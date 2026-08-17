@@ -134,8 +134,10 @@ function parseBlock(row) {
 // Exclusions: containers (day_root), time-tracking segments (time_entry), standing
 // lists (delegated_item), responsibility scaffolding (responsibility* except the
 // dated responsibility_task instance), group
-// templates (task_group), move tombstones (reschedule_tombstone), and Slack
-// reaction-order tombstones (slack_reaction_tombstone).
+// templates (task_group), move tombstones (reschedule_tombstone), Slack
+// reaction-order tombstones (slack_reaction_tombstone), and meeting automation
+// artifacts. A proposed action becomes a task only after approval creates a distinct
+// action row; its proposal remains meeting evidence.
 // Shells and meetings ARE task rows.
 // `triage_suppression` joins the list for the same reason `reschedule_tombstone` is
 // on it: it is a dateless bookkeeping row, not work. Left off, `isTaskRow` would be
@@ -145,7 +147,10 @@ function parseBlock(row) {
 // It stays out of the client's Unscheduled list either way (TaskModel.selectUnscheduled
 // requires a `title`, and suppressions deliberately store theirs as `itemTitle`), so
 // this is about not polluting the task space rather than about a visible bug.
-const NON_TASK_KINDS = new Set(["delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone"]);
+const NON_TASK_KINDS = new Set([
+  "delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone",
+  "meeting_prep", "meeting_transcript", "meeting_summary", "proposed_action_item",
+]);
 function isTaskRow(block) {
   if (!block) return false;
   const type = block.type;
@@ -1502,14 +1507,13 @@ async function getCalendarMeetingContextBySourceIds(sourceIds, workspaceId) {
 // The task test is `local_id IS NOT NULL OR kind = 'task'`. It is deliberately NOT
 // `dcc_is_task_row`, and not the fold's `isFoldableTask` either, so do not "unify" it
 // without re-measuring:
-//   - `dcc_is_task_row` is LOOSER here in the one way that matters: it admits meeting
-//     artifacts (meeting_prep / meeting_summary / meeting_transcript /
-//     proposed_action_item), which are genuine parent_id children of a meeting. Now that
-//     the walk reads parent_id, admitting them would let a task move re-date a meeting's
-//     prep doc. Neither half of this OR matches them, and that exclusion is the only thing
-//     preventing it.
-//   - `isFoldableTask` (public/js/persistence.js) has four branches; this is two of them.
-//     It drops shells and materialized meetings, which is correct here: a meeting has no
+//   - `dcc_is_task_row` now rejects meeting artifacts too, but still admits shells and
+//     materialized meetings. This pool deliberately drops both while also excluding
+//     meeting_prep / meeting_summary / meeting_transcript / proposed_action_item, which
+//     are genuine parent_id children of a meeting. Admitting an artifact would let a
+//     task move re-date a meeting's prep doc.
+//   - `isFoldableTask` (public/js/persistence.js) has four branches; this pool is two of
+//     them. It drops shells and materialized meetings, which is correct here: a meeting has no
 //     local_id, so nothing can be nested under it by local-id link, and its parent_id
 //     children are exactly the artifacts above. A meeting can still BE the moved row —
 //     the route passes the parent in separately, it does not come from this pool.

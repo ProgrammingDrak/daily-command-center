@@ -445,8 +445,26 @@ function normalizedActionText(value) {
 function citationStart(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === "string" && !value.trim()) return null;
-  const seconds = Number(value);
-  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+  const offset = Number(value);
+  return Number.isFinite(offset) && offset >= 0 ? offset : null;
+}
+
+// Transcript evidence and itinerary timing used to share top-level `start`.
+// A proposal's value is a transcript character/segment offset, never a clock time,
+// so keep it under an explicit citation namespace. Legacy reads stay until the
+// one-time migration has rewritten every stored proposal.
+function citationOf(value) {
+  value = value && typeof value === "object" ? value : {};
+  const nested = value.citation && typeof value.citation === "object" && !Array.isArray(value.citation)
+    ? value.citation : {};
+  const rawOffset = nested.startOffset !== undefined
+    ? nested.startOffset
+    : (value.transcriptStartOffset !== undefined ? value.transcriptStartOffset : value.start);
+  const rawQuote = nested.quote !== undefined ? nested.quote : value.quote;
+  return {
+    startOffset: citationStart(rawOffset),
+    quote: String(rawQuote || "").trim().slice(0, 2000),
+  };
 }
 
 function sanitizeRecordingArtifact(value, workspaceId, now = Date.now()) {
@@ -638,8 +656,7 @@ async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) 
         meetingSource: {
           meetingBlockId: meeting.id,
           dashboardRef: propsOf(meeting).dashboard_ref || null,
-          start: citationStart(p.start),
-          quote: p.quote || "",
+          citation: citationOf(p),
         },
         meetingAutomation: {
           meetingBlockId: meeting.id,
@@ -655,8 +672,17 @@ async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) 
     });
     created.push(action);
     approvedCount += 1;
+    const approvedProposalProps = {
+      ...p,
+      citation: citationOf(p),
+      status: "approved",
+      approvedAt: new Date().toISOString(),
+      approvedBlockId: action.id,
+    };
+    delete approvedProposalProps.start;
+    delete approvedProposalProps.quote;
     await blockDB.updateBlock(proposal.id, {
-      properties: { ...p, status: "approved", approvedAt: new Date().toISOString(), approvedBlockId: action.id },
+      properties: approvedProposalProps,
     });
   }
   return { ...(await getAutomation(blockId, workspaceId)), approvedCount, approvedBlocks: created };
@@ -697,8 +723,7 @@ async function listProposedActions({ workspaceId, limit = 50 } = {}) {
       priority: p.priority || "Medium",
       origin: p.origin === "signaled" ? "signaled" : "automated",
       signal: p.signal || null,
-      start: citationStart(p.start),
-      quote: p.quote || "",
+      citation: citationOf(p),
       dashboardRef: mp.dashboard_ref || null,
       approvedBlockId,
       createdAt: proposal.created_at || null,
@@ -941,24 +966,32 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
       const duplicate = existingByText.get(textKey);
       if (duplicate) {
         const prior = propsOf(duplicate);
-        const incomingStart = citationStart(a.start);
-        const incomingQuote = String(a.quote || "").trim().slice(0, 2000);
+        const priorCitation = citationOf(prior);
+        const incomingCitation = citationOf(a);
+        const nextCitation = {
+          startOffset: incomingCitation.startOffset !== null
+            ? incomingCitation.startOffset : priorCitation.startOffset,
+          quote: incomingCitation.quote || priorCitation.quote,
+        };
         const updated = {
           ...prior,
           origin: origin === "signaled" ? "signaled" : prior.origin,
           signal: origin === "signaled" ? signal : prior.signal,
-          start: incomingStart !== null ? incomingStart : citationStart(prior.start),
-          quote: incomingQuote || prior.quote || "",
+          citation: nextCitation,
           sources: origin === "signaled" ? sanitizeSources([
             ...(Array.isArray(prior.sources) ? prior.sources : []),
             ...(Array.isArray(a && a.sources) ? a.sources : []),
           ]) : prior.sources,
         };
+        delete updated.start;
+        delete updated.quote;
         // A later explicit marker upgrades the same extracted task in place. Do
         // not resurrect a dismissed/placed proposal or mint a duplicate task.
         if ((origin === "signaled" && prior.origin !== "signaled") ||
-            (incomingStart !== null && incomingStart !== prior.start) ||
-            (incomingQuote && incomingQuote !== prior.quote)) {
+            (incomingCitation.startOffset !== null && incomingCitation.startOffset !== priorCitation.startOffset) ||
+            (incomingCitation.quote && incomingCitation.quote !== priorCitation.quote) ||
+            Object.prototype.hasOwnProperty.call(prior, "start") ||
+            Object.prototype.hasOwnProperty.call(prior, "quote")) {
           await blockDB.updateBlock(duplicate.id, {
             properties: updated,
           });
@@ -970,16 +1003,18 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
             const approved = await blockDB.getBlock(prior.approvedBlockId);
             if (approvedActionMatches(approved, duplicate, workspaceId)) {
               const approvedProps = propsOf(approved);
+              const meetingSource = {
+                ...(approvedProps.meetingSource || {}),
+                meetingBlockId: meeting.id,
+                dashboardRef: String(dashboardRef || "").trim() || propsOf(meeting).dashboard_ref || null,
+                citation: nextCitation,
+              };
+              delete meetingSource.start;
+              delete meetingSource.quote;
               await blockDB.updateBlock(approved.id, {
                 properties: {
                   ...approvedProps,
-                  meetingSource: {
-                    ...(approvedProps.meetingSource || {}),
-                    meetingBlockId: meeting.id,
-                    dashboardRef: String(dashboardRef || "").trim() || propsOf(meeting).dashboard_ref || null,
-                    start: updated.start,
-                    quote: updated.quote,
-                  },
+                  meetingSource,
                   meetingAutomation: {
                     ...(approvedProps.meetingAutomation || {}),
                     origin: updated.origin,
@@ -1004,8 +1039,7 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
           status: "proposed",
           done: false,
           sources: sanitizeSources(a.sources),
-          start: citationStart(a.start),
-          quote: String(a.quote || "").trim().slice(0, 2000),
+          citation: citationOf(a),
         },
       });
       existingByText.set(textKey, created);

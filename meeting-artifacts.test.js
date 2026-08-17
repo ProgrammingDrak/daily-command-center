@@ -9,6 +9,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
+const fs = require("node:fs");
+const vm = require("node:vm");
 const express = require("express");
 const meetingIdentity = require("./meeting-identity.js");
 
@@ -82,7 +84,7 @@ test("applyArtifacts stores summary/transcript + owner-tagged proposed actions, 
     summary: { markdown: "### Recap\nGood chat about Q3." },
     transcript: { text: "Drake: hi. Ben: hi back." },
     proposedActions: [
-      { text: "Send the recap to Ben", owner: "drake", start: 754.2, quote: "I'll send the recap." },
+      { text: "Send the recap to Ben", owner: "drake", citation: { startOffset: 754.2, quote: "I'll send the recap." } },
       { text: "Ops to update the runbook", owner: "others" },
     ],
   });
@@ -94,8 +96,10 @@ test("applyArtifacts stores summary/transcript + owner-tagged proposed actions, 
   assert.equal(actions.every((a) => a.properties.status === "proposed" && a.properties.done === false), true);
   assert.deepEqual(actions.map((a) => a.properties.owner).sort(), ["drake", "other"]);
   assert.equal(actions.every((a) => a.properties.origin === "automated"), true);
-  assert.equal(actions.find((a) => a.properties.owner === "drake").properties.start, 754.2);
-  assert.equal(actions.find((a) => a.properties.owner === "drake").properties.quote, "I'll send the recap.");
+  const cited = actions.find((a) => a.properties.owner === "drake").properties;
+  assert.deepEqual(cited.citation, { startOffset: 754.2, quote: "I'll send the recap." });
+  assert.equal(cited.start, undefined, "a transcript offset must never occupy the task timing field");
+  assert.equal(cited.quote, undefined, "citation evidence stays in one namespace");
   const m1 = await mem.getBlock("m1");
   // The recap now lives ONLY in the meeting_summary artifact (surfaced in the Recap
   // tab), never mirrored into the meeting's notes box.
@@ -162,14 +166,19 @@ test("a duplicate action gains later transcript citation fields without losing p
     proposedActions: [{ text: "Send the launch brief", owner: "drake", origin: "signaled",
       signal: { source: "google_chat", phrase: "action item", excerpt: "Action item: send it" } }],
   });
+  const legacy = childrenOf("mcitation", "proposed_action_item")[0];
+  legacy.properties.start = 45;
+  legacy.properties.quote = "Legacy transcript quote";
+  delete legacy.properties.citation;
   await automation.applyArtifacts("mcitation", {
     workspaceId: "ws-1", userId: 1,
     proposedActions: [{ text: "Send the launch brief.", owner: "drake", start: 91.5, quote: "I'll send it." }],
   });
   const action = childrenOf("mcitation", "proposed_action_item")[0].properties;
   assert.equal(action.origin, "signaled");
-  assert.equal(action.start, 91.5);
-  assert.equal(action.quote, "I'll send it.");
+  assert.deepEqual(action.citation, { startOffset: 91.5, quote: "I'll send it." });
+  assert.equal(action.start, undefined);
+  assert.equal(action.quote, undefined);
 });
 
 test("missing, blank, negative, and non-finite timestamps never become zero-second citations", async () => {
@@ -185,15 +194,16 @@ test("missing, blank, negative, and non-finite timestamps never become zero-seco
   });
   const proposals = childrenOf("m-no-fake-citations", "proposed_action_item");
   assert.equal(proposals.length, 4);
-  assert.equal(proposals.every(action => action.properties.start === null), true);
+  assert.equal(proposals.every(action => action.properties.citation.startOffset === null), true);
+  assert.equal(proposals.every(action => action.properties.start === undefined), true);
   const projected = (await automation.listProposedActions({ workspaceId: "ws-1" }))
     .filter(action => action.meetingId === "m-no-fake-citations");
-  assert.equal(projected.every(action => action.start === null), true);
+  assert.equal(projected.every(action => action.citation.startOffset === null), true);
 
   const approved = await automation.approveActions("m-no-fake-citations", {
     workspaceId: "ws-1", userId: 1,
   });
-  assert.equal(approved.approvedBlocks.every(action => action.properties.meetingSource.start === null), true);
+  assert.equal(approved.approvedBlocks.every(action => action.properties.meetingSource.citation.startOffset === null), true);
 });
 
 test("later citation enrichment follows an action through approval and placement", async () => {
@@ -204,6 +214,14 @@ test("later citation enrichment follows an action through approval and placement
   });
   const approved = await automation.approveActions("m-citation-sync", { workspaceId: "ws-1", userId: 1 });
   const taskId = approved.approvedBlocks[0].id;
+  const proposal = childrenOf("m-citation-sync", "proposed_action_item")[0];
+  proposal.properties.start = 45;
+  proposal.properties.quote = "Legacy proposal quote";
+  delete proposal.properties.citation;
+  const legacyTask = await mem.getBlock(taskId);
+  legacyTask.properties.meetingSource.start = 45;
+  legacyTask.properties.meetingSource.quote = "Legacy task quote";
+  delete legacyTask.properties.meetingSource.citation;
 
   await automation.applyArtifacts("m-citation-sync", {
     workspaceId: "ws-1", userId: 1, dashboardRef: "updated-review",
@@ -213,8 +231,12 @@ test("later citation enrichment follows an action through approval and placement
     }],
   });
   let task = await mem.getBlock(taskId);
+  assert.equal(proposal.properties.start, undefined);
+  assert.equal(proposal.properties.quote, undefined);
+  assert.deepEqual(proposal.properties.citation, { startOffset: 91.5, quote: "I'll send it." });
   assert.deepEqual(task.properties.meetingSource, {
-    meetingBlockId: "m-citation-sync", dashboardRef: "updated-review", start: 91.5, quote: "I'll send it.",
+    meetingBlockId: "m-citation-sync", dashboardRef: "updated-review",
+    citation: { startOffset: 91.5, quote: "I'll send it." },
   });
   assert.equal(task.properties.meetingAutomation.origin, "signaled");
 
@@ -230,8 +252,78 @@ test("later citation enrichment follows an action through approval and placement
   assert.equal(task.date, "2026-07-20");
   assert.equal(task.properties.kind, "task");
   assert.equal(task.properties.start, "14:00");
-  assert.equal(task.properties.meetingSource.start, 120);
-  assert.equal(task.properties.meetingSource.quote, "The final quote.");
+  assert.deepEqual(task.properties.meetingSource.citation, { startOffset: 120, quote: "The final quote." });
+  assert.equal(task.properties.meetingSource.start, undefined);
+  assert.equal(task.properties.meetingSource.quote, undefined);
+});
+
+test("approveActions normalizes a stored legacy citation before the migration runs", async () => {
+  seedMeeting("m-legacy-approval", { title: "Legacy approval", dashboard_ref: "legacy-review" });
+  mem.store.push({
+    id: "legacy-proposal", type: "block", parent_id: "m-legacy-approval", date: "2026-07-09",
+    properties: {
+      kind: "proposed_action_item", text: "Send the legacy brief", owner: "drake",
+      priority: "High", status: "proposed", start: 91.5, quote: "I'll send it.",
+    },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null,
+  });
+
+  const approved = await automation.approveActions("m-legacy-approval", {
+    workspaceId: "ws-1", userId: 1, actionIds: ["legacy-proposal"],
+  });
+  assert.equal(approved.approvedCount, 1);
+  assert.deepEqual(approved.approvedBlocks[0].properties.meetingSource, {
+    meetingBlockId: "m-legacy-approval", dashboardRef: "legacy-review",
+    citation: { startOffset: 91.5, quote: "I'll send it." },
+  });
+  const proposal = await mem.getBlock("legacy-proposal");
+  assert.deepEqual(proposal.properties.citation, { startOffset: 91.5, quote: "I'll send it." });
+  assert.equal(proposal.properties.start, undefined);
+  assert.equal(proposal.properties.quote, undefined);
+});
+
+test("Recap citation links read the citation namespace with a legacy fallback", () => {
+  const source = fs.readFileSync(require.resolve("./public/js/meeting-automation.js"), "utf8");
+  const extractFunction = (name) => {
+    const start = source.indexOf(`function ${name}`);
+    assert.notEqual(start, -1, `${name} exists`);
+    const open = source.indexOf("{", start);
+    let depth = 0;
+    for (let i = open; i < source.length; i += 1) {
+      if (source[i] === "{") depth += 1;
+      if (source[i] === "}") depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+    throw new Error(`Could not extract ${name}`);
+  };
+  const context = {
+    esc: (value) => String(value || "")
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;"),
+  };
+  vm.createContext(context);
+  vm.runInContext(
+    `${extractFunction("recapTime")}\n${extractFunction("recapActionsHtml")}\nglobalThis.renderRecapActions = recapActionsHtml;`,
+    context,
+  );
+
+  const nested = context.renderRecapActions([{
+    id: "action-1", text: "Send it", citation: { startOffset: 91.5, quote: 'I said "send it"' },
+  }], new Map(), "meeting-1", "review-1");
+  assert.match(nested, /dashboard\?t=91\.5/);
+  assert.match(nested, /title="I said &quot;send it&quot;"/);
+  assert.match(nested, /▶ 01:32/);
+
+  const legacy = context.renderRecapActions([{
+    id: "action-2", text: "Legacy", start: 61, quote: "Legacy quote",
+  }], new Map(), "meeting-1", "review-1");
+  assert.match(legacy, /dashboard\?t=61/);
+  assert.match(legacy, /▶ 01:01/);
+
+  const missing = context.renderRecapActions([{
+    id: "action-3", text: "No citation", citation: { startOffset: null, quote: "" },
+  }], new Map(), "meeting-1", "review-1");
+  assert.doesNotMatch(missing, /recap-action-source/);
 });
 
 test("applyArtifacts attaches the playable review, hot retention metadata, and safe cold source", async () => {
@@ -422,7 +514,7 @@ test("listProposedActions projects only open meeting proposals with meeting cont
     id: "plist", meetingId: "mlist", meetingTitle: "Weekly planning", meetingDate: "2026-07-09",
     meetingStart: "10:00", meetingEnd: "10:30", title: "Send the brief", owner: "drake",
     priority: "High", origin: "automated", signal: null,
-    start: 91.5, quote: "I'll send it.", dashboardRef: "weekly-planning",
+    citation: { startOffset: 91.5, quote: "I'll send it." }, dashboardRef: "weekly-planning",
     approvedBlockId: null, createdAt: "2026-07-09T11:00:00Z",
   });
   assert.equal(rows.some(item => item.id === "placed-list"), false);

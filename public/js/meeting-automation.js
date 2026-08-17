@@ -262,8 +262,11 @@
       const when=(pl&&pl.date)||a.placedDate||"";
       const ownerOther=(a.owner==="other"||a.owner==="others");
       const meta=(a.priority?'<em>'+esc(a.priority)+'</em>':'')+(ownerOther?'<em class="recap-owner">delegated</em>':'');
-      const hasStart=dashboardRef&&a.start!==null&&a.start!==undefined&&isFinite(Number(a.start));
-      const source=hasStart?'<a class="recap-action-source" href="/meetings/'+encodeURIComponent(id)+'/dashboard?t='+encodeURIComponent(a.start)+'" target="_blank" rel="noopener" title="'+esc(a.quote||"Open cited transcript moment")+'">▶ '+recapTime(a.start)+'</a>':'';
+      const citation=a.citation&&typeof a.citation==="object"?a.citation:{};
+      const offset=citation.startOffset!==undefined?citation.startOffset:a.start;
+      const quote=citation.quote!==undefined?citation.quote:a.quote;
+      const hasStart=dashboardRef&&offset!==null&&offset!==undefined&&isFinite(Number(offset));
+      const source=hasStart?'<a class="recap-action-source" href="/meetings/'+encodeURIComponent(id)+'/dashboard?t='+encodeURIComponent(offset)+'" target="_blank" rel="noopener" title="'+esc(quote||"Open cited transcript moment")+'">▶ '+recapTime(offset)+'</a>':'';
       let ctrl;
       if(isPlaced)ctrl='<span class="recap-sched-done">Scheduled'+(when?' '+esc(typeof _prettyDateLabel==="function"?_prettyDateLabel(when):when):'')+' &#10003;</span>';
       else if(ownerOther)ctrl='<span class="recap-owner-note">Owner: other</span>';

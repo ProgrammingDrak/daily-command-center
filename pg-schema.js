@@ -779,8 +779,9 @@ const POST_SCHEMA_STATEMENTS = [
   // Exclusions: containers (day_root), time-tracking segments (time_entry),
   // standing lists (delegated_item), responsibility scaffolding (responsibility*
   // except the dated responsibility_task instance),
-  // group templates (task_group), move tombstones (reschedule_tombstone), and
-  // Slack reaction-order tombstones (slack_reaction_tombstone).
+  // group templates (task_group), move tombstones (reschedule_tombstone), Slack
+  // reaction-order tombstones (slack_reaction_tombstone), and meeting automation
+  // artifacts (meeting_prep/transcript/summary and proposed_action_item).
   // Shells and meetings ARE task rows.
   ["fn dcc_is_task_row", `
     CREATE OR REPLACE FUNCTION dcc_is_task_row(p_type text, p_props jsonb)
@@ -788,7 +789,8 @@ const POST_SCHEMA_STATEMENTS = [
       SELECT p_type IS DISTINCT FROM 'day_root'
          AND p_type IS DISTINCT FROM 'time_entry'
          AND COALESCE(p_props->>'kind', '') NOT IN
-             ('delegated_item', 'task_group', 'reschedule_tombstone', 'triage_suppression', 'slack_reaction_tombstone')
+             ('delegated_item', 'task_group', 'reschedule_tombstone', 'triage_suppression', 'slack_reaction_tombstone',
+              'meeting_prep', 'meeting_transcript', 'meeting_summary', 'proposed_action_item')
          AND (COALESCE(p_props->>'kind', '') NOT LIKE 'responsibility%'
               OR COALESCE(p_props->>'kind', '') = 'responsibility_task')
     $fn$;

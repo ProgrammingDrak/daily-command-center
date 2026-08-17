@@ -141,6 +141,10 @@ test("isTaskRow admits real tasks and rejects containers and scaffolding", () =>
   assert.equal(db.isTaskRow({ type: "block", properties: { kind: "task_group" } }), false);
   assert.equal(db.isTaskRow({ type: "block", properties: { kind: "reschedule_tombstone" } }), false);
   assert.equal(db.isTaskRow({ type: "block", properties: { kind: "slack_reaction_tombstone" } }), false);
+  for (const kind of ["meeting_prep", "meeting_transcript", "meeting_summary", "proposed_action_item"]) {
+    assert.equal(db.isTaskRow({ type: "block", properties: { kind } }), false,
+      kind + " is meeting evidence, not itinerary work");
+  }
   // Responsibility definitions/triggers are scaffolding. A responsibility_task is
   // the dated task instance and must remain part of the itinerary.
   assert.equal(db.isTaskRow({ type: "block", properties: { kind: "responsibility_item" } }), false);

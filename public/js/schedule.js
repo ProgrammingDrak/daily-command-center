@@ -467,11 +467,11 @@ async function _legacyCommitDoneOnDate(id,dateStr,opts){
     //
     // `collectSubtreeBlockIds` is never handed a raw day: the route feeds it
     // `db.getRescheduleSubtreePool`, whose predicate is
-    // `type='block' AND (local_id IS NOT NULL OR kind='task')` — deliberately NOT
-    // `dcc_is_task_row`, because db.js records that the looser test admits meeting artifacts
-    // (`meeting_prep` / `meeting_summary` / `meeting_transcript` / `proposed_action_item`),
-    // which ARE genuine `parent_id` children of a meeting, and "that exclusion is the only
-    // thing preventing" a subtree walk from reaching them. Reading `parent_id` without it did
+    // `type='block' AND (local_id IS NOT NULL OR kind='task')` - deliberately narrower than
+    // `dcc_is_task_row`, which now also rejects meeting artifacts but still admits shells and
+    // materialized meetings. The pool keeps artifacts (`meeting_prep` / `meeting_summary` /
+    // `meeting_transcript` / `proposed_action_item`) out because they are genuine `parent_id`
+    // children of a meeting. Reading `parent_id` without that guard did
     // exactly that: a meeting row has a check-off in the List view, so completing one on a
     // past day cascaded `status:"done"` onto every artifact hanging off it. That is not
     // cosmetic — `meeting-automation.js approveActions` skips proposals whose status is

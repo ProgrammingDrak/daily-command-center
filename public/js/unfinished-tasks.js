@@ -369,7 +369,7 @@
     try {
       await window.blockStore.rescheduleBlock(u.sourceId, targetDate, slot ? { parentStart: slot.start, parentEnd: slot.end } : {});
     } catch (e) {
-      if (typeof showToast === "function") showToast("Could not move " + ev.title, "error");
+      if (typeof showToast === "function") showToast("Could not move " + ev.title + (e && e.message ? ": " + e.message : ""), "error");
       return null;
     } finally {
       window.__RESCHEDULE_IN_FLIGHT__ = false;
