@@ -50,6 +50,18 @@ function makePool(initialRows, { failUpdateId = null } = {}) {
             !item.deleted_at && (item.workspace_id || null) === (ws || null)
             && (item.date || null) === (date || null)).map(item => structuredClone(item)) };
         }
+        if (text.includes("properties->>'blockerType' = 'task'")
+            && text.includes("properties->>'blockerBlockId' = $1")) {
+          const [blockerId, status, workspaceId] = params;
+          return { rows: [...staged.values()].filter(item => {
+            const props = item.properties || {};
+            return item.type === "block" && !item.deleted_at
+              && props.kind === "delegated_item" && props.blockerType === "task"
+              && String(props.blockerBlockId) === String(blockerId)
+              && (props.status || "open") === status
+              && (item.workspace_id || null) === (workspaceId || null);
+          }).map(item => structuredClone(item)) };
+        }
         if (text.includes("type = 'day_root' AND date = $1")) {
           const [date, ws] = params;
           return { rows: [...staged.values()].filter(item => item.type === "day_root"
@@ -74,6 +86,21 @@ function makePool(initialRows, { failUpdateId = null } = {}) {
           const next = { ...current, properties: structuredClone(params[0]), date: params[1], updated_at: params[2] };
           staged.set(id, next);
           return { rows: [structuredClone(next)] };
+        }
+        if (text.startsWith("UPDATE blocks SET properties = $1, sort_order = $2, parent_id = $3, date = $4")) {
+          const id = params[5];
+          if (id === failUpdateId) throw new Error("injected child failure");
+          const current = staged.get(id);
+          const next = {
+            ...current,
+            properties: structuredClone(params[0]),
+            sort_order: params[1],
+            parent_id: params[2],
+            date: params[3],
+            updated_at: params[4],
+          };
+          staged.set(id, next);
+          return { rows: [{ properties: structuredClone(next.properties) }] };
         }
         if (text.startsWith("UPDATE blocks SET properties = $1, updated_at = $2")) {
           if (params[2] === failUpdateId) throw new Error("injected child failure");
@@ -215,6 +242,99 @@ test("a dateless backlog completion is reversible", async () => {
   }));
   assert.equal(pool._rows.get("parent").date, null);
   assert.equal(pool._rows.get("parent").properties.kind, "backlog");
+});
+
+test("completing and reopening a prerequisite transitions its dependency", async () => {
+  const blocker = row("parent", { local_id: "p", title: "Buy fixture", status: "open" });
+  const dependency = row("dependency", {
+    kind: "delegated_item",
+    blockerType: "task",
+    blockerBlockId: "parent",
+    linkedBlockId: "install-fixture",
+    title: "Buy fixture",
+    myTask: "Install fixture",
+    status: "open",
+  }, { date: null });
+  const pool = makePool([blocker, dependency]);
+  const db = loadDb(pool);
+
+  const done = await db.setTaskCompletion(input());
+  assert.equal(pool._rows.get("dependency").properties.status, "ready");
+  assert.equal(pool._rows.get("dependency").properties.readyAt, "2026-08-10T15:00:00Z");
+  assert.deepEqual(done.dependencyTransitions, [{
+    id: "dependency",
+    linkedBlockId: "install-fixture",
+    blockerBlockId: "parent",
+    title: "Install fixture",
+    status: "ready",
+  }]);
+  assert.ok(done.broadcastIds.includes("dependency"));
+  assert.ok(done.broadcastIds.includes("install-fixture"));
+
+  const reopened = await db.setTaskCompletion(input({
+    completed: false,
+    completedAt: null,
+    mutationId: "reopen-dependency",
+    expectedRevision: done.revision,
+  }));
+  assert.equal(pool._rows.get("dependency").properties.status, "open");
+  assert.equal("readyAt" in pool._rows.get("dependency").properties, false);
+  assert.equal(reopened.dependencyTransitions[0].status, "open");
+});
+
+test("a dependency transition failure rolls back prerequisite completion", async () => {
+  const blocker = row("parent", { local_id: "p", title: "Buy fixture", status: "open" });
+  const dependency = row("dependency", {
+    kind: "delegated_item", blockerType: "task", blockerBlockId: "parent",
+    linkedBlockId: "install-fixture", title: "Buy fixture", myTask: "Install fixture", status: "open",
+  }, { date: null });
+  const pool = makePool([blocker, dependency], { failUpdateId: "dependency" });
+  const db = loadDb(pool);
+
+  await assert.rejects(db.setTaskCompletion(input()), /injected child failure/);
+  assert.equal(pool._rows.get("parent").properties.status, "open");
+  assert.equal(pool._rows.get("dependency").properties.status, "open");
+});
+
+test("a blocked dependent cannot be completed outside its release transaction", async () => {
+  const dependent = row("parent", {
+    local_id: "install", title: "Install fixture", status: "open",
+    dependencyWaitingItemId: "dependency",
+  });
+  const dependency = row("dependency", {
+    kind: "delegated_item", blockerType: "task", blockerBlockId: "buy-fixture",
+    linkedBlockId: "parent", title: "Buy fixture", myTask: "Install fixture", status: "ready",
+  }, { date: null });
+  const pool = makePool([dependent, dependency]);
+  const db = loadDb(pool);
+
+  await assert.rejects(
+    db.setTaskCompletion(input()),
+    error => error.statusCode === 409 && error.publicCode === "TASK_DEPENDENCY_BLOCKED"
+  );
+  assert.equal(pool._rows.get("parent").properties.status, "open");
+});
+
+test("completing a ready dependent closes its relation and clears the restore marker", async () => {
+  const dependent = row("parent", {
+    local_id: "install", title: "Install fixture", status: "open",
+    dependencyWaitingItemId: "dependency",
+  }, { date: null });
+  const dependency = row("dependency", {
+    kind: "delegated_item", blockerType: "task", blockerBlockId: "buy-fixture",
+    linkedBlockId: "parent", title: "Buy fixture", myTask: "Install fixture", status: "ready",
+  }, { date: null });
+  const pool = makePool([dependent, dependency]);
+  const db = loadDb(pool);
+  const closed = { ...dependency.properties, status: "done", completedAt: "2026-08-12T18:45:00.000Z" };
+
+  await db.setTaskCompletion(input({
+    companionUpdates: [{ id: "dependency", properties: closed, expectedUpdatedAt: dependency.updated_at }],
+  }));
+
+  assert.equal(pool._rows.get("parent").properties.status, "done");
+  assert.equal("dependencyWaitingItemId" in pool._rows.get("parent").properties, false);
+  assert.equal(pool._rows.get("dependency").properties.status, "done");
 });
 
 test("meeting completion uses the planned end and records when it was checked", async () => {

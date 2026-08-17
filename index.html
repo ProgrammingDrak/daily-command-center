@@ -834,6 +834,34 @@
   </div>
 </div>
 
+<div class="delegated-modal-overlay" id="task-dependency-modal-overlay">
+  <div class="delegated-modal-box task-dependency-modal-box" role="dialog" aria-modal="true" aria-labelledby="task-dependency-title">
+    <h3 class="delegated-modal-title" id="task-dependency-title">What needs to happen first?</h3>
+    <p class="task-dependency-help" id="td-dependent-label"></p>
+    <input type="hidden" id="td-waiting-id">
+    <input type="hidden" id="td-dependent-id">
+    <label class="delegated-modal-label" for="td-blocker-task">Choose an existing task</label>
+    <select id="td-blocker-task" class="delegated-modal-input"></select>
+    <div class="task-dependency-or"><span>or create a prerequisite</span></div>
+    <label class="delegated-modal-label" for="td-new-title">New prerequisite</label>
+    <input id="td-new-title" class="delegated-modal-input" maxlength="300" placeholder="What needs to happen first?">
+    <div class="delegated-modal-row">
+      <div>
+        <label class="delegated-modal-label" for="td-new-duration">Duration</label>
+        <select id="td-new-duration" class="delegated-modal-input"><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option></select>
+      </div>
+      <div>
+        <label class="delegated-modal-label" for="td-new-priority">Priority</label>
+        <select id="td-new-priority" class="delegated-modal-input"><option>Low</option><option selected>Medium</option><option>High</option></select>
+      </div>
+    </div>
+    <div class="delegated-modal-actions">
+      <button type="button" class="secondary" id="td-cancel">Cancel</button>
+      <button type="button" class="primary" id="td-save">Link tasks</button>
+    </div>
+  </div>
+</div>
+
 <!-- Responsibilities create/edit modal -->
 <!-- Manage repeat responsibilities: the full library (search/filter/sort/new +
      per-row schedule/edit/archive). Due ones also surface in the itinerary

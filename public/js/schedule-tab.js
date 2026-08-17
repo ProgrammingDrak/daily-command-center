@@ -170,6 +170,7 @@ function buildTaskChangeItems(ev,trig){
   items.push(
     {icon:"🔄", label:"Convert…",  onPick:()=>openConvertToRadial(ev,trig)},
     {icon:"🤝", label:"Delegate",  onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
+    {icon:"🔒", label:"Blocked by task", onPick:()=>{if(typeof window.openTaskDependencyModal==="function")window.openTaskDependencyModal(ev._blockId||ev.blockId||ev.id);}},
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
     {icon:"💡", label:"Backlog",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}},
     // Delete lives on the radial so it's reachable on phones, where the row's
@@ -715,6 +716,9 @@ function buildListView(){
     const recFlag=(openRow&&isMeeting(ev)&&ev.dashboardRef)?'<a class="prep-flag rec-flag" href="/meetings/'+encodeURIComponent(ev.id)+'/dashboard" target="_blank" rel="noopener" title="Open the recording review dashboard" onclick="event.stopPropagation()" style="text-decoration:none">&#9654; Recording</a>':'';
     const streakChip=openRow?habitStreakChip(ev):'';
     const workButton=(window.DCCWorkSessions&&typeof window.DCCWorkSessions.itineraryActionButtonsHtml==="function")?window.DCCWorkSessions.itineraryActionButtonsHtml(ev,isDoneRow):'';
+    const dependencyChip=(typeof window.taskDependencyChipHtml==="function")
+      ? window.taskDependencyChipHtml({id:ev._blockId||ev.blockId||ev.id,properties:{local_id:ev.local_id||ev.id}})
+      : '';
     // C4 opened the row "+" and the row's open-space click on carryover rows. Both used
     // to resolve their target with scheduled.find() alone, which a past-day row is not
     // in; they now go through taskAnchorById, which looks in both pools and returns the
@@ -742,7 +746,7 @@ function buildListView(){
       '<div class="it-list-main">'+
         // The "+" renders on carryover rows and meetings too. A meeting can own
         // concurrent nested work or relevant subtasks; only done rows skip it.
-        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
+        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
         '<div class="it-list-meta">'+
           inProgressChip+
           nowChip+
@@ -1554,6 +1558,9 @@ function buildBacklog(){
     detailParts.push('<div class="detail-meta">'+metaParts.join('')+'</div>');
 
     const isDelegated=_scheduleTaskHasDelegate(t.id);
+    const dependencyChip=(typeof window.taskDependencyChipHtml==="function")
+      ? window.taskDependencyChipHtml({id:t._blockId||t.blockId||t.id,properties:{local_id:t.local_id||t.id}})
+      : '';
 
     const el=document.createElement("div");el.className="board-card bc-card";el.draggable=true;
     el.addEventListener("dragstart",e=>{
@@ -1570,7 +1577,7 @@ function buildBacklog(){
     el.innerHTML=
       '<div class="bc-row">'+
         '<div class="bar" style="background:'+c.color+'"></div>'+
-        '<div class="bc-title" title="'+t.title.replace(/"/g,'&quot;')+'">'+t.title+'</div>'+
+        '<div class="bc-title" title="'+t.title.replace(/"/g,'&quot;')+'">'+t.title+dependencyChip+'</div>'+
         '<span class="bc-dur">'+ms(t.durMin)+'</span>'+
         '<svg class="bc-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>'+
       '</div>'+
@@ -1581,6 +1588,7 @@ function buildBacklog(){
           '<button class="bc-act bc-act-side" data-id="'+t.id+'" title="Move to side projects">Side Project</button>'+
           '<button class="bc-act bc-act-later" data-id="'+t.id+'" title="Schedule for a later date">Later\u2026</button>'+
           '<button class="bc-act bc-act-repeat" data-id="'+t.id+'" title="Turn into a repeat responsibility">Repeat</button>'+
+          '<button class="bc-act bc-act-blocked" data-id="'+t.id+'" title="Choose the task that must finish first">Blocked by task</button>'+
           notesButton({id: t.id, title: t.title})+
           ((window.DCCWorkSessions&&window.DCCWorkSessions.actionButtonHtml)?window.DCCWorkSessions.actionButtonHtml(t,false):'')+
           '<button class="delegate-btn bc-act-icon" data-id="'+t.id+'" data-title="'+t.title.replace(/"/g,'&quot;')+'" title="'+(isDelegated?'Edit delegated item linked to this task':'Delegate this task')+'">'+(isDelegated?'\u2713':'\u2191')+'</button>'+
@@ -1621,6 +1629,11 @@ function buildBacklog(){
     if(repeatBtn)repeatBtn.addEventListener("click",e=>{
       e.stopPropagation();
       if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(t);
+    });
+    const blockedBtn=el.querySelector(".bc-act-blocked");
+    if(blockedBtn)blockedBtn.addEventListener("click",e=>{
+      e.stopPropagation();
+      if(typeof window.openTaskDependencyModal==="function")window.openTaskDependencyModal(t._blockId||t.blockId||t.id);
     });
     const editBtn=el.querySelector(".bank-edit-btn");
     if(editBtn)editBtn.addEventListener("click",e=>{e.stopPropagation();if(typeof startTaskBankBacklogEdit==="function")startTaskBankBacklogEdit(t.id)});

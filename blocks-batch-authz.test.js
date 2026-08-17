@@ -80,7 +80,10 @@ function mountApp() {
     getTodayStr: () => "2026-07-30",
     isAllowedSweepBlockItem: () => true,
     isValidDate: () => true,
-    pool: { query: async () => ({ rows: [{ workspace_id: MINE, user_id: 1 }] }) },
+    pool: {
+      query: async () => ({ rows: [{ workspace_id: MINE, user_id: 1 }] }),
+      connect: async () => ({ query: async () => ({ rows: [] }), release() {} }),
+    },
   };
   require("./routes/blocks.js")(app, ctx);
   return { app, batched };
@@ -122,7 +125,7 @@ test("a batch update of another workspace's block is refused", async () => {
   assert.equal(batched.length, 0);
 });
 
-test("a batch completion transition cannot bypass the base revision protocol", async () => {
+test("a batch completion transition must use the canonical endpoint", async () => {
   const { app, batched } = mountApp();
   const { status, json } = await postBatch(app, [{
     op: "update",
@@ -131,8 +134,8 @@ test("a batch completion transition cannot bypass the base revision protocol", a
     completionIntent: "reopen",
     completionMutationId: "old-offline-batch",
   }]);
-  assert.equal(status, 400);
-  assert.equal(json.code, "COMPLETION_BASE_REQUIRED");
+  assert.equal(status, 409);
+  assert.equal(json.code, "COMPLETION_ENDPOINT_REQUIRED");
   assert.equal(batched.length, 0);
 });
 

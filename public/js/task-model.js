@@ -305,6 +305,9 @@
       // which is the same reason isFoldableTask keeps it out.
       if (p.status === "deleted" || p.status === "archived" || p.status === "done") continue;
       if (p.done === true) continue;
+      // Dependency-parked tasks live in Waiting until their prerequisite is
+      // released. They remain dateless but must not duplicate into Backlog.
+      if (p.dependencyWaitingItemId) continue;
       // A titleless row cannot render on either surface; both consumers dropped it.
       if (!p.title) continue;
       if (!b.date) { out.push(b); continue; }

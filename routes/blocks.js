@@ -57,6 +57,71 @@ module.exports = function mount(app, ctx) {
   }
   const slugify = s => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
+  const activeTaskDependency = row => {
+    const props = (row && row.properties) || {};
+    return waitingItems.isTaskDependency(props) && !row.deleted_at && ["open", "ready"].includes(props.status || "open");
+  };
+  function clientError(message, statusCode = 400) {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    return error;
+  }
+  async function taskDependencyContext(props, workspaceId, ignoreWaitingId, client) {
+    const blockedId = String(props.linkedBlockId || "").trim();
+    const blockerId = String(props.blockerBlockId || "").trim();
+    if (!blockedId || !blockerId) throw clientError("Blocked task and prerequisite task are required");
+    if (blockedId === blockerId) throw clientError("A task cannot block itself");
+    const [blocked, blocker, rows] = await Promise.all([
+      blockDB.findUniqueLiveBlockByReference(blockedId, workspaceId, client, !!client),
+      blockDB.findUniqueLiveBlockByReference(blockerId, workspaceId, client, !!client),
+      blockDB.getDelegatedItems(workspaceId, client),
+    ]);
+    if (!blocked || !blocker) throw clientError("Linked task not found", 404);
+    assertBlockOwnership(blocked, workspaceId);
+    assertBlockOwnership(blocker, workspaceId);
+    if (!blockDB.isTaskRow(blocked) || !blockDB.isTaskRow(blocker)) throw clientError("Both sides of a dependency must be tasks");
+    if (isCompleted(blocked)) throw clientError("A completed task cannot be blocked");
+    if (isCompleted(blocker)) throw clientError("Choose an open prerequisite task");
+
+    const active = rows.filter(activeTaskDependency).filter(row => row.id !== ignoreWaitingId);
+    if (active.some(row => String((row.properties || {}).linkedBlockId) === blocked.id)) {
+      throw clientError("That task already has an active prerequisite", 409);
+    }
+    const outgoing = new Map();
+    for (const row of active) {
+      const relation = row.properties || {};
+      const from = String(relation.blockerBlockId || "");
+      if (!outgoing.has(from)) outgoing.set(from, []);
+      outgoing.get(from).push(String(relation.linkedBlockId || ""));
+    }
+    const seen = new Set();
+    const stack = [blocked.id];
+    while (stack.length) {
+      const current = stack.pop();
+      if (current === blocker.id) throw clientError("That link would create a dependency cycle", 409);
+      if (seen.has(current)) continue;
+      seen.add(current);
+      for (const next of outgoing.get(current) || []) stack.push(next);
+    }
+    const subtree = await blockDB.getSubtree([blocked.id], workspaceId, client);
+    const blockedTree = subtree.length ? subtree : [blocked];
+    if (blockedTree.some(row => String(row.id) === String(blocker.id))) {
+      throw clientError("A task inside the blocked task cannot be its prerequisite", 409);
+    }
+    return { blocked, blocker, subtree: blockedTree };
+  }
+  async function setDependencyMarker(rows, waitingId, client) {
+    const ids = [];
+    for (const row of rows) {
+      const properties = { ...(row.properties || {}) };
+      if (waitingId) properties.dependencyWaitingItemId = waitingId;
+      else delete properties.dependencyWaitingItemId;
+      await blockDB.updateBlock(row.id, { properties, date: waitingId ? null : row.date }, client);
+      ids.push(row.id);
+    }
+    return ids;
+  }
+
   // The responsibility domain + slot engine + apply-forward engine live in
   // responsibility-store.js; instantiate it here with the server-scope deps.
   const respStore = createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership, appTimeZone: ctx.APP_TIME_ZONE });
@@ -87,11 +152,11 @@ module.exports = function mount(app, ctx) {
       || (TaskModel.isTaskRow(block) && props.kind === "backlog"));
   }
 
-  async function stampSlackDeleteBoundary(block, atMs) {
+  async function stampSlackDeleteBoundary(block, atMs, client) {
     const props = (block && block.properties) || {};
     if (!block || block.deleted_at || props.source !== "slack-bookmark") return block;
     const nextProps = { ...props, slackBookmarkChangedAt: new Date(atMs).toISOString() };
-    const written = await blockDB.updateBlock(block.id, { properties: nextProps });
+    const written = await blockDB.updateBlock(block.id, { properties: nextProps }, client);
     block.properties = (written && written.properties) || nextProps;
     return block;
   }
@@ -318,6 +383,12 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks", validate(schemas.blockCreate), route(async (req, res) => {
     const body = req.body;
     const items = Array.isArray(body) ? body : [body];
+    if (items.some(item => waitingItems.isTaskDependency(
+      typeof (item && item.properties) === "string" ? safeParseProps(item.properties) : ((item && item.properties) || {})
+    ))) {
+      res.status(409).json({ error: "Create task dependencies through the Waiting API" });
+      return;
+    }
     if (req.dccServiceAuth && !items.every(isAllowedSweepBlockItem)) { res.status(403).json({ error: "Sweep Suite token may only create sweep_suite_task blocks" }); return; }
     const { userId, workspaceId } = await resolveOwnerStrict(req);
     const results = [];
@@ -399,7 +470,7 @@ module.exports = function mount(app, ctx) {
       if (blockIds.length) {
         broadcast("blocks-changed", {
           action: "completion", blockIds, clientId: body._clientId,
-          mutationId: body.mutationId,
+          mutationId: body.mutationId, dependencyTransitions: result.dependencyTransitions || [],
         }, workspaceId);
       }
       for (const row of result.affectedTasks || []) await syncSlack(row);
@@ -412,7 +483,7 @@ module.exports = function mount(app, ctx) {
       res.json({
         ok: true, mutationId: body.mutationId, persistenceTarget: result.persistenceTarget,
         task: result.task, affectedTasks: result.affectedTasks || [], revision: result.revision,
-        duplicate: !!result.duplicate, requestId,
+        duplicate: !!result.duplicate, requestId, dependencyTransitions: result.dependencyTransitions || [],
       });
     } catch (error) {
       const status = error.statusCode || error.status || 500;
@@ -493,6 +564,13 @@ module.exports = function mount(app, ctx) {
     const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
+    const requestedProps = typeof (req.body && req.body.properties) === "string"
+      ? safeParseProps(req.body.properties) : ((req.body && req.body.properties) || {});
+    if (waitingItems.isTaskDependency(existing)
+        || waitingItems.isTaskDependency(requestedProps)) {
+      res.status(409).json({ error: "Update task dependencies through the Waiting API" });
+      return;
+    }
     // Compatibility window for already-open clients and their old WAL entries.
     // Ignore the stale full properties snapshot and delegate only the completion
     // intent to the same narrow transaction as the dedicated endpoint.
@@ -530,6 +608,7 @@ module.exports = function mount(app, ctx) {
       const blockIds = result.broadcastIds || [req.params.id];
       broadcast("blocks-changed", {
         action: "completion", blockIds, clientId: req.body._clientId, mutationId,
+        dependencyTransitions: result.dependencyTransitions || [],
       }, workspaceId);
       for (const row of result.affectedTasks || []) await syncSlack(row);
       return result.task;
@@ -543,26 +622,84 @@ module.exports = function mount(app, ctx) {
   }));
 
   app.delete("/api/blocks/:id", route(async (req, res) => {
-    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
+    let existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
-    const deleteAt = Date.now();
-    await stampSlackDeleteBoundary(existing, deleteAt);
-    const props = existing.properties || {};
-    if (props.startedAt) {
-      await pauseWork({ block: existing, atMs: deleteAt, actor: "dcc:delete", actionId: `delete:${existing.id}:${existing.updated_at || props.startedAt}` });
-    }
-    const result = props.kind === "responsibility_item" && props.repeatType === "scheduled"
-      ? await respStore.changeScheduledSeries({
+    let result;
+    let props = existing.properties || {};
+    const closedDependencyIds = [];
+    const releasedDependencyTaskIds = [];
+    // A tombstone cannot acquire a new dependency because dependency creation only
+    // accepts live tasks. Keep repeat DELETE idempotent without requiring a transaction.
+    // Non-task rows are likewise outside the dependency graph by construction.
+    const dependencyAware = !existing.deleted_at && TaskModel.isTaskRow(existing);
+    const client = dependencyAware ? await pool.connect() : null;
+    try {
+      if (client) {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`task-dependencies:${req.workspaceId || "global"}`]);
+      }
+      const waitingRows = dependencyAware ? await blockDB.getDelegatedItems(req.workspaceId, client) : [];
+      const blocking = waitingRows.filter(activeTaskDependency)
+        .filter(row => String((row.properties || {}).blockerBlockId) === String(existing.id));
+      if (blocking.length) {
+        throw clientError(`This task unlocks ${blocking.length} other task${blocking.length === 1 ? "" : "s"}. Change or remove those dependencies first.`, 409);
+      }
+      const dependentRelations = waitingRows.filter(activeTaskDependency)
+        .filter(row => String((row.properties || {}).linkedBlockId) === String(existing.id));
+
+      const deleteAt = Date.now();
+      await stampSlackDeleteBoundary(existing, deleteAt);
+      if (props.startedAt) {
+        await pauseWork({ block: existing, atMs: deleteAt, actor: "dcc:delete", actionId: `delete:${existing.id}:${existing.updated_at || props.startedAt}` });
+      }
+      if (client) {
+        existing = await blockDB.getBlockIncludingDeleted(req.params.id, client, true);
+        if (!existing) throw clientError("Block not found", 404);
+        assertBlockOwnership(existing, req.workspaceId);
+        props = existing.properties || {};
+      }
+
+      if (props.kind === "responsibility_item" && props.repeatType === "scheduled") {
+        result = await respStore.changeScheduledSeries({
           id: req.params.id,
           workspaceId: req.workspaceId,
           userId: req.session && req.session.userId,
           action: "delete",
           scope: "series",
-        })
-      : await blockDB.deleteBlock(req.params.id);
+        });
+      } else if (dependentRelations.length) {
+        const subtree = await blockDB.getSubtree([existing.id], req.workspaceId, client);
+        const activeRelationIds = new Set(dependentRelations.map(row => String(row.id)));
+        for (const row of (subtree.length ? subtree : [existing])) {
+          if (!activeRelationIds.has(String((row.properties || {}).dependencyWaitingItemId || ""))) continue;
+          const next = { ...(row.properties || {}) };
+          delete next.dependencyWaitingItemId;
+          await blockDB.updateBlock(row.id, { properties: next }, client);
+          releasedDependencyTaskIds.push(row.id);
+        }
+        for (const relation of dependentRelations) {
+          const at = new Date().toISOString();
+          await blockDB.updateBlock(relation.id, { properties: waitingItems.normalizeProperties({
+            status: "done", completedAt: at, closureReason: "dependent-deleted", snoozedUntil: null,
+          }, relation.properties || {}) }, client);
+          closedDependencyIds.push(relation.id);
+        }
+        result = await blockDB.deleteBlock(req.params.id, client);
+      } else {
+        result = await blockDB.deleteBlock(req.params.id, client || undefined);
+      }
+      if (client) await client.query("COMMIT");
+    } catch (error) {
+      if (client) {
+        try { await client.query("ROLLBACK"); } catch { /* preserve delete error */ }
+      }
+      throw error;
+    } finally {
+      if (client) client.release();
+    }
     await transitionLinkedTriage(existing, "release", Date.now());
-    broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id], clientId: req.query._clientId }, req.workspaceId);
+    broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id].concat(closedDependencyIds, releasedDependencyTaskIds), clientId: req.query._clientId }, req.workspaceId);
     await syncSlack({ ...existing, deleted_at: result.deleted_at || new Date().toISOString(), properties: existing.properties || props });
     return result;
   }));
@@ -603,16 +740,31 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks/batch", route(async (req, res) => {
     const { operations, _clientId } = req.body;
     if (!Array.isArray(operations)) { res.status(400).json({ error: "operations must be an array" }); return; }
-    const baseLessTransition = operations.some(op => op && op.op === "update" && op.completionIntent
-      && !Object.prototype.hasOwnProperty.call(op, "completionBaseRevision"));
-    if (baseLessTransition) {
-      res.status(400).json({
-        error: "completionBaseRevision is required for completion transitions",
-        code: "COMPLETION_BASE_REQUIRED",
+    const batchCompletion = operations.some(op => op && op.op === "update" && op.completionIntent);
+    if (batchCompletion) {
+      res.status(409).json({
+        error: "Complete tasks through the task completion endpoint",
+        code: "COMPLETION_ENDPOINT_REQUIRED",
       });
       return;
     }
     const { userId, workspaceId } = await resolveOwnerStrict(req);
+
+    for (const op of operations) {
+      if (!op || typeof op !== "object") continue;
+      const opProps = typeof op.properties === "string" ? safeParseProps(op.properties) : (op.properties || {});
+      if ((op.op === "create" || op.op === "update") && waitingItems.isTaskDependency(opProps)) {
+        res.status(409).json({ error: "Mutate task dependencies through the Waiting API" });
+        return;
+      }
+      if ((op.op === "update" || op.op === "delete") && op.id) {
+        const target = await blockDB.getBlockIncludingDeleted(op.id);
+        if (target && waitingItems.isTaskDependency(target)) {
+          res.status(409).json({ error: "Mutate task dependencies through the Waiting API" });
+          return;
+        }
+      }
+    }
 
     // AUTHORIZE every block id this batch REFERENCES, before batchOp opens its
     // transaction. update / delete / reorder arrive with caller-supplied ids and were
@@ -659,11 +811,79 @@ module.exports = function mount(app, ctx) {
       const block = await blockDB.getBlockIncludingDeleted(op.id);
       if (block) deletedBlocks.push(block);
     }
-    for (const block of deletedBlocks) {
-      const deleteAt = Date.now();
-      await stampSlackDeleteBoundary(block, deleteAt);
-      if ((block.properties || {}).startedAt) {
-        await pauseWork({ block, atMs: deleteAt, actor: "dcc:delete", actionId: `batch-delete:${block.id}:${block.updated_at || (block.properties || {}).startedAt}` });
+    let batchOps = opsWithUser;
+    let publicResultIndexes = null;
+    const dependencyBroadcastIds = [];
+    let dependencyClient = null;
+    const dependencyDeletes = deletedBlocks.filter(block => !block.deleted_at && TaskModel.isTaskRow(block));
+    if (dependencyDeletes.length) {
+      dependencyClient = await pool.connect();
+      try {
+        await dependencyClient.query("BEGIN");
+        await dependencyClient.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`task-dependencies:${workspaceId || "global"}`]);
+        const deleteIds = new Set(dependencyDeletes.map(block => String(block.id)));
+        const activeDependencies = (await blockDB.getDelegatedItems(workspaceId, dependencyClient)).filter(activeTaskDependency);
+        const blocking = activeDependencies.filter(relation => {
+          const p = relation.properties || {};
+          return deleteIds.has(String(p.blockerBlockId)) && !deleteIds.has(String(p.linkedBlockId));
+        });
+        if (blocking.length) {
+          throw clientError("A task in this delete still unlocks another task. Remove that dependency first.", 409);
+        }
+
+        const relationsByDependent = new Map();
+        for (const relation of activeDependencies) {
+          const linkedId = String((relation.properties || {}).linkedBlockId || "");
+          if (!deleteIds.has(linkedId)) continue;
+          if (!relationsByDependent.has(linkedId)) relationsByDependent.set(linkedId, []);
+          relationsByDependent.get(linkedId).push(relation);
+        }
+        const expanded = [];
+        const publicIndexes = [];
+        const updatedTaskIds = new Set();
+        const closedRelationIds = new Set();
+        for (const op of opsWithUser) {
+          if (op && op.op === "delete" && op.id && relationsByDependent.has(String(op.id))) {
+            for (const relation of relationsByDependent.get(String(op.id))) {
+              const subtree = await blockDB.getSubtree([op.id], workspaceId, dependencyClient);
+              for (const row of subtree) {
+                if (updatedTaskIds.has(row.id)
+                    || String((row.properties || {}).dependencyWaitingItemId || "") !== String(relation.id)) continue;
+                const properties = { ...(row.properties || {}) };
+                delete properties.dependencyWaitingItemId;
+                expanded.push({ op: "update", id: row.id, properties });
+                updatedTaskIds.add(row.id);
+                dependencyBroadcastIds.push(row.id);
+              }
+              if (!closedRelationIds.has(relation.id)) {
+                const at = new Date().toISOString();
+                expanded.push({ op: "update", id: relation.id, properties: waitingItems.normalizeProperties({
+                  status: "done", completedAt: at, closureReason: "dependent-deleted", snoozedUntil: null,
+                }, relation.properties || {}) });
+                closedRelationIds.add(relation.id);
+                dependencyBroadcastIds.push(relation.id);
+              }
+            }
+          }
+          publicIndexes.push(expanded.length);
+          expanded.push(op);
+        }
+        batchOps = expanded;
+        publicResultIndexes = publicIndexes;
+        for (const block of dependencyDeletes) {
+          const deleteAt = Date.now();
+          await stampSlackDeleteBoundary(block, deleteAt);
+          if ((block.properties || {}).startedAt) {
+            await pauseWork({ block, atMs: deleteAt, actor: "dcc:delete", actionId: `batch-delete:${block.id}:${block.updated_at || (block.properties || {}).startedAt}` });
+          }
+        }
+        for (const block of dependencyDeletes) {
+          await blockDB.getBlockIncludingDeleted(block.id, dependencyClient, true);
+        }
+      } catch (error) {
+        try { await dependencyClient.query("ROLLBACK"); } catch { /* preserve dependency error */ }
+        dependencyClient.release();
+        throw error;
       }
     }
 
@@ -680,7 +900,7 @@ module.exports = function mount(app, ctx) {
     // Deduped creates are REMOVED from the ops handed to batchOp and spliced back
     // into the response at their original index, so `result.blocks[i]` still answers
     // `operations[i]` for every caller that pairs them up.
-    async function runBatch(ops) {
+    async function runBatch(ops, transactionClient) {
       const resolved = new Map();   // original index -> row already on disk
       const echoes = new Map();     // original index -> index of the earlier op in THIS batch that mints it
       const firstForKey = new Map();
@@ -712,7 +932,7 @@ module.exports = function mount(app, ctx) {
         if (key) firstForKey.set(key, i);
         toRun.push({ i, op });
       }
-      const raw = toRun.length ? await blockDB.batchOp(toRun.map(t => t.op)) : { batchId: null, blocks: [] };
+      const raw = toRun.length ? await blockDB.batchOp(toRun.map(t => t.op), transactionClient) : { batchId: null, blocks: [] };
       const byIndex = new Map();
       toRun.forEach((t, n) => byIndex.set(t.i, raw.blocks[n]));
       const rowAt = (i) => {
@@ -733,20 +953,31 @@ module.exports = function mount(app, ctx) {
 
     let result;
     try {
-      result = await runBatch(opsWithUser);
+      result = await runBatch(batchOps, dependencyClient);
+      if (dependencyClient) await dependencyClient.query("COMMIT");
     } catch (err) {
       // A concurrent writer won the key between our lookup and the insert. batchOp is
       // fully transactional, so the rollback left nothing behind and re-resolving is
       // clean: the winner is committed and visible now, so the retry dedupes against
       // it instead of colliding. Exactly ONE retry — a second conflict is no longer
       // the narrow race this handles and should surface rather than spin.
+      if (dependencyClient) {
+        try { await dependencyClient.query("ROLLBACK"); } catch { /* preserve batch error */ }
+        throw err;
+      }
       if (!blockDB.isIdempotencyConflict(err)) throw err;
-      result = await runBatch(opsWithUser);
+      result = await runBatch(batchOps, null);
+    } finally {
+      if (dependencyClient) dependencyClient.release();
+    }
+
+    if (publicResultIndexes) {
+      result = { ...result, blocks: publicResultIndexes.map(index => result.blocks[index]).filter(block => block !== undefined) };
     }
 
     for (const block of deletedBlocks) await transitionLinkedTriage(block, "release", Date.now());
 
-    broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b && (b.id || b.reordered)).filter(Boolean), clientId: _clientId }, req.workspaceId);
+    broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b && (b.id || b.reordered)).filter(Boolean).concat(dependencyBroadcastIds), clientId: _clientId }, req.workspaceId);
     for (const block of deletedBlocks) await syncSlack({ ...block, deleted_at: new Date().toISOString() });
     for (const block of result.blocks || []) if (block && block.id && !block.deleted_at) await syncSlack(block);
     return result;
@@ -1698,10 +1929,66 @@ module.exports = function mount(app, ctx) {
     const body = req.body || {};
     if (!body.properties || typeof body.properties !== "object") { res.status(400).json({ error: "properties required" }); return; }
     const props = waitingItems.normalizeProperties(body.properties);
+    const newBlocker = body.newBlocker && typeof body.newBlocker === "object" ? body.newBlocker : null;
+    if (newBlocker && props.blockerType === "task" && props.linkedBlockId && !props.blockerBlockId) {
+      props.blockerBlockId = "__new_prerequisite__";
+    }
     // The slimmed modal anchors items on myTask; title survives for legacy items.
     const named = v => typeof v === "string" && v.trim();
-    if (!named(props.title) && !named(props.myTask)) { res.status(400).json({ error: "properties.title or properties.myTask required" }); return; }
+    if (!named(props.title) && !named(props.myTask) && !named(newBlocker && newBlocker.title)) { res.status(400).json({ error: "properties.title or properties.myTask required" }); return; }
     const { userId, workspaceId } = await resolveOwnerStrict(req);
+    if (waitingItems.isTaskDependency(props)) {
+      const client = await pool.connect();
+      let created;
+      let createdBlocker = null;
+      let affected = [];
+      try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`task-dependencies:${workspaceId || "global"}`]);
+        if (newBlocker) {
+          const title = String(newBlocker.title || "").trim().slice(0, 300);
+          if (!title) throw clientError("New prerequisite title is required");
+          const duration = Math.max(1, Math.min(1440, Number(newBlocker.duration) || 30));
+          const priority = ["Low", "Medium", "High"].includes(newBlocker.priority) ? newBlocker.priority : "Medium";
+          const localId = `dependency-prerequisite-${crypto.randomUUID()}`;
+          createdBlocker = await blockDB.createBlock({
+            type: "block", parent_id: null, date: null, sort_order: null,
+            user_id: userId, workspace_id: workspaceId,
+            properties: {
+              kind: "backlog", local_id: localId, title, type: "task", source: "manual",
+              priority, stage: "Backlog", status: "open", duration, durMin: duration,
+              added_at: new Date().toISOString(),
+            },
+          }, client);
+          props.blockerBlockId = createdBlocker.id;
+          props.title = title;
+        }
+        const context = await taskDependencyContext(props, workspaceId, null, client);
+        props.blockerBlockId = context.blocker.id;
+        props.linkedBlockId = context.blocked.id;
+        props.title = String((context.blocker.properties || {}).title || props.title || "Prerequisite").slice(0, 300);
+        props.myTask = String((context.blocked.properties || {}).title || props.myTask || "Blocked task").slice(0, 300);
+        props.status = "open";
+        props.checkInDate = null;
+        props.snoozedUntil = null;
+        created = await blockDB.createBlock({
+          type: "block", parent_id: null, date: null, properties: props, sort_order: 0,
+          user_id: userId, workspace_id: workspaceId,
+        }, client);
+        affected = await setDependencyMarker(context.subtree, created.id, client);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        if (error && error.code === "23505" && error.constraint === "idx_blocks_task_dependency_dependent_active") {
+          throw clientError("That task already has an active prerequisite", 409);
+        }
+        throw error;
+      } finally {
+        client.release();
+      }
+      broadcast("blocks-changed", { action: "task-dependency-create", blockIds: [created.id].concat(createdBlocker ? [createdBlocker.id] : [], affected) }, workspaceId);
+      return created;
+    }
     const created = await blockDB.createBlock({
       type: "block",
       parent_id: null,
@@ -1726,6 +2013,67 @@ module.exports = function mount(app, ctx) {
     const incoming = (req.body && req.body.properties) || {};
     // Preserve kind discriminator — clients cannot unset it via PATCH
     const merged = waitingItems.normalizeProperties(incoming, existing.properties || {});
+    const newBlocker = req.body && req.body.newBlocker && typeof req.body.newBlocker === "object"
+      ? req.body.newBlocker : null;
+    if (newBlocker && waitingItems.isTaskDependency(existing)) {
+      merged.blockerType = "task";
+      merged.blockerBlockId = "__new_prerequisite__";
+      merged.linkedBlockId = (existing.properties || {}).linkedBlockId;
+    }
+    const existingIsDependency = waitingItems.isTaskDependency(existing);
+    const mergedIsDependency = waitingItems.isTaskDependency(merged);
+    if (existingIsDependency !== mergedIsDependency) {
+      throw clientError("Task dependencies must be created or removed as a complete link");
+    }
+    if (mergedIsDependency) {
+      const client = await pool.connect();
+      let result;
+      let createdBlocker = null;
+      try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`task-dependencies:${req.workspaceId || "global"}`]);
+        if (newBlocker) {
+          const { userId, workspaceId } = await resolveOwnerStrict(req);
+          const title = String(newBlocker.title || "").trim().slice(0, 300);
+          if (!title) throw clientError("New prerequisite title is required");
+          const duration = Math.max(1, Math.min(1440, Number(newBlocker.duration) || 30));
+          const priority = ["Low", "Medium", "High"].includes(newBlocker.priority) ? newBlocker.priority : "Medium";
+          createdBlocker = await blockDB.createBlock({
+            type: "block", parent_id: null, date: null, sort_order: null,
+            user_id: userId, workspace_id: workspaceId,
+            properties: {
+              kind: "backlog", local_id: `dependency-prerequisite-${crypto.randomUUID()}`,
+              title, type: "task", source: "manual", priority, stage: "Backlog",
+              status: "open", duration, durMin: duration, added_at: new Date().toISOString(),
+            },
+          }, client);
+          merged.blockerBlockId = createdBlocker.id;
+          merged.title = title;
+        }
+        const context = await taskDependencyContext(merged, req.workspaceId, existing.id, client);
+        if (String(context.blocked.id) !== String((existing.properties || {}).linkedBlockId || "")) {
+          throw clientError("Remove this dependency before linking a different blocked task", 409);
+        }
+        merged.blockerBlockId = context.blocker.id;
+        merged.linkedBlockId = context.blocked.id;
+        merged.title = String((context.blocker.properties || {}).title || merged.title || "Prerequisite").slice(0, 300);
+        merged.myTask = String((context.blocked.properties || {}).title || merged.myTask || "Blocked task").slice(0, 300);
+        merged.status = (existing.properties || {}).status || "open";
+        if (String((existing.properties || {}).blockerBlockId || "") !== String(merged.blockerBlockId || "")) {
+          merged.status = "open";
+          delete merged.readyAt;
+        }
+        result = await blockDB.updateBlock(req.params.id, { properties: merged }, client);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+      broadcast("blocks-changed", { action: "delegated-update", blockIds: [req.params.id].concat(createdBlocker ? [createdBlocker.id] : []) }, req.workspaceId);
+      return result;
+    }
     const result = await blockDB.updateBlock(req.params.id, { properties: merged });
     broadcast("blocks-changed", { action: "delegated-update", blockIds: [req.params.id] }, req.workspaceId);
     return result;
@@ -1785,6 +2133,10 @@ module.exports = function mount(app, ctx) {
     const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Waiting item not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
+    if (waitingItems.isTaskDependency(existing) && (existing.properties || {}).status !== "ready") {
+      res.status(409).json({ error: "Complete the prerequisite before completing this blocked task" });
+      return;
+    }
     const completedAt = String(req.body && req.body.completedAt || new Date().toISOString());
     if (Number.isNaN(new Date(completedAt).getTime())) { res.status(400).json({ error: "completedAt must be a valid timestamp" }); return; }
 
@@ -1803,6 +2155,7 @@ module.exports = function mount(app, ctx) {
       : null;
     let updated;
     let blockIds = [existing.id];
+    let dependencyTransitions = [];
     if (linkedTask && !linkedTask.deleted_at) {
       assertBlockOwnership(linkedTask, req.workspaceId);
       if (!isWorkTaskRow(linkedTask)) { res.status(400).json({ error: "Linked block is not a task" }); return; }
@@ -1823,6 +2176,7 @@ module.exports = function mount(app, ctx) {
         atMs: Date.parse(completedAt), actor: userId ? `dcc:${userId}` : "dcc", mutationId,
       });
       linkedTask = result.task;
+      dependencyTransitions = result.dependencyTransitions || [];
       updated = (result.companionBlocks || []).find(row => row.id === existing.id) || existing;
       blockIds = result.broadcastIds || [existing.id, linkedTask.id];
       if (linkedTask) await transitionLinkedTriage(linkedTask, "done", Date.parse(completedAt));
@@ -1831,19 +2185,26 @@ module.exports = function mount(app, ctx) {
       linkedTask = null;
       updated = await blockDB.updateBlock(existing.id, { properties });
     }
-    broadcast("blocks-changed", { action: "waiting-completed", blockIds, date: linkedTask && linkedTask.date || null }, req.workspaceId);
-    return { ok: true, status: "completed", item: updated, task: linkedTask };
+    broadcast("blocks-changed", { action: "waiting-completed", blockIds, dependencyTransitions, date: linkedTask && linkedTask.date || null }, req.workspaceId);
+    return { ok: true, status: "completed", item: updated, task: linkedTask, dependencyTransitions };
   }));
 
   app.post("/api/waiting-items/:id/unblock", route(async (req, res) => {
-    const taskBlockId = String(req.body && req.body.taskBlockId || "").trim();
-    const date = req.body && req.body.date;
-    if (!taskBlockId || !isValidDate(date)) { res.status(400).json({ error: "taskBlockId and date are required" }); return; }
     const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Waiting item not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
+    const existingProps = existing.properties || {};
+    const destination = String(req.body && req.body.destination || "schedule").toLowerCase();
+    const taskBlockId = String(req.body && req.body.taskBlockId || existingProps.linkedBlockId || "").trim();
+    const date = req.body && req.body.date;
+    if (!taskBlockId || !["schedule", "backlog"].includes(destination)) { res.status(400).json({ error: "taskBlockId and a valid destination are required" }); return; }
+    if (waitingItems.isTaskDependency(existing) && taskBlockId !== String(existingProps.linkedBlockId || "")) {
+      res.status(400).json({ error: "Task dependency actions must target the linked blocked task" });
+      return;
+    }
+    if (destination === "schedule" && !isValidDate(date)) { res.status(400).json({ error: "date is required when scheduling" }); return; }
     const task = await blockDB.getBlock(taskBlockId);
-    if (!task || task.deleted_at || task.date !== date) { res.status(400).json({ error: "Underlying task was not scheduled on the requested date" }); return; }
+    if (!task || task.deleted_at || (destination === "schedule" && task.date !== date)) { res.status(400).json({ error: "Underlying task was not placed at the requested destination" }); return; }
     assertBlockOwnership(task, req.workspaceId);
     const now = new Date().toISOString();
     const properties = waitingItems.normalizeProperties({
@@ -1851,8 +2212,33 @@ module.exports = function mount(app, ctx) {
       completedAt: now,
       unblockedAt: now,
       unblockedTaskId: taskBlockId,
+      unblockedDestination: destination,
       snoozedUntil: null,
     }, existing.properties || {});
+    if (waitingItems.isTaskDependency(existing)) {
+      const subtree = await blockDB.getSubtree([task.id], req.workspaceId);
+      const client = await pool.connect();
+      let updated;
+      try {
+        await client.query("BEGIN");
+        updated = await blockDB.updateBlock(existing.id, { properties }, client);
+        for (const row of (subtree.length ? subtree : [task])) {
+          if (String((row.properties || {}).dependencyWaitingItemId || "") !== String(existing.id)) continue;
+          const next = { ...(row.properties || {}) };
+          delete next.dependencyWaitingItemId;
+          await blockDB.updateBlock(row.id, { properties: next, date: destination === "backlog" ? null : row.date }, client);
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+      const affectedIds = (subtree.length ? subtree : [task]).map(row => row.id);
+      broadcast("blocks-changed", { action: "waiting-unblocked", blockIds: [existing.id].concat(affectedIds), date: destination === "schedule" ? date : null }, req.workspaceId);
+      return { ok: true, status: "unblocked", item: updated, task };
+    }
     const updated = await blockDB.updateBlock(existing.id, { properties });
     broadcast("blocks-changed", { action: "waiting-unblocked", blockIds: [existing.id, taskBlockId], date }, req.workspaceId);
     return { ok: true, status: "unblocked", item: updated, task };
@@ -1863,8 +2249,36 @@ module.exports = function mount(app, ctx) {
     if (!existing) { res.status(404).json({ error: "Delegated item not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
     if ((existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Delegated item not found" }); return; }
+    const affectedIds = [];
+    if (waitingItems.isTaskDependency(existing)) {
+      const linked = await blockDB.findUniqueLiveBlockByReference((existing.properties || {}).linkedBlockId, req.workspaceId);
+      const client = await pool.connect();
+      let result;
+      try {
+        await client.query("BEGIN");
+        if (linked) {
+          const subtree = await blockDB.getSubtree([linked.id], req.workspaceId);
+          for (const row of (subtree.length ? subtree : [linked])) {
+            if (String((row.properties || {}).dependencyWaitingItemId || "") !== String(existing.id)) continue;
+            const next = { ...(row.properties || {}) };
+            delete next.dependencyWaitingItemId;
+            await blockDB.updateBlock(row.id, { properties: next, date: null }, client);
+            affectedIds.push(row.id);
+          }
+        }
+        result = await blockDB.deleteBlock(req.params.id, client);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+      broadcast("blocks-changed", { action: "delegated-delete", blockIds: [req.params.id].concat(affectedIds) }, req.workspaceId);
+      return result;
+    }
     const result = await blockDB.deleteBlock(req.params.id);
-    broadcast("blocks-changed", { action: "delegated-delete", blockIds: [req.params.id] }, req.workspaceId);
+    broadcast("blocks-changed", { action: "delegated-delete", blockIds: [req.params.id].concat(affectedIds) }, req.workspaceId);
     return result;
   }));
 

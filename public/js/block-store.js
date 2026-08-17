@@ -560,6 +560,9 @@
               walRemove(entry._walId);
               (result.affectedTasks || []).forEach(cacheSet);
               if (result.task && result.task.type !== "legacy_task") cacheSet(result.task);
+              if (typeof window.notifyReadyTaskDependencies === "function") {
+                window.notifyReadyTaskDependencies(result.dependencyTransitions || []);
+              }
               if (typeof CustomEvent === "function" && typeof window.dispatchEvent === "function") {
                 window.dispatchEvent(new CustomEvent("task-completion-confirmed", {
                   detail: { ...result, replayed: true, clientMeta: entry.meta || null },
@@ -907,6 +910,9 @@
           walRemove(walId);
           (result.affectedTasks || []).forEach(cacheSet);
           if (result.task && result.task.type !== "legacy_task") cacheSet(result.task);
+          if (typeof window.notifyReadyTaskDependencies === "function") {
+            window.notifyReadyTaskDependencies(result.dependencyTransitions || []);
+          }
           setSaved();
           if (typeof CustomEvent === "function" && typeof window.dispatchEvent === "function") {
             window.dispatchEvent(new CustomEvent("task-completion-confirmed", { detail: result }));
@@ -1416,6 +1422,9 @@
     // Called by SSE when blocks change from another source (tab, scheduled task)
     async handleBlocksChanged(event) {
       if (event.clientId === CLIENT_ID) return; // ignore own changes
+      if (typeof window.notifyReadyTaskDependencies === "function") {
+        window.notifyReadyTaskDependencies(event.dependencyTransitions || []);
+      }
       // A row-level reconciliation that starts after a full-day GET must win. Bump
       // the same generation used by loadDay so the older snapshot cannot clear and
       // replace the just-refreshed foreign row when it resolves later.

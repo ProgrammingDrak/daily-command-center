@@ -34,6 +34,14 @@ test("opening a reminder targets the full Waiting card and its lifecycle actions
   assert.match(WAITING_SRC, /postWaitingAction\(id, "complete"/);
 });
 
+test("task dependency UI uses atomic creation and reconciles task projections", () => {
+  assert.match(WAITING_SRC, /body: JSON\.stringify\(\{ properties, \.\.\.\(newBlocker \? \{ newBlocker \} : \{\}\) \}\)/);
+  assert.doesNotMatch(WAITING_SRC, /window\.blockStore\.createBlock\("block", \{\s*kind: "backlog"/);
+  assert.match(WAITING_SRC, /if \(typeof refoldTaskStateFromBlockCache === "function"\) refoldTaskStateFromBlockCache\(\)/);
+  assert.match(WAITING_SRC, /if \(typeof render === "function"\) render\(\)/);
+  assert.match(WAITING_SRC, /if \(isTaskDependency\(item\)\) return renderTaskDependencyCard\(item\)/);
+});
+
 test("source-backed drafts consolidate into Review and Send", () => {
   const source = mustSlice(TRIAGE_SRC, /^function triageDraftAction\(item\)\{[\s\S]*?\n\}/m, "triageDraftAction");
   const actionFor = vm.runInNewContext("(" + source + ")", {

@@ -55,6 +55,7 @@ function mountApp() {
     },
     getBlocksByKind: async (kind, workspaceId) => Object.values(rows).filter(row =>
       !row.deleted_at && row.workspace_id === workspaceId && (row.properties || {}).kind === kind),
+    getDelegatedItems: async () => [],
   };
   require("./routes/blocks.js")(app, {
     blockDB,
@@ -65,7 +66,10 @@ function mountApp() {
     getTodayStr: () => "2026-08-14",
     isAllowedSweepBlockItem: () => true,
     isValidDate: () => true,
-    pool: { query: async () => ({ rows: [] }) },
+    pool: {
+      query: async () => ({ rows: [] }),
+      connect: async () => ({ query: async () => ({ rows: [] }), release() {} }),
+    },
   });
   return { app, rows };
 }

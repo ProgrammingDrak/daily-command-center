@@ -1019,6 +1019,23 @@ const POST_SCHEMA_STATEMENTS = [
       ON blocks (workspace_id, (properties->>'kind'), created_at)
       WHERE deleted_at IS NULL;
   `],
+  ["idx_blocks_task_dependency_blocker", `
+    CREATE INDEX IF NOT EXISTS idx_blocks_task_dependency_blocker
+      ON blocks (workspace_id, (properties->>'blockerBlockId'))
+      WHERE deleted_at IS NULL
+        AND type = 'block'
+        AND properties->>'kind' = 'delegated_item'
+        AND properties->>'blockerType' = 'task';
+  `],
+  ["idx_blocks_task_dependency_dependent_active", `
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_blocks_task_dependency_dependent_active
+      ON blocks (workspace_id, (properties->>'linkedBlockId'))
+      WHERE deleted_at IS NULL
+        AND type = 'block'
+        AND properties->>'kind' = 'delegated_item'
+        AND properties->>'blockerType' = 'task'
+        AND COALESCE(properties->>'status', 'open') IN ('open', 'ready');
+  `],
 
   // Serves db.getBlocksByDateIncludingDeleted, the tombstone-inclusive day load
   // that every dedupe path and responsibility-store.loadDaySlottingContext runs.

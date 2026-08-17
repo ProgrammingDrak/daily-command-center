@@ -108,3 +108,14 @@ test("unblocked and completed rows never enter attention or triage", () => {
   }
 });
 
+test("task dependencies stay out of follow-up cadence and triage", () => {
+  const dependency = item({
+    blockerType: "task",
+    blockerBlockId: "buy-fixture",
+    linkedBlockId: "install-fixture",
+    checkInDate: "2026-08-11",
+  });
+  assert.equal(Waiting.isTaskDependency(dependency), true);
+  assert.equal(Waiting.attentionFor(dependency, "2026-08-12"), null);
+  assert.deepEqual(Waiting.mergeTriage({ open_items: [] }, [dependency], "2026-08-12").open_items, []);
+});
