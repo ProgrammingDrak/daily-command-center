@@ -711,7 +711,7 @@ async function deleteTriageItem(triageId) {
   const previousParent = triageParents[triageId];
   if (triageParents[triageId]) { delete triageParents[triageId]; saveTriageParents(triageParents); }
   if (typeof showToast === "function") {
-    showToast("Triage item deleted", "success", 8000, {
+    showToast(isWaitingCheckIn(item) ? "Check-in deleted. The delegated task is still open in Waiting" : "Triage item deleted", "success", 8000, {
       label: "Undo",
       onClick: async () => {
         let restoredItem = item;
@@ -942,6 +942,31 @@ function triageReceivedDateHtml(item){
   const received=triageReceivedDate(item);
   return received?'<span title="'+DCC.esc(received.title)+'">'+DCC.esc(received.label)+'</span>':'';
 }
+// A triage item that came from a Waiting item is a CHECK-IN REMINDER, not the task.
+// It carries the shared --waiting hue and a labelled pill (same look as the itinerary
+// row, see delegated.js waitingChipHtml) so scheduling, doing, or deleting the
+// reminder is never mistaken for closing the delegated task. The pill jumps to the
+// Waiting item through the document-level [data-waiting-open] handler.
+function isWaitingCheckIn(item){
+  return !!(item && (item.waiting_item_id || String(item.source || "").replace(/-/g, "_") === "waiting_checkin"));
+}
+function waitingCheckInPillHtml(item){
+  if(!isWaitingCheckIn(item))return '';
+  const who=(item.contact&&(item.contact.name||item.contact.handle))||'';
+  const id=item.waiting_item_id||'';
+  const tip="Check-in reminder"+(who?" for "+who:"")+
+    ": this handles the reminder only. The delegated task stays open in Waiting."+
+    (id?" Click to open it.":"");
+  const tag=id?"button":"span";
+  return '<'+tag+(id?' type="button"':'')+' class="waiting-pill checkin"'+
+    (id?' data-waiting-open="'+DCC.esc(id)+'"':'')+
+    ' title="'+DCC.esc(tip)+'">&#128276; Check-in</'+tag+'>';
+}
+function waitingCheckInDeleteTitle(item){
+  return isWaitingCheckIn(item)
+    ? "Delete this check-in reminder (the delegated task stays open in Waiting)"
+    : "Delete triage item";
+}
 function waitingItemLinkHtml(item, className){
   if(!item||!item.waiting_item_id)return '';
   return '<button type="button" class="'+className+'" data-waiting-item="'+DCC.esc(item.waiting_item_id)+'" title="Open the original Waiting item to schedule, complete, edit, or dismiss the task">Open task</button>';
@@ -1002,7 +1027,7 @@ function buildTriageCard(item) {
     ageParts.push(hrs > 0 ? hrs + "h ago" : "just now");
   }
   const triTypeColors = {unanswered_dm:"#a78bfa",email_needs_response:"#f87171",slack_mention:"#22d3ee"};
-  const barColor = isDismissed ? "var(--green)" : (triTypeColors[item.type] || "#a78bfa");
+  const barColor = isDismissed ? "var(--green)" : (isWaitingCheckIn(item) ? "var(--waiting,#a31c43)" : (triTypeColors[item.type] || "#a78bfa"));
   const priCls = item.priority === "high" ? "pri-hi" : item.priority === "medium" ? "pri-med" : "pri-lo";
   const t = TRI_ICONS[item.type] || {emoji:"\u{2753}"};
   const linkLabel = DCC.esc(item.link_label || item.action_label || "Open");
@@ -1016,11 +1041,12 @@ function buildTriageCard(item) {
         : draftAction.kind === "copy"
           ? '<button type="button" class="tri-copy-draft" data-copy-draft="' + DCC.esc(item.id) + '" style="background:var(--cyan-bg,rgba(34,211,238,0.1));color:var(--cyan,#22d3ee);padding:1px 6px;border:0;border-radius:4px;font-size:9px;font-weight:700;cursor:pointer">Copy Draft</button>'
           : '<span style="background:var(--cyan-bg,rgba(34,211,238,0.1));color:var(--cyan,#22d3ee);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700">Draft ready</span>');
-  return '<div class="board-card' + (isDismissed ? ' board-card-done' : '') + '" data-tri-id="' + item.id + '" style="' + (isDismissed ? 'opacity:0.5' : '') + '">' +
+  return '<div class="board-card' + (isDismissed ? ' board-card-done' : '') + (isWaitingCheckIn(item) ? ' waiting-checkin-card' : '') + '" data-tri-id="' + item.id + '" style="' + (isDismissed ? 'opacity:0.5' : '') + '">' +
     '<div class="bar" style="background:' + barColor + '"></div>' +
     '<div class="body">' +
       '<div class="title-row">' +
         '<span class="ttl">' + t.emoji + ' ' + DCC.esc(item.title) + '</span>' +
+        waitingCheckInPillHtml(item) +
         triEscBadge(item.escalation) +
       '</div>' +
       '<div class="meta">' +
@@ -1039,7 +1065,7 @@ function buildTriageCard(item) {
     notesButton({id: item.id, title: item.title}) +
     '<div class="tri-check' + (isDismissed ? ' dismissed' : '') + '" data-dismiss-id="' + item.id + '" data-dismiss-title="' + (item.title || '').replace(/"/g, '&quot;') + '">\u2713</div>' +
     '<button class="tri-quick" data-dismiss-id="' + item.id + '" title="Quick complete">&#9889;</button>' +
-    '<button class="tri-delete-btn" data-delete-tri="' + item.id + '" title="Delete triage item" aria-label="Delete triage item">' +
+    '<button class="tri-delete-btn" data-delete-tri="' + item.id + '" title="' + DCC.esc(waitingCheckInDeleteTitle(item)) + '" aria-label="Delete triage item">' +
       '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>' +
     '</button>' +
   '</div>';
@@ -1334,7 +1360,9 @@ window.activeTriageItems=activeTriageItems;
 function buildScheduleTriageCard(item){
   const pri=triagePriorityLabel(item.priority);
   const priCls=pri==="High"?"pri-hi":pri==="Low"?"pri-lo":"pri-med";
-  const barColor=pri==="High"?"var(--red)":pri==="Low"?"var(--text-muted)":"var(--amber)";
+  // A check-in reminder is coloured by WHAT IT IS, not by the priority it inherited
+  // from its Waiting item -- that is the whole point of the shared --waiting hue.
+  const barColor=isWaitingCheckIn(item)?"var(--waiting,#a31c43)":(pri==="High"?"var(--red)":pri==="Low"?"var(--text-muted)":"var(--amber)");
   const safeTitle=(item.title||"Triage item").replace(/"/g,'&quot;');
   // Scheme-allowlist the draft/source URLs: they come from the sweep, so never
   // let a javascript:/data: URI reach an href.
@@ -1351,10 +1379,10 @@ function buildScheduleTriageCard(item){
         : draftAction.kind==="copy"
           ? '<button type="button" class="schedule-triage-copy" data-copy-draft="'+DCC.esc(item.id)+'" style="border:0;background:transparent;color:var(--green);font:inherit;font-weight:600;cursor:pointer;padding:0">Copy Draft</button>'
           : '<span style="color:var(--green);font-weight:600">Draft ready</span>');
-  return '<div class="board-card schedule-triage-card" data-schedule-triage-id="'+item.id+'">'+
+  return '<div class="board-card schedule-triage-card'+(isWaitingCheckIn(item)?' waiting-checkin-card':'')+'" data-schedule-triage-id="'+item.id+'">'+
     '<div class="bar" style="background:'+barColor+'"></div>'+
     '<div class="body">'+
-      '<div class="title-row"><span class="ttl" title="'+safeTitle+'">'+DCC.esc(item.title||"Triage item")+'</span>'+triEscBadge(item.escalation)+'</div>'+
+      '<div class="title-row"><span class="ttl" title="'+safeTitle+'">'+DCC.esc(item.title||"Triage item")+'</span>'+waitingCheckInPillHtml(item)+triEscBadge(item.escalation)+'</div>'+
       '<div class="meta"><span class="'+priCls+'">'+pri+'</span>'+triagePointsChip(item)+triageReceivedDateHtml(item)+'<span>'+ms(triageDuration(item))+'</span>'+
         (srcHref&&!draftAction?'<a href="'+srcHref+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">'+DCC.esc(item.link_label||item.action_label||"Open")+'</a>':'')+
         waitingItemLinkHtml(item,'schedule-triage-open-waiting')+
@@ -1366,7 +1394,7 @@ function buildScheduleTriageCard(item){
     '<button class="add-btn schedule-triage-schedule" data-triage-id="'+item.id+'">Schedule</button>'+
     '<button class="add-btn schedule-triage-done" data-triage-id="'+item.id+'" data-triage-title="'+safeTitle+'" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>'+
     '<button class="tri-quick schedule-triage-quick" data-triage-id="'+item.id+'" title="Quick complete">&#9889;</button>'+
-    '<button class="tri-delete-btn schedule-triage-delete" data-triage-id="'+item.id+'" title="Delete triage item" aria-label="Delete triage item">'+
+    '<button class="tri-delete-btn schedule-triage-delete" data-triage-id="'+item.id+'" title="'+DCC.esc(waitingCheckInDeleteTitle(item))+'" aria-label="Delete triage item">'+
       '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>'+
     '</button>'+
   '</div>';

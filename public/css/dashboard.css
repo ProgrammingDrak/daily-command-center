@@ -4,6 +4,15 @@
     --green:#22c55e; --green-bg:rgba(34,197,94,0.12); --amber:#f59e0b; --amber-bg:rgba(245,158,11,0.12);
     --red:#ef4444; --purple:#a78bfa; --purple-bg:rgba(167,139,250,0.12);
     --cyan:#22d3ee; --cyan-bg:rgba(34,211,238,0.10); --orange:#f97316; --orange-bg:rgba(249,115,22,0.12);
+    /* Waiting / delegated family. ONE hue for everything parked on someone else:
+     * the Waiting item, the original task it blocks, and the check-in reminders it
+     * spawns. Maroon: deep enough that nothing else in the palette moved, and far
+     * enough from --red that an urgent row still reads urgent. --waiting-ink is the
+     * READABLE member of the family -- a 9px pill label or a link in #a31c43 on a
+     * dark card is unreadable, so text takes the pale tint and the bars/borders take
+     * the deep one. */
+    --waiting:#a31c43; --waiting-bg:rgba(163,28,67,0.42); --waiting-border:rgba(163,28,67,0.66);
+    --waiting-ink:#f0a3b6;
     /* One step up from --bg: the "elevated surface" role — inputs, hovered/active
      * rows, code blocks, chips, cards-on-cards. vault.css consumes this 35 times
      * (it shipped through B1-B6 referencing it with no definition anywhere, so
@@ -2560,9 +2569,25 @@
 .task-dependency-pill.unlocks{color:var(--accent-light);background:rgba(59,130,246,.10);border-color:rgba(96,165,250,.38)}
 .task-dependency-pill.ready{color:var(--green);background:rgba(34,197,94,.10);border-color:rgba(34,197,94,.38)}
 .task-dependency-pill:hover{filter:brightness(1.18)}
+
+/* ── Waiting / delegated look ──
+ * Same hue on all three roles, different LABEL on each, because they are deleted
+ * differently: a check-in pill is a reminder (dropping it leaves the delegated task
+ * open), a "Waiting on X" pill is the original task. Both pills open the Waiting item,
+ * which is where Complete / Delete for the real work lives. */
+.waiting-pill{display:inline-flex;align-items:center;gap:4px;max-width:220px;padding:2px 7px;border-radius:999px;border:1px solid var(--waiting-border);background:var(--waiting-bg);color:var(--waiting-ink);font:inherit;font-size:9px;font-weight:800;line-height:1.35;cursor:pointer;vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:filter .12s}
+.waiting-pill.checkin{border-style:dashed}
+.waiting-pill:hover{filter:brightness(1.18)}
+span.waiting-pill{cursor:default}
+/* The row's LEFT BAR and the pill carry the hue, nothing else: no border, no wash
+ * around the row, so a delegated row still reads as an ordinary row of work
+ * (Drake, 2026-08-18). .waiting-row / .waiting-checkin-card / .cu-waiting-checkin
+ * stay on as markers for the bar color and as JS/test hooks. */
+.cu-title-line .waiting-pill{flex:0 0 auto;margin-left:4px}
 .delegated-card-body{flex:1;min-width:0}
 .delegated-card-title{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px}
-.delegated-card-link{font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border:1px solid var(--border);border-radius:999px;padding:1px 6px;color:var(--accent-light);flex-shrink:0}
+.delegated-card-link{font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border:1px solid var(--waiting-border);background:var(--waiting-bg);border-radius:999px;padding:1px 6px;color:var(--waiting-ink);flex-shrink:0}
+#delegated-blocked-count,details[open]>.tm-section-header #delegated-blocked-count{background:var(--waiting-bg);color:var(--waiting-ink)}
 .delegated-card-source{font-size:9px;font-weight:700;text-decoration:none;border:1px solid #93c5fd;border-radius:999px;padding:1px 6px;color:#60a5fa;flex-shrink:0}
 .delegated-card-source:hover{background:rgba(59,130,246,.12);text-decoration:none}
 .delegated-card-meta{display:flex;gap:10px;font-size:11px;color:var(--text-muted);margin-top:2px;flex-wrap:wrap}
@@ -2585,7 +2610,7 @@
 .resched-popover .resched-time-input:focus{border-color:var(--accent)}
 .resched-popover .resched-time-go{padding:5px 10px;border-radius:5px;border:1px solid var(--accent);background:rgba(59,130,246,0.18);color:var(--accent-light);font-size:11px;font-weight:600;cursor:pointer}
 .resched-popover .resched-time-go:hover{background:rgba(59,130,246,0.32)}
-.resched-popover .resched-tool[data-tool=delegate]:hover{border-color:#f472b6;color:#f472b6;background:rgba(244,114,182,0.12)}
+.resched-popover .resched-tool[data-tool=delegate]:hover{border-color:var(--waiting);color:var(--waiting-ink);background:var(--waiting-bg)}
 /* Urgency progress meter (mirrors .repeat-resp-meter). */
 .delegated-card-meter{height:5px;border-radius:999px;background:rgba(255,255,255,0.07);overflow:hidden;margin:7px 0 4px;border:1px solid rgba(255,255,255,0.05)}
 .delegated-card-meter span{display:block;height:100%;border-radius:inherit}
@@ -2602,7 +2627,7 @@
 .delegated-card-actions .delegated-edit:hover{border-color:var(--accent);color:var(--accent)}
 .delegated-card-actions .delegated-delete:hover{border-color:var(--red);color:var(--red)}
 .delegated-card.delegated-card-target{border-color:var(--accent-light);box-shadow:0 0 0 3px rgba(96,165,250,.18)}
-.tri-open-waiting,.schedule-triage-open-waiting{border:0;background:transparent;color:var(--accent-light);font:inherit;font-weight:700;cursor:pointer;padding:0;text-decoration:none}
+.tri-open-waiting,.schedule-triage-open-waiting{border:0;background:transparent;color:var(--waiting-ink);font:inherit;font-weight:700;cursor:pointer;padding:0;text-decoration:none}
 .tri-open-waiting:hover,.schedule-triage-open-waiting:hover{text-decoration:underline}
 
 /* Delegated create/edit modal (PIN 10.A commit 3) */

@@ -1104,3 +1104,32 @@ test("the Journal mood dialog uses semantic choices and its own focus trap", () 
   assert.match(source, /gbMoodReturnFocus/);
   assert.match(source, /overlay\.querySelectorAll\('button:not\(\[disabled\]\)/);
 });
+
+// A delegated check-in in the recap envelope is the same reminder the itinerary strip
+// shows, and "Drop" on it drops the reminder, never the delegated task. The row has to
+// say so here too, or the envelope becomes the one surface where the old confusion
+// survives. isWaitingCheckIn is triage.js's predicate, injected the way the module sees
+// it at runtime.
+test("a delegated check-in row in the envelope is labelled as a check-in", async () => {
+  const d = ymd(1);
+  const { ctx } = triageCtx(
+    { [d]: [dayRoot()] },
+    [d],
+    [TRI("w1", { source: "waiting_checkin", title: "Check in: Launch plan", waiting_item_id: "waiting-1" }),
+     TRI("s1")],
+    { isWaitingCheckIn: item => !!(item && (item.waiting_item_id || item.source === "waiting_checkin")) }
+  );
+  await ctx.window.initCatchUp();
+  const rows = [...rowsOf(ctx)];
+  const checkIn = rows.find(r => titleOf(r) === "Check in: Launch plan");
+  const plain = rows.find(r => titleOf(r) === "Reply to s1");
+  assert.ok(checkIn, "the check-in row rendered");
+  assert.ok(checkIn.className.includes("cu-waiting-checkin"), "the row carries the waiting marker");
+  assert.match(checkIn.innerHTML, /class="waiting-pill checkin"[^>]*>&#128276; Check-in<\/span>/);
+  // The pill sits inside the title line, which is where the CSS positions it.
+  assert.match(checkIn.innerHTML, /carryover-row-title"><\/div><span class="waiting-pill checkin"/);
+  assert.match(checkIn.innerHTML, /The delegated task stays open in Waiting/);
+  // A swept Slack item is untouched: no marker, no pill.
+  assert.ok(plain && !plain.className.includes("cu-waiting-checkin"));
+  assert.doesNotMatch(plain.innerHTML, /waiting-pill/);
+});
