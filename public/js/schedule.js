@@ -1916,7 +1916,7 @@ const TASK_DESTINATIONS=[
   {value:"urgent",  icon:"⚡", label:"Urgent"},
   {value:"done",    icon:"✅", label:"Completed"},
   {value:"schedule",icon:"📅", label:"Schedule…"},
-  {value:"backlog", icon:"💡", label:"Backlog / Idea"},
+  {value:"backlog", icon:"💡", label:"Task Library (Solo)"},
   {value:"shell",   icon:"🐚", label:"Shell"},
   {value:"wrap",    icon:"🎁", label:"Wrap"},
   {value:"habit",   icon:"🔁", label:"Habit"},

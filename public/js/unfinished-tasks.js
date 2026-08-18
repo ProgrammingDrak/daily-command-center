@@ -581,7 +581,7 @@
         '<div class="carryover-row-actions">' +
           '<button class="carryover-btn carryover-btn-schedule unf-today">Today</button>' +
           '<button class="carryover-btn carryover-btn-schedule unf-tomorrow">Tomorrow</button>' +
-          '<button class="carryover-btn unf-backlog">Backlog</button>' +
+          '<button class="carryover-btn unf-backlog">Solo</button>' +
           '<button class="carryover-btn carryover-btn-drop unf-drop">Drop</button>' +
         '</div>';
       el.querySelector(".carryover-row-title").textContent = ev.title;

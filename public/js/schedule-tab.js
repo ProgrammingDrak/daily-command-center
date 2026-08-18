@@ -172,7 +172,7 @@ function buildTaskChangeItems(ev,trig){
     {icon:"🤝", label:"Delegate",  onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
     {icon:"🔒", label:"Blocked by task", onPick:()=>{if(typeof window.openTaskDependencyModal==="function")window.openTaskDependencyModal(ev._blockId||ev.blockId||ev.id);}},
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
-    {icon:"💡", label:"Backlog",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}},
+    {icon:"💡", label:"Solo",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}},
     // Delete lives on the radial so it's reachable on phones, where the row's
     // trash button is hidden by the mobile layout (dashboard.css).
     {icon:"🗑", label:"Delete",    onPick:()=>{if(typeof openDeleteConfirm==="function")openDeleteConfirm(ev.id);}}
@@ -238,7 +238,7 @@ function convertTaskType(id,newType){
 function buildCarryoverRadialItems(ev,trig,acts){
   const items=[
     {icon:"📅", label:"Move…",   onPick:()=>acts.move(trig)},
-    {icon:"💡", label:"Backlog", onPick:()=>acts.backlog()},
+    {icon:"💡", label:"Solo", onPick:()=>acts.backlog()},
   ];
   if(window.DCCWorkSessions&&window.DCCWorkSessions.policy(ev)==="work_sessions"){
     items.unshift({icon:ev.startedAt?"⏸":"▶",label:ev.startedAt?"Pause work":"Start work",onPick:()=>window.DCCWorkSessions.act(ev,ev.startedAt?"pause":"start")});
@@ -1445,7 +1445,7 @@ function openMoveMenu(id, anchorEl){
     {label:"Today",     action:()=>_mv(_resolvedTodayDate(),moveTaskToToday)},
     {label:"Next week", action:()=>_mv(_nextSundayDate(),moveTaskToNextWeek)},
     {label:"Trivial",   action:()=>moveTaskToTrivial(id)},
-    {label:"Backlog and Ideas",   action:()=>moveTaskToBacklog(id)},
+    {label:"Task Library (Solo)", action:()=>moveTaskToBacklog(id)},
     {label:"Priority",  action:()=>moveTaskToPriority(id)}
   ];
   const pop=document.createElement("div");
@@ -1535,7 +1535,7 @@ function buildBacklog(){
   // Priority-stage items are surfaced in the Priority drawer via buildConsider, not here.
   const items=backlog.filter(t=>t.stage!=="Priority");
   document.getElementById("backlog-count").textContent=items.length;
-  if(!items.length){board.innerHTML='<div class="board-empty">Nothing in Backlog and Ideas yet. Add tasks above or check your Notion board.</div>';return}
+  if(!items.length){board.innerHTML='<div class="board-empty">Nothing in Task Library yet. Add tasks above or check your Notion board.</div>';return}
   // Sort: High > Medium > Low
   const priOrder={High:0,Medium:1,Low:2,undefined:3};
   const sorted=[...items].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));

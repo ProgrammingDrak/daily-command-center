@@ -145,7 +145,7 @@ function parseBlock(row) {
 // It stays out of the client's Unscheduled list either way (TaskModel.selectUnscheduled
 // requires a `title`, and suppressions deliberately store theirs as `itemTitle`), so
 // this is about not polluting the task space rather than about a visible bug.
-const NON_TASK_KINDS = new Set(["delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone"]);
+const NON_TASK_KINDS = new Set(["delegated_item", "task_group", "project", "task_facet", "task_view", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone"]);
 function isTaskRow(block) {
   if (!block) return false;
   const type = block.type;
@@ -647,23 +647,26 @@ async function setTaskCompletion({
 
     const currentProps = target.properties || {};
     let releasedDependencyId = null;
-    if (completed && currentProps.dependencyWaitingItemId) {
-      const dependencyId = String(currentProps.dependencyWaitingItemId);
+    const dependencyIds = Array.isArray(currentProps.dependencyWaitingItemIds)
+      ? currentProps.dependencyWaitingItemIds.map(String)
+      : (currentProps.dependencyWaitingItemId ? [String(currentProps.dependencyWaitingItemId)] : []);
+    if (completed && dependencyIds.length) {
+      const dependencyId = dependencyIds[0];
       const companionReleases = companionUpdates.some(update => update && String(update.id) === dependencyId
         && !["open", "ready"].includes(String((update.properties || {}).status || "open")));
       if (companionReleases) releasedDependencyId = dependencyId;
       if (!companionReleases) {
         const { rows: dependencyRows } = await q.query(
           `SELECT * FROM blocks
-            WHERE id = $1 AND deleted_at IS NULL
+            WHERE id = ANY($1::text[]) AND deleted_at IS NULL
               AND properties->>'kind' = 'delegated_item'
               AND properties->>'blockerType' = 'task'
-              AND COALESCE(properties->>'status', 'open') IN ('open', 'ready')
+              AND COALESCE(properties->>'status', 'open') = 'open'
               AND workspace_id IS NOT DISTINCT FROM $2
             FOR UPDATE`,
-          [dependencyId, workspaceId]
+          [dependencyIds, workspaceId]
         );
-        if (dependencyRows[0]) {
+        if (dependencyRows.length) {
           throw taskCompletionError("Release this task from Waiting before completing it", 409,
             "TASK_DEPENDENCY_BLOCKED", target);
         }
@@ -741,6 +744,10 @@ async function setTaskCompletion({
         ? completedProps(before, before, completionAt, mutationId)
         : reopenedProps(before, before, mutationId);
       if (releasedDependencyId && String(props.dependencyWaitingItemId || "") === releasedDependencyId) {
+        delete props.dependencyWaitingItemId;
+      }
+      if (completed && dependencyIds.length) {
+        delete props.dependencyWaitingItemIds;
         delete props.dependencyWaitingItemId;
       }
       // Idempotency belongs to the request, including a same-state request. The
@@ -973,17 +980,17 @@ async function propagateTaskDependencies({ id, before, after, at, workspaceId, c
 
   const q = client;
   if (!q) throw new Error("Task dependency propagation requires a transaction client");
-  const fromStatus = nowDone ? "open" : "ready";
+  const fromStatuses = nowDone ? ["open"] : ["ready", "unblocked", "done"];
   const { rows } = await q.query(
       `SELECT * FROM blocks
          WHERE type = 'block' AND deleted_at IS NULL
            AND properties->>'kind' = 'delegated_item'
            AND properties->>'blockerType' = 'task'
            AND properties->>'blockerBlockId' = $1
-           AND COALESCE(properties->>'status', 'open') = $2
+           AND COALESCE(properties->>'status', 'open') = ANY($2::text[])
            AND workspace_id IS NOT DISTINCT FROM $3
          FOR UPDATE`,
-      [id, fromStatus, workspaceId || null]
+      [id, fromStatuses, workspaceId || null]
     );
   const transitions = [];
   for (const raw of rows) {
@@ -997,6 +1004,34 @@ async function propagateTaskDependencies({ id, before, after, at, workspaceId, c
       delete props.readyAt;
     }
     const updated = await updateBlock(relation.id, { properties: props }, q);
+    const dependent = await findUniqueLiveBlockByReference(props.linkedBlockId, workspaceId, q, true);
+    if (dependent) {
+      const tree = await getSubtree([dependent.id], workspaceId, q);
+      for (const row of (tree.length ? tree : [dependent])) {
+        const taskProps = { ...(row.properties || {}) };
+        let markers = Array.isArray(taskProps.dependencyWaitingItemIds)
+          ? taskProps.dependencyWaitingItemIds.map(String)
+          : (taskProps.dependencyWaitingItemId ? [String(taskProps.dependencyWaitingItemId)] : []);
+        if (nowDone) {
+          markers = markers.filter(marker => marker !== String(updated.id));
+          if (markers.length) {
+            taskProps.dependencyWaitingItemIds = markers;
+            taskProps.dependencyWaitingItemId = markers[0];
+          } else {
+            delete taskProps.dependencyWaitingItemIds;
+            delete taskProps.dependencyWaitingItemId;
+          }
+        } else if (isCompletedTaskProps(taskProps)) {
+          taskProps.dependencyInconsistent = true;
+          taskProps.dependencyInconsistentEdgeIds = [...new Set((taskProps.dependencyInconsistentEdgeIds || []).map(String).concat(String(updated.id)))];
+        } else {
+          markers = [...new Set(markers.concat(String(updated.id)))];
+          taskProps.dependencyWaitingItemIds = markers;
+          taskProps.dependencyWaitingItemId = markers[0];
+        }
+        await updateBlock(row.id, { properties: taskProps }, q);
+      }
+    }
     transitions.push({
       id: updated.id,
       linkedBlockId: props.linkedBlockId || null,

@@ -304,11 +304,11 @@
       actions += '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button>';
     } else if (ready) {
       actions += '<button type="button" data-delegated-action="unblock" data-id="' + esc(item.id) + '">Schedule task</button>';
-      actions += '<button type="button" data-delegated-action="dependency-backlog" data-id="' + esc(item.id) + '">Move to Backlog</button>';
+      actions += '<button type="button" data-delegated-action="dependency-backlog" data-id="' + esc(item.id) + '">Move to Solo</button>';
     }
     if (!closed) {
       actions += '<button type="button" data-delegated-action="dependency-edit" data-id="' + esc(item.id) + '">Change prerequisite</button>';
-      actions += '<button type="button" data-delegated-action="dependency-remove" data-id="' + esc(item.id) + '">' + (ready ? "Remove dependency" : "Unblock to Backlog") + "</button>";
+      actions += '<button type="button" data-delegated-action="dependency-remove" data-id="' + esc(item.id) + '">' + (ready ? "Remove dependency" : "Unblock to Solo") + "</button>";
     }
     return '<div class="delegated-card delegated-itinerary-card task-dependency-card' + ((ready || closed) ? " dependency-ready" : "") + '" data-id="' + esc(item.id) + '">' +
       '<div class="delegated-card-score dependency' + ((ready || closed) ? " ready" : "") + '">' + icon + "</div>" +
@@ -519,7 +519,7 @@
         taskBlockId: (item.properties || {}).linkedBlockId,
       });
       await afterWaitingAction();
-      toast(options.removed ? "Dependency removed. Task moved to Backlog." : "Task moved to Backlog.", "success");
+      toast(options.removed ? "Dependency removed. Task moved to Solo." : "Task moved to Solo.", "success");
       return true;
     } catch (e) {
       toast("Could not release task: " + (e.message || e), "error");

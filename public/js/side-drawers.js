@@ -4,7 +4,7 @@
 
 (function(){
   const PINNED_SECTIONS_KEY = "pa-sidecar-sections";
-  const DEFAULT_SECTIONS = ["tm-side-projects-section", "tm-repeat-responsibilities-section"];
+  const DEFAULT_SECTIONS = ["tm-task-library-section", "tm-repeat-responsibilities-section"];
   let modalTrigger = null;
   const FOCUSABLE = 'button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
@@ -120,6 +120,7 @@
     if(!(opts && opts.solo)) setSoloSection(null);
     syncBodyClasses(); syncBackdrop();
     updateRailActiveState();
+    if(typeof window.DCCTaskLibrary === "object" && typeof window.DCCTaskLibrary.refresh === "function") window.DCCTaskLibrary.refresh();
     if(!wasOpen || !d.querySelector(".side-drawer-body")?.contains(document.activeElement)) setTimeout(focusInsideTasks, 20);
   }
 
@@ -155,7 +156,7 @@
     }
   }
 
-  function openTasksToSideProjects(){ openTasksToSection("tm-side-projects-section", { solo: true }); }
+  function openTasksToSideProjects(){ openTasksToSection("tm-task-library-section", { solo: true }); }
   function openTasksToRepeatResponsibilities(){ openTasksToSection("tm-repeat-responsibilities-section", { solo: true }); }
 
   function pinSection(sectionId, opts){

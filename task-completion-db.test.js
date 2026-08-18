@@ -37,7 +37,7 @@ function makePool(initialRows, { failUpdateId = null } = {}) {
           staged = new Map([...committed].map(([id, value]) => [id, structuredClone(value)]));
           return { rows: [] };
         }
-        if (text.includes("properties->>'local_id' = $1")) {
+        if (text.includes("properties->>'local_id'") && text.includes("$1")) {
           const [localId, ws, date] = params;
           return { rows: [...staged.values()].filter(item =>
             !item.deleted_at && (item.workspace_id || null) === (ws || null)
@@ -53,12 +53,13 @@ function makePool(initialRows, { failUpdateId = null } = {}) {
         if (text.includes("properties->>'blockerType' = 'task'")
             && text.includes("properties->>'blockerBlockId' = $1")) {
           const [blockerId, status, workspaceId] = params;
+          const statuses = Array.isArray(status) ? status : [status];
           return { rows: [...staged.values()].filter(item => {
             const props = item.properties || {};
             return item.type === "block" && !item.deleted_at
               && props.kind === "delegated_item" && props.blockerType === "task"
               && String(props.blockerBlockId) === String(blockerId)
-              && (props.status || "open") === status
+              && statuses.includes(props.status || "open")
               && (item.workspace_id || null) === (workspaceId || null);
           }).map(item => structuredClone(item)) };
         }
@@ -71,6 +72,23 @@ function makePool(initialRows, { failUpdateId = null } = {}) {
         if (text.startsWith("SELECT id FROM blocks WHERE id = $1")) {
           const item = staged.get(params[0]);
           return { rows: item ? [{ id: item.id }] : [] };
+        }
+        if (text.startsWith("SELECT * FROM blocks") && text.includes("id = ANY($1::text[])")) {
+          const [ids, workspaceId] = params;
+          return { rows: [...staged.values()].filter(item => {
+            const props = item.properties || {};
+            return ids.map(String).includes(String(item.id)) && !item.deleted_at
+              && props.kind === "delegated_item" && props.blockerType === "task"
+              && (props.status || "open") === "open"
+              && (item.workspace_id || null) === (workspaceId || null);
+          }).map(item => structuredClone(item)) };
+        }
+        if (text.startsWith("SELECT * FROM blocks") && text.includes("id=$1")) {
+          const item = staged.get(params[0]);
+          if (!item || item.deleted_at) return { rows: [] };
+          if (text.includes("workspace_id IS NOT DISTINCT FROM $2")
+              && (item.workspace_id || null) !== (params[1] || null)) return { rows: [] };
+          return { rows: [structuredClone(item)] };
         }
         if (text.startsWith("SELECT * FROM blocks") && text.includes("id = $1")) {
           const item = staged.get(params[0]);
@@ -299,11 +317,11 @@ test("a dependency transition failure rolls back prerequisite completion", async
 test("a blocked dependent cannot be completed outside its release transaction", async () => {
   const dependent = row("parent", {
     local_id: "install", title: "Install fixture", status: "open",
-    dependencyWaitingItemId: "dependency",
+    dependencyWaitingItemIds: ["dependency"], dependencyWaitingItemId: "dependency",
   });
   const dependency = row("dependency", {
     kind: "delegated_item", blockerType: "task", blockerBlockId: "buy-fixture",
-    linkedBlockId: "parent", title: "Buy fixture", myTask: "Install fixture", status: "ready",
+    linkedBlockId: "parent", title: "Buy fixture", myTask: "Install fixture", status: "open",
   }, { date: null });
   const pool = makePool([dependent, dependency]);
   const db = loadDb(pool);
@@ -318,7 +336,7 @@ test("a blocked dependent cannot be completed outside its release transaction", 
 test("completing a ready dependent closes its relation and clears the restore marker", async () => {
   const dependent = row("parent", {
     local_id: "install", title: "Install fixture", status: "open",
-    dependencyWaitingItemId: "dependency",
+    dependencyWaitingItemIds: ["dependency"], dependencyWaitingItemId: "dependency",
   }, { date: null });
   const dependency = row("dependency", {
     kind: "delegated_item", blockerType: "task", blockerBlockId: "buy-fixture",
@@ -334,6 +352,7 @@ test("completing a ready dependent closes its relation and clears the restore ma
 
   assert.equal(pool._rows.get("parent").properties.status, "done");
   assert.equal("dependencyWaitingItemId" in pool._rows.get("parent").properties, false);
+  assert.equal("dependencyWaitingItemIds" in pool._rows.get("parent").properties, false);
   assert.equal(pool._rows.get("dependency").properties.status, "done");
 });
 

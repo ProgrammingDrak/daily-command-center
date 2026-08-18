@@ -724,7 +724,7 @@
             ? '<button class="gb-icon-btn" data-gb-decide="'+gbEsc(task.id)+'" data-gb-action="reset" title="Undo decision">Undo</button>'
             : '<button class="gb-add-btn" data-gb-decide="'+gbEsc(task.id)+'" data-gb-action="accept" title="Accept at suggested time">Accept</button>'+
               '<button class="gb-icon-btn" data-gb-decide="'+gbEsc(task.id)+'" data-gb-action="schedule" title="Pick a different time">Move</button>'+
-              '<button class="gb-icon-btn" data-gb-decide="'+gbEsc(task.id)+'" data-gb-action="backlog" title="Send to backlog">Backlog</button>'+
+              '<button class="gb-icon-btn" data-gb-decide="'+gbEsc(task.id)+'" data-gb-action="backlog" title="Send to Task Library">Solo</button>'+
               '<button class="gb-icon-btn" data-gb-decide="'+gbEsc(task.id)+'" data-gb-action="drop" title="Drop entirely">Drop</button>')+
         '</div>'+
       '</div>'+

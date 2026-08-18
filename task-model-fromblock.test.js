@@ -128,9 +128,9 @@ const BASE_KEYS = [
   "_blockId", "_dateless", "actualMinutes", "aiSummary", "alertKey", "alertType", "allDay", "allDayEnd", "allDayStart", "ampUrl", "calUrl",
   "calendarAccountEmail", "calendarAccountKey", "calendarColor", "calendarId", "calendarName", "capacityBucket",
   "completedAt", "createdAt", "dashboardRef", "delegatedItemId", "detail", "end", "hangout_link",
-  "hubspotUrl", "id", "isPlaceholder", "isWrap", "kind", "linkedBlockId", "linkedTagId",
+  "facetValues", "hubspotUrl", "id", "isPlaceholder", "isWrap", "kind", "linkedBlockId", "linkedTagId",
   "location", "meetingBlockId", "meta", "notes", "notionUrl", "placeholderMenus", "pointsDurationMinutes",
-  "prepStatus", "priority", "publicVisibility", "recapStatus", "recordingReview",
+  "prepStatus", "priority", "projectId", "projectOrder", "projectParentTaskId", "projectRole", "publicVisibility", "recapStatus", "recordingReview",
   "recurrenceOverride", "repeatMode", "repeatOccurrenceInstant", "repeatOccurrenceKey", "repeatOccurrenceRootId", "repeatSeriesId",
   "rescheduledFrom", "reschedulePlacement", "responsibilityId", "responsibilityScore",
   "responsibilityTitle", "rsvp_status", "source", "sourceKey", "sourceLabel", "sourceTaskId", "source_id", "start", "startedAt", "status",
@@ -163,7 +163,9 @@ test("every projected key round-trips its property, including the ones nothing a
       ampUrl: "https://amp", hubspotUrl: "https://hs", wrapId: "w", isWrap: true,
       subtaskOf: "p", reschedulePlacement: "earliest", rescheduledFrom: "2026-07-27",
       sourceTaskId: "st", status: "open", startedAt: "2026-07-28T15:00:00.000Z",
-      completedAt: null, actualMinutes: 12, pointsDurationMinutes: 20, aiSummary: "Thread context"
+      completedAt: null, actualMinutes: 12, pointsDurationMinutes: 20, aiSummary: "Thread context",
+      projectId: "griffin", projectParentTaskId: "baseboards", projectRole: "leaf",
+      projectOrder: 2400, facetValues: { area: ["kitchen"], workstream: ["trim"] }
     }
   }));
   assert.deepStrictEqual(ev, {
@@ -177,6 +179,8 @@ test("every projected key round-trips its property, including the ones nothing a
     notionUrl: "https://n", calUrl: "https://c", priority: "Low",
     calendarId: "", calendarName: "", calendarColor: "", calendarAccountKey: "", calendarAccountEmail: "",
     tags: ["a"], kind: "task",
+    projectId: "griffin", projectParentTaskId: "baseboards", projectRole: "leaf",
+    projectOrder: 2400, facetValues: { area: ["kitchen"], workstream: ["trim"] },
     location: "Room", hangout_link: "https://meet", rsvp_status: "yes",
     prepStatus: "ready", recapStatus: "ready", dashboardRef: "dash", recordingReview: true,
     meetingBlockId: "mb", isPlaceholder: true, placeholderMenus: ["m"], taskGroupId: "tg",

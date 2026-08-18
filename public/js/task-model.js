@@ -131,6 +131,11 @@
       calendarAccountEmail: p.account_email || "",
       tags: Array.isArray(p.tags) ? p.tags : [],
       kind: p.kind || "",
+      projectId: p.projectId || null,
+      projectParentTaskId: p.projectParentTaskId || null,
+      projectRole: p.projectRole || "leaf",
+      projectOrder: Number.isFinite(Number(p.projectOrder)) ? Number(p.projectOrder) : null,
+      facetValues: p.facetValues && typeof p.facetValues === "object" ? p.facetValues : {},
       // Meeting affordances (join link / location / RSVP), and the block id
       // the meeting-automation panel keys off (itinerary-card.js).
       location: p.location || "",
@@ -216,7 +221,7 @@
   // admitting its `subtaskOf` children promotes every child to a standalone task and
   // makes the responsibility itself disappear. Keep this exception aligned with
   // db.js and dcc_is_task_row in pg-schema.js.
-  const NON_TASK_KINDS = ["delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone"];
+  const NON_TASK_KINDS = ["delegated_item", "task_group", "project", "task_facet", "task_view", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone"];
   const NON_TASK_TYPES = ["day_root", "time_entry"];
   function isTaskRow(block) {
     block = block || {};
@@ -307,7 +312,7 @@
       if (p.done === true) continue;
       // Dependency-parked tasks live in Waiting until their prerequisite is
       // released. They remain dateless but must not duplicate into Backlog.
-      if (p.dependencyWaitingItemId) continue;
+      if (p.dependencyWaitingItemId || (Array.isArray(p.dependencyWaitingItemIds) && p.dependencyWaitingItemIds.length)) continue;
       // A titleless row cannot render on either surface; both consumers dropped it.
       if (!p.title) continue;
       if (!b.date) { out.push(b); continue; }

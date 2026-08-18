@@ -84,8 +84,9 @@ module.exports = function mount(app, ctx) {
     if (isCompleted(blocker)) throw clientError("Choose an open prerequisite task");
 
     const active = rows.filter(activeTaskDependency).filter(row => row.id !== ignoreWaitingId);
-    if (active.some(row => String((row.properties || {}).linkedBlockId) === blocked.id)) {
-      throw clientError("That task already has an active prerequisite", 409);
+    if (active.some(row => String((row.properties || {}).linkedBlockId) === blocked.id
+      && String((row.properties || {}).blockerBlockId) === blocker.id)) {
+      throw clientError("That dependency already exists", 409);
     }
     const outgoing = new Map();
     for (const row of active) {
@@ -114,8 +115,17 @@ module.exports = function mount(app, ctx) {
     const ids = [];
     for (const row of rows) {
       const properties = { ...(row.properties || {}) };
-      if (waitingId) properties.dependencyWaitingItemId = waitingId;
-      else delete properties.dependencyWaitingItemId;
+      const current = Array.isArray(properties.dependencyWaitingItemIds)
+        ? properties.dependencyWaitingItemIds.map(String)
+        : (properties.dependencyWaitingItemId ? [String(properties.dependencyWaitingItemId)] : []);
+      const next = waitingId ? [...new Set(current.concat(String(waitingId)))] : [];
+      if (next.length) {
+        properties.dependencyWaitingItemIds = next;
+        properties.dependencyWaitingItemId = next[0];
+      } else {
+        delete properties.dependencyWaitingItemIds;
+        delete properties.dependencyWaitingItemId;
+      }
       await blockDB.updateBlock(row.id, { properties, date: waitingId ? null : row.date }, client);
       ids.push(row.id);
     }
@@ -672,9 +682,17 @@ module.exports = function mount(app, ctx) {
         const subtree = await blockDB.getSubtree([existing.id], req.workspaceId, client);
         const activeRelationIds = new Set(dependentRelations.map(row => String(row.id)));
         for (const row of (subtree.length ? subtree : [existing])) {
-          if (!activeRelationIds.has(String((row.properties || {}).dependencyWaitingItemId || ""))) continue;
           const next = { ...(row.properties || {}) };
-          delete next.dependencyWaitingItemId;
+          const remaining = (Array.isArray(next.dependencyWaitingItemIds)
+            ? next.dependencyWaitingItemIds : [next.dependencyWaitingItemId]).filter(Boolean)
+            .map(String).filter(id => !activeRelationIds.has(id));
+          if (remaining.length) {
+            next.dependencyWaitingItemIds = remaining;
+            next.dependencyWaitingItemId = remaining[0];
+          } else {
+            delete next.dependencyWaitingItemIds;
+            delete next.dependencyWaitingItemId;
+          }
           await blockDB.updateBlock(row.id, { properties: next }, client);
           releasedDependencyTaskIds.push(row.id);
         }
@@ -1979,8 +1997,8 @@ module.exports = function mount(app, ctx) {
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK");
-        if (error && error.code === "23505" && error.constraint === "idx_blocks_task_dependency_dependent_active") {
-          throw clientError("That task already has an active prerequisite", 409);
+        if (error && error.code === "23505" && error.constraint === "idx_blocks_task_dependency_edge") {
+          throw clientError("That dependency already exists", 409);
         }
         throw error;
       } finally {
@@ -2223,9 +2241,17 @@ module.exports = function mount(app, ctx) {
         await client.query("BEGIN");
         updated = await blockDB.updateBlock(existing.id, { properties }, client);
         for (const row of (subtree.length ? subtree : [task])) {
-          if (String((row.properties || {}).dependencyWaitingItemId || "") !== String(existing.id)) continue;
           const next = { ...(row.properties || {}) };
-          delete next.dependencyWaitingItemId;
+          const remaining = (Array.isArray(next.dependencyWaitingItemIds)
+            ? next.dependencyWaitingItemIds : [next.dependencyWaitingItemId]).filter(Boolean)
+            .map(String).filter(id => id !== String(existing.id));
+          if (remaining.length) {
+            next.dependencyWaitingItemIds = remaining;
+            next.dependencyWaitingItemId = remaining[0];
+          } else {
+            delete next.dependencyWaitingItemIds;
+            delete next.dependencyWaitingItemId;
+          }
           await blockDB.updateBlock(row.id, { properties: next, date: destination === "backlog" ? null : row.date }, client);
         }
         await client.query("COMMIT");
@@ -2259,9 +2285,17 @@ module.exports = function mount(app, ctx) {
         if (linked) {
           const subtree = await blockDB.getSubtree([linked.id], req.workspaceId);
           for (const row of (subtree.length ? subtree : [linked])) {
-            if (String((row.properties || {}).dependencyWaitingItemId || "") !== String(existing.id)) continue;
             const next = { ...(row.properties || {}) };
-            delete next.dependencyWaitingItemId;
+            const remaining = (Array.isArray(next.dependencyWaitingItemIds)
+              ? next.dependencyWaitingItemIds : [next.dependencyWaitingItemId]).filter(Boolean)
+              .map(String).filter(id => id !== String(existing.id));
+            if (remaining.length) {
+              next.dependencyWaitingItemIds = remaining;
+              next.dependencyWaitingItemId = remaining[0];
+            } else {
+              delete next.dependencyWaitingItemIds;
+              delete next.dependencyWaitingItemId;
+            }
             await blockDB.updateBlock(row.id, { properties: next, date: null }, client);
             affectedIds.push(row.id);
           }
