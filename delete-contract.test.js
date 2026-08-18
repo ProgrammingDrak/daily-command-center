@@ -87,6 +87,20 @@ function mountApp(extraBlocks = {}) {
         blocks[taskRef] = { ...row, properties };
         return { task: blocks[taskRef], affectedTasks: [blocks[taskRef]], revision: "test-revision", persistenceTarget: "task_row", broadcastIds: [taskRef] };
       },
+      // Modelled on blocks-batch-authz.test.js's fake, with one deliberate difference:
+      // that one stages into a copy because it only asserts what reaches batchOp, while
+      // the meeting-provenance tests below need the delete to actually land so the
+      // route's post-batch pass has a real tombstone to react to.
+      batchOp: async (ops) => {
+        for (const o of ops) {
+          if (!o || o.op === "create" || o.op === "reorder") continue;
+          const row = blocks[o.id];
+          if (!row) throw new Error(`Block not found: ${o.id}`);
+          if (o.op === "update" && row.deleted_at) throw new Error(`Block is deleted: ${o.id}`);
+          if (o.op === "delete") { calls.deleted.push(o.id); blocks[o.id] = { ...row, deleted_at: TOMB }; }
+        }
+        return { batchId: "b1", blocks: ops.map((o) => ({ id: (o && o.id) || "new" })) };
+      },
       getChildren: async () => [],
       reorderBlocks: async () => {},
       getBlocksByDate: async () => [],
@@ -122,7 +136,15 @@ function mountApp(extraBlocks = {}) {
     getTodayStr: () => "2026-07-30",
     isAllowedSweepBlockItem: () => true,
     isValidDate: (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || "")),
-    pool: { query: async () => ({ rows: [{ workspace_id: MINE, user_id: 1 }] }) },
+    // The live-row delete path is dependency-aware now and opens a transaction, so the
+    // pool fake needs connect() as well as query(). Same shape as the one in
+    // blocks-batch-authz.test.js. Without it every delete of a LIVE block 500s with
+    // "pool.connect is not a function", which is why the incumbent tests here only
+    // ever deleted an already-tombstoned row.
+    pool: {
+      query: async () => ({ rows: [{ workspace_id: MINE, user_id: 1 }] }),
+      connect: async () => ({ query: async () => ({ rows: [] }), release() {} }),
+    },
   };
   require("./routes/blocks.js")(app, ctx);
   return { app, blocks, calls, broadcasts };
@@ -287,6 +309,121 @@ test("undelete of an unknown id is a 404", async () => {
   assert.equal(status, 404);
   assert.equal(json.error, "Block not found");
   assert.deepEqual(calls.undelete, []);
+});
+
+// ── Meeting provenance follows the task's tombstone ──
+//
+// A placed meeting follow-up is a real day task whose ORIGINATING proposal still lives
+// under the meeting, linked by properties.meetingAutomation.proposedActionId. Deleting
+// the task used to leave that proposal at status:"placed" forever, so the meeting's
+// Recap card reported "Scheduled ✓ <date>" for work that no longer existed.
+//
+// The transition reuses status:"dismissed" rather than a new "dropped" value ON PURPOSE:
+// four separate sites enumerate the terminal statuses by hand (meeting-automation.js:535
+// and :582, public/js/meeting-automation.js:47 and :416), and a value none of them knows
+// renders dropped work as a pre-checked row under a live "Approve selected" button.
+
+// A meeting proposal + the day task placed from it, wired both ways.
+function meetingPair({ status = "placed", extraProposalProps = {}, taskDeleted = null } = {}) {
+  return {
+    "prop-1": { id: "prop-1", type: "block", parent_id: "mtg-1", date: "2026-07-28", workspace_id: MINE, deleted_at: null,
+      properties: { kind: "proposed_action_item", text: "Review the pending PRs", title: "Review the pending PRs",
+        status, placedDate: "2026-07-30", placedStart: "09:00", ...extraProposalProps } },
+    "task-1": { id: "task-1", type: "block", date: "2026-07-30", workspace_id: MINE, deleted_at: taskDeleted,
+      properties: { kind: "task", title: "Review the pending PRs", local_id: "t-1",
+        meetingAutomation: { meetingBlockId: "mtg-1", proposedActionId: "prop-1", origin: "automated" } } },
+  };
+}
+
+test("deleting a placed meeting follow-up marks its proposal dropped", async () => {
+  const { app, blocks } = mountApp(meetingPair());
+  const { status } = await call(app, "DELETE", "/api/blocks/task-1");
+  assert.equal(status, 200);
+  const p = blocks["prop-1"].properties;
+  assert.equal(p.status, "dismissed", "reuses the status every filter already excludes");
+  assert.equal(p.dismissedReason, "task-dropped");
+  assert.ok(p.dismissedAt, "stamped with a time");
+});
+
+test("the drop MOVES placedDate rather than keeping it", async () => {
+  // recapActionsHtml computes isPlaced as `status==="placed" || !!a.placedDate`, so a
+  // placedDate left behind "for history" keeps the row reading "Scheduled ✓" forever —
+  // the exact symptom this feature exists to fix.
+  const { app, blocks } = mountApp(meetingPair());
+  await call(app, "DELETE", "/api/blocks/task-1");
+  const p = blocks["prop-1"].properties;
+  assert.equal(p.placedDate, undefined, "the key every isPlaced check reads must be gone");
+  assert.equal(p.placedStart, undefined);
+  assert.equal(p.droppedFromDate, "2026-07-30", "but the date survives under a name nothing schedules on");
+});
+
+test("a subtree drop through /batch stamps the proposal too", async () => {
+  // unfinished-tasks.js drop() sends the whole subtree as one batch, so this is the
+  // path a Loose Ends Drop actually takes whenever the slipped task has nested rows.
+  // It also proves deletedBlocks carries `properties` — without them the back-link is
+  // unreadable there and the stamp silently never happens.
+  const { app, blocks } = mountApp(meetingPair());
+  const { status } = await call(app, "POST", "/api/blocks/batch", { operations: [{ op: "delete", id: "task-1" }] });
+  assert.equal(status, 200);
+  assert.equal(blocks["prop-1"].properties.dismissedReason, "task-dropped");
+});
+
+test("undelete restores the proposal to placed", async () => {
+  const { app, blocks } = mountApp(meetingPair());
+  await call(app, "DELETE", "/api/blocks/task-1");
+  await call(app, "POST", "/api/blocks/task-1/undelete", {});
+  const p = blocks["prop-1"].properties;
+  assert.equal(p.status, "placed");
+  assert.equal(p.placedDate, "2026-07-30", "the day it was on comes back with it");
+  assert.equal(p.placedStart, "09:00", "and the pinned time, so the round-trip is lossless");
+  assert.equal(p.droppedFromDate, undefined);
+  assert.equal(p.droppedFromStart, undefined);
+  assert.equal(p.dismissedReason, undefined);
+});
+
+test("undelete leaves a HAND-dismissed proposal dismissed", async () => {
+  // Keyed on dismissedReason, not on status: restoring an unrelated task must never
+  // silently un-dismiss a follow-up Drake dismissed himself.
+  const { app, blocks } = mountApp(meetingPair({ status: "dismissed", extraProposalProps: { dismissedAt: TOMB } }));
+  await call(app, "POST", "/api/blocks/task-1/undelete", {});
+  assert.equal(blocks["prop-1"].properties.status, "dismissed");
+});
+
+test("re-deleting an already-dropped task does not re-stamp", async () => {
+  // The batch route collects deletedBlocks with no !deleted_at guard, so a WAL replay
+  // re-runs this hook over rows that are already tombstoned. Gating on status==="placed"
+  // is what keeps that idempotent.
+  const { app, blocks } = mountApp(meetingPair());
+  await call(app, "DELETE", "/api/blocks/task-1");
+  const first = blocks["prop-1"].properties.dismissedAt;
+  await call(app, "DELETE", "/api/blocks/task-1");
+  assert.equal(blocks["prop-1"].properties.dismissedAt, first, "the first drop's timestamp stands");
+});
+
+test("a proposal that is NOT placed is left alone", async () => {
+  const { app, blocks } = mountApp(meetingPair({ status: "approved" }));
+  await call(app, "DELETE", "/api/blocks/task-1");
+  assert.equal(blocks["prop-1"].properties.status, "approved");
+});
+
+test("the stamp is non-fatal: the delete lands even when the proposal cannot be written", async () => {
+  // A tombstoned proposal makes the fake updateBlock throw exactly like db.js does. The
+  // row is already deleted by the time this runs, so a throw here would turn a completed
+  // delete into a 500 and tell the client the drop failed.
+  const pair = meetingPair();
+  pair["prop-1"].deleted_at = TOMB;
+  const { app, blocks, calls } = mountApp(pair);
+  const { status } = await call(app, "DELETE", "/api/blocks/task-1");
+  assert.equal(status, 200);
+  assert.ok(calls.deleted.includes("task-1"), "and the task really is gone");
+  assert.equal(blocks["prop-1"].properties.status, "placed", "untouched");
+});
+
+test("deleting an ordinary task with no meeting link is a no-op", async () => {
+  const { app, calls } = mountApp();
+  const { status } = await call(app, "DELETE", "/api/blocks/live-1");
+  assert.equal(status, 200);
+  assert.deepEqual(calls.getBlock, [], "no back-link means no lookup at all");
 });
 
 // ── Resurrection through the side door ──

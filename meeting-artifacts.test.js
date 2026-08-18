@@ -637,6 +637,43 @@ test("dismiss and schedule never mutate a foreign approvedBlockId", async () => 
   assert.equal(foreign.date, "2026-07-09");
 });
 
+// A task dropped from Loose Ends leaves its proposal at status:"dismissed" with
+// dismissedReason:"task-dropped" (routes/blocks.js transitionLinkedMeetingAction). These
+// two pin the reason that transition reuses "dismissed" instead of minting a "dropped"
+// status. Both server gates are ALLOWLISTS ("proposed"/"approved"), so they would exclude
+// a novel status too -- what "dismissed" buys is that the rest of the system already
+// agrees it is terminal (placeApprovedAction refuses it by name, the recap tab filters it
+// by name), so the vocabulary stays closed instead of growing a fifth member every one of
+// those sites would have to learn.
+test("a dropped proposal stays out of the elevation read model", async () => {
+  seedMeeting("mdrop", { title: "Standup" });
+  mem.store.push({ id: "pdrop", type: "block", parent_id: "mdrop", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "Chase the migration", status: "dismissed",
+      dismissedReason: "task-dropped", droppedFromDate: "2026-07-20" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  const rows = await automation.listProposedActions({ workspaceId: "ws-1" });
+  assert.equal(rows.some(item => item.id === "pdrop"), false);
+});
+
+test("approveActions refuses a dropped proposal, so approve-all cannot resurrect it", async () => {
+  // The dangerous shape: "Approve selected" with nothing checked sends an EMPTY
+  // actionIds, which approves every proposal the filter admits. If a dropped item were
+  // admitted, this call would mint a fresh task from work Drake just threw away. The
+  // allowlist makes that structurally impossible; this test is what keeps it an
+  // allowlist, because the denylist it replaced had exactly this hole (see the
+  // write-up in public/js/schedule.js for the "placed" version of it).
+  seedMeeting("mapprove", { title: "Planning" });
+  mem.store.push({ id: "papprove", type: "block", parent_id: "mapprove", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "Chase the migration", status: "dismissed",
+      dismissedReason: "task-dropped", droppedFromDate: "2026-07-20" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  const result = await automation.approveActions("mapprove", { workspaceId: "ws-1", userId: 1, actionIds: [] });
+  assert.equal(result.approvedCount, 0, "nothing minted");
+  const proposal = await mem.getBlock("papprove");
+  assert.equal(proposal.properties.status, "dismissed", "and the drop stands");
+  assert.equal(proposal.properties.dismissedReason, "task-dropped");
+});
+
 test("placeApprovedAction 404s on a missing action and a cross-workspace action", async () => {
   seedMeeting("m404");
   await assert.rejects(

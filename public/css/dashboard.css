@@ -5008,6 +5008,10 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .recap-sched-done{flex:none;color:var(--green);font-size:var(--fs-xs);font-weight:800;white-space:nowrap}
 .recap-owner-note{flex:none;color:var(--text-muted);font-size:var(--fs-xs)}
 .recap-action.is-scheduled .recap-action-text{color:var(--text-muted)}
+/* Amber, matching the "Rescheduled away" convention: settled, not celebrated. Green
+   here would read as done, and this is work Drake deliberately threw out. */
+.recap-sched-dropped{flex:none;color:var(--amber,#f59e0b);font-size:var(--fs-xs);font-weight:800;white-space:nowrap}
+.recap-action.is-dropped .recap-action-text{text-decoration:line-through}
 /* Pick-mode popover with allowTime: bare time input, right-aligned, no dur stepper */
 .resched-time-only{justify-content:flex-end}
 /* Native work sessions */
