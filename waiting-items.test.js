@@ -119,3 +119,77 @@ test("task dependencies stay out of follow-up cadence and triage", () => {
   assert.equal(Waiting.attentionFor(dependency, "2026-08-12"), null);
   assert.deepEqual(Waiting.mergeTriage({ open_items: [] }, [dependency], "2026-08-12").open_items, []);
 });
+
+// ── a scheduled check-in must not also nag ────────────────────────────────────
+//
+// Reproduced live before this gate existed: scheduling a check-in from the Waiting drawer
+// left THREE prompts for one dependency at the same time. The itinerary task the user just
+// placed, a read-time triage card (mergeTriage), and a Sweep Suite reply draft
+// (/api/waiting-items/attention feeds draft-replies).
+//
+// The condition deliberately mirrors the client's own filter in public/js/delegated.js
+// (`p.checkInTaskId && p.checkInScheduledFor >= todayStr()`) so the sidebar and the server
+// cannot disagree about what counts as already handled.
+
+const scheduledRow = (extra) => ({
+  id: "waiting-sched",
+  type: "block",
+  date: null,
+  created_at: "2026-08-01T12:00:00.000Z",
+  properties: {
+    kind: "delegated_item",
+    myTask: "Chase the vendor",
+    title: "Vendor invoice",
+    delegatee: { name: "Vendor", kind: "person" },
+    checkInDate: "2026-08-10",
+    checkInDays: 7,
+    status: "open",
+    ...extra,
+  },
+});
+const attentionOn = (extra, date) =>
+  Waiting.attentionFor(scheduledRow(extra), date, { timeZone: "America/New_York" });
+
+test("an unscheduled overdue check-in still asks for attention", () => {
+  assert.ok(attentionOn({}, "2026-08-18"), "the baseline must keep working");
+});
+
+test("a check-in scheduled for TODAY does not also raise a card", () => {
+  assert.equal(attentionOn({ checkInTaskId: "t-1", checkInScheduledFor: "2026-08-18" }, "2026-08-18"), null);
+});
+
+test("a check-in scheduled for a future day stays quiet", () => {
+  assert.equal(attentionOn({ checkInTaskId: "t-1", checkInScheduledFor: "2026-08-19" }, "2026-08-18"), null);
+});
+
+test("the gate LAPSES once the scheduled day passes with the cycle still open", () => {
+  // This is what keeps the gate from becoming a dangling pointer. Nothing clears
+  // checkInTaskId when the linked task is DELETED (only completeCycleProperties clears it,
+  // on success), so an open-ended gate would silence the item permanently.
+  assert.ok(
+    attentionOn({ checkInTaskId: "t-1", checkInScheduledFor: "2026-08-17" }, "2026-08-18"),
+    "an unkept plan must resurface"
+  );
+});
+
+test("a task id with no scheduled date does not silence anything", () => {
+  assert.ok(attentionOn({ checkInTaskId: "t-1" }, "2026-08-18"));
+});
+
+test("a scheduled date with no task id does not silence anything", () => {
+  assert.ok(attentionOn({ checkInScheduledFor: "2026-08-18" }, "2026-08-18"));
+});
+
+test("a malformed scheduled date is ignored rather than trusted", () => {
+  assert.ok(attentionOn({ checkInTaskId: "t-1", checkInScheduledFor: "not-a-date" }, "2026-08-18"));
+});
+
+test("completing the cycle clears the gate fields, so the next cycle is unaffected", () => {
+  // completeCycleProperties nulls checkInTaskId/checkInScheduledFor, which is what makes
+  // the gate self-limiting rather than sticky across cycles.
+  const row = scheduledRow({ checkInTaskId: "t-1", checkInScheduledFor: "2026-08-10" });
+  const done = Waiting.completeCycleProperties(row, "waiting:waiting-sched:2026-08-10", "2026-08-10T12:00:00.000Z", "America/New_York");
+  assert.equal(done.status, "completed");
+  assert.equal(done.properties.checkInTaskId, null);
+  assert.equal(done.properties.checkInScheduledFor, null);
+});

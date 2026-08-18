@@ -117,6 +117,22 @@ function attentionFor(item, asOfDate, opts = {}) {
   const due = dueDate({ ...item, properties: props }, opts.timeZone);
   if (!due) return null;
   if (validDate(props.snoozedUntil) && props.snoozedUntil > asOfDate) return null;
+  // A check-in that is already scheduled onto the itinerary must not ALSO nag. Without
+  // this the drawer's scheduleCheckIn produced three prompts for one dependency at once:
+  // the itinerary task the user just placed, a read-time triage card (mergeTriage below),
+  // and a Sweep Suite reply draft (/api/waiting-items/attention feeds draft-replies).
+  //
+  // The condition is a deliberate copy of the client's own filter in
+  // public/js/delegated.js (`p.checkInTaskId && p.checkInScheduledFor >= todayStr()`), so
+  // the sidebar and the server agree about what "already handled" means instead of each
+  // deciding separately.
+  //
+  // `>= asOfDate` is what makes this self-healing rather than a dangling pointer: nothing
+  // clears checkInTaskId when the linked task is DELETED (only completeCycleProperties
+  // clears it, on success), so an equality-or-open-ended gate would silence the item
+  // forever. Once the scheduled day passes with the cycle still open, the gate lapses and
+  // the check-in correctly resurfaces.
+  if (props.checkInTaskId && validDate(props.checkInScheduledFor) && props.checkInScheduledFor >= asOfDate) return null;
 
   const dueDay = dayNumber(due);
   const todayDay = dayNumber(asOfDate);
