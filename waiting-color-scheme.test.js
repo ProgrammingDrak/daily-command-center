@@ -78,24 +78,52 @@ test("both triage card builders paint the waiting hue and carry the pill", () =>
   assert.match(tab, /waiting-checkin-card/);
   assert.match(tab, /waitingCheckInPillHtml\(item\)/);
   // Deleting the reminder says so, so the 8s Undo toast can't be read as "task deleted".
-  assert.match(TRIAGE_SRC, /Check-in deleted\. The delegated task is still open in Waiting/);
+  assert.match(TRIAGE_SRC, /isWaitingCheckIn\(item\) \? "Check-in deleted\. The delegated task is still open in Waiting" : "Triage item deleted"/);
 });
 
 // ── delegated.js: the itinerary row chip (both roles) ──
-function chipRenderer(items) {
-  const code = ["evIdentityIds", "checkInItemId", "isCheckInTask", "waitingItemsForTask", "waitingPill", "waitingChipHtml"]
+// The sandbox mirrors the REAL predicates rather than a convenient approximation of
+// them: `isOpenDelegated` never looks at a top-level `done` flag and a task dependency
+// needs blockerType, so stubs that ignore either detail make the exclusion tests below
+// pass against fixtures the production code would happily paint a pill on.
+const realIsDone = item => {
+  const p = (item && item.properties) || {};
+  return !!(p.completedAt || p.status === "done" || p.status === "unblocked");
+};
+const realIsTaskDependency = item => {
+  const p = (item && item.properties) || {};
+  return p.blockerType === "task" && !!p.blockerBlockId && !!p.linkedBlockId;
+};
+// `scans` counts block-cache sweeps so the per-render memo has a test, not just a comment.
+function chipRenderer(items, opts) {
+  opts = opts || {};
+  const scans = { count: 0 };
+  const code = ["getAllDelegatedItems", "getDelegatedItemById", "evIdentityIds", "checkInItemId", "isCheckInTask", "checkInItem",
+                "checkInIsLive", "waitingLinkIndex", "waitingItemsForTask", "waitingPill", "waitingChipHtml"]
     .map(name => mustSlice(WAITING_SRC, new RegExp("^ {2}function " + name + "\\([\\s\\S]*?^ {2}\\}", "m"), name))
     .join("\n");
-  return vm.runInNewContext(code + "\n;({waitingChipHtml, isCheckInTask})", {
+  const memo = mustSlice(WAITING_SRC, /^ {2}let _linkIndex = null;\n {2}let _linkIndexGen = -1;/m, "memo state");
+  const sandbox = {
     esc,
     truncate: (s, n) => String(s || "").slice(0, n),
-    getAllDelegatedItems: () => items,
-    isOpenDelegated: item => !item.done,
-    isTaskDependency: item => !!(item.properties || {}).blockerBlockId,
-    getDelegatedItemById: id => items.find(i => i.id === id) || null,
-  });
+    Promise,
+    Map,
+    isOpenDelegated: item => !realIsDone(item),
+    isTaskDependency: realIsTaskDependency,
+    sortByUrgency: () => 0,
+    window: {
+      blockStore: {
+        getByType: () => { scans.count++; return items.slice(); },
+        get: id => (opts.storeGet === false ? null : items.find(i => i.id === id) || null),
+        getMutationGeneration: () => (typeof opts.generation === "function" ? opts.generation() : (opts.generation || 0)),
+      },
+    },
+  };
+  const api = vm.runInNewContext(memo + "\n" + code + "\n;({waitingChipHtml, isCheckInTask, checkInIsLive, checkInItemId, waitingItemsForTask})", sandbox);
+  return Object.assign(api, { scans });
 }
-const WAITING_ITEM = { id: "w1", properties: { linkedBlockId: "task-1", delegatee: { name: "Mike P." }, myTask: "Review metrics" } };
+const item = (id, props) => ({ id, properties: Object.assign({ kind: "delegated_item" }, props) });
+const WAITING_ITEM = item("w1", { linkedBlockId: "task-1", delegatee: { name: "Mike P." }, myTask: "Review metrics" });
 
 test("a check-in row is labelled a check-in and links back to its Waiting item", () => {
   const { waitingChipHtml, isCheckInTask } = chipRenderer([WAITING_ITEM]);
@@ -124,13 +152,89 @@ test("the ORIGINAL task wears the same hue, labelled 'Waiting on' -- that's the 
   assert.match(html, /delete the task there/);
 });
 
-test("the chip stays off unrelated tasks, done items, and task dependencies", () => {
-  const done = { id: "w2", done: true, properties: { linkedBlockId: "task-2", delegatee: { name: "Ann" } } };
-  const dependency = { id: "w3", properties: { linkedBlockId: "task-3", blockerBlockId: "task-9" } };
-  const { waitingChipHtml } = chipRenderer([WAITING_ITEM, done, dependency]);
+test("the chip stays off unrelated tasks, closed items, and task dependencies", () => {
+  // All three ways a Waiting item closes, on the shapes the real predicates read.
+  const closed = [
+    item("w2", { linkedBlockId: "task-2", delegatee: { name: "Ann" }, status: "done" }),
+    item("w4", { linkedBlockId: "task-4", delegatee: { name: "Ann" }, status: "unblocked" }),
+    item("w5", { linkedBlockId: "task-5", delegatee: { name: "Ann" }, completedAt: "2026-08-18T00:00:00Z" }),
+  ];
+  const dependency = item("w3", { linkedBlockId: "task-3", blockerBlockId: "task-9", blockerType: "task" });
+  const { waitingChipHtml } = chipRenderer([WAITING_ITEM, ...closed, dependency]);
   assert.equal(waitingChipHtml({ id: "task-unrelated" }), "");
-  assert.equal(waitingChipHtml({ id: "task-2" }), "");   // Waiting item already closed
+  for (const id of ["task-2", "task-4", "task-5"]) assert.equal(waitingChipHtml({ id }), "", id + " is closed");
   assert.equal(waitingChipHtml({ id: "task-3" }), "");   // carries the blocked/unlocks pill instead
+  // ...and the live one still paints, so the exclusions above are not just a dead helper.
+  assert.match(waitingChipHtml({ id: "task-1" }), /Waiting on Mike P\./);
+});
+
+// THE inversion bug: unblockWaitingItem stamps delegatedItemId on the row that carries
+// the REAL WORK, so a delegatedItemId-first predicate labelled that row a reminder and
+// told Drake the delegated task was still open while he deleted the task itself.
+test("the waiting-UNBLOCK row is the work, not a reminder", () => {
+  const { isCheckInTask, waitingChipHtml, checkInItemId } = chipRenderer([WAITING_ITEM]);
+  const unblockRow = { id: "waiting-unblock-task:w1", source: "waiting-unblock", delegatedItemId: "w1", title: "Review metrics" };
+  assert.equal(checkInItemId(unblockRow), null);
+  assert.equal(isCheckInTask(unblockRow), false);
+  assert.doesNotMatch(waitingChipHtml(unblockRow), /Check-in/);
+});
+
+// A reminder outlives its item: complete and delete leave the scheduled row alone.
+test("a check-in whose Waiting item is closed or gone reads as stale, with no link", () => {
+  const closed = item("w1", { linkedBlockId: "task-1", delegatee: { name: "Mike P." }, status: "done" });
+  const ev = { id: "waiting-checkin-task:w1", source: "waiting-checkin", delegatedItemId: "w1" };
+  const shut = chipRenderer([closed]);
+  assert.equal(shut.checkInIsLive(ev), false);
+  const html = shut.waitingChipHtml(ev);
+  assert.match(html, /^<span class="waiting-pill checkin"/);
+  assert.match(html, /already closed or gone, so the reminder is stale/);
+  assert.doesNotMatch(html, /data-waiting-open/);
+  assert.doesNotMatch(html, /stays open in Waiting/);
+  // Deleted outright: nothing resolves, same stale copy rather than a false promise.
+  const gone = chipRenderer([], { storeGet: false });
+  assert.equal(gone.checkInIsLive(ev), false);
+  assert.match(gone.waitingChipHtml(ev), /stale/);
+  // Still live -> the promise is allowed.
+  const live = chipRenderer([WAITING_ITEM]);
+  assert.equal(live.checkInIsLive(ev), true);
+  assert.match(live.waitingChipHtml(ev), /The delegated task stays open in Waiting/);
+});
+
+test("the whole block cache is swept once per render burst, not once per row", () => {
+  const { waitingChipHtml, scans } = chipRenderer([WAITING_ITEM]);
+  for (let i = 0; i < 25; i++) waitingChipHtml({ id: "task-" + i });
+  assert.equal(scans.count, 1, "25 rows must not mean 25 cache sweeps");
+});
+
+test("a store write invalidates the per-burst index", () => {
+  let gen = 0;
+  const { waitingChipHtml, scans } = chipRenderer([WAITING_ITEM], { generation: () => gen });
+  waitingChipHtml({ id: "task-1" });
+  waitingChipHtml({ id: "task-1" });
+  assert.equal(scans.count, 1, "same generation reuses the index");
+  gen = 1;                                    // something wrote to the store
+  waitingChipHtml({ id: "task-1" });
+  assert.equal(scans.count, 2, "a mutation must drop the index rather than serve stale rows");
+});
+
+test("the pill's other three labels", () => {
+  // Two people on one task collapse into a count, and the link goes to the first item.
+  const two = chipRenderer([
+    item("wA", { linkedBlockId: "t9", delegatee: { name: "Ann" } }),
+    item("wB", { linkedBlockId: "t9", delegatee: { name: "Bo" } }),
+  ]);
+  const many = two.waitingChipHtml({ id: "t9" });
+  assert.match(many, /Waiting on 2 people/);
+  assert.match(many, /waiting on Ann, Bo\. Click/);
+  assert.match(many, /data-waiting-open="wA"/);
+  // A nameless delegatee still reads as delegated, and the tip drops the "waiting on" clause.
+  const nameless = chipRenderer([item("wA", { linkedBlockId: "t9" })]);
+  const bare = nameless.waitingChipHtml({ id: "t9" });
+  assert.match(bare, /&#9203; Delegated</);
+  assert.doesNotMatch(bare, /waiting on/);
+  // The trailing period on a name is trimmed rather than doubled up.
+  const dotted = chipRenderer([item("wA", { linkedBlockId: "t9", delegatee: { name: "Mike P." } }) ]);
+  assert.match(dotted.waitingChipHtml({ id: "t9" }), /waiting on Mike P\. Click/);
 });
 
 test("the row matches on every id shape a block can carry", () => {
@@ -153,7 +257,10 @@ test("List rows and cards take the waiting hue and the pill from one helper", ()
 test("deleting a check-in row says the delegated task is still open", () => {
   const del = mustSlice(STATE_SRC, /^async function deleteTaskWithUndo\(id\)\{[\s\S]*?\n\}/m, "deleteTaskWithUndo");
   assert.match(del, /window\.isWaitingCheckInTask\(ev\)/);
-  assert.match(del, /Check-in deleted\. The delegated task is still open in Waiting/);
+  // Orientation, not mere presence: an inverted ternary would put "Task deleted" back on
+  // a check-in row, which is the exact regression this change exists to remove.
+  assert.match(del, /isCheckIn\s*\?\s*\(liveCheckIn\s*\?\s*"Check-in deleted\. The delegated task is still open in Waiting"\s*:\s*"Check-in deleted\. Its Waiting item was already closed"\)\s*:\s*"Task deleted"/);
+  assert.match(del, /window\.waitingCheckInIsLive\(ev\)/);
   assert.match(del, /label:"Undo"/);
 });
 

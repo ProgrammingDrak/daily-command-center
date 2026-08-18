@@ -79,29 +79,90 @@
 
   // The Waiting item a check-in task belongs to, "" when the row is a check-in whose
   // item can't be resolved, and null when the row is not a check-in at all.
-  // delegatedItemId is stamped by scheduleDelegatedItem; the id prefix and the
-  // source tag cover rows written before it (and the timeline-JSON path).
+  //
+  // ROLE FIRST, id second. delegatedItemId alone is NOT the tell: unblockWaitingItem
+  // stamps it on the row that carries the REAL WORK ("waiting-unblock-task:*", created
+  // when the blocker cleared), and task-serialize persists it, so reading it first
+  // labelled that row a reminder and told Drake "the delegated task stays open in
+  // Waiting" while he deleted the actual task. The id prefix and the source tag are the
+  // only things that mean "this row is a reminder".
   function checkInItemId(ev) {
     if (!ev) return null;
-    if (ev.delegatedItemId) return String(ev.delegatedItemId);
     const m = /^waiting-checkin-task:(.+)$/.exec(String(ev.id || ""));
-    if (m) return m[1];
     const src = String(ev.source || "").replace(/_/g, "-");
-    return src === "waiting-checkin" ? "" : null;
+    if (!m && src !== "waiting-checkin") return null;
+    if (ev.delegatedItemId) return String(ev.delegatedItemId);
+    return m ? m[1] : "";
   }
 
   function isCheckInTask(ev) { return checkInItemId(ev) !== null; }
 
+  // The Waiting item a check-in row points at, resolved by id through the store (O(1))
+  // rather than the sorted sidebar list. blockStore.get can hand back a soft-deleted
+  // row, so both the tombstone and the kind are checked; getDelegatedItemById is the
+  // fallback for an id that is a local_id rather than a row id.
+  function checkInItem(ev) {
+    const id = checkInItemId(ev);
+    if (!id) return null;
+    const direct = (window.blockStore && typeof window.blockStore.get === "function")
+      ? window.blockStore.get(id) : null;
+    const item = (direct && !direct.deleted_at && (direct.properties || {}).kind === "delegated_item")
+      ? direct
+      : getDelegatedItemById(id);
+    return item || null;
+  }
+
+  // A check-in reminder OUTLIVES its item: complete and delete both leave the scheduled
+  // reminder on the itinerary (the routes only touch the Waiting row), so once the item
+  // is closed or gone the copy has to stop promising the delegated task is open.
+  function checkInIsLive(ev) {
+    const item = checkInItem(ev);
+    return !!item && isOpenDelegated(item);
+  }
+
+  // linkedBlockId -> open Waiting items, built at most once per synchronous render
+  // burst. The chip helper below runs once PER ROW, and getAllDelegatedItems is a spread
+  // of the WHOLE block cache plus two sorts, one of them Date-heavy through
+  // sortByUrgency -- tens of milliseconds per render on a mature account, on a path that
+  // every drag, completion and SSE tick hits. The memo is bounded two ways: the
+  // mutation-generation key drops it the moment anything writes, and the microtask reset
+  // means it never outlives the burst it was built for. Bucket order inherits
+  // getAllDelegatedItems' urgency sort, so items[0] is still the most urgent.
+  let _linkIndex = null;
+  let _linkIndexGen = -1;
+  function waitingLinkIndex() {
+    const gen = (window.blockStore && typeof window.blockStore.getMutationGeneration === "function")
+      ? window.blockStore.getMutationGeneration() : 0;
+    if (_linkIndex && _linkIndexGen === gen) return _linkIndex;
+    const index = new Map();
+    for (const item of getAllDelegatedItems()) {
+      const p = item.properties || {};
+      // Task-dependency items are excluded here: they carry their own blocked/unlocks
+      // pill (taskDependencyChipHtml) and are not delegated to a person.
+      if (!p.linkedBlockId || !isOpenDelegated(item) || isTaskDependency(item)) continue;
+      const key = String(p.linkedBlockId);
+      const bucket = index.get(key);
+      if (bucket) bucket.push(item); else index.set(key, [item]);
+    }
+    _linkIndex = index;
+    _linkIndexGen = gen;
+    Promise.resolve().then(() => { _linkIndex = null; });
+    return index;
+  }
+
   // Open Waiting items pointing AT this task -- i.e. this row is the original work,
-  // blocked on someone else. Task-dependency items are excluded: they carry their own
-  // blocked/unlocks pill (taskDependencyChipHtml) and are not delegated to a person.
+  // blocked on someone else.
   function waitingItemsForTask(ev) {
     const ids = evIdentityIds(ev);
     if (!ids.size) return [];
-    return getAllDelegatedItems().filter(item => {
-      const p = item.properties || {};
-      return isOpenDelegated(item) && !isTaskDependency(item) && p.linkedBlockId && ids.has(String(p.linkedBlockId));
-    });
+    const index = waitingLinkIndex();
+    if (!index.size) return [];
+    const out = [];
+    for (const id of ids) {
+      const bucket = index.get(id);
+      if (bucket) for (const item of bucket) if (out.indexOf(item) === -1) out.push(item);
+    }
+    return out;
   }
 
   function waitingPill(cls, itemId, label, tip, icon) {
@@ -116,13 +177,15 @@
   function waitingChipHtml(ev) {
     const checkInId = checkInItemId(ev);
     if (checkInId !== null) {
-      const item = checkInId ? getDelegatedItemById(checkInId) : null;
-      const p = (item && item.properties) || {};
+      const item = checkInItem(ev);
+      const live = !!item && isOpenDelegated(item);
+      const p = (live && item.properties) || {};
       const who = (p.delegatee && p.delegatee.name) || "";
-      const tip = "Check-in reminder" + (who ? " for " + who : "") +
-        ": deleting this drops the reminder only. The delegated task stays open in Waiting." +
-        (item ? " Click to open it." : "");
-      return waitingPill("checkin", item && item.id, "Check-in" + (who ? " \u00b7 " + truncate(who, 18) : ""), tip, "&#128276;");
+      const tip = live
+        ? "Check-in reminder" + (who ? " for " + who : "") +
+          ": deleting this drops the reminder only. The delegated task stays open in Waiting. Click to open it."
+        : "Check-in reminder whose Waiting item is already closed or gone, so the reminder is stale.";
+      return waitingPill("checkin", live ? item.id : null, "Check-in" + (who ? " \u00b7 " + truncate(who, 18) : ""), tip, "&#128276;");
     }
     const items = waitingItemsForTask(ev);
     if (!items.length) return "";
@@ -1300,6 +1363,7 @@
   window.taskDependencyChipHtml = taskDependencyChipHtml;
   window.waitingRowChipHtml = waitingChipHtml;
   window.isWaitingCheckInTask = isCheckInTask;
+  window.waitingCheckInIsLive = checkInIsLive;
   window.notifyReadyTaskDependencies = notifyReadyTaskDependencies;
   window.deleteDelegatedItem = deleteDelegatedItem;
   window.getAllDelegatedItems = getAllDelegatedItems;
@@ -1326,6 +1390,7 @@
     completeCheckIn: markDelegatedItemCheckedById,
     completeCheckInCycle,
     isCheckInTask,
+    checkInIsLive,
     itemsForTask: waitingItemsForTask,
     rowChipHtml: waitingChipHtml,
     copyText

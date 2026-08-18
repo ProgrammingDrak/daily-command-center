@@ -2579,12 +2579,11 @@
 .waiting-pill.checkin{border-style:dashed}
 .waiting-pill:hover{filter:brightness(1.18)}
 span.waiting-pill{cursor:default}
-.it-list-item.waiting-row,.card.waiting-row{border-color:var(--waiting-border)}
-.cu-unified-row.cu-waiting-checkin{border-color:var(--waiting-border)}
+/* The row's LEFT BAR and the pill carry the hue, nothing else: no border, no wash
+ * around the row, so a delegated row still reads as an ordinary row of work
+ * (Drake, 2026-08-18). .waiting-row / .waiting-checkin-card / .cu-waiting-checkin
+ * stay on as markers for the bar color and as JS/test hooks. */
 .cu-title-line .waiting-pill{flex:0 0 auto;margin-left:4px}
-.it-list-item.waiting-row:hover,.card.waiting-row:hover{border-color:var(--waiting)}
-.board-card.waiting-checkin-card{border-color:var(--waiting-border)}
-.board-card.waiting-checkin-card .schedule-triage-summary{border-left-color:var(--waiting)!important}
 .delegated-card-body{flex:1;min-width:0}
 .delegated-card-title{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px}
 .delegated-card-link{font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border:1px solid var(--waiting-border);background:var(--waiting-bg);border-radius:999px;padding:1px 6px;color:var(--waiting-ink);flex-shrink:0}

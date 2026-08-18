@@ -1871,7 +1871,10 @@ async function deleteTaskWithUndo(id){
     // A check-in row is a REMINDER, not the delegated task -- say which one went away,
     // because deleting the reminder leaves the real work open in Waiting (delegated.js).
     const isCheckIn=(typeof window.isWaitingCheckInTask==="function")&&window.isWaitingCheckInTask(ev);
-    showToast(isCheckIn?"Check-in deleted. The delegated task is still open in Waiting":"Task deleted","success",8000,{
+    // Liveness, not just role: a reminder outlives its Waiting item (complete and delete
+    // leave the scheduled row alone), so a stale one must not claim the task is open.
+    const liveCheckIn=isCheckIn&&(typeof window.waitingCheckInIsLive==="function")&&window.waitingCheckInIsLive(ev);
+    showToast(isCheckIn?(liveCheckIn?"Check-in deleted. The delegated task is still open in Waiting":"Check-in deleted. Its Waiting item was already closed"):"Task deleted","success",8000,{
       label:"Undo",
       onClick:()=>undoDeleteTask(id)
     });

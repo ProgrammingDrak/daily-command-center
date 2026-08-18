@@ -439,7 +439,14 @@
       const el = document.createElement("div");
       const title = item.title || "Untitled";
       const detailId = "cu-triage-details-" + (++detailSeq);
-      el.className = "carryover-row cu-unified-row cu-triage-row";
+      // Delegated check-ins wear the shared --waiting look here too: the recap envelope
+      // lists the same reminders the itinerary strip does, and "Drop" on one of them
+      // drops the REMINDER, never the delegated task (triage.js isWaitingCheckIn).
+      const isCheckIn = typeof isWaitingCheckIn === "function" && isWaitingCheckIn(item);
+      const checkInPill = isCheckIn
+        ? '<span class="waiting-pill checkin" title="Check-in reminder: this handles the reminder only. The delegated task stays open in Waiting.">&#128276; Check-in</span>'
+        : "";
+      el.className = "carryover-row cu-unified-row cu-triage-row" + (isCheckIn ? " cu-waiting-checkin" : "");
       const safe = (window.DCC && window.DCC.safeUrl) || (u => "");
       const href = safe(item.draft_link || item.draft_url) || safe(item.link || item.source_url);
       el.innerHTML =
@@ -447,6 +454,7 @@
         '<div class="carryover-row-info">' +
           '<div class="cu-title-line">' +
             '<div class="carryover-row-title"></div>' +
+            checkInPill +
             calBtn("cu-cal", "Schedule on a day: " + title) +
           '</div>' +
           '<div class="carryover-row-meta">' + esc(triageMeta(item)) +
@@ -465,17 +473,6 @@
       toggleEl.setAttribute("aria-expanded", "false");
       toggleEl.setAttribute("aria-controls", detailId);
       toggleEl.setAttribute("aria-label", "Show details for " + title);
-      // Delegated check-ins wear the shared --waiting look here too: the recap envelope
-      // lists the same reminders the itinerary strip does, and "Drop" on one of them
-      // drops the REMINDER, never the delegated task (triage.js isWaitingCheckIn).
-      if (typeof isWaitingCheckIn === "function" && isWaitingCheckIn(item)) {
-        el.classList.add("cu-waiting-checkin");
-        const pill = document.createElement("span");
-        pill.className = "waiting-pill checkin";
-        pill.title = "Check-in reminder. This handles the reminder only, the delegated task stays open in Waiting.";
-        pill.innerHTML = "&#128276; Check-in";
-        titleEl.insertAdjacentElement("afterend", pill);
-      }
       el.querySelector(".cu-details-full-title").textContent = title;
       const hasDetails = [
         appendDetailSection(detailBody, "Summary", [item.summary, item.snippet, item.excerpt]),
