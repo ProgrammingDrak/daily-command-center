@@ -248,6 +248,94 @@ module.exports = function mount(app, ctx) {
     broadcast("dcc-state-changed", { source: "triage-suppression", action: "add" }, workspaceId);
     return suppression;
   }
+
+  // The meeting-action sibling of transitionLinkedTriage: a placed meeting follow-up
+  // is a real day task, and deleting it left its ORIGINATING proposal stranded at
+  // status:"placed" forever — so the meeting's Recap card kept reporting
+  // "Scheduled ✓ <date>" for work that no longer exists. The task→proposal back-link
+  // is properties.meetingAutomation.proposedActionId (stamped in approveActions).
+  //
+  // Three things here are load-bearing, and each is a bug reasoned through rather
+  // than discovered:
+  //
+  //   1. It reuses status:"dismissed" instead of minting a "dropped" value. The two
+  //      server gates are allowlists now (meeting-automation.js approveActions and
+  //      listProposedActions both test `status === "proposed" || ... "approved"`), so a
+  //      novel status would be excluded there by construction — but the itinerary
+  //      panel's client filter is still a denylist, placeApprovedAction refuses
+  //      exactly "dismissed", and the recap tab filters exactly "dismissed". Reusing
+  //      the status the rest of the system already treats as terminal keeps that
+  //      vocabulary closed; the REASON rides in its own field for display.
+  //
+  //   2. placedDate is MOVED to droppedFromDate, not kept "for history". The recap row
+  //      computes isPlaced as `status==="placed" || !!a.placedDate`, so leaving the key
+  //      behind means every reader still sees a scheduled task and the display bug
+  //      survives the fix.
+  //
+  //   3. The transition is gated on status==="placed" in both directions, which is what
+  //      makes it idempotent. The batch route collects deletedBlocks WITHOUT a
+  //      !deleted_at guard, so a WAL replay re-runs this over already-tombstoned rows.
+  //
+  // Callers must not let it throw: every call site runs AFTER the row is already
+  // tombstoned, so a failure must not turn a completed delete into a 500.
+  async function transitionLinkedMeetingAction(block, reason, atMs) {
+    const props = (block && block.properties) || {};
+    const proposedActionId = String((props.meetingAutomation || {}).proposedActionId || "").trim();
+    if (!proposedActionId || typeof blockDB.getBlock !== "function") return null;
+    const proposal = await blockDB.getBlock(proposedActionId);
+    if (!proposal || proposal.deleted_at) return null;
+    if (block && block.workspace_id && proposal.workspace_id && proposal.workspace_id !== block.workspace_id) return null;
+    const p = proposal.properties || {};
+    if (p.kind !== "proposed_action_item") return null;
+    const at = new Date(Number.isFinite(atMs) ? atMs : Date.now()).toISOString();
+
+    if (reason === "dropped") {
+      // Only placed work can be dropped. Anything else (proposed, approved, already
+      // dismissed) is either not ours to touch or already terminal.
+      if (p.status !== "placed") return null;
+      // Deleting FINISHED work is cleanup, not a drop. Completion is written to the TASK
+      // and never back to the proposal, so a follow-up Drake actually completed still sits
+      // at "placed" -- without this gate, clearing it off the itinerary would stamp the
+      // meeting card with a struck-through "Dropped" and assert he threw the work away.
+      // Same rule the triage sibling applies when it refuses to release a "done"
+      // suppression on delete.
+      if (isCompleted(block)) return null;
+      const next = { ...p, status: "dismissed", dismissedAt: at, dismissedReason: "task-dropped" };
+      if (p.placedDate) next.droppedFromDate = p.placedDate;
+      if (p.placedStart) next.droppedFromStart = p.placedStart;
+      delete next.placedDate;
+      delete next.placedStart;
+      await blockDB.updateBlock(proposal.id, { properties: next });
+      return "dropped";
+    }
+
+    if (reason === "restored") {
+      // Symmetric undo, keyed on the REASON rather than the status, so a dismissal the
+      // user made by hand is never silently un-dismissed by an unrelated undelete.
+      if (p.dismissedReason !== "task-dropped") return null;
+      const next = { ...p, status: "placed" };
+      if (p.droppedFromDate) next.placedDate = p.droppedFromDate;
+      if (p.droppedFromStart) next.placedStart = p.droppedFromStart;
+      delete next.droppedFromDate;
+      delete next.droppedFromStart;
+      delete next.dismissedAt;
+      delete next.dismissedReason;
+      await blockDB.updateBlock(proposal.id, { properties: next });
+      return "restored";
+    }
+    return null;
+  }
+
+  // The delete has already landed by the time this runs. Swallow and log: a stranded
+  // proposal stamp is a cosmetic wrong on the meeting card, while a throw here would
+  // 500 a request whose row is already tombstoned and leave the client believing the
+  // drop failed. transitionLinkedTriage's own call sites are deliberately NOT wrapped
+  // this way, so this wrapper is the boundary rather than a shared convention.
+  async function settleLinkedMeetingAction(block, reason, atMs) {
+    try { return await transitionLinkedMeetingAction(block, reason, atMs); }
+    catch (e) { console.error("[blocks] meeting-action transition failed (non-fatal):", e.message); return null; }
+  }
+
   // Never let a read fail on a reconcile: the itinerary must still render.
   async function withReconciledTiming(blocks, req) {
     try { await reconcileTiming(blocks, { userId: req.session && req.session.userId, workspaceId: req.workspaceId }); }
@@ -699,6 +787,7 @@ module.exports = function mount(app, ctx) {
       if (client) client.release();
     }
     await transitionLinkedTriage(existing, "release", Date.now());
+    await settleLinkedMeetingAction(existing, "dropped", Date.now());
     broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id].concat(closedDependencyIds, releasedDependencyTaskIds), clientId: req.query._clientId }, req.workspaceId);
     await syncSlack({ ...existing, deleted_at: result.deleted_at || new Date().toISOString(), properties: existing.properties || props });
     return result;
@@ -722,6 +811,9 @@ module.exports = function mount(app, ctx) {
     assertBlockOwnership(existing, req.workspaceId);
     const result = await blockDB.undeleteBlock(req.params.id);
     if (!isCompleted(result)) await transitionLinkedTriage(result, "scheduled", Date.now());
+    // Unconditional, unlike the triage restore above: a meeting follow-up that comes
+    // back completed is still back, and its proposal must stop reading "Dropped".
+    await settleLinkedMeetingAction(result, "restored", Date.now());
     // `undeletedIds` is the signal Track B asked for: block-store.js keeps a local
     // _tombstones set that makes handleBlocksChanged SKIP re-fetching an id it believes
     // is deleted, so a restore performed in another tab would stay invisible until a
@@ -976,6 +1068,10 @@ module.exports = function mount(app, ctx) {
     }
 
     for (const block of deletedBlocks) await transitionLinkedTriage(block, "release", Date.now());
+    // Same pass for meeting provenance. This is the path a Loose Ends Drop actually
+    // takes when the slipped task has nested rows (unfinished-tasks.js drop() sends the
+    // whole subtree as one batch), so it is not the rare branch it looks like.
+    for (const block of deletedBlocks) await settleLinkedMeetingAction(block, "dropped", Date.now());
 
     broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b && (b.id || b.reordered)).filter(Boolean).concat(dependencyBroadcastIds), clientId: _clientId }, req.workspaceId);
     for (const block of deletedBlocks) await syncSlack({ ...block, deleted_at: new Date().toISOString() });

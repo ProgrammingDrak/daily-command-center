@@ -44,7 +44,11 @@
       const prep=data&&data.prep;
       const summary=data&&data.summary;
       const transcript=data&&data.transcript;
-      const proposed=(data&&data.proposedActions||[]).filter(a=>a.status!=="approved"&&a.status!=="placed");
+      // "dismissed" belongs in this list: a dismissed proposal is terminal, and without
+      // it the panel renders one as a PRE-CHECKED row under "Approve selected". The
+      // server's allowlist means clicking that mints nothing, so this is a display lie
+      // rather than a resurrection — but it is the surface a dropped item shows up on.
+      const proposed=(data&&data.proposedActions||[]).filter(a=>a.status!=="approved"&&a.status!=="placed"&&a.status!=="dismissed");
       const approved=(data&&data.proposedActions||[]).filter(a=>a.status==="approved");
       let html="";
       html+='<div class="ma-section">'+
@@ -257,8 +261,13 @@
     const group=(title,items)=>{
       if(!items.length)return '';
       return '<div class="recap-action-group"><div class="prep-view-kicker">'+esc(title)+'</div>'+items.map(a=>{
-      const pl=placed&&placed.get(a.id);
-      const isPlaced=!!pl||a.status==="placed"||!!a.placedDate;
+      // Dropped is resolved FIRST, ahead of `pl`. That session map records "scheduled
+      // during this page session", so schedule here -> drop it in Loose Ends -> reopen
+      // this modal without a reload would otherwise still claim "Scheduled ✓" off a
+      // stale in-memory entry. Server truth outranks the optimistic map.
+      const isDropped=a.status==="dismissed"&&a.dismissedReason==="task-dropped";
+      const pl=!isDropped&&placed&&placed.get(a.id);
+      const isPlaced=!isDropped&&(!!pl||a.status==="placed"||!!a.placedDate);
       const when=(pl&&pl.date)||a.placedDate||"";
       const ownerOther=(a.owner==="other"||a.owner==="others");
       const meta=(a.priority?'<em>'+esc(a.priority)+'</em>':'')+(ownerOther?'<em class="recap-owner">delegated</em>':'');
@@ -268,10 +277,13 @@
       const hasStart=dashboardRef&&offset!==null&&offset!==undefined&&isFinite(Number(offset));
       const source=hasStart?'<a class="recap-action-source" href="/meetings/'+encodeURIComponent(id)+'/dashboard?t='+encodeURIComponent(offset)+'" target="_blank" rel="noopener" title="'+esc(quote||"Open cited transcript moment")+'">▶ '+recapTime(offset)+'</a>':'';
       let ctrl;
-      if(isPlaced)ctrl='<span class="recap-sched-done">Scheduled'+(when?' '+esc(typeof _prettyDateLabel==="function"?_prettyDateLabel(when):when):'')+' &#10003;</span>';
+      // Inert on purpose — no button, nothing to click. The task is gone; re-offering a
+      // Schedule control here is how dropped work would climb back onto the day.
+      if(isDropped)ctrl='<span class="recap-sched-dropped">Dropped</span>';
+      else if(isPlaced)ctrl='<span class="recap-sched-done">Scheduled'+(when?' '+esc(typeof _prettyDateLabel==="function"?_prettyDateLabel(when):when):'')+' &#10003;</span>';
       else if(ownerOther)ctrl='<span class="recap-owner-note">Owner: other</span>';
       else ctrl='<button class="recap-sched-btn" type="button" data-action-id="'+esc(a.id)+'">Schedule</button>';
-      return '<div class="recap-action'+(isPlaced?' is-scheduled':'')+'" data-row-id="'+esc(a.id)+'">'+
+      return '<div class="recap-action'+(isPlaced||isDropped?' is-scheduled':'')+(isDropped?' is-dropped':'')+'" data-row-id="'+esc(a.id)+'">'+
         '<span class="recap-action-text">'+esc(a.text||a.title||"")+meta+source+'</span>'+ctrl+'</div>';
       }).join('')+'</div>';
     };
@@ -433,7 +445,12 @@
     function render(data){
       lastData=data;
       const prep=data&&data.prep, summary=data&&data.summary;
-      const actions=((data&&data.proposedActions)||[]).filter(a=>a.status!=="dismissed");
+      // A hand-dismissed proposal still disappears from the recap, as it always has. A
+      // dismissal the SYSTEM made on Drake's behalf (dismissedReason, currently only
+      // "task-dropped") stays visible instead: he dropped the task somewhere else and
+      // this card is the only place that can tell him the meeting's copy is settled.
+      // Silently vanishing would read as "the follow-up was never captured".
+      const actions=((data&&data.proposedActions)||[]).filter(a=>a.status!=="dismissed"||!!a.dismissedReason);
       // Tear down prior editors before we wipe the doc HTML (open + each regenerate).
       Object.keys(editors).forEach(k=>{ try{editors[k].destroy()}catch(e){} delete editors[k]; });
       let html='';
@@ -487,7 +504,16 @@
       finally{ genBtn.disabled=false; if(genBtn.textContent==="Generating…")genBtn.textContent="Refresh prep"; }
     });
 
-    load(false);
+    // Forced, not cache-first. `cache` is module-level with no TTL and no eviction, and
+    // nothing invalidates it when a task is deleted somewhere else in the app -- so after
+    // a Loose Ends Drop, reopening this modal in the same page session would re-render the
+    // stale bundle and still show "Scheduled <date>" for work that is gone. The SSE path
+    // cannot cover it either: handleBlockEvent returns early on our OWN clientId echo,
+    // which is exactly the tab that did the dropping. Opening this modal is a deliberate
+    // user action on one meeting, so paying one fetch for guaranteed-fresh data is the
+    // cheap fix. The inline itinerary panels stay cache-first: their filter excludes
+    // "placed" and "dismissed" alike, so a stale bundle renders identically there.
+    load(true);
   }
 
   window.meetingAutomationPanelHtml=meetingAutomationPanelHtml;
