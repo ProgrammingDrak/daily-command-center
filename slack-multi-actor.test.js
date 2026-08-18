@@ -64,6 +64,10 @@ function makeHarness(opts = {}) {
     if (href.includes("users.info")) {
       const id = new URL(href).searchParams.get("user");
       calls.usersInfo.push({ id, auth });
+      // A transient failure must be distinguishable from a confirmed absence.
+      if (opts.usersInfoFails) {
+        return { ok: false, status: 429, json: async () => ({ ok: false, error: "ratelimited" }) };
+      }
       const profile = profiles[id];
       if (!profile) return { ok: true, status: 200, json: async () => ({ ok: false, error: "user_not_found" }) };
       return { ok: true, status: 200, json: async () => ({ ok: true, user: {
@@ -629,4 +633,30 @@ test("statusForUser reports absent, pending and linked as three distinct states"
   assert.equal(linked.connected, true);
   assert.equal(linked.pending, false);
   assert.equal(linked.tier, "bot");
+});
+
+test("claimPending refuses when Slack cannot be reached, rather than falling through", async () => {
+  // A rate limit or outage used to look identical to "this profile has no email",
+  // which is the one case the manual claim is allowed to accept. That made the
+  // ownership check bypassable by simply retrying until Slack hiccupped.
+  const h = makeHarness({
+    allowlist: TEAM,
+    usersInfoFails: true,
+    users: [{ id: 9, email: null, workspaceId: "ws-9" }],
+  });
+  const result = await h.api.actors.claimPending(9, "U_ANYONE", "ws-9");
+  assert.equal(result.ok, false);
+  assert.match(result.error, /could not check/i);
+  assert.equal(h.identities.length, 0, "no claim recorded on an unverifiable lookup");
+});
+
+test("autoLink drops the event when Slack cannot be reached", async () => {
+  const h = makeHarness({
+    allowlist: TEAM,
+    usersInfoFails: true,
+    users: [{ id: 4, email: "nora.vance@movewithclever.com", workspaceId: "ws-4" }],
+  });
+  await post(h.handler, envelope(reaction("bookmark", "U_NORA", "flaky.1")));
+  assert.equal(h.identities.length, 0, "no link guessed from a failed lookup");
+  assert.equal(h.blocks.length, 0);
 });
