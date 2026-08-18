@@ -2006,18 +2006,55 @@ module.exports = function mount(app, ctx) {
   // to modify tags or other type:"block" data.
   app.get(["/api/delegated-items", "/api/waiting-items"], route(async (req) => blockDB.getDelegatedItems(req.workspaceId)));
 
+  // `draft_items` is a PUBLISH surface, not a view. Sweep Suite's `dcc-waiting-checkins`
+  // custom source polls this endpoint every 15 minutes and feeds each entry to
+  // draft-replies, which writes a real Gmail or Slack draft for it.
+  //
+  // It applied no suppressions, so handling a check-in in the DCC stopped the card on the
+  // day response (server.js applies applyTriageSuppressions there) but did nothing here:
+  // the sweep kept pulling the same item and kept drafting a reply to a thing Drake had
+  // already dealt with, four times an hour, until the cadence happened to move. That is
+  // one of the loudest sources of "I already handled this".
+  //
+  // The gate is on `draft_items` ONLY. `items` stays raw on purpose: it drives the Waiting
+  // sidebar's urgency display, where a still-open item SHOULD keep showing even after its
+  // current check-in card is handled. Suppression means "stop asking me to act", not
+  // "pretend the dependency is gone".
+  async function suppressionIndexFor(workspaceId) {
+    if (typeof blockDB.getBlocksByKind !== "function") return null;
+    try {
+      const blocks = await blockDB.getBlocksByKind(triageSuppressions.SUPPRESSION_KIND, workspaceId);
+      const active = triageSuppressions.suppressionsFromBlocks(blocks);
+      return active.length ? triageSuppressions.suppressionIndex(active) : null;
+    } catch (e) {
+      // Same best-effort contract server.js uses: an unreadable overlay degrades to
+      // "offer everything" rather than failing the sweep's read outright. Erring toward a
+      // duplicate draft beats erring toward a silently dropped follow-up.
+      console.error("[waiting attention] suppression read failed (non-fatal):", e.message);
+      return null;
+    }
+  }
+
   app.get("/api/waiting-items/attention", route(async (req) => {
     const date = isValidDate(req.query.date) ? req.query.date : getTodayStr();
     const rows = await blockDB.getDelegatedItems(req.workspaceId);
     const items = waitingItems.attentionItems(rows, date, { timeZone: APP_TIME_ZONE });
+    const index = await suppressionIndexFor(req.workspaceId);
+    const eligible = items.filter((item) => item.draftEligible).map((item) => ({
+      ...item,
+      ...waitingItems.triageItem(item, `${item.checkInDate}T12:00:00.000Z`),
+      received_at: `${item.checkInDate}T12:00:00.000Z`,
+    }));
+    // Match on the same shaped item the day response filters, so this endpoint and
+    // buildDayResponse cannot disagree about what "handled" means.
+    const draftItems = index ? eligible.filter((item) => !triageSuppressions.isSuppressed(item, index)) : eligible;
     return {
       date,
       items,
-      draft_items: items.filter((item) => item.draftEligible).map((item) => ({
-        ...item,
-        ...waitingItems.triageItem(item, `${item.checkInDate}T12:00:00.000Z`),
-        received_at: `${item.checkInDate}T12:00:00.000Z`,
-      })),
+      draft_items: draftItems,
+      // Observability for the sweep's run log: a silent drop is indistinguishable from
+      // "nothing was due", and those need to be tellable apart when a draft goes missing.
+      suppressed_draft_count: eligible.length - draftItems.length,
     };
   }));
 

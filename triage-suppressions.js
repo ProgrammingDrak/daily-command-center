@@ -119,6 +119,46 @@ function triageItemKey(item) {
   return `${source}|${id}`;
 }
 
+// ── Subject keys ──────────────────────────────────────────────────────────────
+//
+// The cycle-bearing identity above is correct for a HANDLED CYCLE and wrong for a
+// HANDLED SUBJECT, and conflating the two is the bug this layer fixes.
+//
+// A Waiting check-in's id embeds its due date (`waiting-checkin:<blockId>:<due>`,
+// waiting-items.js triageId). For reason:"done" that is exactly right -- a recurring
+// check-in SHOULD come back next cycle, and a cycle-scoped record is what lets it.
+// But "deleted" and "scheduled" are statements about the THING, not about one cycle,
+// and keying those to a due date makes them evaporate the moment the date moves.
+// Verified against a live server: writing a deleted-suppression and then moving
+// checkInDate by a single day resurrects the card and hands the sweep a fresh draft.
+//
+// So subject-scoped reasons get a dateless key, and cycle-scoped reasons keep the
+// existing arms. SUBJECT_SCOPED_REASONS is the whole policy, in one place.
+const SUBJECT_SCOPED_REASONS = new Set(["deleted", "scheduled"]);
+
+// Dateless identity of the THING an item belongs to, or "" when the family has no
+// subject semantics yet (a Gmail turn's subject is its thread, which the gmailCutoffs
+// path below already handles on its own terms).
+function subjectKeyForItem(item) {
+  if (!item) return "";
+  const waitingId = clipped(item.waiting_item_id || item.waitingItemId, 300);
+  if (waitingId) return `waiting:${waitingId}`;
+  // Legacy and server-side callers may only have the cycle id to go on.
+  const id = String(item.id || "");
+  const m = /^waiting-checkin:(.+):\d{4}-\d{2}-\d{2}$/.exec(id);
+  return m ? `waiting:${m[1]}` : "";
+}
+
+// Same derivation, from a stored row rather than a live item. Rows written before this
+// existed carry no subject_key, so it is recovered from the triage id -- which is why
+// subjectKeyForItem accepts a bare cycle id above. Without that backfill every
+// pre-existing deleted-suppression would silently lose its subject scope.
+function subjectKeyForSuppression(suppression) {
+  if (!suppression) return "";
+  if (suppression.subject_key) return String(suppression.subject_key);
+  return subjectKeyForItem({ id: suppression.triage_id });
+}
+
 // A suppression matches an item on EITHER the composite key or the bare id.
 // Belt and braces on purpose: the composite key is what the merge dedupes on, but
 // it is built from fields the sweep controls, and a reader that starts emitting
@@ -128,11 +168,22 @@ function triageItemKey(item) {
 function suppressionIndex(suppressions) {
   const keys = new Map();
   const ids = new Map();
+  const subjects = new Map();
   const gmailCutoffs = new Map();
   for (const s of suppressions || []) {
     if (!s || s.active === false) continue;
     if (s.key) keys.set(s.key, s);
     if (s.triage_id) ids.set(s.triage_id, s);
+    // Only subject-scoped reasons get the dateless arm. A "done" row must NOT land here
+    // or every future cycle of a recurring check-in would be suppressed by the first one
+    // ever completed, which would silently kill the reminder instead of fixing it.
+    if (SUBJECT_SCOPED_REASONS.has(s.reason)) {
+      const subject = subjectKeyForSuppression(s);
+      // Keep the most recent decision per subject so an Undo-then-redo reads correctly.
+      if (subject && (!subjects.has(subject) || Date.parse(s.at || 0) >= Date.parse(subjects.get(subject).at || 0))) {
+        subjects.set(subject, s);
+      }
+    }
     // Before Sweep Suite gained message-level Gmail ids, a handled turn was stored as
     // gmail:<thread>. Treat that legacy row as a time cutoff, not a permanent thread
     // tombstone: old messages stay dead, but a later inbound turn is allowed through.
@@ -142,7 +193,7 @@ function suppressionIndex(suppressions) {
       gmailCutoffs.get(conversationId).push(s);
     }
   }
-  return { keys, ids, gmailCutoffs };
+  return { keys, ids, subjects, gmailCutoffs };
 }
 
 function matchingSuppression(item, index) {
@@ -150,6 +201,14 @@ function matchingSuppression(item, index) {
   if (index.ids.size && item.id && index.ids.has(item.id)) return index.ids.get(item.id);
   const key = triageItemKey(item);
   if (index.keys.size && index.keys.has(key)) return index.keys.get(key);
+
+  // The dateless arm. Deliberately AFTER the exact arms so a cycle-specific record still
+  // wins when one exists, and deliberately restricted to subject-scoped reasons by the
+  // index build above.
+  if (index.subjects && index.subjects.size) {
+    const subject = subjectKeyForItem(item);
+    if (subject && index.subjects.has(subject)) return index.subjects.get(subject);
+  }
 
   const conversationId = triageConversationId(item);
   const receivedAt = Date.parse(triageReceivedAt(item));
@@ -269,11 +328,16 @@ function mergeTriageForIngest(existing, incoming) {
 // express.json({limit:"5mb"}) would let one request store a multi-megabyte title that
 // then rides along on day reads. The 220/1000 limits match what the repo already
 // applies to the same two fields in routes/social-todo.js.
-function buildSuppressionProperties({ triageId, key, itemTitle, reason, note, at, trivial, conversationId, receivedAt, itemSnapshot, taskId, scheduledFor }) {
+function buildSuppressionProperties({ triageId, key, itemTitle, reason, note, at, trivial, conversationId, receivedAt, itemSnapshot, taskId, scheduledFor, subjectKey }) {
   const snapshot = snapshotTriageItem(itemSnapshot);
   const normalizedReason = ["scheduled", "deleted"].includes(reason) ? reason : "done";
+  // Derived here rather than at each call site, so no writer can forget it and leave a
+  // subject-scoped decision keyed only to a due date that is about to move. Falls back to
+  // the triage id, which subjectKeyForItem can still parse a waiting subject out of.
+  const subject = clipped(subjectKey || subjectKeyForItem({ ...snapshot, id: snapshot.id || triageId }), 300);
   return {
     kind: SUPPRESSION_KIND,
+    subject_key: subject,
     triage_id: String(triageId || "").trim().slice(0, 300),
     key: String(key || "").trim().slice(0, 300),
     itemTitle: String(itemTitle || "").trim().slice(0, 220),
@@ -306,6 +370,7 @@ function suppressionFromBlock(block) {
     block_id: block.id,
     triage_id: p.triage_id || "",
     key: p.key || "",
+    subject_key: p.subject_key || "",
     title: p.itemTitle || "",
     reason: p.reason || "done",
     trivial: !!p.trivial,
@@ -330,6 +395,9 @@ function suppressionsFromBlocks(blocks) {
 module.exports = {
   SUPPRESSION_KIND,
   triageItemKey,
+  subjectKeyForItem,
+  subjectKeyForSuppression,
+  SUBJECT_SCOPED_REASONS,
   suppressionDayKey,
   suppressionIndex,
   matchingSuppression,

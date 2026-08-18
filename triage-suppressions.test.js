@@ -22,6 +22,8 @@ const {
   matchingSuppression,
   snapshotTriageItem,
   mergeTriageForIngest,
+  subjectKeyForItem,
+  subjectKeyForSuppression,
 } = require("./triage-suppressions");
 const { mergeOpenItems, triageItemKey: intelKey } = require("./dcc-intelligence");
 
@@ -335,4 +337,131 @@ test("a suppression is dateless by construction, so it cannot expire with the da
     );
   }
   assert.equal(isSuppressed({ id: "gmail:abc" }, index), true);
+});
+
+// ── Subject-scoped reasons: the cycle-vs-subject distinction ──────────────────
+//
+// A Waiting check-in's triage id embeds its due date (waiting-items.js triageId), which
+// is CORRECT for reason:"done" -- a recurring check-in should come back next cycle -- and
+// wrong for "deleted" and "scheduled", which are statements about the thing rather than
+// about one cycle. Reproduced against a live server before this layer existed: write a
+// deleted-suppression, move checkInDate by ONE day, and the card is back with a fresh id
+// while the sweep endpoint hands draft-replies a new draft for it.
+//
+// Note what is NOT the trigger, because the first diagnosis got this wrong: editing
+// `checkInDays` alone changes nothing, since dueDate prefers an explicit checkInDate.
+// Only checkInDate itself moving mints a new identity.
+
+const cycleItem = (due) => ({
+  id: `waiting-checkin:w-1:${due}`,
+  type: "waiting_checkin",
+  source: "waiting_checkin",
+  source_id: `waiting:w-1:${due}`,
+  waiting_item_id: "w-1",
+});
+const waitingSup = (reason, due, extra = {}) => ({
+  triage_id: `waiting-checkin:w-1:${due}`,
+  key: `waiting_checkin|waiting:w-1:${due}`,
+  subject_key: "waiting:w-1",
+  reason,
+  at: "2026-08-18T12:00:00.000Z",
+  active: true,
+  ...extra,
+});
+
+test("subjectKeyForItem derives the same dateless subject from either direction", () => {
+  assert.equal(subjectKeyForItem({ waiting_item_id: "w-1" }), "waiting:w-1");
+  assert.equal(subjectKeyForItem(cycleItem("2026-08-11")), "waiting:w-1");
+  // A bare cycle id is enough, which is what lets legacy rows be backfilled.
+  assert.equal(subjectKeyForItem({ id: "waiting-checkin:w-1:2026-08-11" }), "waiting:w-1");
+});
+
+test("families without subject semantics get no subject key", () => {
+  // A Gmail turn's subject is its thread, and the gmailCutoffs path already owns that on
+  // its own terms. Minting a key here would quietly change unrelated matching.
+  assert.equal(subjectKeyForItem({ id: "gmail:abc", type: "email" }), "");
+  assert.equal(subjectKeyForItem({ id: "slack:C1:123.45", type: "slack" }), "");
+  assert.equal(subjectKeyForItem(null), "");
+});
+
+test("a deleted check-in stays suppressed after its due date moves", () => {
+  const index = suppressionIndex([waitingSup("deleted", "2026-08-10")]);
+  assert.equal(isSuppressed(cycleItem("2026-08-10"), index), true, "same cycle");
+  assert.equal(isSuppressed(cycleItem("2026-08-11"), index), true, "THE BUG: date moved one day");
+  assert.equal(isSuppressed(cycleItem("2026-12-25"), index), true, "and any later cycle");
+});
+
+test("a scheduled check-in stays suppressed after its due date moves", () => {
+  // /api/waiting-items/check-ins/schedule sets checkInDate to the scheduled day, which is
+  // exactly the move that used to orphan the record and produce a duplicate card.
+  const index = suppressionIndex([waitingSup("scheduled", "2026-08-10")]);
+  assert.equal(isSuppressed(cycleItem("2026-08-18"), index), true);
+});
+
+test("a DONE check-in suppresses only its own cycle, so recurrence survives", () => {
+  // The load-bearing negative. If "done" were subject-scoped, the first completed cycle
+  // would silence the reminder forever, which would be a worse bug than the one being
+  // fixed rather than a fix.
+  const index = suppressionIndex([waitingSup("done", "2026-08-10")]);
+  assert.equal(isSuppressed(cycleItem("2026-08-10"), index), true, "this cycle is handled");
+  assert.equal(isSuppressed(cycleItem("2026-08-17"), index), false, "the NEXT cycle must come back");
+});
+
+test("a trivial dismissal is also cycle-scoped, not subject-scoped", () => {
+  const index = suppressionIndex([waitingSup("done", "2026-08-10", { trivial: true })]);
+  assert.equal(isSuppressed(cycleItem("2026-08-17"), index), false);
+});
+
+test("a legacy row with no stored subject_key is still subject-scoped", () => {
+  // Rows written before this layer carry no subject_key. Recovering it from the triage id
+  // is the only thing that stops every pre-existing deleted-suppression losing its scope
+  // the moment this ships.
+  const legacy = { triage_id: "waiting-checkin:w-1:2026-08-10", reason: "deleted", at: "2026-08-18T12:00:00.000Z", active: true };
+  assert.equal(subjectKeyForSuppression(legacy), "waiting:w-1");
+  assert.equal(isSuppressed(cycleItem("2026-08-11"), suppressionIndex([legacy])), true);
+});
+
+test("an undone (inactive) subject suppression stops holding", () => {
+  const index = suppressionIndex([waitingSup("deleted", "2026-08-10", { active: false })]);
+  assert.equal(isSuppressed(cycleItem("2026-08-11"), index), false, "Undo must re-offer the card");
+});
+
+test("a subject suppression never leaks onto a different Waiting item", () => {
+  const index = suppressionIndex([waitingSup("deleted", "2026-08-10")]);
+  assert.equal(isSuppressed({ id: "waiting-checkin:w-9:2026-08-11", waiting_item_id: "w-9" }, index), false);
+});
+
+test("the newest decision per subject wins, so redo beats an older undo", () => {
+  const index = suppressionIndex([
+    waitingSup("deleted", "2026-08-10", { at: "2026-08-10T00:00:00.000Z", note: "older" }),
+    waitingSup("deleted", "2026-08-12", { at: "2026-08-17T00:00:00.000Z", note: "newer" }),
+  ]);
+  assert.equal(matchingSuppression(cycleItem("2026-08-20"), index).note, "newer");
+});
+
+test("an exact cycle match still outranks the subject arm", () => {
+  // Ordering matters: a cycle-specific record carries the more precise reason and note,
+  // and the Completed row renders from it.
+  const index = suppressionIndex([
+    waitingSup("deleted", "2026-08-10", { note: "subject" }),
+    waitingSup("done", "2026-08-20", { note: "this cycle" }),
+  ]);
+  assert.equal(matchingSuppression(cycleItem("2026-08-20"), index).note, "this cycle");
+});
+
+test("buildSuppressionProperties stores the subject key without being told", () => {
+  // Derived inside the builder so no writer can forget it and leave a subject-scoped
+  // decision keyed only to a due date that is about to move.
+  const props = buildSuppressionProperties({
+    triageId: "waiting-checkin:w-1:2026-08-10",
+    reason: "deleted",
+    itemSnapshot: { id: "waiting-checkin:w-1:2026-08-10" },
+  });
+  assert.equal(props.subject_key, "waiting:w-1");
+  assert.equal(suppressionFromBlock({ id: "b1", properties: props }).subject_key, "waiting:w-1");
+});
+
+test("a non-waiting suppression stores an empty subject key", () => {
+  const props = buildSuppressionProperties({ triageId: "gmail:abc", reason: "deleted", itemSnapshot: { id: "gmail:abc" } });
+  assert.equal(props.subject_key, "");
 });
