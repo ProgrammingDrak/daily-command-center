@@ -2650,3 +2650,24 @@ test("spinBatch refuses up front when points can't cover the whole batch", async
   );
   assert.equal(pool.state.pointBalance, 30, "nothing is charged when the batch can't afford itself");
 });
+
+// Guard for the multi-tenant seedRewards bug: the default-reward INSERT used to
+// name ON CONFLICT (workspace_id, title), but pg-schema.js drops both
+// slot_rewards_workspace_id_title_key and idx_slot_rewards_catalog_title, so the
+// targeted clause raised "no unique or exclusion constraint matching the ON
+// CONFLICT specification" for every workspace whose slot_rewards table was still
+// empty. That is exactly a new teammate's first completion, and it swallowed
+// their points silently because the seeded stamp never landed. A source assertion
+// rather than a behavioural one, because it is the re-introduction of the named
+// target that must be caught, and no mock pool would reproduce the real error.
+test("seedRewards does not name an ON CONFLICT target that pg-schema.js drops", () => {
+  const source = require("node:fs").readFileSync(require.resolve("./slot-store.js"), "utf8");
+  assert.doesNotMatch(
+    source,
+    /ON CONFLICT\s*\(\s*workspace_id\s*,\s*title\s*\)/,
+    "slot_rewards has no unique index on (workspace_id, title); naming it breaks every brand-new workspace"
+  );
+  const schema = require("node:fs").readFileSync(require.resolve("./pg-schema.js"), "utf8");
+  assert.match(schema, /DROP INDEX IF EXISTS idx_slot_rewards_catalog_title/,
+    "if this index is ever restored, the targeted ON CONFLICT above becomes valid again and this guard should be revisited");
+});

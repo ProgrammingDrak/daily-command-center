@@ -1,6 +1,8 @@
 (function(){
   var TOUR_KEY = "dailyCommandCenterTour";
-  var TOUR_VERSION = 1;
+  // Bumped to 2 for the optional-power-ups step: shouldAutoStart() re-triggers on a
+  // version change, so people who already finished the v1 tour see the new step once.
+  var TOUR_VERSION = 2;
   var hasAutoChecked = false;
   var settingsBound = false;
   var active = false;
@@ -48,11 +50,51 @@
       selector: "#tab-bar"
     },
     {
+      title: "Two Optional Power-ups",
+      body: "Neither is required and both can wait. Open one when you want it; they are independent.",
+      render: renderSetupLaunchers
+    },
+    {
       title: "Replay This Anytime",
       body: "Open Settings and choose Replay tutorial whenever you want to walk through the basics again.",
       selector: "#dcc-settings-button"
     }
   ];
+
+  // The tour only LAUNCHES the flows. Everything about them lives in
+  // setup-wizards.js so Settings can open the same thing later, and so a person
+  // who skips the tour is never cut off from either one.
+  function renderSetupLaunchers(host){
+    if (!(window.DCCSetup && typeof DCCSetup.openSlack === "function")) {
+      host.innerHTML = '<div class="dcc-int-note">Setup is available from Settings.</div>';
+      return;
+    }
+    host.innerHTML =
+      '<button class="dcc-tour-launch" type="button" data-flow="slack">'
+        + '<span class="dcc-tour-launch-ico">\uD83D\uDCAC</span>'
+        + '<span class="dcc-tour-launch-main">'
+          + '<span class="dcc-tour-launch-title">Slack task reactions</span>'
+          + '<span class="dcc-tour-launch-note">React \uD83D\uDD16 on a message, it becomes a task on your day.</span>'
+        + '</span><span class="dcc-tour-launch-cta">Set up</span>'
+      + '</button>'
+      + '<button class="dcc-tour-launch" type="button" data-flow="triage">'
+        + '<span class="dcc-tour-launch-ico">\uD83E\uDD16</span>'
+        + '<span class="dcc-tour-launch-main">'
+          + '<span class="dcc-tour-launch-title">AI-based triage</span>'
+          + '<span class="dcc-tour-launch-note">Your Claude sweeps email, Slack and calendar onto your itinerary.</span>'
+        + '</span><span class="dcc-tour-launch-cta">Walk me through it</span>'
+      + '</button>'
+      + '<div class="dcc-int-note">You can open either of these any time from Settings.</div>';
+    host.querySelectorAll("[data-flow]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var flow = btn.getAttribute("data-flow");
+        // Close the tour first: one overlay at a time, and the wizard is the
+        // thing they now care about. The tour is replayable from Settings.
+        dismissTour("dismissedAt");
+        if (flow === "slack") DCCSetup.openSlack(); else DCCSetup.openTriage();
+      });
+    });
+  }
 
   function $(id){ return document.getElementById(id); }
 
@@ -88,6 +130,7 @@
         '<div class="dcc-tour-kicker"></div>' +
         '<h2 class="dcc-tour-title"></h2>' +
         '<p class="dcc-tour-body"></p>' +
+        '<div class="dcc-tour-extra"></div>' +
         '<div class="dcc-tour-progress"></div>' +
         '<div class="dcc-tour-actions">' +
           '<button class="dcc-tour-skip" type="button">Skip</button>' +
@@ -106,6 +149,7 @@
       kicker: root.querySelector(".dcc-tour-kicker"),
       title: root.querySelector(".dcc-tour-title"),
       body: root.querySelector(".dcc-tour-body"),
+      extra: root.querySelector(".dcc-tour-extra"),
       progress: root.querySelector(".dcc-tour-progress"),
       skip: root.querySelector(".dcc-tour-skip"),
       back: root.querySelector(".dcc-tour-back"),
@@ -176,6 +220,16 @@
     els.kicker.textContent = "Step " + (currentIndex + 1) + " of " + steps.length;
     els.title.textContent = step.title;
     els.body.textContent = step.body;
+    // A step may contribute its own body content. Cleared on every render so a
+    // previous step's rows never bleed into the next one, and re-placed after an
+    // async render settles because the card's height changes.
+    els.extra.innerHTML = "";
+    if (typeof step.render === "function") {
+      var renderIndex = currentIndex;
+      Promise.resolve(step.render(els.extra)).then(function(){
+        if (active && currentIndex === renderIndex) placeCard(targetForStep(step));
+      }).catch(function(){});
+    }
     els.progress.textContent = "";
     for (var i = 0; i < steps.length; i++) {
       var dot = document.createElement("span");

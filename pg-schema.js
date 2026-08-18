@@ -32,6 +32,13 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider TEXT;          -- 'pass
 ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name  TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url    TEXT;
 
+-- lower(email) is a lookup key, not just a stored field: auth.js matches a login
+-- against username OR lower(email), and lib/slack-actors.js resolves a Slack
+-- reactor to an account the same way on every first reaction. Without this both
+-- are sequential scans that grow with the account count.
+-- (No backticks in this comment: the whole block is a JS template literal.)
+CREATE INDEX IF NOT EXISTS idx_users_lower_email ON users (lower(email));
+
 -- ── Workspaces ──
 CREATE TABLE IF NOT EXISTS workspaces (
   id         TEXT PRIMARY KEY,
