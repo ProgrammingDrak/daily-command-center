@@ -19,8 +19,7 @@
 (function () {
   "use strict";
   const DCC = (window.DCC = window.DCC || {});
-  const esc = (v) => (DCC.esc ? DCC.esc(v) : String(v == null ? "" : v)
-    .replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
+  const esc = (v) => window.DCC.esc(v);   // delegates to core.js
 
   async function loadStatus() {
     const res = await fetch("/api/me/integrations");
@@ -30,21 +29,33 @@
 
   // Merges into onboarding_state.setup. PATCH /api/me/onboarding spreads unknown
   // top-level keys, so `setup` rides along without a server change.
-  async function saveSetup(patch) {
+  // knownSetup lets a caller that just rendered from loadStatus() reuse what it
+  // already has. Without it every completion stamp fired a second full
+  // /api/me/integrations round trip (slack status + google accounts + account row)
+  // purely to read one field the caller had in scope.
+  async function saveSetup(patch, knownSetup) {
     try {
-      const current = await loadStatus();
+      const base = knownSetup || (await loadStatus()).setup || {};
+      // Merge ONE LEVEL DEEPER than Object.assign would. patch is
+      // { <flow>: { <field>: ts } }, so a shallow merge replaced the whole flow
+      // object and silently dropped the sibling timestamp: stamping completedAt
+      // wiped the startedAt the same flow had just written.
+      const merged = Object.assign({}, base);
+      Object.keys(patch).forEach((flow) => {
+        merged[flow] = Object.assign({}, base[flow], patch[flow]);
+      });
       await fetch("/api/me/onboarding", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ setup: Object.assign({}, current.setup || {}, patch) }),
+        body: JSON.stringify({ setup: merged }),
       });
     } catch (e) { /* progress tracking is cosmetic; never block the flow on it */ }
   }
 
-  function stamp(flow, field) {
+  function stamp(flow, field, knownSetup) {
     const patch = {};
     patch[flow] = Object.assign({}, { [field]: new Date().toISOString() });
-    return saveSetup(patch);
+    return saveSetup(patch, knownSetup);
   }
 
   function row(label, value, ok) {
@@ -129,7 +140,7 @@
           + '<div class="dcc-sw-emoji">🔖 bookmark → task &nbsp;·&nbsp; ⌛ hourglass → start timing &nbsp;·&nbsp; ✅ check → done + points</div>'
           + '<p class="dcc-sw-note">Removing a reaction reverses it, points included.</p>'
           + '<div class="dcc-sw-actions"><button class="dcc-sw-btn" id="dcc-sw-unlink" type="button">Unlink this Slack account</button></div>';
-        stamp("slack", "completedAt");
+        stamp("slack", "completedAt", data.setup);
         const unlink = body.querySelector("#dcc-sw-unlink");
         if (unlink) unlink.addEventListener("click", async () => {
           unlink.disabled = true;
@@ -280,7 +291,7 @@
         + "</div></div>";
 
       wireCopy(body);
-      if (done) stamp("triage", "completedAt");
+      if (done) stamp("triage", "completedAt", data.setup);
       const btn = body.querySelector("#dcc-sw-tcheck");
       if (btn) btn.addEventListener("click", async () => {
         const out = body.querySelector("#dcc-sw-tstatus");

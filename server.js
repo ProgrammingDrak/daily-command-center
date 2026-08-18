@@ -950,8 +950,12 @@ require("./routes/admin-model")(app, ctx);
 require("./routes/slack-events")(app, ctx);
 
 // ── Optional setup flows (Slack reactions, AI triage) ─────────────────────
-// Registered here rather than beside the other /api/me routes because they read
-// ctx.slackActors, which the slack-events mount above publishes.
+// Placed after the slack-events mount for readability, NOT out of necessity: these
+// handlers are closures that read ctx.slackActors at request time, and app.listen
+// runs after every route module has mounted, so they would behave identically up
+// beside /api/me and /api/me/onboarding. Worth extracting to routes/me.js with the
+// rest of the /api/me family, which is how this repo grows every other integration
+// surface (gcal.js, admin-tokens.js, slack-events.js).
 //
 // The two flows are different in kind, and these endpoints reflect that. Slack
 // setup is server-side state this API can finish and verify. Triage setup is

@@ -1033,8 +1033,20 @@ async function seedRewards(workspaceId) {
        -- guaranteed the moment a second workspace could be created: every
        -- completion for a brand-new account failed its credit, and the
        -- default_rewards_seeded_at stamp below never landed, so it failed again
-       -- on the next one. The COUNT(*) guard above is the real duplicate
-       -- defense; this clause only needs to swallow a concurrent double-seed.
+       -- on the next one.
+       --
+       -- Note what this clause does NOT do: pg-schema.js drops both
+       -- slot_rewards_workspace_id_title_key and idx_slot_rewards_catalog_title,
+       -- so there is no unique constraint left for an untargeted DO NOTHING to
+       -- catch. It cannot raise, and it also cannot deduplicate. The COUNT(*)
+       -- guard above is the ONLY duplicate defense, and it is not race safe: two
+       -- concurrent first-completions for the same brand-new workspace can both
+       -- read zero and both seed, duplicating the catalog and skewing spin
+       -- weights. Closing that needs the seed serialized (an advisory xact lock
+       -- on one client, which means giving this function a transaction) or a
+       -- partial unique index restoring a real ON CONFLICT target. Left as a
+       -- follow-up rather than reworking the points store's transaction
+       -- boundaries here.
        ON CONFLICT DO NOTHING`,
       [workspaceId, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits || []), r.weight, r.chance_shares || r.weight, r.payment_source || defaultPaymentSourceForKind(r.kind), r.tier_id || "tier_i", r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes]
     );

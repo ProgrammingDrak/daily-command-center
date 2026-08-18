@@ -51,7 +51,7 @@ function makeHarness(opts = {}) {
     linked_via: row.linkedVia || "email",
   }));
   const users = opts.users || [];                    // [{ id, email }]
-  const calls = { fetch: [], usersInfo: [], reactionsAdd: [], searches: [], broadcast: [], credit: [] };
+  const calls = { fetch: [], usersInfo: [], reactionsAdd: [], searches: [], broadcast: [], credit: [], completion: [] };
   let seq = 0;
 
   // Slack profiles the bot token can see, keyed by member id.
@@ -103,7 +103,8 @@ function makeHarness(opts = {}) {
       getTaskTimeEntries: async () => [],
       // Mirrors the mock in slack-events.test.js: the completion path writes
       // through this durable primitive, not straight to updateBlock.
-      setTaskCompletion: async ({ taskRef, completed, completedAt, mutationId }) => {
+      setTaskCompletion: async ({ taskRef, completed, completedAt, mutationId, userId, workspaceId }) => {
+        calls.completion.push({ taskRef, completed, userId, workspaceId });
         const b = blocks.find(x => x.id === taskRef || (x.properties || {}).local_id === taskRef);
         if (!b) throw new Error("not found " + taskRef);
         const props = { ...(b.properties || {}) };
@@ -377,6 +378,14 @@ test("⌛ then ✅ credits points to the reacting teammate, not the service acco
   assert.equal(h.calls.credit[0].ws, "ws-4");
   assert.equal(h.calls.credit[0].uid, 4);
   assert.equal(h.calls.credit[0].body.actual_minutes, 20);
+
+  // The completion write is the authoritative one, so it needs the same fence as
+  // the credit call. Asserting only the credit would miss a regression that sent
+  // the durable write under the env actor while the points went to the teammate.
+  const done = h.calls.completion.filter(c => c.completed);
+  assert.equal(done.length, 1);
+  assert.equal(done[0].workspaceId, "ws-4");
+  assert.equal(done[0].userId, 4);
 });
 
 // ── bot-tier limits ───────────────────────────────────────────────────────
@@ -535,4 +544,89 @@ test("unlinkUser removes the identity and stops routing", async () => {
   assert.equal(h.identities.length, 0);
   await post(h.handler, envelope(reaction("bookmark", "U_NORA", "unlink.2")));
   assert.equal(h.blocks.length, 1, "no new task once unlinked");
+});
+
+// ── the hijack the security lane caught ────────────────────────────────────
+// The guard used to read `if (mine && mine !== identity.email)`, so it SKIPPED
+// the comparison whenever the CLAIMING account had no email. users.email is
+// nullable and the public password-registration path never sets it, so a
+// self-registered account could claim any colleague's member ID and the victim's
+// own next reaction would activate the hijack onto the attacker's workspace.
+
+test("claimPending refuses when the claimant has no email but Slack knows the target's", async () => {
+  const h = makeHarness({
+    allowlist: TEAM,
+    // The attacker: a password-registered account, email never populated.
+    users: [{ id: 9, email: null, workspaceId: "ws-9" }],
+    // Slack DOES know whose member ID this is, and it is not the attacker's.
+    profiles: { U_VICTIM: { email: "victim@movewithclever.com" } },
+  });
+  const result = await h.api.actors.claimPending(9, "U_VICTIM", "ws-9");
+  assert.equal(result.ok, false, "a claim that cannot be proven must be refused");
+  assert.match(result.error, /no email address/i);
+  assert.equal(h.identities.length, 0, "and no pending row may be written");
+});
+
+test("a victim's reaction cannot activate someone else's claim on their member ID", async () => {
+  const h = makeHarness({
+    allowlist: TEAM,
+    users: [{ id: 9, email: null, workspaceId: "ws-9" }],
+    profiles: { U_VICTIM: { email: "victim@movewithclever.com" } },
+  });
+  await h.api.actors.claimPending(9, "U_VICTIM", "ws-9");   // refused above
+  await post(h.handler, envelope(reaction("bookmark", "U_VICTIM", "hijack.1")));
+  // Nothing was written for the attacker. The victim is simply unlinked, which is
+  // the correct outcome: they get auto-linked once their DCC account has an email.
+  assert.equal(h.blocks.length, 0);
+  assert.equal(h.identities.length, 0);
+});
+
+test("a pending claim does not promote on a reaction from a non-allowlisted team", async () => {
+  const h = makeHarness({
+    allowlist: TEAM,
+    identities: [{ slackUserId: "U_NORA", userId: 4, workspaceId: "ws-4", linkedVia: "pending" }],
+  });
+  await post(h.handler, envelope(reaction("bookmark", "U_NORA", "team.1"), OTHER_TEAM));
+  assert.equal(h.identities[0].linked_via, "pending", "the claim stays unproven");
+  assert.equal(h.blocks.length, 0, "and the reaction writes nothing");
+});
+
+// ── gaps the test-quality lane called out ──────────────────────────────────
+
+test("autoLink refuses when the profile's team disagrees with the allowlisted event team", async () => {
+  const h = makeHarness({
+    allowlist: TEAM,
+    users: [{ id: 4, email: "nora.vance@movewithclever.com", workspaceId: "ws-4" }],
+    // The event arrives from the allowlisted TEAM, but Slack says this member
+    // belongs to a different workspace. Trusting either one alone would link a
+    // reaction from one Slack workspace into an account from another.
+    profiles: { U_NORA: { email: "nora.vance@movewithclever.com", teamId: OTHER_TEAM } },
+  });
+  await post(h.handler, envelope(reaction("bookmark", "U_NORA", "mismatch.1"), TEAM));
+  assert.equal(h.identities.length, 0, "no link on a team mismatch");
+  assert.equal(h.blocks.length, 0, "and nothing written");
+});
+
+test("statusForUser reports absent, pending and linked as three distinct states", async () => {
+  const h = makeHarness({
+    allowlist: TEAM,
+    identities: [
+      { slackUserId: "U_PEND", userId: 5, workspaceId: "ws-5", linkedVia: "pending" },
+      { slackUserId: "U_LIVE", userId: 6, workspaceId: "ws-6", linkedVia: "email" },
+    ],
+  });
+  const absent = await h.api.actors.statusForUser(99);
+  assert.equal(absent.connected, false);
+  assert.equal(absent.pending, false);
+
+  // The whole point of a claim: it must never read as connected.
+  const pending = await h.api.actors.statusForUser(5);
+  assert.equal(pending.connected, false, "an unconfirmed claim is not a connection");
+  assert.equal(pending.pending, true);
+  assert.equal(pending.tier, null);
+
+  const linked = await h.api.actors.statusForUser(6);
+  assert.equal(linked.connected, true);
+  assert.equal(linked.pending, false);
+  assert.equal(linked.tier, "bot");
 });
