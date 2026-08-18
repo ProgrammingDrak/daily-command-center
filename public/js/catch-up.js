@@ -465,6 +465,17 @@
       toggleEl.setAttribute("aria-expanded", "false");
       toggleEl.setAttribute("aria-controls", detailId);
       toggleEl.setAttribute("aria-label", "Show details for " + title);
+      // Delegated check-ins wear the shared --waiting look here too: the recap envelope
+      // lists the same reminders the itinerary strip does, and "Drop" on one of them
+      // drops the REMINDER, never the delegated task (triage.js isWaitingCheckIn).
+      if (typeof isWaitingCheckIn === "function" && isWaitingCheckIn(item)) {
+        el.classList.add("cu-waiting-checkin");
+        const pill = document.createElement("span");
+        pill.className = "waiting-pill checkin";
+        pill.title = "Check-in reminder. This handles the reminder only, the delegated task stays open in Waiting.";
+        pill.innerHTML = "&#128276; Check-in";
+        titleEl.insertAdjacentElement("afterend", pill);
+      }
       el.querySelector(".cu-details-full-title").textContent = title;
       const hasDetails = [
         appendDetailSection(detailBody, "Summary", [item.summary, item.snippet, item.excerpt]),

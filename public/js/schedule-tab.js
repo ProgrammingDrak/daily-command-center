@@ -697,12 +697,16 @@ function buildListView(){
     const chev=(node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'';
     const el=document.createElement("div");
     const tt=window.TaskTypes?window.TaskTypes.get(ev):null;
+    // Delegated look (delegated.js waitingChipHtml): a check-in reminder and the
+    // original task it chases share the --waiting hue and each carry a labelled pill,
+    // so deleting the reminder is never mistaken for deleting the task itself.
+    const waitChip=(typeof window.waitingRowChipHtml==="function")?window.waitingRowChipHtml(ev):'';
     const chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
     const inProgress=!!(window.DCC&&window.DCC.TaskModel&&typeof window.DCC.TaskModel.isInProgress==="function"&&window.DCC.TaskModel.isInProgress(ev,isDoneRow));
     let progressTime="";
     if(inProgress&&ev.startedAt){const parsedStart=new Date(ev.startedAt);if(!isNaN(parsedStart.getTime()))progressTime=parsedStart.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});}
     const inProgressChip=inProgress?'<span class="task-progress-pill" title="Started'+(progressTime?' at '+progressTime:'')+'">In progress</span>':'';
-    el.className="it-list-item"+(isDoneRow?" done":"")+(isUnfRow?" unfinished-row":"")+(subRow?" sub":"")+(isActive(ev)&&!isUnfRow?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"")+(inProgress?" task-in-progress":"");
+    el.className="it-list-item"+(isDoneRow?" done":"")+(isUnfRow?" unfinished-row":"")+(subRow?" sub":"")+(isActive(ev)&&!isUnfRow?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"")+(inProgress?" task-in-progress":"")+(waitChip?" waiting-row":"");
     if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
     el.dataset.id=ev.id;
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
@@ -750,11 +754,11 @@ function buildListView(){
           (!isDoneRow&&!(tt&&tt.rollupMode)?'<button class="chk-quick" title="'+(isUnfRow?'Quick complete on '+escHtml(_unfPrettyDate(r.sourceDate)):'Quick complete')+'">&#9889;</button>':'')+
         '</div>'+
       '</div>'+
-      '<div class="bar" style="background:'+(isUnfRow?'var(--amber,#f59e0b)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
+      '<div class="bar" style="background:'+(isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#a31c43)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)))+'"></div>'+
       '<div class="it-list-main">'+
         // The "+" renders on carryover rows and meetings too. A meeting can own
         // concurrent nested work or relevant subtasks; only done rows skip it.
-        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
+        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
         '<div class="it-list-meta">'+
           inProgressChip+
           nowChip+
@@ -1311,7 +1315,7 @@ function buildSchedule(){
     }
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
     // Subtask and trivial task management moved to Add Items modal (openAddModal)
-    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".work-action-btn")||e.target.closest(".btn-repeat-resp")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-schedule")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".wrap-collapse")||e.target.closest(".itinerary-reactions")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".work-action-btn")||e.target.closest(".btn-repeat-resp")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-schedule")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".wrap-collapse")||e.target.closest(".itinerary-reactions")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".waiting-pill")||e.target.closest(".ttl"))return;if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
 
     // Inline title edit — click title to rename, blur/Enter to save
     if(!isMeeting(ev)){

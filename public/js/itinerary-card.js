@@ -251,6 +251,10 @@
     var dependencyChip=(typeof window.taskDependencyChipHtml==="function")
       ? window.taskDependencyChipHtml({id:ev._blockId||ev.blockId||ev.id,properties:{local_id:ev.local_id||ev.id}})
       : '';
+    // Delegated look, same as the list row (schedule-tab.js): --waiting hue plus a
+    // labelled pill on check-in reminders and on the original task they chase. Owner
+    // page only -- the guest share has no Waiting module.
+    var waitChip=(!guest&&typeof window.waitingRowChipHtml==="function")?window.waitingRowChipHtml(ev):'';
 
     // Inline clock (lock indicator + start/end). Empty for a timeless subtask.
     var tinlineHtml=subTimeless
@@ -264,7 +268,7 @@
       '<div class="tl-node '+nc+(hasPrep?' has-prep':'')+(isPinnedActive?' pinned':'')+(pinnedStyle&&pinnedStyle.pulse?' aging-pulse':'')+'"'+nodeOverdueStyle(pinnedStyle,isPinnedActive)+' data-node-id="'+ev.id+'">'+(active?'<span class="tl-now-time">'+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ","")+'</span>':'')+'</div>'+
       '<div class="card-wrap">'+
         prepTab+fuTab+trivialTab+
-        '<div class="card'+(active?' card-active':'')+(isBounty?' card-bounty':'')+(bountyMeta.hasSponsor?' card-bounty-sponsor':'')+(tt&&tt.cardClass?' '+tt.cardClass:'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>'+
+        '<div class="card'+(waitChip?' waiting-row':'')+(active?' card-active':'')+(isBounty?' card-bounty':'')+(bountyMeta.hasSponsor?' card-bounty-sponsor':'')+(tt&&tt.cardClass?' '+tt.cardClass:'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>'+
           (inProgress?'<span class="task-progress-ring" aria-hidden="true"></span>':'')+
           reactionHtml+
           (guest?'':'<div class="grip" title="Drag to reorder">'+gripSvg+'</div>')+
@@ -272,9 +276,9 @@
           (guest?'':'<div class="chk-col">'+
             (!(tt&&tt.rollupMode)?'<button class="chk-quick" title="Quick complete (no notes)">&#9889;</button>':'')+
           '</div>')+
-          '<div class="bar" style="background:'+((tt&&tt.barColor)||taskTagColor(ev)||c.color)+'"></div>'+
+          '<div class="bar" style="background:'+(waitChip?'var(--waiting,#a31c43)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
           '<div class="body">'+
-            '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+dependencyChip+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+tinlineHtml+(guest||isMeeting(ev)||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>')+(isMeeting(ev)?'<button class="btn-mtg-tags" title="Tags — mark this meeting for Recording Review" style="border:none;background:none;cursor:pointer;font-size:13px;line-height:1;padding:2px 6px;opacity:.65" onclick="event.stopPropagation();openAddModal(\''+ev.id.replace(/'/g,"\\'")+'\',\''+ev.title.replace(/'/g,"\\'")+'\')">🏷</button>':'')+(guest||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
+            '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+dependencyChip+waitChip+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+tinlineHtml+(guest||isMeeting(ev)||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>')+(isMeeting(ev)?'<button class="btn-mtg-tags" title="Tags — mark this meeting for Recording Review" style="border:none;background:none;cursor:pointer;font-size:13px;line-height:1;padding:2px 6px;opacity:.65" onclick="event.stopPropagation();openAddModal(\''+ev.id.replace(/'/g,"\\'")+'\',\''+ev.title.replace(/'/g,"\\'")+'\')">🏷</button>':'')+(guest||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
             '<div class="meta">'+inProgressChip+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+(sub?'Subtask':c.tag)+'</span>'+stackedBadge+chipSlotHtml+habitStreakChip(ev)+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
               petPrivacyChip(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+

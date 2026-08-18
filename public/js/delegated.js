@@ -65,6 +65,80 @@
     return '<button type="button" class="task-dependency-pill unlocks" data-task-dependency-open="' + esc(rows[0].id) + '" title="' + esc("Unlocks: " + titles.join(", ")) + '">&#8594; ' + esc(label) + '</button>';
   }
 
+  // ── Waiting look: one hue, three roles ──
+  // Everything parked on someone else shares --waiting (see dashboard.css): the
+  // Waiting item itself, the ORIGINAL task it blocks, and the check-in reminders it
+  // spawns. The roles are labelled differently on purpose. Deleting a check-in only
+  // drops the reminder -- the delegated task stays open -- and the pill says so and
+  // points at the item where Complete / Delete for the real work lives.
+  function evIdentityIds(ev) {
+    const p = (ev && ev.properties) || {};
+    return new Set([ev && ev.id, ev && ev._blockId, ev && ev.blockId, ev && ev.local_id, p.local_id]
+      .filter(Boolean).map(String));
+  }
+
+  // The Waiting item a check-in task belongs to, "" when the row is a check-in whose
+  // item can't be resolved, and null when the row is not a check-in at all.
+  // delegatedItemId is stamped by scheduleDelegatedItem; the id prefix and the
+  // source tag cover rows written before it (and the timeline-JSON path).
+  function checkInItemId(ev) {
+    if (!ev) return null;
+    if (ev.delegatedItemId) return String(ev.delegatedItemId);
+    const m = /^waiting-checkin-task:(.+)$/.exec(String(ev.id || ""));
+    if (m) return m[1];
+    const src = String(ev.source || "").replace(/_/g, "-");
+    return src === "waiting-checkin" ? "" : null;
+  }
+
+  function isCheckInTask(ev) { return checkInItemId(ev) !== null; }
+
+  // Open Waiting items pointing AT this task -- i.e. this row is the original work,
+  // blocked on someone else. Task-dependency items are excluded: they carry their own
+  // blocked/unlocks pill (taskDependencyChipHtml) and are not delegated to a person.
+  function waitingItemsForTask(ev) {
+    const ids = evIdentityIds(ev);
+    if (!ids.size) return [];
+    return getAllDelegatedItems().filter(item => {
+      const p = item.properties || {};
+      return isOpenDelegated(item) && !isTaskDependency(item) && p.linkedBlockId && ids.has(String(p.linkedBlockId));
+    });
+  }
+
+  function waitingPill(cls, itemId, label, tip, icon) {
+    const open = itemId ? ' data-waiting-open="' + esc(itemId) + '"' : '';
+    const tag = itemId ? "button" : "span";
+    return '<' + tag + (itemId ? ' type="button"' : '') + ' class="waiting-pill ' + cls + '"' + open +
+      ' title="' + esc(tip) + '">' + icon + ' ' + esc(label) + '</' + tag + '>';
+  }
+
+  // The chip an itinerary row renders. Check-in rows win: a check-in task can also be
+  // linked to the original, and calling it a check-in is the whole point.
+  function waitingChipHtml(ev) {
+    const checkInId = checkInItemId(ev);
+    if (checkInId !== null) {
+      const item = checkInId ? getDelegatedItemById(checkInId) : null;
+      const p = (item && item.properties) || {};
+      const who = (p.delegatee && p.delegatee.name) || "";
+      const tip = "Check-in reminder" + (who ? " for " + who : "") +
+        ": deleting this drops the reminder only. The delegated task stays open in Waiting." +
+        (item ? " Click to open it." : "");
+      return waitingPill("checkin", item && item.id, "Check-in" + (who ? " \u00b7 " + truncate(who, 18) : ""), tip, "&#128276;");
+    }
+    const items = waitingItemsForTask(ev);
+    if (!items.length) return "";
+    const names = items.map(item => {
+      const p = item.properties || {};
+      return ((p.delegatee && p.delegatee.name) || "").trim();
+    }).filter(Boolean);
+    const label = items.length > 1
+      ? "Waiting on " + items.length + " people"
+      : (names[0] ? "Waiting on " + truncate(names[0], 20) : "Delegated");
+    // Trailing period trimmed off the name list: "Mike P." + "." reads as a typo.
+    const tip = "This is the delegated task" + (names.length ? ", waiting on " + names.join(", ").replace(/\.$/, "") : "") +
+      ". Click to open its Waiting item: check in, complete, or delete the task there.";
+    return waitingPill("source", items[0].id, label, tip, "&#9203;");
+  }
+
   // ── Urgency model ──
   // How many days between check-ins. Prefers the explicit checkInDays; falls back
   // to mapping the legacy checkInCadence so pre-existing items still render. No
@@ -1167,6 +1241,14 @@
       e.stopPropagation();
       openWaitingItem(pill.dataset.taskDependencyOpen);
     });
+    // Waiting / check-in pills: same jump, so a check-in reminder is always one click
+    // from the item that owns the actual task.
+    document.addEventListener("click", e => {
+      const pill = e.target.closest && e.target.closest("[data-waiting-open]");
+      if (!pill) return;
+      e.stopPropagation();
+      openWaitingItem(pill.dataset.waitingOpen);
+    });
 
     // Task-link picker: selecting an existing task fills the working-task text and
     // records the link; typing into the text box afterward breaks the link.
@@ -1216,6 +1298,8 @@
   window.openDelegatedFromTask = openDelegatedFromTask;
   window.openTaskDependencyModal = openTaskDependencyModal;
   window.taskDependencyChipHtml = taskDependencyChipHtml;
+  window.waitingRowChipHtml = waitingChipHtml;
+  window.isWaitingCheckInTask = isCheckInTask;
   window.notifyReadyTaskDependencies = notifyReadyTaskDependencies;
   window.deleteDelegatedItem = deleteDelegatedItem;
   window.getAllDelegatedItems = getAllDelegatedItems;
@@ -1241,6 +1325,9 @@
     open: openWaitingItem,
     completeCheckIn: markDelegatedItemCheckedById,
     completeCheckInCycle,
+    isCheckInTask,
+    itemsForTask: waitingItemsForTask,
+    rowChipHtml: waitingChipHtml,
     copyText
   });
 })();
