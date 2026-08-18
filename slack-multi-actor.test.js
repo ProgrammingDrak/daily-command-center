@@ -660,3 +660,36 @@ test("autoLink drops the event when Slack cannot be reached", async () => {
   assert.equal(h.identities.length, 0, "no link guessed from a failed lookup");
   assert.equal(h.blocks.length, 0);
 });
+
+test("a WARM-CACHED identity is still team-checked (the cold-start test missed this)", async () => {
+  // The first version of the team gate sat after the cache lookup, so the very
+  // first reaction cached the actor and every later reaction short-circuited past
+  // the check. Each test harness starts cold, so unit tests passed while the live
+  // server still routed a foreign-workspace reaction. This warms the cache first.
+  const h = makeHarness({
+    allowlist: TEAM,
+    identities: [{ slackUserId: "U_NORA", userId: 4, workspaceId: "ws-4", teamId: TEAM }],
+  });
+  await post(h.handler, envelope(reaction("bookmark", "U_NORA", "warm.1"), TEAM));
+  assert.equal(h.blocks.length, 1, "own team works and warms the cache");
+
+  await post(h.handler, envelope(reaction("bookmark", "U_NORA", "warm.2"), OTHER_TEAM));
+  assert.equal(h.blocks.length, 1, "a warm cache must not bypass the team gate");
+});
+
+test("an already-linked identity is dropped when the event team is not its own", async () => {
+  // Deep QA caught this: the team was only checked while LINKING, so a linked id
+  // routed from any workspace. Member ids are workspace-scoped, so the same id
+  // elsewhere is a different person.
+  const h = makeHarness({
+    allowlist: TEAM,
+    identities: [{ slackUserId: "U_NORA", userId: 4, workspaceId: "ws-4", teamId: TEAM }],
+  });
+  await post(h.handler, envelope(reaction("bookmark", "U_NORA", "team.x"), OTHER_TEAM));
+  assert.equal(h.blocks.length, 0, "a foreign-workspace event must not reach a linked account");
+
+  // ...and the same identity still works from its own team.
+  await post(h.handler, envelope(reaction("bookmark", "U_NORA", "team.y"), TEAM));
+  assert.equal(h.blocks.length, 1);
+  assert.equal(h.blocks[0].workspace_id, "ws-4");
+});
