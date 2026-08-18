@@ -2028,21 +2028,39 @@ async function saveDccState(date, stateJson, userId, workspaceId) {
   );
 }
 
-async function saveDccBriefDecision(date, input, userId, workspaceId, emptyState) {
+// A Day in Review packet is generated for ONE day (its `review_date`) and published
+// into that day's row AND the next day's, so "yesterday's review" is reachable from
+// today's screen. The next night's run then overwrites the borrowed row with its own
+// packet — which is how a tab that has been open across that boundary ends up posting
+// yesterday's item ids at a row that now holds today's packet. `opts.probe` is the
+// caller's way to ASK a row whether it owns a target without creating anything: the
+// route walks recent days with it to find the packet an id really belongs to, and a
+// probe must never mint an empty dcc_state row for a day the user never opened.
+async function saveDccBriefDecision(date, input, userId, workspaceId, emptyState, opts = {}) {
   const wsId = workspaceId || (userId ? `ws-${userId}` : "ws-1");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query(
-      `INSERT INTO dcc_state (date, state_json, user_id, workspace_id, updated_at)
-       VALUES ($1, $2, $3, $4, NOW())
-       ON CONFLICT(date, workspace_id) DO NOTHING`,
-      [date, emptyState || { date }, userId || null, wsId]
-    );
+    if (!opts.probe) {
+      await client.query(
+        `INSERT INTO dcc_state (date, state_json, user_id, workspace_id, updated_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT(date, workspace_id) DO NOTHING`,
+        [date, emptyState || { date }, userId || null, wsId]
+      );
+    }
     const { rows } = await client.query(
       "SELECT state_json FROM dcc_state WHERE date = $1 AND workspace_id = $2 FOR UPDATE",
       [date, wsId]
     );
+    if (opts.probe && !(rows[0] && rows[0].state_json)) {
+      const error = new Error(`No Day in Review packet stored for ${date}`);
+      error.status = 400;
+      error.code = "packet_mismatch";
+      error.packetDate = date;
+      error.reviewDate = null;
+      throw error;
+    }
     const state = rows[0] && rows[0].state_json ? rows[0].state_json : (emptyState || { date });
     let briefSource = state.glymphatic_brief || state.glymphaticBrief || null;
     if (!state.glymphatic_brief && state.glymphaticBrief) {
@@ -2061,8 +2079,15 @@ async function saveDccBriefDecision(date, input, userId, workspaceId, emptyState
       const validTarget = input.action === "approve" ? parent
         : (input.action === "push-next" ? followup : (parent || followup));
       if (!validTarget) {
-        const error = new Error("Decision target does not belong to this Day in Review packet");
+        const reviewDate = typeof page.review_date === "string" ? page.review_date : null;
+        const error = new Error(
+          `Decision target does not belong to the Day in Review packet stored for ${date}` +
+          (reviewDate && reviewDate !== date ? ` (that packet reviews ${reviewDate})` : "")
+        );
         error.status = 400;
+        error.code = "packet_mismatch";
+        error.packetDate = date;
+        error.reviewDate = reviewDate;
         throw error;
       }
     }
