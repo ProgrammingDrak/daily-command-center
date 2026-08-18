@@ -765,6 +765,37 @@ module.exports = function mount(app, ctx) {
   // durable day-state data. This is the seed of M2 actuals: every reviewed task
   // has a decision record even before outcome controls land. Morning scheduling
   // reads decisions to build the next day's itinerary.
+  // A Day in Review packet lives in its own day's row and, for one day, in the next
+  // day's too (that is how "yesterday's review" shows up on today's screen). The next
+  // night's run overwrites the borrowed row, so a tab left open across that boundary
+  // posts yesterday's item ids at a row that now holds a different packet — and the
+  // user gets a 400 they cannot act on for a button they can still see. Walking the
+  // recent rows for the packet that actually owns the id settles the decision where it
+  // belongs instead. Probe-only: it never mints a row for a day that has none.
+  const DECISION_LOOKBACK_DAYS = 7;
+  async function saveDecisionOnOwningDay(day, decision, userId, workspaceId, firstError) {
+    const tried = new Set([day]);
+    const candidates = [];
+    if (firstError && firstError.reviewDate) candidates.push(firstError.reviewDate);
+    let cursor = day;
+    for (let back = 0; back < DECISION_LOOKBACK_DAYS; back++) {
+      cursor = previousDateStr(cursor);
+      candidates.push(cursor);
+    }
+    for (const candidate of candidates) {
+      if (!candidate || tried.has(candidate) || !isValidDate(candidate)) continue;
+      tried.add(candidate);
+      try {
+        const result = await blockDB.saveDccBriefDecision(candidate, decision, userId, workspaceId, null, { probe: true });
+        return { date: candidate, result };
+      } catch (error) {
+        if (error && error.code === "packet_mismatch") continue;
+        throw error;
+      }
+    }
+    return null;
+  }
+
   app.post("/api/dcc/brief/decision", async (req, res) => {
     try {
       const { date, task_id, action, time } = req.body || {};
@@ -779,21 +810,34 @@ module.exports = function mount(app, ctx) {
       }
       const day = date || new Date().toISOString().slice(0, 10);
       const { userId, workspaceId } = resolveOwnerLenient(req);
-      const result = await blockDB.saveDccBriefDecision(
-        day,
-        { taskId: task_id.trim(), action, time: normalizedTime },
-        userId,
-        workspaceId,
-        buildSkeletonState(day)
-      );
+      const decision = { taskId: task_id.trim(), action, time: normalizedTime };
+      let settledDay = day;
+      let result;
       try {
-        writeJSON(getDayFilePath(day), result.state);
+        result = await blockDB.saveDccBriefDecision(day, decision, userId, workspaceId, buildSkeletonState(day));
+      } catch (error) {
+        if (!error || error.code !== "packet_mismatch") throw error;
+        const owner = await saveDecisionOnOwningDay(day, decision, userId, workspaceId, error);
+        if (!owner) throw error;
+        settledDay = owner.date;
+        result = owner.result;
+        console.log(`[brief-decision] ${decision.taskId} settled on ${settledDay} (posted at ${day})`);
+      }
+      try {
+        writeJSON(getDayFilePath(settledDay), result.state);
         writeJSON(DAY_STATE_FILE, result.state);
       } catch (mirrorError) {
         console.error("[brief-decision] file mirror failed (db save succeeded):", mirrorError.message);
       }
-      broadcast("dcc-state-changed", { source: "brief-decision", date: day }, workspaceId);
-      res.json({ ok: true, date: day, task_id: task_id.trim(), action, changed: result.changed });
+      broadcast("dcc-state-changed", { source: "brief-decision", date: settledDay }, workspaceId);
+      res.json({
+        ok: true,
+        date: settledDay,
+        task_id: task_id.trim(),
+        action,
+        changed: result.changed,
+        ...(settledDay === day ? {} : { requested_date: day })
+      });
     } catch (e) {
       console.error("[brief decision] failed:", e);
       res.status(e.status || 500).json({ error: e.message || "decision save failed" });

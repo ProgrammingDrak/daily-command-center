@@ -28,6 +28,18 @@ function reviewState(packetDate = TODAY) {
   };
 }
 
+// Serves /api/state/day by date, the way the real endpoint does, so the anchoring and
+// look-back walks can be exercised instead of stubbed.
+function dayServer(rows, seen) {
+  return async (url) => {
+    if (seen) seen.push(url);
+    const date = String(url).split("date=")[1] || "";
+    const state = rows[date];
+    if (!state) return { ok: true, json: async () => ({ date, glymphatic_brief: { current: { pages: [] } } }) };
+    return { ok: true, json: async () => state };
+  };
+}
+
 function load(state, fetchImpl) {
   const storage = new Map();
   const scopedFetch = async (url, opts) => {
@@ -72,16 +84,61 @@ function load(state, fetchImpl) {
 
 test("Day Review falls back to the previous packet without changing its review date", async () => {
   const today = { date: TODAY, glymphatic_brief: { current: { suggested_tasks: [], pages: [] } } };
-  const previous = reviewState(REVIEW_DATE);
   const seen = [];
-  const { sandbox } = load(today, async url => {
-    seen.push(url);
-    return { ok: true, json: async () => previous };
-  });
+  const { sandbox } = load(today, dayServer({ [REVIEW_DATE]: reviewState(REVIEW_DATE) }, seen));
   const ctx = await sandbox.DCC.DayReview.load();
   assert.equal(ctx.packetDate, REVIEW_DATE);
   assert.equal(ctx.reviewDate, REVIEW_DATE);
-  assert.deepEqual(seen, ["/api/state/day?date=2026-08-13"]);
+  assert.equal(seen[0], "/api/state/day?date=2026-08-13");
+  assert.equal(ctx.packets.length, 1, "the day before it has no packet of its own");
+});
+
+// The packet is published into its review day AND the next day's row; the next night
+// overwrites the borrowed copy. Reading it from the borrowed row is fine, WRITING there
+// is not: the decision outlives the row it was made against.
+test("decisions are anchored to the packet's own day, not the row it was read from", async () => {
+  const state = reviewState();                       // TODAY's row, reviewing REVIEW_DATE
+  const owner = reviewState(REVIEW_DATE);            // the same packet in its own row
+  const calls = [];
+  const { sandbox } = load(state, async (url, opts) => {
+    if (String(url).startsWith("/api/state/day")) return dayServer({ [REVIEW_DATE]: owner })(url);
+    calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : null });
+    return { ok: true, json: async () => ({ ok: true }) };
+  });
+  const ctx = await sandbox.DCC.DayReview.load();
+  assert.equal(ctx.packetDate, REVIEW_DATE, "anchored to the packet's durable home");
+  await sandbox.DCC.DayReview.dismissItem("did-1");
+  assert.equal(calls[0].url, "/api/dcc/brief/decision");
+  assert.equal(calls[0].body.date, REVIEW_DATE);
+});
+
+test("older unsettled packets stay reachable, and a click lands on its own packet", async () => {
+  const older = {
+    date: "2026-08-12",
+    glymphatic_brief: {
+      decisions: {},
+      current: { pages: [{ id: "day-review", review_date: "2026-08-12", items: [{ id: "did-old", title: "Older work" }] }] }
+    }
+  };
+  const calls = [];
+  const { sandbox } = load(reviewState(REVIEW_DATE), async (url, opts) => {
+    if (String(url).startsWith("/api/state/day")) return dayServer({ "2026-08-12": older })(url);
+    calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : null });
+    return { ok: true, json: async () => ({ ok: true }) };
+  });
+  const ctx = await sandbox.DCC.DayReview.load();
+  assert.equal(ctx.packets.map(p => p.packetDate).join(","), REVIEW_DATE + ",2026-08-12");
+  assert.equal(sandbox.DCC.DayReview.pendingCount(ctx), 3, "both days count");
+  const html = sandbox.DCC.DayReview.renderPending(ctx);
+  assert.match(html, /data-gb-packet="2026-08-12"/, "each card names the packet it came from");
+  assert.match(html, /Older work/);
+
+  // The click routes by the card's stamp, so a packet swapped under an open modal
+  // cannot send one day's ids to another day's packet.
+  const card = { closest: () => ({ getAttribute: () => "2026-08-12" }) };
+  await sandbox.DCC.DayReview.dismissItem("did-old", card);
+  assert.equal(calls[0].body.date, "2026-08-12");
+  assert.equal(calls[0].body.task_id, "did-old");
 });
 
 test("a review card stays pending until its parent and follow-up are both handled", async () => {
@@ -96,11 +153,12 @@ test("a review card stays pending until its parent and follow-up are both handle
   assert.match(html, /Push to Fri, Aug 14/);
 });
 
-test("approve writes completion to review_date and its durable decision to packetDate", async () => {
-  const state = reviewState();
+test("approve writes both the completion and its decision to the review day", async () => {
+  const state = reviewState(REVIEW_DATE);
   state.glymphatic_brief.current.pages[0].items[0].followups = [];
   const calls = [];
   const { sandbox } = load(state, async (url, opts) => {
+    if (String(url).startsWith("/api/state/day")) return dayServer({})(url);
     calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : null });
     return { ok: true, json: async () => url.endsWith("log-done") ? { credit: { credits: 2 } } : { ok: true } };
   });
@@ -109,7 +167,7 @@ test("approve writes completion to review_date and its durable decision to packe
   assert.equal(calls[0].url, "/api/dcc/brief/log-done");
   assert.equal(calls[0].body.date, REVIEW_DATE);
   assert.equal(calls[1].url, "/api/dcc/brief/decision");
-  assert.equal(calls[1].body.date, TODAY);
+  assert.equal(calls[1].body.date, REVIEW_DATE);
   assert.equal(calls[1].body.action, "approve");
   assert.equal(sandbox.DCC.DayReview.pendingCount(ctx), 0);
 });

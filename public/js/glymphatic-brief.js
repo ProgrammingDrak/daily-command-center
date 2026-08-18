@@ -92,6 +92,44 @@
     return gbLooseEndsReviewContext || gbReviewFromState(typeof __state !== "undefined" ? __state : null, gbDate());
   }
 
+  // Every rendered card carries the packet it came from (data-gb-packet), and a click
+  // is settled against THAT packet rather than against whatever context the module was
+  // last left holding. Without this, a packet swapped under an open modal (the night
+  // run republishing the row a borrowed packet was being read from) sends yesterday's
+  // item ids to today's packet, and the server rightly refuses them.
+  var gbReviewCtxByPacket = {};
+  var GB_REVIEW_LOOKBACK_DAYS = 7;
+  var GB_DAY_STATE_TTL_MS = 5 * 60 * 1000;
+  var gbDayStateCache = {};
+
+  function gbRegisterReviewCtx(ctx){
+    if(ctx && ctx.packetDate)gbReviewCtxByPacket[ctx.packetDate] = ctx;
+    return ctx;
+  }
+
+  function gbCtxFromEl(el){
+    var host = el && el.closest ? el.closest("[data-gb-packet]") : null;
+    var date = host && host.getAttribute ? host.getAttribute("data-gb-packet") : "";
+    return (date && gbReviewCtxByPacket[date]) || gbReviewContext();
+  }
+
+  function gbReviewPackets(ctx){
+    if(ctx && Array.isArray(ctx.packets) && ctx.packets.length)return ctx.packets;
+    return ctx ? [ctx] : [];
+  }
+
+  async function gbFetchDayState(date){
+    var now = Date.now();
+    var cached = gbDayStateCache[date];
+    if(cached && (now - cached.at) < GB_DAY_STATE_TTL_MS)return cached.state;
+    var res = await fetch("/api/state/day?date=" + encodeURIComponent(date));
+    if(!res.ok)throw new Error("Could not load the Day Review for " + date);
+    var state = await res.json();
+    if(state && state._unavailable)throw new Error("Day Review state is unavailable for " + date);
+    gbDayStateCache[date] = { at: now, state: state };
+    return state;
+  }
+
   function gbReviewUi(ctx){
     ctx = ctx || gbReviewContext();
     return gbLoadUiForDate(ctx && ctx.reviewDate);
@@ -124,6 +162,18 @@
     if(action === "reset")delete ctx.decisions[id];
     else ctx.decisions[id] = { action: action, decided_at: new Date().toISOString() };
     return payload;
+  }
+
+  // The server settles a decision on the packet that owns the id, so a packet error now
+  // means the card on screen is genuinely gone (regenerated ids, another device). Drop
+  // the cached day states and ask for a reload rather than leaving a dead button.
+  function gbDecisionFailed(e, fallback){
+    var message = (e && e.message) || fallback;
+    if(typeof showToast === "function")showToast(message, "error");
+    if(/Day in Review packet/i.test(message)){
+      gbDayStateCache = {};
+      gbNotifyReviewChanged();
+    }
   }
 
   function gbNotifyReviewChanged(){
@@ -779,8 +829,8 @@
     return parseInt(o || item.duration || item.duration_minutes || item.durMin || 30, 10) || 30;
   }
 
-  function gbSetDidStart(id, value){
-    var ctx = gbReviewContext();
+  function gbSetDidStart(id, value, el){
+    var ctx = gbCtxFromEl(el);
     var ui = gbReviewUi(ctx);
     ui.did_starts = ui.did_starts || {};
     if(value)ui.did_starts[id] = value;
@@ -788,8 +838,8 @@
     gbSaveReviewUi(ui, ctx);
   }
 
-  function gbSetDidDuration(id, value){
-    var ctx = gbReviewContext();
+  function gbSetDidDuration(id, value, el){
+    var ctx = gbCtxFromEl(el);
     var ui = gbReviewUi(ctx);
     ui.did_durations = ui.did_durations || {};
     ui.did_durations[id] = parseInt(value, 10) || 30;
@@ -831,8 +881,8 @@
   // "No, I didn't do this." Mirrors gbRecordDecision: a local flag for instant
   // render plus a server-persisted decision (action:"dismiss") so the rejection
   // is durable across refresh/devices, unlike the localStorage-only Approve.
-  async function gbSetDidDismissed(id, dismissed){
-    var ctx = gbReviewContext();
+  async function gbSetDidDismissed(id, dismissed, el){
+    var ctx = gbCtxFromEl(el);
     if(!ctx)return;
     var btn = document.querySelector('[data-gb-dismiss="'+id+'"]');
     var card = btn && btn.closest ? btn.closest("[data-gb-did-item]") : null;
@@ -849,7 +899,7 @@
       buildGlymphaticBrief();
     }catch(e){
       parentBtns.forEach(function(el){ el.disabled = false; });
-      if(typeof showToast === "function")showToast(e.message || "Could not save review decision", "error");
+      gbDecisionFailed(e, "Could not save review decision");
     }
   }
 
@@ -873,8 +923,8 @@
     return gbAddDays((ctx && ctx.reviewDate) || gbDate(), 1);
   }
 
-  async function gbApproveDid(id){
-    var ctx = gbReviewContext();
+  async function gbApproveDid(id, el){
+    var ctx = gbCtxFromEl(el);
     if(!ctx)return;
     var current = ctx.current;
     var items = gbDidItems(ctx.page, current);
@@ -924,8 +974,8 @@
     }
   }
 
-  async function gbPushDidNext(followId){
-    var ctx = gbReviewContext();
+  async function gbPushDidNext(followId, el){
+    var ctx = gbCtxFromEl(el);
     if(!ctx)return;
     var current = ctx.current;
     var items = gbDidItems(ctx.page, current);
@@ -973,8 +1023,8 @@
     }
   }
 
-  async function gbDismissDidFollow(followId){
-    var ctx = gbReviewContext();
+  async function gbDismissDidFollow(followId, el){
+    var ctx = gbCtxFromEl(el);
     if(!ctx)return;
     var btn = document.querySelector('[data-gb-dismiss-follow="'+followId+'"]');
     var followRow = btn && btn.closest ? btn.closest(".cu-review-followup") : null;
@@ -989,15 +1039,16 @@
       gbNotifyReviewChanged();
     }catch(e){
       followBtns.forEach(function(el){ el.disabled = false; });
-      if(typeof showToast === "function")showToast(e.message || "Could not dismiss follow-up", "error");
+      gbDecisionFailed(e, "Could not dismiss follow-up");
     }
   }
 
   function gbDidCard(item, ui){
     var approvable = item.approvable !== false;
     var approved = approvable && gbDidApproved(item, ui);
+    var packet = gbEsc(gbReviewContext() && gbReviewContext().packetDate);
     if(gbDidDismissed(item, ui)){
-      return '<article class="gb-task-card gb-pushed" data-gb-did-item="'+gbEsc(item.id)+'" style="opacity:.55">'+
+      return '<article class="gb-task-card gb-pushed" data-gb-packet="'+packet+'" data-gb-did-item="'+gbEsc(item.id)+'" style="opacity:.55">'+
         '<div class="gb-task-top">'+
           '<div class="gb-task-main"><div class="gb-task-title" style="text-decoration:line-through">'+gbEsc(item.title)+'</div>'+
             '<div class="gb-task-meta"><span class="gb-pill">Didn’t do this</span></div></div>'+
@@ -1025,7 +1076,7 @@
       '</div>';
     }).join("");
     var followsBlock = follows ? '<div class="gb-row-stack" style="margin-top:8px"><div class="gb-row-sub">Not finished &mdash; push to tomorrow:</div>'+follows+'</div>' : "";
-    return '<article class="gb-task-card'+(approved?' gb-pushed':'')+'" data-gb-did-item="'+gbEsc(item.id)+'">'+
+    return '<article class="gb-task-card'+(approved?' gb-pushed':'')+'" data-gb-packet="'+packet+'" data-gb-did-item="'+gbEsc(item.id)+'">'+
       '<div class="gb-task-top">'+
         '<div class="gb-task-main">'+
           '<div class="gb-task-title">'+gbEsc(item.title)+'</div>'+
@@ -1100,7 +1151,7 @@
         '</div>'+
       '</div>';
     }).join("");
-    return '<article class="gb-task-card cu-review-card" data-gb-did-item="'+gbEsc(item.id)+'">'+
+    return '<article class="gb-task-card cu-review-card" data-gb-packet="'+gbEsc(ctx && ctx.packetDate)+'" data-gb-did-item="'+gbEsc(item.id)+'">'+
       '<div class="gb-task-top">'+
         '<div class="gb-task-main">'+
           '<div class="gb-task-title">'+gbEsc(item.title)+'</div>'+
@@ -1123,12 +1174,22 @@
     '</article>';
   }
 
+  // One bundle can carry several days: a backlog of unsettled packets runs backwards
+  // from the most recent day left unhandled, and every one of them has to be reachable
+  // from here — reviewing only the newest packet is what left older days unanswerable.
   function gbLooseEndsReviewHtml(ctx){
-    var pending = gbReviewPendingModel(ctx);
-    if(!pending.items.length)return '<div class="cu-caught-up">Day in Review is complete.</div>';
-    return '<div class="gb-task-list cu-review-list">'+pending.items.map(function(model){
-      return gbLooseEndsDidCard(model, ctx);
-    }).join("")+'</div>';
+    var packets = gbReviewPackets(ctx).map(function(packet){
+      return { packet: packet, pending: gbReviewPendingModel(packet) };
+    }).filter(function(entry){ return entry.pending.items.length; });
+    if(!packets.length)return '<div class="cu-caught-up">Day in Review is complete.</div>';
+    return packets.map(function(entry){
+      var label = packets.length > 1
+        ? '<div class="gb-row-sub" style="margin:6px 0 4px">'+gbEsc(gbFmtReviewDate(entry.packet.reviewDate) || entry.packet.reviewDate)+'</div>'
+        : "";
+      return label+'<div class="gb-task-list cu-review-list">'+entry.pending.items.map(function(model){
+        return gbLooseEndsDidCard(model, entry.packet);
+      }).join("")+'</div>';
+    }).join("");
   }
 
   // Journal entry — local-only for now. FUTURE: wire gbSaveJournal to the
@@ -1537,6 +1598,42 @@
     });
   }
 
+  // A packet is published into its own review day AND, for one day, into the next day's
+  // row so "yesterday's review" reaches you on today's screen. The next night's run
+  // overwrites that borrowed row, so the review day's own row is the only durable home
+  // for the packet and for the decisions made against it. Anchor there before writing.
+  async function gbAnchorToReviewDate(ctx){
+    if(!ctx || !ctx.reviewDate || ctx.reviewDate === ctx.packetDate)return ctx;
+    try{
+      var owner = gbReviewFromState(await gbFetchDayState(ctx.reviewDate), ctx.reviewDate);
+      if(owner && owner.page && owner.reviewDate === ctx.reviewDate)return owner;
+    }catch(e){
+      console.error("[Glymphatic Brief] could not anchor the packet to " + ctx.reviewDate + ":", e);
+    }
+    return ctx;
+  }
+
+  // Walk back while the days keep coming up unsettled, capped at a week. The first fully
+  // settled day ends the walk: a backlog is contiguous, so an answered day means the
+  // older ones were answered too, and this stays one fetch on the common day.
+  async function gbCollectReviewPackets(ctx){
+    var packets = [ctx];
+    var cursor = ctx.reviewDate;
+    for(var back = 0; back < GB_REVIEW_LOOKBACK_DAYS; back++){
+      if(!gbReviewPendingModel(packets[packets.length - 1]).count)break;
+      cursor = gbAddDays(cursor, -1);
+      var older = null;
+      try{ older = gbReviewFromState(await gbFetchDayState(cursor), cursor); }
+      catch(e){ break; }
+      // Only a day's OWN packet counts. A borrowed copy (review_date pointing elsewhere)
+      // is the same packet under a second address and would double-render it.
+      if(!older || !older.page || older.reviewDate !== cursor)break;
+      if(!gbReviewPendingModel(older).count)break;
+      packets.push(gbRegisterReviewCtx(older));
+    }
+    return packets;
+  }
+
   async function gbLoadLooseEndsReview(){
     await gbEnsureReviewOwnerScope();
     var todayState = window.__DCC_STATE__ || (typeof __state !== "undefined" ? __state : null);
@@ -1551,11 +1648,13 @@
       if(previousState && previousState._unavailable)throw new Error("Previous Day Review state is unavailable");
       ctx = gbReviewFromState(previousState, previous);
     }
-    gbLooseEndsReviewContext = ctx;
     if(ctx){
-      gbMergeLegacyReviewUi(ctx);
+      gbMergeLegacyReviewUi(ctx);          // migrates UI saved under the borrowed date
+      ctx = gbRegisterReviewCtx(await gbAnchorToReviewDate(ctx));
       gbBackfillLegacyReviewDecisions(ctx);
+      ctx.packets = await gbCollectReviewPackets(ctx);
     }
+    gbLooseEndsReviewContext = ctx;
     return ctx;
   }
 
@@ -1775,15 +1874,15 @@
     var push = e.target.closest("[data-gb-push]");
     if(push){ gbPushTask(push.dataset.gbPush); return; }
     var approve = e.target.closest("[data-gb-approve]");
-    if(approve){ gbApproveDid(approve.dataset.gbApprove); return; }
+    if(approve){ gbApproveDid(approve.dataset.gbApprove, approve); return; }
     var pushNext = e.target.closest("[data-gb-push-next]");
-    if(pushNext){ gbPushDidNext(pushNext.dataset.gbPushNext); return; }
+    if(pushNext){ gbPushDidNext(pushNext.dataset.gbPushNext, pushNext); return; }
     var dismissFollow = e.target.closest("[data-gb-dismiss-follow]");
-    if(dismissFollow){ gbDismissDidFollow(dismissFollow.dataset.gbDismissFollow); return; }
+    if(dismissFollow){ gbDismissDidFollow(dismissFollow.dataset.gbDismissFollow, dismissFollow); return; }
     var dismiss = e.target.closest("[data-gb-dismiss]");
-    if(dismiss){ gbSetDidDismissed(dismiss.dataset.gbDismiss, true); return; }
+    if(dismiss){ gbSetDidDismissed(dismiss.dataset.gbDismiss, true, dismiss); return; }
     var undismiss = e.target.closest("[data-gb-undismiss]");
-    if(undismiss){ gbSetDidDismissed(undismiss.dataset.gbUndismiss, false); return; }
+    if(undismiss){ gbSetDidDismissed(undismiss.dataset.gbUndismiss, false, undismiss); return; }
     var journalSave = e.target.closest("[data-gb-journal-save]");
     if(journalSave){ gbSaveJournal(); return; }
     var openMood = e.target.closest("[data-gb-open-mood]");
@@ -1795,8 +1894,8 @@
   document.addEventListener("change", function(e){
     if(e.target.matches("[data-gb-start]"))gbSetStart(e.target.dataset.gbStart, e.target.value);
     if(e.target.matches("[data-gb-duration]"))gbSetDuration(e.target.dataset.gbDuration, e.target.value);
-    if(e.target.matches("[data-gb-did-start]"))gbSetDidStart(e.target.dataset.gbDidStart, e.target.value);
-    if(e.target.matches("[data-gb-did-duration]"))gbSetDidDuration(e.target.dataset.gbDidDuration, e.target.value);
+    if(e.target.matches("[data-gb-did-start]"))gbSetDidStart(e.target.dataset.gbDidStart, e.target.value, e.target);
+    if(e.target.matches("[data-gb-did-duration]"))gbSetDidDuration(e.target.dataset.gbDidDuration, e.target.value, e.target);
   });
 
   // Autosave the journal on every keystroke (localStorage only, no re-render) so
@@ -1818,11 +1917,15 @@
   DCC.DayReview = {
     load: gbLoadLooseEndsReview,
     context: gbReviewContext,
-    pendingCount: function(ctx){ return gbReviewPendingModel(ctx || gbReviewContext()).count; },
+    pendingCount: function(ctx){
+      return gbReviewPackets(ctx || gbReviewContext()).reduce(function(total, packet){
+        return total + gbReviewPendingModel(packet).count;
+      }, 0);
+    },
     renderPending: function(ctx){ return gbLooseEndsReviewHtml(ctx || gbReviewContext()); },
     renderJournal: function(ctx){ return gbLooseEndsJournalHtml(ctx || gbReviewContext()); },
     approveItem: gbApproveDid,
-    dismissItem: function(id){ return gbSetDidDismissed(id, true); },
+    dismissItem: function(id, el){ return gbSetDidDismissed(id, true, el); },
     pushFollowup: gbPushDidNext,
     dismissFollowup: gbDismissDidFollow
   };
