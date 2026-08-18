@@ -297,6 +297,13 @@ app.get("/api/me", async (req, res) => {
       [req.session.userId]
     );
     const user = rows[0] || {};
+    // A non-browser client asking "who am I" is exactly what dcc_client.py does on
+    // login, so it doubles as the AI-triage setup handshake. Fire-and-forget: the
+    // stamp only drives a checkmark in the setup wizard and must never delay or
+    // fail this response.
+    if (looksLikeAutomation(req) && user.id) {
+      stampAutomationSeen(user.id).catch(() => {});
+    }
     // Identity fields (id + workspaceId) let an automation/skill uniquely pin
     // which person's profile it is operating on after a username/password login.
     res.json({
@@ -941,6 +948,147 @@ require("./routes/vault")(app, ctx);
 require("./routes/admin-tokens")(app, ctx);
 require("./routes/admin-model")(app, ctx);
 require("./routes/slack-events")(app, ctx);
+
+// ── Optional setup flows (Slack reactions, AI triage) ─────────────────────
+// Registered here rather than beside the other /api/me routes because they read
+// ctx.slackActors, which the slack-events mount above publishes.
+//
+// The two flows are different in kind, and these endpoints reflect that. Slack
+// setup is server-side state this API can finish and verify. Triage setup is
+// state on the user's own machine (a Claude plugin plus a credential file), so
+// all the server can do is report the prerequisite it owns and confirm that
+// something has since authenticated as this user from outside a browser.
+
+// A non-browser client authenticating as this user is the triage handshake. It
+// needs no cooperation from the skill: dcc_client.py's login already calls
+// /api/me, and it does so over urllib, which sends no Mozilla UA. Heuristic on
+// purpose, and only ever used to flip a checkmark, never to authorize anything.
+// The URL a person would type, for the copy-paste login command. Configured value
+// wins (Railway sets APP_URL); otherwise derive it from the proxy-aware Host.
+function publicBaseUrl(req) {
+  const configured = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL;
+  if (configured) return String(configured).replace(/\/$/, "");
+  const proto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim()
+    || (req.secure ? "https" : "http");
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  return host ? `${proto}://${host}` : "";
+}
+
+function looksLikeAutomation(req) {
+  const ua = String(req.headers["user-agent"] || "");
+  return !!ua && !/Mozilla/i.test(ua);
+}
+async function stampAutomationSeen(userId) {
+  try {
+    await pool.query(
+      `UPDATE users SET onboarding_state = jsonb_set(
+         jsonb_set(COALESCE(onboarding_state, '{}'::jsonb), '{setup}',
+                   COALESCE(onboarding_state->'setup', '{}'::jsonb), true),
+         '{setup,triageLastSeenAt}', to_jsonb($2::text), true),
+         updated_at = $3
+       WHERE id = $1`,
+      [userId, new Date().toISOString(), new Date().toISOString()]
+    );
+  } catch (e) {
+    console.warn("[setup] automation stamp failed:", e.message);
+  }
+}
+
+app.get("/api/me/integrations", async (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) return res.status(401).json({ error: "Not signed in" });
+
+  const slack = ctx.slackActors
+    ? await ctx.slackActors.statusForUser(userId)
+    : { connected: false, tier: null, slackUserId: null, linkedVia: null };
+
+  let google = { connected: false, accounts: [] };
+  try {
+    const accounts = await gcalAuth.listAuthenticatedAccounts(userId);
+    google = { connected: accounts.length > 0, accounts };
+  } catch (e) {
+    console.warn("[integrations] google status lookup failed:", e.message);
+    google = { connected: false, accounts: [], error: true };
+  }
+
+  // What the triage wizard needs and cannot work out client-side: whether this
+  // account can do a session login at all. A Clerk/Google account has no
+  // password_hash, so dcc_client.py login returns 401 and the whole flow is dead
+  // until a password exists. Surfacing it is the point of the precheck step.
+  let account = { hasPassword: false, username: null, email: null, setup: {} };
+  try {
+    const { rows } = await pool.query(
+      "SELECT username, email, auth_provider, password_hash IS NOT NULL AS has_password, onboarding_state FROM users WHERE id = $1",
+      [userId]
+    );
+    const row = rows[0] || {};
+    account = {
+      hasPassword: !!row.has_password,
+      username: row.username || null,
+      email: row.email || null,
+      authProvider: row.auth_provider || null,
+      setup: (row.onboarding_state && row.onboarding_state.setup) || {},
+    };
+  } catch (e) {
+    console.warn("[integrations] account lookup failed:", e.message);
+  }
+
+  res.json({
+    slack: {
+      ...slack,
+      // The one thing a teammate cannot fix themselves: the shared bot has to
+      // exist on this server, and their workspace has to be allowlisted.
+      sharedBot: !!(ctx.slackActors && ctx.slackActors.hasBotToken()),
+      autoLink: !!(ctx.slackActors && ctx.slackActors.autoLinkEnabled()),
+    },
+    google,
+    triage: {
+      // Everything the wizard needs to render a copy-paste login command. NOT
+      // getRequestOrigin, which is the caller's IP for rate limiting; this has to
+      // be the URL the person would type, so it prefers the configured public one
+      // and falls back to the proxy-aware Host header.
+      baseUrl: publicBaseUrl(req),
+      username: account.username,
+      hasPassword: account.hasPassword,
+      authProvider: account.authProvider,
+      lastSeenAt: account.setup.triageLastSeenAt || null,
+    },
+    setup: account.setup,
+  });
+});
+
+// Claim a Slack member ID when auto-linking by email cannot work (no email on the
+// account). Stored PENDING: it grants nothing until a reaction actually arrives
+// from that member ID, which is the proof of control. See lib/slack-actors.js.
+app.post("/api/me/slack/claim", async (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) return res.status(401).json({ error: "Not signed in" });
+  if (!ctx.slackActors) return res.status(503).json({ error: "Slack capture is not configured on this server" });
+  const slackUserId = String((req.body && req.body.slackUserId) || "").trim().toUpperCase();
+  if (!/^[UW][A-Z0-9]{6,}$/.test(slackUserId)) {
+    return res.status(400).json({ error: "That does not look like a Slack member ID (starts with U or W)" });
+  }
+  try {
+    const result = await ctx.slackActors.claimPending(userId, slackUserId, req.workspaceId || null);
+    if (!result.ok) return res.status(409).json({ error: result.error });
+    res.json({ ok: true, pending: true, slackUserId });
+  } catch (e) {
+    console.error("[setup] slack claim failed:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete("/api/me/slack/claim", async (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) return res.status(401).json({ error: "Not signed in" });
+  if (!ctx.slackActors) return res.status(503).json({ error: "Slack capture is not configured on this server" });
+  try {
+    await ctx.slackActors.unlinkUser(userId);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ── Static + Fallback ──
 app.get("/pet/:shareSlug", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "public-pet.html")); });
