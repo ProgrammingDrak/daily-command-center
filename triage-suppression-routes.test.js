@@ -19,7 +19,7 @@ const express = require("express");
 
 const MINE = "ws-mine";
 
-function mountSuppressions(seed = []) {
+function mountSuppressions(seed = [], existingState = null) {
   const app = express();
   app.use(express.json());
   const blocks = seed.map((b) => ({ ...b }));
@@ -54,12 +54,13 @@ function mountSuppressions(seed = []) {
         if (row && patch.properties) row.properties = patch.properties;
         return row;
       },
-      getDccState: async () => null,
+      getDccState: async () => (existingState ? { state_json: existingState } : null),
       saveDccState: async (date, state) => { saved.push({ date, state }); },
       getBlocksByDateIncludingDeleted: async () => [],
       findByIdempotencyKey: async () => null,
       createItineraryTask: async (b) => b,
     },
+    dccIntelligence: require("./dcc-intelligence"),
     broadcast: (evt, payload) => { broadcasts.push({ evt, payload }); },
     buildSkeletonState: (d) => ({ date: d }),
     getDayFilePath: (d) => {
@@ -347,4 +348,62 @@ test("there is no GET route duplicating what the day response already carries", 
   const { app } = mountSuppressions([sup("s1", { triage_id: "gmail:abc", reason: "done" })]);
   const { status } = await callDcc(app, "GET", "/api/triage/suppressions");
   assert.equal(status, 404);
+});
+
+// ── the ingest door must MERGE glymphatic_brief, not replace it ────────────────
+//
+// Same argument as the header note above: the fix here was removing "glymphatic_brief"
+// from the handler's DCC_SECTIONS full-replace list and merging it instead. A unit test
+// of mergeBriefForIngest cannot fail if someone re-adds the key to that list, deletes the
+// merge call, or orders the loop after it. This drives the handler that would be wrong.
+const BRIEF_STATE = {
+  date: "2026-08-06",
+  glymphatic_brief: {
+    current: { pages: [{ id: "day-review", items: [{ id: "dr-abc" }] }] },
+    decisions: { "dr-abc": { action: "approved", decided_at: "2026-08-06T10:00:00.000Z" } },
+    decision_log: [{ task_id: "dr-abc", action: "approved", time: null, at: "2026-08-06T10:00:00.000Z" }],
+  },
+};
+
+test("a nightly publish cannot reset an answered Day-in-Review card to pending", async () => {
+  const { app, saved } = mountSuppressions([], BRIEF_STATE);
+  const res = await callDcc(app, "POST", "/api/ingest/day-state", {
+    date: "2026-08-06",
+    glymphatic_brief: { current: { pages: [{ id: "day-review", items: [{ id: "dr-abc" }] }] } },
+  });
+  assert.equal(res.status, 200);
+  const brief = saved.at(-1).state.glymphatic_brief;
+  assert.equal(brief.decisions["dr-abc"].action, "approved", "the user's answer must survive the publish");
+  assert.equal(brief.decision_log.length, 1, "and so must its ledger entry");
+});
+
+test("a publish still owns the brief's authored content", async () => {
+  const { app, saved } = mountSuppressions([], BRIEF_STATE);
+  await callDcc(app, "POST", "/api/ingest/day-state", {
+    date: "2026-08-06",
+    glymphatic_brief: { current: { pages: [{ id: "day-review", items: [{ id: "dr-fresh" }] }] } },
+  });
+  const pages = saved.at(-1).state.glymphatic_brief.current.pages;
+  assert.deepStrictEqual(pages, [{ id: "day-review", items: [{ id: "dr-fresh" }] }]);
+});
+
+test("a publish that omits glymphatic_brief leaves the whole section untouched", async () => {
+  const { app, saved } = mountSuppressions([], BRIEF_STATE);
+  await callDcc(app, "POST", "/api/ingest/day-state", {
+    date: "2026-08-06",
+    triage: { open_items: [] },
+  });
+  const brief = saved.at(-1).state.glymphatic_brief;
+  assert.equal(brief.decisions["dr-abc"].action, "approved");
+  assert.deepStrictEqual(brief.current.pages, BRIEF_STATE.glymphatic_brief.current.pages);
+});
+
+test("glymphatic_brief is NOT in the handler's blind full-replace list", () => {
+  // A control on the two tests above: if the key is ever re-added to DCC_SECTIONS the
+  // merge is bypassed and they would start passing for the wrong reason.
+  const src = fs.readFileSync(require.resolve("./routes/dcc.js"), "utf8");
+  const line = src.split("\n").find((l) => l.includes("const DCC_SECTIONS ="));
+  assert.ok(line, "DCC_SECTIONS declaration still exists");
+  assert.ok(!line.includes('"glymphatic_brief"'), "glymphatic_brief must stay out of the full-replace loop");
+  assert.ok(src.includes("mergeBriefForIngest(existing.glymphatic_brief"), "and must be merged instead");
 });

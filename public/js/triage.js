@@ -541,14 +541,45 @@ function closeDismissModal() {
   currentDismissId = null;
 }
 const _triageSuppressionInFlight = new Set();
+// Advance a Waiting item's check-in cadence by one cycle, through the ONE owner of that
+// contract (delegated.js, published on window.DCC.Waiting and already used by
+// catch-up.js). This deliberately does not keep a local copy: the stale-key handling is
+// subtle -- a naive retry under `expectedCycleKey` completes a cycle the user never saw
+// and permanently freezes the cadence -- so a second copy that drifts would silently
+// destroy Waiting items. See completeCheckInCycle in delegated.js for the full argument.
+async function completeWaitingCycle(waitingItemId, cycleKey, completedAt) {
+  const waiting = window.DCC && window.DCC.Waiting;
+  if (!waiting || typeof waiting.completeCheckInCycle !== "function") {
+    throw new Error("Waiting module unavailable. Reload and try again.");
+  }
+  const result = await waiting.completeCheckInCycle(waitingItemId, cycleKey, completedAt);
+  // A stale result here means the cadence already moved past the cycle this card was
+  // rendered from, so there is nothing to advance. Suppressing the stale card is still
+  // the right outcome, which is why this resolves instead of throwing.
+  return result;
+}
+
 async function dismissTriage(triageId, note, trivial) {
   if (_triageSuppressionInFlight.has(triageId)) return false;
   const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId)||{id:triageId,title:"Triage item completed"};
   _triageSuppressionInFlight.add(triageId);
+  // Tracked so the failure path can say WHICH half landed. Advancing first is the right
+  // order (suppressing first would leave the card hidden while still overdue), but it
+  // means a later failure leaves durable cadence movement behind, and mergeTriage will
+  // drop the card on the next read anyway. Reporting a flat "could not resolve" there
+  // would be a lie, and would invite a re-click that is now a stale submit.
+  let cadenceAdvanced = false;
   try {
     const dismissed = loadDismissed();
     const wasDismissed = !!dismissed[triageId];
     const completedAt = new Date().toISOString();
+    // A Waiting check-in is one cycle of a recurring reminder. Advance the cadence
+    // BEFORE suppressing the card, or the suppression is the only thing holding the
+    // item back and the next read re-offers the same overdue cycle forever.
+    if (item.waiting_item_id && item.waiting_cycle_key) {
+      await completeWaitingCycle(item.waiting_item_id, item.waiting_cycle_key, completedAt);
+      cadenceAdvanced = true;
+    }
     const saved = await persistTriageSuppression(triageId, item, "done", note || (trivial ? "Dismissed" : ""), trivial);
     dismissed[triageId] = {
       note: note || (trivial ? "Dismissed" : ""),
@@ -570,7 +601,10 @@ async function dismissTriage(triageId, note, trivial) {
     buildTriage();
     return true;
   } catch (e) {
-    if (typeof showToast === "function") showToast("Could not resolve triage item: " + e.message, "error");
+    const prefix = cadenceAdvanced
+      ? "The check-in cadence advanced, but the Completed record did not save: "
+      : "Could not resolve triage item: ";
+    if (typeof showToast === "function") showToast(prefix + e.message, "error");
     return false;
   } finally {
     _triageSuppressionInFlight.delete(triageId);
@@ -1758,28 +1792,90 @@ function buildTriage() {
     });
   });
 
-  // Notifications with dismiss support
+  // Notifications with dismiss support.
+  //
+  // Two defects made the dismiss button a no-op, and they compounded:
+  //
+  //   1. saveNotifDismissed returned before writing whenever every USE_BLOCKSTORE
+  //      flag was true -- and index.html sets all eleven to true. The early return
+  //      was a hand-off to a blockstore path that was never built, so the click
+  //      wrote no day_root property, no localStorage, nothing. buildTriage() then
+  //      re-read an empty list and the row was back before the click finished.
+  //      Restore was equally inert.
+  //   2. The key written was never the key compared. The write used
+  //      `(n.id || n.title || "")`, which is "" for an id-less notification, while
+  //      the filter compared `includes(n.id || n.title)`, i.e. undefined. Real
+  //      sweep-calendar "[ACTION NEEDED]" payloads carry only `message` -- no id
+  //      and no title -- so identity was undefined for exactly the rows that
+  //      matter most, and a shared "" would have collapsed them into one anyway.
+  //
+  // notifKey is now the single derivation both halves call, so they cannot drift, and
+  // the record lives on the day_root block with localStorage kept only as the offline
+  // fallback. `notifications` is a full-replace section on the ingest route, so the
+  // record deliberately does NOT live in day state.
+  //
+  // Scope, stated honestly: this is cross-DEVICE but still day-SCOPED, because
+  // _bsSaveProp writes the day_root of the day being viewed. notifKey itself is
+  // deliberately day-independent, so a recurring sweep payload republished tomorrow
+  // hashes to the same key and WILL be re-offered on that day. That is the residual
+  // half of this bug, and the fix is the dateless decision row that
+  // triage-suppressions.js already argues for (kind="triage_suppression" and friends),
+  // not another day_root flag. Deferred deliberately rather than half-built here.
+  const NOTIF_DISMISS_PROP = "_notifDismissed";
   const NOTIF_DISMISS_KEY = "pa-notif-dismissed-" + ((__state && __state.date) || "unknown");
-  function loadNotifDismissed(){ try{return JSON.parse(localStorage.getItem(NOTIF_DISMISS_KEY)||"[]")}catch(e){return[]} }
-  function saveNotifDismissed(ids){ if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return; localStorage.setItem(NOTIF_DISMISS_KEY,JSON.stringify(ids)); scheduleIDBSave(); }
+  // Local on purpose. slots.js has a byte-identical hash, but it seeds an RNG -- that is
+  // coincidental implementation, not shared semantics, and core.js's bar is 2+ real
+  // consumers of the same MEANING. What matters here is that the derivation feeding the
+  // persisted key has exactly ONE definition, and it does: notifKey below is the only
+  // place a notification identity is derived anywhere in the app.
+  function notifHash(text){
+    let hash = 0;
+    for(let i = 0; i < text.length; i++) hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+    return Math.abs(hash);
+  }
+  // Stable identity for a notification. Prefers an explicit id, then falls back to a
+  // hash over the fields the sweep actually sends, so an id-less row still gets a
+  // key that is unique to it and identical on every device and every render.
+  function notifKey(n){
+    if(!n) return "";
+    if(n.id) return String(n.id);
+    const parts = [n.source||"", n.timestamp||"", n.title||"", n.message||""].join("|");
+    return "nh:" + notifHash(parts);
+  }
+  function loadNotifDismissed(){
+    const durable = (typeof _bsProp === "function") ? _bsProp(NOTIF_DISMISS_PROP, null) : null;
+    if(Array.isArray(durable)) return durable.map(String);
+    try{return JSON.parse(localStorage.getItem(NOTIF_DISMISS_KEY)||"[]").map(String)}catch(e){return[]}
+  }
+  function saveNotifDismissed(ids){
+    const list = Array.from(new Set((ids||[]).map(String).filter(Boolean)));
+    const wrote = (typeof _bsSaveProp === "function") ? _bsSaveProp(NOTIF_DISMISS_PROP, list) : false;
+    if(wrote) return;
+    try{ localStorage.setItem(NOTIF_DISMISS_KEY,JSON.stringify(list)); }catch(e){}
+    if(typeof scheduleIDBSave === "function") scheduleIDBSave();
+  }
 
   const notifEl = document.getElementById("triage-notifications");
   if (notifEl && INIT_NOTIFICATIONS.length) {
     const dismissedIds = loadNotifDismissed();
-    const active = INIT_NOTIFICATIONS.filter(n => !dismissedIds.includes(n.id || n.title));
-    const dismissed = INIT_NOTIFICATIONS.filter(n => dismissedIds.includes(n.id || n.title));
+    const active = INIT_NOTIFICATIONS.filter(n => !dismissedIds.includes(notifKey(n)));
+    const dismissed = INIT_NOTIFICATIONS.filter(n => dismissedIds.includes(notifKey(n)));
 
     let html = active.map(n => {
-      const nid = (n.id || n.title || "").replace(/"/g, '&quot;');
+      // Everything interpolated below is sweep-supplied third-party text (mail subjects,
+      // Slack bodies, calendar summaries), so it goes through the canonical escaper and
+      // the link is restricted to http(s) to keep a javascript: URI out of the href.
+      const nid = DCC.esc(notifKey(n));
       const needsApproval = n.requires_approval;
+      const safeLink = /^https?:\/\//i.test(String(n.link || "")) ? DCC.esc(n.link) : "";
       return '<div class="tri-notification' + (needsApproval ? ' requires-approval' : '') + '" data-notif-id="' + nid + '">' +
         '<button class="notif-dismiss" data-notif-dismiss="' + nid + '" title="Dismiss">&times;</button>' +
         '<div class="tri-notif-header">' +
           '<span class="tri-notif-icon">' + (needsApproval ? '\u26a0\ufe0f' : '\u2139\ufe0f') + '</span>' +
-          '<span class="tri-notif-title">' + (n.title || n.message || "Notification") + '</span>' +
+          '<span class="tri-notif-title">' + DCC.esc(n.title || n.message || "Notification") + '</span>' +
         '</div>' +
-        (n.body || n.detail ? '<div class="tri-notif-body">' + (n.body || n.detail) + '</div>' : '') +
-        (n.link ? '<div class="tri-notif-actions"><a href="' + n.link + '" target="_blank" class="tri-notif-btn">Review</a>' +
+        (n.body || n.detail ? '<div class="tri-notif-body">' + DCC.esc(n.body || n.detail) + '</div>' : '') +
+        (safeLink ? '<div class="tri-notif-actions"><a href="' + safeLink + '" target="_blank" rel="noopener noreferrer" class="tri-notif-btn">Review</a>' +
           (needsApproval ? '<button class="tri-notif-btn approve">Approve</button>' : '') +
         '</div>' : '') +
       '</div>';
@@ -1788,9 +1884,9 @@ function buildTriage() {
     if (dismissed.length) {
       html += '<div class="notif-dismissed-wrap"><details><summary>Dismissed notifications (' + dismissed.length + ')</summary>' +
         dismissed.map(n => {
-          const nid = (n.id || n.title || "").replace(/"/g, '&quot;');
+          const nid = DCC.esc(notifKey(n));
           return '<div class="notif-dismissed-row">' +
-            '<span class="ndr-title">' + (n.title || n.message || "Notification") + '</span>' +
+            '<span class="ndr-title">' + DCC.esc(n.title || n.message || "Notification") + '</span>' +
             '<button class="ndr-restore" data-notif-restore="' + nid + '">Restore</button>' +
           '</div>';
         }).join('') +

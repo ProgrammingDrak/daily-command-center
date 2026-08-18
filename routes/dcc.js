@@ -308,7 +308,12 @@ module.exports = function mount(app, ctx) {
       console.error("[dcc-state ingest] day-state read failed:", e.message);
       return res.status(503).json({ ok: false, error: e.message });
     }
-    const DCC_SECTIONS = ["schedule", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "glymphatic_brief", "meta", "report_card", "orchestrator", "mutations", "completions", "personal", "meetings"];
+    // "glymphatic_brief" is deliberately NOT in this list. A publish owns the brief's
+    // authored content but not the user's answers about it, and a blind replace here
+    // erased `decisions` / `decision_log` on every nightly publish -- so every
+    // Day-in-Review card the user had already approved or dismissed went back to
+    // pending. It is merged below instead, the same way `triage` is.
+    const DCC_SECTIONS = ["schedule", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "meta", "report_card", "orchestrator", "mutations", "completions", "personal", "meetings"];
     // "pushed" is LEGACY as of C3 (the pushed subsystem is deleted; a push is a real move
     // now). Nothing writes the section any more, so it is only here to preserve what old
     // day files already carry rather than drop it on the next ingest.
@@ -317,6 +322,9 @@ module.exports = function mount(app, ctx) {
     for (const key of DCC_SECTIONS) { if (key in incoming) merged[key] = incoming[key]; }
     if ("triage" in incoming) {
       merged.triage = triageSuppressions.mergeTriageForIngest(existing.triage, incoming.triage);
+    }
+    if ("glymphatic_brief" in incoming) {
+      merged.glymphatic_brief = dccIntelligence.mergeBriefForIngest(existing.glymphatic_brief, incoming.glymphatic_brief);
     }
     for (const key of USER_SECTIONS) { if (key in existing && !(key in incoming)) merged[key] = existing[key]; if (key in incoming && !(key in existing)) merged[key] = incoming[key]; }
     merged.date = incoming.date; merged.last_updated_at = new Date().toISOString(); merged.last_updated_by = incoming.last_updated_by || "scheduled-task";
@@ -638,8 +646,12 @@ module.exports = function mount(app, ctx) {
   // tab's refresh button was a dead end.
   // ── C5b step 4: Postgres is the BASE state for every mutation in this file ──
   //
-  // Six handlers here read the JSON day file as their base and then FULL-REPLACE the
-  // Postgres row (`saveDccState` is `DO UPDATE SET state_json = EXCLUDED.state_json`). That
+  // Six handlers here read the JSON day file as their base and then near-FULL-REPLACE the
+  // Postgres row. `saveDccState` is NOT a plain `DO UPDATE SET state_json =
+  // EXCLUDED.state_json` any more: its ON CONFLICT clause carves out
+  // `glymphatic_brief.decisions` and `.decision_log` and COALESCEs the STORED values back
+  // over the incoming ones, so a publish cannot erase a Day-in-Review answer. Everything
+  // else in state_json is still replaced wholesale. That
   // is what made `server.js buildDayResponse` unfixable on its own, and it is recorded in a
   // comment above that function: with the file as base, the skeleton `ensureSkeletonDays`
   // writes at boot becomes the base, and the next Brief refresh PERSISTS it over the real
@@ -653,7 +665,8 @@ module.exports = function mount(app, ctx) {
   // over workspace B's.
   //
   // ★ THE FALLBACK CHAIN IS THE DANGEROUS PART, because every caller feeds this straight
-  // into `persistDccDay` -> `saveDccState`, which is a FULL REPLACE.
+  // into `persistDccDay` -> `saveDccState`, which replaces every section except the
+  // `glymphatic_brief.decisions` / `.decision_log` carve-out in its ON CONFLICT clause.
   //
   //   - `DAY_STATE_FILE` is the LAST PUBLISHED day. It has no workspace segment and no
   //     guarantee its `date` matches the requested one, so using it ungated meant an ingest
@@ -692,7 +705,8 @@ module.exports = function mount(app, ctx) {
     //
     // It consulted the mirror BEFORE testing `dbFailed`, so a clean no-row read returned
     // `data/state/days/<date>.json` — which has no workspace segment and is written by
-    // `persistDccDay` for every workspace. Every caller feeds this into a full replace, so:
+    // `persistDccDay` for every workspace. Every caller feeds this into a near-full replace
+    // (all but the glymphatic_brief decisions carve-out), so:
     // user B posts `/api/dcc/brief/decision` for a date where B's workspace has no row, the
     // per-date file holds workspace A's day, and B's row is created holding A's timeline. B's
     // `/api/state/day` then serves it and B's public share publishes A's task titles to

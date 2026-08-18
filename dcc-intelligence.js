@@ -351,9 +351,19 @@ function buildBrief({ state, openItems, meetings, health }) {
   } else if (previousCurrent && Array.isArray(previousCurrent.pages) && previousCurrent.pages.length) {
     current.pages = previousCurrent.pages;
   }
+  // `decisions` and `decision_log` are the record of "I already answered this
+  // Day-in-Review card", and they MUST survive a rebuild. They used to be dropped
+  // here: this function returns the whole `glymphatic_brief` section, and both
+  // callers (refreshDccState, ingestDeepSweepPacket) assign that return over the
+  // section wholesale. So `current.pages` was carried forward (just above) while
+  // the answers about those very pages were discarded, which re-offered every
+  // approved and dismissed item on the next nightly publish. Same carry-forward
+  // rule as pages: prefer what the caller already has, never silently drop it.
   return {
     current,
     history: previousCurrent ? [previousCurrent, ...asArray(existingBrief.history)].slice(0, 5) : asArray(existingBrief.history).slice(0, 5),
+    decisions: existingBrief.decisions && typeof existingBrief.decisions === "object" ? existingBrief.decisions : {},
+    decision_log: asArray(existingBrief.decision_log),
   };
 }
 
@@ -669,6 +679,48 @@ function materializeBriefPlan({ sourceState, targetDate, existingBlocks = [] }) 
   };
 }
 
+// A publish owns the brief's authored content (pages, front page, retro, lessons),
+// but NOT the user's answers about it. `decisions` / `decision_log` record "I already
+// approved or dismissed this Day-in-Review card"; they are written by
+// POST /api/dcc/brief/decision and read on both the render path and by
+// materializeBriefPlan. Leaving `glymphatic_brief` in the ingest route's blind
+// full-replace list meant any publisher sending the key erased them, so every card
+// went back to pending. Same shape and the same argument as mergeTriageForIngest.
+// Precedence here MUST match what db.js saveDccState already enforces in SQL, or this
+// helper documents a contract Postgres silently reverses. That clause rebuilds the
+// section with `'decisions', COALESCE(dcc_state.state_json#>'{glymphatic_brief,decisions}',
+// '{}')` -- a stored answer always wins and a publish can never contribute one. The only
+// writer of decisions is POST /api/dcc/brief/decision.
+//
+// decision_log is a bounded append-only ledger everywhere else it is touched
+// (saveDccBriefDecision ends with `.slice(-200)`; `mutations` above uses `.slice(-100)`),
+// so it is bounded and deduped here too. Without the dedupe a publisher that echoes back
+// a brief it just read doubles the log on every publish, because GET /api/state/day
+// returns the whole section including the log.
+const DECISION_LOG_LIMIT = 200;
+function decisionLogKey(entry) {
+  return `${entry.task_id}|${entry.action}|${entry.time || ""}|${entry.at}`;
+}
+function mergeBriefForIngest(existing, incoming) {
+  const previous = existing && typeof existing === "object" ? existing : {};
+  const next = incoming && typeof incoming === "object" ? incoming : {};
+  const decisions = {
+    ...(next.decisions && typeof next.decisions === "object" ? next.decisions : {}),
+    ...(previous.decisions && typeof previous.decisions === "object" ? previous.decisions : {}),
+  };
+  const seen = new Set();
+  const log = [...asArray(previous.decision_log), ...asArray(next.decision_log)]
+    .filter((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      const key = decisionLogKey(entry);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(-DECISION_LOG_LIMIT);
+  return { ...previous, ...next, decisions, decision_log: log };
+}
+
 module.exports = {
   refreshDccState,
   ingestDeepSweepPacket,
@@ -681,4 +733,5 @@ module.exports = {
   mergeOpenItems,
   normalizeTriageItem,
   triageItemKey,
+  mergeBriefForIngest,
 };
