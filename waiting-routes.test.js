@@ -28,7 +28,7 @@ function waitingRow() {
   };
 }
 
-function mountApp() {
+function mountApp(suppressionBlocks = []) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => { req.workspaceId = MINE; req.session = { userId: 1 }; next(); });
@@ -131,7 +131,10 @@ function mountApp() {
       getRescheduleSubtreePool: async () => [],
       getBlocksByDateRange: async () => [],
       getResponsibilityBlocks: async () => [],
-      getBlocksByKind: async () => [],
+      getBlocksByKind: async (kind) => {
+        if (typeof suppressionBlocks === "function") return suppressionBlocks(kind);
+        return suppressionBlocks.filter((b) => (b.properties || {}).kind === kind);
+      },
     },
     broadcast: () => {},
     crypto: require("node:crypto"),
@@ -502,4 +505,110 @@ test("generic block surfaces cannot bypass task dependency validation", async ()
     operations: [{ op: "delete", id: created.body.id }],
   });
   assert.equal(rawBatch.status, 409);
+});
+
+// ── draft_items is a PUBLISH surface, so suppressions have to reach it ────────
+//
+// Sweep Suite's `dcc-waiting-checkins` source polls /api/waiting-items/attention every
+// 15 minutes and hands each draft_items entry to draft-replies, which writes a real
+// Gmail or Slack draft. The endpoint applied no suppressions, so handling a check-in in
+// the DCC stopped the card on the day response and did nothing here: the sweep kept
+// drafting replies to something already dealt with, four times an hour.
+//
+// The asymmetry is deliberate and load-bearing: draft_items is gated, `items` is not.
+// `items` drives the Waiting sidebar's urgency display, where a still-open dependency
+// should keep showing after its current check-in is handled. Suppression means "stop
+// asking me to act", not "pretend the dependency is gone".
+
+function suppressionBlock(triageId, key, reason = "done") {
+  return {
+    id: "sup-" + triageId,
+    type: "block",
+    workspace_id: MINE,
+    created_at: "2026-08-14T12:00:00.000Z",
+    properties: {
+      kind: "triage_suppression",
+      triage_id: triageId,
+      key,
+      itemTitle: "Check in: Launch plan",
+      reason,
+      at: "2026-08-14T12:00:00.000Z",
+      active: true,
+    },
+  };
+}
+
+const DUE_TRIAGE_ID = "waiting-checkin:waiting-1:" + TODAY;
+const DUE_KEY = "waiting_checkin|waiting:waiting-1:" + TODAY;
+
+test("a handled check-in is withheld from draft_items so the sweep stops re-drafting it", async () => {
+  const { app } = mountApp([suppressionBlock(DUE_TRIAGE_ID, DUE_KEY)]);
+  const res = await request(app, "/api/waiting-items/attention?date=" + TODAY);
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.draft_items, [], "nothing left for draft-replies to act on");
+  assert.equal(res.body.suppressed_draft_count, 1, "and the drop is reported, not silent");
+});
+
+test("the Waiting item still shows in items, because the dependency is still open", async () => {
+  const { app } = mountApp([suppressionBlock(DUE_TRIAGE_ID, DUE_KEY)]);
+  const res = await request(app, "/api/waiting-items/attention?date=" + TODAY);
+  assert.equal(res.body.items.length, 1, "the sidebar must not lose a live dependency");
+  assert.equal(res.body.items[0].id, "waiting-1");
+  assert.equal(res.body.items[0].attentionScore, 100);
+});
+
+test("a suppression matching on the bare id alone is enough", async () => {
+  // The two match arms exist because the composite key is built from fields the sweep
+  // controls; the bare id is the client's handle and survives a reader changing shape.
+  const { app } = mountApp([suppressionBlock(DUE_TRIAGE_ID, "")]);
+  const res = await request(app, "/api/waiting-items/attention?date=" + TODAY);
+  assert.deepEqual(res.body.draft_items, []);
+});
+
+test("a suppression matching on the composite key alone is enough", async () => {
+  const { app } = mountApp([suppressionBlock("", DUE_KEY)]);
+  const res = await request(app, "/api/waiting-items/attention?date=" + TODAY);
+  assert.deepEqual(res.body.draft_items, []);
+});
+
+test("a suppression for a DIFFERENT cycle does not withhold the due one", async () => {
+  // The id embeds the due date, so last cycle's record must not silence this cycle.
+  const stale = "waiting-checkin:waiting-1:2026-08-07";
+  const { app } = mountApp([suppressionBlock(stale, "waiting_checkin|waiting:waiting-1:2026-08-07")]);
+  const res = await request(app, "/api/waiting-items/attention?date=" + TODAY);
+  assert.equal(res.body.draft_items.length, 1, "this cycle is still owed a draft");
+  assert.equal(res.body.draft_items[0].id, DUE_TRIAGE_ID);
+  assert.equal(res.body.suppressed_draft_count, 0);
+});
+
+test("a suppression for a different Waiting item is ignored", async () => {
+  const { app } = mountApp([suppressionBlock("waiting-checkin:waiting-9:" + TODAY, "waiting_checkin|waiting:waiting-9:" + TODAY)]);
+  const res = await request(app, "/api/waiting-items/attention?date=" + TODAY);
+  assert.equal(res.body.draft_items.length, 1);
+});
+
+test("a deactivated suppression stops withholding, so Undo restores the draft", async () => {
+  const block = suppressionBlock(DUE_TRIAGE_ID, DUE_KEY);
+  block.properties.active = false;
+  const { app } = mountApp([block]);
+  const res = await request(app, "/api/waiting-items/attention?date=" + TODAY);
+  assert.equal(res.body.draft_items.length, 1, "an undone decision must re-offer the draft");
+});
+
+test("no suppressions at all behaves exactly as before", async () => {
+  const { app } = mountApp();
+  const res = await request(app, "/api/waiting-items/attention?date=" + TODAY);
+  assert.equal(res.body.draft_items.length, 1);
+  assert.equal(res.body.suppressed_draft_count, 0);
+});
+
+test("an unreadable suppression store offers everything rather than failing the sweep", async () => {
+  // Best-effort, same contract as server.js buildDayResponse. A duplicate draft is a
+  // smaller failure than a follow-up that silently never goes out. The store genuinely
+  // throws here; asserting this against a healthy store would be a test that cannot fail.
+  const { app } = mountApp(() => { throw new Error("postgres is down"); });
+  const res = await request(app, "/api/waiting-items/attention?date=" + TODAY);
+  assert.equal(res.status, 200, "the sweep read must not fail outright");
+  assert.equal(res.body.draft_items.length, 1, "degrades to offering the draft");
+  assert.equal(res.body.suppressed_draft_count, 0);
 });
