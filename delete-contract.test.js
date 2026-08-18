@@ -38,7 +38,7 @@ function groupTask(id, deletedAt = null) {
     properties: { title: "Inbox zero", taskGroupId: "grp-1", local_id: "tg-task-x", start: "09:00", end: "09:30" } };
 }
 
-function mountApp(extraBlocks = {}) {
+function mountApp(extraBlocks = {}, { failUpdateIds = [] } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => { req.workspaceId = MINE; req.session = { userId: 1 }; next(); });
@@ -70,6 +70,10 @@ function mountApp(extraBlocks = {}) {
       },
       deleteBlock: async (id) => { calls.deleted.push(id); blocks[id] = { ...blocks[id], deleted_at: TOMB }; return { id, deleted_at: TOMB }; },
       updateBlock: async (id, patch) => {
+        // failUpdateIds makes the WRITE itself throw on a LIVE row. Tombstoning the row
+        // instead does not reach it: the hook returns at its own deleted_at guard first,
+        // so the non-fatality test would pass with no try/catch at all.
+        if (failUpdateIds.includes(id)) throw new Error(`write failed: ${id}`);
         const row = blocks[id];
         if (!row) throw new Error(`Block not found: ${id}`);
         if (row.deleted_at) throw new Error(`Block is deleted: ${id}`);   // db.js raises this
@@ -87,18 +91,23 @@ function mountApp(extraBlocks = {}) {
         blocks[taskRef] = { ...row, properties };
         return { task: blocks[taskRef], affectedTasks: [blocks[taskRef]], revision: "test-revision", persistenceTarget: "task_row", broadcastIds: [taskRef] };
       },
-      // Modelled on blocks-batch-authz.test.js's fake, with one deliberate difference:
-      // that one stages into a copy because it only asserts what reaches batchOp, while
-      // the meeting-provenance tests below need the delete to actually land so the
-      // route's post-batch pass has a real tombstone to react to.
+      // Modelled on blocks-batch-authz.test.js's fake, and transactional for the same
+      // reason the real one is: db.batchOp runs its loop inside BEGIN/COMMIT and ROLLBACKs
+      // on any throw, so a batch that fails on op 2 must leave op 1's delete UNDONE. An
+      // in-place fake is more permissive than production and would hand a false green to
+      // the first test that asserts "the batch failed, so nothing was deleted".
       batchOp: async (ops) => {
+        const staged = { ...blocks };
+        const deleted = [];
         for (const o of ops) {
           if (!o || o.op === "create" || o.op === "reorder") continue;
-          const row = blocks[o.id];
+          const row = staged[o.id];
           if (!row) throw new Error(`Block not found: ${o.id}`);
           if (o.op === "update" && row.deleted_at) throw new Error(`Block is deleted: ${o.id}`);
-          if (o.op === "delete") { calls.deleted.push(o.id); blocks[o.id] = { ...row, deleted_at: TOMB }; }
+          if (o.op === "delete") { deleted.push(o.id); staged[o.id] = { ...row, deleted_at: TOMB }; }
         }
+        Object.assign(blocks, staged);          // COMMIT: only reached if no op threw
+        calls.deleted.push(...deleted);
         return { batchId: "b1", blocks: ops.map((o) => ({ id: (o && o.id) || "new" })) };
       },
       getChildren: async () => [],
@@ -406,17 +415,59 @@ test("a proposal that is NOT placed is left alone", async () => {
   assert.equal(blocks["prop-1"].properties.status, "approved");
 });
 
-test("the stamp is non-fatal: the delete lands even when the proposal cannot be written", async () => {
-  // A tombstoned proposal makes the fake updateBlock throw exactly like db.js does. The
-  // row is already deleted by the time this runs, so a throw here would turn a completed
-  // delete into a 500 and tell the client the drop failed.
+test("the stamp is non-fatal: the delete lands even when the proposal write throws", async () => {
+  // The wrapper's whole job. The row is already tombstoned by the time the stamp runs, so
+  // a throw here would turn a completed delete into a 500 and tell the client the drop
+  // failed. Note the proposal must stay LIVE and the WRITE must fail: tombstoning it
+  // instead returns at the hook's own deleted_at guard and never reaches the try/catch,
+  // which is how this test used to pass with no try/catch at all.
+  const { app, blocks, calls } = mountApp(meetingPair(), { failUpdateIds: ["prop-1"] });
+  const { status } = await call(app, "DELETE", "/api/blocks/task-1");
+  assert.equal(status, 200, "a completed delete must not 500 on a cosmetic stamp");
+  assert.ok(calls.deleted.includes("task-1"), "and the task really is gone");
+  assert.equal(blocks["prop-1"].properties.status, "placed", "the stamp simply never landed");
+});
+
+test("a tombstoned proposal is skipped rather than written", async () => {
   const pair = meetingPair();
   pair["prop-1"].deleted_at = TOMB;
-  const { app, blocks, calls } = mountApp(pair);
+  const { app, blocks } = mountApp(pair);
   const { status } = await call(app, "DELETE", "/api/blocks/task-1");
   assert.equal(status, 200);
-  assert.ok(calls.deleted.includes("task-1"), "and the task really is gone");
   assert.equal(blocks["prop-1"].properties.status, "placed", "untouched");
+});
+
+test("a proposal in another workspace is never touched", async () => {
+  // blockDB.getBlock is `SELECT * FROM blocks WHERE id = $1` with no tenant predicate, and
+  // the route's assertBlockOwnership only vouches for the TASK. This guard is the only
+  // thing standing between a hand-set meetingAutomation.proposedActionId and a foreign row.
+  const pair = meetingPair();
+  pair["prop-1"].workspace_id = FOREIGN;
+  const { app, blocks } = mountApp(pair);
+  const { status } = await call(app, "DELETE", "/api/blocks/task-1");
+  assert.equal(status, 200);
+  assert.equal(blocks["prop-1"].properties.status, "placed", "a back-link is not a tenancy grant");
+});
+
+test("a back-link pointing at a row that is not a proposal is ignored", async () => {
+  const pair = meetingPair();
+  pair["prop-1"].properties.kind = "task";
+  const { app, blocks } = mountApp(pair);
+  await call(app, "DELETE", "/api/blocks/task-1");
+  assert.equal(blocks["prop-1"].properties.status, "placed");
+});
+
+test("deleting a COMPLETED meeting follow-up is cleanup, not a drop", async () => {
+  // The proposal never learns about completion, so it sits at "placed" either way. Without
+  // the isCompleted gate this stamps the meeting card with a struck-through "Dropped" and
+  // claims Drake threw away work he actually finished.
+  const pair = meetingPair();
+  pair["task-1"].properties.completedAt = "2026-07-30T12:00:00Z";
+  const { app, blocks } = mountApp(pair);
+  const { status } = await call(app, "DELETE", "/api/blocks/task-1");
+  assert.equal(status, 200);
+  assert.equal(blocks["prop-1"].properties.status, "placed", "finished work is not dropped work");
+  assert.equal(blocks["prop-1"].properties.dismissedReason, undefined);
 });
 
 test("deleting an ordinary task with no meeting link is a no-op", async () => {

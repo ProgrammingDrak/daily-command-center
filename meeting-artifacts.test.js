@@ -674,6 +674,21 @@ test("approveActions refuses a dropped proposal, so approve-all cannot resurrect
   assert.equal(proposal.properties.dismissedReason, "task-dropped");
 });
 
+test("a status neither gate knows is excluded, because both gates are allowlists", async () => {
+  // The two tests above seed "dismissed", which a DENYLIST excludes just as well -- so they
+  // pin that one value, not the allowlist property. This is the case a denylist would let
+  // through, and it is the actual load-bearing claim behind reusing "dismissed" instead of
+  // minting a new status: an unknown value is excluded by construction.
+  seedMeeting("mnovel", { title: "Planning" });
+  mem.store.push({ id: "pnovel", type: "block", parent_id: "mnovel", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "Chase the migration", status: "dropped" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  const rows = await automation.listProposedActions({ workspaceId: "ws-1" });
+  assert.equal(rows.some(item => item.id === "pnovel"), false, "a denylist would admit this");
+  const result = await automation.approveActions("mnovel", { workspaceId: "ws-1", userId: 1, actionIds: [] });
+  assert.equal(result.approvedCount, 0, "and approve-all would mint from it");
+});
+
 test("placeApprovedAction 404s on a missing action and a cross-workspace action", async () => {
   seedMeeting("m404");
   await assert.rejects(

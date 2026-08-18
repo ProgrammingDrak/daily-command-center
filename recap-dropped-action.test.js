@@ -38,6 +38,18 @@ const RECAP_TIME_SRC = mustMatch(SRC, /function recapTime\(seconds\)\{[\s\S]*?\n
 // block editors; the filter is the entire contract for what reaches the renderer.
 const FILTER_SRC = mustMatch(SRC, /const actions=\(\(data&&data\.proposedActions\)\|\|\[\]\)\.filter\([^\n]*\);/, "render()'s proposedActions filter");
 
+// The third changed filter, and the client half of this feature's intent: without its
+// "dismissed" term the itinerary panel renders a dropped proposal as a PRE-CHECKED row
+// under a live "Approve selected" button.
+const PANEL_FILTER_SRC = mustMatch(SRC, /const proposed=\(data&&data\.proposedActions\|\|\[\]\)\.filter\([^\n]*\);/, "renderPanel's proposedActions filter");
+
+function panelVisible(proposedActions) {
+  const sandbox = { data: { proposedActions } };
+  vm.createContext(sandbox);
+  vm.runInContext(PANEL_FILTER_SRC + "\nglobalThis.__out=proposed;", sandbox);
+  return sandbox.__out;
+}
+
 function ctx() {
   const sandbox = {
     esc: (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
@@ -123,4 +135,12 @@ test("a delegated action is still owner-noted, not droppable-looking", () => {
   const html = render([{ id: "p5", text: "Their job", status: "proposed", owner: "other" }]);
   assert.match(html, /recap-owner-note">Owner: other</);
   assert.equal(/recap-sched-dropped/.test(html), false);
+});
+
+test("a dropped proposal never reaches the Approve-selected list", () => {
+  assert.deepEqual(panelVisible([DROPPED]), [], "a pre-checked row is how dropped work looks approvable");
+});
+
+test("an ordinary proposed action is still offered for approval", () => {
+  assert.equal(panelVisible([{ id: "p9", status: "proposed" }]).length, 1);
 });

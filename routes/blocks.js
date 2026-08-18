@@ -293,6 +293,13 @@ module.exports = function mount(app, ctx) {
       // Only placed work can be dropped. Anything else (proposed, approved, already
       // dismissed) is either not ours to touch or already terminal.
       if (p.status !== "placed") return null;
+      // Deleting FINISHED work is cleanup, not a drop. Completion is written to the TASK
+      // and never back to the proposal, so a follow-up Drake actually completed still sits
+      // at "placed" -- without this gate, clearing it off the itinerary would stamp the
+      // meeting card with a struck-through "Dropped" and assert he threw the work away.
+      // Same rule the triage sibling applies when it refuses to release a "done"
+      // suppression on delete.
+      if (isCompleted(block)) return null;
       const next = { ...p, status: "dismissed", dismissedAt: at, dismissedReason: "task-dropped" };
       if (p.placedDate) next.droppedFromDate = p.placedDate;
       if (p.placedStart) next.droppedFromStart = p.placedStart;

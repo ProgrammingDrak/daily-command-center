@@ -504,7 +504,16 @@
       finally{ genBtn.disabled=false; if(genBtn.textContent==="Generating…")genBtn.textContent="Refresh prep"; }
     });
 
-    load(false);
+    // Forced, not cache-first. `cache` is module-level with no TTL and no eviction, and
+    // nothing invalidates it when a task is deleted somewhere else in the app -- so after
+    // a Loose Ends Drop, reopening this modal in the same page session would re-render the
+    // stale bundle and still show "Scheduled <date>" for work that is gone. The SSE path
+    // cannot cover it either: handleBlockEvent returns early on our OWN clientId echo,
+    // which is exactly the tab that did the dropping. Opening this modal is a deliberate
+    // user action on one meeting, so paying one fetch for guaranteed-fresh data is the
+    // cheap fix. The inline itinerary panels stay cache-first: their filter excludes
+    // "placed" and "dismissed" alike, so a stale bundle renders identically there.
+    load(true);
   }
 
   window.meetingAutomationPanelHtml=meetingAutomationPanelHtml;
