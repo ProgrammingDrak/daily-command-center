@@ -469,6 +469,19 @@ module.exports = function mount(app, ctx) {
           reason: suppression.reason || "done",
           resolved_at: suppression.at || "",
           conversation_id: triageSuppressions.triageConversationId(item),
+          // The dateless identity of the THING, when the family has one. A publisher can
+          // hold several cycle-ids for one Waiting item across polls, and only the ids it
+          // submitted this round come back keyed individually. Sending the subject lets it
+          // clear the siblings it never submitted, instead of leaving them to draft a
+          // native reply for something already handled here.
+          // ONLY for reasons that are subject-scoped here. The stored row carries a
+          // subject_key whatever the reason (the index simply ignores it for cycle-scoped
+          // ones), but putting it on the wire for a "done" would tell the publisher to
+          // clear the NEXT cycle's sibling too, and the recurring reminder would go silent
+          // instead of advancing. A test pins this specific emptiness.
+          subject_key: triageSuppressions.SUBJECT_SCOPED_REASONS.has(suppression.reason)
+            ? (triageSuppressions.subjectKeyForSuppression(suppression) || triageSuppressions.subjectKeyForItem(item))
+            : "",
         };
       }).filter(Boolean);
       if (suppressedResolutions.length) {

@@ -407,3 +407,78 @@ test("glymphatic_brief is NOT in the handler's blind full-replace list", () => {
   assert.ok(!line.includes('"glymphatic_brief"'), "glymphatic_brief must stay out of the full-replace loop");
   assert.ok(src.includes("mergeBriefForIngest(existing.glymphatic_brief"), "and must be merged instead");
 });
+
+// ── the response carries the SUBJECT, not just the submitted id ───────────────
+//
+// A publisher can hold several cycle-ids for one Waiting dependency across polls, and only
+// the ids it submitted in this round come back keyed individually. Sending the dateless
+// subject lets it clear the siblings it never submitted. That matters because an
+// internal-fallback draft is deliberately NOT treated as drafted on the sweep side (it
+// stays eligible for a Gmail or Slack upgrade), so a stale sibling left open there is a
+// live draft candidate and draft-replies will write a real native draft for something
+// already handled here.
+
+test("a deleted Waiting decision reports its dateless subject to the publisher", async () => {
+  const { app, json } = await (async () => {
+    const m = mountSuppressions([
+      sup("s-w", {
+        triage_id: "waiting-checkin:w-1:2026-07-23",
+        key: "waiting_checkin|waiting:w-1:2026-07-23",
+        subject_key: "waiting:w-1",
+        reason: "deleted",
+      }),
+    ]);
+    const res = await callDcc(m.app, "POST", "/api/ingest/day-state", {
+      date: "2026-07-30",
+      triage: { open_items: [{ id: "waiting-checkin:w-1:2026-07-23", type: "waiting_checkin", waiting_item_id: "w-1" }] },
+    });
+    return { app: m.app, json: res.json };
+  })();
+  assert.ok(app);
+  assert.equal(json.suppressed_resolutions.length, 1);
+  assert.equal(json.suppressed_resolutions[0].subject_key, "waiting:w-1");
+  assert.equal(json.suppressed_resolutions[0].reason, "deleted");
+});
+
+test("the subject travels even when the submitted cycle differs from the stored one", async () => {
+  // The whole point: the stored decision is for 2026-07-23, the publisher is submitting a
+  // later cycle, and the subject arm is what connects them.
+  const { app } = mountSuppressions([
+    sup("s-w", {
+      triage_id: "waiting-checkin:w-1:2026-07-23",
+      subject_key: "waiting:w-1",
+      reason: "deleted",
+    }),
+  ]);
+  const { json } = await callDcc(app, "POST", "/api/ingest/day-state", {
+    date: "2026-07-30",
+    triage: { open_items: [{ id: "waiting-checkin:w-1:2026-08-06", type: "waiting_checkin", waiting_item_id: "w-1" }] },
+  });
+  assert.equal(json.suppressed_resolutions.length, 1, "a moved due date must still reconcile");
+  assert.equal(json.suppressed_resolutions[0].id, "waiting-checkin:w-1:2026-08-06");
+  assert.equal(json.suppressed_resolutions[0].subject_key, "waiting:w-1");
+});
+
+test("a cycle-scoped done decision reports NO subject", async () => {
+  // Load-bearing negative: if "done" carried a subject, the sweep would clear the next
+  // cycle too and the recurring reminder would go silent instead of advancing.
+  const { app } = mountSuppressions([
+    sup("s-w", { triage_id: "waiting-checkin:w-1:2026-07-23", subject_key: "waiting:w-1", reason: "done" }),
+  ]);
+  const { json } = await callDcc(app, "POST", "/api/ingest/day-state", {
+    date: "2026-07-30",
+    triage: { open_items: [{ id: "waiting-checkin:w-1:2026-07-23", type: "waiting_checkin", waiting_item_id: "w-1" }] },
+  });
+  assert.equal(json.suppressed_resolutions.length, 1);
+  assert.equal(json.suppressed_resolutions[0].reason, "done");
+  assert.equal(json.suppressed_resolutions[0].subject_key, "", "done must not sweep by subject");
+});
+
+test("a non-waiting resolution carries an empty subject", async () => {
+  const { app } = mountSuppressions([sup("s1", { triage_id: "gmail:abc", reason: "deleted" })]);
+  const { json } = await callDcc(app, "POST", "/api/ingest/day-state", {
+    date: "2026-07-30",
+    triage: { open_items: [{ id: "gmail:abc", type: "email" }] },
+  });
+  assert.equal(json.suppressed_resolutions[0].subject_key, "");
+});
