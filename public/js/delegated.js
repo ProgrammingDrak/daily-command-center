@@ -500,6 +500,39 @@
     return resp.json();
   }
 
+  // The single owner of the check-ins/complete contract, stale handling included.
+  // triage.js reaches it through window.DCC.Waiting rather than keeping a second copy:
+  // this logic is subtle enough that two copies WILL drift, and a wrong copy silently
+  // destroys a cadence (see below).
+  //
+  // The route answers HTTP 200 with `status: "skipped_stale"` whenever our cycleKey is
+  // not the server's current one, so `resp.ok` is true for a call that did nothing.
+  //
+  // The trap: `skipped_stale` is ALSO the repeat-submit signal. After a successful
+  // completion the due date has moved, so resubmitting the old key is stale, not
+  // duplicate. Blindly retrying under `expectedCycleKey` then completes a cycle the
+  // user never saw, which leaves `lastCompletedCycleKey` equal to the NEXT due key.
+  // Verified against a live server: the item is then due forever and every later
+  // completion returns `skipped_duplicate`, permanently freezing the cadence. So only
+  // retry when the server's cycle is not LATER than ours; a later one means this cycle
+  // was already closed elsewhere and there is nothing left for us to advance.
+  function cycleDueOf(key) {
+    return String(key || "").split(":").pop();
+  }
+  async function completeCheckInCycle(id, key, completedAt) {
+    let result = await postWaitingAction(id, "check-ins/complete", { cycleKey: key, completedAt });
+    if (result && result.status === "skipped_stale") {
+      const expected = result.expectedCycleKey || "";
+      // No expected key means there is no due cycle left to close at all.
+      if (!expected) return result;
+      if (cycleDueOf(expected) > cycleDueOf(key)) return result;
+      if (expected !== key) {
+        result = await postWaitingAction(id, "check-ins/complete", { cycleKey: expected, completedAt });
+      }
+    }
+    return result;
+  }
+
   async function afterWaitingAction() {
     await refreshDelegatedItems();
     if (typeof refoldTaskStateFromBlockCache === "function") refoldTaskStateFromBlockCache();
@@ -536,10 +569,14 @@
     const item = getDelegatedItemById(id);
     if (!item) return;
     try {
-      await postWaitingAction(id, "check-ins/complete", {
-        cycleKey: cycleKey(item),
-        completedAt: new Date().toISOString()
-      });
+      const completedAt = new Date().toISOString();
+      const result = await completeCheckInCycle(id, cycleKey(item), completedAt);
+      if (result && result.status === "skipped_stale") {
+        closeDelegatedModal();
+        await afterWaitingAction();
+        toast("This check-in was already completed elsewhere.", "info");
+        return true;
+      }
       closeDelegatedModal();
       await afterWaitingAction();
       toast("Checked in. The next reminder is scheduled.", "success");
@@ -1203,6 +1240,7 @@
     complete: completeWaitingItem,
     open: openWaitingItem,
     completeCheckIn: markDelegatedItemCheckedById,
+    completeCheckInCycle,
     copyText
   });
 })();
