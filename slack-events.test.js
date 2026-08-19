@@ -136,11 +136,20 @@ function makeHarness(opts = {}) {
           // Tombstones are INCLUDED, live rows first — the route's own ORDER BY.
           // The route decides what a tombstoned hit means; the mock must not
           // hide it, or the no-resurrection guard goes untested.
+          //
+          // Two shapes: the single-key lookups pass one key, and the message
+          // lookup passes both a message could have (bookmark, delegate) because a
+          // lifecycle reaction does not know which kind owns the message.
+          const twoKey = /IN \(\$1, \$2\)/.test(sql);
+          const keys = twoKey ? [params[0], params[1]] : [params[0]];
           const hits = blocks
-            .filter(b => b.properties && b.properties.idempotency_key === params[0] && b.type !== "time_entry")
+            .filter(b => b.properties && keys.includes(b.properties.idempotency_key) && b.type !== "time_entry")
             .sort((a, b) => (a.deleted ? 1 : 0) - (b.deleted ? 1 : 0));
-          const hit = hits[0];
-          return { rows: hit ? [{ id: hit.id, date: hit.date, properties: hit.properties, deleted_at: hit.deleted ? "2026-07-28T00:00:00Z" : null, workspace_id: "ws-1" }] : [] };
+          const shape = (hit) => ({
+            id: hit.id, date: hit.date, properties: hit.properties,
+            deleted_at: hit.deleted ? "2026-07-28T00:00:00Z" : null, workspace_id: "ws-1",
+          });
+          return { rows: twoKey ? hits.map(shape) : (hits[0] ? [shape(hits[0])] : []) };
         }
         if (/^\s*DELETE/i.test(sql)) {
           // Honor the route's real predicates (type AND the workspace fence), so a

@@ -9,11 +9,34 @@ What the reactions do:
 | Reaction | Effect |
 |---|---|
 | 🔖 `:bookmark:` | Creates a task on the reactor's itinerary, then enriches the title and summary from the full thread |
-| 👥 `:busts_in_silhouette:` | Creates a Delegated item due for check-in tomorrow |
-| ⌛ `:hourglass:` | Stamps the exact start time, to the second |
-| ✅ `:white_check_mark:` | Completes it, records actual minutes, awards points, writes a Day Review time entry |
+| 👥 `:busts_in_silhouette:` | Creates a Waiting item due for check-in tomorrow |
+| ⌛ `:hourglass:` | Stamps the exact start time, to the second. Tasks only — a Waiting item has no timer, so ⌛ is taken back off |
+| ✅ `:white_check_mark:` | On a task: completes it, records actual minutes, awards points, writes a Day Review time entry. On a Waiting item: closes the item |
 
 Removing a reaction reverses it, including the points.
+
+### The two directions
+
+The DCC and Slack mirror each other, so either side can be the one you touch.
+
+- **Slack → DCC.** The reactions above.
+- **DCC → Slack.** Whatever you do in the DCC lands back on the message: closing a
+  Waiting item puts ✅ beside its 👥, starting a task puts ⌛ on, deleting either one
+  strips the reactions off. This needs `reactions:write` (below).
+
+### Changing what a message IS
+
+🔖 and 👥 are the two *identity* reactions: they say whether a message is work you
+are doing or work you are waiting on. Swapping one for the other converts the
+existing row rather than making a second one, so the title, your notes and the
+generated summary all survive. It works from either side:
+
+- **In Slack**, remove one identity reaction and add the other.
+- **In the DCC**, the task radial's 🤝 Delegate spoke (task → Waiting) and the
+  Waiting card's Unblock → Schedule/Backlog (Waiting → task). The reaction on the
+  message follows.
+
+⌛ and ✅ are *lifecycle* reactions and mean the same thing under either identity.
 
 ## One-time server setup
 
@@ -21,9 +44,17 @@ Removing a reaction reverses it, including the points.
 
 In the app's settings:
 
-- **OAuth & Permissions → Bot Token Scopes**: `reactions:read`, `users:read`,
-  `users:read.email`, `channels:history`, `groups:history`. Install to the
-  workspace and copy the bot token (`xoxb-…`).
+- **OAuth & Permissions → Bot Token Scopes**: `reactions:read`, `reactions:write`,
+  `users:read`, `users:read.email`, `channels:history`, `groups:history`. Install
+  to the workspace and copy the bot token (`xoxb-…`).
+
+  **`reactions:write` is what makes the DCC → Slack direction work**, and it was
+  missing from this list while the code had always needed it. Without it every
+  `reactions.add` fails with `missing_scope` — logged, never surfaced, so the
+  symptom is "the DCC never checks anything off in Slack" with nothing obviously
+  broken. Drake's own reactions have always worked because his personal
+  `SLACK_USER_TOKEN` carries the scope; everyone else is bot-tier (see below), so
+  for them the mirror is dead until the app is reinstalled with this scope added.
 - **Event Subscriptions → Request URL**: `https://<your-dcc-host>/api/slack/events`.
   The URL verification handshake is signature-checked, so the signing secret has
   to be set on the server before Slack will verify.

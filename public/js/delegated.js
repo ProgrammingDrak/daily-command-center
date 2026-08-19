@@ -1362,7 +1362,16 @@
         resp = await fetch("/api/waiting-items", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ properties })
+          // convertedFromBlockId is the 🔖 → 👥 signal, and it rides OUTSIDE
+          // `properties` on purpose. It says "this item IS that task, converted",
+          // which linkedBlockId does not: that one means "I am blocked on
+          // something for that task" and leaves the task alive under its own 🔖.
+          //
+          // The server derives the Slack provenance and the idempotency key from
+          // the named task itself and ignores any we send. It has to: the reaction
+          // lookup is that key within a workspace, so a client that could choose
+          // one could point its own row at a teammate's message.
+          body: JSON.stringify({ properties, convertedFromBlockId: _pendingSourceTaskId || null })
         });
       }
       if (!resp.ok) {

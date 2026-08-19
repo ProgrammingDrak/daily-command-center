@@ -973,6 +973,18 @@ module.exports = function mount(app, ctx) {
       if (!duplicate || (credit && credit.awarded)) {
         broadcast("blocks-changed", { action: "brief-log-done", blockIds: [blockId], date: effectiveDate }, workspaceId);
       }
+
+      // This was the ONE completion writer in the codebase with no Slack
+      // projection: every path in routes/blocks.js fans out through its syncSlack
+      // wrapper, so checking a Slack-captured task off anywhere else landed ✅ on
+      // the message and checking it off from the morning brief silently did not.
+      // Runs on the duplicate branch too — a repeat is exactly the case where the
+      // reaction may have been missed the first time, and the projector is
+      // idempotent (Slack answers already_reacted, which it treats as success).
+      if (typeof ctx.syncSlackTaskReactions === "function" && blockId) {
+        try { await ctx.syncSlackTaskReactions(blockId); }
+        catch (e) { console.error("[brief log-done] Slack reaction sync failed (non-fatal):", e.message); }
+      }
       res.json({
         ok: true, date: effectiveDate,
         status: duplicate ? "skipped_duplicate" : "created",

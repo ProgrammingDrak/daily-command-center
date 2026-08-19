@@ -210,11 +210,26 @@ function makeHarness(opts = {}) {
         if (sql.includes("idempotency_key")) {
           // The workspace fence is the whole point: the idempotency key is the
           // same string for everyone who reacts to a message.
-          const hit = blocks.find(b => b.properties
-            && b.properties.idempotency_key === params[0]
-            && b.workspace_id === params[1]
-            && b.type !== "time_entry");
-          return { rows: hit ? [{ id: hit.id, date: hit.date, properties: hit.properties, deleted_at: hit.deleted_at || null, workspace_id: hit.workspace_id }] : [] };
+          //
+          // TWO SHAPES. Single-key lookups pass (key, workspace). The message
+          // lookup passes (bookmarkKey, delegateKey, workspace), because a
+          // lifecycle reaction cannot know which kind currently owns the message —
+          // after a 🔖⇄👥 conversion the answer is the other one. Model both, or
+          // the IN form matches nothing and every ⌛/✅ silently no-ops.
+          const twoKey = /IN \(\$1, \$2\)/.test(sql);
+          const keys = twoKey ? [params[0], params[1]] : [params[0]];
+          const ws = twoKey ? params[2] : params[1];
+          const hits = blocks
+            .filter(b => b.properties
+              && keys.includes(b.properties.idempotency_key)
+              && b.workspace_id === ws
+              && b.type !== "time_entry")
+            .sort((a, b) => (a.deleted_at ? 1 : 0) - (b.deleted_at ? 1 : 0));
+          const rows = hits.map(hit => ({
+            id: hit.id, date: hit.date, properties: hit.properties,
+            deleted_at: hit.deleted_at || null, workspace_id: hit.workspace_id,
+          }));
+          return { rows: twoKey ? rows : rows.slice(0, 1) };
         }
         return { rows: [] };
       },

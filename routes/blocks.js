@@ -23,6 +23,7 @@ const validate = require("../middleware/validate");
 const schemas = require("../middleware/schemas");
 const { collectSubtreeBlockIds } = require("../lib/reschedule");
 const { resolveOwnerStrict } = require("../middleware/resolve-owner");
+const slackProvenance = require("../lib/slack-provenance");
 const { route } = require("../lib/route-helpers");
 const createTaskTiming = require("../lib/task-timing");
 const TaskModel = require("../public/js/task-model");
@@ -144,6 +145,104 @@ module.exports = function mount(app, ctx) {
     if (typeof ctx.syncSlackTaskReactions !== "function") return;
     try { await ctx.syncSlackTaskReactions(blockOrId); }
     catch (error) { console.error("[blocks] Slack reaction sync failed (non-fatal):", error.message); }
+  }
+
+  // ── Slack provenance on the Waiting API ────────────────────────────────────
+  //
+  // These properties are SERVER-owned. The reaction lookup is `idempotency_key`
+  // within a workspace, so a caller that can write one can point its own row at
+  // somebody else's Slack message and collect that person's ✅ — and
+  // slack_channel + slack_ts are the address projectTaskToSlack posts to, so a
+  // caller that can write those can make the server react on any message the
+  // token can see. The modal has never sent any of them; a hostile caller would.
+  //
+  // The only supported ways in are `convertedFromBlockId` on create and the
+  // unblock handoff, both of which DERIVE the values from a row the caller
+  // already owns. On PATCH the existing row's values survive, because
+  // normalizeProperties spreads `existing` before `incoming`.
+  //
+  // `contact`, `source` and `source_id` are deliberately absent: the modal's
+  // channel/address fields are user-owned, and a non-Slack Waiting item
+  // legitimately carries its own source and deeplink.
+  const SERVER_OWNED_SLACK_PROPS = [
+    "idempotency_key", "slack_channel", "slack_ts", "slack_thread_ts",
+    "slack_author", "slack_channel_name", "slackKindChangedAt",
+    "slackBookmarkChangedAt", "delegate_auto_snapshot",
+  ];
+  function withoutClientSlackProps(incoming) {
+    const out = { ...(incoming || {}) };
+    for (const key of SERVER_OWNED_SLACK_PROPS) delete out[key];
+    return out;
+  }
+
+  // Make a Slack idempotency key free to claim, or report that it is not.
+  //
+  // idx_blocks_idem_unique is UNIQUE on (workspace_id, idempotency_key) across LIVE
+  // rows, and a live reaction TOMBSTONE can be holding the key a conversion needs:
+  // one is written whenever a reaction removal is delivered before its add, and it
+  // stays live (deleted_at NULL) with the key on it. Clearing it is what
+  // handleBookmark already does before it creates.
+  //
+  // Skipping this fails two different ways, neither of them loudly. db.createBlock
+  // absorbs the 23505 by returning the CONFLICTING ROW tagged _resolvedExisting, so
+  // a conversion would delete the real row and hand back a tombstone as its winner —
+  // data loss with a 200. db.updateBlock does not absorb it at all, so the unblock
+  // handoff would 500 instead.
+  //
+  // A live NON-tombstone holder means the message is somehow claimed twice, and the
+  // safe answer there is to destroy nothing and let the caller back out.
+  async function freeSlackKey(key, workspaceId, exceptBlockId) {
+    if (!key || typeof blockDB.findByIdempotencyKey !== "function") return true;
+    const holder = await blockDB.findByIdempotencyKey(workspaceId, key);
+    if (!holder || holder.deleted_at) return true;
+    if (String(holder.id) === String(exceptBlockId || "")) return true;
+    if ((holder.properties || {}).kind !== "slack_reaction_tombstone") return false;
+    await blockDB.deleteBlock(holder.id);
+    return true;
+  }
+
+  // Move a Slack message's provenance from one row to another as the message
+  // changes what it IS, and retire the losing row's key so no future reaction can
+  // resolve to it.
+  //
+  // Retiring is the whole point. Leave the losing key in place and the next 🔖
+  // finds the deleted task and UNDELETES it beside the Waiting item
+  // (handleBookmark's restore branch), while the next 👥 finds the closed item and
+  // mints nothing at all. Both failures are silent.
+  //
+  // Writes the winner here and RETURNS the loser's patch rather than writing it,
+  // because the loser's properties are always already being rebuilt for another
+  // reason — a status change, a delete — and two writes would fight.
+  //
+  // The returned patch is a MINIMAL DELTA, not the loser's property bag. It gets
+  // spread over the caller's own updates, so returning the whole bag silently
+  // reverted them: /unblock sets status "unblocked" and then spread the item's own
+  // status "open" back on top of it. A test caught that; the narrow return is what
+  // makes it impossible.
+  async function handOffSlackProvenance(fromRow, toRow, toKind, workspaceId, options = {}) {
+    const fromProps = (fromRow && fromRow.properties) || {};
+    if (!toRow || !slackProvenance.slackKindOf(fromProps)) return null;
+    const adopted = slackProvenance.adoptProvenance(fromProps, toKind);
+    if (!adopted) return null;
+    const atIso = options.atIso || new Date().toISOString();
+    if (!(await freeSlackKey(adopted.idempotency_key, workspaceId, toRow.id))) return null;
+    const target = (await blockDB.getBlock(toRow.id)) || toRow;
+    const nextProps = {
+      ...(target.properties || {}),
+      ...adopted,
+      slackKindChangedAt: atIso,
+      // `retitle` is off for the unblock path: the client already named the task
+      // it placed, and overwriting that with the item's myTask would fight the
+      // user's own edit. It is on for a Slack-driven conversion, where this code
+      // is the only thing that knows the text at all.
+      ...(options.retitle ? slackProvenance.displayTextFor(fromProps, toKind) : {}),
+    };
+    const written = await blockDB.updateBlock(target.id, { properties: nextProps }, options.client);
+    if (!options.client) await syncSlack(written || { ...target, properties: nextProps });
+    const retired = slackProvenance.retireSlackKey(fromProps, atIso);
+    const patch = { slackKindChangedAt: atIso };
+    if (retired.idempotency_key) patch.idempotency_key = retired.idempotency_key;
+    return patch;
   }
 
   function isWorkTaskRow(block) {
@@ -1999,6 +2098,16 @@ module.exports = function mount(app, ctx) {
     }
   });
 
+  // Published for routes/slack-events.js, the same way that module publishes
+  // ctx.syncSlackTaskReactions back to this one. Mount order between the two is
+  // not guaranteed, so both sides resolve the other lazily at call time.
+  //
+  // This is what stops ✅-on-a-👥-message from being a second implementation of
+  // the completion contract: the reaction and the button run the same function.
+  ctx.completeWaitingItem = completeWaitingItem;
+  ctx.reopenWaitingItem = reopenWaitingItem;
+  ctx.convertSlackMessageKind = convertSlackMessageKind;
+
   // ── Waiting Items API (legacy discriminator: delegated_item) ──
   // GET list uses a dedicated db query; mutations reuse the generic
   // createBlock/updateBlock/deleteBlock primitives. PATCH and DELETE both
@@ -2061,7 +2170,7 @@ module.exports = function mount(app, ctx) {
   app.post(["/api/delegated-items", "/api/waiting-items"], route(async (req, res) => {
     const body = req.body || {};
     if (!body.properties || typeof body.properties !== "object") { res.status(400).json({ error: "properties required" }); return; }
-    const props = waitingItems.normalizeProperties(body.properties);
+    const props = waitingItems.normalizeProperties(withoutClientSlackProps(body.properties));
     const newBlocker = body.newBlocker && typeof body.newBlocker === "object" ? body.newBlocker : null;
     if (newBlocker && props.blockerType === "task" && props.linkedBlockId && !props.blockerBlockId) {
       props.blockerBlockId = "__new_prerequisite__";
@@ -2070,6 +2179,53 @@ module.exports = function mount(app, ctx) {
     const named = v => typeof v === "string" && v.trim();
     if (!named(props.title) && !named(props.myTask) && !named(newBlocker && newBlocker.title)) { res.status(400).json({ error: "properties.title or properties.myTask required" }); return; }
     const { userId, workspaceId } = await resolveOwnerStrict(req);
+
+    // 🔖 → 👥. `convertedFromBlockId` is the 🤝 Delegate spoke saying "this Waiting
+    // item IS that task, converted" — as opposed to `linkedBlockId`, which means
+    // "I am blocked on something for that task" and leaves the task alive and
+    // still wearing its own 🔖. Only the explicit convert signal moves the Slack
+    // message, and it is a top-level field rather than a property so it cannot be
+    // confused with one.
+    const convertedFromId = String(body.convertedFromBlockId || "").trim();
+    let convertedFrom = null;
+    if (convertedFromId) {
+      const source = await blockDB.findUniqueLiveBlockByReference(convertedFromId, workspaceId);
+      if (source && !source.deleted_at && slackProvenance.slackKindOf(source.properties || {})) {
+        assertBlockOwnership(source, workspaceId);
+        convertedFrom = source;
+        // Derived here, never taken from the body. The key names the message, and
+        // a client-chosen one is a task hijack on any shared workspace.
+        //
+        // Re-normalized after the assign because inferReason() reads `source`, and
+        // the first normalize above ran before the source existed. Its answer has to
+        // be CLEARED first: inferReason honours an existing waitingReason, so leaving
+        // the "blocked" it just defaulted to would stick a Blocked pill on an item the
+        // 👥 reaction is about to call Delegated. Verified against local Postgres —
+        // this is exactly what the round trip returned before the delete.
+        //
+        // An explicit choice from the client still wins; only the default is re-derived.
+        const explicitReason = ["blocked", "delegated", "both"].includes(body.properties.waitingReason)
+          ? body.properties.waitingReason
+          : null;
+        Object.assign(props, slackProvenance.adoptProvenance(source.properties || {}, "delegate") || {});
+        if (explicitReason) props.waitingReason = explicitReason;
+        else delete props.waitingReason;
+        props.slackKindChangedAt = new Date().toISOString();
+        // createBlock below would absorb a key collision by returning the
+        // conflicting row, so a delegate tombstone left on this key would make the
+        // response a tombstone rather than the item the user just filled in.
+        if (!(await freeSlackKey(props.idempotency_key, workspaceId, null))) {
+          throw clientError("That Slack message is already tracked by another item", 409);
+        }
+        // NO delegate_auto_snapshot, deliberately. The snapshot is what lets un-👥
+        // delete a pristine auto-created item; an item the user converted by hand
+        // through the modal is not that, and losing it to a stray un-reaction
+        // would throw away everything they typed. Without a snapshot
+        // delegateIsUntouched returns false and handleDelegateRemoved preserves it.
+        Object.assign(props, waitingItems.normalizeProperties(props));
+      }
+    }
+
     if (waitingItems.isTaskDependency(props)) {
       const client = await pool.connect();
       let created;
@@ -2132,6 +2288,16 @@ module.exports = function mount(app, ctx) {
       workspace_id: workspaceId
     });
     broadcast("blocks-changed", { action: "delegated-create", blockIds: [created.id] }, workspaceId);
+    if (convertedFrom) {
+      // Retire the task's key now. The client deletes the task next, and that
+      // DELETE's own projection is what takes 🔖 off the message; this projection
+      // puts 👥 on. Order between the two does not matter — the reconcile loop
+      // converges either way — but the retirement has to happen before the task
+      // row is deleted, or a later 🔖 restores it.
+      const retired = slackProvenance.retireSlackKey(convertedFrom.properties || {}, props.slackKindChangedAt);
+      await blockDB.updateBlock(convertedFrom.id, { properties: { ...retired, slackKindChangedAt: props.slackKindChangedAt } });
+      await syncSlack(created);
+    }
     return created;
   }));
 
@@ -2143,7 +2309,7 @@ module.exports = function mount(app, ctx) {
     if (!existing) { res.status(404).json({ error: "Delegated item not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
     if ((existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Delegated item not found" }); return; }
-    const incoming = (req.body && req.body.properties) || {};
+    const incoming = withoutClientSlackProps((req.body && req.body.properties) || {});
     // Preserve kind discriminator — clients cannot unset it via PATCH
     const merged = waitingItems.normalizeProperties(incoming, existing.properties || {});
     const newBlocker = req.body && req.body.newBlocker && typeof req.body.newBlocker === "object"
@@ -2262,6 +2428,197 @@ module.exports = function mount(app, ctx) {
 
   // Finish the work itself, not merely the current check-in cycle. Close the
   // Waiting record and complete its linked task too when one still exists.
+  //
+  // The body lives in completeWaitingItem so the ✅ reaction can reach the same
+  // contract (published as ctx.completeWaitingItem below). A second copy of this
+  // would drift: the linked-task cascade alone is setTaskCompletion, the timing
+  // normaliser, transitionLinkedTriage and the Slack projection, in that order.
+  // ── 🔖 ⇄ 👥 : one Slack message changing what it IS ─────────────────────────
+  //
+  // Called by routes/slack-events.js when the identity reaction is swapped in
+  // Slack. Same message, same piece of work, so the row is CONVERTED rather than
+  // deleted and reminted: the title, the notes and the Haiku summary survive,
+  // where the old behaviour dropped a pristine item and minted a blank task.
+  //
+  // The loser is retired and removed BEFORE the winner is created, deliberately.
+  // A crash between the two leaves the message with no live row, which the
+  // reconcile sweep repairs from the surviving reaction on its next pass. The
+  // other order would leave two live rows claiming one message, and nothing
+  // repairs that. A single transaction would beat both, but createItineraryTask's
+  // day-root ensure runs outside any client it is handed, so wrapping this would
+  // be a half-truth — self-healing beats a lie.
+  //
+  // `taskDefaults` and `itemDefaults` come from the caller because the Slack
+  // capture constants (the 5-minute no-⌛ estimate, the +1 day check-in) belong to
+  // routes/slack-events.js. This function owns the row shape, not the policy.
+  async function convertSlackMessageKind({ row, fromKind, toKind, atMs, userId, workspaceId, taskDefaults, itemDefaults }) {
+    if (!row || !toKind || fromKind === toKind) return { converted: false };
+    const fromProps = row.properties || {};
+    const adopted = slackProvenance.adoptProvenance(fromProps, toKind);
+    if (!adopted) return { converted: false };
+    const atIso = new Date(atMs || Date.now()).toISOString();
+    const text = slackProvenance.displayTextFor(fromProps, toKind);
+
+    // Free the winner's key BEFORE anything is destroyed — see freeSlackKey.
+    if (!(await freeSlackKey(adopted.idempotency_key, workspaceId, row.id))) return { converted: false };
+
+    await blockDB.updateBlock(row.id, {
+      properties: { ...slackProvenance.retireSlackKey(fromProps, atIso), slackKindChangedAt: atIso },
+    });
+    await blockDB.deleteBlock(row.id);
+
+    let winner;
+    if (toKind === "delegate") {
+      // No delegate_auto_snapshot: this item exists because the user asked for it,
+      // so un-👥 should preserve whatever is on it rather than deleting a
+      // "pristine" row. See the same reasoning on the create route.
+      winner = await blockDB.createBlock({
+        type: "block", parent_id: null, date: null, sort_order: 0,
+        properties: waitingItems.normalizeProperties({
+          ...adopted,
+          ...text,
+          ...(itemDefaults || {}),
+          notes: fromProps.notes || adopted.captureNotes || "",
+          created_by: "slack-events-convert",
+          created_at: atIso,
+          slackKindChangedAt: atIso,
+        }),
+        user_id: userId, workspace_id: workspaceId,
+      });
+    } else {
+      const { date, ...defaults } = taskDefaults || {};
+      // The day column holds the date; keeping a copy in properties would give the
+      // row two answers about where it lives.
+      if (!date) return { converted: false };
+      const created = await blockDB.createItineraryTask({
+        date,
+        properties: {
+          ...adopted,
+          ...text,
+          ...defaults,
+          kind: "task",
+          status: "open",
+          notes: fromProps.notes || adopted.captureNotes || "",
+          detail: fromProps.detail || adopted.aiSummary || "",
+          created_by: "slack-events-convert",
+          created_at: atIso,
+          slackKindChangedAt: atIso,
+        },
+        userId, workspaceId, score: true,
+      });
+      winner = await blockDB.getBlock(created.id) || created;
+    }
+    broadcast("blocks-changed", {
+      action: "slack-kind-converted",
+      blockIds: [row.id, winner.id],
+      date: (winner && winner.date) || null,
+    }, workspaceId);
+    return { converted: true, winner, loser: row };
+  }
+
+  async function completeWaitingItem({ item, completedAt, userId, workspaceId, completedBy }) {
+    const properties = waitingItems.normalizeProperties({
+      status: "done",
+      completedAt,
+      completedBy: completedBy || "waiting",
+      snoozedUntil: null,
+      checkInScheduledFor: null,
+      checkInTaskId: null,
+    }, item.properties || {});
+
+    const linkedBlockId = String((item.properties || {}).linkedBlockId || "").trim();
+    let linkedTask = linkedBlockId
+      ? await blockDB.findUniqueLiveBlockByReference(linkedBlockId, workspaceId)
+      : null;
+    let updated;
+    let blockIds = [item.id];
+    let dependencyTransitions = [];
+    if (linkedTask && !linkedTask.deleted_at) {
+      assertBlockOwnership(linkedTask, workspaceId);
+      if (!isWorkTaskRow(linkedTask)) throw clientError("Linked block is not a task");
+      const mutationId = `waiting:${item.id}:${Date.parse(completedAt)}`;
+      const result = await blockDB.setTaskCompletion({
+        taskRef: linkedTask.id,
+        completed: true,
+        completedAt,
+        taskDate: linkedTask.date || null,
+        mutationId,
+        expectedRevision: (linkedTask.properties || {})._completionRevision || null,
+        userId,
+        workspaceId,
+        companionUpdates: [{ id: item.id, properties, expectedUpdatedAt: item.updated_at }],
+      });
+      await normalizeCompletionWork(result, true, {
+        atMs: Date.parse(completedAt), actor: userId ? `dcc:${userId}` : "dcc", mutationId,
+      });
+      linkedTask = result.task;
+      dependencyTransitions = result.dependencyTransitions || [];
+      updated = (result.companionBlocks || []).find(row => row.id === item.id) || item;
+      blockIds = result.broadcastIds || [item.id, linkedTask.id];
+      if (linkedTask) await transitionLinkedTriage(linkedTask, "done", Date.parse(completedAt));
+      for (const row of result.affectedTasks || []) await syncSlack(row);
+    } else {
+      linkedTask = null;
+      updated = await blockDB.updateBlock(item.id, { properties });
+    }
+    broadcast("blocks-changed", { action: "waiting-completed", blockIds, dependencyTransitions, date: linkedTask && linkedTask.date || null }, workspaceId);
+    // The item itself, not only its linked task. A 👥-sourced item wears 👥 on the
+    // Slack message and this is what puts ✅ beside it.
+    await syncSlack(updated);
+    return { ok: true, status: "completed", item: updated, task: linkedTask, dependencyTransitions };
+  }
+
+  // The inverse, for un-✅. No DCC button reaches this yet — the reaction is the
+  // only caller — but it is written as the full mirror of completeWaitingItem so
+  // it stays honest when one appears: reopen the item, reopen whatever linked task
+  // the completion closed, and put the cadence back.
+  async function reopenWaitingItem({ item, atMs, userId, workspaceId }) {
+    const props = item.properties || {};
+    const cleared = { ...props };
+    for (const key of ["completedAt", "completedBy", "unblockedAt", "unblockedTaskId", "unblockedDestination"]) {
+      delete cleared[key];
+    }
+    // dueDate() falls back to lastCheckedAt + checkInDays when checkInDate is
+    // null, so a reopened item lands back in the cadence rather than going quiet.
+    const properties = waitingItems.normalizeProperties({ status: "open", snoozedUntil: null }, cleared);
+
+    const linkedBlockId = String(props.linkedBlockId || "").trim();
+    const linkedTask = linkedBlockId
+      ? await blockDB.findUniqueLiveBlockByReference(linkedBlockId, workspaceId)
+      : null;
+    let blockIds = [item.id];
+    let dependencyTransitions = [];
+    let updated;
+    if (linkedTask && !linkedTask.deleted_at && isWorkTaskRow(linkedTask) && isCompleted(linkedTask)) {
+      assertBlockOwnership(linkedTask, workspaceId);
+      const mutationId = `waiting-reopen:${item.id}:${atMs}`;
+      const result = await blockDB.setTaskCompletion({
+        taskRef: linkedTask.id,
+        completed: false,
+        completedAt: null,
+        taskDate: linkedTask.date || null,
+        mutationId,
+        expectedRevision: (linkedTask.properties || {})._completionRevision || null,
+        userId,
+        workspaceId,
+        companionUpdates: [{ id: item.id, properties, expectedUpdatedAt: item.updated_at }],
+      });
+      await normalizeCompletionWork(result, false, {
+        atMs, actor: userId ? `dcc:${userId}` : "dcc", mutationId,
+      });
+      dependencyTransitions = result.dependencyTransitions || [];
+      updated = (result.companionBlocks || []).find(row => row.id === item.id) || item;
+      blockIds = result.broadcastIds || [item.id, result.task && result.task.id].filter(Boolean);
+      if (result.task) await transitionLinkedTriage(result.task, "scheduled", atMs);
+      for (const row of result.affectedTasks || []) await syncSlack(row);
+    } else {
+      updated = await blockDB.updateBlock(item.id, { properties });
+    }
+    broadcast("blocks-changed", { action: "waiting-reopened", blockIds, dependencyTransitions, date: linkedTask && linkedTask.date || null }, workspaceId);
+    await syncSlack(updated);
+    return { ok: true, status: "reopened", item: updated, dependencyTransitions };
+  }
+
   app.post("/api/waiting-items/:id/complete", route(async (req, res) => {
     const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Waiting item not found" }); return; }
@@ -2272,54 +2629,8 @@ module.exports = function mount(app, ctx) {
     }
     const completedAt = String(req.body && req.body.completedAt || new Date().toISOString());
     if (Number.isNaN(new Date(completedAt).getTime())) { res.status(400).json({ error: "completedAt must be a valid timestamp" }); return; }
-
-    const properties = waitingItems.normalizeProperties({
-      status: "done",
-      completedAt,
-      completedBy: "waiting",
-      snoozedUntil: null,
-      checkInScheduledFor: null,
-      checkInTaskId: null,
-    }, existing.properties || {});
-
-    const linkedBlockId = String((existing.properties || {}).linkedBlockId || "").trim();
-    let linkedTask = linkedBlockId
-      ? await blockDB.findUniqueLiveBlockByReference(linkedBlockId, req.workspaceId)
-      : null;
-    let updated;
-    let blockIds = [existing.id];
-    let dependencyTransitions = [];
-    if (linkedTask && !linkedTask.deleted_at) {
-      assertBlockOwnership(linkedTask, req.workspaceId);
-      if (!isWorkTaskRow(linkedTask)) { res.status(400).json({ error: "Linked block is not a task" }); return; }
-      const { userId, workspaceId } = await resolveOwnerStrict(req);
-      const mutationId = `waiting:${existing.id}:${Date.parse(completedAt)}`;
-      const result = await blockDB.setTaskCompletion({
-        taskRef: linkedTask.id,
-        completed: true,
-        completedAt,
-        taskDate: linkedTask.date || null,
-        mutationId,
-        expectedRevision: (linkedTask.properties || {})._completionRevision || null,
-        userId,
-        workspaceId,
-        companionUpdates: [{ id: existing.id, properties, expectedUpdatedAt: existing.updated_at }],
-      });
-      await normalizeCompletionWork(result, true, {
-        atMs: Date.parse(completedAt), actor: userId ? `dcc:${userId}` : "dcc", mutationId,
-      });
-      linkedTask = result.task;
-      dependencyTransitions = result.dependencyTransitions || [];
-      updated = (result.companionBlocks || []).find(row => row.id === existing.id) || existing;
-      blockIds = result.broadcastIds || [existing.id, linkedTask.id];
-      if (linkedTask) await transitionLinkedTriage(linkedTask, "done", Date.parse(completedAt));
-      for (const row of result.affectedTasks || []) await syncSlack(row);
-    } else {
-      linkedTask = null;
-      updated = await blockDB.updateBlock(existing.id, { properties });
-    }
-    broadcast("blocks-changed", { action: "waiting-completed", blockIds, dependencyTransitions, date: linkedTask && linkedTask.date || null }, req.workspaceId);
-    return { ok: true, status: "completed", item: updated, task: linkedTask, dependencyTransitions };
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    return completeWaitingItem({ item: existing, completedAt, userId, workspaceId });
   }));
 
   app.post("/api/waiting-items/:id/unblock", route(async (req, res) => {
@@ -2340,6 +2651,15 @@ module.exports = function mount(app, ctx) {
     if (!task || task.deleted_at || (destination === "schedule" && task.date !== date)) { res.status(400).json({ error: "Underlying task was not placed at the requested destination" }); return; }
     assertBlockOwnership(task, req.workspaceId);
     const now = new Date().toISOString();
+    // 👥 → 🔖. Unblocking a Slack-delegated item means the work is yours now, so
+    // the message stops being "something I am waiting on" and becomes a task. The
+    // provenance moves to the task the client just placed and this item's key is
+    // retired.
+    //
+    // Server-side rather than in unblockWaitingItem(): that helper stamps
+    // source "waiting-unblock" on the row it mints, and triage and the sweep reach
+    // this same route, so the client is the wrong place for the invariant.
+    const handoff = await handOffSlackProvenance(existing, task, "bookmark", req.workspaceId, { atIso: now });
     const properties = waitingItems.normalizeProperties({
       status: "unblocked",
       completedAt: now,
@@ -2347,6 +2667,7 @@ module.exports = function mount(app, ctx) {
       unblockedTaskId: taskBlockId,
       unblockedDestination: destination,
       snoozedUntil: null,
+      ...(handoff || {}),
     }, existing.properties || {});
     if (waitingItems.isTaskDependency(existing)) {
       const subtree = await blockDB.getSubtree([task.id], req.workspaceId);
@@ -2374,6 +2695,11 @@ module.exports = function mount(app, ctx) {
     }
     const updated = await blockDB.updateBlock(existing.id, { properties });
     broadcast("blocks-changed", { action: "waiting-unblocked", blockIds: [existing.id, taskBlockId], date }, req.workspaceId);
+    // With a handoff the item no longer owns a Slack message, so this is the
+    // no-op branch of the projector; without one (an item unblocked without ever
+    // coming from Slack, or one whose task could not take the provenance) it is
+    // what marks the message done.
+    await syncSlack(updated);
     return { ok: true, status: "unblocked", item: updated, task };
   }));
 
@@ -2412,6 +2738,10 @@ module.exports = function mount(app, ctx) {
     }
     const result = await blockDB.deleteBlock(req.params.id);
     broadcast("blocks-changed", { action: "delegated-delete", blockIds: [req.params.id].concat(affectedIds) }, req.workspaceId);
+    // Deleting a 👥-sourced item takes 👥 and ✅ back off the message, matching what
+    // deleting a bookmarked task already does. syncSlack needs the tombstone shape,
+    // and deleteBlock's return may not carry the properties the projector reads.
+    await syncSlack({ ...existing, deleted_at: result && result.deleted_at || new Date().toISOString(), properties: existing.properties || {} });
     return result;
   }));
 

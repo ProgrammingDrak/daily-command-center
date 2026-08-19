@@ -45,6 +45,8 @@
 // verifying the request is Slack's signature is THIS route's job.
 const createTaskTiming = require("../lib/task-timing");
 const createSlackActors = require("../lib/slack-actors");
+const slackProvenance = require("../lib/slack-provenance");
+const waitingItems = require("../waiting-items");
 const {
   addCalendarDays,
   fallbackTitle,
@@ -84,17 +86,21 @@ module.exports = function mount(app, ctx) {
   const actors = createSlackActors({ pool, apiTimeoutMs: SLACK_API_TIMEOUT_MS });
 
   const NO_HOURGLASS_MIN = 5;         // 🔖 → ✅ with no ⌛ ⇒ assume 5 minutes
-  const R_BOOKMARK = "bookmark";
+  // The two IDENTITY reactions (the ones that say what a message IS) come from
+  // lib/slack-provenance.js, which is also what decides the `source` and the
+  // idempotency-key prefix each writes. One table, so a kind cannot half-exist.
+  // ⌛ and ✅ are LIFECYCLE reactions, shared by both kinds, so they stay here.
+  const R_BOOKMARK = slackProvenance.reactionFor("bookmark");
   const R_START = "hourglass";
   const R_DONE = "white_check_mark";
-  const R_DELEGATE = "busts_in_silhouette";
+  const R_DELEGATE = slackProvenance.reactionFor("delegate");
 
   // Deterministic per-message key, identical to the poller's (slack-bookmark-to-dcc.py).
   // Two people bookmarking the SAME message each get their own task: the key is
   // identical but every lookup is fenced by the actor's workspace, so there is no
   // collision between tenants.
-  const keyFor = (channel, ts) => `slack-bookmark:${channel}:${ts}`;
-  const delegateKeyFor = (channel, ts) => `slack-delegate:${channel}:${ts}`;
+  const keyFor = (channel, ts) => slackProvenance.slackKeyFor("bookmark", channel, ts);
+  const delegateKeyFor = (channel, ts) => slackProvenance.slackKeyFor("delegate", channel, ts);
 
   // Everything outside this set is user-owned delegated-item state. The stored
   // snapshot lets reaction removal delete only a pristine auto-created item.
@@ -107,7 +113,7 @@ module.exports = function mount(app, ctx) {
     "enrichment_status", "enrichment_attempts", "enrichment_next_attempt_at",
     "enrichment_last_error", "enrichment_model", "enriched_at", "aiTitle",
     "aiSummary", "idempotency_key", "created_by", "created_at",
-    "slack_delegate_reaction_removed_at",
+    "slack_delegate_reaction_removed_at", "slackKindChangedAt",
   ]);
   function delegateUserState(props) {
     const state = {};
@@ -155,6 +161,41 @@ module.exports = function mount(app, ctx) {
   // than inside forActor because forActor is rebuilt on every event: a cursor
   // living there would reset each pass and re-walk the same page forever.
   const mirrorCursors = new Map();
+
+  // Suppresses repeat projections of a state Slack already shows. A Waiting
+  // item's updated_at moves on every check-in bump and mirrorDccCompletions
+  // walks BY updated_at, so without a memo each pass re-posts two or three
+  // reactions per row — and the local poller has already met Slack's
+  // `ratelimited`.
+  //
+  // In memory rather than stamped on the row on purpose: blockDB.updateBlock
+  // replaces properties wholesale, so a projection write would race a real edit.
+  // EXPIRING rather than permanent, also on purpose: a reaction removed by hand
+  // in Slack has to be repairable, and this memo is the only thing that would
+  // stop the reconcile loop from putting it back. Set the interval to 0 to
+  // disable the memo entirely.
+  const PROJECTION_MEMO_MS = Math.max(0, Number(process.env.SLACK_PROJECTION_MEMO_MS || 1_800_000));
+  const PROJECTION_MEMO_MAX = 5_000;
+  const projectedState = new Map();          // blockId -> { state, at }
+
+  function projectionMemoHit(blockId, desired) {
+    if (!PROJECTION_MEMO_MS) return false;
+    const entry = projectedState.get(blockId);
+    if (!entry || entry.state !== desired) return false;
+    if (Date.now() - entry.at > PROJECTION_MEMO_MS) { projectedState.delete(blockId); return false; }
+    return true;
+  }
+  function rememberProjection(blockId, desired) {
+    if (!PROJECTION_MEMO_MS) return;
+    if (projectedState.size >= PROJECTION_MEMO_MAX) {
+      const cutoff = Date.now() - PROJECTION_MEMO_MS;
+      for (const [id, entry] of projectedState) if (entry.at <= cutoff) projectedState.delete(id);
+      // Still full of live entries: drop the oldest insertion so the Map stays
+      // bounded. A dropped memo costs one redundant projection, never a wrong one.
+      if (projectedState.size >= PROJECTION_MEMO_MAX) projectedState.delete(projectedState.keys().next().value);
+    }
+    projectedState.set(blockId, { state: desired, at: Date.now() });
+  }
 
   // ── Slack request signature (v0 scheme) ──────────────────────────────────
   function verifySlack(req) {
@@ -427,14 +468,65 @@ module.exports = function mount(app, ctx) {
       const t = await findTaskByKey(idemKey);
       return t && !t.deleted_at && (t.properties || {}).kind !== "slack_reaction_tombstone" ? t : null;
     }
-    // Absorb the create-race: 🔖 and ⌛/✅ fired back-to-back can arrive out of order.
-    async function findTaskWithRetry(idemKey, tries = 3) {
+    // Every row this message has ever claimed, under EITHER kind.
+    //
+    // A lifecycle reaction (⌛ / ✅) carries no hint about what the DCC currently
+    // thinks the message IS, and after a type conversion the answer is "the other
+    // kind" — so the single-key lookup above silently misses and ✅ on a 👥
+    // message lands nowhere. That was the original bug.
+    //
+    // One query with IN rather than two round trips: idx_blocks_idem_key is a
+    // partial index on properties->>'idempotency_key', which an IN-list still
+    // uses. A RETIRED key carries a ":retired:<iso>" suffix and so matches
+    // neither literal — which is the entire purpose of retiring it.
+    async function findMessageRows(channel, ts) {
+      const keys = slackProvenance.slackKeysFor(channel, ts);
+      const { rows } = await pool.query(
+        `SELECT id, type, parent_id, to_char(date, 'YYYY-MM-DD') AS date, properties,
+                deleted_at, user_id, workspace_id
+           FROM blocks
+          WHERE properties->>'idempotency_key' IN ($1, $2) AND workspace_id = $3
+          ORDER BY deleted_at IS NULL DESC, created_at DESC`,
+        [keys[0], keys[1], OWNER_WORKSPACE_ID]
+      );
+      return rows;
+    }
+
+    // The one LIVE row for this message and which kind it is, or null.
+    // Tombstones are excluded: a tombstone is an ordering artefact absorbing a
+    // remove-before-add, not a thing a lifecycle reaction should act on.
+    async function findLiveMessageRow(channel, ts) {
+      for (const row of await findMessageRows(channel, ts)) {
+        const props = row.properties || {};
+        if (row.deleted_at || props.kind === "slack_reaction_tombstone") continue;
+        const kind = slackProvenance.slackKindOf(props);
+        if (kind) return { row, kind };
+      }
+      return null;
+    }
+
+    // Absorb the create-race: 🔖/👥 and ⌛/✅ fired back-to-back can arrive out of
+    // order, so a lifecycle reaction can beat the row it refers to into existence.
+    // (This replaced a bookmark-only findTaskWithRetry; the retry is the same, the
+    // lookup is the part that had to stop assuming a kind.)
+    async function findLiveMessageRowWithRetry(channel, ts, tries = 3) {
       for (let i = 0; i < tries; i++) {
-        const t = await findLiveTaskByKey(idemKey);
-        if (t) return t;
+        const found = await findLiveMessageRow(channel, ts);
+        if (found) return found;
         if (i < tries - 1) await new Promise(r => setTimeout(r, 400));
       }
       return null;
+    }
+
+    // Is this message already held by the kind we are NOT currently handling?
+    // Both removal handlers ask before writing a tombstone: after a conversion
+    // the losing key is retired, so the removal of the losing reaction finds
+    // nothing and would tombstone the message. A delegate tombstone is
+    // permanent (handleDelegate returns on any existing row), so that would
+    // block every future 👥 on the message forever.
+    async function heldByOtherKind(channel, ts, kind) {
+      const found = await findLiveMessageRow(channel, ts);
+      return !!found && found.kind === slackProvenance.otherKind(kind);
     }
 
     // Drop this task from the day's `_done` overlay. Un-completing has to clear
@@ -524,6 +616,10 @@ module.exports = function mount(app, ctx) {
 
     // ── 🔖 create ───────────────────────────────────────────────────────────
     async function handleBookmark(channel, ts, seed, eventMs = Date.now()) {
+      // 🔖 on a message the DCC already holds as a Waiting item is a type change.
+      // Ask first, so the item is converted rather than left behind while a blank
+      // duplicate task is minted beside it.
+      if (await convertMessageKind(channel, ts, "bookmark", eventMs)) return;
       const idemKey = keyFor(channel, ts);
       let existing = await findTaskByKey(idemKey);
       if (existing) {
@@ -580,7 +676,10 @@ module.exports = function mount(app, ctx) {
       await enrichBlock(block);
     }
 
-    async function handleDelegate(channel, ts, seed) {
+    async function handleDelegate(channel, ts, seed, eventMs = Date.now()) {
+      // The mirror of handleBookmark's first line: 👥 on a message the DCC holds
+      // as a bookmarked task converts that task instead of creating a second row.
+      if (await convertMessageKind(channel, ts, "delegate", eventMs)) return;
       const idemKey = delegateKeyFor(channel, ts);
       const existing = await findTaskByKey(idemKey);
       if (existing) {
@@ -622,6 +721,12 @@ module.exports = function mount(app, ctx) {
     async function handleDelegateRemoved(channel, ts) {
       const item = await findLiveTaskByKey(delegateKeyFor(channel, ts));
       if (!item) {
+        // The tail of a conversion: 👥 came off because this message is a
+        // bookmarked task now, and the item's key was retired so it no longer
+        // answers here. A delegate tombstone is PERMANENT — handleDelegate
+        // returns on any existing row — so writing one would block every future
+        // 👥 on this message.
+        if (await heldByOtherKind(channel, ts, "delegate")) return;
         await createReactionTombstone("delegate", channel, ts);
         return;
       }
@@ -643,6 +748,9 @@ module.exports = function mount(app, ctx) {
       const idemKey = keyFor(channel, ts);
       const task = await findLiveTaskByKey(idemKey);
       if (!task) {
+        // Symmetric to handleDelegateRemoved: 🔖 came off because this message is
+        // a Waiting item now. Do not tombstone a message another kind owns.
+        if (await heldByOtherKind(channel, ts, "bookmark")) return;
         const existing = await findTaskByKey(idemKey);
         if (existing && existing.deleted_at && (existing.properties || {}).kind !== "slack_reaction_tombstone") return;
         if (existing && (existing.properties || {}).kind === "slack_reaction_tombstone") {
@@ -674,8 +782,18 @@ module.exports = function mount(app, ctx) {
 
     // ── ⌛ start ────────────────────────────────────────────────────────────
     async function handleStart(channel, ts, eventMs, actionId = null) {
-      const task = await findTaskWithRetry(keyFor(channel, ts));
-      if (!task) { console.warn(`[slack-events] ⌛ with no task for ${channel}:${ts} — ignored`); return; }
+      const found = await findLiveMessageRowWithRetry(channel, ts);
+      if (!found) { console.warn(`[slack-events] ⌛ with no task for ${channel}:${ts} — ignored`); return; }
+      // A Waiting item is a thing you are waiting ON, not work you are doing, so
+      // it has no timer to start. Strip the reaction rather than ignoring it, so
+      // the message does not sit there claiming work is in progress — the same
+      // treatment a non-trackable task gets two lines down.
+      if (found.kind === "delegate") {
+        console.warn(`[slack-events] ⌛ on a Waiting item for ${channel}:${ts} — no timer, reaction removed`);
+        await removeSlackReaction(channel, ts, R_START);
+        return;
+      }
+      const task = found.row;
       const started = await startWork({ block: task, atMs: eventMs, actor: "slack", actionId: actionId || `${channel}:${ts}:${eventMs}` });
       if (!started.changed && (started.reason === "not-trackable" || started.reason === "completed")) {
         await removeSlackReaction(channel, ts, R_START);
@@ -685,16 +803,20 @@ module.exports = function mount(app, ctx) {
 
     // ── ⌛ removed → clear a not-yet-completed start ──────────────────────────
     async function clearStart(channel, ts, eventMs = Date.now(), actionId = null) {
-      const task = await findLiveTaskByKey(keyFor(channel, ts));
-      if (!task) return;
+      const found = await findLiveMessageRow(channel, ts);
+      // Nothing to pause on a Waiting item — handleStart refused to start one.
+      if (!found || found.kind === "delegate") return;
+      const task = found.row;
       await pauseWork({ block: task, atMs: eventMs, actor: "slack", actionId });
       broadcast("blocks-changed", { action: "slack-start-clear", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
     }
 
     // ── ✅ complete ───────────────────────────────────────────────────────────
     async function handleDone(channel, ts, eventMs, actionId = null) {
-      const task = await findTaskWithRetry(keyFor(channel, ts));
-      if (!task) { console.warn(`[slack-events] ✅ with no task for ${channel}:${ts} — ignored`); return; }
+      const found = await findLiveMessageRowWithRetry(channel, ts);
+      if (!found) { console.warn(`[slack-events] ✅ with no task for ${channel}:${ts} — ignored`); return; }
+      if (found.kind === "delegate") return closeWaitingItemFromSlack(found.row, eventMs);
+      const task = found.row;
       const props = task.properties || {};
       if (props.completedAt) return;   // already done (Slack retry) — idempotent
 
@@ -744,8 +866,10 @@ module.exports = function mount(app, ctx) {
     // The full inverse of handleDone, in the same order, so nothing is left half-done:
     // reopen the row, drop the timing, reverse the credit, restore the queue.
     async function handleUndone(channel, ts, eventMs = Date.now(), actionId = null) {
-      const task = await findLiveTaskByKey(keyFor(channel, ts));
-      if (!task) { console.warn(`[slack-events] un-✅ with no task for ${channel}:${ts} — ignored`); return; }
+      const found = await findLiveMessageRow(channel, ts);
+      if (!found) { console.warn(`[slack-events] un-✅ with no task for ${channel}:${ts} — ignored`); return; }
+      if (found.kind === "delegate") return reopenWaitingItemFromSlack(found.row, eventMs);
+      const task = found.row;
       const props = task.properties || {};
       if (!props.completedAt) return;   // never completed by us (or a Slack retry) — idempotent
       if (isStaleWorkEvent(props, eventMs)) return;
@@ -801,6 +925,122 @@ module.exports = function mount(app, ctx) {
         dependencyTransitions: durable.dependencyTransitions || [],
         date: task.date,
       }, OWNER_WORKSPACE_ID);
+    }
+
+    // ── ✅ / un-✅ on a 👥 message → close / reopen the WAITING ITEM ───────────
+    //
+    // "Done" for a delegated item means the WORK is finished, so ✅ closes the
+    // Waiting item — not the recurring "Check in: X" reminder row it spawns.
+    // That row is a nudge; ticking it advances one cadence cycle and says nothing
+    // about whether the thing you are waiting on has landed.
+    //
+    // Both directions delegate to routes/blocks.js rather than reimplementing the
+    // contract, because closing a Waiting item can cascade into its linked task
+    // (setTaskCompletion + the timing normaliser + transitionLinkedTriage) and a
+    // second copy of that WILL drift. Resolved lazily off ctx: mount order
+    // between the two route modules is not guaranteed, which is the same reason
+    // routes/blocks.js checks for ctx.syncSlackTaskReactions at call time.
+    //
+    // NO POINTS, deliberately. The DCC's own /complete route awards none for a
+    // Waiting item — credit only ever rides the linked task's own check-off — so
+    // crediting here would make ✅ worth more than the button it mirrors. Note
+    // also that creditKeyFor is `${task.date}:${task.id}` and a Waiting item is
+    // date-less, so routing one through the credit path would mint a "null:<id>"
+    // ledger key.
+    async function closeWaitingItemFromSlack(item, eventMs) {
+      if (typeof ctx.completeWaitingItem !== "function") {
+        console.error("[slack-events] ✅ on a Waiting item but completeWaitingItem is unavailable");
+        return;
+      }
+      if (!waitingItems.isOpen(item)) return;      // already closed (Slack retry) — idempotent
+      try {
+        await ctx.completeWaitingItem({
+          item,
+          completedAt: new Date(eventMs).toISOString(),
+          userId: OWNER_USER_ID,
+          workspaceId: OWNER_WORKSPACE_ID,
+          completedBy: "slack",
+        });
+      } catch (error) {
+        // A dependency that is not ready refuses to complete (the route answers
+        // 409). Take the reaction back off so the message stops claiming the work
+        // is done, and say why.
+        console.error(`[slack-events] ✅ could not close Waiting item ${item.id}:`, error.message);
+        const coords = slackProvenance.slackCoordsOf(item.properties || {});
+        if (coords) await removeSlackReaction(coords.channel, coords.ts, R_DONE);
+      }
+    }
+
+    async function reopenWaitingItemFromSlack(item, eventMs) {
+      if (typeof ctx.reopenWaitingItem !== "function") {
+        console.error("[slack-events] un-✅ on a Waiting item but reopenWaitingItem is unavailable");
+        return;
+      }
+      if (waitingItems.isOpen(item)) return;       // never closed by us — idempotent
+      await ctx.reopenWaitingItem({
+        item,
+        atMs: eventMs,
+        userId: OWNER_USER_ID,
+        workspaceId: OWNER_WORKSPACE_ID,
+      });
+    }
+
+    // ── 🔖 ⇄ 👥 : the same message changing what it IS ─────────────────────────
+    //
+    // Swapping the reaction in Slack is a type change, not a new capture: same
+    // message, same piece of work. Converting in place keeps the title, the
+    // notes, the Haiku summary and the history, where the old behaviour deleted
+    // the pristine item and minted a blank replacement.
+    //
+    // Returns true when it handled the event, so the caller returns without
+    // creating anything.
+    async function convertMessageKind(channel, ts, toKind, eventMs) {
+      if (typeof ctx.convertSlackMessageKind !== "function") return false;
+      const found = await findLiveMessageRow(channel, ts);
+      if (!found || found.kind === toKind) return false;
+
+      // Monotonic guard, the same trick slackBookmarkChangedAt plays for
+      // add-vs-remove. Slack delivers a swap as two independent events that can
+      // arrive either way round, and a redelivery can arrive much later; without
+      // this an old event flips a row that a newer one already settled.
+      const previousMs = Date.parse((found.row.properties || {}).slackKindChangedAt || "");
+      if (Number.isFinite(previousMs) && eventMs <= previousMs) return true;
+
+      // The Slack-capture policy lives here, not in routes/blocks.js: the
+      // 5-minute no-⌛ estimate and the +1 day first check-in are the same
+      // defaults handleBookmark and handleDelegate mint a fresh row with, so a
+      // converted row is indistinguishable from a freshly captured one.
+      const today = getTodayStr();
+      const result = await ctx.convertSlackMessageKind({
+        row: found.row,
+        fromKind: found.kind,
+        toKind,
+        atMs: eventMs,
+        userId: OWNER_USER_ID,
+        workspaceId: OWNER_WORKSPACE_ID,
+        taskDefaults: {
+          date: today,
+          estimatedMinutes: NO_HOURGLASS_MIN,
+          priority: "Medium",
+          start: "09:00",
+          end: addMin("09:00", NO_HOURGLASS_MIN),
+        },
+        itemDefaults: {
+          kind: "delegated_item",
+          waitingReason: "delegated",
+          status: "open",
+          checkInMode: "date",
+          checkInDate: addCalendarDays(today, 1),
+          checkInDays: 1,
+        },
+      });
+      if (!result || !result.converted) return false;
+
+      // Take the old identity reaction off. The winner's own reactions are put on
+      // by the projection that routes/blocks.js fires for the new row.
+      await retractSlackKind(channel, ts, found.kind);
+      if (result.winner) await projectTaskToSlack(result.winner);
+      return true;
     }
 
     // `hasmy:` is a USER-token search with no bot-token equivalent, which is why
@@ -878,6 +1118,12 @@ module.exports = function mount(app, ctx) {
       const idemKey = kind === "delegate" ? delegateKeyFor(channel, ts) : keyFor(channel, ts);
       let block = await findTaskByKey(idemKey);
       if (!block) {
+        // Slack's search index lags a reaction by minutes, so this sweep can
+        // still see a reaction the user has already swapped away. If the message
+        // is live under the OTHER kind, creating here duplicates the row and
+        // converting here ping-pongs the kind against the row the real events
+        // just settled. Leave it to the events.
+        if (await heldByOtherKind(channel, ts, kind)) return { skipped: true };
         if (kind === "delegate") await handleDelegate(channel, ts, match);
         else await handleBookmark(channel, ts, match);
         return { created: true };
@@ -923,34 +1169,68 @@ module.exports = function mount(app, ctx) {
       // person's task if that resolution is ever wrong.
       if (String(block.workspace_id || "") !== String(OWNER_WORKSPACE_ID || "")) return false;
       const props = block.properties || {};
-      const channel = props.slack_channel;
-      const ts = props.slack_ts;
-      if (!channel || !ts || props.source !== "slack-bookmark") return false;
+      // A tombstone is a hidden ordering artefact, not a task. It carries the
+      // source and the coordinates, so before this guard existed it projected as
+      // an "open" row and re-added the very identity reaction the user had just
+      // removed. It has no business on Slack at all.
+      if (props.kind === "slack_reaction_tombstone") return false;
+      const kind = slackProvenance.slackKindOf(props);
+      const coords = slackProvenance.slackCoordsOf(props);
+      if (!kind || !coords) return false;
+      const { channel, ts } = coords;
+      const identity = slackProvenance.reactionFor(kind);
+      // ⌛ is a bookmark-only concept: a Waiting item has no timer to run, so
+      // without this gate every delegate projection fired a reactions.remove
+      // that could only ever answer no_reaction.
+      const timed = kind === "bookmark";
+
+      // isBlockDone already reads a Waiting item correctly — /complete writes
+      // status "done" and /unblock writes status "unblocked", and both stamp
+      // completedAt. So the done mirror needs no new predicate for delegates.
+      const done = !block.deleted_at && isBlockDone(block, null);
+      const active = timed && !block.deleted_at && !done && !!props.startedAt;
+      const desired = block.deleted_at
+        ? `${kind}:gone`
+        : `${kind}:${done ? "done" : active ? "active" : "open"}`;
+      if (projectionMemoHit(block.id, desired)) return true;
+
       try {
         if (block.deleted_at) {
-          await removeSlackReaction(channel, ts, R_START);
+          if (timed) await removeSlackReaction(channel, ts, R_START);
           await removeSlackReaction(channel, ts, R_DONE);
-          await removeSlackReaction(channel, ts, R_BOOKMARK);
-          return true;
-        }
-        const done = isBlockDone(block, null);
-        const active = !done && !!props.startedAt;
-        await addSlackReaction(channel, ts, R_BOOKMARK);
-        if (done) {
-          await addSlackReaction(channel, ts, R_DONE);
-          await removeSlackReaction(channel, ts, R_START);
-        } else if (active) {
-          await addSlackReaction(channel, ts, R_START);
-          await removeSlackReaction(channel, ts, R_DONE);
+          await removeSlackReaction(channel, ts, identity);
         } else {
-          await removeSlackReaction(channel, ts, R_START);
-          await removeSlackReaction(channel, ts, R_DONE);
+          await addSlackReaction(channel, ts, identity);
+          if (done) {
+            await addSlackReaction(channel, ts, R_DONE);
+            if (timed) await removeSlackReaction(channel, ts, R_START);
+          } else if (active) {
+            await addSlackReaction(channel, ts, R_START);
+            await removeSlackReaction(channel, ts, R_DONE);
+          } else {
+            if (timed) await removeSlackReaction(channel, ts, R_START);
+            await removeSlackReaction(channel, ts, R_DONE);
+          }
         }
+        rememberProjection(block.id, desired);
         return true;
       } catch (error) {
+        // Forget the memo so the next pass retries rather than trusting a
+        // half-applied projection.
+        projectedState.delete(block.id);
         console.warn(`[slack-events] projection retry for ${block.id}:`, error.message);
         return false;
       }
+    }
+
+    // Strip every reaction this integration owns from a message the DCC no
+    // longer represents under `kind`. Used by the losing half of a conversion,
+    // where the row survives (a Waiting item closed as "unblocked") and so
+    // cannot be detected by projectTaskToSlack's deleted_at branch.
+    async function retractSlackKind(channel, ts, kind) {
+      if (!channel || !ts) return false;
+      await removeSlackReaction(channel, ts, slackProvenance.reactionFor(kind));
+      return true;
     }
 
     async function mirrorDccCompletions() {
@@ -959,7 +1239,8 @@ module.exports = function mount(app, ctx) {
         `SELECT id, to_char(date, 'YYYY-MM-DD') AS date, properties, deleted_at, workspace_id, updated_at
            FROM blocks
           WHERE workspace_id = $1
-            AND properties->>'source' = 'slack-bookmark'
+            AND properties->>'source' IN ('slack-bookmark', 'slack-delegate')
+            AND COALESCE(properties->>'kind', '') <> 'slack_reaction_tombstone'
             AND NULLIF(properties->>'slack_channel', '') IS NOT NULL
             AND NULLIF(properties->>'slack_ts', '') IS NOT NULL
             AND ($2::timestamptz IS NULL OR updated_at > $2::timestamptz
@@ -985,6 +1266,7 @@ module.exports = function mount(app, ctx) {
       handleBookmark, handleBookmarkRemoved, handleDelegate, handleDelegateRemoved,
       handleStart, clearStart, handleDone, handleUndone,
       projectTaskToSlack, retryPendingEnrichment, mirrorDccCompletions,
+      findLiveMessageRow, heldByOtherKind, convertMessageKind, retractSlackKind,
     };
   }
 
@@ -1124,7 +1406,7 @@ module.exports = function mount(app, ctx) {
       return;
     }
     if (ev.reaction === R_BOOKMARK) return bound.handleBookmark(channel, ts, null, eventMs);
-    if (ev.reaction === R_DELEGATE) return bound.handleDelegate(channel, ts);
+    if (ev.reaction === R_DELEGATE) return bound.handleDelegate(channel, ts, null, eventMs);
     if (ev.reaction === R_START) return bound.handleStart(channel, ts, eventMs, actionId);
     if (ev.reaction === R_DONE) return bound.handleDone(channel, ts, eventMs, actionId);
   }
