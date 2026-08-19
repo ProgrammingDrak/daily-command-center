@@ -351,13 +351,13 @@
       ' title="' + esc(tip) + '">' + icon + ' ' + esc(label) + '</' + tag + '>';
   }
 
-  // The origin-task chip, built ONCE here rather than per surface. The itinerary row and
-  // the details modal both render it and the document-level [data-origin-open] handler
-  // consumes it, so three files would otherwise have to independently agree on the
-  // attribute name, the date-presence rule and the non-obvious row-id derivation. Same
-  // shape as waitingPill / taskDependencyChipHtml, which the row and the card already
-  // share through one builder. `cls` varies because the row wants the .src-jump pill and
-  // the modal wants a .detail-action-link.
+  // The origin-task chip. The DETAILS MODAL renders it; the itinerary row no longer does,
+  // because the Check-in pill there already opens the same task through a superset of the
+  // same resolution (see checkInPillTarget). Still built here rather than in features.js
+  // so the modal and the document-level [data-origin-open] handler cannot disagree about
+  // the attribute name, the date-presence rule or the non-obvious row-id derivation.
+  // `cls` stays parameterised: the modal wants a .detail-action-link, and the .src-jump
+  // default is what any future surface would want.
   function checkInOriginChipHtml(ev, cls, label) {
     const block = checkInOriginBlock(ev);
     if (!block) return "";

@@ -294,15 +294,18 @@ test("the origin chip closes, switches days, waits for the row, then opens -- in
   assert.doesNotMatch(body, /setTimeout\(/, "the handler itself must not sleep");
 });
 
-test("both surfaces render through the shared builder and the row keeps its Slack fallback", () => {
-  assert.match(SCHEDULE_SRC, /\+srcTag\(ev\.source\)\+sourceJumpLink\(ev\)\+originJumpLink\(ev\)\+/,
-    "both chips belong in the title row, beside the Check-in pill");
+test("the row carries the Slack chip and the pill; the origin chip is the modal's alone", () => {
+  assert.match(SCHEDULE_SRC, /\+srcTag\(ev\.source\)\+sourceJumpLink\(ev\)\+listPrivacyChip\(ev\)/,
+    "the Slack chip belongs in the title row, beside the Check-in pill");
   assert.match(SCHEDULE_SRC, /if\(!url&&typeof window\.waitingCheckInSourceUrl==="function"\)url=window\.waitingCheckInSourceUrl\(ev\)/,
     "sourceJumpLink must fall back to the check-in resolver");
-  assert.match(SCHEDULE_SRC, /window\.waitingOriginChipHtml\(ev\)/,
-    "the row must use the shared builder, not its own copy of the markup");
+  // The row's origin chip is GONE: the Check-in pill next to it opens the same task
+  // through a superset of the same resolution, so the chip was a second control with one
+  // destination on the busiest row on the itinerary.
+  assert.doesNotMatch(SCHEDULE_SRC, /originJumpLink|waitingOriginChipHtml/,
+    "the row must not render an origin chip the pill already replaces");
   assert.match(FEATURES_SRC, /window\.waitingOriginChipHtml\(ev,'detail-action-link','Open origin task'\)/,
-    "the modal must use the same builder with its own class");
+    "the modal keeps it -- there is no pill in there");
   assert.doesNotMatch(SCHEDULE_SRC + FEATURES_SRC, /data-origin-open="'\+/,
     "no surface may hand-build the attribute contract any more");
   assert.match(WAITING_SRC, /window\.waitingOriginChipHtml = checkInOriginChipHtml;/);
