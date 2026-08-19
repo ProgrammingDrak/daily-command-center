@@ -160,3 +160,52 @@ test("activity: a seen cursor newer than every item still reads as caught up", (
   // Possible after a rotate or a clock skew; it must not go negative or throw.
   assert.equal(unreadFor([AT("2026-08-19T10:00:00Z")], "2026-08-20T00:00:00Z").unreadCount, 0);
 });
+
+// ── range-export rate cap ────────────────────────────────────────────────────
+
+const CAP_SRC = mustMatch(
+  /const RANGE_EXPORT_WINDOW_MS[\s\S]*?\nfunction allowRangeExport\(actorKey, now\) \{[\s\S]*?\n\}/,
+  "allowRangeExport + its window constants"
+);
+
+function loadCap() {
+  const sandbox = { module: {} };
+  vm.createContext(sandbox);
+  vm.runInContext(CAP_SRC + "\nmodule.exports = { allowRangeExport, RANGE_EXPORT_PER_WINDOW, RANGE_EXPORT_WINDOW_MS };", sandbox);
+  return sandbox.module.exports;
+}
+
+test("range export cap: allows a burst up to the limit, then refuses", () => {
+  const { allowRangeExport, RANGE_EXPORT_PER_WINDOW } = loadCap();
+  const t0 = 1_000_000;
+  for (let i = 0; i < RANGE_EXPORT_PER_WINDOW; i++) {
+    assert.equal(allowRangeExport("guest:a", t0 + i), true, "rejected request " + i);
+  }
+  assert.equal(allowRangeExport("guest:a", t0 + RANGE_EXPORT_PER_WINDOW), false);
+});
+
+test("range export cap: one guest cannot starve another", () => {
+  const { allowRangeExport, RANGE_EXPORT_PER_WINDOW } = loadCap();
+  const t0 = 2_000_000;
+  for (let i = 0; i < RANGE_EXPORT_PER_WINDOW; i++) allowRangeExport("guest:a", t0 + i);
+  assert.equal(allowRangeExport("guest:a", t0 + 10), false);
+  assert.equal(allowRangeExport("guest:b", t0 + 10), true);
+});
+
+test("range export cap: the window rolls, it is not a permanent ban", () => {
+  const { allowRangeExport, RANGE_EXPORT_PER_WINDOW, RANGE_EXPORT_WINDOW_MS } = loadCap();
+  const t0 = 3_000_000;
+  for (let i = 0; i < RANGE_EXPORT_PER_WINDOW; i++) allowRangeExport("guest:a", t0 + i);
+  assert.equal(allowRangeExport("guest:a", t0 + 10), false);
+  assert.equal(allowRangeExport("guest:a", t0 + RANGE_EXPORT_WINDOW_MS + 1), true);
+});
+
+test("range export cap: sweeps expired keys so the map cannot grow forever", () => {
+  const { allowRangeExport, RANGE_EXPORT_WINDOW_MS } = loadCap();
+  const t0 = 4_000_000;
+  for (let i = 0; i < 500; i++) allowRangeExport("guest:" + i, t0);
+  // One request past the window sweeps every stale key on its way through.
+  assert.equal(allowRangeExport("guest:late", t0 + RANGE_EXPORT_WINDOW_MS + 1), true);
+  // The swept keys are free again, which is the observable proof they were dropped.
+  assert.equal(allowRangeExport("guest:0", t0 + RANGE_EXPORT_WINDOW_MS + 2), true);
+});

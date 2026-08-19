@@ -1477,6 +1477,48 @@ app.post("/api/todo-share/activity/seen", async (req, res) => {
 // against a pool capped at 10. Same reasoning as the guest-task date clamp above.
 const MAX_EXPORT_DAYS = 31;
 
+// Range exports are the one expensive thing an anonymous caller can ask for
+// repeatedly. Hoisting the invariant lookups (below) cut the per-day cost, but a
+// multi-day export is still a day read plus a tombstone scan PER DAY against a
+// small pool, and there is no rate limiting anywhere in this app -- the same gap
+// the guest-task cap above calls out. A share token is handed around freely and
+// cannot be revoked per recipient, so a handful of concurrent `?from=&to=`
+// requests could hold connections open and stall the owner's own dashboard.
+//
+// Single-day exports are deliberately NOT capped: they cost the same as the
+// share poll the page already makes every 15 seconds, so capping them would
+// break normal use to guard nothing.
+//
+// KEYED ON (share, origin IP), NOT on todoActorKey. The first cut used
+// todoActorKey and did nothing at all: for a guest that key mixes in
+// `req.sessionID`, which a caller sending no cookie rotates on every single
+// request, so a scripted attacker got a fresh bucket each time while a real
+// browser (one stable session) was the only thing the cap could ever bite.
+// Verified by firing six range exports with curl and watching all six pass.
+// A cap that only limits the honest user is worse than none, because it reads
+// as protection. The share id cannot be rotated at all and the IP cannot be
+// rotated for free; a genuinely distributed caller is still unbounded here,
+// which is an edge-network problem, not one this handler can solve.
+const RANGE_EXPORT_WINDOW_MS = 60 * 1000;
+const RANGE_EXPORT_PER_WINDOW = 5;
+const rangeExportHits = new Map();
+
+function allowRangeExport(actorKey, now) {
+  const cutoff = now - RANGE_EXPORT_WINDOW_MS;
+  // Sweep opportunistically: this Map is per-process and would otherwise grow one
+  // entry per distinct guest forever.
+  for (const [key, stamps] of rangeExportHits) {
+    const live = stamps.filter(t => t > cutoff);
+    if (live.length) rangeExportHits.set(key, live);
+    else rangeExportHits.delete(key);
+  }
+  const mine = (rangeExportHits.get(actorKey) || []).filter(t => t > cutoff);
+  if (mine.length >= RANGE_EXPORT_PER_WINDOW) return false;
+  mine.push(now);
+  rangeExportHits.set(actorKey, mine);
+  return true;
+}
+
 function exportDatesFrom(query) {
   const today = getTodayStr();
   const single = coerceDateString(query.date);
@@ -1519,6 +1561,9 @@ app.get("/api/public/todo-share/:token/export", async (req, res) => {
       return res.status(400).json({ error: "Unsupported format. Use csv, ics, or md." });
     }
     const { dates, from, to } = exportDatesFrom(req.query || {});
+    if (dates.length > 1 && !allowRangeExport(share.id + "|" + (getRequestOrigin(req) || "unknown"), Date.now())) {
+      return res.status(429).json({ error: "Too many range exports. Try again in a minute." });
+    }
     const tasks = [];
     let workspaceName = "";
     let ownerUsername = "";
