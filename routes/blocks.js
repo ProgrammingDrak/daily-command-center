@@ -48,8 +48,63 @@ const completionMetrics = {
 };
 
 module.exports = function mount(app, ctx) {
-  const { APP_TIME_ZONE, blockDB, broadcast, crypto, filterLegacyGcalBlocks, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, isValidDate, pool, waitingItems: waitingItemsFromCtx } = ctx;
+  const { APP_TIME_ZONE, blockDB, broadcast, crypto, filterLegacyGcalBlocks, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, isValidDate, pool, socialStore, waitingItems: waitingItemsFromCtx } = ctx;
   const waitingItems = waitingItemsFromCtx || require("../waiting-items");
+
+  // ── Feed post on completion ────────────────────────────────────────────────
+  // The feed's PRODUCER. social-store.js has shipped createCompletionPost,
+  // publishPost, hidePost and listFriendsFeed for a while, and nothing ever
+  // called the first one -- so feed_posts was permanently empty and the whole
+  // feed was unreachable no matter what UI sat on top of it.
+  //
+  // Sources that make a post permanently unpublishable. The lock is ONE-WAY
+  // (publishPost refuses `private_task` at the SQL level), so this errs toward
+  // locking: a Slack thread or an email subject is somebody else's words, and a
+  // meeting title routinely names a client. Manual and self-created tasks stay
+  // publishable, which is the content this feature is actually for.
+  const WORK_SOURCES = new Set(["slack", "gmail", "email", "sweep", "triage", "meeting", "gcal", "calendar"]);
+
+  function isWorkSourcedTask(props) {
+    const source = String(props.source || "").toLowerCase();
+    const kind = String(props.kind || "").toLowerCase();
+    return WORK_SOURCES.has(source) || WORK_SOURCES.has(kind)
+      || !!props.gcal_event_id || !!props.gcal_calendar_id;
+  }
+
+  // NEVER throws into the completion path. A completion is the user's work being
+  // recorded; a feed post is decoration on top of it. If this fails, the right
+  // outcome is a logged warning and a missing post, not a task the user watched
+  // fail to check off.
+  async function recordCompletionPost(result, body, userId, workspaceId) {
+    if (!socialStore || typeof socialStore.createCompletionPost !== "function") return;
+    if (body.completed !== true) return;          // un-completing is not an event
+    if (result.duplicate) return;                 // replay: the post already exists
+    if (!userId) return;                          // no owner, no post
+    const task = result.task;
+    if (!task) return;
+    const props = task.properties || {};
+    const title = String(props.title || props.label || "").trim();
+    if (!title) return;                           // nothing worth showing
+    try {
+      await socialStore.createCompletionPost({
+        ownerUserId: userId,
+        workspaceId,
+        taskId: String(task.id || ""),
+        // The mutation id IS the completion's identity everywhere else in this
+        // endpoint, so it is the honest idempotency key here too.
+        completionId: body.mutationId || null,
+        pointsAwarded: Number(props.points) || 0,
+        estimatedMinutes: Number(props.duration) || null,
+        actualMinutes: Number(props.actualMinutes) || null,
+        isPrivate: props.publicVisibility === "private",
+        isWorkSourced: isWorkSourcedTask(props),
+        titleSnapshot: title,
+        itemType: String(props.kind || task.type || "task")
+      });
+    } catch (e) {
+      console.error("[feed] completion post failed (non-fatal):", e.message);
+    }
+  }
 
   // ── Local helpers ──
   function assertBlockOwnership(block, workspaceId) { if (block.workspace_id && workspaceId && block.workspace_id !== workspaceId) { const err = new Error("Block not found"); err.statusCode = 404; throw err; } }
@@ -641,6 +696,9 @@ module.exports = function mount(app, ctx) {
             trigger: result.task, completedAt: new Date(recordedMs).toISOString(), userId, workspaceId,
           })
         : { blockIds: [] };
+      // AFTER the cascade: that moves real task state, this is decoration on top
+      // of it, and recordCompletionPost deliberately swallows its own failures.
+      await recordCompletionPost(result, body, userId, workspaceId);
       const blockIds = (result.broadcastIds || (result.task && result.task.id ? [result.task.id] : []))
         .concat(cascaded.blockIds);
       if (blockIds.length) {

@@ -1177,6 +1177,13 @@ app.post("/api/social/rewards/queue/:id/discard", route(req =>
 app.get("/api/social/feed", route(req =>
   socialStore.listFriendsFeed(req.session.userId, { limit: parseInt(req.query.limit, 10) || 50 })));
 
+// The owner's own unpublished completions: the publish queue. Separate from the
+// feed read because it answers a different question ("what could I share?") and
+// because posts locked to `private_task` are excluded here rather than rendered
+// with a control that publishPost would refuse anyway.
+app.get("/api/social/feed/publishable", route(req =>
+  socialStore.listPublishablePosts(req.session.userId, { limit: parseInt(req.query.limit, 10) || 50 })));
+
 app.post("/api/social/feed/:id/publish", route(req =>
   socialStore.publishPost(intParam(req, "id"), req.session.userId, { caption: (req.body || {}).caption || null })));
 
