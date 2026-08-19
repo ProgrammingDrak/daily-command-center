@@ -82,6 +82,19 @@ for (const tab of TABS) {
   check(`tab ${tab} no h-overflow @375`, overflow === "false", overflow);
 }
 
+// Count visibility is covered in catch-up's unit tests. Expose the real pill
+// here only long enough to measure the complete mobile CSS cascade and geometry.
+js("document.querySelector('[data-tab=schedule]')?.click();'x'");
+const looseEndsMobile = js(
+  "(()=>{const p=document.getElementById('loose-ends-pill'),n=document.getElementById('date-nav');" +
+  "if(!p||!n)return null;const h=p.hidden;p.hidden=false;const b=p.getBoundingClientRect(),nb=n.getBoundingClientRect();" +
+  "const ob=[...n.children].filter(c=>c!==p&&getComputedStyle(c).display!=='none').map(c=>c.getBoundingClientRect().bottom);" +
+  "const r={visible:getComputedStyle(p).display!=='none'&&b.width>0&&b.height>0,insideViewport:b.left>=0&&b.right<=window.innerWidth,dedicatedRow:b.top>=Math.max(...ob),fullWidth:b.width>=nb.width-1,touchHeight:b.height>=44};" +
+  "p.hidden=h;return JSON.stringify(r)})()"
+);
+const looseEndsMobileResult = looseEndsMobile ? JSON.parse(looseEndsMobile) : null;
+check("Loose Ends mobile pill is visible in its own full-width row", !!looseEndsMobileResult && Object.values(looseEndsMobileResult).every(Boolean), looseEndsMobile);
+
 // budget tank renders from the live API (not just an error card): aquarium
 // present and /api/budget/state answers with a usage block
 js(`(document.querySelector('[data-tab="budget"]')||{}).click?.();'x'`);

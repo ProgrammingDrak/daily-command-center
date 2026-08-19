@@ -16,7 +16,7 @@ import { chromium } from "playwright-core";
 /* Browser-context globals referenced inside page.evaluate() callbacks (they run
    in Chromium, not Node). smoke.mjs escapes this by passing browser code as
    strings; here it is real code, so declare the globals for the linter. */
-/* global window, document, DCC, KeyboardEvent */
+/* global window, document, DCC, KeyboardEvent, getComputedStyle */
 
 const BASE = process.argv[2] || "http://localhost:3987";
 const USER = process.argv[3] || "drake";
@@ -99,6 +99,33 @@ for (const tab of TABS) {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   check(`tab ${tab} no h-overflow @375`, overflow === false, String(overflow));
 }
+
+// Loose Ends is count-gated, so expose it just for layout measurement. The
+// catch-up unit tests own the count/hidden behavior; this browser smoke owns the
+// real mobile header cascade and viewport geometry.
+await page.evaluate(() => { document.querySelector('[data-tab="schedule"]')?.click?.(); });
+const looseEndsMobile = await page.evaluate(() => {
+  const pill = document.getElementById("loose-ends-pill");
+  const nav = document.getElementById("date-nav");
+  if (!pill || !nav) return null;
+  const wasHidden = pill.hidden;
+  pill.hidden = false;
+  const box = pill.getBoundingClientRect();
+  const navBox = nav.getBoundingClientRect();
+  const otherBottoms = [...nav.children]
+    .filter((child) => child !== pill && getComputedStyle(child).display !== "none")
+    .map((child) => child.getBoundingClientRect().bottom);
+  const result = {
+    visible: getComputedStyle(pill).display !== "none" && box.width > 0 && box.height > 0,
+    insideViewport: box.left >= 0 && box.right <= window.innerWidth,
+    dedicatedRow: box.top >= Math.max(...otherBottoms),
+    fullWidth: box.width >= navBox.width - 1,
+    touchHeight: box.height >= 44
+  };
+  pill.hidden = wasHidden;
+  return result;
+});
+check("Loose Ends mobile pill is visible in its own full-width row", !!looseEndsMobile && Object.values(looseEndsMobile).every(Boolean), JSON.stringify(looseEndsMobile));
 
 // budget tank renders from the live API (aquarium + /api/budget/state shape).
 // The aquarium builds after an async fetch of /api/budget/state — poll for it

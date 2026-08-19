@@ -4025,7 +4025,13 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .header .hdr-sub{display:none}
   .header .date-nav{
     grid-column:auto;grid-row:auto;
-    display:flex;align-items:center;gap:6px;margin-top:4px;
+    display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:4px;
+  }
+  /* Loose Ends shares the date toolbar on desktop. Give it a dedicated row on
+     phones so the arrows, date, and Tomorrow shortcut cannot push it off-screen. */
+  .header .date-nav .loose-ends-pill{
+    flex:1 0 100%;order:2;justify-content:center;
+    min-height:44px;margin-left:0;padding:6px 10px;
   }
   .header>div:last-child{display:none!important}  /* owner buttons + clock → More sheet */
 

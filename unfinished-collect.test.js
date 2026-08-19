@@ -328,7 +328,7 @@ test("carryover actions route through the ONE shared implementation", () => {
   assert.ok(/batchOp\(ids\.map\(id => \(\{ op: "delete", id \}\)\)\)/.test(unfSource));
 });
 
-test("carryover rows render through the shared tree, with their own pool", () => {
+test("carryover row helpers keep using their own pool", () => {
   assert.ok(/const pool=isUnfRow\?unfPool:scheduled;/.test(schedTabSource),
     "tree lookups must use the row's own pool");
   // C3 folded the lane's duplicate progress walker into the shared subtaskProgress,
@@ -336,14 +336,8 @@ test("carryover rows render through the shared tree, with their own pool", () =>
   assert.ok(/wrapBandwidth\(ev,pool\)/.test(schedTabSource) && /subtaskProgress\(ev\.id,pool,isUnfRow\?_unfDone:null\)/.test(schedTabSource));
   assert.equal(/function _unfProgress\b/.test(schedTabSource), false,
     "the duplicated progress walker must stay deleted -- a fix to the walk has to land once");
-  // C6a: flattenSchedule moved into TaskModel.selectTree, and the lane names its POOL.
-  // `openRows`, not `unfPool`: a carryover whose parent finished on its origin day is a
-  // deliberate orphan here, and pooling against unfPool (which keeps the done parent so
-  // subtask counts work) would hide that still-open step.
-  assert.ok(/selectTree\(rootOrder\.concat\(openRows\.filter\(ev=>!rootIds\.has\(ev\.id\)\)\),\{pool:openRows\}\)/.test(schedTabSource),
-    "the lane must render through TaskModel.selectTree, pooled on openRows, so children nest");
-  assert.ok(/emitNode\(node,_isSubRow\(node\)\?0:rank\+\+,"unfinished"\)/.test(schedTabSource),
-    "carryover nodes must pass the tree node to row() (subtask variant + indent)");
+  assert.equal(/section\("Unfinished"/.test(schedTabSource), false,
+    "the task list must not duplicate the Loose Ends queue");
 });
 
 // A subtask whose parent is NOT in the pool comes back from flattenSchedule as a
@@ -389,7 +383,8 @@ test("the Unscheduled badge no longer sums two different things", () => {
     "...and on a summed badge whose first term is a call, which [^)]* could not reach");
   // C6a: the section renders a SUBTREE now, so the badge counts ROOTS explicitly.
   assert.ok(/section\("Unscheduled",day\.unscheduledRoots\.length,"unscheduled","uns-group"\)/.test(schedTabSource));
-  assert.ok(/section\("Unfinished",roots\.length,null,"uns-group"\)/.test(schedTabSource));
+  assert.equal(/section\("Unfinished"/.test(schedTabSource), false,
+    "unfinished rows belong exclusively to the Loose Ends pill");
 });
 
 test("the unbounded sweep asks for the route's full headroom, and carries truncation through", async () => {
@@ -476,12 +471,12 @@ test("the carryover progress chip counts done children, nested descendants, and 
   assert.deepEqual(plain(laneProgress("c", [{ id: "c", subtaskOf: "c", __unf: { done: false } }])), { done: 0, total: 1 });
 });
 
-// The Catch up MODAL has to list the same thing the lane and the prompt list. It used
-// to hand renderRows every open row flat, so a child got its own Today/Tomorrow/
+// The Catch up MODAL and prompt have to list the same thing. It used to hand
+// renderRows every open row flat, so a child got its own Today/Tomorrow/
 // Backlog/Drop -- rescheduling the child alone stranded its parent on the origin day
 // and landed the child as an orphan, which is the standalone-subtask bug this phase
 // removes. The full pool still reaches renderRows so subtree actions carry descendants.
-test("the Catch up modal lists ROOTS, and every surface shares one predicate", () => {
+test("the Catch up modal lists ROOTS through the shared Loose Ends predicate", () => {
   assert.ok(/renderRows\(overlay, rootsOf\(result\.rows\), result\.total, result\.rows, result\.truncated\)/.test(unfSource),
     "the modal must render roots, with the full pool passed through for subtree actions");
   assert.ok(!/renderRows\(overlay, result\.rows\.filter/.test(unfSource),
@@ -491,8 +486,8 @@ test("the Catch up modal lists ROOTS, and every surface shares one predicate", (
   assert.ok(/window\.DCC\.Carryover\.openRows\(pool\)/.test(
     require("node:fs").readFileSync(require.resolve("./public/js/catch-up.js"), "utf8")),
     "catch-up.js must defer to the shared predicate rather than keep a copy");
-  assert.ok(/_CO_\?_CO_\.rootsOf\(unfPool\)/.test(schedTabSource),
-    "the lane must defer to the shared predicate too");
+  assert.equal(/section\("Unfinished"/.test(schedTabSource), false,
+    "the retired task-list lane must not duplicate the Loose Ends surface");
 });
 
 // Untimed-today and carryovers share one persisted order array but render as two

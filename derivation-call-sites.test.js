@@ -182,19 +182,14 @@ test("★ the list view derives ONCE — one selectDay call feeding every sectio
   assert.ok(start > 0, "buildListView must exist");
   const after = schedTabCode.indexOf("\nfunction ", start + 1);
   const listView = schedTabCode.slice(start, after > 0 ? after : undefined);
-  assert.ok(listView.includes('section("Unfinished"'), "the slice must cover the whole of buildListView");
+  assert.equal(listView.includes('section("Unfinished"'), false,
+    "past-day unfinished work must stay in Loose Ends instead of rendering below the task list");
   assert.equal(listView.includes("function buildSchedule("), false, "the slice must not run into buildSchedule");
   const calls = (listView.match(/TaskModel\.selectDay\(/g) || []).length;
   assert.equal(calls, 1, "buildListView must call selectDay exactly once, got " + calls);
   assert.match(listView, /const day=DCC\.TaskModel\.selectDay\(scheduled,viewDate,\{today:actualToday,carryoverPool:unfPool\}\)/);
-  // The carryover fetch has to precede the derivation that consumes it.
-  // Assert PRESENCE before comparing positions. `indexOf` returns -1 when absent, and
-  // -1 < anyIndex is true -- so the exact regression this line names (the
-  // `_ensureUnfinished` hoist being deleted or moved back below selectDay, leaving unfPool
-  // empty when the derivation consumes it) made the assertion PASS.
-  const fetchAt = listView.indexOf("_ensureUnfinished(actualToday)");
-  const deriveAt = listView.indexOf("TaskModel.selectDay(");
-  assert.ok(fetchAt >= 0, "buildListView must still fetch the carryover pool via _ensureUnfinished(actualToday)");
-  assert.ok(deriveAt >= 0, "buildListView must still call selectDay");
-  assert.ok(fetchAt < deriveAt, "the carryover pool must be resolved before selectDay reads it");
+  assert.match(listView, /const unfPool=\[\];/,
+    "the list derivation must keep its carryover pool empty because Loose Ends owns those rows");
+  assert.equal(listView.includes("_ensureUnfinished(actualToday)"), false,
+    "the retired list queue must not trigger a hidden carryover fetch and second render");
 });
