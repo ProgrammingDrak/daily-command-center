@@ -1616,11 +1616,24 @@
   // Walk back while the days keep coming up unsettled, capped at a week. The first fully
   // settled day ends the walk: a backlog is contiguous, so an answered day means the
   // older ones were answered too, and this stays one fetch on the common day.
+  // "Answered" is what ends the walk. A packet the SERVER emptied as a repeat of an
+  // earlier dismissal was never answered on this day, so treating it as settled would
+  // stop the walk on a day the user never saw and hide the genuinely unsettled days
+  // behind it. Zero pending plus a non-empty repeat_suppressed_items means "nothing
+  // left here, keep going", not "the backlog ends here".
+  function gbReviewWalkEnds(model){
+    if(!model)return true;
+    if(gbReviewPendingModel(model).count)return false;
+    var page = model.page || {};
+    var hidden = page.repeat_suppressed_items;
+    return !(Array.isArray(hidden) && hidden.length);
+  }
+
   async function gbCollectReviewPackets(ctx){
     var packets = [ctx];
     var cursor = ctx.reviewDate;
     for(var back = 0; back < GB_REVIEW_LOOKBACK_DAYS; back++){
-      if(!gbReviewPendingModel(packets[packets.length - 1]).count)break;
+      if(gbReviewWalkEnds(packets[packets.length - 1]))break;
       cursor = gbAddDays(cursor, -1);
       var older = null;
       try{ older = gbReviewFromState(await gbFetchDayState(cursor), cursor); }
@@ -1628,7 +1641,7 @@
       // Only a day's OWN packet counts. A borrowed copy (review_date pointing elsewhere)
       // is the same packet under a second address and would double-render it.
       if(!older || !older.page || older.reviewDate !== cursor)break;
-      if(!gbReviewPendingModel(older).count)break;
+      if(gbReviewWalkEnds(older))break;
       packets.push(gbRegisterReviewCtx(older));
     }
     return packets;

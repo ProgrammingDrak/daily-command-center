@@ -21,6 +21,7 @@ const recurrence = require("./lib/recurrence");
 // cannot drift apart on which types are never carried over.
 const TaskTypes = require("./public/js/task-types");
 const { plannedWindowOf } = require("./lib/task-timing");
+const dayReviewRepeats = require("./day-review-repeats");
 
 // ── Workspace Bootstrap ──
 
@@ -2073,14 +2074,32 @@ async function saveDccBriefDecision(date, input, userId, workspaceId, emptyState
       delete state.glymphaticBrief;
       briefSource = state.glymphatic_brief;
     }
+    let decisionSignature = "";
     if (["approve", "push-next", "dismiss"].includes(input.action)) {
       briefSource = briefSource || {};
       const current = briefSource.current || briefSource;
       const pages = current && Array.isArray(current.pages) ? current.pages : [];
       const page = pages.find(candidate => candidate && candidate.id === "day-review") || {};
       const items = Array.isArray(page.items) ? page.items : (Array.isArray(current.did_today) ? current.did_today : []);
-      const parent = items.some(item => item && item.id === input.taskId);
-      const followup = items.some(item => Array.isArray(item && item.followups) && item.followups.some(follow => follow && follow.id === input.taskId));
+      const parentItem = items.find(item => item && item.id === input.taskId) || null;
+      let followupItem = null;
+      for (const item of items) {
+        const hit = Array.isArray(item && item.followups)
+          ? item.followups.find(follow => follow && follow.id === input.taskId)
+          : null;
+        if (hit) { followupItem = hit; break; }
+      }
+      const parent = !!parentItem;
+      const followup = !!followupItem;
+      // The content signature is derived HERE, while the item is still in the row, and
+      // stored on the decision itself. A packet lives in its own day's row and, for one
+      // day, in the borrowed next-day row; the client reviews the borrowed copy, so the
+      // decision lands there and the next night's publish replaces that row's items.
+      // Re-deriving the signature later by joining decision ids back to items therefore
+      // finds nothing (verified in prod: 2026-08-17 held 34 decisions against 24 item
+      // ids). Carrying it on the decision, which saveDccState COALESCEs forward forever,
+      // is what makes the suppression outlive the packet it came from.
+      decisionSignature = dayReviewRepeats.itemSignature(parentItem || followupItem);
       const validTarget = input.action === "approve" ? parent
         : (input.action === "push-next" ? followup : (parent || followup));
       if (!validTarget) {
@@ -2100,7 +2119,10 @@ async function saveDccBriefDecision(date, input, userId, workspaceId, emptyState
     const decisions = brief.decisions || (brief.decisions = {});
     const prior = decisions[input.taskId] || null;
     const at = new Date().toISOString();
-    const next = input.action === "reset" ? null : { action: input.action, time: input.time || null, decided_at: at };
+    const next = input.action === "reset" ? null : {
+      action: input.action, time: input.time || null, decided_at: at,
+      ...(decisionSignature ? { signature: decisionSignature } : {}),
+    };
     const changed = input.action === "reset"
       ? !!prior
       : !prior || prior.action !== next.action || (prior.time || null) !== next.time;

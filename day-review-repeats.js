@@ -47,6 +47,16 @@ function dismissedSignatures(state) {
   const out = new Set();
   if (!model) return out;
   const decisions = model.root.decisions || {};
+  // A decision written since the signature landed on the record carries its own, which
+  // is the only copy that survives the next night's republish of a borrowed row. Read
+  // it FIRST and without touching items, so a decision whose item is long gone still
+  // suppresses. The item walk below stays for decisions written before that.
+  for (const key of Object.keys(decisions)) {
+    const decision = decisions[key];
+    if (!decision || typeof decision !== "object") continue;
+    if (actionOf(decision) !== "dismiss") continue;
+    if (decision.signature) out.add(decision.signature);
+  }
   for (const item of model.items) {
     if (actionOf(decisions[item && item.id]) === "dismiss") {
       const signature = itemSignature(item);
@@ -89,9 +99,23 @@ function applyDayReviewRepeatOverlay(state, recentRows) {
   const bySignature = new Map();
   const suppressed = [];
   const currentDecisions = model.root.decisions || {};
+  // A follow-up is re-keyed by the publisher exactly like its parent, so the same
+  // regenerated-id evasion applies one level down. dismissedSignatures already harvests
+  // dismissed follow-ups; without this they fed the set but were never filtered by it,
+  // and gbReviewPendingModel counts every follow-up as pending work.
+  const keepFollowup = (followup) => {
+    const sig = itemSignature(followup);
+    if (!sig || !dismissed.has(sig)) return true;
+    return actionOf(currentDecisions[followup && followup.id]) === "dismiss";
+  };
   for (const original of model.items) {
     if (!original) continue;
-    const item = { ...original, followups: asArray(original.followups).slice() };
+    const followups = [];
+    for (const followup of asArray(original.followups)) {
+      if (keepFollowup(followup)) { followups.push(followup); continue; }
+      suppressed.push({ id: (followup && followup.id) || "", signature: itemSignature(followup), reason: "dismissed-repeat-followup" });
+    }
+    const item = { ...original, followups };
     const signature = itemSignature(item);
     // Keep the item that OWNS this packet's decision. The full Day Review renders
     // that crossed-out card with Undo; only separately keyed repeats are hidden.

@@ -595,7 +595,12 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
     typeof blockDB.getDelegatedItems === "function"
       ? blockDB.getDelegatedItems(ws).catch((e) => { console.error("[waiting] read overlay failed (non-fatal):", e.message); return []; })
       : Promise.resolve([]),
-    typeof blockDB.getDccStateRange === "function"
+    // Gated on userId, not just on capability. buildPublicTodoShare reaches this same
+    // builder anonymously as buildDayResponse(date, null, workspaceId) and its client
+    // polls every 15 seconds per open viewer, while never reading glymphatic_brief at
+    // all. Ungated, every one of those polls pulled seven whole day packets out of a
+    // pool capped at 10 and threw them away.
+    userId && typeof blockDB.getDccStateRange === "function"
       ? blockDB.getDccStateRange(addDays(dateStr, -dayReviewRepeats.LOOKBACK_DAYS), addDays(dateStr, -1), ws)
         .catch((e) => { console.error("[day-review] repeat overlay failed (non-fatal):", e.message); return []; })
       : Promise.resolve([]),

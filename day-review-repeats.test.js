@@ -79,6 +79,44 @@ test("the item that owns a dismissal remains available for Undo while its siblin
   assert.equal(page.repeat_suppressed_items[0].id, "sibling");
 });
 
+test("a dismissal outlives the republish that replaces its packet's items", () => {
+  // The real row layout, not the convenient one. The client reviews yesterday's packet
+  // from TODAY's borrowed row, so the decision lands there; the next night's publish
+  // replaces that row's items. Verified in prod on 2026-08-17: 34 stored decisions
+  // against 24 item ids in the same row. Joining ids back to items finds nothing, so
+  // the signature has to travel ON the decision.
+  const republished = {
+    glymphatic_brief: {
+      decisions: { "old-id": { action: "dismiss", signature: repeats.itemSignature({ title: "reply with exactly READY", tags: ["claude"] }) } },
+      current: { pages: [{ id: "day-review", items: [{ id: "unrelated", title: "Something else entirely" }] }] },
+    },
+  };
+  const current = packet([{ id: "new-id", title: "reply with exactly READY", tags: ["claude"] }]);
+  const out = repeats.applyDayReviewRepeatOverlay(current, [republished]);
+  assert.deepEqual(out.glymphatic_brief.current.pages[0].items.map((i) => i.id), []);
+});
+
+test("a dismissed FOLLOW-UP does not come back under a new id", () => {
+  const prior = packet(
+    [{ id: "p-old", title: "Session", followups: [{ id: "f-old", title: "Send the rollout note" }] }],
+    { "f-old": { action: "dismiss" } }
+  );
+  const current = packet([{ id: "p-new", title: "Session", followups: [{ id: "f-new", title: "Send the rollout note" }] }]);
+  const out = repeats.applyDayReviewRepeatOverlay(current, [prior]);
+  const kept = out.glymphatic_brief.current.pages[0].items;
+  assert.deepEqual(kept.map((i) => i.id), ["p-new"], "the parent is a distinct signature and survives");
+  assert.deepEqual(kept[0].followups.map((f) => f.id), [], "the re-keyed follow-up is suppressed");
+});
+
+test("the follow-up that OWNS the current dismissal still renders, so Undo works", () => {
+  const current = packet(
+    [{ id: "p", title: "Session", followups: [{ id: "f", title: "Send the rollout note" }] }],
+    { f: { action: "dismiss" } }
+  );
+  const out = repeats.applyDayReviewRepeatOverlay(current, []);
+  assert.deepEqual(out.glymphatic_brief.current.pages[0].items[0].followups.map((f) => f.id), ["f"]);
+});
+
 test("the overlay does not mutate stored packet objects", () => {
   const current = packet([
     { id: "a", title: "Duplicate" },
