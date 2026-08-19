@@ -4,6 +4,11 @@
 module.exports = function mount(app, ctx) {
   const { APP_TIME_ZONE, DAY_STATE_FILE, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, coerceDateString, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getTodayStr, intParam, isValidDate, notFound, path, pool, readJSON, route, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON } = ctx;
 
+// The ONE serializer behind both export surfaces (this route and the browser
+// download in public/js/public-todo-share.js). Pure + UMD, so requiring the
+// browser file here is deliberate, not a layering accident.
+const shareExport = require("../public/js/share-export.js");
+
 // ── Live Todo Share API ──
 function makeShareToken() {
   return crypto.randomBytes(18).toString("base64url");
@@ -1305,6 +1310,87 @@ app.get("/api/public/todo-share/:token", async (req, res) => {
     // audience.
     console.error("[public-todo] share read failed:", e);
     res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not load this list right now" });
+  }
+});
+
+// ── Export ───────────────────────────────────────────────────────────────────
+// The "never going to use DCC" audience: hand them the day in a format their own
+// system already reads. Serialization lives in public/js/share-export.js, shared
+// verbatim with the browser download, so the two can't drift on what a task is.
+//
+// A range is capped at MAX_EXPORT_DAYS. Each day is a full `buildPublicTodoShare`
+// (one day read plus a tombstone scan), the endpoint is ANONYMOUS, and the caller
+// picks the bounds: an uncapped `from`/`to` is a link that runs 3650 day-reads
+// against a pool capped at 10. Same reasoning as the guest-task date clamp above.
+const MAX_EXPORT_DAYS = 31;
+
+function exportDatesFrom(query) {
+  const today = getTodayStr();
+  const single = coerceDateString(query.date);
+  const rawFrom = coerceDateString(query.from);
+  const rawTo = coerceDateString(query.to);
+  if (!rawFrom && !rawTo) {
+    const date = isValidDate(single) ? single : today;
+    return { dates: [date], from: date, to: date };
+  }
+  const from = isValidDate(rawFrom) ? rawFrom : today;
+  const to = isValidDate(rawTo) ? rawTo : from;
+  if (to < from) { const e = new Error("Range ends before it starts"); e.statusCode = 400; throw e; }
+  const dates = [];
+  const cursor = new Date(`${from}T12:00:00Z`);
+  const last = new Date(`${to}T12:00:00Z`);
+  while (cursor <= last && dates.length < MAX_EXPORT_DAYS) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return { dates, from: dates[0], to: dates[dates.length - 1] };
+}
+
+app.get("/api/public/todo-share/:token/export", async (req, res) => {
+  try {
+    const share = await findTodoShareByToken(req.params.token);
+    if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
+    const format = String(req.query.format || "csv").toLowerCase();
+    if (!shareExport.isFormat(format)) {
+      return res.status(400).json({ error: "Unsupported format. Use csv, ics, or md." });
+    }
+    const { dates, from, to } = exportDatesFrom(req.query || {});
+    const tasks = [];
+    let workspaceName = "";
+    let ownerUsername = "";
+    for (const date of dates) {
+      const day = await buildPublicTodoShare(share, date, req);
+      workspaceName = workspaceName || day.workspaceName || "";
+      ownerUsername = ownerUsername || day.ownerUsername || "";
+      // The projection is day-scoped and leaves `date` implicit, which is fine for
+      // a single-day payload and wrong the moment two days are in one file. Stamp
+      // it here rather than teaching the projection about ranges.
+      for (const task of (day.tasks || [])) if (task) tasks.push(Object.assign({}, task, { date }));
+    }
+    const meta = {
+      workspaceName,
+      owner: ownerUsername,
+      date: from === to ? from : "",
+      from,
+      to,
+      url: todoShareUrl(req, share.token)
+    };
+    const body = shareExport.serialize(format, tasks, meta);
+    res.setHeader("Content-Type", shareExport.mimeFor(format));
+    res.setHeader("Content-Disposition",
+      `attachment; filename="${shareExport.filenameFor(meta, format)}"`);
+    // A share link is rotatable and the day changes under it; a cached export is a
+    // stale one handed out under a live URL.
+    res.setHeader("Cache-Control", "no-store");
+    res.send(body);
+  } catch (e) {
+    // Same fail-closed convention as the share GET: an anonymous caller never sees
+    // Postgres text, and a partial file is worse than no file because it reads as
+    // a complete day with tasks missing.
+    console.error("[public-todo] export failed:", e);
+    res.status(e.statusCode || 500).json({
+      error: e.statusCode ? e.message : "Could not build that export right now"
+    });
   }
 });
 

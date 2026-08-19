@@ -67,6 +67,41 @@
               <option value="duration">Duration</option>
             </select>
           </label>
+
+          <!-- Export: for the visitor who is never going to open DCC. Takes the
+               list they are looking at (same filters, same sort) into whatever
+               their own system reads. Single-day formats serialize client-side
+               from the loaded payload; a range hands off to the server route. -->
+          <div class="todo-export" id="todo-export">
+            <span class="todo-export-label" id="todo-export-label">Export</span>
+            <button id="todo-export-button" class="todo-filter-menu-button" type="button"
+                    aria-haspopup="true" aria-expanded="false"
+                    aria-labelledby="todo-export-label todo-export-button">Download</button>
+            <div id="todo-export-menu" class="todo-filter-menu todo-export-menu" hidden>
+              <button type="button" class="todo-export-item" data-export="csv">
+                <span>CSV</span><small>Import into any task app or spreadsheet</small>
+              </button>
+              <button type="button" class="todo-export-item" data-export="ics">
+                <span>Calendar (.ics)</span><small>Drop the day into your own calendar</small>
+              </button>
+              <button type="button" class="todo-export-item" data-export="md">
+                <span>Markdown</span><small>Paste straight into a Google Doc</small>
+              </button>
+              <button type="button" class="todo-export-item" data-export="pdf">
+                <span>PDF</span><small>Print-ready one pager</small>
+              </button>
+              <div class="todo-export-range">
+                <label>Range
+                  <select id="todo-export-range">
+                    <option value="day">This day</option>
+                    <option value="7">Next 7 days</option>
+                    <option value="30">Next 30 days</option>
+                  </select>
+                </label>
+                <small id="todo-export-range-note">Exports exactly the rows shown above.</small>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Inline guest task creation. Reuses the same fields the sidebar used so
@@ -98,7 +133,15 @@
       </section>
     </section>
   </main>
+  <!-- core.js FIRST, same as index.html. It was missing here, and this page's
+       `esc()` delegates straight to `window.DCC.esc` — so the very first render
+       threw "Cannot read properties of undefined" and the shared list published
+       an error banner and NO TASKS to whoever held the link. The controls still
+       drew, which is why it read as an empty day rather than a broken page.
+       Found while adding the export bar; the break predates it. -->
+  <script src="/public/js/core.js"></script>
   <script src="/public/js/itinerary-card.js"></script>
+  <script src="/public/js/share-export.js"></script>
   <script src="/public/js/public-todo-share.js"></script>
 </body>
 </html>

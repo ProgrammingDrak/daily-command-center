@@ -388,11 +388,27 @@
   .todo-public-stats{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
   .todo-public-stats span{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:5px 8px;color:var(--text-muted)}
   .todo-public-stats b{color:var(--text)}
-  .todo-public-controls{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin-bottom:14px}
-  .todo-public-controls label,.todo-public-multiselect{display:flex;flex-direction:column;gap:4px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.45px;color:var(--text-muted)}
+  .todo-public-controls{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:8px;margin-bottom:14px}
+  .todo-public-controls label,.todo-public-multiselect,.todo-export{display:flex;flex-direction:column;gap:4px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.45px;color:var(--text-muted)}
   .todo-public-controls select,.todo-filter-menu-button{min-width:0;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font:inherit;font-size:12px;font-weight:650;text-transform:none;letter-spacing:0;padding:8px}
   .todo-public-controls select:focus,.todo-filter-menu-button:focus{border-color:var(--accent);outline:none}
-  .todo-public-multiselect{position:relative}
+  .todo-public-multiselect,.todo-export{position:relative}
+  /* Export menu. Rides the filter-menu shell (same card, border, shadow) but its
+     rows are buttons with a description line rather than checkbox labels, and it
+     opens right-aligned because it is the last control in the grid. */
+  /* Matches the uppercase caption the four sibling controls get from their
+     <label>, so the export button's box lines up with the selects beside it. */
+  .todo-export-label{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.45px;color:var(--text-muted)}
+  .todo-export-menu{left:auto;right:0;min-width:250px;padding:4px}
+  .todo-export-head{padding:7px 9px 5px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)}
+  .todo-export-item{display:block;width:100%;text-align:left;background:none;border:0;border-radius:5px;padding:7px 9px;color:var(--text);font:inherit;cursor:pointer;text-transform:none;letter-spacing:0}
+  .todo-export-item:hover,.todo-export-item:focus-visible{background:rgba(255,255,255,0.06);outline:none}
+  .todo-export-item span{display:block;font-size:12.5px;font-weight:700}
+  .todo-export-item small{display:block;font-size:10.5px;font-weight:500;color:var(--text-muted);margin-top:1px}
+  .todo-export-range{border-top:1px solid var(--border);margin-top:4px;padding:8px 9px 6px}
+  .todo-export-range label{flex-direction:column;align-items:stretch;gap:4px;padding:0;font-size:9.5px}
+  .todo-export-range select{width:100%;background:var(--card);border:1px solid var(--border);border-radius:5px;color:var(--text);font:inherit;font-size:12px;font-weight:650;text-transform:none;letter-spacing:0;padding:6px}
+  .todo-export-range small{display:block;margin-top:6px;font-size:10px;font-weight:500;color:var(--text-muted);text-transform:none;letter-spacing:0;line-height:1.4}
   .todo-filter-menu-button{height:37px;text-align:left;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px}
   .todo-filter-menu-button:after{content:"";width:7px;height:7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg) translateY(-2px);opacity:0.75;flex-shrink:0}
   .todo-filter-menu{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:30;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 12px 28px rgba(0,0,0,0.35);padding:5px}
@@ -4555,6 +4571,67 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .todo-reward-row{display:flex;gap:8px}
   .todo-reward-row input{flex:1}
   .todo-reward-row .todo-public-btn{flex:0 0 auto}
+
+/* ── Shared list: print / save-as-PDF ─────────────────────────────────────────
+   The PDF export path is the browser's own print dialog, so this stylesheet IS
+   the PDF. Two jobs: strip every control that means nothing on paper (filters,
+   export menu, the guest add form, react/comment/bounty buttons, the sign-in
+   pills), and force a light palette, because the page is dark-themed and
+   printing it as-is either burns a cartridge or, with backgrounds off, renders
+   near-white text on white. `color-adjust` is deliberately NOT set: the point is
+   to let the browser drop the dark background, not preserve it. */
+@media print {
+  /* Blanket first, exceptions after. Naming the containers one at a time was the
+     first cut and it shipped a dark page: `.todo-public-main` painted var(--bg)
+     over everything and the date read as near-black on near-black. There are too
+     many nested panels on this page to enumerate, and a missed one is invisible
+     text, so every background is cleared and every colour forced to ink. */
+  .todo-public-body,
+  .todo-public-body *{background-color:transparent!important;background-image:none!important;box-shadow:none!important;color:#111!important}
+  .todo-public-body{background:#fff!important}
+  .todo-public-body .todo-public-shell{max-width:none;padding:0;margin:0}
+  .todo-public-body .todo-public-main{border:0!important;padding:0}
+  /* Secondary text stays secondary; without this the times and block headers
+     carry the same weight as the task titles and the page reads as a wall. */
+  .todo-public-body .tl-time,
+  .todo-public-body .block-hdr-time,
+  .todo-public-body .todo-public-stats,
+  .todo-public-body #todo-public-updated,
+  .todo-public-body .todo-public-hero p{color:#555!important}
+  .todo-public-body .todo-public-actions,
+  .todo-public-body .todo-public-controls,
+  .todo-public-body .todo-guest-add,
+  .todo-public-body .todo-public-comment-form,
+  .todo-public-body .todo-reward-form,
+  .todo-public-body .todo-public-reactions,
+  .todo-public-body .todo-bounty-btn,
+  .todo-public-body .todo-reward-btn,
+  .todo-public-body [data-reward-toggle],
+  .todo-public-body .todo-public-login{display:none!important}
+  .todo-public-body .todo-public-hero{border:0;padding:0 0 8px;margin:0 0 8px;border-bottom:1px solid #ccc}
+  .todo-public-body h1{font-size:20pt;color:#111!important}
+  .todo-public-body .todo-public-grid{display:block}
+  .todo-public-body .card,
+  .todo-public-body .todo-public-task,
+  .todo-public-body .todo-public-stats span{border:1px solid #ccc!important}
+  .todo-public-body .tl-item,
+  .todo-public-body .todo-public-task{break-inside:avoid;page-break-inside:avoid}
+  /* The row shell sizes itself around action buttons that print hides, so each
+     task reserved ~40pt of blank paper. Collapse the shell and let the card set
+     the height. */
+  .todo-public-body .tl-item{min-height:0!important;margin-bottom:6pt}
+  .todo-public-body .tl-node,
+  .todo-public-body .card-wrap{min-height:0!important}
+  /* Under its container query the card becomes a 2-row grid whose second row is
+     all controls. Print hides the controls but `grid-template-rows:auto auto`
+     keeps the empty band, which cost ~40pt of blank paper per task. Drop back to
+     flex so the row is only as tall as the text left in it. */
+  .todo-public-body .card{display:flex!important;flex-wrap:wrap;align-items:center;padding:6pt 8pt!important;min-height:0!important}
+  .todo-public-body .todo-public-completed{border-top:1px solid #ccc}
+  /* A print with no visible URL is an orphan page: nobody who picks it up off a
+     desk can get back to the live list. */
+  .todo-public-body .todo-public-hero:after{content:attr(data-print-url);display:block;font-size:9pt;color:#555;margin-top:6px}
+}
 
 /* ── Preset Task Groups + Menus ───────────────────────────────────────────── */
 /* Placeholder task on the itinerary: dashed, muted, clearly "pick a task". */
