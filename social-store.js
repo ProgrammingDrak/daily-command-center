@@ -145,12 +145,25 @@ async function blockUser(userId, otherId) {
   return rows[0];
 }
 
+// Both list functions join the name. They used to return bare ids, which no UI
+// can render without a lookup per row, and "friend_id: 7" is not something a
+// person recognises.
 async function listFriends(userId) {
   const { rows } = await pool.query(
-    `SELECT CASE WHEN requester_id=$1 THEN addressee_id ELSE requester_id END AS friend_id, updated_at
-       FROM friendships
-      WHERE status='accepted' AND (requester_id=$1 OR addressee_id=$1)
-      ORDER BY updated_at DESC`,
+    `SELECT f.friend_id,
+            f.updated_at,
+            COALESCE(NULLIF(pr.display_name, ''), u.username) AS name,
+            u.username,
+            pr.avatar
+       FROM (
+         SELECT CASE WHEN requester_id=$1 THEN addressee_id ELSE requester_id END AS friend_id,
+                updated_at
+           FROM friendships
+          WHERE status='accepted' AND (requester_id=$1 OR addressee_id=$1)
+       ) f
+       JOIN users u ON u.id = f.friend_id
+       LEFT JOIN user_profiles pr ON pr.user_id = f.friend_id
+      ORDER BY f.updated_at DESC`,
     [userId]
   );
   return rows;
@@ -158,7 +171,14 @@ async function listFriends(userId) {
 
 async function listFriendRequests(userId) {
   const { rows } = await pool.query(
-    `SELECT * FROM friendships WHERE addressee_id=$1 AND status='pending' ORDER BY created_at DESC`,
+    `SELECT f.*,
+            COALESCE(NULLIF(pr.display_name, ''), u.username) AS requester_name,
+            u.username AS requester_username
+       FROM friendships f
+       JOIN users u ON u.id = f.requester_id
+       LEFT JOIN user_profiles pr ON pr.user_id = f.requester_id
+      WHERE f.addressee_id=$1 AND f.status='pending'
+      ORDER BY f.created_at DESC`,
     [userId]
   );
   return rows;
@@ -879,18 +899,29 @@ async function createCompletionPost({
   actualMinutes = null,
   isPrivate = false,
   isWorkSourced = false,
+  titleSnapshot = "",
+  itemType = "task",
 }) {
   const locked = isPrivate || isWorkSourced;
+  // ON CONFLICT DO NOTHING, not an upsert: the completion endpoint is replayed by
+  // design (mutationId dedupe, offline WAL replay), and a replay must neither
+  // stack a second post NOR overwrite one the owner may already have published
+  // and captioned. RETURNING is then empty on a replay, which the caller reads as
+  // "already recorded".
   const { rows } = await pool.query(
     `INSERT INTO feed_posts
        (owner_user_id, workspace_id, task_id, completion_id, points_awarded,
-        estimated_minutes, actual_minutes, publish_state, publish_source)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'hidden',$8)
+        estimated_minutes, actual_minutes, publish_state, publish_source,
+        title_snapshot, item_type)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'hidden',$8,$9,$10)
+     ON CONFLICT (owner_user_id, completion_id) WHERE completion_id IS NOT NULL
+       DO NOTHING
      RETURNING *`,
     [ownerUserId, workspaceId, taskId, completionId, pointsAwarded,
-     estimatedMinutes, actualMinutes, locked ? "private_task" : "default_hidden"]
+     estimatedMinutes, actualMinutes, locked ? "private_task" : "default_hidden",
+     String(titleSnapshot || "").slice(0, 220), String(itemType || "task").slice(0, 40)]
   );
-  return rows[0];
+  return rows[0] || null;
 }
 
 /** Publish a completion post. The work-task wall: a post whose source is
@@ -916,10 +947,20 @@ async function hidePost(postId, ownerUserId) {
   return { post: rows[0] || null, changed: rows.length > 0 };
 }
 
-/** A viewer's friends feed: published posts from accepted friends only. */
+/** A viewer's friends feed: published posts from accepted friends only.
+ *  Joins the author's display name so a feed row renders without a second round
+ *  trip. The TASK TITLE comes from the post's own snapshot, never from a live
+ *  join to blocks: a feed entry is a record of what happened, and the task may
+ *  since have been deleted, renamed, or rescheduled. */
 async function listFriendsFeed(viewerUserId, { limit = 50 } = {}) {
   const { rows } = await pool.query(
-    `SELECT p.* FROM feed_posts p
+    `SELECT p.*,
+            COALESCE(NULLIF(pr.display_name, ''), u.username) AS author_name,
+            pr.avatar AS author_avatar,
+            (p.owner_user_id = $1) AS is_own
+       FROM feed_posts p
+       JOIN users u ON u.id = p.owner_user_id
+       LEFT JOIN user_profiles pr ON pr.user_id = p.owner_user_id
       WHERE p.publish_state='published'
         AND (
           p.owner_user_id=$1
@@ -932,6 +973,23 @@ async function listFriendsFeed(viewerUserId, { limit = 50 } = {}) {
       ORDER BY p.published_at DESC
       LIMIT $2`,
     [viewerUserId, limit]
+  );
+  return rows;
+}
+
+/** The owner's own completions that are not published yet: the publish queue.
+ *  LOCKED posts (private or work-sourced) are excluded outright rather than
+ *  listed with a disabled button. publishPost refuses them at the SQL level, so
+ *  rendering a control that can never succeed would just look like a bug. */
+async function listPublishablePosts(ownerUserId, { limit = 50 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT * FROM feed_posts
+      WHERE owner_user_id=$1
+        AND publish_state='hidden'
+        AND publish_source <> 'private_task'
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [ownerUserId, limit]
   );
   return rows;
 }
@@ -977,6 +1035,7 @@ module.exports = {
   publishPost,
   hidePost,
   listFriendsFeed,
+  listPublishablePosts,
   // pure helpers (unit-testable without a DB)
   _test: {
     resolveReviewState,

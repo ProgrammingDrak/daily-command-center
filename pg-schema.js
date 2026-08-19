@@ -606,6 +606,24 @@ CREATE INDEX IF NOT EXISTS idx_feed_posts_owner_state
 CREATE INDEX IF NOT EXISTS idx_feed_posts_published
   ON feed_posts(publish_state, published_at DESC) WHERE publish_state = 'published';
 
+-- The post recorded points and minutes but NOT what was actually completed, so a
+-- feed row could not say more than "finished something worth 30 points". Snapshot
+-- the title at completion time rather than joining to blocks on read: the task can
+-- be deleted, rescheduled, or renamed afterwards, and a feed entry is a record of
+-- what happened, not a live view of the row. Same reasoning (and same column name)
+-- as reward_queue_items.title_snapshot.
+ALTER TABLE feed_posts
+  ADD COLUMN IF NOT EXISTS title_snapshot TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS item_type      TEXT NOT NULL DEFAULT 'task';
+
+-- Idempotency. The completion endpoint is replayed by design (mutationId dedupe,
+-- offline WAL replay), and re-completing a task must not stack duplicate posts.
+-- Partial, because completion_id is nullable and several posts may legitimately
+-- carry no completion id.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feed_posts_completion
+  ON feed_posts(owner_user_id, completion_id)
+  WHERE completion_id IS NOT NULL;
+
 -- ── Budget Tank (tank blocks are slot_rewards rows; see budget-store.js) ──
 -- tank_unlock_cents is the cumulative bottom-up waterline gate, recomputed
 -- server-side on every tank mutation. It is deliberately SEPARATE from
