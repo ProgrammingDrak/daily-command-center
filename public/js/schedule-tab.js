@@ -646,21 +646,11 @@ function buildListView(){
     return '<a class="src-jump" href="'+escHtml(url)+'" target="_blank" rel="noopener" title="Open source ('+label+')" onclick="event.stopPropagation()">'+label+' ↗</a>';
   }
 
-  // The other half of a check-in's provenance: the DCC task it chases, when the
-  // Waiting item was raised off one. A button rather than an anchor because the
-  // target is a row on a day, not a URL -- the handler switches days first when the
-  // origin lives elsewhere, then opens its details modal.
+  // The other half of a check-in's provenance: the DCC task it chases, when the Waiting
+  // item was raised off one. Built by delegated.js (same as the Check-in pill next to it)
+  // so the row, the details modal and the click handler share one markup contract.
   function originJumpLink(ev){
-    if(typeof window.waitingCheckInOriginBlock!=="function")return "";
-    const block=window.waitingCheckInOriginBlock(ev);
-    if(!block)return "";
-    const bp=block.properties||{};
-    const title=String(bp.title||"the original task");
-    // The row id, not the block id: openAddModal resolves through taskAnchorById,
-    // which matches on ev.id -- and TaskModel.fromBlock keys that as local_id || block.id.
-    return '<button type="button" class="src-jump origin" data-origin-block="'+escHtml(bp.local_id||block.id)+'"'+
-      (block.date?' data-origin-date="'+escHtml(block.date)+'"':'')+
-      ' title="'+escHtml("Open origin task: "+title)+'">Origin task ↗</button>';
+    return (typeof window.waitingOriginChipHtml==="function")?window.waitingOriginChipHtml(ev):"";
   }
 
   // A node is a SUB row when it is actually NESTED in the rendered tree, not merely

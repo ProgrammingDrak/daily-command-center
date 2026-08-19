@@ -40,7 +40,19 @@
   // Schemes that must never reach an href. Hitting one ABORTS the walk rather
   // than skipping it: a hostile value in the highest-priority field is a signal
   // about the whole record, so falling through to a sibling field would launder it.
-  const HOSTILE_SCHEME = /^\s*(javascript|data|vbscript)\s*:/i;
+  //
+  // Test the value the way a BROWSER reads it, not the way it is stored. Browsers
+  // drop leading C0 controls and any whitespace sitting INSIDE a scheme before
+  // parsing it, so href="jav&#9;ascript:alert(1)" still executes. Matching only
+  // /^\s*javascript\s*:/ let those through, which mattered twice: the exported
+  // predicate below is consumed as a safety gate, and a bypassed abort in one field
+  // silently fell through to a sibling. Stripping is safe because the normalized
+  // string is only ever tested, never returned.
+  const SCHEME_NOISE = /[\u0000-\u0020\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]/g;
+  const HOSTILE_SCHEME = /^(javascript|data|vbscript):/i;
+  function schemeSafe(value) {
+    return String(value == null ? "" : value).replace(SCHEME_NOISE, "");
+  }
 
   // Two different non-URL cases live in these fields and they need opposite
   // handling, which a single first-truthy read cannot give them:
@@ -59,7 +71,7 @@
     for (const field of SOURCE_URL_FIELDS) {
       const raw = String(src[field] == null ? "" : src[field]).trim();
       if (!raw) continue;
-      if (HOSTILE_SCHEME.test(raw)) return "";
+      if (HOSTILE_SCHEME.test(schemeSafe(raw))) return "";
       if (/^https?:\/\//i.test(raw)) return raw;
     }
     return "";
@@ -71,7 +83,7 @@
   // the Waiting item's deeplink, but a `javascript:` one must not -- otherwise the
   // fall-through launders exactly what the abort exists to stop.
   function taskSourceUrlBlocked(value) {
-    return HOSTILE_SCHEME.test(String(value == null ? "" : value));
+    return HOSTILE_SCHEME.test(schemeSafe(value));
   }
 
   function taskSourceLabel(value) {

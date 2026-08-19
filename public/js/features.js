@@ -306,13 +306,12 @@ function _amBuildDetails(ev){
     var srcLabel=(window.DCC&&typeof window.DCC.taskSourceLabel==='function')?window.DCC.taskSourceLabel(srcUrl):'Source';
     meta.push('<a class="detail-action-link" href="'+esc(srcUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">Open in '+esc(srcLabel||'source')+' &#8599;</a>');
   }
-  var origin=(typeof window.waitingCheckInOriginBlock==='function')?window.waitingCheckInOriginBlock(ev):null;
-  if(origin){
-    var op=origin.properties||{};
-    meta.push('<button type="button" class="detail-action-link" data-origin-block="'+esc(op.local_id||origin.id)+'"'+
-      (origin.date?' data-origin-date="'+esc(origin.date)+'"':'')+
-      ' title="'+esc('Open origin task: '+(op.title||'the original task'))+'">Open origin task &#8599;</button>');
-  }
+  // Same builder the itinerary row uses (delegated.js), so the attribute contract the
+  // [data-origin-open] handler depends on lives in exactly one place.
+  var originChip=(typeof window.waitingOriginChipHtml==='function')
+    ? window.waitingOriginChipHtml(ev,'detail-action-link','Open origin task')
+    : '';
+  if(originChip)meta.push(originChip);
   return meta.join('');
 }
 
@@ -472,16 +471,7 @@ function _amSetupTitle(taskId, taskEntry, fallbackTitle) {
 }
 
 function closeAddModal() {
-  persistAddModalCommute();
-  // Save notes from block editor on close
-  if (_addModalTaskId && window._amBlockEditor) {
-    var notes = loadNotes();
-    if(!window._amBlockEditor.isEmpty()){
-      var blocks=window._amBlockEditor.getBlocks();
-      notes[_addModalTaskId]={blocks:blocks, html:window._amBlockEditor.toHtml(), text:window._amBlockEditor.toMarkdown()};
-    } else { delete notes[_addModalTaskId]; }
-    saveNotes(notes);
-  }
+  persistAddModalEdits();
   document.getElementById('add-modal-overlay').classList.remove('open');
   _addModalTaskId = null;
   // C4: clear the row id with the task id. Leaving it set would point the NEXT modal's
@@ -1115,6 +1105,26 @@ function toggleSnCreateTask(){
   addBtn && addBtn.addEventListener("click", collapseIfAdded);
   titleInp && titleInp.addEventListener("keydown", e=>{ if(e.key==="Enter") collapseIfAdded(); });
 })();
+
+// Everything the open modal holds that is not yet durable: commute inputs and the notes
+// block editor. Split out of closeAddModal because a caller can need the SAVE without the
+// CLOSE. openAddModal destroys the block editor to rebuild it, so re-entering the modal on
+// a different task (the origin-task chip) silently discarded whatever was typed, while
+// calling closeAddModal instead would have run its trailing _flushDeferredRender() +
+// render() -- and that refold races a following switchToDate, leaving the day's task array
+// empty. Persisting without closing avoids both.
+function persistAddModalEdits() {
+  persistAddModalCommute();
+  if (_addModalTaskId && window._amBlockEditor) {
+    var notes = loadNotes();
+    if (!window._amBlockEditor.isEmpty()) {
+      var blocks = window._amBlockEditor.getBlocks();
+      notes[_addModalTaskId] = { blocks: blocks, html: window._amBlockEditor.toHtml(), text: window._amBlockEditor.toMarkdown() };
+    } else { delete notes[_addModalTaskId]; }
+    saveNotes(notes);
+  }
+}
+window.persistAddModalEdits = persistAddModalEdits;
 
 function persistAddModalCommute() {
   if (!_addModalTaskId) return;

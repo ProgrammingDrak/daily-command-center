@@ -5,6 +5,7 @@ const {
   taskCommonProps,
   taskBlockProps,
   taskSourceUrl,
+  taskSourceUrlBlocked,
   taskSourceLabel,
 } = require("./public/js/task-serialize");
 
@@ -143,6 +144,41 @@ test("taskSourceUrl skips an opaque identity but still aborts on a hostile schem
   assert.equal(taskSourceUrl({ source_id: "data:text/html,<script>", source_ref: slack }), "");
   assert.equal(taskSourceUrl({ source_id: "  JavaScript:alert(1)", source_ref: slack }), "",
     "the abort is case- and whitespace-insensitive");
+  assert.equal(taskSourceUrl({ source_id: cycleKey, link: "javascript:alert(1)", source_ref: slack }), "",
+    "the abort applies wherever the walk finds a hostile value, not only in the first field");
+});
+
+// A denylist has to test the value the way a BROWSER reads it. Browsers drop leading C0
+// controls and whitespace sitting inside a scheme, so these all execute in an href even
+// though a naive /^\s*javascript\s*:/ misses them. The http(s) allowlist still gates the
+// return value, but the exported predicate is consumed as a safety gate, and a missed
+// abort silently fell through to a sibling field.
+test("taskSourceUrl normalizes scheme noise the way a browser does", () => {
+  const slack = "https://cleverrealestate.slack.com/archives/C1/p123";
+  const TAB = String.fromCharCode(9), NL = String.fromCharCode(10), C0 = String.fromCharCode(1);
+  for (const [name, hostile] of [
+    ["tab inside the scheme", "jav" + TAB + "ascript:alert(1)"],
+    ["newline inside the scheme", "jav" + NL + "ascript:alert(1)"],
+    ["leading C0 control", C0 + "javascript:alert(1)"],
+    ["space before the colon", "javascript :alert(1)"],
+  ]) {
+    assert.equal(taskSourceUrl(hostile), "", name + " must not resolve");
+    assert.equal(taskSourceUrl({ source_id: hostile, link: slack }), "",
+      name + " must abort the walk, not launder into the sibling field");
+    assert.equal(taskSourceUrlBlocked(hostile), true, name + " must read as hostile");
+  }
+});
+
+test("taskSourceUrlBlocked separates hostile from merely-opaque, and takes a bare value only", () => {
+  assert.equal(taskSourceUrlBlocked("javascript:alert(1)"), true);
+  assert.equal(taskSourceUrlBlocked("  DATA:text/html,x"), true);
+  assert.equal(taskSourceUrlBlocked("vbscript:msgbox"), true);
+  assert.equal(taskSourceUrlBlocked("waiting:blk-1:2026-08-18"), false,
+    "opaque is not hostile -- that split is the whole point");
+  assert.equal(taskSourceUrlBlocked("https://example.com"), false);
+  assert.equal(taskSourceUrlBlocked(null), false);
+  assert.equal(taskSourceUrlBlocked({ source_id: "javascript:alert(1)" }), false,
+    "unlike taskSourceUrl this takes a bare value; callers must unwrap the record first");
 });
 
 test("taskSourceUrl accepts a bare string and rejects a bare unsafe one", () => {

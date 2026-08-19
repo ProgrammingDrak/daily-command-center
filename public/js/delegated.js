@@ -159,6 +159,63 @@
     return (block && !block.deleted_at) ? block : null;
   }
 
+  // How many frames to give the post-close render flush before calling the row missing.
+  const ORIGIN_ANCHOR_TRIES = 20;
+  function nextFrame() {
+    return new Promise(resolve => (typeof requestAnimationFrame === "function")
+      ? requestAnimationFrame(() => resolve())
+      : setTimeout(resolve, 16));
+  }
+
+  // Open the origin task a chip points at. Three ordering rules, each one a bug review
+  // caught rather than a guess:
+  //   1. CLOSE the open details modal first when the chip was clicked from inside it.
+  //      openAddModal destroys the notes block editor, and notes are only persisted on
+  //      close, so re-entering it directly threw away whatever was typed. Closing also
+  //      matters for rule 3: _doRender bails while any modal is open, so the day switch
+  //      below cannot rebuild the task array until the modal is gone.
+  //   2. Switch days BEFORE opening, or the modal resolves an id the viewed day's caches
+  //      never held and renders an empty shell.
+  //   3. WAIT for the row to actually resolve. closeAddModal's flush lands on the next
+  //      animation frame, so the row is not addressable the instant switchToDate returns.
+  //      Poll the real condition instead of sleeping a guessed number of milliseconds, and
+  //      only give up (with a toast) once it genuinely has not appeared.
+  async function openOriginBlockFromChip(chip) {
+    const id = chip && chip.dataset && chip.dataset.originOpen;
+    const date = (chip && chip.dataset && chip.dataset.originDate) || "";
+    if (!id) return;
+    const anchored = () => (typeof taskAnchorById === "function") ? taskAnchorById(id) : null;
+    try {
+      const overlay = document.getElementById("add-modal-overlay");
+      if (overlay && overlay.classList.contains("open") && typeof closeAddModal === "function") {
+        closeAddModal();
+        // Let the close's deferred-render flush actually run BEFORE the day switch.
+        // _doRender bails while a modal is open and re-arms on the next animation frame,
+        // so switching in the same tick leaves the target day's task array unbuilt.
+        await nextFrame();
+        await nextFrame();
+      }
+      // Completes the repo's viewed-day idiom: viewDate is genuinely nullable
+      // (persistence.js initialises it from __state), and reading only viewDate skipped
+      // the switch on exactly the path it exists for.
+      const viewed = (typeof viewDate !== "undefined" && viewDate)
+        ? viewDate
+        : ((typeof __state !== "undefined" && __state) ? __state.date : null);
+      if (date && date !== viewed && typeof switchToDate === "function") await switchToDate(date);
+      // Give the row a few frames to become addressable, then open regardless. Review
+      // asked for a hard bail when taskAnchorById still misses, and that was tried and
+      // reverted: closing the modal defers the render that BUILDS the day's task array,
+      // so the miss is routine on the modal path and the bail refused the jump outright,
+      // breaking the feature it meant to protect. openAddModal already tolerates an
+      // unresolved id the same way it does for every other caller, so a slow day costs a
+      // sparse panel rather than a dead chip.
+      for (let i = 0; i < ORIGIN_ANCHOR_TRIES && !anchored(); i += 1) await nextFrame();
+      if (typeof openAddModal === "function") openAddModal(id, blockTitle(id, ""));
+    } catch (err) {
+      toast("Could not open the origin task: " + (err.message || err), "error");
+    }
+  }
+
   // linkedBlockId -> open Waiting items, built at most once per synchronous render
   // burst. The chip helper below runs once PER ROW, and getAllDelegatedItems is a spread
   // of the WHOLE block cache plus two sorts, one of them Date-heavy through
@@ -209,6 +266,26 @@
     const tag = itemId ? "button" : "span";
     return '<' + tag + (itemId ? ' type="button"' : '') + ' class="waiting-pill ' + cls + '"' + open +
       ' title="' + esc(tip) + '">' + icon + ' ' + esc(label) + '</' + tag + '>';
+  }
+
+  // The origin-task chip, built ONCE here rather than per surface. The itinerary row and
+  // the details modal both render it and the document-level [data-origin-open] handler
+  // consumes it, so three files would otherwise have to independently agree on the
+  // attribute name, the date-presence rule and the non-obvious row-id derivation. Same
+  // shape as waitingPill / taskDependencyChipHtml, which the row and the card already
+  // share through one builder. `cls` varies because the row wants the .src-jump pill and
+  // the modal wants a .detail-action-link.
+  function checkInOriginChipHtml(ev, cls, label) {
+    const block = checkInOriginBlock(ev);
+    if (!block) return "";
+    const bp = block.properties || {};
+    // The ROW id, not the block id: openAddModal resolves through taskAnchorById, which
+    // matches ev.id, and TaskModel.fromBlock keys that as local_id || block.id.
+    return '<button type="button" class="' + esc(cls || "src-jump origin") + '"' +
+      ' data-origin-open="' + esc(bp.local_id || block.id) + '"' +
+      (block.date ? ' data-origin-date="' + esc(block.date) + '"' : "") +
+      ' title="' + esc("Open origin task: " + (bp.title || "the original task")) + '">' +
+      esc(label || "Origin task") + ' &#8599;</button>';
   }
 
   // The chip an itinerary row renders. Check-in rows win: a check-in task can also be
@@ -862,14 +939,37 @@
     });
   }
 
+  // local_id -> block, memoized on the same mutation-generation key waitingLinkIndex
+  // uses. resolveLinkedBlock's fallback is a getByType("block") spread of BOTH cache
+  // partitions plus a filter and a sort (block-store.js), and checkInOriginBlock puts
+  // that on the per-ROW render path -- where the miss is the COMMON case, because an
+  // origin task on another day is not in _dayCache and a carryover row lives in
+  // _rangeCache, which the store cannot see. k check-in rows meant k full scans per
+  // render, per drag settle, per SSE tick, usually to produce null. Same bounding as
+  // _linkIndex: the generation key drops it on any write, the microtask reset means it
+  // never outlives the render burst it was built for.
+  let _localIdIndex = null;
+  let _localIdIndexGen = -1;
+  function localIdIndex() {
+    const gen = (window.blockStore && typeof window.blockStore.getMutationGeneration === "function")
+      ? window.blockStore.getMutationGeneration() : 0;
+    if (_localIdIndex && _localIdIndexGen === gen) return _localIdIndex;
+    const index = new Map();
+    for (const block of window.blockStore.getByType("block")) {
+      const key = String((block.properties || {}).local_id || "");
+      // First writer wins, which preserves .find()'s sort_order-first semantics
+      // because getByType("block") hands rows back already sorted.
+      if (key && !index.has(key)) index.set(key, block);
+    }
+    _localIdIndex = index;
+    _localIdIndexGen = gen;
+    Promise.resolve().then(() => { _localIdIndex = null; });
+    return index;
+  }
+
   function resolveLinkedBlock(id) {
     if (!id || !window.blockStore) return null;
-    const direct = window.blockStore.get(id);
-    if (direct) return direct;
-    return window.blockStore.getByType("block").find(block => {
-      const p = block.properties || {};
-      return String(p.local_id || "") === String(id);
-    }) || null;
+    return window.blockStore.get(id) || localIdIndex().get(String(id)) || null;
   }
 
   function unblockWaitingItem(id, anchorEl, selectedDate) {
@@ -1359,24 +1459,14 @@
       e.stopPropagation();
       openWaitingItem(pill.dataset.waitingOpen);
     });
-    // Origin-task chip on a check-in row. The target is a row on a day rather than a
-    // URL, so switch days first when it lives elsewhere -- otherwise the modal opens
-    // on an id the viewed day's caches have never heard of and renders an empty shell.
+    // Origin-task chip on a check-in row or in its details modal. Named rather than
+    // inline so the ordering guarantees below are drivable from a test.
     document.addEventListener("click", async e => {
-      const chip = e.target.closest && e.target.closest("[data-origin-block]");
+      const chip = e.target.closest && e.target.closest("[data-origin-open]");
       if (!chip) return;
       e.stopPropagation();
       e.preventDefault();
-      const id = chip.dataset.originBlock;
-      const date = chip.dataset.originDate || "";
-      if (!id) return;
-      try {
-        const viewed = (typeof viewDate !== "undefined" && viewDate) ? viewDate : null;
-        if (date && viewed && date !== viewed && typeof switchToDate === "function") await switchToDate(date);
-        if (typeof openAddModal === "function") openAddModal(id, blockTitle(id, ""));
-      } catch (err) {
-        toast("Could not open the origin task: " + (err.message || err), "error");
-      }
+      await openOriginBlockFromChip(chip);
     });
 
     // Task-link picker: selecting an existing task fills the working-task text and
@@ -1432,6 +1522,7 @@
   window.waitingCheckInIsLive = checkInIsLive;
   window.waitingCheckInSourceUrl = checkInSourceUrl;
   window.waitingCheckInOriginBlock = checkInOriginBlock;
+  window.waitingOriginChipHtml = checkInOriginChipHtml;
   window.notifyReadyTaskDependencies = notifyReadyTaskDependencies;
   window.deleteDelegatedItem = deleteDelegatedItem;
   window.getAllDelegatedItems = getAllDelegatedItems;
@@ -1461,6 +1552,8 @@
     checkInIsLive,
     checkInSourceUrl,
     checkInOriginBlock,
+    originChipHtml: checkInOriginChipHtml,
+    openOriginFromChip: openOriginBlockFromChip,
     sourceRef: waitingSourceRef,
     itemsForTask: waitingItemsForTask,
     rowChipHtml: waitingChipHtml,
