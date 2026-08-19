@@ -1355,6 +1355,11 @@ async function getCarryoverPool(workspaceId, beforeDate, opts = {}) {
         AND b.deleted_at IS NULL
         AND b.type = ANY($4::text[])
         AND dcc_is_task_row(b.type, b.properties)
+        -- Production can briefly run newer application code against an older copy of
+        -- dcc_is_task_row while a schema refresh rolls through. Proposed actions are
+        -- meeting evidence, including rows whose terminal state is "dismissed"; they
+        -- must never become carryover work even during that version-skew window.
+        AND COALESCE(b.properties->>'kind', '') <> 'proposed_action_item'
         AND COALESCE(b.properties->>'type', '') <> ALL($5::text[])
         AND (COALESCE(b.properties->>'start', '') <> ''
              OR b.properties->>'subtaskOf' IS NOT NULL

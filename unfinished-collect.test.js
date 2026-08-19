@@ -217,6 +217,20 @@ test("completed rows never surface, by row id / local_id / the done property", a
   assert.deepEqual(plain(rows.map(r => r.id)), ["open"]);
 });
 
+test("meeting artifacts never become carryover work if a stale server admits them", async () => {
+  const d = ymd(1);
+  const proposal = blk("proposal", d, {
+    local_id: null,
+    kind: "proposed_action_item",
+    status: "dismissed",
+    dismissedAt: "2026-07-28T17:00:00.000Z",
+  });
+  const { CO } = load({ [d]: [dayRoot(), proposal, blk("real-task", d, {})] }, [d]);
+  const { rows, total } = await CO.collect();
+  assert.deepEqual(plain(rows.map(r => r.id)), ["real-task"]);
+  assert.equal(total, 1);
+});
+
 // The overlay is a PER-DAY fact. Flattening done ids across the pool is a real bug
 // I wrote once while building C2 and only caught by diffing against the old
 // collector: the same id can exist on two days and being done on one must not mark

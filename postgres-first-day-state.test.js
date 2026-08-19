@@ -55,7 +55,7 @@ const dayWithTimeline = (label) => ({ date: DATE, schedule: { timeline: [{ id: "
 
 // ── buildDayResponse ─────────────────────────────────────────────────────────
 
-function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionBlocks = [], suppressionsThrow = false } = {}) {
+function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionBlocks = [], suppressionsThrow = false, reviewRows = [] } = {}) {
   const writes = [];
   const ctx = {
     console: { error: () => {}, warn: () => {} },
@@ -67,6 +67,12 @@ function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionB
     buildSkeletonState: (d) => ({ date: d, last_updated_by: "skeleton", schedule: { timeline: [] } }),
     getScheduleBlocks: async () => [],
     triageSuppressions: require("./triage-suppressions"),
+    dayReviewRepeats: require("./day-review-repeats"),
+    addDays: (date, days) => {
+      const value = new Date(date + "T12:00:00Z");
+      value.setUTCDate(value.getUTCDate() + days);
+      return value.toISOString().slice(0, 10);
+    },
     // buildDayResponse scopes suppressed_items to the app's LOCAL day, so the zone is
     // part of what it reads. Pinned here rather than left to the host's TZ so the
     // evening-boundary behaviour stays deterministic in CI.
@@ -80,6 +86,7 @@ function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionB
         if (suppressionsThrow) throw new Error("connection terminated unexpectedly");
         return suppressionBlocks;
       },
+      getDccStateRange: async () => reviewRows,
     },
   };
   vm.createContext(ctx);
@@ -158,6 +165,12 @@ test("the row is read for the caller's OWN workspace, not a default", async () =
     buildSkeletonState: (d) => ({ date: d, schedule: { timeline: [] } }),
     getScheduleBlocks: async () => [],
     triageSuppressions: require("./triage-suppressions"),
+    dayReviewRepeats: require("./day-review-repeats"),
+    addDays: (date, days) => {
+      const value = new Date(date + "T12:00:00Z");
+      value.setUTCDate(value.getUTCDate() + days);
+      return value.toISOString().slice(0, 10);
+    },
     // buildDayResponse scopes suppressed_items to the app's LOCAL day, so the zone is
     // part of what it reads. Pinned here rather than left to the host's TZ so the
     // evening-boundary behaviour stays deterministic in CI.
@@ -231,6 +244,25 @@ test("an unreadable suppression overlay degrades to the RAW triage list, not to 
   const out = await call();
   assert.deepEqual(out.triage.open_items.map((i) => i.id), ["gmail:abc"]);
   assert.deepEqual(out.triage.suppressed_items, []);
+});
+
+test("a differently keyed Day Review item stays hidden after the same signature was dismissed", async () => {
+  const review = (id, decisions = {}) => ({
+    date: DATE,
+    schedule: { timeline: [] },
+    glymphatic_brief: {
+      decisions,
+      current: { pages: [{ id: "day-review", items: [{ id, title: "reply with exactly READY", tags: ["claude"] }] }] },
+    },
+  });
+  const { call } = runBuildDay({
+    dbRow: { state_json: review("new-id") },
+    reviewRows: [{ state_json: review("old-id", { "old-id": { action: "dismiss" } }) }],
+  });
+  const out = await call();
+  const page = out.glymphatic_brief.current.pages[0];
+  assert.deepEqual(page.items, []);
+  assert.equal(page.repeat_suppressed_items[0].id, "new-id");
 });
 
 // ── dayStateUnavailable (the degraded answer) ────────────────────────────────
