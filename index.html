@@ -1280,7 +1280,26 @@
           <div class="pet-meter"><span>Food</span><strong id="pet-food-label">0%</strong><i><b id="pet-food-fill"></b></i></div>
           <div class="pet-meter"><span>Mood</span><strong id="pet-mood-label">0%</strong><i><b id="pet-mood-fill"></b></i></div>
           <div class="pet-currency"><span>Decor treats</span><strong id="pet-decor-currency">0</strong></div>
+          <div class="pet-meter pet-level-meter">
+            <span>Level <span id="pet-level-num">1</span></span>
+            <strong id="pet-level-label">0 to go</strong>
+            <i><b id="pet-level-fill"></b></i>
+          </div>
         </div>
+      </section>
+      <section class="pet-panel">
+        <div class="pet-panel-head">
+          <h3>Visits</h3>
+          <span id="pet-visit-count">none yet</span>
+        </div>
+        <p class="pet-visit-note">Send your pet to a friend's home once a day. It carries a note.</p>
+        <div class="pet-visit-send">
+          <select id="pet-visit-friend" aria-label="Friend to visit"><option value="">Pick a friend</option></select>
+          <input id="pet-visit-message" type="text" maxlength="300" placeholder="Say something (optional)">
+          <button id="pet-visit-send" class="pet-btn primary" type="button">Send pet</button>
+        </div>
+        <div id="pet-visit-status" class="pet-visit-status"></div>
+        <div id="pet-visits" class="pet-visits"></div>
       </section>
       <section class="pet-panel">
         <h3>Customize</h3>
