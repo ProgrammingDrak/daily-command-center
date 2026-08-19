@@ -29,19 +29,61 @@
     DCC.taskCommonProps = api.taskCommonProps;
     DCC.taskBlockProps = api.taskBlockProps;
     DCC.taskSourceUrl = api.taskSourceUrl;
+    DCC.taskSourceUrlBlocked = api.taskSourceUrlBlocked;
     DCC.taskSourceLabel = api.taskSourceLabel;
   }
 })(typeof self !== "undefined" ? self : this, function () {
   // Source-backed triage items arrive with several field names depending on the
   // reader that produced them. Resolve that vocabulary once so scheduling, row
   // rendering and the one-time backfill cannot disagree about the deeplink.
+  const SOURCE_URL_FIELDS = ["source_id", "link", "source_ref", "source_url", "url", "action_url", "actionUrl", "evidence_link"];
+  // Schemes that must never reach an href. Hitting one ABORTS the walk rather
+  // than skipping it: a hostile value in the highest-priority field is a signal
+  // about the whole record, so falling through to a sibling field would launder it.
+  //
+  // Test the value the way a BROWSER reads it, not the way it is stored. Browsers
+  // drop leading C0 controls and any whitespace sitting INSIDE a scheme before
+  // parsing it, so href="jav&#9;ascript:alert(1)" still executes. Matching only
+  // /^\s*javascript\s*:/ let those through, which mattered twice: the exported
+  // predicate below is consumed as a safety gate, and a bypassed abort in one field
+  // silently fell through to a sibling. Stripping is safe because the normalized
+  // string is only ever tested, never returned.
+  const SCHEME_NOISE = /[\u0000-\u0020\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]/g;
+  const HOSTILE_SCHEME = /^(javascript|data|vbscript):/i;
+  function schemeSafe(value) {
+    return String(value == null ? "" : value).replace(SCHEME_NOISE, "");
+  }
+
+  // Two different non-URL cases live in these fields and they need opposite
+  // handling, which a single first-truthy read cannot give them:
+  //   HOSTILE  ("javascript:alert(1)") -> stop, resolve to "".
+  //   OPAQUE   (a Waiting cycle key, "waiting:<id>:<date>") -> skip, keep looking.
+  // Treating opaque as hostile is what hid the Slack permalink on Waiting
+  // check-ins: waiting-items.js puts the cycle key in source_id while the real
+  // deeplink sits one field over in link/source_ref, so the walk stopped on an
+  // identity string and never reached it.
   function taskSourceUrl(value) {
     const src = value && typeof value === "object" ? value : null;
-    const raw = src
-      ? (src.source_id || src.link || src.source_ref || src.source_url || src.url || src.action_url || src.actionUrl || src.evidence_link || "")
-      : value;
-    const url = String(raw == null ? "" : raw).trim();
-    return /^https?:\/\//i.test(url) ? url : "";
+    if (!src) {
+      const bare = String(value == null ? "" : value).trim();
+      return /^https?:\/\//i.test(bare) ? bare : "";
+    }
+    for (const field of SOURCE_URL_FIELDS) {
+      const raw = String(src[field] == null ? "" : src[field]).trim();
+      if (!raw) continue;
+      if (HOSTILE_SCHEME.test(schemeSafe(raw))) return "";
+      if (/^https?:\/\//i.test(raw)) return raw;
+    }
+    return "";
+  }
+
+  // "This value is hostile" as opposed to "this value is not a link", so a caller
+  // resolving across TWO records can honour the same abort taskSourceUrl applies
+  // within one. Waiting check-ins need it: an empty source_id should fall through to
+  // the Waiting item's deeplink, but a `javascript:` one must not -- otherwise the
+  // fall-through launders exactly what the abort exists to stop.
+  function taskSourceUrlBlocked(value) {
+    return HOSTILE_SCHEME.test(schemeSafe(value));
   }
 
   function taskSourceLabel(value) {
@@ -98,6 +140,7 @@
     taskCommonProps: taskCommonProps,
     taskBlockProps: taskBlockProps,
     taskSourceUrl: taskSourceUrl,
+    taskSourceUrlBlocked: taskSourceUrlBlocked,
     taskSourceLabel: taskSourceLabel
   };
 });

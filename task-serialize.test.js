@@ -5,6 +5,7 @@ const {
   taskCommonProps,
   taskBlockProps,
   taskSourceUrl,
+  taskSourceUrlBlocked,
   taskSourceLabel,
 } = require("./public/js/task-serialize");
 
@@ -123,6 +124,70 @@ test("taskSourceUrl normalizes triage provenance and rejects unsafe schemes", ()
     "an explicitly unsafe source_id must not fall through to a different field");
   assert.equal(taskSourceUrl({ source_ref: "mailto:person@example.com" }), "");
   assert.equal(taskSourceUrl({ source_ref: "javascript:alert(1)" }), "");
+});
+
+// Hostile and merely-opaque both fail the http(s) test, and they need OPPOSITE
+// handling. A first-truthy read gave them the same one, which is how the Slack
+// permalink on a Waiting check-in went missing: waiting-items.js puts the cycle key
+// in source_id and the real deeplink one field over in link/source_ref, so the walk
+// stopped on an identity string it was never going to render.
+test("taskSourceUrl skips an opaque identity but still aborts on a hostile scheme", () => {
+  const slack = "https://cleverrealestate.slack.com/archives/C1/p123";
+  const cycleKey = "waiting:blk-1:2026-08-18";
+  assert.equal(taskSourceUrl({ source_id: cycleKey, link: slack }), slack,
+    "a non-URL identity in source_id must not hide a real deeplink in a later field");
+  assert.equal(taskSourceUrl({ source_id: cycleKey, source_ref: slack }), slack);
+  assert.equal(taskSourceUrl({ source_id: cycleKey }), "",
+    "an opaque identity with nothing to fall back to still resolves to no link");
+  assert.equal(taskSourceUrl({ source_id: "javascript:alert(1)", link: slack }), "",
+    "skipping opaque values must not weaken the hostile-scheme abort");
+  assert.equal(taskSourceUrl({ source_id: "data:text/html,<script>", source_ref: slack }), "");
+  assert.equal(taskSourceUrl({ source_id: "  JavaScript:alert(1)", source_ref: slack }), "",
+    "the abort is case- and whitespace-insensitive");
+  assert.equal(taskSourceUrl({ source_id: cycleKey, link: "javascript:alert(1)", source_ref: slack }), "",
+    "the abort applies wherever the walk finds a hostile value, not only in the first field");
+});
+
+// A denylist has to test the value the way a BROWSER reads it. Browsers drop leading C0
+// controls and whitespace sitting inside a scheme, so these all execute in an href even
+// though a naive /^\s*javascript\s*:/ misses them. The http(s) allowlist still gates the
+// return value, but the exported predicate is consumed as a safety gate, and a missed
+// abort silently fell through to a sibling field.
+test("taskSourceUrl normalizes scheme noise the way a browser does", () => {
+  const slack = "https://cleverrealestate.slack.com/archives/C1/p123";
+  const TAB = String.fromCharCode(9), NL = String.fromCharCode(10), C0 = String.fromCharCode(1);
+  for (const [name, hostile] of [
+    ["tab inside the scheme", "jav" + TAB + "ascript:alert(1)"],
+    ["newline inside the scheme", "jav" + NL + "ascript:alert(1)"],
+    ["leading C0 control", C0 + "javascript:alert(1)"],
+    ["space before the colon", "javascript :alert(1)"],
+  ]) {
+    assert.equal(taskSourceUrl(hostile), "", name + " must not resolve");
+    assert.equal(taskSourceUrl({ source_id: hostile, link: slack }), "",
+      name + " must abort the walk, not launder into the sibling field");
+    assert.equal(taskSourceUrlBlocked(hostile), true, name + " must read as hostile");
+  }
+});
+
+test("taskSourceUrlBlocked separates hostile from merely-opaque, and takes a bare value only", () => {
+  assert.equal(taskSourceUrlBlocked("javascript:alert(1)"), true);
+  assert.equal(taskSourceUrlBlocked("  DATA:text/html,x"), true);
+  assert.equal(taskSourceUrlBlocked("vbscript:msgbox"), true);
+  assert.equal(taskSourceUrlBlocked("waiting:blk-1:2026-08-18"), false,
+    "opaque is not hostile -- that split is the whole point");
+  assert.equal(taskSourceUrlBlocked("https://example.com"), false);
+  assert.equal(taskSourceUrlBlocked(null), false);
+  assert.equal(taskSourceUrlBlocked({ source_id: "javascript:alert(1)" }), false,
+    "unlike taskSourceUrl this takes a bare value; callers must unwrap the record first");
+});
+
+test("taskSourceUrl accepts a bare string and rejects a bare unsafe one", () => {
+  const slack = "https://cleverrealestate.slack.com/archives/C1/p123";
+  assert.equal(taskSourceUrl(slack), slack, "sourceJumpLink passes ev.source_id as a bare string");
+  assert.equal(taskSourceUrl("waiting:blk-1:2026-08-18"), "");
+  assert.equal(taskSourceUrl("javascript:alert(1)"), "");
+  assert.equal(taskSourceUrl(null), "");
+  assert.equal(taskSourceUrl(undefined), "");
 });
 
 test("taskSourceLabel distinguishes Slack, Gmail and generic sources", () => {

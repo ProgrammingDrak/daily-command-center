@@ -43,6 +43,21 @@ test("refuses conflicts, missing source records and unsafe URLs", () => {
   assert.equal(unsafe.issues[0].reason, "valid_source_url_missing");
 });
 
+// This script PERSISTS source_id onto blocks, and it gates the write on taskSourceUrl.
+// Teaching that resolver to skip a merely-opaque identity instead of stopping on it moved
+// reader-shaped rows from "refuse" to "write", which is the intended fix but was unpinned
+// because every fixture above omits source_id entirely.
+test("an opaque triage source_id no longer hides the deeplink one field over", () => {
+  const opaque = [{ id: "slack:1", source_id: "C1:1723999999.000100", source_ref: SLACK }];
+  const plan = buildBackfillPlan([row({}, opaque)], [ID]);
+  assert.deepEqual(plan.issues, []);
+  assert.deepEqual(plan.candidates[0], { id: ID, triageId: "slack:1", url: SLACK, label: "Slack" });
+
+  const hostile = [{ id: "slack:1", source_id: "javascript:alert(1)", source_ref: SLACK }];
+  assert.equal(buildBackfillPlan([row({}, hostile)], [ID]).issues[0].reason, "valid_source_url_missing",
+    "a hostile identity still refuses the whole record rather than falling through to a sibling field");
+});
+
 test("refuses to widen beyond the explicit block allowlist", () => {
   const plan = buildBackfillPlan([{ ...row({}), id: "unexpected" }], [ID]);
   assert.deepEqual(plan.issues.map((issue) => issue.reason).sort(), ["allowlisted_block_missing", "not_allowlisted"]);
