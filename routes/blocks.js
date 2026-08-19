@@ -61,13 +61,35 @@ module.exports = function mount(app, ctx) {
   // locking: a Slack thread or an email subject is somebody else's words, and a
   // meeting title routinely names a client. Manual and self-created tasks stay
   // publishable, which is the content this feature is actually for.
-  const WORK_SOURCES = new Set(["slack", "gmail", "email", "sweep", "triage", "meeting", "gcal", "calendar"]);
+  // PREFIX matching, not exact membership. The first cut used a Set and exact
+  // `has()`, and no writer in this repo stores the bare string "slack": Slack
+  // capture writes `source: "slack-bookmark"` and `"slack-delegate"` with the
+  // title taken straight from the message text, and Sweep Suite writes
+  // "sweep-suite" / kind "sweep_suite_task". Every one of those missed the Set,
+  // landed as publishable, and put a colleague's words one button press away
+  // from a social feed. The committed test even asserted that an unknown source
+  // is deliberately not locked -- true as a principle, and wrong here, because
+  // these are not future integrations, they are the repo's current dominant
+  // work-capture writers.
+  const WORK_SOURCES = ["slack", "gmail", "email", "sweep", "triage", "meeting", "gcal", "calendar", "notion", "google_chat"];
+
+  // "oneone" is a 1:1 meeting and is the repo's canonical second spelling for one
+  // (task-model.js and db.js both test `type IN ('meeting','oneone')`), so it has
+  // to be here or a 1:1's title -- which is a person's name -- ships publishable.
+  const WORK_KINDS = ["meeting", "oneone"];
 
   function isWorkSourcedTask(props) {
-    const source = String(props.source || "").toLowerCase();
-    const kind = String(props.kind || "").toLowerCase();
-    return WORK_SOURCES.has(source) || WORK_SOURCES.has(kind)
-      || !!props.gcal_event_id || !!props.gcal_calendar_id;
+    const fields = [props.source, props.kind, props.type].map(v => String(v || "").toLowerCase());
+    const named = fields.some(v => v && WORK_SOURCES.some(w => v === w || v.startsWith(w + "-") || v.startsWith(w + "_")));
+    return named
+      || fields.some(v => WORK_KINDS.indexOf(v) !== -1)
+      // gcal_account_key counts as calendar-owned elsewhere in the app
+      // (server.js), so it counts here too.
+      || !!props.gcal_event_id || !!props.gcal_calendar_id || !!props.gcal_account_key
+      // Identifying properties, so a task carrying Slack provenance is locked
+      // even if its source string is something nobody anticipated.
+      || !!props.slack_channel || !!props.slack_ts || !!props.slack_thread_ts
+      || !!props.source_message_preview;
   }
 
   // NEVER throws into the completion path. A completion is the user's work being
@@ -76,11 +98,19 @@ module.exports = function mount(app, ctx) {
   // fail to check off.
   async function recordCompletionPost(result, body, userId, workspaceId) {
     if (!socialStore || typeof socialStore.createCompletionPost !== "function") return;
-    if (body.completed !== true) return;          // un-completing is not an event
-    if (result.duplicate) return;                 // replay: the post already exists
     if (!userId) return;                          // no owner, no post
     const task = result.task;
     if (!task) return;
+    if (body.completed !== true) {
+      // Reopening RETRACTS rather than no-ops. The idempotency key is the
+      // mutation and the client mints a fresh one per toggle, so a bare return
+      // left the old post in the publish queue offering to announce a task the
+      // owner had just reopened, and the next completion stacked a second row.
+      try { await socialStore.retractCompletionPost(userId, task.id); }
+      catch (e) { console.error("[feed] retract failed (non-fatal):", e.message); }
+      return;
+    }
+    if (result.duplicate) return;                 // replay: the post already exists
     const props = task.properties || {};
     const title = String(props.title || props.label || "").trim();
     if (!title) return;                           // nothing worth showing

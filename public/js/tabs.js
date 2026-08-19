@@ -18,7 +18,9 @@ DCC.tabs = DCC.tabs || (function () {
 // Built-in renderers, resolved lazily by name (functions live in their own
 // files, loaded after this one). No entry = static tab, nothing to render.
 DCC.tabs.register("glymphatic", () => typeof buildGlymphaticBrief === "function" && buildGlymphaticBrief());
-DCC.tabs.register("pet-home", () => window.PetHome && typeof PetHome.render === "function" && PetHome.render());
+// `activate`, not `render`: render also runs on every task completion, so the
+// friend-picker refresh belongs only on the tab path.
+DCC.tabs.register("pet-home", () => window.PetHome && typeof PetHome.activate === "function" && PetHome.activate());
 DCC.tabs.register("budget", () => typeof renderBudget === "function" && renderBudget());
 DCC.tabs.register("tasks", () => {
   // PIN 9: mount the mini-month sidebar into the Task Menu split view. Cheap

@@ -198,6 +198,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_pet_home_events_source
 CREATE INDEX IF NOT EXISTS idx_pet_home_events_workspace_created
   ON pet_home_events(workspace_id, created_at DESC);
 
+-- Both reads getState added filter on event_type. The index above leads with
+-- created_at, so listVisits walked the whole workspace history hunting for a
+-- handful of pet_visit rows -- worst on day one, when there are none and it
+-- scans everything to return an empty list. task_feed grows by one row per
+-- completed task forever, so this degrades quietly and permanently.
+CREATE INDEX IF NOT EXISTS idx_pet_home_events_workspace_type_created
+  ON pet_home_events(workspace_id, event_type, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS pet_task_suggestions (
   id                SERIAL PRIMARY KEY,
   workspace_id      TEXT NOT NULL REFERENCES workspaces(id),
