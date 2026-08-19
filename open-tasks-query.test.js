@@ -95,6 +95,8 @@ test("the pool query carries every term of the client predicate it replaced", as
   const { text, params } = pool.log[0];
   assert.match(text, /b\.type = ANY\(\$4::text\[\]\)/, "three row types, not just 'block'");
   assert.match(text, /dcc_is_task_row\(b\.type, b\.properties\)/, "one task-row predicate, not a copy");
+  assert.match(text, /properties->>'kind', ''\) <> 'proposed_action_item'/,
+    "a stale production predicate must not resurrect dismissed meeting evidence");
   assert.doesNotMatch(text, /OR\s+COALESCE\(b\.properties->>'kind', ''\) = 'responsibility_task'/,
     "responsibility_task belongs in the shared task-row predicate, not a query-local workaround");
   assert.match(text, /COALESCE\(b\.properties->>'type', ''\) <> ALL\(\$5::text\[\]\)/, "fixed-type skip");

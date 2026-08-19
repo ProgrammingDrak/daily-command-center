@@ -55,8 +55,9 @@ const dayWithTimeline = (label) => ({ date: DATE, schedule: { timeline: [{ id: "
 
 // ── buildDayResponse ─────────────────────────────────────────────────────────
 
-function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionBlocks = [], suppressionsThrow = false } = {}) {
+function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionBlocks = [], suppressionsThrow = false, reviewRows = [], reviewRowsThrow = false, userId = 1 } = {}) {
   const writes = [];
+  const reviewAsked = [];
   const ctx = {
     console: { error: () => {}, warn: () => {} },
     getDayFilePath: (d) => "days/" + d + ".json",
@@ -67,6 +68,12 @@ function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionB
     buildSkeletonState: (d) => ({ date: d, last_updated_by: "skeleton", schedule: { timeline: [] } }),
     getScheduleBlocks: async () => [],
     triageSuppressions: require("./triage-suppressions"),
+    dayReviewRepeats: require("./day-review-repeats"),
+    addDays: (date, days) => {
+      const value = new Date(date + "T12:00:00Z");
+      value.setUTCDate(value.getUTCDate() + days);
+      return value.toISOString().slice(0, 10);
+    },
     // buildDayResponse scopes suppressed_items to the app's LOCAL day, so the zone is
     // part of what it reads. Pinned here rather than left to the host's TZ so the
     // evening-boundary behaviour stays deterministic in CI.
@@ -80,12 +87,18 @@ function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionB
         if (suppressionsThrow) throw new Error("connection terminated unexpectedly");
         return suppressionBlocks;
       },
+      getDccStateRange: async (start, end, ws) => {
+        reviewAsked.push([start, end, ws]);
+        if (reviewRowsThrow) throw new Error("connection terminated unexpectedly");
+        return reviewRows;
+      },
     },
   };
   vm.createContext(ctx);
   vm.runInContext(SUPPRESSIONS_SRC, ctx);
   vm.runInContext(BUILD_DAY_SRC, ctx);
-  return { call: () => vm.runInContext(`buildDayResponse("${DATE}", null, "ws-1")`, ctx), writes };
+  const uid = userId === null ? "null" : String(userId);
+  return { call: () => vm.runInContext(`buildDayResponse("${DATE}", ${uid}, "ws-1")`, ctx), writes, reviewAsked };
 }
 
 test("the Postgres row WINS over a file carrying a non-empty timeline", async () => {
@@ -158,6 +171,12 @@ test("the row is read for the caller's OWN workspace, not a default", async () =
     buildSkeletonState: (d) => ({ date: d, schedule: { timeline: [] } }),
     getScheduleBlocks: async () => [],
     triageSuppressions: require("./triage-suppressions"),
+    dayReviewRepeats: require("./day-review-repeats"),
+    addDays: (date, days) => {
+      const value = new Date(date + "T12:00:00Z");
+      value.setUTCDate(value.getUTCDate() + days);
+      return value.toISOString().slice(0, 10);
+    },
     // buildDayResponse scopes suppressed_items to the app's LOCAL day, so the zone is
     // part of what it reads. Pinned here rather than left to the host's TZ so the
     // evening-boundary behaviour stays deterministic in CI.
@@ -231,6 +250,56 @@ test("an unreadable suppression overlay degrades to the RAW triage list, not to 
   const out = await call();
   assert.deepEqual(out.triage.open_items.map((i) => i.id), ["gmail:abc"]);
   assert.deepEqual(out.triage.suppressed_items, []);
+});
+
+test("the Day Review lookback asks for seven days back, ending YESTERDAY, in the caller's OWN workspace", async () => {
+  // getDccStateRange DROPS its workspace predicate entirely when the third argument is
+  // falsy (db.js), so an unscoped call would let another tenant's dismissals suppress
+  // this workspace's cards. Nothing else in the suite would notice.
+  const { call, reviewAsked } = runBuildDay({ dbRow: { state_json: { date: DATE, schedule: { timeline: [] } } } });
+  await call();
+  assert.deepEqual(reviewAsked, [["2026-07-28", "2026-08-03", "ws-1"]]);
+});
+
+test("the anonymous share build never runs the Day Review lookback", async () => {
+  // buildPublicTodoShare calls this builder as buildDayResponse(date, null, ws) and its
+  // client polls every 15 seconds, while never reading glymphatic_brief.
+  const { call, reviewAsked } = runBuildDay({
+    userId: null,
+    dbRow: { state_json: { date: DATE, schedule: { timeline: [] } } },
+  });
+  await call();
+  assert.deepEqual(reviewAsked, []);
+});
+
+test("an unreadable Day Review history serves the RAW packet, not a 500", async () => {
+  const raw = {
+    date: DATE,
+    schedule: { timeline: [] },
+    glymphatic_brief: { decisions: {}, current: { pages: [{ id: "day-review", items: [{ id: "new-id", title: "reply with exactly READY" }] }] } },
+  };
+  const { call } = runBuildDay({ dbRow: { state_json: raw }, reviewRowsThrow: true });
+  const out = await call();
+  assert.deepEqual(out.glymphatic_brief.current.pages[0].items.map((i) => i.id), ["new-id"]);
+});
+
+test("a differently keyed Day Review item stays hidden after the same signature was dismissed", async () => {
+  const review = (id, decisions = {}) => ({
+    date: DATE,
+    schedule: { timeline: [] },
+    glymphatic_brief: {
+      decisions,
+      current: { pages: [{ id: "day-review", items: [{ id, title: "reply with exactly READY", tags: ["claude"] }] }] },
+    },
+  });
+  const { call } = runBuildDay({
+    dbRow: { state_json: review("new-id") },
+    reviewRows: [{ state_json: review("old-id", { "old-id": { action: "dismiss" } }) }],
+  });
+  const out = await call();
+  const page = out.glymphatic_brief.current.pages[0];
+  assert.deepEqual(page.items, []);
+  assert.equal(page.repeat_suppressed_items[0].id, "new-id");
 });
 
 // ── dayStateUnavailable (the degraded answer) ────────────────────────────────

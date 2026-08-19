@@ -138,6 +138,12 @@
       const date = b.date;
       const { doneIds, lockedIds } = overlayFor(date);
 
+      // Version-skew shield. The server owns the structural predicate, but a rolling
+      // deploy can briefly pair this client with a database whose dcc_is_task_row
+      // function predates meeting artifacts. Never turn evidence such as a dismissed
+      // proposed action into a task just because that stale function admitted it.
+      if (typeof TaskModel.isTaskRow === "function" && !TaskModel.isTaskRow(b)) continue;
+
       // A nested step (subtask / ride-along) legitimately carries no time — it lives
       // under its parent. The server keeps them, which is what lets the lane nest.
       const nested = !!(p.subtaskOf || p.wrapId);
