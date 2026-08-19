@@ -361,6 +361,23 @@
   .todo-share-section-head span{font-size:11px;color:var(--accent-light);font-weight:700}
   .todo-share-sponsorships{display:flex;flex-direction:column;gap:8px}
   .todo-share-empty{font-size:12px;color:var(--text-muted);padding:14px;border:1px dashed var(--border);border-radius:8px;text-align:center}
+  /* Guest Activity inbox: one reverse-chronological list of comments, reactions
+     and offers. Unread rows carry an accent rail rather than a background wash,
+     so a screen of new items still reads as a list instead of a solid block. */
+  .todo-share-mark-read{margin-left:10px;background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.4px;padding:3px 8px;cursor:pointer}
+  .todo-share-mark-read:hover{color:var(--text);border-color:var(--text-muted)}
+  .todo-share-activity{display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto}
+  .todo-share-activity-item{display:flex;gap:9px;align-items:flex-start;background:var(--card);border:1px solid var(--border);border-left-width:3px;border-left-color:var(--border);border-radius:8px;padding:9px 11px}
+  .todo-share-activity-item.unread{border-left-color:var(--accent)}
+  .todo-share-activity-icon{font-size:14px;line-height:1.3;flex-shrink:0}
+  .todo-share-activity-body{min-width:0;flex:1}
+  .todo-share-activity-head{font-size:12px;line-height:1.45;color:var(--text-muted)}
+  .todo-share-activity-head b{color:var(--text);font-weight:700}
+  .todo-share-activity-when{color:var(--text-muted);font-size:10.5px;margin-left:6px;white-space:nowrap}
+  .todo-share-activity-body p{margin:4px 0 0;font-size:12px;line-height:1.45;color:var(--text);word-break:break-word}
+  /* Header badge. Absolute so it never reflows the toolbar when it appears. */
+  .todo-share-open{position:relative}
+  .todo-share-badge{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--accent);color:#fff;font-size:9.5px;font-weight:800;line-height:16px;text-align:center;pointer-events:none}
   .todo-share-offer{display:flex;justify-content:space-between;gap:12px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
   .todo-share-offer.approved{border-color:rgba(34,197,94,0.35)}
   .todo-share-offer.dismissed{opacity:0.6}
