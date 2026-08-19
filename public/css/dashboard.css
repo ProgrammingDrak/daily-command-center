@@ -1247,6 +1247,12 @@
   .it-list-item.active{box-shadow:inset 3px 0 0 var(--accent)}
   .src-jump{font-size:10px;font-weight:700;color:var(--cyan);text-decoration:none;border:1px solid var(--cyan);border-radius:5px;padding:0 6px;line-height:1.6;flex:none;opacity:0.85}
   .src-jump:hover{opacity:1;background:var(--cyan-bg)}
+  /* The button form (origin-task jump) needs the reset an anchor gets for free. */
+  button.src-jump{background:none;font-family:inherit;cursor:pointer}
+  /* Origin-task chip rides the --waiting hue so it reads as part of the same family
+     as the 🔔 Check-in pill it sits beside, rather than as a second Slack link. */
+  .src-jump.origin{color:var(--waiting-ink);border-color:var(--waiting-border)}
+  .src-jump.origin:hover{background:var(--waiting-bg)}
   .it-list-item.done{opacity:0.62}
   .it-list-item.done .ttl{text-decoration:line-through}
   /* Completed top-level rows shrink + grey in place (inline, in their schedule

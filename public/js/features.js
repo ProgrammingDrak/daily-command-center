@@ -296,6 +296,23 @@ function _amBuildDetails(ev){
       if(notionUrl.protocol==='http:'||notionUrl.protocol==='https:')meta.push('<a href="'+esc(notionUrl.href)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">Open in Notion</a>');
     }catch(e){}
   }
+  // Provenance. srcTag above is a deliberate no-op stub, so until now this modal named
+  // a source and gave no way to reach it -- for every source-backed task, not just
+  // check-ins. Same two jumps the itinerary row carries, same resolvers, so the two
+  // surfaces cannot disagree about where a task came from.
+  var srcUrl=(window.DCC&&typeof window.DCC.taskSourceUrl==='function')?window.DCC.taskSourceUrl(ev.source_id):'';
+  if(!srcUrl&&typeof window.waitingCheckInSourceUrl==='function')srcUrl=window.waitingCheckInSourceUrl(ev);
+  if(srcUrl){
+    var srcLabel=(window.DCC&&typeof window.DCC.taskSourceLabel==='function')?window.DCC.taskSourceLabel(srcUrl):'Source';
+    meta.push('<a class="detail-action-link" href="'+esc(srcUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">Open in '+esc(srcLabel||'source')+' &#8599;</a>');
+  }
+  var origin=(typeof window.waitingCheckInOriginBlock==='function')?window.waitingCheckInOriginBlock(ev):null;
+  if(origin){
+    var op=origin.properties||{};
+    meta.push('<button type="button" class="detail-action-link" data-origin-block="'+esc(op.local_id||origin.id)+'"'+
+      (origin.date?' data-origin-date="'+esc(origin.date)+'"':'')+
+      ' title="'+esc('Open origin task: '+(op.title||'the original task'))+'">Open origin task &#8599;</button>');
+  }
   return meta.join('');
 }
 

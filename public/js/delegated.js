@@ -120,6 +120,45 @@
     return !!item && isOpenDelegated(item);
   }
 
+  // Where a Waiting item's own deeplink lives. contact.sourceRef is the structured
+  // home (normalizeProperties preserves it); source_id is the flat twin the Slack
+  // capture writes. One spelling, so the drawer card, the reminder it spawns and the
+  // row chip cannot disagree about which field is the source of truth.
+  function waitingSourceRef(props) {
+    const p = props || {};
+    return String((p.contact && p.contact.sourceRef) || p.source_id || "").trim();
+  }
+
+  // The deeplink a check-in ROW should jump to. Two legs on purpose:
+  //   1. its own source_id -- set at creation, and the only leg that still works
+  //      once the Waiting item is completed or deleted;
+  //   2. the live Waiting item -- which is what heals every reminder scheduled
+  //      before creation started forwarding the permalink, no backfill needed.
+  // Scheme safety stays in taskSourceUrl so there is one gate, not three.
+  function checkInSourceUrl(ev) {
+    if (!isCheckInTask(ev)) return "";
+    const url = window.DCC && window.DCC.taskSourceUrl;
+    const blocked = window.DCC && window.DCC.taskSourceUrlBlocked;
+    if (typeof url !== "function") return "";
+    const stored = (ev && ev.source_id) || "";
+    // A hostile stored value ABORTS rather than falling through to the item, or the
+    // second leg would launder exactly what taskSourceUrl's abort exists to stop.
+    if (typeof blocked === "function" && blocked(stored)) return "";
+    const own = url(stored);
+    if (own) return own;
+    const item = checkInItem(ev);
+    return item ? url(waitingSourceRef(item.properties || {})) : "";
+  }
+
+  // The original task a check-in chases, when the Waiting item was raised off one
+  // (openDelegatedFromTask stamps linkedBlockId). Null for a 👥 reminder, whose
+  // origin is the Slack message rather than a DCC row -- checkInSourceUrl covers that.
+  function checkInOriginBlock(ev) {
+    if (!isCheckInTask(ev)) return null;
+    const block = resolveLinkedBlock(ev && ev.linkedBlockId);
+    return (block && !block.deleted_at) ? block : null;
+  }
+
   // linkedBlockId -> open Waiting items, built at most once per synchronous render
   // burst. The chip helper below runs once PER ROW, and getAllDelegatedItems is a spread
   // of the WHOLE block cache plus two sorts, one of them Date-heavy through
@@ -485,7 +524,7 @@
       : '<div class="delegated-card-score ' + cls + '">' + u.score + '</div>';
 
     const linkChip = p.linkedBlockId ? '<span class="delegated-card-link">linked task</span>' : '';
-    const sourceRef = (p.contact && p.contact.sourceRef) || p.source_id || "";
+    const sourceRef = waitingSourceRef(p);
     const sourceLink = /^https?:\/\//.test(sourceRef)
       ? '<a class="delegated-card-source" href="' + esc(sourceRef) + '" target="_blank" rel="noopener" title="Open source" onclick="event.stopPropagation()">Source &#8599;</a>'
       : '';
@@ -776,6 +815,14 @@
       meta: "Waiting check-in - 15m",
       detail: "Check in" + (who ? " with " + who : "") + "\n\n" + blockerLabel(item) + (p.notes ? "\n\n" + p.notes : ""),
       source: "waiting-checkin",
+      // The reminder inherits the item's deeplink so the row can jump back to the
+      // Slack message that started this (👥 stamps the permalink on both
+      // contact.sourceRef and source_id -- see routes/slack-events.js
+      // captureProperties). Without it the reminder is a dead end: it names a thing
+      // to chase and offers no way to reach it. Same resolution the Waiting drawer
+      // card already uses, and checkInSourceUrl below recovers it live for the
+      // reminders created before this line existed.
+      source_id: waitingSourceRef(p),
       tags: ["waiting", "check-in"],
       delegatedItemId: id,
       linkedBlockId: p.linkedBlockId || null,
@@ -1312,6 +1359,25 @@
       e.stopPropagation();
       openWaitingItem(pill.dataset.waitingOpen);
     });
+    // Origin-task chip on a check-in row. The target is a row on a day rather than a
+    // URL, so switch days first when it lives elsewhere -- otherwise the modal opens
+    // on an id the viewed day's caches have never heard of and renders an empty shell.
+    document.addEventListener("click", async e => {
+      const chip = e.target.closest && e.target.closest("[data-origin-block]");
+      if (!chip) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const id = chip.dataset.originBlock;
+      const date = chip.dataset.originDate || "";
+      if (!id) return;
+      try {
+        const viewed = (typeof viewDate !== "undefined" && viewDate) ? viewDate : null;
+        if (date && viewed && date !== viewed && typeof switchToDate === "function") await switchToDate(date);
+        if (typeof openAddModal === "function") openAddModal(id, blockTitle(id, ""));
+      } catch (err) {
+        toast("Could not open the origin task: " + (err.message || err), "error");
+      }
+    });
 
     // Task-link picker: selecting an existing task fills the working-task text and
     // records the link; typing into the text box afterward breaks the link.
@@ -1364,6 +1430,8 @@
   window.waitingRowChipHtml = waitingChipHtml;
   window.isWaitingCheckInTask = isCheckInTask;
   window.waitingCheckInIsLive = checkInIsLive;
+  window.waitingCheckInSourceUrl = checkInSourceUrl;
+  window.waitingCheckInOriginBlock = checkInOriginBlock;
   window.notifyReadyTaskDependencies = notifyReadyTaskDependencies;
   window.deleteDelegatedItem = deleteDelegatedItem;
   window.getAllDelegatedItems = getAllDelegatedItems;
@@ -1391,6 +1459,9 @@
     completeCheckInCycle,
     isCheckInTask,
     checkInIsLive,
+    checkInSourceUrl,
+    checkInOriginBlock,
+    sourceRef: waitingSourceRef,
     itemsForTask: waitingItemsForTask,
     rowChipHtml: waitingChipHtml,
     copyText

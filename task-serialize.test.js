@@ -125,6 +125,35 @@ test("taskSourceUrl normalizes triage provenance and rejects unsafe schemes", ()
   assert.equal(taskSourceUrl({ source_ref: "javascript:alert(1)" }), "");
 });
 
+// Hostile and merely-opaque both fail the http(s) test, and they need OPPOSITE
+// handling. A first-truthy read gave them the same one, which is how the Slack
+// permalink on a Waiting check-in went missing: waiting-items.js puts the cycle key
+// in source_id and the real deeplink one field over in link/source_ref, so the walk
+// stopped on an identity string it was never going to render.
+test("taskSourceUrl skips an opaque identity but still aborts on a hostile scheme", () => {
+  const slack = "https://cleverrealestate.slack.com/archives/C1/p123";
+  const cycleKey = "waiting:blk-1:2026-08-18";
+  assert.equal(taskSourceUrl({ source_id: cycleKey, link: slack }), slack,
+    "a non-URL identity in source_id must not hide a real deeplink in a later field");
+  assert.equal(taskSourceUrl({ source_id: cycleKey, source_ref: slack }), slack);
+  assert.equal(taskSourceUrl({ source_id: cycleKey }), "",
+    "an opaque identity with nothing to fall back to still resolves to no link");
+  assert.equal(taskSourceUrl({ source_id: "javascript:alert(1)", link: slack }), "",
+    "skipping opaque values must not weaken the hostile-scheme abort");
+  assert.equal(taskSourceUrl({ source_id: "data:text/html,<script>", source_ref: slack }), "");
+  assert.equal(taskSourceUrl({ source_id: "  JavaScript:alert(1)", source_ref: slack }), "",
+    "the abort is case- and whitespace-insensitive");
+});
+
+test("taskSourceUrl accepts a bare string and rejects a bare unsafe one", () => {
+  const slack = "https://cleverrealestate.slack.com/archives/C1/p123";
+  assert.equal(taskSourceUrl(slack), slack, "sourceJumpLink passes ev.source_id as a bare string");
+  assert.equal(taskSourceUrl("waiting:blk-1:2026-08-18"), "");
+  assert.equal(taskSourceUrl("javascript:alert(1)"), "");
+  assert.equal(taskSourceUrl(null), "");
+  assert.equal(taskSourceUrl(undefined), "");
+});
+
 test("taskSourceLabel distinguishes Slack, Gmail and generic sources", () => {
   assert.equal(taskSourceLabel("https://cleverrealestate.slack.com/archives/C1/p123"), "Slack");
   assert.equal(taskSourceLabel("https://mail.google.com/mail/u/0/#all/abc"), "Email");

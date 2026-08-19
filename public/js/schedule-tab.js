@@ -636,11 +636,31 @@ function buildListView(){
 
   // Jump-to-source link for API-inserted tasks whose source_id is a URL (e.g.
   // the Slack-bookmark poller stores the message permalink). Opens in a new tab.
+  // A Waiting check-in falls back to its Waiting item's deeplink, which is what
+  // gives reminders scheduled before creation forwarded source_id a live link.
   function sourceJumpLink(ev){
-    const url=DCC.taskSourceUrl(ev&&ev.source_id);
+    let url=DCC.taskSourceUrl(ev&&ev.source_id);
+    if(!url&&typeof window.waitingCheckInSourceUrl==="function")url=window.waitingCheckInSourceUrl(ev);
     if(!url)return "";
     const label=DCC.taskSourceLabel(url);
     return '<a class="src-jump" href="'+escHtml(url)+'" target="_blank" rel="noopener" title="Open source ('+label+')" onclick="event.stopPropagation()">'+label+' ↗</a>';
+  }
+
+  // The other half of a check-in's provenance: the DCC task it chases, when the
+  // Waiting item was raised off one. A button rather than an anchor because the
+  // target is a row on a day, not a URL -- the handler switches days first when the
+  // origin lives elsewhere, then opens its details modal.
+  function originJumpLink(ev){
+    if(typeof window.waitingCheckInOriginBlock!=="function")return "";
+    const block=window.waitingCheckInOriginBlock(ev);
+    if(!block)return "";
+    const bp=block.properties||{};
+    const title=String(bp.title||"the original task");
+    // The row id, not the block id: openAddModal resolves through taskAnchorById,
+    // which matches on ev.id -- and TaskModel.fromBlock keys that as local_id || block.id.
+    return '<button type="button" class="src-jump origin" data-origin-block="'+escHtml(bp.local_id||block.id)+'"'+
+      (block.date?' data-origin-date="'+escHtml(block.date)+'"':'')+
+      ' title="'+escHtml("Open origin task: "+title)+'">Origin task ↗</button>';
   }
 
   // A node is a SUB row when it is actually NESTED in the rendered tree, not merely
@@ -747,7 +767,7 @@ function buildListView(){
       '<div class="it-list-main">'+
         // The "+" renders on carryover rows and meetings too. A meeting can own
         // concurrent nested work or relevant subtasks; only done rows skip it.
-        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
+        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+originJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
         '<div class="it-list-meta">'+
           inProgressChip+
           nowChip+
