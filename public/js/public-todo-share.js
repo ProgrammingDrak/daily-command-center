@@ -419,6 +419,10 @@
     document.getElementById("todo-public-title").textContent = data.workspaceName || "Shared Todo List";
     document.getElementById("todo-public-subtitle").textContent = data.ownerUsername ? "Live guest view for " + data.ownerUsername : "Live guest view";
     document.getElementById("todo-public-date").textContent = data.date || "Today";
+    // Printed copies carry the live URL (see the @media print block): a sheet of
+    // paper with no way back to the list is a dead end.
+    const hero = document.querySelector(".todo-public-hero");
+    if (hero) hero.setAttribute("data-print-url", location.href.split("?")[0]);
     document.getElementById("todo-public-updated").textContent = "Updated " + new Date(data.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     renderCalendarOptions(data);
     renderTasks(data.tasks || []);
@@ -613,6 +617,114 @@
     if (name && loggedIn && viewer.username && !name.value) name.value = viewer.username;
   }
 
+  // ── Export ─────────────────────────────────────────────────────────────────
+  // Serialization is window.DCC.ShareExport, the same module the server route
+  // requires, so the download and the link produce byte-identical files for the
+  // same rows. What differs is WHICH rows: a single-day export runs through
+  // `visibleTasks`, so the file matches the filters and sort on screen rather
+  // than silently handing over rows the viewer had filtered away. A range has no
+  // on-screen equivalent to match, so it goes to the server unfiltered and the
+  // menu says so.
+  function exportMeta(){
+    return {
+      workspaceName: (current && current.workspaceName) || "",
+      owner: (current && current.ownerUsername) || "",
+      date: (current && current.date) || "",
+      url: location.href.split("?")[0]
+    };
+  }
+
+  function downloadBlob(text, filename, mime){
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Revoke on the next tick, not synchronously: Safari cancels an in-flight
+    // download when the object URL disappears out from under it.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function exportRangeDays(){
+    const select = document.getElementById("todo-export-range");
+    const value = select ? select.value : "day";
+    return value === "day" ? 0 : (parseInt(value, 10) || 0);
+  }
+
+  function addDays(dateStr, days){
+    const base = new Date((dateStr || new Date().toISOString().slice(0, 10)) + "T12:00:00Z");
+    base.setUTCDate(base.getUTCDate() + days);
+    return base.toISOString().slice(0, 10);
+  }
+
+  function runExport(format){
+    const ShareExport = (window.DCC && window.DCC.ShareExport) || null;
+    if (format === "pdf") {
+      // Print rather than generating a PDF: the browser's own print-to-PDF
+      // renders the page the viewer is actually looking at, needs no library,
+      // and stays inside the CSP a public page runs under.
+      window.print();
+      return;
+    }
+    if (!ShareExport) { alert("Export is unavailable on this page right now."); return; }
+    const days = exportRangeDays();
+    const meta = exportMeta();
+
+    if (days > 0) {
+      // Range: the server owns multi-day assembly (it has to read each day).
+      const from = meta.date || new Date().toISOString().slice(0, 10);
+      const params = new URLSearchParams({ format: format, from: from, to: addDays(from, days - 1) });
+      window.location.href = "/api/public/todo-share/" + encodeURIComponent(token)
+        + "/export?" + params.toString();
+      return;
+    }
+
+    if (!current) { alert("The list is still loading."); return; }
+    const rows = visibleTasks(current.tasks || []).map(task =>
+      Object.assign({}, task, { date: current.date || meta.date }));
+    if (!rows.length && !confirm("Nothing matches the current filters. Export an empty file anyway?")) return;
+    downloadBlob(
+      ShareExport.serialize(format, rows, meta),
+      ShareExport.filenameFor(meta, format),
+      ShareExport.mimeFor(format)
+    );
+  }
+
+  function bindExport(){
+    const button = document.getElementById("todo-export-button");
+    const menu = document.getElementById("todo-export-menu");
+    if (!button || !menu) return;
+    button.addEventListener("click", () => {
+      const open = menu.hidden;
+      menu.hidden = !open;
+      button.setAttribute("aria-expanded", String(open));
+    });
+    menu.addEventListener("click", e => {
+      const item = e.target.closest("[data-export]");
+      if (!item) return;
+      menu.hidden = true;
+      button.setAttribute("aria-expanded", "false");
+      runExport(item.dataset.export);
+    });
+    const range = document.getElementById("todo-export-range");
+    const note = document.getElementById("todo-export-range-note");
+    if (range && note) {
+      range.addEventListener("change", () => {
+        note.textContent = range.value === "day"
+          ? "Exports exactly the rows shown above."
+          : "Multi-day exports include every task, ignoring the filters above.";
+      });
+    }
+    document.addEventListener("click", e => {
+      if (menu.hidden || e.target.closest("#todo-export")) return;
+      menu.hidden = true;
+      button.setAttribute("aria-expanded", "false");
+    });
+  }
+
   function bindControls(){
     [
       ["todo-filter-status", "status"],
@@ -706,6 +818,7 @@
   }
 
   bindControls();
+  bindExport();
   load();
   setInterval(load, 15000);
 })();
