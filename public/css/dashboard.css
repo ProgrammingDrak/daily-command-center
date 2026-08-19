@@ -5271,8 +5271,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .social-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .social-btn.primary:hover{filter:brightness(1.08)}
 .social-status{font-size:12px;font-weight:600;min-height:18px;margin:6px 0 10px}
-.social-status.ok{color:var(--green,#00b373)}
-.social-status.error{color:var(--red,#dc2626)}
+.social-status.ok{color:var(--green)}
+.social-status.error{color:var(--red)}
 
 .social-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:16px;align-items:start}
 .social-panel{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:16px}
@@ -5323,8 +5323,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .pet-visit-send input{flex:1 1 160px}
 .pet-visit-send select:disabled{opacity:0.5;cursor:not-allowed}
 .pet-visit-status{font-size:11.5px;font-weight:600;min-height:16px;margin-top:7px}
-.pet-visit-status.ok{color:var(--green,#00b373)}
-.pet-visit-status.error{color:var(--red,#dc2626)}
+.pet-visit-status.ok{color:var(--green)}
+.pet-visit-status.error{color:var(--red)}
 .pet-visits{display:flex;flex-direction:column;gap:6px;margin-top:10px}
 .pet-visit-row{background:var(--card);border:1px solid var(--border);border-radius:7px;padding:8px 10px;font-size:12px;line-height:1.45}
 .pet-visit-row strong{display:block;font-size:12px;font-weight:700}

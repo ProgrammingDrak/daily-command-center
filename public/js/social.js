@@ -17,21 +17,15 @@
   const esc = (v) => window.DCC.esc(v);
   const api = (path, options) => window.DCC.api(path, { ...(options || {}), errorLabel: "Social request failed" });
   const toast = (msg, type) => window.DCC.toast(msg, type);
+  // core.js owns these two. ARCHITECTURE.md is explicit that shared helpers live
+  // on window.DCC and are never reimplemented per tab, and core.js's own header
+  // records that timeAgo and updateBadge were consolidated BECAUSE they had grown
+  // per-file copies. A brand new module adding another makes that cleanup bigger.
+  const relTime = (v) => (v ? window.DCC.dates.timeAgo(v) : "");
 
   let state = { publishable: [], requests: [], friends: [], feed: [] };
   let loading = false;
-
-  function relTime(value) {
-    if (!value) return "";
-    const then = new Date(value).getTime();
-    if (isNaN(then)) return "";
-    const mins = Math.round((Date.now() - then) / 60000);
-    if (mins < 1) return "just now";
-    if (mins < 60) return mins + "m ago";
-    const hours = Math.round(mins / 60);
-    if (hours < 24) return hours + "h ago";
-    return Math.round(hours / 24) + "d ago";
-  }
+  let reloadQueued = false;
 
   function minutesLabel(post) {
     const actual = Number(post.actual_minutes) || 0;
@@ -152,17 +146,17 @@
   // requests and completions waiting to be published or skipped. It deliberately
   // does not count feed items: somebody else's post is not a task.
   function updateBadge() {
-    const badge = document.getElementById("social-badge");
-    if (!badge) return;
-    const n = state.requests.length + state.publishable.length;
-    badge.textContent = n > 99 ? "99+" : String(n);
-    badge.style.display = n ? "" : "none";
+    window.DCC.updateBadge("social-badge", state.requests.length + state.publishable.length);
   }
 
   // ── data ───────────────────────────────────────────────────────────────────
 
   async function load() {
-    if (loading) return;
+    // A refresh asked for MID-FLIGHT is a refresh for data the in-flight read
+    // cannot contain, so remember it rather than dropping it. Publishing one item
+    // and skipping another in quick succession used to leave the skipped row
+    // sitting in the queue until something else triggered a reload.
+    if (loading) { reloadQueued = true; return; }
     loading = true;
     try {
       // Independent reads, so one slow or failing panel does not blank the rest.
@@ -183,6 +177,7 @@
       renderAll();
     } finally {
       loading = false;
+      if (reloadQueued) { reloadQueued = false; load(); }
     }
   }
 
@@ -270,12 +265,24 @@
     });
   }
 
+  // Boot only fetches what the badge COUNTS. The full load() also pulls the feed
+  // (the heaviest of the four: feed_posts joined to users and user_profiles under
+  // a friendships subquery) and the friends list, neither of which the badge
+  // reads, on every single page load.
+  async function loadBadge() {
+    const [publishable, requests] = await Promise.all([
+      api("/api/social/feed/publishable").catch(() => state.publishable),
+      api("/api/social/friends/requests").catch(() => state.requests)
+    ]);
+    state.publishable = publishable || [];
+    state.requests = requests || [];
+    updateBadge();
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     bind();
-    // Load once at boot so the badge is right without opening the tab, matching
-    // how the share inbox badge works. Silent on failure: an unreachable social
-    // read must not break the dashboard.
-    load().catch(() => {});
+    // Silent on failure: an unreachable social read must not break the dashboard.
+    loadBadge().catch(() => {});
   });
 
   if (window.DCC && DCC.tabs) DCC.tabs.register("social", () => load().catch(() => {}));

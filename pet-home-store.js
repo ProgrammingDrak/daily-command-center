@@ -82,6 +82,9 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_pet_home_events_workspace_created
       ON pet_home_events(workspace_id, created_at DESC);
 
+    CREATE INDEX IF NOT EXISTS idx_pet_home_events_workspace_type_created
+      ON pet_home_events(workspace_id, event_type, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS pet_task_suggestions (
       id              SERIAL PRIMARY KEY,
       workspace_id    TEXT NOT NULL REFERENCES workspaces(id),
@@ -130,17 +133,39 @@ function shapeHome(row) {
   };
 }
 
-async function recentEvents(workspaceId, limit = 20) {
+// `types` is an ALLOWLIST, and the public projection must always pass one. The
+// public pet page is anonymous (isPublicRoute exempts /api/public/), and this
+// function returned every row in the ledger, so the moment pet_visit events
+// existed a friend's private note -- written from an authenticated friends-only
+// UI, with no hint it could travel -- was served verbatim to any holder of the
+// share link, together with metadata carrying the sender's numeric user id.
+// Verified with an anonymous curl before the fix.
+//
+// Allowlist rather than a pet_visit denylist on purpose: the next event type
+// somebody adds should be private by default and made public deliberately.
+async function recentEvents(workspaceId, limit = 20, types = null) {
+  const params = [workspaceId];
+  let typeClause = "";
+  if (Array.isArray(types) && types.length) {
+    params.push(types);
+    typeClause = ` AND event_type = ANY($${params.length})`;
+  }
+  params.push(clamp(limit, 1, 100));
   const { rows } = await pool.query(
     `SELECT id, event_type, actor_name, message, metadata, created_at
      FROM pet_home_events
-     WHERE workspace_id = $1
+     WHERE workspace_id = $1${typeClause}
      ORDER BY created_at DESC
-     LIMIT $2`,
-    [workspaceId, limit]
+     LIMIT $${params.length}`,
+    params
   );
   return rows;
 }
+
+// What an anonymous visitor may see on a shared pet home. `encouragement` and
+// `task_suggestion` originate FROM that public page, and `task_feed` is the
+// progress the page exists to show. `pet_visit` is deliberately absent.
+const PUBLIC_EVENT_TYPES = ["encouragement", "task_feed", "task_suggestion"];
 
 async function listSuggestions(workspaceId, status = null) {
   const params = [workspaceId];
@@ -311,7 +336,10 @@ async function getPublicHome(shareSlug, todayStr) {
   return {
     home: shapeHome(home),
     tasks,
-    events: await recentEvents(workspaceId, 30),
+    // Allowlisted types only, and metadata stripped: nothing on the public page
+    // reads it, and it carried the visiting friend's numeric user id.
+    events: (await recentEvents(workspaceId, 30, PUBLIC_EVENT_TYPES))
+      .map(({ metadata, ...rest }) => rest),
     today: todayStr
   };
 }
@@ -420,11 +448,19 @@ async function lifetimeTreats(workspaceId) {
 //
 // The FRIEND GATE is deliberately not here: this store has no social dependency
 // and should keep none. The route checks socialStore.areFriends before calling.
-async function sendPetVisit({ fromUserId, fromPetName, toUserId, message, onDate }) {
+async function sendPetVisit({ fromUserId, fromUsername, fromPetName, toUserId, toWorkspaceId, message, onDate }) {
   await ensureSchema();
+  // The workspace is resolved by the ROUTE, through the ownership table the rest
+  // of the app uses. The first cut looked the host up by `pet_homes.user_id`,
+  // which is neither unique nor authoritative -- ensureHome stamps it with
+  // whoever first opened the pet home in that workspace. That made the write
+  // target non-deterministic (LIMIT 1 with no ORDER BY), and because the
+  // once-a-day key is scoped per workspace, a different row on the next call
+  // would have let the same sender visit twice in a day.
+  if (!toWorkspaceId) { const e = new Error("That friend has not set up a pet home yet"); e.statusCode = 404; throw e; }
   const { rows: hostRows } = await pool.query(
-    "SELECT workspace_id, user_id FROM pet_homes WHERE user_id = $1 LIMIT 1",
-    [toUserId]
+    "SELECT workspace_id, user_id FROM pet_homes WHERE workspace_id = $1",
+    [toWorkspaceId]
   );
   const host = hostRows[0];
   // No pet home means nothing to visit. A caller-facing error rather than a
@@ -445,7 +481,7 @@ async function sendPetVisit({ fromUserId, fromPetName, toUserId, message, onDate
       `${date}:${fromUserId}`,
       petName,
       note || `${petName} came by to say hello.`,
-      { fromUserId, petName, date }
+      { fromUserId, fromUsername: safeText(fromUsername, "").slice(0, 60), petName, date }
     ]
   );
   // Empty means the unique index caught a repeat visit today. Not an error: the

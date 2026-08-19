@@ -191,21 +191,39 @@
     if(count)count.textContent=visits.length?visits.length+" recent":"none yet";
     if(!wrap)return;
     if(!visits.length){wrap.innerHTML='<div class="pet-visit-empty">No pets have come by yet.</div>';return;}
-    wrap.innerHTML=visits.map(v=>'<div class="pet-visit-row"><strong>'+esc(v.actor_name||"A pet")+'</strong><span>'+esc(v.message||"")+'</span></div>').join("");
+    // actor_name is the sender's PET name, which the sender can rename freely, so
+    // it is a display label and not an identity. The account name rides beside it.
+    wrap.innerHTML=visits.map(v=>{
+      const who=(v.metadata&&v.metadata.fromUsername)||"";
+      return '<div class="pet-visit-row"><strong>'+esc(v.actor_name||"A pet")+
+        (who?' <em>from '+esc(who)+'</em>':'')+'</strong><span>'+esc(v.message||"")+'</span></div>';
+    }).join("");
   }
 
   // Populated from the friends list so the picker cannot offer someone the
-  // server would reject: the visit route refuses a non-friend with a 403.
-  async function loadVisitFriends(){
+  // server would reject: the visit route refuses a non-friend (or a blocked one)
+  // with a 403.
+  //
+  // CACHED, because renderPetHome is not just the tab handler: schedule.js calls
+  // PetHome.awardTask on every point-earning completion and awardTask ends in
+  // renderPetHome, so fetching here uncached meant a /api/social/friends round
+  // trip on every task check-off, including ones made with this tab closed and
+  // the <select> not even on screen. The friends list changes about monthly.
+  let visitFriends=null;
+  function paintVisitFriends(select,friends){
+    const current=select.value;
+    select.innerHTML='<option value="">Pick a friend</option>'+
+      friends.map(f=>'<option value="'+f.friend_id+'">'+esc(f.name||f.username||("User "+f.friend_id))+'</option>').join("");
+    if(current)select.value=current;
+    select.disabled=!friends.length;
+  }
+  async function loadVisitFriends(force){
     const select=document.getElementById("pet-visit-friend");
     if(!select)return;
+    if(!force&&visitFriends)return paintVisitFriends(select,visitFriends);
     try{
-      const friends=await api("/api/social/friends");
-      const current=select.value;
-      select.innerHTML='<option value="">Pick a friend</option>'+
-        (friends||[]).map(f=>'<option value="'+f.friend_id+'">'+esc(f.name||f.username||("User "+f.friend_id))+'</option>').join("");
-      if(current)select.value=current;
-      select.disabled=!(friends||[]).length;
+      visitFriends=(await api("/api/social/friends"))||[];
+      paintVisitFriends(select,visitFriends);
     }catch(e){ select.disabled=true; }
   }
 
@@ -225,6 +243,9 @@
         status.textContent=out.visited?"Your pet is on its way.":"Your pet already visited them today.";
       }
       if(message&&out.visited)message.value="";
+      // Refresh the visits list so the sender sees their own note land without
+      // waiting for the next full render.
+      renderVisits();
     }catch(e){
       if(status){status.className="pet-visit-status error";status.textContent=e.message||"Could not send your pet";}
     }
@@ -250,7 +271,6 @@
     renderEvents();
     renderLevel();
     renderVisits();
-    loadVisitFriends();
     updateBadge();
   }
   async function saveCustomize(){
@@ -347,6 +367,7 @@
     renderPetHome();
   }
   function bind(){
+    document.getElementById("pet-visit-send")?.addEventListener("click",()=>sendPetVisit());
     document.getElementById("pet-save-customize")?.addEventListener("click",()=>saveCustomize().catch(e=>toast(e.message,"error")));
     document.getElementById("pet-share-enable")?.addEventListener("click",()=>enableShare().catch(e=>toast(e.message,"error")));
     document.getElementById("pet-share-copy")?.addEventListener("click",()=>copyShare().catch(e=>toast(e.message,"error")));
@@ -391,10 +412,13 @@
       accessory:accessoryGlyph(pet.accessory)
     };
   }
-  document.addEventListener("DOMContentLoaded",()=>{
-    const send=document.getElementById("pet-visit-send");
-    if(send)send.addEventListener("click",sendPetVisit);
-  });
+  // `render` runs on every completion (schedule.js -> awardTask -> renderPetHome),
+  // so it stays free of network calls beyond the state read. `activate` is what
+  // the TAB calls, and is the only place that refreshes the friend picker.
+  async function activate(){
+    await renderPetHome();
+    loadVisitFriends(true);
+  }
 
-  window.PetHome={render:renderPetHome,awardTask,toggleTaskPrivacy,privacyChip,identity};
+  window.PetHome={render:renderPetHome,activate,awardTask,toggleTaskPrivacy,privacyChip,identity};
 })();

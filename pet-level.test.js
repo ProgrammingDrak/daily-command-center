@@ -17,14 +17,20 @@ test("a brand new pet is level 1, not level 0", () => {
   assert.equal(zero.progress, 0);
 });
 
-test("the curve is monotonic: more treats never means a lower level", () => {
-  // The invariant that matters most. A pet that goes DOWN a level after doing
-  // more work is the bug this whole derived-not-stored design exists to prevent.
+test("every level boundary is exactly 25 * (N-1)^2, and progress resets there", () => {
+  // Replaces a sweep that stepped by 7 and therefore visited only 3 of the 20
+  // thresholds, and whose `level >= previous` assertion could only fire on a
+  // DECREASE -- impossible for a floor(sqrt()) curve, so it killed no mutation
+  // the threshold test did not already kill. Walking the exact boundaries is
+  // cheaper and actually load-bearing, and it pins the progress reset too.
   let previous = 0;
-  for (let treats = 0; treats <= 12000; treats += 7) {
-    const { level } = petLevel(treats);
-    assert.ok(level >= previous, "level dropped at " + treats + " treats");
-    previous = level;
+  for (let n = 2; n <= 20; n++) {
+    const at = 25 * Math.pow(n - 1, 2);
+    assert.equal(petLevel(at - 1).level, n - 1, `one treat short of level ${n} (${at})`);
+    assert.equal(petLevel(at).level, n, `level ${n} starts at ${at}`);
+    assert.equal(petLevel(at).progress, n === 20 ? 1 : 0, `progress resets entering level ${n}`);
+    assert.ok(petLevel(at).level >= previous, "level dropped at " + at);
+    previous = petLevel(at).level;
   }
 });
 
@@ -55,13 +61,21 @@ test("needForNext counts down to exactly the next threshold", () => {
   assert.equal(petLevel(99).needForNext, 1);
 });
 
-test("the level caps, and a capped pet reads as finished rather than stuck at zero", () => {
-  const huge = petLevel(10_000_000);
-  assert.equal(huge.level, huge.maxLevel);
-  assert.equal(huge.atMax, true);
-  assert.equal(huge.needForNext, 0);
+test("the cap is level 20 at exactly 9025 treats", () => {
+  // The LITERAL, not the object's own maxLevel field. The first version asserted
+  // `huge.level === huge.maxLevel`, which compares two fields of the same
+  // returned object and therefore holds for any cap: dropping PET_MAX_LEVEL from
+  // 20 to 4 (demoting every pet at level 5 and above) left the whole suite green.
+  assert.equal(petLevel(0).maxLevel, 20);
+  assert.equal(petLevel(9024).level, 19, "one treat short of the cap");
+  assert.equal(petLevel(9024).atMax, false);
+  assert.equal(petLevel(9025).level, 20, "25 * 19^2");
+  assert.equal(petLevel(9025).atMax, true);
+  assert.equal(petLevel(9025).needForNext, 0);
   // 1, not 0: a full bar must read as "done", not as "no progress made".
-  assert.equal(huge.progress, 1);
+  assert.equal(petLevel(9025).progress, 1);
+  // Past the cap it stays pinned rather than computing a level 633.
+  assert.equal(petLevel(10_000_000).level, 20);
 });
 
 test("junk input degrades to a level 1 pet instead of NaN", () => {

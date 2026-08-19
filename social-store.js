@@ -85,15 +85,27 @@ async function isBlocked(ownerUserId, otherUserId) {
   return rows.length > 0;
 }
 
+/** Mutual friendship, with a BLOCK ON EITHER SIDE revoking it.
+ *
+ *  friendships rows are DIRECTED and unique on (requester_id, addressee_id), so
+ *  blockUser(B, A) inserts a SECOND row and leaves the original
+ *  (A, B, 'accepted') row untouched. The old single-row `status='accepted'`
+ *  lookup matched that survivor, so `areFriends` kept returning true after a
+ *  block: a blocked user still passed every friend gate, and listFriendsFeed
+ *  still showed each of them the other's published posts. Proven against a live
+ *  database, not inferred.
+ *
+ *  Reading BOTH rows and letting a block veto is the fix, and it belongs here
+ *  rather than at each call site so a future gate cannot forget it. */
 async function areFriends(a, b) {
   const { rows } = await pool.query(
-    `SELECT 1 FROM friendships
-      WHERE status='accepted'
-        AND ((requester_id=$1 AND addressee_id=$2) OR (requester_id=$2 AND addressee_id=$1))
-      LIMIT 1`,
+    `SELECT bool_or(status='accepted') AS friends,
+            bool_or(status='blocked')  AS blocked
+       FROM friendships
+      WHERE (requester_id=$1 AND addressee_id=$2) OR (requester_id=$2 AND addressee_id=$1)`,
     [a, b]
   );
-  return rows.length > 0;
+  return !!(rows[0] && rows[0].friends && !rows[0].blocked);
 }
 
 /** Send a friend request. If the addressee had already requested the requester,
@@ -160,6 +172,17 @@ async function listFriends(userId) {
                 updated_at
            FROM friendships
           WHERE status='accepted' AND (requester_id=$1 OR addressee_id=$1)
+            -- Same block-revokes-friendship rule as areFriends(). Without it a
+            -- blocked person still appeared in the friend list, and the pet-visit
+            -- picker (built from this list) offered someone the route then 403s.
+            -- NOT IN on the id alone, deliberately: an EXCEPT here would compare
+            -- whole rows, and the two rows carry different updated_at values, so
+            -- it would never match and the filter would silently do nothing.
+            AND CASE WHEN requester_id=$1 THEN addressee_id ELSE requester_id END NOT IN (
+              SELECT CASE WHEN requester_id=$1 THEN addressee_id ELSE requester_id END
+                FROM friendships
+               WHERE status='blocked' AND (requester_id=$1 OR addressee_id=$1)
+            )
        ) f
        JOIN users u ON u.id = f.friend_id
        LEFT JOIN user_profiles pr ON pr.user_id = f.friend_id
@@ -938,6 +961,27 @@ async function publishPost(postId, ownerUserId, { caption = null } = {}) {
   return { post: rows[0] || null, published: rows.length > 0 };
 }
 
+/** Reopening a task retracts its post.
+ *
+ *  The idempotency key is the MUTATION, and the client mints a fresh mutation id
+ *  per toggle, so without this an un-complete left the old post sitting in the
+ *  publish queue offering to announce a task the owner is no longer finished
+ *  with, and a re-complete then stacked a SECOND row for the same task. Keyed on
+ *  the task rather than the mutation, so it catches the post whichever mutation
+ *  created it.
+ *
+ *  Marks rather than deletes: the owner may already have published it, and
+ *  `manually_hidden` is the retraction state this table already has. */
+async function retractCompletionPost(ownerUserId, taskId) {
+  const { rows } = await pool.query(
+    `UPDATE feed_posts SET publish_state='manually_hidden', hidden_at=NOW()
+      WHERE owner_user_id=$1 AND task_id=$2 AND publish_state <> 'manually_hidden'
+      RETURNING id`,
+    [ownerUserId, String(taskId)]
+  );
+  return rows.length;
+}
+
 async function hidePost(postId, ownerUserId) {
   const { rows } = await pool.query(
     `UPDATE feed_posts SET publish_state='manually_hidden', hidden_at=NOW()
@@ -965,9 +1009,16 @@ async function listFriendsFeed(viewerUserId, { limit = 50 } = {}) {
         AND (
           p.owner_user_id=$1
           OR p.owner_user_id IN (
+            -- Same block-revokes-friendship rule as areFriends(): the accepted
+            -- row survives a block, so an EXCEPT is required or a blocked pair
+            -- keeps seeing each other's posts.
             SELECT CASE WHEN requester_id=$1 THEN addressee_id ELSE requester_id END
               FROM friendships
              WHERE status='accepted' AND (requester_id=$1 OR addressee_id=$1)
+            EXCEPT
+            SELECT CASE WHEN requester_id=$1 THEN addressee_id ELSE requester_id END
+              FROM friendships
+             WHERE status='blocked' AND (requester_id=$1 OR addressee_id=$1)
           )
         )
       ORDER BY p.published_at DESC
@@ -1036,6 +1087,7 @@ module.exports = {
   hidePost,
   listFriendsFeed,
   listPublishablePosts,
+  retractCompletionPost,
   // pure helpers (unit-testable without a DB)
   _test: {
     resolveReviewState,
