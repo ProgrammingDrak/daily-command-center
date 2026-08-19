@@ -1313,6 +1313,144 @@ app.get("/api/public/todo-share/:token", async (req, res) => {
   }
 });
 
+// ── Guest activity inbox ─────────────────────────────────────────────────────
+// Comments and reactions were already stored, already fetched, and already drawn
+// as chips on the itinerary row — but there was nowhere to answer "what did
+// people say today". A per-row chip only works if you already know which row to
+// look at, which is exactly what the owner doesn't know.
+//
+// One reverse-chronological union of the three things a visitor can leave
+// behind. Guest-CREATED tasks are deliberately NOT here: they land in triage and
+// already have an approval surface, so listing them again would be two inboxes
+// for one decision.
+//
+// "Unread" rides `todo_shares.settings.activity_seen_at` rather than
+// localStorage, so the badge follows the owner across devices instead of
+// resetting on whichever browser last opened the modal.
+const ACTIVITY_LIMIT = 60;
+
+async function buildGuestActivity(workspaceId, share, { limit = ACTIVITY_LIMIT } = {}) {
+  const capped = Math.max(1, Math.min(limit, 200));
+  const [comments, reactions, sponsorships] = await Promise.all([
+    pool.query(
+      `SELECT task_id, task_date, task_title, body, author_name, author_kind, created_at
+         FROM todo_task_comments
+        WHERE workspace_id = $1 AND share_id = $2
+        ORDER BY created_at DESC LIMIT $3`,
+      [workspaceId, share.id, capped]
+    ),
+    pool.query(
+      `SELECT task_id, task_date, task_title, emoji, actor_user_id, created_at
+         FROM todo_task_reactions
+        WHERE workspace_id = $1 AND share_id = $2
+        ORDER BY created_at DESC LIMIT $3`,
+      [workspaceId, share.id, capped]
+    ),
+    pool.query(
+      `SELECT id, task_id, task_date, task_title, sponsor_name, reward_title, note,
+              value_cents, kind, status, created_at
+         FROM todo_sponsorships
+        WHERE workspace_id = $1 AND share_id = $2
+        ORDER BY created_at DESC LIMIT $3`,
+      [workspaceId, share.id, capped]
+    )
+  ]);
+
+  const items = [
+    ...comments.rows.map(row => ({
+      kind: "comment",
+      at: row.created_at,
+      actorName: row.author_name || "Guest",
+      actorKind: row.author_kind || "guest",
+      taskId: row.task_id,
+      taskDate: row.task_date,
+      taskTitle: row.task_title || "",
+      body: row.body || ""
+    })),
+    ...reactions.rows.map(row => ({
+      kind: "reaction",
+      at: row.created_at,
+      // Reactions carry no author name (only a hashed actor key), so there is
+      // nothing honest to show but the tier. Inventing "Guest 4f2a" would read
+      // as an identity the system does not actually have.
+      actorName: row.actor_user_id ? "A signed-in visitor" : "A visitor",
+      actorKind: row.actor_user_id ? "user" : "guest",
+      taskId: row.task_id,
+      taskDate: row.task_date,
+      taskTitle: row.task_title || "",
+      emoji: row.emoji
+    })),
+    ...sponsorships.rows.map(row => ({
+      kind: "sponsorship",
+      at: row.created_at,
+      actorName: row.sponsor_name || "Someone",
+      actorKind: "guest",
+      taskId: row.task_id,
+      taskDate: row.task_date,
+      taskTitle: row.task_title || "",
+      sponsorshipId: row.id,
+      rewardTitle: row.reward_title || "",
+      note: row.note || "",
+      valueCents: row.value_cents || 0,
+      offerKind: row.kind || "reward",
+      status: row.status || "pending"
+    }))
+  ].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, capped);
+
+  const seenAt = (share.settings && share.settings.activity_seen_at) || null;
+  return {
+    items,
+    seenAt,
+    latestAt: items.length ? items[0].at : null,
+    unreadCount: seenAt
+      ? items.filter(item => new Date(item.at) > new Date(seenAt)).length
+      : items.length
+  };
+}
+
+app.get("/api/todo-share/activity", async (req, res) => {
+  try {
+    await ensureTodoShareTables();
+    const share = await getActiveTodoShare(req.workspaceId);
+    // No share link enabled is a normal state, not an error: the modal renders
+    // an empty inbox and the badge stays at zero.
+    if (!share) return res.json({ items: [], seenAt: null, latestAt: null, unreadCount: 0 });
+    // `intParam` reads a PATH param; this is a query string, so parse it here.
+    const requested = parseInt(req.query.limit, 10);
+    res.json(await buildGuestActivity(req.workspaceId, share, {
+      limit: Number.isFinite(requested) ? requested : ACTIVITY_LIMIT
+    }));
+  } catch (e) {
+    console.error("[todo-share] activity read failed:", e);
+    res.status(500).json({ error: "Could not load guest activity right now" });
+  }
+});
+
+app.post("/api/todo-share/activity/seen", async (req, res) => {
+  try {
+    await ensureTodoShareTables();
+    const share = await getActiveTodoShare(req.workspaceId);
+    if (!share) return res.json({ seenAt: null });
+    // Stamp with the newest item the CLIENT actually rendered, not NOW(): a
+    // comment that lands between the read and this write would otherwise be
+    // marked seen without ever having been shown.
+    const requested = req.body && req.body.seenAt ? new Date(req.body.seenAt) : null;
+    const seenAt = (requested && !isNaN(requested)) ? requested.toISOString() : new Date().toISOString();
+    const { rows } = await pool.query(
+      `UPDATE todo_shares
+          SET settings = COALESCE(settings, '{}'::jsonb) || jsonb_build_object('activity_seen_at', $2::text),
+              updated_at = NOW()
+        WHERE id = $1
+      RETURNING settings`,
+      [share.id, seenAt]
+    );
+    res.json({ seenAt: (rows[0] && rows[0].settings && rows[0].settings.activity_seen_at) || seenAt });
+  } catch (e) {
+    console.error("[todo-share] activity seen failed:", e);
+    res.status(500).json({ error: "Could not save that right now" });
+  }
+});
+
 // ── Export ───────────────────────────────────────────────────────────────────
 // The "never going to use DCC" audience: hand them the day in a format their own
 // system already reads. Serialization lives in public/js/share-export.js, shared
