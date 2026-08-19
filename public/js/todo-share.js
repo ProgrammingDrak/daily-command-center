@@ -10,6 +10,7 @@
   let reactionsLoading = null;
   let commentsDate = "";
   let commentsLoading = null;
+  let activity = { items: [], seenAt: null, latestAt: null, unreadCount: 0 };
 
   function esc(value) { return window.DCC.esc(value); } // delegates to core.js
 
@@ -87,6 +88,16 @@
           '<div class="todo-share-section-head"><h3>Sponsored Offers</h3><span id="todo-share-pending">0 pending</span></div>' +
           '<div id="todo-share-sponsorships" class="todo-share-sponsorships"></div>' +
         '</div>' +
+        // Guest Activity: the answer to "what did people say today". The chips on
+        // the itinerary rows only help once you know WHICH row to look at, which
+        // is the thing the owner doesn't know.
+        '<div class="todo-share-section">' +
+          '<div class="todo-share-section-head"><h3>Guest Activity</h3>' +
+            '<span id="todo-share-activity-count">0 new</span>' +
+            '<button id="todo-share-activity-seen" class="todo-share-mark-read" type="button" hidden>Mark all read</button>' +
+          '</div>' +
+          '<div id="todo-share-activity" class="todo-share-activity"></div>' +
+        '</div>' +
       '</div>';
     document.body.appendChild(modal);
     modal.addEventListener("click", e => { if (e.target === modal) closeModal(); });
@@ -94,6 +105,7 @@
     modal.querySelector("#todo-share-enable").addEventListener("click", enableShare);
     modal.querySelector("#todo-share-copy").addEventListener("click", copyShare);
     modal.querySelector("#todo-share-rotate").addEventListener("click", rotateShare);
+    modal.querySelector("#todo-share-activity-seen").addEventListener("click", markActivitySeen);
     modal.addEventListener("click", e => {
       const btn = e.target.closest("[data-todo-sponsor-status]");
       if (!btn) return;
@@ -144,6 +156,117 @@
     share = status.share || null;
     sponsorships = await api("/api/todo-share/sponsorships");
     render();
+    // Activity loads after the first render rather than blocking it: the link
+    // box and the offers are what the modal is opened for, and a slow inbox
+    // query should not hold them back.
+    //
+    // A failure here is NOT the same as the silent one on page load. There, the
+    // only casualty is a missing badge. Here the modal is OPEN and this panel is
+    // what the owner came to read, and `loadActivity` assigns before it renders,
+    // so a 500 left the panel blank under a header reading "0 new" -- identical
+    // to a genuinely quiet day, which is the one thing this feature exists to
+    // rule out. Draw whatever the page-load fetch already got, and say so when
+    // there is nothing to draw.
+    loadActivity().catch(() => {
+      renderActivity();
+      const el = document.getElementById("todo-share-activity");
+      if (el && !el.innerHTML) {
+        el.innerHTML = '<div class="todo-share-empty">Could not load guest activity. Close and reopen to retry.</div>';
+      }
+    });
+  }
+
+  // ── Guest activity inbox ───────────────────────────────────────────────────
+  function activityIcon(item){
+    if (item.kind === "reaction") return item.emoji || "✦";
+    if (item.kind === "sponsorship") return "🎁";
+    return "💬";
+  }
+
+  function activityLine(item){
+    const task = item.taskTitle ? esc(item.taskTitle) : "a task";
+    if (item.kind === "reaction") return "reacted to <b>" + task + "</b>";
+    if (item.kind === "sponsorship") {
+      const amount = money(item.valueCents);
+      return "offered <b>" + esc(item.rewardTitle || "a reward") + "</b>"
+        + (amount ? " (" + esc(amount) + ")" : "") + " on <b>" + task + "</b>";
+    }
+    return "commented on <b>" + task + "</b>";
+  }
+
+  function renderActivity(){
+    const modal = document.getElementById("todo-share-modal");
+    if (!modal) return;
+    const list = modal.querySelector("#todo-share-activity");
+    const count = modal.querySelector("#todo-share-activity-count");
+    const markBtn = modal.querySelector("#todo-share-activity-seen");
+    if (!list) return;
+
+    const unread = activity.unreadCount || 0;
+    if (count) count.textContent = unread ? unread + " new" : "All caught up";
+    if (markBtn) markBtn.hidden = !unread;
+
+    const items = activity.items || [];
+    if (!items.length) {
+      list.innerHTML = '<div class="todo-share-empty">Nobody has reacted, commented, or offered anything yet.</div>';
+      return;
+    }
+    const seenAt = activity.seenAt ? new Date(activity.seenAt) : null;
+    list.innerHTML = items.map(item => {
+      const isNew = !seenAt || new Date(item.at) > seenAt;
+      return '<div class="todo-share-activity-item' + (isNew ? " unread" : "") + '">' +
+        '<span class="todo-share-activity-icon">' + esc(activityIcon(item)) + '</span>' +
+        '<div class="todo-share-activity-body">' +
+          '<div class="todo-share-activity-head"><b>' + esc(item.actorName || "Someone") + '</b> ' +
+            activityLine(item) +
+            '<span class="todo-share-activity-when">' + esc(relTime(item.at)) + '</span>' +
+          '</div>' +
+          (item.body ? '<p>' + esc(item.body) + '</p>' : '') +
+          (item.note ? '<p>' + esc(item.note) + '</p>' : '') +
+        '</div>' +
+      '</div>';
+    }).join("");
+  }
+
+  async function loadActivity(){
+    activity = await api("/api/todo-share/activity");
+    renderActivity();
+    updateActivityBadge();
+  }
+
+  // The badge rides the existing "Share list" header button, so a comment left
+  // while the modal is closed is still visible without opening anything.
+  function updateActivityBadge(){
+    const btn = document.getElementById("todo-share-open");
+    if (!btn) return;
+    const unread = (activity && activity.unreadCount) || 0;
+    let dot = btn.querySelector(".todo-share-badge");
+    if (!unread) { if (dot) dot.remove(); return; }
+    if (!dot) {
+      dot = document.createElement("span");
+      dot.className = "todo-share-badge";
+      btn.appendChild(dot);
+    }
+    dot.textContent = unread > 9 ? "9+" : String(unread);
+    btn.title = unread + " new guest " + (unread === 1 ? "item" : "items");
+  }
+
+  async function markActivitySeen(){
+    // Stamp the newest item the list actually RENDERED. Using "now" would mark
+    // an item that arrived between the read and the click as seen.
+    const seenAt = activity.latestAt;
+    if (!seenAt) return;
+    try {
+      const result = await api("/api/todo-share/activity/seen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seenAt })
+      });
+      activity.seenAt = (result && result.seenAt) || seenAt;
+      activity.unreadCount = 0;
+      renderActivity();
+      updateActivityBadge();
+    } catch (e) { toast("Could not mark those read", "error"); }
   }
 
   async function loadReactions(date, options){
@@ -407,6 +530,10 @@
     const btn = document.getElementById("todo-share-open");
     if (btn) btn.addEventListener("click", openModal);
     ensureReactionsForDate(currentItineraryDate());
+    // Badge on load, without opening the modal: a guest comment left overnight
+    // should be visible from the header the moment the page comes up. Silent on
+    // failure — an unreachable inbox must not break the dashboard boot.
+    loadActivity().catch(() => {});
   });
 
   window.openTodoShareModal = openModal;

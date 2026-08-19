@@ -4,6 +4,11 @@
 module.exports = function mount(app, ctx) {
   const { APP_TIME_ZONE, DAY_STATE_FILE, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, coerceDateString, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getTodayStr, intParam, isValidDate, notFound, path, pool, readJSON, route, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON } = ctx;
 
+// The ONE serializer behind both export surfaces (this route and the browser
+// download in public/js/public-todo-share.js). Pure + UMD, so requiring the
+// browser file here is deliberate, not a layering accident.
+const shareExport = require("../public/js/share-export.js");
+
 // ── Live Todo Share API ──
 function makeShareToken() {
   return crypto.randomBytes(18).toString("base64url");
@@ -133,6 +138,17 @@ async function ensureTodoShareTables() {
   `);
   await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_task_comments_share_task ON todo_task_comments(share_id, task_id, created_at DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_task_comments_share_date ON todo_task_comments(share_id, task_date, created_at DESC)");
+  // Guest Activity inbox: all three of its reads are `WHERE share_id = $2 ORDER BY
+  // created_at DESC LIMIT n`, and none of the indexes above serve that shape --
+  // they lead with task_id / task_date, which this query does not constrain, so
+  // created_at is not an ordering column and Postgres reads the share's whole
+  // history and top-N sorts. todo_sponsorships was worse: it had no index leading
+  // with share_id at all, so it scanned every sponsorship in the workspace. This
+  // runs on every dashboard load now (the header badge), against append-only
+  // tables that only grow.
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_task_comments_share_created ON todo_task_comments(share_id, created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_task_reactions_share_created ON todo_task_reactions(share_id, created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_sponsorships_share_created ON todo_sponsorships(share_id, created_at DESC)");
 }
 
 function normalizeTodoShare(row, req) {
@@ -423,7 +439,11 @@ function normalizePublicTask(input, doneIds, calendarsById = new Map(), opts = {
   return task;
 }
 
-async function buildPublicTodoShare(share, dateStr, req) {
+// `shared` is an OPTIONAL per-request cache of the workspace-scoped lookups that
+// do not vary by date. Single-day callers omit it and behave exactly as before;
+// the range export passes one so a 31-day file does not re-run the same two
+// queries 31 times (getPublicCalendarMap has no WHERE clause at all).
+async function buildPublicTodoShare(share, dateStr, req, shared) {
   const date = isValidDate(dateStr) ? dateStr : getTodayStr();
   const state = await buildDayResponse(date, null, share.workspace_id);
   // ONE day read, split locally. `getBlocksByDateIncludingDeleted` is a strict superset of
@@ -510,8 +530,8 @@ async function buildPublicTodoShare(share, dateStr, req) {
     if (aliases.some(id => doneIds.has(id))) aliases.forEach(id => doneIds.add(id));
     if (aliases.some(id => hiddenIds.has(id))) aliases.forEach(id => hiddenIds.add(id));
   }
-  const calendarsById = await getPublicCalendarMap();
-  const tagsById = await getPublicTagMap(share.workspace_id);
+  const calendarsById = (shared && shared.calendarsById) || await getPublicCalendarMap();
+  const tagsById = (shared && shared.tagsById) || await getPublicTagMap(share.workspace_id);
   const tasks = [];
   const seen = new Set();
   const addTask = (task) => {
@@ -1305,6 +1325,291 @@ app.get("/api/public/todo-share/:token", async (req, res) => {
     // audience.
     console.error("[public-todo] share read failed:", e);
     res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not load this list right now" });
+  }
+});
+
+// ── Guest activity inbox ─────────────────────────────────────────────────────
+// Comments and reactions were already stored, already fetched, and already drawn
+// as chips on the itinerary row — but there was nowhere to answer "what did
+// people say today". A per-row chip only works if you already know which row to
+// look at, which is exactly what the owner doesn't know.
+//
+// One reverse-chronological union of the three things a visitor can leave
+// behind. Guest-CREATED tasks are deliberately NOT here: they land in triage and
+// already have an approval surface, so listing them again would be two inboxes
+// for one decision.
+//
+// "Unread" rides `todo_shares.settings.activity_seen_at` rather than
+// localStorage, so the badge follows the owner across devices instead of
+// resetting on whichever browser last opened the modal.
+const ACTIVITY_LIMIT = 60;
+
+async function buildGuestActivity(workspaceId, share, { limit = ACTIVITY_LIMIT } = {}) {
+  const capped = Math.max(1, Math.min(limit, 200));
+  const [comments, reactions, sponsorships] = await Promise.all([
+    pool.query(
+      `SELECT task_id, task_date, task_title, body, author_name, author_kind, created_at
+         FROM todo_task_comments
+        WHERE workspace_id = $1 AND share_id = $2
+        ORDER BY created_at DESC LIMIT $3`,
+      [workspaceId, share.id, capped]
+    ),
+    pool.query(
+      `SELECT task_id, task_date, task_title, emoji, actor_user_id, created_at
+         FROM todo_task_reactions
+        WHERE workspace_id = $1 AND share_id = $2
+        ORDER BY created_at DESC LIMIT $3`,
+      [workspaceId, share.id, capped]
+    ),
+    pool.query(
+      `SELECT id, task_id, task_date, task_title, sponsor_name, reward_title, note,
+              value_cents, kind, status, created_at
+         FROM todo_sponsorships
+        WHERE workspace_id = $1 AND share_id = $2
+        ORDER BY created_at DESC LIMIT $3`,
+      [workspaceId, share.id, capped]
+    )
+  ]);
+
+  const items = [
+    ...comments.rows.map(row => ({
+      kind: "comment",
+      at: row.created_at,
+      actorName: row.author_name || "Guest",
+      actorKind: row.author_kind || "guest",
+      taskId: row.task_id,
+      taskDate: row.task_date,
+      taskTitle: row.task_title || "",
+      body: row.body || ""
+    })),
+    ...reactions.rows.map(row => ({
+      kind: "reaction",
+      at: row.created_at,
+      // Reactions carry no author name (only a hashed actor key), so there is
+      // nothing honest to show but the tier. Inventing "Guest 4f2a" would read
+      // as an identity the system does not actually have.
+      actorName: row.actor_user_id ? "A signed-in visitor" : "A visitor",
+      actorKind: row.actor_user_id ? "user" : "guest",
+      taskId: row.task_id,
+      taskDate: row.task_date,
+      taskTitle: row.task_title || "",
+      emoji: row.emoji
+    })),
+    ...sponsorships.rows.map(row => ({
+      kind: "sponsorship",
+      at: row.created_at,
+      actorName: row.sponsor_name || "Someone",
+      actorKind: "guest",
+      taskId: row.task_id,
+      taskDate: row.task_date,
+      taskTitle: row.task_title || "",
+      sponsorshipId: row.id,
+      rewardTitle: row.reward_title || "",
+      note: row.note || "",
+      valueCents: row.value_cents || 0,
+      offerKind: row.kind || "reward",
+      status: row.status || "pending"
+    }))
+  ].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, capped);
+
+  const seenAt = (share.settings && share.settings.activity_seen_at) || null;
+  return {
+    items,
+    seenAt,
+    latestAt: items.length ? items[0].at : null,
+    unreadCount: seenAt
+      ? items.filter(item => new Date(item.at) > new Date(seenAt)).length
+      : items.length
+  };
+}
+
+app.get("/api/todo-share/activity", async (req, res) => {
+  try {
+    await ensureTodoShareTables();
+    const share = await getActiveTodoShare(req.workspaceId);
+    // No share link enabled is a normal state, not an error: the modal renders
+    // an empty inbox and the badge stays at zero.
+    if (!share) return res.json({ items: [], seenAt: null, latestAt: null, unreadCount: 0 });
+    // `intParam` reads a PATH param; this is a query string, so parse it here.
+    const requested = parseInt(req.query.limit, 10);
+    res.json(await buildGuestActivity(req.workspaceId, share, {
+      limit: Number.isFinite(requested) ? requested : ACTIVITY_LIMIT
+    }));
+  } catch (e) {
+    console.error("[todo-share] activity read failed:", e);
+    res.status(500).json({ error: "Could not load guest activity right now" });
+  }
+});
+
+app.post("/api/todo-share/activity/seen", async (req, res) => {
+  try {
+    await ensureTodoShareTables();
+    const share = await getActiveTodoShare(req.workspaceId);
+    if (!share) return res.json({ seenAt: null });
+    // Stamp with the newest item the CLIENT actually rendered, not NOW(): a
+    // comment that lands between the read and this write would otherwise be
+    // marked seen without ever having been shown.
+    const requested = req.body && req.body.seenAt ? new Date(req.body.seenAt) : null;
+    const seenAt = (requested && !isNaN(requested)) ? requested.toISOString() : new Date().toISOString();
+    const { rows } = await pool.query(
+      `UPDATE todo_shares
+          SET settings = COALESCE(settings, '{}'::jsonb) || jsonb_build_object('activity_seen_at', $2::text),
+              updated_at = NOW()
+        WHERE id = $1
+      RETURNING settings`,
+      [share.id, seenAt]
+    );
+    res.json({ seenAt: (rows[0] && rows[0].settings && rows[0].settings.activity_seen_at) || seenAt });
+  } catch (e) {
+    console.error("[todo-share] activity seen failed:", e);
+    res.status(500).json({ error: "Could not save that right now" });
+  }
+});
+
+// ── Export ───────────────────────────────────────────────────────────────────
+// The "never going to use DCC" audience: hand them the day in a format their own
+// system already reads. Serialization lives in public/js/share-export.js, shared
+// verbatim with the browser download, so the two can't drift on what a task is.
+//
+// A range is capped at MAX_EXPORT_DAYS. Each day is a full `buildPublicTodoShare`
+// (one day read plus a tombstone scan), the endpoint is ANONYMOUS, and the caller
+// picks the bounds: an uncapped `from`/`to` is a link that runs 3650 day-reads
+// against a pool capped at 10. Same reasoning as the guest-task date clamp above.
+const MAX_EXPORT_DAYS = 31;
+
+// Range exports are the one expensive thing an anonymous caller can ask for
+// repeatedly. Hoisting the invariant lookups (below) cut the per-day cost, but a
+// multi-day export is still a day read plus a tombstone scan PER DAY against a
+// small pool, and there is no rate limiting anywhere in this app -- the same gap
+// the guest-task cap above calls out. A share token is handed around freely and
+// cannot be revoked per recipient, so a handful of concurrent `?from=&to=`
+// requests could hold connections open and stall the owner's own dashboard.
+//
+// Single-day exports are deliberately NOT capped: they cost the same as the
+// share poll the page already makes every 15 seconds, so capping them would
+// break normal use to guard nothing.
+//
+// KEYED ON (share, origin IP), NOT on todoActorKey. The first cut used
+// todoActorKey and did nothing at all: for a guest that key mixes in
+// `req.sessionID`, which a caller sending no cookie rotates on every single
+// request, so a scripted attacker got a fresh bucket each time while a real
+// browser (one stable session) was the only thing the cap could ever bite.
+// Verified by firing six range exports with curl and watching all six pass.
+// A cap that only limits the honest user is worse than none, because it reads
+// as protection. The share id cannot be rotated at all and the IP cannot be
+// rotated for free; a genuinely distributed caller is still unbounded here,
+// which is an edge-network problem, not one this handler can solve.
+const RANGE_EXPORT_WINDOW_MS = 60 * 1000;
+const RANGE_EXPORT_PER_WINDOW = 5;
+const rangeExportHits = new Map();
+
+function allowRangeExport(actorKey, now) {
+  const cutoff = now - RANGE_EXPORT_WINDOW_MS;
+  // Sweep opportunistically: this Map is per-process and would otherwise grow one
+  // entry per distinct guest forever.
+  for (const [key, stamps] of rangeExportHits) {
+    const live = stamps.filter(t => t > cutoff);
+    if (live.length) rangeExportHits.set(key, live);
+    else rangeExportHits.delete(key);
+  }
+  const mine = (rangeExportHits.get(actorKey) || []).filter(t => t > cutoff);
+  if (mine.length >= RANGE_EXPORT_PER_WINDOW) return false;
+  mine.push(now);
+  rangeExportHits.set(actorKey, mine);
+  return true;
+}
+
+function exportDatesFrom(query) {
+  const today = getTodayStr();
+  const single = coerceDateString(query.date);
+  const rawFrom = coerceDateString(query.from);
+  const rawTo = coerceDateString(query.to);
+  if (!rawFrom && !rawTo) {
+    const date = isValidDate(single) ? single : today;
+    return { dates: [date], from: date, to: date };
+  }
+  // `isValidDate` is a SHAPE check (/^\d{4}-\d{2}-\d{2}$/), not a validity check,
+  // and treating it as the latter produced a 200 with an EMPTY file: "2026-13-45"
+  // passes the regex, `new Date` returns Invalid Date, `cursor <= last` is false
+  // against NaN, so the loop never ran and the caller got a header-only CSV that
+  // reads as "the owner has nothing scheduled". "2026-02-30" was quieter still --
+  // it parses, JS rolls it, and the export silently covered 2026-03-02 instead.
+  // Round-trip through toISOString to reject both.
+  const parseDay = (value) => {
+    if (!isValidDate(value)) return null;
+    const d = new Date(`${value}T12:00:00Z`);
+    return (!isNaN(d) && d.toISOString().slice(0, 10) === value) ? d : null;
+  };
+  const badDate = () => { const e = new Error("Use real YYYY-MM-DD dates for from and to"); e.statusCode = 400; throw e; };
+  const cursor = rawFrom ? (parseDay(rawFrom) || badDate()) : new Date(`${today}T12:00:00Z`);
+  const last = rawTo ? (parseDay(rawTo) || badDate()) : new Date(cursor);
+  if (last < cursor) { const e = new Error("Range ends before it starts"); e.statusCode = 400; throw e; }
+  const dates = [];
+  while (cursor <= last && dates.length < MAX_EXPORT_DAYS) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return { dates, from: dates[0], to: dates[dates.length - 1] };
+}
+
+app.get("/api/public/todo-share/:token/export", async (req, res) => {
+  try {
+    const share = await findTodoShareByToken(req.params.token);
+    if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
+    const format = String(req.query.format || "csv").toLowerCase();
+    if (!shareExport.isFormat(format)) {
+      return res.status(400).json({ error: "Unsupported format. Use csv, ics, or md." });
+    }
+    const { dates, from, to } = exportDatesFrom(req.query || {});
+    if (dates.length > 1 && !allowRangeExport(share.id + "|" + (getRequestOrigin(req) || "unknown"), Date.now())) {
+      return res.status(429).json({ error: "Too many range exports. Try again in a minute." });
+    }
+    const tasks = [];
+    let workspaceName = "";
+    let ownerUsername = "";
+    // Hoisted, not parallelized. These two are workspace-scoped (the calendar map
+    // is not scoped at all) and identical on every iteration, so a 31-day export
+    // was issuing 60 byte-identical round-trips. Parallelizing the DAY loop would
+    // be worse, not better: each buildDayResponse already fans out several
+    // concurrent queries, so a 31-wide Promise.all would demand far more
+    // connections than the pool's max and start timing out.
+    const shared = {
+      calendarsById: await getPublicCalendarMap(),
+      tagsById: await getPublicTagMap(share.workspace_id)
+    };
+    for (const date of dates) {
+      const day = await buildPublicTodoShare(share, date, req, shared);
+      workspaceName = workspaceName || day.workspaceName || "";
+      ownerUsername = ownerUsername || day.ownerUsername || "";
+      // The projection is day-scoped and leaves `date` implicit, which is fine for
+      // a single-day payload and wrong the moment two days are in one file. Stamp
+      // it here rather than teaching the projection about ranges.
+      for (const task of (day.tasks || [])) if (task) tasks.push(Object.assign({}, task, { date }));
+    }
+    const meta = {
+      workspaceName,
+      owner: ownerUsername,
+      date: from === to ? from : "",
+      from,
+      to,
+      url: todoShareUrl(req, share.token)
+    };
+    const body = shareExport.serialize(format, tasks, meta);
+    res.setHeader("Content-Type", shareExport.mimeFor(format));
+    res.setHeader("Content-Disposition",
+      `attachment; filename="${shareExport.filenameFor(meta, format)}"`);
+    // A share link is rotatable and the day changes under it; a cached export is a
+    // stale one handed out under a live URL.
+    res.setHeader("Cache-Control", "no-store");
+    res.send(body);
+  } catch (e) {
+    // Same fail-closed convention as the share GET: an anonymous caller never sees
+    // Postgres text, and a partial file is worse than no file because it reads as
+    // a complete day with tasks missing.
+    console.error("[public-todo] export failed:", e);
+    res.status(e.statusCode || 500).json({
+      error: e.statusCode ? e.message : "Could not build that export right now"
+    });
   }
 });
 
