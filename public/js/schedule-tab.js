@@ -579,21 +579,10 @@ function buildListView(){
   // isActive() is time-of-day only (no date), so the "Now" chip must be gated to
   // today or it would light up on a past/future day whose times overlap the clock.
   const isTodayView=viewDate===((window.DCC&&DCC.dates&&DCC.dates.todayKey)?DCC.dates.todayKey():new Date().toISOString().split("T")[0]);
-  // The carryover pool for this render — every unfinished past-day row, parents and
-  // children alike. row() and TaskModel.selectTree do their tree lookups against it
-  // (a child nests under its parent instead of standing alone as its own task).
-  //
-  // C6a: fetched HERE rather than down at the Unscheduled block, because the one
-  // derivation below takes it as input. `_ensureUnfinished` guards on
-  // `_unfinishedFetchedFor` and re-renders itself when its fetch lands, so hoisting
-  // the call changes nothing about when the request goes out.
   const actualToday=(typeof _actualTodayStr==="function")?_actualTodayStr():viewDate;
-  let unf=null;
-  if(viewDate===actualToday){
-    _ensureUnfinished(actualToday);
-    unf=_unfinishedCache;
-  }
-  const unfPool=(unf&&Array.isArray(unf.rows))?unf.rows:[];
+  // Loose Ends owns past-day unfinished work now. Keep carryovers out of the task
+  // list derivation entirely, including the old hidden fetch and second render.
+  const unfPool=[];
 
   // C6a: ONE derivation for the whole view. `day.visible` is the universe (not
   // deleted, not side-project-flagged), `day.unscheduled` is the Unscheduled SUBTREE,
@@ -923,11 +912,8 @@ function buildListView(){
       wrap.appendChild(emitNode(node,displayIdx,isDone(node.ev)?"done":"open"));
     });
   }
-  // Unscheduled: untimed tasks for this day, plus — on the actual today view
-  // only — unfinished tasks from past days folded into the same list. Folded
-  // rows keep the amber tag and their origin-day semantics: complete lands on
-  // the origin day, reschedule is a true move (server tombstone -> the origin
-  // day shows it amber).
+  // Unscheduled: untimed tasks for this day. Past-day unfinished work is handled
+  // exclusively through Loose Ends.
   const uMode=_sectionSort("unscheduled");
   if(day.unscheduledRoots.length){
     // The header counts and the drag/sort order apply to ROOTS; children follow their
@@ -949,49 +935,8 @@ function buildListView(){
         wrap.appendChild(emitNode(node,_isSubRow(node)?0:uRank++,isDone(node.ev)?"done":"open"));
       });
   }
-  // Carryovers get their OWN header and count. One badge used to mean three things
-  // (untimed-today + carryover rows shown + carryover total), so no number on the
-  // page matched anything you could point at.
-  if(unfPool.length){
-    // Only OPEN rows render. Rows already finished on their origin day ride along in
-    // unfPool purely so a parent's "2/5 subtasks" can count them (same as the work
-    // list, where a done subtask folds into its parent instead of listing).
-    // Roots = rows whose parent isn't itself unfinished. A child of an unfinished
-    // parent nests under it; a genuine orphan (parent done or gone) stays top-level,
-    // which is what we want — standalone work must never disappear.
-    // Both predicates come from DCC.Carryover so this lane, the Catch up modal and
-    // the morning prompt cannot drift apart (they already had: two spellings of the
-    // parent edge). `openRows` is TaskModel.selectCarryover under that name; the roots
-    // walk stays in DCC.Carryover, which is the carryover lane's own derivation and is
-    // already shared by all three of its surfaces.
-    const _CO_=(window.DCC&&window.DCC.Carryover)||null;
-    const openRows=_CO_?_CO_.openRows(unfPool):day.carryover;
-    const roots=_CO_?_CO_.rootsOf(unfPool):DCC.TaskModel.selectRoots(openRows);
-    const rootOrder=_sectionSortIsManual(uMode)
-      ? _orderUnscheduled(roots)
-      : _applySectionSort(roots,uMode,ev=>ev.title,_unsCreated);
-    section("Unfinished",roots.length,null,"uns-group");
-    // Roots first in display order, then the rest of the open rows so selectTree can
-    // still resolve children (it walks each root's subtree via childrenOf and skips any
-    // row whose parent is in the list).
-    //
-    // pool:openRows, NOT unfPool. A carryover whose parent finished on its origin day is
-    // a deliberate ORPHAN here -- DCC.Carryover.rootsOf already promotes it, because a
-    // done parent renders nowhere in this lane and its open step must not vanish with it.
-    // Pooling against unfPool (which still holds the done parent so subtask counts work)
-    // would hide exactly that row.
-    const rootIds=new Set(rootOrder.map(ev=>ev.id));
-    let rank=0;
-    DCC.TaskModel.selectTree(rootOrder.concat(openRows.filter(ev=>!rootIds.has(ev.id))),{pool:openRows}).forEach(node=>{
-      wrap.appendChild(emitNode(node,_isSubRow(node)?0:rank++,"unfinished"));
-    });
-    if(unf&&unf.total>openRows.length){
-      const more=document.createElement("div");
-      more.className="it-list-empty";
-      more.textContent="+"+(unf.total-openRows.length)+" more unfinished — open Catch up to work through the rest.";
-      wrap.appendChild(more);
-    }
-  }
+  // Past-day unfinished work belongs in Loose Ends. Do not duplicate that queue
+  // below today's task list; the header pill is its single visible entry point.
 
   // The "Pushed" section is DELETED (C3). A pushed task no longer sits on this day in a
   // greyed limbo with a copy of itself on tomorrow — it moved, so it is on tomorrow and
