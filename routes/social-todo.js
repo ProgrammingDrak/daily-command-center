@@ -138,6 +138,17 @@ async function ensureTodoShareTables() {
   `);
   await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_task_comments_share_task ON todo_task_comments(share_id, task_id, created_at DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_task_comments_share_date ON todo_task_comments(share_id, task_date, created_at DESC)");
+  // Guest Activity inbox: all three of its reads are `WHERE share_id = $2 ORDER BY
+  // created_at DESC LIMIT n`, and none of the indexes above serve that shape --
+  // they lead with task_id / task_date, which this query does not constrain, so
+  // created_at is not an ordering column and Postgres reads the share's whole
+  // history and top-N sorts. todo_sponsorships was worse: it had no index leading
+  // with share_id at all, so it scanned every sponsorship in the workspace. This
+  // runs on every dashboard load now (the header badge), against append-only
+  // tables that only grow.
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_task_comments_share_created ON todo_task_comments(share_id, created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_task_reactions_share_created ON todo_task_reactions(share_id, created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_sponsorships_share_created ON todo_sponsorships(share_id, created_at DESC)");
 }
 
 function normalizeTodoShare(row, req) {
@@ -428,7 +439,11 @@ function normalizePublicTask(input, doneIds, calendarsById = new Map(), opts = {
   return task;
 }
 
-async function buildPublicTodoShare(share, dateStr, req) {
+// `shared` is an OPTIONAL per-request cache of the workspace-scoped lookups that
+// do not vary by date. Single-day callers omit it and behave exactly as before;
+// the range export passes one so a 31-day file does not re-run the same two
+// queries 31 times (getPublicCalendarMap has no WHERE clause at all).
+async function buildPublicTodoShare(share, dateStr, req, shared) {
   const date = isValidDate(dateStr) ? dateStr : getTodayStr();
   const state = await buildDayResponse(date, null, share.workspace_id);
   // ONE day read, split locally. `getBlocksByDateIncludingDeleted` is a strict superset of
@@ -515,8 +530,8 @@ async function buildPublicTodoShare(share, dateStr, req) {
     if (aliases.some(id => doneIds.has(id))) aliases.forEach(id => doneIds.add(id));
     if (aliases.some(id => hiddenIds.has(id))) aliases.forEach(id => hiddenIds.add(id));
   }
-  const calendarsById = await getPublicCalendarMap();
-  const tagsById = await getPublicTagMap(share.workspace_id);
+  const calendarsById = (shared && shared.calendarsById) || await getPublicCalendarMap();
+  const tagsById = (shared && shared.tagsById) || await getPublicTagMap(share.workspace_id);
   const tasks = [];
   const seen = new Set();
   const addTask = (task) => {
@@ -1471,12 +1486,23 @@ function exportDatesFrom(query) {
     const date = isValidDate(single) ? single : today;
     return { dates: [date], from: date, to: date };
   }
-  const from = isValidDate(rawFrom) ? rawFrom : today;
-  const to = isValidDate(rawTo) ? rawTo : from;
-  if (to < from) { const e = new Error("Range ends before it starts"); e.statusCode = 400; throw e; }
+  // `isValidDate` is a SHAPE check (/^\d{4}-\d{2}-\d{2}$/), not a validity check,
+  // and treating it as the latter produced a 200 with an EMPTY file: "2026-13-45"
+  // passes the regex, `new Date` returns Invalid Date, `cursor <= last` is false
+  // against NaN, so the loop never ran and the caller got a header-only CSV that
+  // reads as "the owner has nothing scheduled". "2026-02-30" was quieter still --
+  // it parses, JS rolls it, and the export silently covered 2026-03-02 instead.
+  // Round-trip through toISOString to reject both.
+  const parseDay = (value) => {
+    if (!isValidDate(value)) return null;
+    const d = new Date(`${value}T12:00:00Z`);
+    return (!isNaN(d) && d.toISOString().slice(0, 10) === value) ? d : null;
+  };
+  const badDate = () => { const e = new Error("Use real YYYY-MM-DD dates for from and to"); e.statusCode = 400; throw e; };
+  const cursor = rawFrom ? (parseDay(rawFrom) || badDate()) : new Date(`${today}T12:00:00Z`);
+  const last = rawTo ? (parseDay(rawTo) || badDate()) : new Date(cursor);
+  if (last < cursor) { const e = new Error("Range ends before it starts"); e.statusCode = 400; throw e; }
   const dates = [];
-  const cursor = new Date(`${from}T12:00:00Z`);
-  const last = new Date(`${to}T12:00:00Z`);
   while (cursor <= last && dates.length < MAX_EXPORT_DAYS) {
     dates.push(cursor.toISOString().slice(0, 10));
     cursor.setUTCDate(cursor.getUTCDate() + 1);
@@ -1496,8 +1522,18 @@ app.get("/api/public/todo-share/:token/export", async (req, res) => {
     const tasks = [];
     let workspaceName = "";
     let ownerUsername = "";
+    // Hoisted, not parallelized. These two are workspace-scoped (the calendar map
+    // is not scoped at all) and identical on every iteration, so a 31-day export
+    // was issuing 60 byte-identical round-trips. Parallelizing the DAY loop would
+    // be worse, not better: each buildDayResponse already fans out several
+    // concurrent queries, so a 31-wide Promise.all would demand far more
+    // connections than the pool's max and start timing out.
+    const shared = {
+      calendarsById: await getPublicCalendarMap(),
+      tagsById: await getPublicTagMap(share.workspace_id)
+    };
     for (const date of dates) {
-      const day = await buildPublicTodoShare(share, date, req);
+      const day = await buildPublicTodoShare(share, date, req, shared);
       workspaceName = workspaceName || day.workspaceName || "";
       ownerUsername = ownerUsername || day.ownerUsername || "";
       // The projection is day-scoped and leaves `date` implicit, which is fine for

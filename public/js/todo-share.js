@@ -159,7 +159,21 @@
     // Activity loads after the first render rather than blocking it: the link
     // box and the offers are what the modal is opened for, and a slow inbox
     // query should not hold them back.
-    loadActivity().catch(() => {});
+    //
+    // A failure here is NOT the same as the silent one on page load. There, the
+    // only casualty is a missing badge. Here the modal is OPEN and this panel is
+    // what the owner came to read, and `loadActivity` assigns before it renders,
+    // so a 500 left the panel blank under a header reading "0 new" -- identical
+    // to a genuinely quiet day, which is the one thing this feature exists to
+    // rule out. Draw whatever the page-load fetch already got, and say so when
+    // there is nothing to draw.
+    loadActivity().catch(() => {
+      renderActivity();
+      const el = document.getElementById("todo-share-activity");
+      if (el && !el.innerHTML) {
+        el.innerHTML = '<div class="todo-share-empty">Could not load guest activity. Close and reopen to retry.</div>';
+      }
+    });
   }
 
   // ── Guest activity inbox ───────────────────────────────────────────────────

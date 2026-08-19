@@ -417,7 +417,6 @@
      <label>, so the export button's box lines up with the selects beside it. */
   .todo-export-label{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.45px;color:var(--text-muted)}
   .todo-export-menu{left:auto;right:0;min-width:250px;padding:4px}
-  .todo-export-head{padding:7px 9px 5px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)}
   .todo-export-item{display:block;width:100%;text-align:left;background:none;border:0;border-radius:5px;padding:7px 9px;color:var(--text);font:inherit;cursor:pointer;text-transform:none;letter-spacing:0}
   .todo-export-item:hover,.todo-export-item:focus-visible{background:rgba(255,255,255,0.06);outline:none}
   .todo-export-item span{display:block;font-size:12.5px;font-weight:700}

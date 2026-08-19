@@ -654,12 +654,6 @@
     return value === "day" ? 0 : (parseInt(value, 10) || 0);
   }
 
-  function addDays(dateStr, days){
-    const base = new Date((dateStr || new Date().toISOString().slice(0, 10)) + "T12:00:00Z");
-    base.setUTCDate(base.getUTCDate() + days);
-    return base.toISOString().slice(0, 10);
-  }
-
   function runExport(format){
     const ShareExport = (window.DCC && window.DCC.ShareExport) || null;
     if (format === "pdf") {
@@ -676,7 +670,11 @@
     if (days > 0) {
       // Range: the server owns multi-day assembly (it has to read each day).
       const from = meta.date || new Date().toISOString().slice(0, 10);
-      const params = new URLSearchParams({ format: format, from: from, to: addDays(from, days - 1) });
+      // window.DCC.dates.addDays, not a local copy: core.js already ships this
+      // exact helper (same UTC-noon anchor) and this page now loads core.js.
+      const params = new URLSearchParams({
+        format: format, from: from, to: window.DCC.dates.addDays(from, days - 1)
+      });
       window.location.href = "/api/public/todo-share/" + encodeURIComponent(token)
         + "/export?" + params.toString();
       return;
@@ -712,11 +710,22 @@
     const range = document.getElementById("todo-export-range");
     const note = document.getElementById("todo-export-range-note");
     if (range && note) {
-      range.addEventListener("change", () => {
-        note.textContent = range.value === "day"
-          ? "Exports exactly the rows shown above."
-          : "Multi-day exports include every task, ignoring the filters above.";
-      });
+      // PDF prints the page on screen, so it can only ever be one day. Disable
+      // it while a range is selected rather than silently printing today: the
+      // range picker sits in the same menu, so it reads as applying to all four.
+      const syncRange = () => {
+        const isRange = range.value !== "day";
+        const pdf = menu.querySelector('[data-export="pdf"]');
+        if (pdf) {
+          pdf.disabled = isRange;
+          pdf.title = isRange ? "PDF prints the day on screen. Pick This day." : "";
+        }
+        note.textContent = isRange
+          ? "Multi-day exports include every task, ignoring the filters above. PDF prints this day only."
+          : "Exports exactly the rows shown above.";
+      };
+      range.addEventListener("change", syncRange);
+      syncRange();
     }
     document.addEventListener("click", e => {
       if (menu.hidden || e.target.closest("#todo-export")) return;
