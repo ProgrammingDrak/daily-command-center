@@ -2,7 +2,41 @@
 // ctx carries shared server-scope helpers/stores; see server.js where ctx is built.
 
 module.exports = function mount(app, ctx) {
-  const { blockDB, broadcast, getTodayStr, isValidDate, petHomeStore, pool } = ctx;
+  const { blockDB, broadcast, getTodayStr, isValidDate, petHomeStore, pool, socialStore } = ctx;
+
+// ── Pet visits ──
+// Send your pet to a friend's home, carrying a note. The FRIEND GATE lives here
+// rather than in pet-home-store: that store has no social dependency today and
+// keeping it that way means its tests never need the friendship tables. A visit
+// is also the first thing in the pet system that writes to somebody ELSE's
+// workspace, so the consent check belongs at the HTTP boundary where the actor
+// is unambiguous.
+app.post("/api/pet-home/visit", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const toUserId = parseInt(body.toUserId, 10);
+    const fromUserId = req.session.userId;
+    if (!Number.isFinite(toUserId)) return res.status(400).json({ error: "toUserId required" });
+    if (toUserId === fromUserId) return res.status(400).json({ error: "Your pet already lives here" });
+    if (!(await socialStore.areFriends(fromUserId, toUserId))) {
+      return res.status(403).json({ error: "You can only send your pet to a friend" });
+    }
+    // The visiting pet's name comes from the SENDER's own home, not from the
+    // request body: letting the caller name the pet would let a friend forge
+    // whose pet turned up.
+    const mine = await petHomeStore.getState(req.workspaceId, fromUserId);
+    const result = await petHomeStore.sendPetVisit({
+      fromUserId,
+      fromPetName: (mine.home && mine.home.pet && mine.home.pet.name) || "A friend's pet",
+      toUserId,
+      message: body.message,
+      onDate: getTodayStr()
+    });
+    res.status(result.visited ? 201 : 200).json(result);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not send your pet right now" });
+  }
+});
 
 // ── Pet Home API ──
 app.get("/api/pet-home/state", async (req, res) => {

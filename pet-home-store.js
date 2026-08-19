@@ -162,10 +162,18 @@ async function listSuggestions(workspaceId, status = null) {
 
 async function getState(workspaceId, userId) {
   const home = await ensureHome(workspaceId, userId);
+  const [events, suggestions, treats, visits] = await Promise.all([
+    recentEvents(workspaceId),
+    listSuggestions(workspaceId),
+    lifetimeTreats(workspaceId),
+    listVisits(workspaceId)
+  ]);
   return {
     home: shapeHome(home),
-    events: await recentEvents(workspaceId),
-    suggestions: await listSuggestions(workspaceId)
+    events,
+    suggestions,
+    level: petLevel(treats),
+    visits
   };
 }
 
@@ -362,8 +370,108 @@ async function markSuggestion(workspaceId, id, status, approvedBlockId = null) {
   return rows[0] || null;
 }
 
+// ── Levels ──────────────────────────────────────────────────────────────────
+// DERIVED from the append-only pet_home_events ledger, never stored. decor_currency
+// is a spendable balance that goes DOWN when decor is unlocked, so a level built on
+// it would drop when you bought a lamp. Lifetime earned treats only ever grow, and
+// the ledger already records every award with its currencyDelta, so there is no new
+// counter to drift out of sync. Same discipline reward_events uses.
+const PET_LEVEL_STEP = 25;   // treats needed for level 2; the curve is quadratic
+const PET_MAX_LEVEL = 20;
+
+/** Pure: lifetime treats -> level and progress toward the next one. */
+function petLevel(lifetimeTreats) {
+  const treats = Math.max(0, Math.floor(Number(lifetimeTreats) || 0));
+  const threshold = (level) => PET_LEVEL_STEP * Math.pow(level - 1, 2);
+  const raw = Math.floor(Math.sqrt(treats / PET_LEVEL_STEP)) + 1;
+  const level = Math.min(Math.max(raw, 1), PET_MAX_LEVEL);
+  const atMax = level >= PET_MAX_LEVEL;
+  const base = threshold(level);
+  const next = atMax ? null : threshold(level + 1);
+  const span = atMax ? 0 : next - base;
+  return {
+    level,
+    lifetimeTreats: treats,
+    maxLevel: PET_MAX_LEVEL,
+    atMax,
+    intoLevel: treats - base,
+    needForNext: atMax ? 0 : next - treats,
+    // 1 at max rather than 0, so a full bar reads as "done" and not "no progress".
+    progress: atMax ? 1 : (span > 0 ? Math.min(1, (treats - base) / span) : 0)
+  };
+}
+
+async function lifetimeTreats(workspaceId) {
+  const { rows } = await pool.query(
+    `SELECT COALESCE(SUM((metadata->>'currencyDelta')::int), 0)::int AS total
+       FROM pet_home_events
+      WHERE workspace_id = $1 AND event_type = 'task_feed'`,
+    [workspaceId]
+  );
+  return rows[0] ? rows[0].total : 0;
+}
+
+// ── Visits ──────────────────────────────────────────────────────────────────
+// A friend's pet comes over and leaves a note. Rides pet_home_events rather than a
+// new table: that ledger already carries actor_name, message, metadata and a unique
+// (workspace_id, source_type, source_key), which is exactly a visit plus its
+// idempotency. The key is per sender per DAY, so a pet visits once a day -- a
+// natural limit that matches the mental model instead of a bolted-on rate check.
+//
+// The FRIEND GATE is deliberately not here: this store has no social dependency
+// and should keep none. The route checks socialStore.areFriends before calling.
+async function sendPetVisit({ fromUserId, fromPetName, toUserId, message, onDate }) {
+  await ensureSchema();
+  const { rows: hostRows } = await pool.query(
+    "SELECT workspace_id, user_id FROM pet_homes WHERE user_id = $1 LIMIT 1",
+    [toUserId]
+  );
+  const host = hostRows[0];
+  // No pet home means nothing to visit. A caller-facing error rather than a
+  // silent no-op, so the sender is told why nothing happened.
+  if (!host) { const e = new Error("That friend has not set up a pet home yet"); e.statusCode = 404; throw e; }
+  const date = safeText(onDate, new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const petName = safeText(fromPetName, "A friend's pet").slice(0, 60);
+  const note = safeText(message, "").slice(0, 300);
+  const { rows } = await pool.query(
+    `INSERT INTO pet_home_events
+       (workspace_id, user_id, event_type, source_type, source_key, actor_name, message, metadata)
+     VALUES ($1,$2,'pet_visit','pet_visit',$3,$4,$5,$6)
+     ON CONFLICT (workspace_id, source_type, source_key) DO NOTHING
+     RETURNING id, created_at`,
+    [
+      host.workspace_id,
+      host.user_id,
+      `${date}:${fromUserId}`,
+      petName,
+      note || `${petName} came by to say hello.`,
+      { fromUserId, petName, date }
+    ]
+  );
+  // Empty means the unique index caught a repeat visit today. Not an error: the
+  // sender simply already visited, and telling them so is more useful than a 409.
+  return { visited: rows.length > 0, alreadyVisitedToday: rows.length === 0 };
+}
+
+/** Visits received, newest first: the "who came by" list on the pet home. */
+async function listVisits(workspaceId, limit = 10) {
+  const { rows } = await pool.query(
+    `SELECT actor_name, message, metadata, created_at
+       FROM pet_home_events
+      WHERE workspace_id = $1 AND event_type = 'pet_visit'
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [workspaceId, clamp(limit, 1, 50)]
+  );
+  return rows;
+}
+
 module.exports = {
   DECOR_CATALOG,
+  petLevel,
+  lifetimeTreats,
+  sendPetVisit,
+  listVisits,
   publicUrl,
   ensureSchema,
   getState,

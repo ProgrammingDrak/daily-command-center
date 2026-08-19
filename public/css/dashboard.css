@@ -5301,3 +5301,32 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .social-add{width:100%}
   .social-add input{flex:1;min-width:0}
 }
+
+/* ── Pet: level bar + visits ───────────────────────────────────────────────
+   The level meter reuses .pet-meter so it lines up with Food and Mood; only the
+   accent differs, because level is an achievement rather than a care state that
+   can fall. */
+.pet-level-meter i > b{background:linear-gradient(90deg,var(--accent),var(--accent-light,var(--accent)))}
+/* The level number is a nested <span>, NOT a <b>: `.pet-meter b` is the fill-bar
+   selector (it paints the gradient), so a <b> in the label picked up bar styling
+   and pushed the number onto its own line, leaving this meter taller than the
+   Food and Mood meters beside it. */
+.pet-level-meter > span{white-space:nowrap}
+.pet-level-meter > span > span{color:var(--text);font-weight:850}
+.pet-panel-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.pet-panel-head h3{margin:0}
+.pet-panel-head span{font-size:11px;font-weight:700;color:var(--text-muted)}
+.pet-visit-note{font-size:11.5px;color:var(--text-muted);line-height:1.5;margin:4px 0 10px}
+.pet-visit-send{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.pet-visit-send select,.pet-visit-send input{background:var(--card);border:1px solid var(--border);border-radius:7px;color:var(--text);font:inherit;font-size:12.5px;padding:7px 9px;min-width:0}
+.pet-visit-send select{flex:0 1 150px}
+.pet-visit-send input{flex:1 1 160px}
+.pet-visit-send select:disabled{opacity:0.5;cursor:not-allowed}
+.pet-visit-status{font-size:11.5px;font-weight:600;min-height:16px;margin-top:7px}
+.pet-visit-status.ok{color:var(--green,#00b373)}
+.pet-visit-status.error{color:var(--red,#dc2626)}
+.pet-visits{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.pet-visit-row{background:var(--card);border:1px solid var(--border);border-radius:7px;padding:8px 10px;font-size:12px;line-height:1.45}
+.pet-visit-row strong{display:block;font-size:12px;font-weight:700}
+.pet-visit-row span{color:var(--text-muted)}
+.pet-visit-empty{font-size:11.5px;color:var(--text-muted);padding:12px;border:1px dashed var(--border);border-radius:7px;text-align:center}
