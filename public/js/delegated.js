@@ -126,14 +126,29 @@
   // row chip cannot disagree about which field is the source of truth.
   function waitingSourceRef(props) {
     const p = props || {};
-    return String((p.contact && p.contact.sourceRef) || p.source_id || "").trim();
+    const stored = String((p.contact && p.contact.sourceRef) || p.source_id || "").trim();
+    if (stored) return stored;
+    // Neither link field is guaranteed. A Slack capture that predates contact.sourceRef,
+    // and any item typed by hand off a pasted permalink, carry the origin ONLY in prose.
+    // Recovering it here rather than at each call site is what keeps the drawer card, the
+    // reminder it spawns and the row chip on one answer -- and it means a check-in
+    // scheduled from such an item is born with a real source_id instead of "".
+    return recoverUrl(p.notes) || recoverUrl(p.captureNotes);
   }
 
-  // The deeplink a check-in ROW should jump to. Two legs on purpose:
+  // window.DCC is the one owner of link parsing (scheme safety, the host allowlist), so
+  // this file borrows it rather than growing a second copy that can drift.
+  function recoverUrl(text) {
+    const recover = window.DCC && window.DCC.recoverSourceUrl;
+    return (typeof recover === "function") ? recover(text) : "";
+  }
+
+  // The deeplink a check-in ROW should jump to. Three legs, best evidence first:
   //   1. its own source_id -- set at creation, and the only leg that still works
   //      once the Waiting item is completed or deleted;
-  //   2. the live Waiting item -- which is what heals every reminder scheduled
-  //      before creation started forwarding the permalink, no backfill needed.
+  //   2. the Waiting item -- which heals every reminder scheduled before creation
+  //      started forwarding the permalink, as long as the item still exists;
+  //   3. the reminder's own detail prose -- the orphan's last resort (see below).
   // Scheme safety stays in taskSourceUrl so there is one gate, not three.
   function checkInSourceUrl(ev) {
     if (!isCheckInTask(ev)) return "";
@@ -147,7 +162,15 @@
     const own = url(stored);
     if (own) return own;
     const item = checkInItem(ev);
-    return item ? url(waitingSourceRef(item.properties || {})) : "";
+    const fromItem = item ? url(waitingSourceRef(item.properties || {})) : "";
+    if (fromItem) return fromItem;
+    // Leg 3, for the ORPHAN: a reminder whose Waiting item was deleted outright has
+    // nothing left to resolve THROUGH, and legs 1 and 2 both come up empty on every
+    // reminder made before leg 1 was stamped. Its own `detail` still holds the item's
+    // notes verbatim (scheduleDelegatedItem copies them in), so the permalink survives
+    // in prose after the record that owned it is gone. Last, and last on purpose: a
+    // stored link and a live item are both better evidence than text.
+    return recoverUrl(ev && ev.detail);
   }
 
   // The original task a check-in chases, when the Waiting item was raised off one

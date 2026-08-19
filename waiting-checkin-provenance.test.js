@@ -12,7 +12,7 @@ const vm = require("node:vm");
 const WAITING_SRC = fs.readFileSync(require.resolve("./public/js/delegated.js"), "utf8");
 const SCHEDULE_SRC = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
 const FEATURES_SRC = fs.readFileSync(require.resolve("./public/js/features.js"), "utf8");
-const { taskBlockProps, taskSourceUrl, taskSourceUrlBlocked } = require("./public/js/task-serialize");
+const { taskBlockProps, taskSourceUrl, taskSourceUrlBlocked, recoverSourceUrl } = require("./public/js/task-serialize");
 
 const PERMALINK = "https://cleverrealestate.slack.com/archives/C1/p1723999999000100";
 const OTHER_PERMALINK = "https://cleverrealestate.slack.com/archives/C9/p1799999999000999";
@@ -43,15 +43,16 @@ function sliceFn(src, name, opts) {
 function loadResolvers({ items = {}, blocks = {} } = {}) {
   const source = [
     sliceFn(WAITING_SRC, "waitingSourceRef"),
+    sliceFn(WAITING_SRC, "recoverUrl"),
     sliceFn(WAITING_SRC, "checkInItemId"),
     sliceFn(WAITING_SRC, "isCheckInTask", { oneLine: true }),
     sliceFn(WAITING_SRC, "checkInItem"),
     sliceFn(WAITING_SRC, "checkInSourceUrl"),
     sliceFn(WAITING_SRC, "checkInOriginBlock"),
   ].join("\n");
-  const names = ["waitingSourceRef", "checkInItemId", "isCheckInTask", "checkInItem", "checkInSourceUrl", "checkInOriginBlock"];
+  const names = ["waitingSourceRef", "recoverUrl", "checkInItemId", "isCheckInTask", "checkInItem", "checkInSourceUrl", "checkInOriginBlock"];
   const context = {
-    window: { DCC: { taskSourceUrl, taskSourceUrlBlocked }, blockStore: { get: id => blocks[id] || null } },
+    window: { DCC: { taskSourceUrl, taskSourceUrlBlocked, recoverSourceUrl }, blockStore: { get: id => blocks[id] || null } },
     getDelegatedItemById: id => items[id] || null,
     isOpenDelegated: item => (item.properties || {}).status !== "done",
     resolveLinkedBlock: id => blocks[id] || null,
@@ -333,4 +334,87 @@ test("the local_id lookup is memoized on the mutation generation, like waitingLi
     "resolveLinkedBlock must route its fallback through the memo, not getByType directly");
   assert.doesNotMatch(WAITING_SRC, /getByType\("block"\)\.find\(/,
     "the per-call whole-cache scan must stay deleted");
+});
+
+// ── Leg 3: the permalink that only ever made it into prose ──────────────────
+// Legs 1 and 2 both read LINK fields. Neither can help the reminder in the bug that
+// prompted this: made before leg 1 was stamped, and its Waiting item deleted outright,
+// so there is no record left holding the URL in a field. The URL itself was never lost
+// -- scheduleDelegatedItem copies the item's notes into the reminder's `detail`.
+
+const NOTES = "Delegated from Slack\n" + PERMALINK + "\n\nFrom unknown in #slack:";
+
+test("recoverSourceUrl only recovers links it can honestly label", () => {
+  assert.equal(recoverSourceUrl(NOTES), PERMALINK);
+  assert.equal(recoverSourceUrl("see https://mail.google.com/mail/u/0/#inbox/abc please"),
+    "https://mail.google.com/mail/u/0/#inbox/abc");
+
+  // A `detail` is free text and routinely quotes a third party's message, so anything
+  // outside the two hosts taskSourceLabel can NAME must not become a provenance chip.
+  assert.equal(recoverSourceUrl("ping me at https://example.com/thread/9"), "");
+  assert.equal(recoverSourceUrl("https://cleverrealestate.slack.com/team/U04Q"), "",
+    "a slack.com URL that is not an archives permalink is not a message link");
+
+  // Lookalike hosts. A bare host match would have taken both.
+  assert.equal(recoverSourceUrl("https://evil-slack.com/archives/C1/p1"), "");
+  assert.equal(recoverSourceUrl("https://slack.com.evil.com/archives/C1/p1"), "");
+  assert.equal(recoverSourceUrl("https://mail.google.com.evil.com/x"), "");
+
+  // The pattern only ever matches http(s), so there is no scheme to launder.
+  assert.equal(recoverSourceUrl("javascript:alert(1)"), "");
+  assert.equal(recoverSourceUrl('<a href="javascript:alert(1)">slack.com/archives/C1</a>'), "");
+
+  // Prose punctuation is not part of the href. A trailing slash is.
+  assert.equal(recoverSourceUrl("see (" + PERMALINK + ")."), PERMALINK);
+  assert.equal(recoverSourceUrl("here: " + PERMALINK + ","), PERMALINK);
+  assert.equal(recoverSourceUrl("https://cleverrealestate.slack.com/archives/C1/"),
+    "https://cleverrealestate.slack.com/archives/C1/");
+
+  assert.equal(recoverSourceUrl(null), "");
+  assert.equal(recoverSourceUrl(undefined), "");
+});
+
+test("an orphaned reminder recovers its permalink from its own detail", () => {
+  // The exact shape from prod: source_id never stamped, Waiting item deleted.
+  const orphan = {
+    id: "waiting-checkin-task:gone",
+    source: "waiting-checkin",
+    source_id: "",
+    delegatedItemId: "gone",
+    detail: "Check in\n\nWaiting on an external dependency\n\n" + NOTES,
+  };
+  const { checkInSourceUrl } = loadResolvers();
+  assert.equal(checkInSourceUrl(orphan), PERMALINK);
+
+  assert.equal(checkInSourceUrl({ ...orphan, detail: "Check in\n\nWaiting on Mike" }), "",
+    "a reminder with no link anywhere still resolves to no link, not a throw");
+});
+
+test("leg 3 is last: a live item and a stored link both outrank prose", () => {
+  const detail = "Check in\n\nDelegated from Slack\n" + OTHER_PERMALINK;
+
+  const withItem = { id: "waiting-checkin-task:wait-1", source: "waiting-checkin", source_id: "", delegatedItemId: "wait-1", detail };
+  const { checkInSourceUrl: viaItem } = loadResolvers({ items: { "wait-1": slackItem } });
+  assert.equal(viaItem(withItem), PERMALINK, "the live item's link wins over the reminder's prose");
+
+  const stored = { ...withItem, source_id: PERMALINK, delegatedItemId: "gone" };
+  const { checkInSourceUrl: viaStored } = loadResolvers();
+  assert.equal(viaStored(stored), PERMALINK, "the row's own source_id wins over its prose");
+
+  // The hostile abort covers the whole resolver, not just leg 2. Falling through to
+  // prose would launder exactly what the abort exists to stop.
+  assert.equal(viaStored({ ...withItem, source_id: "javascript:alert(1)" }), "",
+    "a hostile stored value must abort before leg 3, not fall through to it");
+});
+
+test("a Waiting item whose only trace of Slack is its notes still yields a deeplink", () => {
+  const { waitingSourceRef } = loadResolvers();
+  // What the drawer card reads, and what scheduleDelegatedItem stamps onto a NEW
+  // reminder -- so this is the half that stops the bug recurring going forward.
+  assert.equal(waitingSourceRef({ contact: { sourceRef: "" }, notes: NOTES }), PERMALINK);
+  assert.equal(waitingSourceRef({ captureNotes: NOTES }), PERMALINK);
+  assert.equal(waitingSourceRef({ contact: { sourceRef: OTHER_PERMALINK }, notes: NOTES }), OTHER_PERMALINK,
+    "recovery fills an EMPTY field; it never overrides a stored one");
+  assert.equal(waitingSourceRef({ notes: "Waiting to hear back from Matt." }), "",
+    "a hand-made item with no origin gets no invented one");
 });
