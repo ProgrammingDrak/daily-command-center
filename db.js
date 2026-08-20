@@ -363,7 +363,17 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
     return { ...parseBlock(found[0]), _resolvedExisting: true };
   }
   await q.query(`INSERT INTO operations (block_id, op_type, after_data, timestamp) VALUES ($1, 'create', $2, $3)`, [blockId, props, now]);
-  return { id: blockId, type, parent_id: parentId, date: date || null, properties: props, sort_order: sortOrderToUse || 0, created_at: now, updated_at: now, deleted_at: null };
+  // Hand-built rather than `inserted.rows[0]` so `properties` stays the parsed
+  // object the caller passed. That means every column the row actually has must
+  // be listed HERE, and `user_id` / `workspace_id` were not: the two other exits
+  // above go through parseBlock/findByIdempotencyKey and DO carry them, so a
+  // fresh insert was the one shape missing its tenant. Any caller that scopes on
+  // the returned row read `undefined` and silently concluded "other workspace" —
+  // meeting-automation approvedActionMatches did exactly that, which is why
+  // scheduling a never-yet-approved meeting follow-up from Loose Ends 409'd with
+  // "Could not approve meeting action" while the two-step Recap path (which
+  // re-fetches through getBlock) worked.
+  return { id: blockId, type, parent_id: parentId, date: date || null, properties: props, sort_order: sortOrderToUse || 0, user_id: user_id || null, workspace_id: workspace_id || null, created_at: now, updated_at: now, deleted_at: null };
 }
 
 // `client` lets a caller run this inside its own transaction (batchOp,
