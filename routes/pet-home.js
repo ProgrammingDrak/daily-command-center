@@ -2,7 +2,59 @@
 // ctx carries shared server-scope helpers/stores; see server.js where ctx is built.
 
 module.exports = function mount(app, ctx) {
-  const { blockDB, broadcast, getTodayStr, isValidDate, petHomeStore, pool } = ctx;
+  const { blockDB, broadcast, getTodayStr, isValidDate, petHomeStore, pool, socialStore } = ctx;
+
+// ── Pet visits ──
+// Send your pet to a friend's home, carrying a note. The FRIEND GATE lives here
+// rather than in pet-home-store: that store has no social dependency today and
+// keeping it that way means its tests never need the friendship tables. A visit
+// is also the first thing in the pet system that writes to somebody ELSE's
+// workspace, so the consent check belongs at the HTTP boundary where the actor
+// is unambiguous.
+app.post("/api/pet-home/visit", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const toUserId = parseInt(body.toUserId, 10);
+    const fromUserId = req.session.userId;
+    if (!Number.isFinite(toUserId)) return res.status(400).json({ error: "toUserId required" });
+    if (toUserId === fromUserId) return res.status(400).json({ error: "Your pet already lives here" });
+    // BOTH checks, and the same 403 for each so the response never reveals that a
+    // block exists. areFriends alone was not enough: friendships rows are
+    // directed, so blockUser inserts a second row and leaves the original
+    // 'accepted' one intact. areFriends is fixed to let a block veto, and this
+    // explicit isBlocked call is the belt to that braces -- this endpoint writes
+    // into somebody else's workspace, which is the last place to rely on one
+    // predicate being right.
+    if (await socialStore.isBlocked(fromUserId, toUserId)
+        || !(await socialStore.areFriends(fromUserId, toUserId))) {
+      return res.status(403).json({ error: "You can only send your pet to a friend" });
+    }
+    // Resolve the recipient's workspace through the OWNERSHIP table, not through
+    // pet_homes.user_id: that column is nullable, non-unique, and records
+    // whoever first opened the home rather than who owns it.
+    const toWorkspaceId = await socialStore.resolveWorkspaceId(toUserId);
+    // The visiting pet's name comes from the SENDER's stored home rather than the
+    // request body. That stops a caller naming the pet inline, though the sender
+    // can still rename their own pet, so `actor_name` is a display label and NOT
+    // a trustworthy identity -- which is why the visit also records the sender's
+    // username for the recipient to see.
+    const { rows: mine } = await pool.query(
+      "SELECT pet FROM pet_homes WHERE workspace_id = $1", [req.workspaceId]
+    );
+    const result = await petHomeStore.sendPetVisit({
+      fromUserId,
+      fromUsername: req.session.username || "",
+      fromPetName: (mine[0] && mine[0].pet && mine[0].pet.name) || "A friend's pet",
+      toUserId,
+      toWorkspaceId,
+      message: body.message,
+      onDate: getTodayStr()
+    });
+    res.status(result.visited ? 201 : 200).json(result);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not send your pet right now" });
+  }
+});
 
 // ── Pet Home API ──
 app.get("/api/pet-home/state", async (req, res) => {

@@ -85,15 +85,27 @@ async function isBlocked(ownerUserId, otherUserId) {
   return rows.length > 0;
 }
 
+/** Mutual friendship, with a BLOCK ON EITHER SIDE revoking it.
+ *
+ *  friendships rows are DIRECTED and unique on (requester_id, addressee_id), so
+ *  blockUser(B, A) inserts a SECOND row and leaves the original
+ *  (A, B, 'accepted') row untouched. The old single-row `status='accepted'`
+ *  lookup matched that survivor, so `areFriends` kept returning true after a
+ *  block: a blocked user still passed every friend gate, and listFriendsFeed
+ *  still showed each of them the other's published posts. Proven against a live
+ *  database, not inferred.
+ *
+ *  Reading BOTH rows and letting a block veto is the fix, and it belongs here
+ *  rather than at each call site so a future gate cannot forget it. */
 async function areFriends(a, b) {
   const { rows } = await pool.query(
-    `SELECT 1 FROM friendships
-      WHERE status='accepted'
-        AND ((requester_id=$1 AND addressee_id=$2) OR (requester_id=$2 AND addressee_id=$1))
-      LIMIT 1`,
+    `SELECT bool_or(status='accepted') AS friends,
+            bool_or(status='blocked')  AS blocked
+       FROM friendships
+      WHERE (requester_id=$1 AND addressee_id=$2) OR (requester_id=$2 AND addressee_id=$1)`,
     [a, b]
   );
-  return rows.length > 0;
+  return !!(rows[0] && rows[0].friends && !rows[0].blocked);
 }
 
 /** Send a friend request. If the addressee had already requested the requester,
@@ -145,12 +157,36 @@ async function blockUser(userId, otherId) {
   return rows[0];
 }
 
+// Both list functions join the name. They used to return bare ids, which no UI
+// can render without a lookup per row, and "friend_id: 7" is not something a
+// person recognises.
 async function listFriends(userId) {
   const { rows } = await pool.query(
-    `SELECT CASE WHEN requester_id=$1 THEN addressee_id ELSE requester_id END AS friend_id, updated_at
-       FROM friendships
-      WHERE status='accepted' AND (requester_id=$1 OR addressee_id=$1)
-      ORDER BY updated_at DESC`,
+    `SELECT f.friend_id,
+            f.updated_at,
+            COALESCE(NULLIF(pr.display_name, ''), u.username) AS name,
+            u.username,
+            pr.avatar
+       FROM (
+         SELECT CASE WHEN requester_id=$1 THEN addressee_id ELSE requester_id END AS friend_id,
+                updated_at
+           FROM friendships
+          WHERE status='accepted' AND (requester_id=$1 OR addressee_id=$1)
+            -- Same block-revokes-friendship rule as areFriends(). Without it a
+            -- blocked person still appeared in the friend list, and the pet-visit
+            -- picker (built from this list) offered someone the route then 403s.
+            -- NOT IN on the id alone, deliberately: an EXCEPT here would compare
+            -- whole rows, and the two rows carry different updated_at values, so
+            -- it would never match and the filter would silently do nothing.
+            AND CASE WHEN requester_id=$1 THEN addressee_id ELSE requester_id END NOT IN (
+              SELECT CASE WHEN requester_id=$1 THEN addressee_id ELSE requester_id END
+                FROM friendships
+               WHERE status='blocked' AND (requester_id=$1 OR addressee_id=$1)
+            )
+       ) f
+       JOIN users u ON u.id = f.friend_id
+       LEFT JOIN user_profiles pr ON pr.user_id = f.friend_id
+      ORDER BY f.updated_at DESC`,
     [userId]
   );
   return rows;
@@ -158,7 +194,14 @@ async function listFriends(userId) {
 
 async function listFriendRequests(userId) {
   const { rows } = await pool.query(
-    `SELECT * FROM friendships WHERE addressee_id=$1 AND status='pending' ORDER BY created_at DESC`,
+    `SELECT f.*,
+            COALESCE(NULLIF(pr.display_name, ''), u.username) AS requester_name,
+            u.username AS requester_username
+       FROM friendships f
+       JOIN users u ON u.id = f.requester_id
+       LEFT JOIN user_profiles pr ON pr.user_id = f.requester_id
+      WHERE f.addressee_id=$1 AND f.status='pending'
+      ORDER BY f.created_at DESC`,
     [userId]
   );
   return rows;
@@ -879,18 +922,29 @@ async function createCompletionPost({
   actualMinutes = null,
   isPrivate = false,
   isWorkSourced = false,
+  titleSnapshot = "",
+  itemType = "task",
 }) {
   const locked = isPrivate || isWorkSourced;
+  // ON CONFLICT DO NOTHING, not an upsert: the completion endpoint is replayed by
+  // design (mutationId dedupe, offline WAL replay), and a replay must neither
+  // stack a second post NOR overwrite one the owner may already have published
+  // and captioned. RETURNING is then empty on a replay, which the caller reads as
+  // "already recorded".
   const { rows } = await pool.query(
     `INSERT INTO feed_posts
        (owner_user_id, workspace_id, task_id, completion_id, points_awarded,
-        estimated_minutes, actual_minutes, publish_state, publish_source)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'hidden',$8)
+        estimated_minutes, actual_minutes, publish_state, publish_source,
+        title_snapshot, item_type)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'hidden',$8,$9,$10)
+     ON CONFLICT (owner_user_id, completion_id) WHERE completion_id IS NOT NULL
+       DO NOTHING
      RETURNING *`,
     [ownerUserId, workspaceId, taskId, completionId, pointsAwarded,
-     estimatedMinutes, actualMinutes, locked ? "private_task" : "default_hidden"]
+     estimatedMinutes, actualMinutes, locked ? "private_task" : "default_hidden",
+     String(titleSnapshot || "").slice(0, 220), String(itemType || "task").slice(0, 40)]
   );
-  return rows[0];
+  return rows[0] || null;
 }
 
 /** Publish a completion post. The work-task wall: a post whose source is
@@ -907,6 +961,27 @@ async function publishPost(postId, ownerUserId, { caption = null } = {}) {
   return { post: rows[0] || null, published: rows.length > 0 };
 }
 
+/** Reopening a task retracts its post.
+ *
+ *  The idempotency key is the MUTATION, and the client mints a fresh mutation id
+ *  per toggle, so without this an un-complete left the old post sitting in the
+ *  publish queue offering to announce a task the owner is no longer finished
+ *  with, and a re-complete then stacked a SECOND row for the same task. Keyed on
+ *  the task rather than the mutation, so it catches the post whichever mutation
+ *  created it.
+ *
+ *  Marks rather than deletes: the owner may already have published it, and
+ *  `manually_hidden` is the retraction state this table already has. */
+async function retractCompletionPost(ownerUserId, taskId) {
+  const { rows } = await pool.query(
+    `UPDATE feed_posts SET publish_state='manually_hidden', hidden_at=NOW()
+      WHERE owner_user_id=$1 AND task_id=$2 AND publish_state <> 'manually_hidden'
+      RETURNING id`,
+    [ownerUserId, String(taskId)]
+  );
+  return rows.length;
+}
+
 async function hidePost(postId, ownerUserId) {
   const { rows } = await pool.query(
     `UPDATE feed_posts SET publish_state='manually_hidden', hidden_at=NOW()
@@ -916,22 +991,56 @@ async function hidePost(postId, ownerUserId) {
   return { post: rows[0] || null, changed: rows.length > 0 };
 }
 
-/** A viewer's friends feed: published posts from accepted friends only. */
+/** A viewer's friends feed: published posts from accepted friends only.
+ *  Joins the author's display name so a feed row renders without a second round
+ *  trip. The TASK TITLE comes from the post's own snapshot, never from a live
+ *  join to blocks: a feed entry is a record of what happened, and the task may
+ *  since have been deleted, renamed, or rescheduled. */
 async function listFriendsFeed(viewerUserId, { limit = 50 } = {}) {
   const { rows } = await pool.query(
-    `SELECT p.* FROM feed_posts p
+    `SELECT p.*,
+            COALESCE(NULLIF(pr.display_name, ''), u.username) AS author_name,
+            pr.avatar AS author_avatar,
+            (p.owner_user_id = $1) AS is_own
+       FROM feed_posts p
+       JOIN users u ON u.id = p.owner_user_id
+       LEFT JOIN user_profiles pr ON pr.user_id = p.owner_user_id
       WHERE p.publish_state='published'
         AND (
           p.owner_user_id=$1
           OR p.owner_user_id IN (
+            -- Same block-revokes-friendship rule as areFriends(): the accepted
+            -- row survives a block, so an EXCEPT is required or a blocked pair
+            -- keeps seeing each other's posts.
             SELECT CASE WHEN requester_id=$1 THEN addressee_id ELSE requester_id END
               FROM friendships
              WHERE status='accepted' AND (requester_id=$1 OR addressee_id=$1)
+            EXCEPT
+            SELECT CASE WHEN requester_id=$1 THEN addressee_id ELSE requester_id END
+              FROM friendships
+             WHERE status='blocked' AND (requester_id=$1 OR addressee_id=$1)
           )
         )
       ORDER BY p.published_at DESC
       LIMIT $2`,
     [viewerUserId, limit]
+  );
+  return rows;
+}
+
+/** The owner's own completions that are not published yet: the publish queue.
+ *  LOCKED posts (private or work-sourced) are excluded outright rather than
+ *  listed with a disabled button. publishPost refuses them at the SQL level, so
+ *  rendering a control that can never succeed would just look like a bug. */
+async function listPublishablePosts(ownerUserId, { limit = 50 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT * FROM feed_posts
+      WHERE owner_user_id=$1
+        AND publish_state='hidden'
+        AND publish_source <> 'private_task'
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [ownerUserId, limit]
   );
   return rows;
 }
@@ -977,6 +1086,8 @@ module.exports = {
   publishPost,
   hidePost,
   listFriendsFeed,
+  listPublishablePosts,
+  retractCompletionPost,
   // pure helpers (unit-testable without a DB)
   _test: {
     resolveReviewState,

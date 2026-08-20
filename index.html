@@ -214,6 +214,7 @@
   <button class="tab" data-tab="pet-home" id="pet-home-tab-btn">Pet Home <span class="badge" id="pet-home-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="runway" id="runway-tab-btn">Runway</button>
   <button class="tab" data-tab="budget" id="budget-tab-btn">Budget</button>
+  <button class="tab" data-tab="social" id="social-tab-btn">Social <span class="badge" id="social-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="vault" id="vault-tab-btn">Mycelium</button>
 </div>
 
@@ -1279,7 +1280,26 @@
           <div class="pet-meter"><span>Food</span><strong id="pet-food-label">0%</strong><i><b id="pet-food-fill"></b></i></div>
           <div class="pet-meter"><span>Mood</span><strong id="pet-mood-label">0%</strong><i><b id="pet-mood-fill"></b></i></div>
           <div class="pet-currency"><span>Decor treats</span><strong id="pet-decor-currency">0</strong></div>
+          <div class="pet-meter pet-level-meter">
+            <span>Level <span id="pet-level-num">1</span></span>
+            <strong id="pet-level-label">0 to go</strong>
+            <i><b id="pet-level-fill"></b></i>
+          </div>
         </div>
+      </section>
+      <section class="pet-panel">
+        <div class="pet-panel-head">
+          <h3>Visits</h3>
+          <span id="pet-visit-count">none yet</span>
+        </div>
+        <p class="pet-visit-note">Send your pet to a friend's home once a day. It carries a note.</p>
+        <div class="pet-visit-send">
+          <select id="pet-visit-friend" aria-label="Friend to visit"><option value="">Pick a friend</option></select>
+          <input id="pet-visit-message" type="text" maxlength="300" placeholder="Say something (optional)">
+          <button id="pet-visit-send" class="pet-btn primary" type="button">Send pet</button>
+        </div>
+        <div id="pet-visit-status" class="pet-visit-status"></div>
+        <div id="pet-visits" class="pet-visits"></div>
       </section>
       <section class="pet-panel">
         <h3>Customize</h3>
@@ -1746,6 +1766,59 @@
   <iframe class="tool-frame" src="/public/tools/quit-runway-simple.html" title="Simple Burn vs Income Runway"></iframe>
 </div>
 
+<!-- Social tab: friend requests, friend list, publish queue, friends feed.
+     Nothing is shared automatically; see public/js/social.js. -->
+<div class="tab-content" id="tab-social">
+  <div class="social-shell">
+    <div class="social-topline">
+      <div>
+        <h2 class="social-title">Social</h2>
+        <div class="social-subtitle">Friends see what you choose to publish. Nothing is shared automatically.</div>
+      </div>
+      <div class="social-add">
+        <input id="social-lookup-input" type="text" maxlength="60" placeholder="Add a friend by username" autocomplete="off">
+        <button id="social-lookup-send" class="social-btn primary" type="button">Send request</button>
+      </div>
+    </div>
+    <div id="social-lookup-status" class="social-status"></div>
+
+    <div class="social-grid">
+      <section class="social-panel">
+        <div class="social-panel-head">
+          <h3>Ready to share</h3>
+          <span id="social-publishable-count">0</span>
+        </div>
+        <p class="social-panel-note">
+          Completed tasks, private until you publish them. Work-sourced tasks
+          (Slack, email, meetings) and anything marked private never appear here.
+        </p>
+        <div id="social-publishable" class="social-list"></div>
+      </section>
+
+      <section class="social-panel">
+        <div class="social-panel-head">
+          <h3>Friend requests</h3>
+          <span id="social-requests-count">0</span>
+        </div>
+        <div id="social-requests" class="social-list"></div>
+        <div class="social-panel-head" style="margin-top:16px">
+          <h3>Friends</h3>
+          <span id="social-friends-count">0</span>
+        </div>
+        <div id="social-friends" class="social-list"></div>
+      </section>
+
+      <section class="social-panel social-panel-wide">
+        <div class="social-panel-head">
+          <h3>Feed</h3>
+          <span id="social-feed-count">0</span>
+        </div>
+        <div id="social-feed" class="social-list"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
 <!-- Mycelium vault tab (Phase B1): read-only markdown viewer over the git-backed vault. -->
 <div class="tab-content" id="tab-vault">
   <div id="vault-header">
@@ -1905,6 +1978,7 @@
      loads later and calls window.notifyTriageArrivals. -->
 <script src="/public/js/pet-courier.js"></script>
 <script src="/public/js/todo-share.js"></script>
+<script src="/public/js/social.js"></script>
 <script src="/public/js/slots.js"></script>
 <script src="/public/js/punishments.js"></script>
 <script src="/public/js/rewards-queue.js"></script>

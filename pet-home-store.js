@@ -82,6 +82,9 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_pet_home_events_workspace_created
       ON pet_home_events(workspace_id, created_at DESC);
 
+    CREATE INDEX IF NOT EXISTS idx_pet_home_events_workspace_type_created
+      ON pet_home_events(workspace_id, event_type, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS pet_task_suggestions (
       id              SERIAL PRIMARY KEY,
       workspace_id    TEXT NOT NULL REFERENCES workspaces(id),
@@ -130,17 +133,39 @@ function shapeHome(row) {
   };
 }
 
-async function recentEvents(workspaceId, limit = 20) {
+// `types` is an ALLOWLIST, and the public projection must always pass one. The
+// public pet page is anonymous (isPublicRoute exempts /api/public/), and this
+// function returned every row in the ledger, so the moment pet_visit events
+// existed a friend's private note -- written from an authenticated friends-only
+// UI, with no hint it could travel -- was served verbatim to any holder of the
+// share link, together with metadata carrying the sender's numeric user id.
+// Verified with an anonymous curl before the fix.
+//
+// Allowlist rather than a pet_visit denylist on purpose: the next event type
+// somebody adds should be private by default and made public deliberately.
+async function recentEvents(workspaceId, limit = 20, types = null) {
+  const params = [workspaceId];
+  let typeClause = "";
+  if (Array.isArray(types) && types.length) {
+    params.push(types);
+    typeClause = ` AND event_type = ANY($${params.length})`;
+  }
+  params.push(clamp(limit, 1, 100));
   const { rows } = await pool.query(
     `SELECT id, event_type, actor_name, message, metadata, created_at
      FROM pet_home_events
-     WHERE workspace_id = $1
+     WHERE workspace_id = $1${typeClause}
      ORDER BY created_at DESC
-     LIMIT $2`,
-    [workspaceId, limit]
+     LIMIT $${params.length}`,
+    params
   );
   return rows;
 }
+
+// What an anonymous visitor may see on a shared pet home. `encouragement` and
+// `task_suggestion` originate FROM that public page, and `task_feed` is the
+// progress the page exists to show. `pet_visit` is deliberately absent.
+const PUBLIC_EVENT_TYPES = ["encouragement", "task_feed", "task_suggestion"];
 
 async function listSuggestions(workspaceId, status = null) {
   const params = [workspaceId];
@@ -162,10 +187,18 @@ async function listSuggestions(workspaceId, status = null) {
 
 async function getState(workspaceId, userId) {
   const home = await ensureHome(workspaceId, userId);
+  const [events, suggestions, treats, visits] = await Promise.all([
+    recentEvents(workspaceId),
+    listSuggestions(workspaceId),
+    lifetimeTreats(workspaceId),
+    listVisits(workspaceId)
+  ]);
   return {
     home: shapeHome(home),
-    events: await recentEvents(workspaceId),
-    suggestions: await listSuggestions(workspaceId)
+    events,
+    suggestions,
+    level: petLevel(treats),
+    visits
   };
 }
 
@@ -303,7 +336,10 @@ async function getPublicHome(shareSlug, todayStr) {
   return {
     home: shapeHome(home),
     tasks,
-    events: await recentEvents(workspaceId, 30),
+    // Allowlisted types only, and metadata stripped: nothing on the public page
+    // reads it, and it carried the visiting friend's numeric user id.
+    events: (await recentEvents(workspaceId, 30, PUBLIC_EVENT_TYPES))
+      .map(({ metadata, ...rest }) => rest),
     today: todayStr
   };
 }
@@ -362,8 +398,116 @@ async function markSuggestion(workspaceId, id, status, approvedBlockId = null) {
   return rows[0] || null;
 }
 
+// ── Levels ──────────────────────────────────────────────────────────────────
+// DERIVED from the append-only pet_home_events ledger, never stored. decor_currency
+// is a spendable balance that goes DOWN when decor is unlocked, so a level built on
+// it would drop when you bought a lamp. Lifetime earned treats only ever grow, and
+// the ledger already records every award with its currencyDelta, so there is no new
+// counter to drift out of sync. Same discipline reward_events uses.
+const PET_LEVEL_STEP = 25;   // treats needed for level 2; the curve is quadratic
+const PET_MAX_LEVEL = 20;
+
+/** Pure: lifetime treats -> level and progress toward the next one. */
+function petLevel(lifetimeTreats) {
+  const treats = Math.max(0, Math.floor(Number(lifetimeTreats) || 0));
+  const threshold = (level) => PET_LEVEL_STEP * Math.pow(level - 1, 2);
+  const raw = Math.floor(Math.sqrt(treats / PET_LEVEL_STEP)) + 1;
+  const level = Math.min(Math.max(raw, 1), PET_MAX_LEVEL);
+  const atMax = level >= PET_MAX_LEVEL;
+  const base = threshold(level);
+  const next = atMax ? null : threshold(level + 1);
+  const span = atMax ? 0 : next - base;
+  return {
+    level,
+    lifetimeTreats: treats,
+    maxLevel: PET_MAX_LEVEL,
+    atMax,
+    intoLevel: treats - base,
+    needForNext: atMax ? 0 : next - treats,
+    // 1 at max rather than 0, so a full bar reads as "done" and not "no progress".
+    progress: atMax ? 1 : (span > 0 ? Math.min(1, (treats - base) / span) : 0)
+  };
+}
+
+async function lifetimeTreats(workspaceId) {
+  const { rows } = await pool.query(
+    `SELECT COALESCE(SUM((metadata->>'currencyDelta')::int), 0)::int AS total
+       FROM pet_home_events
+      WHERE workspace_id = $1 AND event_type = 'task_feed'`,
+    [workspaceId]
+  );
+  return rows[0] ? rows[0].total : 0;
+}
+
+// ── Visits ──────────────────────────────────────────────────────────────────
+// A friend's pet comes over and leaves a note. Rides pet_home_events rather than a
+// new table: that ledger already carries actor_name, message, metadata and a unique
+// (workspace_id, source_type, source_key), which is exactly a visit plus its
+// idempotency. The key is per sender per DAY, so a pet visits once a day -- a
+// natural limit that matches the mental model instead of a bolted-on rate check.
+//
+// The FRIEND GATE is deliberately not here: this store has no social dependency
+// and should keep none. The route checks socialStore.areFriends before calling.
+async function sendPetVisit({ fromUserId, fromUsername, fromPetName, toUserId, toWorkspaceId, message, onDate }) {
+  await ensureSchema();
+  // The workspace is resolved by the ROUTE, through the ownership table the rest
+  // of the app uses. The first cut looked the host up by `pet_homes.user_id`,
+  // which is neither unique nor authoritative -- ensureHome stamps it with
+  // whoever first opened the pet home in that workspace. That made the write
+  // target non-deterministic (LIMIT 1 with no ORDER BY), and because the
+  // once-a-day key is scoped per workspace, a different row on the next call
+  // would have let the same sender visit twice in a day.
+  if (!toWorkspaceId) { const e = new Error("That friend has not set up a pet home yet"); e.statusCode = 404; throw e; }
+  const { rows: hostRows } = await pool.query(
+    "SELECT workspace_id, user_id FROM pet_homes WHERE workspace_id = $1",
+    [toWorkspaceId]
+  );
+  const host = hostRows[0];
+  // No pet home means nothing to visit. A caller-facing error rather than a
+  // silent no-op, so the sender is told why nothing happened.
+  if (!host) { const e = new Error("That friend has not set up a pet home yet"); e.statusCode = 404; throw e; }
+  const date = safeText(onDate, new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const petName = safeText(fromPetName, "A friend's pet").slice(0, 60);
+  const note = safeText(message, "").slice(0, 300);
+  const { rows } = await pool.query(
+    `INSERT INTO pet_home_events
+       (workspace_id, user_id, event_type, source_type, source_key, actor_name, message, metadata)
+     VALUES ($1,$2,'pet_visit','pet_visit',$3,$4,$5,$6)
+     ON CONFLICT (workspace_id, source_type, source_key) DO NOTHING
+     RETURNING id, created_at`,
+    [
+      host.workspace_id,
+      host.user_id,
+      `${date}:${fromUserId}`,
+      petName,
+      note || `${petName} came by to say hello.`,
+      { fromUserId, fromUsername: safeText(fromUsername, "").slice(0, 60), petName, date }
+    ]
+  );
+  // Empty means the unique index caught a repeat visit today. Not an error: the
+  // sender simply already visited, and telling them so is more useful than a 409.
+  return { visited: rows.length > 0, alreadyVisitedToday: rows.length === 0 };
+}
+
+/** Visits received, newest first: the "who came by" list on the pet home. */
+async function listVisits(workspaceId, limit = 10) {
+  const { rows } = await pool.query(
+    `SELECT actor_name, message, metadata, created_at
+       FROM pet_home_events
+      WHERE workspace_id = $1 AND event_type = 'pet_visit'
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [workspaceId, clamp(limit, 1, 50)]
+  );
+  return rows;
+}
+
 module.exports = {
   DECOR_CATALOG,
+  petLevel,
+  lifetimeTreats,
+  sendPetVisit,
+  listVisits,
   publicUrl,
   ensureSchema,
   getState,
