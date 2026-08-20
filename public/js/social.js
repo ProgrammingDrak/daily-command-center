@@ -25,6 +25,10 @@
 
   let state = { publishable: [], requests: [], friends: [], feed: [], grants: [], granted: [] };
   const selectedPosts = new Set();
+  // The viewer's own handle, for the "Your username" chip. Fetched once and kept:
+  // a username does not change while the page is open, and the Social tab reloads
+  // on every open.
+  let myUsername = "";
   // The coach day view's own state, kept apart from the tab's: it is a different
   // person's data and must never be mistaken for the viewer's own.
   let coach = { ownerUserId: null, name: "", role: "none", date: "", capabilities: {} };
@@ -123,7 +127,7 @@
     if (!list) return;
     if (count) count.textContent = state.friends.length || "none";
     if (!state.friends.length) {
-      list.innerHTML = '<div class="social-empty">No friends yet. Add someone by username above.</div>';
+      list.innerHTML = '<div class="social-empty">No friends yet. Add someone by username or email above.</div>';
       return;
     }
     list.innerHTML = state.friends.map(row =>
@@ -209,6 +213,31 @@
       '</div>').join("");
   }
 
+  // Nothing else in the app tells you your own username, and a Google-signed-in
+  // account never chose one (auth.js derives it from the email). Without this a
+  // friend request is a guessing game in both directions.
+  function renderMe() {
+    const wrap = document.getElementById("social-you");
+    const name = document.getElementById("social-you-name");
+    if (!wrap || !name) return;
+    if (!myUsername) { wrap.hidden = true; return; }
+    name.textContent = myUsername;
+    wrap.hidden = false;
+  }
+
+  async function copyMyUsername() {
+    if (!myUsername) return;
+    try {
+      await navigator.clipboard.writeText(myUsername);
+      toast("Username copied", "success");
+    } catch (e) {
+      // Clipboard is refused on an insecure origin and in some embedded views.
+      // Say the name out loud instead of failing silently -- it is short enough
+      // to read off a toast and type by hand.
+      toast("Copy blocked here. Your username is " + myUsername, "info");
+    }
+  }
+
   function renderAll() {
     renderPublishable();
     renderRequests();
@@ -216,6 +245,7 @@
     renderFeed();
     renderGrants();
     renderGranted();
+    renderMe();
     updateBadge();
   }
 
@@ -239,14 +269,18 @@
       // Independent reads, so one slow or failing panel does not blank the rest.
       // A rejected panel keeps its previous contents rather than throwing the
       // whole tab away.
-      const [publishable, requests, friends, feed, grants, granted] = await Promise.all([
+      const [publishable, requests, friends, feed, grants, granted, me] = await Promise.all([
         api("/api/social/feed/publishable").catch(() => state.publishable),
         api("/api/social/friends/requests").catch(() => state.requests),
         api("/api/social/friends").catch(() => state.friends),
         api("/api/social/feed").catch(() => state.feed),
         api("/api/access/grants").catch(() => state.grants),
-        api("/api/access/granted-to-me").catch(() => state.granted)
+        api("/api/access/granted-to-me").catch(() => state.granted),
+        // Only on the first open: the handle cannot change under us, so later
+        // reloads (publish, respond, revoke) must not pay for it again.
+        myUsername ? Promise.resolve({ username: myUsername }) : api("/api/me").catch(() => ({}))
       ]);
+      myUsername = (me && me.username) || myUsername;
       state = {
         publishable: publishable || [],
         requests: requests || [],
@@ -272,7 +306,7 @@
       // Two steps on purpose: the lookup gives a clear "no such user" before any
       // friendship row is written, so a typo does not create a pending request
       // against nobody.
-      const user = await api("/api/social/users/lookup?username=" + encodeURIComponent(username));
+      const user = await api("/api/social/users/lookup?q=" + encodeURIComponent(username));
       await api("/api/social/friends/request", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -355,7 +389,7 @@
     const username = nameField ? nameField.value.trim() : "";
     if (status) { status.className = "social-status"; status.textContent = ""; }
     if (!username) {
-      if (status) { status.className = "social-status error"; status.textContent = "Enter a username."; }
+      if (status) { status.className = "social-status error"; status.textContent = "Enter a username or email."; }
       return;
     }
     const role = roleField ? roleField.value : "viewer";
@@ -371,7 +405,7 @@
       // Two steps, same as friend requests: the lookup gives a clear "no such
       // user" before any grant row exists, so a typo cannot create access for
       // somebody unintended.
-      const user = await api("/api/social/users/lookup?username=" + encodeURIComponent(username));
+      const user = await api("/api/social/users/lookup?q=" + encodeURIComponent(username));
       const result = await api("/api/access/grants", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -565,6 +599,8 @@
     if (send) send.addEventListener("click", sendRequest);
     const input = document.getElementById("social-lookup-input");
     if (input) input.addEventListener("keydown", e => { if (e.key === "Enter") sendRequest(); });
+    const copyMe = document.getElementById("social-you-copy");
+    if (copyMe) copyMe.addEventListener("click", copyMyUsername);
 
     const shell = document.getElementById("tab-social");
     if (!shell) return;

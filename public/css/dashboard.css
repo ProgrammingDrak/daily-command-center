@@ -5530,12 +5530,22 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 /* wrap + shrinkable input: the dashboard has fixed side rails, and at the far
    right of the topline the button was being clipped under one of them. */
 .social-add{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;max-width:100%}
+.social-add-label{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);white-space:nowrap}
 .social-add input{background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);font:inherit;font-size:13px;padding:8px 11px;min-width:0;width:min(230px,100%);flex:1 1 160px}
 .social-add input:focus{border-color:var(--accent);outline:none}
 .social-btn{background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);font:inherit;font-size:12px;font-weight:700;padding:8px 13px;cursor:pointer;white-space:nowrap;transition:border-color 0.12s,background 0.12s}
 .social-btn:hover{border-color:var(--text-muted)}
 .social-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .social-btn.primary:hover{filter:brightness(1.08)}
+/* "Your username": the answer to "what do I tell my friend to type". A button,
+   not a label, because the whole chip copies. */
+.social-you{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+.social-you-label{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)}
+.social-you-chip{display:inline-flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:999px;color:var(--text);font:inherit;font-size:12.5px;font-weight:700;padding:5px 11px;cursor:pointer;transition:border-color 0.12s}
+.social-you-chip:hover{border-color:var(--accent)}
+.social-you-hint{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)}
+.social-you-chip:hover .social-you-hint{color:var(--accent)}
+.social-you-note{font-size:11.5px;color:var(--text-muted)}
 .social-status{font-size:12px;font-weight:600;min-height:18px;margin:6px 0 10px}
 .social-status.ok{color:var(--green)}
 .social-status.error{color:var(--red)}
