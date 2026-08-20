@@ -2284,6 +2284,33 @@ async function findResponsibilityTaskByAlertKey(alertKey, workspaceId) {
 // row it cannot see at all is indistinguishable from one that was never created.
 // Date-independent on purpose, so an instance dragged to another day is still
 // found (nothing re-stamps the definition when a task is rescheduled).
+// Every task row that belongs to one Waiting item: its check-in reminders and the
+// "waiting-unblock-task:*" row carrying the real work. Both of the edges those rows
+// were written with are matched, because both are still in the data -- the stamped
+// delegatedItemId, and the older local_id suffix that the first rows have instead.
+//
+// The item's `linkedBlockId` task is deliberately NOT resolved here: that reference
+// has its own resolver (findUniqueLiveBlockByReference) which the completion routes
+// already use, and duplicating its tombstone/duplicate-id rules in a second query is
+// exactly how the two would drift.
+async function getWaitingClusterTasks(itemId, workspaceId) {
+  if (!itemId) return [];
+  const { rows } = await pool.query(
+    `SELECT * FROM blocks
+      WHERE type = 'block'
+        AND deleted_at IS NULL
+        AND ($2::text IS NULL OR workspace_id = $2)
+        AND (
+          properties->>'delegatedItemId' = $1
+          OR properties->>'local_id' = 'waiting-checkin-task:' || $1
+          OR properties->>'local_id' = 'waiting-unblock-task:' || $1
+        )
+      ORDER BY date ASC NULLS LAST, created_at ASC`,
+    [itemId, workspaceId || null]
+  );
+  return rows.map(parseBlock);
+}
+
 async function findBlockByLocalId(localId, workspaceId) {
   const { rows } = await pool.query(
     `SELECT * FROM blocks WHERE properties->>'local_id'=$1 AND ($2::text IS NULL OR workspace_id=$2) ORDER BY updated_at DESC LIMIT 1`,
@@ -2344,5 +2371,6 @@ module.exports = {
   parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers,
   getTaskTimeEntries,
   getResponsibilityBlocks, findResponsibilityBySlug, getBlocksByKind,
-  findResponsibilityTriggerBySlug, findResponsibilityTaskByAlertKey, findBlockByLocalId, findUniqueLiveBlockByReference, getFutureDatesWithBlocks
+  findResponsibilityTriggerBySlug, findResponsibilityTaskByAlertKey, findBlockByLocalId, findUniqueLiveBlockByReference, getFutureDatesWithBlocks,
+  getWaitingClusterTasks
 };

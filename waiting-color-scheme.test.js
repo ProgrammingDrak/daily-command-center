@@ -21,6 +21,9 @@ function mustSlice(src, re, name) {
   return match[0];
 }
 const esc = value => String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+// vm.runInNewContext builds its objects in another realm, so deepStrictEqual fails on
+// prototype identity even when the shape matches. Compare the plain projection.
+const plain = value => JSON.parse(JSON.stringify(value));
 
 // ── triage.js: the reminder cards (itinerary Triage strip + Triage tab) ──
 function triagePill() {
@@ -99,10 +102,12 @@ function chipRenderer(items, opts) {
   opts = opts || {};
   const scans = { count: 0 };
   const code = ["getAllDelegatedItems", "getDelegatedItemById", "evIdentityIds", "checkInItemId", "isCheckInTask", "checkInItem",
-                "checkInIsLive", "waitingLinkIndex", "waitingItemsForTask", "waitingPill", "waitingChipHtml"]
+                "checkInIsLive", "waitingLinkIndex", "localIdIndex", "resolveLinkedBlock", "checkInOriginBlock",
+                "checkInWorkBlock", "checkInPillTarget", "waitingItemsForTask", "waitingPill", "waitingChipHtml"]
     .map(name => mustSlice(WAITING_SRC, new RegExp("^ {2}function " + name + "\\([\\s\\S]*?^ {2}\\}", "m"), name))
     .join("\n");
-  const memo = mustSlice(WAITING_SRC, /^ {2}let _linkIndex = null;\n {2}let _linkIndexGen = -1;/m, "memo state");
+  const memo = mustSlice(WAITING_SRC, /^ {2}let _linkIndex = null;\n {2}let _linkIndexGen = -1;/m, "memo state")
+    + "\n" + mustSlice(WAITING_SRC, /^ {2}let _localIdIndex = null;\n {2}let _localIdIndexGen = -1;/m, "local-id memo state");
   const sandbox = {
     esc,
     truncate: (s, n) => String(s || "").slice(0, n),
@@ -113,27 +118,62 @@ function chipRenderer(items, opts) {
     sortByUrgency: () => 0,
     window: {
       blockStore: {
-        getByType: () => { scans.count++; return items.slice(); },
-        get: id => (opts.storeGet === false ? null : items.find(i => i.id === id) || null),
+        // opts.blocks are the TASK rows -- the work a delegation points at. They sit in
+        // the same cache the real store hands back, so checkInWorkBlock resolves them
+        // exactly as it does in the browser.
+        getByType: () => { scans.count++; return items.concat(opts.blocks || []); },
+        get: id => (opts.storeGet === false ? null : items.concat(opts.blocks || []).find(i => i.id === id) || null),
         getMutationGeneration: () => (typeof opts.generation === "function" ? opts.generation() : (opts.generation || 0)),
       },
     },
   };
-  const api = vm.runInNewContext(memo + "\n" + code + "\n;({waitingChipHtml, isCheckInTask, checkInIsLive, checkInItemId, waitingItemsForTask})", sandbox);
+  const api = vm.runInNewContext(memo + "\n" + code + "\n;({waitingChipHtml, isCheckInTask, checkInIsLive, checkInItemId, waitingItemsForTask, checkInPillTarget, checkInWorkBlock})", sandbox);
   return Object.assign(api, { scans });
 }
 const item = (id, props) => ({ id, properties: Object.assign({ kind: "delegated_item" }, props) });
 const WAITING_ITEM = item("w1", { linkedBlockId: "task-1", delegatee: { name: "Mike P." }, myTask: "Review metrics" });
 
-test("a check-in row is labelled a check-in and links back to its Waiting item", () => {
-  const { waitingChipHtml, isCheckInTask } = chipRenderer([WAITING_ITEM]);
+// The pill opens the DELEGATED WORK, not the nag. A delegation with a real task row
+// jumps to that row; one without (a Slack capture) falls back to the Waiting card,
+// which is the only record of the work there is.
+test("a check-in row is labelled a check-in and opens the delegated task", () => {
+  const workRow = { id: "blk-task-1", date: "2026-08-20", properties: { local_id: "task-1", title: "Review metrics" } };
+  const { waitingChipHtml, isCheckInTask, checkInPillTarget } =
+    chipRenderer([WAITING_ITEM], { blocks: [workRow] });
   const ev = { id: "waiting-checkin-task:w1", title: "Check in: Review metrics", source: "waiting-checkin", delegatedItemId: "w1" };
   assert.equal(isCheckInTask(ev), true);
+  assert.deepEqual(plain(checkInPillTarget(ev)), { kind: "work", id: "task-1", date: "2026-08-20" });
   const html = waitingChipHtml(ev);
   assert.match(html, /class="waiting-pill checkin"/);
   assert.match(html, /Check-in · Mike P\./);
-  assert.match(html, /data-waiting-open="w1"/);
-  assert.match(html, /The delegated task stays open in Waiting/);
+  // The ROW id, not the block id -- openAddModal resolves through taskAnchorById.
+  assert.match(html, /data-origin-open="task-1"/);
+  assert.match(html, /data-origin-date="2026-08-20"/);
+  assert.match(html, /click to open the delegated task/);
+  assert.doesNotMatch(html, /data-waiting-open/);
+});
+
+test("a delegation with no task of its own still opens its Waiting card", () => {
+  // The 👥 Slack capture: linkedBlockId is null and no unblock row was ever made, so the
+  // card IS the delegated work. Anything else here would be a pill pointing at nothing.
+  const slackItem = item("w7", { delegatee: { name: "Mike P." }, myTask: "Slack task", source: "slack-delegate" });
+  const { waitingChipHtml, checkInPillTarget } = chipRenderer([slackItem]);
+  const ev = { id: "waiting-checkin-task:w7", source: "waiting-checkin", delegatedItemId: "w7" };
+  assert.deepEqual(plain(checkInPillTarget(ev)), { kind: "waiting", id: "w7", date: "" });
+  const html = waitingChipHtml(ev);
+  assert.match(html, /data-waiting-open="w7"/);
+  assert.match(html, /no task of its own/);
+});
+
+test("the unblock row counts as the delegated work", () => {
+  // unblockWaitingItem's row carries no linkedBlockId edge back from the item, so it is
+  // found by its deterministic local_id instead.
+  const unblock = { id: "blk-9", date: "2026-08-21", properties: { local_id: "waiting-unblock-task:w8", source: "waiting-unblock", title: "Slack task" } };
+  const slackItem = item("w8", { delegatee: { name: "Ann" }, myTask: "Slack task" });
+  const { checkInPillTarget } = chipRenderer([slackItem], { blocks: [unblock] });
+  const ev = { id: "waiting-checkin-task:w8", source: "waiting-checkin", delegatedItemId: "w8" };
+  assert.deepEqual(plain(checkInPillTarget(ev)),
+    { kind: "work", id: "waiting-unblock-task:w8", date: "2026-08-21" });
 });
 
 test("a check-in row is recognised from its id or source when delegatedItemId is missing", () => {
@@ -180,24 +220,36 @@ test("the waiting-UNBLOCK row is the work, not a reminder", () => {
 });
 
 // A reminder outlives its item: complete and delete leave the scheduled row alone.
-test("a check-in whose Waiting item is closed or gone reads as stale, with no link", () => {
+test("a stale check-in loses the delegatee name but never the click", () => {
+  // A reminder outlives its item: complete and delete both leave the scheduled row alone.
+  // The NAME goes (labelling a closed delegation with a delegatee promises they are still
+  // on the hook) but the pill stays clickable -- a dead span on the most confusing row on
+  // the itinerary is what sent Drake looking for this in the first place.
   const closed = item("w1", { linkedBlockId: "task-1", delegatee: { name: "Mike P." }, status: "done" });
+  const workRow = { id: "blk-task-1", date: "2026-08-20", properties: { local_id: "task-1", title: "Review metrics" } };
   const ev = { id: "waiting-checkin-task:w1", source: "waiting-checkin", delegatedItemId: "w1" };
-  const shut = chipRenderer([closed]);
+
+  const shut = chipRenderer([closed], { blocks: [workRow] });
   assert.equal(shut.checkInIsLive(ev), false);
   const html = shut.waitingChipHtml(ev);
-  assert.match(html, /^<span class="waiting-pill checkin"/);
-  assert.match(html, /already closed or gone, so the reminder is stale/);
-  assert.doesNotMatch(html, /data-waiting-open/);
-  assert.doesNotMatch(html, /stays open in Waiting/);
-  // Deleted outright: nothing resolves, same stale copy rather than a false promise.
+  assert.match(html, /^<button type="button" class="waiting-pill checkin"/);
+  assert.doesNotMatch(html, /Mike P\./, "a closed delegation must not still name its delegatee");
+  assert.match(html, /data-origin-open="task-1"/, "the finished work is still worth reaching");
+  assert.match(html, /The Waiting item is already closed/);
+
+  // Deleted outright, and no work row either: the pill falls back to the reminder itself
+  // rather than swallowing the click.
   const gone = chipRenderer([], { storeGet: false });
   assert.equal(gone.checkInIsLive(ev), false);
-  assert.match(gone.waitingChipHtml(ev), /stale/);
-  // Still live -> the promise is allowed.
-  const live = chipRenderer([WAITING_ITEM]);
+  const goneHtml = gone.waitingChipHtml(ev);
+  assert.match(goneHtml, /stale/);
+  assert.match(goneHtml, /data-origin-open="waiting-checkin-task:w1"/);
+  assert.doesNotMatch(goneHtml, /data-waiting-open/);
+
+  // Still live -> the delegatee is named again.
+  const live = chipRenderer([WAITING_ITEM], { blocks: [workRow] });
   assert.equal(live.checkInIsLive(ev), true);
-  assert.match(live.waitingChipHtml(ev), /The delegated task stays open in Waiting/);
+  assert.match(live.waitingChipHtml(ev), /Check-in · Mike P\./);
 });
 
 test("the whole block cache is swept once per render burst, not once per row", () => {

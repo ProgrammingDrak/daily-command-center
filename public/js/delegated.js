@@ -126,14 +126,29 @@
   // row chip cannot disagree about which field is the source of truth.
   function waitingSourceRef(props) {
     const p = props || {};
-    return String((p.contact && p.contact.sourceRef) || p.source_id || "").trim();
+    const stored = String((p.contact && p.contact.sourceRef) || p.source_id || "").trim();
+    if (stored) return stored;
+    // Neither link field is guaranteed. A Slack capture that predates contact.sourceRef,
+    // and any item typed by hand off a pasted permalink, carry the origin ONLY in prose.
+    // Recovering it here rather than at each call site is what keeps the drawer card, the
+    // reminder it spawns and the row chip on one answer -- and it means a check-in
+    // scheduled from such an item is born with a real source_id instead of "".
+    return recoverUrl(p.notes) || recoverUrl(p.captureNotes);
   }
 
-  // The deeplink a check-in ROW should jump to. Two legs on purpose:
+  // window.DCC is the one owner of link parsing (scheme safety, the host allowlist), so
+  // this file borrows it rather than growing a second copy that can drift.
+  function recoverUrl(text) {
+    const recover = window.DCC && window.DCC.recoverSourceUrl;
+    return (typeof recover === "function") ? recover(text) : "";
+  }
+
+  // The deeplink a check-in ROW should jump to. Three legs, best evidence first:
   //   1. its own source_id -- set at creation, and the only leg that still works
   //      once the Waiting item is completed or deleted;
-  //   2. the live Waiting item -- which is what heals every reminder scheduled
-  //      before creation started forwarding the permalink, no backfill needed.
+  //   2. the Waiting item -- which heals every reminder scheduled before creation
+  //      started forwarding the permalink, as long as the item still exists;
+  //   3. the reminder's own detail prose -- the orphan's last resort (see below).
   // Scheme safety stays in taskSourceUrl so there is one gate, not three.
   function checkInSourceUrl(ev) {
     if (!isCheckInTask(ev)) return "";
@@ -147,7 +162,64 @@
     const own = url(stored);
     if (own) return own;
     const item = checkInItem(ev);
-    return item ? url(waitingSourceRef(item.properties || {})) : "";
+    const fromItem = item ? url(waitingSourceRef(item.properties || {})) : "";
+    if (fromItem) return fromItem;
+    // Leg 3, for the ORPHAN: a reminder whose Waiting item was deleted outright has
+    // nothing left to resolve THROUGH, and legs 1 and 2 both come up empty on every
+    // reminder made before leg 1 was stamped. Its own `detail` still holds the item's
+    // notes verbatim (scheduleDelegatedItem copies them in), so the permalink survives
+    // in prose after the record that owned it is gone. Last, and last on purpose: a
+    // stored link and a live item are both better evidence than text.
+    return recoverUrl(ev && ev.detail);
+  }
+
+  // The row that carries the DELEGATED WORK for a check-in, when one exists at all.
+  //
+  // Two ways a delegation gets a real task: the Waiting item was raised OFF an existing
+  // task (linkedBlockId, which checkInOriginBlock resolves), or unblockWaitingItem made
+  // one when the blocker cleared ("waiting-unblock-task:<itemId>"). A 👥 Slack capture
+  // has NEITHER -- its delegated work has never had a row of its own, and the Waiting
+  // card is the only record of it.
+  //
+  // Resolved through localIdIndex, not a cache scan: this runs once per check-in ROW on
+  // every render, and getAllDelegatedItems-style whole-cache work on that path is the
+  // exact cost the memo above exists to avoid.
+  function checkInWorkBlock(ev) {
+    const own = checkInOriginBlock(ev);
+    if (own) return own;
+    const itemId = checkInItemId(ev);
+    if (!itemId) return null;
+    const item = checkInItem(ev);
+    const linked = item ? resolveLinkedBlock((item.properties || {}).linkedBlockId) : null;
+    if (linked && !linked.deleted_at) return linked;
+    // Guarded like resolveLinkedBlock: localIdIndex spreads the block cache and there is
+    // no cache on a surface that renders before the store exists.
+    if (!window.blockStore) return null;
+    const unblock = localIdIndex().get("waiting-unblock-task:" + itemId);
+    return (unblock && !unblock.deleted_at) ? unblock : null;
+  }
+
+  // Where the Check-in pill goes when clicked. The pill used to open the Waiting card
+  // and only when the item was still open, which made it a DEAD SPAN on exactly the rows
+  // that confuse people most -- a reminder whose item is gone. Four rungs, and the pill
+  // is clickable on every one of them:
+  //   "work"    the task carrying the real work. What Drake means by "the actual task".
+  //   "waiting" the Waiting card, when the delegation has no DCC task (Slack captures).
+  //   "self"    the reminder's own details, when the item is gone too. Not useful, but
+  //             it beats a pill that swallows the click and does nothing.
+  // Returns null for a row that is not a check-in at all.
+  function checkInPillTarget(ev) {
+    if (!isCheckInTask(ev)) return null;
+    const work = checkInWorkBlock(ev);
+    if (work) {
+      const wp = work.properties || {};
+      // The ROW id, not the block id: openAddModal resolves through taskAnchorById,
+      // which matches ev.id, and TaskModel.fromBlock keys that as local_id || block.id.
+      return { kind: "work", id: String(wp.local_id || work.id), date: work.date || "" };
+    }
+    const item = checkInItem(ev);
+    if (item) return { kind: "waiting", id: String(item.id), date: "" };
+    return { kind: "self", id: String((ev && ev.id) || ""), date: (ev && ev.date) || "" };
   }
 
   // The original task a check-in chases, when the Waiting item was raised off one
@@ -261,20 +333,31 @@
     return out;
   }
 
-  function waitingPill(cls, itemId, label, tip, icon) {
-    const open = itemId ? ' data-waiting-open="' + esc(itemId) + '"' : '';
-    const tag = itemId ? "button" : "span";
-    return '<' + tag + (itemId ? ' type="button"' : '') + ' class="waiting-pill ' + cls + '"' + open +
+  // `target` is either a Waiting item id (the delegated-source pill, which has only ever
+  // had one destination) or a checkInPillTarget descriptor. The descriptor's "work" and
+  // "self" kinds route through [data-origin-open], the existing document handler that
+  // already knows how to close an open modal, switch the day and wait for the row --
+  // rebuilding that here is how the two would drift.
+  function waitingPill(cls, target, label, tip, icon) {
+    const t = (target && typeof target === "object") ? target : (target ? { kind: "waiting", id: target } : null);
+    let attrs = "";
+    if (t && t.id) {
+      attrs = (t.kind === "waiting")
+        ? ' data-waiting-open="' + esc(t.id) + '"'
+        : ' data-origin-open="' + esc(t.id) + '"' + (t.date ? ' data-origin-date="' + esc(t.date) + '"' : "");
+    }
+    const tag = attrs ? "button" : "span";
+    return '<' + tag + (attrs ? ' type="button"' : '') + ' class="waiting-pill ' + cls + '"' + attrs +
       ' title="' + esc(tip) + '">' + icon + ' ' + esc(label) + '</' + tag + '>';
   }
 
-  // The origin-task chip, built ONCE here rather than per surface. The itinerary row and
-  // the details modal both render it and the document-level [data-origin-open] handler
-  // consumes it, so three files would otherwise have to independently agree on the
-  // attribute name, the date-presence rule and the non-obvious row-id derivation. Same
-  // shape as waitingPill / taskDependencyChipHtml, which the row and the card already
-  // share through one builder. `cls` varies because the row wants the .src-jump pill and
-  // the modal wants a .detail-action-link.
+  // The origin-task chip. The DETAILS MODAL renders it; the itinerary row no longer does,
+  // because the Check-in pill there already opens the same task through a superset of the
+  // same resolution (see checkInPillTarget). Still built here rather than in features.js
+  // so the modal and the document-level [data-origin-open] handler cannot disagree about
+  // the attribute name, the date-presence rule or the non-obvious row-id derivation.
+  // `cls` stays parameterised: the modal wants a .detail-action-link, and the .src-jump
+  // default is what any future surface would want.
   function checkInOriginChipHtml(ev, cls, label) {
     const block = checkInOriginBlock(ev);
     if (!block) return "";
@@ -295,13 +378,23 @@
     if (checkInId !== null) {
       const item = checkInItem(ev);
       const live = !!item && isOpenDelegated(item);
+      // The NAME still comes from a live item only: labelling a stale reminder with a
+      // delegatee reads as a promise that they are still on the hook.
       const p = (live && item.properties) || {};
       const who = (p.delegatee && p.delegatee.name) || "";
-      const tip = live
+      // The TARGET does not care whether the item is open. A completed delegation whose
+      // work row still exists is exactly when jumping to that row is most useful.
+      const target = checkInPillTarget(ev);
+      const stale = !live;
+      const tip = (target && target.kind === "work")
         ? "Check-in reminder" + (who ? " for " + who : "") +
-          ": deleting this drops the reminder only. The delegated task stays open in Waiting. Click to open it."
-        : "Check-in reminder whose Waiting item is already closed or gone, so the reminder is stale.";
-      return waitingPill("checkin", live ? item.id : null, "Check-in" + (who ? " \u00b7 " + truncate(who, 18) : ""), tip, "&#128276;");
+          ": click to open the delegated task. Completing it closes this reminder and the Waiting item too." +
+          (stale ? " The Waiting item is already closed." : "")
+        : (target && target.kind === "waiting")
+          ? "Check-in reminder" + (who ? " for " + who : "") +
+            ": this delegation has no task of its own, so click opens its Waiting item. Complete it there and this reminder closes with it."
+          : "Check-in reminder whose Waiting item is already closed or gone, so the reminder is stale. Click to open the reminder itself.";
+      return waitingPill("checkin", target, "Check-in" + (who ? " \u00b7 " + truncate(who, 18) : ""), tip, "&#128276;");
     }
     const items = waitingItemsForTask(ev);
     if (!items.length) return "";
@@ -1552,6 +1645,8 @@
     checkInIsLive,
     checkInSourceUrl,
     checkInOriginBlock,
+    checkInWorkBlock,
+    checkInPillTarget,
     originChipHtml: checkInOriginChipHtml,
     openOriginFromChip: openOriginBlockFromChip,
     sourceRef: waitingSourceRef,

@@ -646,13 +646,12 @@ function buildListView(){
     return '<a class="src-jump" href="'+escHtml(url)+'" target="_blank" rel="noopener" title="Open source ('+label+')" onclick="event.stopPropagation()">'+label+' ↗</a>';
   }
 
-  // The other half of a check-in's provenance: the DCC task it chases, when the Waiting
-  // item was raised off one. Built by delegated.js (same as the Check-in pill next to it)
-  // so the row, the details modal and the click handler share one markup contract.
-  function originJumpLink(ev){
-    return (typeof window.waitingOriginChipHtml==="function")?window.waitingOriginChipHtml(ev):"";
-  }
-
+  // No origin chip on the row any more. The Check-in pill beside it now opens the
+  // delegated work itself (delegated.js checkInPillTarget), and it resolves a superset
+  // of what the chip did -- the item's linkedBlockId and its unblock row as well as the
+  // row's own -- so the chip could only ever point where the pill already goes. Two
+  // controls, one destination, on the row that already carries the most chips on the
+  // itinerary. The details modal still renders it: there is no pill in there.
   // A node is a SUB row when it is actually NESTED in the rendered tree, not merely
   // when it carries a parent edge. selectTree returns a subtask whose parent
   // isn't in this pool as a ROOT (depth 0) — a genuine orphan, and deliberately
@@ -757,7 +756,7 @@ function buildListView(){
       '<div class="it-list-main">'+
         // The "+" renders on carryover rows and meetings too. A meeting can own
         // concurrent nested work or relevant subtasks; only done rows skip it.
-        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+originJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
+        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
         '<div class="it-list-meta">'+
           inProgressChip+
           nowChip+

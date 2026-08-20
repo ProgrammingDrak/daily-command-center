@@ -30,6 +30,7 @@ const createMaterializeGuard = require("../lib/materialize-guard");
 const { dedupeStatus } = createMaterializeGuard;
 const createResponsibilityStore = require("../responsibility-store");
 const triageSuppressions = require("../triage-suppressions");
+const waitingCascade = require("../waiting-cascade");
 const {
   firstFreeSlot, minutesToHHMM, hhmmToMinutes, taskDuration,
   buildResponsibilityTaskProps, parseOffersAmpAlert,
@@ -186,6 +187,85 @@ module.exports = function mount(app, ctx) {
   function isCompleted(block) {
     const props = (block && block.properties) || {};
     return props.status === "done" || props.done === true || !!props.completedAt;
+  }
+
+  // ── Waiting cluster cascade ──
+  // Completing any one of {the delegated task, its Waiting item, its check-in reminders}
+  // closes the other two. Before this, each route closed only what it was pointed at:
+  // the Waiting card's Complete button took the item and its linked task, and NOTHING
+  // took the reminders, so a finished delegation kept nagging from the itinerary.
+  //
+  // Runs AFTER the caller's own write has committed, never inside it. That costs strict
+  // atomicity and buys three things worth more: each cascaded task goes through the full
+  // setTaskCompletion path (points, work sessions, Slack sync) instead of a raw property
+  // write; a cluster of any size cannot hold a single transaction open across N task
+  // subtrees; and the deterministic mutation ids make a retry after a partial failure a
+  // no-op on whatever already closed. Failures are logged and swallowed -- the caller's
+  // completion is real and must not be reported as failed because a companion row was
+  // contended.
+  //
+  // Cascades on COMPLETE only. Reopening one row does not reopen the cluster: "I ticked
+  // this by mistake" is a much more common reopen than "the whole delegation is live
+  // again", and guessing wrong there resurrects work Drake had legitimately closed.
+  async function cascadeWaitingCompletion({ req, trigger, itemId: knownItemId, completedAt, userId: knownUserId, workspaceId: knownWorkspaceId }) {
+    const atMs = Number.isFinite(Date.parse(completedAt)) ? Date.parse(completedAt) : Date.now();
+    const at = new Date(atMs).toISOString();
+    const blockIds = [];
+    try {
+      // Resolved INSIDE the try, and only when the caller has not already done it: the
+      // Waiting complete route serves auth contexts that never needed a strict owner,
+      // and a throw here must degrade to "no cascade", never to a failed completion.
+      const owner = (knownUserId !== undefined && knownWorkspaceId !== undefined)
+        ? { userId: knownUserId, workspaceId: knownWorkspaceId }
+        : await resolveOwnerStrict(req);
+      const userId = owner.userId;
+      const workspaceId = owner.workspaceId;
+      const items = await blockDB.getDelegatedItems(workspaceId);
+      const itemId = String(knownItemId || waitingCascade.itemIdForTask(trigger, items) || "");
+      if (!itemId) return { blockIds };
+      const item = items.find(row => String(row.id) === itemId) || null;
+
+      const clusterTasks = await blockDB.getWaitingClusterTasks(itemId, workspaceId);
+      // The item's linked work row carries no cluster marker of its own, so the id
+      // query above cannot see it. Resolve it the way the Waiting complete route does.
+      const linkedRef = String(((item && item.properties) || {}).linkedBlockId || "").trim();
+      if (linkedRef && !clusterTasks.some(row => String(row.id) === linkedRef)) {
+        const linked = await blockDB.findUniqueLiveBlockByReference(linkedRef, workspaceId);
+        if (linked && !linked.deleted_at) clusterTasks.push(linked);
+      }
+
+      const plan = waitingCascade.cascadeTargets({ trigger, item, tasks: clusterTasks });
+      for (const task of plan.tasks) {
+        // Ownership is re-checked per row: getWaitingClusterTasks is already
+        // workspace-scoped, but the linked row above came from a different resolver.
+        assertBlockOwnership(task, workspaceId);
+        const mutationId = waitingCascade.cascadeMutationId(itemId, task.id, atMs);
+        const result = await blockDB.setTaskCompletion({
+          taskRef: task.id,
+          completed: true,
+          completedAt: at,
+          taskDate: task.date || null,
+          mutationId,
+          expectedRevision: ((task.properties || {})._completionRevision) || null,
+          userId,
+          workspaceId,
+        });
+        await normalizeCompletionWork(result, true, { atMs, actor: userId ? `dcc:${userId}` : "dcc", mutationId });
+        if (result.task) await transitionLinkedTriage(result.task, "done", atMs);
+        for (const row of result.affectedTasks || []) await syncSlack(row);
+        blockIds.push(...(result.broadcastIds || [task.id]));
+      }
+
+      if (plan.item) {
+        const properties = waitingItems.normalizeProperties(
+          waitingCascade.completedItemProperties(at), plan.item.properties || {});
+        await blockDB.updateBlock(plan.item.id, { properties });
+        blockIds.push(plan.item.id);
+      }
+    } catch (error) {
+      console.error("[waiting-cascade] failed:", error && error.message);
+    }
+    return { blockIds };
   }
 
   // The itinerary task is the durable lifecycle handle for a scheduled Sweep item.
@@ -554,7 +634,15 @@ module.exports = function mount(app, ctx) {
       else completionMetrics.accepted++;
       if (result.persistenceTarget === "legacy_overlay") completionMetrics.legacyFallback++;
       if (result.task) await transitionLinkedTriage(result.task, isCompleted(result.task) ? "done" : "scheduled", Date.parse(body.completedAt || ""));
-      const blockIds = result.broadcastIds || (result.task && result.task.id ? [result.task.id] : []);
+      // Skipped on a duplicate: setTaskCompletion already dedupes the primary write, and
+      // re-running the cascade on every retry of the same mutation would be pure churn.
+      const cascaded = (body.completed && !result.duplicate && result.task)
+        ? await cascadeWaitingCompletion({
+            trigger: result.task, completedAt: new Date(recordedMs).toISOString(), userId, workspaceId,
+          })
+        : { blockIds: [] };
+      const blockIds = (result.broadcastIds || (result.task && result.task.id ? [result.task.id] : []))
+        .concat(cascaded.blockIds);
       if (blockIds.length) {
         broadcast("blocks-changed", {
           action: "completion", blockIds, clientId: body._clientId,
@@ -693,7 +781,12 @@ module.exports = function mount(app, ctx) {
         mutationId,
       });
       if (result.task) await transitionLinkedTriage(result.task, isCompleted(result.task) ? "done" : "scheduled", Date.parse(props.completedAt || props.doneAt || ""));
-      const blockIds = result.broadcastIds || [req.params.id];
+      const cascaded = req.body.completionIntent === "complete"
+        ? await cascadeWaitingCompletion({
+            trigger: result.task || existing, completedAt: new Date(recordedMs).toISOString(), userId, workspaceId,
+          })
+        : { blockIds: [] };
+      const blockIds = (result.broadcastIds || [req.params.id]).concat(cascaded.blockIds);
       broadcast("blocks-changed", {
         action: "completion", blockIds, clientId: req.body._clientId, mutationId,
         dependencyTransitions: result.dependencyTransitions || [],
@@ -2318,7 +2411,12 @@ module.exports = function mount(app, ctx) {
       linkedTask = null;
       updated = await blockDB.updateBlock(existing.id, { properties });
     }
-    broadcast("blocks-changed", { action: "waiting-completed", blockIds, dependencyTransitions, date: linkedTask && linkedTask.date || null }, req.workspaceId);
+    // The item and its linked task are closed above; the reminders were never anyone's
+    // job. `trigger` is the item, so the cascade skips it and takes only what is left.
+    const cascaded = await cascadeWaitingCompletion({
+      req, trigger: { id: existing.id }, itemId: existing.id, completedAt,
+    });
+    broadcast("blocks-changed", { action: "waiting-completed", blockIds: blockIds.concat(cascaded.blockIds), dependencyTransitions, date: linkedTask && linkedTask.date || null }, req.workspaceId);
     return { ok: true, status: "completed", item: updated, task: linkedTask, dependencyTransitions };
   }));
 

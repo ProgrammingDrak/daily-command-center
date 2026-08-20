@@ -31,6 +31,7 @@
     DCC.taskSourceUrl = api.taskSourceUrl;
     DCC.taskSourceUrlBlocked = api.taskSourceUrlBlocked;
     DCC.taskSourceLabel = api.taskSourceLabel;
+    DCC.recoverSourceUrl = api.recoverSourceUrl;
   }
 })(typeof self !== "undefined" ? self : this, function () {
   // Source-backed triage items arrive with several field names depending on the
@@ -94,6 +95,26 @@
     return "Source";
   }
 
+  // LAST-RESORT recovery, for records whose only surviving trace of the origin is a
+  // permalink pasted into free text (a check-in reminder's `detail`, a Waiting item's
+  // `notes`). Deliberately NOT a field in SOURCE_URL_FIELDS: that walk is a contract
+  // over LINK fields, and free text is not one -- `detail` routinely carries a quoted
+  // Slack message body, so "the first http URL in it" is not necessarily the source.
+  //
+  // The allowlist is exactly the two hosts taskSourceLabel can NAME. A link we can only
+  // label "Source" has not earned a provenance chip on the strength of prose, and
+  // narrowing it this way is also what makes the scheme safe: the pattern only ever
+  // matches an http(s) URL, so nothing hostile can be recovered in the first place.
+  // Path-anchored on purpose -- "slack.com/archives/" cannot match evil-slack.com or
+  // slack.com.evil.com, both of which a bare host match would have accepted.
+  const RECOVERABLE_SOURCE_URL = /https?:\/\/(?:[a-z0-9-]+\.)*(?:slack\.com\/archives\/|mail\.google\.com\/)\S+/i;
+  function recoverSourceUrl(text) {
+    const match = RECOVERABLE_SOURCE_URL.exec(String(text == null ? "" : text));
+    // Prose punctuation is not part of the link: notes end sentences, and wrap URLs
+    // in parentheses. Trailing "/" is kept -- it is a legal, meaningful path segment.
+    return match ? match[0].replace(/[)\]}>.,;:'"]+$/, "") : "";
+  }
+
   function taskCommonProps(ev, overrides) {
     const src = Object.assign({}, ev || {}, overrides || {});
     const commuteMinutes = src.commuteMinutes || src.commute_minutes || null;
@@ -141,6 +162,7 @@
     taskBlockProps: taskBlockProps,
     taskSourceUrl: taskSourceUrl,
     taskSourceUrlBlocked: taskSourceUrlBlocked,
-    taskSourceLabel: taskSourceLabel
+    taskSourceLabel: taskSourceLabel,
+    recoverSourceUrl: recoverSourceUrl
   };
 });
