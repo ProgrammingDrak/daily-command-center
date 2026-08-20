@@ -34,6 +34,7 @@ const tokenStore = require("./token-store");
 const validate = require("./middleware/validate");
 const schemas = require("./middleware/schemas");
 const { resolveOwnerStrict, resolveOwnerLenient } = require("./middleware/resolve-owner");
+const accessStore = require("./access-store");
 const { coerceDateString, isValidDate, addMinutesHHMM, intParam, route } = routeHelpers;
 const { scoreTaskPoints, resolvePointTag } = require("./slot-scoring");
 const capabilities = require("./capabilities");
@@ -942,12 +943,13 @@ const meetingMaterializer = require("./meeting-materializer")({
 // initializes them after routes mount.
 const ctx = {
   APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, gcalAuth, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, meetingSignals, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, rewardVaultStore, readDayStateMirror, readJSON, readTriageSuppressionsForWorkspace, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, waitingItems, writeJSON,
-  dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR,
+  dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR, accessStore,
   meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN,
   ...routeHelpers,
   get vault() { return vault; },
   get syncMgr() { return syncMgr; },
 };
+require("./routes/access")(app, ctx);
 require("./routes/social-todo")(app, ctx);
 require("./routes/pet-home")(app, ctx);
 require("./routes/blocks")(app, ctx);
