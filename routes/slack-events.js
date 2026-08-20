@@ -156,6 +156,60 @@ module.exports = function mount(app, ctx) {
   // living there would reset each pass and re-walk the same page forever.
   const mirrorCursors = new Map();
 
+  // ── Reaction-write failure state ─────────────────────────────────────────
+  //
+  // The projector retried permanently-dead writes forever. Measured in prod
+  // (railway logs): 20 of 46 log lines in one window were reactions.remove
+  // failures — 12 channel_not_found, 6 message_not_found, 2 RATELIMITED. Only
+  // `no_reaction` was ever treated as terminal, so every deleted Slack task
+  // re-attempted three removals per five-minute reconcile pass, indefinitely,
+  // and eventually walked the whole backlog into Slack's rate limiter.
+  //
+  // The local poller (claude-brain/scripts/slack-bookmark-to-dcc.py) already
+  // solved this; these are its two rules, ported. Keep the two lists in step.
+  //
+  // MESSAGE-level, not reaction-level: if the message or channel is gone, every
+  // reaction on it is equally hopeless, so one dead marker covers all four
+  // emoji rather than each learning the same thing separately.
+  const PERMANENT_REACTION_ERRORS = new Set([
+    "message_not_found", "channel_not_found", "is_archived",
+    "not_in_channel", "no_item_specified",
+  ]);
+  // Expiring rather than permanent, deliberately. `channel_not_found` is not
+  // always forever — a private channel the token was later invited to, or a
+  // Slack consistency blip, both read the same from here. A long TTL stops the
+  // five-minute churn while still letting a genuine recovery heal itself.
+  // Floored at 0 rather than a minute so the expiry is testable without a real
+  // sleep; 0 means "never remember", i.e. the old behaviour. Prod does not set
+  // this, so the 24h default is what actually runs.
+  const DEAD_MESSAGE_TTL_MS = Math.max(0, Number(process.env.SLACK_DEAD_MESSAGE_TTL_MS ?? 86_400_000));
+  const DEAD_MESSAGE_MAX = 5_000;
+  const deadMessages = new Map();            // "channel:ts" -> { code, at }
+  // Per-workspace because the rate limit belongs to the token, and one actor
+  // owns one workspace. Mount scope because forActor is rebuilt per event.
+  const reactionCooldowns = new Map();       // workspaceId -> resumeAtMs
+  // Floor of 0 rather than a second so the pause is testable without a real
+  // sleep; 0 disables it outright, matching how the other tunables here behave.
+  // Prod does not set this, so the 60s default is what actually runs.
+  const RATE_LIMIT_BACKOFF_MS = Math.max(0, Number(process.env.SLACK_RATE_LIMIT_BACKOFF_MS ?? 60_000));
+
+  function deadMessageCode(channel, ts) {
+    const entry = deadMessages.get(`${channel}:${ts}`);
+    if (!entry) return null;
+    if (Date.now() - entry.at > DEAD_MESSAGE_TTL_MS) { deadMessages.delete(`${channel}:${ts}`); return null; }
+    return entry.code;
+  }
+  function markMessageDead(channel, ts, code) {
+    if (deadMessages.size >= DEAD_MESSAGE_MAX) {
+      const cutoff = Date.now() - DEAD_MESSAGE_TTL_MS;
+      for (const [key, entry] of deadMessages) if (entry.at <= cutoff) deadMessages.delete(key);
+      // Still full of live entries: drop the oldest insertion so the Map stays
+      // bounded. A dropped marker costs one wasted retry, never a wrong answer.
+      if (deadMessages.size >= DEAD_MESSAGE_MAX) deadMessages.delete(deadMessages.keys().next().value);
+    }
+    deadMessages.set(`${channel}:${ts}`, { code, at: Date.now() });
+  }
+
   // ── Slack request signature (v0 scheme) ──────────────────────────────────
   function verifySlack(req) {
     if (!SIGNING_SECRET) { console.error("[slack-events] SLACK_SIGNING_SECRET unset — rejecting"); return false; }
@@ -218,6 +272,10 @@ module.exports = function mount(app, ctx) {
       if (!response.ok || !data.ok) {
         const error = new Error(`Slack ${method} failed: ${data.error || response.status}`);
         error.code = data.error || `http_${response.status}`;
+        // Slack answers a 429 with Retry-After in seconds. Honour its number
+        // rather than guessing; the fallback only applies when it is absent.
+        const retryAfter = Number(response.headers && response.headers.get && response.headers.get("retry-after"));
+        if (Number.isFinite(retryAfter) && retryAfter > 0) error.retryAfterMs = retryAfter * 1000;
         throw error;
       }
       return data;
@@ -470,26 +528,70 @@ module.exports = function mount(app, ctx) {
     // construction: it routes to handleBookmark, which finds the (still live) task
     // and returns. No loop, no duplicate — see the test that pins it. On a bot-tier
     // actor the reaction is the bot's, so there is no echo and no hasmy: match.
+    // Both reaction writers share one gate and one classifier, because they fail
+    // in exactly the same ways and diverged only in which "already in the desired
+    // state" answer they forgive (already_reacted vs no_reaction).
+    //
+    // Returns true for "Slack is in the state we asked for, or never will be" and
+    // false only for a failure worth retrying. Callers have always ignored the
+    // value; it is the reconcile loop's repeat attempt that this actually saves.
+    function reactionWriteBlocked(channel, ts, name, verb) {
+      if (!ANY_TOKEN) {
+        console.warn(`[slack-events] no Slack token for user ${OWNER_USER_ID} - cannot ${verb} :${name}:`);
+        return true;
+      }
+      const dead = deadMessageCode(channel, ts);
+      if (dead) return true;                       // already learned, silently
+      const resumeAt = reactionCooldowns.get(OWNER_WORKSPACE_ID) || 0;
+      if (Date.now() < resumeAt) return true;      // rate-limited, see below
+      return false;
+    }
+
+    // `settled` means stop asking: either Slack agrees with us, or it never will.
+    function classifyReactionFailure(error, channel, ts, name, verb) {
+      if (PERMANENT_REACTION_ERRORS.has(error.code)) {
+        // Logged once per message, at info level, where this used to repeat every
+        // five minutes per emoji per dead row. Once is structural rather than
+        // guarded: marking the message dead makes reactionWriteBlocked short-circuit
+        // every later write, so the classifier is only ever reached the first time.
+        console.log(`[slack-events] ${channel}:${ts} is unreachable (${error.code}) - no further reaction writes`);
+        markMessageDead(channel, ts, error.code);
+        return { settled: true };
+      }
+      if (error.code === "ratelimited") {
+        // Stop the rest of this pass rather than walking the remaining backlog
+        // into the same wall — the poller breaks its loop here for the same
+        // reason. The mirror is explicitly allowed latency, so draining across
+        // several reconcile passes costs nothing.
+        const backoff = error.retryAfterMs || RATE_LIMIT_BACKOFF_MS;
+        reactionCooldowns.set(OWNER_WORKSPACE_ID, Date.now() + backoff);
+        console.warn(`[slack-events] rate-limited by Slack; pausing reaction writes for ${Math.round(backoff / 1000)}s`);
+        return { settled: false };
+      }
+      // Anything else is genuinely worth another go — missing_scope before a
+      // reinstall is the motivating example.
+      console.error(`[slack-events] reactions.${verb} :${name}: failed:`, error.message);
+      return { settled: false };
+    }
+
     async function addSlackReaction(channel, ts, name) {
-      if (!ANY_TOKEN) { console.warn(`[slack-events] no Slack token for user ${OWNER_USER_ID} - cannot add :${name}:`); return false; }
+      if (reactionWriteBlocked(channel, ts, name, "add")) return false;
       try {
         await slackApi("reactions.add", { channel, timestamp: ts, name }, { post: true });
         return true;
       } catch (e) {
         if (e.code === "already_reacted") return true;
-        console.error(`[slack-events] reactions.add :${name}: failed:`, e.message);
-        return false;
+        return classifyReactionFailure(e, channel, ts, name, "add").settled;
       }
     }
     async function removeSlackReaction(channel, ts, name) {
-      if (!ANY_TOKEN) { console.warn(`[slack-events] no Slack token for user ${OWNER_USER_ID} - cannot remove :${name}:`); return false; }
+      if (reactionWriteBlocked(channel, ts, name, "remove")) return false;
       try {
         await slackApi("reactions.remove", { channel, timestamp: ts, name }, { post: true });
         return true;
       } catch (e) {
         if (e.code === "no_reaction") return true;
-        console.error(`[slack-events] reactions.remove :${name}: failed:`, e.message);
-        return false;
+        return classifyReactionFailure(e, channel, ts, name, "remove").settled;
       }
     }
 
