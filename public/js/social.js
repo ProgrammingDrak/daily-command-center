@@ -27,6 +27,10 @@
   // The coach day view's own state, kept apart from the tab's: it is a different
   // person's data and must never be mistaken for the viewer's own.
   let coach = { ownerUserId: null, name: "", role: "none", date: "", capabilities: {} };
+  // Monotonic token. openCoachDay mutates `coach` in two phases either side of an
+  // await, so opening A then quickly B could land A's response last and render
+  // A's tasks under B's title with A's role. A stale response is dropped instead.
+  let coachRequestId = 0;
   let loading = false;
   let reloadQueued = false;
 
@@ -359,6 +363,9 @@
 
   async function changeRole(granteeUserId, role) {
     try {
+      // The note is preserved server-side when omitted (see access-store's
+      // COALESCE); sending "" here would have erased the owner's own annotation
+      // as a side effect of a role change.
       await api("/api/access/grants", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -418,6 +425,7 @@
   async function openCoachDay(ownerUserId, name, date, keepMessage) {
     const modal = document.getElementById("coach-day-modal");
     if (!modal) return;
+    const token = ++coachRequestId;
     coach.ownerUserId = Number(ownerUserId);
     coach.name = name || "";
     coach.date = date || "";
@@ -439,6 +447,8 @@
         api(base + "/capabilities"),
         api(base + "/day" + (coach.date ? "?date=" + encodeURIComponent(coach.date) : ""))
       ]);
+      // A newer open (or a close) superseded this one while it was in flight.
+      if (token !== coachRequestId) return;
       coach.capabilities = (caps && caps.capabilities) || {};
       coach.role = (caps && caps.role) || "none";
       coach.date = day.date;
@@ -457,6 +467,7 @@
           : '<div class="social-empty">Nothing on this day.</div>';
       }
     } catch (e) {
+      if (token !== coachRequestId) return;
       // A 403 here means the grant was revoked while the modal was open, which is
       // the expected outcome of an instant revoke rather than a bug. Say that.
       if (status) {
@@ -469,17 +480,26 @@
 
   function shiftCoachDay(days) {
     if (!coach.ownerUserId) return;
-    const next = days === 0
-      ? new Date().toISOString().slice(0, 10)
-      : window.DCC.dates.addDays(coach.date || new Date().toISOString().slice(0, 10), days);
+    // todayKey(), not toISOString(): the latter is the UTC calendar date, so at
+    // 7pm local "Today" opened tomorrow. todayKey prefers the server-derived date
+    // and matches getTodayStr's timezone handling.
+    const today = window.DCC.dates.todayKey();
+    const next = days === 0 ? today : window.DCC.dates.addDays(coach.date || today, days);
     openCoachDay(coach.ownerUserId, coach.name, next);
   }
 
   async function savePoints(taskId) {
     const field = document.querySelector('[data-points-for="' + taskId + '"]');
     if (!field || !coach.ownerUserId) return;
-    const points = Number(field.value);
+    const raw = String(field.value || "").trim();
+    const points = Number(raw);
     const status = document.getElementById("coach-day-status");
+    // Number("") is 0, so clearing the box and pressing Set used to zero the task
+    // with full attribution and no way to tell it from a cancel.
+    if (raw === "" || !Number.isFinite(points)) {
+      if (status) { status.className = "social-status error"; status.textContent = "Enter a number first."; }
+      return;
+    }
     try {
       const out = await api("/api/coach/" + encodeURIComponent(coach.ownerUserId) +
         "/tasks/" + encodeURIComponent(taskId) + "/points", {
@@ -498,6 +518,8 @@
   }
 
   function closeCoachDay() {
+    // Bump the token so a response still in flight cannot repopulate a closed modal.
+    coachRequestId++;
     const modal = document.getElementById("coach-day-modal");
     if (modal) modal.hidden = true;
     coach = { ownerUserId: null, name: "", role: "none", date: "", capabilities: {} };

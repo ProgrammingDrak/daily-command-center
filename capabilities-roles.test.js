@@ -80,16 +80,28 @@ test("each role reaches exactly its own rung and everything below", () => {
   // The literal expected matrix. A reordering of ROLE_RANK or a changed
   // CAPABILITY_MIN_ROLE entry has to update this table, which is the point.
   const matrix = {
-    none:      { view_itinerary: false, adjust_points: false, assign_task: false, edit_task: false, delete_task: false },
-    viewer:    { view_itinerary: true,  adjust_points: false, assign_task: false, edit_task: false, delete_task: false },
-    commenter: { view_itinerary: true,  adjust_points: false, assign_task: false, edit_task: false, delete_task: false },
-    coach:     { view_itinerary: true,  adjust_points: true,  assign_task: true,  edit_task: false, delete_task: false },
-    manager:   { view_itinerary: true,  adjust_points: true,  assign_task: true,  edit_task: true,  delete_task: true },
-    owner:     { view_itinerary: true,  adjust_points: true,  assign_task: true,  edit_task: true,  delete_task: true }
+    none:      { view_itinerary: false, comment: false, adjust_points: false, approve_sponsorship: false, assign_task: false, edit_task: false, delete_task: false },
+    viewer:    { view_itinerary: true,  comment: false, adjust_points: false, approve_sponsorship: false, assign_task: false, edit_task: false, delete_task: false },
+    commenter: { view_itinerary: true,  comment: true,  adjust_points: false, approve_sponsorship: false, assign_task: false, edit_task: false, delete_task: false },
+    coach:     { view_itinerary: true,  comment: true,  adjust_points: true,  approve_sponsorship: true,  assign_task: true,  edit_task: false, delete_task: false },
+    manager:   { view_itinerary: true,  comment: true,  adjust_points: true,  approve_sponsorship: true,  assign_task: true,  edit_task: true,  delete_task: true },
+    owner:     { view_itinerary: true,  comment: true,  adjust_points: true,  approve_sponsorship: true,  assign_task: true,  edit_task: true,  delete_task: true }
   };
+  // SELF-ENFORCING COVERAGE. The first version listed five of the seven role
+  // capabilities, so approve_sponsorship could be loosened to viewer -- or
+  // deleted outright -- with the whole suite green. Tying the columns to the
+  // table means the next capability added without a column fails here instead of
+  // shipping untested.
+  for (const role of Object.keys(matrix)) {
+    assert.deepEqual(Object.keys(matrix[role]).sort(), Object.keys(cap.CAPABILITY_MIN_ROLE).sort(),
+      `the ${role} row does not cover every role capability`);
+  }
+  // canForOwner, not can(): the delegated axis is role-only, which is what makes
+  // a `comment: false` for a viewer meaningful at all (can() would say true via
+  // the public tier).
   for (const [role, caps] of Object.entries(matrix)) {
     for (const [name, want] of Object.entries(caps)) {
-      assert.equal(cap.can("guest", name, { role }), want, `${role} ${name}`);
+      assert.equal(cap.canForOwner(name, role), want, `${role} ${name}`);
     }
   }
 });
@@ -122,13 +134,18 @@ test("only the four intermediate roles are grantable", () => {
 
 // ── the two axes compose without leaking into each other ─────────────────────
 
-test("either axis alone can satisfy a capability that both tables list", () => {
-  // `comment` is in BOTH tables: guests may comment on a shared list, and a
-  // commenter grant allows it on the owner's real itinerary. Neither path may
-  // depend on the other.
-  assert.equal(cap.can("guest", "comment"), true, "via tier");
-  assert.equal(cap.can("guest", "comment", { role: "none" }), true, "tier still wins with no role");
-  assert.equal(cap.can("guest", "comment", { role: "commenter" }), true, "via role");
+test("the two axes answer different questions and must not be confused", () => {
+  // `comment` is in BOTH tables, and that is exactly where the danger was: on the
+  // PUBLIC axis a guest may comment on a shared list, so can() says true for
+  // everyone. A delegated guard built on can() would therefore have authorized
+  // every signed-in stranger against every owner.
+  assert.equal(cap.can("guest", "comment"), true, "public share: a guest may comment");
+  assert.equal(cap.canForOwner("comment", "none"), false, "delegated: a stranger may not");
+  assert.equal(cap.canForOwner("comment", "commenter"), true, "delegated: a commenter may");
+  // And a tier-only capability is not delegatable at all.
+  assert.equal(cap.canForOwner("place_bounty", "manager"), false);
+  assert.equal(cap.isDelegatable("place_bounty"), false);
+  assert.equal(cap.isDelegatable("adjust_points"), true);
 });
 
 test("capabilityMapFor is the full union and reflects the role", () => {

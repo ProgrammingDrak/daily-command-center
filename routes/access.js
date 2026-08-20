@@ -26,7 +26,7 @@
 const TaskModel = require("../public/js/task-model.js");
 
 module.exports = function mount(app, ctx) {
-  const { accessStore, buildDayResponse, blockDB, broadcast, capabilities, coerceDateString, getTodayStr, isValidDate, pool, route, socialStore } = ctx;
+  const { accessStore, badRequest, blockDB, broadcast, capabilities, coerceDateString, getTodayStr, intParam, isValidDate, notFound, pool, route, socialStore } = ctx;
 
   // ── Owner-only grant management ───────────────────────────────────────────
   // Every one of these acts on req.session.userId AS THE OWNER. There is no
@@ -67,6 +67,12 @@ module.exports = function mount(app, ctx) {
   // different status would turn this endpoint into a probe for which user ids
   // exist.
   function requireGrant(capability) {
+    // Fail at MOUNT time, not request time. A capability with no role minimum is
+    // not delegatable, and wiring one here would have authorized every signed-in
+    // user against every owner rather than throwing.
+    if (!capabilities.isDelegatable(capability)) {
+      throw new Error(`requireGrant("${capability}") is not a role-gated capability`);
+    }
     return async (req, res, next) => {
       try {
         const ownerUserId = parseInt(req.params.ownerUserId, 10);
@@ -77,7 +83,10 @@ module.exports = function mount(app, ctx) {
         // self, so acting on your own data through this namespace works and
         // needs no grant.
         const role = await accessStore.resolveRole(viewerUserId, ownerUserId);
-        if (!capabilities.can("user", capability, { role })) {
+        // canForOwner, not can(): the TIER axis must never answer a per-owner
+        // question, or a capability that is also public (comment, react) would
+        // admit everyone.
+        if (!capabilities.canForOwner(capability, role)) {
           return res.status(403).json({ error: "You do not have access to do that", capability });
         }
         // The owner's workspace is resolved from the OWNERSHIP table, never from
@@ -109,11 +118,24 @@ module.exports = function mount(app, ctx) {
   app.get("/api/coach/:ownerUserId/day", requireGrant("view_itinerary"), route(async (req) => {
     const requested = coerceDateString(req.query.date);
     const date = isValidDate(requested) ? requested : getTodayStr();
-    // The owner's OWN day builder, so a coach sees exactly what the owner sees
-    // rather than a second projection that could drift. userId is the owner's,
-    // not the caller's: this is the owner's day, viewed by someone else.
-    const state = await buildDayResponse(date, req.grant.ownerUserId, req.grant.ownerWorkspaceId);
-
+    // NO buildDayResponse. The first cut called it and shipped the whole `state`
+    // object, which was wrong twice over:
+    //
+    //  1. OVER-DISCLOSURE. That object is the owner's full day packet: triage
+    //     (Gmail subjects, Slack DM content), the glymphatic brief, meetings,
+    //     completions, watermarks. The capability gating this route is
+    //     `view_itinerary`, whose minimum role is `viewer` -- described to the
+    //     owner as "can see my day". A viewer was reading the owner's inbox.
+    //  2. CROSS-TENANT LEAK. buildDayResponse falls back to
+    //     readJSON(getDayFilePath(date)), and getDayFilePath has NO workspace
+    //     segment -- server.js says so in a comment and calls it "latent today".
+    //     This route is what would have made it non-latent: for an owner whose
+    //     workspace has no dcc_state row (on prod that is every workspace but
+    //     ws-1), a GRANTEE received whatever workspace last wrote that file,
+    //     across a caller-controlled date range. Reproduced with a marker file
+    //     before this fix.
+    //
+    // Nothing read `state`, so deleting it costs nothing and closes both.
     // TASKS come from the day's BLOCKS, not from state.schedule.timeline. The
     // timeline is the MATERIALIZED PLAN and is empty on a day that was never
     // planned, so a coach opening an unplanned day saw "nothing scheduled" while
@@ -127,10 +149,19 @@ module.exports = function mount(app, ctx) {
     // specifically about what work is worth.
     const rows = await blockDB.getBlocksByDate(date, req.grant.ownerWorkspaceId);
     const tasks = (rows || [])
-      .filter(row => TaskModel.isTaskRow(row))
+      // foldsIntoItinerary, NOT isTaskRow: task-model.js says isTaskRow alone is
+      // "far too wide -- side_project rows, sticky notes and untitled scaffolding
+      // all pass the kind exclusions", and the itinerary this claims to mirror
+      // uses the narrower one. Using the wide predicate reintroduced exactly the
+      // drift this projection exists to prevent.
+      .filter(row => TaskModel.foldsIntoItinerary(row))
       .map(row => {
         const props = row.properties || {};
-        return Object.assign(TaskModel.fromBlock(row), {
+        // deriveEnd: the legacy fallback reads a DURATION as a clock time, so a
+        // row with start 09:00 and no end renders "09:00-00:30". Every render
+        // surface that does not immediately recalc passes this; a read-only view
+        // of someone else's day never recalcs.
+        return Object.assign(TaskModel.fromBlock(row, { deriveEnd: true }), {
           points: Number(props.points) || 0,
           durationMinutes: Number(props.duration) || 0,
           // Provenance of a previous coach adjustment, so the view can show that
@@ -144,12 +175,15 @@ module.exports = function mount(app, ctx) {
       // without this a coach reads the day out of sequence, which is the one
       // thing a day view has to get right.
       .sort((a, b) => {
-        const at = a.start || "99:99";
-        const bt = b.start || "99:99";
+        // fromBlock defaults `start` to "00:00", so `a.start || "99:99"` never
+        // took the sentinel and untimed tasks sorted FIRST, the opposite of the
+        // intent. The `untimed` flag it derives is the real signal.
+        const at = a.untimed ? "99:99" : (a.start || "99:99");
+        const bt = b.untimed ? "99:99" : (b.start || "99:99");
         return at === bt ? String(a.title || "").localeCompare(String(b.title || "")) : at.localeCompare(bt);
       });
 
-    return { date, role: req.grant.role, ownerUserId: req.grant.ownerUserId, tasks, state };
+    return { date, role: req.grant.role, ownerUserId: req.grant.ownerUserId, tasks };
   }));
 
   // ── Write: adjust what a task is worth ─────────────────────────────────────
@@ -163,48 +197,85 @@ module.exports = function mount(app, ctx) {
     const body = req.body || {};
     const points = Number(body.points);
     if (!Number.isFinite(points) || points < 0 || points > 100000) {
-      const e = new Error("points must be a number between 0 and 100000"); e.statusCode = 400; throw e;
+      throw badRequest("points must be a number between 0 and 100000");
     }
     const reason = String(body.reason || "").slice(0, 280);
-    const { rows } = await pool.query(
-      `SELECT id, properties FROM blocks
-        WHERE workspace_id=$1 AND deleted_at IS NULL
-          AND (id=$2 OR properties->>'local_id'=$2)
-        LIMIT 1`,
-      [req.grant.ownerWorkspaceId, String(req.params.taskId)]
-    );
-    const block = rows[0];
-    // Scoped to the owner's workspace in the query itself, so a coach cannot
-    // reach a task id belonging to somebody else by guessing it.
-    if (!block) { const e = new Error("Task not found"); e.statusCode = 404; throw e; }
-    const previous = Number((block.properties || {}).points) || 0;
+    const adjustedAt = new Date().toISOString();
 
-    const updated = await blockDB.updateBlock(block.id, {
-      properties: {
-        ...(block.properties || {}),
-        points,
-        // Provenance ON THE ROW as well as in the ledger: the itinerary renders
-        // from properties, so this is what lets the UI show "adjusted by" without
-        // a second read.
-        pointsAdjustedBy: req.grant.viewerUserId,
-        pointsAdjustedByRole: req.grant.role,
-        pointsAdjustedAt: new Date().toISOString(),
-        pointsAdjustedFrom: previous,
-        pointsAdjustedReason: reason
-      }
-    });
+    // ONE TRANSACTION, and the SELECT takes the row lock the write will use.
+    // The first cut read `properties` on the pool, then handed updateBlock a full
+    // spread of that snapshot. updateBlock locks internally, but the snapshot
+    // predates the lock, and preserveCompletionProps only re-preserves the nine
+    // COMPLETION_PROP_KEYS -- so title, start, end, duration, notes and tags were
+    // all replaced by the stale copy. If the owner renamed or rescheduled the task
+    // while the coach's modal was open, their edit vanished with no conflict and
+    // no error. Two actors writing one row is not an exotic race here; it is the
+    // entire premise of delegated access.
+    const client = await pool.connect();
+    let block;
+    let previous = 0;
+    let updated;
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query(
+        `SELECT id, type, date, properties FROM blocks
+          WHERE workspace_id=$1 AND deleted_at IS NULL
+            AND (id=$2 OR properties->>'local_id'=$2)
+          ORDER BY (id=$2) DESC, date DESC NULLS LAST
+          LIMIT 1
+          FOR UPDATE`,
+        [req.grant.ownerWorkspaceId, String(req.params.taskId)]
+      );
+      block = rows[0];
+      // Scoped to the owner's workspace in the query itself, so a coach cannot
+      // reach a task id belonging to somebody else by guessing it. The ORDER BY
+      // prefers an exact id match: local_id is NOT unique across days (a carryover
+      // row shares it with its origin), so an unordered LIMIT 1 could adjust a
+      // different day's copy.
+      if (!block) throw notFound("Task not found");
+      // The WRITE must be scoped like the READ. Without this a coach, whose only
+      // granted power is adjust_points, could merge properties into a
+      // schedule_block or a day_root by supplying its id -- rows this capability
+      // says nothing about, which then get broadcast as changed.
+      if (!TaskModel.foldsIntoItinerary(block)) throw notFound("Task not found");
+      previous = Number((block.properties || {}).points) || 0;
+      updated = await blockDB.updateBlock(block.id, {
+        properties: {
+          ...(block.properties || {}),
+          points,
+          // Provenance ON THE ROW as well as in the ledger: the itinerary renders
+          // from properties, so this is what lets the UI show "adjusted by"
+          // without a second read.
+          pointsAdjustedBy: req.grant.viewerUserId,
+          pointsAdjustedByRole: req.grant.role,
+          pointsAdjustedAt: adjustedAt,
+          pointsAdjustedFrom: previous,
+          pointsAdjustedReason: reason
+        }
+      }, client);
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+    void updated;
 
     // Ledger it. Non-fatal on failure, because losing the audit row is bad but
-    // silently refusing the owner's coach a legitimate change is worse -- and
-    // the provenance is also on the row above.
+    // silently refusing the owner's coach a legitimate change is worse -- and the
+    // provenance is also on the row above.
     try {
       await socialStore.recordEvent(pool, {
         ownerUserId: req.grant.ownerUserId,
         actorUserId: req.grant.viewerUserId,
         eventType: "points_adjusted",
         sourceType: "coach_adjustment",
-        // Idempotent per (task, actor, value): a double-submit records once.
-        sourceId: `${block.id}:${req.grant.viewerUserId}:${points}`,
+        // Keyed on the TRANSITION and the instant, not the destination value. The
+        // first cut used `${task}:${actor}:${points}`, which deduped a real change
+        // back to a value already used: 50 -> 80 -> 50 recorded only two rows and
+        // silently lost the third.
+        sourceId: `${block.id}:${req.grant.viewerUserId}:${previous}->${points}:${adjustedAt}`,
         metadata: { from: previous, to: points, role: req.grant.role, reason, taskId: block.id }
       });
     } catch (e) {

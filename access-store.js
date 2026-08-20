@@ -33,6 +33,8 @@
 
 const pool = require("./pg-pool");
 const capabilities = require("./capabilities");
+// social-store requires only pg-pool, so there is no cycle.
+const socialStore = require("./social-store");
 
 /** Append to the audit ledger. Never throws into the caller's transaction path:
  *  a missing audit row is bad, a failed revoke because of one is worse. */
@@ -60,7 +62,12 @@ async function recordGrantEvent({ ownerUserId, granteeUserId, actorUserId, event
 async function resolveRole(viewerUserId, ownerUserId) {
   const viewer = Number(viewerUserId);
   const owner = Number(ownerUserId);
-  if (!Number.isFinite(viewer) || !Number.isFinite(owner)) return "none";
+  // POSITIVE integers, not merely finite. Number(null), Number(false) and
+  // Number("") are all 0, which is finite -- so a null viewer id silently became
+  // "user 0" and went on to query the grants table instead of being refused.
+  // Found by the fail-closed test, which is the point of having one.
+  const usable = (n) => Number.isInteger(n) && n > 0;
+  if (!usable(viewer) || !usable(owner)) return "none";
   // Self, before any table read: your own access is never a row that could be
   // missing, wrong, or revoked by someone else.
   if (viewer === owner) return "owner";
@@ -103,7 +110,8 @@ async function canActFor(viewerUserId, ownerUserId, capability, tier = "user") {
 async function grantAccess({ ownerUserId, granteeUserId, role, note = "" }) {
   const owner = Number(ownerUserId);
   const grantee = Number(granteeUserId);
-  if (!Number.isFinite(owner) || !Number.isFinite(grantee)) {
+  const usableId = (n) => Number.isInteger(n) && n > 0;
+  if (!usableId(owner) || !usableId(grantee)) {
     const e = new Error("owner and grantee are required"); e.statusCode = 400; throw e;
   }
   if (owner === grantee) {
@@ -116,14 +124,11 @@ async function grantAccess({ ownerUserId, granteeUserId, role, note = "" }) {
   // A blocked person cannot be handed access. Checked BEFORE the write so the
   // row never exists, rather than relying on resolveRole to veto it later: a
   // grant row for a blocked user is a confusing thing to find in the table.
-  const { rows: blockedRows } = await pool.query(
-    `SELECT 1 FROM friendships
-      WHERE status='blocked'
-        AND ((requester_id=$1 AND addressee_id=$2) OR (requester_id=$2 AND addressee_id=$1))
-      LIMIT 1`,
-    [owner, grantee]
-  );
-  if (blockedRows.length) {
+  //
+  // socialStore.isBlocked, not a fourth copy of the predicate: the first cut
+  // inlined the same query character-for-character, and "what does blocked mean"
+  // should have one definition.
+  if (await socialStore.isBlocked(owner, grantee)) {
     const e = new Error("Unblock this person before granting them access"); e.statusCode = 403; throw e;
   }
   const existing = await pool.query(
@@ -135,7 +140,12 @@ async function grantAccess({ ownerUserId, granteeUserId, role, note = "" }) {
     `INSERT INTO access_grants (owner_user_id, grantee_user_id, role, note)
      VALUES ($1,$2,$3,$4)
      ON CONFLICT (owner_user_id, grantee_user_id)
-       DO UPDATE SET role=EXCLUDED.role, note=EXCLUDED.note, updated_at=NOW()
+       -- COALESCE the note: changing a role via the dropdown sends no note, and
+       -- EXCLUDED.note would then erase the owner's own annotation as a side
+       -- effect of a role change.
+       DO UPDATE SET role=EXCLUDED.role,
+                     note=COALESCE(NULLIF(EXCLUDED.note, ''), access_grants.note),
+                     updated_at=NOW()
      RETURNING *`,
     [owner, grantee, String(role).toLowerCase(), String(note || "").slice(0, 280)]
   );
@@ -151,6 +161,10 @@ async function grantAccess({ ownerUserId, granteeUserId, role, note = "" }) {
 async function revokeAccess({ ownerUserId, granteeUserId }) {
   const owner = Number(ownerUserId);
   const grantee = Number(granteeUserId);
+  // grantAccess validated and revoke did not, so a bad id reached the DELETE.
+  if (!(Number.isInteger(owner) && owner > 0) || !(Number.isInteger(grantee) && grantee > 0)) {
+    const e = new Error("owner and grantee are required"); e.statusCode = 400; throw e;
+  }
   const { rows } = await pool.query(
     "DELETE FROM access_grants WHERE owner_user_id=$1 AND grantee_user_id=$2 RETURNING role",
     [owner, grantee]

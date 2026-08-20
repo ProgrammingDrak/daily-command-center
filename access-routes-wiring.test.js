@@ -32,7 +32,14 @@ test("the route table was actually parsed", () => {
   // Guard the guard: if the regex stops matching, every assertion below would
   // vacuously pass over an empty array. This is the do-nothing-verification trap
   // that has already bitten this project three times.
-  assert.ok(ROUTES.length >= 8, "expected at least 8 routes, parsed " + ROUTES.length);
+  // A COMPLETENESS check, not a magic number. The floor used to equal the exact
+  // route count, so a route the regex failed to parse (a single-quoted path, a
+  // declaration prettier wrapped onto two lines) kept the count at 8 and was
+  // silently exempt from every assertion below.
+  const declared = (SRC.match(/app\.(?:get|post|patch|delete|put)\(/g) || []).length;
+  assert.ok(declared >= 8, "expected at least 8 route declarations, found " + declared);
+  assert.equal(ROUTES.length, declared,
+    "a route declaration was not parsed -- every assertion below would skip it");
   assert.ok(ROUTES.some(r => r.path.startsWith("/api/coach/")), "no coach routes parsed");
   assert.ok(ROUTES.some(r => r.path.startsWith("/api/access/")), "no access routes parsed");
 });
@@ -50,11 +57,17 @@ test("every /api/coach route is wrapped in requireGrant", () => {
 test("every guarded capability is one capabilities.js actually knows", () => {
   // A typo'd capability name fails closed (can() returns false), so the endpoint
   // would 403 for everyone including the owner. Silent and confusing, so pin it.
-  const named = [...SRC.matchAll(/requireGrant\("([^"]+)"\)/g)].map(m => m[1]);
+  // Exclude interpolations: the mount-time error message in routes/access.js
+  // contains the literal text requireGrant("${capability}"), which a naive regex
+  // happily reports as a capability named "${capability}".
+  const named = [...SRC.matchAll(/requireGrant\("([^"$]+)"\)/g)].map(m => m[1]);
   assert.ok(named.length >= 3);
   for (const name of named) {
-    const known = capabilities.CAPABILITY_MIN_ROLE[name] || capabilities.CAPABILITY_MIN_TIER[name];
-    assert.ok(known, `requireGrant("${name}") names a capability that does not exist`);
+    // CAPABILITY_MIN_ROLE specifically. Accepting a tier-only name would bless a
+    // guard that authorizes every signed-in user, which is exactly what
+    // requireGrant("comment") would have done.
+    assert.ok(capabilities.CAPABILITY_MIN_ROLE[name],
+      `requireGrant("${name}") is not a role-gated capability`);
   }
 });
 
@@ -120,26 +133,39 @@ test("no coach route can create or change a grant", () => {
 
 // ── the guard's own shape ───────────────────────────────────────────────────
 
-test("the guard denies before it does anything else", () => {
+test("the guard reads its role only from the store, never from request input", () => {
+  // NARROWED on purpose. This used to assert that the strings 401/403 appear in
+  // the slice, which cannot fail when the guard stops denying: changing the
+  // check to `if (false && !canForOwner(...))` deletes authorization outright
+  // and every one of those assertions still passed. The guard's DECISIONS are
+  // now executed in access-guard.test.js. What source text can still usefully
+  // prove is that no role arrives from the request.
   const guard = SRC.slice(SRC.indexOf("function requireGrant"), SRC.indexOf("// What the caller may do"));
   assert.ok(guard.length > 200, "failed to slice requireGrant");
-  // Unauthenticated is 401, unauthorized is 403, and a missing owner id is 400.
-  assert.match(guard, /401/, "no unauthenticated branch");
-  assert.match(guard, /403/, "no unauthorized branch");
-  // The role comes from the store, which is where the block veto lives; the
-  // guard must not read a role off the request.
-  assert.match(guard, /accessStore\.resolveRole\(/, "the guard must resolve the role via the store");
+  assert.match(guard, /accessStore\.resolveRole\(viewerUserId, ownerUserId\)/,
+    "the role must be resolved viewer-over-owner via the store");
   assert.ok(!/req\.(body|query|params)\.role/.test(guard), "the guard reads a role from request input");
-  // A thrown error must deny, not fall through to the handler.
-  assert.match(guard, /catch[\s\S]*403/, "a guard error must deny");
-  // The owner's workspace must come from the ownership table, not the caller.
+  assert.match(guard, /canForOwner\(/, "delegated checks must use the role-only axis");
   assert.match(guard, /resolveWorkspaceId\(ownerUserId\)/, "workspace must resolve from the owner");
   assert.ok(!/req\.workspaceId/.test(guard), "the guard uses the CALLER's workspace");
 });
 
-test("the point-adjust handler scopes its lookup to the owner's workspace", () => {
-  // Without the workspace predicate in the WHERE clause, a coach could reach a
-  // task id belonging to someone else entirely by guessing it.
+test("the point-adjust LOOKUP is scoped to the owner's workspace", () => {
+  // Sliced to the lookup only. The first version passed SRC.indexOf() with ONE
+  // argument, so the slice ran to end-of-file and `req.grant.ownerWorkspaceId`
+  // in the broadcast line satisfied an assertion about the QUERY: binding the
+  // query to req.workspaceId instead left the suite green.
+  const start = SRC.indexOf('/tasks/:taskId/points"');
+  const handler = SRC.slice(start, SRC.indexOf("previous = Number(", start));
+  assert.ok(handler.length > 200, "failed to slice the point-adjust lookup");
+  assert.match(handler, /\[\s*req\.grant\.ownerWorkspaceId\s*,/,
+    "the workspace parameter must be bound from the GRANT, not the caller's session");
+  assert.ok(!/req\.workspaceId/.test(handler), "the lookup uses the CALLER's workspace");
+  assert.match(handler, /FOR UPDATE/, "the row must be locked before it is read");
+  assert.match(handler, /foldsIntoItinerary/, "the write must be scoped to tasks like the read is");
+});
+
+test("the point-adjust handler attributes and ledgers the change", () => {
   const handler = SRC.slice(SRC.indexOf('/tasks/:taskId/points"'));
   assert.match(handler, /workspace_id=\$1/, "the task lookup is not workspace-scoped");
   assert.match(handler, /req\.grant\.ownerWorkspaceId/, "it must use the GRANT's workspace");
@@ -164,7 +190,18 @@ test("the coach day reads BLOCKS, not the materialized timeline", () => {
   assert.ok(handler.length > 200, "failed to slice the day handler");
   assert.match(handler, /getBlocksByDate\(/, "the day must read blocks");
   assert.match(handler, /TaskModel\.fromBlock/, "and project them through the canonical projection");
-  assert.match(handler, /TaskModel\.isTaskRow/, "filtered by the canonical task predicate");
+  // foldsIntoItinerary, not isTaskRow: task-model.js documents isTaskRow as "far
+  // too wide" for a task LIST, and the itinerary this mirrors uses the narrower
+  // predicate.
+  assert.match(handler, /TaskModel\.foldsIntoItinerary/, "filtered by the itinerary's own predicate");
+  assert.match(handler, /deriveEnd: true/, "a read-only view never recalcs, so it must derive end");
+  // Strip comments first: the handler EXPLAINS why buildDayResponse was removed,
+  // so a naive search finds the word in the prose that documents its absence.
+  const code = handler.split("\n").filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  assert.ok(!/buildDayResponse\(/.test(code),
+    "the day must not rebuild the owner's full state packet");
+  assert.ok(!/\bstate\b\s*[,}]/.test(code),
+    "the response must not carry the owner's full day state");
   // It must not go back to deriving the list from the timeline.
   assert.ok(!/schedule\s*\|\|\s*\{\}\)\.timeline/.test(handler),
     "the task list must not come from the materialized timeline");

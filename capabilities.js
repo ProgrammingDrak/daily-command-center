@@ -112,6 +112,33 @@ function can(tier, capability, opts) {
 }
 
 /**
+ * DELEGATED authorization: may `role` do `capability` over the owner it was
+ * granted on? ROLE-ONLY, on purpose.
+ *
+ * `can()` satisfies a capability from EITHER axis and returns as soon as the
+ * tier passes. That is right for a public share and WRONG for a per-owner
+ * question: `comment` has a tier minimum of "guest", so
+ * `can("user", "comment", { role: "none" })` is true, and a guard built on it
+ * would authorize every signed-in stranger -- including a blocked one, because
+ * resolveRole's correct "none" gets discarded by the tier branch. Four of the
+ * tier capabilities are reachable that way.
+ *
+ * A capability with no ROLE minimum is not delegatable at all and fails closed,
+ * which is also what keeps `grant_access` unreachable.
+ */
+function canForOwner(capability, role) {
+  const needRole = CAPABILITY_MIN_ROLE[capability];
+  if (!needRole) return false;
+  return (ROLE_RANK[normalizeRole(role)] ?? -1) >= (ROLE_RANK[needRole] ?? Infinity);
+}
+
+/** Is this capability delegatable at all? Lets a guard fail at MOUNT time rather
+ *  than silently authorizing everyone at request time. */
+function isDelegatable(capability) {
+  return !!CAPABILITY_MIN_ROLE[capability];
+}
+
+/**
  * The map the PUBLIC share payload carries. Deliberately still tier-only and
  * therefore byte-identical to the pre-grants version: an anonymous link holder
  * has no grant, so shipping them `adjust_points: false` would only widen the
@@ -134,7 +161,14 @@ function capabilityMapFor({ tier, role } = {}) {
     ...Object.keys(CAPABILITY_MIN_TIER),
     ...Object.keys(CAPABILITY_MIN_ROLE),
   ]);
-  for (const capability of names) out[capability] = can(tier, capability, { role });
+  // Role capabilities answer through canForOwner, so this map cannot report
+  // `comment: true` to a viewer just because the tier axis allows it on a public
+  // share. A tier-only capability still answers on the tier.
+  for (const capability of names) {
+    out[capability] = CAPABILITY_MIN_ROLE[capability]
+      ? canForOwner(capability, role)
+      : can(tier, capability);
+  }
   return out;
 }
 
@@ -150,6 +184,8 @@ module.exports = {
   normalizeRole,
   isGrantableRole,
   can,
+  canForOwner,
+  isDelegatable,
   capabilityMap,
   capabilityMapFor,
 };
