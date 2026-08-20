@@ -45,6 +45,7 @@
 // verifying the request is Slack's signature is THIS route's job.
 const createTaskTiming = require("../lib/task-timing");
 const createSlackActors = require("../lib/slack-actors");
+const { createSlackOAuth } = require("../lib/slack-oauth");
 const {
   addCalendarDays,
   fallbackTitle,
@@ -81,7 +82,20 @@ module.exports = function mount(app, ctx) {
   // Who a reaction belongs to. The env identity stays the first-checked, DB-free
   // fallback, so the original single-tenant deployment keeps behaving exactly as
   // it did. See lib/slack-actors.js.
-  const actors = createSlackActors({ pool, apiTimeoutMs: SLACK_API_TIMEOUT_MS });
+  // Tier 2. `openGrant` is what lets a DB-backed identity be user tier: without
+  // it every stored token is ignored and everyone stays bot tier, which is exactly
+  // the pre-OAuth behaviour. Wrapped rather than passed directly so a server with
+  // no SLACK_TOKEN_ENC_KEY boots normally and only complains if a grant is
+  // actually present to open.
+  const slackOAuth = createSlackOAuth({ apiTimeoutMs: SLACK_API_TIMEOUT_MS });
+  const actors = createSlackActors({
+    pool,
+    apiTimeoutMs: SLACK_API_TIMEOUT_MS,
+    openGrant: (sealed) => slackOAuth.openGrant(sealed),
+  });
+  // Published so routes/slack-oauth.js shares this instance — one redirect URI and
+  // one encryption key across the process, rather than two modules each reading env.
+  ctx.slackOAuth = slackOAuth;
 
   const NO_HOURGLASS_MIN = 5;         // 🔖 → ✅ with no ⌛ ⇒ assume 5 minutes
   const R_BOOKMARK = "bookmark";
@@ -1141,9 +1155,14 @@ module.exports = function mount(app, ctx) {
 
       for (const actor of roster) {
         const bound = forActor(actor);
-        // hasmy: needs a user token. Bot-tier actors have no equivalent, so they
-        // get the enrichment and mirror passes but not the catch-up search.
-        if (actor.tokens.user) {
+        // hasmy: needs a user token AND `search:read`. Gating on token presence
+        // alone was right when the only user token was Drake's legacy one, which
+        // happens to carry search:read. A Tier 2 grant is deliberately minimal
+        // (reactions only), so that actor HAS a token and still cannot search —
+        // and without this check the sweep would fail missing_scope every five
+        // minutes, per actor, forever. Unknown scopes stay permissive, so the env
+        // identity keeps sweeping exactly as before. See makeActor.
+        if (actors.actorHasScope(actor, "search:read")) {
           try {
             const bookmarks = await bound.searchSlack("hasmy::bookmark:");
             for (const match of bookmarks) await bound.reconcileMatch("bookmark", match);

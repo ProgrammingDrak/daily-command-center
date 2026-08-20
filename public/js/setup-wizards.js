@@ -116,6 +116,31 @@
       }
       const slack = data.slack || {};
 
+      // 0. Per-user authorization. FIRST, because it needs no bot token and no
+      // allowlist — so it must come before the two admin dead-ends below, which
+      // between them tell a teammate "there is nothing for you to do here yet".
+      // That was only ever true in a bot-only world; connecting your own Slack is
+      // something you can do entirely yourself.
+      //
+      // Also catches an already-linked BOT-tier account, where connecting is an
+      // upgrade rather than a first link: same button, different framing.
+      if (slack.canOauth && slack.tier !== "user") {
+        const upgrading = !!slack.connected;
+        body.innerHTML = '<p class="dcc-sw-p">'
+            + (upgrading
+              ? "<strong>You are linked, but reactions are posted by the app rather than by you.</strong> Connect your own Slack and the ✅ on a message will be yours."
+              : "<strong>Connect your Slack</strong> and reacting to a message captures it onto your itinerary. The ✅ the DCC puts back on the message comes from you, not from a bot.")
+          + "</p>"
+          + row("Your Slack account", slack.connected ? (slack.slackUserId || "linked") : "not connected", !!slack.connected)
+          + row("Reactions posted as", "the app", false)
+          + '<div class="dcc-sw-emoji">🔖 bookmark → task &nbsp;·&nbsp; 👥 people → waiting on someone &nbsp;·&nbsp; ✅ check → done</div>'
+          + '<div class="dcc-sw-oneclick"><span>Authorize the DCC for your Slack account</span>'
+            + '<a class="dcc-sw-btn dcc-sw-btn--primary" href="/api/slack/auth">' + (upgrading ? "Connect as me" : "Connect") + "</a>"
+          + "</div>"
+          + '<p class="dcc-sw-note">It asks for two permissions: read reactions, and add or remove them. Nothing else — not your messages, not search.</p>';
+        return;
+      }
+
       // 1. Something only an admin can fix.
       if (!slack.sharedBot) {
         body.innerHTML = '<p class="dcc-sw-p">This server has no shared Slack bot configured yet, so reactions cannot reach the DCC at all.</p>'
@@ -137,6 +162,7 @@
           + row("Shared bot", "ready", true)
           + row("Your Slack account", slack.slackUserId || "linked", true)
           + row("Coverage", slack.tier === "user" ? "channels, DMs and private channels" : "channels the bot is in", true)
+          + row("Reactions posted as", slack.tier === "user" ? "you" : "the app", slack.tier === "user")
           + '<div class="dcc-sw-emoji">🔖 bookmark → task &nbsp;·&nbsp; ⌛ hourglass → start timing &nbsp;·&nbsp; ✅ check → done + points</div>'
           + '<p class="dcc-sw-note">Removing a reaction reverses it, points included.</p>'
           + '<div class="dcc-sw-actions"><button class="dcc-sw-btn" id="dcc-sw-unlink" type="button">Unlink this Slack account</button></div>';

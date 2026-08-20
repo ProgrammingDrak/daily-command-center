@@ -13,6 +13,7 @@ const { test } = require("node:test");
 const assert = require("node:assert");
 const crypto = require("node:crypto");
 const mount = require("./routes/slack-events.js");
+const { createSecretBox, generateKey } = require("./lib/secret-box.js");
 
 const SECRET = "test-signing-secret";
 const TEAM = "T_CLEVER";
@@ -30,6 +31,10 @@ function makeHarness(opts = {}) {
   process.env.DCC_SERVICE_USER_ID = "1";
   process.env.DCC_SERVICE_WORKSPACE_ID = "ws-1";
   delete process.env.ANTHROPIC_API_KEY;
+  // Tier 2: without a key the route cannot open a stored grant, so an identity
+  // carrying `userTokenEnc` would still resolve as bot tier.
+  if (opts.encKey) process.env.SLACK_TOKEN_ENC_KEY = opts.encKey;
+  else delete process.env.SLACK_TOKEN_ENC_KEY;
   if (opts.allowlist === undefined) delete process.env.SLACK_TEAM_ALLOWLIST;
   else process.env.SLACK_TEAM_ALLOWLIST = opts.allowlist;
   if (opts.env) {
@@ -406,6 +411,44 @@ test("a bot-tier actor posts reactions with the bot token", async () => {
   assert.equal(h.calls.reactionsAdd.length, 1, "the 🔖 goes back on after an un-✅");
   assert.equal(h.calls.reactionsAdd[0].auth, `Bearer ${BOT_TOKEN}`, "no user token exists, so the bot speaks");
   assert.equal(h.calls.reactionsAdd[0].body.name, "bookmark");
+});
+
+// ── Tier 2: the sweep is gated on SCOPES, not on having a token ─────────────
+
+test("a user-tier actor with only reaction scopes is skipped by the hasmy: sweep", async () => {
+  // The gate used to read `if (actor.tokens.user)`. A Tier 2 grant is deliberately
+  // minimal — reactions only — so that actor HAS a token and still cannot call
+  // search.messages. Under the old gate the sweep would attempt it and fail
+  // missing_scope every five minutes, per actor, forever.
+  const key = generateKey();
+  const sealed = createSecretBox(key).sealJson({
+    v: 1, token: "xoxp-nora", scopes: ["reactions:read", "reactions:write"], slackUserId: "U_NORA",
+  });
+  const h = makeHarness({
+    allowlist: TEAM, encKey: key,
+    identities: [{ slackUserId: "U_NORA", userId: 4, workspaceId: "ws-4", linkedVia: "oauth", userTokenEnc: sealed }],
+  });
+  const stats = await h.api.runReconciliation();
+  assert.equal(h.calls.searches.length, 0, "no search is attempted at all");
+  assert.equal(stats.actors, 1);
+  assert.equal(stats.bookmarks, 0);
+  assert.equal(stats.delegates, 0);
+});
+
+test("a user-tier actor that DOES hold search:read still sweeps", async () => {
+  const key = generateKey();
+  const sealed = createSecretBox(key).sealJson({
+    v: 1, token: "xoxp-wide", scopes: ["reactions:read", "reactions:write", "search:read"], slackUserId: "U_WIDE",
+  });
+  const h = makeHarness({
+    allowlist: TEAM, encKey: key,
+    identities: [{ slackUserId: "U_WIDE", userId: 5, workspaceId: "ws-5", linkedVia: "oauth", userTokenEnc: sealed }],
+  });
+  await h.api.runReconciliation();
+  assert.deepEqual(h.calls.searches.map(c => c.query), ["hasmy::bookmark:", "hasmy::busts_in_silhouette:"],
+    "the gate must not have become a blanket refusal");
+  // And it searched as THEM, on the token from their own grant.
+  assert.ok(h.calls.searches.every(c => c.auth === "Bearer xoxp-wide"));
 });
 
 test("reconciliation skips the hasmy: sweep for bot-tier actors instead of erroring", async () => {

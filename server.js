@@ -151,7 +151,7 @@ if (!LOCAL_AUTH_ENABLED) {
 app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
-const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
+const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts", "/api/dcc/meeting-signals", "/api/dcc/slack-reconcile"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/sponsor/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
@@ -966,6 +966,9 @@ require("./routes/vault")(app, ctx);
 require("./routes/admin-tokens")(app, ctx);
 require("./routes/admin-model")(app, ctx);
 require("./routes/slack-events")(app, ctx);
+// After slack-events, which publishes ctx.slackOAuth and ctx.slackActors that
+// these routes need. They also read both lazily, so the order is belt and braces.
+require("./routes/slack-oauth")(app, ctx);
 
 // ── Optional setup flows (Slack reactions, AI triage) ─────────────────────
 // Placed after the slack-events mount for readability, NOT out of necessity: these
@@ -1062,6 +1065,11 @@ app.get("/api/me/integrations", async (req, res) => {
       // exist on this server, and their workspace has to be allowlisted.
       sharedBot: !!(ctx.slackActors && ctx.slackActors.hasBotToken()),
       autoLink: !!(ctx.slackActors && ctx.slackActors.autoLinkEnabled()),
+      // Whether this server can offer per-user authorization at all. Both halves
+      // are required: the client credentials to run the flow, and the encryption
+      // key to store what comes back. Offering the button without the key would
+      // spend the user's consent and then fail to keep it.
+      canOauth: !!(ctx.slackOAuth && ctx.slackOAuth.configured() && ctx.slackOAuth.hasEncryptionKey()),
     },
     google,
     triage: {
