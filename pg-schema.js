@@ -590,6 +590,48 @@ ALTER TABLE todo_sponsorships
 CREATE INDEX IF NOT EXISTS idx_todo_sponsorships_owner_review
   ON todo_sponsorships(owner_user_id, review_state, created_at DESC);
 
+-- ── Access Grants (per-owner delegated roles: viewer/commenter/coach/manager) ──
+-- ONLY ACTIVE GRANTS live here. Revoking DELETES the row rather than stamping a
+-- revoked_at, deliberately: a nullable revoked_at means every read has to
+-- remember the AND revoked_at IS NULL, and a reader that forgets it silently hands
+-- a revoked coach live access. One fewer predicate to forget is worth more than
+-- the convenience of soft deletes, and the audit trail lives in
+-- access_grant_events instead.
+CREATE TABLE IF NOT EXISTS access_grants (
+  id              SERIAL PRIMARY KEY,
+  owner_user_id   INTEGER NOT NULL REFERENCES users(id),
+  grantee_user_id INTEGER NOT NULL REFERENCES users(id),
+  role            TEXT NOT NULL DEFAULT 'viewer',
+  note            TEXT NOT NULL DEFAULT '',
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(owner_user_id, grantee_user_id),
+  -- A grant to yourself is meaningless (an owner is already above manager) and
+  -- would be a confusing way to appear in your own coach list.
+  CONSTRAINT access_grants_not_self CHECK (owner_user_id <> grantee_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_access_grants_grantee
+  ON access_grants(grantee_user_id);
+
+-- Append-only audit. Every grant, role change and revoke lands here, so "who
+-- gave this person access to my day, and when" is answerable after the grant
+-- row itself is gone.
+CREATE TABLE IF NOT EXISTS access_grant_events (
+  id              SERIAL PRIMARY KEY,
+  owner_user_id   INTEGER NOT NULL REFERENCES users(id),
+  grantee_user_id INTEGER NOT NULL REFERENCES users(id),
+  actor_user_id   INTEGER REFERENCES users(id),
+  event_type      TEXT NOT NULL,  -- granted, role_changed, revoked
+  role            TEXT,
+  previous_role   TEXT,
+  metadata        JSONB NOT NULL DEFAULT '{}',
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_access_grant_events_owner
+  ON access_grant_events(owner_user_id, created_at DESC);
+
 -- ── Feed Posts (derive from task completions; publish is opt-in) ──
 CREATE TABLE IF NOT EXISTS feed_posts (
   id                SERIAL PRIMARY KEY,
