@@ -152,3 +152,26 @@ test("the point-adjust handler scopes its lookup to the owner's workspace", () =
   assert.match(handler, /eventType:\s*"points_adjusted"/, "the change is not written to the ledger");
   assert.match(handler, /actorUserId:\s*req\.grant\.viewerUserId/, "the ledger entry is not attributed");
 });
+
+// ── the day projection ───────────────────────────────────────────────────────
+
+test("the coach day reads BLOCKS, not the materialized timeline", () => {
+  // The bug this pins: state.schedule.timeline is the materialized PLAN and is
+  // empty on a day nobody planned, so a coach opening an unplanned day saw
+  // "nothing scheduled" while the owner had three tasks. Found by seeding real
+  // tasks and getting zero rows back.
+  const handler = SRC.slice(SRC.indexOf('/day", requireGrant'), SRC.indexOf("// ── Write:"));
+  assert.ok(handler.length > 200, "failed to slice the day handler");
+  assert.match(handler, /getBlocksByDate\(/, "the day must read blocks");
+  assert.match(handler, /TaskModel\.fromBlock/, "and project them through the canonical projection");
+  assert.match(handler, /TaskModel\.isTaskRow/, "filtered by the canonical task predicate");
+  // It must not go back to deriving the list from the timeline.
+  assert.ok(!/schedule\s*\|\|\s*\{\}\)\.timeline/.test(handler),
+    "the task list must not come from the materialized timeline");
+});
+
+test("the coach day is sorted chronologically, untimed last", () => {
+  const handler = SRC.slice(SRC.indexOf('/day", requireGrant'), SRC.indexOf("// ── Write:"));
+  assert.match(handler, /\.sort\(/, "the day must be ordered");
+  assert.match(handler, /99:99/, "untimed tasks must sort last, not first");
+});

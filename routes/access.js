@@ -20,6 +20,11 @@
 // probably a mistake, and it is right -- but this has no fallback at all. The
 // owner is EXPLICIT in the URL and checked against a grant. Nothing is inferred,
 // so there is no chain to get wrong.
+// The canonical block -> task projection, shared with the itinerary. Required
+// here rather than re-derived so the coach view cannot drift from what the owner
+// sees. UMD, so the same file the browser loads is the one this requires.
+const TaskModel = require("../public/js/task-model.js");
+
 module.exports = function mount(app, ctx) {
   const { accessStore, buildDayResponse, blockDB, broadcast, capabilities, coerceDateString, getTodayStr, isValidDate, pool, route, socialStore } = ctx;
 
@@ -108,7 +113,43 @@ module.exports = function mount(app, ctx) {
     // rather than a second projection that could drift. userId is the owner's,
     // not the caller's: this is the owner's day, viewed by someone else.
     const state = await buildDayResponse(date, req.grant.ownerUserId, req.grant.ownerWorkspaceId);
-    return { date, role: req.grant.role, ownerUserId: req.grant.ownerUserId, state };
+
+    // TASKS come from the day's BLOCKS, not from state.schedule.timeline. The
+    // timeline is the MATERIALIZED PLAN and is empty on a day that was never
+    // planned, so a coach opening an unplanned day saw "nothing scheduled" while
+    // the owner had a full list. Found by seeding two real tasks and getting
+    // zero rows back.
+    //
+    // Projected through TaskModel.fromBlock, the repo's canonical block -> task
+    // projection, so this surface cannot drift from the itinerary on what a task
+    // is called or when it runs. `points` and `durationMinutes` are attached
+    // separately because fromBlock does not carry them and the coach view is
+    // specifically about what work is worth.
+    const rows = await blockDB.getBlocksByDate(date, req.grant.ownerWorkspaceId);
+    const tasks = (rows || [])
+      .filter(row => TaskModel.isTaskRow(row))
+      .map(row => {
+        const props = row.properties || {};
+        return Object.assign(TaskModel.fromBlock(row), {
+          points: Number(props.points) || 0,
+          durationMinutes: Number(props.duration) || 0,
+          // Provenance of a previous coach adjustment, so the view can show that
+          // a number was changed and by whom rather than presenting it as the
+          // owner's own estimate.
+          adjustedBy: props.pointsAdjustedBy || null,
+          adjustedFrom: props.pointsAdjustedFrom == null ? null : Number(props.pointsAdjustedFrom)
+        });
+      })
+      // Chronological, untimed last. Block insertion order is creation order, so
+      // without this a coach reads the day out of sequence, which is the one
+      // thing a day view has to get right.
+      .sort((a, b) => {
+        const at = a.start || "99:99";
+        const bt = b.start || "99:99";
+        return at === bt ? String(a.title || "").localeCompare(String(b.title || "")) : at.localeCompare(bt);
+      });
+
+    return { date, role: req.grant.role, ownerUserId: req.grant.ownerUserId, tasks, state };
   }));
 
   // ── Write: adjust what a task is worth ─────────────────────────────────────

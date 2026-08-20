@@ -23,7 +23,10 @@
   // per-file copies. A brand new module adding another makes that cleanup bigger.
   const relTime = (v) => (v ? window.DCC.dates.timeAgo(v) : "");
 
-  let state = { publishable: [], requests: [], friends: [], feed: [] };
+  let state = { publishable: [], requests: [], friends: [], feed: [], grants: [], granted: [] };
+  // The coach day view's own state, kept apart from the tab's: it is a different
+  // person's data and must never be mistaken for the viewer's own.
+  let coach = { ownerUserId: null, name: "", role: "none", date: "", capabilities: {} };
   let loading = false;
   let reloadQueued = false;
 
@@ -44,6 +47,13 @@
     if (mins) bits.push(mins);
     return bits.join(" &middot; ");
   }
+
+  const ROLE_BLURB = {
+    viewer: "can see your day",
+    commenter: "can see your day and comment",
+    coach: "can adjust points and assign tasks",
+    manager: "can edit and delete your tasks"
+  };
 
   // ── renderers ──────────────────────────────────────────────────────────────
 
@@ -134,11 +144,63 @@
       '</div>').join("");
   }
 
+  function renderGrants() {
+    const list = document.getElementById("social-grants");
+    const count = document.getElementById("social-grants-count");
+    if (!list) return;
+    if (count) count.textContent = state.grants.length ? state.grants.length + " with access" : "nobody";
+    if (!state.grants.length) {
+      list.innerHTML = '<div class="social-empty">Nobody else can act on your day.</div>';
+      return;
+    }
+    list.innerHTML = state.grants.map(g =>
+      '<div class="social-item">' +
+        '<div class="social-item-body">' +
+          '<strong>' + esc(g.name || g.username) + '</strong>' +
+          '<span class="social-item-meta">' +
+            '<b class="social-role-pill role-' + esc(g.role) + '">' + esc(g.role) + '</b> ' +
+            esc(ROLE_BLURB[g.role] || "") +
+            (g.note ? ' &middot; ' + esc(g.note) : "") +
+          '</span>' +
+        '</div>' +
+        '<div class="social-item-actions">' +
+          '<select data-role-for="' + g.grantee_user_id + '" aria-label="Change role">' +
+            ["viewer", "commenter", "coach", "manager"].map(r =>
+              '<option value="' + r + '"' + (r === g.role ? " selected" : "") + '>' + r + '</option>').join("") +
+          '</select>' +
+          '<button class="social-btn" data-revoke="' + g.grantee_user_id + '" type="button">Revoke</button>' +
+        '</div>' +
+      '</div>').join("");
+  }
+
+  function renderGranted() {
+    const list = document.getElementById("social-granted");
+    const count = document.getElementById("social-granted-count");
+    if (!list) return;
+    if (count) count.textContent = state.granted.length || "none";
+    if (!state.granted.length) {
+      list.innerHTML = '<div class="social-empty">Nobody has given you access to their day.</div>';
+      return;
+    }
+    list.innerHTML = state.granted.map(g =>
+      '<div class="social-item">' +
+        '<div class="social-item-body">' +
+          '<strong>' + esc(g.name || g.username) + '</strong>' +
+          '<span class="social-item-meta">you are their <b class="social-role-pill role-' + esc(g.role) + '">' + esc(g.role) + '</b></span>' +
+        '</div>' +
+        '<div class="social-item-actions">' +
+          '<button class="social-btn primary" data-open-day="' + g.owner_user_id + '" data-owner-name="' + esc(g.name || g.username) + '" type="button">Open their day</button>' +
+        '</div>' +
+      '</div>').join("");
+  }
+
   function renderAll() {
     renderPublishable();
     renderRequests();
     renderFriends();
     renderFeed();
+    renderGrants();
+    renderGranted();
     updateBadge();
   }
 
@@ -162,17 +224,21 @@
       // Independent reads, so one slow or failing panel does not blank the rest.
       // A rejected panel keeps its previous contents rather than throwing the
       // whole tab away.
-      const [publishable, requests, friends, feed] = await Promise.all([
+      const [publishable, requests, friends, feed, grants, granted] = await Promise.all([
         api("/api/social/feed/publishable").catch(() => state.publishable),
         api("/api/social/friends/requests").catch(() => state.requests),
         api("/api/social/friends").catch(() => state.friends),
-        api("/api/social/feed").catch(() => state.feed)
+        api("/api/social/feed").catch(() => state.feed),
+        api("/api/access/grants").catch(() => state.grants),
+        api("/api/access/granted-to-me").catch(() => state.granted)
       ]);
       state = {
         publishable: publishable || [],
         requests: requests || [],
         friends: friends || [],
-        feed: feed || []
+        feed: feed || [],
+        grants: grants || [],
+        granted: granted || []
       };
       renderAll();
     } finally {
@@ -245,6 +311,198 @@
     } catch (e) { toast(e.message || "Could not hide that", "error"); }
   }
 
+  // ── access grants ──────────────────────────────────────────────────────────
+
+  async function sendGrant() {
+    const nameField = document.getElementById("social-grant-username");
+    const roleField = document.getElementById("social-grant-role");
+    const noteField = document.getElementById("social-grant-note");
+    const status = document.getElementById("social-grant-status");
+    const username = nameField ? nameField.value.trim() : "";
+    if (status) { status.className = "social-status"; status.textContent = ""; }
+    if (!username) {
+      if (status) { status.className = "social-status error"; status.textContent = "Enter a username."; }
+      return;
+    }
+    const role = roleField ? roleField.value : "viewer";
+    // Confirm a WRITE role explicitly. Viewer and commenter are recoverable;
+    // coach and manager can change what the owner's work is worth or delete it,
+    // and a mistyped username should not hand that to a stranger silently.
+    if ((role === "coach" || role === "manager") &&
+        !confirm("Give " + username + " " + role + " access? They will be able to " +
+                 (role === "manager" ? "edit and delete your tasks." : "adjust your points and assign you tasks."))) {
+      return;
+    }
+    try {
+      // Two steps, same as friend requests: the lookup gives a clear "no such
+      // user" before any grant row exists, so a typo cannot create access for
+      // somebody unintended.
+      const user = await api("/api/social/users/lookup?username=" + encodeURIComponent(username));
+      const result = await api("/api/access/grants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ granteeUserId: user.id, role: role, note: noteField ? noteField.value.trim() : "" })
+      });
+      if (nameField) nameField.value = "";
+      if (noteField) noteField.value = "";
+      if (status) {
+        status.className = "social-status ok";
+        status.textContent = result.previousRole
+          ? user.username + " changed from " + result.previousRole + " to " + role + "."
+          : user.username + " now has " + role + " access.";
+      }
+      load();
+    } catch (e) {
+      if (status) { status.className = "social-status error"; status.textContent = e.message || "Could not give access"; }
+    }
+  }
+
+  async function changeRole(granteeUserId, role) {
+    try {
+      await api("/api/access/grants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ granteeUserId: Number(granteeUserId), role: role })
+      });
+      toast("Role changed to " + role, "success");
+      load();
+    } catch (e) { toast(e.message || "Could not change that role", "error"); load(); }
+  }
+
+  async function revokeGrant(granteeUserId) {
+    const entry = state.grants.find(g => String(g.grantee_user_id) === String(granteeUserId));
+    const who = entry ? (entry.name || entry.username) : "this person";
+    // Revoking is instant and there is no suspend state, so it is worth one
+    // confirm rather than an undo that does not exist.
+    if (!confirm("Revoke " + who + "'s access? It stops immediately.")) return;
+    try {
+      await api("/api/access/grants/" + encodeURIComponent(granteeUserId), { method: "DELETE" });
+      toast("Access revoked", "success");
+      load();
+    } catch (e) { toast(e.message || "Could not revoke that", "error"); }
+  }
+
+  // ── the coach day view ─────────────────────────────────────────────────────
+
+  function coachRow(ev) {
+    const time = [ev.start, ev.end].filter(Boolean).join("-");
+    const points = Number(ev.points) || 0;
+    const done = ev.completed || ev.status === "done";
+    // Show that a number was already changed by someone other than the owner,
+    // so a coach does not read a previous adjustment as the owner's estimate.
+    // Only when it actually CHANGED. A no-op adjustment (77 -> 77) rendered
+    // "77 pts was 77", which reads like a bug.
+    const from = Number(ev.adjustedFrom);
+    const adjusted = (ev.adjustedBy && Number.isFinite(from) && from !== points)
+      ? ' <em class="coach-adjusted">was ' + from + '</em>' : "";
+    // The adjust control appears only when the capability map says so. The server
+    // re-checks on every request regardless: this is about not showing a control
+    // that would fail, never about being the gate.
+    const canAdjust = !!coach.capabilities.adjust_points;
+    // _blockId is the durable row id TaskModel.fromBlock stamps; `id` may be a
+    // local_id alias. The route accepts either, but prefer the row id.
+    const id = ev._blockId || ev.id || "";
+    return '<div class="coach-row' + (done ? " done" : "") + '">' +
+      '<span class="coach-time">' + esc(time || "--") + '</span>' +
+      '<span class="coach-title">' + esc(ev.label || ev.title || "Untitled") + '</span>' +
+      '<span class="coach-points">' + (points ? points + ' pts' : '') + adjusted + '</span>' +
+      (canAdjust && id
+        ? '<span class="coach-adjust">' +
+            '<input type="number" min="0" max="100000" value="' + points + '" data-points-for="' + esc(id) + '" aria-label="Points">' +
+            '<button class="social-btn" data-save-points="' + esc(id) + '" type="button">Set</button>' +
+          '</span>'
+        : "") +
+    '</div>';
+  }
+
+  async function openCoachDay(ownerUserId, name, date, keepMessage) {
+    const modal = document.getElementById("coach-day-modal");
+    if (!modal) return;
+    coach.ownerUserId = Number(ownerUserId);
+    coach.name = name || "";
+    coach.date = date || "";
+    modal.hidden = false;
+    const status = document.getElementById("coach-day-status");
+    const list = document.getElementById("coach-day-list");
+    const title = document.getElementById("coach-day-title");
+    if (title) title.textContent = coach.name ? coach.name + "'s day" : "Their day";
+    // A caller that just finished a write passes its confirmation through, so
+    // the reload does not wipe the only feedback the action gave.
+    if (status) {
+      status.className = keepMessage ? "social-status ok" : "social-status";
+      status.textContent = keepMessage || "Loading...";
+    }
+    if (list) list.innerHTML = "";
+    try {
+      const base = "/api/coach/" + encodeURIComponent(coach.ownerUserId);
+      const [caps, day] = await Promise.all([
+        api(base + "/capabilities"),
+        api(base + "/day" + (coach.date ? "?date=" + encodeURIComponent(coach.date) : ""))
+      ]);
+      coach.capabilities = (caps && caps.capabilities) || {};
+      coach.role = (caps && caps.role) || "none";
+      coach.date = day.date;
+      const roleEl = document.getElementById("coach-day-role");
+      const dateEl = document.getElementById("coach-day-date");
+      if (roleEl) roleEl.textContent = coach.role;
+      if (dateEl) dateEl.textContent = coach.date;
+      // `tasks`, not state.schedule.timeline: the timeline is the materialized
+      // plan and is empty on a day nobody planned, which showed a coach an empty
+      // list while the owner had three tasks.
+      const tasks = day.tasks || [];
+      if (status && !keepMessage) status.textContent = "";
+      if (list) {
+        list.innerHTML = tasks.length
+          ? tasks.map(coachRow).join("")
+          : '<div class="social-empty">Nothing on this day.</div>';
+      }
+    } catch (e) {
+      // A 403 here means the grant was revoked while the modal was open, which is
+      // the expected outcome of an instant revoke rather than a bug. Say that.
+      if (status) {
+        status.className = "social-status error";
+        status.textContent = e.message || "Could not load that day";
+      }
+      if (list) list.innerHTML = "";
+    }
+  }
+
+  function shiftCoachDay(days) {
+    if (!coach.ownerUserId) return;
+    const next = days === 0
+      ? new Date().toISOString().slice(0, 10)
+      : window.DCC.dates.addDays(coach.date || new Date().toISOString().slice(0, 10), days);
+    openCoachDay(coach.ownerUserId, coach.name, next);
+  }
+
+  async function savePoints(taskId) {
+    const field = document.querySelector('[data-points-for="' + taskId + '"]');
+    if (!field || !coach.ownerUserId) return;
+    const points = Number(field.value);
+    const status = document.getElementById("coach-day-status");
+    try {
+      const out = await api("/api/coach/" + encodeURIComponent(coach.ownerUserId) +
+        "/tasks/" + encodeURIComponent(taskId) + "/points", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ points: points, reason: "" })
+      });
+      const message = out.previousPoints === out.points
+        ? "Unchanged at " + out.points + " points."
+        : "Points changed from " + out.previousPoints + " to " + out.points + ". " +
+          coach.name + " can see it was you.";
+      openCoachDay(coach.ownerUserId, coach.name, coach.date, message);
+    } catch (e) {
+      if (status) { status.className = "social-status error"; status.textContent = e.message || "Could not set that"; }
+    }
+  }
+
+  function closeCoachDay() {
+    const modal = document.getElementById("coach-day-modal");
+    if (modal) modal.hidden = true;
+    coach = { ownerUserId: null, name: "", role: "none", date: "", capabilities: {} };
+  }
+
   // ── wiring ─────────────────────────────────────────────────────────────────
 
   function bind() {
@@ -255,7 +513,34 @@
 
     const shell = document.getElementById("tab-social");
     if (!shell) return;
+    const grantSend = document.getElementById("social-grant-send");
+    if (grantSend) grantSend.addEventListener("click", sendGrant);
+    const grantName = document.getElementById("social-grant-username");
+    if (grantName) grantName.addEventListener("keydown", e => { if (e.key === "Enter") sendGrant(); });
+
+    const modal = document.getElementById("coach-day-modal");
+    if (modal) {
+      modal.addEventListener("click", e => {
+        if (e.target === modal) return closeCoachDay();
+        if (e.target.closest("#coach-day-close")) return closeCoachDay();
+        if (e.target.closest("#coach-day-prev")) return shiftCoachDay(-1);
+        if (e.target.closest("#coach-day-next")) return shiftCoachDay(1);
+        if (e.target.closest("#coach-day-today")) return shiftCoachDay(0);
+        const save = e.target.closest("[data-save-points]");
+        if (save) return savePoints(save.dataset.savePoints);
+      });
+    }
+
+    shell.addEventListener("change", e => {
+      const roleSelect = e.target.closest("[data-role-for]");
+      if (roleSelect) changeRole(roleSelect.dataset.roleFor, roleSelect.value);
+    });
+
     shell.addEventListener("click", e => {
+      const revokeBtn = e.target.closest("[data-revoke]");
+      if (revokeBtn) return revokeGrant(revokeBtn.dataset.revoke);
+      const openDay = e.target.closest("[data-open-day]");
+      if (openDay) return openCoachDay(openDay.dataset.openDay, openDay.dataset.ownerName);
       const respondBtn = e.target.closest("[data-respond]");
       if (respondBtn) return respond(respondBtn.dataset.respond, respondBtn.dataset.accept === "1");
       const publishBtn = e.target.closest("[data-publish]");

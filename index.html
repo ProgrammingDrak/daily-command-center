@@ -1815,7 +1815,67 @@
         </div>
         <div id="social-feed" class="social-list"></div>
       </section>
+
+      <!-- Access: delegated roles over this day. Deliberately its own panel and
+           not folded into Friends -- a friend and a coach are different
+           relationships, and conflating them is how someone ends up with more
+           access than they were meant to have. -->
+      <section class="social-panel social-panel-wide">
+        <div class="social-panel-head">
+          <h3>Who can act on my day</h3>
+          <span id="social-grants-count">nobody</span>
+        </div>
+        <p class="social-panel-note">
+          A grant is one direction only: giving someone access to your day gives
+          you none of theirs. Revoking takes effect immediately.
+        </p>
+        <div class="social-grant-add">
+          <input id="social-grant-username" type="text" maxlength="60" placeholder="Username" autocomplete="off">
+          <select id="social-grant-role" aria-label="Role to grant">
+            <option value="viewer">Viewer &mdash; can see my day</option>
+            <option value="commenter">Commenter &mdash; can also comment</option>
+            <option value="coach">Coach &mdash; can also adjust points and assign</option>
+            <option value="manager">Manager &mdash; can also edit and delete</option>
+          </select>
+          <input id="social-grant-note" type="text" maxlength="280" placeholder="Note (optional)">
+          <button id="social-grant-send" class="social-btn primary" type="button">Give access</button>
+        </div>
+        <div id="social-grant-status" class="social-status"></div>
+        <div id="social-grants" class="social-list"></div>
+      </section>
+
+      <section class="social-panel social-panel-wide">
+        <div class="social-panel-head">
+          <h3>Days I can act on</h3>
+          <span id="social-granted-count">none</span>
+        </div>
+        <div id="social-granted" class="social-list"></div>
+      </section>
     </div>
+  </div>
+</div>
+
+<!-- Coach day view: someone else's itinerary, seen through a grant. Rendered
+     from GET /api/coach/:ownerUserId/day, which is the OWNER's own day builder,
+     so a coach sees what the owner sees rather than a second projection that
+     could drift. Every control here is gated on the capability map the same
+     endpoint returns; the server re-checks regardless. -->
+<div id="coach-day-modal" class="coach-modal" hidden>
+  <div class="coach-card">
+    <div class="coach-head">
+      <div>
+        <h2 id="coach-day-title">Their day</h2>
+        <div class="coach-sub"><span id="coach-day-role">viewer</span> &middot; <span id="coach-day-date"></span></div>
+      </div>
+      <button id="coach-day-close" class="coach-x" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="coach-nav">
+      <button id="coach-day-prev" class="social-btn" type="button">&lsaquo; Previous</button>
+      <button id="coach-day-today" class="social-btn" type="button">Today</button>
+      <button id="coach-day-next" class="social-btn" type="button">Next &rsaquo;</button>
+    </div>
+    <div id="coach-day-status" class="social-status"></div>
+    <div id="coach-day-list" class="coach-list"></div>
   </div>
 </div>
 
