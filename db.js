@@ -363,7 +363,24 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
     return { ...parseBlock(found[0]), _resolvedExisting: true };
   }
   await q.query(`INSERT INTO operations (block_id, op_type, after_data, timestamp) VALUES ($1, 'create', $2, $3)`, [blockId, props, now]);
-  return { id: blockId, type, parent_id: parentId, date: date || null, properties: props, sort_order: sortOrderToUse || 0, created_at: now, updated_at: now, deleted_at: null };
+  // Built from the row the INSERT just returned, NOT hand-listed. This exit used
+  // to enumerate its columns by hand and had fallen a column behind twice over:
+  // `user_id` and `workspace_id` were missing, so a freshly created block came
+  // back with no tenant. That matters because this repo's ownership fences are
+  // written `if (block.workspace_id && workspaceId && block.workspace_id !== workspaceId) deny`
+  // and therefore PASS on a row whose workspace is absent. meeting-automation's
+  // approvedActionMatches is the strict twin of that shape, and it went the other
+  // way: it read the missing workspace as "someone else's" and refused the block
+  // it had just created, so scheduling a never-yet-approved meeting follow-up
+  // from Loose Ends answered 409 "Could not approve meeting action". The two-step
+  // Recap path escaped it only because placeApprovedAction re-reads via getBlock.
+  //
+  // `properties` is re-attached because callers rely on getting back the same
+  // parsed object they passed in, not a re-parse of the JSONB. Everything else
+  // comes off the row, so a column added to `blocks` cannot silently go missing
+  // here again, and this exit now returns the same shape (and the same value
+  // types) as the ON CONFLICT re-read and the idempotency winner above.
+  return { ...parseBlock(inserted.rows[0]), properties: props };
 }
 
 // `client` lets a caller run this inside its own transaction (batchOp,
@@ -946,7 +963,16 @@ async function updateBlock(id, fields, client) {
       ? (typeof writtenRows[0].properties === "string" ? JSON.parse(writtenRows[0].properties) : writtenRows[0].properties)
       : newProps;
     await q.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'update', $2, $3, $4)`, [id, existing.properties, writtenProps, now]);
-    result = { id, type: existing.type, parent_id: newParentId, date: normalizeDate(newDate), properties: writtenProps, sort_order: newSortOrder, created_at: existing.created_at, updated_at: now, deleted_at: null };
+    // `user_id` / `workspace_id` come straight off the locked `SELECT *` row. They
+    // are here for the same reason createBlock's exit above is built from its
+    // returned row: batchOp collects create, update and delete results into ONE
+    // `blocks` array, so a response that carried the tenant on creates and dropped
+    // it on updates would hand callers two different contracts in one array. The
+    // fences downstream fail OPEN on a missing workspace (routes/blocks.js
+    // transitionLinkedTriage passes it straight into getBlocksByKind, which runs
+    // with no workspace predicate when it is null), so "absent" is not a safe
+    // default to leave in a writer's return.
+    result = { id, type: existing.type, parent_id: newParentId, date: normalizeDate(newDate), properties: writtenProps, sort_order: newSortOrder, user_id: existing.user_id, workspace_id: existing.workspace_id, created_at: existing.created_at, updated_at: now, deleted_at: null };
     if (ownsTransaction) await q.query("COMMIT");
   } catch (error) {
     if (ownsTransaction) {
@@ -1713,7 +1739,12 @@ async function rescheduleBlocks(moves, creates) {
       }
       await client.query(`UPDATE blocks SET properties = $1, date = $2, sort_order = $3, updated_at = $4 WHERE id = $5`, [newProps, newDate, newSortOrder, now, m.id]);
       await client.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'update', $2, $3, $4)`, [m.id, existing.properties, newProps, now]);
-      results.push({ id: m.id, type: existing.type, parent_id: existing.parent_id, date: normalizeDate(newDate), properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps, sort_order: newSortOrder, created_at: existing.created_at, updated_at: now, deleted_at: null });
+      // Same tenant fields as updateBlock above, and load-bearing in the same
+      // array: the loop below pushes createBlock results into THIS `results`, and
+      // the route splits it into `blocks` and `created`. Without these the two
+      // halves of one reschedule response would disagree about whether a row
+      // knows its workspace.
+      results.push({ id: m.id, type: existing.type, parent_id: existing.parent_id, date: normalizeDate(newDate), properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps, sort_order: newSortOrder, user_id: existing.user_id, workspace_id: existing.workspace_id, created_at: existing.created_at, updated_at: now, deleted_at: null });
     }
     for (const c of (creates || [])) {
       results.push(await createBlock(c, client));

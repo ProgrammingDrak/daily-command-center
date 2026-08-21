@@ -1072,6 +1072,12 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
 }
 
 module.exports = {
+  // Exported for create-block-return-shape.test.js, which drives this predicate
+  // with a real db.js createBlock return. It is the strict tenant twin of the
+  // fail-open fences elsewhere, so it is the thing that actually breaks when a
+  // writer forgets to return `workspace_id`. A test that pasted a copy of the
+  // expression could not have caught that.
+  approvedActionMatches,
   getAutomation,
   generatePrep,
   updateArtifactContent,
