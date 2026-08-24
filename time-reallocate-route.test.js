@@ -20,7 +20,9 @@ const TODAY = "2026-08-21";
 function harness({ rows = [] } = {}) {
   const store = rows.slice();
   const created = [];
+  const createCalls = [];
   const broadcasts = [];
+  const dayRootCalls = [];
   const find = (id) => store.find((row) => row.id === id) || null;
 
   const app = express();
@@ -30,6 +32,18 @@ function harness({ rows = [] } = {}) {
   const ctx = {
     blockDB: {
       getBlock: async (id) => find(id),
+      // The real one folds `deleted_at IS NULL` and `workspace_id IS NOT DISTINCT FROM`
+      // into the query and falls back to properties->>'local_id'. Modelling only the id
+      // lookup would hide the local_id path the picker actually exercises.
+      findUniqueLiveBlockByReference: async (ref, workspaceId) => {
+        const live = store.filter((row) => !row.deleted_at
+          && (row.workspace_id == null || workspaceId == null || row.workspace_id === workspaceId));
+        const direct = live.find((row) => row.id === ref);
+        if (direct) return direct;
+        const byLocal = live.filter((row) => (row.properties || {}).local_id === ref);
+        if (byLocal.length > 1) { const e = new Error("Task reference is ambiguous"); e.statusCode = 409; throw e; }
+        return byLocal[0] || null;
+      },
       getBlockIncludingDeleted: async (id) => find(id),
       updateBlock: async (id, patch) => {
         const row = find(id);
@@ -44,13 +58,14 @@ function harness({ rows = [] } = {}) {
       },
       deleteBlock: async (id) => { const row = find(id); if (row) row.deleted_at = new Date().toISOString(); return { id }; },
       undeleteBlock: async (id) => { const row = find(id); if (row) row.deleted_at = null; return row; },
-      ensureDayRoot: async (date) => `day-root-${date}`,
-      createItineraryTask: async ({ date, properties, userId, workspaceId }) => {
+      ensureDayRoot: async (date) => { dayRootCalls.push(date); return `day-root-${date}`; },
+      createItineraryTask: async (args) => {
         const row = {
-          id: `made-${created.length + 1}`, type: "block", date, properties,
-          user_id: userId, workspace_id: workspaceId, deleted_at: null,
+          id: `made-${created.length + 1}`, type: "block", date: args.date, properties: args.properties,
+          user_id: args.userId, workspace_id: args.workspaceId, deleted_at: null,
         };
         created.push(row);
+        createCalls.push(args);
         store.push(row);
         return row;
       },
@@ -81,7 +96,7 @@ function harness({ rows = [] } = {}) {
     APP_TIME_ZONE: "America/New_York",
   };
   require("./routes/blocks.js")(app, ctx);
-  return { app, store, created, broadcasts, find };
+  return { app, store, created, createCalls, dayRootCalls, broadcasts, find };
 }
 
 async function post(app, id, body) {
@@ -220,6 +235,11 @@ test("a typed title becomes a real task on the segment's own day", async () => {
   assert.equal(made.properties.estimatedMinutes, 30, "the estimate matches the time being filed onto it");
   assert.equal(made.workspace_id, MINE);
   assert.deepEqual(body.createdTasks, [{ id: made.id, title: "Unplanned firefight" }]);
+  // The route asks for scoring and the real createItineraryTask acts on it. Without
+  // this the flag could be dropped and every creation test would still pass, shipping
+  // 0-point tasks into a points-driven itinerary.
+  assert.equal(h.createCalls[0].score, true, "a task minted to hold real time still earns its points");
+  assert.equal(h.createCalls[0].ensureRoot, false, "its day root was ensured once for the request");
   assert.equal(live(h, made.id).length, 1);
   assert.equal(h.find(made.id).properties.actualMinutes, 30);
   assert.equal(live(h, "a").length, 0);
@@ -262,4 +282,84 @@ test("a malformed action id is rejected rather than stored", async () => {
   const { status } = await post(h.app, "seg", { parts: [{ taskId: "b" }], actionId: "bad id!" });
   assert.equal(status, 400);
   assert.equal(live(h, "a").length, 1);
+});
+
+// ── the regressions the five-lane review found ───────────────────────────────
+
+test("a replayed WHOLE move is answered, not 404'd", async () => {
+  const h = harness({ rows: [task("a"), task("b"), segment("seg", "a", 3600)] });
+  const first = await post(h.app, "seg", { parts: [{ taskId: "b" }], actionId: "submit-1" });
+  assert.equal(first.body.changed, true);
+  assert.equal(live(h, "a").length, 0, "the source row is gone after a whole move");
+
+  // The source is a tombstone now, so a naive order would 404 the retry and tell a
+  // client whose write landed that its time went missing.
+  const replay = await post(h.app, "seg", { parts: [{ taskId: "b" }], actionId: "submit-1" });
+  assert.equal(replay.status, 200, "a retry of a completed move is not an error");
+  assert.equal(replay.body.changed, false);
+  assert.equal(replay.body.reason, "duplicate");
+  assert.equal(h.find("b").properties.actualMinutes, 60, "and b did not gain a second hour");
+});
+
+test("a destination picked by local_id resolves instead of 404ing", async () => {
+  // TaskModel.fromBlock sets a task's id to `local_id || block.id`, and the picker sends
+  // `task._blockId || task.id`, so for any row carrying a local_id the client sends one.
+  const dest = task("b", {}, { local_id: "ev-b-1" });
+  const h = harness({ rows: [task("a"), dest, segment("seg", "a", 3600)] });
+  const { status, body } = await post(h.app, "seg", { parts: [{ taskId: "ev-b-1" }] });
+  assert.equal(status, 200, "a validly picked destination is not missing");
+  assert.equal(body.changed, true);
+  assert.equal(h.find("b").properties.actualMinutes, 60);
+});
+
+test("a segment whose blockId names another workspace's task is refused", async () => {
+  const foreign = task("theirs", { workspace_id: "ws-other" }, { title: "Their work" });
+  foreign.properties.actualMinutes = 90;
+  const h = harness({ rows: [task("mine"), foreign, segment("seg", "theirs", 3600)] });
+  // The segment itself is ours, so assertBlockOwnership on it passes; the ORIGIN is the
+  // foreign row, and db.updateBlock has no tenant predicate.
+  const { status } = await post(h.app, "seg", { parts: [{ taskId: "mine" }] });
+  assert.equal(status, 404);
+  assert.equal(h.find("theirs").properties.actualMinutes, 90, "their minutes are untouched");
+  assert.equal(live(h, "theirs").length, 1, "and the segment never moved");
+});
+
+test("day-root lookups do not grow with the number of pieces", async () => {
+  // Two layers each ensure once for the one date involved (the route for the tasks it
+  // creates, the store for the segment rows), so the absolute count is 2. The invariant
+  // worth pinning is that it is FLAT: it was previously one lookup per piece and per
+  // created task, against db.createItineraryTasks' own ensure-each-date-once rule.
+  async function lookupsFor(parts, rows) {
+    const h = harness({ rows });
+    const { status } = await post(h.app, "seg", { parts });
+    assert.equal(status, 200);
+    return { count: h.dayRootCalls.length, dates: [...new Set(h.dayRootCalls)], created: h.created.length };
+  }
+  const small = await lookupsFor(
+    [{ minutes: 20, newTask: { title: "First" } }, { taskId: "a" }],
+    [task("a"), segment("seg", "a", 3600)],
+  );
+  const big = await lookupsFor(
+    [
+      { minutes: 10, newTask: { title: "First" } },
+      { minutes: 10, newTask: { title: "Second" } },
+      { minutes: 10, newTask: { title: "Third" } },
+      { taskId: "a" },
+    ],
+    [task("a"), segment("seg", "a", 3600)],
+  );
+  assert.equal(small.created, 1);
+  assert.equal(big.created, 3);
+  assert.deepEqual(small.dates, ["2026-08-20"], "only the segment's own day");
+  assert.deepEqual(big.dates, ["2026-08-20"]);
+  assert.equal(big.count, small.count, "four pieces cost the same lookups as two");
+});
+
+test("over the part ceiling is refused before any task is created", async () => {
+  const h = harness({ rows: [task("a"), segment("seg", "a", 3600)] });
+  const parts = new Array(13).fill(null).map(() => ({ minutes: 1, newTask: { title: "x" } }));
+  const { status, body } = await post(h.app, "seg", { parts });
+  assert.equal(status, 400);
+  assert.equal(body.code, "TIME_ALLOCATION_INVALID");
+  assert.equal(h.created.length, 0, "the ceiling is enforced before the first side effect");
 });

@@ -249,7 +249,7 @@
   // invalidate() calls at each write site. The wrapped set below is the COMPLETE
   // list of blockStore write methods (a matching pointer note in block-store.js
   // reminds a maintainer to add any new mutator here too):
-  //   - createBlock/updateBlock/setTaskCompletion/workAction/deleteBlock/rescheduleBlock/batchOp/undeleteBlock:
+  //   - createBlock/updateBlock/setTaskCompletion/workAction/reallocateTimeEntry/deleteBlock/rescheduleBlock/batchOp/undeleteBlock:
   //     every local write (push, reschedule, restore, commit, quick-add, unschedule,
   //     drag, clone, tombstone, batch, undelete) clears the affected date(s) after it
   //     settles.
@@ -303,6 +303,9 @@
       return ds.length ? ds : null;
     });
     _wrapWrite(bs, "workAction", (a) => _dateOfBlock(bs, a[0]));
+    // A reallocation can mint a task on the segment's day and always rewrites that day's
+    // segments, so the day it touches is the SEGMENT's date, not the destination task's.
+    _wrapWrite(bs, "reallocateTimeEntry", (a) => _dateOfBlock(bs, a[0]));
     _wrapWrite(bs, "deleteBlock", (a) => _dateOfBlock(bs, a[0]));
     // batchOp mutates an arbitrary set of blocks/dates server-side with no cheap
     // way to know which, so clear all. NOT dormant, whatever this comment used to

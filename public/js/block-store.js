@@ -588,6 +588,14 @@
             if (result && result.block) cacheSet(result.block);
             break;
           }
+          case "realloc": {
+            // The stored actionId is what makes this replay-safe: the server answers a
+            // second arrival with { changed: false, reason: "duplicate" } instead of
+            // splitting the segment again.
+            const result = await apiPost("/api/time-entries/" + entry.id + "/reallocate", entry.data);
+            (result && result.entries || []).forEach(block => { if (block && block.id) cacheSet(block); });
+            break;
+          }
         }
         walRemove(entry._walId);
         succeeded++;
@@ -662,7 +670,8 @@
     CLIENT_ID,
 
     // NOTE: day-context.js wraps these mutators at runtime (createBlock,
-    // updateBlock, deleteBlock, rescheduleBlock, batchOp, undeleteBlock) to
+    // updateBlock, deleteBlock, rescheduleBlock, batchOp, undeleteBlock,
+    // reallocateTimeEntry) to
     // invalidate its per-day slot cache after each write. If you add a new
     // server-mutating method here, add it to that wrap list too or its day can go
     // stale. cancelBufferedWrite is deliberately NOT wrapped: it abandons a write
@@ -986,6 +995,48 @@
         }
         setError("Work update failed - buffered for retry");
         return { changed: false, buffered: true, block: optimistic };
+      }
+    },
+
+    // Move or split one tracked time_entry across destination tasks. Lives HERE, not in
+    // time-reallocate.js, for the same reason workAction does: this is the layer that
+    // owns the WAL, the optimistic cache, the save indicator, and the clientId the SSE
+    // echo is suppressed by, and day-context wraps it to drop the slot cache for the
+    // affected day. A dialog POSTing on its own would be the only block write in the app
+    // outside this file, and its day-context entry would go stale in the very tab that
+    // made the change.
+    async reallocateTimeEntry(entryId, parts, options) {
+      options = options || {};
+      setSaving();
+      const data = {
+        parts,
+        actionId: options.actionId || ((crypto && crypto.randomUUID)
+          ? crypto.randomUUID() : ("realloc-" + Date.now() + "-" + Math.random().toString(36).slice(2))),
+      };
+      const walId = walPush({ op: "realloc", id: entryId, data });
+      try {
+        const result = await apiPost("/api/time-entries/" + entryId + "/reallocate", data);
+        (result && result.entries || []).forEach(block => { if (block && block.id) cacheSet(block); });
+        // The source row is gone on a whole move. Reflect that locally or the fill stays
+        // clickable and hands a stale durSec to the next dialog.
+        if (result && result.sourceEntryDeleted) {
+          const stale = cacheGet(entryId);
+          if (stale) cacheSet({ ...stale, deleted_at: new Date().toISOString() });
+        }
+        walRemove(walId);
+        setSaved();
+        return result;
+      } catch (error) {
+        // Same permanence rule as workAction: a 400/404/409 is a verdict, not a blip.
+        const permanent = error && (error.status === 400 || error.status === 404 || error.status === 409);
+        if (permanent) {
+          walMoveToDeadLetter(walGet().find(entry => entry && entry._walId === walId),
+            `${error.status || "error"} ${error.message || ""}`.trim());
+          setError(error.message || "Time move rejected");
+          throw error;
+        }
+        setError("Time move failed - buffered for retry");
+        throw error;
       }
     },
 

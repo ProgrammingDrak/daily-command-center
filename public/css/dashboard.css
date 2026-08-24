@@ -5274,13 +5274,13 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .treallo-picker{display:grid;gap:8px;min-height:0}
 .treallo-picker-head{display:flex;align-items:center;gap:10px;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 .treallo-back{border:0;background:transparent;color:var(--cyan,#22d3ee);font:inherit;font-size:11px;cursor:pointer;padding:0}
-.treallo-picker-list{display:grid;gap:6px;max-height:46vh;overflow-y:auto}
-.treallo-row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:10px 12px;text-align:left;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer}
-.treallo-row:hover,.treallo-row:focus-visible{border-color:var(--cyan,#22d3ee);outline:none}
-.treallo-row span{display:grid;gap:2px;min-width:0}
-.treallo-row strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.treallo-row small{color:var(--text-muted);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.treallo-row b{color:var(--cyan,#22d3ee);font-size:10px;text-transform:uppercase;letter-spacing:.06em;flex:0 0 auto}
+/* Composed on .work-picker-list / .work-picker-row in the markup rather than copied,
+   so a restyle of the work picker's rows carries here instead of leaving two
+   visually identical row styles to drift apart. Only the deltas live below. */
+.treallo-picker-list{max-height:46vh}
+.treallo-row{gap:12px}
+.treallo-row small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.treallo-row b{font-size:10px;text-transform:uppercase;letter-spacing:.06em;flex:0 0 auto}
 .treallo-row.new b{color:#4ade80}
 /* Work-history rows get the same affordance, so a session can be re-attributed
    from the place it is listed rather than only from Day Review. */
@@ -5291,7 +5291,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
    to re-attributing that time. */
 .dr-fill[data-time-entry]{cursor:pointer}
 .dr-fill[data-time-entry]:hover{outline:2px solid var(--cyan,#22d3ee);outline-offset:-2px}
-@media(max-width:600px){.treallo-piece{grid-template-columns:68px minmax(0,1fr) 22px}.treallo-picker-list{max-height:52vh}}
+@media(max-width:480px){.treallo-piece{grid-template-columns:68px minmax(0,1fr) 22px}.treallo-picker-list{max-height:52vh}}
 .recap-recording-attachment{margin:0 0 16px;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
 .recap-recording-link{display:inline-flex;align-items:center;gap:6px;margin:6px 10px 0 0;font-weight:700;text-decoration:none}
 .recap-recording-link.cold{font-weight:600;opacity:.78}

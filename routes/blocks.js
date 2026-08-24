@@ -833,17 +833,22 @@ module.exports = function mount(app, ctx) {
   // re-attributed to work that was never on the plan).
   app.post("/api/time-entries/:id/reallocate", route(async (req, res) => {
     const entry = await blockDB.getBlockIncludingDeleted(req.params.id);
-    if (!entry || entry.deleted_at || entry.type !== "time_entry") { res.status(404).json({ error: "Tracked time not found" }); return; }
+    if (!entry || entry.type !== "time_entry") { res.status(404).json({ error: "Tracked time not found" }); return; }
     assertBlockOwnership(entry, req.workspaceId);
     const body = req.body || {};
     const actionId = body.actionId == null ? null : String(body.actionId);
     if (actionId != null && !/^[A-Za-z0-9:_-]{1,160}$/.test(actionId)) { res.status(400).json({ error: "Invalid reallocation id" }); return; }
-    // A retry of the same submission is answered, not re-applied. Checked before
-    // the plan, because a replay's source row is already the shortened one and the
-    // plan would read as invalid rather than as a duplicate.
+    // A retry of the same submission is ANSWERED, not re-applied, and this has to run
+    // before the tombstone check as well as before the plan. Both of the shapes a
+    // reallocation ends in defeat a naive order: a split leaves the source row
+    // shortened, so planAllocations would call the replay invalid rather than
+    // duplicate; a whole move deletes the source, so a `deleted_at` 404 would tell a
+    // client whose write actually landed that its time went missing. The store stamps
+    // the row before deleting it precisely so this answer stays available.
     if (actionId && (entry.properties || {}).reallocationOperationId === actionId) {
       return { ok: true, changed: false, reason: "duplicate", entries: [entry], tasks: [], createdTasks: [] };
     }
+    if (entry.deleted_at) { res.status(404).json({ error: "Tracked time not found" }); return; }
     const requests = Array.isArray(body.parts) ? body.parts : [];
     const plan = planAllocations((entry.properties || {}).durSec, requests);
     if (!plan.ok) { res.status(400).json({ error: plan.error, code: "TIME_ALLOCATION_INVALID" }); return; }
@@ -856,23 +861,40 @@ module.exports = function mount(app, ctx) {
     // time that silently disappeared.
     const allocations = [];
     const createdTasks = [];
+    let ensuredTaskRoot = false;
     for (let i = 0; i < plan.parts.length; i++) {
       const request = requests[i] || {};
       const durSec = plan.parts[i].durSec;
       let task = null;
       if (request.taskId != null && String(request.taskId).trim()) {
-        task = await blockDB.getBlock(String(request.taskId).trim());
-        // getBlock is tombstone-inclusive, so deleted_at is checked here rather
-        // than assumed. A deleted task reads as absent, matching GET /api/blocks/:id.
-        if (!task || task.deleted_at) { res.status(404).json({ error: "That task no longer exists" }); return; }
-        try { assertBlockOwnership(task, req.workspaceId); } catch { res.status(404).json({ error: "That task no longer exists" }); return; }
+        // findUniqueLiveBlockByReference, not getBlock: it folds `deleted_at IS NULL`
+        // and the tenant predicate into the query AND falls back to
+        // properties->>'local_id'. That fallback is load-bearing here, not tidiness.
+        // TaskModel.fromBlock sets a task's id to `local_id || block.id`, and the
+        // picker sends `task._blockId || task.id`, so for any row that has a local_id
+        // the client is sending one. A bare getBlock answers 404 "That task no longer
+        // exists" for a task the user just picked out of the list. db.js says the same
+        // thing about duplicating its rules in a second query: that is how they drift.
+        try {
+          task = await blockDB.findUniqueLiveBlockByReference(String(request.taskId).trim(), req.workspaceId);
+        } catch (e) {
+          res.status(e.statusCode || e.status || 409).json({ error: e.message || "That task reference is ambiguous" });
+          return;
+        }
+        if (!task) { res.status(404).json({ error: "That task no longer exists" }); return; }
         if (!isWorkTaskRow(task)) { res.status(400).json({ error: "Tracked time can only sit on a task", code: "WORK_NOT_TRACKABLE" }); return; }
       } else {
         const title = String((request.newTask && request.newTask.title) || "").trim();
         if (!title) { res.status(400).json({ error: "Every piece needs a task to land on", code: "TIME_ALLOCATION_INVALID" }); return; }
         if (title.length > 200) { res.status(400).json({ error: "That task title is too long" }); return; }
+        const taskDate = entry.date || getTodayStr();
+        // Ensured once per request rather than once per created task, matching
+        // db.createItineraryTasks. ensureRoot:false is what createItineraryTask's own
+        // flag exists for.
+        if (!ensuredTaskRoot) { await blockDB.ensureDayRoot(taskDate, userId, workspaceId); ensuredTaskRoot = true; }
         task = await blockDB.createItineraryTask({
-          date: entry.date || getTodayStr(),
+          date: taskDate,
+          ensureRoot: false,
           properties: {
             title, status: "open", kind: "task", type: "task",
             estimatedMinutes: Math.max(1, Math.round(durSec / 60)),
@@ -890,6 +912,19 @@ module.exports = function mount(app, ctx) {
     if (allocations.length === 1 && originId && String(allocations[0].task.id) === originId) {
       res.status(400).json({ error: "That time is already on this task", code: "TIME_ALLOCATION_NOOP" });
       return;
+    }
+    // The ORIGIN is fenced explicitly, because it is not covered by the segment's own
+    // ownership check. `properties.blockId` is client-writable (schemas.blockItem is
+    // passthrough over a free-form type), so a segment legitimately owned by this
+    // workspace can name a task in another one, and db.updateBlock has no tenant
+    // predicate. The store refuses to write outside the fence as well; this is the
+    // half that makes the request FAIL rather than silently skip the origin.
+    if (originId) {
+      const origin = await blockDB.getBlock(originId);
+      if (origin && !origin.deleted_at) {
+        try { assertBlockOwnership(origin, req.workspaceId); }
+        catch { res.status(404).json({ error: "Tracked time not found" }); return; }
+      }
     }
 
     const actor = req.session && req.session.userId ? `dcc:${req.session.userId}` : "dcc";
