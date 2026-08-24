@@ -184,6 +184,10 @@
     }).join("") : "";
   }
 
+  // The rows the open history section is currently showing, so the reallocate
+  // click has the full time_entry to hand over without a second fetch.
+  var _historyRows = [];
+
   function fmtWhen(iso) {
     var date = new Date(iso);
     return Number.isNaN(date.getTime()) ? "" : date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -218,14 +222,19 @@
         target.innerHTML = summary + '<div class="work-history-empty">' + (missingWindow ? "No timed meeting window was available." : "No work sessions yet.") + '</div>';
         return;
       }
+      // Grouped by LOGICAL session, but the reallocate button is per ROW, because
+      // a row is what the server moves: a session that crossed midnight is two
+      // rows on two days, and "move this session" would be ambiguous. One part
+      // gets a plain button; several get one button each, labelled by part.
       var groups = new Map();
       sessions.forEach(function (row) {
-        var p = row.properties || {};
-        var id = p.workSessionId || row.id;
+        var id = (row.properties || {}).workSessionId || row.id;
         if (!groups.has(id)) groups.set(id, []);
-        groups.get(id).push(p);
+        groups.get(id).push(row);
       });
-      target.innerHTML = summary + Array.from(groups.values()).map(function (parts) {
+      _historyRows = sessions.slice();
+      target.innerHTML = summary + Array.from(groups.values()).map(function (rows) {
+        var parts = rows.map(function (row) { return row.properties || {}; });
         var first = parts[0] || {};
         var last = parts[parts.length - 1] || first;
         var seconds = parts.reduce(function (sum, p) { return sum + (Number(p.durSec) || 0); }, 0);
@@ -233,7 +242,11 @@
         var badge = first.estimated ? '<span class="work-estimated">Estimated</span>' : "";
         var from = first.startedBy || first.actor || "dcc";
         var to = last.endedBy || last.actor || from;
-        return '<div class="work-history-row"><div><strong>' + fmtWhen(first.startedAt) + '</strong><span> to ' + fmtWhen(last.endedAt) + '</span></div><div>' + minutes + "m " + badge + '</div><small>' + esc(from === to ? from : from + " to " + to) + "</small></div>";
+        var moveButtons = window.DCCTimeReallocate ? '<div class="work-realloc-set">' + rows.map(function (row, i) {
+          return '<button type="button" class="work-realloc" data-time-entry="' + esc(row.id) + '">'
+            + (rows.length > 1 ? "Move part " + (i + 1) : "Move or split") + '</button>';
+        }).join("") + '</div>' : "";
+        return '<div class="work-history-row"><div><strong>' + fmtWhen(first.startedAt) + '</strong><span> to ' + fmtWhen(last.endedAt) + '</span></div><div>' + minutes + "m " + badge + '</div><small>' + esc(from === to ? from : from + " to " + to) + "</small>" + moveButtons + "</div>";
       }).join("");
     } catch (error) {
       section.style.display = "";
@@ -242,6 +255,24 @@
   }
 
   document.addEventListener("click", function (event) {
+    var move = event.target.closest && event.target.closest(".work-realloc[data-time-entry]");
+    if (move) {
+      event.preventDefault();
+      event.stopPropagation();
+      var entry = _historyRows.find(function (row) { return String(row.id) === String(move.dataset.timeEntry); });
+      if (!entry || !window.DCCTimeReallocate) return;
+      var owner = (entry.properties || {}).blockId;
+      window.DCCTimeReallocate.open({
+        entry: entry,
+        taskTitle: (entry.properties || {}).taskTitle,
+        onSaved: function () {
+          if (owner) renderHistory(owner);
+          refresh();
+          if (typeof render === "function") render("schedule");
+        },
+      });
+      return;
+    }
     var button = event.target.closest && event.target.closest("[data-work-task]");
     if (!button) return;
     event.preventDefault();

@@ -25,6 +25,7 @@ const { collectSubtreeBlockIds } = require("../lib/reschedule");
 const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 const { route } = require("../lib/route-helpers");
 const createTaskTiming = require("../lib/task-timing");
+const { planAllocations } = createTaskTiming;
 const TaskModel = require("../public/js/task-model");
 const createMaterializeGuard = require("../lib/materialize-guard");
 const { dedupeStatus } = createMaterializeGuard;
@@ -815,6 +816,92 @@ module.exports = function mount(app, ctx) {
     }
     const sessions = await taskTiming.getSessions(block, { workspaceId: req.workspaceId });
     return { block, sessions };
+  }));
+
+  // ── Tracked time is TRANSFERRABLE and SPLITTABLE ───────────────────────────
+  // One endpoint, because a move and a split are one mechanic: a segment's
+  // seconds are re-divided among destination tasks. A move is `parts` of length
+  // one pointing somewhere else; a split is `parts` of length two or more; "the
+  // first 20m was actually onboarding" is a split whose remaining piece points
+  // back at the task it is already on.
+  //
+  // `parts` is ordered along the clock, and the LAST piece always takes the
+  // remainder (lib/task-timing planAllocations), so no arrangement of minute
+  // inputs can invent or lose tracked time. A piece names its destination as
+  // either `taskId` (an existing task, including the origin) or
+  // `newTask: { title }` (created here, on the segment's own date, so time can be
+  // re-attributed to work that was never on the plan).
+  app.post("/api/time-entries/:id/reallocate", route(async (req, res) => {
+    const entry = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!entry || entry.deleted_at || entry.type !== "time_entry") { res.status(404).json({ error: "Tracked time not found" }); return; }
+    assertBlockOwnership(entry, req.workspaceId);
+    const body = req.body || {};
+    const actionId = body.actionId == null ? null : String(body.actionId);
+    if (actionId != null && !/^[A-Za-z0-9:_-]{1,160}$/.test(actionId)) { res.status(400).json({ error: "Invalid reallocation id" }); return; }
+    // A retry of the same submission is answered, not re-applied. Checked before
+    // the plan, because a replay's source row is already the shortened one and the
+    // plan would read as invalid rather than as a duplicate.
+    if (actionId && (entry.properties || {}).reallocationOperationId === actionId) {
+      return { ok: true, changed: false, reason: "duplicate", entries: [entry], tasks: [], createdTasks: [] };
+    }
+    const requests = Array.isArray(body.parts) ? body.parts : [];
+    const plan = planAllocations((entry.properties || {}).durSec, requests);
+    if (!plan.ok) { res.status(400).json({ error: plan.error, code: "TIME_ALLOCATION_INVALID" }); return; }
+
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const originId = String((entry.properties || {}).blockId || "");
+    // Resolve or create every destination BEFORE the first ledger write, so a bad
+    // destination fails with the segment still whole. A created-then-abandoned
+    // task is a visible empty row the user can delete; a half-moved segment is
+    // time that silently disappeared.
+    const allocations = [];
+    const createdTasks = [];
+    for (let i = 0; i < plan.parts.length; i++) {
+      const request = requests[i] || {};
+      const durSec = plan.parts[i].durSec;
+      let task = null;
+      if (request.taskId != null && String(request.taskId).trim()) {
+        task = await blockDB.getBlock(String(request.taskId).trim());
+        // getBlock is tombstone-inclusive, so deleted_at is checked here rather
+        // than assumed. A deleted task reads as absent, matching GET /api/blocks/:id.
+        if (!task || task.deleted_at) { res.status(404).json({ error: "That task no longer exists" }); return; }
+        try { assertBlockOwnership(task, req.workspaceId); } catch { res.status(404).json({ error: "That task no longer exists" }); return; }
+        if (!isWorkTaskRow(task)) { res.status(400).json({ error: "Tracked time can only sit on a task", code: "WORK_NOT_TRACKABLE" }); return; }
+      } else {
+        const title = String((request.newTask && request.newTask.title) || "").trim();
+        if (!title) { res.status(400).json({ error: "Every piece needs a task to land on", code: "TIME_ALLOCATION_INVALID" }); return; }
+        if (title.length > 200) { res.status(400).json({ error: "That task title is too long" }); return; }
+        task = await blockDB.createItineraryTask({
+          date: entry.date || getTodayStr(),
+          properties: {
+            title, status: "open", kind: "task", type: "task",
+            estimatedMinutes: Math.max(1, Math.round(durSec / 60)),
+            priority: "Medium",
+            source: "time-reallocation",
+            created_by: "time-reallocation",
+            created_at: new Date().toISOString(),
+          },
+          userId, workspaceId, score: true,
+        });
+        createdTasks.push({ id: task.id, title });
+      }
+      allocations.push({ durSec, task });
+    }
+    if (allocations.length === 1 && originId && String(allocations[0].task.id) === originId) {
+      res.status(400).json({ error: "That time is already on this task", code: "TIME_ALLOCATION_NOOP" });
+      return;
+    }
+
+    const actor = req.session && req.session.userId ? `dcc:${req.session.userId}` : "dcc";
+    const result = await taskTiming.reallocateTimeEntry({ entry, allocations, actor, userId, workspaceId, actionId });
+    const blockIds = [...new Set([originId, ...allocations.map(part => String(part.task.id))].filter(Boolean))];
+    broadcast("blocks-changed", {
+      action: "time-reallocate", blockIds, date: entry.date, clientId: body._clientId,
+    }, req.workspaceId);
+    return {
+      ok: true, changed: true, entries: result.entries, tasks: result.tasks, createdTasks,
+      originTaskId: result.originTaskId, sourceEntryDeleted: result.sourceEntryDeleted,
+    };
   }));
 
   // The mutation routes below fetch TOMBSTONE-INCLUDED on purpose, and say so by
