@@ -109,6 +109,8 @@ module.exports = function mount(app, ctx) {
   // collision between tenants.
   const keyFor = (channel, ts) => `slack-bookmark:${channel}:${ts}`;
   const delegateKeyFor = (channel, ts) => `slack-delegate:${channel}:${ts}`;
+  const delegateCompletionKeyFor = (channel, ts) => `slack-delegate-completion:${channel}:${ts}`;
+  const pendingDoneKeyFor = (channel, ts) => `slack-done-pending:${channel}:${ts}`;
 
   // Everything outside this set is user-owned delegated-item state. The stored
   // snapshot lets reaction removal delete only a pristine auto-created item.
@@ -121,7 +123,8 @@ module.exports = function mount(app, ctx) {
     "enrichment_status", "enrichment_attempts", "enrichment_next_attempt_at",
     "enrichment_last_error", "enrichment_model", "enriched_at", "aiTitle",
     "aiSummary", "idempotency_key", "created_by", "created_at",
-    "slack_delegate_reaction_removed_at",
+    "slack_delegate_reaction_removed_at", "slackDelegateChangedAt",
+    "slackDelegateClusterIds",
   ]);
   function delegateUserState(props) {
     const state = {};
@@ -499,14 +502,18 @@ module.exports = function mount(app, ctx) {
       const t = await findTaskByKey(idemKey);
       return t && !t.deleted_at && (t.properties || {}).kind !== "slack_reaction_tombstone" ? t : null;
     }
-    // Absorb the create-race: 🔖 and ⌛/✅ fired back-to-back can arrive out of order.
-    async function findTaskWithRetry(idemKey, tries = 3) {
+    // A ✅ can follow either capture reaction. Check both on every retry so a
+    // delegate does not wait through three bookmark-only reads before it closes.
+    async function findReactedRowsWithRetry(channel, ts, tries = 3) {
       for (let i = 0; i < tries; i++) {
-        const t = await findLiveTaskByKey(idemKey);
-        if (t) return t;
+        const [bookmark, delegate] = await Promise.all([
+          findLiveTaskByKey(keyFor(channel, ts)),
+          findLiveTaskByKey(delegateKeyFor(channel, ts)),
+        ]);
+        if (bookmark || delegate) return { bookmark, delegate };
         if (i < tries - 1) await new Promise(r => setTimeout(r, 400));
       }
-      return null;
+      return { bookmark: null, delegate: null };
     }
 
     // Drop this task from the day's `_done` overlay. Un-completing has to clear
@@ -630,12 +637,68 @@ module.exports = function mount(app, ctx) {
           slack_ts: ts,
           created_by: "slack-events-tombstone",
           created_at: new Date().toISOString(),
-          ...(kind === "bookmark" ? { slackBookmarkChangedAt: new Date(eventMs).toISOString() } : {}),
+          ...(kind === "bookmark"
+            ? { slackBookmarkChangedAt: new Date(eventMs).toISOString() }
+            : { slackDelegateChangedAt: new Date(eventMs).toISOString() }),
         },
         user_id: OWNER_USER_ID,
         workspace_id: OWNER_WORKSPACE_ID,
       });
       return created;
+    }
+
+    async function writePendingDoneIntent(channel, ts, eventMs, status) {
+      const idemKey = pendingDoneKeyFor(channel, ts);
+      const existing = await findTaskByKey(idemKey);
+      const changedAt = new Date(eventMs).toISOString();
+      if (existing && !existing.deleted_at) {
+        const props = existing.properties || {};
+        const previousMs = Date.parse(props.pendingDoneChangedAt || props.pendingCompletedAt || "");
+        if (Number.isFinite(previousMs) && eventMs <= previousMs) return existing;
+        return blockDB.updateBlock(existing.id, { properties: {
+          ...props,
+          status,
+          pendingDoneChangedAt: changedAt,
+          ...(status === "pending" ? { pendingCompletedAt: changedAt } : {}),
+        } });
+      }
+      if (existing && existing.deleted_at) return existing;
+      return blockDB.createBlock({
+        type: "block",
+        parent_id: null,
+        date: null,
+        properties: {
+          kind: "slack_done_intent",
+          source: "slack-reaction-intent",
+          status,
+          hidden: true,
+          idempotency_key: idemKey,
+          slack_channel: channel,
+          slack_ts: ts,
+          pendingDoneChangedAt: changedAt,
+          ...(status === "pending" ? { pendingCompletedAt: changedAt } : {}),
+          created_by: "slack-events",
+          created_at: new Date().toISOString(),
+        },
+        user_id: OWNER_USER_ID,
+        workspace_id: OWNER_WORKSPACE_ID,
+      });
+    }
+
+    const createPendingDoneIntent = (channel, ts, eventMs) => writePendingDoneIntent(channel, ts, eventMs, "pending");
+    const cancelPendingDoneIntent = (channel, ts, eventMs) => writePendingDoneIntent(channel, ts, eventMs, "cancelled");
+
+    async function applyPendingDoneIntent(channel, ts) {
+      const pending = await findLiveTaskByKey(pendingDoneKeyFor(channel, ts));
+      if (!pending || (pending.properties || {}).status !== "pending") return false;
+      const atMs = Date.parse((pending.properties || {}).pendingCompletedAt || "");
+      await handleDone(channel, ts, Number.isFinite(atMs) ? atMs : Date.now(), pending.id);
+      await blockDB.updateBlock(pending.id, { properties: {
+        ...(pending.properties || {}),
+        status: "applied",
+        pendingAppliedAt: new Date().toISOString(),
+      } });
+      return true;
     }
 
     // ── 🔖 create ───────────────────────────────────────────────────────────
@@ -668,7 +731,34 @@ module.exports = function mount(app, ctx) {
         } else if (!Number.isFinite(previousMs) || eventMs > previousMs) {
           await blockDB.updateBlock(existing.id, { properties: { ...existingProps, slackBookmarkChangedAt: new Date(eventMs).toISOString() } });
         }
+        await applyPendingDoneIntent(channel, ts);
         return;
+      }
+
+      // A completed delegate can exist before this queued bookmark event runs.
+      // Move bookmark ownership onto its canonical task instead of creating a
+      // second open row beside completed work. Bookmark removal transfers it back.
+      const completedDelegate = await findLiveTaskByKey(delegateKeyFor(channel, ts));
+      const completedDelegateProps = (completedDelegate && completedDelegate.properties) || {};
+      if (completedDelegate && (completedDelegateProps.status === "done" || completedDelegateProps.completedAt)) {
+        const delegateTask = await linkedDelegateTask(completedDelegate);
+        if (delegateTask) {
+          const transferredProps = {
+            ...(delegateTask.properties || {}),
+            source: "slack-bookmark",
+            idempotency_key: idemKey,
+            delegatedItemId: completedDelegate.id,
+            slackBookmarkChangedAt: new Date(eventMs).toISOString(),
+          };
+          await blockDB.updateBlock(delegateTask.id, { properties: transferredProps });
+          broadcast("blocks-changed", {
+            action: "slack-bookmark-claim-delegate-task",
+            blockIds: [delegateTask.id, completedDelegate.id],
+            date: delegateTask.date,
+          }, OWNER_WORKSPACE_ID);
+          await applyPendingDoneIntent(channel, ts);
+          return;
+        }
       }
       const date = getTodayStr();
       const seedCapture = seed && seed.text ? normalizeSlackMessage(seed, { ts }) : null;
@@ -694,13 +784,40 @@ module.exports = function mount(app, ctx) {
         catch (error) { console.warn(`[slack-events] message capture retry for ${channel}:${ts}:`, error.message); }
       }
       await enrichBlock(block);
+      await applyPendingDoneIntent(channel, ts);
     }
 
-    async function handleDelegate(channel, ts, seed) {
+    async function handleDelegate(channel, ts, seed, eventMs = Date.now()) {
       const idemKey = delegateKeyFor(channel, ts);
-      const existing = await findTaskByKey(idemKey);
+      let existing = await findTaskByKey(idemKey);
       if (existing) {
-        if (existing.deleted_at) console.log(`[slack-events] 👥 on a cancelled delegated item for ${channel}:${ts} - not re-created`);
+        const existingProps = existing.properties || {};
+        const previousMs = Date.parse(existingProps.slackDelegateChangedAt || "");
+        const isOrderTombstone = existingProps.kind === "slack_reaction_tombstone";
+        if (Number.isFinite(previousMs) && (eventMs < previousMs || (eventMs === previousMs && !isOrderTombstone))) return;
+        if (isOrderTombstone) {
+          await blockDB.deleteBlock(existing.id);
+          existing = null;
+        }
+      }
+      if (existing) {
+        const existingProps = existing.properties || {};
+        const previousMs = Date.parse(existingProps.slackDelegateChangedAt || "");
+        if (existing.deleted_at) {
+          if (typeof ctx.restoreWaitingCluster !== "function") return;
+          await ctx.restoreWaitingCluster({
+            itemId: existing.id,
+            restoredAt: new Date(eventMs).toISOString(),
+            workspaceId: OWNER_WORKSPACE_ID,
+            broadcastAction: "slack-delegate-restore",
+          });
+        } else if (!Number.isFinite(previousMs) || eventMs > previousMs) {
+          await blockDB.updateBlock(existing.id, { properties: {
+            ...existingProps,
+            slackDelegateChangedAt: new Date(eventMs).toISOString(),
+          } });
+        }
+        await applyPendingDoneIntent(channel, ts);
         return;
       }
       const seedCapture = seed && seed.text ? normalizeSlackMessage(seed, { ts }) : null;
@@ -720,6 +837,7 @@ module.exports = function mount(app, ctx) {
         idempotency_key: idemKey,
         created_by: "slack-events",
         created_at: new Date().toISOString(),
+        slackDelegateChangedAt: new Date(eventMs).toISOString(),
       };
       props = stampDelegateSnapshot(props);
       const created = await blockDB.createBlock({
@@ -733,24 +851,111 @@ module.exports = function mount(app, ctx) {
         catch (error) { console.warn(`[slack-events] delegate capture retry for ${channel}:${ts}:`, error.message); }
       }
       await enrichBlock(block);
+
+      // Events for one Slack message are serialized. A ✅ queued before this 👥
+      // cannot see the future Waiting row, so reconcile the late capture here.
+      // Reuse the completed bookmark task and do not award its credit twice.
+      const bookmark = await findLiveTaskByKey(keyFor(channel, ts));
+      const bookmarkProps = (bookmark && bookmark.properties) || {};
+      if (bookmark && (bookmarkProps.status === "done" || bookmarkProps.completedAt)) {
+        if (typeof ctx.completeWaitingItem !== "function") throw new Error("Waiting completion service is unavailable");
+        await ctx.completeWaitingItem({
+          itemId: created.id,
+          linkedTaskRef: bookmark.id,
+          completedAt: bookmarkProps.completedAt || bookmarkProps.doneAt || new Date(eventMs).toISOString(),
+          completedBy: "slack-events",
+          userId: OWNER_USER_ID,
+          workspaceId: OWNER_WORKSPACE_ID,
+          broadcastAction: "slack-delegate-late-capture-done",
+        });
+      }
+      await applyPendingDoneIntent(channel, ts);
     }
 
-    async function handleDelegateRemoved(channel, ts) {
+    // A Waiting item is not itself an itinerary task. When ✅ closes a delegate,
+    // materialize one normal task on today, then let the canonical Waiting service
+    // complete both rows together. A bookmark on the same message is reused instead.
+    async function ensureDelegateCompletionTask(item, channel, ts) {
+      const idemKey = delegateCompletionKeyFor(channel, ts);
+      const existing = await findLiveTaskByKey(idemKey);
+      if (existing) return existing;
+      const itemProps = item.properties || {};
+      const duration = Math.max(1, Number(itemProps.estimatedMinutes || itemProps.duration || itemProps.durMin) || NO_HOURGLASS_MIN);
+      const date = getTodayStr();
+      const title = itemProps.myTask || itemProps.aiTitle || itemProps.captureTitle || itemProps.title || "Delegated Slack task";
+      const props = {
+        title,
+        kind: "task",
+        status: "open",
+        estimatedMinutes: duration,
+        priority: itemProps.priority || "Medium",
+        source: "slack-delegate-completion",
+        source_id: itemProps.source_id || "",
+        notes: itemProps.notes || itemProps.captureNotes || "Delegated from Slack",
+        contact: itemProps.contact || undefined,
+        slack_channel: channel,
+        slack_ts: ts,
+        slack_thread_ts: itemProps.slack_thread_ts || ts,
+        delegatedItemId: item.id,
+        created_by: "slack-events",
+        created_at: new Date().toISOString(),
+        start: "09:00",
+        end: addMin("09:00", duration),
+        idempotency_key: idemKey,
+      };
+      const created = await blockDB.createItineraryTask({
+        date, properties: props, userId: OWNER_USER_ID, workspaceId: OWNER_WORKSPACE_ID, score: true,
+      });
+      return (await blockDB.getBlock(created.id))
+        || { id: created.id, date, type: "block", properties: props, workspace_id: OWNER_WORKSPACE_ID, user_id: OWNER_USER_ID };
+    }
+
+    async function linkedDelegateTask(item) {
+      const linkedRef = String(((item && item.properties) || {}).linkedBlockId || "").trim();
+      if (!linkedRef) return null;
+      const task = await blockDB.findUniqueLiveBlockByReference(linkedRef, OWNER_WORKSPACE_ID);
+      return task && !task.deleted_at && (task.properties || {}).kind !== "slack_reaction_tombstone"
+        ? task
+        : null;
+    }
+
+    async function handleDelegateRemoved(channel, ts, eventMs = Date.now()) {
       const item = await findLiveTaskByKey(delegateKeyFor(channel, ts));
       if (!item) {
-        await createReactionTombstone("delegate", channel, ts);
+        const existing = await findTaskByKey(delegateKeyFor(channel, ts));
+        if (existing) {
+          const props = existing.properties || {};
+          const previousMs = Date.parse(props.slackDelegateChangedAt || "");
+          if (!Number.isFinite(previousMs) || eventMs > previousMs) {
+            if (typeof blockDB.updateDeletedBlockProperties !== "function") {
+              throw new Error("Deleted Waiting ordering service is unavailable");
+            }
+            await blockDB.updateDeletedBlockProperties(existing.id, {
+              ...props,
+              slackDelegateChangedAt: new Date(eventMs).toISOString(),
+            }, OWNER_WORKSPACE_ID);
+          }
+          return;
+        }
+        await createReactionTombstone("delegate", channel, ts, eventMs);
         return;
       }
       const props = item.properties || {};
-      if (delegateIsUntouched(props)) {
-        await blockDB.deleteBlock(item.id);
-        broadcast("blocks-changed", { action: "slack-delegate-cancel", blockIds: [item.id] }, OWNER_WORKSPACE_ID);
-        return;
+      const previousMs = Date.parse(props.slackDelegateChangedAt || "");
+      if (Number.isFinite(previousMs) && eventMs < previousMs) return;
+      if (typeof ctx.deleteWaitingCluster !== "function") throw new Error("Waiting deletion service is unavailable");
+      await ctx.deleteWaitingCluster({
+        itemId: item.id,
+        deletedAt: new Date(eventMs).toISOString(),
+        workspaceId: OWNER_WORKSPACE_ID,
+        broadcastAction: "slack-delegate-cancel",
+      });
+      const bookmark = await findLiveTaskByKey(keyFor(channel, ts));
+      if (bookmark) await projectTaskToSlack(bookmark);
+      else {
+        await removeSlackReaction(channel, ts, R_START);
+        await removeSlackReaction(channel, ts, R_DONE);
       }
-      await blockDB.updateBlock(item.id, { properties: {
-        ...props,
-        slack_delegate_reaction_removed_at: new Date().toISOString(),
-      } });
     }
 
     // Removing Slack's bookmark removes the canonical DCC task too. If it is
@@ -776,6 +981,25 @@ module.exports = function mount(app, ctx) {
       const previousMs = Date.parse(props.slackBookmarkChangedAt || "");
       if (Number.isFinite(previousMs) && eventMs < previousMs) return;
       if (isStaleWorkEvent(props, eventMs)) return;
+      const delegate = await findLiveTaskByKey(delegateKeyFor(channel, ts));
+      const delegateProps = (delegate && delegate.properties) || {};
+      if (delegate && String(delegateProps.linkedBlockId || "") === String(task.id)) {
+        const transferredProps = {
+          ...props,
+          source: "slack-delegate-completion",
+          idempotency_key: delegateCompletionKeyFor(channel, ts),
+          delegatedItemId: delegate.id,
+          slackBookmarkChangedAt: new Date(eventMs).toISOString(),
+        };
+        const transferred = await blockDB.updateBlock(task.id, { properties: transferredProps });
+        await projectTaskToSlack({ ...task, properties: (transferred && transferred.properties) || transferredProps });
+        broadcast("blocks-changed", {
+          action: "slack-bookmark-transfer-to-delegate",
+          blockIds: [task.id, delegate.id],
+          date: task.date,
+        }, OWNER_WORKSPACE_ID);
+        return;
+      }
       const removedProps = { ...props, slackBookmarkChangedAt: new Date(eventMs).toISOString() };
       const stamped = await blockDB.updateBlock(task.id, { properties: removedProps });
       task.properties = stamped && stamped.properties ? stamped.properties : removedProps;
@@ -789,9 +1013,39 @@ module.exports = function mount(app, ctx) {
     }
 
     // ── ⌛ start ────────────────────────────────────────────────────────────
+    async function taskForWorkReaction(channel, ts) {
+      const rows = await findReactedRowsWithRetry(channel, ts);
+      const linked = rows.delegate && await linkedDelegateTask(rows.delegate);
+      if (linked) return linked;
+      const delegateProps = (rows.delegate && rows.delegate.properties) || {};
+      if (rows.delegate && (delegateProps.status === "done" || delegateProps.completedAt)) return null;
+      if (rows.bookmark) {
+        if (rows.delegate) {
+          const props = rows.delegate.properties || {};
+          if (String(props.linkedBlockId || "") !== String(rows.bookmark.id)) {
+            await blockDB.updateBlock(rows.delegate.id, { properties: { ...props, linkedBlockId: rows.bookmark.id } });
+          }
+        }
+        return rows.bookmark;
+      }
+      if (!rows.delegate) return null;
+      let task = await findLiveTaskByKey(delegateCompletionKeyFor(channel, ts));
+      if (!task) task = await ensureDelegateCompletionTask(rows.delegate, channel, ts);
+      const props = rows.delegate.properties || {};
+      if (String(props.linkedBlockId || "") !== String(task.id)) {
+        await blockDB.updateBlock(rows.delegate.id, { properties: { ...props, linkedBlockId: task.id } });
+      }
+      return task;
+    }
+
     async function handleStart(channel, ts, eventMs, actionId = null) {
-      const task = await findTaskWithRetry(keyFor(channel, ts));
-      if (!task) { console.warn(`[slack-events] ⌛ with no task for ${channel}:${ts} — ignored`); return; }
+      const task = await taskForWorkReaction(channel, ts);
+      if (!task) {
+        const delegate = await findLiveTaskByKey(delegateKeyFor(channel, ts));
+        if (delegate && isBlockDone(delegate, null)) await removeSlackReaction(channel, ts, R_START);
+        else console.warn(`[slack-events] ⌛ with no task for ${channel}:${ts} — ignored`);
+        return;
+      }
       const started = await startWork({ block: task, atMs: eventMs, actor: "slack", actionId: actionId || `${channel}:${ts}:${eventMs}` });
       if (!started.changed && (started.reason === "not-trackable" || started.reason === "completed")) {
         await removeSlackReaction(channel, ts, R_START);
@@ -801,21 +1055,65 @@ module.exports = function mount(app, ctx) {
 
     // ── ⌛ removed → clear a not-yet-completed start ──────────────────────────
     async function clearStart(channel, ts, eventMs = Date.now(), actionId = null) {
-      const task = await findLiveTaskByKey(keyFor(channel, ts));
+      const rows = await findReactedRowsWithRetry(channel, ts);
+      const task = (rows.delegate && await linkedDelegateTask(rows.delegate))
+        || rows.bookmark
+        || await findLiveTaskByKey(delegateCompletionKeyFor(channel, ts));
       if (!task) return;
       await pauseWork({ block: task, atMs: eventMs, actor: "slack", actionId });
       broadcast("blocks-changed", { action: "slack-start-clear", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
     }
 
+    async function awardSlackCompletion(task, fallbackCompletedIso) {
+      const finalProps = task.properties || {};
+      const title = finalProps.title || "Slack task";
+      try {
+        await slotStore.earnTaskCredit(OWNER_WORKSPACE_ID, OWNER_USER_ID, {
+          source_key: creditKeyFor(task),
+          task_id: task.id, title, type: finalProps.type || "task", tags: finalProps.tags || [],
+          priority: finalProps.priority || "",
+          duration_minutes: finalProps.estimatedMinutes || NO_HOURGLASS_MIN,
+          points_duration_minutes: finalProps.pointsDurationMinutes || undefined,
+          actual_minutes: finalProps.actualMinutes || 0,
+          completed_at: finalProps.completedAt || fallbackCompletedIso,
+        });
+      } catch (e) { console.error("[slack-events] credit failed (non-fatal):", e.message); }
+    }
+
     // ── ✅ complete ───────────────────────────────────────────────────────────
     async function handleDone(channel, ts, eventMs, actionId = null) {
-      const task = await findTaskWithRetry(keyFor(channel, ts));
-      if (!task) { console.warn(`[slack-events] ✅ with no task for ${channel}:${ts} — ignored`); return; }
-      const props = task.properties || {};
-      if (props.completedAt) return;   // already done (Slack retry) — idempotent
-
+      const rows = await findReactedRowsWithRetry(channel, ts, 1);
+      if (!rows.bookmark && !rows.delegate) {
+        await createPendingDoneIntent(channel, ts, eventMs);
+        return;
+      }
       const completedIso = new Date(eventMs).toISOString();
-      const title = props.title || "Slack task";
+
+      // 👥 is the primary lifecycle when both capture reactions exist. Reuse the
+      // bookmark task if present, which prevents two itinerary rows and two credits.
+      if (rows.delegate) {
+        const delegateProps = rows.delegate.properties || {};
+        if (delegateProps.status === "done" || delegateProps.completedAt) return;
+        if (typeof ctx.completeWaitingItem !== "function") throw new Error("Waiting completion service is unavailable");
+        const task = await linkedDelegateTask(rows.delegate)
+          || rows.bookmark
+          || await ensureDelegateCompletionTask(rows.delegate, channel, ts);
+        const result = await ctx.completeWaitingItem({
+          itemId: rows.delegate.id,
+          linkedTaskRef: task.id,
+          completedAt: completedIso,
+          completedBy: "slack-events",
+          userId: OWNER_USER_ID,
+          workspaceId: OWNER_WORKSPACE_ID,
+          broadcastAction: "slack-delegate-done",
+        });
+        await awardSlackCompletion(result.task || task, completedIso);
+        return;
+      }
+
+      const task = rows.bookmark;
+      const props = task.properties || {};
+      if (props.completedAt) return;   // already done (Slack retry), idempotent
       const mutationId = completionMutationId(actionId || completedIso, task.id, "complete");
       const durable = await blockDB.setTaskCompletion({
         taskRef: task.id,
@@ -830,21 +1128,7 @@ module.exports = function mount(app, ctx) {
       const canonical = durable.task || task;
       const completion = await completeWork({ block: canonical, atMs: eventMs, actor: "slack-events", actionId: mutationId, normalizeExisting: true });
       if (!completion.changed && !durable.duplicate) return;
-      const finalProps = canonical.properties || props;
-      const actualMin = finalProps.actualMinutes || 0;
-      const actualCompletedIso = finalProps.completedAt || completedIso;
-
-      // Points — idempotent on source_key (mirrors log-done so a later reconcile dedupes).
-      try {
-        await slotStore.earnTaskCredit(OWNER_WORKSPACE_ID, OWNER_USER_ID, {
-          source_key: creditKeyFor(task),
-          task_id: task.id, title, type: finalProps.type || "task", tags: finalProps.tags || [],
-          priority: finalProps.priority || "",
-          duration_minutes: finalProps.estimatedMinutes || NO_HOURGLASS_MIN,
-          points_duration_minutes: finalProps.pointsDurationMinutes || undefined,
-          actual_minutes: actualMin, completed_at: actualCompletedIso,
-        });
-      } catch (e) { console.error("[slack-events] credit failed (non-fatal):", e.message); }
+      await awardSlackCompletion(canonical, completedIso);
 
       broadcast("blocks-changed", {
         action: "slack-done",
@@ -860,8 +1144,36 @@ module.exports = function mount(app, ctx) {
     // The full inverse of handleDone, in the same order, so nothing is left half-done:
     // reopen the row, drop the timing, reverse the credit, restore the queue.
     async function handleUndone(channel, ts, eventMs = Date.now(), actionId = null) {
-      const task = await findLiveTaskByKey(keyFor(channel, ts));
-      if (!task) { console.warn(`[slack-events] un-✅ with no task for ${channel}:${ts} — ignored`); return; }
+      const pending = await findLiveTaskByKey(pendingDoneKeyFor(channel, ts));
+      if (pending) await cancelPendingDoneIntent(channel, ts, eventMs);
+      const [bookmark, delegate] = await Promise.all([
+        findLiveTaskByKey(keyFor(channel, ts)),
+        findLiveTaskByKey(delegateKeyFor(channel, ts)),
+      ]);
+      const delegateProps = (delegate && delegate.properties) || {};
+      const reopenDelegate = !!delegate && (delegateProps.status === "done" || !!delegateProps.completedAt);
+      let task = bookmark;
+      if (reopenDelegate) {
+        task = await linkedDelegateTask(delegate)
+          || await findLiveTaskByKey(delegateCompletionKeyFor(channel, ts))
+          || bookmark;
+      }
+      if (!task && reopenDelegate) {
+        if (isStaleWorkEvent(delegateProps, eventMs)) return;
+        if (typeof ctx.reopenWaitingItem !== "function") throw new Error("Waiting reopen service is unavailable");
+        await ctx.reopenWaitingItem({
+          itemId: delegate.id,
+          reopenedAt: new Date(eventMs).toISOString(),
+          userId: OWNER_USER_ID,
+          workspaceId: OWNER_WORKSPACE_ID,
+          broadcastAction: "slack-delegate-undone",
+        });
+        return;
+      }
+      if (!task) {
+        if (!pending) await cancelPendingDoneIntent(channel, ts, eventMs);
+        return;
+      }
       const props = task.properties || {};
       if (!props.completedAt) return;   // never completed by us (or a Slack retry) — idempotent
       if (isStaleWorkEvent(props, eventMs)) return;
@@ -894,29 +1206,45 @@ module.exports = function mount(app, ctx) {
         return;
       }
 
-      const mutationId = completionMutationId(actionId || eventMs, task.id, "reopen");
-      const durable = await blockDB.setTaskCompletion({
-        taskRef: task.id,
-        completed: false,
-        completedAt: null,
-        taskDate: task.date || null,
-        mutationId,
-        expectedRevision: props._completionRevision || null,
-        userId: OWNER_USER_ID,
-        workspaceId: OWNER_WORKSPACE_ID,
-      });
-      const canonical = durable.task || task;
-      await reopenWork({ block: canonical, atMs: eventMs, actor: "slack-events", actionId: mutationId });
+      let durable;
+      if (reopenDelegate) {
+        if (typeof ctx.reopenWaitingItem !== "function") throw new Error("Waiting reopen service is unavailable");
+        const result = await ctx.reopenWaitingItem({
+          itemId: delegate.id,
+          taskRef: task.id,
+          reopenedAt: new Date(eventMs).toISOString(),
+          userId: OWNER_USER_ID,
+          workspaceId: OWNER_WORKSPACE_ID,
+          broadcastAction: "slack-delegate-undone",
+        });
+        durable = { task: result.task || task, broadcastIds: [delegate.id, task.id], dependencyTransitions: [] };
+      } else {
+        const mutationId = completionMutationId(actionId || eventMs, task.id, "reopen");
+        durable = await blockDB.setTaskCompletion({
+          taskRef: task.id,
+          completed: false,
+          completedAt: null,
+          taskDate: task.date || null,
+          mutationId,
+          expectedRevision: props._completionRevision || null,
+          userId: OWNER_USER_ID,
+          workspaceId: OWNER_WORKSPACE_ID,
+        });
+        const canonical = durable.task || task;
+        await reopenWork({ block: canonical, atMs: eventMs, actor: "slack-events", actionId: mutationId });
+      }
 
       // Back into the active queue on the Slack side too (E2 reads 🔖 as the queue).
-      await addSlackReaction(channel, ts, R_BOOKMARK);
+      if (bookmark) await addSlackReaction(channel, ts, R_BOOKMARK);
 
-      broadcast("blocks-changed", {
-        action: "slack-undone",
-        blockIds: durable.broadcastIds || [task.id],
-        dependencyTransitions: durable.dependencyTransitions || [],
-        date: task.date,
-      }, OWNER_WORKSPACE_ID);
+      if (!reopenDelegate) {
+        broadcast("blocks-changed", {
+          action: "slack-undone",
+          blockIds: durable.broadcastIds || [task.id],
+          dependencyTransitions: durable.dependencyTransitions || [],
+          date: task.date,
+        }, OWNER_WORKSPACE_ID);
+      }
     }
 
     // `hasmy:` is a USER-token search with no bot-token equivalent, which is why
@@ -1041,8 +1369,41 @@ module.exports = function mount(app, ctx) {
       const props = block.properties || {};
       const channel = props.slack_channel;
       const ts = props.slack_ts;
-      if (!channel || !ts || props.source !== "slack-bookmark") return false;
+      const bookmarkTask = props.source === "slack-bookmark";
+      const delegatedItem = props.source === "slack-delegate" && props.kind === "delegated_item";
+      const delegateTask = props.source === "slack-delegate-completion";
+      if (!channel || !ts || (!bookmarkTask && !delegatedItem && !delegateTask)) return false;
       try {
+        // The Waiting item owns 👥. Its generated task owns ⌛ and ✅.
+        if (delegatedItem) {
+          if (block.deleted_at) await removeSlackReaction(channel, ts, R_DELEGATE);
+          else {
+            await addSlackReaction(channel, ts, R_DELEGATE);
+            if (isBlockDone(block, null)) await addSlackReaction(channel, ts, R_DONE);
+            else await removeSlackReaction(channel, ts, R_DONE);
+          }
+          return true;
+        }
+        if (delegateTask) {
+          if (block.deleted_at) {
+            await removeSlackReaction(channel, ts, R_START);
+            await removeSlackReaction(channel, ts, R_DONE);
+            return true;
+          }
+          const done = isBlockDone(block, null);
+          const active = !done && !!props.startedAt;
+          if (done) {
+            await addSlackReaction(channel, ts, R_DONE);
+            await removeSlackReaction(channel, ts, R_START);
+          } else if (active) {
+            await addSlackReaction(channel, ts, R_START);
+            await removeSlackReaction(channel, ts, R_DONE);
+          } else {
+            await removeSlackReaction(channel, ts, R_START);
+            await removeSlackReaction(channel, ts, R_DONE);
+          }
+          return true;
+        }
         if (block.deleted_at) {
           await removeSlackReaction(channel, ts, R_START);
           await removeSlackReaction(channel, ts, R_DONE);
@@ -1073,9 +1434,9 @@ module.exports = function mount(app, ctx) {
       const cursor = mirrorCursors.get(OWNER_WORKSPACE_ID) || null;
       const { rows } = await pool.query(
         `SELECT id, to_char(date, 'YYYY-MM-DD') AS date, properties, deleted_at, workspace_id, updated_at
-           FROM blocks
+          FROM blocks
           WHERE workspace_id = $1
-            AND properties->>'source' = 'slack-bookmark'
+            AND properties->>'source' IN ('slack-bookmark', 'slack-delegate', 'slack-delegate-completion')
             AND NULLIF(properties->>'slack_channel', '') IS NOT NULL
             AND NULLIF(properties->>'slack_ts', '') IS NOT NULL
             AND ($2::timestamptz IS NULL OR updated_at > $2::timestamptz
@@ -1240,12 +1601,12 @@ module.exports = function mount(app, ctx) {
     if (ev.type === "reaction_removed") {
       if (ev.reaction === R_START) return bound.clearStart(channel, ts, eventMs, actionId);
       if (ev.reaction === R_BOOKMARK) return bound.handleBookmarkRemoved(channel, ts, eventMs);
-      if (ev.reaction === R_DELEGATE) return bound.handleDelegateRemoved(channel, ts);
+      if (ev.reaction === R_DELEGATE) return bound.handleDelegateRemoved(channel, ts, eventMs);
       if (ev.reaction === R_DONE) return bound.handleUndone(channel, ts, eventMs, actionId);
       return;
     }
     if (ev.reaction === R_BOOKMARK) return bound.handleBookmark(channel, ts, null, eventMs);
-    if (ev.reaction === R_DELEGATE) return bound.handleDelegate(channel, ts);
+    if (ev.reaction === R_DELEGATE) return bound.handleDelegate(channel, ts, null, eventMs);
     if (ev.reaction === R_START) return bound.handleStart(channel, ts, eventMs, actionId);
     if (ev.reaction === R_DONE) return bound.handleDone(channel, ts, eventMs, actionId);
   }

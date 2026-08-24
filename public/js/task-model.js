@@ -220,7 +220,7 @@
   // proposed_action_item.citation.startOffset is not an itinerary start time; approval
   // creates a separate action row that can later become a real scheduled task.
   const NON_TASK_KINDS = [
-    "delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone",
+    "delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone", "slack_done_intent",
     "meeting_prep", "meeting_transcript", "meeting_summary", "proposed_action_item"
   ];
   const NON_TASK_TYPES = ["day_root", "time_entry"];

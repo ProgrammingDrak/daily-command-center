@@ -45,11 +45,19 @@ function mountApp(suppressionBlocks = []) {
   const updates = [];
   const completions = [];
   const batches = [];
+  const slackSync = [];
+  const broadcasts = [];
+  const transactionQueries = [];
   const ctx = {
     blockDB: {
       getDelegatedItems: async () => [...rows.values()].filter(row => !row.deleted_at && (row.properties || {}).kind === "delegated_item"),
       getBlockIncludingDeleted: async id => rows.get(id) || null,
       getBlock: async id => rows.get(id) || null,
+      ensureDayRoot: async date => `day-root-${MINE}-${date}`,
+      getTaskTimeEntries: async blockId => [...rows.values()].filter(row => !row.deleted_at
+        && row.type === "time_entry" && String((row.properties || {}).blockId) === String(blockId)),
+      getWaitingClusterTasks: async itemId => [...rows.values()].filter(row => !row.deleted_at
+        && String((row.properties || {}).delegatedItemId || "") === String(itemId)),
       findUniqueLiveBlockByReference: async blockRef => {
         const direct = rows.get(blockRef);
         if (direct && !direct.deleted_at) return direct;
@@ -73,6 +81,12 @@ function mountApp(suppressionBlocks = []) {
         const row = rows.get(id);
         if (row) row.deleted_at = new Date().toISOString();
         return row || { id };
+      },
+      undeleteBlock: async id => {
+        const row = rows.get(id);
+        if (!row) throw new Error("Block not found: " + id);
+        row.deleted_at = null;
+        return row;
       },
       getSubtree: async ids => {
         const wanted = new Set(ids.map(String));
@@ -136,7 +150,7 @@ function mountApp(suppressionBlocks = []) {
         return suppressionBlocks.filter((b) => (b.properties || {}).kind === kind);
       },
     },
-    broadcast: () => {},
+    broadcast: (event, payload, workspaceId) => { broadcasts.push({ event, payload, workspaceId }); },
     crypto: require("node:crypto"),
     filterLegacyGcalBlocks: rows => rows,
     getScheduleBlocks: async () => [],
@@ -145,13 +159,17 @@ function mountApp(suppressionBlocks = []) {
     isValidDate: value => /^\d{4}-\d{2}-\d{2}$/.test(String(value)),
     pool: {
       query: async () => ({ rows: [{ workspace_id: MINE, user_id: 1 }] }),
-      connect: async () => ({ query: async () => ({ rows: [] }), release() {} }),
+      connect: async () => ({
+        query: async sql => { transactionQueries.push(String(sql)); return { rows: [] }; },
+        release() {},
+      }),
     },
     APP_TIME_ZONE: "America/New_York",
     waitingItems: require("./waiting-items"),
+    syncSlackTaskReactions: async row => { slackSync.push(row); return true; },
   };
   require("./routes/blocks.js")(app, ctx);
-  return { app, waiting, task, prerequisite, rows, updates, completions, batches };
+  return { app, ctx, waiting, task, prerequisite, rows, updates, completions, batches, slackSync, broadcasts, transactionQueries };
 }
 
 async function request(app, path, method = "GET", body) {
@@ -172,7 +190,7 @@ async function request(app, path, method = "GET", body) {
 test("attention returns one stable internal draft for a due Waiting cycle", async () => {
   const { app } = mountApp();
   const result = await request(app, "/api/waiting-items/attention?date=" + TODAY);
-  assert.equal(result.status, 200);
+  assert.equal(result.status, 200, JSON.stringify(result.body));
   assert.equal(result.body.items[0].attentionScore, 100);
   assert.equal(result.body.draft_items[0].id, "waiting-checkin:waiting-1:" + TODAY);
   assert.equal(result.body.draft_items[0].draft_type, "internal");
@@ -301,13 +319,140 @@ test("complete ignores a deleted local-id collision", async () => {
 });
 
 test("complete also closes a text-only Waiting item", async () => {
-  const { app, waiting } = mountApp();
+  const { app, waiting, slackSync } = mountApp();
+  waiting.properties.source = "slack-delegate";
+  waiting.properties.slack_channel = "C1";
+  waiting.properties.slack_ts = "123.45";
   const result = await request(app, "/api/waiting-items/waiting-1/complete", "POST", {
     completedAt: "2026-08-14T16:00:00.000Z",
   });
   assert.equal(result.status, 200);
   assert.equal(result.body.task, null);
   assert.equal(waiting.properties.status, "done");
+  assert.equal(slackSync.length, 1);
+  assert.equal(slackSync[0].id, waiting.id);
+  assert.equal(slackSync[0].properties.status, "done");
+});
+
+test("deleting Waiting removes its generated task cluster and syncs Slack", async () => {
+  const { app, waiting, rows, slackSync, transactionQueries } = mountApp();
+  waiting.properties.source = "slack-delegate";
+  waiting.properties.slack_channel = "C1";
+  waiting.properties.slack_ts = "123.4";
+  const checkIn = {
+    id: "check-in-1", type: "block", date: TODAY, workspace_id: MINE, user_id: 1,
+    properties: { kind: "task", source: "waiting-check-in", delegatedItemId: waiting.id },
+  };
+  const completion = {
+    id: "delegate-task-1", type: "block", date: TODAY, workspace_id: MINE, user_id: 1,
+    properties: {
+      kind: "task", source: "slack-delegate-completion", delegatedItemId: waiting.id,
+      slack_channel: "C1", slack_ts: "123.4",
+    },
+  };
+  rows.set(checkIn.id, checkIn);
+  rows.set(completion.id, completion);
+
+  const result = await request(app, "/api/waiting-items/" + waiting.id, "DELETE");
+  assert.equal(result.status, 200);
+  assert.ok(waiting.deleted_at);
+  assert.ok(checkIn.deleted_at);
+  assert.ok(completion.deleted_at);
+  assert.deepEqual(waiting.properties.slackDelegateClusterIds.sort(), [checkIn.id, completion.id].sort());
+  assert.ok(slackSync.some(row => row.id === waiting.id && row.deleted_at));
+  assert.ok(slackSync.some(row => row.id === completion.id && row.deleted_at));
+  assert.ok(transactionQueries.some(sql => sql.includes("pg_advisory_xact_lock")));
+});
+
+test("deleting Waiting settles a task that starts between discovery and locking", async () => {
+  const { app, ctx, waiting, rows } = mountApp();
+  const completion = {
+    id: "delegate-task-race", type: "block", date: TODAY, workspace_id: MINE, user_id: 1,
+    properties: {
+      kind: "task", source: "slack-delegate-completion", delegatedItemId: waiting.id,
+      estimatedMinutes: 5,
+    },
+  };
+  rows.set(completion.id, completion);
+  const originalScan = ctx.blockDB.getWaitingClusterTasks;
+  let scans = 0;
+  ctx.blockDB.getWaitingClusterTasks = async (...args) => {
+    scans += 1;
+    if (scans === 2) {
+      completion.properties.startedAt = new Date(Date.now() - 60_000).toISOString();
+      completion.properties.activeWorkSessionId = "race-session";
+      completion.properties.startedBy = "dcc";
+    }
+    return originalScan(...args);
+  };
+
+  const result = await request(app, "/api/waiting-items/" + waiting.id, "DELETE");
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.ok(scans >= 4);
+  assert.equal(completion.properties.startedAt, undefined);
+  assert.ok(completion.properties.actualMinutes >= 1);
+  assert.ok(completion.deleted_at);
+});
+
+test("restoring Waiting undeletes the same generated task cluster", async () => {
+  const { app, ctx, waiting, rows, transactionQueries } = mountApp();
+  waiting.properties.source = "slack-delegate";
+  const checkIn = {
+    id: "check-in-restore", type: "block", date: TODAY, workspace_id: MINE, user_id: 1,
+    properties: { kind: "task", source: "waiting-check-in", delegatedItemId: waiting.id },
+  };
+  rows.set(checkIn.id, checkIn);
+  await request(app, "/api/waiting-items/" + waiting.id, "DELETE");
+
+  const result = await ctx.restoreWaitingCluster({
+    itemId: waiting.id,
+    restoredAt: "2026-08-14T18:00:00.000Z",
+    workspaceId: MINE,
+  });
+  assert.deepEqual(result.blockIds.sort(), [waiting.id, checkIn.id].sort());
+  assert.equal(waiting.deleted_at, null);
+  assert.equal(checkIn.deleted_at, null);
+  assert.equal(waiting.properties.slackDelegateChangedAt, "2026-08-14T18:00:00.000Z");
+  assert.ok(transactionQueries.filter(sql => sql.includes("pg_advisory_xact_lock")).length >= 2);
+});
+
+test("restoring Waiting rejects a stored cluster id from another workspace", async () => {
+  const { ctx, waiting, rows } = mountApp();
+  const foreign = {
+    id: "foreign-deleted", type: "block", date: TODAY, workspace_id: "ws-other", user_id: 9,
+    deleted_at: "2026-08-14T12:00:00.000Z",
+    properties: { kind: "task", source: "waiting-check-in", delegatedItemId: waiting.id },
+  };
+  waiting.deleted_at = "2026-08-14T12:00:00.000Z";
+  waiting.properties.slackDelegateClusterIds = [foreign.id];
+  rows.set(foreign.id, foreign);
+
+  await assert.rejects(
+    ctx.restoreWaitingCluster({ itemId: waiting.id, workspaceId: MINE }),
+    error => error && error.statusCode === 404
+  );
+  assert.equal(foreign.deleted_at, "2026-08-14T12:00:00.000Z");
+});
+
+test("generic DCC delete and undo use the same Waiting cluster lifecycle", async () => {
+  const { app, waiting, rows, broadcasts } = mountApp();
+  const checkIn = {
+    id: "check-in-generic", type: "block", date: TODAY, workspace_id: MINE, user_id: 1,
+    properties: { kind: "task", source: "waiting-check-in", delegatedItemId: waiting.id },
+  };
+  rows.set(checkIn.id, checkIn);
+
+  const deleted = await request(app, "/api/blocks/" + waiting.id, "DELETE");
+  assert.equal(deleted.status, 200);
+  assert.ok(waiting.deleted_at);
+  assert.ok(checkIn.deleted_at);
+
+  const restored = await request(app, "/api/blocks/" + waiting.id + "/undelete", "POST", {});
+  assert.equal(restored.status, 200);
+  assert.equal(waiting.deleted_at, null);
+  assert.equal(checkIn.deleted_at, null);
+  const undo = broadcasts.find(call => call.payload.action === "undelete");
+  assert.deepEqual(undo.payload.undeletedIds.sort(), [waiting.id, checkIn.id].sort());
 });
 
 test("creating a task dependency moves the blocked task to Waiting", async () => {
