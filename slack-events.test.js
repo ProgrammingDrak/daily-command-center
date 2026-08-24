@@ -24,7 +24,7 @@ function makeHarness(opts = {}) {
   process.env.SLACK_RECONCILE_ENABLED = "0";
 
   const blocks = [];            // {id, date, properties, type}
-  const calls = { credit: [], revoke: [], broadcast: [], reactionsAdd: [], fetch: [] };
+  const calls = { credit: [], revoke: [], broadcast: [], reactionsAdd: [], reactionsRemove: [], fetch: [] };
   let seq = 0;
   // Stand in for the day_root `_done` overlay the browser writes. Handlers that
   // ask "was this finished elsewhere?" read it through blockDB.getBlock.
@@ -58,6 +58,9 @@ function makeHarness(opts = {}) {
     if (String(url).includes("reactions.add")) {
       calls.reactionsAdd.push({ url, headers: init.headers, body: Object.fromEntries(new URLSearchParams(init.body)) });
     }
+    if (String(url).includes("reactions.remove")) {
+      calls.reactionsRemove.push({ url, headers: init.headers, body: Object.fromEntries(new URLSearchParams(init.body)) });
+    }
     return fetchImpl(url, init);
   };
   const setFetch = (fn) => { fetchImpl = fn; };
@@ -75,6 +78,8 @@ function makeHarness(opts = {}) {
     blockDB: {
       getBlock: async (id) => (id === dayRootRow.id ? dayRootRow : blocks.find(b => b.id === id) || null),
       getBlockIncludingDeleted: async (id) => (id === dayRootRow.id ? dayRootRow : blocks.find(b => b.id === id) || null),
+      findUniqueLiveBlockByReference: async (ref) => blocks.find(b => !b.deleted_at
+        && (String(b.id) === String(ref) || String((b.properties || {}).local_id || "") === String(ref))) || null,
       getTaskTimeEntries: async (blockId, workspaceId, options = {}) => blocks.filter(b => b.type === "time_entry"
         && b.properties.blockId === blockId
         && (!workspaceId || !b.workspace_id || b.workspace_id === workspaceId)
@@ -116,6 +121,12 @@ function makeHarness(opts = {}) {
         const b = blocks.find(x => x.id === id);
         if (!b) throw new Error("not found " + id);
         b.properties = properties; return { id };
+      },
+      updateDeletedBlockProperties: async (id, properties) => {
+        const b = blocks.find(x => x.id === id);
+        if (!b || !b.deleted_at) throw new Error("deleted row not found " + id);
+        b.properties = properties;
+        return b;
       },
       deleteBlock: async (id) => {
         const b = blocks.find(x => x.id === id);
@@ -160,6 +171,71 @@ function makeHarness(opts = {}) {
         return { rows: [] };
       },
     },
+  };
+
+  // routes/blocks.js publishes the canonical Waiting lifecycle services in
+  // production. This focused Slack harness supplies their observable contract.
+  ctx.completeWaitingItem = async ({ itemId, linkedTaskRef, completedAt, completedBy }) => {
+    const item = blocks.find(b => b.id === itemId);
+    const task = blocks.find(b => b.id === linkedTaskRef);
+    const result = await ctx.blockDB.setTaskCompletion({
+      taskRef: task.id, completed: true, completedAt, mutationId: `waiting:${item.id}:${Date.parse(completedAt)}`,
+    });
+    item.properties = {
+      ...item.properties,
+      status: "done",
+      completedAt,
+      completedBy,
+      linkedBlockId: task.id,
+      snoozedUntil: null,
+      checkInScheduledFor: null,
+      checkInTaskId: null,
+    };
+    return { ok: true, status: "completed", item, task: result.task };
+  };
+  ctx.reopenWaitingItem = async ({ itemId, taskRef, reopenedAt }) => {
+    const item = blocks.find(b => b.id === itemId);
+    item.properties = { ...item.properties, status: "open" };
+    delete item.properties.completedAt;
+    delete item.properties.completedBy;
+    if (!taskRef) {
+      delete item.properties.linkedBlockId;
+      return { ok: true, status: "reopened", item, task: null };
+    }
+    const result = await ctx.blockDB.setTaskCompletion({
+      taskRef, completed: false, completedAt: null, mutationId: `waiting-reopen:${item.id}:${Date.parse(reopenedAt)}`,
+    });
+    return { ok: true, status: "reopened", item, task: result.task };
+  };
+  ctx.deleteWaitingCluster = async ({ itemId, deletedAt, broadcastAction }) => {
+    const item = blocks.find(b => b.id === itemId);
+    const tasks = blocks.filter(b => !b.deleted && String((b.properties || {}).delegatedItemId || "") === String(itemId)
+      && (b.properties || {}).source !== "slack-bookmark");
+    item.properties = {
+      ...item.properties,
+      slackDelegateChangedAt: deletedAt,
+      slackDelegateClusterIds: tasks.map(task => task.id),
+    };
+    for (const row of [item, ...tasks]) {
+      row.deleted = true;
+      row.deleted_at = deletedAt;
+    }
+    ctx.broadcast("blocks-changed", {
+      action: broadcastAction,
+      blockIds: [item.id, ...tasks.map(task => task.id)],
+    });
+    return { item, tasks, blockIds: [item.id, ...tasks.map(task => task.id)] };
+  };
+  ctx.restoreWaitingCluster = async ({ itemId, restoredAt }) => {
+    const item = blocks.find(b => b.id === itemId);
+    const ids = (item.properties.slackDelegateClusterIds || []).map(String);
+    const restored = [item, ...blocks.filter(b => ids.includes(String(b.id)))];
+    for (const row of restored) {
+      delete row.deleted;
+      row.deleted_at = null;
+    }
+    item.properties = { ...item.properties, slackDelegateChangedAt: restoredAt };
+    return { item, tasks: restored.slice(1), blockIds: restored.map(row => row.id) };
   };
 
   let handler;
@@ -269,27 +345,357 @@ test("👥 creates a delegated item with tomorrow's check-in and removes an unto
   assert.ok(calls.broadcast.some((b) => b.payload.action === "slack-delegate-cancel"));
 });
 
-test("removing 👥 preserves a completed delegated item", async () => {
-  const { handler, blocks } = makeHarness();
-  await post(handler, reaction("busts_in_silhouette", "222.4", "222.9"));
-  blocks[0].properties.status = "done";
-  blocks[0].properties.completedAt = "2026-07-28T18:00:00.000Z";
-  await post(handler, removal("busts_in_silhouette", "222.4"));
-  assert.equal(blocks[0].deleted, undefined);
-  assert.ok(blocks[0].properties.slack_delegate_reaction_removed_at);
+test("👥 then ✅ closes Waiting and creates one completed task on today's itinerary", async () => {
+  const { handler, blocks, calls } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.31", "222.9"));
+  await post(handler, reaction("white_check_mark", "222.31", "1720001200.000000"));
+
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  const task = blocks.find(b => (b.properties || {}).kind === "task");
+  assert.ok(task, "a normal itinerary task was created");
+  assert.equal(task.date, "2026-07-28");
+  assert.equal(task.properties.status, "done");
+  assert.equal(task.properties.done, true);
+  assert.equal(task.properties.source, "slack-delegate-completion");
+  assert.equal(task.properties.delegatedItemId, item.id);
+  assert.equal(item.properties.status, "done");
+  assert.equal(item.properties.completedBy, "slack-events");
+  assert.equal(item.properties.linkedBlockId, task.id);
+  assert.equal(calls.credit.length, 1);
+
+  await post(handler, reaction("white_check_mark", "222.31", "1720001200.000000"));
+  assert.equal(blocks.filter(b => (b.properties || {}).kind === "task").length, 1, "a retry creates no duplicate task");
+  assert.equal(calls.credit.length, 1, "a retry creates no duplicate credit call");
 });
 
-test("removing 👥 preserves any user-edited delegated item fields", async () => {
+test("removing ✅ reopens both the delegated task and its Waiting item", async () => {
+  const { handler, blocks, calls } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.32", "222.9"));
+  await post(handler, reaction("white_check_mark", "222.32", "1720001200.000000"));
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  const task = blocks.find(b => (b.properties || {}).kind === "task");
+
+  await post(handler, removal("white_check_mark", "222.32", DRAKE, "1720001300.000000"));
+  assert.equal(item.properties.status, "open");
+  assert.equal(item.properties.completedAt, undefined);
+  assert.equal(task.properties.status, "open");
+  assert.equal(task.properties.done, undefined);
+  assert.deepEqual(calls.revoke, [`${task.date}:${task.id}`]);
+  assert.equal(calls.reactionsAdd.length, 0, "a delegate-only message does not gain a bookmark");
+
+  await post(handler, reaction("white_check_mark", "222.32", "1720001400.000000"));
+  assert.equal(item.properties.status, "done");
+  assert.equal(task.properties.status, "done");
+  assert.equal(blocks.filter(b => (b.properties || {}).kind === "task").length, 1);
+  assert.equal(calls.credit.length, 2);
+});
+
+test("✅ reuses a bookmark task when the message is also delegated", async () => {
+  const { handler, blocks, calls } = makeHarness();
+  await post(handler, reaction("bookmark", "222.33", "222.9"));
+  await post(handler, reaction("busts_in_silhouette", "222.33", "223.0"));
+  await post(handler, reaction("white_check_mark", "222.33", "1720001200.000000"));
+
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  const tasks = blocks.filter(b => (b.properties || {}).kind === "task");
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].properties.source, "slack-bookmark");
+  assert.equal(tasks[0].properties.status, "done");
+  assert.equal(item.properties.linkedBlockId, tasks[0].id);
+  assert.equal(item.properties.status, "done");
+  assert.equal(calls.credit.length, 1);
+});
+
+test("queued ✅ then 👥 reconciles one completed task and one completed Waiting item", async () => {
+  const { handler, blocks, calls } = makeHarness();
+  await post(handler, reaction("bookmark", "222.331", "1900000000.000000"));
+  await Promise.all([
+    post(handler, reaction("white_check_mark", "222.331", "1900000001.000000")),
+    post(handler, reaction("busts_in_silhouette", "222.331", "1900000002.000000")),
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 120));
+
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  const tasks = blocks.filter(b => (b.properties || {}).kind === "task");
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].properties.status, "done");
+  assert.equal(item.properties.status, "done");
+  assert.equal(item.properties.linkedBlockId, tasks[0].id);
+  assert.equal(calls.credit.length, 1);
+});
+
+test("queued ✅ before any capture becomes a durable delegate completion intent", async () => {
+  const { handler, blocks, calls } = makeHarness();
+  await Promise.all([
+    post(handler, reaction("white_check_mark", "222.3311", "1900000001.000000")),
+    post(handler, reaction("busts_in_silhouette", "222.3311", "1900000002.000000")),
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 120));
+
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  const tasks = blocks.filter(b => (b.properties || {}).kind === "task");
+  const pending = blocks.find(b => (b.properties || {}).kind === "slack_done_intent");
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].properties.status, "done");
+  assert.equal(item.properties.status, "done");
+  assert.equal(pending.properties.status, "applied");
+  assert.equal(calls.credit.length, 1);
+});
+
+test("removing ✅ cancels pending completion despite a delayed older done event", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("white_check_mark", "222.3312", "1900000001.000000"));
+  await post(handler, removal("white_check_mark", "222.3312", DRAKE, "1900000003.000000"));
+  await post(handler, reaction("white_check_mark", "222.3312", "1900000002.000000"));
+  await post(handler, reaction("busts_in_silhouette", "222.3312", "1900000004.000000"));
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  const pending = blocks.find(b => (b.properties || {}).kind === "slack_done_intent");
+  assert.equal(item.properties.status, "open");
+  assert.equal(blocks.filter(b => (b.properties || {}).kind === "task").length, 0);
+  assert.equal(pending.properties.status, "cancelled");
+});
+
+test("un-✅ before any add blocks an older delayed done event", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, removal("white_check_mark", "222.3313", DRAKE, "1900000003.000000"));
+  await post(handler, reaction("white_check_mark", "222.3313", "1900000002.000000"));
+  await post(handler, reaction("busts_in_silhouette", "222.3313", "1900000004.000000"));
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  const pending = blocks.find(b => (b.properties || {}).kind === "slack_done_intent");
+  assert.equal(item.properties.status, "open");
+  assert.equal(blocks.filter(b => (b.properties || {}).kind === "task").length, 0);
+  assert.equal(pending.properties.status, "cancelled");
+});
+
+test("a restored delegate consumes a new pending done intent", async () => {
+  const { handler, blocks, calls } = makeHarness();
+  await post(handler, reaction("white_check_mark", "222.3314", "1900000001.000000"));
+  await post(handler, reaction("busts_in_silhouette", "222.3314", "1900000002.000000"));
+  await post(handler, removal("white_check_mark", "222.3314", DRAKE, "1900000003.000000"));
+  await post(handler, removal("busts_in_silhouette", "222.3314", DRAKE, "1900000004.000000"));
+  await post(handler, reaction("white_check_mark", "222.3314", "1900000005.000000"));
+  await post(handler, reaction("busts_in_silhouette", "222.3314", "1900000006.000000"));
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  const task = blocks.find(b => (b.properties || {}).kind === "task");
+  const pending = blocks.find(b => (b.properties || {}).kind === "slack_done_intent");
+  assert.equal(item.deleted, undefined);
+  assert.equal(task.deleted, undefined);
+  assert.equal(item.properties.status, "done");
+  assert.equal(task.properties.status, "done");
+  assert.equal(pending.properties.status, "applied");
+  assert.equal(calls.credit.length, 2);
+});
+
+test("queued ✅ then 🔖 claims the completed delegate task without a duplicate", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.332", "1900000000.000000"));
+  await Promise.all([
+    post(handler, reaction("white_check_mark", "222.332", "1900000001.000000")),
+    post(handler, reaction("bookmark", "222.332", "1900000002.000000")),
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 120));
+
+  const tasks = blocks.filter(b => (b.properties || {}).kind === "task");
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].properties.status, "done");
+  assert.equal(tasks[0].properties.source, "slack-bookmark");
+  assert.equal(tasks[0].properties.idempotency_key, "slack-bookmark:C1:222.332");
+});
+
+test("removing 👥 deletes a completed Waiting item and its itinerary task", async () => {
+  const { handler, blocks, calls } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.4", "222.9"));
+  await post(handler, reaction("white_check_mark", "222.4", "1720001200.000000"));
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  const task = blocks.find(b => (b.properties || {}).source === "slack-delegate-completion");
+  await post(handler, removal("busts_in_silhouette", "222.4"));
+  assert.equal(item.deleted, true);
+  assert.equal(task.deleted, true);
+  assert.ok(calls.reactionsRemove.some(call => call.body.name === "white_check_mark"));
+});
+
+test("re-adding 👥 restores the same Waiting cluster and preserves user edits", async () => {
   const { handler, blocks } = makeHarness();
   await post(handler, reaction("busts_in_silhouette", "222.41", "222.9"));
-  blocks[0].properties.notes = "Morgan owns this, ask for legal approval first.";
-  blocks[0].properties.delegatee = { name: "Morgan" };
-  blocks[0].properties.checkInDate = "2026-08-03";
+  const item = blocks[0];
+  item.properties.notes = "Morgan owns this, ask for legal approval first.";
+  item.properties.delegatee = { name: "Morgan" };
+  item.properties.checkInDate = "2026-08-03";
+  await post(handler, reaction("hourglass", "222.41", "1720000000.000000"));
+  const task = blocks.find(b => (b.properties || {}).source === "slack-delegate-completion");
   await post(handler, removal("busts_in_silhouette", "222.41"));
-  assert.equal(blocks[0].deleted, undefined);
-  assert.equal(blocks[0].properties.delegatee.name, "Morgan");
-  assert.equal(blocks[0].properties.checkInDate, "2026-08-03");
-  assert.match(blocks[0].properties.notes, /legal approval/);
+  assert.equal(item.deleted, true);
+  assert.equal(task.deleted, true);
+  await post(handler, reaction("busts_in_silhouette", "222.41", "1900000100.000000"));
+  assert.equal(item.deleted, undefined);
+  assert.equal(task.deleted, undefined);
+  assert.equal(blocks.filter(b => (b.properties || {}).kind === "delegated_item").length, 1);
+  assert.equal(item.properties.delegatee.name, "Morgan");
+  assert.equal(item.properties.checkInDate, "2026-08-03");
+  assert.match(item.properties.notes, /legal approval/);
+});
+
+test("removing 👥 deletes every generated check-in", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.411", "1900000000.000000"));
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  blocks.push({
+    id: "check-in-1", type: "block", date: "2026-07-29", workspace_id: "ws-1", user_id: 1,
+    properties: { kind: "task", source: "waiting-check-in", delegatedItemId: item.id },
+  });
+  blocks.push({
+    id: "check-in-2", type: "block", date: "2026-07-30", workspace_id: "ws-1", user_id: 1,
+    properties: { kind: "task", source: "waiting-check-in", delegatedItemId: item.id },
+  });
+
+  await post(handler, removal("busts_in_silhouette", "222.411", DRAKE, "1900000100.000000"));
+  assert.equal(item.deleted, true);
+  assert.equal(blocks.find(b => b.id === "check-in-1").deleted, true);
+  assert.equal(blocks.find(b => b.id === "check-in-2").deleted, true);
+});
+
+test("removing 👥 preserves a bookmark task owned by the same message", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("bookmark", "222.412", "1900000000.000000"));
+  await post(handler, reaction("busts_in_silhouette", "222.412", "1900000001.000000"));
+  await post(handler, reaction("white_check_mark", "222.412", "1900000002.000000"));
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  const bookmark = blocks.find(b => (b.properties || {}).source === "slack-bookmark");
+
+  await post(handler, removal("busts_in_silhouette", "222.412", DRAKE, "1900000100.000000"));
+  assert.equal(item.deleted, true);
+  assert.equal(bookmark.deleted, undefined);
+  assert.equal(bookmark.properties.status, "done");
+});
+
+test("removing 🔖 transfers a shared completed task to the remaining delegate", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("bookmark", "222.4121", "1900000000.000000"));
+  await post(handler, reaction("busts_in_silhouette", "222.4121", "1900000001.000000"));
+  await post(handler, reaction("white_check_mark", "222.4121", "1900000002.000000"));
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  const task = blocks.find(b => (b.properties || {}).kind === "task");
+
+  await post(handler, removal("bookmark", "222.4121", DRAKE, "1900000100.000000"));
+  assert.equal(task.deleted, undefined);
+  assert.equal(task.properties.source, "slack-delegate-completion");
+  assert.equal(task.properties.idempotency_key, "slack-delegate-completion:C1:222.4121");
+  assert.equal(task.properties.delegatedItemId, item.id);
+  assert.equal(task.properties.status, "done");
+});
+
+test("a pre-existing delegate task remains canonical after adding a bookmark", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.4122", "1900000000.000000"));
+  await post(handler, reaction("hourglass", "222.4122", "1900000001.000000"));
+  const delegateTask = blocks.find(b => (b.properties || {}).source === "slack-delegate-completion");
+  await post(handler, reaction("bookmark", "222.4122", "1900000002.000000"));
+  const bookmark = blocks.find(b => (b.properties || {}).source === "slack-bookmark");
+
+  await post(handler, reaction("white_check_mark", "222.4122", "1900000100.000000"));
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  assert.equal(item.properties.linkedBlockId, delegateTask.id);
+  assert.equal(delegateTask.properties.status, "done");
+  assert.equal(bookmark.properties.status, "open");
+
+  await post(handler, removal("bookmark", "222.4122", DRAKE, "1900000200.000000"));
+  assert.equal(bookmark.deleted, true);
+  assert.equal(delegateTask.deleted, undefined);
+});
+
+test("a delayed 👥 add cannot restore a cluster removed by a newer event", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.413", "1900000000.000000"));
+  const item = blocks[0];
+  await post(handler, removal("busts_in_silhouette", "222.413", DRAKE, "1900000200.000000"));
+  await post(handler, reaction("busts_in_silhouette", "222.413", "1900000100.000000"));
+  assert.equal(item.deleted, true);
+
+  await post(handler, reaction("busts_in_silhouette", "222.413", "1900000300.000000"));
+  assert.equal(item.deleted, undefined);
+});
+
+test("a newer repeated 👥 removal advances the deleted row ordering boundary", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.4131", "1900000000.000000"));
+  const item = blocks[0];
+  await post(handler, removal("busts_in_silhouette", "222.4131", DRAKE, "1900000002.000000"));
+  await post(handler, removal("busts_in_silhouette", "222.4131", DRAKE, "1900000004.000000"));
+  await post(handler, reaction("busts_in_silhouette", "222.4131", "1900000003.000000"));
+  assert.equal(item.deleted, true);
+  assert.equal(item.properties.slackDelegateChangedAt, "2030-03-17T17:46:44.000Z");
+});
+
+test("👥 supports ⌛ start and un-⌛ without creating a bookmark", async () => {
+  const { handler, blocks, calls } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.414", "1900000000.000000"));
+  await post(handler, reaction("hourglass", "222.414", "1900000100.000000"));
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  const task = blocks.find(b => (b.properties || {}).source === "slack-delegate-completion");
+  assert.ok(task.properties.startedAt);
+  assert.equal(item.properties.linkedBlockId, task.id);
+
+  await post(handler, removal("hourglass", "222.414", DRAKE, "1900000400.000000"));
+  assert.equal(task.properties.startedAt, undefined);
+  assert.ok(task.properties.actualMinutes > 0);
+  assert.equal(calls.reactionsAdd.some(call => call.body.name === "bookmark"), false);
+});
+
+test("un-⌛ pauses the delegate task after a bookmark is added", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.4141", "1900000000.000000"));
+  await post(handler, reaction("hourglass", "222.4141", "1900000001.000000"));
+  const delegateTask = blocks.find(b => (b.properties || {}).source === "slack-delegate-completion");
+  await post(handler, reaction("bookmark", "222.4141", "1900000002.000000"));
+  const bookmark = blocks.find(b => (b.properties || {}).source === "slack-bookmark");
+  await post(handler, removal("hourglass", "222.4141", DRAKE, "1900000004.000000"));
+  assert.equal(delegateTask.properties.startedAt, undefined);
+  assert.equal(bookmark.properties.startedAt, undefined);
+  assert.ok(delegateTask.properties.actualMinutes > 0);
+});
+
+test("removing 👥 preserves an active delegate task claimed by 🔖", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.41411", "1900000000.000000"));
+  await post(handler, reaction("white_check_mark", "222.41411", "1900000001.000000"));
+  await post(handler, reaction("bookmark", "222.41411", "1900000002.000000"));
+  await post(handler, removal("white_check_mark", "222.41411", DRAKE, "1900000003.000000"));
+  await post(handler, reaction("hourglass", "222.41411", "1900000004.000000"));
+  const task = blocks.find(b => (b.properties || {}).kind === "task");
+  assert.equal(task.properties.source, "slack-bookmark");
+  assert.ok(task.properties.startedAt);
+  await post(handler, removal("busts_in_silhouette", "222.41411", DRAKE, "1900000005.000000"));
+  assert.equal(task.deleted, undefined);
+  assert.ok(task.properties.startedAt);
+});
+
+test("delegate work reactions resolve a linked task stored by local id", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.4142", "1900000000.000000"));
+  await post(handler, reaction("hourglass", "222.4142", "1900000001.000000"));
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  const task = blocks.find(b => (b.properties || {}).source === "slack-delegate-completion");
+  task.properties.local_id = "delegate-local-task";
+  item.properties.linkedBlockId = "delegate-local-task";
+  await post(handler, reaction("white_check_mark", "222.4142", "1900000003.000000"));
+  assert.equal(task.properties.status, "done");
+  assert.equal(blocks.filter(b => (b.properties || {}).kind === "task").length, 1);
+});
+
+test("un-✅ reopens a completed text-only Waiting item without creating a task", async () => {
+  const { handler, blocks, calls } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.4143", "1900000000.000000"));
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+  item.properties.status = "done";
+  item.properties.completedAt = "2030-03-17T17:46:41.000Z";
+  item.properties.completedBy = "dcc";
+  item.properties.linkedBlockId = "deleted-local-id";
+  await post(handler, removal("white_check_mark", "222.4143", DRAKE, "1900000002.000000"));
+  assert.equal(item.properties.status, "open");
+  assert.equal(item.properties.completedAt, undefined);
+  assert.equal(item.properties.linkedBlockId, undefined);
+  assert.equal(blocks.filter(b => (b.properties || {}).kind === "task").length, 0);
+  assert.equal(calls.revoke.length, 0);
 });
 
 test("a removal that arrives before creation leaves a durable tombstone, not a phantom delegate", async () => {
@@ -533,10 +939,15 @@ test("reconciliation repairs legacy poller rows that only stored the idempotency
 
 test("completion mirroring selects only rows with valid Slack coordinates", () => {
   const source = require("node:fs").readFileSync(require.resolve("./routes/slack-events.js"), "utf8");
-  assert.match(source, /NULLIF\(properties->>'slack_channel', ''\) IS NOT NULL/);
-  assert.match(source, /NULLIF\(properties->>'slack_ts', ''\) IS NOT NULL/);
-  assert.match(source, /ORDER BY updated_at ASC, id ASC/);
-  assert.match(source, /LIMIT \$4/);
+  const start = source.indexOf("async function mirrorDccCompletions");
+  const end = source.indexOf("\n    return {", start);
+  assert.ok(start >= 0 && end > start, "mirrorDccCompletions source slice exists");
+  const mirror = source.slice(start, end);
+  assert.match(mirror, /properties->>'source' IN \('slack-bookmark', 'slack-delegate', 'slack-delegate-completion'\)/);
+  assert.match(mirror, /NULLIF\(properties->>'slack_channel', ''\) IS NOT NULL/);
+  assert.match(mirror, /NULLIF\(properties->>'slack_ts', ''\) IS NOT NULL/);
+  assert.match(mirror, /ORDER BY updated_at ASC, id ASC/);
+  assert.match(mirror, /LIMIT \$4/);
   assert.match(source, /mirrorCursor/);
 });
 
@@ -548,6 +959,26 @@ test("Slack projection refuses blocks from another workspace", async () => {
   });
   assert.equal(projected, false);
   assert.equal(calls.fetch.length, 0);
+});
+
+test("completing and reopening Waiting mirrors ✅ onto its Slack message", async () => {
+  const { handler, blocks, ctx, calls } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "mirror-wait.1", "222.9"));
+  const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
+
+  item.properties.status = "done";
+  item.properties.completedAt = "2026-07-28T16:00:00.000Z";
+  assert.equal(await ctx.syncSlackTaskReactions(item), true);
+  assert.deepEqual(calls.reactionsAdd.at(-1).body, {
+    channel: "C1", timestamp: "mirror-wait.1", name: "white_check_mark",
+  });
+
+  item.properties.status = "open";
+  delete item.properties.completedAt;
+  assert.equal(await ctx.syncSlackTaskReactions(item), true);
+  assert.deepEqual(calls.reactionsRemove.at(-1).body, {
+    channel: "C1", timestamp: "mirror-wait.1", name: "white_check_mark",
+  });
 });
 
 test("🔖 is idempotent — a duplicate bookmark event makes no second task", async () => {
@@ -643,10 +1074,12 @@ test("reactions from other users are ignored", async () => {
   assert.equal(blocks.length, 0);
 });
 
-test("✅ on a never-bookmarked message creates nothing", async () => {
+test("✅ on a message without capture creates only a hidden pending intent", async () => {
   const { handler, blocks } = makeHarness();
   await post(handler, reaction("white_check_mark", "888.8", "1720000000.000000"));
-  assert.equal(blocks.length, 0);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].properties.kind, "slack_done_intent");
+  assert.equal(blocks[0].properties.hidden, true);
 });
 
 const removal = (name, ts, user = DRAKE, evTs = "1900000000.000000") => ({

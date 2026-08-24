@@ -149,7 +149,7 @@ function parseBlock(row) {
 // requires a `title`, and suppressions deliberately store theirs as `itemTitle`), so
 // this is about not polluting the task space rather than about a visible bug.
 const NON_TASK_KINDS = new Set([
-  "delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone",
+  "delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone", "slack_done_intent",
   "meeting_prep", "meeting_transcript", "meeting_summary", "proposed_action_item",
 ]);
 function isTaskRow(block) {
@@ -536,6 +536,7 @@ function collectCompletionSubtreeIds(rows, parent) {
 async function setTaskCompletion({
   taskRef, completed, completedAt = null, taskDate = null, mutationId,
   expectedRevision = null, userId = null, workspaceId = null, companionUpdates = [],
+  transactionLockKey = null,
 }) {
   validateTaskCompletionInput({ taskRef, completed, completedAt, taskDate, mutationId, expectedRevision });
   if (!Array.isArray(companionUpdates)) throw new Error("companionUpdates must be an array");
@@ -586,6 +587,9 @@ async function setTaskCompletion({
   };
   try {
     await q.query("BEGIN");
+    if (transactionLockKey) {
+      await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [transactionLockKey]);
+    }
 
     let { rows: directRows } = await q.query(
       `SELECT * FROM blocks
@@ -1206,6 +1210,43 @@ async function undeleteBlock(id, client) {
     [id, existing.properties, now]
   );
   return parseBlock({ ...existing, deleted_at: null, updated_at: now });
+}
+
+// Event ordering metadata must sometimes advance after a row is soft-deleted.
+// Keep that narrow write tenant-fenced and transactional without weakening
+// updateBlock's rule that ordinary PATCH operations reject tombstones.
+async function updateDeletedBlockProperties(id, properties, workspaceId, transactionClient) {
+  const ownsTransaction = !transactionClient;
+  const q = transactionClient || await pool.connect();
+  const now = new Date().toISOString();
+  try {
+    if (ownsTransaction) await q.query("BEGIN");
+    const { rows } = await q.query(
+      `SELECT * FROM blocks
+        WHERE id = $1 AND workspace_id IS NOT DISTINCT FROM $2
+        FOR UPDATE`,
+      [id, workspaceId || null]
+    );
+    const existing = rows[0];
+    if (!existing) throw new Error(`Block not found: ${id}`);
+    if (!existing.deleted_at) throw new Error(`Block is not deleted: ${id}`);
+    await q.query(
+      "UPDATE blocks SET properties = $1, updated_at = $2 WHERE id = $3",
+      [properties, now, id]
+    );
+    await q.query(
+      `INSERT INTO operations (block_id, op_type, before_data, timestamp)
+       VALUES ($1, 'update', $2, $3)`,
+      [id, existing.properties, now]
+    );
+    if (ownsTransaction) await q.query("COMMIT");
+    return parseBlock({ ...existing, properties, updated_at: now });
+  } catch (error) {
+    if (ownsTransaction) await q.query("ROLLBACK");
+    throw error;
+  } finally {
+    if (ownsTransaction) q.release();
+  }
 }
 
 // Fetch a row tombstone included. getBlock() happens to behave identically today,
@@ -2324,9 +2365,9 @@ async function findResponsibilityTaskByAlertKey(alertKey, workspaceId) {
 // has its own resolver (findUniqueLiveBlockByReference) which the completion routes
 // already use, and duplicating its tombstone/duplicate-id rules in a second query is
 // exactly how the two would drift.
-async function getWaitingClusterTasks(itemId, workspaceId) {
+async function getWaitingClusterTasks(itemId, workspaceId, transactionClient, forUpdate = false) {
   if (!itemId) return [];
-  const { rows } = await pool.query(
+  const { rows } = await (transactionClient || pool).query(
     `SELECT * FROM blocks
       WHERE type = 'block'
         AND deleted_at IS NULL
@@ -2336,7 +2377,7 @@ async function getWaitingClusterTasks(itemId, workspaceId) {
           OR properties->>'local_id' = 'waiting-checkin-task:' || $1
           OR properties->>'local_id' = 'waiting-unblock-task:' || $1
         )
-      ORDER BY date ASC NULLS LAST, created_at ASC`,
+      ORDER BY date ASC NULLS LAST, created_at ASC${forUpdate ? " FOR UPDATE" : ""}`,
     [itemId, workspaceId || null]
   );
   return rows.map(parseBlock);
@@ -2392,7 +2433,7 @@ module.exports = {
   pool, BLOCK_SCHEMAS, VALID_TYPES, validateBlock,
   createBlock, updateBlock, deleteBlock,
   // Canonical task model primitives (A1) — no callers yet except the audit endpoint.
-  undeleteBlock, getBlockIncludingDeleted, findByIdempotencyKey, getBlocksByIdempotencyKeys, getRepeatSeriesBlocks, withRepeatSeriesLock, isIdempotencyConflict,
+  undeleteBlock, updateDeletedBlockProperties, getBlockIncludingDeleted, findByIdempotencyKey, getBlocksByIdempotencyKeys, getRepeatSeriesBlocks, withRepeatSeriesLock, isIdempotencyConflict,
   getCarryoverPool, carryoverSkipTypes, getSubtree, isTaskRow,
   isCompletedTaskProps, applyCompletionIntent, setTaskCompletion, propagateResponsibilityDone,
   getBlocksByDate, getBlocksByDateIncludingDeleted, getCalendarMeetingContextBySourceIds, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,

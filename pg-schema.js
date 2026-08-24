@@ -864,7 +864,7 @@ const POST_SCHEMA_STATEMENTS = [
       SELECT p_type IS DISTINCT FROM 'day_root'
          AND p_type IS DISTINCT FROM 'time_entry'
          AND COALESCE(p_props->>'kind', '') NOT IN
-             ('delegated_item', 'task_group', 'reschedule_tombstone', 'triage_suppression', 'slack_reaction_tombstone',
+             ('delegated_item', 'task_group', 'reschedule_tombstone', 'triage_suppression', 'slack_reaction_tombstone', 'slack_done_intent',
               'meeting_prep', 'meeting_transcript', 'meeting_summary', 'proposed_action_item')
          AND (COALESCE(p_props->>'kind', '') NOT LIKE 'responsibility%'
               OR COALESCE(p_props->>'kind', '') = 'responsibility_task')
