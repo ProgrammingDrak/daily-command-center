@@ -363,3 +363,34 @@ test("over the part ceiling is refused before any task is created", async () => 
   assert.equal(body.code, "TIME_ALLOCATION_INVALID");
   assert.equal(h.created.length, 0, "the ceiling is enforced before the first side effect");
 });
+
+// ── iteration 2 of the review ────────────────────────────────────────────────
+
+test("an absurdly long segment is refused before it can fan out", async () => {
+  // The PIECE count was capped but the SOURCE LENGTH was not, and per-piece midnight
+  // splitting multiplies them: splitSessionByLocalDay emits one row per local day up to
+  // its 370-day guard, and the guard TRUNCATES, so time is silently lost as well.
+  const h = harness({ rows: [task("a"), task("b"), segment("seg", "a", 4440 * 24 * 3600)] });
+  const { status, body } = await post(h.app, "seg", { parts: [{ taskId: "b" }] });
+  assert.equal(status, 400);
+  assert.equal(body.code, "TIME_ALLOCATION_INVALID");
+  assert.equal(live(h, "a").length, 1, "nothing was written");
+  // A long-but-plausible segment still moves: 16h is reconcileTiming's own ceiling.
+  const ok = harness({ rows: [task("a"), task("b"), segment("seg", "a", 16 * 3600)] });
+  assert.equal((await post(ok.app, "seg", { parts: [{ taskId: "b" }] })).status, 200);
+});
+
+test("an unsettled operation is resumed by its replay, not reported as done", async () => {
+  const h = harness({ rows: [task("a"), task("b"), segment("seg", "a", 3600)] });
+  // Hand-stamp the shape a crashed run leaves behind: started, projections outstanding.
+  const source = h.find("seg");
+  source.properties.reallocationOperationId = "crashed-1";
+  source.properties.reallocationPriorTotals = { a: 60 };
+  source.properties.reallocationTouchedIds = ["a", "b"];
+  source.properties.reallocationKeptSource = true;
+
+  const { status, body } = await post(h.app, "seg", { parts: [{ minutes: 20, taskId: "b" }, { taskId: "a" }], actionId: "crashed-1" });
+  assert.equal(status, 200);
+  assert.equal(body.reason, "resumed", "answering 'duplicate' here would report a half-applied move as complete");
+  assert.ok(h.find("seg").properties.reallocationSettledAt);
+});
