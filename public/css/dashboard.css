@@ -5247,6 +5247,51 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .work-picker-row small{color:var(--text-muted);font-weight:400}
 .work-picker-row b{color:var(--cyan,#22d3ee);font-size:11px}
 @media(max-width:600px){.active-work-row{flex-wrap:wrap}.active-work-title{flex:1}.active-work-time{width:100%;margin-left:18px}.active-work-row .work-action-btn:first-of-type{margin-left:18px}}
+/* Move / split tracked time — reuses .work-picker's shell, adds the piece rows */
+.treallo-body{display:grid;gap:8px;overflow-y:auto}
+.treallo-pieces{display:grid;gap:6px}
+.treallo-piece{display:grid;grid-template-columns:78px minmax(0,1fr) 24px;align-items:center;gap:8px}
+.treallo-piece-len{display:grid;justify-items:center;gap:1px;padding:6px 4px;background:var(--card);border:1px solid var(--border);border-radius:8px}
+.treallo-piece-len input{width:100%;box-sizing:border-box;padding:2px 4px;background:transparent;border:0;color:var(--text);font:inherit;font-weight:650;text-align:center;font-variant-numeric:tabular-nums}
+.treallo-piece-len input:focus{outline:none}
+.treallo-piece-len small{color:var(--text-muted);font-size:9px;text-transform:uppercase;letter-spacing:.06em}
+.treallo-rest{font-weight:650;font-variant-numeric:tabular-nums}
+.treallo-rest.bad{color:#f87171}
+.treallo-piece.last .treallo-piece-len{border-style:dashed}
+.treallo-target{padding:11px 12px;text-align:left;background:var(--card);border:1px dashed var(--border);border-radius:8px;color:var(--text-muted);font:inherit;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.treallo-target.chosen{border-style:solid;border-color:var(--cyan,#22d3ee);color:var(--text);font-weight:650}
+.treallo-target:hover,.treallo-target:focus-visible{border-color:var(--cyan,#22d3ee);outline:none}
+.treallo-drop{border:0;background:transparent;color:var(--text-muted);font-size:19px;line-height:1;cursor:pointer}
+.treallo-drop:hover{color:#f87171}
+.treallo-drop-spacer{display:block}
+.treallo-add{padding:8px;background:transparent;border:1px dashed var(--border);border-radius:8px;color:var(--text-muted);font:inherit;font-size:11px;cursor:pointer}
+.treallo-add:hover{border-color:var(--cyan,#22d3ee);color:var(--text)}
+.treallo-warn{padding:7px 9px;border-radius:8px;background:rgba(248,113,113,.12);color:#fca5a5;font-size:11px}
+.treallo-actions{display:flex;justify-content:flex-end;gap:8px}
+.treallo-actions button{padding:9px 15px;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);font:inherit;cursor:pointer}
+.treallo-actions .treallo-save{border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee);font-weight:650}
+.treallo-actions button:disabled{opacity:.45;cursor:not-allowed}
+.treallo-picker{display:grid;gap:8px;min-height:0}
+.treallo-picker-head{display:flex;align-items:center;gap:10px;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.treallo-back{border:0;background:transparent;color:var(--cyan,#22d3ee);font:inherit;font-size:11px;cursor:pointer;padding:0}
+.treallo-picker-list{display:grid;gap:6px;max-height:46vh;overflow-y:auto}
+.treallo-row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:10px 12px;text-align:left;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer}
+.treallo-row:hover,.treallo-row:focus-visible{border-color:var(--cyan,#22d3ee);outline:none}
+.treallo-row span{display:grid;gap:2px;min-width:0}
+.treallo-row strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.treallo-row small{color:var(--text-muted);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.treallo-row b{color:var(--cyan,#22d3ee);font-size:10px;text-transform:uppercase;letter-spacing:.06em;flex:0 0 auto}
+.treallo-row.new b{color:#4ade80}
+/* Work-history rows get the same affordance, so a session can be re-attributed
+   from the place it is listed rather than only from Day Review. */
+.work-history-row .work-realloc{grid-column:1/-1;justify-self:start;margin-top:2px;padding:3px 8px;background:transparent;border:1px solid var(--border);border-radius:999px;color:var(--text-muted);font:inherit;font-size:10px;cursor:pointer}
+.work-history-row .work-realloc:hover{border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee)}
+.work-realloc-set{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:5px;margin-top:2px}
+/* A Day Review actual fill is the segment, so clicking it is the shortest path
+   to re-attributing that time. */
+.dr-fill[data-time-entry]{cursor:pointer}
+.dr-fill[data-time-entry]:hover{outline:2px solid var(--cyan,#22d3ee);outline-offset:-2px}
+@media(max-width:600px){.treallo-piece{grid-template-columns:68px minmax(0,1fr) 22px}.treallo-picker-list{max-height:52vh}}
 .recap-recording-attachment{margin:0 0 16px;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
 .recap-recording-link{display:inline-flex;align-items:center;gap:6px;margin:6px 10px 0 0;font-weight:700;text-decoration:none}
 .recap-recording-link.cold{font-weight:600;opacity:.78}
