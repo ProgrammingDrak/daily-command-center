@@ -840,3 +840,115 @@ test("a chained reallocation does not inherit the previous operation's stamp", a
   assert.equal(h.live(c)[0].properties.reallocationOperationId, undefined);
   assert.equal(h.live(b)[0].properties.reallocationOperationId, undefined);
 });
+
+test("a non-finite tracked length is refused at every layer, not silently accepted", () => {
+  // durSec is client-writable, and "Infinity" is valid JSON that Number() coerces. Every
+  // guard downstream used to be satisfied by it BY ACCIDENT: the conservation check
+  // compares `Infinity !== Infinity`, which is false, and splitSessionByLocalDay returns
+  // no spans for a non-finite window, so the infinite piece wrote nothing, nothing
+  // "stayed" on the origin, and the source segment was deleted out from under it.
+  for (const bad of ["Infinity", "-Infinity", "1e400", Infinity, NaN, "abc", null, undefined]) {
+    assert.equal(planAllocations(bad, [{ minutes: 5 }, {}]).ok, false, `planAllocations accepted ${String(bad)}`);
+    assert.equal(entryWindow({ date: "2026-08-20", properties: { durSec: bad, startedAt: "2026-08-20T13:00:00.000Z" } }).durSec, 0,
+      `entryWindow measured a length for ${String(bad)}`);
+  }
+  // And a finite length still works, so the guard is not just refusing everything.
+  assert.equal(planAllocations(3600, [{ minutes: 5 }, {}]).ok, true);
+  assert.equal(entryWindow({ date: "2026-08-20", properties: { durSec: 3600, startedAt: "2026-08-20T13:00:00.000Z" } }).durSec, 3600);
+});
+
+test("the store refuses an infinite allocation even if a caller gets past the planner", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  const entry = await trackedHour(h, owner);
+  entry.properties.durSec = "Infinity";
+  const before = JSON.stringify(h.rows);
+  await assert.rejects(
+    () => h.timing.reallocateTimeEntry({
+      entry, allocations: [{ durSec: 300, task: other }, { durSec: Infinity, task: owner }], workspaceId: "ws-1",
+    }),
+    /conserve/,
+  );
+  assert.equal(JSON.stringify(h.rows), before, "and it rolls back rather than deleting the source");
+});
+
+test("a task whose Slack timer segment was moved away can still record new time", async () => {
+  const h = harness();
+  const from = h.task({ startedAt: "2026-08-20T13:00:00.000Z" }, { id: "from" });
+  const to = h.task({}, { id: "to" });
+  await h.timing.finalizeTiming({ block: from, endMs: Date.parse("2026-08-20T13:25:00.000Z"), userId: 1, workspaceId: "ws-1" });
+  const timerRow = h.live(from)[0];
+  assert.equal(timerRow.id, "from-slacktimer");
+
+  await h.timing.reallocateTimeEntry({ entry: timerRow, allocations: [{ durSec: timerRow.properties.durSec, task: to }], actionId: "move-1", workspaceId: "ws-1" });
+  // The source is SOFT-deleted, because the replay stamp the route answers off has to
+  // survive on it. That leaves a tombstone at the deterministic `<taskId>-slacktimer` id,
+  // and finalizeTiming's existence check is tombstone-inclusive.
+  const tombstone = h.rows.find((row) => row.id === "from-slacktimer");
+  assert.ok(tombstone.deleted_at);
+
+  // A genuine new hourglass on the origin must still produce a segment.
+  from.properties.startedAt = "2026-08-21T13:00:00.000Z";
+  delete from.properties.actualMinutes;
+  await h.timing.finalizeTiming({ block: from, endMs: Date.parse("2026-08-21T13:30:00.000Z"), userId: 1, workspaceId: "ws-1" });
+  assert.equal(from.properties.actualMinutes, 30);
+  assert.equal(h.live(from).length, 1, "the tombstone was revived rather than swallowing the timer");
+  assert.equal(h.live(from)[0].properties.durSec, 1800, "and it carries the NEW measurement");
+  assert.equal(h.live(to).length, 1, "the moved segment is untouched");
+  assert.equal(to.properties.actualMinutes, 25);
+});
+
+test("two segments moving onto one task cannot corrupt its projection", async () => {
+  // The segment lock does not serialize this: two DIFFERENT segments landing on one task
+  // are a read-modify-write race, and the projection writes properties wholesale. Without
+  // a task-level lock the second operation either lost the first's minutes (10) or read
+  // them back as unaccounted and added them on top (30), and the 30 was sticky.
+  const h = harness();
+  const a = h.task({}, { id: "a" });
+  const b = h.task({}, { id: "b" });
+  const dest = h.task({}, { id: "dest" });
+  const first = await trackedHour(h, a, { startIso: "2026-08-20T13:00:00.000Z", minutes: 10 });
+  const second = await trackedHour(h, b, { startIso: "2026-08-20T15:00:00.000Z", minutes: 10 });
+
+  let locks = [];
+  const perOperation = [];
+  const realLocked = h.db.getBlockIncludingDeleted.bind(h.db);
+  h.db.getBlockIncludingDeleted = async (id, client, forUpdate) => {
+    if (forUpdate) locks.push(id);
+    return realLocked(id, client, forUpdate);
+  };
+  for (const entry of [first, second]) {
+    locks = [];
+    await h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 600, task: dest }], workspaceId: "ws-1" });
+    perOperation.push(locks);
+  }
+
+  assert.equal(dest.properties.actualMinutes, 20, "both moves are accounted for exactly once");
+  assert.equal(h.live(dest).length, 2);
+  assert.equal(h.totalSec(), 1200);
+  for (const taken of perOperation) {
+    // The destination task itself must be among the rows taken FOR UPDATE, or the
+    // read-modify-write above is unprotected.
+    assert.ok(taken.includes("dest"), "the destination task is locked, not just the segment");
+    // And WITHIN one operation the task locks are taken in a stable order, so two
+    // overlapping operations sharing tasks cannot deadlock each other.
+    const taskLocks = taken.filter((id) => ["a", "b", "dest"].includes(id));
+    assert.deepEqual(taskLocks, [...taskLocks].sort(), "task locks are acquired in sorted order");
+  }
+});
+
+test("a pool that cannot open a transaction is refused, not silently degraded", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  const entry = await trackedHour(h, owner);
+  // A harness missing `connect` would otherwise make every rollback assertion in this
+  // file pass with nothing rolled back.
+  const naive = createTaskTiming({ blockDB: h.db, pool: { query: async () => ({ rows: [] }) }, timeZone: "America/New_York" });
+  await assert.rejects(
+    () => naive.reallocateTimeEntry({ entry, allocations: [{ durSec: 3600, task: other }], workspaceId: "ws-1" }),
+    /needs a pool that can open a transaction/,
+  );
+  assert.equal(h.totalSec(), 3600);
+});

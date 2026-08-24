@@ -427,3 +427,16 @@ test("a forged resume stamp has nothing left to steer", async () => {
     assert.equal(row.properties.reallocationSettledAt, undefined);
   }
 });
+
+test("a forged non-finite length is refused by the route, not waved past the cap", async () => {
+  const h = harness({ rows: [task("a"), task("b"), segment("seg", "a", 3600)] });
+  const source = h.find("seg");
+  for (const bad of ["Infinity", "1e400", "abc", 0, -5]) {
+    source.properties.durSec = bad;
+    const { status, body } = await post(h.app, "seg", { parts: [{ minutes: 5, taskId: "b" }, { taskId: "a" }] });
+    assert.equal(status, 400, `durSec ${String(bad)} was not refused`);
+    assert.equal(body.code, "TIME_ALLOCATION_INVALID");
+    assert.equal(live(h, "a").length, 1, "the segment is still there");
+    assert.equal(live(h, "b").length, 0, "and nothing landed on the destination");
+  }
+});
