@@ -59,7 +59,21 @@ function harness() {
     },
     async ensureDayRoot(date) { return `day-root-${date}`; },
   };
-  const timing = createTaskTiming({ blockDB: db, pool: { query: async () => ({ rows: [] }) }, timeZone: "America/New_York" });
+  // deleteTimerRow is this module's one raw statement, so an inert pool stub makes
+  // every clearTiming assertion below vacuous: nothing could hard-delete anything and
+  // "the destination keeps its time" would hold even if the moved piece had kept the
+  // `<taskId>-slacktimer` id. task-timing.test.js already models it properly.
+  const hardDeleted = [];
+  const pool = {
+    query: async (sql, params) => {
+      if (/^\s*DELETE/i.test(sql)) {
+        const i = rows.findIndex((row) => row.id === params[0] && row.type === "time_entry");
+        if (i >= 0) hardDeleted.push(rows.splice(i, 1)[0]);
+      }
+      return { rows: [] };
+    },
+  };
+  const timing = createTaskTiming({ blockDB: db, pool, timeZone: "America/New_York" });
   function task(properties = {}, options = {}) {
     const row = {
       id: options.id || `task-${++seq}`,
@@ -77,7 +91,7 @@ function harness() {
     && candidate.properties.blockId === row.id && !candidate.deleted_at);
   const totalSec = () => rows.filter((row) => row.type === "time_entry" && !row.deleted_at)
     .reduce((sum, row) => sum + (Number(row.properties.durSec) || 0), 0);
-  return { rows, timing, task, live, totalSec, db };
+  return { rows, timing, task, live, totalSec, db, hardDeleted };
 }
 
 // One tracked hour on `owner`, written by the real work-session writer so the
@@ -172,6 +186,7 @@ test("a moved piece keeps its clock window", async () => {
   assert.equal(moved.properties.end, before.end);
   assert.equal(moved.properties.startedAt, before.startedAt);
   assert.equal(moved.date, "2026-08-20", "the segment stays on the day the work happened");
+  assert.equal(h.totalSec(), 3600);
 });
 
 // ── splitting ─────────────────────────────────────────────────────────────────
@@ -259,6 +274,7 @@ test("moving an inferred meeting window strips the flags reopenWork deletes on",
   await h.timing.reopenWork({ block: real, atMs: Date.parse("2026-08-20T15:00:00.000Z") });
   assert.equal(h.live(real).length, 1, "hand-placed time survives a reopen");
   assert.equal(real.properties.actualMinutes, 60);
+  assert.equal(h.totalSec(), 3600);
 });
 
 test("a moved Slack timer row cannot be hard-deleted by the origin's clearTiming", async () => {
@@ -280,6 +296,15 @@ test("a moved Slack timer row cannot be hard-deleted by the origin's clearTiming
   await h.timing.clearTiming({ block: from });
   assert.equal(h.live(to).length, 1, "the destination keeps its time");
   assert.equal(to.properties.actualMinutes, 30);
+  assert.equal(h.totalSec(), 1800, "clearTiming on the origin erased nothing");
+  // It DOES hard-delete one row: the source's own tombstone, still sitting at
+  // `from-slacktimer` after the move soft-deleted it. What matters is that the reach of
+  // a delete keyed on the ORIGIN's id stops there and never touches the destination.
+  assert.ok(h.hardDeleted.length > 0, "the pool stub really executes deleteTimerRow");
+  assert.ok(
+    h.hardDeleted.every((row) => (row.properties || {}).blockId !== "to"),
+    "nothing clearTiming deleted belonged to the destination",
+  );
 });
 
 test("recomputeActualMinutes drops a stale ⏱ note but keeps an unrelated one", async () => {
@@ -293,6 +318,7 @@ test("recomputeActualMinutes drops a stale ⏱ note but keeps an unrelated one",
   await h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 1800, task: to }], workspaceId: "ws-1" });
   assert.equal(from.properties.notes, "Ticket ABC-1", "the ⏱ line goes, the user's own text stays");
   assert.equal(from.properties.actualMinutes, undefined);
+  assert.equal(h.totalSec(), 1800);
 });
 
 test("a reconciled guess becomes a real measurement once a human places it", async () => {
@@ -303,6 +329,7 @@ test("a reconciled guess becomes a real measurement once a human places it", asy
   await h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 3600, task: to }], workspaceId: "ws-1" });
   assert.equal(to.properties.actualMinutes, 60);
   assert.equal(to.properties.actualMinutesFrom, undefined, "the derived flag is gone, so no read withdraws it");
+  assert.equal(h.totalSec(), 3600);
 });
 
 // ── replay safety ─────────────────────────────────────────────────────────────
@@ -358,4 +385,239 @@ test("a piece that lands on a deleted-and-restored row reuses it instead of dupl
   await h.timing.reallocateTimeEntry({ entry: stayed, allocations, workspaceId: "ws-1" });
   assert.equal(h.live(other).length, 1);
   assert.equal(h.live(other)[0].id, created.id);
+  // The ledger, not just the id: a revived row with the wrong durSec, or an extra row
+  // on the origin, would satisfy both assertions above.
+  assert.equal(h.totalSec(), 3600, "the tombstone was revived, not duplicated");
+});
+
+// ── the regressions the five-lane review found ───────────────────────────────
+
+test("splitting an inferred window makes BOTH halves survive a reopen", async () => {
+  const h = harness();
+  const meeting = h.task({
+    type: "meeting", start: "09:00", end: "10:00",
+    plannedStartAt: "2026-08-20T13:00:00.000Z", plannedEndAt: "2026-08-20T14:00:00.000Z",
+  }, { id: "meeting" });
+  const real = h.task({}, { id: "real" });
+  await h.timing.completeWork({ block: meeting, atMs: Date.parse("2026-08-20T14:05:00.000Z") });
+  const inferred = h.live(meeting)[0];
+  assert.equal(inferred.properties.inferenceReason, "meeting-planned-window");
+
+  // The piece that STAYS is hand-placed too: its duration is one the user chose, so it
+  // is no longer the planned-window guess. Gating the flag strip on `moved` left it
+  // marked as inferred, and reopenWork deletes rows by exactly that field.
+  await h.timing.reallocateTimeEntry({
+    entry: inferred,
+    allocations: [{ durSec: 1200, task: real }, { durSec: 2400, task: meeting }],
+    workspaceId: "ws-1",
+  });
+  assert.equal(h.live(meeting)[0].properties.inferenceReason, undefined);
+  assert.equal(h.live(real)[0].properties.inferenceReason, undefined);
+
+  await h.timing.reopenWork({ block: meeting, atMs: Date.parse("2026-08-20T15:00:00.000Z") });
+  assert.equal(meeting.properties.actualMinutes, 40, "the 40m that stayed survives the reopen");
+  assert.equal(h.totalSec(), 3600);
+});
+
+test("moving every minute away does not let the reconciler re-invent them", async () => {
+  const h = harness();
+  // The shape reconcileTiming exists for: started, then checked off in the UI, so
+  // completion lives in the day_root overlay and startedAt outlives it.
+  const from = h.task({ startedAt: "2026-08-20T13:00:00.000Z" }, { id: "from" });
+  const to = h.task({}, { id: "to" });
+  const dayRoot = {
+    id: "day-root-2026-08-20", type: "day_root", date: "2026-08-20",
+    properties: { _done: { ids: ["from"], at: { from: "2026-08-20T13:30:00.000Z" } } },
+    workspace_id: "ws-1", deleted_at: null,
+  };
+  h.rows.push(dayRoot);
+
+  await h.timing.reconcileTiming([from, dayRoot], { userId: 1, workspaceId: "ws-1" });
+  assert.equal(from.properties.actualMinutesFrom, "reconcile", "the reconciler derived a stamp");
+  const derived = h.live(from)[0];
+  assert.ok(derived, "and minted its segment");
+
+  await h.timing.reallocateTimeEntry({ entry: derived, allocations: [{ durSec: derived.properties.durSec, task: to }], workspaceId: "ws-1" });
+  assert.equal(from.properties.actualMinutes, undefined);
+  assert.equal(from.properties.actualMinutesFrom, "reallocated", "the sentinel holds the reconciler off");
+  const movedMinutes = to.properties.actualMinutes;
+
+  // Deleting actualMinutesFrom outright would drop this row into the "startedAt with no
+  // actualMinutes" branch and re-derive the very minutes that just moved.
+  await h.timing.reconcileTiming([from, dayRoot], { userId: 1, workspaceId: "ws-1" });
+  assert.equal(from.properties.actualMinutes, undefined, "no minutes re-invented on the origin");
+  assert.equal(to.properties.actualMinutes, movedMinutes, "and the destination is untouched");
+  assert.equal(h.live(from).length, 0, "no timer row re-minted either");
+
+  // The timer on this row is still running (an overlay completion never cleared it),
+  // so startWork answers "already-active" and writes nothing. Pausing is what gives
+  // such a row real minutes again, and that is what has to retire the sentinel.
+  await h.timing.pauseWork({ block: from, atMs: Date.parse("2026-08-20T14:00:00.000Z") });
+  assert.equal(from.properties.actualMinutesFrom, undefined, "measured minutes retire the sentinel");
+  assert.ok(Number(from.properties.actualMinutes) > 0);
+});
+
+test("a segment naming a task in another workspace cannot write to it", async () => {
+  const h = harness();
+  const mine = h.task({}, { id: "mine" });
+  const theirs = h.task({ actualMinutes: 90, notes: "⏱ Took ~90m (their work)" }, { id: "theirs", workspaceId: "ws-other" });
+  // properties.blockId is client-writable, so a segment owned by ws-1 can name a task
+  // in ws-other. db.updateBlock carries no tenant predicate, so the store must fence.
+  const entry = await trackedHour(h, mine);
+  // Re-point the segment at the foreign task, and clear the stamp the pause left on
+  // `mine`, so the fixture is a segment that only ever pointed at `theirs`.
+  entry.properties.blockId = "theirs";
+  delete mine.properties.actualMinutes;
+
+  await h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 3600, task: mine }], workspaceId: "ws-1" });
+  assert.equal(theirs.properties.actualMinutes, 90, "the other workspace's minutes are untouched");
+  assert.match(theirs.properties.notes, /Took ~90m/, "and its note was not stripped");
+  assert.equal(mine.properties.actualMinutes, 60);
+});
+
+test("a piece past local midnight lands on the day it happened", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  // One unsplit row spanning 23:30 to 00:30, which is what finalizeTiming writes for a
+  // hourglass that crossed midnight and what Day Review's editor allows by hand.
+  // trackedHour cannot produce it: writeLogicalSession already splits by local day.
+  const entry = await h.db.createBlock({
+    id: "crosses-midnight", type: "time_entry", date: "2026-08-20",
+    properties: {
+      blockId: "owner", taskTitle: "Work", durSec: 3600, source: "slack",
+      startedAt: "2026-08-21T03:30:00.000Z", endedAt: "2026-08-21T04:30:00.000Z",
+      start: "23:30", end: "00:30",
+    },
+    user_id: 1, workspace_id: "ws-1",
+  });
+  assert.equal(entry.date, "2026-08-20");
+
+  await h.timing.reallocateTimeEntry({
+    entry, allocations: [{ durSec: 1200, task: owner }, { durSec: 2400, task: other }], workspaceId: "ws-1",
+  });
+  assert.equal(h.totalSec(), 3600);
+  // Every row's date must be the local day its OWN window falls in. Pinning each piece
+  // to the source row's date put post-midnight minutes on the previous day, where Day
+  // Review positions them by `start` and draws them ~23.5h off.
+  for (const row of h.rows.filter((r) => r.type === "time_entry" && !r.deleted_at)) {
+    const localDay = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(new Date(row.properties.startedAt));
+    assert.equal(row.date, localDay, `row ${row.id} sits on ${row.date} but starts on ${localDay}`);
+  }
+  assert.ok(h.rows.some((r) => r.type === "time_entry" && !r.deleted_at && r.date === "2026-08-21"),
+    "the minutes after midnight belong to the next day");
+});
+
+test("an unpositioned segment splits without smearing a stale clock", async () => {
+  const h = harness();
+  // A backlog task is dateless and a legal source: isWorkTaskRow admits kind backlog.
+  const from = h.task({ kind: "backlog", startedAt: "2026-08-20T13:00:00.000Z" }, { id: "from", date: null });
+  const to = h.task({}, { id: "to" });
+  await h.timing.finalizeTiming({ block: from, endMs: Date.parse("2026-08-20T13:30:00.000Z"), userId: 1, workspaceId: "ws-1" });
+  const entry = h.live(from)[0];
+  assert.equal(entry.date, null);
+
+  await h.timing.reallocateTimeEntry({
+    entry, allocations: [{ durSec: 600, task: to }, { durSec: 1200, task: from }], workspaceId: "ws-1",
+  });
+  assert.equal(h.totalSec(), 1800);
+  for (const row of [h.live(to)[0], h.live(from)[0]]) {
+    assert.equal(row.properties.start, undefined, "an unpositioned piece carries no clock at all");
+    assert.equal(row.properties.end, undefined);
+    assert.equal(row.properties.startedAt, undefined);
+  }
+});
+
+test("a manual segment keeps its naive-local shape instead of gaining an ISO stamp", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  // The shape day-review's editor writes: naive local start/end, no startedAt.
+  const manual = await h.db.createBlock({
+    id: "manual-1", type: "time_entry", date: "2026-08-20",
+    properties: { blockId: "owner", taskTitle: "Work", start: "2026-08-20T09:00:00", end: "2026-08-20T10:00:00", durSec: 3600, source: "manual" },
+    user_id: 1, workspace_id: "ws-1",
+  });
+  await h.timing.reallocateTimeEntry({
+    entry: manual, allocations: [{ durSec: 1200, task: other }, { durSec: 2400, task: owner }], workspaceId: "ws-1",
+  });
+  // entryWindow trusts startedAt first, so inventing one here would make a later
+  // Day Review edit invisible: the editor spreads the old props forward.
+  assert.equal(h.live(other)[0].properties.startedAt, undefined);
+  assert.equal(h.live(owner)[0].properties.startedAt, undefined);
+  assert.equal(h.live(other)[0].properties.start, "09:00");
+  assert.equal(h.totalSec(), 3600);
+});
+
+test("a destination carrying minutes no segment explains does not lose them", async () => {
+  const h = harness();
+  const from = h.task({}, { id: "from" });
+  // finalizeTiming stamps actualMinutes first and mints its segment in a try/catch it
+  // labels non-fatal, so a row with minutes and no rows is a state the app produces.
+  const legacy = h.task({ actualMinutes: 90 }, { id: "legacy" });
+  const entry = await trackedHour(h, from, { minutes: 20 });
+
+  await h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 1200, task: legacy }], workspaceId: "ws-1" });
+  assert.equal(legacy.properties.actualMinutes, 110, "20m projected on top of 90m of unexplained history");
+});
+
+test("a write that fails partway over-counts rather than losing time, and the retry converges", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  const entry = await trackedHour(h, owner);
+  const allocations = [{ durSec: 1200, task: owner }, { durSec: 2400, task: other }];
+
+  // Fail the create of the piece that does NOT stay. Because the source is shrunk LAST
+  // and stamped LAST, the ledger is left over-counting, never short.
+  const realCreate = h.db.createBlock;
+  let boom = true;
+  h.db.createBlock = async (input) => { if (boom) { boom = false; throw new Error("db down"); } return realCreate(input); };
+  await assert.rejects(() => h.timing.reallocateTimeEntry({ entry, allocations, actionId: "attempt-1", workspaceId: "ws-1" }), /db down/);
+
+  const source = h.rows.find((row) => row.id === entry.id);
+  assert.equal(source.properties.durSec, 3600, "the source is still whole, so nothing was lost");
+  assert.equal(source.properties.reallocationOperationId, undefined,
+    "and it carries no replay stamp, so the retry is not answered as a duplicate");
+
+  await h.timing.reallocateTimeEntry({ entry: source, allocations, actionId: "attempt-1", workspaceId: "ws-1" });
+  assert.equal(h.totalSec(), 3600, "the retry converges on exactly the tracked hour");
+  assert.equal(owner.properties.actualMinutes, 20);
+  assert.equal(other.properties.actualMinutes, 40);
+});
+
+test("a whole move stamps the tombstone, so the route can still answer a replay", async () => {
+  const h = harness();
+  const from = h.task({}, { id: "from" });
+  const to = h.task({}, { id: "to" });
+  const entry = await trackedHour(h, from);
+  await h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 3600, task: to }], actionId: "move-1", workspaceId: "ws-1" });
+
+  const tombstone = h.rows.find((row) => row.id === entry.id);
+  assert.ok(tombstone.deleted_at, "the source row is gone");
+  assert.equal(tombstone.properties.reallocationOperationId, "move-1",
+    "but it remembers the operation, so a retry reads as duplicate instead of 404");
+  assert.ok(Array.isArray(tombstone.properties.movedToEntryIds) && tombstone.properties.movedToEntryIds.length);
+});
+
+test("a planted row at a derived id cannot absorb another workspace's segment", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  const entry = await trackedHour(h, owner);
+  const allocations = [{ durSec: 1200, task: other }, { durSec: 2400, task: owner }];
+  // Ids are client-suppliable (POST /api/blocks takes one), so a row can be sitting at
+  // a derived id already. writeLogicalSession refuses that; so must this.
+  const { reallocatedRowId } = createTaskTiming;
+  const seed = allocations.map((part) => `${part.durSec}>${part.task.id}`).join("|");
+  await h.db.createBlock({
+    id: reallocatedRowId(entry, seed, "0.0"), type: "time_entry", date: "2026-08-20",
+    properties: { blockId: "someone-elses-task", durSec: 1 }, user_id: 2, workspace_id: "ws-other",
+  });
+  await assert.rejects(
+    () => h.timing.reallocateTimeEntry({ entry, allocations, workspaceId: "ws-1" }),
+    /identity collision/,
+  );
 });

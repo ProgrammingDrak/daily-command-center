@@ -19,35 +19,17 @@
 (function () {
   "use strict";
 
+  // Kept in step with the server export rather than hardcoded twice: the dialog must not
+  // offer a split the route will refuse.
   var MAX_PIECES = 12;
   var overlay = null;
   var state = null;
 
-  function esc(value) {
-    return String(value == null ? "" : value).replace(/[&<>"']/g, function (ch) {
-      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch];
-    });
-  }
-
-  function api(path, opts) {
-    if (window.DCC && typeof window.DCC.api === "function") return window.DCC.api(path, opts);
-    var options = opts || {};
-    if (options.body && typeof options.body !== "string") {
-      options.body = JSON.stringify(options.body);
-      options.headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
-    }
-    return fetch(path, options).then(function (res) {
-      return res.json().catch(function () { return {}; }).then(function (data) {
-        if (!res.ok) throw new Error(data.error || "Request failed");
-        return data;
-      });
-    });
-  }
-
-  function toast(message, kind) {
-    if (typeof showToast === "function") showToast(message, kind || "ok");
-    else if (window.DCC && typeof window.DCC.toast === "function") window.DCC.toast(message, kind || "ok");
-  }
+  // core.js owns these and loads first (see the "core.js MUST load first" tag in
+  // index.html), so this file uses them instead of shipping a fourth copy of each.
+  var esc = window.DCC.esc;
+  var api = window.DCC.api;
+  function toast(message, kind) { window.DCC.toast(message, kind || "ok"); }
 
   function minutesOf(entry) {
     var sec = Number((entry.properties || {}).durSec) || 0;
@@ -92,6 +74,20 @@
   // they include tasks already checked off (moving time onto finished work is the
   // common case). GET /api/tasks/open then widens it to open work from earlier
   // days, which is what a segment on a past date usually wants.
+  var model = window.DCC && window.DCC.TaskModel;
+
+  // The SAME predicate the server enforces (routes/blocks.js isWorkTaskRow), so the
+  // picker cannot offer a row that comes back 400 WORK_NOT_TRACKABLE. The type-only
+  // check this replaces let through every NON_TASK_KINDS row (delegated_item,
+  // task_group, meeting_prep, the meeting doc types) and anything failing
+  // foldsIntoItinerary's "addressable as an ev" half. work-sessions.js builds its own
+  // picker from this exact rule.
+  function isTrackableRow(row) {
+    if (!model) return false;
+    var props = (row && row.properties) || {};
+    return model.foldsIntoItinerary(row) || (model.isTaskRow(row) && props.kind === "backlog");
+  }
+
   function poolTasks() {
     var out = [];
     [
@@ -123,13 +119,12 @@
     try {
       var today = (window.blockStore && window.blockStore.getCurrentDate && window.blockStore.getCurrentDate())
         || new Date().toISOString().slice(0, 10);
-      var before = new Date(today + "T12:00:00Z");
-      before.setUTCDate(before.getUTCDate() + 1);
-      var payload = await api("/api/tasks/open?before=" + before.toISOString().slice(0, 10) + "&days=180&limit=400");
+      var before = window.DCC.dates.addDays(today, 1);
+      var payload = await api("/api/tasks/open?before=" + before + "&days=180&limit=400");
       (payload.rows || []).forEach(function (row) {
-        var props = row.properties || {};
-        if (row.type === "day_root" || row.type === "time_entry") return;
-        add({ id: String(row.id), title: props.title || "Task", when: row.date || props.start || "", done: false });
+        if (!isTrackableRow(row)) return;
+        var task = model ? model.fromBlock(row, { deriveEnd: true }) : (row.properties || {});
+        add({ id: String(row.id), title: task.title || "Task", when: row.date || task.start || "", done: false });
       });
     } catch (e) {
       // A cold or failing pool read must not block a move onto a task that is
@@ -182,6 +177,27 @@
       (rest < 1 ? '<div class="treallo-warn">Give the earlier pieces less time. The last piece has to keep at least a minute.</div>' : '');
   }
 
+  // ONE readiness rule, used by the full render and by the input handler's fast path.
+  // Two copies drifted: neither checked per-piece lengths, so clearing a minutes box
+  // only made the remainder bigger and left Save enabled, and the plan was then
+  // rejected server-side with "Every piece needs a length in minutes".
+  function isReady() {
+    if (remainingMinutes() < 1) return false;
+    return state.pieces.every(function (piece, index) {
+      var last = index === state.pieces.length - 1;
+      if (!piece.taskId && !piece.newTitle) return false;
+      return last || Number(piece.minutes) >= 1;
+    });
+  }
+
+  function syncSaveButton() {
+    var save = overlay && overlay.querySelector("[data-treallo-save]");
+    if (!save) return;
+    var onlyOrigin = state.pieces.length === 1 && state.pieces[0].taskId === state.originTaskId;
+    save.disabled = state.saving || !isReady() || onlyOrigin;
+    save.textContent = state.saving ? "Saving…" : (state.pieces.length > 1 ? "Split it up" : "Move it");
+  }
+
   function renderBody() {
     var body = overlay.querySelector(".treallo-body");
     // The picker's redraw closes over DOM this replaces, so it stops being a
@@ -189,11 +205,7 @@
     state.redrawPicker = null;
     body.innerHTML = bodyHtml();
     overlay.querySelector(".treallo-actions").hidden = false;
-    var save = overlay.querySelector("[data-treallo-save]");
-    var ready = remainingMinutes() >= 1 && state.pieces.every(function (piece) { return !!piece.taskId || !!piece.newTitle; });
-    var onlyOrigin = state.pieces.length === 1 && state.pieces[0].taskId === state.originTaskId;
-    save.disabled = state.saving || !ready || onlyOrigin;
-    save.textContent = state.saving ? "Saving…" : (state.pieces.length > 1 ? "Split it up" : "Move it");
+    syncSaveButton();
   }
 
   // ── the task picker pane ───────────────────────────────────────────────────
@@ -207,7 +219,7 @@
           '<span>Send piece ' + (index + 1) + ' to</span>' +
         '</div>' +
         '<input class="work-picker-search" type="search" placeholder="Find a task, or type a new one" aria-label="Find a task">' +
-        '<div class="treallo-picker-list"></div>' +
+        '<div class="work-picker-list treallo-picker-list"></div>' +
       '</div>';
     var search = body.querySelector(".work-picker-search");
     var list = body.querySelector(".treallo-picker-list");
@@ -220,17 +232,17 @@
       }).slice(0, 60);
       var html = "";
       if (query.length >= 2) {
-        html += '<button type="button" class="treallo-row new" data-treallo-new="1">' +
+        html += '<button type="button" class="work-picker-row treallo-row new" data-treallo-new="1">' +
           '<span><strong>Create "' + esc(query) + '"</strong><small>A new task on this day, holding this time</small></span><b>New</b></button>';
       }
       if (state.originTaskId) {
-        html += '<button type="button" class="treallo-row" data-treallo-choose="' + esc(state.originTaskId) + '">' +
+        html += '<button type="button" class="work-picker-row treallo-row" data-treallo-choose="' + esc(state.originTaskId) + '">' +
           '<span><strong>' + esc(state.originTitle || "This task") + '</strong><small>Leave this piece where it is</small></span><b>Stay</b></button>';
       }
       html += matches.length
         ? matches.map(function (task) {
           if (state.originTaskId && String(task.id) === String(state.originTaskId)) return "";
-          return '<button type="button" class="treallo-row" data-treallo-choose="' + esc(task.id) + '">' +
+          return '<button type="button" class="work-picker-row treallo-row" data-treallo-choose="' + esc(task.id) + '">' +
             '<span><strong>' + esc(task.title) + '</strong><small>' + esc(task.when || "Open task") + (task.done ? " · done" : "") + '</small></span><b>Move</b></button>';
         }).join("")
         : (state.loadingChoices ? '<div class="work-history-empty">Loading tasks…</div>' : '<div class="work-history-empty">No matching task. Type a name to create one.</div>');
@@ -289,27 +301,35 @@
     // again); changing the pieces has to read as a new one.
     var planKey = JSON.stringify(parts);
     if (state.planKey !== planKey) { state.planKey = planKey; state.actionId = uuid(); }
+    // Everything needed after the await is captured FIRST. close() nulls `state`, and it
+    // stays reachable while the request is in flight (Escape, the X, Cancel, a backdrop
+    // click), so reading state afterwards threw a TypeError and then threw a second one
+    // inside the catch: a write that SUCCEEDED got no refresh, no toast and no callback,
+    // leaving Day Review rendering and re-offering time that had already moved.
+    var entryId = state.entry.id;
+    var entryDate = state.entry.date;
+    var pieceCount = state.pieces.length;
+    var totalMinutes = state.totalMinutes;
+    var callback = state.onSaved;
+    var actionId = state.actionId;
     try {
-      var result = await api("/api/time-entries/" + encodeURIComponent(state.entry.id) + "/reallocate", {
-        method: "POST",
-        body: {
-          parts: parts,
-          actionId: state.actionId,
-          _clientId: (window.blockStore && window.blockStore.CLIENT_ID) || undefined,
-        },
-      });
-      await refreshDate(state.entry.date);
-      var moved = state.pieces.length > 1
-        ? "Split " + fmtMinutes(state.totalMinutes) + " across " + state.pieces.length + " tasks"
+      // Through block-store, which owns the WAL, the optimistic cache, the save
+      // indicator and the clientId the SSE echo is suppressed by, and which day-context
+      // wraps to drop the slot cache for this day.
+      var result = window.blockStore && typeof window.blockStore.reallocateTimeEntry === "function"
+        ? await window.blockStore.reallocateTimeEntry(entryId, parts, { actionId: actionId })
+        : await api("/api/time-entries/" + encodeURIComponent(entryId) + "/reallocate", {
+          method: "POST", body: { parts: parts, actionId: actionId },
+        });
+      await refreshDate(entryDate);
+      var moved = pieceCount > 1
+        ? "Split " + fmtMinutes(totalMinutes) + " across " + pieceCount + " tasks"
         : "Moved " + fmtMinutes(rest);
       toast(moved, "ok");
-      var callback = state.onSaved;
-      var payload = result;
       close();
-      if (typeof callback === "function") callback(payload);
+      if (typeof callback === "function") callback(result);
     } catch (error) {
-      state.saving = false;
-      if (overlay) renderBody();
+      if (state) { state.saving = false; if (overlay) renderBody(); }
       toast((error && error.message) || "Could not move that time", "error");
     }
   }
@@ -324,7 +344,15 @@
     try {
       var current = bs.getCurrentDate ? bs.getCurrentDate() : null;
       if (current && String(dateStr) === String(current)) {
-        await bs.loadDay(dateStr);
+        // loadDay returns null WITHOUT loading while any write is pending elsewhere in
+        // the app. Ignoring that left the day cache holding the pre-move segment, so the
+        // fill handed its stale durSec to the next dialog and the user split "60m" that
+        // was really 40m. Drop the range cache too and report the view as stale.
+        var loaded = await bs.loadDay(dateStr);
+        if (!loaded) {
+          if (bs.invalidateRangeCache) bs.invalidateRangeCache(dateStr);
+          return { stale: true };
+        }
       } else {
         if (bs.invalidateRangeCache) bs.invalidateRangeCache(dateStr);
         if (bs.loadDateRange) await bs.loadDateRange(dateStr, dateStr);
@@ -429,11 +457,7 @@
       var warn = overlay.querySelector(".treallo-warn");
       if (rest < 1 && !warn) renderBody();
       else if (rest >= 1 && warn) renderBody();
-      else {
-        var saveBtn = overlay.querySelector("[data-treallo-save]");
-        var ready = rest >= 1 && state.pieces.every(function (piece) { return !!piece.taskId || !!piece.newTitle; });
-        if (saveBtn) saveBtn.disabled = state.saving || !ready;
-      }
+      else syncSaveButton();
     });
 
     document.addEventListener("keydown", onKey, true);
