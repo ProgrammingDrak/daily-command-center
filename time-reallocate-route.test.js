@@ -31,7 +31,7 @@ function harness({ rows = [] } = {}) {
 
   const ctx = {
     blockDB: {
-      getBlock: async (id) => find(id),
+      getBlock: async (id, _client) => find(id),
       // The real one folds `deleted_at IS NULL` and `workspace_id IS NOT DISTINCT FROM`
       // into the query and falls back to properties->>'local_id'. Modelling only the id
       // lookup would hide the local_id path the picker actually exercises.
@@ -44,24 +44,25 @@ function harness({ rows = [] } = {}) {
         if (byLocal.length > 1) { const e = new Error("Task reference is ambiguous"); e.statusCode = 409; throw e; }
         return byLocal[0] || null;
       },
-      getBlockIncludingDeleted: async (id) => find(id),
-      updateBlock: async (id, patch) => {
+      getBlockIncludingDeleted: async (id, _client, _forUpdate) => find(id),
+      updateBlock: async (id, patch, _client) => {
         const row = find(id);
         if (!row) throw new Error("missing " + id);
         if (patch.properties !== undefined) row.properties = patch.properties;
         return row;
       },
-      createBlock: async (input) => {
+      createBlock: async (input, _client) => {
         const row = { deleted_at: null, ...input, properties: input.properties || {} };
         store.push(row);
         return row;
       },
-      deleteBlock: async (id) => { const row = find(id); if (row) row.deleted_at = new Date().toISOString(); return { id }; },
-      undeleteBlock: async (id) => { const row = find(id); if (row) row.deleted_at = null; return row; },
-      ensureDayRoot: async (date) => { dayRootCalls.push(date); return `day-root-${date}`; },
+      deleteBlock: async (id, _client) => { const row = find(id); if (row) row.deleted_at = new Date().toISOString(); return { id }; },
+      undeleteBlock: async (id, _client) => { const row = find(id); if (row) row.deleted_at = null; return row; },
+      ensureDayRoot: async (date, _userId, _workspaceId, _client) => { dayRootCalls.push(date); return `day-root-${date}`; },
       createItineraryTask: async (args) => {
         const row = {
-          id: `made-${created.length + 1}`, type: "block", date: args.date, properties: args.properties,
+          id: `made-${created.length + 1}`, type: "block", date: args.date,
+          properties: { kind: "task", type: "task", status: "open", ...(args.properties || {}) },
           user_id: args.userId, workspace_id: args.workspaceId, deleted_at: null,
         };
         created.push(row);
@@ -69,7 +70,7 @@ function harness({ rows = [] } = {}) {
         store.push(row);
         return row;
       },
-      getTaskTimeEntries: async (blockId, workspaceId, opts = {}) => store.filter((row) => row.type === "time_entry"
+      getTaskTimeEntries: async (blockId, workspaceId, opts = {}, _client) => store.filter((row) => row.type === "time_entry"
         && (row.properties || {}).blockId === blockId
         && row.workspace_id === workspaceId
         && (opts.includeDeleted || !row.deleted_at)),
@@ -92,7 +93,13 @@ function harness({ rows = [] } = {}) {
     getTodayStr: () => TODAY,
     isAllowedSweepBlockItem: () => true,
     isValidDate: (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d)),
-    pool: { query: async () => ({ rows: [] }) },
+    // reallocateTimeEntry owns a BEGIN/COMMIT, so the ctx pool has to supply a client.
+    // Rollback is exercised properly in time-reallocation.test.js; here the route's own
+    // validation ordering is what matters, so the client just passes writes through.
+    pool: {
+      query: async () => ({ rows: [] }),
+      connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
+    },
     APP_TIME_ZONE: "America/New_York",
   };
   require("./routes/blocks.js")(app, ctx);
@@ -239,7 +246,9 @@ test("a typed title becomes a real task on the segment's own day", async () => {
   // this the flag could be dropped and every creation test would still pass, shipping
   // 0-point tasks into a points-driven itinerary.
   assert.equal(h.createCalls[0].score, true, "a task minted to hold real time still earns its points");
-  assert.equal(h.createCalls[0].ensureRoot, false, "its day root was ensured once for the request");
+  assert.ok(h.createCalls[0].client, "created inside the mover's transaction, so a rollback takes it with it");
+  assert.equal(h.createCalls[0].ensureRoot, false,
+    "and its day root is ensured through that client, because createItineraryTask does not pass one on");
   assert.equal(live(h, made.id).length, 1);
   assert.equal(h.find(made.id).properties.actualMinutes, 30);
   assert.equal(live(h, "a").length, 0);
@@ -380,17 +389,41 @@ test("an absurdly long segment is refused before it can fan out", async () => {
   assert.equal((await post(ok.app, "seg", { parts: [{ taskId: "b" }] })).status, 200);
 });
 
-test("an unsettled operation is resumed by its replay, not reported as done", async () => {
+test("a committed operation is answered without writing anything", async () => {
   const h = harness({ rows: [task("a"), task("b"), segment("seg", "a", 3600)] });
-  // Hand-stamp the shape a crashed run leaves behind: started, projections outstanding.
-  const source = h.find("seg");
-  source.properties.reallocationOperationId = "crashed-1";
-  source.properties.reallocationPriorTotals = { a: 60 };
-  source.properties.reallocationTouchedIds = ["a", "b"];
-  source.properties.reallocationKeptSource = true;
+  const first = await post(h.app, "seg", { parts: [{ minutes: 20, taskId: "b" }, { taskId: "a" }], actionId: "submit-1" });
+  assert.equal(first.body.changed, true);
+  const snapshot = JSON.stringify(h.store);
 
-  const { status, body } = await post(h.app, "seg", { parts: [{ minutes: 20, taskId: "b" }, { taskId: "a" }], actionId: "crashed-1" });
+  // The stamp is written in the same transaction as the work, so it means COMMITTED.
+  // There is no half-applied state to resume and nothing for a replay to repair.
+  const replay = await post(h.app, "seg", { parts: [{ minutes: 20, taskId: "b" }, { taskId: "a" }], actionId: "submit-1" });
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body.changed, false);
+  assert.equal(replay.body.reason, "duplicate");
+  assert.equal(JSON.stringify(h.store), snapshot, "a replay writes nothing");
+});
+
+test("a forged resume stamp has nothing left to steer", async () => {
+  // The previous design stamped its resume state (touched ids, prior totals) into a
+  // time_entry's properties, which PATCH /api/blocks/:id writes verbatim. A forged list
+  // drove one request into thousands of write transactions. Those fields are gone, and
+  // the only stamp left is compared for equality and never iterated.
+  const h = harness({ rows: [task("a"), task("b"), segment("seg", "a", 3600)] });
+  const source = h.find("seg");
+  source.properties.reallocationTouchedIds = new Array(500).fill("a");
+  source.properties.reallocationPriorTotals = { a: -1000000 };
+  source.properties.reallocationSettledAt = "2020-01-01T00:00:00.000Z";
+
+  const { status, body } = await post(h.app, "seg", { parts: [{ minutes: 20, taskId: "b" }, { taskId: "a" }], actionId: "fresh-1" });
   assert.equal(status, 200);
-  assert.equal(body.reason, "resumed", "answering 'duplicate' here would report a half-applied move as complete");
-  assert.ok(h.find("seg").properties.reallocationSettledAt);
+  assert.equal(body.changed, true);
+  assert.equal(h.find("a").properties.actualMinutes, 40, "the forged prior totals did not inflate anything");
+  assert.equal(h.find("b").properties.actualMinutes, 20);
+  // And the forged bookkeeping is not carried onto the rows this operation wrote.
+  for (const row of h.store.filter((r) => r.type === "time_entry" && !r.deleted_at)) {
+    assert.equal(row.properties.reallocationTouchedIds, undefined);
+    assert.equal(row.properties.reallocationPriorTotals, undefined);
+    assert.equal(row.properties.reallocationSettledAt, undefined);
+  }
 });

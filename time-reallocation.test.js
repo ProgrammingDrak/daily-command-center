@@ -16,22 +16,26 @@ function harness() {
   const rows = [];
   let seq = 0;
   const db = {
-    async getBlock(id) { return rows.find((row) => row.id === id) || null; },
-    async getBlockIncludingDeleted(id) { return rows.find((row) => row.id === id) || null; },
-    async getTaskTimeEntries(blockId, workspaceId, opts = {}) {
+    // Both take a `client` (and getBlockIncludingDeleted a FOR UPDATE flag) so the mover
+    // can read through its own transaction. The real ones ignore neither.
+    async getBlock(id, _client) { return rows.find((row) => row.id === id) || null; },
+    async getBlockIncludingDeleted(id, _client, _forUpdate) { return rows.find((row) => row.id === id) || null; },
+    async getTaskTimeEntries(blockId, workspaceId, opts = {}, _client) {
       return rows.filter((row) => row.type === "time_entry"
         && row.properties.blockId === blockId
         && row.workspace_id === workspaceId
         && (opts.includeDeleted || !row.deleted_at));
     },
-    async updateBlock(id, patch) {
+    async updateBlock(id, patch, _client) {
       const row = rows.find((candidate) => candidate.id === id);
       if (!row) throw new Error("missing " + id);
+      if (row.deleted_at) throw new Error("Block is deleted: " + id);
       if (patch.properties !== undefined) row.properties = patch.properties;
       if (patch.date !== undefined) row.date = patch.date;
+      if (patch.parent_id !== undefined) row.parent_id = patch.parent_id;
       return row;
     },
-    async createBlock(input) {
+    async createBlock(input, _client) {
       if (rows.some((row) => row.id === input.id)) throw new Error("duplicate id " + input.id);
       const row = {
         id: input.id || `row-${++seq}`,
@@ -46,25 +50,65 @@ function harness() {
       rows.push(row);
       return row;
     },
-    async deleteBlock(id) {
+    async deleteBlock(id, _client) {
       const row = rows.find((candidate) => candidate.id === id);
       if (row) row.deleted_at = new Date().toISOString();
       return { id };
     },
-    async undeleteBlock(id) {
+    async undeleteBlock(id, _client) {
       const row = rows.find((candidate) => candidate.id === id);
       if (!row) throw new Error("missing " + id);
       row.deleted_at = null;
       return row;
     },
-    async ensureDayRoot(date) { return `day-root-${date}`; },
+    async ensureDayRoot(date, _userId, _workspaceId, _client) { return `day-root-${date}`; },
+    // Destinations are created inside the transaction now, so the fake has to exist.
+    async createItineraryTask({ date, properties, userId, workspaceId }, _opts) {
+      const row = {
+        id: `made-${++seq}`, type: "block", date: date || null,
+        properties: { kind: "task", type: "task", status: "open", ...(properties || {}) },
+        user_id: userId || null, workspace_id: workspaceId || null, deleted_at: null,
+      };
+      rows.push(row);
+      return row;
+    },
   };
   // deleteTimerRow is this module's one raw statement, so an inert pool stub makes
   // every clearTiming assertion below vacuous: nothing could hard-delete anything and
   // "the destination keeps its time" would hold even if the moved piece had kept the
   // `<taskId>-slacktimer` id. task-timing.test.js already models it properly.
   const hardDeleted = [];
+  // And the reallocation mover owns a real transaction now, so the stub has to model one
+  // or the rollback tests below would be asserting against nothing. BEGIN snapshots every
+  // row, ROLLBACK restores the snapshot, COMMIT drops it. That is what lets a test say
+  // "the failed attempt changed NOTHING" and mean it.
+  let snapshot = null;
+  // Restores IN PLACE, onto the same row objects, rather than swapping in clones. Both
+  // because callers hold references to these objects (the store assigns
+  // `block.properties` back onto the task it was handed) and because a clone-swap would
+  // silently detach a test's own fixture from the array under it.
+  const clone = () => rows.map((row) => ({ row, fields: { ...row }, properties: { ...row.properties } }));
+  const restore = (saved) => {
+    const keep = new Set(saved.map((entry) => entry.row));
+    for (let i = rows.length - 1; i >= 0; i--) if (!keep.has(rows[i])) rows.splice(i, 1);
+    for (const entry of saved) {
+      Object.assign(entry.row, entry.fields);
+      entry.row.properties = entry.properties;
+      if (!rows.includes(entry.row)) rows.push(entry.row);
+    }
+  };
+  const client = {
+    query: async (sql, params) => {
+      const text = String(sql).trim().toUpperCase();
+      if (text.startsWith("BEGIN")) { snapshot = clone(); return { rows: [] }; }
+      if (text.startsWith("COMMIT")) { snapshot = null; return { rows: [] }; }
+      if (text.startsWith("ROLLBACK")) { if (snapshot) restore(snapshot); snapshot = null; return { rows: [] }; }
+      return pool.query(sql, params);
+    },
+    release: () => {},
+  };
   const pool = {
+    connect: async () => client,
     query: async (sql, params) => {
       if (/^\s*DELETE/i.test(sql)) {
         const i = rows.findIndex((row) => row.id === params[0] && row.type === "time_entry");
@@ -563,31 +607,6 @@ test("a destination carrying minutes no segment explains does not lose them", as
   assert.equal(legacy.properties.actualMinutes, 110, "20m projected on top of 90m of unexplained history");
 });
 
-test("a write that fails partway over-counts rather than losing time, and the retry converges", async () => {
-  const h = harness();
-  const owner = h.task({}, { id: "owner" });
-  const other = h.task({}, { id: "other" });
-  const entry = await trackedHour(h, owner);
-  const allocations = [{ durSec: 1200, task: owner }, { durSec: 2400, task: other }];
-
-  // Fail the create of the piece that does NOT stay. Because the source is shrunk LAST
-  // and stamped LAST, the ledger is left over-counting, never short.
-  const realCreate = h.db.createBlock;
-  let boom = true;
-  h.db.createBlock = async (input) => { if (boom) { boom = false; throw new Error("db down"); } return realCreate(input); };
-  await assert.rejects(() => h.timing.reallocateTimeEntry({ entry, allocations, actionId: "attempt-1", workspaceId: "ws-1" }), /db down/);
-
-  const source = h.rows.find((row) => row.id === entry.id);
-  assert.equal(source.properties.durSec, 3600, "the source is still whole, so nothing was lost");
-  assert.equal(source.properties.reallocationOperationId, undefined,
-    "and it carries no replay stamp, so the retry is not answered as a duplicate");
-
-  await h.timing.reallocateTimeEntry({ entry: source, allocations, actionId: "attempt-1", workspaceId: "ws-1" });
-  assert.equal(h.totalSec(), 3600, "the retry converges on exactly the tracked hour");
-  assert.equal(owner.properties.actualMinutes, 20);
-  assert.equal(other.properties.actualMinutes, 40);
-});
-
 test("a whole move stamps the tombstone, so the route can still answer a replay", async () => {
   const h = harness();
   const from = h.task({}, { id: "from" });
@@ -623,67 +642,6 @@ test("a planted row at a derived id cannot absorb another workspace's segment", 
 });
 
 // ── iteration 2 of the review: the failure windows the first fix left open ────
-
-test("a whole move whose delete fails does not invent an hour, and the replay finishes it", async () => {
-  const h = harness();
-  const from = h.task({}, { id: "from" });
-  const to = h.task({}, { id: "to" });
-  const entry = await trackedHour(h, from);
-
-  const realDelete = h.db.deleteBlock;
-  let boom = true;
-  h.db.deleteBlock = async (id) => { if (boom) { boom = false; throw new Error("db down"); } return realDelete(id); };
-  await assert.rejects(
-    () => h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 3600, task: to }], actionId: "move-1", workspaceId: "ws-1" }),
-    /db down/,
-  );
-  // The source is still live beside the moved row, so the ledger over-counts. That is
-  // recoverable; the bug this replaces INVENTED the hour and then reported success.
-  assert.equal(h.totalSec(), 7200, "over-counted, as designed, pending the resume");
-
-  const stranded = h.rows.find((row) => row.id === entry.id);
-  assert.equal(stranded.properties.reallocationOperationId, "move-1");
-  assert.ok(stranded.properties.reallocationSettledAt, "the projections had already settled");
-  assert.equal(stranded.properties.reallocationKeptSource, false);
-
-  const replay = await h.timing.reallocateTimeEntry({ entry: stranded, allocations: [{ durSec: 3600, task: to }], actionId: "move-1", workspaceId: "ws-1" });
-  assert.equal(replay.duplicate, true);
-  assert.equal(h.totalSec(), 3600, "the replay finished the outstanding delete");
-  assert.equal(to.properties.actualMinutes, 60);
-  assert.equal(from.properties.actualMinutes, undefined);
-});
-
-test("a projection that fails leaves the operation unsettled, and the replay repairs it", async () => {
-  const h = harness();
-  const owner = h.task({}, { id: "owner" });
-  const other = h.task({}, { id: "other" });
-  const entry = await trackedHour(h, owner);
-  const allocations = [{ durSec: 1200, task: other }, { durSec: 2400, task: owner }];
-
-  // Fail the second projection, after the segment rows and the started stamp landed.
-  const realUpdate = h.db.updateBlock;
-  let hits = 0;
-  h.db.updateBlock = async (id, patch) => {
-    if (id === "other" || id === "owner") { hits++; if (hits === 2) throw new Error("db down"); }
-    return realUpdate(id, patch);
-  };
-  await assert.rejects(() => h.timing.reallocateTimeEntry({ entry, allocations, actionId: "split-1", workspaceId: "ws-1" }), /db down/);
-  h.db.updateBlock = realUpdate;
-
-  const source = h.rows.find((row) => row.id === entry.id);
-  assert.equal(source.properties.reallocationOperationId, "split-1");
-  assert.equal(source.properties.reallocationSettledAt, undefined, "started, not settled");
-  // The snapshot the repair needs travels with the stamp, because it cannot be retaken:
-  // re-reading the origin's sessions now would count the moved 20m as unexplained.
-  assert.deepEqual(source.properties.reallocationPriorTotals, { owner: 60, other: null });
-
-  const replay = await h.timing.reallocateTimeEntry({ entry: source, allocations, actionId: "split-1", workspaceId: "ws-1" });
-  assert.equal(replay.resumed, true, "resumed rather than answered");
-  assert.equal(h.totalSec(), 3600);
-  assert.equal(owner.properties.actualMinutes, 40, "both projections are repaired");
-  assert.equal(other.properties.actualMinutes, 20);
-  assert.ok(h.rows.find((row) => row.id === entry.id).properties.reallocationSettledAt);
-});
 
 test("a retry converges even when a piece is a freshly created task", async () => {
   const h = harness();
@@ -739,4 +697,146 @@ test("per-day spans sum exactly to the window even off a sub-second boundary", (
     // and the conservation guard runs before the split so it could never catch it.
     assert.equal(have, want, `${startIso} +${ms}ms produced ${have}s of spans for ${want}s`);
   }
+});
+
+// ── atomicity: the operation is one transaction, so a failure changes nothing ──
+//
+// Three review rounds found three different partial-failure windows in this mover while
+// it was a sequence of writes: shrinking the source first LOST time, stamping the
+// idempotency key before the tail INVENTED it and reported success, and a resume that
+// read its own half-written state double-counted it. These tests exist to prove the
+// windows are gone rather than moved, so each one fails at a DIFFERENT step and then
+// asserts the same thing: the ledger is untouched and the retry is clean.
+
+function failOnce(h, name, predicate) {
+  const real = h.db[name].bind(h.db);
+  let armed = true;
+  h.db[name] = async (...args) => {
+    if (armed && (!predicate || predicate(...args))) { armed = false; throw new Error("db down"); }
+    return real(...args);
+  };
+  return () => { h.db[name] = real; };
+}
+
+for (const step of [
+  { name: "a piece write", hook: ["createBlock"] },
+  { name: "the source write", hook: ["updateBlock", (id) => id === "seg-under-test"] },
+  // The delete only runs when NOTHING stays on the origin, so this step needs a whole
+  // move to reach it at all.
+  { name: "the source delete", hook: ["deleteBlock"], whole: true },
+  { name: "a projection", hook: ["updateBlock", (id) => id === "owner" || id === "other"] },
+]) {
+  test(`a failure at ${step.name} rolls the whole reallocation back`, async () => {
+    const h = harness();
+    const owner = h.task({}, { id: "owner" });
+    const other = h.task({}, { id: "other" });
+    const entry = await trackedHour(h, owner);
+    // Rename so the source-write hook can target it precisely.
+    entry.id = "seg-under-test";
+    const before = JSON.stringify(h.rows);
+
+    const allocations = step.whole
+      ? [{ durSec: 3600, task: other }]
+      : [{ durSec: 1200, task: other }, { durSec: 2400, task: owner }];
+
+    const restore = failOnce(h, step.hook[0], step.hook[1]);
+    await assert.rejects(
+      () => h.timing.reallocateTimeEntry({ entry, allocations, actionId: "attempt-1", workspaceId: "ws-1" }),
+      /db down/,
+    );
+    restore();
+
+    assert.equal(JSON.stringify(h.rows), before, "the failed attempt changed nothing at all");
+    assert.equal(h.totalSec(), 3600, "no time lost and none invented");
+    const source = h.rows.find((row) => row.id === "seg-under-test");
+    assert.equal(source.properties.reallocationOperationId, undefined,
+      "and no replay stamp survived, so the retry is not answered as a duplicate");
+
+    // The retry is a clean first attempt and lands exactly once.
+    await h.timing.reallocateTimeEntry({ entry: source, allocations, actionId: "attempt-1", workspaceId: "ws-1" });
+    assert.equal(h.totalSec(), 3600);
+    assert.equal(owner.properties.actualMinutes, step.whole ? undefined : 40);
+    assert.equal(other.properties.actualMinutes, step.whole ? 60 : 20);
+  });
+}
+
+test("a committed operation is answered, not re-applied, and answering is all it does", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  const entry = await trackedHour(h, owner);
+  const allocations = [{ durSec: 1200, task: other }, { durSec: 2400, task: owner }];
+  await h.timing.reallocateTimeEntry({ entry, allocations, actionId: "submit-1", workspaceId: "ws-1" });
+  const after = JSON.stringify(h.rows);
+
+  const replay = await h.timing.reallocateTimeEntry({
+    entry: h.rows.find((row) => row.id === entry.id), allocations, actionId: "submit-1", workspaceId: "ws-1",
+  });
+  assert.equal(replay.duplicate, true);
+  assert.equal(JSON.stringify(h.rows), after, "a replay writes nothing whatsoever");
+  assert.equal(h.totalSec(), 3600);
+});
+
+test("a whole move commits the stamp and the delete together", async () => {
+  const h = harness();
+  const from = h.task({}, { id: "from" });
+  const to = h.task({}, { id: "to" });
+  const entry = await trackedHour(h, from);
+  await h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 3600, task: to }], actionId: "move-1", workspaceId: "ws-1" });
+
+  const tombstone = h.rows.find((row) => row.id === entry.id);
+  assert.ok(tombstone.deleted_at, "the source row is gone");
+  assert.equal(tombstone.properties.reallocationOperationId, "move-1",
+    "and it remembers the operation, so a retry reads as duplicate rather than 404");
+  assert.equal(h.totalSec(), 3600);
+  assert.equal(to.properties.actualMinutes, 60);
+  assert.equal(from.properties.actualMinutes, undefined);
+});
+
+test("a destination created inside the transaction does not survive a rollback", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const entry = await trackedHour(h, owner);
+  const restore = failOnce(h, "createBlock");
+  await assert.rejects(
+    () => h.timing.reallocateTimeEntry({
+      entry,
+      allocations: [{ durSec: 1200, newTask: { properties: { title: "Typed title" } } }, { durSec: 2400, task: owner }],
+      actionId: "plan-1", workspaceId: "ws-1",
+    }),
+    /db down/,
+  );
+  restore();
+  // Creating the task outside the transaction left an orphan behind on every failure.
+  assert.equal(h.rows.filter((row) => (row.properties || {}).title === "Typed title").length, 0,
+    "no orphan task is left behind");
+  assert.equal(h.totalSec(), 3600);
+});
+
+test("a chained reallocation does not inherit the previous operation's stamp", async () => {
+  const h = harness();
+  const a = h.task({}, { id: "a" });
+  const b = h.task({}, { id: "b" });
+  const c = h.task({}, { id: "c" });
+  const entry = await trackedHour(h, a);
+
+  // Split, then move the remainder. Ordinary behaviour, and the bookkeeping used to ride
+  // forward on the property spread so the second operation answered for the first.
+  await h.timing.reallocateTimeEntry({
+    entry, allocations: [{ durSec: 1200, task: b }, { durSec: 2400, task: a }],
+    actionId: "op-1", workspaceId: "ws-1",
+  });
+  const kept = h.live(a)[0];
+  assert.equal(kept.properties.reallocationOperationId, "op-1");
+
+  await h.timing.reallocateTimeEntry({
+    entry: kept, allocations: [{ durSec: 2400, task: c }], actionId: "op-2", workspaceId: "ws-1",
+  });
+  assert.equal(h.totalSec(), 3600, "the chain conserves the original hour");
+  assert.equal(a.properties.actualMinutes, undefined);
+  assert.equal(b.properties.actualMinutes, 20);
+  assert.equal(c.properties.actualMinutes, 40);
+  // The moved piece starts clean: its predecessor's operation id is not its own.
+  assert.equal(h.live(c)[0].properties.reallocationOperationId, undefined);
+  assert.equal(h.live(b)[0].properties.reallocationOperationId, undefined);
 });
