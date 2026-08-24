@@ -840,23 +840,20 @@ module.exports = function mount(app, ctx) {
     const body = req.body || {};
     const actionId = body.actionId == null ? null : String(body.actionId);
     if (actionId != null && !/^[A-Za-z0-9:_-]{1,160}$/.test(actionId)) { res.status(400).json({ error: "Invalid reallocation id" }); return; }
-    // A retry of the same submission is ANSWERED, not re-applied, and this has to run
-    // before the tombstone check as well as before the plan. Both of the shapes a
-    // reallocation ends in defeat a naive order: a split leaves the source row
-    // shortened, so planAllocations would call the replay invalid rather than
-    // duplicate; a whole move deletes the source, so a `deleted_at` 404 would tell a
-    // client whose write actually landed that its time went missing. The store stamps
-    // the row before deleting it precisely so this answer stays available.
+    // A retry of the same submission is ANSWERED, not re-applied, and this runs before
+    // the tombstone check as well as before the plan, because both shapes a reallocation
+    // ends in defeat a naive order: a split leaves the source shortened, so
+    // planAllocations would call the replay invalid rather than duplicate, and a whole
+    // move deletes the source, so a `deleted_at` 404 would tell a client whose write
+    // landed that its time went missing. The store stamps the row in the same
+    // transaction as the work, so the stamp means the operation COMMITTED. There is
+    // nothing half-applied to resume.
     if (actionId && (entry.properties || {}).reallocationOperationId === actionId) {
-      // STARTED is not SETTLED. An operation that began and never finished is RESUMED
-      // here (the store re-runs its tail off the prior totals it stamped), because
-      // answering "duplicate" for it would report a completed move over a half-applied
-      // one: a whole move whose delete failed leaves the source live beside the moved
-      // row, which invents time rather than losing it.
-      const result = await taskTiming.resumeReallocation({ entry, actionId, workspaceId: req.workspaceId });
+      const originTaskId = String((entry.properties || {}).blockId || "") || null;
       return {
-        ok: true, changed: false, reason: result.duplicate ? "duplicate" : "resumed",
-        entries: result.entries || [entry], tasks: result.tasks || [], createdTasks: [],
+        ok: true, changed: false, reason: "duplicate",
+        entries: [entry], tasks: [], createdTasks: [],
+        originTaskId, sourceEntryDeleted: !!entry.deleted_at,
       };
     }
     if (entry.deleted_at) { res.status(404).json({ error: "Tracked time not found" }); return; }
@@ -879,13 +876,11 @@ module.exports = function mount(app, ctx) {
 
     const { userId, workspaceId } = await resolveOwnerStrict(req);
     const originId = String((entry.properties || {}).blockId || "");
-    // Resolve or create every destination BEFORE the first ledger write, so a bad
-    // destination fails with the segment still whole. A created-then-abandoned
-    // task is a visible empty row the user can delete; a half-moved segment is
-    // time that silently disappeared.
+    // Resolve every EXISTING destination here (reads only), and hand a spec for every
+    // new one to the store, which creates it inside the same transaction as the ledger
+    // writes. Creating tasks out here would leave an orphan behind on a rollback, which
+    // was the last non-atomic step in the operation.
     const allocations = [];
-    const createdTasks = [];
-    let ensuredTaskRoot = false;
     for (let i = 0; i < plan.parts.length; i++) {
       const request = requests[i] || {};
       const durSec = plan.parts[i].durSec;
@@ -911,14 +906,8 @@ module.exports = function mount(app, ctx) {
         const title = String((request.newTask && request.newTask.title) || "").trim();
         if (!title) { res.status(400).json({ error: "Every piece needs a task to land on", code: "TIME_ALLOCATION_INVALID" }); return; }
         if (title.length > 200) { res.status(400).json({ error: "That task title is too long" }); return; }
-        const taskDate = entry.date || getTodayStr();
-        // Ensured once per request rather than once per created task, matching
-        // db.createItineraryTasks. ensureRoot:false is what createItineraryTask's own
-        // flag exists for.
-        if (!ensuredTaskRoot) { await blockDB.ensureDayRoot(taskDate, userId, workspaceId); ensuredTaskRoot = true; }
-        task = await blockDB.createItineraryTask({
-          date: taskDate,
-          ensureRoot: false,
+        const spec = {
+          date: entry.date || getTodayStr(),
           properties: {
             title, status: "open", kind: "task", type: "task",
             estimatedMinutes: Math.max(1, Math.round(durSec / 60)),
@@ -927,13 +916,13 @@ module.exports = function mount(app, ctx) {
             created_by: "time-reallocation",
             created_at: new Date().toISOString(),
           },
-          userId, workspaceId, score: true,
-        });
-        createdTasks.push({ id: task.id, title });
+        };
+        allocations.push({ durSec, newTask: spec });
+        continue;
       }
       allocations.push({ durSec, task });
     }
-    if (allocations.length === 1 && originId && String(allocations[0].task.id) === originId) {
+    if (allocations.length === 1 && originId && allocations[0].task && String(allocations[0].task.id) === originId) {
       res.status(400).json({ error: "That time is already on this task", code: "TIME_ALLOCATION_NOOP" });
       return;
     }
@@ -953,7 +942,14 @@ module.exports = function mount(app, ctx) {
 
     const actor = req.session && req.session.userId ? `dcc:${req.session.userId}` : "dcc";
     const result = await taskTiming.reallocateTimeEntry({ entry, allocations, actor, userId, workspaceId, actionId });
-    const blockIds = [...new Set([originId, ...allocations.map(part => String(part.task.id))].filter(Boolean))];
+    const createdTasks = result.createdTasks || [];
+    // Derived from the rows that were actually written, because a destination created
+    // inside the transaction has no id until it commits.
+    const blockIds = [...new Set([
+      originId,
+      ...(result.entries || []).map(row => String(((row && row.properties) || {}).blockId || "")),
+      ...createdTasks.map(task => String(task.id)),
+    ].filter(Boolean))];
     broadcast("blocks-changed", {
       action: "time-reallocate", blockIds, date: entry.date, clientId: body._clientId,
     }, req.workspaceId);
