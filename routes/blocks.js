@@ -26,6 +26,7 @@ const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 const { route } = require("../lib/route-helpers");
 const createTaskTiming = require("../lib/task-timing");
 const { planAllocations } = createTaskTiming;
+const MAX_REALLOCATABLE_SEC = 36 * 3600;
 const TaskModel = require("../public/js/task-model");
 const createMaterializeGuard = require("../lib/materialize-guard");
 const { dedupeStatus } = createMaterializeGuard;
@@ -846,10 +847,32 @@ module.exports = function mount(app, ctx) {
     // client whose write actually landed that its time went missing. The store stamps
     // the row before deleting it precisely so this answer stays available.
     if (actionId && (entry.properties || {}).reallocationOperationId === actionId) {
-      return { ok: true, changed: false, reason: "duplicate", entries: [entry], tasks: [], createdTasks: [] };
+      // STARTED is not SETTLED. An operation that began and never finished is RESUMED
+      // here (the store re-runs its tail off the prior totals it stamped), because
+      // answering "duplicate" for it would report a completed move over a half-applied
+      // one: a whole move whose delete failed leaves the source live beside the moved
+      // row, which invents time rather than losing it.
+      const result = await taskTiming.resumeReallocation({ entry, actionId, workspaceId: req.workspaceId });
+      return {
+        ok: true, changed: false, reason: result.duplicate ? "duplicate" : "resumed",
+        entries: result.entries || [entry], tasks: result.tasks || [], createdTasks: [],
+      };
     }
     if (entry.deleted_at) { res.status(404).json({ error: "Tracked time not found" }); return; }
     const requests = Array.isArray(body.parts) ? body.parts : [];
+    // The PIECE count is capped (MAX_ALLOCATION_PARTS) but the SOURCE LENGTH was not, and
+    // per-piece midnight splitting multiplies the two: splitSessionByLocalDay emits one
+    // row per local day up to its 370-day guard, so 12 pieces of a planted durSec plan
+    // thousands of serial createBlock and ensureDayRoot writes, and the guard TRUNCATES,
+    // so the pieces stop summing to durSec and time is silently lost. durSec is client
+    // input: POST /api/blocks passes properties through for this free-form type.
+    // 36h clears every honest shape (reconcileTiming refuses to settle past
+    // MAX_TIMED_MINUTES, 16h, and Day Review's manual editor tops out at 24h).
+    const sourceSec = Number((entry.properties || {}).durSec);
+    if (Number.isFinite(sourceSec) && sourceSec > MAX_REALLOCATABLE_SEC) {
+      res.status(400).json({ error: "That segment is too long to move", code: "TIME_ALLOCATION_INVALID" });
+      return;
+    }
     const plan = planAllocations((entry.properties || {}).durSec, requests);
     if (!plan.ok) { res.status(400).json({ error: plan.error, code: "TIME_ALLOCATION_INVALID" }); return; }
 

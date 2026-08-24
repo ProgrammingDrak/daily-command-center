@@ -77,7 +77,12 @@
       // one row fully supersedes every older buffered update for that row. This also
       // makes completion intent last-write-wins after a lost acknowledgement: an old
       // buffered complete can never replay after a newer reopen.
-      if (entry && (entry.op === "update" || entry.op === "completion") && entry.id) {
+      // "realloc" belongs here too: a failed save leaves the dialog usable, so the user
+      // can edit the pieces and save again, and the WAL would then hold two plans for
+      // one segment. The stale one carries a different actionId, so the server does not
+      // see a duplicate, and it is APPLIED if its pieces still fit the now-shorter
+      // source: a second, unrequested re-attribution of time already moved.
+      if (entry && (entry.op === "update" || entry.op === "completion" || entry.op === "realloc") && entry.id) {
         wal = wal.filter(e => !(e && e.op === entry.op && e.id === entry.id));
       }
       wal.push({ ...entry, _walId: entryId, timestamp: new Date().toISOString() });
@@ -483,7 +488,11 @@
     // "undelete" too: A2's route 404s when the row is gone for real (hard-deleted, or
     // purged by the 30-day purgeSoftDeleted sweep). There is nothing left to revive, so
     // retrying can only fail again.
-    if ((entry.op === "update" || entry.op === "completion" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "batch" || entry.op === "undelete" || entry.op === "work") && err.status === 404) return true;
+    // "realloc" for the same reason, and it is reachable on REPLAY rather than only on
+    // the first attempt: the POST fails with a network error so the entry stays
+    // buffered, and by the time it replays the destination task or the segment itself
+    // may be gone (404) or a local_id may now match two live rows (409).
+    if ((entry.op === "update" || entry.op === "completion" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "batch" || entry.op === "undelete" || entry.op === "work" || entry.op === "realloc") && err.status === 404) return true;
     // 409 is terminal for undelete and reschedule specifically. An undelete
     // db.undeleteBlock raises it when clearing deleted_at would move the row into
     // idx_blocks_idem_unique's predicate while a LIVE row already holds that
@@ -494,7 +503,7 @@
     // source calendar owns placement. That authority will not change on retry.
     if ((entry.op === "undelete" || entry.op === "reschedule") && err.status === 409) return true;
     if ((entry.op === "update" || entry.op === "completion") && err.status === 409) return true;
-    if (entry.op === "work" && err.status === 409) return true;
+    if ((entry.op === "work" || entry.op === "realloc") && err.status === 409) return true;
     return false;
   }
 

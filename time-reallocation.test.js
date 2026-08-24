@@ -621,3 +621,122 @@ test("a planted row at a derived id cannot absorb another workspace's segment", 
     /identity collision/,
   );
 });
+
+// ── iteration 2 of the review: the failure windows the first fix left open ────
+
+test("a whole move whose delete fails does not invent an hour, and the replay finishes it", async () => {
+  const h = harness();
+  const from = h.task({}, { id: "from" });
+  const to = h.task({}, { id: "to" });
+  const entry = await trackedHour(h, from);
+
+  const realDelete = h.db.deleteBlock;
+  let boom = true;
+  h.db.deleteBlock = async (id) => { if (boom) { boom = false; throw new Error("db down"); } return realDelete(id); };
+  await assert.rejects(
+    () => h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 3600, task: to }], actionId: "move-1", workspaceId: "ws-1" }),
+    /db down/,
+  );
+  // The source is still live beside the moved row, so the ledger over-counts. That is
+  // recoverable; the bug this replaces INVENTED the hour and then reported success.
+  assert.equal(h.totalSec(), 7200, "over-counted, as designed, pending the resume");
+
+  const stranded = h.rows.find((row) => row.id === entry.id);
+  assert.equal(stranded.properties.reallocationOperationId, "move-1");
+  assert.ok(stranded.properties.reallocationSettledAt, "the projections had already settled");
+  assert.equal(stranded.properties.reallocationKeptSource, false);
+
+  const replay = await h.timing.reallocateTimeEntry({ entry: stranded, allocations: [{ durSec: 3600, task: to }], actionId: "move-1", workspaceId: "ws-1" });
+  assert.equal(replay.duplicate, true);
+  assert.equal(h.totalSec(), 3600, "the replay finished the outstanding delete");
+  assert.equal(to.properties.actualMinutes, 60);
+  assert.equal(from.properties.actualMinutes, undefined);
+});
+
+test("a projection that fails leaves the operation unsettled, and the replay repairs it", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  const entry = await trackedHour(h, owner);
+  const allocations = [{ durSec: 1200, task: other }, { durSec: 2400, task: owner }];
+
+  // Fail the second projection, after the segment rows and the started stamp landed.
+  const realUpdate = h.db.updateBlock;
+  let hits = 0;
+  h.db.updateBlock = async (id, patch) => {
+    if (id === "other" || id === "owner") { hits++; if (hits === 2) throw new Error("db down"); }
+    return realUpdate(id, patch);
+  };
+  await assert.rejects(() => h.timing.reallocateTimeEntry({ entry, allocations, actionId: "split-1", workspaceId: "ws-1" }), /db down/);
+  h.db.updateBlock = realUpdate;
+
+  const source = h.rows.find((row) => row.id === entry.id);
+  assert.equal(source.properties.reallocationOperationId, "split-1");
+  assert.equal(source.properties.reallocationSettledAt, undefined, "started, not settled");
+  // The snapshot the repair needs travels with the stamp, because it cannot be retaken:
+  // re-reading the origin's sessions now would count the moved 20m as unexplained.
+  assert.deepEqual(source.properties.reallocationPriorTotals, { owner: 60, other: null });
+
+  const replay = await h.timing.reallocateTimeEntry({ entry: source, allocations, actionId: "split-1", workspaceId: "ws-1" });
+  assert.equal(replay.resumed, true, "resumed rather than answered");
+  assert.equal(h.totalSec(), 3600);
+  assert.equal(owner.properties.actualMinutes, 40, "both projections are repaired");
+  assert.equal(other.properties.actualMinutes, 20);
+  assert.ok(h.rows.find((row) => row.id === entry.id).properties.reallocationSettledAt);
+});
+
+test("a retry converges even when a piece is a freshly created task", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const entry = await trackedHour(h, owner);
+
+  // The route mints a new task per attempt, so a seed built from resolved destination ids
+  // changed on every retry and orphaned the previous attempt's rows.
+  const attempt = (destination) => [{ durSec: 1200, task: destination }, { durSec: 2400, task: owner }];
+  const madeOne = h.task({}, { id: "made-1", title: "Typed title" });
+  const realCreate = h.db.createBlock;
+  let boom = true;
+  h.db.createBlock = async (input) => { const row = await realCreate(input); if (boom) { boom = false; throw new Error("db down"); } return row; };
+  await assert.rejects(() => h.timing.reallocateTimeEntry({ entry, allocations: attempt(madeOne), actionId: "plan-1", workspaceId: "ws-1" }), /db down/);
+  h.db.createBlock = realCreate;
+
+  const madeTwo = h.task({}, { id: "made-2", title: "Typed title" });
+  const source = h.rows.find((row) => row.id === entry.id);
+  await h.timing.reallocateTimeEntry({ entry: source, allocations: attempt(madeTwo), actionId: "plan-1", workspaceId: "ws-1" });
+  assert.equal(h.totalSec(), 3600, "the retry re-landed on the same rows instead of orphaning them");
+});
+
+test("an unfenced legacy task cannot be written by whoever names it", async () => {
+  const h = harness();
+  const mine = h.task({}, { id: "mine" });
+  // A row with NO workspace passes the repo's usual `a && b && a !== b` fence, which
+  // db.js createBlock calls out by name. Its owner is the only identity left.
+  const legacy = h.task({ actualMinutes: 45 }, { id: "legacy", workspaceId: null });
+  legacy.user_id = 999;
+  const entry = await trackedHour(h, mine);
+  entry.properties.blockId = "legacy";
+  delete mine.properties.actualMinutes;
+
+  await h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 3600, task: mine }], workspaceId: "ws-1" });
+  assert.equal(legacy.properties.actualMinutes, 45, "someone else's unfenced row is untouched");
+  assert.equal(mine.properties.actualMinutes, 60);
+});
+
+test("per-day spans sum exactly to the window even off a sub-second boundary", () => {
+  const { splitSessionByLocalDay } = createTaskTiming;
+  const cases = [
+    ["2026-08-21T03:59:59.600Z", 30_000],
+    ["2026-08-21T03:59:59.600Z", 1_000],
+    ["2026-08-21T03:30:00.000Z", 3_600_000],
+    ["2026-08-20T13:00:00.000Z", 1_800_000],
+  ];
+  for (const [startIso, ms] of cases) {
+    const startMs = Date.parse(startIso);
+    const spans = splitSessionByLocalDay(startMs, startMs + ms, "America/New_York");
+    const want = Math.round(ms / 1000);
+    const have = spans.reduce((sum, span) => sum + span.durSec, 0);
+    // Math.max(1, round) only rounds UP, so an unaligned boundary used to gain a second,
+    // and the conservation guard runs before the split so it could never catch it.
+    assert.equal(have, want, `${startIso} +${ms}ms produced ${have}s of spans for ${want}s`);
+  }
+});
