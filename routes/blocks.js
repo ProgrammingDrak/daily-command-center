@@ -865,9 +865,16 @@ module.exports = function mount(app, ctx) {
     // input: POST /api/blocks passes properties through for this free-form type.
     // 36h clears every honest shape (reconcileTiming refuses to settle past
     // MAX_TIMED_MINUTES, 16h, and Day Review's manual editor tops out at 24h).
+    // A POSITIVE gate, not a conditional one. Gating on `Number.isFinite(...) && over`
+    // meant a non-finite durSec skipped the cap rather than being refused by it, and
+    // durSec is client-writable, so "Infinity" reached the store and satisfied its
+    // conservation re-check too.
     const sourceSec = Number((entry.properties || {}).durSec);
-    if (Number.isFinite(sourceSec) && sourceSec > MAX_REALLOCATABLE_SEC) {
-      res.status(400).json({ error: "That segment is too long to move", code: "TIME_ALLOCATION_INVALID" });
+    if (!Number.isFinite(sourceSec) || sourceSec <= 0 || sourceSec > MAX_REALLOCATABLE_SEC) {
+      res.status(400).json({
+        error: sourceSec > MAX_REALLOCATABLE_SEC ? "That segment is too long to move" : "That segment's tracked length is not usable",
+        code: "TIME_ALLOCATION_INVALID",
+      });
       return;
     }
     const plan = planAllocations((entry.properties || {}).durSec, requests);
