@@ -35,6 +35,11 @@ const KIND = "schedule_settings";
 // Reusing it keeps one spelling of the kind lookup and, unlike a raw pool.query,
 // leaves the store injectable for tests.
 async function findSettingsBlock(workspaceId, deps) {
+  // db.js getBlocksByKind DROPS the workspace predicate when workspaceId is falsy, and
+  // db.js's own comment calls that unsafe. No live caller can reach here without one,
+  // but the failure mode is cross-tenant (resetScheduleSettings would delete the oldest
+  // settings row in the whole table), so guard rather than rely on every future caller.
+  if (!workspaceId) return null;
   const db = (deps && deps.blockDB) || blockDB;
   if (!db || typeof db.getBlocksByKind !== "function") return null;
   const rows = await db.getBlocksByKind(KIND, workspaceId);

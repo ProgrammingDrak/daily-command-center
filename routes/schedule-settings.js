@@ -31,10 +31,13 @@ module.exports = function mount(app, ctx) {
         req.session && req.session.userId,
         req.body || {}
       );
-      // Other tabs hold their own __state copy and their own memoized day
-      // contexts; without this they keep auto-placing against the old floor
-      // until a reload.
-      broadcast("blocks-changed", { action: "schedule-settings-update" }, req.workspaceId);
+      // dcc-state-changed, NOT blocks-changed. day_start rides on state.schedule, and
+      // in public/js/sse.js only dcc-state-changed reaches refreshDccState, the one path
+      // that refetches /api/state/day and reassigns __state. blocks-changed just refolds
+      // the block cache, so the receiving tab would keep the old floor until a reload,
+      // the opposite of why this broadcast exists. Same channel and {source, action}
+      // shape triage suppressions use, which is the same kind-block read-time stamp.
+      broadcast("dcc-state-changed", { source: "schedule-settings", action: "update" }, req.workspaceId);
       res.json(updated);
     } catch (e) {
       res.status(400).json({ error: e.message });
@@ -44,7 +47,7 @@ module.exports = function mount(app, ctx) {
   app.delete("/api/schedule/settings", async (req, res) => {
     try {
       const reset = await scheduleSettingsStore.resetScheduleSettings(req.workspaceId);
-      broadcast("blocks-changed", { action: "schedule-settings-reset" }, req.workspaceId);
+      broadcast("dcc-state-changed", { source: "schedule-settings", action: "reset" }, req.workspaceId);
       res.json(reset);
     } catch (e) {
       res.status(500).json({ error: e.message });

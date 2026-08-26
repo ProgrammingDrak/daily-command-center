@@ -620,14 +620,21 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     // removed today's instance of a responsibility, the auto-scheduler must not
     // resurrect it today (mirrors meeting-materializer's tombstone rule). Live
     // rows drive blockers and dedup exactly as before.
-    const allBlocks = await blockDB.getBlocksByDateIncludingDeleted(dateStr, workspaceId);
+    // All three reads are independent, so issue them together. The first one cannot use
+    // an index (every blocks index is partial on deleted_at IS NULL) and sequential-scans,
+    // so it already dominates this function; stacking two more serial round trips behind
+    // it is latency for nothing.
+    const [allBlocks, dayBlocks, floorMin] = await Promise.all([
+      blockDB.getBlocksByDateIncludingDeleted(dateStr, workspaceId),
+      getScheduleBlocks(userId, workspaceId),
+      getDayStartMinutes(workspaceId),
+    ]);
     const blocks = allBlocks.filter(b => !b.deleted_at);
     const deletedResponsibilityIds = new Set(
       allBlocks
         .filter(b => b.deleted_at && (b.properties || {}).kind === "responsibility_task" && (b.properties || {}).responsibilityId)
         .map(b => b.properties.responsibilityId)
     );
-    const dayBlocks = await getScheduleBlocks(userId, workspaceId);
     const workBlocks = dayBlocks.filter(b => (b.blockType || b.type) === "work");
     // The user's start of day is a FLOOR on top of the derived bound, never a
     // replacement for it: a 05:00 work block still bounds the day, it just stops
@@ -636,7 +643,6 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     // one floor, four slot engines, no fifth spelling of it.
     // A null floor means "not wired" (the DI default, and every test stub), which
     // must mean NO clamp rather than a silently invented 07:00 policy.
-    const floorMin = await getDayStartMinutes(workspaceId);
     const derivedStart = workBlocks[0] ? hhmmToMinutes(workBlocks[0].start) : 9 * 60;
     const dayStart = floorMin == null ? derivedStart : Math.max(floorMin, derivedStart);
     const dayEnd = workBlocks.length ? hhmmToMinutes(workBlocks[workBlocks.length - 1].end) : 17 * 60;

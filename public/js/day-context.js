@@ -140,11 +140,12 @@
   // the route, and this module cannot disagree about what a legal value is. Returns a
   // canonical "HH:MM" or null; callers turn null into a 400 or into the default.
   //
-  // The 12:00 cap is not arbitrary. dayStart > dayEnd bricks the day: findSlot's
-  // `slot + d > ctx.dayEnd + 60` then rejects EVERY placement ("No free slot on..."),
-  // while the server's firstFreeSlot returns null and falls back to
-  // `Math.max(dayStart, nowMin)` -- so the two engines would disagree in that state
-  // instead of failing the same way. A start of day past noon is not a real setting.
+  // The 12:00 cap bounds how far the floor can push dayStart toward dayEnd. It does
+  // NOT by itself prevent an inverted window (a day whose plan ends early does that
+  // on its own), which is why buildDayContext also clamps dayEnd up to dayStart.
+  // Both guards exist because findSlot rejects on `slot + d > ctx.dayEnd + 60` while
+  // the server's firstFreeSlot falls back to `Math.max(dayStart, nowMin)`, so an
+  // inverted window makes the two engines disagree rather than fail alike.
   const DAY_START_DEFAULT = "07:00";
   const DAY_START_MAX = "12:00";
 
@@ -191,9 +192,16 @@
       dayStartMinutes(state),
       stBlocks.length ? _pt(stBlocks[0].start) : 7 * 60
     );
-    const dayEnd = stBlocks.length
-      ? _pt(stBlocks[stBlocks.length - 1].end)
-      : 17 * 60 + 30;
+    // Raising dayStart must never invert the window. A day whose plan ends before the
+    // floor (an early-only Saturday block) would otherwise give dayEnd < dayStart, and
+    // findSlot's `slot + d > dayEnd + 60` and the server's firstFreeSlot disagree about
+    // what that means. Clamping keeps the window degenerate-but-valid, so both engines
+    // read it the same way. A genuinely full day still answers "no slot", which is the
+    // floor working, not a bug.
+    const dayEnd = Math.max(
+      dayStart,
+      stBlocks.length ? _pt(stBlocks[stBlocks.length - 1].end) : 17 * 60 + 30
+    );
     return {
       dateStr: dateStr,
       state: state || null,

@@ -628,9 +628,35 @@ test("floor: reach-back still clears an EARLY held item, or the drop is a silent
   assert.equal(find(sched, "hold").start, "06:00");
 });
 
-test("floor: reach-back above a LATER held item is still clamped to the floor", () => {
-  const sched = [t("mv", "13:00", "13:30"), t("hold", "09:00", "09:30", { _userSetStart: true })];
+// Reach-back is deliberately NOT floored: an explicit drag to the top outranks the
+// floor, and clamping it would push the drop past the item it was dragged above.
+test("reach-back stays below the floor when the hold leaves no room above it", () => {
+  const sched = [t("mv", "13:00", "14:00"), t("hold", "07:30", "08:00", { _userSetStart: true })];
   const day = makeDay(sched, { dayStart: "07:00" });
   day.context.recalcTimes({ orderWins: true, reachBackFor: "mv" });
-  assert.equal(find(sched, "mv").start, "08:30", "reaches back to just before the hold, above the floor");
+  assert.equal(find(sched, "mv").start, "06:30", "before the 07:30 hold, not pushed to 08:00 after it");
+});
+
+test("reach-back with a hold just ABOVE the floor still lands the drop before it", () => {
+  const sched = [t("mv", "13:00", "13:30"), t("hold", "07:15", "07:45", { _userSetStart: true })];
+  const day = makeDay(sched, { dayStart: "07:00" });
+  day.context.recalcTimes({ orderWins: true, reachBackFor: "mv" });
+  assert.equal(find(sched, "mv").start, "06:45", "before the hold it was dragged above, not 07:45 after it");
+});
+
+// recalcTimesTagAware is the OTHER cascade: when any schedule block has acceptedTags,
+// recalcTimes delegates to it and the per-block cursor -- not fallbackCursor -- is where
+// tasks actually land. Reverting that one clamp used to leave every test in the repo green.
+test("floor: a tagged block starting before the floor still places at the floor", () => {
+  const sched = [t("a", "09:00", "09:30", { tags: ["deep"] })];
+  const blocks = [{ id: "b1", start: "05:00", end: "17:00", acceptedTags: ["deep"] }];
+  makeDay(sched, { blocks, dayStart: "07:00" }).context.recalcTimes({ orderWins: true });
+  assert.equal(find(sched, "a").start, "07:00", "05:00 without the nextFree clamp");
+});
+
+test("floor: the tag-aware FALLBACK cursor is floored too, for a task no block accepts", () => {
+  const sched = [t("a", "05:30", "06:00", { tags: ["other"] })];
+  const blocks = [{ id: "b1", start: "05:00", end: "17:00", acceptedTags: ["deep"] }];
+  makeDay(sched, { blocks, dayStart: "07:00" }).context.recalcTimes({ orderWins: true });
+  assert.equal(find(sched, "a").start, "07:00");
 });

@@ -307,14 +307,15 @@ function recalcTimes(opts){
     if(mv&&mv.id===opts.reachBackFor&&!_holdsTime(mv,opts)){
       const firstHold=Math.min.apply(null,blockers.map(b=>b.s));
       const d=_isSeqShell(mv)?_shellSpan(mv):dur(mv);
-      const reach=Math.min(cursor,firstHold-d);
-      // The floor must NOT turn this into a no-op. When the earliest held item is
-      // itself before the floor (a real 06:00 meeting, or a hand-set 06:00 row),
-      // clamping the reach-back to the floor would land the drop AFTER the very
-      // thing the user dragged above -- silently, which is the exact bug the
-      // reach-back exists to fix. So the floor applies only when there is room for
-      // it above the earliest hold; otherwise fall back to the original 00:00 clamp.
-      cursor=firstHold>floorMin?Math.max(floorMin,reach):Math.max(0,reach);
+      // UNCHANGED by the start-of-day floor, deliberately. `cursor` is already
+      // floored above, so `reach` can only fall below the floor when the earliest
+      // hold leaves less room than the dragged task needs -- and in exactly that
+      // case the drop MUST reach below the floor, or _freeStart pushes it past the
+      // hold and it silently lands after the item it was dragged above. Adding a
+      // floor clamp here is provably a no-op when the task fits (reach >= floorMin
+      // already) and a bug when it does not, so the original clamp is the correct
+      // one. An explicit drag outranks the floor; typing a time is the other escape.
+      cursor=Math.max(0,Math.min(cursor,firstHold-d));
     }
   }
 

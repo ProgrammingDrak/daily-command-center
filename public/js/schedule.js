@@ -1961,7 +1961,14 @@ function _renderDayStartNote(){
   // the setting look broken.
   const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
   const work=blocks.filter(b=>(b.blockType||b.type)==="work");
-  if(!work.length)return void(note.textContent="");
+  note.textContent="";
+  if(!work.length)return;
+  // Only true while the work day starts LATER than the floor. Printed unconditionally it
+  // told a user with a 10:00 floor and a 09:00 work block that work "still begins" at
+  // 09:00, the opposite of max(floor, derived). Reads the picker, not the saved value.
+  const input=document.getElementById("day-start-input");
+  const picked=(window.DCC&&DCC.normalizeDayStart&&DCC.normalizeDayStart(input&&input.value))||_dayStartValue();
+  if(pt(work[0].start)<=pt(picked))return;
   note.textContent="Your work day starts at "+_schedTimeLabel(work[0].start)+". Auto-scheduled work still begins then.";
 }
 function openDayStart(){
@@ -1999,8 +2006,15 @@ async function _saveDayStart(value){
 // _locked / _userSetStart rows alone, so a hand-set 06:00 survives while everything
 // the scheduler placed lifts to the new floor -- which is the visible payoff.
 function _applyDayStart(value){
-  if(__state&&__state.schedule)__state.schedule.day_start=value;
-  if(typeof __DCC_TOMORROW__!=="undefined"&&__DCC_TOMORROW__&&__DCC_TOMORROW__.schedule)__DCC_TOMORROW__.schedule.day_start=value;
+  // All three, not just the viewed one. __state and window.__DCC_STATE__ are the same
+  // object ONLY on today's view; change the setting from tomorrow or an archive day and
+  // today's cached state keeps the old floor, which day-context _resolveKnownState then
+  // hands straight back to findSlot. Today is the day the floor matters most.
+  [typeof __state!=="undefined"?__state:null,
+   typeof window!=="undefined"?window.__DCC_STATE__:null,
+   typeof __DCC_TOMORROW__!=="undefined"?__DCC_TOMORROW__:null].forEach(function(s){
+    if(s&&s.schedule)s.schedule.day_start=value;
+  });
   if(window.DCC&&DCC.invalidateDayContext)DCC.invalidateDayContext();
   if(typeof recalcTimes==="function")recalcTimes();
   if(typeof saveTaskOrder==="function")saveTaskOrder();
@@ -2019,6 +2033,7 @@ function _applyDayStart(value){
   if(closeBtn)closeBtn.addEventListener("click",closeDayStart);
   ov.addEventListener("click",e=>{if(e.target===ov)closeDayStart()});
   const input=document.getElementById("day-start-input");
+  if(input)input.addEventListener("change",_renderDayStartNote);
   const saveBtn=document.getElementById("day-start-save");
   const doSave=async()=>{if(input&&await _saveDayStart(input.value))closeDayStart()};
   if(saveBtn)saveBtn.addEventListener("click",doSave);

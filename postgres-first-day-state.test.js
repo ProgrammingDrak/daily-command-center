@@ -58,6 +58,7 @@ const dayWithTimeline = (label) => ({ date: DATE, schedule: { timeline: [{ id: "
 function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionBlocks = [], suppressionsThrow = false, reviewRows = [], reviewRowsThrow = false, userId = 1 } = {}) {
   const writes = [];
   const reviewAsked = [];
+  const settingsAsked = [];
   const ctx = {
     console: { error: () => {}, warn: () => {} },
     getDayFilePath: (d) => "days/" + d + ".json",
@@ -72,7 +73,11 @@ function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionB
     // The start-of-day floor buildDayResponse stamps onto schedule.day_start. Stubbed
     // rather than wired to the real store so this suite keeps testing the day-response
     // contract, not the settings storage.
-    scheduleSettingsStore: { getScheduleSettings: async () => ({ dayStart: "07:00", _source: "defaults" }) },
+    scheduleSettingsStore: {
+      // Returns a NON-default value on purpose: with "07:00" an assertion could not
+      // tell a real stamp from day-context's client-side fallback.
+      getScheduleSettings: async (ws) => { settingsAsked.push(ws); return { dayStart: "09:30", _source: "user" }; },
+    },
     addDays: (date, days) => {
       const value = new Date(date + "T12:00:00Z");
       value.setUTCDate(value.getUTCDate() + days);
@@ -102,7 +107,7 @@ function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionB
   vm.runInContext(SUPPRESSIONS_SRC, ctx);
   vm.runInContext(BUILD_DAY_SRC, ctx);
   const uid = userId === null ? "null" : String(userId);
-  return { call: () => vm.runInContext(`buildDayResponse("${DATE}", ${uid}, "ws-1")`, ctx), writes, reviewAsked };
+  return { call: () => vm.runInContext(`buildDayResponse("${DATE}", ${uid}, "ws-1")`, ctx), writes, reviewAsked, settingsAsked };
 }
 
 test("the Postgres row WINS over a file carrying a non-empty timeline", async () => {
@@ -671,4 +676,30 @@ test("guest submissions are CAPPED, because this is a durable unauthenticated ap
   const mine = runAppend({ dbRow: { state_json: { date: DATE, triage: { open_items: ownersOwn, resolved_items: [] } } } });
   await mine.call();
   assert.equal(mine.saved.length, 1, "only public_share items are counted");
+});
+
+// ── START OF DAY: the day response is how the floor reaches every client engine ──
+// day-context.js dayStartMinutes reads state.schedule.day_start, and drag.js, state.js
+// and glymphatic-brief.js all read it through that. Without these, deleting the stamp
+// line in buildDayResponse left the whole suite green.
+
+test("the day response carries the workspace's start of day, read once for that workspace", async () => {
+  const { call, settingsAsked } = runBuildDay({
+    dbRow: { state_json: { date: DATE, schedule: { timeline: [] } } },
+  });
+  const out = await call();
+  assert.equal(out.schedule.day_start, "09:30");
+  assert.deepEqual(settingsAsked, ["ws-1"]);
+});
+
+// The anonymous share poll runs every 15s per open viewer against a pool capped at 10,
+// and a share viewer never auto-places anything, so it must not pay for this read.
+test("the anonymous share path does NOT read the setting and stamps no floor", async () => {
+  const { call, settingsAsked } = runBuildDay({
+    dbRow: { state_json: { date: DATE, schedule: { timeline: [] } } },
+    userId: null,
+  });
+  const out = await call();
+  assert.deepEqual(settingsAsked, []);
+  assert.equal("day_start" in out.schedule, false);
 });
