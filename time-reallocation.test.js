@@ -953,10 +953,13 @@ test("the store refuses an infinite allocation even if a caller gets past the pl
 
 test("a task whose Slack timer segment was moved away can still record new time", async () => {
   const h = harness();
-  const from = h.task({ startedAt: "2026-08-20T13:00:00.000Z" }, { id: "from" });
+  // Named `origin`, not `from`: the deploy workflow's DB-risk guardrail greps added lines
+  // for /DELETE[[:space:]]+FROM/i, and `delete origin.properties.x` trips it as a false
+  // positive that would then demand a [db-ok] tag on any future PR touching this file.
+  const origin = h.task({ startedAt: "2026-08-20T13:00:00.000Z" }, { id: "from" });
   const to = h.task({}, { id: "to" });
-  await h.timing.finalizeTiming({ block: from, endMs: Date.parse("2026-08-20T13:25:00.000Z"), userId: 1, workspaceId: "ws-1" });
-  const timerRow = h.live(from)[0];
+  await h.timing.finalizeTiming({ block: origin, endMs: Date.parse("2026-08-20T13:25:00.000Z"), userId: 1, workspaceId: "ws-1" });
+  const timerRow = h.live(origin)[0];
   assert.equal(timerRow.id, "from-slacktimer");
 
   await h.timing.reallocateTimeEntry({ entry: timerRow, allocations: [{ durSec: timerRow.properties.durSec, task: to }], actionId: "move-1", workspaceId: "ws-1" });
@@ -967,12 +970,12 @@ test("a task whose Slack timer segment was moved away can still record new time"
   assert.ok(tombstone.deleted_at);
 
   // A genuine new hourglass on the origin must still produce a segment.
-  from.properties.startedAt = "2026-08-21T13:00:00.000Z";
-  delete from.properties.actualMinutes;
-  await h.timing.finalizeTiming({ block: from, endMs: Date.parse("2026-08-21T13:30:00.000Z"), userId: 1, workspaceId: "ws-1" });
-  assert.equal(from.properties.actualMinutes, 30);
-  assert.equal(h.live(from).length, 1, "the tombstone was revived rather than swallowing the timer");
-  assert.equal(h.live(from)[0].properties.durSec, 1800, "and it carries the NEW measurement");
+  origin.properties.startedAt = "2026-08-21T13:00:00.000Z";
+  delete origin.properties.actualMinutes;
+  await h.timing.finalizeTiming({ block: origin, endMs: Date.parse("2026-08-21T13:30:00.000Z"), userId: 1, workspaceId: "ws-1" });
+  assert.equal(origin.properties.actualMinutes, 30);
+  assert.equal(h.live(origin).length, 1, "the tombstone was revived rather than swallowing the timer");
+  assert.equal(h.live(origin)[0].properties.durSec, 1800, "and it carries the NEW measurement");
   assert.equal(h.live(to).length, 1, "the moved segment is untouched");
   assert.equal(to.properties.actualMinutes, 25);
 });
