@@ -698,7 +698,12 @@ function _placeTaskAtNextTodaySlot(id){
 
   const roundTo15=m=>Math.ceil(m/15)*15;
   const active=scheduled.find(isActive);
-  const cursor=roundTo15(active?pt(active.end):now());
+  // Floored by the user's start of day, exactly like the non-today arm below
+  // (_placeTaskAtEarliestCurrentDateSlot). rescheduleTaskToDate picks between the two
+  // on isActualToday, so clamping only one would mean "next free slot" respects the
+  // floor on every day EXCEPT today -- which is the day it matters most.
+  const _floor=(typeof DCC!=="undefined"&&DCC.dayStartMinutes)?DCC.dayStartMinutes(__state):0;
+  const cursor=Math.max(_floor,roundTo15(active?pt(active.end):now()));
   const blockers=(typeof _meetingBlocks==="function")?_meetingBlocks().slice():[];
   const startMin=(typeof _freeStart==="function")?_freeStart(cursor,d,blockers):cursor;
   const startStr=fmt(startMin);
@@ -732,7 +737,10 @@ function _placeTaskAtEarliestCurrentDateSlot(id){
   if(typeof saveDeletedState==="function")saveDeletedState();
 
   const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
-  const startMin=blocks.length?pt(blocks[0].start):7*60;
+  // Floor, not a source: a 05:00 first block still bounds the day, it just stops
+  // being where "earliest slot" lands. recalcTimes() below re-flows collisions.
+  const _floor=(typeof DCC!=="undefined"&&DCC.dayStartMinutes)?DCC.dayStartMinutes(__state):0;
+  const startMin=Math.max(_floor,blocks.length?pt(blocks[0].start):7*60);
   moved.start=fmt(startMin);
   moved.end=fmt(startMin+d);
   scheduled.unshift(moved);

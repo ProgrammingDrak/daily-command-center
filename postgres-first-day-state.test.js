@@ -69,6 +69,10 @@ function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionB
     getScheduleBlocks: async () => [],
     triageSuppressions: require("./triage-suppressions"),
     dayReviewRepeats: require("./day-review-repeats"),
+    // The start-of-day floor buildDayResponse stamps onto schedule.day_start. Stubbed
+    // rather than wired to the real store so this suite keeps testing the day-response
+    // contract, not the settings storage.
+    scheduleSettingsStore: { getScheduleSettings: async () => ({ dayStart: "07:00", _source: "defaults" }) },
     addDays: (date, days) => {
       const value = new Date(date + "T12:00:00Z");
       value.setUTCDate(value.getUTCDate() + days);
@@ -172,6 +176,10 @@ test("the row is read for the caller's OWN workspace, not a default", async () =
     getScheduleBlocks: async () => [],
     triageSuppressions: require("./triage-suppressions"),
     dayReviewRepeats: require("./day-review-repeats"),
+    // The start-of-day floor buildDayResponse stamps onto schedule.day_start. Stubbed
+    // rather than wired to the real store so this suite keeps testing the day-response
+    // contract, not the settings storage.
+    scheduleSettingsStore: { getScheduleSettings: async () => ({ dayStart: "07:00", _source: "defaults" }) },
     addDays: (date, days) => {
       const value = new Date(date + "T12:00:00Z");
       value.setUTCDate(value.getUTCDate() + days);

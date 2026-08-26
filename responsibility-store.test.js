@@ -238,12 +238,15 @@ function makeFakeBlockDB(seed = {}) {
   return api;
 }
 
-function makeStore(fake) {
+function makeStore(fake, opts = {}) {
   return createResponsibilityStore({
     blockDB: fake,
-    getScheduleBlocks: async () => [{ blockType: "work", start: "09:00", end: "17:00" }],
+    getScheduleBlocks: async () => opts.scheduleBlocks || [{ blockType: "work", start: "09:00", end: "17:00" }],
     getTodayStr: () => "2026-07-11",
     assertBlockOwnership: () => {},
+    // Unwired by default (null == no floor), which is what every other test here
+    // wants: the pre-feature behaviour, derived from the work blocks alone.
+    ...(opts.dayStartMinutes === undefined ? {} : { getDayStartMinutes: async () => opts.dayStartMinutes }),
   });
 }
 
@@ -490,4 +493,48 @@ test("applyForwardDiff: empty diff makes NO batchOp call", async () => {
   const result = await store.applyForwardDiff({ fromDate: "2026-07-11", diff: {}, userId: 1, workspaceId: "ws-1" });
   assert.equal(fake.calls.batchOp.length, 0);
   assert.equal(result.daysUpdated, 0);
+});
+
+// ── START OF DAY: the floor on the server slot engine ─────────────────────
+// Same contract the client engine applies in public/js/day-context.js: max(floor,
+// derived), never a replacement for the derived bound.
+
+test("start of day: a floor LATER than the work day pushes the task down to it", async () => {
+  const fake = makeFakeBlockDB({ blocksByDate: { "2026-07-12": [] } });
+  const store = makeStore(fake, { dayStartMinutes: 10 * 60 });
+  const responsibility = { id: "r1", properties: { title: "Task", estimatedMinutes: 30, kind: "responsibility_item" } };
+  const out = await store.scheduleResponsibilityTask({ responsibility, date: "2026-07-12", userId: 1, workspaceId: "ws-1" });
+  assert.equal(out.block.properties.start, "10:00");
+  assert.equal(out.block.properties.end, "10:30");
+});
+
+test("start of day: a floor EARLIER than the work day changes nothing", async () => {
+  const fake = makeFakeBlockDB({ blocksByDate: { "2026-07-12": [] } });
+  const store = makeStore(fake, { dayStartMinutes: 6 * 60 });
+  const responsibility = { id: "r1", properties: { title: "Task", estimatedMinutes: 30, kind: "responsibility_item" } };
+  const out = await store.scheduleResponsibilityTask({ responsibility, date: "2026-07-12", userId: 1, workspaceId: "ws-1" });
+  assert.equal(out.block.properties.start, "09:00", "the work block still wins");
+});
+
+// The real bug this feature exists for: an early block dragging placement into the
+// small hours. Here the work day itself starts at 05:00.
+test("start of day: an 05:00 work day no longer places at 05:00", async () => {
+  const early = [{ blockType: "work", start: "05:00", end: "17:00" }];
+  const responsibility = { id: "r1", properties: { title: "Task", estimatedMinutes: 30, kind: "responsibility_item" } };
+
+  const before = await makeStore(makeFakeBlockDB({ blocksByDate: { "2026-07-12": [] } }), { scheduleBlocks: early })
+    .scheduleResponsibilityTask({ responsibility, date: "2026-07-12", userId: 1, workspaceId: "ws-1" });
+  assert.equal(before.block.properties.start, "05:00", "unwired: the pre-feature behaviour");
+
+  const after = await makeStore(makeFakeBlockDB({ blocksByDate: { "2026-07-12": [] } }), { scheduleBlocks: early, dayStartMinutes: 7 * 60 })
+    .scheduleResponsibilityTask({ responsibility, date: "2026-07-12", userId: 1, workspaceId: "ws-1" });
+  assert.equal(after.block.properties.start, "07:00");
+});
+
+test("start of day: an unwired store applies NO floor, so the default is never invented", async () => {
+  const fake = makeFakeBlockDB({ blocksByDate: { "2026-07-12": [] } });
+  const store = makeStore(fake, { scheduleBlocks: [{ blockType: "work", start: "05:00", end: "17:00" }] });
+  const responsibility = { id: "r1", properties: { title: "Task", estimatedMinutes: 30, kind: "responsibility_item" } };
+  const out = await store.scheduleResponsibilityTask({ responsibility, date: "2026-07-12", userId: 1, workspaceId: "ws-1" });
+  assert.equal(out.block.properties.start, "05:00");
 });

@@ -28,6 +28,7 @@ const createTaskTiming = require("../lib/task-timing");
 const { planAllocations } = createTaskTiming;
 const MAX_REALLOCATABLE_SEC = 36 * 3600;
 const TaskModel = require("../public/js/task-model");
+const scheduleSettingsStore = require("../schedule-settings-store");
 const createMaterializeGuard = require("../lib/materialize-guard");
 const { dedupeStatus } = createMaterializeGuard;
 const createResponsibilityStore = require("../responsibility-store");
@@ -212,7 +213,19 @@ module.exports = function mount(app, ctx) {
 
   // The responsibility domain + slot engine + apply-forward engine live in
   // responsibility-store.js; instantiate it here with the server-scope deps.
-  const respStore = createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership, appTimeZone: ctx.APP_TIME_ZONE });
+  const respStore = createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership,
+    // Reads through the SAME blockDB this module was handed, so a harness's fake is
+    // honoured and no code path reaches a real pool behind the test's back.
+    // A settings read that fails must never break auto-scheduling: null means
+    // "no floor", i.e. exactly the pre-feature behaviour.
+    getDayStartMinutes: async (workspaceId) => {
+      try { return await scheduleSettingsStore.getDayStartMinutes(workspaceId, { blockDB }); }
+      catch (e) {
+        console.error("[schedule] day-start read failed (non-fatal):", e.message);
+        return null;
+      }
+    },
+    appTimeZone: ctx.APP_TIME_ZONE });
 
   // The shared no-resurrection contract (lib/materialize-guard.js). Used here by the
   // task-group schedule route; routes/dcc.js and meeting-materializer.js hold the

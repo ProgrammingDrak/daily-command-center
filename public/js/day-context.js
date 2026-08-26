@@ -36,6 +36,9 @@
 //   - Day bounds: first/last of state.schedule.blocks, falling back to
 //     07:00-17:30 when the day has no plan. (_scheduleTaskOnDate fell back to
 //     08:00.) A task may run up to 60 min past dayEnd before "no slot" fires.
+//   - Start of day: the user's floor (state.schedule.day_start, default 07:00)
+//     clamps dayStart upward. See the dayStartMinutes block below -- it is THE
+//     answer for all four slot engines, not just this one.
 //   - excludeSelf: drop ev's own persisted block from the blockers (moves want
 //     to reslot around everything BUT themselves). The create paths dedupe on
 //     ev.id in their wrapper instead and never pass excludeSelf.
@@ -51,6 +54,10 @@
     DCC.findSlot = api.findSlot;
     DCC.invalidateDayContext = api.invalidateDayContext;
     DCC.buildDayContext = api.buildDayContext;
+    DCC.dayStartMinutes = api.dayStartMinutes;
+    DCC.normalizeDayStart = api.normalizeDayStart;
+    DCC.DAY_START_DEFAULT = api.DAY_START_DEFAULT;
+    DCC.DAY_START_MAX = api.DAY_START_MAX;
   }
 })(typeof self !== "undefined" ? self : this, function () {
   const _root =
@@ -116,6 +123,44 @@
     return n.getHours() * 60 + n.getMinutes();
   }
 
+  // ---- START OF DAY: the one floor every auto-placement path shares ----
+  // A user-set "don't schedule me before this" time, served on every day response as
+  // state.schedule.day_start (stamped at READ time by buildDayResponse, so it cannot
+  // go stale). THE single answer to "earliest auto-placeable minute" -- the four slot
+  // engines (this module, responsibility-store.js, drag.js's two cascades, and
+  // glymphatic-brief.js gbPlanTasks) all clamp through here rather than each deriving
+  // their own, which is exactly the drift the day-bounds comment above records.
+  //
+  // It is a FLOOR, never a source: `max(floor, derived)`. A 05:00 schedule block still
+  // renders and still bounds the day, tasks just stop auto-landing inside it. Explicit
+  // intent outranks it everywhere -- a hand-named time carries properties.userSetStart,
+  // and drag.js _holdsTime holds those rows unconditionally.
+  //
+  // normalizeDayStart is the ONE home for the format AND the policy, so the store,
+  // the route, and this module cannot disagree about what a legal value is. Returns a
+  // canonical "HH:MM" or null; callers turn null into a 400 or into the default.
+  //
+  // The 12:00 cap is not arbitrary. dayStart > dayEnd bricks the day: findSlot's
+  // `slot + d > ctx.dayEnd + 60` then rejects EVERY placement ("No free slot on..."),
+  // while the server's firstFreeSlot returns null and falls back to
+  // `Math.max(dayStart, nowMin)` -- so the two engines would disagree in that state
+  // instead of failing the same way. A start of day past noon is not a real setting.
+  const DAY_START_DEFAULT = "07:00";
+  const DAY_START_MAX = "12:00";
+
+  function normalizeDayStart(value) {
+    if (typeof value !== "string") return null;
+    const raw = value.trim();
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(raw)) return null;
+    if (_pt(raw) > _pt(DAY_START_MAX)) return null;
+    return raw;
+  }
+
+  function dayStartMinutes(state) {
+    const raw = normalizeDayStart(state && state.schedule ? state.schedule.day_start : null);
+    return _pt(raw || DAY_START_DEFAULT);
+  }
+
   // Which persisted block types occupy time (i.e. block a new task's slot).
   const BLOCKER_TYPES = { added_task: 1, schedule_item: 1, block: 1 };
 
@@ -139,7 +184,13 @@
       .map((e) => ({ s: _pt(e.start), e: _pt(e.end) }))
       .sort((a, b) => a.s - b.s);
     const stBlocks = sched.blocks || [];
-    const dayStart = stBlocks.length ? _pt(stBlocks[0].start) : 7 * 60;
+    // FLOOR, not a source: the user's start of day clamps whatever the day's plan
+    // implies, so a 05:00 block still bounds the day but stops pulling auto-placement
+    // into it. max(), never assignment -- a later first block still wins.
+    const dayStart = Math.max(
+      dayStartMinutes(state),
+      stBlocks.length ? _pt(stBlocks[0].start) : 7 * 60
+    );
     const dayEnd = stBlocks.length
       ? _pt(stBlocks[stBlocks.length - 1].end)
       : 17 * 60 + 30;
@@ -341,5 +392,9 @@
     findSlot: findSlot,
     invalidateDayContext: invalidateDayContext,
     buildDayContext: buildDayContext,
+    dayStartMinutes: dayStartMinutes,
+    normalizeDayStart: normalizeDayStart,
+    DAY_START_DEFAULT: DAY_START_DEFAULT,
+    DAY_START_MAX: DAY_START_MAX,
   };
 });

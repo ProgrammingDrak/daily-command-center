@@ -24,6 +24,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const TASK_MODEL_SRC = fs.readFileSync(require.resolve("./public/js/task-model.js"), "utf8");
+const DAY_CONTEXT_SRC = fs.readFileSync(require.resolve("./public/js/day-context.js"), "utf8");
 
 // state.js's accessor, which its five bare tree globals and several other functions call.
 // Six harnesses slice state.js regions that reach it, so it is installed here too -- SLICED
@@ -44,4 +45,18 @@ function installTaskModel(ctx) {
   return ctx.DCC.TaskModel;
 }
 
-module.exports = { installTaskModel, TASK_MODEL_SRC, TM_ACCESSOR };
+// Same doctrine as installTaskModel: the REAL module, running INSIDE the context.
+// drag.js reads the start-of-day floor through DCC.dayStartMinutes, and that call is
+// deliberately guarded (no module -> no floor) so the harnesses that do NOT install
+// this keep their pre-feature placements. Call it only from a harness that means to
+// exercise the floor; installing it everywhere would move assertions in suites that
+// place rows at 00:00 / 00:45 for reasons unrelated to scheduling.
+function installDayContext(ctx) {
+  vm.runInContext(DAY_CONTEXT_SRC, ctx);
+  if (!ctx.DCC || typeof ctx.DCC.dayStartMinutes !== "function") {
+    throw new Error("installDayContext: day-context did not attach to the context");
+  }
+  return ctx.DCC;
+}
+
+module.exports = { installTaskModel, installDayContext, TASK_MODEL_SRC, DAY_CONTEXT_SRC, TM_ACCESSOR };

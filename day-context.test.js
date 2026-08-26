@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { findSlot, buildDayContext } = require("./public/js/day-context");
+const { findSlot, buildDayContext, dayStartMinutes, normalizeDayStart, DAY_START_DEFAULT } = require("./public/js/day-context");
 
 // day-context.js unified the four copy-pasted free-slot pipelines
 // (schedulePushedOnDate / _scheduleTaskOnDate / _computeRescheduleSlot /
@@ -255,4 +255,95 @@ test("the create path and the reschedule path land the same slot", () => {
   const reschedSlot = findSlot(ev, ctx, { ...OFF, anchorNow: true, excludeSelf: true });
   assert.deepEqual(createSlot, reschedSlot);
   assert.equal(createSlot.start, "13:00"); // 11:00-12:00 too short for 90min; lands after the break
+});
+
+// ── START OF DAY: the floor every auto-placement path shares ──────────────
+// A user-set "do not schedule me before this" time. It CLAMPS the derived day
+// start upward and never lowers it, so a 05:00 schedule block still bounds the
+// day but stops pulling auto-placement into the small hours.
+
+test("normalizeDayStart accepts canonical HH:MM and rejects everything else", () => {
+  assert.equal(normalizeDayStart("07:00"), "07:00");
+  assert.equal(normalizeDayStart("  09:30  "), "09:30");
+  assert.equal(normalizeDayStart("00:00"), "00:00");
+  assert.equal(normalizeDayStart("7:00"), null);      // not zero-padded
+  assert.equal(normalizeDayStart("24:00"), null);
+  assert.equal(normalizeDayStart("09:60"), null);
+  assert.equal(normalizeDayStart(""), null);
+  assert.equal(normalizeDayStart(null), null);
+  assert.equal(normalizeDayStart(420), null);         // minutes are not the wire format
+});
+
+// dayStart > dayEnd makes findSlot reject EVERY placement and makes the two
+// engines disagree, so a start of day past noon is refused outright.
+test("normalizeDayStart refuses a start of day past noon, which would brick the day", () => {
+  assert.equal(normalizeDayStart("12:00"), "12:00");
+  assert.equal(normalizeDayStart("12:01"), null);
+  assert.equal(normalizeDayStart("18:00"), null);
+});
+
+test("dayStartMinutes falls back to the default on a missing or malformed value", () => {
+  const def = 7 * 60;
+  assert.equal(DAY_START_DEFAULT, "07:00");
+  assert.equal(dayStartMinutes(null), def);
+  assert.equal(dayStartMinutes({}), def);
+  assert.equal(dayStartMinutes(state([], WORKDAY)), def);                       // field absent
+  assert.equal(dayStartMinutes({ schedule: { day_start: "nope" } }), def);      // malformed
+  assert.equal(dayStartMinutes({ schedule: { day_start: "23:00" } }), def);     // out of range
+  assert.equal(dayStartMinutes({ schedule: { day_start: "09:15" } }), 555);
+});
+
+test("buildDayContext: the floor CLAMPS an early first block", () => {
+  const early = state([], [{ start: "05:00", end: "17:30" }]);
+  // The DEFAULT floor already applies, before the user has set anything: a fresh
+  // account gets 07:00, which is the whole point of shipping a default.
+  assert.equal(buildDayContext(OTHER_DAY, early, []).dayStart, 7 * 60, "default floor");
+  early.schedule.day_start = "06:00";
+  assert.equal(buildDayContext(OTHER_DAY, early, []).dayStart, 6 * 60, "user lowered it");
+  early.schedule.day_start = "07:00";
+  assert.equal(buildDayContext(OTHER_DAY, early, []).dayStart, 7 * 60);
+  assert.equal(buildDayContext(OTHER_DAY, early, []).dayEnd, 17 * 60 + 30, "dayEnd untouched");
+});
+
+test("buildDayContext: the floor never LOWERS a later first block", () => {
+  const late = state([], [{ start: "09:00", end: "17:30" }]);
+  late.schedule.day_start = "07:00";
+  assert.equal(buildDayContext(OTHER_DAY, late, []).dayStart, 9 * 60);
+});
+
+test("buildDayContext: the floor also clamps the no-plan fallback", () => {
+  const bare = state([], []);
+  bare.schedule.day_start = "09:00";
+  assert.equal(buildDayContext(OTHER_DAY, bare, []).dayStart, 9 * 60);
+});
+
+test("findSlot: a task cannot land before the floor on an empty day", () => {
+  const early = state([], [{ start: "05:00", end: "17:30" }]);
+  early.schedule.day_start = "08:00";
+  const ctx = buildDayContext(OTHER_DAY, early, []);
+  assert.deepEqual(findSlot({ duration: 30 }, ctx, OFF), {
+    start: "08:00", end: "08:30", duration: 30,
+  });
+});
+
+// anchorNow starts the search at now() on the real today. now() can be BEFORE the
+// floor (an early riser opening the app at 05:30), and the floor has to win.
+test("findSlot: anchor-to-now on today still cannot start before the floor", () => {
+  const early = state([], [{ start: "05:00", end: "17:30" }]);
+  early.schedule.day_start = "07:00";
+  const ctx = buildDayContext(OTHER_DAY, early, []);
+  const slot = findSlot({ duration: 30 }, ctx, {
+    todayStr: OTHER_DAY, nowMinutes: 5 * 60 + 30,
+  });
+  assert.deepEqual(slot, { start: "07:00", end: "07:30", duration: 30 });
+});
+
+test("findSlot: a now() AFTER the floor still wins, so the floor is a floor and not a pin", () => {
+  const early = state([], [{ start: "05:00", end: "17:30" }]);
+  early.schedule.day_start = "07:00";
+  const ctx = buildDayContext(OTHER_DAY, early, []);
+  const slot = findSlot({ duration: 30 }, ctx, {
+    todayStr: OTHER_DAY, nowMinutes: 10 * 60 + 5,
+  });
+  assert.deepEqual(slot, { start: "10:15", end: "10:45", duration: 30 });
 });
