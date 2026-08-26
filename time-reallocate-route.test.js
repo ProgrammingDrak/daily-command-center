@@ -334,9 +334,9 @@ test("a segment whose blockId names another workspace's task is refused", async 
 });
 
 test("day-root lookups do not grow with the number of pieces", async () => {
-  // Two layers each ensure once for the one date involved (the route for the tasks it
-  // creates, the store for the segment rows), so the absolute count is 2. The invariant
-  // worth pinning is that it is FLAT: it was previously one lookup per piece and per
+  // ONE layer now: the route stopped doing its own ensure when task creation moved inside
+  // the mover's transaction, so the store's memoized dayRootFor owns it. One date, one
+  // lookup, whatever the piece count. It was previously one lookup per piece AND per
   // created task, against db.createItineraryTasks' own ensure-each-date-once rule.
   async function lookupsFor(parts, rows) {
     const h = harness({ rows });
@@ -361,6 +361,7 @@ test("day-root lookups do not grow with the number of pieces", async () => {
   assert.equal(big.created, 3);
   assert.deepEqual(small.dates, ["2026-08-20"], "only the segment's own day");
   assert.deepEqual(big.dates, ["2026-08-20"]);
+  assert.equal(small.count, 1, "one date, one lookup");
   assert.equal(big.count, small.count, "four pieces cost the same lookups as two");
 });
 
