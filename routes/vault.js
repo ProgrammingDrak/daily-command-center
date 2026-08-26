@@ -299,10 +299,13 @@ const NOTEBOOK_PAGE_SCHEMA_VERSION = 1;
 // keep the two in step.
 const NOTEBOOK_INK_GAP_BAR = 0.2;
 
-// Ink blobs are PKDrawing.dataRepresentation(), an opaque Apple format with no
-// registered mime. Images are what the vault tab renders.
+// Ink is an OPEN stroke format (public/js/ink/strokes.js): plain JSON you can
+// read in a text editor in twenty years. The Apple-only version of this stored
+// PKDrawing blobs, which only Apple can read and only on Apple hardware -- the
+// wrong trade for a vault meant to outlive the app.
 const NOTEBOOK_INK_TYPES = new Map([
-  ["application/octet-stream", new Set(["pkd", "pkdrawing", "bin", ""])],
+  ["application/json", new Set(["json", "strokes"])],
+  ["text/json", new Set(["json", "strokes"])],
 ]);
 const NOTEBOOK_IMAGE_TYPES = new Map([
   ["image/jpeg", new Set(["jpg", "jpeg"])],
@@ -358,9 +361,9 @@ function upsertPageSection(body, n, sectionText) {
 
 // Same upsert rule for the frontmatter page index.
 function upsertPageEntry(pages, entry) {
-  const list = Array.isArray(pages) ? pages.filter((p) => p && Number(p.n) !== Number(entry.n)) : [];
+  const list = Array.isArray(pages) ? pages.filter((p) => p && Number(p.page) !== Number(entry.page)) : [];
   list.push(entry);
-  list.sort((a, b) => Number(a.n) - Number(b.n));
+  list.sort((a, b) => Number(a.page) - Number(b.page));
   return list;
 }
 
@@ -410,7 +413,10 @@ function notebookPageRecord({ pageNumber, transcript, confidence, ink, image, oc
   parts.push(text || "_No recognized text on this page._");
   const sectionText = parts.join("\n\n");
 
-  const entry = { n, ink: inkShort, image: imageShort, updated: new Date().toISOString().slice(0, 10) };
+  // Key is `page`, not `n`: bare `n` is a boolean-ish token in YAML 1.1, so
+  // emitters quote it and stricter parsers can read it as `false`. Not a trap to
+  // leave in a vault meant to be read by many tools for a long time.
+  const entry = { page: n, ink: inkShort, image: imageShort, updated: new Date().toISOString().slice(0, 10) };
   if (score != null) entry.confidence = score;
   if (partial) entry.ocr_partial = true;
 
@@ -1711,10 +1717,10 @@ app.post("/api/vault/attach", (req, res) => {
   // Mycelium Ink (iPad) syncs one handwritten page. Sibling of
   // journal-image-ingest, with three deliberate differences:
   //
-  //  1. TWO blobs per page. Ink strokes are the editable source of truth; the
-  //     rendered image is what stays readable if Apple's undocumented stroke
-  //     format ever stops parsing, and is what the vault tab displays. A free
-  //     Apple ID cannot use iCloud, so the vault is the ONLY backup of the ink.
+  //  1. TWO blobs per page. Strokes are the editable source of truth, in an open
+  //     JSON format; the rendered image is what any tool can display forever and
+  //     what server-side OCR reads. The device is the primary store, so the
+  //     vault is the only backup the ink has.
   //  2. Keyed by PAGE NUMBER, not by content hash. An edited page has new bytes,
   //     so hash-keyed dedup alone would append a second copy of the same page.
   //  3. An empty transcript is valid. A page holding only a diagram has no words
@@ -1737,7 +1743,7 @@ app.post("/api/vault/attach", (req, res) => {
         const allowed = table.get(mime);
         return !!allowed && allowed.has(ext(file.originalname, ""));
       };
-      if (!typeOk(inkFile, NOTEBOOK_INK_TYPES)) return res.status(400).json({ error: "ink must be a .pkd stroke blob" });
+      if (!typeOk(inkFile, NOTEBOOK_INK_TYPES)) return res.status(400).json({ error: "ink must be a .json stroke file" });
       if (!typeOk(imageFile, NOTEBOOK_IMAGE_TYPES)) return res.status(400).json({ error: "page image must be a JPEG or PNG with a matching extension" });
 
       const b = req.body || {};
@@ -1772,7 +1778,7 @@ app.post("/api/vault/attach", (req, res) => {
         const existing = ctx.vault.get(slug);
         if (existing) {
           const prior = (existing.frontmatter && Array.isArray(existing.frontmatter.pages) ? existing.frontmatter.pages : [])
-            .find((pg) => pg && Number(pg.n) === record.n);
+            .find((pg) => pg && Number(pg.page) === record.n);
           if (prior && prior.ink === record.entry.ink) {
             return res.status(200).json({ slug, page: record.n, created: false, deduplicated: true });
           }
@@ -1781,7 +1787,7 @@ app.post("/api/vault/attach", (req, res) => {
         let ink = null;
         let image = null;
         try {
-          ink = await ingestMedia(inkFile.buffer, inkFile.originalname || `page-${record.n}.pkd`, inkFile.mimetype, { sensitive: false, deferNotify: true });
+          ink = await ingestMedia(inkFile.buffer, inkFile.originalname || `page-${record.n}.json`, inkFile.mimetype, { sensitive: false, deferNotify: true });
           image = await ingestMedia(imageFile.buffer, imageFile.originalname || `page-${record.n}.jpg`, imageFile.mimetype, {
             sensitive: false, deferNotify: true, textSidecar: record.transcript || undefined,
           });

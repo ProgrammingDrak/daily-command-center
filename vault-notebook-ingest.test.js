@@ -49,7 +49,7 @@ async function startVault() {
 
 // `ink` varies per call so an "edit" produces genuinely different bytes,
 // which is exactly the case that content-hash dedup alone would get wrong.
-function pageForm({ ink = "strokes-v1", page = 1, transcript = "hello", notebook = "Morning Pages", extra = {}, inkName = "page.pkd", inkMime = "application/octet-stream", imgName = "page.png", imgMime = "image/png" } = {}) {
+function pageForm({ ink = "strokes-v1", page = 1, transcript = "hello", notebook = "Morning Pages", extra = {}, inkName = "page.json", inkMime = "application/json", imgName = "page.png", imgMime = "image/png" } = {}) {
   const form = new FormDataCtor();
   form.append("ink", new BlobCtor([Buffer.from(ink)], { type: inkMime }), inkName);
   form.append("image", new BlobCtor([PNG], { type: imgMime }), imgName);
@@ -80,7 +80,7 @@ test("first page creates the notebook node and stores both blobs", async () => {
     assert.strictEqual(node.data.type, "notebook");
     assert.strictEqual(node.data.title, "Morning Pages");
     assert.strictEqual(node.data.pages.length, 1);
-    assert.strictEqual(node.data.pages[0].n, 1);
+    assert.strictEqual(node.data.pages[0].page, 1);
     assert.match(node.content, /^## Page 1$/m);
     assert.match(node.content, /Ink first, filing later/);
     assert.match(node.content, /Hand edits will be lost/);
@@ -88,7 +88,7 @@ test("first page creates the notebook node and stores both blobs", async () => {
     // Both blobs are on disk, not just referenced.
     const blobs = await fsp.readdir(path.join(h.dir, "media", "blobs", "2026"));
     assert.strictEqual(blobs.length, 2, `expected ink + image, got ${blobs.join(", ")}`);
-    assert.ok(blobs.some((f) => f.endsWith(".pkd")), "ink strokes must be stored");
+    assert.ok(blobs.some((f) => f.endsWith(".json")), "ink strokes must be stored");
     assert.ok(blobs.some((f) => f.endsWith(".png")), "page image must be stored");
   } finally { await h.close(); }
 });
@@ -102,7 +102,7 @@ test("a second page appends without disturbing the first", async () => {
     assert.strictEqual((await res.json()).created, false);
 
     const node = await readNode(h.dir, "notebooks/morning-pages");
-    assert.deepStrictEqual(node.data.pages.map((p) => p.n), [1, 2]);
+    assert.deepStrictEqual(node.data.pages.map((p) => p.page), [1, 2]);
     assert.match(node.content, /page one/);
     assert.match(node.content, /page two/);
   } finally { await h.close(); }
@@ -143,8 +143,8 @@ test("editing a page replaces its section rather than appending a duplicate", as
     assert.strictEqual(node.content.match(/^## Page 1$/gm).length, 1, "page 1 must appear exactly once");
     assert.match(node.content, /the revised line/);
     assert.ok(!/the draft line/.test(node.content), "superseded text must be gone");
-    assert.deepStrictEqual(node.data.pages.map((p) => p.n), [1, 2]);
-    assert.strictEqual(node.data.pages.filter((p) => p.n === 1).length, 1);
+    assert.deepStrictEqual(node.data.pages.map((p) => p.page), [1, 2]);
+    assert.strictEqual(node.data.pages.filter((p) => p.page === 1).length, 1);
   } finally { await h.close(); }
 });
 
@@ -157,7 +157,7 @@ test("pages sync out of order and still read in order", async () => {
     const node = await readNode(h.dir, "notebooks/morning-pages");
     const order = [...node.content.matchAll(/^## Page (\d+)$/gm)].map((m) => Number(m[1]));
     assert.deepStrictEqual(order, [1, 2, 3, 10]);
-    assert.deepStrictEqual(node.data.pages.map((p) => p.n), [1, 2, 3, 10]);
+    assert.deepStrictEqual(node.data.pages.map((p) => p.page), [1, 2, 3, 10]);
   } finally { await h.close(); }
 });
 
@@ -190,9 +190,9 @@ test("malformed uploads are refused before anything is written", async () => {
   try {
     const cases = [
       ["missing ink", (() => { const f = new FormDataCtor(); f.append("image", new BlobCtor([PNG], { type: "image/png" }), "p.png"); f.append("notebookTitle", "N"); f.append("pageNumber", "1"); return f; })(), /ink strokes required/],
-      ["missing image", (() => { const f = new FormDataCtor(); f.append("ink", new BlobCtor([Buffer.from("s")], { type: "application/octet-stream" }), "p.pkd"); f.append("notebookTitle", "N"); f.append("pageNumber", "1"); return f; })(), /page image required/],
+      ["missing image", (() => { const f = new FormDataCtor(); f.append("ink", new BlobCtor([Buffer.from("s")], { type: "application/json" }), "p.json"); f.append("notebookTitle", "N"); f.append("pageNumber", "1"); return f; })(), /page image required/],
       ["image mime mismatch", pageForm({ imgName: "p.png", imgMime: "text/plain" }), /JPEG or PNG/],
-      ["ink is not a stroke blob", pageForm({ inkName: "p.txt", inkMime: "text/plain" }), /stroke blob/],
+      ["ink is not a stroke file", pageForm({ inkName: "p.txt", inkMime: "text/plain" }), /stroke file/],
       ["no notebook title", pageForm({ notebook: "   " }), /notebookTitle required/],
       ["page zero", pageForm({ page: 0 }), /pageNumber/],
     ];

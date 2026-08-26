@@ -34,8 +34,8 @@ test("record embeds the image, cites the ink, and carries the transcript", () =>
   assert.match(r.sectionText, /ink: media:sha256:a{64}/);
   assert.match(r.sectionText, /morning pages/);
   assert.deepStrictEqual(
-    { n: r.entry.n, ink: r.entry.ink, image: r.entry.image, confidence: r.entry.confidence },
-    { n: 3, ink: "a".repeat(12), image: "b".repeat(12), confidence: 0.9 },
+    { page: r.entry.page, ink: r.entry.ink, image: r.entry.image, confidence: r.entry.confidence },
+    { page: 3, ink: "a".repeat(12), image: "b".repeat(12), confidence: 0.9 },
   );
 });
 
@@ -134,19 +134,19 @@ test("a heading that merely mentions a page is not treated as one", () => {
 // ── the frontmatter index follows the same rule ───────────────────────────────
 
 test("the page index upserts and sorts rather than accumulating duplicates", () => {
-  let pages = upsertPageEntry([], { n: 2, ink: "x", image: "y" });
-  pages = upsertPageEntry(pages, { n: 1, ink: "a", image: "b" });
-  pages = upsertPageEntry(pages, { n: 2, ink: "z", image: "w" });   // page 2 re-synced
+  let pages = upsertPageEntry([], { page: 2, ink: "x", image: "y" });
+  pages = upsertPageEntry(pages, { page: 1, ink: "a", image: "b" });
+  pages = upsertPageEntry(pages, { page: 2, ink: "z", image: "w" });   // page 2 re-synced
 
-  assert.deepStrictEqual(pages.map((p) => p.n), [1, 2]);
-  assert.strictEqual(pages.filter((p) => p.n === 2).length, 1);
-  assert.strictEqual(pages.find((p) => p.n === 2).ink, "z", "latest ink wins");
+  assert.deepStrictEqual(pages.map((p) => p.page), [1, 2]);
+  assert.strictEqual(pages.filter((p) => p.page === 2).length, 1);
+  assert.strictEqual(pages.find((p) => p.page === 2).ink, "z", "latest ink wins");
 });
 
 test("the page index tolerates a missing or malformed list", () => {
-  assert.deepStrictEqual(upsertPageEntry(undefined, { n: 1 }).map((p) => p.n), [1]);
-  assert.deepStrictEqual(upsertPageEntry(null, { n: 1 }).map((p) => p.n), [1]);
-  assert.deepStrictEqual(upsertPageEntry([null, { n: 1, ink: "old" }], { n: 1, ink: "new" }).length, 1);
+  assert.deepStrictEqual(upsertPageEntry(undefined, { page: 1 }).map((p) => p.page), [1]);
+  assert.deepStrictEqual(upsertPageEntry(null, { page: 1 }).map((p) => p.page), [1]);
+  assert.deepStrictEqual(upsertPageEntry([null, { page: 1, ink: "old" }], { page: 1, ink: "new" }).length, 1);
 });
 
 test("round trip: body and index agree on which pages exist", () => {
@@ -158,5 +158,5 @@ test("round trip: body and index agree on which pages exist", () => {
     pages = upsertPageEntry(pages, r.entry);
   }
   const inBody = [...body.matchAll(/^## Page (\d+)$/gm)].map((m) => Number(m[1]));
-  assert.deepStrictEqual(inBody, pages.map((p) => p.n));
+  assert.deepStrictEqual(inBody, pages.map((p) => p.page));
 });
