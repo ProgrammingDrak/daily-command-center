@@ -223,6 +223,11 @@ app.use(async (req, res, next) => {
     // A Codex chat can transcribe one uploaded journal image and hand the
     // validated source-backed payload to Mycelium without a browser session.
     if (req.method === "POST" && req.path === "/api/vault/journal-image-ingest" && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) { attachSweepServiceAuth(req); return next(); }
+    // Mycelium Ink (iPad) uploads one handwritten page. A native app holds a
+    // revocable dcc_ service token, not a browser cookie, so it needs the same
+    // headless path the journal ingest uses. Without this line every page
+    // upload 401s at the gate.
+    if (req.method === "POST" && req.path === "/api/vault/notebook-page-ingest" && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) { attachSweepServiceAuth(req); return next(); }
     if (req.method === "POST" && req.path === "/api/dcc/meeting-artifacts" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
     if (req.method === "POST" && req.path === "/api/dcc/meeting-signals" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
     if (req.method === "GET" && req.path === "/api/dcc/meeting-retention-candidates") {
