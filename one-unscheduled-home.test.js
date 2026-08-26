@@ -364,7 +364,7 @@ test("scheduleRowOnDay is ONE update with the date, and strips the backlog marke
 });
 
 test("unscheduleRow clears the date and the stale slot, and sets the stage", () => {
-  const r = row("r1", "2026-08-03", { local_id: "t-1", title: "Do laundry", duration: 45, start: "09:00", end: "09:45", _pinnedStart: "09:00", subtaskOf: "p" });
+  const r = row("r1", "2026-08-03", { local_id: "t-1", title: "Do laundry", duration: 45, start: "09:00", end: "09:45", _pinnedStart: "09:00", userSetStart: true, subtaskOf: "p" });
   const { store, calls } = makeStore([r]);
   const ctx = ctxWith(PRIMITIVES, { window: { blockStore: store } });
   return ctx.unscheduleRow("r1", { stage: "Priority" }).then((res) => {
@@ -380,6 +380,9 @@ test("unscheduleRow clears the date and the stale slot, and sets the stage", () 
     assert.equal("start" in w.props, false, "a stale start on a dateless row would pin it on the way back out");
     assert.equal("end" in w.props, false);
     assert.equal("_pinnedStart" in w.props, false);
+    // A stale userSetStart is worse than a stale pin: _holdsTime honours it
+    // unconditionally, so the row would come back permanently immovable by drag.
+    assert.equal("userSetStart" in w.props, false);
     assert.equal(w.props.subtaskOf, "p", "the parent edge survives");
     assert.equal(w.props.local_id, "t-1");
   });

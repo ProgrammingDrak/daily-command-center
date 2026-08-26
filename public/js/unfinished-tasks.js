@@ -386,7 +386,9 @@
     }
     window.__RESCHEDULE_IN_FLIGHT__ = true;
     try {
-      await window.blockStore.rescheduleBlock(u.sourceId, targetDate, slot ? { parentStart: slot.start, parentEnd: slot.end } : {});
+      // opts.slot is the time the user typed in the Move popover; a slot we computed
+      // ourselves below is the auto-slot and carries no intent.
+      await window.blockStore.rescheduleBlock(u.sourceId, targetDate, slot ? { parentStart: slot.start, parentEnd: slot.end, userSetStart: !!opts.slot } : {});
     } catch (e) {
       if (typeof showToast === "function") showToast("Could not move " + ev.title + (e && e.message ? ": " + e.message : ""), "error");
       return null;

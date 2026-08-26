@@ -72,6 +72,32 @@ function _freeStart(cursor, d, meetingBlocks){
   return s;
 }
 
+// ── Does the cascade have to leave this row's start alone? ──
+// THE one answer, so the two cascades (recalcTimes + recalcTimesTagAware) and their two
+// passes each cannot drift. Three separate reasons, and the difference between the last
+// two is the whole point:
+//   _locked        sticky; the user must explicitly unlock before anything moves it.
+//   _userSetStart  a HUMAN named this time (pinStartTime / the placement picker / a timed
+//                  server placement). Holds even under orderWins.
+//   _pinnedStart   DERIVED: task-model.js stamps one on every top-level row that carries a
+//                  stored start, so it is true for nearly the whole day. A drag
+//                  (orderWins) has to demote these or reordering could never re-time
+//                  anything -- which is exactly why it must NOT be the flag that protects
+//                  a hand-typed start.
+function _holdsTime(ev,opts){
+  if(!ev)return false;
+  if(_placedByHand(ev))return true;
+  return !(opts&&opts.orderWins)&&!!ev._pinnedStart;
+}
+// The INTENT subset of the above, and the only thing that may leave the cascade's anchor
+// pool. A derived `_pinnedStart` must NOT: task-model.js stamps one on every top-level
+// timed row, so excluding those would empty the pool on the no-opts paths and stop
+// unpinned work filling the morning. Meetings carry a derived pin too, and they ARE in
+// `active` (both passes filter them out themselves), so this is not a theoretical set.
+function _placedByHand(ev){
+  return !!(ev&&(ev._locked||ev._userSetStart));
+}
+
 // Tag-aware helpers (used by recalcTimesTagAware)
 function getTagAncestors(tagId){
   return (window.__TAGS__ && window.__TAGS__.getAncestors) ? window.__TAGS__.getAncestors(tagId) : [tagId];
@@ -93,7 +119,9 @@ function recalcTimesTagAware(schedBlocks){
   if(!active.length) return;
 
   const firstOrig = DCC.TaskModel.selectActive(INIT_SCHED)[0];
-  const tagAnchorCandidates = active.map(ev => pt(ev.start));
+  // Same exclusion as recalcTimes: a held row's start is not the day's anchor.
+  const tagAnchorPool = active.filter(ev => !_placedByHand(ev));
+  const tagAnchorCandidates = (tagAnchorPool.length ? tagAnchorPool : active).map(ev => pt(ev.start));
   if(firstOrig) tagAnchorCandidates.push(pt(firstOrig.start));
   let fallbackCursor = Math.min.apply(null, tagAnchorCandidates);
   if(typeof viewMode !== "undefined" && viewMode === "today" && typeof now === "function"){
@@ -105,7 +133,7 @@ function recalcTimesTagAware(schedBlocks){
   active.forEach(ev => {
     if(isNested(ev)) return; // nested (ride-along/subtask): lives under its parent, never a blocker
     if(isFixedTimeBlock(ev)) return;
-    if(ev._pinnedStart || ev._locked){
+    if(_holdsTime(ev)){
       const ps = pt(ev._pinnedStart || ev.start);
       ev.start = fmt(ps);
       const d = _isSeqShell(ev) ? _layoutShellChildren(ev) : dur(ev);
@@ -125,7 +153,7 @@ function recalcTimesTagAware(schedBlocks){
       fallbackCursor = Math.max(fallbackCursor, pt(ev.end));
       return;
     }
-    if(ev._pinnedStart || ev._locked){
+    if(_holdsTime(ev)){
       fallbackCursor = Math.max(fallbackCursor, pt(ev.end));
       return;
     }
@@ -167,9 +195,14 @@ function recalcTimesTagAware(schedBlocks){
 // pinned (or locked) task as immovable. Unpinned tasks flow around all of
 // them so inserting an Urgent task at a fixed time bumps later tasks
 // forward.
-// opts.orderWins (drag reflow): list order is truth — pinned tasks join the
-// chain and their pins re-sync to the new starts; only meetings/OOO/breaks
-// and _locked tasks still hold.
+// opts.orderWins (drag reflow): list order is truth — DERIVED pins (_pinnedStart)
+// join the chain and re-sync to the new starts; meetings/OOO/breaks, _locked tasks
+// and _userSetStart tasks still hold. That last one is the fix for "I set a task to
+// 06:00 and the next drag moved it": _pinnedStart cannot mean "the user chose this",
+// because task-model.js derives one for every timed row. See _holdsTime.
+// opts.reachBackFor (a dragged ev id): when that task lands FIRST in the chain, let
+// the anchor reach back to just before the day's earliest held item, so a drop at the
+// very top lands BEFORE a meeting or a hand-set start instead of after it.
 // When any schedule block has acceptedTags, delegates to recalcTimesTagAware.
 function recalcTimes(opts){
   opts=opts||{};
@@ -194,7 +227,7 @@ function recalcTimes(opts){
   active.forEach(ev=>{
     if(isNested(ev))return;          // nested (ride-along/subtask): lives under its parent, never a blocker
     if(isFixedTimeBlock(ev))return;     // already represented in _meetingBlocks()
-    if(ev._locked||(!opts.orderWins&&ev._pinnedStart)){
+    if(_holdsTime(ev,opts)){
       const ps=pt(ev._pinnedStart||ev.start);
       ev.start=fmt(ps);
       // A pinned/locked shell derives its span from its children, laid out from
@@ -210,8 +243,16 @@ function recalcTimes(opts){
   // unpinned tasks fill morning slots even when INIT_SCHED's first item is a
   // late event (e.g. an evening "Personal" block) and the user has only
   // user-added tasks earlier in the day.
+  //
+  // A row placed BY HAND is excluded from the candidates. Its start says where THAT task
+  // must be, not where free work should begin: a hand-set 06:00 would otherwise drag the
+  // anchor to 06:00 and pack the whole day from there on the next drag, the opposite of
+  // "leave that one task alone". `_placedByHand`, NOT `_holdsTime` — a derived pin holds
+  // its own slot but still tells you where the day's work sits. Falls back to the full set
+  // when every row was placed by hand, so the anchor can never be Infinity.
   const firstOrig=INIT_SCHED.find(ev=>!isDone(ev)&&!isDeleted(ev));
-  const anchorCandidates=active.map(ev=>pt(ev.start));
+  const anchorPool=active.filter(ev=>!_placedByHand(ev));
+  const anchorCandidates=(anchorPool.length?anchorPool:active).map(ev=>pt(ev.start));
   if(firstOrig)anchorCandidates.push(pt(firstOrig.start));
   let cursor=Math.min.apply(null,anchorCandidates);
 
@@ -222,6 +263,24 @@ function recalcTimes(opts){
     cursor=Math.min(cursor,now());
   }
 
+  // The anchor above is a FLOOR no drop position can beat: it is the minimum of every
+  // current start, so a task dropped at the very top can only ever reach the day's
+  // earliest existing slot. Once a meeting or a hand-set start holds that slot, "drag it
+  // above that" silently landed the task AFTER it -- the reported "it will not let me
+  // schedule it earlier". When the drag put this task first in the chain, reach the
+  // anchor back to just before the earliest held item so the drop means what it looks
+  // like. Clamped at 00:00; every other drop is untouched.
+  const anchorFloor=cursor;
+  if(opts.reachBackFor&&blockers.length){
+    const top=active.filter(ev=>!isNested(ev)&&!isFixedTimeBlock(ev));
+    const mv=top[0];
+    if(mv&&mv.id===opts.reachBackFor&&!_holdsTime(mv,opts)){
+      const firstHold=Math.min.apply(null,blockers.map(b=>b.s));
+      const d=_isSeqShell(mv)?_shellSpan(mv):dur(mv);
+      cursor=Math.max(0,Math.min(cursor,firstHold-d));
+    }
+  }
+
   // Pass 2: cascade non-pinned, non-locked, non-meeting tasks around all blockers.
   const repinned=[];
   active.forEach(ev=>{
@@ -230,7 +289,7 @@ function recalcTimes(opts){
       cursor=Math.max(cursor,pt(ev.end));
       return;
     }
-    if(ev._locked||(!opts.orderWins&&ev._pinnedStart)){
+    if(_holdsTime(ev,opts)){
       cursor=Math.max(cursor,pt(ev.end));
       return;
     }
@@ -245,7 +304,11 @@ function recalcTimes(opts){
       ev._pinnedStart=ev.start;
       repinned.push(ev);
     }
-    cursor=s+d;
+    // The reach-back was computed for ONE row. `cursor` is the single cursor threaded
+    // through the whole chain, so leaving it lowered would re-time every untouched task
+    // behind the drop — the same harm the anchor pool above exists to prevent, through the
+    // other door. Restore the floor the moment that row is placed.
+    cursor=(opts.reachBackFor&&ev.id===opts.reachBackFor)?Math.max(s+d,anchorFloor):s+d;
   });
 
   // orderWins bumped some pinned tasks: rewrite their entries in the explicit
@@ -473,11 +536,19 @@ function _reorderActive(movedId,targetId,after){
   let ai=0;for(let i=0;i<scheduled.length;i++){if(!isDone(scheduled[i]))scheduled[i]=active[ai++];}
 }
 function _clearPin(ev){
-  if(ev&&ev._pinnedStart){
+  if(!ev)return;
+  if(ev._pinnedStart){
     delete ev._pinnedStart;
     if(typeof loadPinnedStarts==="function"&&typeof savePinnedStarts==="function"){
       const pins=loadPinnedStarts();if(pins[ev.id]){delete pins[ev.id];savePinnedStarts(pins);}
     }
+  }
+  // Dragging a task IS the user handing its time back to the cascade, so the row this
+  // runs on gives up its hand-set intent too. Only the DRAGGED task reaches here --
+  // every other user-set start on the day now survives the reflow (recalcTimes below).
+  if(ev._userSetStart){
+    if(typeof _setUserSetStart==="function")_setUserSetStart(ev,ev.id,false);
+    else delete ev._userSetStart;
   }
 }
 function _finishDrag(old){
@@ -595,7 +666,9 @@ function dDrop(e,tid){
     const oldStart=pt(moved.start);
     _clearPin(moved);
     _reorderActive(moved.id,target.id,after);
-    recalcTimes({orderWins:true});
+    // Top-level reorder, so it may have landed first: let the anchor reach back.
+    // recalcTimes ignores this unless the task really is first in the chain.
+    recalcTimes({orderWins:true,reachBackFor:moved.id});
     _shiftWrapChildren(moved,oldStart);
     _finishDrag(old);return;
   }
@@ -645,7 +718,9 @@ function dDrop(e,tid){
     const wasNested=!!parentIdOf(moved);
     _promoteMutate(moved);
     _reorderActive(moved.id,target.id,after);
-    recalcTimes({orderWins:true});
+    // Same reach-back as the wrap branch: a drop at the very top of the list should
+    // land BEFORE the day's first held item, not after it.
+    recalcTimes({orderWins:true,reachBackFor:moved.id});
     if(wasNested){_persistPromoted(moved);if(typeof showToast==="function")showToast("Promoted to its own task","success",2200);}
   }
   _finishDrag(old);

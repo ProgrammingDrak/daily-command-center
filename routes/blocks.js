@@ -1435,7 +1435,12 @@ module.exports = function mount(app, ctx) {
   // load-bearing subtree move should not be churned by the P8 extraction.
   app.post("/api/blocks/:id/reschedule", async (req, res) => {
     try {
-      const { targetDate, parentStart, parentEnd, placement, _clientId } = req.body || {};
+      const { targetDate, parentStart, parentEnd, placement, userSetStart, _clientId } = req.body || {};
+      // Did a HUMAN name the landing time? A timed placement cannot answer that on its
+      // own: the client sends parentStart for an auto-slotted move too. Only an explicit
+      // true marks the start as user-chosen, which is what stops the client's drag
+      // reflow from re-timing it later.
+      if (userSetStart != null && typeof userSetStart !== "boolean") return res.status(400).json({ error: "Invalid userSetStart (want boolean)" });
       if (!targetDate || !isValidDate(targetDate)) return res.status(400).json({ error: "Invalid targetDate" });
       // parentStart/parentEnd are written straight into properties.start/end; guard the
       // format so a hand-crafted call can't poison a task's time fields with junk.
@@ -1519,10 +1524,15 @@ module.exports = function mount(app, ctx) {
           if (dateChanged) properties.rescheduledFrom = { date: fromDate, at: now };
           if (place && place.kind === "timed") {
             properties.start = place.start; properties.end = place.end; properties._pinnedStart = place.start;
+            // Absence is the only value that has ever meant "not user-set", same rule the
+            // lock axis follows, so an auto-slotted move DELETES a stale flag rather than
+            // storing false. Otherwise a task that was hand-placed once would keep
+            // resisting reflow after the scheduler later re-slotted it.
+            if (userSetStart === true) properties.userSetStart = true; else delete properties.userSetStart;
             delete properties.all_day; delete properties.all_day_start; delete properties.all_day_end;
           } else if (place && place.kind === "all_day") {
             properties.all_day = true; properties.all_day_start = targetDate; properties.all_day_end = place.endDate;
-            delete properties.start; delete properties.end; delete properties._pinnedStart;
+            delete properties.start; delete properties.end; delete properties._pinnedStart; delete properties.userSetStart;
           }
         } else {
           if (timeDelta && properties.start && properties.end) {

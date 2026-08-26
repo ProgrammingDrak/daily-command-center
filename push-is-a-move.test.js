@@ -66,6 +66,7 @@ function load({ scheduled, rows = {}, rescheduleFails = null, failMaterializeFor
   let materializeCount = 0;
   let pinMap = {};
   const lockSet = new Set();
+  const userSetMap = new Set();   // rows carrying properties.userSetStart
   const context = {
     console,
     scheduled,
@@ -112,6 +113,13 @@ function load({ scheduled, rows = {}, rescheduleFails = null, failMaterializeFor
       if (!evArg) return;
       if (evArg._pinnedStart) { delete evArg._pinnedStart; delete pinMap[evArg.id]; }
       if (evArg._locked) { delete evArg._locked; lockSet.delete(evArg.id); }
+      // The third axis, and the one with teeth: a kept-behind row is still on the viewed
+      // day, so the real persistRowProp RESOLVES it and the delete actually lands.
+      if (evArg._userSetStart) { delete evArg._userSetStart; userSetMap.delete(evArg.id); }
+    },
+    _setUserSetStart: (evArg, id, on) => {
+      if (evArg) { if (on) evArg._userSetStart = true; else delete evArg._userSetStart; }
+      if (on) userSetMap.add(id); else userSetMap.delete(id);
     },
     // The same-day re-slot branch. Recorded, not no-ops: a same-day "move" must take
     // this path and must never reach the cross-date mover.
@@ -576,4 +584,20 @@ test("a pinned start survives on a row that stayed behind", async () => {
   assert.equal(back._pinnedStart, "11:30", "and kept the pin the user set");
   assert.equal(vm.runInContext("loadPinnedStarts()", context)["ds-kid"], "11:30",
     "including in the persisted map, which persistence.js rehydrates from on reload");
+});
+
+test("a HAND-SET start survives on a row that stayed behind", async () => {
+  // Same hazard as the pin above, one axis over. _clearTaskPinAndLock gained userSetStart,
+  // and the kept row is still on the viewed day, so persistRowProp resolves it and the
+  // delete really is enqueued. Restoring only pin and lock would lose the intent for good
+  // on a task that never moved, and reflow would then be free to re-time it.
+  const kid = ev("ds-kid", { subtaskOf: "notion-1" });
+  kid._pinnedStart = "11:30";
+  kid._userSetStart = true;
+  const { context } = load({ scheduled: [ev("notion-1"), kid], rows: {}, failMaterializeFor: ["ds-kid"] });
+  await vm.runInContext(`rescheduleTaskToDate("notion-1","${TOMORROW}")`, context);
+  const back = vm.runInContext('scheduled.find(e=>e.id==="ds-kid")', context);
+  assert.ok(back, "it stayed");
+  assert.equal(back._userSetStart, true, "and kept the hand-set intent");
+  assert.equal(back._pinnedStart, "11:30", "alongside the pin itself");
 });

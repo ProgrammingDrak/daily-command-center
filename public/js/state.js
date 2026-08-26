@@ -673,6 +673,13 @@ function _clearTaskPinAndLock(ev){
     delete ev._pinnedStart;
     try{const pins=loadPinnedStarts();delete pins[ev.id];savePinnedStarts(pins)}catch(e){}
   }
+  // The auto-slot paths that call this (Move to Today, earliest-slot re-place) are the
+  // user asking to give the time BACK to the scheduler, so the hand-set intent goes too.
+  // Safe on a row that just moved days: persistRowProp resolves against the viewed day
+  // and returns null for a row that is no longer on it, so no write lands.
+  if(ev._userSetStart&&typeof _setUserSetStart==="function"){
+    try{_setUserSetStart(ev,ev.id,false)}catch(e){delete ev._userSetStart}
+  }
   if(ev._locked){
     delete ev._locked;
     try{const locks=new Set(loadLockedSet());locks.delete(ev.id);saveLockedSet([...locks])}catch(e){}
@@ -761,6 +768,7 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
     item.start=pinned;
     item.end=fmt(pt(pinned)+(dur(ev)||30));
     item._pinnedStart=pinned;
+    item._userSetStart=true;   // persistAddedTask stamps `userSetStart` on the new row
   }
   let block=null;
   try{
@@ -779,11 +787,16 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
   // it for one render and then resurrecting it as an orphaned root on the next reload, which
   // is the stranding this phase exists to delete, just deferred.
   const keepVisible=childMove.failed.map(fid=>scheduled.find(e=>e.id===fid)).filter(Boolean);
-  // Snapshot pin/lock for those rows. _removeSubtreeFromScheduled runs _clearTaskPinAndLock on
-  // everything it splices, which deletes the ev fields AND the entries in the persisted
-  // pinned-starts / locked maps — so a task that never left the day would silently lose a
-  // start the user pinned, permanently, since persistence.js rehydrates from those maps.
-  const keptPins=keepVisible.map(e=>({id:e.id,pinnedStart:e._pinnedStart,locked:e._locked}));
+  // Snapshot pin/lock/user-set for those rows. _removeSubtreeFromScheduled runs
+  // _clearTaskPinAndLock on everything it splices, which deletes the ev fields AND the
+  // entries in the persisted pinned-starts / locked maps — so a task that never left the
+  // day would silently lose a start the user pinned, permanently, since persistence.js
+  // rehydrates from those maps.
+  //
+  //  is the third axis and it is the one with teeth: the kept row is still on the
+  // viewed day, so persistRowProp RESOLVES it and the delete really is enqueued. Restoring
+  // only the first two would lose the hand-set intent on a task that never moved.
+  const keptPins=keepVisible.map(e=>({id:e.id,pinnedStart:e._pinnedStart,locked:e._locked,userSet:e._userSetStart}));
   // Same optimistic cleanup the true move does. Without it the children whose rows were
   // just re-dated stay in `scheduled` on this day, and because their parent is now
   // filtered out they would render as top-level OPEN roots AND keep counting toward the
@@ -793,7 +806,7 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
   _removeSubtreeFromScheduled(id);
   for(const back of keepVisible)if(!scheduled.find(e=>e.id===back.id))scheduled.push(back);
   // Put back what the removal wiped off the rows that stayed.
-  if(keptPins.some(k=>k.pinnedStart||k.locked)){
+  if(keptPins.some(k=>k.pinnedStart||k.locked||k.userSet)){
     try{
       const pins=loadPinnedStarts();
       const locks=new Set(loadLockedSet());
@@ -801,6 +814,11 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
         const ev2=scheduled.find(e=>e.id===k.id);
         if(k.pinnedStart){pins[k.id]=k.pinnedStart;if(ev2)ev2._pinnedStart=k.pinnedStart;}
         if(k.locked){locks.add(k.id);if(ev2)ev2._locked=k.locked;}
+        // Its own writer, because this axis lives on the row rather than in a map the two
+        // saves below flush. Tolerates a missing ev2 the same way the branches above do.
+        if(k.userSet&&typeof _setUserSetStart==="function"){
+          try{_setUserSetStart(ev2||{id:k.id},k.id,true)}catch(e){}
+        }
       }
       savePinnedStarts(pins);
       saveLockedSet([...locks]);
@@ -1050,7 +1068,10 @@ async function unscheduleRow(blockId,opts){
   // and renders the row untimed either way, so leaving it behind just means the next
   // reader has to know to ignore it. _pinnedStart would additionally survive a round
   // trip and pin the task to a stale slot the moment it is scheduled again.
-  delete props.start;delete props.end;delete props._pinnedStart;
+  // `userSetStart` goes with the start it describes. Keeping it would re-assert a
+  // hand-set time the row no longer carries, and reflow holds a user-set start
+  // unconditionally -- so a stale flag is worse here than a stale `_pinnedStart` was.
+  delete props.start;delete props.end;delete props._pinnedStart;delete props.userSetStart;
   return _writeRowDate(blockId,block,props,null);
 }
 
@@ -1648,7 +1669,10 @@ async function rescheduleTaskToDate(id,targetDate,opts){
         :await _computeRescheduleSlot(ev,targetDate);
       let result=null;
       try{
-        result=await window.blockStore.rescheduleBlock(srcBlock.id,targetDate,{parentStart:slot&&slot.start,parentEnd:slot&&slot.end,fromDate});
+        // `userSetStart:!!pinned` is the whole distinction the server cannot make for
+        // itself: BOTH branches above send a parentStart, but only the pinned one came
+        // from a person picking a time.
+        result=await window.blockStore.rescheduleBlock(srcBlock.id,targetDate,{parentStart:slot&&slot.start,parentEnd:slot&&slot.end,fromDate,userSetStart:!!pinned});
       }catch(e){
         // blockStore stamps e.permanent using its single permanence rule
         // (400/404 final; 401/403 auth blips and 5xx/network stay buffered).

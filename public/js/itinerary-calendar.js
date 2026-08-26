@@ -190,13 +190,20 @@
     if(importedMeeting(ev)){toast("This meeting is owned by Google Calendar. Open it there to change the time.","info");openInspector(id);return;}
     if(isComplete(ev)||!editableDate(day)){toast("Completed work and past dates are read-only.","info");return;}
     const placement=kind==="all_day"?{kind:"all_day",endDate:end}:{kind:"timed",start:clock(start),end:clock(end)};
-    try{await root.blockStore.rescheduleBlock(ev._blockId,day,{fromDate:ev._block.date||day,placement});await build({keepScroll:true});}
+    // Every path into this calendar is a person naming a time: a drag, a resize, a
+    // drag-to-create, or the inspector's Start/End fields. So the placement is always
+    // user-set, and the itinerary cascade must not re-time it on the next drag there.
+    try{await root.blockStore.rescheduleBlock(ev._blockId,day,{fromDate:ev._block.date||day,placement,userSetStart:kind!=="all_day"});await build({keepScroll:true});}
     catch(e){toast(e.message||"Could not move this item.","error");}
   }
+  // Drag-to-create on the grid: the user drew this window, so the start is user-set from
+  // birth. Without the flag the row would come back carrying only the DERIVED _pinnedStart
+  // that task-model.js stamps on every timed row, and the next itinerary drag would re-time
+  // it -- the same gesture protected on an existing event but not on a new one.
   async function createDraft(day,start,end){
     if(!editableDate(day))return;
     const nowIso=new Date().toISOString();
-    const block=await root.blockStore.createBlock("block",{local_id:"calendar-task-"+(root.crypto&&root.crypto.randomUUID?root.crypto.randomUUID():Date.now()),title:"New task",type:"task",kind:"task",source:"manual",status:"open",start:clock(start),end:clock(end),duration:Math.max(15,end-start),estimatedMinutes:Math.max(15,end-start),priority:"Medium",tags:[],added_at:nowIso},{date:day});
+    const block=await root.blockStore.createBlock("block",{local_id:"calendar-task-"+(root.crypto&&root.crypto.randomUUID?root.crypto.randomUUID():Date.now()),title:"New task",type:"task",kind:"task",source:"manual",status:"open",start:clock(start),end:clock(end),userSetStart:true,duration:Math.max(15,end-start),estimatedMinutes:Math.max(15,end-start),priority:"Medium",tags:[],added_at:nowIso},{date:day});
     await build({keepScroll:true});
     if(block&&block.id)openInspector(block.id,true);
   }

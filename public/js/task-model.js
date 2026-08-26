@@ -180,7 +180,18 @@
     if (p.commuteBackMinutes || p.commute_back_minutes || p.commuteReturnMinutes || p.commute_return_minutes) task.commuteBackMinutes = p.commuteBackMinutes || p.commute_back_minutes || p.commuteReturnMinutes || p.commute_return_minutes;
     // Pin the start time so recalcTimes() doesn't overwrite it (skip nested
     // items: ride-alongs/subtasks live under their parent, never cascaded).
+    //
+    // `_pinnedStart` is DERIVED: every top-level row that carries a stored start gets
+    // one, whether a human chose that time or the cascade produced it. That is why the
+    // drag reflow (`recalcTimes({orderWins:true})`) has to demote pins wholesale --
+    // holding all of them would make a drag unable to reorder anything.
+    //
+    // `_userSetStart` is the INTENT half, and it is set only where a person names a
+    // time (pinStartTime, the placement picker, a timed server placement). Nothing
+    // derives it. Reflow holds a user-set start unconditionally, so a hand-typed 06:00
+    // survives a drag that legitimately re-chains everything around it.
     if (hasStoredTime && !task.subtaskOf) task._pinnedStart = p.start;
+    if (p.userSetStart && !task.subtaskOf) task._userSetStart = true;
     return task;
   }
 

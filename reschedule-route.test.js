@@ -201,8 +201,39 @@ test("timed placement shifts descendant times and preserves relative descendant 
   assert.equal(movedKid.properties.end, "10:45");
 });
 
-test("all-day placement uses an exclusive end and strips timed fields", async () => {
+test("★ userSetStart marks the start as user-chosen; an auto-slotted move clears it", async () => {
+  // A timed placement alone cannot say a HUMAN picked the time: the client sends
+  // parentStart for an auto-slotted cross-day move too. Only the explicit flag does,
+  // and it is what stops the client cascade re-timing the task on the next drag.
   const parent = blk("B1", "t1", { properties: { start: "09:00", end: "10:00" } });
+  const chosen = mountApp({ parent, pool: [parent] });
+  const a = await post(chosen.app, "B1", { targetDate: TO, parentStart: "07:15", parentEnd: "08:15", userSetStart: true });
+  assert.equal(a.status, 200);
+  assert.equal(chosen.calls.reschedule[0].moves[0].properties.userSetStart, true);
+  assert.equal(chosen.calls.reschedule[0].moves[0].properties._pinnedStart, "07:15");
+
+  // Absence is the only value that has ever meant "not user-set", and a row that was
+  // hand-placed once must stop resisting reflow after the scheduler re-slots it.
+  const auto = mountApp({ parent: blk("B1", "t1", { properties: { start: "09:00", end: "10:00", userSetStart: true } }), pool: [parent] });
+  const b = await post(auto.app, "B1", { targetDate: TO, parentStart: "13:00", parentEnd: "14:00" });
+  assert.equal(b.status, 200);
+  const props = auto.calls.reschedule[0].moves[0].properties;
+  assert.equal("userSetStart" in props, false, "the key is deleted, not set falsy");
+});
+
+test("a non-boolean userSetStart is refused rather than written to the row", async () => {
+  const parent = blk("B1", "t1", { properties: { start: "09:00", end: "10:00" } });
+  const { app, calls } = mountApp({ parent, pool: [parent] });
+  const { status, body } = await post(app, "B1", { targetDate: TO, parentStart: "07:15", parentEnd: "08:15", userSetStart: "yes" });
+  assert.equal(status, 400);
+  assert.match(body.error, /userSetStart/);
+  assert.equal(calls.reschedule.length, 0);
+});
+
+test("all-day placement uses an exclusive end and strips timed fields", async () => {
+  // Seeded WITH userSetStart so the strip assertion below can actually fail: on a parent
+  // that never carried the flag, `"userSetStart" in props` is false either way.
+  const parent = blk("B1", "t1", { properties: { start: "09:00", end: "10:00", userSetStart: true } });
   const { app, calls } = mountApp({ parent, pool: [parent] });
   const { status } = await post(app, "B1", {
     targetDate: FROM,
@@ -214,6 +245,7 @@ test("all-day placement uses an exclusive end and strips timed fields", async ()
   assert.equal(props.all_day_start, FROM);
   assert.equal(props.all_day_end, "2026-08-02");
   assert.equal(props.start, undefined);
+  assert.equal("userSetStart" in props, false); // the flag goes with the start it describes
   assert.equal(calls.reschedule[0].creates.length, 0);
 });
 

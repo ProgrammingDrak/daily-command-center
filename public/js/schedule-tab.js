@@ -763,7 +763,7 @@ function buildListView(){
           '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+
           (subTimeless?'':'<span>'+ms(dur(ev))+'</span>')+
           chipSlot+streakChip+
-          (subTimeless?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+          (subTimeless?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
           // Schedule/reschedule right where the time is labeled (and next to
           // "Unscheduled" for untimed tasks). Reschedulable rows only — carryovers
           // very much included: getting a task off a past day and onto a real one
