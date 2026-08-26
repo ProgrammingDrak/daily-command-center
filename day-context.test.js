@@ -347,3 +347,25 @@ test("findSlot: a now() AFTER the floor still wins, so the floor is a floor and 
   });
   assert.deepEqual(slot, { start: "10:15", end: "10:45", duration: 30 });
 });
+
+// A plan that ends BEFORE the floor must not invert the window. Both engines clamp
+// dayEnd up to dayStart (responsibility-store.js loadDaySlottingContext does the same),
+// so neither can read a negative window and disagree about what it means.
+test("buildDayContext: the floor never inverts the day window", () => {
+  const early = state([], [{ start: "06:00", end: "08:00" }]);
+  early.schedule.day_start = "10:00";
+  const ctx = buildDayContext(OTHER_DAY, early, []);
+  assert.equal(ctx.dayStart, 10 * 60);
+  assert.equal(ctx.dayEnd, 10 * 60, "clamped up to dayStart, not left at 08:00");
+  assert.ok(ctx.dayEnd >= ctx.dayStart);
+});
+
+// Documenting the deliberate consequence, so a future change cannot quietly widen it:
+// such a day is only the 60 minute grace wide.
+test("findSlot: a plan ending before the floor gives the grace window and no more", () => {
+  const early = state([], [{ start: "06:00", end: "08:00" }]);
+  early.schedule.day_start = "10:00";
+  const ctx = buildDayContext(OTHER_DAY, early, []);
+  assert.deepEqual(findSlot({ duration: 60 }, ctx, OFF), { start: "10:00", end: "11:00", duration: 60 });
+  assert.equal(findSlot({ duration: 90 }, ctx, OFF), null, "no window to place into");
+});

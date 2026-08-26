@@ -538,3 +538,18 @@ test("start of day: an unwired store applies NO floor, so the default is never i
   const out = await store.scheduleResponsibilityTask({ responsibility, date: "2026-07-12", userId: 1, workspaceId: "ws-1" });
   assert.equal(out.block.properties.start, "05:00");
 });
+
+test("start of day: the server clamps dayEnd up too, so the window is never inverted", async () => {
+  // Plan ends 08:00, floor 10:00. Without the dayEnd clamp the server window would be
+  // [600, 480] while the client's is [600, 600], and firstFreeSlot's fallback would
+  // place a task the client had already refused.
+  const fake = makeFakeBlockDB({ blocksByDate: { "2026-07-12": [] } });
+  const store = makeStore(fake, {
+    scheduleBlocks: [{ blockType: "work", start: "06:00", end: "08:00" }],
+    dayStartMinutes: 10 * 60,
+  });
+  const ctx = await store.loadDaySlottingContext("2026-07-12", 1, "ws-1");
+  assert.equal(ctx.dayStart, 600);
+  assert.equal(ctx.dayEnd, 600, "clamped up to dayStart, matching buildDayContext");
+  assert.ok(ctx.dayEnd >= ctx.dayStart);
+});

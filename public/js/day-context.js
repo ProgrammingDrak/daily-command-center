@@ -193,11 +193,17 @@
       stBlocks.length ? _pt(stBlocks[0].start) : 7 * 60
     );
     // Raising dayStart must never invert the window. A day whose plan ends before the
-    // floor (an early-only Saturday block) would otherwise give dayEnd < dayStart, and
-    // findSlot's `slot + d > dayEnd + 60` and the server's firstFreeSlot disagree about
-    // what that means. Clamping keeps the window degenerate-but-valid, so both engines
-    // read it the same way. A genuinely full day still answers "no slot", which is the
-    // floor working, not a bug.
+    // floor (an early-only Saturday block) would otherwise give dayEnd < dayStart.
+    // responsibility-store.js loadDaySlottingContext applies the SAME clamp, so the two
+    // engines cannot disagree about the window itself.
+    //
+    // What this does NOT do, deliberately: it leaves such a day only `+ 60` wide (the
+    // existing grace), so a task longer than an hour, or any placement once the clock
+    // is past dayStart + 60, still answers "no slot". That is the correct reading of
+    // "your plan ends before your start of day" -- there is no window to place into.
+    // The client says so by returning null while the server's firstFreeSlot falls back
+    // to `Math.max(dayStart, nowMin)` and places anyway; that fallback divergence is
+    // pre-existing and is not what this change is fixing.
     const dayEnd = Math.max(
       dayStart,
       stBlocks.length ? _pt(stBlocks[stBlocks.length - 1].end) : 17 * 60 + 30

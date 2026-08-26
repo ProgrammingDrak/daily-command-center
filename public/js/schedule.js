@@ -2010,11 +2010,15 @@ function _applyDayStart(value){
   // object ONLY on today's view; change the setting from tomorrow or an archive day and
   // today's cached state keeps the old floor, which day-context _resolveKnownState then
   // hands straight back to findSlot. Today is the day the floor matters most.
-  [typeof __state!=="undefined"?__state:null,
+  const cached=[typeof __state!=="undefined"?__state:null,
    typeof window!=="undefined"?window.__DCC_STATE__:null,
-   typeof __DCC_TOMORROW__!=="undefined"?__DCC_TOMORROW__:null].forEach(function(s){
-    if(s&&s.schedule)s.schedule.day_start=value;
-  });
+   typeof __DCC_TOMORROW__!=="undefined"?__DCC_TOMORROW__:null];
+  // The fourth cache: persistence.js switchToDate parks every visited non-today,
+  // non-tomorrow day in __DCC_ARCHIVES__ and assigns it straight to __state on the way
+  // back, where drag.js _dayStartFloor reads schedule.day_start off it.
+  const arch=(typeof window!=="undefined"&&window.__DCC_ARCHIVES__)||null;
+  if(arch)Object.keys(arch).forEach(function(k){cached.push(arch[k])});
+  cached.forEach(function(s){ if(s&&s.schedule)s.schedule.day_start=value; });
   if(window.DCC&&DCC.invalidateDayContext)DCC.invalidateDayContext();
   if(typeof recalcTimes==="function")recalcTimes();
   if(typeof saveTaskOrder==="function")saveTaskOrder();
@@ -2046,6 +2050,9 @@ function _applyDayStart(value){
       const reset=await res.json();
       _applyDayStart(reset.dayStart);
       if(input){input.value=reset.dayStart;if(typeof input.__twRender==="function")input.__twRender()}
+      // A scripted value assignment fires no "change", and the dialog stays open, so
+      // the note would keep showing its pre-reset conclusion.
+      _renderDayStartNote();
     }catch(e){if(window.DCC&&DCC.toast)DCC.toast("Could not reset start of day")}
   });
   document.addEventListener("keydown",e=>{if(e.key==="Escape"&&ov.classList.contains("open"))closeDayStart()});

@@ -645,7 +645,12 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     // must mean NO clamp rather than a silently invented 07:00 policy.
     const derivedStart = workBlocks[0] ? hhmmToMinutes(workBlocks[0].start) : 9 * 60;
     const dayStart = floorMin == null ? derivedStart : Math.max(floorMin, derivedStart);
-    const dayEnd = workBlocks.length ? hhmmToMinutes(workBlocks[workBlocks.length - 1].end) : 17 * 60;
+    // Clamped up to dayStart for the same reason the client does it in
+    // public/js/day-context.js buildDayContext: raising dayStart past the end of a
+    // short plan would otherwise invert the window here while the client's stayed
+    // valid, and firstFreeSlot's `|| Math.max(dayStart, nowMin)` fallback would place
+    // a task the client had already refused. Same clamp, same shape, both engines.
+    const dayEnd = Math.max(dayStart, workBlocks.length ? hhmmToMinutes(workBlocks[workBlocks.length - 1].end) : 17 * 60);
     const blockers = blocks
       .filter(b => (b.properties || {}).start && (b.properties || {}).end)
       .map(b => ({ s: hhmmToMinutes(b.properties.start), e: hhmmToMinutes(b.properties.end) }));
