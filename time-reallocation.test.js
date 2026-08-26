@@ -15,6 +15,12 @@ const { planAllocations, entryWindow } = createTaskTiming;
 function harness() {
   const rows = [];
   let seq = 0;
+  // THE FAKE CANNOT SEE A TRANSACTION, so it has to be told. A write that arrives without
+  // the client runs on the pool in real Postgres and survives the ROLLBACK, which is the
+  // single most likely way this mover regresses and exactly what its comments are about.
+  // Recorded rather than refused, so a test can assert the list is empty.
+  const escaped = [];
+  let writes = 0;
   const db = {
     // Both take a `client` (and getBlockIncludingDeleted a FOR UPDATE flag) so the mover
     // can read through its own transaction. The real ones ignore neither.
@@ -27,6 +33,8 @@ function harness() {
         && (opts.includeDeleted || !row.deleted_at));
     },
     async updateBlock(id, patch, _client) {
+      if (!_client) escaped.push(["updateBlock", id]);
+      writes++;
       const row = rows.find((candidate) => candidate.id === id);
       if (!row) throw new Error("missing " + id);
       if (row.deleted_at) throw new Error("Block is deleted: " + id);
@@ -36,6 +44,8 @@ function harness() {
       return row;
     },
     async createBlock(input, _client) {
+      if (!_client) escaped.push(["createBlock", input.id]);
+      writes++;
       if (rows.some((row) => row.id === input.id)) throw new Error("duplicate id " + input.id);
       const row = {
         id: input.id || `row-${++seq}`,
@@ -51,19 +61,32 @@ function harness() {
       return row;
     },
     async deleteBlock(id, _client) {
+      if (!_client) escaped.push(["deleteBlock", id]);
+      writes++;
       const row = rows.find((candidate) => candidate.id === id);
       if (row) row.deleted_at = new Date().toISOString();
       return { id };
     },
     async undeleteBlock(id, _client) {
+      if (!_client) escaped.push(["undeleteBlock", id]);
+      writes++;
       const row = rows.find((candidate) => candidate.id === id);
       if (!row) throw new Error("missing " + id);
       row.deleted_at = null;
       return row;
     },
-    async ensureDayRoot(date, _userId, _workspaceId, _client) { return `day-root-${date}`; },
+    async ensureDayRoot(date, _userId, _workspaceId, _client) {
+      if (!_client) escaped.push(["ensureDayRoot", date]);
+      return `day-root-${date}`;
+    },
     // Destinations are created inside the transaction now, so the fake has to exist.
-    async createItineraryTask({ date, properties, userId, workspaceId }, _opts) {
+    async createItineraryTask(args) {
+      const { date, properties, userId, workspaceId } = args;
+      if (!args.client) escaped.push(["createItineraryTask", date]);
+      // db.createItineraryTask calls ensureDayRoot WITHOUT forwarding its client, so
+      // leaving ensureRoot on would put that insert outside the transaction.
+      if (args.ensureRoot !== false) escaped.push(["createItineraryTask:ensureRoot", date]);
+      writes++;
       const row = {
         id: `made-${++seq}`, type: "block", date: date || null,
         properties: { kind: "task", type: "task", status: "open", ...(properties || {}) },
@@ -135,7 +158,7 @@ function harness() {
     && candidate.properties.blockId === row.id && !candidate.deleted_at);
   const totalSec = () => rows.filter((row) => row.type === "time_entry" && !row.deleted_at)
     .reduce((sum, row) => sum + (Number(row.properties.durSec) || 0), 0);
-  return { rows, timing, task, live, totalSec, db, hardDeleted };
+  return { rows, timing, task, live, totalSec, db, hardDeleted, escaped, writeCount: () => writes };
 }
 
 // One tracked hour on `owner`, written by the real work-session writer so the
@@ -719,7 +742,11 @@ function failOnce(h, name, predicate) {
 }
 
 for (const step of [
-  { name: "a piece write", hook: ["createBlock"] },
+  // keepFirst puts the piece that STAYS first, so the create failure lands after a real
+  // write and the rollback below has something to undo. Ordered the other way this step
+  // threw before the first write and was the only one of the four that still passed with
+  // ROLLBACK removed.
+  { name: "a piece write", hook: ["createBlock"], keepFirst: true },
   { name: "the source write", hook: ["updateBlock", (id) => id === "seg-under-test"] },
   // The delete only runs when NOTHING stays on the origin, so this step needs a whole
   // move to reach it at all.
@@ -737,7 +764,13 @@ for (const step of [
 
     const allocations = step.whole
       ? [{ durSec: 3600, task: other }]
-      : [{ durSec: 1200, task: other }, { durSec: 2400, task: owner }];
+      : step.keepFirst
+        ? [{ durSec: 2400, task: owner }, { durSec: 1200, task: other }]
+        : [{ durSec: 1200, task: other }, { durSec: 2400, task: owner }];
+    const writesBefore = h.writeCount();
+    // trackedHour's own startWork/pauseWork are not transactional, so drop their writes
+    // before measuring what the reallocation does.
+    h.escaped.length = 0;
 
     const restore = failOnce(h, step.hook[0], step.hook[1]);
     await assert.rejects(
@@ -746,6 +779,10 @@ for (const step of [
     );
     restore();
 
+    // Without this, a step that throws before its first write asserts nothing: there is
+    // no state for the rollback to undo, so the comparison below is true either way.
+    assert.ok(h.writeCount() > writesBefore,
+      `${step.name} failed before writing anything, so its rollback assertion is vacuous`);
     assert.equal(JSON.stringify(h.rows), before, "the failed attempt changed nothing at all");
     assert.equal(h.totalSec(), 3600, "no time lost and none invented");
     const source = h.rows.find((row) => row.id === "seg-under-test");
@@ -757,6 +794,7 @@ for (const step of [
     assert.equal(h.totalSec(), 3600);
     assert.equal(owner.properties.actualMinutes, step.whole ? undefined : 40);
     assert.equal(other.properties.actualMinutes, step.whole ? 60 : 20);
+    assert.deepEqual(h.escaped, [], "and every write went through the transaction client");
   });
 }
 
@@ -951,4 +989,115 @@ test("a pool that cannot open a transaction is refused, not silently degraded", 
     /needs a pool that can open a transaction/,
   );
   assert.equal(h.totalSec(), 3600);
+});
+
+test("every ledger write in a reallocation runs on the transaction client", async () => {
+  // A write that skips the client runs on the pool and survives a ROLLBACK, so this is
+  // the one regression the fake transaction cannot catch on its own. Dropping `client`
+  // from the mover's writes used to leave the whole suite green.
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const entry = await trackedHour(h, owner);
+  h.escaped.length = 0;
+  await h.timing.reallocateTimeEntry({
+    entry,
+    allocations: [{ durSec: 1200, newTask: { properties: { title: "New" } } }, { durSec: 2400, task: owner }],
+    actionId: "op-1", workspaceId: "ws-1",
+  });
+  assert.deepEqual(h.escaped, [], "a write outside the transaction cannot be rolled back");
+});
+
+test("the whole-move shape keeps every write inside the transaction too", async () => {
+  const h = harness();
+  const from = h.task({}, { id: "from" });
+  const to = h.task({}, { id: "to" });
+  const entry = await trackedHour(h, from);
+  h.escaped.length = 0;
+  await h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 3600, task: to }], actionId: "m-1", workspaceId: "ws-1" });
+  assert.deepEqual(h.escaped, []);
+});
+
+test("the source segment is re-read under a row lock", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  const entry = await trackedHour(h, owner);
+  const locks = [];
+  const real = h.db.getBlockIncludingDeleted.bind(h.db);
+  h.db.getBlockIncludingDeleted = async (id, client, forUpdate) => { locks.push([id, !!forUpdate]); return real(id, client, forUpdate); };
+  await h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 1200, task: other }, { durSec: 2400, task: owner }], workspaceId: "ws-1" });
+  assert.deepEqual(locks[0], [entry.id, true],
+    "without FOR UPDATE two submissions race on one segment and both pass conservation");
+});
+
+test("a racer holding a pre-commit copy of the segment is answered, not re-applied", async () => {
+  // The concurrent shape the in-transaction duplicate check exists for: request B was
+  // built from a read taken before A committed, so B's own copy carries no stamp and only
+  // the re-read under the lock can see it. Every other test hands in the same object that
+  // lives in `rows`, so the pre-transaction check catches the replay first and this
+  // branch is never reached.
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  const entry = await trackedHour(h, owner);
+  const allocations = [{ durSec: 1200, task: other }, { durSec: 2400, task: owner }];
+  const stale = { ...entry, properties: { ...entry.properties } };
+
+  await h.timing.reallocateTimeEntry({ entry, allocations, actionId: "submit-1", workspaceId: "ws-1" });
+  const after = JSON.stringify(h.rows);
+
+  const replay = await h.timing.reallocateTimeEntry({ entry: stale, allocations, actionId: "submit-1", workspaceId: "ws-1" });
+  assert.equal(replay.duplicate, true);
+  assert.equal(JSON.stringify(h.rows), after, "the second racer wrote nothing");
+  assert.equal(h.totalSec(), 3600);
+});
+
+test("a keep piece that changes local day moves its container with it", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  // A row whose `date` disagrees with its own window: filed on 08-19, started 23:30 on
+  // 08-20. db.updateBlock leaves parent_id alone on a date change, so the mover has to.
+  const entry = await h.db.createBlock({
+    id: "misdated", type: "time_entry", date: "2026-08-19", parent_id: "day-root-2026-08-19",
+    properties: {
+      blockId: "owner", taskTitle: "Work", durSec: 3600,
+      startedAt: "2026-08-21T03:30:00.000Z", endedAt: "2026-08-21T04:30:00.000Z", start: "23:30", end: "00:30",
+    },
+    user_id: 1, workspace_id: "ws-1",
+  }, {});
+  await h.timing.reallocateTimeEntry({
+    entry, allocations: [{ durSec: 1200, task: owner }, { durSec: 2400, task: other }], workspaceId: "ws-1",
+  });
+  const kept = h.rows.find((row) => row.id === "misdated");
+  assert.equal(kept.date, "2026-08-20");
+  assert.equal(kept.parent_id, "day-root-2026-08-20", "the row must not stay in the previous day's container");
+  assert.equal(h.totalSec(), 3600);
+});
+
+test("a piece spanning three local days conserves and dates every row", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  // 36h is the route's ceiling, and starting late in the evening it covers three days.
+  const entry = await h.db.createBlock({
+    id: "long-one", type: "time_entry", date: "2026-08-20",
+    properties: {
+      blockId: "owner", taskTitle: "Work", durSec: 36 * 3600, source: "slack",
+      startedAt: "2026-08-21T02:00:00.000Z", endedAt: "2026-08-22T14:00:00.000Z", start: "22:00", end: "10:00",
+    },
+    user_id: 1, workspace_id: "ws-1",
+  }, {});
+  await h.timing.reallocateTimeEntry({
+    entry, allocations: [{ durSec: 36 * 3600, task: other }], workspaceId: "ws-1",
+  });
+  const written = h.rows.filter((row) => row.type === "time_entry" && !row.deleted_at);
+  assert.ok(written.length >= 3, `expected 3+ rows across local days, got ${written.length}`);
+  assert.equal(h.totalSec(), 36 * 3600, "a multi-span piece still conserves exactly");
+  for (const row of written) {
+    const localDay = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(new Date(row.properties.startedAt));
+    assert.equal(row.date, localDay, `row ${row.id} sits on ${row.date} but starts on ${localDay}`);
+  }
 });
