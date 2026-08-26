@@ -21,10 +21,13 @@ test("DCC completion updates the in-memory task before rendering and crediting",
   const ctx = harness();
   ctx.ev = {
     id: "t-1", title: "Measured", startedAt: "2026-07-28T15:32:00Z",
-    start: "15:55", end: "16:30", actualMinutes: null,
+    start: "15:55", end: "16:30", actualMinutes: null, _userSetStart: true,
   };
   vm.runInContext('_applyMeasuredCompletionToEv(ev,"2026-07-28T15:46:00Z")', ctx);
   assert.equal(ctx.ev.start, "11:30");
+  // The measured window REPLACED the start the flag described, so the intent goes with it.
+  // Left behind, reopening the task would pin it forever to whenever the timer ran.
+  assert.equal("_userSetStart" in ctx.ev, false);
   assert.equal(ctx.ev.end, "11:50");
   assert.equal(ctx.ev.pointsDurationMinutes, 20);
   const payload = ctx.window.TaskPoints.buildPayload(ctx.ev, {});
@@ -36,10 +39,11 @@ test("DCC row completion persists the rounded schedule and scoring metadata", ()
   const ctx = harness();
   ctx.props = {
     title: "Measured", startedAt: "2026-07-28T15:32:00Z",
-    start: "15:55", end: "16:30", duration: 35, estimatedMinutes: 35,
+    start: "15:55", end: "16:30", duration: 35, estimatedMinutes: 35, userSetStart: true,
   };
   const next = vm.runInContext('_doneRowProps(props,"2026-07-28T15:46:00Z")', ctx);
   assert.equal(next.start, "11:30");
+  assert.equal("userSetStart" in next, false); // same rule on the row as on the ev
   assert.equal(next.end, "11:50");
   assert.equal(next.duration, 20);
   assert.equal(next.durationMinutes, 20);

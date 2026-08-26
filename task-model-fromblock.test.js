@@ -76,6 +76,21 @@ test("a dated row with a real start is pinned; a subtask never is", () => {
   assert.equal(sub._pinnedStart, undefined);
 });
 
+test("★ userSetStart is PROJECTED, never derived, and a subtask never carries it", () => {
+  // This is the only place a stored `userSetStart` becomes the `_userSetStart` the drag
+  // cascade reads, so it closes the round trip: server writes the property -> fromBlock
+  // projects it -> _holdsTime honours it. Without this test every cascade fixture builds
+  // the flag by hand, so deleting the projection line would leave the suite green while
+  // the feature is dead on any reloaded day.
+  const plain = TaskModel.fromBlock(block({ properties: { local_id: "p", start: "13:00", end: "14:00" } }));
+  assert.equal(plain._userSetStart, undefined, "a stored start alone is NOT user intent");
+  const chosen = TaskModel.fromBlock(block({ properties: { local_id: "p", start: "13:00", end: "14:00", userSetStart: true } }));
+  assert.equal(chosen._userSetStart, true);
+  assert.equal(chosen._pinnedStart, "13:00", "the derived pin still rides alongside it");
+  const sub = TaskModel.fromBlock(block({ properties: { local_id: "s", start: "13:00", end: "13:30", subtaskOf: "p", userSetStart: true } }));
+  assert.equal(sub._userSetStart, undefined, "same subtaskOf guard as the pin");
+});
+
 test("end: legacy fallback is fmt(duration); deriveEnd anchors it to the start", () => {
   // Legacy shape, kept byte-identical for the work list (recalcTimes rewrites it).
   const legacy = TaskModel.fromBlock(block({ properties: { start: "09:00", duration: 30 } }));

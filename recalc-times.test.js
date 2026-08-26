@@ -23,6 +23,7 @@ const addToScheduleSource = scheduleSource.match(/\/\/ opts \(drag drops\)[\s\S]
 function makeDay(scheduled, opts = {}) {
   const pins = opts.pins || {};
   let pinsSaved = 0;
+  const userSetWrites = [];
   const context = {
     console,
     window: { __TAGS__: null },
@@ -43,7 +44,16 @@ function makeDay(scheduled, opts = {}) {
     isWrap: (ev) => !!ev.isWrap || (Array.isArray(ev.tags) && ev.tags.includes("wrap")),
     loadPinnedStarts: () => pins,
     savePinnedStarts: () => { pinsSaved++; },
+    // The real one lives in schedule.js and persists `userSetStart` through
+    // persistRowProp. Stubbed as a SPY, not omitted: without it `_clearPin`'s
+    // `typeof _setUserSetStart === "function"` check is false and the tests would only
+    // ever exercise the local-delete fallback, which never runs in the browser.
+    _setUserSetStart: (ev, id, on) => {
+      userSetWrites.push({ id, on });
+      if (on) ev._userSetStart = true; else delete ev._userSetStart;
+    },
   };
+  context.__userSetWrites = userSetWrites;
   context.dur = context.dur.bind(context);
   // _dropAtTargetLevel collaborators (subtask-order spy; reparentAsSubtask left
   // undefined so the helper's manual fallback branch is what gets exercised)
@@ -211,6 +221,33 @@ test("★ orderWins: a drop at the very top lands BEFORE the day's first held it
   assert.equal(find(after.sched, "u").start, "09:00");      // the held item never moves
 });
 
+test("★ orderWins: the reach-back lands a top drop BEFORE a meeting too", () => {
+  // The comment on reachBackFor names a meeting first, but every other test here uses a
+  // hand-set start as the held item. A meeting reaches `blockers` by a different route
+  // (_meetingBlocks, not the pass-1 push) and is the ONLY case where the
+  // `!isFixedTimeBlock` filter on `top` is load-bearing: without it the meeting is top[0],
+  // the id check fails, and the reach-back silently does nothing.
+  const mtg = t("mtg", "09:00", "10:00", { type: "meeting" });
+  const sched = [t("moved", "13:00", "13:30"), mtg];
+  const { context } = makeDay(sched, { initSched: [mtg] });
+  context.recalcTimes({ orderWins: true, reachBackFor: "moved" });
+  assert.equal(find(sched, "moved").start, "08:30"); // 09:00 minus its 30m
+  assert.equal(find(sched, "mtg").start, "09:00");   // the meeting never moves
+});
+
+test("★ orderWins: a drop AFTER a leading meeting must not reach back past it", () => {
+  // The drop landed at index 1, behind the meeting. Excluding fixed blocks when deciding
+  // "did this land first" would make the meeting invisible to that check, so the task
+  // would be treated as first and yanked to 08:30 -- in front of the very meeting the
+  // user dropped it behind.
+  const mtg = t("mtg", "09:00", "10:00", { type: "meeting" });
+  const sched = [mtg, t("moved", "13:00", "13:30")];
+  const { context } = makeDay(sched, { initSched: [mtg] });
+  context.recalcTimes({ orderWins: true, reachBackFor: "moved" });
+  assert.equal(find(sched, "moved").start, "10:00"); // after the meeting, where it was dropped
+  assert.equal(find(sched, "mtg").start, "09:00");
+});
+
 test("orderWins: reachBackFor is ignored when the task did not land first", () => {
   const sched = [
     t("u", "09:00", "09:30", { _pinnedStart: "09:00", _userSetStart: true }),
@@ -230,6 +267,27 @@ test("orderWins: the reach-back clamps at midnight", () => {
   context.recalcTimes({ orderWins: true, reachBackFor: "moved" });
   // No room for 30m before 00:15, so it packs after rather than wrapping to yesterday.
   assert.equal(find(sched, "moved").start, "00:45");
+});
+
+test("★ tag-aware: a held row is a BLOCKER, so the fallback cascade routes around it", () => {
+  // Pass 1's job is to push the held row into `blockers`. Asserting only that the held row
+  // stayed put is satisfied by the pass-2 hold alone, so this covers the double-booking
+  // that the pass-1 line is what actually prevents.
+  const sched = [t("a", "14:00", "15:00"), t("u", "14:00", "14:30", { _userSetStart: true })];
+  const blocks = [{ id: "b1", start: "09:00", end: "17:00", acceptedTags: ["deep"] }];
+  const { context } = makeDay(sched, { blocks, initSched: [t("a", "14:00", "15:00")] });
+  context.recalcTimes({ orderWins: true });
+  assert.equal(find(sched, "u").start, "14:00");
+  assert.equal(find(sched, "a").start, "14:30"); // routed past it, not stacked on top
+});
+
+test("★ tag-aware: an early user-set start is not the day's anchor", () => {
+  const sched = [t("early", "06:00", "06:30", { _userSetStart: true }), t("a", "09:00", "09:30")];
+  const blocks = [{ id: "b1", start: "09:00", end: "17:00", acceptedTags: ["deep"] }];
+  const { context } = makeDay(sched, { blocks, initSched: [t("a", "09:00", "09:30")] });
+  context.recalcTimes({ orderWins: true });
+  assert.equal(find(sched, "early").start, "06:00");
+  assert.equal(find(sched, "a").start, "09:00"); // 06:30 without the tagAnchorPool filter
 });
 
 test("★ tag-aware mode holds a user-set start too", () => {
@@ -253,6 +311,8 @@ test("_clearPin drops the hand-set intent along with the derived pin", () => {
   assert.equal("_pinnedStart" in find(sched, "a"), false);
   assert.equal("_userSetStart" in find(sched, "a"), false);
   assert.equal("a" in pins, false);
+  assert.deepEqual(day.context.__userSetWrites, [{ id: "a", on: false }],
+    "cleared through the PERSISTING writer, not the local fallback");
 });
 
 test("orderWins: pure chain closes gaps (downstream pulls earlier)", () => {

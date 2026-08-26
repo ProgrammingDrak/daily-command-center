@@ -231,7 +231,9 @@ test("a non-boolean userSetStart is refused rather than written to the row", asy
 });
 
 test("all-day placement uses an exclusive end and strips timed fields", async () => {
-  const parent = blk("B1", "t1", { properties: { start: "09:00", end: "10:00" } });
+  // Seeded WITH userSetStart so the strip assertion below can actually fail: on a parent
+  // that never carried the flag, `"userSetStart" in props` is false either way.
+  const parent = blk("B1", "t1", { properties: { start: "09:00", end: "10:00", userSetStart: true } });
   const { app, calls } = mountApp({ parent, pool: [parent] });
   const { status } = await post(app, "B1", {
     targetDate: FROM,

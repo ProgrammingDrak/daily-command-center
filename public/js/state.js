@@ -787,11 +787,16 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
   // it for one render and then resurrecting it as an orphaned root on the next reload, which
   // is the stranding this phase exists to delete, just deferred.
   const keepVisible=childMove.failed.map(fid=>scheduled.find(e=>e.id===fid)).filter(Boolean);
-  // Snapshot pin/lock for those rows. _removeSubtreeFromScheduled runs _clearTaskPinAndLock on
-  // everything it splices, which deletes the ev fields AND the entries in the persisted
-  // pinned-starts / locked maps — so a task that never left the day would silently lose a
-  // start the user pinned, permanently, since persistence.js rehydrates from those maps.
-  const keptPins=keepVisible.map(e=>({id:e.id,pinnedStart:e._pinnedStart,locked:e._locked}));
+  // Snapshot pin/lock/user-set for those rows. _removeSubtreeFromScheduled runs
+  // _clearTaskPinAndLock on everything it splices, which deletes the ev fields AND the
+  // entries in the persisted pinned-starts / locked maps — so a task that never left the
+  // day would silently lose a start the user pinned, permanently, since persistence.js
+  // rehydrates from those maps.
+  //
+  //  is the third axis and it is the one with teeth: the kept row is still on the
+  // viewed day, so persistRowProp RESOLVES it and the delete really is enqueued. Restoring
+  // only the first two would lose the hand-set intent on a task that never moved.
+  const keptPins=keepVisible.map(e=>({id:e.id,pinnedStart:e._pinnedStart,locked:e._locked,userSet:e._userSetStart}));
   // Same optimistic cleanup the true move does. Without it the children whose rows were
   // just re-dated stay in `scheduled` on this day, and because their parent is now
   // filtered out they would render as top-level OPEN roots AND keep counting toward the
@@ -801,7 +806,7 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
   _removeSubtreeFromScheduled(id);
   for(const back of keepVisible)if(!scheduled.find(e=>e.id===back.id))scheduled.push(back);
   // Put back what the removal wiped off the rows that stayed.
-  if(keptPins.some(k=>k.pinnedStart||k.locked)){
+  if(keptPins.some(k=>k.pinnedStart||k.locked||k.userSet)){
     try{
       const pins=loadPinnedStarts();
       const locks=new Set(loadLockedSet());
@@ -809,6 +814,11 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
         const ev2=scheduled.find(e=>e.id===k.id);
         if(k.pinnedStart){pins[k.id]=k.pinnedStart;if(ev2)ev2._pinnedStart=k.pinnedStart;}
         if(k.locked){locks.add(k.id);if(ev2)ev2._locked=k.locked;}
+        // Its own writer, because this axis lives on the row rather than in a map the two
+        // saves below flush. Tolerates a missing ev2 the same way the branches above do.
+        if(k.userSet&&typeof _setUserSetStart==="function"){
+          try{_setUserSetStart(ev2||{id:k.id},k.id,true)}catch(e){}
+        }
       }
       savePinnedStarts(pins);
       saveLockedSet([...locks]);
