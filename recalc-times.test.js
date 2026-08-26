@@ -166,6 +166,35 @@ test("orderWins: pinned task bumps, pin updates, explicit pin map re-syncs", () 
   assert.equal(day.pinsSavedCount(), 1);
 });
 
+test("★★ a DERIVED pin still anchors the day; only INTENT leaves the anchor pool", () => {
+  // The anchor exclusion is justified by intent ("a hand-set 06:00 must not drag the whole
+  // day down to 06:00"). Keying it on _holdsTime instead sweeps out derived pins too, and
+  // task-model.js stamps one on every top-level timed row -- so on the no-opts paths
+  // (pinStartTime, render, add-task) almost the entire day leaves the pool and unpinned
+  // work stops filling the morning. INIT_SCHED is empty so firstOrig cannot mask it.
+  const sched = [t("P", "09:00", "10:00", { _pinnedStart: "09:00" }), t("Q", "14:00", "14:30")];
+  const { context } = makeDay(sched, { initSched: [] });
+  context.recalcTimes();
+  assert.equal(find(sched, "P").start, "09:00");
+  assert.equal(find(sched, "Q").start, "10:00"); // pulled up behind the pin, not left at 14:00
+});
+
+test("★★ the reach-back applies to the DRAGGED row only, not the chain behind it", () => {
+  // `cursor` is the one cursor pass 2 threads through the whole day, so lowering it for the
+  // dropped row re-anchors every untouched task after it. That is the exact harm the anchor
+  // pool above exists to prevent, reintroduced through the other door.
+  const sched = [
+    t("B", "10:00", "10:30"),                                          // dropped at the top
+    t("U", "06:00", "06:30", { _userSetStart: true }),
+    t("A", "09:00", "09:30"),                                          // never touched
+  ];
+  const { context } = makeDay(sched, { initSched: [t("A", "09:00", "09:30")] });
+  context.recalcTimes({ orderWins: true, reachBackFor: "B" });
+  assert.equal(find(sched, "B").start, "05:30"); // reached back before the hand-set 06:00
+  assert.equal(find(sched, "U").start, "06:00"); // held
+  assert.equal(find(sched, "A").start, "09:00"); // NOT dragged back to 06:30
+});
+
 test("★ orderWins: a USER-SET start holds while a DERIVED pin bumps", () => {
   // The whole reason _userSetStart exists apart from _pinnedStart. task-model.js derives
   // a _pinnedStart for every timed row, so orderWins must demote those or a drag could

@@ -86,8 +86,16 @@ function _freeStart(cursor, d, meetingBlocks){
 //                  a hand-typed start.
 function _holdsTime(ev,opts){
   if(!ev)return false;
-  if(ev._locked||ev._userSetStart)return true;
+  if(_placedByHand(ev))return true;
   return !(opts&&opts.orderWins)&&!!ev._pinnedStart;
+}
+// The INTENT subset of the above, and the only thing that may leave the cascade's anchor
+// pool. A derived `_pinnedStart` must NOT: task-model.js stamps one on every top-level
+// timed row, so excluding those would empty the pool on the no-opts paths and stop
+// unpinned work filling the morning. Meetings carry a derived pin too, and they ARE in
+// `active` (both passes filter them out themselves), so this is not a theoretical set.
+function _placedByHand(ev){
+  return !!(ev&&(ev._locked||ev._userSetStart));
 }
 
 // Tag-aware helpers (used by recalcTimesTagAware)
@@ -112,7 +120,7 @@ function recalcTimesTagAware(schedBlocks){
 
   const firstOrig = DCC.TaskModel.selectActive(INIT_SCHED)[0];
   // Same exclusion as recalcTimes: a held row's start is not the day's anchor.
-  const tagAnchorPool = active.filter(ev => !_holdsTime(ev));
+  const tagAnchorPool = active.filter(ev => !_placedByHand(ev));
   const tagAnchorCandidates = (tagAnchorPool.length ? tagAnchorPool : active).map(ev => pt(ev.start));
   if(firstOrig) tagAnchorCandidates.push(pt(firstOrig.start));
   let fallbackCursor = Math.min.apply(null, tagAnchorCandidates);
@@ -236,14 +244,14 @@ function recalcTimes(opts){
   // late event (e.g. an evening "Personal" block) and the user has only
   // user-added tasks earlier in the day.
   //
-  // A HELD row is excluded from the candidates. Its start says where THAT task must be,
-  // not where free work should begin. Before user-set starts existed this could not bite
-  // (meetings are never in `active`, and a lock is rare), but a hand-set 06:00 would
-  // otherwise drag the anchor to 06:00 and pack the whole day from there on the next
-  // drag — the opposite of "leave that one task alone". Falls back to the full set when
-  // every row is held, so the anchor can never be Infinity.
+  // A row placed BY HAND is excluded from the candidates. Its start says where THAT task
+  // must be, not where free work should begin: a hand-set 06:00 would otherwise drag the
+  // anchor to 06:00 and pack the whole day from there on the next drag, the opposite of
+  // "leave that one task alone". `_placedByHand`, NOT `_holdsTime` — a derived pin holds
+  // its own slot but still tells you where the day's work sits. Falls back to the full set
+  // when every row was placed by hand, so the anchor can never be Infinity.
   const firstOrig=INIT_SCHED.find(ev=>!isDone(ev)&&!isDeleted(ev));
-  const anchorPool=active.filter(ev=>!_holdsTime(ev,opts));
+  const anchorPool=active.filter(ev=>!_placedByHand(ev));
   const anchorCandidates=(anchorPool.length?anchorPool:active).map(ev=>pt(ev.start));
   if(firstOrig)anchorCandidates.push(pt(firstOrig.start));
   let cursor=Math.min.apply(null,anchorCandidates);
@@ -262,6 +270,7 @@ function recalcTimes(opts){
   // schedule it earlier". When the drag put this task first in the chain, reach the
   // anchor back to just before the earliest held item so the drop means what it looks
   // like. Clamped at 00:00; every other drop is untouched.
+  const anchorFloor=cursor;
   if(opts.reachBackFor&&blockers.length){
     const top=active.filter(ev=>!isNested(ev)&&!isFixedTimeBlock(ev));
     const mv=top[0];
@@ -295,7 +304,11 @@ function recalcTimes(opts){
       ev._pinnedStart=ev.start;
       repinned.push(ev);
     }
-    cursor=s+d;
+    // The reach-back was computed for ONE row. `cursor` is the single cursor threaded
+    // through the whole chain, so leaving it lowered would re-time every untouched task
+    // behind the drop — the same harm the anchor pool above exists to prevent, through the
+    // other door. Restore the floor the moment that row is placed.
+    cursor=(opts.reachBackFor&&ev.id===opts.reachBackFor)?Math.max(s+d,anchorFloor):s+d;
   });
 
   // orderWins bumped some pinned tasks: rewrite their entries in the explicit
