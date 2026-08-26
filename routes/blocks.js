@@ -25,6 +25,8 @@ const { collectSubtreeBlockIds } = require("../lib/reschedule");
 const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 const { route } = require("../lib/route-helpers");
 const createTaskTiming = require("../lib/task-timing");
+const { planAllocations } = createTaskTiming;
+const MAX_REALLOCATABLE_SEC = 36 * 3600;
 const TaskModel = require("../public/js/task-model");
 const createMaterializeGuard = require("../lib/materialize-guard");
 const { dedupeStatus } = createMaterializeGuard;
@@ -816,6 +818,152 @@ module.exports = function mount(app, ctx) {
     }
     const sessions = await taskTiming.getSessions(block, { workspaceId: req.workspaceId });
     return { block, sessions };
+  }));
+
+  // ── Tracked time is TRANSFERRABLE and SPLITTABLE ───────────────────────────
+  // One endpoint, because a move and a split are one mechanic: a segment's
+  // seconds are re-divided among destination tasks. A move is `parts` of length
+  // one pointing somewhere else; a split is `parts` of length two or more; "the
+  // first 20m was actually onboarding" is a split whose remaining piece points
+  // back at the task it is already on.
+  //
+  // `parts` is ordered along the clock, and the LAST piece always takes the
+  // remainder (lib/task-timing planAllocations), so no arrangement of minute
+  // inputs can invent or lose tracked time. A piece names its destination as
+  // either `taskId` (an existing task, including the origin) or
+  // `newTask: { title }` (created here, on the segment's own date, so time can be
+  // re-attributed to work that was never on the plan).
+  app.post("/api/time-entries/:id/reallocate", route(async (req, res) => {
+    const entry = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!entry || entry.type !== "time_entry") { res.status(404).json({ error: "Tracked time not found" }); return; }
+    assertBlockOwnership(entry, req.workspaceId);
+    const body = req.body || {};
+    const actionId = body.actionId == null ? null : String(body.actionId);
+    if (actionId != null && !/^[A-Za-z0-9:_-]{1,160}$/.test(actionId)) { res.status(400).json({ error: "Invalid reallocation id" }); return; }
+    // A retry of the same submission is ANSWERED, not re-applied, and this runs before
+    // the tombstone check as well as before the plan, because both shapes a reallocation
+    // ends in defeat a naive order: a split leaves the source shortened, so
+    // planAllocations would call the replay invalid rather than duplicate, and a whole
+    // move deletes the source, so a `deleted_at` 404 would tell a client whose write
+    // landed that its time went missing. The store stamps the row in the same
+    // transaction as the work, so the stamp means the operation COMMITTED. There is
+    // nothing half-applied to resume.
+    if (actionId && (entry.properties || {}).reallocationOperationId === actionId) {
+      const originTaskId = String((entry.properties || {}).blockId || "") || null;
+      return {
+        ok: true, changed: false, reason: "duplicate",
+        entries: [entry], tasks: [], createdTasks: [],
+        originTaskId, sourceEntryDeleted: !!entry.deleted_at,
+      };
+    }
+    if (entry.deleted_at) { res.status(404).json({ error: "Tracked time not found" }); return; }
+    const requests = Array.isArray(body.parts) ? body.parts : [];
+    // The PIECE count is capped (MAX_ALLOCATION_PARTS) but the SOURCE LENGTH was not, and
+    // per-piece midnight splitting multiplies the two: splitSessionByLocalDay emits one
+    // row per local day up to its 370-day guard, so 12 pieces of a planted durSec plan
+    // thousands of serial createBlock and ensureDayRoot writes, and the guard TRUNCATES,
+    // so the pieces stop summing to durSec and time is silently lost. durSec is client
+    // input: POST /api/blocks passes properties through for this free-form type.
+    // 36h clears every honest shape (reconcileTiming refuses to settle past
+    // MAX_TIMED_MINUTES, 16h, and Day Review's manual editor tops out at 24h).
+    // A POSITIVE gate, not a conditional one. Gating on `Number.isFinite(...) && over`
+    // meant a non-finite durSec skipped the cap rather than being refused by it, and
+    // durSec is client-writable, so "Infinity" reached the store and satisfied its
+    // conservation re-check too.
+    const sourceSec = Number((entry.properties || {}).durSec);
+    if (!Number.isFinite(sourceSec) || sourceSec <= 0 || sourceSec > MAX_REALLOCATABLE_SEC) {
+      res.status(400).json({
+        error: sourceSec > MAX_REALLOCATABLE_SEC ? "That segment is too long to move" : "That segment's tracked length is not usable",
+        code: "TIME_ALLOCATION_INVALID",
+      });
+      return;
+    }
+    const plan = planAllocations((entry.properties || {}).durSec, requests);
+    if (!plan.ok) { res.status(400).json({ error: plan.error, code: "TIME_ALLOCATION_INVALID" }); return; }
+
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const originId = String((entry.properties || {}).blockId || "");
+    // Resolve every EXISTING destination here (reads only), and hand a spec for every
+    // new one to the store, which creates it inside the same transaction as the ledger
+    // writes. Creating tasks out here would leave an orphan behind on a rollback, which
+    // was the last non-atomic step in the operation.
+    const allocations = [];
+    for (let i = 0; i < plan.parts.length; i++) {
+      const request = requests[i] || {};
+      const durSec = plan.parts[i].durSec;
+      let task = null;
+      if (request.taskId != null && String(request.taskId).trim()) {
+        // findUniqueLiveBlockByReference, not getBlock: it folds `deleted_at IS NULL`
+        // and the tenant predicate into the query AND falls back to
+        // properties->>'local_id'. That fallback is load-bearing here, not tidiness.
+        // TaskModel.fromBlock sets a task's id to `local_id || block.id`, and the
+        // picker sends `task._blockId || task.id`, so for any row that has a local_id
+        // the client is sending one. A bare getBlock answers 404 "That task no longer
+        // exists" for a task the user just picked out of the list. db.js says the same
+        // thing about duplicating its rules in a second query: that is how they drift.
+        try {
+          task = await blockDB.findUniqueLiveBlockByReference(String(request.taskId).trim(), req.workspaceId);
+        } catch (e) {
+          res.status(e.statusCode || e.status || 409).json({ error: e.message || "That task reference is ambiguous" });
+          return;
+        }
+        if (!task) { res.status(404).json({ error: "That task no longer exists" }); return; }
+        if (!isWorkTaskRow(task)) { res.status(400).json({ error: "Tracked time can only sit on a task", code: "WORK_NOT_TRACKABLE" }); return; }
+      } else {
+        const title = String((request.newTask && request.newTask.title) || "").trim();
+        if (!title) { res.status(400).json({ error: "Every piece needs a task to land on", code: "TIME_ALLOCATION_INVALID" }); return; }
+        if (title.length > 200) { res.status(400).json({ error: "That task title is too long" }); return; }
+        const spec = {
+          date: entry.date || getTodayStr(),
+          properties: {
+            title, status: "open", kind: "task", type: "task",
+            estimatedMinutes: Math.max(1, Math.round(durSec / 60)),
+            priority: "Medium",
+            source: "time-reallocation",
+            created_by: "time-reallocation",
+            created_at: new Date().toISOString(),
+          },
+        };
+        allocations.push({ durSec, newTask: spec });
+        continue;
+      }
+      allocations.push({ durSec, task });
+    }
+    if (allocations.length === 1 && originId && allocations[0].task && String(allocations[0].task.id) === originId) {
+      res.status(400).json({ error: "That time is already on this task", code: "TIME_ALLOCATION_NOOP" });
+      return;
+    }
+    // The ORIGIN is fenced explicitly, because it is not covered by the segment's own
+    // ownership check. `properties.blockId` is client-writable (schemas.blockItem is
+    // passthrough over a free-form type), so a segment legitimately owned by this
+    // workspace can name a task in another one, and db.updateBlock has no tenant
+    // predicate. The store refuses to write outside the fence as well; this is the
+    // half that makes the request FAIL rather than silently skip the origin.
+    if (originId) {
+      const origin = await blockDB.getBlock(originId);
+      if (origin && !origin.deleted_at) {
+        try { assertBlockOwnership(origin, req.workspaceId); }
+        catch { res.status(404).json({ error: "Tracked time not found" }); return; }
+      }
+    }
+
+    const actor = req.session && req.session.userId ? `dcc:${req.session.userId}` : "dcc";
+    const result = await taskTiming.reallocateTimeEntry({ entry, allocations, actor, userId, workspaceId, actionId });
+    const createdTasks = result.createdTasks || [];
+    // Derived from the rows that were actually written, because a destination created
+    // inside the transaction has no id until it commits.
+    const blockIds = [...new Set([
+      originId,
+      ...(result.entries || []).map(row => String(((row && row.properties) || {}).blockId || "")),
+      ...createdTasks.map(task => String(task.id)),
+    ].filter(Boolean))];
+    broadcast("blocks-changed", {
+      action: "time-reallocate", blockIds, date: entry.date, clientId: body._clientId,
+    }, req.workspaceId);
+    return {
+      ok: true, changed: true, entries: result.entries, tasks: result.tasks, createdTasks,
+      originTaskId: result.originTaskId, sourceEntryDeleted: result.sourceEntryDeleted,
+    };
   }));
 
   // The mutation routes below fetch TOMBSTONE-INCLUDED on purpose, and say so by

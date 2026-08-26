@@ -2236,9 +2236,12 @@ async function purgeSoftDeleted(olderThanDays = 30) {
   return result.rowCount;
 }
 
-async function getTaskTimeEntries(blockId, workspaceId, opts = {}) {
+// `client` lets this read run inside the caller's transaction, which the reallocation
+// mover needs: it re-projects a task's actualMinutes from the segments it has just
+// written in the same BEGIN/COMMIT, and a pool read would not see them.
+async function getTaskTimeEntries(blockId, workspaceId, opts = {}, client) {
   const deleted = opts.includeDeleted ? "" : "AND deleted_at IS NULL";
-  const { rows } = await pool.query(
+  const { rows } = await (client || pool).query(
     `SELECT * FROM blocks WHERE type = 'time_entry'
        AND properties->>'blockId' = $1
        AND workspace_id IS NOT DISTINCT FROM $2 ${deleted}

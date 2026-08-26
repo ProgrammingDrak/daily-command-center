@@ -77,7 +77,12 @@
       // one row fully supersedes every older buffered update for that row. This also
       // makes completion intent last-write-wins after a lost acknowledgement: an old
       // buffered complete can never replay after a newer reopen.
-      if (entry && (entry.op === "update" || entry.op === "completion") && entry.id) {
+      // "realloc" belongs here too: a failed save leaves the dialog usable, so the user
+      // can edit the pieces and save again, and the WAL would then hold two plans for
+      // one segment. The stale one carries a different actionId, so the server does not
+      // see a duplicate, and it is APPLIED if its pieces still fit the now-shorter
+      // source: a second, unrequested re-attribution of time already moved.
+      if (entry && (entry.op === "update" || entry.op === "completion" || entry.op === "realloc") && entry.id) {
         wal = wal.filter(e => !(e && e.op === entry.op && e.id === entry.id));
       }
       wal.push({ ...entry, _walId: entryId, timestamp: new Date().toISOString() });
@@ -483,7 +488,11 @@
     // "undelete" too: A2's route 404s when the row is gone for real (hard-deleted, or
     // purged by the 30-day purgeSoftDeleted sweep). There is nothing left to revive, so
     // retrying can only fail again.
-    if ((entry.op === "update" || entry.op === "completion" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "batch" || entry.op === "undelete" || entry.op === "work") && err.status === 404) return true;
+    // "realloc" for the same reason, and it is reachable on REPLAY rather than only on
+    // the first attempt: the POST fails with a network error so the entry stays
+    // buffered, and by the time it replays the destination task or the segment itself
+    // may be gone (404) or a local_id may now match two live rows (409).
+    if ((entry.op === "update" || entry.op === "completion" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "batch" || entry.op === "undelete" || entry.op === "work" || entry.op === "realloc") && err.status === 404) return true;
     // 409 is terminal for undelete and reschedule specifically. An undelete
     // db.undeleteBlock raises it when clearing deleted_at would move the row into
     // idx_blocks_idem_unique's predicate while a LIVE row already holds that
@@ -494,7 +503,7 @@
     // source calendar owns placement. That authority will not change on retry.
     if ((entry.op === "undelete" || entry.op === "reschedule") && err.status === 409) return true;
     if ((entry.op === "update" || entry.op === "completion") && err.status === 409) return true;
-    if (entry.op === "work" && err.status === 409) return true;
+    if ((entry.op === "work" || entry.op === "realloc") && err.status === 409) return true;
     return false;
   }
 
@@ -588,6 +597,14 @@
             if (result && result.block) cacheSet(result.block);
             break;
           }
+          case "realloc": {
+            // The stored actionId is what makes this replay-safe: the server answers a
+            // second arrival with { changed: false, reason: "duplicate" } instead of
+            // splitting the segment again.
+            const result = await apiPost("/api/time-entries/" + entry.id + "/reallocate", entry.data);
+            (result && result.entries || []).forEach(block => { if (block && block.id) cacheSet(block); });
+            break;
+          }
         }
         walRemove(entry._walId);
         succeeded++;
@@ -662,7 +679,8 @@
     CLIENT_ID,
 
     // NOTE: day-context.js wraps these mutators at runtime (createBlock,
-    // updateBlock, deleteBlock, rescheduleBlock, batchOp, undeleteBlock) to
+    // updateBlock, deleteBlock, rescheduleBlock, batchOp, undeleteBlock,
+    // reallocateTimeEntry) to
     // invalidate its per-day slot cache after each write. If you add a new
     // server-mutating method here, add it to that wrap list too or its day can go
     // stale. cancelBufferedWrite is deliberately NOT wrapped: it abandons a write
@@ -986,6 +1004,48 @@
         }
         setError("Work update failed - buffered for retry");
         return { changed: false, buffered: true, block: optimistic };
+      }
+    },
+
+    // Move or split one tracked time_entry across destination tasks. Lives HERE, not in
+    // time-reallocate.js, for the same reason workAction does: this is the layer that
+    // owns the WAL, the optimistic cache, the save indicator, and the clientId the SSE
+    // echo is suppressed by, and day-context wraps it to drop the slot cache for the
+    // affected day. A dialog POSTing on its own would be the only block write in the app
+    // outside this file, and its day-context entry would go stale in the very tab that
+    // made the change.
+    async reallocateTimeEntry(entryId, parts, options) {
+      options = options || {};
+      setSaving();
+      const data = {
+        parts,
+        actionId: options.actionId || ((crypto && crypto.randomUUID)
+          ? crypto.randomUUID() : ("realloc-" + Date.now() + "-" + Math.random().toString(36).slice(2))),
+      };
+      const walId = walPush({ op: "realloc", id: entryId, data });
+      try {
+        const result = await apiPost("/api/time-entries/" + entryId + "/reallocate", data);
+        (result && result.entries || []).forEach(block => { if (block && block.id) cacheSet(block); });
+        // The source row is gone on a whole move. Reflect that locally or the fill stays
+        // clickable and hands a stale durSec to the next dialog.
+        if (result && result.sourceEntryDeleted) {
+          const stale = cacheGet(entryId);
+          if (stale) cacheSet({ ...stale, deleted_at: new Date().toISOString() });
+        }
+        walRemove(walId);
+        setSaved();
+        return result;
+      } catch (error) {
+        // Same permanence rule as workAction: a 400/404/409 is a verdict, not a blip.
+        const permanent = error && (error.status === 400 || error.status === 404 || error.status === 409);
+        if (permanent) {
+          walMoveToDeadLetter(walGet().find(entry => entry && entry._walId === walId),
+            `${error.status || "error"} ${error.message || ""}`.trim());
+          setError(error.message || "Time move rejected");
+          throw error;
+        }
+        setError("Time move failed - buffered for retry");
+        throw error;
       }
     },
 

@@ -97,7 +97,7 @@
       if (!entryMatchesEvent(p, ev)) continue;
       const durMin = (p.durSec || 0) / 60;
       const startMin = p.start ? toMin(p.start) : null;
-      segs.push({ startMin, durMin, source: p.source || "manual", _id: te.id });
+      segs.push({ startMin, durMin, source: p.source || "manual", _id: te.id, _entry: te });
     }
     if (segs.length) return segs;
     // Legacy fallbacks (read-only, no ids — not editable as time_entry)
@@ -257,6 +257,17 @@
         fill.className = "dr-fill" + (seg.source === "legacy" ? " legacy" : "");
         fill.style.cssText = "top:" + minsToY(segStart) + "px;height:" + segH + "px;left:" + leftCalc + ";width:" + blockWidth + ";--dr-color:" + color + ";";
         fill.title = (seg.startMin != null ? fmtClock(segStart) + " · " : "") + fmtDur(seg.durMin) + (seg.source ? " (" + seg.source + ")" : "");
+        // A fill IS the segment, so it is the shortest path to re-attributing that
+        // time. Only real time_entry rows carry an id; the legacy `_sessions`
+        // fallback has none and stays read-only, as it always was.
+        if (seg._id && seg._entry && window.DCCTimeReallocate) {
+          fill.dataset.timeEntry = seg._id;
+          // The ROW rides on the element. blockStore.get() only sees the day and
+          // global caches, so on a past day (which reads the range cache) a
+          // lookup by id would come back empty and the dialog would refuse to open.
+          fill._timeEntry = seg._entry;
+          fill.title += " — click to move or split";
+        }
         grid.appendChild(fill);
       });
 
@@ -281,6 +292,21 @@
       btn.addEventListener("click", e => {
         e.stopPropagation();
         editTimeEntries(btn.dataset.blockId, btn.dataset.title, dateStr, btn);
+      });
+    });
+
+    // Click a solid actual fill to move or split the time it represents. The
+    // segment's own row is handed over, so the dialog needs no second read.
+    root.querySelectorAll(".dr-fill[data-time-entry]").forEach(fill => {
+      fill.addEventListener("click", e => {
+        e.stopPropagation();
+        const entry = fill._timeEntry || (window.blockStore && window.blockStore.get(fill.dataset.timeEntry));
+        if (!entry) { if (typeof showToast === "function") showToast("That time is not loaded yet", "error"); return; }
+        window.DCCTimeReallocate.open({
+          entry,
+          taskTitle: (entry.properties || {}).taskTitle,
+          onSaved: () => buildDayReview(dateStr)
+        });
       });
     });
   }
