@@ -9,7 +9,7 @@
 // mounts on a bare express app with fake stores — same harness as
 // tasks-open-route.test.js, with req.workspaceId / req.session injected the way
 // server middleware supplies them.
-const test = require("node:test");
+const { test, after } = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
 const express = require("express");
@@ -106,20 +106,33 @@ function harness({ rows = [] } = {}) {
   return { app, store, created, createCalls, dayRootCalls, broadcasts, find };
 }
 
-async function post(app, id, body) {
-  const server = http.createServer(app);
-  await new Promise((r) => server.listen(0, r));
-  const { port } = server.address();
-  try {
-    const resp = await fetch(`http://127.0.0.1:${port}/api/time-entries/${encodeURIComponent(id)}/reallocate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    return { status: resp.status, body: await resp.json().catch(() => ({})) };
-  } finally {
-    await new Promise((r) => server.close(r));
+// ONE server per app, not one per request. Standing a fresh listener up and tearing it
+// down for every call churns ephemeral ports, and under a parallel `node --test` run that
+// reliably produced a spurious non-200 in roughly a quarter of runs. A flaky test is worse
+// than no test, so the listener is created once per harness and closed when the file ends.
+const servers = [];
+async function listenerFor(app) {
+  let entry = servers.find((candidate) => candidate.app === app);
+  if (!entry) {
+    const server = http.createServer(app);
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    entry = { app, server, port: server.address().port };
+    servers.push(entry);
   }
+  return entry;
+}
+after(async () => {
+  await Promise.all(servers.map((entry) => new Promise((resolve) => entry.server.close(resolve))));
+});
+
+async function post(app, id, body) {
+  const { port } = await listenerFor(app);
+  const resp = await fetch(`http://127.0.0.1:${port}/api/time-entries/${encodeURIComponent(id)}/reallocate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { status: resp.status, body: await resp.json().catch(() => ({})) };
 }
 
 function task(id, extra = {}, props = {}) {

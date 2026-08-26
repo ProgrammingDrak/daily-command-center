@@ -18,9 +18,22 @@ function harness() {
   // THE FAKE CANNOT SEE A TRANSACTION, so it has to be told. A write that arrives without
   // the client runs on the pool in real Postgres and survives the ROLLBACK, which is the
   // single most likely way this mover regresses and exactly what its comments are about.
-  // Recorded rather than refused, so a test can assert the list is empty.
+  //
+  // REFUSED, not merely recorded. Recording left each test responsible for remembering an
+  // assertion, and three rounds of review each found another branch that had forgotten
+  // one (the revive-and-overwrite path was the last). Throwing while a transaction is
+  // open makes the whole class impossible to miss, in every test, without an assertion.
+  // Writes outside a transaction stay legal, because startWork, pauseWork, finalizeTiming
+  // and clearTiming are all single-row and correctly clientless.
   const escaped = [];
   let writes = 0;
+  let leaked = 0;
+  function guardWrite(op, id, client) {
+    writes++;
+    if (snapshot === null || client) return;
+    escaped.push([op, id]);
+    throw new Error(`write escaped the transaction: ${op} ${id}`);
+  }
   const db = {
     // Both take a `client` (and getBlockIncludingDeleted a FOR UPDATE flag) so the mover
     // can read through its own transaction. The real ones ignore neither.
@@ -33,8 +46,7 @@ function harness() {
         && (opts.includeDeleted || !row.deleted_at));
     },
     async updateBlock(id, patch, _client) {
-      if (!_client) escaped.push(["updateBlock", id]);
-      writes++;
+      guardWrite("updateBlock", id, _client);
       const row = rows.find((candidate) => candidate.id === id);
       if (!row) throw new Error("missing " + id);
       if (row.deleted_at) throw new Error("Block is deleted: " + id);
@@ -44,8 +56,7 @@ function harness() {
       return row;
     },
     async createBlock(input, _client) {
-      if (!_client) escaped.push(["createBlock", input.id]);
-      writes++;
+      guardWrite("createBlock", input.id, _client);
       if (rows.some((row) => row.id === input.id)) throw new Error("duplicate id " + input.id);
       const row = {
         id: input.id || `row-${++seq}`,
@@ -61,32 +72,35 @@ function harness() {
       return row;
     },
     async deleteBlock(id, _client) {
-      if (!_client) escaped.push(["deleteBlock", id]);
-      writes++;
+      guardWrite("deleteBlock", id, _client);
       const row = rows.find((candidate) => candidate.id === id);
       if (row) row.deleted_at = new Date().toISOString();
       return { id };
     },
     async undeleteBlock(id, _client) {
-      if (!_client) escaped.push(["undeleteBlock", id]);
-      writes++;
+      guardWrite("undeleteBlock", id, _client);
       const row = rows.find((candidate) => candidate.id === id);
       if (!row) throw new Error("missing " + id);
       row.deleted_at = null;
       return row;
     },
     async ensureDayRoot(date, _userId, _workspaceId, _client) {
-      if (!_client) escaped.push(["ensureDayRoot", date]);
+      if (snapshot !== null && !_client) {
+        escaped.push(["ensureDayRoot", date]);
+        throw new Error("write escaped the transaction: ensureDayRoot " + date);
+      }
       return `day-root-${date}`;
     },
     // Destinations are created inside the transaction now, so the fake has to exist.
     async createItineraryTask(args) {
       const { date, properties, userId, workspaceId } = args;
-      if (!args.client) escaped.push(["createItineraryTask", date]);
+      guardWrite("createItineraryTask", date, args.client);
       // db.createItineraryTask calls ensureDayRoot WITHOUT forwarding its client, so
       // leaving ensureRoot on would put that insert outside the transaction.
-      if (args.ensureRoot !== false) escaped.push(["createItineraryTask:ensureRoot", date]);
-      writes++;
+      if (snapshot !== null && args.ensureRoot !== false) {
+        escaped.push(["createItineraryTask:ensureRoot", date]);
+        throw new Error("createItineraryTask would ensure its day root outside the transaction");
+      }
       const row = {
         id: `made-${++seq}`, type: "block", date: date || null,
         properties: { kind: "task", type: "task", status: "open", ...(properties || {}) },
@@ -128,7 +142,14 @@ function harness() {
       if (text.startsWith("ROLLBACK")) { if (snapshot) restore(snapshot); snapshot = null; return { rows: [] }; }
       return pool.query(sql, params);
     },
-    release: () => {},
+    // Releasing a connection mid-transaction is not a commit and not a rollback: pg hands
+    // it back to the pool with the work still open, so the work is discarded AND the next
+    // borrower can inherit the open transaction. Modelling the discard is what makes a
+    // missing COMMIT visible; counting the leak is what keeps a missing ROLLBACK visible,
+    // because otherwise the discard silently does the rollback's job for it.
+    release: () => {
+      if (snapshot) { leaked++; restore(snapshot); snapshot = null; }
+    },
   };
   const pool = {
     connect: async () => client,
@@ -158,7 +179,7 @@ function harness() {
     && candidate.properties.blockId === row.id && !candidate.deleted_at);
   const totalSec = () => rows.filter((row) => row.type === "time_entry" && !row.deleted_at)
     .reduce((sum, row) => sum + (Number(row.properties.durSec) || 0), 0);
-  return { rows, timing, task, live, totalSec, db, hardDeleted, escaped, writeCount: () => writes };
+  return { rows, timing, task, live, totalSec, db, hardDeleted, escaped, writeCount: () => writes, leaked: () => leaked };
 }
 
 // One tracked hour on `owner`, written by the real work-session writer so the
@@ -449,9 +470,11 @@ test("a piece that lands on a deleted-and-restored row reuses it instead of dupl
   // colliding on insert.
   const stayed = h.rows.find((row) => row.id === entry.id);
   stayed.properties.durSec = 3600;
+  h.escaped.length = 0;
   await h.timing.reallocateTimeEntry({ entry: stayed, allocations, workspaceId: "ws-1" });
   assert.equal(h.live(other).length, 1);
   assert.equal(h.live(other)[0].id, created.id);
+  assert.deepEqual(h.escaped, [], "the revive-and-overwrite path uses the transaction client too");
   // The ledger, not just the id: a revived row with the wrong durSec, or an extra row
   // on the origin, would satisfy both assertions above.
   assert.equal(h.totalSec(), 3600, "the tombstone was revived, not duplicated");
@@ -536,7 +559,15 @@ test("a segment naming a task in another workspace cannot write to it", async ()
   entry.properties.blockId = "theirs";
   delete mine.properties.actualMinutes;
 
+  const touchedIds = [];
+  const realUpdate = h.db.updateBlock.bind(h.db);
+  h.db.updateBlock = async (id, patch, client) => { touchedIds.push(id); return realUpdate(id, patch, client); };
+
   await h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 3600, task: mine }], workspaceId: "ws-1" });
+  // The ABSENCE OF THE WRITE is the claim. Asserting only the value passed with the fence
+  // deleted, because an unfenced foreign task has no priorTotals entry, so its minutes
+  // were carried forward unchanged even though a cross-tenant UPDATE really went out.
+  assert.ok(!touchedIds.includes("theirs"), "no UPDATE may be issued against another workspace's row");
   assert.equal(theirs.properties.actualMinutes, 90, "the other workspace's minutes are untouched");
   assert.match(theirs.properties.notes, /Took ~90m/, "and its note was not stripped");
   assert.equal(mine.properties.actualMinutes, 60);
@@ -677,7 +708,9 @@ test("a retry converges even when a piece is a freshly created task", async () =
   const madeOne = h.task({}, { id: "made-1", title: "Typed title" });
   const realCreate = h.db.createBlock;
   let boom = true;
-  h.db.createBlock = async (input) => { const row = await realCreate(input); if (boom) { boom = false; throw new Error("db down"); } return row; };
+  // Forwards EVERY argument, client included. Dropping it made the harness (correctly)
+  // refuse the write as having escaped the transaction.
+  h.db.createBlock = async (...args) => { const row = await realCreate(...args); if (boom) { boom = false; throw new Error("db down"); } return row; };
   await assert.rejects(() => h.timing.reallocateTimeEntry({ entry, allocations: attempt(madeOne), actionId: "plan-1", workspaceId: "ws-1" }), /db down/);
   h.db.createBlock = realCreate;
 
@@ -698,7 +731,12 @@ test("an unfenced legacy task cannot be written by whoever names it", async () =
   entry.properties.blockId = "legacy";
   delete mine.properties.actualMinutes;
 
+  const legacyTouched = [];
+  const realLegacyUpdate = h.db.updateBlock.bind(h.db);
+  h.db.updateBlock = async (id, patch, client) => { legacyTouched.push(id); return realLegacyUpdate(id, patch, client); };
+
   await h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 3600, task: mine }], workspaceId: "ws-1" });
+  assert.ok(!legacyTouched.includes("legacy"), "no UPDATE may be issued against an unfenced row owned by someone else");
   assert.equal(legacy.properties.actualMinutes, 45, "someone else's unfenced row is untouched");
   assert.equal(mine.properties.actualMinutes, 60);
 });
@@ -795,6 +833,8 @@ for (const step of [
     assert.equal(owner.properties.actualMinutes, step.whole ? undefined : 40);
     assert.equal(other.properties.actualMinutes, step.whole ? 60 : 20);
     assert.deepEqual(h.escaped, [], "and every write went through the transaction client");
+    assert.equal(h.leaked(), 0,
+      "the connection must be ROLLBACKed before release, not handed back with the transaction open");
   });
 }
 
@@ -1100,4 +1140,100 @@ test("a piece spanning three local days conserves and dates every row", async ()
     }).format(new Date(row.properties.startedAt));
     assert.equal(row.date, localDay, `row ${row.id} sits on ${row.date} but starts on ${localDay}`);
   }
+});
+
+test("a keep piece that straddles local midnight leaves its later day on a fresh row", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  // The `&& j === 0` half of the keep-row rule: only the FIRST span may reuse the source
+  // id. Without it both spans write to the same id, the second overwrites the first, and
+  // the minutes in between vanish. finalizeTiming writes exactly this shape for an
+  // hourglass that spanned midnight.
+  const entry = await h.db.createBlock({
+    id: "straddle", type: "time_entry", date: "2026-08-20", parent_id: "day-root-2026-08-20",
+    properties: {
+      blockId: "owner", taskTitle: "Work", durSec: 3600,
+      startedAt: "2026-08-21T03:40:00.000Z", endedAt: "2026-08-21T04:40:00.000Z", start: "23:40", end: "00:40",
+    },
+    user_id: 1, workspace_id: "ws-1",
+  }, {});
+  h.escaped.length = 0;
+  await h.timing.reallocateTimeEntry({
+    entry, allocations: [{ durSec: 2400, task: owner }, { durSec: 1200, task: other }], workspaceId: "ws-1",
+  });
+  assert.equal(h.totalSec(), 3600, "a multi-span keep piece must not overwrite its own first span");
+  assert.equal(h.live(owner).reduce((sum, row) => sum + row.properties.durSec, 0), 2400);
+  assert.deepEqual(h.escaped, []);
+});
+
+test("task locks are sorted even when the natural order is not", async () => {
+  // The previous assertion compared the observed order against its own sort, and the
+  // fixture's ids were already in order, so dropping `.sort()` from the mover survived.
+  const h = harness();
+  const origin = h.task({}, { id: "z-origin" });
+  const dest = h.task({}, { id: "a-dest" });
+  const entry = await trackedHour(h, origin, { minutes: 10 });
+  const locks = [];
+  const real = h.db.getBlockIncludingDeleted.bind(h.db);
+  h.db.getBlockIncludingDeleted = async (id, client, forUpdate) => {
+    if (forUpdate) locks.push(id);
+    return real(id, client, forUpdate);
+  };
+  await h.timing.reallocateTimeEntry({ entry, allocations: [{ durSec: 600, task: dest }], workspaceId: "ws-1" });
+  assert.deepEqual(locks.filter((id) => ["z-origin", "a-dest"].includes(id)), ["a-dest", "z-origin"],
+    "two operations sharing tasks must acquire them in the same order or they can deadlock");
+});
+
+test("a planted row with NO workspace at a derived id fails closed too", async () => {
+  // The code claims strict equality so an absent workspace fails CLOSED. The existing
+  // test planted a FOREIGN workspace, which the repo's permissive fence would also catch.
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  const entry = await trackedHour(h, owner);
+  const allocations = [{ durSec: 1200, task: other }, { durSec: 2400, task: owner }];
+  const { reallocatedRowId } = createTaskTiming;
+  const seed = allocations.map((part) => `${part.durSec}>${part.task.id}`).join("|");
+  await h.db.createBlock({
+    id: reallocatedRowId(entry, seed, "0.0"), type: "time_entry", date: "2026-08-20",
+    properties: { blockId: "someone-elses-task", durSec: 1 }, user_id: 2, workspace_id: null,
+  }, {});
+  await assert.rejects(
+    () => h.timing.reallocateTimeEntry({ entry, allocations, workspaceId: "ws-1" }),
+    /identity collision/,
+  );
+  assert.equal(h.totalSec(), 3601, "and it rolled back");
+});
+
+test("a segment tombstoned between the caller's read and the lock is refused", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  const entry = await trackedHour(h, owner);
+  // The caller's copy predates the delete, which is the whole point of re-reading under
+  // the lock: neither pre-transaction check can see it.
+  const stale = { ...entry, properties: { ...entry.properties } };
+  await h.db.deleteBlock(entry.id);
+  await assert.rejects(
+    () => h.timing.reallocateTimeEntry({
+      entry: stale, allocations: [{ durSec: 1200, task: other }, { durSec: 2400, task: owner }], workspaceId: "ws-1",
+    }),
+    /Tracked time not found/,
+  );
+  assert.equal(h.totalSec(), 0, "a tombstoned segment must not be resurrected as new rows");
+});
+
+test("a committed reallocation closes its transaction cleanly", async () => {
+  const h = harness();
+  const owner = h.task({}, { id: "owner" });
+  const other = h.task({}, { id: "other" });
+  const entry = await trackedHour(h, owner);
+  await h.timing.reallocateTimeEntry({
+    entry, allocations: [{ durSec: 1200, task: other }, { durSec: 2400, task: owner }], workspaceId: "ws-1",
+  });
+  assert.equal(h.totalSec(), 3600);
+  // Neither COMMIT nor ROLLBACK is optional: without the COMMIT pg discards the work, and
+  // without either the connection returns to the pool still inside the transaction.
+  assert.equal(h.leaked(), 0, "the connection was released with a transaction still open");
 });
