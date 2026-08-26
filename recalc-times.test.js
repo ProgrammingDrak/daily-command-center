@@ -156,6 +156,105 @@ test("orderWins: pinned task bumps, pin updates, explicit pin map re-syncs", () 
   assert.equal(day.pinsSavedCount(), 1);
 });
 
+test("★ orderWins: a USER-SET start holds while a DERIVED pin bumps", () => {
+  // The whole reason _userSetStart exists apart from _pinnedStart. task-model.js derives
+  // a _pinnedStart for every timed row, so orderWins must demote those or a drag could
+  // never reorder anything -- but a time a person typed has to survive that same drag.
+  const sched = [
+    t("a", "09:00", "09:30"),
+    t("p", "11:00", "11:30", { _pinnedStart: "11:00" }),                       // derived
+    t("u", "14:00", "14:30", { _pinnedStart: "14:00", _userSetStart: true }),  // hand-set
+  ];
+  const pins = { p: "11:00", u: "14:00" };
+  const day = makeDay(sched, { pins });
+  day.context.recalcTimes({ orderWins: true });
+  assert.equal(find(sched, "p").start, "09:30");        // derived pin still bumps
+  assert.equal(pins.p, "09:30");                        // and re-syncs, as before
+  assert.equal(find(sched, "u").start, "14:00");        // hand-set start untouched
+  assert.equal(find(sched, "u")._pinnedStart, "14:00");
+  assert.equal(pins.u, "14:00");                        // and never rewritten
+});
+
+test("★ orderWins: a user-set start EARLIER than the plan holds, and is not the anchor", () => {
+  // The reported bug, in one case: set a task to 06:00, then drag anything. It used to
+  // be pulled back into the chain AND to drag the whole day's anchor down with it.
+  const sched = [
+    t("early", "06:00", "06:30", { _pinnedStart: "06:00", _userSetStart: true }),
+    t("a", "09:00", "09:30"),
+    t("b", "10:00", "10:30"),
+  ];
+  const { context } = makeDay(sched, { initSched: [t("a", "09:00", "09:30")] });
+  context.recalcTimes({ orderWins: true });
+  assert.equal(find(sched, "early").start, "06:00"); // held
+  assert.equal(find(sched, "a").start, "09:00");     // anchor is still the day's plan
+  assert.equal(find(sched, "b").start, "09:30");     // ordinary chain, unchanged
+});
+
+test("★ orderWins: a drop at the very top lands BEFORE the day's first held item", () => {
+  // Without reachBackFor the cascade anchor is a floor no drop position can beat, so
+  // "drag it above the 09:00 task" landed it at 09:30 instead. reachBackFor is ignored
+  // unless the task really is first in the chain, so every other drop is untouched.
+  const day = () => {
+    const sched = [
+      t("moved", "13:00", "13:45"),                                              // 45m
+      t("u", "09:00", "09:30", { _pinnedStart: "09:00", _userSetStart: true }),
+    ];
+    return { sched, ctx: makeDay(sched, { initSched: [t("u", "09:00", "09:30")] }).context };
+  };
+  const before = day();
+  before.ctx.recalcTimes({ orderWins: true });
+  assert.equal(find(before.sched, "moved").start, "09:30"); // control: pushed past it
+  const after = day();
+  after.ctx.recalcTimes({ orderWins: true, reachBackFor: "moved" });
+  assert.equal(find(after.sched, "moved").start, "08:15");  // 09:00 minus its 45m
+  assert.equal(find(after.sched, "moved").end, "09:00");
+  assert.equal(find(after.sched, "u").start, "09:00");      // the held item never moves
+});
+
+test("orderWins: reachBackFor is ignored when the task did not land first", () => {
+  const sched = [
+    t("u", "09:00", "09:30", { _pinnedStart: "09:00", _userSetStart: true }),
+    t("moved", "13:00", "13:30"),
+  ];
+  const { context } = makeDay(sched, { initSched: [t("u", "09:00", "09:30")] });
+  context.recalcTimes({ orderWins: true, reachBackFor: "moved" });
+  assert.equal(find(sched, "moved").start, "09:30"); // still chains after the held row
+});
+
+test("orderWins: the reach-back clamps at midnight", () => {
+  const sched = [
+    t("moved", "13:00", "13:30"),
+    t("u", "00:15", "00:45", { _pinnedStart: "00:15", _userSetStart: true }),
+  ];
+  const { context } = makeDay(sched, { initSched: [t("u", "00:15", "00:45")] });
+  context.recalcTimes({ orderWins: true, reachBackFor: "moved" });
+  // No room for 30m before 00:15, so it packs after rather than wrapping to yesterday.
+  assert.equal(find(sched, "moved").start, "00:45");
+});
+
+test("★ tag-aware mode holds a user-set start too", () => {
+  const sched = [
+    t("a", "09:00", "09:30"),
+    t("u", "14:00", "14:30", { _userSetStart: true }),
+  ];
+  const blocks = [{ id: "b1", start: "09:00", end: "17:00", acceptedTags: ["deep"] }];
+  const { context } = makeDay(sched, { blocks });
+  context.recalcTimes({ orderWins: true });
+  assert.equal(find(sched, "u").start, "14:00");
+});
+
+test("_clearPin drops the hand-set intent along with the derived pin", () => {
+  // A drag IS the user handing that task's time back to the cascade. Only the DRAGGED
+  // row reaches _clearPin; every other user-set start on the day survives.
+  const sched = [t("a", "09:00", "09:30", { _pinnedStart: "09:00", _userSetStart: true })];
+  const pins = { a: "09:00" };
+  const day = makeDay(sched, { pins });
+  day.context._clearPin(find(sched, "a"));
+  assert.equal("_pinnedStart" in find(sched, "a"), false);
+  assert.equal("_userSetStart" in find(sched, "a"), false);
+  assert.equal("a" in pins, false);
+});
+
 test("orderWins: pure chain closes gaps (downstream pulls earlier)", () => {
   const sched = [
     t("a", "09:00", "09:30"),

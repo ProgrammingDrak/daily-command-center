@@ -190,7 +190,10 @@
     if(importedMeeting(ev)){toast("This meeting is owned by Google Calendar. Open it there to change the time.","info");openInspector(id);return;}
     if(isComplete(ev)||!editableDate(day)){toast("Completed work and past dates are read-only.","info");return;}
     const placement=kind==="all_day"?{kind:"all_day",endDate:end}:{kind:"timed",start:clock(start),end:clock(end)};
-    try{await root.blockStore.rescheduleBlock(ev._blockId,day,{fromDate:ev._block.date||day,placement});await build({keepScroll:true});}
+    // Every path into this calendar is a person naming a time: a drag, a resize, a
+    // drag-to-create, or the inspector's Start/End fields. So the placement is always
+    // user-set, and the itinerary cascade must not re-time it on the next drag there.
+    try{await root.blockStore.rescheduleBlock(ev._blockId,day,{fromDate:ev._block.date||day,placement,userSetStart:kind!=="all_day"});await build({keepScroll:true});}
     catch(e){toast(e.message||"Could not move this item.","error");}
   }
   async function createDraft(day,start,end){

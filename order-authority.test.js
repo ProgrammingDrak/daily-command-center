@@ -103,6 +103,7 @@ function ctx(rows, overlay) {
     /function _pruneOverlayMap\(key,keep\)\{[\s\S]*?\n\}/,
     /function loadPinnedStarts\(\)\{[\s\S]*?\n\}/,
     /function savePinnedStarts\(data\)\{[\s\S]*?\n\}/,
+    /function _setUserSetStart\(ev,id,on\)\{[\s\S]*?\n\}/,
     /function loadLockedSet\(\)\{[\s\S]*?\n\}/,
     /function saveLockedSet\(ids\)\{[\s\S]*?\n\}/,
     /function _spliceDayOrder\(subsetIds\)\{[\s\S]*?\n\}/,
@@ -268,6 +269,31 @@ test("saveLockedSet toggles the row key, writing only what changed, and is idemp
   const c2 = ctx([row("a", 1000, { locked: true })], {});
   assert.equal(vm.runInContext('saveLockedSet(["a"])', c2), 0);
   assert.deepEqual(run(c2, "updated"), []);
+});
+
+test("★ userSetStart lives on the row, and clearing it DELETES the key", () => {
+  // The intent half of the start axis, kept apart from the DERIVED `_pinnedStart` that
+  // task-model.js stamps on every timed row. Same writer as the pin and the lock
+  // (persistRowProp -> enqueueRowPropsWrite), because db.updateBlock replaces
+  // `properties` wholesale and a direct write would drop a sibling field.
+  const c = ctx([row("a", 1000, { _pinnedStart: "09:00" })], {});
+  vm.runInContext('_setUserSetStart({id:"a"},"a",true)', c);
+  const set = run(c, "updated");
+  assert.equal(set.length, 1);
+  assert.equal(set[0].props.userSetStart, true);
+  assert.equal(set[0].props._pinnedStart, "09:00", "and must not disturb the rest of the bag");
+
+  const c2 = ctx([row("b", 1000, { _pinnedStart: "09:00", userSetStart: true })], {});
+  vm.runInContext('_setUserSetStart({id:"b"},"b",false)', c2);
+  const cleared = run(c2, "updated");
+  assert.equal(cleared.length, 1);
+  assert.equal("userSetStart" in cleared[0].props, false, "the key is deleted, not set falsy");
+  assert.equal(cleared[0].props._pinnedStart, "09:00");
+
+  // A no-op must not PATCH the row at all (the queue's documented "skip the write").
+  const c3 = ctx([row("d", 1000, {})], {});
+  vm.runInContext('_setUserSetStart({id:"d"},"d",false)', c3);
+  assert.deepEqual(run(c3, "updated"), []);
 });
 
 test("the pin and lock OVERLAY WRITES are gone (only the prune remains)", () => {

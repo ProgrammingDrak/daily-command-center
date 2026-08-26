@@ -1136,13 +1136,16 @@
     // of subtree size, one broadcast the origin client ignores (own clientId) — so
     // no snap-back, no duplication, no stranded children. The moved blocks now live
     // on targetDate, so evict them from the current-day cache.
-    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate, placement } = {}) {
+    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate, placement, userSetStart } = {}) {
       const previous = _rescheduleChains.get(blockId) || Promise.resolve();
       const run = previous.catch(() => {}).then(async () => {
       setSaving();
       // fromDate: the viewed origin day, used by the server when the block row
       // itself is undated (task-bar pending_tasks) so the move can't 400.
-      const body = { targetDate, parentStart, parentEnd, fromDate, placement };
+      // userSetStart: TRUE only when a human named the landing time. A timed placement
+      // alone cannot say that — an auto-slotted cross-day move sends parentStart too —
+      // and the flag is what makes the client cascade leave the start alone.
+      const body = { targetDate, parentStart, parentEnd, fromDate, placement, userSetStart };
       const walId = walPush({ op: "reschedule", id: blockId, data: body });
       try {
         let result;
