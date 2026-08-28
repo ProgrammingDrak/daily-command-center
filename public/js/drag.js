@@ -60,6 +60,19 @@ function _meetingBlocks(){
     .sort((a,b)=>a.s-b.s);
 }
 
+// The user's start of day, as a floor on the cascade anchor. Guarded rather than a
+// bare DCC.dayStartMinutes call: four other suites slice this file into a node:vm
+// context WITHOUT day-context.js installed (push-is-a-move places rows at 00:45,
+// subtask-unified-row at 00:00), and a floor applied there would move assertions that
+// have nothing to do with this feature. No module in the context means no floor.
+// In the browser the module always exists -- index.html loads day-context.js well
+// before this file -- so the 0 is unreachable in production.
+function _dayStartFloor(){
+  const D = typeof DCC !== "undefined" ? DCC : (typeof window !== "undefined" ? window.DCC : null);
+  if(!D || typeof D.dayStartMinutes !== "function")return 0;
+  return D.dayStartMinutes(typeof __state !== "undefined" ? __state : null);
+}
+
 // Return the earliest start >= cursor where duration d fits without overlapping any meeting
 function _freeStart(cursor, d, meetingBlocks){
   let s=cursor, changed=true;
@@ -127,6 +140,10 @@ function recalcTimesTagAware(schedBlocks){
   if(typeof viewMode !== "undefined" && viewMode === "today" && typeof now === "function"){
     fallbackCursor = Math.min(fallbackCursor, now());
   }
+  // Floor AFTER the now() pull-back, or opening the app at 05:30 would repack the
+  // whole day from 05:30 -- the exact complaint the setting exists to answer.
+  const tagFloor = _dayStartFloor();
+  fallbackCursor = Math.max(tagFloor, fallbackCursor);
 
   // Pass 1: place pinned/locked tasks and collect them as blockers alongside meetings.
   const blockers = _meetingBlocks().slice();
@@ -144,8 +161,13 @@ function recalcTimesTagAware(schedBlocks){
   blockers.sort((a, b) => a.s - b.s);
 
   // Per-block free-slot cursor (starts at block's start time)
+  // Per-block free-slot cursor, floored the same way. This is the PRIMARY placement
+  // path in tag-aware mode (fallbackCursor above only catches the no-match case), so
+  // leaving it unclamped would let a 05:00 tagged block keep placing at 05:00 and
+  // quietly defeat the whole setting. A block that ends before the floor now fails
+  // the `slotEnd <= pt(b.end)` fit test below and correctly falls through.
   const nextFree = {};
-  schedBlocks.forEach(b => { nextFree[b.id] = pt(b.start); });
+  schedBlocks.forEach(b => { nextFree[b.id] = Math.max(tagFloor, pt(b.start)); });
 
   active.forEach(ev => {
     if(isNested(ev)) return; // nested (ride-along/subtask): doesn't consume the cascade cursor
@@ -263,6 +285,14 @@ function recalcTimes(opts){
     cursor=Math.min(cursor,now());
   }
 
+  // The user's start of day, applied AFTER the now() pull-back above. Without it,
+  // opening the app at 05:30 repacks every unpinned task from 05:30, and a stray
+  // 00:00 row drags the anchor to midnight. Held rows (_locked / _userSetStart) are
+  // excluded from the anchor pool already, so a hand-typed 06:00 keeps its slot and
+  // does NOT pull the chain back down.
+  const floorMin=_dayStartFloor();
+  cursor=Math.max(floorMin,cursor);
+
   // The anchor above is a FLOOR no drop position can beat: it is the minimum of every
   // current start, so a task dropped at the very top can only ever reach the day's
   // earliest existing slot. Once a meeting or a hand-set start holds that slot, "drag it
@@ -277,6 +307,14 @@ function recalcTimes(opts){
     if(mv&&mv.id===opts.reachBackFor&&!_holdsTime(mv,opts)){
       const firstHold=Math.min.apply(null,blockers.map(b=>b.s));
       const d=_isSeqShell(mv)?_shellSpan(mv):dur(mv);
+      // UNCHANGED by the start-of-day floor, deliberately. `cursor` is already
+      // floored above, so `reach` can only fall below the floor when the earliest
+      // hold leaves less room than the dragged task needs -- and in exactly that
+      // case the drop MUST reach below the floor, or _freeStart pushes it past the
+      // hold and it silently lands after the item it was dragged above. Adding a
+      // floor clamp here is provably a no-op when the task fits (reach >= floorMin
+      // already) and a bug when it does not, so the original clamp is the correct
+      // one. An explicit drag outranks the floor; typing a time is the other escape.
       cursor=Math.max(0,Math.min(cursor,firstHold-d));
     }
   }
@@ -647,7 +685,7 @@ function dDrop(e,tid){
   if(wasUntimed&&!target.untimed){
     moved.untimed=false;
     const _d=dur(moved)||30;
-    const _s=pt(target.start)||(typeof now==="function"?Math.ceil(now()/15)*15:8*60);
+    const _s=pt(target.start)||Math.max(_dayStartFloor(),typeof now==="function"?Math.ceil(now()/15)*15:8*60);
     moved.start=fmt(_s);moved.end=fmt(_s+_d);
   }
 

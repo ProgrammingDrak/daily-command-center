@@ -317,7 +317,12 @@
     var ordered = gbOrderedTasks(tasks, ui);
     var blockers = gbBlockers();
     var endMin = gbDayEnd();
-    var cursor = gbRound15(gbNow());
+    // Floored by the user's start of day. gbNow() is the raw wall clock, so planning
+    // the brief at 05:30 would otherwise lay the whole day out from 05:30. A time the
+    // user typed themselves (ui.starts[task.id], read below) stays exempt.
+    var gbFloor = (window.DCC && window.DCC.dayStartMinutes)
+      ? window.DCC.dayStartMinutes(typeof __state !== "undefined" ? __state : null) : 0;
+    var cursor = Math.max(gbFloor, gbRound15(gbNow()));
     var starts = ui.starts || {};
     return ordered.map(function(task){
       var durMin = gbTaskDuration(task, ui);

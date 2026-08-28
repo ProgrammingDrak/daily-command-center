@@ -44,6 +44,7 @@ const meetingSignals = require("./meeting-signals");
 const gcalAuth = require("./gcal-auth");
 const dccIntelligence = require("./dcc-intelligence");
 const triageSuppressions = require("./triage-suppressions");
+const scheduleSettingsStore = require("./schedule-settings-store");
 const dayReviewRepeats = require("./day-review-repeats");
 const waitingItems = require("./waiting-items");
 
@@ -590,7 +591,7 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   // hottest read path in the app (both state endpoints, plus the anonymous share poll
   // through buildPublicTodoShare). All swallow their own errors and resolve to [],
   // so Promise.all adds no rejection path.
-  const [scheduleBlocks, suppressions, waitingRows, recentReviewRows] = await Promise.all([
+  const [scheduleBlocks, suppressions, waitingRows, recentReviewRows, scheduleSettings] = await Promise.all([
     getScheduleBlocks(userId, workspaceId),
     readTriageSuppressionsForWorkspace(ws),
     typeof blockDB.getDelegatedItems === "function"
@@ -605,8 +606,20 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
       ? blockDB.getDccStateRange(addDays(dateStr, -dayReviewRepeats.LOOKBACK_DAYS), addDays(dateStr, -1), ws)
         .catch((e) => { console.error("[day-review] repeat overlay failed (non-fatal):", e.message); return []; })
       : Promise.resolve([]),
+    // The user's start of day, gated on userId for the same reason recentReviewRows
+    // above is: buildPublicTodoShare reaches this builder anonymously and its client
+    // polls every 15s per open viewer against a pool capped at 10. A share viewer
+    // never auto-places anything, so the floor is dead weight on that path -- and
+    // day-context.js falls back to the 07:00 default when the field is absent.
+    userId
+      ? scheduleSettingsStore.getScheduleSettings(ws)
+        .catch((e) => { console.error("[schedule] day-start read failed (non-fatal):", e.message); return null; })
+      : Promise.resolve(null),
   ]);
   result.schedule.blocks = scheduleBlocks;
+  // Stamped at READ time, exactly like schedule.blocks above, so a saved day file can
+  // never serve a stale floor and a changed setting takes effect on the next fetch.
+  if (scheduleSettings) result.schedule.day_start = scheduleSettings.dayStart;
   // Due Waiting check-ins are a read-time triage overlay. This produces a
   // copy-ready fallback without mutating state during a GET. Sweep may later
   // replace the same stable item with a native Gmail or Slack draft.
@@ -955,6 +968,7 @@ require("./routes/pet-home")(app, ctx);
 require("./routes/blocks")(app, ctx);
 require("./routes/dcc")(app, ctx);
 require("./routes/evaluation")(app, ctx);
+require("./routes/schedule-settings")(app, ctx);
 require("./routes/meeting")(app, ctx);
 require("./routes/meeting-dashboard")(app, ctx);
 require("./routes/meeting-audio")(app, ctx);

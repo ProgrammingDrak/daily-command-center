@@ -320,7 +320,7 @@ function parseOffersAmpAlert(text) {
 // ── Persistence-touching operations ──
 // Factory: the caller injects blockDB, the two server-scope helpers
 // (getScheduleBlocks, getTodayStr), and the shared assertBlockOwnership guard.
-function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership, appTimeZone = "America/New_York" }) {
+function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership, getDayStartMinutes = async () => null, appTimeZone = "America/New_York" }) {
   // Read the day_root row for a date WITHOUT creating one. ensureDayRoot()
   // would insert a row as a side effect of a read, which a GET must never do,
   // so the id derivation (and its ws-1 legacy fallback) is mirrored here as a
@@ -620,17 +620,37 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     // removed today's instance of a responsibility, the auto-scheduler must not
     // resurrect it today (mirrors meeting-materializer's tombstone rule). Live
     // rows drive blockers and dedup exactly as before.
-    const allBlocks = await blockDB.getBlocksByDateIncludingDeleted(dateStr, workspaceId);
+    // All three reads are independent, so issue them together. The first one cannot use
+    // an index (every blocks index is partial on deleted_at IS NULL) and sequential-scans,
+    // so it already dominates this function; stacking two more serial round trips behind
+    // it is latency for nothing.
+    const [allBlocks, dayBlocks, floorMin] = await Promise.all([
+      blockDB.getBlocksByDateIncludingDeleted(dateStr, workspaceId),
+      getScheduleBlocks(userId, workspaceId),
+      getDayStartMinutes(workspaceId),
+    ]);
     const blocks = allBlocks.filter(b => !b.deleted_at);
     const deletedResponsibilityIds = new Set(
       allBlocks
         .filter(b => b.deleted_at && (b.properties || {}).kind === "responsibility_task" && (b.properties || {}).responsibilityId)
         .map(b => b.properties.responsibilityId)
     );
-    const dayBlocks = await getScheduleBlocks(userId, workspaceId);
     const workBlocks = dayBlocks.filter(b => (b.blockType || b.type) === "work");
-    const dayStart = workBlocks[0] ? hhmmToMinutes(workBlocks[0].start) : 9 * 60;
-    const dayEnd = workBlocks.length ? hhmmToMinutes(workBlocks[workBlocks.length - 1].end) : 17 * 60;
+    // The user's start of day is a FLOOR on top of the derived bound, never a
+    // replacement for it: a 05:00 work block still bounds the day, it just stops
+    // pulling auto-placement into the small hours. Same contract the client engine
+    // applies in public/js/day-context.js buildDayContext, which is the point --
+    // one floor, four slot engines, no fifth spelling of it.
+    // A null floor means "not wired" (the DI default, and every test stub), which
+    // must mean NO clamp rather than a silently invented 07:00 policy.
+    const derivedStart = workBlocks[0] ? hhmmToMinutes(workBlocks[0].start) : 9 * 60;
+    const dayStart = floorMin == null ? derivedStart : Math.max(floorMin, derivedStart);
+    // Clamped up to dayStart for the same reason the client does it in
+    // public/js/day-context.js buildDayContext: raising dayStart past the end of a
+    // short plan would otherwise invert the window here while the client's stayed
+    // valid, and firstFreeSlot's `|| Math.max(dayStart, nowMin)` fallback would place
+    // a task the client had already refused. Same clamp, same shape, both engines.
+    const dayEnd = Math.max(dayStart, workBlocks.length ? hhmmToMinutes(workBlocks[workBlocks.length - 1].end) : 17 * 60);
     const blockers = blocks
       .filter(b => (b.properties || {}).start && (b.properties || {}).end)
       .map(b => ({ s: hhmmToMinutes(b.properties.start), e: hhmmToMinutes(b.properties.end) }));

@@ -9,7 +9,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 // C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
 // module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
-const { installTaskModel } = require("./task-model-vm-fixture.js");
+const { installTaskModel, installDayContext } = require("./task-model-vm-fixture.js");
 
 const dragSource = fs.readFileSync(require.resolve("./public/js/drag.js"), "utf8");
 
@@ -29,7 +29,7 @@ function makeDay(scheduled, opts = {}) {
     window: { __TAGS__: null },
     scheduled,
     INIT_SCHED: opts.initSched || scheduled.slice(),
-    __state: { schedule: { blocks: opts.blocks || [] } },
+    __state: { schedule: { blocks: opts.blocks || [], day_start: opts.dayStart } },
     viewMode: "planning",
     pt: (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; },
     fmt: (m) => String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"),
@@ -70,6 +70,9 @@ function makeDay(scheduled, opts = {}) {
   context.render = () => {};
   vm.createContext(context);
   installTaskModel(context);
+  // Only the floor tests install day-context. drag.js's _dayStartFloor is guarded, so
+  // every other test in this file keeps its pre-feature anchor maths.
+  if (opts.dayStart) installDayContext(context);
   vm.runInContext(dragSource, context);
   vm.runInContext(addToScheduleSource, context);
   return { context, pins, pinsSavedCount: () => pinsSaved, subtaskOrderSaves };
@@ -567,4 +570,93 @@ test("subtask join uses the real reparentAsSubtask when present (time collapses 
   assert.equal(find(sched, "x").start, "09:00"); // collapsed to the parent's start
   assert.equal(find(sched, "x").end, "09:00");
   assert.deepEqual(sched.filter((e) => e.subtaskOf === "p").map((e) => e.id), ["s1", "x"]);
+});
+
+// ── START OF DAY: the floor on the cascade anchor ─────────────────────────
+// recalcTimes anchors on the MINIMUM start across unheld rows, so one stray early
+// row used to drag the whole day's cascade down with it. The user's start of day is
+// a floor on that anchor. Held rows (_locked / _userSetStart) are excluded from the
+// anchor pool already, so a hand-set early start keeps its slot without pulling the
+// chain back down with it.
+
+test("floor: a stray 00:00 row no longer cascades the whole day from midnight", () => {
+  const sched = [t("stray", "00:00", "00:30"), t("a", "09:00", "09:30")];
+  const day = makeDay(sched, { dayStart: "07:00" });
+  day.context.recalcTimes();
+  assert.equal(find(sched, "stray").start, "07:00");
+  assert.equal(find(sched, "a").start, "07:30");
+});
+
+test("floor: an early anchor lifts to the floor, and a later one is untouched", () => {
+  const early = [t("a", "05:00", "05:30"), t("b", "05:30", "06:00")];
+  makeDay(early, { dayStart: "07:00" }).context.recalcTimes();
+  assert.equal(find(early, "a").start, "07:00");
+  assert.equal(find(early, "b").start, "07:30");
+
+  const late = [t("a", "09:00", "09:30"), t("b", "09:30", "10:00")];
+  makeDay(late, { dayStart: "07:00" }).context.recalcTimes();
+  assert.equal(find(late, "a").start, "09:00", "the floor must not PULL a later day earlier");
+});
+
+// The escape hatch. _userSetStart is set only where a human named a time, and it has
+// to survive the floor -- otherwise "start of day" would silently overwrite the one
+// thing the user asked for explicitly.
+test("floor: a hand-set start before the floor still holds, and does not re-anchor the chain", () => {
+  const sched = [t("hand", "06:00", "06:30", { _userSetStart: true }), t("a", "09:00", "09:30")];
+  const day = makeDay(sched, { dayStart: "07:00" });
+  day.context.recalcTimes({ orderWins: true });
+  assert.equal(find(sched, "hand").start, "06:00", "the human named this time");
+  assert.equal(find(sched, "a").start, "07:00", "the rest still starts at the floor");
+});
+
+test("floor: on today's view, a now() before the floor does not repack the day early", () => {
+  const sched = [t("a", "09:00", "09:30")];
+  const day = makeDay(sched, { dayStart: "07:00" });
+  day.context.viewMode = "today";
+  day.context.now = () => 5 * 60 + 30; // 05:30, the early riser
+  day.context.recalcTimes();
+  assert.equal(find(sched, "a").start, "07:00");
+});
+
+// reachBackFor exists so a drop at the very top lands BEFORE a meeting or a hand-set
+// start. The floor must not quietly undo that when the held item is itself early.
+test("floor: reach-back still clears an EARLY held item, or the drop is a silent no-op", () => {
+  const sched = [t("mv", "10:00", "10:30"), t("hold", "06:00", "06:30", { _userSetStart: true })];
+  const day = makeDay(sched, { dayStart: "07:00" });
+  day.context.recalcTimes({ orderWins: true, reachBackFor: "mv" });
+  assert.equal(find(sched, "mv").start, "05:30", "lands before the 06:00 hold it was dragged above");
+  assert.equal(find(sched, "hold").start, "06:00");
+});
+
+// Reach-back is deliberately NOT floored: an explicit drag to the top outranks the
+// floor, and clamping it would push the drop past the item it was dragged above.
+test("reach-back stays below the floor when the hold leaves no room above it", () => {
+  const sched = [t("mv", "13:00", "14:00"), t("hold", "07:30", "08:00", { _userSetStart: true })];
+  const day = makeDay(sched, { dayStart: "07:00" });
+  day.context.recalcTimes({ orderWins: true, reachBackFor: "mv" });
+  assert.equal(find(sched, "mv").start, "06:30", "before the 07:30 hold, not pushed to 08:00 after it");
+});
+
+test("reach-back with a hold just ABOVE the floor still lands the drop before it", () => {
+  const sched = [t("mv", "13:00", "13:30"), t("hold", "07:15", "07:45", { _userSetStart: true })];
+  const day = makeDay(sched, { dayStart: "07:00" });
+  day.context.recalcTimes({ orderWins: true, reachBackFor: "mv" });
+  assert.equal(find(sched, "mv").start, "06:45", "before the hold it was dragged above, not 07:45 after it");
+});
+
+// recalcTimesTagAware is the OTHER cascade: when any schedule block has acceptedTags,
+// recalcTimes delegates to it and the per-block cursor -- not fallbackCursor -- is where
+// tasks actually land. Reverting that one clamp used to leave every test in the repo green.
+test("floor: a tagged block starting before the floor still places at the floor", () => {
+  const sched = [t("a", "09:00", "09:30", { tags: ["deep"] })];
+  const blocks = [{ id: "b1", start: "05:00", end: "17:00", acceptedTags: ["deep"] }];
+  makeDay(sched, { blocks, dayStart: "07:00" }).context.recalcTimes({ orderWins: true });
+  assert.equal(find(sched, "a").start, "07:00", "05:00 without the nextFree clamp");
+});
+
+test("floor: the tag-aware FALLBACK cursor is floored too, for a task no block accepts", () => {
+  const sched = [t("a", "05:30", "06:00", { tags: ["other"] })];
+  const blocks = [{ id: "b1", start: "05:00", end: "17:00", acceptedTags: ["deep"] }];
+  makeDay(sched, { blocks, dayStart: "07:00" }).context.recalcTimes({ orderWins: true });
+  assert.equal(find(sched, "a").start, "07:00");
 });

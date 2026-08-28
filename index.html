@@ -134,6 +134,7 @@
     <div class="dcc-settings-wrap" id="dcc-settings-wrap">
       <button class="admin-link dcc-settings-button" id="dcc-settings-button" type="button" aria-haspopup="true" aria-expanded="false" title="Open settings">Settings</button>
       <div class="dcc-settings-menu" id="dcc-settings-menu" role="menu" aria-hidden="true">
+        <button type="button" id="dcc-day-start" role="menuitem">Start of day</button>
         <button type="button" id="dcc-schedule-defaults" role="menuitem">Schedule default times</button>
         <button type="button" id="dcc-setup-integrations" role="menuitem">Setup &amp; integrations</button>
         <button type="button" id="dcc-replay-tutorial" role="menuitem">Replay tutorial</button>
@@ -599,6 +600,27 @@
     <div class="sched-picker-footer">
       <button class="sched-picker-cancel" id="sched-defaults-reset">Reset to defaults</button>
       <button class="sched-picker-confirm" id="sched-defaults-save">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- Start of day (Settings) -->
+<div class="sched-picker-overlay" id="day-start-overlay">
+  <div class="sched-picker">
+    <div class="sched-picker-hdr">
+      <h3>Start of day</h3>
+      <button class="pvb-close" id="day-start-close">&times;</button>
+    </div>
+    <div class="sched-picker-body">
+      <div class="sched-picker-hint">Tasks are never scheduled for you before this time. You can still set an earlier time by hand, and meetings keep their real time.</div>
+      <div class="sched-after-custom">
+        <input id="day-start-input" type="time" class="sched-picker-input" />
+      </div>
+      <div class="sched-picker-hint" id="day-start-note"></div>
+    </div>
+    <div class="sched-picker-footer">
+      <button class="sched-picker-cancel" id="day-start-reset">Reset to 7:00 AM</button>
+      <button class="sched-picker-confirm" id="day-start-save">Save</button>
     </div>
   </div>
 </div>
@@ -1974,7 +1996,7 @@
 <script src="/public/js/measured-task-window.js?v=measured-task-window-1"></script>
 <script src="/public/js/task-model.js?v=task-model-1"></script>
 <!-- day-context.js: the one day-context + free-slot engine (window.DCC.getDayContext/findSlot); must load before state.js/schedule.js consume it -->
-<script src="/public/js/day-context.js?v=day-context-1"></script>
+<script src="/public/js/day-context.js?v=day-context-2"></script>
 <script src="/public/js/core-ui.js?v=core-ui-1"></script>
 <script src="/public/js/block-editor.js"></script>
 <script src="/public/js/data.js"></script>
