@@ -14,6 +14,77 @@
 #vault-tree{flex:0 0 246px;width:246px;overflow-y:auto;max-height:74vh;padding:10px 6px;border-right:1px solid var(--border);font-size:13px}
 #vault-reading{flex:1 1 auto;overflow-y:auto;max-height:74vh;padding:24px 30px 64px;min-width:0}
 
+/* Adaptive journal workspace. The existing #vault-reading pane becomes the
+   only journal reader. Layout state moves it instead of creating another copy. */
+#vault-journal-backdrop,#vault-journal-restore,.vault-journal-hotbar-zone{display:none}
+#vault-journal-backdrop{position:fixed;inset:0;z-index:1190;background:rgba(0,0,0,.58);backdrop-filter:blur(3px)}
+#vault-journal-restore{position:fixed;z-index:1250;top:0;left:50%;transform:translateX(-50%);max-width:min(560px,82vw);height:34px;padding:0 14px;border:1px solid var(--border);border-top:0;border-radius:0 0 10px 10px;background:var(--bg-elev);color:var(--text);box-shadow:0 8px 24px rgba(0,0,0,.35);font-size:12px;font-weight:650;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+body.vault-journal-focus #vault-journal-backdrop{display:block}
+body.vault-journal-focus #vault-reading,
+body.vault-journal-float #vault-reading,
+body.vault-journal-dock-left #vault-reading,
+body.vault-journal-dock-right #vault-reading{position:fixed;display:block;z-index:1200;box-sizing:border-box;max-height:none;min-width:0;padding:0;overflow-y:auto;background:var(--bg,#0f172a);border:1px solid var(--border);box-shadow:0 24px 70px rgba(0,0,0,.48);overscroll-behavior:contain}
+body.vault-journal-focus #vault-reading{border-radius:16px}
+body.vault-journal-float #vault-reading{border-radius:14px;resize:both}
+body.vault-journal-dock-left #vault-reading,
+body.vault-journal-dock-right #vault-reading{border-radius:0;resize:horizontal}
+body.vault-journal-dock-left{padding-left:calc(var(--vault-journal-dock-width) + 24px)}
+body.vault-journal-dock-right{padding-right:calc(var(--vault-journal-dock-width) + 24px)}
+body.vault-journal-collapsed #vault-reading,
+body.vault-journal-collapsed #vault-journal-backdrop{display:none}
+body.vault-journal-collapsed #vault-journal-restore{display:block}
+body.vault-journal-focus #vault-reading #vault-detail,
+body.vault-journal-float #vault-reading #vault-detail,
+body.vault-journal-dock-left #vault-reading #vault-detail,
+body.vault-journal-dock-right #vault-reading #vault-detail{padding:58px 30px 64px;box-sizing:border-box}
+body.vault-journal-dock-left #vault-reading #vault-detail,
+body.vault-journal-dock-right #vault-reading #vault-detail{padding-left:24px;padding-right:24px}
+body.vault-journal-focus #vault-reading-close,
+body.vault-journal-float #vault-reading-close,
+body.vault-journal-dock-left #vault-reading-close,
+body.vault-journal-dock-right #vault-reading-close{display:none}
+body.vault-journal-focus .vault-detail-bar,
+body.vault-journal-float .vault-detail-bar,
+body.vault-journal-dock-left .vault-detail-bar,
+body.vault-journal-dock-right .vault-detail-bar{display:none}
+
+.vault-journal-hotbar-zone{position:sticky;top:0;z-index:8;flex-direction:column;align-items:stretch;transform:translateY(calc(-100% + 15px));transition:transform 140ms ease;pointer-events:none;margin-bottom:-43px}
+body.vault-journal-focus .vault-journal-hotbar-zone,
+body.vault-journal-float .vault-journal-hotbar-zone,
+body.vault-journal-dock-left .vault-journal-hotbar-zone,
+body.vault-journal-dock-right .vault-journal-hotbar-zone{display:flex}
+.vault-journal-hotbar-zone:hover,.vault-journal-hotbar-zone:focus-within,.vault-journal-hotbar-zone.pinned{transform:translateY(0)}
+.vault-journal-hotbar{display:flex;align-items:center;gap:7px;min-height:42px;padding:5px 7px;background:color-mix(in srgb,var(--bg-elev) 96%,transparent);border-bottom:1px solid var(--border);box-shadow:0 7px 20px rgba(0,0,0,.25);cursor:grab;pointer-events:auto}
+.vault-journal-identity{display:flex;align-items:baseline;gap:7px;min-width:0;flex:1 1 180px}
+.vault-journal-identity strong{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vault-journal-identity span{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);border:1px solid var(--border);border-radius:999px;padding:1px 6px}
+.vault-journal-menu-wrap,.vault-journal-layout{display:flex;align-items:center;gap:4px}
+.vault-journal-ctl{height:30px;min-width:30px;padding:0 7px;border:1px solid var(--border);border-radius:7px;background:transparent;color:var(--text-muted);font-size:12px;cursor:pointer}
+.vault-journal-ctl:hover{color:var(--text);border-color:var(--text-muted)}
+.vault-journal-ctl.active,.vault-journal-ctl.write{background:var(--accent);border-color:var(--accent);color:#fff}
+.vault-journal-ctl.wide{min-width:auto}
+.vault-journal-ctl:disabled{opacity:.35;cursor:not-allowed}
+.vault-journal-sensor{height:15px;flex:0 0 15px;border:0;padding:0;background:linear-gradient(to bottom,rgba(0,0,0,.2),transparent);cursor:pointer;pointer-events:auto}
+.vault-journal-sheet{position:absolute;top:43px;right:8px;width:min(340px,calc(100% - 16px));max-height:52vh;overflow:auto;padding:8px;background:var(--bg-elev);border:1px solid var(--border);border-top:0;border-radius:0 0 10px 10px;box-shadow:0 14px 36px rgba(0,0,0,.45);pointer-events:auto}
+.vault-journal-sheet-title{padding:3px 7px 6px;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em}
+.vault-journal-sheet-empty{padding:10px;color:var(--text-muted);font-size:12px}
+.vault-journal-sheet button{display:flex;width:100%;align-items:baseline;justify-content:space-between;gap:10px;padding:7px;border:0;border-radius:7px;background:transparent;color:var(--text);font-size:12px;text-align:left;cursor:pointer}
+.vault-journal-sheet button:hover{background:var(--bg)}
+.vault-journal-sheet button.level-2{padding-left:18px}.vault-journal-sheet button.level-3{padding-left:30px}
+.vault-journal-sheet button small{min-width:0;color:var(--text-muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+@media (prefers-reduced-motion:reduce){.vault-journal-hotbar-zone{transition:none}}
+@media (max-width:899px){
+  body.vault-journal-focus #vault-reading,body.vault-journal-float #vault-reading{border-radius:0}
+  body.vault-journal-focus #vault-reading #vault-detail,body.vault-journal-float #vault-reading #vault-detail{padding:54px 16px 48px}
+  .vault-journal-hotbar{gap:4px;flex-wrap:nowrap}.vault-journal-identity{flex-basis:80px}.vault-journal-identity span{display:none}
+  .vault-journal-menu-wrap .wide{width:30px;font-size:0}.vault-journal-menu-wrap .wide::after{content:attr(data-short);font-size:12px}
+}
+@media (max-width:599px){
+  .vault-journal-layout{display:none}.vault-journal-ctl.write{width:30px;font-size:0}.vault-journal-ctl.write::after{content:"✎";font-size:13px}
+}
+
 /* Explorer (Obsidian file tree) */
 .vtree-row{display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;cursor:pointer;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;user-select:none}
 .vtree-row:hover{background:var(--bg-elev)}
@@ -85,7 +156,7 @@
 .vault-unlock-note{font-size:11.5px;color:var(--text-muted);margin-top:10px}
 
 /* Editor modal */
-.vault-ed-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(2px);display:none;align-items:flex-start;justify-content:center;z-index:1000;padding:40px 16px;overflow-y:auto}
+.vault-ed-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(2px);display:none;align-items:flex-start;justify-content:center;z-index:1600;padding:40px 16px;overflow-y:auto}
 .vault-ed-overlay.open{display:flex}
 .vault-ed-card{width:100%;max-width:640px;background:var(--bg,#0f172a);border:1px solid var(--border);border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.45);overflow:hidden}
 .vault-ed-card.drag{outline:2px dashed var(--accent);outline-offset:-6px}
