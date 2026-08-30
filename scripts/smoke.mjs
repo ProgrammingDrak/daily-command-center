@@ -101,9 +101,9 @@ const budgetState = js(
 );
 check("GET /api/budget/state shape", budgetState === "true", budgetState);
 check("Money Changer uses Bank Units", js("document.querySelector('.bt-changer')?.textContent.includes('1 pt = 1 Bank Unit')") === "true");
-js("document.querySelector('[data-act=add-block]')?.click();const i=document.querySelector('[data-field=description]');if(i){i.value='Dinner for me and Fae';i.dispatchEvent(new Event('input',{bubbles:true}))};'x'");
-check("planned purchase auto-categorizes", js("document.querySelector('[data-role=auto-category]')?.textContent.includes('Dining')") === "true");
-js("document.querySelector('[data-act=cancel-block]')?.click();'x'");
+js("document.querySelector('[data-card=discretionary]')?.click();'x'");
+check("planned purchase editor uses the Discretionary card", js("!!document.querySelector('[data-finance-purchase-form] input[name=description]')") === "true");
+js("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));'x'");
 check("Slots is not a top-level tab", js("!document.querySelector('[data-tab=slots]')") === "true");
 check("Feeling lucky launcher renders", js("!!document.querySelector('[data-act=open-casino]')") === "true");
 js("document.querySelector('[data-act=open-casino]')?.click();'x'");

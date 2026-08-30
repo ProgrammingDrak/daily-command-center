@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
-/* global window, document, getComputedStyle, KeyboardEvent */
+/* global window, document, getComputedStyle */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -214,7 +214,7 @@ if (await login(page)) {
   check("Quick add opens above Task Manager", await page.locator("#dcc-compose").evaluate((node) => node.classList.contains("open")));
   const mediumComposer = await page.locator("#dcc-compose").evaluate((node) => {
     const box = node.getBoundingClientRect();
-    return { left: box.left, right: box.right, width: box.width, viewport: innerWidth };
+    return { left: box.left, right: box.right, width: box.width, viewport: window.innerWidth };
   });
   check("Quick add stays on-screen beside a medium Task Manager", mediumComposer.left >= 0 && mediumComposer.right <= mediumComposer.viewport, JSON.stringify(mediumComposer));
   check("Task Manager stays open with Quick add", await page.locator("#tasks-drawer").evaluate((node) => node.classList.contains("open")));
@@ -387,7 +387,7 @@ if (await login(page)) {
   const mobileSticky = await page.evaluate(async () => {
     const pill = document.getElementById("loose-ends-pill");
     pill.hidden = false;
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
     const header = document.querySelector(".header").getBoundingClientRect();
     const tabs = document.querySelector(".tabs").getBoundingClientRect();
     pill.hidden = true;

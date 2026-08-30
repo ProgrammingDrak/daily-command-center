@@ -138,10 +138,16 @@ const budgetState = await page.evaluate(() =>
 );
 check("GET /api/budget/state shape", budgetState === true, String(budgetState));
 check("Money Changer uses Bank Units", (await page.evaluate(() => document.querySelector(".bt-changer")?.textContent.includes("1 pt = 1 Bank Unit"))) === true);
-await page.evaluate(() => document.querySelector('[data-act="add-block"]')?.click());
-await page.locator('[data-field="description"]').fill("Dinner for me and Fae");
-check("planned purchase auto-categorizes", (await page.evaluate(() => document.querySelector('[data-role="auto-category"]')?.textContent.includes("Dining"))) === true);
-await page.evaluate(() => document.querySelector('[data-act="cancel-block"]')?.click());
+await page.locator('[data-card="discretionary"]').click();
+await page.locator('[data-finance-purchase-form] input[name="description"]').fill("Dinner for me and Fae");
+await page.locator('[data-finance-purchase-form] input[name="amount"]').fill("100");
+await Promise.all([
+  page.waitForResponse((response) => response.url().includes("/api/budget/blocks") && response.request().method() === "POST" && response.ok()),
+  page.locator('[data-finance-purchase-form] button[type="submit"]').click(),
+]);
+const plannedPurchaseCategory = await page.evaluate(() => fetch("/api/budget/state").then((response) => response.json()).then((state) => state.blocks.find((block) => block.item === "Dinner for me and Fae")?.category || ""));
+check("planned purchase auto-categorizes", plannedPurchaseCategory === "Dining", plannedPurchaseCategory);
+await page.keyboard.press("Escape");
 check("Slots is not a top-level tab", (await page.evaluate(() => !document.querySelector('[data-tab="slots"]'))) === true);
 check("Feeling lucky launcher renders", (await page.evaluate(() => !!document.querySelector('[data-act="open-casino"]'))) === true);
 await page.evaluate(() => document.querySelector('[data-act="open-casino"]')?.click());
