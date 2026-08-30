@@ -379,6 +379,11 @@
       });
       setTimeout(() => { const p = el.querySelector("#vault-pin"); if (p) p.focus(); }, 20);
     }
+    if (window.VaultJournalWorkspace && isJournalNode(node)) {
+      window.VaultJournalWorkspace.open(node, { editable: false });
+    } else if (window.VaultJournalWorkspace) {
+      window.VaultJournalWorkspace.deactivate();
+    }
   }
 
   async function doUnlock(pin, slugToOpen) {
@@ -422,7 +427,11 @@
   function renderDetail(node) {
     const el = document.getElementById("vault-detail");
     if (!el) return;
-    if (!node) { el.innerHTML = '<div class="vault-empty">Select a note from the explorer.</div>'; return; }
+    if (!node) {
+      el.innerHTML = '<div class="vault-empty">Select a note from the explorer.</div>';
+      if (window.VaultJournalWorkspace) window.VaultJournalWorkspace.deactivate();
+      return;
+    }
     const fm = node.frontmatter || {};
     const title = fm.title || node.slug.split("/").pop();
 
@@ -446,6 +455,17 @@
     upgradeMedia(el, node);
     wireLinkClicks(el);
     loadUnlinked(node.slug);
+    if (window.VaultJournalWorkspace && isJournalNode(node)) {
+      window.VaultJournalWorkspace.open(node);
+    } else if (window.VaultJournalWorkspace) {
+      window.VaultJournalWorkspace.deactivate();
+    }
+  }
+
+  function isJournalNode(node) {
+    if (!node) return false;
+    const fm = node.frontmatter || {};
+    return fm.type === "journal" || String(node.slug || "").startsWith("journal/");
   }
 
   // Unlinked mentions (B5): notes that NAME this one (title/alias) in their body
@@ -781,6 +801,7 @@
 
   async function loadDetail(slug) {
     if (!slug) { renderDetail(null); return; }
+    if (window.VaultJournalWorkspace) window.VaultJournalWorkspace.prepare(slug);
     // Keep the graph's selected ring (and its local-hop root) pointed at whatever
     // the reading pane is showing, however we got here — tree click, wikilink,
     // search hit, ⌘K jump. Cheap no-op when the graph has never been mounted.
@@ -859,6 +880,19 @@
       getTagColors: () => tagColors,
       getUnmapped: () => unmappedColor,
       onSaved: (slug) => afterWrite(slug),
+    });
+
+    // Journal entries reuse the same reading pane and the existing vault write
+    // path. The workspace only owns layout, references, outline, and lifecycle.
+    if (window.VaultJournalWorkspace) window.VaultJournalWorkspace.init({
+      openSlug: (slug) => openSlug(slug),
+      editNode: (node) => window.VaultEditor && window.VaultEditor.openEdit(node),
+      onClose: () => {
+        selectedSlug = null;
+        renderTree();
+        renderDetail(null);
+        if (inCanvas()) closeReadingDrawer();
+      },
     });
 
     // Timeline (B4a): clicking a dot loads that note into the reading pane below;
