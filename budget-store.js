@@ -106,21 +106,67 @@ const TANK_SHAPES = ["chest", "gift", "star", "heart", "castle", "coral", "plant
 const DEFAULT_NEC_SHAPES = ["castle", "coral", "plant", "rocks", "shell"];
 
 function normalizeNecessities(list) {
-  if (!Array.isArray(list)) return DEFAULT_NECESSITIES.map((n, i) => ({ ...n, shape: DEFAULT_NEC_SHAPES[i % DEFAULT_NEC_SHAPES.length] }));
+  const source = Array.isArray(list) ? list : DEFAULT_NECESSITIES;
+  const out = [];
+  for (const raw of source) {
+    if (!raw || typeof raw !== "object") continue;
+    const name = String(raw.name || "").trim().slice(0, 80);
+    if (!name) continue;
+    let minCents = clampInt(raw.min_cents ?? raw.minCents ?? raw.amount_cents ?? raw.amountCents ?? raw.amount, 0, MAX_BLOCK_CENTS);
+    let maxCents = clampInt(raw.max_cents ?? raw.maxCents ?? raw.amount_cents ?? raw.amountCents ?? raw.amount, 0, MAX_BLOCK_CENTS);
+    if (maxCents < minCents) [minCents, maxCents] = [maxCents, minCents];
+    const variable = raw.variable === true || raw.kind === "variable";
+    const amountCents = variable
+      ? Math.round((minCents + maxCents) / 2)
+      : clampInt(raw.amount_cents ?? raw.amountCents ?? raw.amount, 0, MAX_BLOCK_CENTS);
+    out.push({
+      id: String(raw.id || "").trim() || "nec-" + (out.length + 1),
+      name,
+      amount_cents: amountCents,
+      variable,
+      min_cents: variable ? minCents : amountCents,
+      max_cents: variable ? maxCents : amountCents,
+      color: isHexColor(raw.color) ? raw.color.trim() : BLOCK_PALETTE[out.length % BLOCK_PALETTE.length],
+      shape: TANK_SHAPES.includes(raw.shape) ? raw.shape : DEFAULT_NEC_SHAPES[out.length % DEFAULT_NEC_SHAPES.length],
+    });
+  }
+  return out;
+}
+
+function normalizeNamedAmounts(list, prefix) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const name = String(raw.name || raw.source || "").trim().slice(0, 80);
+    if (!name) continue;
+    out.push({
+      id: String(raw.id || "").trim() || prefix + "-" + (out.length + 1),
+      name,
+      amount_cents: clampInt(raw.amount_cents ?? raw.amountCents ?? raw.amount, 0, MAX_BLOCK_CENTS),
+    });
+  }
+  return out;
+}
+
+function normalizeDiscretionaryCategories(list) {
+  if (!Array.isArray(list)) return [];
   const out = [];
   for (const raw of list) {
     if (!raw || typeof raw !== "object") continue;
     const name = String(raw.name || "").trim().slice(0, 80);
     if (!name) continue;
     out.push({
-      id: String(raw.id || "").trim() || "nec-" + (out.length + 1),
+      id: String(raw.id || "").trim() || "category-" + (out.length + 1),
       name,
-      amount_cents: clampInt(raw.amount_cents ?? raw.amountCents ?? raw.amount, 0, MAX_BLOCK_CENTS),
-      color: isHexColor(raw.color) ? raw.color.trim() : BLOCK_PALETTE[out.length % BLOCK_PALETTE.length],
-      shape: TANK_SHAPES.includes(raw.shape) ? raw.shape : DEFAULT_NEC_SHAPES[out.length % DEFAULT_NEC_SHAPES.length],
+      point_threshold: clampInt(raw.point_threshold ?? raw.pointThreshold ?? raw.points, 1, 1000000),
     });
   }
   return out;
+}
+
+function namedAmountsTotalCents(list) {
+  return (list || []).reduce((sum, row) => sum + (row.amount_cents || 0), 0);
 }
 
 function normalizeCurrentPeriod(raw) {
@@ -141,9 +187,16 @@ function normalizeBudgetTankSettings(raw) {
   const capacitySource = ["last_income", "prior_period_banked", "fixed"].includes(src.capacity_source)
     ? src.capacity_source
     : "last_income";
+  const legacyIncomeCents = clampInt(src.income_cents ?? 310000, 0, MAX_BLOCK_CENTS);
+  const incomeSources = Array.isArray(src.income_sources)
+    ? normalizeNamedAmounts(src.income_sources, "income")
+    : (legacyIncomeCents > 0 ? [{ id: "income-1", name: "Income", amount_cents: legacyIncomeCents }] : []);
   return {
-    income_cents: clampInt(src.income_cents ?? 310000, 0, MAX_BLOCK_CENTS),
+    income_sources: incomeSources,
+    income_cents: Array.isArray(src.income_sources) ? namedAmountsTotalCents(incomeSources) : legacyIncomeCents,
     necessities: normalizeNecessities(src.necessities),
+    savings: normalizeNamedAmounts(src.savings, "savings"),
+    discretionary_categories: normalizeDiscretionaryCategories(src.discretionary_categories),
     period_type: periodType,
     capacity_source: capacitySource,
     fixed_capacity_cents: clampInt(src.fixed_capacity_cents ?? 0, 0, MAX_BLOCK_CENTS),
@@ -223,8 +276,10 @@ function tankDrivenGoalCents(accountSettings) {
   if (bt.capacity_source === "last_income") gross = Math.round(Number(bt.income_cents));
   else if (bt.capacity_source === "fixed") gross = Math.round(Number(bt.fixed_capacity_cents));
   else gross = bt.current_period && Math.round(Number(bt.current_period.capacity_cents));
-  const necessities = (Array.isArray(bt.necessities) ? bt.necessities : []).reduce((s, n) => s + (Number(n && n.amount_cents) || 0), 0);
-  const cap = Math.max(0, (Number.isFinite(gross) ? gross : 0) - necessities);
+  const necessities = Array.isArray(bt.necessities) ? normalizeNecessities(bt.necessities) : [];
+  const savings = Array.isArray(bt.savings) ? normalizeNamedAmounts(bt.savings, "savings") : [];
+  const deductions = necessitiesTotalCents({ necessities }) + savingsTotalCents({ savings });
+  const cap = Math.max(0, (Number.isFinite(gross) ? gross : 0) - deductions);
   return cap > 0 ? cap : 0;
 }
 
@@ -247,10 +302,12 @@ function resolveTankWaterline(settings, usage) {
         : resolveCapacity(settings, usage))
     : resolveCapacity(settings, usage);
   const necessitiesCents = necessitiesTotalCents(settings);
-  const capacityCents = Math.max(0, grossCents - necessitiesCents); // discretionary budget
+  const savingsCents = savingsTotalCents(settings);
+  const capacityCents = Math.max(0, grossCents - necessitiesCents - savingsCents);
   return {
     grossCents,
     necessitiesCents,
+    savingsCents,
     capacityCents,
     waterlineCents: Math.min(usage.periodBanked, capacityCents),
   };
@@ -258,6 +315,10 @@ function resolveTankWaterline(settings, usage) {
 
 function necessitiesTotalCents(settings) {
   return (settings.necessities || []).reduce((sum, n) => sum + (n.amount_cents || 0), 0);
+}
+
+function savingsTotalCents(settings) {
+  return namedAmountsTotalCents(settings.savings);
 }
 
 async function saveBudgetTankSettings(workspaceId, budgetTank, exec = pool) {
@@ -799,7 +860,7 @@ function sweepPreview(settings, usage, blocks) {
   // actually reaches is discretionary (gross - necessities). Cap the closing
   // waterline at discretionary so the sweep matches the live waterline and can't
   // invest phantom money above the last funded block (matches resolveTankWaterline).
-  const closingCapacity = Math.max(0, (closing.capacity_cents || 0) - necessitiesTotalCents(settings));
+  const closingCapacity = Math.max(0, (closing.capacity_cents || 0) - necessitiesTotalCents(settings) - savingsTotalCents(settings));
   const closingWaterline = Math.min(usage.priorPeriodBanked, closingCapacity);
   const plannedCents = blocks.reduce((sum, block) => sum + (block.value_cents || 0), 0);
   // Overflow exists only after every planned purchase is covered. Partial
@@ -969,10 +1030,18 @@ async function setInvestmentTaskBlock(workspaceId, periodKey, taskBlockId, exec 
 async function updateBudgetConfig(workspaceId, userId, body = {}) {
   const account = await upsertSlotAccountRow(pool, workspaceId, userId);
   const current = normalizeBudgetTankSettings(account.settings && account.settings.budget_tank);
+  const nextIncomeSources = body.income_sources != null || body.incomeSources != null
+    ? (body.income_sources ?? body.incomeSources)
+    : (body.income_cents != null || body.incomeCents != null
+        ? [{ ...(current.income_sources[0] || { id: "income-1", name: "Income" }), amount_cents: body.income_cents ?? body.incomeCents }]
+        : current.income_sources);
   const next = normalizeBudgetTankSettings({
     ...current,
-    ...(body.income_cents != null || body.incomeCents != null ? { income_cents: body.income_cents ?? body.incomeCents } : {}),
+    income_sources: nextIncomeSources,
     ...(body.necessities != null ? { necessities: body.necessities } : {}),
+    ...(body.savings != null ? { savings: body.savings } : {}),
+    ...(body.discretionary_categories != null || body.discretionaryCategories != null
+      ? { discretionary_categories: body.discretionary_categories ?? body.discretionaryCategories } : {}),
     ...(body.period_type != null || body.periodType != null ? { period_type: body.period_type ?? body.periodType } : {}),
     ...(body.capacity_source != null || body.capacitySource != null ? { capacity_source: body.capacity_source ?? body.capacitySource } : {}),
     ...(body.fixed_capacity_cents != null || body.fixedCapacityCents != null ? { fixed_capacity_cents: body.fixed_capacity_cents ?? body.fixedCapacityCents } : {}),
@@ -999,6 +1068,44 @@ async function getInvestments(workspaceId, exec = pool) {
     [workspaceId]
   );
   return { total_cents: (all && all.total) || total, entries: rows };
+}
+
+async function getCompletedTaskCredits(workspaceId, periodType = "month", exec = pool) {
+  const p = PERIOD_SQL[periodType === "week" ? "week" : "month"];
+  const { rows } = await exec.query(
+    `WITH completions AS (
+       SELECT description AS title,
+              delta::int AS points,
+              COALESCE(
+                NULLIF(metadata->'inputs'->>'completed_at', '')::timestamptz,
+                NULLIF(metadata->>'completed_at', '')::timestamptz,
+                created_at
+              ) AS completion_time
+         FROM slot_point_ledger
+        WHERE workspace_id = $1
+          AND source_type = 'task_complete'
+          AND delta > 0
+     )
+     SELECT title,
+            points,
+            completion_time::text AS completed_at,
+            SUM(points) OVER ()::int AS total_points
+       FROM completions
+      WHERE completion_time >= ${p.trunc}
+      ORDER BY completion_time DESC
+      LIMIT 200`,
+    [workspaceId]
+  );
+  const tasks = rows.map((row) => ({
+    title: row.title || "Completed task",
+    points: Number(row.points) || 0,
+    completed_at: row.completed_at || null,
+  }));
+  Object.defineProperty(tasks, "totalPoints", {
+    value: rows.length ? (Number(rows[0].total_points) || tasks.reduce((sum, task) => sum + task.points, 0)) : 0,
+    enumerable: false,
+  });
+  return tasks;
 }
 
 function resolveCapacity(settings, usage) {
@@ -1030,7 +1137,7 @@ async function getBudgetState(workspaceId, userId) {
     rolloverDue = true;
   }
 
-  const { grossCents, necessitiesCents, capacityCents, waterlineCents } = resolveTankWaterline(settings, usage);
+  const { grossCents, necessitiesCents, savingsCents, capacityCents, waterlineCents } = resolveTankWaterline(settings, usage);
   const bankUnit = quoteBankUnitForTank({
     ...(account.settings || {}),
     budget_tank: settings,
@@ -1043,7 +1150,13 @@ async function getBudgetState(workspaceId, userId) {
   const allocatedCents = blocks.reduce((sum, b) => sum + b.value_cents, 0);
   const overflowCents = Math.max(0, Math.min(waterlineCents - allocatedCents, funding.total || 0));
   const categories = buildCategories(blocks, waterlineCents);
-  const investments = await getInvestments(workspaceId);
+  const [investments, completedTasks] = await Promise.all([
+    getInvestments(workspaceId),
+    getCompletedTaskCredits(workspaceId, settings.period_type),
+  ]);
+  const completedTaskPoints = Number.isFinite(completedTasks.totalPoints)
+    ? completedTasks.totalPoints
+    : completedTasks.reduce((sum, task) => sum + task.points, 0);
 
   return {
     settings,
@@ -1055,14 +1168,21 @@ async function getBudgetState(workspaceId, userId) {
       prior_period_banked_cents: usage.priorPeriodBanked,
       income_cents: grossCents,                 // whole tank = last period's income
       necessities_total_cents: necessitiesCents, // submerged covered base
+      absolute_expenses_cents: necessitiesCents,
+      savings_total_cents: savingsCents,
       capacity_cents: capacityCents,             // discretionary budget = income - necessities
+      discretionary_cents: capacityCents,
       waterline_cents: waterlineCents,
+      reserve_unlocked_cents: waterlineCents,
+      completed_task_points: completedTaskPoints,
+      completed_task_value_cents: Math.min(capacityCents, completedTaskPoints * bankUnit.cents),
       allocated_cents: allocatedCents,
       unallocated_cents: Math.max(0, capacityCents - allocatedCents),
       overflow_cents: overflowCents,
     },
     funding,
     investments,
+    completed_tasks: completedTasks,
     points: account.point_balance || 0,
     rollover_due: rolloverDue,
     rollover_preview: rolloverDue ? sweepPreview(settings, usage, rows) : null,
@@ -1089,6 +1209,7 @@ module.exports = {
   isFinalPeriodWeek,
   normalizeBudgetTankSettings,
   necessitiesTotalCents,
+  savingsTotalCents,
   tankDrivenGoalCents,
   resolveTankWaterline,
   getTankUsage,
@@ -1106,5 +1227,6 @@ module.exports = {
   reorderTank,
   updateBudgetConfig,
   getInvestments,
+  getCompletedTaskCredits,
   getBudgetState,
 };

@@ -43,7 +43,6 @@
 
   const NAV_ITEMS = [
     { key:"schedule",   label:"Today", icon:"🗓", action(){ activateTab("schedule"); } },
-    { key:"glymphatic", label:"Brief", icon:"📋", action(){ activateTab("glymphatic"); }, badge:"glymphatic-count" },
     { key:"__tasks",    label:"Tasks", icon:"☑",        action(){ closeMoreSheet(); toggleTasksDrawer(); }, center:true },
     { key:"budget",     label:"Budget", icon:"💰", action(){ activateTab("budget"); } },
     { key:"__more",     label:"More",  icon:"⋯",        action(){ toggleMoreSheet(); } }
@@ -74,8 +73,7 @@
   // Overflow content tabs (not surfaced directly in the bottom bar).
   const MORE_TABS = [
     { label:"Delegated", tab:"delegated", badge:"delegated-count" },
-    { label:"Pet Home",  tab:"pet-home", badge:"pet-home-badge" },
-    { label:"Runway",    tab:"runway" }
+    { label:"Pet Home",  tab:"pet-home", badge:"pet-home-badge" }
   ];
 
   // Owner actions: each row triggers the existing header element's own handler,
@@ -160,7 +158,7 @@
   function syncActiveNav(){
     const active = document.querySelector(".tab.active");
     const key = active ? active.dataset.tab : null;
-    const overflow = ["delegated", "pet-home", "runway"];
+    const overflow = ["delegated", "pet-home"];
     document.querySelectorAll("#mobile-tabbar .mtab").forEach(b => {
       const navKey = b.dataset.navKey;
       let on = false;

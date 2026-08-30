@@ -1791,13 +1791,6 @@
     var tasks = current.suggested_tasks || [];
     var plan = gbPlanTasks(tasks, ui);
     var nextTask = plan.find(function(item){ return !gbIsPushed(item.task, ui); });
-    var badge = document.getElementById("glymphatic-count");
-    if(badge){
-      var count = plan.filter(function(item){ return !gbIsPushed(item.task, ui); }).length;
-      badge.textContent = count;
-      badge.style.display = count ? "" : "none";
-    }
-
     var pages = gbPages(current);
     if(pages){
       if(!gbActivePage || !pages.some(function(p){ return p.id===gbActivePage; }))gbActivePage = pages[0].id;
@@ -1923,8 +1916,7 @@
   });
 
   setInterval(function(){
-    var tab = document.getElementById("tab-glymphatic");
-    if(!tab || !tab.classList.contains("active"))return;
+    if(!document.getElementById("glymphatic-brief-root"))return;
     // Don't clobber the journal (or lose the cursor) while Drake is typing in it.
     var ae = document.activeElement;
     if(ae && ae.matches && ae.matches("[data-gb-journal]"))return;
@@ -1932,6 +1924,30 @@
   }, 60000);
 
   var DCC = (window.DCC = window.DCC || {});
+  var gbBriefOverlay = null;
+
+  function gbOpenBrief(anchor){
+    if(gbBriefOverlay && gbBriefOverlay.el && gbBriefOverlay.el.isConnected){
+      gbBriefOverlay.el.focus({preventScroll:true});
+      return gbBriefOverlay;
+    }
+    if(!DCC.overlay || typeof DCC.overlay.open !== "function")return null;
+    var root = document.createElement("div");
+    root.id = "glymphatic-brief-root";
+    root.className = "gb-reader-root";
+    gbBriefOverlay = DCC.overlay.open({
+      kind: "modal",
+      title: "Daily Brief",
+      body: root,
+      anchor: anchor || document.activeElement,
+      onClose: function(){ gbBriefOverlay = null; }
+    });
+    gbBriefOverlay.overlay.classList.add("dcc-brief-overlay");
+    gbBriefOverlay.el.classList.add("dcc-brief-reader");
+    buildGlymphaticBrief();
+    return gbBriefOverlay;
+  }
+
   DCC.DayReview = {
     load: gbLoadLooseEndsReview,
     context: gbReviewContext,
@@ -1947,5 +1963,6 @@
     pushFollowup: gbPushDidNext,
     dismissFollowup: gbDismissDidFollow
   };
+  DCC.brief = { open: gbOpenBrief };
   window.buildGlymphaticBrief = buildGlymphaticBrief;
 })();

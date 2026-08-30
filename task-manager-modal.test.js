@@ -21,9 +21,9 @@ test("task shortcut rail opens modal managers instead of a persistent slide-out 
   assert.match(source, /setTimeout\(focusInsideTasks, 0\)/);
 });
 
-test("repeat shortcut bypasses the general task manager and opens its dedicated modal", () => {
-  assert.match(source, /sectionId === "tm-repeat-responsibilities-section"/);
-  assert.match(source, /window\.openRepeatResponsibilityManager\(\)/);
+test("repeat opens inside the shared Task Manager workspace", () => {
+  assert.match(source, /openTasksToRepeatResponsibilities\(\)\{ openTasksToSection\("tm-repeat-responsibilities-section"/);
+  assert.doesNotMatch(source, /window\.openRepeatResponsibilityManager\(\)/);
   assert.match(source, /document\.querySelectorAll\("#tasks-drawer \.tm-section"\)/);
   assert.match(html, /data-sidecar-label="Repeat responsibilities"/);
 });

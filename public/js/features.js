@@ -185,6 +185,12 @@ function openTrivialPicker(scheduleId, anchorEl){
 
 // ======== TASK DETAIL MODAL (Notes + Subtasks + Side Projects + Action Items) ========
 let _addModalTaskId = null;
+let _addModalEditing = false;
+let _addModalDraftTitle = '';
+let _addModalDraftTags = [];
+let _addModalDraftRecordingReview = false;
+let _addModalOpener = null;
+const _addModalControlState = new WeakMap();
 // C4: the open row's BLOCK id, whenever the ev carries one. That is MOST rows, not just
 // carryovers -- TaskModel.fromBlock stamps `_blockId` on every block-backed ev, so
 // taskAnchorById returns it for a scheduled[] hit too. (An earlier comment here claimed
@@ -196,6 +202,71 @@ let _addModalTaskId = null;
 // getByType/cacheGet search below misses it and the write is silently dropped. With the
 // row id there is nothing to search for. `_amWriteRowProps` is the one helper that uses it.
 let _addModalBlockId = null;
+
+function _setAddModalPageInert(overlay, on) {
+  Array.from(document.body.children).forEach(function(node) {
+    if (node === overlay || node.tagName === 'SCRIPT' || node.classList.contains('toast-container')) return;
+    if (on) {
+      if (node.dataset.amWasInert === undefined) node.dataset.amWasInert = node.inert ? '1' : '0';
+      node.inert = true;
+    } else if (node.dataset.amWasInert !== undefined) {
+      node.inert = node.dataset.amWasInert === '1';
+      delete node.dataset.amWasInert;
+    }
+  });
+}
+
+function _setAddModalControlsEditable(modal, editing) {
+  var body = modal && modal.querySelector('.add-modal-body');
+  if (!body) return;
+  body.querySelectorAll('input, textarea, select, button, [contenteditable]').forEach(function(control) {
+    var saved = _addModalControlState.get(control);
+    if (!saved) {
+      saved = {
+        disabled: !!control.disabled,
+        readOnly: !!control.readOnly,
+        contenteditable: control.getAttribute('contenteditable'),
+        tabindex: control.getAttribute('tabindex')
+      };
+      _addModalControlState.set(control, saved);
+    }
+    if (editing) {
+      if ('disabled' in control) control.disabled = saved.disabled;
+      if ('readOnly' in control) control.readOnly = saved.readOnly;
+      if (saved.contenteditable === null) control.removeAttribute('contenteditable');
+      else control.setAttribute('contenteditable', saved.contenteditable);
+      if (saved.tabindex === null) control.removeAttribute('tabindex');
+      else control.setAttribute('tabindex', saved.tabindex);
+      control.removeAttribute('aria-disabled');
+    } else {
+      if ('disabled' in control) control.disabled = true;
+      if ('readOnly' in control) control.readOnly = true;
+      if (control.hasAttribute('contenteditable')) control.setAttribute('contenteditable', 'false');
+      control.setAttribute('tabindex', '-1');
+      control.setAttribute('aria-disabled', 'true');
+    }
+  });
+}
+
+function _handleAddModalKeydown(event) {
+  var overlay = document.getElementById('add-modal-overlay');
+  if (!overlay || !overlay.classList.contains('open')) return;
+  if (event.key === 'Escape') {
+    if (event.target && event.target.classList && event.target.classList.contains('am-title-edit')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeAddModal();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  var modal = overlay.querySelector('.add-modal');
+  var focusable = Array.from(modal.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+    .filter(function(node) { return !node.hidden && node.getClientRects().length; });
+  if (!focusable.length) { event.preventDefault(); modal.focus(); return; }
+  var first = focusable[0], last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+}
 
 // Merge `patch` into the open row's properties, addressed by ROW id (C4).
 //
@@ -322,6 +393,13 @@ function _amBuildDetails(ev){
 // Those two failures together are why the row's open-space click was disabled on
 // carryovers: it looked like a working affordance and saved to the wrong place.
 function openAddModal(taskId, taskTitle) {
+  var taskOverlay = document.getElementById('add-modal-overlay');
+  if (!taskOverlay.classList.contains('open')) {
+    var activeOpener = document.activeElement;
+    _addModalOpener = activeOpener && activeOpener !== document.body && activeOpener !== document.documentElement
+      ? activeOpener
+      : null;
+  }
   _addModalTaskId = taskId;
   var anchor = (typeof taskAnchorById === 'function') ? taskAnchorById(taskId) : null;
   var taskEntry = anchor ? anchor.ev
@@ -330,6 +408,9 @@ function openAddModal(taskId, taskTitle) {
   // local_id, and a carryover row is in _rangeCache only — so the search misses and the
   // update never happens. _addModalBlockId short-circuits it.
   _addModalBlockId = (anchor && anchor.blockId) || null;
+  _addModalDraftTitle = (taskEntry && taskEntry.title) || taskTitle || '';
+  _addModalDraftTags = taskEntry && Array.isArray(taskEntry.tags) ? taskEntry.tags.slice() : [];
+  _addModalDraftRecordingReview = !!(taskEntry && taskEntry.recordingReview);
   _amSetupTitle(taskId, taskEntry, taskTitle);
 
   // Read-only details (priority / duration / time / source / link)
@@ -343,10 +424,9 @@ function openAddModal(taskId, taskTitle) {
   // Initialize tag picker
   var tagContainer = document.getElementById('am-tag-picker');
   if (tagContainer && typeof createTagPicker === 'function') {
-    var currentTags = (taskEntry && taskEntry.tags) ? taskEntry.tags : [];
+    var currentTags = _addModalDraftTags.slice();
     createTagPicker(tagContainer, currentTags, function(newIds) {
-      if (taskEntry) taskEntry.tags = newIds;
-      _persistTaskTags(taskId, newIds);
+      _addModalDraftTags = newIds.slice();
     });
   }
 
@@ -362,8 +442,7 @@ function openAddModal(taskId, taskTitle) {
         + '<span>&#128252; Recording Review <span style="opacity:.6;font-weight:400">— transcript + dashboard after this meeting</span></span></label>';
       var rrChk = document.getElementById('am-rr-check');
       if (rrChk) rrChk.addEventListener('change', function () {
-        if (taskEntry) taskEntry.recordingReview = rrChk.checked;
-        _persistMeetingFlag(taskId, 'recording_review', rrChk.checked);
+        _addModalDraftRecordingReview = rrChk.checked;
       });
     } else {
       rrEl.style.display = 'none';
@@ -397,9 +476,81 @@ function openAddModal(taskId, taskTitle) {
   document.getElementById('am-item-input').value = '';
   document.getElementById('am-trivial-picker').style.display = 'none';
 
-  document.getElementById('add-modal-overlay').classList.add('open');
+  taskOverlay.classList.add('open');
+  taskOverlay.setAttribute('aria-hidden', 'false');
+  _setAddModalPageInert(taskOverlay, true);
+  selectAddModalTab('overview');
   if(window.DCCWorkSessions&&typeof window.DCCWorkSessions.renderHistory==='function')window.DCCWorkSessions.renderHistory(_addModalBlockId);
-  setTimeout(function() { if(window._amBlockEditor) window._amBlockEditor.focus(); }, 80);
+  setAddModalMode(false);
+  setTimeout(function() { document.getElementById('add-modal-close')?.focus(); }, 80);
+}
+
+function selectAddModalTab(tabId) {
+  var modal = document.querySelector('#add-modal-overlay .add-modal');
+  if (!modal) return;
+  modal.querySelectorAll('[data-am-tab]').forEach(function(btn) {
+    var active = btn.dataset.amTab === tabId;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    btn.tabIndex = active ? 0 : -1;
+  });
+  modal.querySelectorAll('[data-am-panel]').forEach(function(panel) {
+    panel.hidden = panel.dataset.amPanel !== tabId;
+  });
+}
+
+function setAddModalMode(editing) {
+  _addModalEditing = !!editing;
+  var modal = document.querySelector('#add-modal-overlay .add-modal');
+  if (!modal) return;
+  modal.classList.toggle('dcc-task-readonly', !_addModalEditing);
+  modal.dataset.mode = _addModalEditing ? 'edit' : 'read';
+  _setAddModalControlsEditable(modal, _addModalEditing);
+  var titleControl = document.getElementById('add-modal-title');
+  if (titleControl && titleControl.classList.contains('am-title-editable')) {
+    titleControl.tabIndex = _addModalEditing ? 0 : -1;
+    titleControl.setAttribute('aria-disabled', _addModalEditing ? 'false' : 'true');
+  }
+  var edit = document.getElementById('add-modal-edit');
+  var save = document.getElementById('add-modal-save');
+  var cancel = document.getElementById('add-modal-cancel-edit');
+  var close = document.getElementById('add-modal-done');
+  if (edit) edit.hidden = _addModalEditing;
+  if (save) save.hidden = !_addModalEditing;
+  if (cancel) cancel.hidden = !_addModalEditing;
+  if (close) close.hidden = _addModalEditing;
+}
+
+function saveAddModalEdits() {
+  if (!_addModalTaskId || !_addModalEditing) return;
+  var anchor = typeof taskAnchorById === 'function' ? taskAnchorById(_addModalTaskId) : null;
+  var taskEntry = anchor ? anchor.ev : taskForRepeatResponsibility(_addModalTaskId, _addModalDraftTitle);
+  var oldTitle = taskEntry && taskEntry.title ? taskEntry.title : '';
+  if (_addModalDraftTitle && _addModalDraftTitle !== oldTitle) {
+    if (taskEntry) taskEntry.title = _addModalDraftTitle;
+    _persistTaskTitle(_addModalTaskId, _addModalDraftTitle);
+    if (typeof isBountyTask === 'function' && isBountyTask(_addModalTaskId) && typeof saveBountyState === 'function') saveBountyState();
+  }
+  if (taskEntry) {
+    taskEntry.tags = _addModalDraftTags.slice();
+    taskEntry.recordingReview = _addModalDraftRecordingReview;
+  }
+  _persistTaskTags(_addModalTaskId, _addModalDraftTags.slice());
+  var recordingReview = document.getElementById('am-recording-review');
+  if (recordingReview && recordingReview.style.display !== 'none') {
+    _persistMeetingFlag(_addModalTaskId, 'recording_review', _addModalDraftRecordingReview);
+  }
+  persistAddModalEdits();
+  setAddModalMode(false);
+  if (typeof showToast === 'function') showToast('Task details saved', 'success');
+  if (typeof render === 'function') render();
+}
+
+function cancelAddModalEdits() {
+  if (!_addModalTaskId) return;
+  var taskId = _addModalTaskId;
+  var fallbackTitle = taskForRepeatResponsibility(taskId, _addModalDraftTitle).title;
+  openAddModal(taskId, fallbackTitle);
 }
 
 // Repaint only the read-only metadata while this modal is open. Rebuilding the
@@ -438,8 +589,11 @@ function _amSetupTitle(taskId, taskEntry, fallbackTitle) {
   var editable = currentTitle && !(taskEntry && typeof isMeeting === 'function' && isMeeting(taskEntry));
   if (!editable) return;
   h3.classList.add('am-title-editable');
-  h3.setAttribute('title', 'Click to rename');
-  h3.addEventListener('click', function() {
+  h3.setAttribute('role', 'button');
+  h3.setAttribute('aria-label', 'Rename task title');
+  h3.setAttribute('title', 'Rename task title');
+  function beginRename() {
+    if (!_addModalEditing) return;
     var inp = document.createElement('input');
     inp.type = 'text';
     inp.className = 'am-title-edit';
@@ -452,12 +606,7 @@ function _amSetupTitle(taskId, taskEntry, fallbackTitle) {
       var newTitle = inp.value.trim();
       if (newTitle && newTitle !== currentTitle) {
         currentTitle = newTitle;
-        var task = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
-        if (task) task.title = newTitle;
-        if (taskEntry && taskEntry !== task) taskEntry.title = newTitle;
-        _persistTaskTitle(taskId, newTitle);
-        if (typeof isBountyTask === 'function' && isBountyTask(taskId) && typeof saveBountyState === 'function') saveBountyState();
-        if (typeof showToast === 'function') showToast('Title updated', 'success');
+        _addModalDraftTitle = newTitle;
         h3.textContent = newTitle;
       }
       inp.replaceWith(h3);
@@ -467,13 +616,25 @@ function _amSetupTitle(taskId, taskEntry, fallbackTitle) {
       if (e.key === 'Escape') { saved = true; inp.replaceWith(h3); }
     });
     inp.addEventListener('blur', save);
+  }
+  h3.addEventListener('click', beginRename);
+  h3.addEventListener('keydown', function(e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    beginRename();
   });
 }
 
 function closeAddModal() {
-  persistAddModalEdits();
-  document.getElementById('add-modal-overlay').classList.remove('open');
+  var overlay = document.getElementById('add-modal-overlay');
+  var returnFocus = _addModalOpener;
+  var returnTaskId = _addModalTaskId;
+  overlay.classList.remove('open');
+  overlay.setAttribute('aria-hidden', 'true');
+  _setAddModalPageInert(overlay, false);
+  setAddModalMode(false);
   _addModalTaskId = null;
+  _addModalOpener = null;
   // C4: clear the row id with the task id. Leaving it set would point the NEXT modal's
   // tag/flag writes at the previous row — a cross-task write, and the kind of stale
   // module state that only shows up on the second open.
@@ -481,6 +642,18 @@ function closeAddModal() {
   // Flush any deferred renders now that modal is closed
   _flushDeferredRender();
   if (typeof render === 'function') render();
+  requestAnimationFrame(function() {
+    if (returnFocus && returnFocus !== document.body && returnFocus !== document.documentElement && returnFocus.isConnected && typeof returnFocus.focus === 'function') {
+      returnFocus.focus({ preventScroll: true });
+      return;
+    }
+    var escaped = window.CSS && typeof window.CSS.escape === 'function' ? window.CSS.escape(String(returnTaskId || '')) : String(returnTaskId || '').replace(/"/g, '\\"');
+    var row = document.querySelector('.it-list-item[data-id="' + escaped + '"], .card[data-id="' + escaped + '"]');
+    var fallback = row && (row.querySelector('button:not([disabled]), [href], input:not([disabled])') || row);
+    if (fallback === row && !row.hasAttribute('tabindex')) row.setAttribute('tabindex', '-1');
+    fallback = fallback || document.querySelector('.tab.active');
+    if (fallback && typeof fallback.focus === 'function') fallback.focus({ preventScroll: true });
+  });
 }
 
 function renderModalItems(taskId) {
@@ -614,9 +787,25 @@ function renderModalItems(taskId) {
 
 // Wire up modal events after DOM loads
 document.addEventListener('DOMContentLoaded', function() {
+  document.addEventListener('keydown', _handleAddModalKeydown, true);
   // Close
   document.getElementById('add-modal-close').addEventListener('click', closeAddModal);
   document.getElementById('add-modal-done').addEventListener('click', closeAddModal);
+  document.getElementById('add-modal-edit').addEventListener('click', function() { setAddModalMode(true); });
+  document.getElementById('add-modal-save').addEventListener('click', saveAddModalEdits);
+  document.getElementById('add-modal-cancel-edit').addEventListener('click', cancelAddModalEdits);
+  document.querySelectorAll('[data-am-tab]').forEach(function(btn) {
+    btn.addEventListener('click', function() { selectAddModalTab(btn.dataset.amTab); });
+    btn.addEventListener('keydown', function(e) {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      var tabs = Array.from(document.querySelectorAll('[data-am-tab]'));
+      var current = tabs.indexOf(btn);
+      var next = e.key === 'ArrowRight' ? (current + 1) % tabs.length : (current - 1 + tabs.length) % tabs.length;
+      e.preventDefault();
+      selectAddModalTab(tabs[next].dataset.amTab);
+      tabs[next].focus();
+    });
+  });
   var repeatBtn = document.getElementById('add-modal-repeat');
   if (repeatBtn) repeatBtn.addEventListener('click', function(e) {
     e.preventDefault();
@@ -643,9 +832,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (!commuteInput) return;
     commuteInput.addEventListener('input', updateAddModalCommuteHint);
     commuteInput.addEventListener('change', function() {
-      persistAddModalCommute();
       updateAddModalCommuteHint();
-      if (typeof render === 'function') render();
     });
   });
 
@@ -939,7 +1126,7 @@ function renderStickyNotesList(){
     _snLastSig.delete(id);
   }
 
-  if(!notes.length){list.innerHTML='<div class="sn-empty">No notes yet. Hit "+ New Note" to add one.</div>';return;}
+  if(!notes.length){list.innerHTML='<div class="sn-empty">No quick notes yet.</div>';renderTaskNotesWorkspace();return;}
 
   const now=Date.now();
   list.innerHTML="";
@@ -982,10 +1169,45 @@ function renderStickyNotesList(){
 
     card.querySelector(".sn-del-btn").addEventListener("click",()=>deleteStickyNote(n.id));
   });
+  renderTaskNotesWorkspace();
 }
 
+function renderTaskNotesWorkspace(){
+  const list=document.getElementById("sn-task-list");
+  if(!list||typeof loadNotes!=="function")return;
+  const notes=loadNotes()||{};
+  const entries=Object.entries(notes).filter(([,note])=>{
+    const text=typeof note==="string"?note:(note&&(note.text||note.html))||"";
+    return String(text).replace(/<[^>]+>/g,"").trim();
+  });
+  if(!entries.length){list.innerHTML='<div class="sn-empty">No task notes yet.</div>';return;}
+  list.innerHTML=entries.map(([taskId,note])=>{
+    const task=taskForRepeatResponsibility(taskId,"Task");
+    const title=(task&&task.title)||"Task";
+    const text=(typeof note==="string"?note:(note.text||note.html||""))
+      .replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim();
+    return '<article class="sn-task-card" data-task-note-id="'+String(taskId).replace(/"/g,"&quot;")+'">'+
+      '<strong>'+String(title).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"})[c])+'</strong>'+
+      '<p>'+String(text.slice(0,180)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"})[c])+'</p>'+
+      '<button type="button">Open task note</button></article>';
+  }).join("");
+  list.querySelectorAll("[data-task-note-id] button").forEach(button=>button.addEventListener("click",()=>{
+    const card=button.closest("[data-task-note-id]");
+    const id=card.dataset.taskNoteId;
+    const task=taskForRepeatResponsibility(id,"Task");
+    closeStickyNotes();
+    setTimeout(()=>{
+      openAddModal(id,(task&&task.title)||"Task");
+      selectAddModalTab("notes");
+    },0);
+  }));
+}
+
+let _snReturnFocus=null;
 function openStickyNotes(){
-  document.getElementById("sn-overlay").classList.add("open");
+  const overlay=document.getElementById("sn-overlay");
+  if(!overlay.classList.contains("open"))_snReturnFocus=document.activeElement;
+  overlay.classList.add("open");
   // Reset the create-task bar so it doesn't carry stale state from a prior session.
   const taskBar=document.getElementById("task-add-sticky");
   if(taskBar){
@@ -1003,8 +1225,17 @@ function closeStickyNotes(){
   _snPruneEmpty().then(()=>{
     document.getElementById("sn-overlay").classList.remove("open");
     if(typeof _flushDeferredRender==='function')_flushDeferredRender();
+    if(_snReturnFocus&&typeof _snReturnFocus.focus==="function")_snReturnFocus.focus();
+    _snReturnFocus=null;
   });
 }
+
+document.addEventListener("keydown",event=>{
+  if(event.key==="Escape"&&document.getElementById("sn-overlay")?.classList.contains("open")){
+    event.preventDefault();
+    closeStickyNotes();
+  }
+});
 
 async function _snPruneEmpty(){
   const notes=loadStickyNotes();
@@ -1337,7 +1568,13 @@ function _persistTaskTitle(taskId, newTitle) {
 // Check if any modal/overlay is currently open
 function _anyModalOpen() {
   var overlays = document.querySelectorAll('.done-modal-overlay.open, .add-modal-overlay.open, .del-confirm-overlay.open, .sn-overlay.open, .notes-drawer-overlay.open, .delegated-modal-overlay.open');
-  return overlays.length > 0;
+  return Array.from(overlays).some(function(overlay){
+    // Repeat editors now live inside Task Manager. Their legacy `open` class
+    // controls the embedded panel, not a blocking overlay.
+    if(overlay.closest('.repeat-workspace'))return false;
+    var style=window.getComputedStyle(overlay);
+    return style.display!=="none"&&style.visibility!=="hidden"&&overlay.getClientRects().length>0;
+  });
 }
 
 // ======== SURFACE REGISTRY (visibility-aware rendering) ========

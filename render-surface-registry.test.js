@@ -34,6 +34,7 @@ const source = [
 // SURFACES/_dirty; slice it on top of `source` with a _renderPending stub so the
 // consumption contract can run headless.
 const doRenderSource = ["var _renderPending=false;", source, one(/function _doRender\(\)\{[\s\S]*?\n\}/)].join("\n");
+const anyModalOpenSource = one(/function _anyModalOpen\(\) \{[\s\S]*?\n\}/);
 
 function ctx() {
   const context = { console };
@@ -49,6 +50,36 @@ function doRenderCtx() {
 }
 const dirtyKeys = (c) => JSON.parse(vm.runInContext("JSON.stringify(Object.keys(_dirty).filter(k=>_dirty[k]))", c)).sort();
 const reset = (c) => vm.runInContext("for(const k in _dirty) delete _dirty[k];", c);
+
+function modalContext(overlays) {
+  const context = {
+    document: { querySelectorAll: () => overlays },
+    window: { getComputedStyle: (node) => node.style },
+  };
+  vm.createContext(context);
+  vm.runInContext(anyModalOpenSource, context);
+  return context;
+}
+
+test("embedded Repeat panels never defer itinerary rendering", () => {
+  const embedded = {
+    closest: (selector) => selector === ".repeat-workspace" ? {} : null,
+    style: { display: "block", visibility: "visible" },
+    getClientRects: () => [{}],
+  };
+  assert.equal(vm.runInContext("_anyModalOpen()", modalContext([embedded])), false);
+});
+
+test("only visible blocking overlays defer itinerary rendering", () => {
+  const overlay = {
+    closest: () => null,
+    style: { display: "flex", visibility: "visible" },
+    getClientRects: () => [{}],
+  };
+  assert.equal(vm.runInContext("_anyModalOpen()", modalContext([overlay])), true);
+  overlay.style.display = "none";
+  assert.equal(vm.runInContext("_anyModalOpen()", modalContext([overlay])), false);
+});
 
 test("render('schedule') marks exactly the three schedule sub-view surfaces dirty", () => {
   const c = ctx();

@@ -54,7 +54,7 @@ await page.evaluate((entry) => {
   window.VaultJournalWorkspace.open(entry);
 }, node);
 
-assert.equal(await page.evaluate(() => document.body.classList.contains("vault-journal-focus")), true);
+assert.equal(await page.evaluate(() => document.body.classList.contains("vault-journal-dock-right")), true);
 const focus = await page.locator("#vault-reading").boundingBox();
 assert.ok(focus && focus.x >= 0 && focus.y >= 0 && focus.x + focus.width <= 1280 && focus.y + focus.height <= 800);
 assert.equal(await page.locator("#journal-section-notes").count(), 1);

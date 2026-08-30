@@ -41,6 +41,7 @@ function createMockPool(options = {}) {
     convUsage: options.convUsage || { cur_cents: 0, prior_cents: 0 },
     pendingCents: options.pendingCents ?? 0,
     investments: options.investments || [],
+    taskCredits: options.taskCredits || [],
     carryovers: options.carryovers || [],
     insertedRewards: [],
     nextId: options.nextId ?? 100,
@@ -243,6 +244,9 @@ function createMockPool(options = {}) {
     }
     if (text.includes("FROM budget_investments")) {
       return { rows: state.investments.map(r => ({ ...r })) };
+    }
+    if (text.includes("FROM slot_point_ledger") && text.includes("source_type = 'task_complete'")) {
+      return { rows: state.taskCredits.map(r => ({ ...r })) };
     }
     throw new Error("Unhandled mock query: " + text.slice(0, 120));
   }
@@ -514,6 +518,61 @@ test("last_income capacity = income minus necessities; editing income resizes th
   assert.equal(after.usage.capacity_cents, 120000);         // 250000 - 130000
 });
 
+test("financial setup derives income, variable expenses, savings, and task reserve detail", async () => {
+  const mock = createMockPool({
+    settings: { budget_tank: {
+      capacity_source: "last_income",
+      income_sources: [
+        { id: "salary", name: "Salary", amount_cents: 300000 },
+        { id: "freelance", name: "Freelance", amount_cents: 50000 },
+      ],
+      necessities: [
+        { id: "rent", name: "Rent", amount_cents: 120000 },
+        { id: "power", name: "Power", variable: true, min_cents: 8000, max_cents: 12000 },
+      ],
+      savings: [{ id: "emergency", name: "Emergency fund", amount_cents: 40000 }],
+      discretionary_categories: [{ id: "fun", name: "Impulse fun", point_threshold: 250 }],
+      current_period: { key: "2026-07", capacity_cents: 350000 },
+    } },
+    spinsUsage: { period_key: "2026-07", cur_cents: 25000, prior_cents: 0 },
+    taskCredits: [
+      { title: "Finish report", points: 40, completed_at: "2026-07-12T10:00:00Z" },
+      { title: "Call lender", points: 20, completed_at: "2026-07-13T11:00:00Z" },
+    ],
+  });
+  const store = loadStoreWithMock(mock);
+  const state = await store.getBudgetState(WS, 7);
+
+  assert.equal(state.usage.income_cents, 350000);
+  assert.equal(state.settings.necessities[1].amount_cents, 10000);
+  assert.equal(state.usage.absolute_expenses_cents, 130000);
+  assert.equal(state.usage.savings_total_cents, 40000);
+  assert.equal(state.usage.discretionary_cents, 180000);
+  assert.equal(state.usage.completed_task_points, 60);
+  assert.equal(state.completed_tasks.length, 2);
+  assert.equal(state.settings.discretionary_categories[0].point_threshold, 250);
+});
+
+test("completed task totals stay exact when the detail list is limited", async () => {
+  const mock = createMockPool({
+    settings: { budget_tank: { capacity_source: "last_income", income_cents: 500000 } },
+    taskCredits: [
+      { title: "Recent task", points: 40, total_points: 999, completed_at: "2026-07-13T11:00:00Z" },
+      { title: "Earlier task", points: 20, total_points: 999, completed_at: "2026-07-12T10:00:00Z" },
+    ],
+  });
+  const store = loadStoreWithMock(mock);
+  const state = await store.getBudgetState(WS, 7);
+
+  assert.equal(state.completed_tasks.length, 2);
+  assert.equal(state.usage.completed_task_points, 999);
+  const creditQuery = mock.calls.find((call) => String(call.sql).includes("source_type = 'task_complete'"));
+  assert.match(String(creditQuery.sql), /metadata->'inputs'->>'completed_at'/);
+  assert.match(String(creditQuery.sql), /SUM\(points\) OVER \(\)/);
+  assert.match(String(creditQuery.sql), /WHERE completion_time >=/);
+  assert.match(String(creditQuery.sql), /ORDER BY completion_time DESC/);
+});
+
 test("updateBudgetConfig merges fields, clamps the rate, and never takes current_period from the client", async () => {
   const mock = createMockPool({
     settings: { budget_tank: { period_type: "month", current_period: { key: "2026-07", capacity_cents: 40000 } } },
@@ -528,6 +587,24 @@ test("updateBudgetConfig merges fields, clamps the rate, and never takes current
   assert.equal(next.cents_per_point, 5);
   assert.equal(next.current_period.key, "2026-07");
   assert.equal(mock.state.savedSettings.budget_tank.current_period.key, "2026-07");
+});
+
+test("legacy income_cents replaces a multi-source total exactly", async () => {
+  const mock = createMockPool({
+    settings: { budget_tank: {
+      income_sources: [
+        { id: "salary", name: "Salary", amount_cents: 300000 },
+        { id: "freelance", name: "Freelance", amount_cents: 50000 },
+      ],
+    } },
+  });
+  const store = loadStoreWithMock(mock);
+  const next = await store.updateBudgetConfig(WS, 7, { income_cents: 500000 });
+
+  assert.equal(next.income_cents, 500000);
+  assert.equal(next.income_sources.length, 1);
+  assert.equal(next.income_sources[0].amount_cents, 500000);
+  assert.equal(mock.state.savedSettings.budget_tank.income_cents, 500000);
 });
 
 test("claimTankBlock debits value_cents (never the cumulative threshold) and stamps the period", async () => {

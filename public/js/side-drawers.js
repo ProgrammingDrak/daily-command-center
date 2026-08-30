@@ -140,11 +140,6 @@
   }
 
   function openTasksToSection(sectionId, opts){
-    if(sectionId === "tm-repeat-responsibilities-section" && typeof window.openRepeatResponsibilityManager === "function"){
-      closeTasks();
-      window.openRepeatResponsibilityManager();
-      return;
-    }
     openTasks({ solo: opts && opts.solo });
     if(opts && opts.solo) setSoloSection(sectionId);
     setTimeout(focusInsideTasks, 20);
@@ -378,9 +373,10 @@
 
     document.addEventListener("keydown", e => {
       const d = drawer();
-      if(d?.classList.contains("open")) trapFocus(e, d.querySelector(".side-drawer-body"));
+      const quickAddOpen = document.getElementById("dcc-compose")?.classList.contains("open");
+      if(d?.classList.contains("open") && !quickAddOpen) trapFocus(e, d.querySelector(".side-drawer-body"));
       if(e.key === "Escape"){
-        if(d?.classList.contains("open")) closeTasks();
+        if(d?.classList.contains("open") && !quickAddOpen) closeTasks();
       }
     });
 
@@ -389,6 +385,7 @@
       if(!d?.classList.contains("open")) return;
       if(e.target.closest("#tasks-drawer .side-drawer-body")) return;
       if(e.target.closest(".sidecar-tabs")) return;
+      if(e.target.closest("#dcc-launcher,#dcc-scrim")) return;
       closeTasks();
     });
 

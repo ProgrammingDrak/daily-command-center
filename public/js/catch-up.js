@@ -280,7 +280,7 @@
     overlay.className = "carryover-overlay";
     overlay.id = "catchup-overlay";
     overlay.innerHTML =
-      '<div class="carryover" role="dialog" aria-modal="true" aria-labelledby="catchup-title">' +
+      '<div class="carryover" role="region" aria-labelledby="catchup-title">' +
         '<div class="carryover-hdr">' +
           '<h3 id="catchup-title">Loose Ends</h3>' +
           '<button class="pvb-close" id="catchup-close" aria-label="Close Loose Ends">&times;</button>' +
@@ -290,6 +290,7 @@
           '<div class="carryover-list" id="catchup-list"></div>' +
         '</div>' +
         '<div class="carryover-footer">' +
+          '<label class="cu-bulk-select"><input type="checkbox" id="catchup-select-all"> Select schedulable</label>' +
           '<button class="carryover-btn carryover-btn-schedule" id="catchup-all">Move schedulable items to today</button>' +
           '<button class="carryover-skip" id="catchup-skip">Leave them</button>' +
         '</div>' +
@@ -435,6 +436,16 @@
       listEl.appendChild(el);
     };
 
+    const addBulkSelect = (el, kind, id) => {
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.className = "cu-select";
+      input.dataset.bulkKind = kind;
+      input.dataset.bulkId = String(id);
+      input.setAttribute("aria-label", "Select for bulk scheduling");
+      el.prepend(input);
+    };
+
     const addTriageRow = (item, before) => {
       const el = document.createElement("div");
       const title = item.title || "Untitled";
@@ -520,6 +531,7 @@
       });
       wireCal(el.querySelector(".cu-cal"), item.title || "Untitled", place);
       triEls.set(item.id, el);
+      addBulkSelect(el, "triage", item.id);
       activeReviewRows.add(el);
       // `before` keeps expanded older items INSIDE the triage group. Appending them
       // instead dropped them below the Slipped section, orphaned from their heading.
@@ -699,6 +711,11 @@
       });
       el.querySelector(".cu-mtg-drop").addEventListener("click", () => runMeeting(() => dismissMeetingAction(item)));
       meetingEls.set(item.id, el);
+      if (mine) addBulkSelect(el, "meeting", item.id);
+      else el.querySelectorAll("button:disabled").forEach(button => {
+        button.title = "Delegated follow-ups stay with their owner.";
+        button.setAttribute("aria-label", "Unavailable. Delegated follow-up stays with its owner.");
+      });
       activeReviewRows.add(el);
       (item.origin === "signaled" ? signaledMeetingRows : automatedMeetingRows).push(el);
     });
@@ -788,6 +805,7 @@
       // path, so an arbitrary day can't behave differently from Today.
       wireCal(el.querySelector(".cu-cal"), title, (d2) => run(() => CO.moveTo(ev, d2, { pool })));
       rowEls.set(ev.id, el);
+      addBulkSelect(el, "task", ev.id);
       activeReviewRows.add(el);
       taskRows.push(el);
     });
@@ -819,6 +837,11 @@
     updateCount();
     const schedulableCount = rowEls.size + triEls.size + meetingActions.filter(item => item.owner !== "other").length;
     allBtn.style.display = schedulableCount ? "" : "none";
+    const selectAll = overlay.querySelector("#catchup-select-all");
+    if (selectAll) {
+      selectAll.checked = false;
+      selectAll.onchange = () => overlay.querySelectorAll(".cu-select").forEach(input => { input.checked = selectAll.checked; });
+    }
 
 
     // Move all: one row at a time on purpose. Each move is a server transaction and
@@ -832,9 +855,14 @@
       _allHandler = null;                 // {once:true} already unbound it
       allBtn.disabled = true;
       const original = allBtn.textContent;
-      const queue = [...rowEls.keys()];
-      const triQueue = [...triEls.keys()];
-      const meetingQueue = meetingActions.filter(item => item.owner !== "other" && meetingEls.has(item.id));
+      const selected = Array.from(overlay.querySelectorAll(".cu-select:checked"));
+      const selectedIds = kind => new Set(selected.filter(input => input.dataset.bulkKind === kind).map(input => input.dataset.bulkId));
+      const taskSelection = selectedIds("task");
+      const triageSelection = selectedIds("triage");
+      const meetingSelection = selectedIds("meeting");
+      const queue = [...rowEls.keys()].filter(id => !selected.length || taskSelection.has(String(id)));
+      const triQueue = [...triEls.keys()].filter(id => !selected.length || triageSelection.has(String(id)));
+      const meetingQueue = meetingActions.filter(item => item.owner !== "other" && meetingEls.has(item.id) && (!selected.length || meetingSelection.has(String(item.id))));
       const step = (n) => { allBtn.textContent = "Moving " + n + " of " + (queue.length + triQueue.length + meetingQueue.length) + "…"; };
       let moved = 0;
       const target = todayStr();
@@ -932,7 +960,7 @@
     const snapshot = await collectSnapshot();
     if (!snapshot) return null;
     const restoreMoodFocus = !!preservedFocus && document.activeElement === preservedFocus;
-    if ((opts.open || wasOpen) && snapshotCount(snapshot)) {
+    if ((opts.open || wasOpen) && (snapshotCount(snapshot) || snapshot.dayReview)) {
       openPrompt(snapshot.res.rows, snapshot.res.total, {
         triage: snapshot.triage,
         waiting: snapshot.waiting,
@@ -985,14 +1013,9 @@
       if (!snapshot.failed) markReviewed();
       return;
     }
-    if (reviewed()) return;
-    openPrompt(snapshot.res.rows, snapshot.res.total, {
-      triage: triage,
-      waiting: snapshot.waiting,
-      waitingTriage: snapshot.waitingTriage,
-      meetingActions: snapshot.meetingActions,
-      dayReview: snapshot.dayReview
-    });
+    // Loose Ends is user-opened. Boot only updates its truthful reminder count.
+    // Do not mark it reviewed until the person closes the workspace.
+    if (reviewed()) setIndicatorCount(0);
   }
 
   // The courier's prompt: the pet just delivered, so lead with what arrived. Older
@@ -1018,18 +1041,9 @@
     let dayReview = null;
     try { dayReview = window.DCC.DayReview ? await window.DCC.DayReview.load() : null; }
     catch (e) { loadFailed = true; }
-    openPrompt(res.rows, res.total, {
-      title: "Fresh from the sweep",
-      triage: fresh,
-      olderTriage: all.filter(i => !ids.has(i.id)),
-      waiting,
-      waitingTriage,
-      meetingActions: meetingActions,
-      dayReview: dayReview,
-      loadFailed: loadFailed
-    });
     _lastSnapshot = { res, triage: all, waiting, waitingTriage, meetingActions, dayReview, failed: loadFailed };
     setIndicatorCount(snapshotCount(_lastSnapshot));
+    if (typeof showToast === "function") showToast(fresh.length + " new Loose End" + (fresh.length === 1 ? "" : "s"), "info");
     return true;
   }
 
@@ -1054,15 +1068,6 @@
     const rawTriage = activeTriage();
     const waitingTriage = rawTriage.filter(item => waitingIds.has(String(item.waiting_item_id || "")));
     const triage = rawTriage.filter(item => !waitingIds.has(String(item.waiting_item_id || "")));
-    openPrompt(res.rows, res.total, {
-      title: "Fresh meeting follow-ups",
-      triage: triage,
-      waiting,
-      waitingTriage,
-      meetingActions: meetingActions,
-      dayReview: dayReview,
-      loadFailed: loadFailed
-    });
     _lastSnapshot = { res, triage, waiting, waitingTriage, meetingActions, dayReview, failed: loadFailed };
     setIndicatorCount(snapshotCount(_lastSnapshot));
     return true;

@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Daily Command Center — Account</title>
+  <link rel="stylesheet" href="/public/css/tokens.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -322,12 +323,20 @@
     @media (prefers-reduced-motion: reduce) {
       .auth-orbit::before, .auth-orbit::after, .auth-orbit-icon, .auth-dots span { animation: none; }
     }
-    @media (max-width: 520px) {
+    @media (max-width: 480px) {
       body { align-items: flex-start; }
       .card { padding: 24px 20px 26px; border-radius: 14px; }
       .auth-progress { min-height: calc(100dvh - 40px); }
       .auth-progress-card { padding: 38px 22px; }
     }
+    body { font-family: var(--font-sans); background: var(--surface-page); color: var(--ink); }
+    .card, .auth-progress-card { background: var(--surface-base); border-color: var(--line); }
+    .logo h1, .auth-progress h1 { color: var(--ink-strong); }
+    .logo p, label, .fine-print, .auth-progress-copy { color: var(--ink-muted); }
+    .logo-icon, .auth-orbit-icon, .btn { background: var(--brand); }
+    input, .auth-tabs, .auth-provider-status { min-height: var(--target-min); background: var(--surface-sunken); border-color: var(--line); color: var(--ink); }
+    .auth-tab, .btn, .toggle-pw { min-height: var(--target-min); }
+    :focus-visible { outline: var(--focus-size) solid var(--focus-ring); outline-offset: var(--focus-offset); }
   </style>
   <script>
     (function markOAuthReturnBeforePaint() {

@@ -92,6 +92,17 @@
     badge.textContent=String(pending);
     badge.style.display=pending?"inline-block":"none";
   }
+  function renderShareState(){
+    const enabled=!!shareUrl;
+    const status=document.getElementById("pet-share-state");
+    const copy=document.getElementById("pet-share-copy");
+    const rotate=document.getElementById("pet-share-rotate");
+    const enable=document.getElementById("pet-share-enable");
+    if(status){status.textContent=enabled?"Sharing enabled":"Sharing disabled";status.classList.toggle("enabled",enabled);}
+    if(copy)copy.disabled=!enabled;
+    if(rotate)rotate.disabled=!enabled;
+    if(enable){enable.disabled=enabled;enable.textContent=enabled?"Share enabled":"Enable share";}
+  }
   function syncInputs(home){
     const h=home||state&&state.home;if(!h)return;
     const pet=h.pet||{};
@@ -271,6 +282,7 @@
     renderEvents();
     renderLevel();
     renderVisits();
+    renderShareState();
     updateBadge();
   }
   async function saveCustomize(){
@@ -289,16 +301,20 @@
     const data=await api("/api/pet-home/share",{method:"POST"});
     shareUrl=data.shareUrl;
     await load();
+    renderShareState();
     toast("Pet Home share link enabled","success",2400);
   }
   async function rotateShare(){
+    if(!shareUrl)return;
+    if(!confirm("Rotate the Pet Home link? The current link will stop working."))return;
     const data=await api("/api/pet-home/share/rotate",{method:"POST"});
     shareUrl=data.shareUrl;
     await load();
+    renderShareState();
     toast("Pet Home link rotated","success",2400);
   }
   async function copyShare(){
-    if(!shareUrl)await enableShare();
+    if(!shareUrl){toast("Enable sharing before copying a link","info",2200);return;}
     if(navigator.clipboard&&shareUrl)await navigator.clipboard.writeText(shareUrl);
     toast("Pet Home link copied","success",2200);
   }

@@ -53,7 +53,7 @@ test("stored preferences accept only known modes and finite geometry", () => {
     mode: "offscreen", x: "no", y: Infinity, width: 640, height: 500,
     dockWidth: 410, collapsed: true,
   }));
-  assert.equal(parsed.mode, "focus");
+  assert.equal(parsed.mode, "dock-right");
   assert.equal(parsed.x, workspace.DEFAULT_PREFERENCES.x);
   assert.equal(parsed.y, workspace.DEFAULT_PREFERENCES.y);
   assert.equal(parsed.width, 640);

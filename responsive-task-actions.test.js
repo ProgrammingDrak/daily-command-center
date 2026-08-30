@@ -23,14 +23,16 @@ function radialLabels(meeting) {
   return Array.from(context.buildTaskRadialItems({ id: "task-1", title: "Task" }, {}), item => item.label);
 }
 
-test("compact task radial keeps notes and delete reachable", () => {
+test("compact task radial omits duplicate completion", () => {
   const labels = radialLabels(false);
+  assert.ok(!labels.includes("Complete without notes"));
   assert.ok(labels.includes("Notes & actions"));
   assert.ok(labels.includes("Delete task"));
 });
 
-test("compact meeting radial keeps notes and delete reachable", () => {
+test("compact meeting radial omits duplicate completion", () => {
   const labels = radialLabels(true);
+  assert.ok(!labels.includes("Complete without notes"));
   assert.ok(labels.includes("Notes & actions"));
   assert.ok(labels.includes("Delete task"));
 });

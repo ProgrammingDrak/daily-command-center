@@ -24,6 +24,8 @@
     "backup": "bash scripts/db-backup.sh",
     "smoke": "node scripts/smoke.mjs",
     "smoke:ci": "node scripts/smoke-ci.mjs",
+    "test:ui-review": "node scripts/verify-ui-optimization.mjs",
+    "ui-review:serve": "node scripts/ui-review-server.mjs",
     "start:render": "npm run check:db && node pg-schema.js && node server.js"
   },
   "engines": {

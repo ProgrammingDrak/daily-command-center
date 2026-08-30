@@ -24,6 +24,7 @@
   const relTime = (v) => (v ? window.DCC.dates.timeAgo(v) : "");
 
   let state = { publishable: [], requests: [], friends: [], feed: [], grants: [], granted: [] };
+  const selectedPosts = new Set();
   // The coach day view's own state, kept apart from the tab's: it is a different
   // person's data and must never be mistaken for the viewer's own.
   let coach = { ownerUserId: null, name: "", role: "none", date: "", capabilities: {} };
@@ -59,12 +60,20 @@
     manager: "can edit and delete your tasks"
   };
 
+  function reconcileSelectedPosts() {
+    const visibleIds = new Set(state.publishable.map(post => String(post.id)));
+    for (const postId of selectedPosts) {
+      if (!visibleIds.has(String(postId))) selectedPosts.delete(postId);
+    }
+  }
+
   // ── renderers ──────────────────────────────────────────────────────────────
 
   function renderPublishable() {
     const list = document.getElementById("social-publishable");
     const count = document.getElementById("social-publishable-count");
     if (!list) return;
+    reconcileSelectedPosts();
     if (count) count.textContent = state.publishable.length ? state.publishable.length + " waiting" : "nothing waiting";
     if (!state.publishable.length) {
       list.innerHTML = '<div class="social-empty">Finish a task and it shows up here, private, until you publish it.</div>';
@@ -72,10 +81,12 @@
     }
     list.innerHTML = state.publishable.map(post =>
       '<div class="social-item">' +
+        '<input class="social-select" type="checkbox" data-social-select="' + post.id + '"' + (selectedPosts.has(String(post.id)) ? " checked" : "") + ' aria-label="Select ' + esc(post.title_snapshot || "task") + '">' +
         '<div class="social-item-body">' +
           '<strong>' + esc(post.title_snapshot || "A task") + '</strong>' +
           '<span class="social-item-meta">' + metaLine(post) + '</span>' +
           '<input class="social-caption" data-caption-for="' + post.id + '" type="text" maxlength="280" placeholder="Say something about it (optional)">' +
+          '<span class="social-scope">Visible to: Friends</span>' +
         '</div>' +
         '<div class="social-item-actions">' +
           '<button class="social-btn primary" data-publish="' + post.id + '" type="button">Publish</button>' +
@@ -290,6 +301,7 @@
   async function publish(postId) {
     const field = document.querySelector('[data-caption-for="' + postId + '"]');
     const caption = field ? field.value.trim() : "";
+    selectedPosts.delete(String(postId));
     try {
       const result = await api("/api/social/feed/" + encodeURIComponent(postId) + "/publish", {
         method: "POST",
@@ -309,10 +321,28 @@
   }
 
   async function hide(postId) {
+    selectedPosts.delete(String(postId));
     try {
       await api("/api/social/feed/" + encodeURIComponent(postId) + "/hide", { method: "POST" });
       load();
     } catch (e) { toast(e.message || "Could not hide that", "error"); }
+  }
+
+  async function bulkDecision(action) {
+    reconcileSelectedPosts();
+    const ids = Array.from(selectedPosts);
+    if (!ids.length) { toast("Select at least one item", "info"); return; }
+    try {
+      await Promise.all(ids.map(postId => action === "publish"
+        ? api("/api/social/feed/" + encodeURIComponent(postId) + "/publish", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ caption: document.querySelector('[data-caption-for="' + postId + '"]')?.value.trim() || null })
+          })
+        : api("/api/social/feed/" + encodeURIComponent(postId) + "/hide", { method: "POST" })));
+      selectedPosts.clear();
+      toast(action === "publish" ? "Published selected items to friends" : "Skipped selected items", "success");
+      load();
+    } catch (e) { toast(e.message || "Could not update selected items", "error"); }
   }
 
   // ── access grants ──────────────────────────────────────────────────────────
@@ -362,6 +392,9 @@
   }
 
   async function changeRole(granteeUserId, role) {
+    const entry = state.grants.find(g => String(g.grantee_user_id) === String(granteeUserId));
+    const who = entry ? (entry.name || entry.username) : "this person";
+    if ((role === "coach" || role === "manager") && !confirm("Give " + who + " " + role + " access? " + (role === "manager" ? "They can edit and delete tasks." : "They can adjust points and assign tasks."))) return load();
     try {
       // The note is preserved server-side when omitted (see access-store's
       // COALESCE); sending "" here would have erased the owner's own annotation
@@ -535,6 +568,8 @@
 
     const shell = document.getElementById("tab-social");
     if (!shell) return;
+    document.getElementById("social-bulk-publish")?.addEventListener("click", () => bulkDecision("publish"));
+    document.getElementById("social-bulk-skip")?.addEventListener("click", () => bulkDecision("skip"));
     const grantSend = document.getElementById("social-grant-send");
     if (grantSend) grantSend.addEventListener("click", sendGrant);
     const grantName = document.getElementById("social-grant-username");
@@ -554,11 +589,26 @@
     }
 
     shell.addEventListener("change", e => {
+      const selection = e.target.closest("[data-social-select]");
+      if (selection) {
+        if (selection.checked) selectedPosts.add(selection.dataset.socialSelect);
+        else selectedPosts.delete(selection.dataset.socialSelect);
+        return;
+      }
       const roleSelect = e.target.closest("[data-role-for]");
       if (roleSelect) changeRole(roleSelect.dataset.roleFor, roleSelect.value);
     });
 
     shell.addEventListener("click", e => {
+      const sectionTab = e.target.closest("[data-social-tab]");
+      if (sectionTab) {
+        shell.querySelector(".social-grid").dataset.socialActive = sectionTab.dataset.socialTab;
+        shell.querySelectorAll("[data-social-tab]").forEach(button => button.classList.toggle("active", button === sectionTab));
+        return;
+      }
+      if (e.target.closest("[data-social-open-share]")) return document.getElementById("todo-share-open")?.click();
+      if (e.target.closest("[data-social-open-pet]")) return document.getElementById("pet-home-tab-btn")?.click();
+      if (e.target.closest("[data-social-refresh-guests]")) return document.getElementById("todo-reactions-toggle")?.click();
       const revokeBtn = e.target.closest("[data-revoke]");
       if (revokeBtn) return revokeGrant(revokeBtn.dataset.revoke);
       const openDay = e.target.closest("[data-open-day]");

@@ -7,8 +7,7 @@
 //   - window.DCC core is present (esc/api/toast/dates/modal/sheet/tabs)
 //   - every top-bar tab activates and its panel renders
 //   - the DCC.modal / DCC.sheet primitives open and close
-//   - no UNEXPECTED console errors (the two known pre-existing 404s —
-//     /api/brain/recent, /api/runway-state — are allowlisted)
+//   - no unexpected console errors from application assets
 //   - no horizontal overflow at 375px on any tab
 //
 // Uses the gstack `browse` daemon over its CLI (already how we dogfood).
@@ -24,7 +23,7 @@ import { join } from "node:path";
 const BASE = process.argv[2] || "http://localhost:3987";
 const USER = process.argv[3] || "drake";
 const PASS = process.argv[4] || "clever123";
-const TABS = ["schedule", "glymphatic", "pet-home", "runway", "budget"];
+const TABS = ["schedule", "pet-home", "budget"];
 // A FRONTEND smoke test guards frontend health: uncaught JS exceptions and
 // failed loads of real static assets. HTTP-status/transport errors on API and
 // SSE endpoints (404s on dead routes, SSE reconnect 401s/ERR_* in a headless
@@ -73,11 +72,8 @@ for (const tab of TABS) {
     `return c && c.classList.contains('active') ? 'active' : 'inactive';})()`
   );
   check(`tab ${tab} activates`, active === "active", active);
-  // runway is an iframe; its panel has no text content — skip the render check
-  if (tab !== "runway") {
-    const rendered = js(`(document.getElementById('tab-${tab}')?.textContent.trim().length||0) > 10`);
-    check(`tab ${tab} renders`, rendered === "true");
-  }
+  const rendered = js(`(document.getElementById('tab-${tab}')?.textContent.trim().length||0) > 10`);
+  check(`tab ${tab} renders`, rendered === "true");
   const overflow = js("document.documentElement.scrollWidth > window.innerWidth");
   check(`tab ${tab} no h-overflow @375`, overflow === "false", overflow);
 }
@@ -105,9 +101,9 @@ const budgetState = js(
 );
 check("GET /api/budget/state shape", budgetState === "true", budgetState);
 check("Money Changer uses Bank Units", js("document.querySelector('.bt-changer')?.textContent.includes('1 pt = 1 Bank Unit')") === "true");
-js("document.querySelector('[data-act=add-block]')?.click();const i=document.querySelector('[data-field=description]');if(i){i.value='Dinner for me and Fae';i.dispatchEvent(new Event('input',{bubbles:true}))};'x'");
-check("planned purchase auto-categorizes", js("document.querySelector('[data-role=auto-category]')?.textContent.includes('Dining')") === "true");
-js("document.querySelector('[data-act=cancel-block]')?.click();'x'");
+js("document.querySelector('[data-card=discretionary]')?.click();'x'");
+check("planned purchase editor uses the Discretionary card", js("!!document.querySelector('[data-finance-purchase-form] input[name=description]')") === "true");
+js("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));'x'");
 check("Slots is not a top-level tab", js("!document.querySelector('[data-tab=slots]')") === "true");
 check("Feeling lucky launcher renders", js("!!document.querySelector('[data-act=open-casino]')") === "true");
 js("document.querySelector('[data-act=open-casino]')?.click();'x'");

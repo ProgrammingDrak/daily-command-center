@@ -1,11 +1,33 @@
 // ======== SAVE STATUS + TOAST ========
 function updateSaveStatus(state, text) {
   const el = document.getElementById("save-status");
-  if (!el) return;
-  el.className = "save-status save-status--" + state;
-  el.title = text || "";
+  const pending = window.blockStore && typeof window.blockStore.debug === "function"
+    ? Number(window.blockStore.debug().walEntries || 0)
+    : 0;
+  const message = text || "";
+  let local = "Saved locally";
+  let remote = "Waiting to sync";
+  if (state === "ok") remote = pending ? "Waiting to sync" : "Synced";
+  else if (state === "saving") remote = pending ? "Waiting to sync" : "Syncing";
+  else if (state === "local-error") { local = "Local save failed"; remote = "Needs attention"; }
+  else if (state === "error") remote = /unreachable|offline|database unavailable/i.test(message) ? "Offline" : "Needs attention";
+  const detail = {
+    local,
+    remote,
+    pending,
+    timestamp: new Date().toISOString(),
+    message: remote === "Offline"
+      ? "Local work is safe. Reconnection restarts syncing automatically."
+      : message
+  };
+  try { localStorage.setItem("dcc:save-status", JSON.stringify(detail)); } catch (_) {}
+  if (el) {
+    el.className = "save-status save-status--" + state;
+    el.title = local + " · " + remote;
+  }
   const tooltip = document.getElementById("save-status-tooltip");
-  if (tooltip) tooltip.textContent = text || "";
+  if (tooltip) tooltip.textContent = local + " · " + remote;
+  document.dispatchEvent(new CustomEvent("dcc:save-status", { detail }));
 }
 
 // showToast moved to core.js (DCC.toast) 2026-07-04 \u2014 this shim keeps the

@@ -188,6 +188,37 @@
     badge.style.display = count ? "" : "none";
   };
 
+  // Number fields often use zero as their empty calculation value. When a
+  // person starts typing, replace that zero instead of appending to it.
+  function isReplaceableZeroNumberInput(target) {
+    return Boolean(
+      target &&
+      target.tagName === "INPUT" &&
+      target.type === "number" &&
+      !target.disabled &&
+      !target.readOnly &&
+      !target.hasAttribute("data-keep-leading-zero") &&
+      String(target.value).trim() !== "" &&
+      Number(target.value) === 0
+    );
+  }
+
+  function selectZeroNumberInput(target) {
+    if (!isReplaceableZeroNumberInput(target)) return;
+    try { target.select(); } catch (_) {}
+  }
+
+  document.addEventListener("focusin", function (event) {
+    selectZeroNumberInput(event.target);
+  });
+  document.addEventListener("pointerup", function (event) {
+    selectZeroNumberInput(event.target);
+  });
+  document.addEventListener("beforeinput", function (event) {
+    if (!String(event.inputType || "").startsWith("insert")) return;
+    if (isReplaceableZeroNumberInput(event.target)) event.target.value = "";
+  });
+
   // ── legacy aliases (migration bridge) ──────────────────────────────────
   // Existing call sites keep working; consumer-migration PRs move them to
   // DCC.* and these aliases eventually retire with tag-manager/persistence.

@@ -15,6 +15,7 @@
 <link rel="stylesheet" href="/public/css/dashboard.css">
 <link rel="stylesheet" href="/public/css/calendar-week.css?v=calendar-week-1">
 <link rel="stylesheet" href="/public/css/vault.css?v=vault-b6-1">
+<link rel="stylesheet" href="/public/css/ui-optimization.css?v=dcc-ui-1">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -132,9 +133,9 @@
     <button class="admin-link todo-share-open" id="todo-share-open" type="button" title="Share a live to-do view">Share list</button>
     <button class="admin-link todo-reactions-toggle" id="todo-reactions-toggle" type="button" title="Refresh guest reactions on itinerary tasks">Refresh reactions</button>
     <div class="dcc-settings-wrap" id="dcc-settings-wrap">
-      <button class="admin-link dcc-settings-button" id="dcc-settings-button" type="button" aria-haspopup="true" aria-expanded="false" title="Open settings">Settings</button>
+      <button class="admin-link dcc-settings-button" id="dcc-settings-button" type="button" aria-haspopup="true" aria-expanded="false" title="Open utilities">Utilities</button>
       <div class="dcc-settings-menu" id="dcc-settings-menu" role="menu" aria-hidden="true">
-        <button type="button" id="dcc-day-start" role="menuitem">Start of day</button>
+        <button type="button" id="dcc-day-start" role="menuitem">Scheduling floor</button>
         <button type="button" id="dcc-schedule-defaults" role="menuitem">Schedule default times</button>
         <button type="button" id="dcc-setup-integrations" role="menuitem">Setup &amp; integrations</button>
         <button type="button" id="dcc-replay-tutorial" role="menuitem">Replay tutorial</button>
@@ -157,7 +158,7 @@
 <div class="sn-overlay" id="sn-overlay" onclick="if(event.target===this)closeStickyNotes()">
   <div class="sn-panel">
     <div class="sn-bar">
-      <div class="sn-bar-title">📌 Sticky Notes</div>
+      <div class="sn-bar-title">Notes</div>
       <div class="sn-bar-actions">
         <button class="sn-new-btn" onclick="newStickyNote()">+ New Note</button>
         <button class="sn-new-btn" id="sn-create-task" onclick="toggleSnCreateTask()" title="Create a task">+ Create Task</button>
@@ -182,7 +183,16 @@
       </select>
       <button class="tab-add">+ Add</button>
     </div>
-    <div class="sn-list" id="sn-list"></div>
+    <div class="sn-workspace-grid">
+      <section class="sn-workspace-section">
+        <h3>Quick notes</h3>
+        <div class="sn-list" id="sn-list"></div>
+      </section>
+      <section class="sn-workspace-section">
+        <h3>Task notes</h3>
+        <div class="sn-task-list" id="sn-task-list"></div>
+      </section>
+    </div>
   </div>
 </div>
 
@@ -211,9 +221,7 @@
 
 <div class="tabs" id="tab-bar">
   <button class="tab active" data-tab="schedule">Itinerary</button>
-  <button class="tab" data-tab="glymphatic" id="glymphatic-tab-btn">Brief <span class="badge" id="glymphatic-count" style="display:none">0</span></button>
   <button class="tab" data-tab="pet-home" id="pet-home-tab-btn">Pet Home <span class="badge" id="pet-home-badge" style="display:none">0</span></button>
-  <button class="tab" data-tab="runway" id="runway-tab-btn">Runway</button>
   <button class="tab" data-tab="budget" id="budget-tab-btn">Budget</button>
   <button class="tab" data-tab="social" id="social-tab-btn">Social <span class="badge" id="social-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="vault" id="vault-tab-btn">Mycelium</button>
@@ -240,10 +248,6 @@
   <div id="actual-view" style="display:none"></div>
 </div>
 
-<div class="tab-content" id="tab-glymphatic">
-  <div id="glymphatic-brief-root"></div>
-</div>
-
 <!-- Floating Trivial bubble: at-a-glance count of available trivial tasks -->
 <button class="float-trivial" id="float-trivial" type="button" style="display:none" title="Trivial tasks">
   <span class="float-trivial-count" id="float-trivial-count">0</span>
@@ -261,42 +265,27 @@
       <button class="side-drawer-all" id="tasks-drawer-all" type="button" style="display:none">All tasks</button>
       <button class="side-drawer-close" id="tasks-drawer-close" type="button" aria-label="Close">&times;</button>
     </div>
-    <div class="task-add-bar" id="task-add-menus">
-      <input class="tab-title" type="text" placeholder="+ Add a task..." />
-      <select class="tab-dur">
-        <option value="15">15m</option>
-        <option value="30" selected>30m</option>
-        <option value="45">45m</option>
-        <option value="60">1h</option>
-        <option value="90">1.5h</option>
-        <option value="120">2h</option>
-      </select>
-      <select class="tab-dest">
-        <option value="backlog">Backlog and Ideas</option>
-        <option value="schedule">Schedule</option>
-        <option value="urgent" selected>Urgent</option>
-      </select>
-      <button class="tab-add">+ Add</button>
-    </div>
     <div class="side-drawer-content">
-      <div class="acc-controls">
-        <button type="button" class="acc-btn" data-acc-scope="#tasks-drawer" data-acc-action="expand">Expand all</button>
-        <button type="button" class="acc-btn" data-acc-scope="#tasks-drawer" data-acc-action="collapse">Collapse all</button>
-      </div>
-      <div class="task-bank-tools" id="task-bank-tools">
-        <div class="task-bank-search">
-          <input type="search" id="task-bank-search" placeholder="Search task bank...">
+      <div class="task-manager-toolbar">
+        <div class="acc-controls">
+          <button type="button" class="acc-btn" data-acc-scope="#tasks-drawer" data-acc-action="expand">Expand all</button>
+          <button type="button" class="acc-btn" data-acc-scope="#tasks-drawer" data-acc-action="collapse">Collapse all</button>
         </div>
-        <label class="task-bank-sort">
-          <span>Sort</span>
-          <select id="task-bank-sort">
-            <option value="priority">Priority</option>
-            <option value="title">Title</option>
-            <option value="duration">Duration</option>
-            <option value="newest">Newest</option>
-            <option value="oldest">Oldest</option>
-          </select>
-        </label>
+        <div class="task-bank-tools" id="task-bank-tools">
+          <div class="task-bank-search">
+            <input type="search" id="task-bank-search" placeholder="Search task bank...">
+          </div>
+          <label class="task-bank-sort">
+            <span>Sort</span>
+            <select id="task-bank-sort">
+              <option value="priority">Priority</option>
+              <option value="title">Title</option>
+              <option value="duration">Duration</option>
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+            </select>
+          </label>
+        </div>
       </div>
       <div class="tm-accordion">
 
@@ -472,10 +461,9 @@
   </div>
 </div>
 
-<!-- ======== UNIVERSAL "+" LAUNCHER ======== -->
+<!-- Responsive quick-add composer -->
 <div class="dcc-launcher" id="dcc-launcher">
-  <!-- Compose popover (quick tap) -->
-  <div class="dcc-compose" id="dcc-compose" aria-hidden="true">
+  <div class="dcc-compose" id="dcc-compose" role="dialog" aria-modal="true" aria-label="Quick add" aria-hidden="true" tabindex="-1">
     <div class="task-add-bar" id="task-add-launcher">
       <input class="tab-title" type="text" placeholder="+ Add a task..." />
       <select class="tab-dur">
@@ -488,30 +476,15 @@
       </select>
       <select class="tab-dest" aria-label="Task type">
         <option value="urgent" selected>Urgent</option>
+        <option value="schedule">Schedule</option>
+        <option value="backlog">Backlog and Ideas</option>
       </select>
       <button class="tab-add">+ Add</button>
     </div>
   </div>
-
-  <!-- Radial HUD menu (press-and-hold) -->
-  <div class="dcc-radial" id="dcc-radial" aria-hidden="true">
-    <button class="dcc-radial-item" data-action="task" style="--i:0" type="button" title="Add task" aria-label="Add task">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-    </button>
-    <button class="dcc-radial-item" data-action="work" style="--i:1" type="button" title="Start work" aria-label="Start work">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5v14l11-7z"/></svg>
-    </button>
-    <button class="dcc-radial-item" data-action="feedback" style="--i:2" type="button" title="Give feedback" aria-label="Give feedback">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-    </button>
-    <button class="dcc-radial-item" data-action="catchup" style="--i:3" type="button" title="Catch up (reschedule unfinished tasks)" aria-label="Catch up on unfinished tasks">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
-    </button>
-  </div>
-
-  <!-- The "+" circle -->
-  <button class="dcc-launcher-btn" id="dcc-launcher-btn" type="button" title="Add task (hold for more)" aria-label="Add task; press and hold for menu">
+  <button class="dcc-launcher-btn" id="dcc-launcher-btn" type="button" title="Quick add" aria-label="Open quick add">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    <span class="dcc-launcher-label">Quick add</span>
   </button>
 </div>
 <div class="dcc-scrim" id="dcc-scrim"></div>
@@ -604,19 +577,19 @@
   </div>
 </div>
 
-<!-- Start of day (Settings) -->
+<!-- Scheduling floor (Settings) -->
 <div class="sched-picker-overlay" id="day-start-overlay">
   <div class="sched-picker">
     <div class="sched-picker-hdr">
-      <h3>Start of day</h3>
+      <h3>Scheduling floor</h3>
       <button class="pvb-close" id="day-start-close">&times;</button>
     </div>
     <div class="sched-picker-body">
-      <div class="sched-picker-hint">Tasks are never scheduled for you before this time. You can still set an earlier time by hand, and meetings keep their real time.</div>
+      <div class="sched-picker-hint">Automatic scheduling never starts before this floor. Your workday can start earlier. Manual times and meetings keep their real time.</div>
       <div class="sched-after-custom">
         <input id="day-start-input" type="time" class="sched-picker-input" />
       </div>
-      <div class="sched-picker-hint" id="day-start-note"></div>
+      <div class="sched-picker-hint" id="day-start-note">Example: a 7:00 AM floor and 9:00 AM workday starts automatic work at 9:00 AM.</div>
     </div>
     <div class="sched-picker-footer">
       <button class="sched-picker-cancel" id="day-start-reset">Reset to 7:00 AM</button>
@@ -672,22 +645,29 @@
 </div>
 
 <!-- Task Detail Modal (notes + subtasks + side projects + action items) -->
-<div class="add-modal-overlay" id="add-modal-overlay">
-  <div class="add-modal">
+<div class="add-modal-overlay" id="add-modal-overlay" aria-hidden="true">
+    <div class="add-modal" role="dialog" aria-modal="true" aria-labelledby="add-modal-title" tabindex="-1">
     <div class="add-modal-hdr">
       <h3 id="add-modal-title">Task Details</h3>
-      <button class="pvb-close" id="add-modal-close">&times;</button>
+      <button class="pvb-close" id="add-modal-close" type="button" aria-label="Close task details">&times;</button>
+    </div>
+    <div class="dcc-task-detail-tabs" role="tablist" aria-label="Task details sections">
+      <button class="dcc-task-detail-tab active" type="button" role="tab" aria-selected="true" data-am-tab="overview">Overview</button>
+      <button class="dcc-task-detail-tab" type="button" role="tab" aria-selected="false" data-am-tab="notes">Notes</button>
+      <button class="dcc-task-detail-tab" type="button" role="tab" aria-selected="false" data-am-tab="subtasks">Subtasks</button>
+      <button class="dcc-task-detail-tab" type="button" role="tab" aria-selected="false" data-am-tab="history">History</button>
+      <button class="dcc-task-detail-tab" type="button" role="tab" aria-selected="false" data-am-tab="automation">Automation</button>
     </div>
     <div class="add-modal-body">
       <!-- Read-only details (description lives in Notes below) -->
-      <div class="am-det-meta" id="am-details-section" style="display:none"></div>
+      <div class="am-det-meta" id="am-details-section" data-am-panel="overview" style="display:none"></div>
       <!-- Tags section -->
-      <div class="am-section" id="am-tag-section">
+      <div class="am-section" id="am-tag-section" data-am-panel="overview">
         <div class="am-section-label">Tags</div>
         <div id="am-tag-picker" class="am-tag-picker-wrap"></div>
         <div id="am-recording-review" style="margin-top:10px;display:none"></div>
       </div>
-      <div class="am-section">
+      <div class="am-section" data-am-panel="overview">
         <div class="am-section-label">Commute time</div>
         <div class="am-commute-row">
           <label class="am-commute-field"><span>There</span><input id="am-commute-to-input" type="number" min="0" step="5" inputmode="numeric" placeholder="Min"></label>
@@ -696,25 +676,25 @@
         </div>
       </div>
       <!-- Notes section -->
-      <div class="am-section">
+      <div class="am-section" data-am-panel="notes" hidden>
         <div class="am-section-label">Notes</div>
         <div id="am-notes-block-editor" class="dm-notes-editor"></div>
       </div>
 
-      <div class="am-section" id="am-work-history-section" style="display:none">
+      <div class="am-section" id="am-work-history-section" data-am-panel="history" hidden>
         <div class="am-section-label">Work history</div>
         <div id="am-work-actions" class="am-work-actions"></div>
         <div id="am-work-history" class="am-work-history"></div>
       </div>
 
       <!-- Combined items list -->
-      <div class="am-section">
+      <div class="am-section" data-am-panel="subtasks" hidden>
         <div class="am-section-label">Items <span id="am-items-count" style="opacity:0.5;font-weight:400">(0)</span></div>
         <div id="am-items-list"></div>
       </div>
 
       <!-- Add new item -->
-      <div class="am-add-section">
+      <div class="am-add-section" data-am-panel="subtasks" hidden>
         <div class="am-add-row">
           <input id="am-item-input" type="text" placeholder="Add item...">
           <select id="am-item-type" class="am-type-select">
@@ -726,11 +706,20 @@
         </div>
         <div id="am-trivial-picker" style="display:none"></div>
       </div>
+      <div class="am-section dcc-task-automation" data-am-panel="automation" hidden>
+        <div class="am-section-label">Automation</div>
+        <p>Convert this task into repeat work or a waiting responsibility.</p>
+        <div class="dcc-task-automation-actions">
+          <button class="dm-btn-cancel am-repeat-btn" id="add-modal-repeat" type="button">Make repeat</button>
+          <button class="dm-btn-cancel am-repeat-btn" id="add-modal-delegated" type="button">Mark waiting</button>
+        </div>
+      </div>
     </div>
     <div class="add-modal-footer">
-      <button class="dm-btn-cancel am-repeat-btn" id="add-modal-repeat" type="button">Make repeat</button>
-      <button class="dm-btn-cancel am-repeat-btn" id="add-modal-delegated" type="button">Waiting</button>
-      <button class="dm-btn-cancel" id="add-modal-done">Done</button>
+      <button class="dm-btn-cancel" id="add-modal-done" type="button">Close</button>
+      <button class="dm-btn-cancel" id="add-modal-cancel-edit" type="button" hidden>Cancel</button>
+      <button class="dm-btn-complete" id="add-modal-edit" type="button">Edit</button>
+      <button class="dm-btn-complete" id="add-modal-save" type="button" hidden>Save</button>
     </div>
   </div>
 </div>
@@ -1279,14 +1268,18 @@
         <h2 class="pet-title">Pet Home</h2>
         <div class="pet-subtitle">A cozy little house where completed tasks become care, decor, and visible progress.</div>
       </div>
-      <div class="pet-share">
+      <div class="pet-share" id="pet-sharing">
+        <span class="pet-share-state" id="pet-share-state">Sharing disabled</span>
         <button id="pet-share-enable" class="pet-btn primary" type="button">Enable share</button>
-        <button id="pet-share-copy" class="pet-btn" type="button">Copy link</button>
-        <button id="pet-share-rotate" class="pet-btn" type="button">Rotate link</button>
+        <button id="pet-share-copy" class="pet-btn" type="button" disabled>Copy link</button>
+        <button id="pet-share-rotate" class="pet-btn" type="button" disabled>Rotate link</button>
       </div>
     </div>
+    <nav class="pet-workspace-nav" aria-label="Pet Home sections">
+      <a href="#pet-progress">Progress</a><a href="#pet-customization">Customization</a><a href="#pet-visits-panel">Visits</a><a href="#pet-sharing">Sharing</a>
+    </nav>
     <div class="pet-grid">
-      <section class="pet-home-stage" aria-label="Pet home preview">
+      <section class="pet-home-stage" id="pet-progress" aria-label="Pet home preview">
         <div class="pet-room">
           <div class="pet-window"></div>
           <div class="pet-whiteboard">
@@ -1309,7 +1302,7 @@
           </div>
         </div>
       </section>
-      <section class="pet-panel">
+      <section class="pet-panel" id="pet-visits-panel">
         <div class="pet-panel-head">
           <h3>Visits</h3>
           <span id="pet-visit-count">none yet</span>
@@ -1323,7 +1316,7 @@
         <div id="pet-visit-status" class="pet-visit-status"></div>
         <div id="pet-visits" class="pet-visits"></div>
       </section>
-      <section class="pet-panel">
+      <section class="pet-panel" id="pet-customization">
         <h3>Customize</h3>
         <div class="pet-form-grid">
           <label>Name <input id="pet-name-input" type="text" maxlength="40"></label>
@@ -1784,10 +1777,6 @@
   </section>
 </div>
 
-<div class="tab-content" id="tab-runway">
-  <iframe class="tool-frame" src="/public/tools/quit-runway-simple.html" title="Simple Burn vs Income Runway"></iframe>
-</div>
-
 <!-- Social tab: friend requests, friend list, publish queue, friends feed.
      Nothing is shared automatically; see public/js/social.js. -->
 <div class="tab-content" id="tab-social">
@@ -1803,9 +1792,16 @@
       </div>
     </div>
     <div id="social-lookup-status" class="social-status"></div>
+    <nav class="social-workspace-tabs" aria-label="Social sections">
+      <button type="button" data-social-tab="publish" class="active">Publish</button>
+      <button type="button" data-social-tab="inbox">Inbox</button>
+      <button type="button" data-social-tab="friends">Friends</button>
+      <button type="button" data-social-tab="feed">Feed</button>
+      <button type="button" data-social-tab="access">Access</button>
+    </nav>
 
-    <div class="social-grid">
-      <section class="social-panel">
+    <div class="social-grid" data-social-active="publish">
+      <section class="social-panel" data-social-section="publish">
         <div class="social-panel-head">
           <h3>Ready to share</h3>
           <span id="social-publishable-count">0</span>
@@ -1814,23 +1810,31 @@
           Completed tasks, private until you publish them. Work-sourced tasks
           (Slack, email, meetings) and anything marked private never appear here.
         </p>
+        <div class="social-bulk">
+          <button class="social-btn primary" id="social-bulk-publish" type="button">Publish selected</button>
+          <button class="social-btn" id="social-bulk-skip" type="button">Skip selected</button>
+          <span class="social-scope">Visible to: Friends</span>
+        </div>
         <div id="social-publishable" class="social-list"></div>
       </section>
 
-      <section class="social-panel">
+      <section class="social-panel" data-social-section="inbox">
         <div class="social-panel-head">
           <h3>Friend requests</h3>
           <span id="social-requests-count">0</span>
         </div>
         <div id="social-requests" class="social-list"></div>
-        <div class="social-panel-head" style="margin-top:16px">
+      </section>
+
+      <section class="social-panel" data-social-section="friends">
+        <div class="social-panel-head">
           <h3>Friends</h3>
           <span id="social-friends-count">0</span>
         </div>
         <div id="social-friends" class="social-list"></div>
       </section>
 
-      <section class="social-panel social-panel-wide">
+      <section class="social-panel social-panel-wide" data-social-section="feed">
         <div class="social-panel-head">
           <h3>Feed</h3>
           <span id="social-feed-count">0</span>
@@ -1842,7 +1846,7 @@
            not folded into Friends -- a friend and a coach are different
            relationships, and conflating them is how someone ends up with more
            access than they were meant to have. -->
-      <section class="social-panel social-panel-wide">
+      <section class="social-panel social-panel-wide" data-social-section="access">
         <div class="social-panel-head">
           <h3>Who can act on my day</h3>
           <span id="social-grants-count">nobody</span>
@@ -1851,6 +1855,17 @@
           A grant is one direction only: giving someone access to your day gives
           you none of theirs. Revoking takes effect immediately.
         </p>
+        <ol class="social-role-ladder" aria-label="Cumulative access roles">
+          <li><strong>Viewer</strong><br>See the day</li>
+          <li><strong>Commenter</strong><br>Viewer plus comments</li>
+          <li><strong>Coach</strong><br>Commenter plus points and assignments</li>
+          <li><strong>Manager</strong><br>Coach plus task editing and deletion</li>
+        </ol>
+        <div class="social-share-channels" aria-label="Owner sharing workspaces">
+          <div class="social-share-channel"><strong>Public list</strong><p>Guest tasks, comments, sponsorships, and exports.</p><button class="social-btn" data-social-open-share type="button">Manage public list</button></div>
+          <div class="social-share-channel"><strong>Pet Home</strong><p>Public visits and encouragement use a separate token.</p><button class="social-btn" data-social-open-pet type="button">Manage Pet Home</button></div>
+          <div class="social-share-channel"><strong>Guest activity</strong><p>Refresh reactions without changing access grants.</p><button class="social-btn" data-social-refresh-guests type="button">Refresh guest activity</button></div>
+        </div>
         <div class="social-grant-add">
           <input id="social-grant-username" type="text" maxlength="60" placeholder="Username" autocomplete="off">
           <select id="social-grant-role" aria-label="Role to grant">
@@ -1866,7 +1881,7 @@
         <div id="social-grants" class="social-list"></div>
       </section>
 
-      <section class="social-panel social-panel-wide">
+      <section class="social-panel social-panel-wide" data-social-section="access">
         <div class="social-panel-head">
           <h3>Days I can act on</h3>
           <span id="social-granted-count">none</span>
@@ -1918,8 +1933,13 @@
     <button id="vault-capture-btn" class="vault-ctl vault-btn primary" type="button" title="Quick capture (fleeting note)">+ Capture</button>
     <button id="vault-new-btn" class="vault-ctl vault-btn" type="button" title="New note">+ New</button>
     <button id="vault-daily-btn" class="vault-ctl vault-btn" type="button" title="Open today's journal (j)">Daily note</button>
-    <button id="vault-refresh-btn" class="vault-ctl vault-btn" type="button">Refresh</button>
-    <button id="vault-flush-btn" class="vault-ctl vault-btn" type="button">Sync now</button>
+    <details class="vault-advanced-menu">
+      <summary class="vault-ctl vault-btn">Advanced</summary>
+      <div>
+        <button id="vault-refresh-btn" class="vault-ctl vault-btn" type="button">Refresh index</button>
+        <button id="vault-flush-btn" class="vault-ctl vault-btn" type="button">Sync now</button>
+      </div>
+    </details>
   </div>
   <!-- Search + saved views + discovery (Phase B5). The search box drops a results
        panel; ⌘K opens the same index as a quick-switcher (works from any tab). -->
@@ -1998,6 +2018,7 @@
 <!-- day-context.js: the one day-context + free-slot engine (window.DCC.getDayContext/findSlot); must load before state.js/schedule.js consume it -->
 <script src="/public/js/day-context.js?v=day-context-2"></script>
 <script src="/public/js/core-ui.js?v=core-ui-1"></script>
+<script src="/public/js/collection.js?v=dcc-ui-1"></script>
 <script src="/public/js/block-editor.js"></script>
 <script src="/public/js/data.js"></script>
 <script src="/public/js/persistence.js"></script>
@@ -2090,11 +2111,16 @@ window.USE_BLOCKSTORE = {
 </script>
 <script src="/public/js/sse.js"></script>
 
-<!-- Save status indicator (top-right dot with tooltip) -->
-<div id="save-status" class="save-status save-status--ok" title="All changes synced">
+<!-- Local durability and remote convergence remain separate facts. -->
+<button id="save-status" class="save-status save-status--ok" type="button" aria-haspopup="dialog" aria-expanded="false">
   <span class="save-status-dot"></span>
-  <span class="save-status-tooltip" id="save-status-tooltip">All changes synced</span>
-</div>
+  <span class="save-status-copy">
+    <strong data-save-local>Saved locally</strong>
+    <span data-save-remote>Checking sync</span>
+  </span>
+  <span class="save-status-tooltip" id="save-status-tooltip">Saved locally</span>
+</button>
+<script src="/public/js/shell.js?v=dcc-ui-1"></script>
 
 <div class="feedback-panel" id="feedback-panel" aria-hidden="true">
   <div class="feedback-panel-head">

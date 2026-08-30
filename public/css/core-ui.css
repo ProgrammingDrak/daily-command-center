@@ -1,73 +1,152 @@
-/* core-ui.css — styles for the DCC.modal / DCC.sheet primitives (core-ui.js).
- * Uses the design tokens from tokens.css. The bottom sheet is derived from the
- * proven .dur-sheet (slide-up, safe-area padding, reduced-motion guard). */
-
 .dcc-overlay {
-  position: fixed; inset: 0; z-index: 10000;
-  background: rgba(2, 6, 23, 0.55);
-  display: flex; justify-content: center;
-  opacity: 0; transition: opacity 0.2s ease;
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  opacity: 0;
+  background: var(--surface-scrim);
+  transition: opacity 160ms ease;
 }
 .dcc-overlay.open { opacity: 1; }
+.dcc-overlay--modal { align-items: center; justify-content: center; padding: var(--sp-4); }
+.dcc-overlay--drawer { align-items: stretch; justify-content: flex-end; }
+.dcc-overlay--sheet { align-items: flex-end; justify-content: center; }
+.dcc-overlay--popover { pointer-events: none; background: transparent; }
 
-/* modal: centered dialog */
-.dcc-overlay--modal { align-items: center; padding: var(--sp-4); }
+.dcc-modal,
+.dcc-drawer,
+.dcc-sheet,
+.dcc-popover {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--surface-overlay);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-2);
+}
 .dcc-modal {
-  width: 100%; max-width: 520px; max-height: 88vh; overflow: auto;
-  background: var(--card); border: 1px solid var(--border);
+  width: min(620px, 100%);
+  max-height: min(88dvh, 900px);
   border-radius: var(--r-xl);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
-  padding: var(--sp-4);
-  transform: translateY(8px) scale(0.98);
-  transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+  transform: translateY(8px) scale(0.985);
+  transition: transform 180ms ease;
 }
 .dcc-overlay--modal.open .dcc-modal { transform: none; }
-
-/* sheet: bottom slide-up (mobile-first) */
-.dcc-overlay--sheet { align-items: flex-end; }
+.dcc-drawer {
+  width: min(560px, 100%);
+  height: 100dvh;
+  border-width: 0 0 0 1px;
+  transform: translateX(100%);
+  transition: transform 200ms cubic-bezier(.32,.72,0,1);
+}
+.dcc-overlay--drawer.open .dcc-drawer { transform: none; }
 .dcc-sheet {
-  width: 100%; max-width: 520px; max-height: 88vh; overflow: auto;
-  background: var(--card); border: 1px solid var(--border); border-bottom: none;
+  width: min(760px, 100%);
+  max-height: 92dvh;
   border-radius: var(--r-xl) var(--r-xl) 0 0;
-  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.5);
-  padding: var(--sp-3) var(--sp-4) calc(var(--sp-4) + env(safe-area-inset-bottom)) var(--sp-4);
+  border-bottom: 0;
+  padding-bottom: env(safe-area-inset-bottom);
   transform: translateY(100%);
-  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+  transition: transform 200ms cubic-bezier(.32,.72,0,1);
 }
-.dcc-overlay--sheet.open .dcc-sheet { transform: translateY(0); }
+.dcc-overlay--sheet.open .dcc-sheet { transform: none; }
+.dcc-popover {
+  position: fixed;
+  width: min(360px, calc(100vw - 16px));
+  max-height: min(70dvh, 560px);
+  border-radius: var(--r-lg);
+  pointer-events: auto;
+}
 .dcc-sheet-handle {
-  width: 38px; height: 4px; border-radius: var(--r-full);
-  background: var(--border); margin: var(--sp-1) auto var(--sp-3);
+  width: 40px;
+  height: 4px;
+  margin: var(--sp-2) auto 0;
+  border-radius: var(--r-full);
+  background: var(--line-strong);
 }
-
-/* shared chrome */
 .dcc-overlay-head {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: var(--sp-3); margin-bottom: var(--sp-3);
+  display: flex;
+  align-items: center;
+  min-height: 64px;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line-subtle);
 }
-.dcc-overlay-title { font-size: var(--fs-lg); font-weight: 800; color: var(--text); }
-.dcc-overlay-close {
-  flex: 0 0 auto; width: 32px; height: 32px; border-radius: var(--r-md);
-  border: 1px solid var(--border); background: transparent;
-  color: var(--text-muted); font-size: 20px; line-height: 1; cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
+.dcc-overlay-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--ink-strong);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: var(--leading-tight);
 }
-.dcc-overlay-close--floating { position: absolute; top: var(--sp-3); right: var(--sp-3); }
-.dcc-overlay-close:hover { color: var(--text); border-color: var(--text-muted); }
-.dcc-overlay-body { color: var(--text); font-size: var(--fs-md); }
-.dcc-overlay-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-4); }
+.dcc-overlay-close,
+.dcc-overlay-back {
+  width: var(--target-min);
+  height: var(--target-min);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--ink-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 1.35rem;
+  cursor: pointer;
+}
+.dcc-overlay-close:hover,
+.dcc-overlay-back:hover { color: var(--ink); background: var(--surface-hover); }
+.dcc-overlay-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-4);
+  color: var(--ink);
+  font-size: var(--fs-md);
+  line-height: var(--leading-body);
+}
+.dcc-overlay-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--line-subtle);
+  background: var(--surface-overlay);
+}
 .dcc-overlay-btn {
-  flex: 1; height: 46px; border-radius: var(--r-lg);
-  font-size: var(--fs-base); font-weight: 800; cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
+  min-width: 108px;
+  min-height: var(--target-min);
+  padding: 0 var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--ink);
+  background: var(--surface-raised);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
 }
-.dcc-overlay-btn--secondary { border: 1px solid var(--border); background: transparent; color: var(--text-muted); }
-.dcc-overlay-btn--primary { border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+.dcc-overlay-btn--primary { border-color: var(--brand); background: var(--brand); color: white; }
+.dcc-overlay-btn--danger { border-color: var(--danger); background: var(--danger); color: white; }
+.dcc-overlay-btn:hover { filter: brightness(1.08); }
 
-/* touch: the close button is a comfortable target on phones */
 @media (max-width: 760px) {
-  .dcc-overlay-close { width: 40px; height: 40px; }
+  .dcc-overlay--drawer { align-items: flex-end; }
+  .dcc-drawer {
+    width: 100%;
+    height: min(92dvh, 880px);
+    border-width: 1px 0 0;
+    border-radius: var(--r-xl) var(--r-xl) 0 0;
+    transform: translateY(100%);
+  }
+  .dcc-overlay--drawer.open .dcc-drawer { transform: none; }
+  .dcc-overlay-actions { display: grid; grid-template-columns: 1fr 1fr; }
 }
+
 @media (prefers-reduced-motion: reduce) {
-  .dcc-overlay, .dcc-modal, .dcc-sheet { transition: none; }
+  .dcc-overlay,
+  .dcc-modal,
+  .dcc-drawer,
+  .dcc-sheet { transition: none; }
 }

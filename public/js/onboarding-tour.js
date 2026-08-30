@@ -46,7 +46,7 @@
     },
     {
       title: "Use The Supporting Tabs",
-      body: "Brief, Delegated, Pet Home, Slots, and Runway are supporting work areas for review, follow-up, rewards, and planning.",
+      body: "Brief lives inside Save status. Delegated, Pet Home, and Slots support daily work.",
       selector: "#tab-bar"
     },
     {

@@ -34,7 +34,7 @@ function buildActualView(dateStr){
 // sibling reorder via drag (drag.js _dropAtTargetLevel + saveSubtaskOrder).
 
 // ── Task-row radial: every task-level action fans out from the row's arrow ──
-// The row itself keeps only done / notes / delete visible; everything else
+// The row itself keeps only quick-complete / notes / delete visible; everything else
 // (schedule, duration, work sessions, lock, add, subtask, delegate, repeat,
 // backlog, bounty) is a spoke here. Items are built fresh per open so dynamic
 // state — the lock flag, bounty availability — is read at fan time.
@@ -117,6 +117,47 @@ function openTaskNotes(ev){
   if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);
   else if(typeof openNotesDrawer==="function")openNotesDrawer(ev.id,ev.title);
 }
+const QUICK_COMPLETE_HOLD_MS=550;
+function bindQuickCompleteControl(button,onQuick,onWithNotes){
+  if(!button)return;
+  let holdTimer=null;
+  let suppressClick=false;
+  const clearPress=()=>{
+    if(holdTimer){clearTimeout(holdTimer);holdTimer=null;}
+    button.classList.remove("is-holding");
+  };
+  button.addEventListener("pointerdown",event=>{
+    if(event.button!=null&&event.button!==0)return;
+    event.stopPropagation();
+    suppressClick=false;
+    button.classList.add("is-holding");
+    try{button.setPointerCapture(event.pointerId);}catch(_err){}
+    holdTimer=setTimeout(()=>{
+      holdTimer=null;
+      suppressClick=true;
+      button.classList.remove("is-holding");
+      if(typeof onWithNotes==="function")onWithNotes();
+    },QUICK_COMPLETE_HOLD_MS);
+  });
+  button.addEventListener("pointerup",clearPress);
+  button.addEventListener("pointercancel",clearPress);
+  button.addEventListener("click",event=>{
+    event.preventDefault();
+    event.stopPropagation();
+    clearPress();
+    if(suppressClick){suppressClick=false;return;}
+    button.classList.add("flash");
+    if(typeof onQuick==="function")onQuick();
+  });
+  button.addEventListener("keydown",event=>{
+    if(!event.shiftKey||!(event.key==="Enter"||event.key===" "))return;
+    event.preventDefault();
+    event.stopPropagation();
+    clearPress();
+    if(typeof onWithNotes==="function")onWithNotes();
+  });
+  button.addEventListener("contextmenu",event=>event.preventDefault());
+}
 // Meeting rows get a focused radial: the Prep/Recap spoke (contextual by whether
 // the meeting has started) plus duration and add-task. The task-only spokes
 // (delegate/backlog/repeat/lock) don't apply to a calendar block, so they're left
@@ -134,6 +175,7 @@ function buildMeetingRadialItems(ev,trig){
 }
 function buildTaskRadialItems(ev,trig){
   if(typeof isMeeting==="function"&&isMeeting(ev))return buildMeetingRadialItems(ev,trig);
+  const tt=(typeof window!=="undefined"&&window.TaskTypes)?window.TaskTypes.get(ev):null;
   const items=[
     // Move/convert actions live one level down: this spoke chains into the
     // "Change task" sub-fan (openRadialMenu closes the current fan first).
@@ -631,7 +673,7 @@ function buildListView(){
     if(!ev||isFixed(ev))return "";
     const visibility=ev.publicVisibility==="private"?"private":"public";
     const label=visibility==="private"?"Private":"Public";
-    return '<button class="pet-privacy-toggle '+visibility+'" type="button" data-pet-privacy-id="'+String(ev.id).replace(/"/g,'&quot;')+'" title="Toggle Pet Home sharing">'+label+'</button>';
+    return '<button class="pet-privacy-toggle it-list-privacy '+visibility+'" type="button" data-pet-privacy-id="'+String(ev.id).replace(/"/g,'&quot;')+'" title="Toggle Pet Home sharing"><span>'+label+'</span></button>';
   }
 
   // Jump-to-source link for API-inserted tasks whose source_id is a URL (e.g.
@@ -743,25 +785,27 @@ function buildListView(){
     // first (one click silently does two things), or leave it off. Drake's call,
     // 2026-08-03: leave it off until the semantics are chosen. Not a missing feature.
     const gripTitle=movable?('Drag to reorder'+(subRow?'':', position '+(idx+1))):'Fixed item';
+    const quickCompleteTitle='Click to quick complete. Hold for completion notes. Shift+Enter also opens notes.';
+    const completionControl=isDoneRow
+      ? '<button class="chk it-list-check on" title="Uncheck">'+ckSvg+'</button>'
+      : '<button class="it-list-check quick-complete-control'+(chkBlocked?' chk-blocked':'')+'" title="'+quickCompleteTitle+'" aria-label="'+quickCompleteTitle+'"><span aria-hidden="true">&#9889;</span></button>';
     el.innerHTML=
       (inProgress?'<span class="task-progress-ring" aria-hidden="true"></span>':'')+
       '<div class="it-list-utility">'+
-        '<div class="it-list-nav">'+chev+'<div class="grip it-list-grip" title="'+gripTitle+'">'+gripSvg+'</div></div>'+
+        '<div class="it-list-nav"><div class="grip it-list-grip" title="'+gripTitle+'">'+gripSvg+'</div></div>'+
         '<div class="it-list-check-col">'+
-          '<button class="chk it-list-check'+(isDoneRow?' on':'')+(chkBlocked?' chk-blocked':'')+'" title="'+(isUnfRow?'Mark done on '+escHtml(_unfPrettyDate(r.sourceDate)):(isDoneRow?'Uncheck':(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done')))+'">'+ckSvg+'</button>'+
-          (!isDoneRow&&!(tt&&tt.rollupMode)?'<button class="chk-quick" title="'+(isUnfRow?'Quick complete on '+escHtml(_unfPrettyDate(r.sourceDate)):'Quick complete')+'">&#9889;</button>':'')+
+          completionControl+
         '</div>'+
       '</div>'+
       '<div class="bar" style="background:'+(isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#a31c43)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)))+'"></div>'+
       '<div class="it-list-main">'+
         // The "+" renders on carryover rows and meetings too. A meeting can own
         // concurrent nested work or relevant subtasks; only done rows skip it.
-        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
+        '<div class="it-list-title-row">'+chev+'<span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
         '<div class="it-list-meta">'+
           inProgressChip+
           nowChip+
           '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+
-          (subTimeless?'':'<span>'+ms(dur(ev))+'</span>')+
           chipSlot+streakChip+
           (subTimeless?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
           // Schedule/reschedule right where the time is labeled (and next to
@@ -796,18 +840,15 @@ function buildListView(){
         (!isDoneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule" aria-label="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+
       '</div>';
 
-    el.querySelector(".it-list-check").addEventListener("click",e=>{
-      e.stopPropagation();
-      // Unfinished completes on its ORIGIN day, not today — no scheduled[] task to
-      // toggle. _unfComplete carries the subtree (the old handler didn't, so a
-      // carryover parent's children stayed unfinished forever).
+    const completionButton=el.querySelector(".it-list-check");
+    const completeNow=()=>{
+      // Unfinished completes on its ORIGIN day, not today. _unfComplete carries
+      // the subtree so a carryover parent's children do not stay unfinished.
       if(isUnfRow){_unfComplete(ev,el);return;}
-      // Blocked rollup container: skip the notes modal, let toggleDone toast why.
-      if(isDoneRow||chkBlocked)toggleDone(ev.id);
-      else openDoneModal(ev.id,ev.title,()=>toggleDone(ev.id),ev);
-    });
-    const quick=el.querySelector(".chk-quick");
-    if(quick)quick.addEventListener("click",e=>{e.stopPropagation();quick.classList.add("flash");if(isUnfRow){_unfComplete(ev,el);return;}toggleDone(ev.id);});
+      toggleDone(ev.id);
+    };
+    if(isDoneRow){completionButton.addEventListener("click",e=>{e.stopPropagation();completeNow();});}
+    else bindQuickCompleteControl(completionButton,completeNow,chkBlocked?completeNow:()=>openDoneModal(ev.id,ev.title,completeNow,ev));
     const stSpan=el.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfSchedulePopover(ev,el,stSpan);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:stSpan,view:"time"});});
     // Prep chip opens the prep briefing (radial Prep/Recap spoke), not the row's
     // details modal. stopPropagation keeps the row click from also firing.
@@ -1218,14 +1259,10 @@ function buildSchedule(){
     el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));
 
     // Event listeners
-    el.querySelector(".chk").addEventListener("click",e=>{
-      e.stopPropagation();
-      // Blocked rollup container: skip the notes modal, let toggleDone toast why.
-      if(typeof shellCompleteBlocked==="function"&&shellCompleteBlocked(ev))toggleDone(ev.id);
-      else openDoneModal(ev.id,ev.title,()=>toggleDone(ev.id),ev);
-    });
-    const _q=el.querySelector(".chk-quick"); // absent on rollup containers
-    if(_q)_q.addEventListener("click",e=>{e.stopPropagation();e.currentTarget.classList.add("flash");toggleDone(ev.id);});
+    const _q=el.querySelector(".quick-complete-control");
+    const completeNow=()=>toggleDone(ev.id);
+    const completeBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
+    bindQuickCompleteControl(_q,completeNow,completeBlocked?completeNow:()=>openDoneModal(ev.id,ev.title,completeNow,ev));
     const tagToggle=el.querySelector(".card-tags-toggle");
     if(tagToggle)tagToggle.addEventListener("click",e=>{e.stopPropagation();toggleTagsExpanded(ev.id);if(typeof render==='function')render();});
     el.querySelectorAll(".dbtn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();adjustDur(b.dataset.id,parseInt(b.dataset.d))}));
