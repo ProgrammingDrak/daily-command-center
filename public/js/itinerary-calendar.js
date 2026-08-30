@@ -226,7 +226,10 @@
   function inspectorField(label,name,value,opts){
     opts=opts||{};
     if(opts.type==="textarea")return '<label class="iwc-field">'+label+'<textarea name="'+name+'" '+(opts.readonly?'readonly':'')+'>'+escapeHtml(value||"")+'</textarea></label>';
-    if(opts.options)return '<label class="iwc-field">'+label+'<select name="'+name+'" '+(opts.disabled?'disabled':'')+'>'+opts.options.map(o=>'<option '+(o===value?'selected':'')+'>'+escapeHtml(o)+'</option>').join("")+'</select></label>';
+    if(opts.options)return '<label class="iwc-field">'+label+'<select name="'+name+'" '+(opts.disabled?'disabled':'')+'>'+opts.options.map(option=>{
+      const item=typeof option==="string"?{value:option,label:option}:option;
+      return '<option value="'+escapeHtml(item.value)+'" '+(item.value===value?'selected':'')+'>'+escapeHtml(item.label)+'</option>';
+    }).join("")+'</select></label>';
     return '<label class="iwc-field">'+label+'<input name="'+name+'" type="'+(opts.type||"text")+'" value="'+escapeHtml(value||"")+'" '+(opts.readonly?'readonly':'')+'></label>';
   }
   function openInspector(id,focusTitle){
@@ -245,7 +248,11 @@
     panel.innerHTML='<div class="iwc-inspector-head"><span class="iwc-type-mark">'+(meeting?icon("calendar"):'☐')+'</span><h3>'+(meeting?'Meeting':'Task')+'</h3><button class="iwc-close" type="button" aria-label="Close">×</button></div>'+
       (sourceOwned?'<p class="iwc-authority">Time and title are managed by Google Calendar.</p>':'')+
       inspectorField("Title","title",ev.title,{readonly:sourceOwned||past})+
-      inspectorField("Status","status",ev.status||"open",{options:["open","in_progress","done"],disabled:past})+
+      inspectorField("Status","status",ev.status||"open",{options:[
+        {value:"open",label:"Open"},
+        {value:"in_progress",label:"In progress"},
+        {value:"done",label:"Done"}
+      ],disabled:past})+
       (!meeting?inspectorField("Priority","priority",ev.priority||"Medium",{options:["Low","Medium","High","Critical"],disabled:past}):'')+
       inspectorField("Date","date",ev._block.date,{type:"date",readonly:timeReadonly})+
       (ev.allDay?'<label class="iwc-field">All day through<input name="allDayEnd" type="date" value="'+escapeHtml(ev.allDayEnd||addDays(ev._block.date,1))+'" '+(timeReadonly?'readonly':'')+'></label>':inspectorField("Start","start",ev.start,{type:"time",readonly:timeReadonly})+inspectorField("End","end",ev.end,{type:"time",readonly:timeReadonly}))+
@@ -270,10 +277,18 @@
         return;
       }
       if(input.name==="status"){
-        await root.blockStore.setTaskCompletion(ev._blockId,input.value==="done",{
-          block:ev._block,taskDate:ev._block.date,completedAt:input.value==="done"?new Date().toISOString():null
-        });
-        await build({keepScroll:true});openInspector(ev._blockId);return;
+        try{
+          if(input.value==="done"){
+            await toggleComplete(ev,true);
+          }else{
+            if(isComplete(ev))await toggleComplete(ev,false);
+            const latest=root.blockStore.get(ev._blockId)||ev._block;
+            await root.blockStore.updateBlock(ev._blockId,{...(latest.properties||{}),status:input.value});
+            await build({keepScroll:true});
+          }
+          openInspector(ev._blockId);
+        }catch(e){toast(e.message||"Could not update status.","error");}
+        return;
       }
       const next={...ev._block.properties};
       next[input.name]=input.name==="tags"?input.value.split(",").map(x=>x.trim()).filter(Boolean):input.value;

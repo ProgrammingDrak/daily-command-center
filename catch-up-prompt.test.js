@@ -64,6 +64,7 @@ function FakeEl(tag) {
     },
     fire(ev, arg) { (el._on[ev] || []).forEach(fn => fn(arg || { target: el })); },
     appendChild(c) { el.children.push(c); return c; },
+    prepend(c) { el.children.unshift(c); return c; },
     // Strict like the real DOM: a non-child reference is a TypeError, not a silent
     // append. The forgiving version hid a bug where forEach's index arrived as the
     // reference node and every browser threw while the tests stayed green.
@@ -153,6 +154,13 @@ function load(daysByDate, archiveDates, extra) {
   return { ctx, saved, CO: ctx.window.DCC.Carryover };
 }
 
+// Loose Ends is now a dedicated, user-opened workspace. Boot refreshes its
+// reminder count. Tests open the workspace explicitly before checking actions.
+async function openLooseEnds(ctx) {
+  await ctx.window.initCatchUp();
+  return ctx.window.DCC.CatchUp.open();
+}
+
 // Titles the prompt actually rendered, in order.
 function listedTitles(ctx) {
   const overlay = ctx.document.getElementById("catchup-overlay");
@@ -175,7 +183,7 @@ test("a done subtask is NOT offered as work that slipped", async () => {
     blk("kid", d, { title: "Washer", subtaskOf: "parent" }),
     blk("real", d, { title: "Actually unfinished" })
   ] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   assert.deepEqual(listedTitles(ctx), ["Actually unfinished"]);
 });
 
@@ -187,7 +195,7 @@ test("roots only: a child with an open parent nests and is not listed separately
     blk("kid", d, { title: "Write the tests", subtaskOf: "parent" }),
     blk("ride", d, { title: "Ride along", wrapId: "parent" })
   ] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   assert.deepEqual(listedTitles(ctx), ["Ship C1"]);
 });
 
@@ -201,7 +209,7 @@ test("a child orphaned by a FINISHED parent is still real work and stays listed"
     blk("parent", d, { title: "Do Laundry" }),
     blk("kid", d, { title: "Dryer still running", subtaskOf: "parent" })
   ] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   assert.deepEqual(listedTitles(ctx), ["Dryer still running"]);
 });
 
@@ -212,7 +220,7 @@ test("an all-done pool marks the day reviewed instead of opening an empty prompt
     blk("parent", d, { title: "Do Laundry" }),
     blk("kid", d, { title: "Washer", subtaskOf: "parent" })
   ] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   assert.equal(ctx.document.getElementById("catchup-overlay"), null, "no modal should be built");
   assert.ok(saved._catchUpReviewed, "the day must be marked reviewed so it does not re-prompt");
 });
@@ -220,17 +228,17 @@ test("an all-done pool marks the day reviewed instead of opening an empty prompt
 test("nothing unfinished at all: reviewed, no prompt", async () => {
   const d = ymd(1);
   const { ctx, saved } = load({ [d]: [dayRoot({ _done: { ids: ["only"] } }), blk("only", d, {})] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   assert.equal(ctx.document.getElementById("catchup-overlay"), null);
   assert.ok(saved._catchUpReviewed);
 });
 
-test("an already-reviewed day never prompts twice", async () => {
+test("boot never reopens reviewed Loose Ends", async () => {
   const d = ymd(1);
   const { ctx } = load({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   assert.deepEqual(listedTitles(ctx), ["Slipped"]);
-  // Second call on the same day: the flag is set, so it must bail before building.
+  // A reviewed day remains closed during boot. Manual access remains available.
   const { ctx: ctx2, saved: saved2 } = load({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d]);
   saved2._catchUpReviewed = new Date(0).toISOString();
   await ctx2.window.initCatchUp();
@@ -253,7 +261,7 @@ test("Drop routes the listed ROOT through DCC.Carryover.drop and clears its row"
   const { ctx } = load({ [d]: [
     dayRoot(), blk("p", d, { title: "Slipped" }), blk("k", d, { title: "Kid", subtaskOf: "p" })
   ] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   let got = null;
   ctx.window.DCC.Carryover.drop = async (ev, pool) => { got = { id: ev.id, pool: pool.length }; return { removed: [ev.id, "k"] }; };
 
@@ -270,7 +278,7 @@ test("a settled task is pruned from the Loose Ends fallback snapshot", async () 
   const { ctx } = load({ [d]: [
     dayRoot(), blk("p", d, { title: "Slipped" }), blk("k", d, { title: "Kid", subtaskOf: "p" })
   ] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
 
   ctx.dispatchEvent(new ctx.CustomEvent("dcc:carryover-settled", {
     detail: { action: "drop", removed: ["p", "k"], sourceDate: d }
@@ -286,7 +294,7 @@ test("a settled task is pruned from the Loose Ends fallback snapshot", async () 
 test("Today moves the root to the current day", async () => {
   const d = ymd(1);
   const { ctx } = load({ [d]: [dayRoot(), blk("p", d, { title: "Slipped" })] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   let target = null;
   ctx.window.DCC.Carryover.moveTo = async (ev, date) => { target = date; return { removed: [ev.id] }; };
   row0(ctx).querySelector(".cu-today").fire("click");
@@ -299,7 +307,7 @@ test("Complete routes the root and full pool through the shared origin-day compl
   const { ctx } = load({ [d]: [
     dayRoot(), blk("p", d, { title: "Slipped" }), blk("k", d, { title: "Kid", subtaskOf: "p" })
   ] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   let got = null;
   const r = row0(ctx);
   ctx.window.DCC.Carryover.complete = async (ev, pool) => {
@@ -315,7 +323,7 @@ test("Complete routes the root and full pool through the shared origin-day compl
 test("a failed completion stays in the review instead of pretending it persisted", async () => {
   const d = ymd(1);
   const { ctx } = load({ [d]: [dayRoot(), blk("p", d, { title: "Slipped" })] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const r = row0(ctx);
   ctx.window.DCC.Carryover.complete = async () => null;
   r.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
@@ -327,7 +335,7 @@ test("a failed completion stays in the review instead of pretending it persisted
 test("completing the focused row moves focus to the next completion control", async () => {
   const d = ymd(1);
   const { ctx } = load({ [d]: [dayRoot(), blk("a", d, { title: "A" }), blk("b", d, { title: "B" })] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const rows = ctx.document.getElementById("catchup-overlay").querySelector("#catchup-list").children
     .filter(r => r.className && r.className.indexOf("carryover-row") > -1);
   const firstComplete = rows[0].querySelector(".cu-complete");
@@ -345,7 +353,7 @@ test("completing the final focused row returns focus to the task launcher", asyn
   const launcher = ctx.document.createElement("button");
   launcher.id = "dcc-launcher-btn";
   ctx.document.body.appendChild(launcher);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const row = row0(ctx);
   const complete = row.querySelector(".cu-complete");
   ctx.document.activeElement = complete;
@@ -359,7 +367,7 @@ test("the full title is available on hover and the row expands read-only details
   const d = ymd(1);
   const longTitle = "Review the full Offers Script draft and all implementation notes";
   const { ctx } = load({ [d]: [dayRoot(), blk("p", d, { title: longTitle })] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const r = row0(ctx);
   const title = r.querySelector(".carryover-row-title");
   const toggle = r.querySelector(".cu-details-toggle");
@@ -387,7 +395,7 @@ test("the full title is available on hover and the row expands read-only details
 test("details expansion uses a native button and explains an empty task", async () => {
   const d = ymd(1);
   const { ctx } = load({ [d]: [dayRoot(), blk("p", d, { title: "Slipped" })] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const r = row0(ctx);
   const toggle = r.querySelector(".cu-details-toggle");
   ctx.window.DCC.Carryover.loadDetails = async () => ({ title: "Slipped", details: [], notes: [] });
@@ -404,7 +412,7 @@ test("Move all to today drains the queue, defers the refold, and marks the day r
   const { ctx, saved } = load({ [d]: [
     dayRoot(), blk("a", d, { title: "A" }), blk("b", d, { title: "B" }), blk("c", d, { title: "C" })
   ] }, [d]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const moves = [];
   let refolds = 0;
   ctx.window.DCC.Carryover.moveTo = async (ev, date, opts) => {
@@ -454,7 +462,7 @@ function meetingCtx(action, completionResult) {
 
 test("meeting follow-ups have an already-done checkmark that completes the approved action", async () => {
   const { ctx, calls } = meetingCtx(MTG_ACTION);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
   row.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -465,7 +473,7 @@ test("meeting follow-ups have an already-done checkmark that completes the appro
 
 test("retrying an approved meeting follow-up completes its existing action without duplicating it", async () => {
   const { ctx, calls } = meetingCtx({ ...MTG_ACTION, approvedBlockId: "approved-existing" });
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
   row.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -476,7 +484,7 @@ test("retrying an approved meeting follow-up completes its existing action witho
 
 test("a pending meeting completion stays visible, re-enables, and restores focus", async () => {
   const { ctx, calls } = meetingCtx(MTG_ACTION, { ok: false, pending: true });
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
   const complete = row.querySelector(".cu-complete");
   ctx.document.activeElement = complete;
@@ -493,7 +501,7 @@ test("completing the final meeting follow-up returns focus to the task launcher"
   const launcher = ctx.document.createElement("button");
   launcher.id = "dcc-launcher-btn";
   ctx.document.body.appendChild(launcher);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
   const complete = row.querySelector(".cu-complete");
   ctx.document.activeElement = complete;
@@ -508,7 +516,7 @@ test("meeting Details opens that meeting's recap", async () => {
     fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION] }) }),
     openPrepModal: (meeting, opts) => opened.push({ meeting, opts })
   });
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
   row.querySelector(".cu-mtg-details").fire("click");
   assert.deepEqual(JSON.parse(JSON.stringify(opened)), [{
@@ -527,7 +535,7 @@ test("signaled meeting actions render above automated meeting actions", async ()
   const { ctx } = triageCtx({ [ymd(1)]: [dayRoot()] }, [ymd(1)], [], {
     fetch: async () => ({ ok: true, json: async () => ({ items: [automated, signaled] }) }),
   });
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const children = [...allRowsOf(ctx)];
   const labels = children.filter(r => r.className === "cu-section-label").map(r => r.textContent);
   assert.deepEqual(labels, ["Signaled Action Items from Meetings", "Automated Action Items from Meetings"]);
@@ -549,7 +557,7 @@ test("a delegated meeting row keeps the shared layout without stealing the owner
     throw new Error("Unexpected URL " + url);
   };
   const { ctx } = triageCtx({ [ymd(1)]: [dayRoot()] }, [ymd(1)], [], { fetch });
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
   assert.match(row.innerHTML, /<button disabled[^>]*class="btn-schedule cu-cal"/,
     "delegated rows keep the shared calendar control, visibly disabled");
@@ -656,7 +664,7 @@ function waitingCtx(draftOverrides) {
 
 test("Waiting has one Loose Ends row with its internal draft, not a duplicate triage row", async () => {
   const { ctx } = waitingCtx();
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   assert.deepEqual([...rowsOf(ctx)].map(titleOf).filter(Boolean), ["Launch plan"]);
   assert.deepEqual(
     [...allRowsOf(ctx)].filter(r => r.className === "cu-section-label").map(r => r.textContent),
@@ -670,7 +678,7 @@ test("Waiting has one Loose Ends row with its internal draft, not a duplicate tr
 
 test("Waiting actions snooze, schedule a check-in, unblock, and copy the fallback", async () => {
   const { ctx, calls } = waitingCtx();
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
   row.querySelector(".cu-wait-details").fire("click");
   assert.equal(row.querySelector(".cu-details").hidden, false);
@@ -690,7 +698,7 @@ test("Waiting actions snooze, schedule a check-in, unblock, and copy the fallbac
 
 test("a source-backed Waiting draft offers one Review and Send action", async () => {
   const { ctx, calls } = waitingCtx({ link: "https://slack.example/thread" });
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
   const detailsBody = row.querySelector(".cu-details-body");
   const actionHtml = detailsBody.children[detailsBody.children.length - 1].innerHTML;
@@ -707,7 +715,7 @@ test("a failed Waiting draft copy closes the reserved source tab", async () => {
   const pending = { opener: {}, location: {}, closed: false, close() { this.closed = true; } };
   ctx.window.open = () => pending;
   ctx.window.DCC.Waiting.copyText = async () => false;
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
   let prevented = false;
   row.querySelector(".cu-wait-copy").fire("click", { preventDefault() { prevented = true; } });
@@ -726,7 +734,7 @@ test("the unified modal follows the requested section order", async () => {
     { fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION] }) }) }
   );
   installDayReview(ctx, 2);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   assert.deepEqual(
     [...allRowsOf(ctx)].filter(r => r.className === "cu-section-label").map(r => r.textContent),
     ["Slipped tasks", "Slack", "Gmail", "Automated Action Items from Meetings", "Day in Review"]
@@ -744,7 +752,7 @@ test("every Loose Ends row uses checkmark, title, calendar, Today, Drop, Details
     [TRI("s1")],
     { fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION, delegated] }) }) }
   );
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const rows = [...rowsOf(ctx)];
   assert.equal(rows.length, 4);
   for (const row of rows) {
@@ -768,7 +776,7 @@ test("an unaddressed Day in Review keeps the Loose Ends reminder after close", a
   const pill = ctx.document.createElement("button"); pill.id = "loose-ends-pill"; pill.hidden = true; ctx.document.body.appendChild(pill);
   const count = ctx.document.createElement("span"); count.id = "loose-ends-pill-count"; ctx.document.body.appendChild(count);
   installDayReview(ctx, 3);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   assert.equal(pill.hidden, false);
   assert.equal(count.textContent, "3");
   ctx.document.getElementById("catchup-overlay").querySelector("#catchup-close").fire("click");
@@ -780,7 +788,7 @@ test("a completed Day in Review still opens the morning Journal once", async () 
   const d = ymd(1);
   const { ctx, saved } = load({ [d]: [dayRoot()] }, [d]);
   installDayReview(ctx, 0);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const overlay = ctx.document.getElementById("catchup-overlay");
   assert.equal(overlay.classList.contains("open"), true);
   assert.ok([...allRowsOf(ctx)].some(row => row.className === "cu-journal-wrap"));
@@ -794,13 +802,13 @@ test("a Day in Review load failure never marks the morning reviewed", async () =
     load: async () => { throw new Error("temporarily unavailable"); },
     pendingCount: () => 0
   };
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   assert.equal(saved._catchUpReviewed, undefined);
-  assert.equal(ctx.document.getElementById("catchup-overlay"), null,
-    "a partial first-run modal waits and retries instead of hiding an omitted section");
+  assert.ok(ctx.document.getElementById("catchup-overlay"),
+    "manual review stays available and reports the partial load");
 });
 
-test("fresh sweep arrivals still open when Day in Review is temporarily unavailable", async () => {
+test("fresh sweep arrivals update Loose Ends without opening it", async () => {
   const { ctx, saved } = triageCtx({}, [], [TRI("s1")]);
   ctx.window.DCC.DayReview = {
     load: async () => { throw new Error("temporarily unavailable"); },
@@ -808,8 +816,10 @@ test("fresh sweep arrivals still open when Day in Review is temporarily unavaila
   };
   const opened = await ctx.window.DCC.CatchUp.openArrivals(["s1"]);
   assert.equal(opened, true);
+  assert.equal(ctx.document.getElementById("catchup-overlay"), null);
+  await ctx.window.DCC.CatchUp.open();
   const overlay = ctx.document.getElementById("catchup-overlay");
-  assert.equal(overlay.querySelector("#catchup-title").textContent, "Fresh from the sweep");
+  assert.equal(overlay.querySelector("#catchup-title").textContent, "Loose Ends");
   assert.deepEqual([...rowsOf(ctx)].map(titleOf).filter(Boolean), ["Reply to s1"]);
   overlay.querySelector("#catchup-close").fire("click");
   assert.equal(saved._catchUpReviewed, undefined, "closing a partial fresh modal never marks the morning reviewed");
@@ -824,7 +834,7 @@ test("fresh arrivals stay unreviewed when slipped tasks or meeting follow-ups fa
     installDayReview(ctx, 0);
     if (failedSource === "slipped") ctx.window.DCC.Carryover.collect = async () => { throw new Error("tasks unavailable"); };
     assert.equal(await ctx.window.DCC.CatchUp.openArrivals(["s1"]), true);
-    ctx.document.getElementById("catchup-overlay").querySelector("#catchup-close").fire("click");
+    assert.equal(ctx.document.getElementById("catchup-overlay"), null);
     assert.equal(saved._catchUpReviewed, undefined, failedSource + " failure must keep the morning retryable");
   }
 });
@@ -832,7 +842,7 @@ test("fresh arrivals stay unreviewed when slipped tasks or meeting follow-ups fa
 test("triage items ride along with the tasks that slipped, in their own section", async () => {
   const d = ymd(1);
   const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("m1")]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   // The unified morning sequence starts with what slipped, then moves into comms.
   const listed = [...rowsOf(ctx)].map(titleOf).filter(Boolean);
   assert.deepEqual(listed, ["Slipped", "Reply to m1"]);
@@ -844,7 +854,7 @@ test("a triage-only morning still opens the prompt (and does not mark it reviewe
   // Nothing unfinished at all: the old gate returned early on an empty root list,
   // which would have swallowed a mailbox full of replies.
   const { ctx, saved } = triageCtx({ [d]: [dayRoot({ _done: { ids: ["only"] } }), blk("only", d, {})] }, [d], [TRI("m1")]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   assert.deepEqual([...rowsOf(ctx)].map(titleOf).filter(Boolean), ["Reply to m1"]);
   assert.equal(saved._catchUpReviewed, undefined, "an open prompt has not been answered yet");
 });
@@ -852,14 +862,14 @@ test("a triage-only morning still opens the prompt (and does not mark it reviewe
 test("boot banks what is already waiting so the pet does not run at page load", async () => {
   const d = ymd(1);
   const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1"), TRI("m2")]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   assert.deepEqual(calls.seen, ["m1", "m2"]);
 });
 
 test("Today on a triage row schedules it on the current day and clears the row", async () => {
   const d = ymd(1);
   const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const first = [...rowsOf(ctx)][0];
   first.querySelector(".cu-tri-today").fire("click");
   await new Promise(r => setTimeout(r, 0));
@@ -871,7 +881,7 @@ test("triage Details expands the item context without changing its metadata", as
   const d = ymd(1);
   const item = TRI("m1", { summary: "Needs a reply before Friday", draft_preview: "Thanks for checking in." });
   const { ctx } = triageCtx({ [d]: [dayRoot()] }, [d], [item]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
   const toggle = row.querySelector(".cu-tri-details");
   const details = row.querySelector(".cu-details");
@@ -886,7 +896,7 @@ test("triage Details expands the item context without changing its metadata", as
 test("triage Details includes notes-only context", async () => {
   const d = ymd(1);
   const { ctx } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1", { notes: "Use the approved response." })]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
   row.querySelector(".cu-tri-details").fire("click");
   assert.equal(row.querySelector(".cu-details-body").children[0].children[1].textContent,
@@ -896,7 +906,7 @@ test("triage Details includes notes-only context", async () => {
 test("triage rows have an already-done checkmark that resolves them", async () => {
   const d = ymd(1);
   const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
   row.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -907,7 +917,7 @@ test("triage rows have an already-done checkmark that resolves them", async () =
 test("completing focused triage moves focus to the next source's completion control", async () => {
   const d = ymd(1);
   const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("m1")]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const rows = [...rowsOf(ctx)].filter(row => row.className.includes("carryover-row"));
   const triageComplete = rows.find(row => row.className.includes("cu-triage-row")).querySelector(".cu-complete");
   const slippedComplete = rows.find(row => row.className.includes("cu-task-row")).querySelector(".cu-complete");
@@ -923,7 +933,7 @@ test("a refused schedule leaves the triage row in place and re-enables it", asyn
   // row must survive so the answer isn't silently lost.
   const { ctx } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")],
     { scheduleTriageOnDate: async () => null });
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const r = [...rowsOf(ctx)][0];
   r.querySelector(".cu-tri-today").fire("click");
   await new Promise(r2 => setTimeout(r2, 0));
@@ -934,7 +944,7 @@ test("a refused schedule leaves the triage row in place and re-enables it", asyn
 test("Drop on a triage row deletes the triage item, never a block", async () => {
   const d = ymd(1);
   const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   let carryoverDrops = 0;
   ctx.window.DCC.Carryover.drop = async () => { carryoverDrops++; return null; };
   const r = [...rowsOf(ctx)][0];
@@ -954,7 +964,7 @@ test("the calendar button on a task row routes its pick through the same mover",
   // An apostrophe in the title is the case that catches double-escaping: the popover
   // escapes the header itself, so an esc() here would render a literal &#39;.
   const { ctx, calls } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Bob's & Sue's deck" })] }, [d], []);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const moves = [];
   ctx.window.DCC.Carryover.moveTo = async (ev, date) => { moves.push({ id: ev.id, date }); return { removed: [ev.id] }; };
   const r = [...rowsOf(ctx)][0];
@@ -970,7 +980,7 @@ test("the calendar button on a task row routes its pick through the same mover",
 test("the calendar button on a triage row routes its pick through the triage scheduler", async () => {
   const d = ymd(1);
   const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const r = [...rowsOf(ctx)][0];
   r.querySelector(".cu-cal").fire("click", { target: r.querySelector(".cu-cal") });
   assert.equal(calls.pickers.length, 1);
@@ -981,7 +991,7 @@ test("the calendar button on a triage row routes its pick through the triage sch
 test("Move all to today takes the triage rows with it", async () => {
   const d = ymd(1);
   const { ctx, calls } = triageCtx({ [d]: [dayRoot(), blk("a", d, { title: "A" })] }, [d], [TRI("m1")]);
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   ctx.window.DCC.Carryover.moveTo = async (ev) => ({ removed: [ev.id] });
   ctx.window.DCC.Carryover.refoldViewedDay = async () => {};
   ctx.document.getElementById("catchup-overlay").querySelector("#catchup-all").fire("click");
@@ -991,21 +1001,16 @@ test("Move all to today takes the triage rows with it", async () => {
 });
 
 // ───────────────── the courier's prompt (openArrivals) ─────────────────
-test("openArrivals leads with what arrived and folds the rest behind one line", async () => {
+test("openArrivals refreshes the workspace without interrupting work", async () => {
   const d = ymd(1);
   const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d],
     [TRI("new1"), TRI("old1"), TRI("old2")]);
   const shown = await ctx.window.DCC.CatchUp.openArrivals(["new1"]);
   assert.equal(shown, true);
+  assert.equal(ctx.document.getElementById("catchup-overlay"), null);
+  await ctx.window.DCC.CatchUp.open();
   const listed = [...rowsOf(ctx)].map(titleOf).filter(Boolean);
-  assert.deepEqual(listed, ["Slipped", "Reply to new1"], "the normal Loose Ends order remains stable; older items are not listed up front");
-  const older = [...allRowsOf(ctx)].find(r => r.className && r.className.indexOf("cu-tri-older") > -1);
-  assert.ok(older, "but one line says they exist");
-  assert.match(older.textContent, /2 older waiting/);
-  // Expanding appends in place rather than re-opening the modal, which would
-  // re-bind the footer's "Move all" and run it twice per click.
-  older.fire("click");
-  assert.deepEqual([...rowsOf(ctx)].map(titleOf).filter(Boolean),
+  assert.deepEqual(listed,
     ["Slipped", "Reply to new1", "Reply to old1", "Reply to old2"]);
 });
 
@@ -1028,7 +1033,7 @@ test("a second open does not leave the first Move-all handler bound", async () =
   const d = ymd(1);
   const { ctx, calls } = triageCtx({ [d]: [dayRoot(), blk("a", d, { title: "A" })] }, [d], [TRI("m1")]);
   ctx.window.DCC.Carryover.refoldViewedDay = async () => {};
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   await ctx.window.DCC.CatchUp.openArrivals(["m1"]);      // same overlay, footer re-bound
   const moves = [];
   ctx.window.DCC.Carryover.moveTo = async (ev) => { moves.push(ev.id); return { removed: [ev.id] }; };
@@ -1046,8 +1051,8 @@ test("Move all defers the per-item refold for triage rows too", async () => {
   ctx.window.DCC.Carryover.moveTo = async (ev) => ({ removed: [ev.id] });
   ctx.window.DCC.Carryover.refoldViewedDay = async () => { refolds++; };
   ctx.document.getElementById("catchup-overlay") // build it first
-    || await ctx.window.initCatchUp();
-  await ctx.window.initCatchUp();
+    || await openLooseEnds(ctx);
+  await openLooseEnds(ctx);
   ctx.document.getElementById("catchup-overlay").querySelector("#catchup-all").fire("click");
   await new Promise(r => setTimeout(r, 30));
   assert.equal(refolds, 1, "ONE refold for the whole batch, after both loops");
@@ -1077,7 +1082,7 @@ test("the calendar button is really in every row kind's markup", async () => {
   const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("m1")], {
     fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION] }) })
   });
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const rows = [...rowsOf(ctx)].filter(r => r.className && r.className.indexOf("carryover-row") > -1);
   assert.equal(rows.length, 3);
   for (const r of rows) {
@@ -1119,7 +1124,7 @@ test("a delegated check-in row in the envelope is labelled as a check-in", async
      TRI("s1")],
     { isWaitingCheckIn: item => !!(item && (item.waiting_item_id || item.source === "waiting_checkin")) }
   );
-  await ctx.window.initCatchUp();
+  await openLooseEnds(ctx);
   const rows = [...rowsOf(ctx)];
   const checkIn = rows.find(r => titleOf(r) === "Check in: Launch plan");
   const plain = rows.find(r => titleOf(r) === "Reply to s1");

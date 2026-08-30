@@ -1010,12 +1010,14 @@
       ?"Edit this and following occurrences"
       :(id?"Edit repeat responsibility":(p.createdFrom==="task"?"Task to repeat responsibility":"New repeat responsibility"));
     document.getElementById("responsibility-modal-overlay").classList.add("open");
+    document.querySelector(".repeat-workspace")?.classList.add("editing");
     setTimeout(()=>document.getElementById("resp-title").focus(),20);
   }
 
   function closeResponsibilityModal(){
     const overlay=document.getElementById("responsibility-modal-overlay");
     if(overlay)overlay.classList.remove("open");
+    document.querySelector(".repeat-workspace")?.classList.remove("editing");
     _seriesEditContext=null;
   }
 
@@ -1106,8 +1108,8 @@
     }catch(error){if(typeof showToast==="function")showToast("Delete failed: "+(error.message||error),"error");}
   }
 
-  // The library lives in a dedicated modal now (the drawer just opens it). Same
-  // tool/list IDs as before, so renderRepeatResponsibilitiesSidebar populates it.
+  // The library and editor share one Task Manager workspace. Moving the existing
+  // nodes preserves every binding and keeps their data paths unchanged.
   let _responsibilityManagerTrigger=null;
   const _managerFocusable='button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
   function trapResponsibilityManagerFocus(event){
@@ -1121,11 +1123,12 @@
     else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
   }
   function openResponsibilityManager(){
-    if(typeof window.closeTasksDrawer==="function")window.closeTasksDrawer();
     _responsibilityManagerTrigger=document.activeElement;
+    if(typeof window.openTasksToSection==="function")window.openTasksToSection("tm-repeat-responsibilities-section",{solo:true});
     const overlay=document.getElementById("responsibility-manage-overlay");
     if(!overlay)return;
     overlay.classList.add("open");
+    document.querySelector(".repeat-workspace")?.classList.remove("editing");
     renderRepeatResponsibilitiesSidebar();
     const search=document.getElementById("repeat-responsibilities-search");
     if(search)setTimeout(()=>search.focus(),20);
@@ -1133,8 +1136,26 @@
   function closeResponsibilityManager(){
     const overlay=document.getElementById("responsibility-manage-overlay");
     if(overlay)overlay.classList.remove("open");
+    if(typeof window.closeTasksDrawer==="function")window.closeTasksDrawer();
     if(_responsibilityManagerTrigger&&typeof _responsibilityManagerTrigger.focus==="function")_responsibilityManagerTrigger.focus();
     _responsibilityManagerTrigger=null;
+  }
+
+  function mountResponsibilityWorkspace(){
+    const section=document.getElementById("tm-repeat-responsibilities-section");
+    const manager=document.getElementById("responsibility-manage-overlay");
+    const editor=document.getElementById("responsibility-modal-overlay");
+    if(!section||!manager||!editor||section.querySelector(".repeat-workspace"))return;
+    const host=document.createElement("div");
+    host.className="repeat-workspace";
+    manager.classList.add("repeat-manager-embedded","open");
+    editor.classList.add("repeat-editor-embedded");
+    const managerClose=document.getElementById("responsibility-manage-close");
+    if(managerClose)managerClose.textContent="Close tasks";
+    const editorCancel=document.getElementById("resp-cancel");
+    if(editorCancel)editorCancel.textContent="Back";
+    host.append(manager,editor);
+    section.appendChild(host);
   }
 
   function formProps(){
@@ -1251,6 +1272,7 @@
   // Responsibilities surface itself still uses it.
 
   function bindResponsibilities(){
+    mountResponsibilityWorkspace();
     const repeatSearch=document.getElementById("repeat-responsibilities-search");
     if(repeatSearch)repeatSearch.addEventListener("input",()=>{_sidebarQuery=repeatSearch.value||"";renderRepeatResponsibilitiesSidebar();});
     const repeatFilter=document.getElementById("repeat-responsibilities-filter");

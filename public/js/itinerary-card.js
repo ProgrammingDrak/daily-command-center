@@ -209,10 +209,11 @@
     var fuTab=hasFu?'<div class="edge-tab edge-fu" data-edge="fu">'+ev.followups.length+' Actions '+chevSm+'</div>':'';
     var trivialTab='';
 
-    // Timeless subtask: empty left rail (keeps the 3-column grid aligned) — no clock.
+    // Unscheduled work names its state. It never renders a synthetic midnight.
     var timeHtml;
-    if(subTimeless){
-      timeHtml='<div class="tl-time'+(hasPrep?' has-prep':'')+'"></div>';
+    var unscheduled=!ev.start||ev.untimed;
+    if(subTimeless||unscheduled){
+      timeHtml='<div class="tl-time'+(hasPrep?' has-prep':'')+'">'+(subTimeless?'':'<span class="it-list-untimed">Unscheduled</span>')+'</div>';
     }else{
       timeHtml='<div class="tl-time'+(hasPrep?' has-prep':'')+'">'+f12(ev.start).replace(" ","<br>")+'<span class="et">'+f12(ev.end)+'</span>';
       if(hasPrep){timeHtml+='<span class="prep-line"></span>';}
@@ -257,8 +258,8 @@
     var waitChip=(!guest&&typeof window.waitingRowChipHtml==="function")?window.waitingRowChipHtml(ev):'';
 
     // Inline clock (lock indicator + start/end). Empty for a timeless subtask.
-    var tinlineHtml=subTimeless
-      ? '<span class="tinline"></span>'
+    var tinlineHtml=(subTimeless||unscheduled)
+      ? '<span class="tinline">'+(unscheduled?'<span class="it-list-untimed">Unscheduled</span>':'')+'</span>'
       : '<span class="tinline">'+(ev._locked||isMeeting(ev)?'<span class="lock-ind" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' · Now':'')+'</span>';
     // Chip slot: shell rollup, else own pie bar, else (subtask) its pie slice, else the points chip.
     var chipSlotHtml=shellChip?shellChip:(pplan?pieBarHtml:(sub?subSliceHtml:pointsChip(ev)));
@@ -272,10 +273,7 @@
           (inProgress?'<span class="task-progress-ring" aria-hidden="true"></span>':'')+
           reactionHtml+
           (guest?'':'<div class="grip" title="Drag to reorder">'+gripSvg+'</div>')+
-          (guest?'':'<button class="chk'+(chkBlocked?' chk-blocked':'')+'" title="'+(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done')+'">'+ckSvg+'</button>')+
-          (guest?'':'<div class="chk-col">'+
-            (!(tt&&tt.rollupMode)?'<button class="chk-quick" title="Quick complete (no notes)">&#9889;</button>':'')+
-          '</div>')+
+          (guest?'':'<button class="chk-quick quick-complete-control'+(chkBlocked?' chk-blocked':'')+'" title="Click to quick complete. Hold for completion notes. Shift+Enter also opens notes." aria-label="Click to quick complete. Hold for completion notes. Shift+Enter also opens notes."><span aria-hidden="true">&#9889;</span></button>')+
           '<div class="bar" style="background:'+(waitChip?'var(--waiting,#a31c43)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
           '<div class="body">'+
             '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+waitChip+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+tinlineHtml+(guest||isMeeting(ev)||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>')+(isMeeting(ev)?'<button class="btn-mtg-tags" title="Tags — mark this meeting for Recording Review" style="border:none;background:none;cursor:pointer;font-size:13px;line-height:1;padding:2px 6px;opacity:.65" onclick="event.stopPropagation();openAddModal(\''+ev.id.replace(/'/g,"\\'")+'\',\''+ev.title.replace(/'/g,"\\'")+'\')">🏷</button>':'')+(guest||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+

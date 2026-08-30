@@ -29,14 +29,14 @@
 .admin-message{font-size:13px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
 .admin-empty,.admin-error{padding:18px;color:var(--text-muted);font-size:13px}
 .admin-error{color:var(--red)}
-@media (max-width:900px){
+@media (max-width:1024px){
   .admin-body{padding:18px 14px}
   .admin-top{flex-direction:column}
   .admin-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
   .admin-grid{grid-template-columns:1fr}
   .admin-list{max-height:none}
 }
-@media (max-width:560px){
+@media (max-width:760px){
   .admin-metrics{grid-template-columns:1fr}
   .admin-row{grid-template-columns:1fr;gap:6px}
   .admin-login-head{display:none}

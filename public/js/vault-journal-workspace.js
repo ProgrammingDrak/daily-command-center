@@ -17,14 +17,14 @@
   const POSITION_KEY = "dcc:mycelium-journal-positions";
   const TRAY_LIMIT = 6;
   const POSITION_LIMIT = 20;
-  const DOCK_MIN_VIEWPORT = 900;
+  const DOCK_MIN_VIEWPORT = 1024;
   const MIN_WIDTH = 280;
   const MIN_HEIGHT = 240;
   const FOCUS_MARGIN = 24;
   const DOCK_MIN = 320;
   const MODES = ["focus", "float", "dock-left", "dock-right"];
   const DEFAULT_PREFERENCES = Object.freeze({
-    mode: "focus",
+    mode: "dock-right",
     x: 0,
     y: 0,
     width: 760,

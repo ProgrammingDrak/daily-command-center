@@ -72,6 +72,8 @@
     const error = document.getElementById("todo-public-error");
     const content = document.getElementById("todo-public-content");
     if (content) content.hidden = true;
+    const status = document.getElementById("todo-public-status");
+    if (status) status.hidden = true;
     if (error) {
       error.hidden = false;
       error.textContent = message;
@@ -416,6 +418,8 @@
     current = data;
     document.getElementById("todo-public-content").hidden = false;
     document.getElementById("todo-public-error").hidden = true;
+    const status = document.getElementById("todo-public-status");
+    if (status) status.hidden = true;
     document.getElementById("todo-public-title").textContent = data.workspaceName || "Shared Todo List";
     document.getElementById("todo-public-subtitle").textContent = data.ownerUsername ? "Live guest view for " + data.ownerUsername : "Live guest view";
     document.getElementById("todo-public-date").textContent = data.date || "Today";

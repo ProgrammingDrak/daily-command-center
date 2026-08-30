@@ -1,50 +1,130 @@
-/* tokens.css — the design-token layer. Loaded BEFORE dashboard.css so every
- * rule can reference these, and so future PRs migrate hard-coded px values to
- * tokens block-by-block (the "boy-scout" rule in ARCHITECTURE.md).
- *
- * PURE ADDITIVE: this file only DEFINES variables. Nothing consumes them yet,
- * so it changes zero pixels on its own. Root font-size stays at the browser
- * default (100%), so the ~1000 existing `font-size:NNpx` rules render
- * identically until a later PR converts a given block to --fs-*.
- *
- * Colors are re-declared here (mirroring dashboard.css :root) so tokens.css is
- * the single home for the design system; dashboard.css keeps its own :root for
- * now to avoid a cascade surprise, and the two are kept in sync by hand until
- * the color block is migrated too.
- */
+/* Daily Command Center semantic foundation.
+ * New responsive work uses only 480px, 760px, and 1024px boundaries. */
+@font-face {
+  font-family: "Poppins";
+  src: url("/public/fonts/Poppins-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Poppins";
+  src: url("/public/fonts/Poppins-Medium.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Poppins";
+  src: url("/public/fonts/Poppins-SemiBold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Poppins";
+  src: url("/public/fonts/Poppins-Bold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
 :root {
-  /* Type scale — rem-based (root = 16px). Body copy is --fs-md. clamp() only on
-   * the two heading sizes so they breathe on wide screens without turning every
-   * label fluid. */
-  --fs-xs: 0.75rem;    /* 12px — badges, meta, timestamps */
-  --fs-sm: 0.8125rem;  /* 13px — secondary text, list rows */
-  --fs-md: 0.875rem;   /* 14px — default body */
-  --fs-base: 1rem;     /* 16px — inputs (iOS no-zoom floor), emphasis */
-  --fs-lg: 1.125rem;   /* 18px — card titles */
-  --fs-xl: clamp(1.25rem, 1.1rem + 0.6vw, 1.5rem);   /* section headings */
-  --fs-2xl: clamp(1.5rem, 1.2rem + 1.2vw, 2rem);     /* page / hero headings */
+  color-scheme: dark;
 
-  /* Spacing — 4px base scale. */
-  --sp-1: 0.25rem;   /* 4  */
-  --sp-2: 0.5rem;    /* 8  */
-  --sp-3: 0.75rem;   /* 12 */
-  --sp-4: 1rem;      /* 16 */
-  --sp-5: 1.25rem;   /* 20 */
-  --sp-6: 1.5rem;    /* 24 */
-  --sp-8: 2rem;      /* 32 */
-  --sp-10: 2.5rem;   /* 40 */
+  /* Typography */
+  --font-sans: "Poppins", "Segoe UI", sans-serif;
+  --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.8125rem;
+  --fs-md: 0.875rem;
+  --fs-base: 1rem;
+  --fs-lg: 1.125rem;
+  --fs-xl: clamp(1.25rem, 1.1rem + 0.6vw, 1.5rem);
+  --fs-2xl: clamp(1.5rem, 1.2rem + 1.2vw, 2rem);
+  --leading-tight: 1.25;
+  --leading-body: 1.55;
 
-  /* Radius. */
-  --r-sm: 4px;
-  --r-md: 8px;
-  --r-lg: 12px;
-  --r-xl: 16px;
+  /* Spacing */
+  --sp-0: 0;
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.25rem;
+  --sp-6: 1.5rem;
+  --sp-8: 2rem;
+  --sp-10: 2.5rem;
+  --sp-12: 3rem;
+
+  /* Shape and depth */
+  --r-sm: 0.375rem;
+  --r-md: 0.5rem;
+  --r-lg: 0.75rem;
+  --r-xl: 1rem;
   --r-full: 9999px;
+  --shadow-1: 0 8px 24px rgba(0, 0, 0, 0.28);
+  --shadow-2: 0 20px 56px rgba(0, 0, 0, 0.48);
+  --target-min: 44px;
 
-  /* Breakpoints are documented here as the canonical set (used in @media by
-   * hand; CSS custom props can't drive media queries):
-   *   480px  small phone
-   *   760px  the mobile boundary (matches mobile-shell.js MOBILE_QUERY)
-   *   1024px desktop
-   * New responsive rules use these three; don't add ad-hoc values. */
+  /* Dark cockpit surfaces */
+  --surface-canvas: #09111f;
+  --surface-base: #0f1a2b;
+  --surface-raised: #162337;
+  --surface-overlay: #1b2a40;
+  --surface-hover: #22344d;
+  --surface-scrim: rgba(2, 8, 23, 0.72);
+
+  /* Text and borders */
+  --ink-strong: #f5f8fc;
+  --ink: #dbe5f1;
+  --ink-muted: #9aabc0;
+  --ink-faint: #6f8299;
+  --line-subtle: #24364e;
+  --line: #324760;
+  --line-strong: #4a627f;
+
+  /* Clever semantic color */
+  --brand: #0075eb;
+  --brand-hover: #1688f5;
+  --brand-soft: rgba(0, 117, 235, 0.16);
+  --success: #00b373;
+  --success-soft: rgba(0, 179, 115, 0.14);
+  --warning: #f5a524;
+  --warning-soft: rgba(245, 165, 36, 0.14);
+  --danger: #ef5b67;
+  --danger-soft: rgba(239, 91, 103, 0.14);
+  --info: #48a6f2;
+  --purple-semantic: #a78bfa;
+  --cyan-semantic: #38c7dd;
+  --orange-semantic: #f28a45;
+
+  /* Focus and layering */
+  --focus-ring: 0 0 0 3px rgba(72, 166, 242, 0.36);
+  --z-sticky: 200;
+  --z-popover: 1200;
+  --z-overlay: 10000;
+  --z-toast: 11000;
+
+  /* Legacy aliases keep existing surfaces on the semantic palette. */
+  --bg: var(--surface-canvas);
+  --bg-elev: var(--surface-raised);
+  --card: var(--surface-raised);
+  --card-hover: var(--surface-hover);
+  --border: var(--line);
+  --text: var(--ink);
+  --text-muted: var(--ink-muted);
+  --accent: var(--brand);
+  --accent-light: var(--info);
+  --green: var(--success);
+  --green-bg: var(--success-soft);
+  --amber: var(--warning);
+  --amber-bg: var(--warning-soft);
+  --red: var(--danger);
+  --purple: var(--purple-semantic);
+  --purple-bg: rgba(167, 139, 250, 0.14);
+  --cyan: var(--cyan-semantic);
+  --cyan-bg: rgba(56, 199, 221, 0.12);
+  --orange: var(--orange-semantic);
+  --orange-bg: rgba(242, 138, 69, 0.14);
 }

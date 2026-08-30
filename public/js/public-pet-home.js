@@ -9,6 +9,8 @@
   function setError(message){
     document.getElementById("public-pet-content").hidden=true;
     const err=document.getElementById("public-pet-error");
+    const status=document.getElementById("public-pet-status");
+    if(status)status.hidden=true;
     err.hidden=false;
     err.textContent=message;
   }
@@ -56,6 +58,8 @@
   function render(){
     const home=state.home;
     document.getElementById("public-pet-content").hidden=false;
+    const status=document.getElementById("public-pet-status");
+    if(status)status.hidden=true;
     document.getElementById("public-pet-title").textContent=(home.pet&&home.pet.name?home.pet.name:"Pet")+" Home";
     document.getElementById("public-pet-subtitle").textContent="Visit, cheer, and suggest tasks for the shared board.";
     renderAvatar(home);

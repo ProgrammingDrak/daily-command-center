@@ -1,4 +1,6 @@
 (function(){
+  var activityCollection = null;
+  var feedbackCollection = null;
   function $(id){ return document.getElementById(id); }
   function text(id, value){ var el = $(id); if (el) el.textContent = value; }
   function esc(value) { return window.DCC.esc(value); } // delegates to core.js
@@ -12,47 +14,33 @@
     var list = $("activity-list");
     text("activity-count", items.length + " shown");
     if (!list) return;
-    if (!items.length) {
-      list.innerHTML = '<div class="admin-empty">No logins found yet.</div>';
-      return;
-    }
-    var header = '<div class="admin-login-head">' +
-      '<span>User</span>' +
-      '<span>Logged in</span>' +
-      '<span>From</span>' +
-    '</div>';
-    list.innerHTML = header + items.map(function(item){
-      return '<article class="admin-login-row">' +
-        '<div class="admin-login-user">' + esc(item.username || ("User #" + (item.userId || item.id))) + '</div>' +
-        '<div class="admin-login-time">' + esc(fmtTime(item.timestamp)) + '</div>' +
-        '<div class="admin-login-origin">' + esc(item.origin || item.ipAddress || "Unknown") + '</div>' +
-      '</article>';
-    }).join("");
+    var rows = items.map(function(item){ return {
+      username: item.username || ("User #" + (item.userId || item.id)),
+      status: item.status || "Success",
+      timestamp: item.timestamp,
+      origin: item.origin || item.ipAddress || "Unknown"
+    }; });
+    if (activityCollection) activityCollection.update(rows);
+    else activityCollection = window.DCC.collection.mount(list, { rows: rows, stateKey: "admin-activity", urlKey: "activity" });
   }
   function renderFeedback(items){
     var list = $("feedback-list");
     text("feedback-count", items.length + " shown");
     if (!list) return;
-    if (!items.length) {
-      list.innerHTML = '<div class="admin-empty">No feedback messages yet.</div>';
-      return;
-    }
-    list.innerHTML = items.map(function(item){
-      return '<article class="admin-row">' +
-        '<div class="admin-time">' + esc(fmtTime(item.created_at)) + '</div>' +
-        '<div>' +
-          '<div class="admin-message">' + esc(item.message) + '</div>' +
-          '<div class="admin-meta">' +
-            (item.page_path ? '<span>' + esc(item.page_path) + '</span>' : '') +
-            '<span>#' + esc(item.id) + '</span>' +
-          '</div>' +
-        '</div>' +
-      '</article>';
-    }).join("");
+    var rows = items.map(function(item){ return {
+      status: item.status || "Received",
+      created_at: item.created_at,
+      message: item.message,
+      page_path: item.page_path || "—",
+      id: item.id
+    }; });
+    if (feedbackCollection) feedbackCollection.update(rows);
+    else feedbackCollection = window.DCC.collection.mount(list, { rows: rows, stateKey: "admin-feedback", urlKey: "feedback" });
   }
   async function loadAdmin(){
     var refresh = $("admin-refresh");
     if (refresh) refresh.disabled = true;
+    text("admin-refresh-status", "Loading…");
     try {
       var response = await fetch("/api/admin/activity?limit=100");
       var data = await response.json().catch(function(){ return {}; });
@@ -63,12 +51,16 @@
       text("metric-feedback", String((data.feedback || []).length));
       text("metric-last-activity", fmtTime(data.summary && data.summary.latestActivityAt));
       text("metric-last-feedback", fmtTime(data.summary && data.summary.latestFeedbackAt));
+      text("admin-refresh-status", "Updated " + new Date().toLocaleTimeString([], { hour:"numeric", minute:"2-digit" }));
     } catch (err) {
       var msg = esc(err.message || "Could not load admin data");
       var activity = $("activity-list");
       var feedback = $("feedback-list");
       if (activity) activity.innerHTML = '<div class="admin-error">' + msg + '</div>';
       if (feedback) feedback.innerHTML = '<div class="admin-error">' + msg + '</div>';
+      activityCollection = null;
+      feedbackCollection = null;
+      text("admin-refresh-status", "Refresh failed");
     } finally {
       if (refresh) refresh.disabled = false;
     }

@@ -497,7 +497,7 @@ function saveBountyState(){
 function hydrateBountyState(){dailyBounty=loadBountyState();}
 function getDailyBounty(){return dailyBounty;}
 function isBountyTask(id){return getBountyCountForTask(id)>0}
-function placeBounty(id){
+function placeBounty(id,confirmed){
   if(typeof viewMode!=="undefined"&&viewMode==="archive"){
     if(typeof showToast==="function")showToast("Archived days are read-only","info");
     return;
@@ -517,6 +517,20 @@ function placeBounty(id){
   }
   if(isDone(ev)){
     if(typeof showToast==="function")showToast("Pick an unfinished task for the bounty","info");
+    return;
+  }
+  if(!confirmed){
+    const body=document.createElement("div");
+    body.innerHTML='<p><strong>'+DCC.esc(ev.title)+'</strong> will earn double points.</p>'+
+      '<p style="margin-top:10px;color:var(--text-muted)">This choice locks for the day. The current interface cannot undo it.</p>';
+    DCC.modal({
+      title:"Lock today’s bounty?",
+      body,
+      actions:[
+        {label:"Cancel",kind:"secondary"},
+        {label:"Lock 2x bounty",kind:"primary",onClick:()=>placeBounty(id,true)}
+      ]
+    });
     return;
   }
   dailyBounty={...state,self:{taskId:ev.id,taskTitle:ev.title,placedAt:new Date().toISOString(),source:"self"}};

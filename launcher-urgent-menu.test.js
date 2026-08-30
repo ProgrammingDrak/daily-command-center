@@ -8,6 +8,11 @@ class FakeClassList {
   add(value){ this.values.add(value); }
   remove(value){ this.values.delete(value); }
   contains(value){ return this.values.has(value); }
+  toggle(value, force){
+    const next = force === undefined ? !this.values.has(value) : Boolean(force);
+    if(next) this.values.add(value); else this.values.delete(value);
+    return next;
+  }
 }
 
 class FakeElement {
@@ -122,7 +127,7 @@ test("launcher markup starts on Urgent without changing other add bars", () => {
   const launcher = html.match(/<div class="task-add-bar" id="task-add-launcher">([\s\S]*?)<\/div>/)[1];
   const sticky = html.match(/<div class="task-add-bar" id="task-add-sticky"[\s\S]*?<\/div>/)[0];
   assert.deepEqual(Array.from(launcher.matchAll(/<option value="([^"]+)"/g), match => match[1]),
-    ["15", "30", "45", "60", "90", "120", "urgent"]);
+    ["15", "30", "45", "60", "90", "120", "urgent", "schedule", "backlog"]);
   assert.match(sticky, /option value="schedule"/);
   assert.match(sticky, /option value="backlog"/);
   assert.match(sticky, /option value="shell"/);
@@ -203,29 +208,26 @@ function loadLauncher(){
   };
 }
 
-test("quick tap opens Urgent compose and its quick radial, then toggles both closed", () => {
+test("quick tap opens one composer and preserves its selected destination", () => {
   const loaded = loadLauncher();
   loaded.bar.parts.destination.value = "meeting";
-  loaded.button.emit("pointerup", {});
   loaded.button.emit("click", {detail: 1});
   assert.equal(loaded.compose.classList.contains("open"), true);
-  assert.equal(loaded.bar.parts.destination.value, "urgent");
+  assert.equal(loaded.bar.parts.destination.value, "meeting");
   assert.equal(loaded.bar.parts.title.focused, true);
-  assert.equal(loaded.quickRadialOpens(), 1);
+  assert.equal(loaded.quickRadialOpens(), 0);
 
-  loaded.button.emit("pointerup", {});
+  loaded.button.emit("click", {detail: 1});
   assert.equal(loaded.compose.classList.contains("open"), false);
-  assert.equal(loaded.quickRadialCloses(), 1);
+  assert.equal(loaded.button.focused, true);
 });
 
 test("keyboard activation opens the launcher and Escape closes it with focus restored", () => {
   const loaded = loadLauncher();
-  let prevented = false;
-  loaded.button.emit("keydown", {key: "Enter", repeat: false, preventDefault(){ prevented = true; }});
+  loaded.button.emit("click", {detail: 0});
   assert.equal(loaded.compose.classList.contains("open"), true);
-  assert.equal(prevented, true);
   loaded.button.focused = false;
-  loaded.emitDocument("keydown", {key: "Escape"});
+  loaded.emitDocument("keydown", {key: "Escape", preventDefault(){}});
   assert.equal(loaded.compose.classList.contains("open"), false);
   assert.equal(loaded.button.focused, true);
 
@@ -233,21 +235,17 @@ test("keyboard activation opens the launcher and Escape closes it with focus res
   assert.equal(loaded.compose.classList.contains("open"), true, "direct assistive click still activates the launcher");
 });
 
-test("press and hold still opens the utility radial instead of the task-type fan", () => {
+test("press and hold has no hidden second launcher mode", () => {
   const loaded = loadLauncher();
   loaded.button.emit("pointerdown", {button: 0, pointerId: 1, clientX: 10, clientY: 10});
-  assert.equal(loaded.holdTimers.length, 1);
-  loaded.holdTimers[0]();
-  assert.equal(loaded.utilityRadial.classList.contains("open"), true);
+  assert.equal(loaded.holdTimers.length, 0);
+  assert.equal(loaded.utilityRadial.classList.contains("open"), false);
   assert.equal(loaded.quickRadialOpens(), 0);
-
-  loaded.button.emit("pointerup", {});
-  assert.equal(loaded.utilityRadial.classList.contains("open"), true, "release after a hold must not toggle the menu");
 });
 
 test("a successful or deferred submission closes the launcher", () => {
   const loaded = loadLauncher();
-  loaded.button.emit("pointerup", {});
+  loaded.button.emit("click", {detail: 1});
   loaded.bar.dispatchEvent({type: "dcc:launcher-submit-success"});
   assert.equal(loaded.compose.classList.contains("open"), false);
   assert.equal(loaded.scrim.classList.contains("open"), false);

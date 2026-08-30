@@ -15,6 +15,7 @@
   let _loadSeq = 0;
   let _convertKey = null;   // per-attempt idempotency key; reused on retry
   let _convertBusy = false;
+  let _tankFillAnimation = null; // one-shot visual for a successful Bank Unit conversion
   let _rolloverSnoozed = false;
   let _vault = { items: [], milestones: { items: [], progress: { total: 0 } } };
   let _vaultOpen = false;
@@ -27,6 +28,7 @@
   let _overflowKey = null;
   let _autoResolving = false;
   let _sponsorLink = null;
+  let _financeOverlay = null;
   const _collapsed = new Set();  // collapsed category keys
 
   // Shell-to-tank tie-in (Phase 11): a shell's 10% all-done bonus banks POINTS
@@ -168,52 +170,36 @@
   }
 
   // ---- tank markup ----------------------------------------------------------
-  // Geometry: the NECESSITIES reef is a modest fixed-height decorative base at
-  // the bottom (always submerged) — bills are context, not the show. Everything
-  // above it is the discretionary zone: reward-block chests stack in cents-space
-  // (column-reverse, priority-1 at the bottom) with open water for the
-  // unallocated remainder. The waterline fills the discretionary zone as the
-  // Reward Reserve is earned, so its level = reef + (waterline/budget) of the
-  // space above the reef. The level labels sit in a gutter to the LEFT.
-  const REEF_PX = 88;
-
+  // The whole tank is income. Expenses and savings use a compact visual floor,
+  // leaving the main tank for the Reward Reserve. Converted Bank Units fill
+  // that space with persistent coins. Exact dollar values remain in labels.
   function tankMarkup(s) {
     const u = s.usage;
-    const waterFrac = u.capacity_cents > 0 ? Math.min(1, u.waterline_cents / u.capacity_cents) : 0;
-    const level = "calc(" + REEF_PX + "px + (100% - " + REEF_PX + "px) * " + waterFrac.toFixed(4) + ")";
+    const income = Math.max(0, u.income_cents || 0);
+    const fixedFloor = Math.min(income, Math.max(0, (u.absolute_expenses_cents || 0) + (u.savings_total_cents || 0)));
+    const maximumReserve = Math.max(0, u.discretionary_cents || 0);
+    const earnedReserve = Math.min(maximumReserve, Math.max(0, u.reserve_unlocked_cents || 0));
+    const openWater = Math.max(0, maximumReserve - earnedReserve);
+    const pending = _tankFillAnimation;
+    const startingReserve = pending ? Math.min(earnedReserve, Math.max(0, pending.fromCents || 0)) : earnedReserve;
+    const floorPct = fixedFloor > 0 ? 16 : 6;
+    const reserveZonePct = 80;
+    const reserveFillPct = amount => amount > 0 && maximumReserve > 0
+      ? Math.max(4, (amount / maximumReserve) * reserveZonePct)
+      : 0;
+    const startWaterPct = reserveFillPct(startingReserve);
+    const finalWaterPct = reserveFillPct(earnedReserve);
+    const startSurfacePct = Math.min(100, floorPct + startWaterPct);
+    const finalSurfacePct = Math.min(100, floorPct + finalWaterPct);
     const claimedCount = s.blocks.filter(b => b.claimed).length;
     const fishCount = Math.min(6, claimedCount);
+    const fallingCoinCount = pending ? Math.min(12, Math.max(1, pending.units || 1)) : 0;
+    const fallingCoins = Array.from({ length: fallingCoinCount }, (_, i) =>
+      '<span class="bt-falling-coin" style="--coin-x:' + (10 + ((i * 31) % 78)) + '%;--coin-delay:' + (i * 55) + 'ms;--coin-r:' + (-24 + ((i * 19) % 48)) + 'deg">●</span>').join("");
 
-    // Tank is the user's free priority order (any order they drag). Each chest
-    // carries its own little category line, since neighbors may differ.
-    const zones = s.blocks.map(b => {
-      const info = statusInfo(b, u.waterline_cents);
-      const over = (b.tank_unlock_cents || 0) > u.capacity_cents;
-      const catName = (b.category && b.category !== (b.item || b.title)) ? b.category : "";
-      return '<div class="bt-zone ' + info.cls + (over ? " bt--overcap" : "") + '" draggable="true" data-id="' + b.id + '"' +
-        ' style="flex-grow:' + b.value_cents + ';color:' + esc(b.color || "#f59e0b") + '">' +
-        '<span class="bt-zone-sprite">' + chestSpriteFor(b) + "</span>" +
-        '<div class="bt-zone-body">' +
-          (catName ? '<div class="bt-zone-cat">' + esc(catName) + "</div>" : "") +
-          '<div class="bt-zone-top"><span class="bt-zone-name">' + esc(b.item || b.title) + "</span>" +
-          '<span class="bt-zone-amt">' + money(b.value_cents) + "</span></div>" +
-          '<div class="bt-zone-status">' + esc(info.label) + (over ? " · over budget" : "") +
-            (b.claimable ? ' <button class="bt-claim-btn" data-act="claim">Claim</button>' : "") +
-          "</div>" +
-        "</div>" +
-        "</div>";
-    }).join("");
-
-    const openDisc = Math.max(0, u.capacity_cents - u.allocated_cents);
-    const spacer = openDisc > 0
-      ? '<div class="bt-zone bt-zone--open" style="flex-grow:' + openDisc + '">' +
-        '<span class="bt-open-label">open water · ' + money(openDisc) + " left to allocate</span></div>"
-      : "";
-
-    // The reef: necessities as labeled submerged scenery, a modest fixed base.
-    const reef = '<div class="bt-reef">' +
+    const floor = '<div class="bt-reef" style="height:' + floorPct.toFixed(4) + '%">' +
       '<div class="bt-reef-floor">' + reefSceneryMarkup(s.settings.necessities) + "</div>" +
-      '<span class="bt-reef-label">Necessities · ' + money(u.necessities_total_cents) + " · covered</span>" +
+      '<span class="bt-reef-label">Expenses + savings · ' + money(fixedFloor) + " committed</span>" +
     "</div>";
 
     const bubbles = Array.from({ length: 7 }, (_, i) =>
@@ -222,38 +208,60 @@
     const fish = Array.from({ length: fishCount }, (_, i) =>
       '<span class="bt-fish" style="color:' + FISH_COLORS[i % FISH_COLORS.length] + ";bottom:" + (12 + (i * 17) % 62) + "%;animation-delay:" + (i * 2.3) + 's;animation-duration:' + (11 + (i % 4) * 3) + 's">' + FISH_SVG + "</span>").join("");
 
-    // Level labels in a gutter to the LEFT, each pinned to its level: budget
-    // ceiling at the top, Reward Reserve at the waterline (same calc as water).
     const sideLabels =
       '<div class="bt-side" aria-hidden="false">' +
         '<div class="bt-side-label bt-side-cap">' +
-          '<span class="bt-side-t">Budget ceiling</span>' +
-          '<span class="bt-side-val">' + money(u.capacity_cents) + "</span>" +
-          '<span class="bt-side-sub">to unlock</span>' +
+          '<span class="bt-side-t">Income capacity</span>' +
+          '<span class="bt-side-val">' + money(income) + "</span>" +
+          '<span class="bt-side-sub">budget ceiling</span>' +
         "</div>" +
-        '<div class="bt-side-label bt-side-reserve" style="bottom:' + level + '">' +
+        '<div class="bt-side-label bt-side-reserve" data-role="tank-reserve-label" style="bottom:' + startSurfacePct.toFixed(4) + '%" data-final-bottom="' + finalSurfacePct.toFixed(4) + '%">' +
           '<span class="bt-side-t">Reward Reserve</span>' +
-          '<span class="bt-side-val">' + money(u.waterline_cents) + "</span>" +
-          '<span class="bt-side-sub">earned this ' + esc(s.settings.period_type) + "</span>" +
+          '<span class="bt-side-val">' + money(earnedReserve) + "</span>" +
+          '<span class="bt-side-sub">converted Bank Units</span>' +
         "</div>" +
       "</div>";
 
     return '<div class="bt-tank-frame">' +
       sideLabels +
-      '<div class="bt-aquarium">' +
-        '<div class="bt-zones" data-role="zones">' +
-          zones + spacer +
-        "</div>" +
-        reef +
+      '<div class="bt-aquarium" role="img" aria-label="Income capacity ' + esc(money(income)) + '. Expenses and savings commit ' + esc(money(fixedFloor)) + '. Reward Reserve contains ' + esc(money(earnedReserve)) + '. Open water contains ' + esc(money(openWater)) + '.">' +
+        '<div class="bt-open-water" style="bottom:' + finalSurfacePct.toFixed(4) + '%"><span>Open water</span><strong>' + money(openWater) + '</strong><small>not converted into Reward Reserve</small></div>' +
+        floor +
         '<div class="bt-cap-line"></div>' +
-        '<div class="bt-water" style="height:' + level + '">' +
+        '<div class="bt-water" data-role="tank-water" style="bottom:' + floorPct.toFixed(4) + '%;height:' + startWaterPct.toFixed(4) + '%" data-final-height="' + finalWaterPct.toFixed(4) + '%">' +
           '<div class="bt-caustics" aria-hidden="true"></div>' +
           bubbles + fish +
         "</div>" +
-        '<div class="bt-surface" style="bottom:' + level + '"></div>' +
+        '<div class="bt-persistent-coins" data-role="tank-coins" aria-hidden="true" style="bottom:' + floorPct.toFixed(4) + '%;height:' + startWaterPct.toFixed(4) + '%" data-final-height="' + finalWaterPct.toFixed(4) + '%"></div>' +
+        '<div class="bt-surface" data-role="tank-surface" style="bottom:' + startSurfacePct.toFixed(4) + '%" data-final-bottom="' + finalSurfacePct.toFixed(4) + '%"></div>' +
+        (pending ? '<div class="bt-coin-rain" aria-hidden="true" style="bottom:' + finalSurfacePct.toFixed(4) + '%">' + fallingCoins + '</div>' : '') +
         '<div class="bt-glass" aria-hidden="true"></div>' +
       "</div>" +
     "</div>";
+  }
+
+  function runTankFillAnimation(root) {
+    if (!_tankFillAnimation) return;
+    _tankFillAnimation = null;
+    const water = root.querySelector('[data-role="tank-water"]');
+    const coins = root.querySelector('[data-role="tank-coins"]');
+    const surface = root.querySelector('[data-role="tank-surface"]');
+    const reserveLabel = root.querySelector('[data-role="tank-reserve-label"]');
+    if (!water || !coins || !surface || !reserveLabel) return;
+    const applyFinalLevel = () => {
+      water.style.height = water.dataset.finalHeight;
+      coins.style.height = coins.dataset.finalHeight;
+      surface.style.bottom = surface.dataset.finalBottom;
+      reserveLabel.style.bottom = reserveLabel.dataset.finalBottom;
+    };
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      applyFinalLevel();
+      return;
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      root.querySelector('.bt-aquarium')?.classList.add('is-filling');
+      applyFinalLevel();
+    }));
   }
 
   // ---- money changer ---------------------------------------------------------
@@ -265,8 +273,9 @@
     const rateLabel = "1 pt = 1 Bank Unit";
     const quoteDetail = money(rate) + " today · budget-aware safe exchange";
     return '<div class="bt-group bt-changer">' +
-      '<div class="bt-group-head"><span class="bt-group-title" id="budget-money-changer-title" tabindex="-1">🪙 Money Changer</span>' +
-        '<span class="bt-group-sub">' + esc(rateLabel) + " · " + esc(quoteDetail) + "</span></div>" +
+      '<div class="bt-group-head bt-changer-head"><span class="bt-group-title" id="budget-money-changer-title" tabindex="-1">🪙 Money Changer</span>' +
+        '<button type="button" class="bt-btn bt-changer-rewards" data-act="vault-open">Rewards</button></div>' +
+      '<span class="bt-group-sub bt-changer-rate">' + esc(rateLabel) + " · " + esc(quoteDetail) + "</span>" +
       '<div class="bt-changer-row">' +
         '<span class="bt-changer-balance">' + esc(String(s.points)) + " pts</span>" +
         '<input type="number" class="bt-changer-input" data-role="convert-amt" min="1" max="' + s.points + '" placeholder="points">' +
@@ -468,6 +477,220 @@
     return rows + '<button class="bt-add" data-act="add-nec">+ add bill</button>';
   }
 
+  function financeInputValue(cents) {
+    const value = Math.max(0, Number(cents) || 0) / 100;
+    return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  }
+
+  function financeId(prefix) {
+    return prefix + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
+  }
+
+  function financialSummaryMarkup(s) {
+    const u = s.usage;
+    const countLabel = (count, singular) => count + " " + singular + (count === 1 ? "" : "s");
+    const incomeCount = (s.settings.income_sources || []).length;
+    const expenseCount = (s.settings.necessities || []).length;
+    const savingsCount = (s.settings.savings || []).length;
+    const taskCount = (s.completed_tasks || []).length;
+    const cards = [
+      { key: "income", label: "Income", value: u.income_cents, help: "Determines the size of the tank", meta: countLabel(incomeCount, "source") },
+      { key: "expenses", label: "Absolute Expenses", value: u.absolute_expenses_cents, help: "These are deducted from the very start", meta: countLabel(expenseCount, "expense") },
+      { key: "savings", label: "Savings", value: u.savings_total_cents, help: "Set aside before discretionary spending", meta: countLabel(savingsCount, "goal") },
+      { key: "discretionary", label: "Discretionary Spending", value: u.discretionary_cents, budgeted: u.allocated_cents || 0, help: "Specific purchases count against this maximum", meta: countLabel((s.blocks || []).length, "purchase") },
+      { key: "reserve", label: "Reserve Unlocked", value: u.reserve_unlocked_cents, help: "This is what you've unlocked to spend so far this month!", meta: (u.completed_task_points || 0) + " points from " + countLabel(taskCount, "task") },
+    ];
+    return '<div class="bt-summary-grid" id="budget-overview" aria-label="Budget setup">' + cards.map(card =>
+      '<button type="button" class="bt-finance-card bt-finance-card--' + card.key + '" data-act="budget-card" data-card="' + card.key + '" aria-label="Edit ' + esc(card.label) + '">' +
+        '<span class="bt-finance-card-label">' + esc(card.label) + '</span>' +
+        '<strong>' + (card.key === "discretionary" ? money(card.budgeted) + ' / ' + money(card.value) + ' <em>budgeted</em>' : money(card.value)) + '</strong>' +
+        '<small>' + esc(card.help) + '</small>' +
+        '<span class="bt-finance-card-meta">' + esc(card.meta) + '<b aria-hidden="true">→</b></span>' +
+      '</button>'
+    ).join("") + '</div>';
+  }
+
+  function namedFinanceRow(row, kind) {
+    return '<tr data-finance-row data-id="' + esc(row.id || financeId(kind)) + '">' +
+      '<td><input data-finance-field="name" value="' + esc(row.name || "") + '" placeholder="' + (kind === "income" ? "Salary, freelance…" : "Emergency fund, vacation…") + '"></td>' +
+      '<td><span class="bt-finance-money">$<input type="number" min="0" step="0.01" data-finance-field="amount" value="' + esc(financeInputValue(row.amount_cents)) + '"></span></td>' +
+      '<td><button type="button" class="bt-finance-remove" data-finance-remove aria-label="Remove row">×</button></td>' +
+    '</tr>';
+  }
+
+  function expenseFinanceRow(row) {
+    const variable = row.variable === true;
+    return '<tr data-finance-row data-id="' + esc(row.id || financeId("expense")) + '" data-color="' + esc(row.color || "#22c55e") + '" data-shape="' + esc(row.shape || "castle") + '" class="' + (variable ? "is-variable" : "") + '">' +
+      '<td><input data-finance-field="name" value="' + esc(row.name || "") + '" placeholder="Rent, power…"></td>' +
+      '<td><select data-finance-field="expense-type"><option value="fixed"' + (!variable ? " selected" : "") + '>Fixed</option><option value="variable"' + (variable ? " selected" : "") + '>Variable</option></select></td>' +
+      '<td class="bt-finance-fixed"><span class="bt-finance-money">$<input type="number" min="0" step="0.01" data-finance-field="amount" value="' + esc(financeInputValue(row.amount_cents)) + '"></span></td>' +
+      '<td class="bt-finance-range"><span class="bt-finance-money">$<input type="number" min="0" step="0.01" data-finance-field="min" value="' + esc(financeInputValue(row.min_cents ?? row.amount_cents)) + '" aria-label="Estimated minimum"></span><span>to</span><span class="bt-finance-money">$<input type="number" min="0" step="0.01" data-finance-field="max" value="' + esc(financeInputValue(row.max_cents ?? row.amount_cents)) + '" aria-label="Estimated maximum"></span></td>' +
+      '<td><span class="bt-finance-average">' + (variable ? money(row.amount_cents) + " average" : "") + '</span></td>' +
+      '<td><button type="button" class="bt-finance-remove" data-finance-remove aria-label="Remove expense">×</button></td>' +
+    '</tr>';
+  }
+
+  function categoryFinanceRow(row) {
+    return '<tr data-finance-row data-id="' + esc(row.id || financeId("category")) + '">' +
+      '<td><input data-finance-field="name" value="' + esc(row.name || "") + '" placeholder="Impulse fun, dining…"></td>' +
+      '<td><input type="number" min="1" step="1" data-finance-field="points" value="' + esc(row.point_threshold || 1) + '"></td>' +
+      '<td><button type="button" class="bt-finance-remove" data-finance-remove aria-label="Remove category">×</button></td>' +
+    '</tr>';
+  }
+
+  function financeTable(title, headers, rows, addLabel, kind) {
+    return '<section class="bt-finance-section"><div class="bt-finance-section-head"><div><h3>' + esc(title) + '</h3></div><button type="button" class="bt-btn" data-finance-add="' + kind + '">+ ' + esc(addLabel) + '</button></div>' +
+      '<div class="bt-finance-table-scroll"><table class="bt-finance-table"><thead><tr>' + headers.map(header => '<th scope="col">' + esc(header) + '</th>').join("") + '</tr></thead><tbody>' + rows + '</tbody></table></div></section>';
+  }
+
+  function financeEditorBody(kind) {
+    const body = document.createElement("div");
+    body.className = "bt-finance-editor";
+    if (kind === "income") {
+      body.innerHTML = '<p class="bt-finance-intro">Add each income source. Their total determines the tank size.</p>' +
+        financeTable("Income sources", ["Source", "Amount", ""], (_state.settings.income_sources || []).map(row => namedFinanceRow(row, "income")).join(""), "Add source", "income");
+    } else if (kind === "expenses") {
+      body.innerHTML = '<p class="bt-finance-intro">Absolute expenses leave the tank first. Variable ranges use their average.</p>' +
+        financeTable("Absolute expenses", ["Expense", "Type", "Amount or range", "Calculation", ""], (_state.settings.necessities || []).map(expenseFinanceRow).join(""), "Add expense", "expense");
+    } else if (kind === "savings") {
+      body.innerHTML = '<p class="bt-finance-intro">Savings leave income before discretionary spending becomes available.</p>' +
+        financeTable("Savings goals", ["Goal", "Amount", ""], (_state.settings.savings || []).map(row => namedFinanceRow(row, "savings")).join(""), "Add goal", "savings");
+    } else if (kind === "discretionary") {
+      body.innerHTML = '<div class="bt-finance-equation"><span>Maximum Reward Reserve</span><strong>' + money(_state.usage.discretionary_cents) + '</strong><small>1 Bank Point currently unlocks ' + money(_state.constants.bank_unit_cents) + '</small></div>' +
+        '<p class="bt-finance-intro">Plan specific purchases, or unlock flexible categories with points.</p>' +
+        '<section class="bt-finance-section"><div class="bt-finance-section-head"><div><h3>Specific purchases</h3><p>These remain connected to the existing tank plan.</p></div></div><div data-finance-purchases></div>' +
+        '<form class="bt-finance-purchase-form" data-finance-purchase-form><label>Purchase<input name="description" required placeholder="Dinner with Fae"></label><label>Amount ($)<input name="amount" type="number" min="1" step="1" required></label><button type="submit" class="bt-btn bt-btn--primary">Add purchase</button></form></section>' +
+        financeTable("Flexible categories", ["Category", "Unlock at points", ""], (_state.settings.discretionary_categories || []).map(categoryFinanceRow).join(""), "Add category", "category");
+    } else {
+      body.innerHTML = '<div class="bt-finance-equation"><span>Reserve unlocked</span><strong>' + money(_state.usage.reserve_unlocked_cents) + '</strong><small>' + (_state.usage.completed_task_points || 0) + ' points earned this ' + esc(_state.settings.period_type || "month") + '</small></div>' +
+        '<p class="bt-finance-intro">Completed tasks and point values appear below.</p><div data-finance-completed></div>';
+    }
+    return body;
+  }
+
+  function gatherNamedFinanceRows(body) {
+    return [...body.querySelectorAll("[data-finance-row]")].map(row => ({
+      id: row.dataset.id,
+      name: row.querySelector('[data-finance-field="name"]')?.value.trim() || "",
+      amount_cents: Math.max(0, Math.round((Number(row.querySelector('[data-finance-field="amount"]')?.value) || 0) * 100)),
+    })).filter(row => row.name);
+  }
+
+  function gatherExpenseFinanceRows(body) {
+    return [...body.querySelectorAll("[data-finance-row]")].map(row => {
+      const variable = row.querySelector('[data-finance-field="expense-type"]')?.value === "variable";
+      const amount = Math.max(0, Math.round((Number(row.querySelector('[data-finance-field="amount"]')?.value) || 0) * 100));
+      const min = Math.max(0, Math.round((Number(row.querySelector('[data-finance-field="min"]')?.value) || 0) * 100));
+      const max = Math.max(0, Math.round((Number(row.querySelector('[data-finance-field="max"]')?.value) || 0) * 100));
+      return { id: row.dataset.id, name: row.querySelector('[data-finance-field="name"]')?.value.trim() || "", variable, amount_cents: variable ? Math.round((min + max) / 2) : amount, min_cents: min, max_cents: max, color: row.dataset.color, shape: row.dataset.shape };
+    }).filter(row => row.name);
+  }
+
+  function gatherCategoryFinanceRows(body) {
+    return [...body.querySelectorAll("[data-finance-row]")].map(row => ({
+      id: row.dataset.id,
+      name: row.querySelector('[data-finance-field="name"]')?.value.trim() || "",
+      point_threshold: Math.max(1, Math.round(Number(row.querySelector('[data-finance-field="points"]')?.value) || 1)),
+    })).filter(row => row.name);
+  }
+
+  async function saveFinanceEditor(kind, body) {
+    try {
+      if (kind === "income") await api("PUT", "/api/budget/config", { income_sources: gatherNamedFinanceRows(body), capacity_source: "last_income" });
+      else if (kind === "expenses") await api("PUT", "/api/budget/config", { necessities: gatherExpenseFinanceRows(body) });
+      else if (kind === "savings") await api("PUT", "/api/budget/config", { savings: gatherNamedFinanceRows(body) });
+      else if (kind === "discretionary") await api("PUT", "/api/budget/config", { discretionary_categories: gatherCategoryFinanceRows(body) });
+      await loadBudget();
+      toast("Budget setup saved", "success");
+      return true;
+    } catch (err) {
+      toast(err.message || "Could not save budget setup", "error");
+      return false;
+    }
+  }
+
+  function wireFinanceEditor(kind, body) {
+    body.addEventListener("click", event => {
+      const remove = event.target.closest("[data-finance-remove]");
+      if (remove) { remove.closest("[data-finance-row]")?.remove(); return; }
+      const add = event.target.closest("[data-finance-add]");
+      if (!add) return;
+      const tbody = add.closest(".bt-finance-section")?.querySelector("tbody");
+      if (!tbody) return;
+      const row = add.dataset.financeAdd === "expense" ? expenseFinanceRow({})
+        : add.dataset.financeAdd === "category" ? categoryFinanceRow({})
+        : namedFinanceRow({}, add.dataset.financeAdd);
+      tbody.insertAdjacentHTML("beforeend", row);
+      tbody.querySelector("tr:last-child input")?.focus();
+    });
+    body.addEventListener("change", event => {
+      if (event.target.dataset.financeField !== "expense-type") return;
+      const row = event.target.closest("[data-finance-row]");
+      row?.classList.toggle("is-variable", event.target.value === "variable");
+    });
+    body.addEventListener("input", event => {
+      if (!['min', 'max'].includes(event.target.dataset.financeField)) return;
+      const row = event.target.closest("[data-finance-row]");
+      const min = Number(row?.querySelector('[data-finance-field="min"]')?.value) || 0;
+      const max = Number(row?.querySelector('[data-finance-field="max"]')?.value) || 0;
+      const average = row?.querySelector(".bt-finance-average");
+      if (average) average.textContent = money(Math.round((min + max) * 50)) + " average";
+    });
+    const purchaseForm = body.querySelector("[data-finance-purchase-form]");
+    if (purchaseForm) purchaseForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      const data = new FormData(purchaseForm);
+      const submit = purchaseForm.querySelector('button[type="submit"]');
+      submit.disabled = true;
+      try {
+        await api("POST", "/api/budget/blocks", { description: String(data.get("description") || "").trim(), amount: Math.max(1, Math.round(Number(data.get("amount")) || 0)), recurring: false });
+        await loadBudget();
+        purchaseForm.reset();
+        mountFinanceCollections("discretionary", body);
+        toast("Purchase added", "success");
+      } catch (err) { toast(err.message || "Could not add purchase", "error"); }
+      finally { submit.disabled = false; }
+    });
+  }
+
+  function mountFinanceCollections(kind, body) {
+    if (!window.DCC.collection) return;
+    if (kind === "discretionary") {
+      const mount = body.querySelector("[data-finance-purchases]");
+      if (mount) window.DCC.collection.mount(mount, {
+        rows: (_state.blocks || []).map(block => ({ Purchase: block.item || block.title, Amount: money(block.value_cents), Status: block.status })),
+        stateKey: "budget-specific-purchases",
+      });
+    }
+    if (kind === "reserve") {
+      const mount = body.querySelector("[data-finance-completed]");
+      if (mount) window.DCC.collection.mount(mount, {
+        rows: (_state.completed_tasks || []).map(task => ({ Task: task.title, Points: task.points, Completed: task.completed_at })),
+        stateKey: "budget-completed-tasks",
+      });
+    }
+  }
+
+  function openFinanceEditor(kind, anchor) {
+    if (!_state || _state.error || !window.DCC.overlay) return;
+    const titles = { income: "Income", expenses: "Absolute Expenses", savings: "Savings", discretionary: "Discretionary Spending", reserve: "Reserve Unlocked" };
+    const body = financeEditorBody(kind);
+    wireFinanceEditor(kind, body);
+    const editable = kind !== "reserve";
+    _financeOverlay = window.DCC.overlay.open({
+      kind: "drawer",
+      title: titles[kind],
+      body,
+      anchor,
+      actions: editable ? [
+        { label: "Cancel" },
+        { label: "Save", kind: "primary", onClick: async () => saveFinanceEditor(kind, body) },
+      ] : [],
+      onClose: () => { _financeOverlay = null; },
+    });
+    mountFinanceCollections(kind, body);
+  }
+
   function vaultKind(item) {
     if (item.payment_source === "sponsored") return "sponsored";
     return item.max_cents > 0 ? "purchase" : "free";
@@ -507,7 +730,7 @@
         (item.quick_add && item.max_cents > 0 ? '<button class="bt-btn bt-btn--primary" data-act="vault-quick-add">Add ' + esc(money(item.max_cents)) + '</button>' : '') +
         (item.max_cents === 0 && item.milestone ? '<button class="bt-btn" data-act="milestone-from-item">Add checkpoint</button>' : '') +
         '<button class="bt-linkbtn" data-act="vault-edit">Edit</button>' +
-        '<button class="bt-linkbtn rv-danger" data-act="vault-archive">Archive</button>' +
+        '<details class="rv-more"><summary>More</summary><button class="bt-linkbtn rv-danger" data-act="vault-archive">Archive</button></details>' +
       '</div></article>';
   }
 
@@ -648,74 +871,24 @@
     }
 
     const s = _state;
-    const u = s.usage;
     const period = s.settings.period_type === "week" ? "week" : "month";
-    const capSource = s.settings.capacity_source === "fixed" ? "fixed budget"
-      : s.settings.capacity_source === "prior_period_banked" ? "last " + period + "'s build"
-      : "your stated income";
-    const usingIncome = s.settings.capacity_source === "last_income";
-
-    const chips =
-      chip("info", "Discretionary budget " + money(u.capacity_cents)) +
-      chip("info", "Necessities " + money(u.necessities_total_cents) + " · covered") +
-      chip(u.waterline_cents >= u.capacity_cents && u.capacity_cents > 0 ? "ok" : "info",
-        "Banked " + money(u.period_banked_cents) + " this " + period) +
-      chip("info", "Reserve " + money(s.funding.total)) +
-      (u.income_cents > 0 && u.necessities_total_cents >= u.income_cents
-        ? chip("warn", "Necessities use the whole income") : "") +
-      (u.allocated_cents > u.capacity_cents ? chip("warn", "Over budget by " + money(u.allocated_cents - u.capacity_cents)) : "") +
-      (u.overflow_cents > 0 ? chip("ok", "Overflow " + money(u.overflow_cents)) : "") +
-      (s.investments.total_cents > 0 ? chip("ok", "Invested " + money(s.investments.total_cents)) : "") +
-      (s.rollover_due ? chip("warn", "New " + period + " — rollover pending") : "");
-
-    // Standalone budget ledger: category groups in their own stable order
-    // (divorced from the tank's priority order).
-    const catGroups = s.categories.map(cat => categoryGroupMarkup(cat, u)).join("");
 
     root.innerHTML =
       '<div class="bt-wrap">' +
         '<div class="bt-head">' +
           '<h2 class="bt-title">Budget Tank</h2>' +
-          '<p class="bt-sub">Add the actual things you want to buy. Bank builds fund them bottom-to-top, and each purchase automatically rolls into a card-style category.</p>' +
+          '<p class="bt-sub">Convert completed-task points into Bank Units. Each conversion raises your Reward Reserve.</p>' +
         "</div>" +
-        '<div class="bt-controls">' +
-          '<div class="bt-income">' +
-            '<label class="bt-income-label" for="bt-income-input">Income from last ' + period + "</label>" +
-            '<div class="bt-income-field">' +
-              '<span class="bt-income-prefix">$</span>' +
-              '<input type="number" id="bt-income-input" class="bt-income-input" data-role="income-input" min="0" step="1" ' +
-                'value="' + Math.round((s.settings.income_cents || 0) / 100) + '">' +
-            "</div>" +
-            '<span class="bt-income-note">' +
-              (usingIncome ? "sets your tank budget" :
-                '<button class="bt-linkbtn" data-act="use-income">use this as the budget</button> · now: ' + esc(capSource)) +
-            "</span>" +
-          "</div>" +
-          '<div class="bt-chips">' + chips + "</div>" +
+        financialSummaryMarkup(s) +
+        '<div class="bt-main bt-main--tank">' +
+          '<div class="bt-changer-col">' + moneyChangerMarkup(s) + "</div>" +
+          '<div class="bt-tank-col">' + tankMarkup(s) + "</div>" +
         "</div>" +
-        '<div class="bt-main">' +
-          '<div class="bt-tank-col">' + tankMarkup(s) + moneyChangerMarkup(s) + "</div>" +
-          '<div class="bt-breakdown">' +
-            '<div class="bt-group">' +
-              '<div class="bt-group-head"><span class="bt-group-title">Planned purchases</span>' +
-                '<span class="bt-group-sub">concrete items · auto-categorized · bottom fills first</span></div>' +
-              (catGroups || '<div class="bt-empty-note">Nothing planned yet. Add the actual purchase, like “Dinner for me and Fae” for $100, and the category will take care of itself.</div>') +
-              (!_form ? '<button class="bt-add" data-act="add-block">+ add planned purchase</button>' : "") +
-              (_form ? blockFormMarkup(s) : "") +
-            "</div>" +
-            '<div class="bt-group">' +
-              '<div class="bt-group-head"><span class="bt-group-title">Necessities</span>' +
-                '<span class="bt-group-sub">the reef floor · always covered</span></div>' +
-              necessitiesMarkup(s) +
-              '<button class="bt-vault-launch" data-act="vault-open"><span>Reward Vault</span><small>' + (_vault.items || []).length + ' rewards · self care · sponsor prizes</small><b>Open →</b></button>' +
-            "</div>" +
-            overflowMarkup(s) +
-            investmentsMarkup(s) +
-          "</div>" +
-        "</div>" +
+        '<div class="bt-budget-secondary">' + overflowMarkup(s) + investmentsMarkup(s) + '</div>' +
         (s.rollover_due && !_rolloverSnoozed ? rolloverModalMarkup(s) : "") + vaultDrawerMarkup() +
       "</div>";
 
+    runTankFillAnimation(root);
     maybeCelebrate();
   }
 
@@ -881,6 +1054,11 @@
       if (!btn) return;
       const act = btn.dataset.act;
       if (act === "retry") { _state = null; render(); loadBudget(); return; }
+      if (act === "budget-card") { openFinanceEditor(btn.dataset.card, btn); return; }
+      if (act === "budget-section") {
+        document.getElementById(btn.dataset.target)?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+        return;
+      }
       if (act === "use-income") {
         try {
           await api("PUT", "/api/budget/config", { capacity_source: "last_income" });
@@ -1017,10 +1195,14 @@
         btn.disabled = true;
         if (!_convertKey) _convertKey = (crypto.randomUUID ? crypto.randomUUID() : "cv-" + Date.now() + "-" + Math.random().toString(36).slice(2));
         try {
+          const reserveBeforeConversion = Math.max(0, _state.usage.reserve_unlocked_cents || 0);
           const out = await api("POST", "/api/budget/convert", { points: pts, source_key: _convertKey });
           _convertKey = null;
           const cents = out.conversion ? out.conversion.cents : 0;
           const units = out.bank_units || (out.conversion && out.conversion.points) || pts;
+          if (!out.duplicate && cents > 0) {
+            _tankFillAnimation = { fromCents: reserveBeforeConversion, toCents: reserveBeforeConversion + cents, units, cents };
+          }
           toast(out.duplicate ? "Already converted that batch" : "Clink: " + units + " Bank Units (" + money(cents) + ") into the tank", "success");
           await loadBudget();
         } catch (err) {

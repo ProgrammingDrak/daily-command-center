@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Shared Todo List</title>
+  <link rel="stylesheet" href="/public/css/tokens.css">
   <link rel="stylesheet" href="/public/css/dashboard.css">
+  <link rel="stylesheet" href="/public/css/ui-optimization.css">
 </head>
 <body class="todo-public-body guest-mode">
   <main class="todo-public-shell">
@@ -19,6 +21,7 @@
       </div>
     </section>
 
+    <section id="todo-public-status" class="todo-public-error" role="status">Loading shared list…</section>
     <section id="todo-public-error" class="todo-public-error" hidden></section>
 
     <section id="todo-public-content" class="todo-public-grid" hidden>

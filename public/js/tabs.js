@@ -17,7 +17,6 @@ DCC.tabs = DCC.tabs || (function () {
 
 // Built-in renderers, resolved lazily by name (functions live in their own
 // files, loaded after this one). No entry = static tab, nothing to render.
-DCC.tabs.register("glymphatic", () => typeof buildGlymphaticBrief === "function" && buildGlymphaticBrief());
 // `activate`, not `render`: render also runs on every task completion, so the
 // friend-picker refresh belongs only on the tab path.
 DCC.tabs.register("pet-home", () => window.PetHome && typeof PetHome.activate === "function" && PetHome.activate());

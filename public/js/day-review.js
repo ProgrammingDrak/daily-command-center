@@ -316,10 +316,9 @@
     const hud = document.createElement("div");
     hud.className = "dr-hud";
     const planned = model.rows.length;
-    const doneCount = model.rows.filter(r => r.done).length;
-    const pct = planned ? Math.round((doneCount / planned) * 100) : 0;
     const plannedMin = model.rows.reduce((s, r) => s + r.plannedMin, 0);
     const actualMin = model.rows.reduce((s, r) => s + r.actualMin, 0) + model.extras.reduce((s, x) => s + x.min, 0);
+    const variance = actualMin - plannedMin;
     const dispDate = (function () {
       const p = String(model.dateStr).split("-");
       try { return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }); }
@@ -328,12 +327,10 @@
     hud.innerHTML =
       '<div class="dr-hud-date">' + dispDate + '</div>' +
       '<div class="dr-hud-stats">' +
-        statCard(pct + '%', 'completed', 'accent') +
-        statCard(doneCount + '/' + planned, 'tasks done', '') +
-        statCard(fmtDur(actualMin), 'time tracked', 'green') +
-        statCard(fmtDur(plannedMin), 'planned', 'muted') +
-      '</div>' +
-      '<div class="dr-hud-meter"><span style="width:' + pct + '%"></span></div>';
+        statCard(fmtDur(plannedMin), 'planned time', 'muted') +
+        statCard(fmtDur(actualMin), 'actual time', 'green') +
+        statCard((variance > 0 ? '+' : variance < 0 ? '-' : '') + fmtDur(Math.abs(variance)), variance > 0 ? 'over plan' : variance < 0 ? 'under plan' : 'on plan', variance > 0 ? 'accent' : '') +
+      '</div>';
     return hud;
   }
   function statCard(big, label, tone) {
@@ -385,9 +382,6 @@
         '<button class="dr-ed-save">Save</button>' +
       '</div>';
 
-    document.body.appendChild(panel);
-    positionEditor(panel, anchorEl);
-
     panel.querySelector(".dr-ed-add").addEventListener("click", () => {
       const rows = panel.querySelector(".dr-ed-rows");
       const tmp = document.createElement("div"); tmp.innerHTML = rowHtml("", "", "");
@@ -401,7 +395,17 @@
       closeEditor();
       buildDayReview(dateStr);
     });
-    setTimeout(() => document.addEventListener("mousedown", outsideClose, true), 0);
+    if (window.DCC && window.DCC.overlay) {
+      _timeEditorHandle = window.DCC.overlay.open({
+        kind: window.innerWidth <= 760 ? "sheet" : "drawer",
+        title: "Actual time · " + taskTitle,
+        body: panel,
+        onClose: function() { _timeEditorHandle = null; }
+      });
+    } else {
+      document.body.appendChild(panel);
+      positionEditor(panel, anchorEl);
+    }
   }
 
   function bindDelButtons(panel) {
@@ -409,14 +413,13 @@
       b.onclick = () => { const row = b.closest(".dr-ed-row"); if (row) row.remove(); };
     });
   }
-  function outsideClose(e) {
-    const panel = document.getElementById("dr-editor");
-    if (panel && !panel.contains(e.target) && !(e.target.closest && e.target.closest(".dr-addtime"))) closeEditor();
-  }
+  let _timeEditorHandle = null;
   function closeEditor() {
+    const handle = _timeEditorHandle;
+    _timeEditorHandle = null;
+    if (handle) handle.close("time-editor");
     const p = document.getElementById("dr-editor");
     if (p) p.remove();
-    document.removeEventListener("mousedown", outsideClose, true);
   }
   function positionEditor(panel, anchorEl) {
     if (!anchorEl) { panel.style.cssText += "left:50%;top:120px;transform:translateX(-50%);"; return; }

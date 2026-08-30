@@ -316,10 +316,11 @@ test("both lossy projections are gone", () => {
   assert.ok(/TaskModel\.fromBlock\(b, \{ deriveEnd: true \}\)/.test(unfSource), "the collector must project through TaskModel");
 });
 
-test("the five affordance gates are off the carryover row", () => {
-  // Quick-complete, the start time and the Schedule… button no longer test isUnfRow.
-  assert.ok(/!isDoneRow&&!\(tt&&tt\.rollupMode\)\?'<button class="chk-quick"/.test(schedTabSource),
-    "quick-complete must not be gated on isUnfRow");
+test("carryover keeps its canonical completion and scheduling affordances", () => {
+  // The primary checkbox already completes carryover directly. The duplicate
+  // lightning control moved into Task Actions for ordinary scheduled tasks.
+  assert.ok(/if\(isUnfRow\)\{_unfComplete\(ev,el\);return;\}/.test(schedTabSource),
+    "carryover completion must route through its canonical handler");
   assert.ok(/\(subTimeless\?'':\(ev\.untimed\?/.test(schedTabSource),
     "the start-time cell must not be gated on isUnfRow");
   assert.ok(/\(!subTimeless&&!isDoneRow&&!isMeeting\(ev\)\?'<button class="btn-schedule"/.test(schedTabSource),

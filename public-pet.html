@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pet Home</title>
+  <link rel="stylesheet" href="/public/css/tokens.css">
   <link rel="stylesheet" href="/public/css/dashboard.css">
+  <link rel="stylesheet" href="/public/css/ui-optimization.css">
 </head>
 <body class="pet-public-body">
   <main class="pet-public-shell">
@@ -15,6 +17,7 @@
       </div>
       <a class="pet-public-login" href="/register">Create account</a>
     </section>
+    <section id="public-pet-status" class="pet-public-error" role="status">Loading Pet Home…</section>
     <section id="public-pet-error" class="pet-public-error" hidden></section>
     <section id="public-pet-content" class="pet-public-grid" hidden>
       <div class="pet-home-stage public">
@@ -38,11 +41,15 @@
         <h2>Visit as a guest</h2>
         <p>Use your name so your encouragement and suggestions are easy to recognize.</p>
         <label>Your name <input id="public-visitor-name" type="text" maxlength="60" placeholder="Name"></label>
-        <label>Encouragement <textarea id="public-encouragement" maxlength="500" placeholder="Leave a kind note"></textarea></label>
-        <button id="public-send-encouragement" class="pet-btn primary" type="button">Send encouragement</button>
-        <label>Suggest a task <input id="public-suggestion-title" type="text" maxlength="160" placeholder="Task idea"></label>
-        <label>Optional note <textarea id="public-suggestion-note" maxlength="500" placeholder="Why this might help"></textarea></label>
-        <button id="public-send-suggestion" class="pet-btn" type="button">Suggest task</button>
+        <fieldset><legend>Encouragement</legend>
+          <label>Message <textarea id="public-encouragement" maxlength="500" placeholder="Leave a kind note"></textarea></label>
+          <button id="public-send-encouragement" class="pet-btn primary" type="button">Send encouragement</button>
+        </fieldset>
+        <fieldset><legend>Task suggestion</legend>
+          <label>Task idea <input id="public-suggestion-title" type="text" maxlength="160" placeholder="Task idea"></label>
+          <label>Optional note <textarea id="public-suggestion-note" maxlength="500" placeholder="Why this might help"></textarea></label>
+          <button id="public-send-suggestion" class="pet-btn" type="button">Suggest task</button>
+        </fieldset>
       </aside>
       <section class="pet-public-panel">
         <h2>Progress</h2>
@@ -54,6 +61,7 @@
       </section>
     </section>
   </main>
+  <script src="/public/js/core.js"></script>
   <script src="/public/js/public-pet-home.js"></script>
 </body>
 </html>

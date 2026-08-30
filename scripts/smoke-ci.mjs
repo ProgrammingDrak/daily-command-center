@@ -21,10 +21,10 @@ import { chromium } from "playwright-core";
 const BASE = process.argv[2] || "http://localhost:3987";
 const USER = process.argv[3] || "drake";
 const PASS = process.argv[4] || "clever123";
-const TABS = ["schedule", "glymphatic", "pet-home", "runway", "budget"];
+const TABS = ["schedule", "pet-home", "budget"];
 // Count an error only if it names a real /public/ asset OR looks like a JS
 // exception. HTTP-status/SSE transport errors (the two known pre-existing 404s
-// on /api/brain/recent and /api/runway-state) are backend concerns, out of scope.
+// on /api/brain/recent) are backend concerns, out of scope.
 const APP_ERROR_RX = /\/public\/|TypeError|ReferenceError|SyntaxError|is not defined|is not a function|Uncaught/;
 
 let failures = 0;
@@ -88,14 +88,11 @@ for (const tab of TABS) {
     tab
   );
   check(`tab ${tab} activates`, active === "active", active);
-  // runway is an iframe; its panel has no text content — skip the render check
-  if (tab !== "runway") {
-    const rendered = await page.evaluate(
-      (t) => (document.getElementById(`tab-${t}`)?.textContent.trim().length || 0) > 10,
-      tab
-    );
-    check(`tab ${tab} renders`, rendered === true);
-  }
+  const rendered = await page.evaluate(
+    (t) => (document.getElementById(`tab-${t}`)?.textContent.trim().length || 0) > 10,
+    tab
+  );
+  check(`tab ${tab} renders`, rendered === true);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   check(`tab ${tab} no h-overflow @375`, overflow === false, String(overflow));
 }
