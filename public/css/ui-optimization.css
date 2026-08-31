@@ -313,6 +313,9 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .it-list-item:not(.done) .it-list-check-col { display: flex; }
 .it-list-item:not(.done) .it-list-check {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: var(--target-min);
   height: var(--target-min);
   min-width: var(--target-min);
@@ -329,6 +332,13 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .it-list-item:not(.done) .quick-complete-control::before {
   content: "";
   position: absolute;
+  /* An absolute box with no offsets parks at its STATIC position, which for a
+     block-level button is the content box's top-left -- measured 11.5px/11.5px
+     inside the 44px button, so the plate itself sat 3.5px off centre before the
+     glyph was even considered. `inset: 0` plus auto margins centres a
+     fixed-size absolute box exactly. */
+  inset: 0;
+  margin: auto;
   width: 28px;
   height: 28px;
   border: 1px solid rgba(251,191,36,.42);
@@ -339,7 +349,9 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .it-list-item:not(.done) .quick-complete-control > span {
   position: relative;
   z-index: 1;
-  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
 }
 .it-list-item:not(.done) .quick-complete-control:hover::before,
@@ -348,6 +360,11 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .quick-complete-control.is-holding > span { animation:quick-complete-pulse 550ms ease-in-out infinite alternate; }
 .quick-complete-control.flash::before { animation:qflash .35s ease-out; }
 .quick-complete-control.chk-blocked { color:var(--ink-muted); }
+/* The glyph is `fill: currentColor` now, so `color` finally reaches it -- but the
+   row's own `color: #fbbf24` above is (0,3,0) and outranks the (0,2,0) blocked
+   rule, which left a blocked control showing an amber bolt against its correctly
+   greyed plate. Match the specificity so both halves mute together. */
+.it-list-item:not(.done) .quick-complete-control.chk-blocked { color: var(--ink-muted); }
 .quick-complete-control.chk-blocked::before { border-color:var(--line)!important;background:var(--surface-raised)!important; }
 .card .quick-complete-control.chk-quick { display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;min-width:44px;opacity:1; }
 .card .quick-complete-control.chk-quick > span { position:relative;z-index:1;font-size:18px; }
@@ -748,4 +765,164 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
   *,
   *::before,
   *::after { scroll-behavior: auto !important; animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Itinerary list rows: a centered completion glyph, and rows that hug their
+   text.
+
+   MEASURED CAUSE (1440px, one task row, before this block):
+     row 112px = 9 pad + titleRow 44 + 4 margin + meta 44 + 9 pad + 2 border
+     title text 18.19px, meta text 16.5px  ->  38.7px of content in 112px
+     gap from the title's baseline box to the meta line: 16.91px
+
+   The touch floor near the top of this file -- `button { min-height:
+   var(--target-min) }` plus its `min-width` companion -- carries no media
+   query, so it applies to a mouse-driven 1440px viewport as readily as to a
+   phone. Every small chip on the row is a <button>: the privacy pill, the tag
+   count, the row "+", and the meta line's schedule button. Each became a 44px
+   box around 9-10px of text, and because both `.it-list-title-row` and
+   `.it-list-meta` are `align-items: center` flex rows, each row took its
+   tallest child's height and floated its text in the middle. That surplus,
+   split above and below two lines of text, IS the reported dead air -- and it
+   is also why MEETING rows already looked right: a meeting gets no privacy
+   pill and no schedule button, so only its title row was inflated.
+
+   So the fix is not new padding. It is giving those chips a line box that
+   matches their text, and leaving the row's own padding and min-height alone.
+   `.src-jump` (the "Slack ↗" chip) is the reference: it is an <a>, never
+   caught by the button floor, measured 18px, and looks correct today.
+
+   The completion control KEEPS the full 44px target at every width -- it is
+   the row's primary action and the one control a thumb must hit. It stays the
+   row's height floor, which is what `min-height: 64px` above was already
+   tuned for.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── The bolt's size, per surface ────────────────────────────────────────
+   The centering itself now lives in the `.it-list-check` /
+   `.quick-complete-control::before` / `> span` blocks above, beside the rules
+   that define those boxes, rather than as a second set of identical selectors
+   down here. What is left is sizing and colour.
+
+   19px on the list row: the ink is then 14.3x15.8 inside the 28px plate. 15px
+   disappears in it, 21px crowds the border. Change these two values to retune. */
+.it-list-item .quick-complete-control svg { display: block; width: 19px; height: 19px; }
+/* The other surfaces that shared the emoji: the timeline card's `.chk-quick`
+   and both triage cards' `.tri-quick`. Sized at the specificity of the rule
+   they have to beat -- `.card .quick-complete-control.chk-quick svg` is
+   (0,3,1), so a bare `.chk-quick svg` at (0,1,1) could not size the card's
+   glyph at any width, and the only site that renders `.chk-quick`
+   (itinerary-card.js) always emits it as `chk-quick quick-complete-control`
+   inside `.card`. */
+.chk-quick svg, .tri-quick svg { display: block; color: #fbbf24; }
+.card .quick-complete-control.chk-quick svg { width: 20px; height: 20px; }
+.tri-quick svg { width: 13px; height: 13px; }
+
+
+/* ── Row chips get a line box, not a touch box ───────────────────────────
+   18px matches `.src-jump` and clears the 14px title's 18.2px line box, so
+   the title row measures the title and the meta row measures its text. */
+.it-list-item .it-list-title-row > :is(.pet-privacy-toggle, .card-tags-toggle, .btn-add-menu, .wrap-collapse) {
+  min-height: 0;
+  min-width: 0;
+  /* The tap target stays 44px; the negative block margin is what stops it from
+     DRIVING the row. A flex item's contribution to the line's cross size is its
+     margin box, so 44px of button with -13px above and below contributes 18px of
+     height while the button itself -- the thing a thumb hits -- is untouched.
+     This is the pattern the row already uses for the completion control (44px
+     button, 28px visible plate) and the one scripts/verify-ui-optimization.mjs
+     pins for this very chip: "List privacy uses a compact visual pill"
+     (pill <= 24px) AND "List privacy keeps a 44 pixel touch target"
+     (button >= 44px). Setting `height: 18px` here satisfied the first and broke
+     the second. */
+  height: var(--target-min);
+  margin-block: calc((18px - var(--target-min)) / 2);
+  padding-block: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  flex: none;
+}
+/* The privacy pill draws its visible capsule on an inner span. */
+.it-list-item .it-list-title-row > .it-list-privacy > span { min-height: 0; height: 18px; }
+/* The "+" is square-ish, so it needs width where the others take their text's. */
+.it-list-item .it-list-title-row > .btn-add-menu { min-width: 20px; }
+/* Meta-line buttons (the schedule calendar) — no `display` here, so the
+   hover-reveal rules above keep deciding what is visible. */
+.it-list-item .it-list-meta > button {
+  min-height: 0;
+  min-width: 0;
+  height: var(--target-min);
+  margin-block: calc((18px - var(--target-min)) / 2);
+  padding-block: 0;
+}
+
+/* `.ttl` is `white-space: nowrap` above 760px, so its content width is the
+   whole string. `min-width: 0` alone does NOT stop the chips from wrapping:
+   with `flex-wrap: wrap` the browser breaks the line using each item's
+   hypothetical main size and only shrinks items WITHIN a line, so a 602px
+   title in a 702px row pushed the "+" onto a second line and that row
+   measured 84px while its neighbours measured 64px (visible at 1024px, not at
+   1440px -- which is why a single-width check would have missed it).
+   `min-width: 0` is still what lets the title ellipsize once it is the item
+   being shrunk. */
+.it-list-item .it-list-title-row > .ttl { min-width: 0; }
+
+/* Above 760px the title is already a single ellipsizing line, so the row has
+   nothing to gain from wrapping and everything to lose: turning the wrap off
+   makes the title the item that absorbs the shrink. The chips keep `flex: none`,
+   so they stay their own size and stay ADJACENT to the title rather than being
+   pushed to the far edge -- which is where a zero `flex-basis` on the title
+   would have put them, and a chip relocation is not what this change is for.
+   Stated as the base rule and re-enabled in the mobile block below, because
+   this project pins every stylesheet to the 480/760/1024 breakpoints
+   (ui-optimization.test.js) and a `min-width: 761px` query would be a fourth. */
+.it-list-item .it-list-title-row { flex-wrap: nowrap; }
+
+/* ── Done rows collapse again ────────────────────────────────────────────
+   `.it-list-item.done:not(.sub) .it-list-check` asks for 14px in
+   dashboard.css, but it sets `height`, and the global floor sets `min-height`,
+   which wins over a smaller height. A row designed to collapse to ~18px
+   measured 48px. */
+.it-list-item.done:not(.sub) .it-list-check { min-height: 0; }
+/* And its colour bar is `visibility: hidden` but still holds its grid track, so
+   `.bar { min-height: 36px }` floored an 18px row at 40px. Open rows are immune
+   (their bar is absolutely positioned above), and `.bar` is shared with `.card`,
+   `.bc-card`, and the timeline -- hence the narrow selector rather than
+   lowering the shared floor. */
+.it-list-item.done:not(.sub) > .bar { min-height: 0; }
+
+@media (max-width: 760px) {
+  /* Mobile was worse than desktop: at 390px the same chips wrapped to a
+     second 44px flex line, so the title row measured 91.59px and the row
+     137.09px. They get a 26px box here -- above the 24px WCAG 2.5.8 (AA)
+     floor, and the row's 8px gaps supply the required spacing -- while the
+     completion control keeps its full 44px AAA target above. */
+  /* Same trick, a roomier 26px of row height: the buttons stay 44px. */
+  .it-list-item .it-list-title-row > :is(.pet-privacy-toggle, .card-tags-toggle, .btn-add-menu, .wrap-collapse),
+  .it-list-item .it-list-meta > button { margin-block: calc((26px - var(--target-min)) / 2); }
+  .it-list-item .it-list-title-row > .it-list-privacy > span { height: 26px; }
+  /* dashboard.css sets a hard 44px width here, which is the target we want. */
+  .it-list-item .it-list-title-row > .btn-add-menu { width: var(--target-min); min-width: var(--target-min); }
+  .card .quick-complete-control.chk-quick svg { width: 22px; height: 22px; }
+  /* The wrap comes back here. The title clamps to two lines and takes the full
+     width on a phone, and the chips take the line below it. Pulling them up
+     onto the title's line (a zero flex-basis on `.ttl`) does buy 17px -- 102px
+     rows instead of 119px -- but it leaves the title only 106px of the 199px
+     available, and at a 2-line clamp that truncates every row to about
+     thirteen characters: three different "Check in: ..." tasks all render as
+     "Check in: Review...". Compared side by side at 390px; 17px is not worth a
+     title you cannot tell apart from its neighbour. The chip line is real
+     content, not the dead air this change is about. */
+  .it-list-item .it-list-title-row { flex-wrap: wrap; }
+}
+
+@media (max-width: 480px) {
+  /* dashboard.css drops the row "+" on the narrowest phones to cut clutter.
+     The `display: inline-flex` that centers the chip glyphs above is more
+     specific than that rule, so without this the "+" came back at 390px.
+     Caught by measuring the row at 390px, not by reading the diff. */
+  .it-list-item .it-list-title-row > .btn-add-menu { display: none; }
 }

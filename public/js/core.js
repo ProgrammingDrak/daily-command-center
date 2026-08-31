@@ -32,7 +32,24 @@
   // wanted a third — the point at which a duplicated string becomes a drift
   // hazard. One copy, here, where every file can read it at parse time.
   DCC.icons = {
-    calendar: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>'
+    calendar: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
+    // Quick-complete bolt. Was the raw emoji U+26A1 on all four surfaces (the
+    // list row, the timeline card, and both triage cards). Apple Color Emoji
+    // has asymmetric side bearings and an ascent+descent over 1em, so flexbox
+    // centered the glyph's ADVANCE box while its ink landed high and left of
+    // the amber plate -- measurably, 3.5px left and 5.5px up in the list row.
+    // No amount of line-height or transform fixes that portably, because the
+    // offset is a property of whichever emoji font the platform picked. This
+    // path's ink spans x 3..21 and y 2..22, so its bbox centre is exactly
+    // (12,12) -- the viewBox centre -- and it lands wherever the box does.
+    //
+    // Every entry states a default width/height, and consumers that want another
+    // size override it in CSS (the bolt is sized per surface in
+    // ui-optimization.css). An inline <svg> with a viewBox and NO width/height has
+    // no intrinsic size: it resolves against its containing block, so the next
+    // reader of this registry who forgets the CSS gets a full-width bolt rather
+    // than a small one. The default is what keeps that failure small.
+    bolt: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>'
   };
 
   // ── safeUrl ────────────────────────────────────────────────────────────

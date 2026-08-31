@@ -104,6 +104,7 @@ const _bountyBtnSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none"
 // One calendar glyph for the whole app (core.js). It used to be spelled out here
 // AND in itinerary-card.js, and the catch-up modals now want it too.
 const _calSvg=(window.DCC&&window.DCC.icons&&window.DCC.icons.calendar)||"";
+const _boltSvg=(window.DCC&&window.DCC.icons&&window.DCC.icons.bolt)||"";
 // Open the prep briefing for a meeting. Used by the Prep chip and the radial
 // Prep/Recap spoke. The only surface with an INLINE meeting-auto-panel is the
 // retired #timeline (display:none; switchToDate still builds it hidden), so a
@@ -788,7 +789,7 @@ function buildListView(){
     const quickCompleteTitle='Click to quick complete. Hold for completion notes. Shift+Enter also opens notes.';
     const completionControl=isDoneRow
       ? '<button class="chk it-list-check on" title="Uncheck">'+ckSvg+'</button>'
-      : '<button class="it-list-check quick-complete-control'+(chkBlocked?' chk-blocked':'')+'" title="'+quickCompleteTitle+'" aria-label="'+quickCompleteTitle+'"><span aria-hidden="true">&#9889;</span></button>';
+      : '<button class="it-list-check quick-complete-control'+(chkBlocked?' chk-blocked':'')+'" title="'+quickCompleteTitle+'" aria-label="'+quickCompleteTitle+'"><span aria-hidden="true">'+_boltSvg+'</span></button>';
     el.innerHTML=
       (inProgress?'<span class="task-progress-ring" aria-hidden="true"></span>':'')+
       '<div class="it-list-utility">'+
