@@ -1670,6 +1670,12 @@ function closeSchedulePicker(){
   if(overlay)overlay.classList.remove("open");
   _schedPickerTitle="";_schedPickerDur=30;_schedPickerOptions={};_schedPickerDate="";
   _schedPickerOnPlace=null;_schedPickerVerb="";
+  // A close ENDS the session, so an in-flight earliest-free resolve can never land
+  // on whatever picker replaces this one. Clearing the latch here matters just as
+  // much: Escape, the header X and the overlay click all sit OUTSIDE
+  // #sched-step-after, so _schedSetAfterBusy never disabled them, and a latch left
+  // set would swallow every later commit for the life of the page.
+  _schedSession++;_schedCommitting=false;
 }
 function _schedShowStep(step){
   const dayEl=document.getElementById("sched-step-day");
@@ -1680,6 +1686,7 @@ function _schedShowStep(step){
 // Lock in a day and advance to the "After…" step.
 function _schedPickDay(dateStr){
   if(!dateStr)return;
+  _schedSession++;              // a new day is a new session: see closeSchedulePicker
   _schedPickerDate=dateStr;
   _schedShowStep("after");
   _renderSchedAfterStep(dateStr);
@@ -1691,14 +1698,16 @@ async function _renderSchedAfterStep(dateStr){
   const chipWrap=document.getElementById("sched-after-chips");
   if(chipWrap){
     chipWrap.innerHTML="";
-    // Placement mode gets an "Earliest free" chip: the one-tap auto-slot the
-    // old quick buttons did, for when the exact time doesn't matter.
-    if(_schedPickerOnPlace){
-      const b=document.createElement("button");
-      b.type="button";b.className="sched-chip sched-chip-earliest";b.textContent="⚡ Earliest free";
-      b.addEventListener("click",()=>_schedCommit(dateStr,null));
-      chipWrap.appendChild(b);
-    }
+    // "Earliest free" is the one-tap auto-slot, for when the exact time doesn't
+    // matter. BOTH modes offer it, and both resolve it through the one slot engine:
+    // a mover hands the null straight to onPlace (rescheduleTaskToDate auto-slots a
+    // missing pinnedStart), a create resolves it in _schedEarliestFree below. It was
+    // placement-only, which left the create surfaces -- Triage most visibly -- with
+    // no way to say "whenever fits".
+    const efb=document.createElement("button");
+    efb.type="button";efb.className="sched-chip sched-chip-earliest";efb.textContent="⚡ Earliest free";
+    efb.addEventListener("click",()=>_schedCommit(dateStr,null));
+    chipWrap.appendChild(efb);
     loadSchedTimePresets().forEach(t=>{
       const b=document.createElement("button");
       b.type="button";b.className="sched-chip";b.textContent=_schedTimeLabel(t);
@@ -1737,41 +1746,107 @@ async function _schedDayTasks(dateStr){
   const out=[];
   const viewing=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state&&__state.date)?__state.date:null);
   const toHHMM=(typeof _toHHMM==="function")?_toHHMM:(s=>s);
+  // An UNTIMED row is not an anchor. It renders in the Unscheduled section but still
+  // carries a stored 00:00-based end, so it used to arrive here as "ends 12:30 AM",
+  // sort to the very TOP of the list (00:30 beats every real end), and commit 00:30 --
+  // a start in the past -- if picked. Same trap _rowIsTimed guards in schedule-tab.js.
+  // The live arm tests TaskModel's `untimed`; the API arms test the thing that DERIVES
+  // it (task-model.js: no properties.start => untimed), which this code was missing
+  // because it only ever required an end.
   if(dateStr===viewing&&typeof scheduled!=="undefined"&&Array.isArray(scheduled)){
-    scheduled.forEach(ev=>{if(ev&&ev.title&&ev.end)out.push({title:ev.title,end:toHHMM(ev.end)})});
+    scheduled.forEach(ev=>{if(ev&&!ev.untimed&&ev.title&&ev.end)out.push({title:ev.title,end:toHHMM(ev.end)})});
   }else{
     // One shared day fetch: the same {state,blocks} the earliest-free slot math
     // reads, so the "After…" anchors and the landed slot can't diverge.
     const ctx=await window.DCC.getDayContext(dateStr);
     const timeline=(ctx&&ctx.state&&ctx.state.schedule&&ctx.state.schedule.timeline)||[];
-    timeline.forEach(e=>{if(e&&e.title&&e.end&&e.type!=="break"&&e.type!=="ooo")out.push({title:e.title,end:toHHMM(e.end)})});
+    timeline.forEach(e=>{if(e&&e.title&&e.start&&e.end&&e.type!=="break"&&e.type!=="ooo")out.push({title:e.title,end:toHHMM(e.end)})});
     // Tasks persisted directly to that date (added/scheduled blocks)
     ((ctx&&ctx.blocks)||[]).forEach(b=>{
       const p=(b&&(b.properties||b.props))||{};
-      if(b&&!b.deleted_at&&p.title&&p.end)out.push({title:p.title,end:toHHMM(p.end)});
+      if(b&&!b.deleted_at&&p.title&&p.start&&p.end)out.push({title:p.title,end:toHHMM(p.end)});
     });
   }
   // Dedup by title+end, drop entries with an unparseable end, sort by end time.
   const seen=new Set();const uniq=[];
   out.forEach(it=>{
     if(isNaN(pt(it.end)))return;
+    // fmt() does not wrap at midnight, so a day that overflowed stores an end like
+    // "24:30" -- but pt() DOES wrap, so such a row rendered as "ends 12:30 AM",
+    // sorted to the TOP of this list (ahead of every real anchor), and committed
+    // "24:30" as a start. It is not a legal start on this day, so it is not an anchor.
+    if(parseInt(String(it.end).split(":")[0],10)>=24)return;
     const k=it.title+"@"+it.end;
     if(!seen.has(k)){seen.add(k);uniq.push(it)}
   });
   uniq.sort((a,b)=>pt(a.end)-pt(b.end));
   return uniq;
 }
+// The earliest free start on `dateStr`, or null when the day cannot hold durMin.
+// Two lines of reuse, not a sixth slot algorithm: day-context.js is THE engine
+// (memoized per date, invalidated on every blockStore write), and this is the same
+// getDayContext + findSlot pair state.js scheduleTaskOnDate and the reschedule
+// compute run, so the create path can never disagree with them.
+// `duration` (not durMin) is the key _taskDuration reads first. No `id`: a create
+// has no existing row to excludeSelf.
+async function _schedEarliestFree(dateStr,durMin){
+  if(!window.DCC||typeof window.DCC.getDayContext!=="function")return null;
+  let ctx=null;
+  try{ctx=await window.DCC.getDayContext(dateStr)}catch(e){ctx=null}
+  if(!ctx)return null;
+  const slot=window.DCC.findSlot({duration:durMin||30},ctx,{anchorNow:true});
+  return slot?slot.start:null;
+}
+// The After step stays OPEN across the resolve (a full day has to be able to send
+// the user back to a hand-typed time), so its controls -- Back included -- go inert
+// for the duration instead.
+function _schedSetAfterBusy(busy){
+  const step=document.getElementById("sched-step-after");
+  if(!step)return;
+  step.querySelectorAll("button,input").forEach(el=>{el.disabled=!!busy});
+}
 // Resolve the chosen day+time: hand it to the placement callback (movers) or
 // create the scheduled task (the original create flow), then close.
-function _schedCommit(dateStr,timeStr){
+let _schedCommitting=false,_schedSession=0;
+async function _schedCommit(dateStr,timeStr){
+  if(_schedCommitting)return;   // a second click while a resolve is in flight
+  const session=_schedSession;
   // The title is editable in the modal; whatever it says at commit time wins.
   const title=(_schedPickerTitle||"").trim()||"Untitled task";
   const durMin=_schedPickerDur,options=_schedPickerOptions;
   const onPlace=_schedPickerOnPlace;
   const bar=options&&options.sourceBar;
+  let autoPlaced=false;
+  // A null time means "earliest free". Movers own that themselves
+  // (openPlacementPicker's contract: rescheduleTaskToDate auto-slots a null
+  // pinnedStart), so only a CREATE resolves one -- and it resolves BEFORE the
+  // picker closes, so a packed day can leave the user on the After step instead
+  // of silently doing nothing. The four module reads above are already snapshotted
+  // into locals, which is what makes an await here safe: closeSchedulePicker()
+  // clears every one of them.
+  if(!onPlace&&!timeStr){
+    _schedCommitting=true;_schedSetAfterBusy(true);
+    try{timeStr=await _schedEarliestFree(dateStr,durMin)}
+    // Only the session that armed this resolve may un-busy the step, or a stale
+    // resolve would re-enable controls a NEWER one just disabled.
+    finally{if(_schedSession===session){_schedCommitting=false;_schedSetAfterBusy(false)}}
+    // A date check is not enough. Close-then-reopen on the same day is two taps
+    // (Today is the primary button), and it restores _schedPickerDate, so an
+    // abandoned resolve would sail through and commit the FIRST picker's title and
+    // duration into the picker the user is now looking at. The counter is bumped by
+    // every close and every day pick, so it answers the real question: is this still
+    // the same picker session?
+    if(_schedSession!==session)return;
+    if(!timeStr){
+      const label=(typeof _prettyDateLabel==="function")?_prettyDateLabel(dateStr):dateStr;
+      if(typeof showToast==="function")showToast("No free slot on "+label+"'s schedule","error");
+      return;   // stay on the After step: a time can still be named by hand
+    }
+    autoPlaced=true;
+  }
   closeSchedulePicker();
   if(onPlace){onPlace(dateStr,timeStr,title);return}
-  commitScheduledTask(title,durMin,dateStr,timeStr,options);
+  commitScheduledTask(title,durMin,dateStr,timeStr,options,autoPlaced?{autoPlaced:true}:null);
   if(bar){const inp=bar.querySelector(".tab-title");if(inp){inp.value="";inp.classList.remove("tab-error");}}
 }
 function schedulePickerFields(durMin,options){
@@ -1794,8 +1869,13 @@ function schedulePickerFields(durMin,options){
 // Resolve a chosen day (dateStr) + time (HH:MM) into a real task. If that day is
 // the one currently being viewed, insert it live with a pinned start; otherwise
 // persist it to the blockstore (or a per-date localStorage bucket) for that day.
-function commitScheduledTask(title,durMin,dateStr,timeStr,options){
+// `placement` is internal, set only by _schedCommit: {autoPlaced:true} means the
+// engine chose this start, not a human. Positional rather than an options key so
+// the existing 5-arg callers are untouched, and so a placement detail stays out of
+// the caller-facing bag that feeds schedulePickerFields.
+function commitScheduledTask(title,durMin,dateStr,timeStr,options,placement){
   options=options||{};
+  const autoPlaced=!!(placement&&placement.autoPlaced);
   if(!title||!dateStr||!timeStr)return;
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)
     ?viewDate:((typeof __state!=="undefined"&&__state&&__state.date)?__state.date:null);
@@ -1807,10 +1887,15 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
     const newItem=Object.assign({id,title,type:_type,start:timeStr,end:fmt(s+durMin),
       // Rollup containers are wraps from birth so drag carries their children.
       isWrap:(window.TaskTypes&&window.TaskTypes.rule(_type,"dragMovesSubtree"))||undefined,
-      // commitScheduledTask only runs with a timeStr, so this create IS a user-named
-      // time. persistAddedTask carries the flag onto the row.
-      _userSetStart:true,
       _pinnedStart:timeStr},schedulePickerFields(durMin,options));
+    // A hand-named time IS user intent, and drag.js _holdsTime holds those rows even
+    // under orderWins. An "Earliest free" start is not: it keeps the derived pin (which
+    // is what stops recalcTimes from cascading it away) and stays demotable by a later
+    // drag, exactly like insertTaskNow's auto-placed row. Assigned rather than set to
+    // undefined in the literal so the key never exists on an auto-placed row --
+    // persistAddedTask reads `item._userSetStart` and _setUserSetStart's contract is
+    // that a reader testing the value and one testing `in` must not disagree.
+    if(!autoPlaced)newItem._userSetStart=true;
     // Insert in chronological order based on pinned start
     let insertAt=scheduled.findIndex(ev=>pt(ev.start)>=s);
     if(insertAt===-1)insertAt=scheduled.length;
@@ -1820,7 +1905,7 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
     // Single record: persistAddedTask's dated block. (A savePendingTasks push
     // here used to mint an orphaned dateless pending_task twin.)
     const persistence=persistAddedTask(newItem);
-    log("scheduled",id,"Scheduled at "+timeStr+": "+title);
+    log("scheduled",id,"Scheduled at "+timeStr+(autoPlaced?" (earliest free)":"")+": "+title);
     render();
     checkBlockWarnings(newItem);
     if(typeof options.onScheduled==="function"){
@@ -1837,7 +1922,7 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
     if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
       const bprops=Object.assign(
         window.DCC.taskBlockProps(newItem,{local_id:id,duration:durMin,start:timeStr,end:newItem.end}),
-        {_pinnedStart:timeStr,userSetStart:true,added_at:new Date().toISOString()}
+        {_pinnedStart:timeStr,userSetStart:autoPlaced?undefined:true,added_at:new Date().toISOString()}
       );
       persistence=window.blockStore.createBlock("block",bprops,{date:dateStr});
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
@@ -1848,7 +1933,7 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
       let arr=[];try{arr=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){arr=[]}
       arr.push(Object.assign(
         window.DCC.taskCommonProps(newItem),
-        {id,durMin,start:timeStr,end:newItem.end,_pinnedStart:timeStr,userSetStart:true,addedAt:new Date().toISOString()}
+        {id,durMin,start:timeStr,end:newItem.end,_pinnedStart:timeStr,userSetStart:autoPlaced?undefined:true,addedAt:new Date().toISOString()}
       ));
       localStorage.setItem(key,JSON.stringify(arr));
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
@@ -1895,7 +1980,8 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
   if(backBtn)backBtn.addEventListener("click",()=>_schedShowStep("day"));
   const customGo=document.getElementById("sched-custom-go");
   const customTime=document.getElementById("sched-custom-time");
-  const commitCustom=()=>{if(customTime&&customTime.value&&_schedPickerDate)_schedCommit(_schedPickerDate,customTime.value)};
+  // Same HH:MM guard the row popover already applies before it commits a typed time.
+  const commitCustom=()=>{if(customTime&&/^\d{2}:\d{2}$/.test(customTime.value||"")&&_schedPickerDate)_schedCommit(_schedPickerDate,customTime.value)};
   if(customGo)customGo.addEventListener("click",commitCustom);
   if(customTime)customTime.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();commitCustom()}});
   document.addEventListener("keydown",e=>{if(e.key==="Escape"&&overlay.classList.contains("open"))closeSchedulePicker()});
