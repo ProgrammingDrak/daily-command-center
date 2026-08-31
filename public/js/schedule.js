@@ -1670,6 +1670,12 @@ function closeSchedulePicker(){
   if(overlay)overlay.classList.remove("open");
   _schedPickerTitle="";_schedPickerDur=30;_schedPickerOptions={};_schedPickerDate="";
   _schedPickerOnPlace=null;_schedPickerVerb="";
+  // A close ENDS the session, so an in-flight earliest-free resolve can never land
+  // on whatever picker replaces this one. Clearing the latch here matters just as
+  // much: Escape, the header X and the overlay click all sit OUTSIDE
+  // #sched-step-after, so _schedSetAfterBusy never disabled them, and a latch left
+  // set would swallow every later commit for the life of the page.
+  _schedSession++;_schedCommitting=false;
 }
 function _schedShowStep(step){
   const dayEl=document.getElementById("sched-step-day");
@@ -1680,6 +1686,7 @@ function _schedShowStep(step){
 // Lock in a day and advance to the "After…" step.
 function _schedPickDay(dateStr){
   if(!dateStr)return;
+  _schedSession++;              // a new day is a new session: see closeSchedulePicker
   _schedPickerDate=dateStr;
   _schedShowStep("after");
   _renderSchedAfterStep(dateStr);
@@ -1800,9 +1807,10 @@ function _schedSetAfterBusy(busy){
 }
 // Resolve the chosen day+time: hand it to the placement callback (movers) or
 // create the scheduled task (the original create flow), then close.
-let _schedCommitting=false;
+let _schedCommitting=false,_schedSession=0;
 async function _schedCommit(dateStr,timeStr){
   if(_schedCommitting)return;   // a second click while a resolve is in flight
+  const session=_schedSession;
   // The title is editable in the modal; whatever it says at commit time wins.
   const title=(_schedPickerTitle||"").trim()||"Untitled task";
   const durMin=_schedPickerDur,options=_schedPickerOptions;
@@ -1819,11 +1827,16 @@ async function _schedCommit(dateStr,timeStr){
   if(!onPlace&&!timeStr){
     _schedCommitting=true;_schedSetAfterBusy(true);
     try{timeStr=await _schedEarliestFree(dateStr,durMin)}
-    finally{_schedCommitting=false;_schedSetAfterBusy(false)}
-    // closeSchedulePicker() clears _schedPickerDate and Back reassigns it, so this
-    // one check covers both "cancelled mid-resolve" and "went back and picked
-    // another day". Same guard _renderSchedAfterStep uses around its own await.
-    if(_schedPickerDate!==dateStr)return;
+    // Only the session that armed this resolve may un-busy the step, or a stale
+    // resolve would re-enable controls a NEWER one just disabled.
+    finally{if(_schedSession===session){_schedCommitting=false;_schedSetAfterBusy(false)}}
+    // A date check is not enough. Close-then-reopen on the same day is two taps
+    // (Today is the primary button), and it restores _schedPickerDate, so an
+    // abandoned resolve would sail through and commit the FIRST picker's title and
+    // duration into the picker the user is now looking at. The counter is bumped by
+    // every close and every day pick, so it answers the real question: is this still
+    // the same picker session?
+    if(_schedSession!==session)return;
     if(!timeStr){
       const label=(typeof _prettyDateLabel==="function")?_prettyDateLabel(dateStr):dateStr;
       if(typeof showToast==="function")showToast("No free slot on "+label+"'s schedule","error");

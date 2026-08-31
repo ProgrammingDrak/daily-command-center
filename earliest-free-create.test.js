@@ -50,14 +50,19 @@ const RENDER_AFTER = mustSlice(SRC, /^async function _renderSchedAfterStep\(date
 const DAY_TASKS = mustSlice(SRC, /^async function _schedDayTasks\(dateStr\)\{[\s\S]*?\n\}/m, "_schedDayTasks");
 const EARLIEST = mustSlice(SRC, /^async function _schedEarliestFree\(dateStr,durMin\)\{[\s\S]*?\n\}/m, "_schedEarliestFree");
 const BUSY = mustSlice(SRC, /^function _schedSetAfterBusy\(busy\)\{[\s\S]*?\n\}/m, "_schedSetAfterBusy");
-const COMMIT = mustSlice(SRC, /^let _schedCommitting=false;\nasync function _schedCommit\(dateStr,timeStr\)\{[\s\S]*?\n\}/m, "_schedCommit");
+const COMMIT = mustSlice(SRC, /^let _schedCommitting=false,_schedSession=0;\nasync function _schedCommit\(dateStr,timeStr\)\{[\s\S]*?\n\}/m, "_schedCommit");
 const FIELDS = mustSlice(SRC, /^function schedulePickerFields\(durMin,options\)\{[\s\S]*?\n\}/m, "schedulePickerFields");
 const COMMIT_TASK = mustSlice(SRC, /^function commitScheduledTask\(title,durMin,dateStr,timeStr,options,placement\)\{[\s\S]*?\n\}/m, "commitScheduledTask");
 
 // pt/fmt/ms/_toHHMM sliced, not retyped: a gentler copy in the harness would move
 // every time assertion off the code under test.
+// The single-line alternative goes FIRST. Tried the other way round, the lazy
+// `[\s\S]*?\n\}` still matches a one-liner by running on to the NEXT column-0
+// brace: the `fmt` slice actually returned fmt+ms+f12+fmtMoney, and the real f12
+// then shadowed the `f12: s => s` stub this harness installs on purpose. mustSlice
+// reported success the whole time, which is the one thing it exists to prevent.
 const PRIMITIVES = ["pt", "fmt", "ms", "_toHHMM"].map(name => {
-  const re = new RegExp("^function " + name + "\\([\\s\\S]*?\\n\\}|^function " + name + "\\(.*\\}$", "m");
+  const re = new RegExp("^function " + name + "\\(.*\\}$|^function " + name + "\\([\\s\\S]*?\\n\\}", "m");
   return mustSlice(STATE_SRC, re, "state.js " + name);
 }).join("\n");
 
@@ -75,7 +80,17 @@ function makeEl(tag) {
     innerHTML: "", children: [],
     appendChild(c) { this.children.push(c); return c; },
     addEventListener(t, fn) { if (t === "click") el.onclick = fn; },
-    querySelectorAll: () => [],
+    // Real enough to see _schedSetAfterBusy work. A hardcoded [] made both the
+    // disable AND the re-enable unassertable, which would have let a permanently
+    // disabled After step through while the packed-day test below still passed.
+    querySelectorAll(sel) {
+      const want = String(sel).split(",").map(x => x.trim().toUpperCase());
+      const out = [];
+      (function walk(n) {
+        n.children.forEach(c => { if (want.includes(String(c.tagName).toUpperCase())) out.push(c); walk(c); });
+      })(el);
+      return out;
+    },
     classList: { add() {}, remove() {} }
   };
   return el;
@@ -266,10 +281,10 @@ test("no free slot keeps the picker OPEN and says so", async () => {
 // ── 5. re-entrancy across the await ────────────────────────────────────────
 
 test("a double-click during the resolve commits exactly once", async () => {
-  let release;
+  let release, fetches = 0;
   const gate = new Promise(r => { release = r; });
   const h = harness({
-    dayContext: d => gate.then(() => h.ctx.DCC.buildDayContext(d, h.state, []))
+    dayContext: d => { fetches++; return gate.then(() => h.ctx.DCC.buildDayContext(d, h.state, [])); }
   });
   armCreate(h);
   const a = h.run('_schedCommit("' + DAY + '",null)');
@@ -277,6 +292,41 @@ test("a double-click during the resolve commits exactly once", async () => {
   release();
   await a; await b;
   assert.equal(h.rec.scheduled.length, 1, "the modal stays open across the resolve, so the second click has to be latched out");
+  // Counting fetches is what pins the LATCH. Without it the assertion above passes
+  // on the session guard alone: the first call closes the picker before the second
+  // rechecks, so one commit lands either way and the latch could be deleted.
+  assert.equal(fetches, 1, "the second click must be turned away BEFORE it reaches the engine");
+});
+
+test("the latch is released, so the NEXT Earliest free still works", async () => {
+  // A latch that is set and never cleared kills every later commit for the life of
+  // the page, and every other test builds a fresh context, so nothing else sees it.
+  const h = harness();
+  armCreate(h);
+  await h.run('_schedCommit("' + DAY + '",null)');
+  armCreate(h);
+  await h.run('_schedCommit("' + DAY + '",null)');
+  assert.equal(h.rec.scheduled.length, 2);
+});
+
+test("closing mid-resolve and reopening on the SAME day commits nothing", async () => {
+  // The date guard alone cannot see this: closeSchedulePicker clears
+  // _schedPickerDate and reopening on Today (one tap) puts the same value back, so
+  // the abandoned resolve would commit the FIRST picker's title into the second.
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const h = harness({
+    dayContext: d => gate.then(() => h.ctx.DCC.buildDayContext(d, h.state, []))
+  });
+  armCreate(h);
+  const p = h.run('_schedCommit("' + DAY + '",null)');
+  h.run("closeSchedulePicker()");
+  h.run('_schedPickerTitle="A different task";_schedPickerDur=30;_schedPickerOptions={};'
+    + '_schedPickerDate="' + DAY + '";_schedPickerOnPlace=null;');
+  release();
+  await p;
+  assert.equal(h.rec.scheduled.length, 0, "the abandoned resolve belongs to a picker session the user already left");
+  assert.equal(h.run("_schedPickerDate"), DAY, "and it must not close the picker the user is now looking at");
 });
 
 test("closing the picker mid-resolve commits nothing", async () => {
@@ -335,6 +385,18 @@ test("a startless block is not offered as an anchor (the API arm)", async () => 
   assert.deepEqual(Array.from(items, i => i.title), ["Real anchor"]);
 });
 
+test("a startless TIMELINE entry is not offered as an anchor", async () => {
+  // Two arms got the same new `start` requirement and only the blocks arm was
+  // pinned. The timeline is the primary anchor source for a day the user is NOT
+  // viewing, so it is the arm most likely to serve the ghost rows in the first place.
+  const h = harness({ viewDate: "2099-03-01", timeline: [
+    { type: "task", title: "Real anchor", start: "09:00", end: "10:00" },
+    { type: "task", title: "No start at all", end: "00:30" }
+  ] });
+  const items = await h.run('_schedDayTasks("' + DAY + '")');
+  assert.deepEqual(Array.from(items, i => i.title), ["Real anchor"]);
+});
+
 test("a past-midnight task is not offered as an anchor", async () => {
   const h = harness({ viewDate: "2099-03-01" });   // force the API branch, not live `scheduled`
   const blocks = [
@@ -356,4 +418,68 @@ test("the resolved slot is the shared engine's answer, not a local guess", async
   armCreate(h);
   await h.run('_schedCommit("' + DAY + '",null)');
   assert.equal(h.rec.scheduled[0].start, "10:00", "the 09:00 blocker must push the slot, exactly as findSlot says");
+});
+
+test("the picker's duration reaches the engine, not just its default", async () => {
+  // `duration` is the key _taskDuration reads first, and its fallback for anything
+  // it does not understand is 30 -- the same 30 every other test pins. So with a
+  // 30-minute task, findSlot({}) and findSlot({durMin}) both answer correctly and
+  // the hand-off is unasserted. A 90-minute task cannot fit the 09:00-09:30 gap.
+  const h = harness({ timeline: [{ type: "break", title: "Standup", start: "09:30", end: "11:00" }] });
+  armCreate(h);
+  h.run("_schedPickerDur=90;");
+  await h.run('_schedCommit("' + DAY + '",null)');
+  assert.equal(h.rec.scheduled[0].start, "11:00", "a 30-minute search would have answered 09:00");
+  assert.equal(h.rec.scheduled[0].end, "12:30");
+});
+
+test("on the actual today the slot is anchored to NOW, not to day start", async () => {
+  // Every other test uses a far-future day on purpose, which leaves anchorNow -- the
+  // flag that only does anything on the real today -- with zero coverage. Dropping
+  // it would pin a 09:00 start at lunchtime: a task in the past, on the exact path
+  // this feature exists for (Triage -> Today -> Earliest free).
+  const h = harness();
+  const FROZEN = new Date(2099, 0, 5, 13, 7).getTime();   // the same calendar day as DAY
+  class FrozenDate extends Date {
+    constructor(...a) { a.length ? super(...a) : super(FROZEN); }
+  }
+  h.ctx.Date = FrozenDate;   // day-context runs INSIDE this context, so it sees it
+  armCreate(h);
+  await h.run('_schedCommit("' + DAY + '",null)');
+  assert.equal(h.rec.scheduled[0].start, "13:15", "unanchored, the empty day answers 09:00 — a start hours in the past");
+});
+
+test("the After step goes inert for the resolve, and comes back", async () => {
+  // _schedSetAfterBusy is the only thing stopping a second commit from a control the
+  // latch does not cover, and the re-enable is what keeps the packed-day escape
+  // hatch above (name a time by hand) alive in the browser.
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const h = harness({
+    dayContext: d => gate.then(() => h.ctx.DCC.buildDayContext(d, h.state, []))
+  });
+  const btn = makeEl("button"), input = makeEl("input");
+  h.els["sched-step-after"].appendChild(btn);
+  h.els["sched-step-after"].appendChild(input);
+  armCreate(h);
+  const p = h.run('_schedCommit("' + DAY + '",null)');
+  assert.equal(btn.disabled, true, "the step must be inert while the day is being fetched");
+  assert.equal(input.disabled, true);
+  release();
+  await p;
+  assert.equal(btn.disabled, false, "left disabled, the After step is dead for the rest of the session");
+  assert.equal(input.disabled, false);
+});
+
+test("a packed day re-enables the step so a time can still be typed", async () => {
+  const h = harness({ blocks: [{ type: "block", properties: { start: "09:00", end: "23:00" } }] });
+  const btn = makeEl("button");
+  h.els["sched-step-after"].appendChild(btn);
+  armCreate(h);
+  await h.run('_schedCommit("' + DAY + '",null)');
+  assert.equal(h.rec.toasts.length, 1);
+  assert.equal(btn.disabled, false, "the toast says name a time by hand, so the controls have to accept one");
+  await h.run('_schedCommit("' + DAY + '","14:00")');
+  assert.equal(h.rec.scheduled.length, 1, "and the hand-typed time must actually commit");
+  assert.equal(h.rec.scheduled[0].start, "14:00");
 });
