@@ -7,6 +7,24 @@ const scheduleSource = fs.readFileSync(path.join(__dirname, "public/js/schedule-
 const dashboardCss = fs.readFileSync(path.join(__dirname, "public/css/dashboard.css"), "utf8");
 const optimizationCss = fs.readFileSync(path.join(__dirname, "public/css/ui-optimization.css"), "utf8");
 
+// Bound a rule assertion to ONE declaration block. An unbounded `[\s\S]*?`
+// between a selector and a declaration is lazy but not fenced: it walks past `}`
+// into unrelated rules, so it reports a match for a declaration that lives 400
+// lines away and the assertion can never fail. Two of the asserts below were
+// written that way and were verified to pass with the rule they guard deleted.
+function cssRule(selectorPattern) {
+  // Anchored at a line start so a selector that also appears INSIDE a grouped
+  // selector list resolves to its own rule: `.tri-quick svg` heads one rule and
+  // is also the second half of `.chk-quick svg, .tri-quick svg`, and an
+  // unanchored match returns whichever comes first in the file.
+  const found = optimizationCss.match(new RegExp("^" + selectorPattern + "\\s*\\{[^}]*\\}", "m"));
+  assert.ok(found, `no rule found for ${selectorPattern}`);
+  // Comments out: these blocks are heavily commented, and a comment that quotes
+  // a declaration ("setting `height: 18px` here broke the touch target") makes a
+  // doesNotMatch assert against its own prose instead of the CSS.
+  return found[0].replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
 test("list rows keep one completion control in a compact utility rail", () => {
   assert.match(scheduleSource, /class="it-list-utility"/);
   assert.match(scheduleSource, /class="it-list-nav"/);
@@ -39,7 +57,10 @@ test("the quick-complete bolt is a shared inline SVG, not the raw emoji", () => 
   const cardSource = fs.readFileSync(path.join(__dirname, "public/js/itinerary-card.js"), "utf8");
   const triageSource = fs.readFileSync(path.join(__dirname, "public/js/triage.js"), "utf8");
 
-  assert.match(coreSource, /bolt: '<svg viewBox="0 0 24 24"/);
+  // The registry states a default size on every entry (see core.js): a viewBox
+  // with no width/height has no intrinsic size and resolves against its
+  // container, so a future consumer that forgets the CSS gets a full-width bolt.
+  assert.match(coreSource, /bolt: '<svg width="14" height="14" viewBox="0 0 24 24"/);
   for (const [name, src] of [["schedule-tab", scheduleSource], ["itinerary-card", cardSource], ["triage", triageSource]]) {
     assert.doesNotMatch(src, /&#9889;/, `${name}.js still emits the raw bolt emoji`);
   }
@@ -51,9 +72,44 @@ test("the quick-complete bolt is a shared inline SVG, not the raw emoji", () => 
   // The button must centre it, and the amber plate must centre itself: an
   // absolute ::before with no offsets parks at its static position, not the
   // middle, which is what put the plate 3.5px off-centre on its own.
-  assert.match(optimizationCss, /\.it-list-item:not\(\.done\) \.it-list-check \{\s*display: inline-flex;\s*align-items: center;\s*justify-content: center;/);
-  assert.match(optimizationCss, /\.it-list-item:not\(\.done\) \.quick-complete-control::before \{\s*inset: 0;\s*margin: auto;/);
-  assert.match(optimizationCss, /\.it-list-item \.quick-complete-control svg \{ display: block;/);
+  // Per declaration, not one whitespace- and order-coupled blob: these three
+  // have no interaction, so a reorder must not fail while `flex` -> `block`
+  // (the actual regression) would.
+  const centering = cssRule("\\.it-list-item:not\\(\\.done\\) \\.it-list-check");
+  for (const decl of [/display:\s*inline-flex/, /align-items:\s*center/, /justify-content:\s*center/]) {
+    assert.match(centering, decl);
+  }
+  const plate = cssRule("\\.it-list-item:not\\(\\.done\\) \\.quick-complete-control::before");
+  assert.match(plate, /inset:\s*0/);
+  assert.match(plate, /margin:\s*auto/);
+  // Sizes, per surface. The glyph is `fill: currentColor` with a viewBox, so if
+  // any of these is dropped the bolt takes its default size on that surface.
+  const listSvg = cssRule("\\.it-list-item \\.quick-complete-control svg");
+  assert.match(listSvg, /width:\s*19px/);
+  assert.match(listSvg, /height:\s*19px/);
+  assert.match(cssRule("\\.tri-quick svg"), /width:\s*13px/);
+  assert.match(cssRule("\\.card \\.quick-complete-control\\.chk-quick svg"), /width:\s*20px/);
+  // The amber rides the GLYPH, not the button: triage.js also renders a
+  // `.tri-quick resp-triage-pause` whose U+23F8 is text-presentation and would
+  // have been recoloured by a button-level rule.
+  assert.match(optimizationCss, /\.chk-quick svg, \.tri-quick svg \{[^}]*color: #fbbf24/);
+  assert.doesNotMatch(optimizationCss, /^\.chk-quick, \.tri-quick \{ color/m);
+
+  // All three files capture the icon in a top-level binding at PARSE time, so if
+  // core.js ever loads after them the `|| ""` fallback yields an empty string and
+  // the button renders with no glyph at all: no error, no console warning, just a
+  // missing control on four surfaces. index.html carries a comment about exactly
+  // this hazard; pin the order it depends on, on every page that loads a consumer.
+  for (const page of ["index.html", "public-todo.html"]) {
+    const html = fs.readFileSync(path.join(__dirname, page), "utf8");
+    const core = html.indexOf("/public/js/core.js");
+    assert.ok(core >= 0, `${page} loads a bolt consumer but not core.js`);
+    for (const consumer of ["itinerary-card.js", "schedule-tab.js", "triage.js"]) {
+      const at = html.indexOf(`/public/js/${consumer}`);
+      if (at < 0) continue;
+      assert.ok(core < at, `${page}: core.js must load before ${consumer}`);
+    }
+  }
 
   // The behaviour the swap must not touch.
   assert.match(scheduleSource, /bindQuickCompleteControl\(completionButton/);
@@ -70,12 +126,35 @@ test("row chips carry a line box, not the 44px touch floor", () => {
   // design).
   assert.match(optimizationCss, /\.it-list-item \.it-list-title-row > :is\(\.pet-privacy-toggle, \.card-tags-toggle, \.btn-add-menu, \.wrap-collapse\)/);
   assert.match(optimizationCss, /\.it-list-item \.it-list-meta > button \{[^}]*min-height: 0;/);
-  // The completion control is the one target that KEEPS the full 44px, at
-  // every width -- it is the row's primary action.
-  assert.match(optimizationCss, /\.it-list-item:not\(\.done\) \.it-list-check \{[\s\S]*?height: var\(--target-min\);/);
+  // The completion control keeps the full 44px at every width -- it is the
+  // row's primary action. Bounded to the block: the unbounded form of this
+  // assertion reached a `min-height: var(--target-min)` several hundred lines
+  // downstream and still passed with this rule's whole size group deleted.
+  const control = cssRule("\\.it-list-item:not\\(\\.done\\) \\.it-list-check");
+  assert.match(control, /(?<!min-)height: var\(--target-min\);/);
+  assert.match(control, /(?<!min-)width: var\(--target-min\);/);
+  // The chips keep a 44px target too and shed only their claim on row height,
+  // via a negative block margin. scripts/verify-ui-optimization.mjs pins BOTH
+  // halves of that contract for the privacy chip: "List privacy uses a compact
+  // visual pill" (pill <= 24px) and "List privacy keeps a 44 pixel touch
+  // target" (button >= 44px). A plain `height: 18px` here satisfies the first
+  // and silently reverses the second.
+  const chips = cssRule("\\.it-list-item \\.it-list-title-row > :is\\(\\.pet-privacy-toggle, \\.card-tags-toggle, \\.btn-add-menu, \\.wrap-collapse\\)");
+  assert.match(chips, /height: var\(--target-min\)/);
+  assert.match(chips, /margin-block: calc\(\(18px - var\(--target-min\)\) \/ 2\)/);
+  assert.doesNotMatch(chips, /height: 18px/);
   // The row "+" is hidden below 480px; the flex centering above is more
-  // specific than that rule, so the hide has to be restated.
-  assert.match(optimizationCss, /@media \(max-width: 480px\) \{[\s\S]*?\.it-list-item \.it-list-title-row > \.btn-add-menu \{ display: none; \}/);
+  // specific than that rule, so the hide has to be restated. Slice the block
+  // rather than spanning to it: the unbounded form anchored on the FIRST 480px
+  // query in the file and still passed with this rule hoisted out of every
+  // media query, which would hide the "+" at all widths.
+  const narrow = optimizationCss.slice(optimizationCss.lastIndexOf("@media (max-width: 480px) {"));
+  const narrowBlock = narrow.slice(0, narrow.indexOf("\n}"));
+  assert.match(narrowBlock, /\.it-list-item \.it-list-title-row > \.btn-add-menu \{ display: none; \}/);
+  assert.doesNotMatch(
+    optimizationCss.slice(0, optimizationCss.indexOf("@media")),
+    /\.it-list-item \.it-list-title-row > \.btn-add-menu \{ display: none; \}/,
+  );
 });
 
 test("a long title ellipsizes instead of wrapping the chips to a second line", () => {
@@ -95,6 +174,10 @@ test("a long title ellipsizes instead of wrapping the chips to a second line", (
   // matched with one cross-block regex -- a lazy `[\s\S]*?` happily spans from
   // an early `max-width: 760px` to a `flex-wrap` in a LATER block, proving
   // nothing.
-  const mobileTail = optimizationCss.slice(optimizationCss.lastIndexOf("@media (max-width: 760px)"));
+  // Anchored on the block's own comment, not `lastIndexOf` of the media query:
+  // this file is append-only, so the next 760px block added at the bottom moves
+  // that anchor past this rule and fails a test with nothing wrong in the CSS.
+  // responsive-task-actions.test.js uses the same comment-marker idiom.
+  const mobileTail = optimizationCss.slice(optimizationCss.indexOf("/* Mobile was worse than desktop"));
   assert.match(mobileTail, /\.it-list-item \.it-list-title-row \{ flex-wrap: wrap; \}/);
 });

@@ -163,7 +163,10 @@ if (await login(page)) {
     const visual = button ? getComputedStyle(button, "::before") : null;
     return {
       controls: row.querySelectorAll(".it-list-check-col button").length,
-      lightning: button?.textContent?.includes("⚡") || false,
+      // The glyph is an inline SVG (DCC.icons.bolt), not a text node: the emoji's
+      // ink sat high and left of its plate in every emoji font, so textContent is
+      // empty here now and this has to look for the element.
+      lightning: Boolean(button?.querySelector("svg")),
       instructions: button?.getAttribute("title") || "",
       targetHeight: target?.height || 0,
       visualWidth: visual ? Number.parseFloat(visual.width) : 0,

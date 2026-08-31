@@ -42,7 +42,14 @@
     // offset is a property of whichever emoji font the platform picked. This
     // path's ink spans x 3..21 and y 2..22, so its bbox centre is exactly
     // (12,12) -- the viewBox centre -- and it lands wherever the box does.
-    bolt: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>'
+    //
+    // Every entry states a default width/height, and consumers that want another
+    // size override it in CSS (the bolt is sized per surface in
+    // ui-optimization.css). An inline <svg> with a viewBox and NO width/height has
+    // no intrinsic size: it resolves against its containing block, so the next
+    // reader of this registry who forgets the CSS gets a full-width bolt rather
+    // than a small one. The default is what keeps that failure small.
+    bolt: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>'
   };
 
   // ── safeUrl ────────────────────────────────────────────────────────────

@@ -313,6 +313,9 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .it-list-item:not(.done) .it-list-check-col { display: flex; }
 .it-list-item:not(.done) .it-list-check {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: var(--target-min);
   height: var(--target-min);
   min-width: var(--target-min);
@@ -329,6 +332,13 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .it-list-item:not(.done) .quick-complete-control::before {
   content: "";
   position: absolute;
+  /* An absolute box with no offsets parks at its STATIC position, which for a
+     block-level button is the content box's top-left -- measured 11.5px/11.5px
+     inside the 44px button, so the plate itself sat 3.5px off centre before the
+     glyph was even considered. `inset: 0` plus auto margins centres a
+     fixed-size absolute box exactly. */
+  inset: 0;
+  margin: auto;
   width: 28px;
   height: 28px;
   border: 1px solid rgba(251,191,36,.42);
@@ -339,7 +349,9 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .it-list-item:not(.done) .quick-complete-control > span {
   position: relative;
   z-index: 1;
-  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
 }
 .it-list-item:not(.done) .quick-complete-control:hover::before,
@@ -348,6 +360,11 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .quick-complete-control.is-holding > span { animation:quick-complete-pulse 550ms ease-in-out infinite alternate; }
 .quick-complete-control.flash::before { animation:qflash .35s ease-out; }
 .quick-complete-control.chk-blocked { color:var(--ink-muted); }
+/* The glyph is `fill: currentColor` now, so `color` finally reaches it -- but the
+   row's own `color: #fbbf24` above is (0,3,0) and outranks the (0,2,0) blocked
+   rule, which left a blocked control showing an amber bolt against its correctly
+   greyed plate. Match the specificity so both halves mute together. */
+.it-list-item:not(.done) .quick-complete-control.chk-blocked { color: var(--ink-muted); }
 .quick-complete-control.chk-blocked::before { border-color:var(--line)!important;background:var(--surface-raised)!important; }
 .card .quick-complete-control.chk-quick { display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;min-width:44px;opacity:1; }
 .card .quick-complete-control.chk-quick > span { position:relative;z-index:1;font-size:18px; }
@@ -782,51 +799,26 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
    tuned for.
    ══════════════════════════════════════════════════════════════════════════ */
 
-/* ── The bolt, centered ──────────────────────────────────────────────────
-   Two independent offsets were stacking. First, `.it-list-check` never set a
-   centering context, so the button stayed `display: block` and the glyph was
-   placed as inline text on the first line box -- horizontally centered by the
-   UA's `text-align: center`, but sitting high. Second, the amber plate is an
-   absolutely positioned `::before` with no offsets, which parks it at its
-   static position (the content box's top-left) rather than in the middle:
-   measured at 11.5px/11.5px inside a 44px button, so the 28px plate itself sat
-   3.5px right and 3.5px below centre. Net: the ink read 3.5px left and 5.5px
-   high of its own box.
+/* ── The bolt's size, per surface ────────────────────────────────────────
+   The centering itself now lives in the `.it-list-check` /
+   `.quick-complete-control::before` / `> span` blocks above, beside the rules
+   that define those boxes, rather than as a second set of identical selectors
+   down here. What is left is sizing and colour.
 
-   `inset: 0` + `margin: auto` centers a fixed-size absolute box exactly; flex
-   centering on the button places the glyph; and the glyph is now an SVG whose
-   ink is centered in its viewBox, so none of the three depends on font
-   metrics. Hover, focus, `.flash`/qflash, `.is-holding`, the title text, and
-   both click bindings are untouched -- this is a glyph and a box, not
-   behaviour. */
-.it-list-item:not(.done) .it-list-check {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.it-list-item:not(.done) .quick-complete-control::before {
-  inset: 0;
-  margin: auto;
-}
-.it-list-item:not(.done) .quick-complete-control > span {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-/* 19px: the ink is then 14.3x15.8 inside the 28px plate. 15px disappears in it,
-   21px crowds the border. Change these two values to retune. */
+   19px on the list row: the ink is then 14.3x15.8 inside the 28px plate. 15px
+   disappears in it, 21px crowds the border. Change these two values to retune. */
 .it-list-item .quick-complete-control svg { display: block; width: 19px; height: 19px; }
-/* Same glyph on the surfaces that share the emoji: the timeline card's
-   `.chk-quick` (22px box) and both triage cards' `.tri-quick` (20px box).
-   Both need the amber stated explicitly. The emoji carried its own colour;
-   an SVG on `fill: currentColor` inherits, and neither of these two selectors
-   ever set one -- so without this the triage bolt turned white. (The list
-   row's control already sets `color: #fbbf24` above, and so does `.chk-quick`
-   inside its mobile block.) */
-.chk-quick, .tri-quick { color: #fbbf24; }
-.chk-quick svg { display: block; width: 14px; height: 14px; }
+/* The other surfaces that shared the emoji: the timeline card's `.chk-quick`
+   and both triage cards' `.tri-quick`. Sized at the specificity of the rule
+   they have to beat -- `.card .quick-complete-control.chk-quick svg` is
+   (0,3,1), so a bare `.chk-quick svg` at (0,1,1) could not size the card's
+   glyph at any width, and the only site that renders `.chk-quick`
+   (itinerary-card.js) always emits it as `chk-quick quick-complete-control`
+   inside `.card`. */
+.chk-quick svg, .tri-quick svg { display: block; color: #fbbf24; }
 .card .quick-complete-control.chk-quick svg { width: 20px; height: 20px; }
-.tri-quick svg { display: block; width: 13px; height: 13px; }
+.tri-quick svg { width: 13px; height: 13px; }
+
 
 /* ── Row chips get a line box, not a touch box ───────────────────────────
    18px matches `.src-jump` and clears the 14px title's 18.2px line box, so
@@ -834,7 +826,18 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .it-list-item .it-list-title-row > :is(.pet-privacy-toggle, .card-tags-toggle, .btn-add-menu, .wrap-collapse) {
   min-height: 0;
   min-width: 0;
-  height: 18px;
+  /* The tap target stays 44px; the negative block margin is what stops it from
+     DRIVING the row. A flex item's contribution to the line's cross size is its
+     margin box, so 44px of button with -13px above and below contributes 18px of
+     height while the button itself -- the thing a thumb hits -- is untouched.
+     This is the pattern the row already uses for the completion control (44px
+     button, 28px visible plate) and the one scripts/verify-ui-optimization.mjs
+     pins for this very chip: "List privacy uses a compact visual pill"
+     (pill <= 24px) AND "List privacy keeps a 44 pixel touch target"
+     (button >= 44px). Setting `height: 18px` here satisfied the first and broke
+     the second. */
+  height: var(--target-min);
+  margin-block: calc((18px - var(--target-min)) / 2);
   padding-block: 0;
   display: inline-flex;
   align-items: center;
@@ -851,7 +854,8 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .it-list-item .it-list-meta > button {
   min-height: 0;
   min-width: 0;
-  height: 18px;
+  height: var(--target-min);
+  margin-block: calc((18px - var(--target-min)) / 2);
   padding-block: 0;
 }
 
@@ -896,12 +900,13 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
      137.09px. They get a 26px box here -- above the 24px WCAG 2.5.8 (AA)
      floor, and the row's 8px gaps supply the required spacing -- while the
      completion control keeps its full 44px AAA target above. */
-  .it-list-item .it-list-title-row > :is(.pet-privacy-toggle, .card-tags-toggle, .btn-add-menu, .wrap-collapse) { height: 26px; }
+  /* Same trick, a roomier 26px of row height: the buttons stay 44px. */
+  .it-list-item .it-list-title-row > :is(.pet-privacy-toggle, .card-tags-toggle, .btn-add-menu, .wrap-collapse),
+  .it-list-item .it-list-meta > button { margin-block: calc((26px - var(--target-min)) / 2); }
   .it-list-item .it-list-title-row > .it-list-privacy > span { height: 26px; }
-  /* dashboard.css sets a hard 44px width/height on `.btn-add-menu` here. */
-  .it-list-item .it-list-title-row > .btn-add-menu { width: 26px; min-width: 26px; height: 26px; }
-  .it-list-item .it-list-meta > button { height: 26px; }
-  .chk-quick svg { width: 22px; height: 22px; }
+  /* dashboard.css sets a hard 44px width here, which is the target we want. */
+  .it-list-item .it-list-title-row > .btn-add-menu { width: var(--target-min); min-width: var(--target-min); }
+  .card .quick-complete-control.chk-quick svg { width: 22px; height: 22px; }
   /* The wrap comes back here. The title clamps to two lines and takes the full
      width on a phone, and the chips take the line below it. Pulling them up
      onto the title's line (a zero flex-basis on `.ttl`) does buy 17px -- 102px

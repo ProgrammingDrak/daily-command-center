@@ -1068,7 +1068,7 @@ function buildTriageCard(item) {
     '</div>' +
     notesButton({id: item.id, title: item.title}) +
     '<div class="tri-check' + (isDismissed ? ' dismissed' : '') + '" data-dismiss-id="' + item.id + '" data-dismiss-title="' + (item.title || '').replace(/"/g, '&quot;') + '">\u2713</div>' +
-    '<button class="tri-quick" data-dismiss-id="' + item.id + '" title="Quick complete">' + _triBoltSvg + '</button>' +
+    '<button class="tri-quick" data-dismiss-id="' + DCC.esc(item.id) + '" title="Quick complete">' + _triBoltSvg + '</button>' +
     '<button class="tri-delete-btn" data-delete-tri="' + item.id + '" title="' + DCC.esc(waitingCheckInDeleteTitle(item)) + '" aria-label="Delete triage item">' +
       '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>' +
     '</button>' +
@@ -1397,7 +1397,7 @@ function buildScheduleTriageCard(item){
     '</div>'+
     '<button class="add-btn schedule-triage-schedule" data-triage-id="'+item.id+'">Schedule</button>'+
     '<button class="add-btn schedule-triage-done" data-triage-id="'+item.id+'" data-triage-title="'+safeTitle+'" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>'+
-    '<button class="tri-quick schedule-triage-quick" data-triage-id="'+item.id+'" title="Quick complete">'+_triBoltSvg+'</button>'+
+    '<button class="tri-quick schedule-triage-quick" data-triage-id="'+DCC.esc(item.id)+'" title="Quick complete">'+_triBoltSvg+'</button>'+
     '<button class="tri-delete-btn schedule-triage-delete" data-triage-id="'+item.id+'" title="'+DCC.esc(waitingCheckInDeleteTitle(item))+'" aria-label="Delete triage item">'+
       '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>'+
     '</button>'+
