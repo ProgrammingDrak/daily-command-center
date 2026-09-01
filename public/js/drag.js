@@ -31,13 +31,14 @@ function dOver(e,id){
   // Meetings are valid parents too: a normal body-drop represents concurrent
   // work during the meeting, while Shift+drop creates a pie subtask relevant to
   // the meeting. Only the existing carryover and cycle guards block nesting.
-  const canNest=!draggingCarryover&&targetEv&&!(typeof _isAncestor==="function"&&_isAncestor(dragId,id));
-  // A touch drag carries an explicit mode (see the DCC_DRAG facade): the finger's
-  // sideways offset picks reorder vs nest, because a phone row's 25% edge band is
-  // far too small to hit with a thumb. A mouse drag leaves dccMode undefined and
-  // keeps the mid-row band below, so the desktop path is unchanged.
-  const wantsNest=e.dccMode?(e.dccMode!=="reorder"):(y>h*0.25&&y<h*0.75);
-  if(canNest&&wantsNest){
+  // An Unscheduled row never nests: dDrop gates its nest on !wasUntimed, so without
+  // the same term here the purple "wrap inside" overlay promises a nest that the drop
+  // then refuses, and the task lands top-level instead. Cursor position used to decide
+  // this; a sideways touch drag makes it a deliberate request, so the lie is louder.
+  const draggingEv=(typeof scheduled!=="undefined")?scheduled.find(x=>x.id===dragId):null;
+  const draggingUntimed=!!(draggingEv&&draggingEv.untimed);
+  const canNest=!draggingCarryover&&!draggingUntimed&&targetEv&&!(typeof _isAncestor==="function"&&_isAncestor(dragId,id));
+  if(canNest&&_nestZone(e,y,h)){
     tgt.classList.add("drag-over-nest");
     tgt.classList.toggle("drag-over-nest-sub",!!e.shiftKey);
     return;
@@ -46,6 +47,14 @@ function dOver(e,id){
   tgt.classList.toggle("drag-over-bottom",y>=h/2);
 }
 function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub","pin-drop-target")}
+// Does this drop land in the "nest inside the target" zone? THE one answer, so the
+// hover feedback (dOver) and the actual drop (dDrop) cannot drift apart -- the same
+// reason _holdsTime exists for the two cascades. A touch drag states its mode
+// outright (see the DCC_DRAG facade), because a phone row's 25% edge band is far too
+// small to hit with a thumb. A mouse DragEvent carries no dccMode and keeps the band.
+function _nestZone(e,y,h){
+  return e.dccMode?(e.dccMode!=="reorder"):(y>h*0.25&&y<h*0.75);
+}
 
 // ── Scheduling helpers ──
 
@@ -699,8 +708,7 @@ function dDrop(e,tid){
   // mid-row band doesn't silently turn the scheduled task into a subtask.
   const r=e.currentTarget.getBoundingClientRect();
   const y=e.clientY-r.top,h=r.height;
-  const nestZone=e.dccMode?(e.dccMode!=="reorder"):(y>h*0.25&&y<h*0.75);
-  const nest=(!wasUntimed&&nestZone&&!_isAncestor(moved.id,target.id));
+  const nest=(!wasUntimed&&_nestZone(e,y,h)&&!_isAncestor(moved.id,target.id));
   const after=y>=h/2;
 
   // ---- Case A: dragging a WRAP -> move it; its ride-alongs follow by the same delta ----

@@ -12,6 +12,14 @@ const dragSource = fs.readFileSync(require.resolve("./public/js/drag.js"), "utf8
 const tabsSource = fs.readFileSync(require.resolve("./public/js/tabs.js"), "utf8");
 const touchSource = fs.readFileSync(require.resolve("./public/js/touch-drag.js"), "utf8");
 
+// sourceFunction below stops at a column-0 brace, which is right for drag.js's
+// top-level functions and wrong for anything inside touch-drag.js's IIFE.
+function sliceIndented(source, name) {
+  const match = source.match(new RegExp("\\n  function " + name + "\\([\\s\\S]*?\\n  \\}"));
+  assert.ok(match, "expected to find indented " + name);
+  return match[0];
+}
+
 function sourceFunction(source, name) {
   const match = source.match(new RegExp("function " + name + "[\\s\\S]*?\\n\\}"));
   assert.ok(match, "expected to find " + name);
@@ -156,6 +164,66 @@ test("touch reorder feedback is the blue bar, not the purple nest overlay", () =
   const subRow = fakeRow(100);
   context.window.DCC_DRAG.over(subRow, "target", 8, "sub");
   assert.ok(subRow.classes.has("drag-over-nest-sub"));
+});
+
+test("an Unscheduled row is never offered a nest it will not get", () => {
+  // dDrop gates nesting on !wasUntimed, so dOver must not paint the purple "wrap
+  // inside" overlay for an untimed row. Otherwise the drag promises a nest and the
+  // drop schedules the task top-level instead, which reads as the app ignoring you.
+  const tasks = twoTasks();
+  tasks.find((t) => t.id === "moved").untimed = true;
+  const context = makeDragDay(tasks);
+  startDrag(context, "moved");
+
+  const row = fakeRow(100);
+  context.window.DCC_DRAG.over(row, "target", 50, "nest");
+  assert.equal(row.classes.has("drag-over-nest"), false, "no nest promise for an untimed row");
+  assert.ok(row.classes.has("drag-over-top") || row.classes.has("drag-over-bottom"));
+
+  // And the drop agrees: it schedules top-level rather than nesting.
+  context.window.DCC_DRAG.drop(fakeRow(100), "target", 50, "nest");
+  const moved = tasks.find((t) => t.id === "moved");
+  assert.equal(moved.wrapId ?? null, null);
+  assert.equal(moved.subtaskOf ?? null, null);
+});
+
+test("modeFor pins the exact reorder / nest / sub boundaries", () => {
+  // The thresholds ARE the feature. Asserted as behaviour, not as the names of two
+  // constants: a source regex still matches after NEST_PX becomes 4, after the two
+  // comparisons are swapped so "sub" turns into dead code, or after the two values
+  // trade places. Every one of those ships a different gesture.
+  const ctx = { state: { startX: 0 } };
+  vm.createContext(ctx);
+  vm.runInContext(
+    touchSource.match(/var NEST_PX[\s\S]*?var SUB_PX = \d+;/)[0] + sliceIndented(touchSource, "modeFor"),
+    ctx,
+  );
+  assert.equal(ctx.NEST_PX, 48);
+  assert.equal(ctx.SUB_PX, 112);
+  assert.equal(ctx.modeFor(-200), "reorder", "dragging LEFT must never re-parent");
+  assert.equal(ctx.modeFor(0), "reorder");
+  assert.equal(ctx.modeFor(47), "reorder");
+  assert.equal(ctx.modeFor(48), "nest", "NEST_PX is inclusive");
+  assert.equal(ctx.modeFor(111), "nest");
+  assert.equal(ctx.modeFor(112), "sub", "SUB_PX is inclusive");
+  assert.equal(ctx.modeFor(400), "sub");
+});
+
+test("mouse hover (no mode) keeps the desktop mid-row nest highlight", () => {
+  // The dccMode edit was made in two places. dDrop's mouse fallback is pinned above;
+  // this pins dOver's, so the hover highlight and the drop outcome cannot part ways.
+  // Without it, rewriting the line to `e.dccMode !== "reorder"` lights the nest overlay
+  // on every desktop hover, edges included, and the whole suite stays green.
+  const context = makeDragDay(twoTasks());
+  startDrag(context, "moved");
+  const mid = fakeRow(100);
+  context.dOver({ preventDefault() {}, shiftKey: false, clientY: 50, currentTarget: mid }, "target");
+  assert.ok(mid.classes.has("drag-over-nest"));
+
+  const edge = fakeRow(100);
+  context.dOver({ preventDefault() {}, shiftKey: false, clientY: 8, currentTarget: edge }, "target");
+  assert.equal(edge.classes.has("drag-over-nest"), false);
+  assert.ok(edge.classes.has("drag-over-top"));
 });
 
 test("the touch gesture picks its mode from the sideways offset, reorder by default", () => {
