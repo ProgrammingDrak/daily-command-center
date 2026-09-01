@@ -1816,20 +1816,11 @@
   .carryover-footer{padding:10px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end}
   .carryover-skip{padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:12px;cursor:pointer}
   .carryover-skip:hover{color:var(--text);background:rgba(255,255,255,0.05)}
-  .cu-review-card{padding:12px;border-radius:10px}
-  .cu-review-list{display:flex;flex-direction:column;gap:8px}
-  .cu-review-followups{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
-  .cu-review-followup{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:7px 0}
-  .cu-review-followup+.cu-review-followup{border-top:1px solid rgba(255,255,255,0.05)}
-  .cu-caught-up{padding:14px;border:1px solid rgba(34,197,94,0.34);border-radius:10px;background:var(--green-bg);color:var(--green);font-size:12px;font-weight:700;text-align:center}
   .cu-journal-wrap .gb-section{margin-top:0}
   @media(max-width:420px){
     .carryover-overlay{padding:12px}
     .cu-unified-row .carryover-row-actions{flex:0 0 100%;min-width:0;padding-left:38px;justify-content:flex-start}
     .cu-unified-row .carryover-btn{flex:1 1 calc(33.333% - 3px);min-width:0;padding-left:6px;padding-right:6px}
-    .cu-review-followup{align-items:flex-start;flex-direction:column}
-    .cu-review-followup .carryover-row-actions{width:100%}
-    .cu-review-followup .carryover-btn{flex:1 1 0}
     .header .loose-ends-pill{min-height:44px;margin-left:0;padding-left:10px}
   }
 

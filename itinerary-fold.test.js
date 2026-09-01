@@ -88,7 +88,7 @@ test("deleted and archived rows never fold", () => {
 
 test("a DATED done row folds (server completions render instead of vanishing)", () => {
   const fold = makeFold(TODAY, new Set());
-  // Day in Review's Approve, the Slack ✅ reaction and the MCP tools all write
+  // The Slack ✅ reaction and the MCP tools all write
   // status/done onto the row and never touch day_root._done. Excluding them here
   // is what made a completed task disappear from the itinerary altogether.
   assert.equal(fold(block(TODAY, { local_id: "qa-6", status: "done", completedAt: "2026-07-08T14:00:00Z" })), true);

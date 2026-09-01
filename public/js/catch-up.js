@@ -339,9 +339,10 @@
     const otherTriage = triage.filter(item => triageLane(item) === "other");
     const olderTriage = cfg.olderTriage || [];
     const meetingActions = cfg.meetingActions || [];
-    const dayReview = cfg.dayReview || null;
-    const reviewApi = window.DCC && window.DCC.DayReview;
-    const reviewCount = dayReview && reviewApi ? reviewApi.pendingCount(dayReview) : 0;
+    const journalApi = window.DCC && window.DCC.Journal;
+    // Empty until journal.js has resolved the owner scope (see its render() note), so
+    // this doubles as "is there a Journal section this pass".
+    const journalHtml = journalApi && typeof journalApi.render === "function" ? journalApi.render() : "";
     const hintEl = overlay.querySelector("#catchup-hint");
     const listEl = overlay.querySelector("#catchup-list");
     const allBtn = overlay.querySelector("#catchup-all");
@@ -355,13 +356,11 @@
     const triagePhrase = triage.length + " Sweep item" + (triage.length === 1 ? "" : "s") + " waiting";
     const waitingPhrase = waiting.length + " Waiting item" + (waiting.length === 1 ? "" : "s") + " due for a decision";
     const meetingPhrase = meetingActions.length + " meeting follow-up" + (meetingActions.length === 1 ? "" : "s");
-    const reviewPhrase = reviewCount + " Day in Review decision" + (reviewCount === 1 ? "" : "s");
     const phrases = [];
     if (roots.length) phrases.push(taskPhrase);
     if (waiting.length) phrases.push(waitingPhrase);
     if (triage.length) phrases.push(triagePhrase);
     if (meetingActions.length) phrases.push(meetingPhrase);
-    if (reviewCount) phrases.push(reviewPhrase);
     hintEl.textContent = phrases.join(phrases.length > 2 ? ", " : " and ") +
       ". Handle what matters now, or close this and come back from the reminder above.";
     listEl.innerHTML = "";
@@ -384,11 +383,14 @@
     // "older waiting" line still counts as something to answer — closing over it
     // would hide the queue it exists to advertise.
     let olderPending = olderTriage.length > 0;
-    const pendingDomCount = () => rowEls.size + waitingEls.size + triEls.size + meetingEls.size + reviewCount + (olderPending ? olderTriage.length : 0);
+    const pendingDomCount = () => rowEls.size + waitingEls.size + triEls.size + meetingEls.size + (olderPending ? olderTriage.length : 0);
     const updateCount = () => setIndicatorCount(pendingDomCount());
     const closeIfDrained = () => {
       updateCount();
-      if (!pendingDomCount() && !dayReview) close();
+      // The Journal section has nothing to "answer", so it never holds the modal open
+      // against a drained list -- but while it is showing, draining the last row should
+      // leave it reachable rather than yanking the modal shut mid-entry.
+      if (!pendingDomCount() && !journalHtml) close();
     };
     const focusAfterRemoval = (orderedRows, removedIndex) => {
       const next = orderedRows.slice(removedIndex + 1).find(row => activeReviewRows.has(row));
@@ -805,16 +807,17 @@
     if (cfg._olderButton) listEl.appendChild(cfg._olderButton);
     appendRows("Signaled Action Items from Meetings", signaledMeetingRows);
     appendRows("Automated Action Items from Meetings", automatedMeetingRows);
-    if (dayReview && reviewApi) {
-      label("Day in Review");
-      const reviewWrap = document.createElement("div");
-      reviewWrap.className = "cu-review-wrap";
-      reviewWrap.innerHTML = reviewApi.renderPending(dayReview);
-      listEl.appendChild(reviewWrap);
+    // Journal + mood tagging (public/js/journal.js). Packet-free: it renders whenever
+    // the module is loaded, so the daily entry is reachable even on a morning with no
+    // loose ends at all. Handing journal.js the host node lets a mood edit repaint just
+    // this section instead of rebuilding the whole modal.
+    if (journalHtml) {
+      label("Journal");
       const journalWrap = document.createElement("div");
       journalWrap.className = "cu-journal-wrap";
-      journalWrap.innerHTML = reviewApi.renderJournal(dayReview);
+      journalWrap.innerHTML = journalHtml;
       listEl.appendChild(journalWrap);
+      if (typeof journalApi.setHost === "function") journalApi.setHost(journalWrap);
     }
     updateCount();
     const schedulableCount = rowEls.size + triEls.size + meetingActions.filter(item => item.owner !== "other").length;
@@ -869,7 +872,7 @@
       }
       allBtn.textContent = original;
       allBtn.disabled = false;
-      if (reviewCount) await refreshReminder({ open: true });
+      if (journalHtml) await refreshReminder({ open: true });
       else close();
       const parts = [];
       if (moved) parts.push(moved + " unfinished task" + (moved === 1 ? "" : "s"));
@@ -882,27 +885,31 @@
     if (!overlay.classList.contains("open")) _returnFocus = document.activeElement;
     overlay.classList.add("open");
     if (cfg.focus !== false) {
-      const first = overlay.querySelector(".cu-complete, [data-gb-approve], #catchup-close");
+      const first = overlay.querySelector(".cu-complete, #catchup-close");
       if (first && typeof first.focus === "function") first.focus();
     }
   }
 
   // ── entry points ──
+  // Deliberately excludes the Journal: an unwritten entry is not a "loose end" and must
+  // never inflate the pill count. It only decides whether the prompt opens (below).
   function snapshotCount(snapshot) {
     if (!snapshot) return 0;
-    const reviewApi = window.DCC && window.DCC.DayReview;
-    return rootsOf(snapshot.res.rows).length + snapshot.waiting.length + snapshot.triage.length + snapshot.meetingActions.length +
-      (snapshot.dayReview && reviewApi ? reviewApi.pendingCount(snapshot.dayReview) : 0);
+    return rootsOf(snapshot.res.rows).length + snapshot.waiting.length + snapshot.triage.length + snapshot.meetingActions.length;
   }
 
   async function collectSnapshot() {
     const CO = window.DCC && window.DCC.Carryover;
     if (!CO) return null;
-    const reviewApi = window.DCC && window.DCC.DayReview;
+    const journalApi = window.DCC && window.DCC.Journal;
     const results = await Promise.allSettled([
       CO.collect(),
       loadMeetingActions(),
-      reviewApi && typeof reviewApi.load === "function" ? reviewApi.load() : Promise.resolve(null)
+      // Resolving the owner scope is what makes the journal's storage key correct. A
+      // REJECTION here must keep `failed` true: initCatchUp refuses to mark the day
+      // reviewed on a partial load, and silently treating a scope failure as "no
+      // journal" would bank the day against an entry that was never offered.
+      journalApi && typeof journalApi.ensureScope === "function" ? journalApi.ensureScope() : Promise.resolve(null)
     ]);
     const failed = results.some(result => result.status === "rejected");
     const waiting = typeof window.getAttentionWaitingItems === "function" ? window.getAttentionWaitingItems() : [];
@@ -912,7 +919,9 @@
     const snapshot = {
       res: results[0].status === "fulfilled" ? results[0].value : (_lastSnapshot ? _lastSnapshot.res : { rows: [], total: 0 }),
       meetingActions: results[1].status === "fulfilled" ? results[1].value : (_lastSnapshot ? _lastSnapshot.meetingActions : []),
-      dayReview: results[2].status === "fulfilled" ? results[2].value : (_lastSnapshot ? _lastSnapshot.dayReview : null),
+      journalPending: results[2].status === "fulfilled" && journalApi && typeof journalApi.isPending === "function"
+        ? journalApi.isPending()
+        : (_lastSnapshot ? !!_lastSnapshot.journalPending : false),
       waiting,
       waitingTriage,
       triage: allTriage.filter(item => !waitingIds.has(String(item.waiting_item_id || ""))),
@@ -926,29 +935,19 @@
   async function refreshReminder(opts) {
     opts = opts || {};
     const wasOpen = !!document.getElementById("catchup-overlay") && document.getElementById("catchup-overlay").classList.contains("open");
-    const preservedFocus = opts.preserveMoodFocus && document.activeElement &&
-      document.activeElement.closest && document.activeElement.closest("[data-gb-open-mood]")
-      ? document.activeElement : null;
     const snapshot = await collectSnapshot();
     if (!snapshot) return null;
-    const restoreMoodFocus = !!preservedFocus && document.activeElement === preservedFocus;
     if ((opts.open || wasOpen) && snapshotCount(snapshot)) {
       openPrompt(snapshot.res.rows, snapshot.res.total, {
         triage: snapshot.triage,
         waiting: snapshot.waiting,
         waitingTriage: snapshot.waitingTriage,
         meetingActions: snapshot.meetingActions,
-        dayReview: snapshot.dayReview,
         loadFailed: snapshot.failed,
         focus: opts.focus
       });
-    } else if (wasOpen && !snapshotCount(snapshot) && snapshot.dayReview) {
-      openPrompt([], 0, { dayReview: snapshot.dayReview, focus: opts.focus });
-    }
-    if (restoreMoodFocus) {
-      const activeOverlay = document.getElementById("catchup-overlay");
-      const replacement = activeOverlay && activeOverlay.querySelector("[data-gb-open-mood]");
-      if (replacement && typeof replacement.focus === "function") replacement.focus();
+    } else if (wasOpen && !snapshotCount(snapshot) && snapshot.journalPending) {
+      openPrompt([], 0, { focus: opts.focus });
     }
     return snapshot;
   }
@@ -981,7 +980,7 @@
     if (courier && typeof courier.markSeen === "function") courier.markSeen(triage.concat(snapshot.waitingTriage).map(i => i.id));
     // Gate on OPEN rows, not raw rows: a pool made up entirely of done children is
     // nothing to catch up on, and prompting on it opened an empty-feeling modal.
-    if (!snapshotCount(snapshot) && !snapshot.dayReview) {
+    if (!snapshotCount(snapshot) && !snapshot.journalPending) {
       if (!snapshot.failed) markReviewed();
       return;
     }
@@ -990,8 +989,7 @@
       triage: triage,
       waiting: snapshot.waiting,
       waitingTriage: snapshot.waitingTriage,
-      meetingActions: snapshot.meetingActions,
-      dayReview: snapshot.dayReview
+      meetingActions: snapshot.meetingActions
     });
   }
 
@@ -1015,8 +1013,12 @@
     try { res = await CO.collect(); } catch (e) { loadFailed = true; }
     let meetingActions = [];
     try { meetingActions = await loadMeetingActions(); } catch (e) { loadFailed = true; }
-    let dayReview = null;
-    try { dayReview = window.DCC.DayReview ? await window.DCC.DayReview.load() : null; }
+    // This entry point builds its own snapshot instead of going through
+    // collectSnapshot, so it has to resolve the journal's owner scope itself -- the
+    // storage key embeds it, and rendering before it lands would file the entry under
+    // "unidentified". A failure is a partial load, exactly like the two above.
+    const arrivalsJournal = window.DCC && window.DCC.Journal;
+    try { if (arrivalsJournal && arrivalsJournal.ensureScope) await arrivalsJournal.ensureScope(); }
     catch (e) { loadFailed = true; }
     openPrompt(res.rows, res.total, {
       title: "Fresh from the sweep",
@@ -1025,10 +1027,9 @@
       waiting,
       waitingTriage,
       meetingActions: meetingActions,
-      dayReview: dayReview,
       loadFailed: loadFailed
     });
-    _lastSnapshot = { res, triage: all, waiting, waitingTriage, meetingActions, dayReview, failed: loadFailed };
+    _lastSnapshot = { res, triage: all, waiting, waitingTriage, meetingActions, failed: loadFailed };
     setIndicatorCount(snapshotCount(_lastSnapshot));
     return true;
   }
@@ -1046,8 +1047,9 @@
     let res = { rows: [], total: 0 };
     let loadFailed = false;
     try { res = await CO.collect(); } catch (e) { loadFailed = true; }
-    let dayReview = null;
-    try { dayReview = window.DCC.DayReview ? await window.DCC.DayReview.load() : null; }
+    // Same reason as openArrivals: own snapshot, so own scope resolution.
+    const meetingJournal = window.DCC && window.DCC.Journal;
+    try { if (meetingJournal && meetingJournal.ensureScope) await meetingJournal.ensureScope(); }
     catch (e) { loadFailed = true; }
     const waiting = typeof window.getAttentionWaitingItems === "function" ? window.getAttentionWaitingItems() : [];
     const waitingIds = new Set(waiting.map(item => String(item.id)));
@@ -1060,10 +1062,9 @@
       waiting,
       waitingTriage,
       meetingActions: meetingActions,
-      dayReview: dayReview,
       loadFailed: loadFailed
     });
-    _lastSnapshot = { res, triage, waiting, waitingTriage, meetingActions, dayReview, failed: loadFailed };
+    _lastSnapshot = { res, triage, waiting, waitingTriage, meetingActions, failed: loadFailed };
     setIndicatorCount(snapshotCount(_lastSnapshot));
     return true;
   }
@@ -1079,7 +1080,4 @@
   };
   const pill = document.getElementById("loose-ends-pill");
   if (pill) pill.addEventListener("click", openReminder);
-  if (typeof window.addEventListener === "function") {
-    window.addEventListener("dcc:day-review-changed", () => refreshReminder({ focus: false, preserveMoodFocus: true }));
-  }
 })();
