@@ -1378,6 +1378,10 @@ const SURFACES = {
   triage:          {build:()=>{if(typeof buildTriage==="function")buildTriage();},              isVisible:()=>true},
   actionItems:     {build:()=>{if(typeof buildActionItemsTab==="function")buildActionItemsTab();},isVisible:()=>true},
   trivial:         {build:()=>{if(typeof buildTrivialTasks==="function")buildTrivialTasks();},  isVisible:()=>true},
+  // Anytime dock (anytime-dock.js). Always-built because the dock is body-level
+  // fixed chrome, not tab content: it is on screen whichever tab is active, so
+  // gating it by tab visibility would strand the corner pill showing stale counts.
+  anytime:         {build:()=>{if(typeof buildAnytime==="function")buildAnytime();},           isVisible:()=>true},
   scheduled:       {build:()=>{if(typeof buildScheduled==="function")buildScheduled();},        isVisible:()=>true},
   scheduleSoon:    {build:()=>{if(typeof buildScheduleSoon==="function")buildScheduleSoon();},  isVisible:()=>true},
   glymphaticBrief: {build:()=>{if(typeof buildGlymphaticBrief==="function")buildGlymphaticBrief();},isVisible:()=>true},

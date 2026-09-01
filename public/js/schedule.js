@@ -73,6 +73,10 @@ function persistAddedTask(item,targetDate){
       status:item.status||undefined,
       done:item.done||undefined,
       completedAt:item.completedAt||undefined,
+      // A create where the caller already carries a hand-set start (the placement picker
+      // with a chosen time, commitScheduledTask) says so on the row. `undefined` drops
+      // out of the body, so an auto-slotted create is unaffected.
+      userSetStart:item._userSetStart?true:undefined,
       added_at:new Date().toISOString()
     },{date});
   }
@@ -766,7 +770,11 @@ function _applyMeasuredCompletionToEv(ev,completedAt){
   const minutes=measured.durationMinutes;
   ev.start=measured.start;ev.end=measured.end;
   ev.durMin=minutes;ev.duration=minutes;ev.durationMinutes=minutes;ev.estimatedMinutes=minutes;
+  // The measured window REPLACES the planned start, so any hand-set intent no longer
+  // describes this row. Dropping it keeps the flag honest: reopening the task must not
+  // pin it forever to whenever the timer happened to run. Same rule as unscheduleRow.
   ev.pointsDurationMinutes=minutes;ev._pinnedStart=measured.start;ev.untimed=false;
+  delete ev._userSetStart;
   if(typeof refreshOpenAddModalDetails==="function")refreshOpenAddModalDetails();
   return measured;
 }
@@ -780,6 +788,7 @@ function _doneRowProps(props,completedAt){
       next.start=measured.start;next.end=measured.end;
       next.duration=minutes;next.durationMinutes=minutes;next.estimatedMinutes=minutes;
       next.pointsDurationMinutes=minutes;next._pinnedStart=measured.start;
+      delete next.userSetStart;   // the measured window replaced the start it described
       const explicitOverride=next.pointsOverride!=null||(next.pointsBreakdown&&next.pointsBreakdown.pointsOverride!=null);
       if(!explicitOverride&&window.TaskPoints&&typeof window.TaskPoints.estimate==="function"){
         const scored=window.TaskPoints.estimate({...next,points_duration_minutes:minutes});
@@ -1245,6 +1254,13 @@ function pinStartTime(id,timeStr){
   if(!(typeof isFixedTimeBlock==="function"&&isFixedTimeBlock(ev))){
     ev._pinnedStart=timeStr;
     const pins=loadPinnedStarts(); pins[id]=timeStr; savePinnedStarts(pins);
+    // A HUMAN named this time. `_pinnedStart` alone cannot say that -- task-model.js
+    // derives one for every timed row -- so the drag reflow demotes pins wholesale and
+    // used to rewrite this start on the next drag. `userSetStart` is the durable
+    // intent, and reflow holds it unconditionally. Same row-property writer the pin
+    // itself uses (state.js persistRowProp -> enqueueRowPropsWrite), because
+    // db.updateBlock replaces `properties` wholesale.
+    _setUserSetStart(ev,id,true);
   }
   log("pin-start",id,"Pinned start to "+timeStr);
   recalcTimes();render();
@@ -1253,9 +1269,26 @@ function unpinStartTime(id){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
   delete ev._pinnedStart;
   const pins=loadPinnedStarts(); delete pins[id]; savePinnedStarts(pins);
+  _setUserSetStart(ev,id,false);
   log("unpin-start",id,"Removed start pin");
   recalcTimes();render();
 }
+// The ONE place `userSetStart` flips, on the ev and on its row. `undefined` (not
+// `false`) clears the key, matching persistRowProp's contract and the `_pinnedStart`
+// precedent: a reader testing `p.userSetStart` and one testing `"userSetStart" in p`
+// must not disagree.
+function _setUserSetStart(ev,id,on){
+  if(on)ev._userSetStart=true;else delete ev._userSetStart;
+  if(typeof persistRowProp!=="function")return;
+  // A day-state-only task (a Notion/DCC insert the fold renders straight from the day's
+  // JSON) has no row to carry this, so the write is refused and the flag lives only for
+  // this session. Exactly what `savePinnedStarts` already does with a pin on such a task,
+  // counted the same way so the population stays visible rather than silently growing.
+  try{
+    if(!persistRowProp(id,"userSetStart",on?true:undefined,ev)&&typeof _c6bFallback==="function")_c6bFallback("userSetStartRefused",1);
+  }catch(e){}
+}
+window._setUserSetStart=_setUserSetStart;
 
 // ======== TASK LOCK ========
 // Locked tasks behave like meetings: immovable in the cascade and not draggable.
@@ -1774,6 +1807,9 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
     const newItem=Object.assign({id,title,type:_type,start:timeStr,end:fmt(s+durMin),
       // Rollup containers are wraps from birth so drag carries their children.
       isWrap:(window.TaskTypes&&window.TaskTypes.rule(_type,"dragMovesSubtree"))||undefined,
+      // commitScheduledTask only runs with a timeStr, so this create IS a user-named
+      // time. persistAddedTask carries the flag onto the row.
+      _userSetStart:true,
       _pinnedStart:timeStr},schedulePickerFields(durMin,options));
     // Insert in chronological order based on pinned start
     let insertAt=scheduled.findIndex(ev=>pt(ev.start)>=s);
@@ -1801,7 +1837,7 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
     if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
       const bprops=Object.assign(
         window.DCC.taskBlockProps(newItem,{local_id:id,duration:durMin,start:timeStr,end:newItem.end}),
-        {_pinnedStart:timeStr,added_at:new Date().toISOString()}
+        {_pinnedStart:timeStr,userSetStart:true,added_at:new Date().toISOString()}
       );
       persistence=window.blockStore.createBlock("block",bprops,{date:dateStr});
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
@@ -1812,7 +1848,7 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
       let arr=[];try{arr=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){arr=[]}
       arr.push(Object.assign(
         window.DCC.taskCommonProps(newItem),
-        {id,durMin,start:timeStr,end:newItem.end,_pinnedStart:timeStr,addedAt:new Date().toISOString()}
+        {id,durMin,start:timeStr,end:newItem.end,_pinnedStart:timeStr,userSetStart:true,addedAt:new Date().toISOString()}
       ));
       localStorage.setItem(key,JSON.stringify(arr));
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
@@ -1907,6 +1943,99 @@ function closeSchedDefaults(){const ov=document.getElementById("sched-defaults-o
   if(saveBtn)saveBtn.addEventListener("click",closeSchedDefaults);
   document.addEventListener("keydown",e=>{if(e.key==="Escape"&&ov.classList.contains("open"))closeSchedDefaults()});
 })();
+// Settings -> "Start of day": the floor no auto-placement may start before.
+// Stored server-side (workspace-scoped) and served back on every day response as
+// __state.schedule.day_start; public/js/day-context.js dayStartMinutes is the one
+// reader every slot engine goes through. Sibling of the overlay above on purpose:
+// same markup, same open/close/Escape contract.
+function _dayStartValue(){
+  const D=window.DCC;
+  const cur=(__state&&__state.schedule&&__state.schedule.day_start)||null;
+  return (D&&D.normalizeDayStart&&D.normalizeDayStart(cur))||(D&&D.DAY_START_DEFAULT)||"07:00";
+}
+function _renderDayStartNote(){
+  const note=document.getElementById("day-start-note");
+  if(!note)return;
+  // The server-side scheduler derives its own bound from WORK blocks only, so a floor
+  // earlier than the first work block changes nothing there. Say so rather than let
+  // the setting look broken.
+  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
+  const work=blocks.filter(b=>(b.blockType||b.type)==="work");
+  if(!work.length)return void(note.textContent="");
+  note.textContent="Your work day starts at "+_schedTimeLabel(work[0].start)+". Auto-scheduled work still begins then.";
+}
+function openDayStart(){
+  const ov=document.getElementById("day-start-overlay");
+  if(!ov)return;
+  const input=document.getElementById("day-start-input");
+  if(input){input.value=_dayStartValue();if(typeof input.__twRender==="function")input.__twRender()}
+  _renderDayStartNote();
+  ov.classList.add("open");
+}
+function closeDayStart(){const ov=document.getElementById("day-start-overlay");if(ov)ov.classList.remove("open")}
+async function _saveDayStart(value){
+  const D=window.DCC;
+  const clean=D&&D.normalizeDayStart?D.normalizeDayStart(value):null;
+  if(!clean){
+    if(window.DCC&&DCC.toast)DCC.toast("Pick a time between 12:00 AM and 12:00 PM");
+    return false;
+  }
+  try{
+    const res=await fetch("/api/schedule/settings",{
+      method:"PATCH",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({dayStart:clean})
+    });
+    if(!res.ok)throw new Error((await res.json().catch(()=>({}))).error||"Save failed");
+    const saved=await res.json();
+    _applyDayStart(saved.dayStart);
+    return true;
+  }catch(e){
+    if(window.DCC&&DCC.toast)DCC.toast(e.message||"Could not save start of day");
+    return false;
+  }
+}
+// One place that lands a new floor: update the in-memory day, drop the memoized day
+// contexts (they carry the OLD dayStart), then reflow. recalcTimes already leaves
+// _locked / _userSetStart rows alone, so a hand-set 06:00 survives while everything
+// the scheduler placed lifts to the new floor -- which is the visible payoff.
+function _applyDayStart(value){
+  if(__state&&__state.schedule)__state.schedule.day_start=value;
+  if(typeof __DCC_TOMORROW__!=="undefined"&&__DCC_TOMORROW__&&__DCC_TOMORROW__.schedule)__DCC_TOMORROW__.schedule.day_start=value;
+  if(window.DCC&&DCC.invalidateDayContext)DCC.invalidateDayContext();
+  if(typeof recalcTimes==="function")recalcTimes();
+  if(typeof saveTaskOrder==="function")saveTaskOrder();
+  if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
+  if(typeof render==="function")render();
+}
+(function(){
+  const menuItem=document.getElementById("dcc-day-start");
+  if(menuItem)menuItem.addEventListener("click",()=>{
+    const wrap=document.getElementById("dcc-settings-wrap");if(wrap)wrap.classList.remove("open");
+    openDayStart();
+  });
+  const ov=document.getElementById("day-start-overlay");
+  if(!ov)return;
+  const closeBtn=document.getElementById("day-start-close");
+  if(closeBtn)closeBtn.addEventListener("click",closeDayStart);
+  ov.addEventListener("click",e=>{if(e.target===ov)closeDayStart()});
+  const input=document.getElementById("day-start-input");
+  const saveBtn=document.getElementById("day-start-save");
+  const doSave=async()=>{if(input&&await _saveDayStart(input.value))closeDayStart()};
+  if(saveBtn)saveBtn.addEventListener("click",doSave);
+  if(input)input.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();doSave()}});
+  const resetBtn=document.getElementById("day-start-reset");
+  if(resetBtn)resetBtn.addEventListener("click",async()=>{
+    try{
+      const res=await fetch("/api/schedule/settings",{method:"DELETE"});
+      if(!res.ok)throw new Error("Reset failed");
+      const reset=await res.json();
+      _applyDayStart(reset.dayStart);
+      if(input){input.value=reset.dayStart;if(typeof input.__twRender==="function")input.__twRender()}
+    }catch(e){if(window.DCC&&DCC.toast)DCC.toast("Could not reset start of day")}
+  });
+  document.addEventListener("keydown",e=>{if(e.key==="Escape"&&ov.classList.contains("open"))closeDayStart()});
+})();
+
 // ======== TASK DESTINATIONS (shared registry + radial menu) ========
 // One list drives every task-add bar, so new destinations (like Shell) show up
 // everywhere at once instead of drifting per-bar. Regular add bars keep the

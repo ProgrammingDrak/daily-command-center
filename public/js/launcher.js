@@ -139,6 +139,7 @@
     else if (action === "work" && window.DCCWorkSessions){ window.DCCWorkSessions.openPicker(); }
     else if (action === "feedback"){ if (typeof window.dccOpenFeedback === "function") window.dccOpenFeedback(); }
     else if (action === "catchup"){ if (typeof window.openUnfinishedTasks === "function") window.openUnfinishedTasks(); }
+    else if (action === "anytime"){ if (typeof window.dccOpenAnytime === "function") window.dccOpenAnytime(); }
   });
 
   // ---- dismissal ----

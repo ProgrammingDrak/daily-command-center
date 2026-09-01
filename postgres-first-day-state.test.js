@@ -55,9 +55,18 @@ const dayWithTimeline = (label) => ({ date: DATE, schedule: { timeline: [{ id: "
 
 // ── buildDayResponse ─────────────────────────────────────────────────────────
 
-function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionBlocks = [], suppressionsThrow = false, reviewRows = [], reviewRowsThrow = false, userId = 1 } = {}) {
+function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionBlocks = [], suppressionsThrow = false, reviewRows = [], reviewRowsThrow = false, userId = 1, today = DATE } = {}) {
   const writes = [];
   const reviewAsked = [];
+  const readersUsed = [];
+  // Which of the two readers buildDayResponse picks is a pure date comparison against
+  // today, so `today` is the dial. It defaults to DATE, which puts every test on the
+  // COMPACT reader -- the one that now serves every today/future dashboard read.
+  const readRow = async (reader) => {
+    readersUsed.push(reader);
+    if (dbThrows) throw new Error("connection terminated unexpectedly");
+    return dbRow;
+  };
   const ctx = {
     console: { error: () => {}, warn: () => {} },
     getDayFilePath: (d) => "days/" + d + ".json",
@@ -69,6 +78,14 @@ function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionB
     getScheduleBlocks: async () => [],
     triageSuppressions: require("./triage-suppressions"),
     dayReviewRepeats: require("./day-review-repeats"),
+    // The start-of-day floor buildDayResponse stamps onto schedule.day_start. Stubbed
+    // rather than wired to the real store so this suite keeps testing the day-response
+    // contract, not the settings storage.
+    scheduleSettingsStore: { getScheduleSettings: async () => ({ dayStart: "07:00", _source: "defaults" }) },
+    // Pinned, not the host clock: buildDayResponse compares the requested date against
+    // today to choose its reader, so a real clock would silently swap which branch this
+    // suite covers the moment DATE fell into the past.
+    getTodayStr: () => today,
     addDays: (date, days) => {
       const value = new Date(date + "T12:00:00Z");
       value.setUTCDate(value.getUTCDate() + days);
@@ -79,10 +96,11 @@ function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionB
     // evening-boundary behaviour stays deterministic in CI.
     APP_TIME_ZONE: "America/New_York",
     blockDB: {
-      getDccState: async () => {
-        if (dbThrows) throw new Error("connection terminated unexpectedly");
-        return dbRow;
-      },
+      // Both readers answer from the ONE store above. A compact stub that could disagree
+      // with the full one about whether the row exists would be the mock contradiction
+      // this harness was written to avoid.
+      getDccState: () => readRow("full"),
+      getDccStateCompact: () => readRow("compact"),
       getBlocksByKind: async () => {
         if (suppressionsThrow) throw new Error("connection terminated unexpectedly");
         return suppressionBlocks;
@@ -98,7 +116,7 @@ function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionB
   vm.runInContext(SUPPRESSIONS_SRC, ctx);
   vm.runInContext(BUILD_DAY_SRC, ctx);
   const uid = userId === null ? "null" : String(userId);
-  return { call: () => vm.runInContext(`buildDayResponse("${DATE}", ${uid}, "ws-1")`, ctx), writes, reviewAsked };
+  return { call: () => vm.runInContext(`buildDayResponse("${DATE}", ${uid}, "ws-1")`, ctx), writes, reviewAsked, readersUsed };
 }
 
 test("the Postgres row WINS over a file carrying a non-empty timeline", async () => {
@@ -142,6 +160,35 @@ test("a FAILED read WITH a file serves the file — degraded, not broken", async
   assert.equal(out.schedule.timeline[0].label, "mirror");
 });
 
+test("today and future dates take the COMPACT reader, past dates the full one", async () => {
+  // The reader split is a pure date comparison, and it is the only thing standing between
+  // a routine dashboard read and every historical Sweep ledger in the row. An inverted
+  // comparison would still return a correct-looking day, so nothing else in this suite
+  // would notice.
+  const todayRun = runBuildDay({ dbRow: { state_json: dayWithTimeline("db") }, today: DATE });
+  await todayRun.call();
+  assert.deepEqual(todayRun.readersUsed, ["compact"]);
+
+  const futureRun = runBuildDay({ dbRow: { state_json: dayWithTimeline("db") }, today: "2026-08-03" });
+  await futureRun.call();
+  assert.deepEqual(futureRun.readersUsed, ["compact"], "a future date is the hot path too");
+
+  const pastRun = runBuildDay({ dbRow: { state_json: dayWithTimeline("db") }, today: "2026-08-05" });
+  await pastRun.call();
+  assert.deepEqual(pastRun.readersUsed, ["full"], "history still needs the whole row");
+});
+
+test("blocker 4 holds on BOTH readers, not just the one today happens to pick", async () => {
+  // The outage branch is the one that mints a skeleton and serves it as a real day if it
+  // regresses, so it is asserted against each reader rather than against whichever the
+  // clock selects.
+  for (const today of [DATE, "2026-08-05"]) {
+    const { call, writes } = runBuildDay({ dbThrows: true, file: null, today });
+    await assert.rejects(call(), /Day state unavailable/, "reader for today=" + today);
+    assert.deepEqual(writes, [], "and it must not persist one either way");
+  }
+});
+
 test("NO branch writes anything (blocker 2, checked across all four)", async () => {
   for (const fixture of [
     { dbRow: { state_json: dayWithTimeline("db") }, file: dayWithTimeline("file") },
@@ -172,6 +219,11 @@ test("the row is read for the caller's OWN workspace, not a default", async () =
     getScheduleBlocks: async () => [],
     triageSuppressions: require("./triage-suppressions"),
     dayReviewRepeats: require("./day-review-repeats"),
+    // The start-of-day floor buildDayResponse stamps onto schedule.day_start. Stubbed
+    // rather than wired to the real store so this suite keeps testing the day-response
+    // contract, not the settings storage.
+    scheduleSettingsStore: { getScheduleSettings: async () => ({ dayStart: "07:00", _source: "defaults" }) },
+    getTodayStr: () => DATE,
     addDays: (date, days) => {
       const value = new Date(date + "T12:00:00Z");
       value.setUTCDate(value.getUTCDate() + days);
@@ -182,7 +234,11 @@ test("the row is read for the caller's OWN workspace, not a default", async () =
     // evening-boundary behaviour stays deterministic in CI.
     APP_TIME_ZONE: "America/New_York",
     blockDB: {
+      // Both readers record into the SAME array: the workspace argument has to survive
+      // whichever branch the date comparison picks, so asserting on only one of them
+      // would leave the other free to drop it.
       getDccState: async (d, ws) => { asked.push([d, ws]); return null; },
+      getDccStateCompact: async (d, ws) => { asked.push([d, ws]); return null; },
       getBlocksByKind: async (kind, ws) => { askedSuppressions.push([kind, ws]); return []; },
     },
   };

@@ -44,8 +44,10 @@ const meetingSignals = require("./meeting-signals");
 const gcalAuth = require("./gcal-auth");
 const dccIntelligence = require("./dcc-intelligence");
 const triageSuppressions = require("./triage-suppressions");
+const scheduleSettingsStore = require("./schedule-settings-store");
 const dayReviewRepeats = require("./day-review-repeats");
 const waitingItems = require("./waiting-items");
+const syncStore = require("./sync-store");
 
 // ── Clerk (managed login widget) via the shared drake-auth kit — optional.
 // With no keys, social login is simply hidden and the existing
@@ -152,7 +154,7 @@ app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
-const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts", "/api/dcc/meeting-signals", "/api/dcc/slack-reconcile"]);
+const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/ingest/day-state/v2", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts", "/api/dcc/meeting-signals", "/api/dcc/slack-reconcile"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/sponsor/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 // On Render the app runs behind a same-host reverse proxy, so EVERY request's
@@ -162,7 +164,7 @@ function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr =
 function trustLocalhost(req) { return process.env.NODE_ENV !== "production" && isLocalhost(req); }
 function hasDccToken(req) { const dccToken = process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!dccToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === dccToken : false; }
 function hasSweepWriteToken(req) { const token = process.env.SECRET_SWEEP_SUITE_TOKEN || process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!token) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === token : false; }
-function isDccStateIngest(req) { return req.method === "POST" && req.path === "/api/ingest/day-state"; }
+function isDccStateIngest(req) { return req.method === "POST" && (req.path === "/api/ingest/day-state" || req.path === "/api/ingest/day-state/v2"); }
 // DB-backed service tokens (token-store.js, rotatable/revocable via
 // /api/admin/tokens) with the legacy env-var tokens kept as a fallback.
 async function hasServiceToken(req, scope) {
@@ -391,6 +393,7 @@ app.get("/vendor/drake-auth/browser.js", (req, res) => res.sendFile(require.reso
 
 // ── SSE ──
 const sseClients = new Map();
+const publicSseClients = new Map();
 app.get("/api/events", (req, res) => {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   res.write("data: connected\n\n");
@@ -406,6 +409,24 @@ function broadcast(eventType, data, workspaceId) {
   if (workspaceId) { targets = sseClients.get(workspaceId) || new Set(); }
   else { targets = new Set(); for (const s of sseClients.values()) s.forEach(c => targets.add(c)); }
   for (const client of targets) { client.write(`data: ${payload}\n\n`); }
+  if (workspaceId && ["blocks-changed", "dcc-state-changed", "todo-share-changed", "slot-changed"].includes(eventType)) {
+    for (const client of publicSseClients.get(workspaceId) || []) {
+      client.write("data: changed\n\n");
+    }
+  }
+}
+
+function registerPublicSse(workspaceId, req, res) {
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  res.write("data: connected\n\n");
+  if (!publicSseClients.has(workspaceId)) publicSseClients.set(workspaceId, new Set());
+  publicSseClients.get(workspaceId).add(res);
+  req.on("close", () => {
+    const clients = publicSseClients.get(workspaceId);
+    if (!clients) return;
+    clients.delete(res);
+    if (!clients.size) publicSseClients.delete(workspaceId);
+  });
 }
 
 // ── File Watching ──
@@ -562,7 +583,11 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   let enrichment = null;
   let dbFailed = false;
   try {
-    const dccRow = await blockDB.getDccState(dateStr, ws);
+    // Today and future dates are the hot path. Read only browser-visible JSON
+    // fields so historical Sweep ledgers never cross the Supabase pooler.
+    const dccRow = dateStr >= getTodayStr() && typeof blockDB.getDccStateCompact === "function"
+      ? await blockDB.getDccStateCompact(dateStr, ws)
+      : await blockDB.getDccState(dateStr, ws);
     if (dccRow && dccRow.state_json) enrichment = dccRow.state_json;
   } catch (e) {
     dbFailed = true;
@@ -590,7 +615,7 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   // hottest read path in the app (both state endpoints, plus the anonymous share poll
   // through buildPublicTodoShare). All swallow their own errors and resolve to [],
   // so Promise.all adds no rejection path.
-  const [scheduleBlocks, suppressions, waitingRows, recentReviewRows] = await Promise.all([
+  const [scheduleBlocks, suppressions, waitingRows, recentReviewRows, scheduleSettings] = await Promise.all([
     getScheduleBlocks(userId, workspaceId),
     readTriageSuppressionsForWorkspace(ws),
     typeof blockDB.getDelegatedItems === "function"
@@ -605,8 +630,20 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
       ? blockDB.getDccStateRange(addDays(dateStr, -dayReviewRepeats.LOOKBACK_DAYS), addDays(dateStr, -1), ws)
         .catch((e) => { console.error("[day-review] repeat overlay failed (non-fatal):", e.message); return []; })
       : Promise.resolve([]),
+    // The user's start of day, gated on userId for the same reason recentReviewRows
+    // above is: buildPublicTodoShare reaches this builder anonymously and its client
+    // polls every 15s per open viewer against a pool capped at 10. A share viewer
+    // never auto-places anything, so the floor is dead weight on that path -- and
+    // day-context.js falls back to the 07:00 default when the field is absent.
+    userId
+      ? scheduleSettingsStore.getScheduleSettings(ws)
+        .catch((e) => { console.error("[schedule] day-start read failed (non-fatal):", e.message); return null; })
+      : Promise.resolve(null),
   ]);
   result.schedule.blocks = scheduleBlocks;
+  // Stamped at READ time, exactly like schedule.blocks above, so a saved day file can
+  // never serve a stale floor and a changed setting takes effect on the next fetch.
+  if (scheduleSettings) result.schedule.day_start = scheduleSettings.dayStart;
   // Due Waiting check-ins are a read-time triage overlay. This produces a
   // copy-ready fallback without mutating state during a GET. Sweep may later
   // replace the same stable item with a native Gmail or Slack draft.
@@ -928,7 +965,7 @@ app.get("/api/health", async (req, res) => {
 app.get("/public/js/app-config.js", (req, res) => {
   res.type("application/javascript");
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-  res.send(`window.DCC_APP_TIME_ZONE=${JSON.stringify(APP_TIME_ZONE)};`);
+  res.send(`window.DCC_APP_TIME_ZONE=${JSON.stringify(APP_TIME_ZONE)};window.DCC_DELTA_SYNC_ENABLED=${process.env.DCC_DELTA_SYNC_ENABLED === "0" ? "false" : "true"};`);
 });
 app.use("/public", express.static(path.join(PROJECT_DIR, "public"), { etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 
@@ -944,7 +981,7 @@ const meetingMaterializer = require("./meeting-materializer")({
 const ctx = {
   APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, gcalAuth, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, meetingSignals, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, rewardVaultStore, readDayStateMirror, readJSON, readTriageSuppressionsForWorkspace, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, waitingItems, writeJSON,
   dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR, accessStore,
-  meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN,
+  meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN, registerPublicSse,
   ...routeHelpers,
   get vault() { return vault; },
   get syncMgr() { return syncMgr; },
@@ -953,8 +990,10 @@ require("./routes/access")(app, ctx);
 require("./routes/social-todo")(app, ctx);
 require("./routes/pet-home")(app, ctx);
 require("./routes/blocks")(app, ctx);
+require("./routes/sync")(app, ctx);
 require("./routes/dcc")(app, ctx);
 require("./routes/evaluation")(app, ctx);
+require("./routes/schedule-settings")(app, ctx);
 require("./routes/meeting")(app, ctx);
 require("./routes/meeting-dashboard")(app, ctx);
 require("./routes/meeting-audio")(app, ctx);
@@ -1205,8 +1244,12 @@ app.listen(PORT, async () => {
   try { ensureSkeletonDays(); } catch (e) {}
   // Time-block containers (Morning Work/Lunch/etc.) removed 2026-07 -- no longer seeded.
   try { const purged = await blockDB.purgeSoftDeleted(30); if (purged > 0) console.log(`[Purge] Startup: removed ${purged}`); } catch(e) {}
+  try { await syncStore.pruneSyncEvents(30); } catch (e) { console.error("[sync] Event prune failed:", e.message); }
 
   setInterval(() => { try { ensureSkeletonDays(); } catch (e) {} }, 6 * 60 * 60 * 1000);
-  setInterval(async () => { try { await blockDB.purgeSoftDeleted(30); } catch (e) {} }, 24 * 60 * 60 * 1000);
+  setInterval(async () => {
+    try { await blockDB.purgeSoftDeleted(30); } catch (e) {}
+    try { await syncStore.pruneSyncEvents(30); } catch (e) {}
+  }, 24 * 60 * 60 * 1000);
   console.log();
 });

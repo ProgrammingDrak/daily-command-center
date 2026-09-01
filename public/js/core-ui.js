@@ -80,6 +80,29 @@
     return { el: panel, close };
   }
 
+  // ── reducedMotion / busyElsewhere ────────────────────────────────────────
+  // The two "should I interrupt?" predicates. Both were private to
+  // pet-courier.js; the anytime nudge needs the same answers, and a second copy
+  // of "am I allowed to animate over Drake right now" is exactly the drift this
+  // namespace exists to prevent. The courier still carries its own copies so its
+  // contract suite stays untouched; repointing it is a follow-up.
+  DCC.reducedMotion = function reducedMotion() {
+    try { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }
+    catch (e) { return false; }
+  };
+
+  // Mid-sentence, mid-modal, or not even looking. Callers must degrade to
+  // something quiet (a chip, a toast) rather than skipping the delivery.
+  DCC.busyElsewhere = function busyElsewhere() {
+    if (typeof document.hidden === "boolean" && document.hidden) return true;
+    const a = document.activeElement;
+    if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.contentEditable === "true")) return true;
+    if (typeof window._anyModalOpen === "function" && window._anyModalOpen()) return true;
+    const cu = document.getElementById("catchup-overlay") || document.getElementById("unfinished-overlay");
+    if (cu && cu.classList && cu.classList.contains("open")) return true;
+    return false;
+  };
+
   DCC.modal = function modal(opts) { return buildOverlay("modal", opts || {}); };
   DCC.sheet = function sheet(opts) { return buildOverlay("sheet", opts || {}); };
 })();

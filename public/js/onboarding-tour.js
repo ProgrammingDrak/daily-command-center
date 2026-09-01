@@ -328,7 +328,12 @@
     if (replay) replay.addEventListener("click", function(){ startTour({ replay: true }); });
     if (signOut) signOut.addEventListener("click", async function(){
       closeSettingsMenu();
-      try { await fetch("/api/auth/logout", { method: "POST" }); } catch(e) {}
+      // DCC and Clerk own separate sessions. Clear both before the login page
+      // loads, or Clerk immediately recreates the DCC session.
+      var dccLogout = fetch("/api/auth/logout", { method: "POST" });
+      var clerkLogout = import("/vendor/drake-auth/browser.js")
+        .then(function(auth){ return auth.clerkSignOut(); });
+      await Promise.allSettled([dccLogout, clerkLogout]);
       window.location.href = "/login";
     });
     document.addEventListener("click", function(e){

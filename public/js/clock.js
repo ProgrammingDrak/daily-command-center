@@ -24,6 +24,10 @@ function updateClock(){
     if(typeof getPinnedActiveId==="function"&&getPinnedActiveId()&&typeof render==="function"){
       render();
     }
+    // Anytime nudges (pet-nudge.js): a window quietly running out fires no event,
+    // so the only honest trigger is looking at the clock. Minute-granular, hence
+    // this branch rather than the per-second tail below.
+    if(typeof window.anytimeNudgeTick==="function")window.anytimeNudgeTick();
   }
   const timeStr=h12+":"+String(m).padStart(2,"0")+ap.toLowerCase();
   // Only update the live time indicator on today's page — not on historical pages

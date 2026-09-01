@@ -180,7 +180,18 @@
     if (p.commuteBackMinutes || p.commute_back_minutes || p.commuteReturnMinutes || p.commute_return_minutes) task.commuteBackMinutes = p.commuteBackMinutes || p.commute_back_minutes || p.commuteReturnMinutes || p.commute_return_minutes;
     // Pin the start time so recalcTimes() doesn't overwrite it (skip nested
     // items: ride-alongs/subtasks live under their parent, never cascaded).
+    //
+    // `_pinnedStart` is DERIVED: every top-level row that carries a stored start gets
+    // one, whether a human chose that time or the cascade produced it. That is why the
+    // drag reflow (`recalcTimes({orderWins:true})`) has to demote pins wholesale --
+    // holding all of them would make a drag unable to reorder anything.
+    //
+    // `_userSetStart` is the INTENT half, and it is set only where a person names a
+    // time (pinStartTime, the placement picker, a timed server placement). Nothing
+    // derives it. Reflow holds a user-set start unconditionally, so a hand-typed 06:00
+    // survives a drag that legitimately re-chains everything around it.
     if (hasStoredTime && !task.subtaskOf) task._pinnedStart = p.start;
+    if (p.userSetStart && !task.subtaskOf) task._userSetStart = true;
     return task;
   }
 
@@ -221,7 +232,11 @@
   // creates a separate action row that can later become a real scheduled task.
   const NON_TASK_KINDS = [
     "delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone",
-    "meeting_prep", "meeting_transcript", "meeting_summary", "proposed_action_item"
+    "meeting_prep", "meeting_transcript", "meeting_summary", "proposed_action_item",
+    // An anytime_item is a dateless DEFINITION (target + window + nudge cadence),
+    // not work. Left on the task side it would surface in Unscheduled/Backlog as
+    // an untitled-looking row and take a status:"open" stamp it has no use for.
+    "anytime_item"
   ];
   const NON_TASK_TYPES = ["day_root", "time_entry"];
   function isTaskRow(block) {

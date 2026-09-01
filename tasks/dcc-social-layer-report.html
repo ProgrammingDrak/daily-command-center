@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DCC Social Layer</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root{
+    --ink:#161e26; --muted:#6b7280; --line:#e5e7eb; --bg:#f4f5f7; --card:#ffffff;
+    --blue:#0075eb; --blue-dark:#005fbf; --green:#00b373; --gold:#e0a300; --maroon:#8c2d3f;
+  }
+  body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.011em}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px}
+  .eyebrow{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.09em;color:var(--blue)}
+  [contenteditable="true"]:hover{outline:1px dashed #cbd5e1;outline-offset:3px;border-radius:3px}
+  [contenteditable="true"]:focus{outline:2px solid var(--blue);outline-offset:3px;border-radius:3px;background:#f8fbff}
+
+  /* ── demo chrome ── */
+  .chrome{border:1px solid #d8dce2;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 8px 28px rgba(22,30,38,.10)}
+  .chrome-bar{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#eceef2;border-bottom:1px solid #d8dce2}
+  .dot{width:9px;height:9px;border-radius:50%}
+  .urlbar{flex:1;background:#fff;border:1px solid #dfe3e8;border-radius:6px;padding:4px 9px;font-size:11px;color:#6b7280;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* ── role switcher ── */
+  .roles{display:flex;gap:4px;padding:10px 12px;background:#fafbfc;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .role{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font-size:11.5px;font-weight:700;color:var(--muted);cursor:pointer;transition:.13s;white-space:nowrap}
+  .role:hover{border-color:#c3cad3}
+  .role.on{background:var(--blue);border-color:var(--blue);color:#fff}
+  .role-note{padding:8px 12px;background:#f0f7ff;border-bottom:1px solid #d9e9fb;font-size:11.5px;color:#2b4d70;line-height:1.45}
+
+  /* ── list ── */
+  .listwrap{padding:12px}
+  .toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+  .stats{display:flex;gap:10px;font-size:11px;color:var(--muted)}
+  .stats b{color:var(--ink)}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 11px;font-size:11.5px;font-weight:700;color:var(--ink);cursor:pointer;transition:.13s}
+  .btn:hover{border-color:#b9c1cb;background:#fafbfc}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .btn.primary:hover{background:var(--blue-dark)}
+  .btn.gold{background:#fff8e5;border-color:#f0d489;color:#8a6300}
+  .btn.gold:hover{background:#fdf1cf}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+
+  .menu{position:relative;display:inline-block}
+  .menu-pop{position:absolute;right:0;top:calc(100% + 5px);background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 26px rgba(22,30,38,.16);min-width:212px;z-index:40;overflow:hidden}
+  .menu-pop[hidden]{display:none}
+  .menu-item{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:9px 12px;font-size:12px;font-weight:600;background:#fff;border:0;cursor:pointer}
+  .menu-item:hover{background:#f4f8ff}
+  .menu-item small{display:block;font-weight:500;color:var(--muted);font-size:10.5px}
+  .menu-head{padding:8px 12px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);background:#fafbfc;border-bottom:1px solid var(--line)}
+
+  .row{border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:7px;background:#fff;transition:.13s}
+  .row.bounty{border-color:#f0d489;background:linear-gradient(180deg,#fffdf5,#fff)}
+  .row.done{opacity:.62}
+  .row-top{display:flex;align-items:center;gap:8px}
+  .time{font-size:10.5px;font-weight:700;color:var(--muted);font-variant-numeric:tabular-nums;min-width:52px}
+  .title{font-size:13px;font-weight:600;flex:1;min-width:0}
+  .row.done .title{text-decoration:line-through}
+  .chip{font-size:9.5px;font-weight:800;padding:2px 6px;border-radius:5px;white-space:nowrap}
+  .chip-pts{background:#e8f2fe;color:var(--blue)}
+  .chip-bounty{background:#fdf1cf;color:#8a6300}
+  .chip-coach{background:#f4e6ea;color:var(--maroon)}
+  .row-actions{display:flex;align-items:center;gap:5px;margin-top:7px;flex-wrap:wrap}
+  .react{border:1px solid var(--line);background:#fff;border-radius:999px;padding:2px 8px;font-size:11px;cursor:pointer;transition:.13s}
+  .react:hover{border-color:#b9c1cb}
+  .react.mine{background:#e8f2fe;border-color:#a9d0f8}
+  .thread{margin-top:8px;border-top:1px dashed var(--line);padding-top:8px}
+  .thread[hidden]{display:none}
+  .cmt{font-size:11.5px;line-height:1.5;margin-bottom:6px}
+  .cmt b{font-weight:700}
+  .cmt .who{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;padding:1px 5px;border-radius:4px;margin-left:5px}
+  .who.guest{background:#eef0f3;color:#5b6470}
+  .who.friend{background:#e8f2fe;color:var(--blue)}
+  .who.coach{background:#f4e6ea;color:var(--maroon)}
+  .cmt-form{display:flex;gap:6px;margin-top:7px}
+  .cmt-form input{flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;font-size:11.5px;outline:none}
+  .cmt-form input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,117,235,.08)}
+
+  .panel{margin-top:8px;border:1px solid #f0d489;background:#fffdf5;border-radius:10px;padding:10px}
+  .panel[hidden]{display:none}
+  .panel h4{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#8a6300;margin:0 0 7px}
+  .shape{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px 9px;margin-bottom:6px;cursor:pointer;font-size:11.5px;transition:.13s}
+  .shape:hover{border-color:#f0d489}
+  .shape.on{border-color:var(--gold);background:#fffaed;box-shadow:0 0 0 2px rgba(224,163,0,.14)}
+  .shape .lbl{font-weight:700}
+  .shape .sub{color:var(--muted);font-size:10.5px;display:block;margin-top:1px}
+  .shape input[type="text"],.shape input[type="number"]{border:1px solid var(--line);border-radius:6px;padding:4px 7px;font:inherit;font-size:11px;width:100%;margin-top:5px;outline:none}
+
+  .toast{position:absolute;left:50%;transform:translateX(-50%);bottom:14px;background:#161e26;color:#fff;font-size:11.5px;font-weight:600;padding:8px 14px;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.24);z-index:60;max-width:88%;text-align:center}
+  .toast[hidden]{display:none}
+  .demo-tag{position:absolute;top:8px;right:8px;background:rgba(22,30,38,.78);color:#fff;font-size:9px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;padding:3px 7px;border-radius:5px;z-index:50}
+
+  .pin{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;background:var(--blue);color:#fff;font-size:10px;font-weight:800;margin-right:7px;flex:none}
+  .lane{border-left:3px solid var(--line);padding-left:12px}
+  .lane.a{border-color:var(--blue)} .lane.b{border-color:var(--gold)}
+  .lane.c{border-color:var(--green)} .lane.d{border-color:var(--maroon)} .lane.e{border-color:#8b5cf6}
+</style>
+</head>
+<body data-report-slug="dcc-social-layer" class="pb-10">
+
+<div class="bg-amber-500 text-white text-center text-sm font-semibold py-2 px-4">
+  PROPOSED PLAN. Nothing built or merged yet. This report describes intended
+  work, for review before implementation begins.
+</div>
+
+<main class="max-w-[760px] mx-auto px-4 sm:px-5">
+
+  <!-- ═══ HERO: clickable demo of the intended end state ═══ -->
+  <section class="pt-6">
+    <span class="eyebrow" contenteditable="true">Daily Command Center &middot; Plan</span>
+    <h1 class="text-[26px] sm:text-[31px] font-extrabold leading-tight mt-1 mb-1" contenteditable="true">DCC Social Layer</h1>
+    <p class="text-[13.5px] text-[color:var(--muted)] leading-relaxed mb-4" contenteditable="true">
+      One shared list, three tiers of visitor. Flip the tier below to see what each
+      person gets. Everything in this demo is fake data and fully clickable.
+    </p>
+
+    <div class="chrome relative" id="demo">
+      <span class="demo-tag">Interactive demo</span>
+      <div class="chrome-bar">
+        <span class="dot" style="background:#f05d5d"></span>
+        <span class="dot" style="background:#f0c05d"></span>
+        <span class="dot" style="background:#5dc98a"></span>
+        <span class="urlbar" id="demo-url">dcc.app/todo/x7k2m9</span>
+      </div>
+
+      <div class="roles" role="tablist" aria-label="Viewer tier">
+        <button class="role on" data-role="guest">Guest &middot; no account</button>
+        <button class="role" data-role="friend">Friend &middot; DCC user</button>
+        <button class="role" data-role="coach">Coach &middot; accountability</button>
+      </div>
+      <div class="role-note" id="role-note"></div>
+
+      <div class="listwrap">
+        <div class="toolbar">
+          <div class="stats">
+            <span><b>4</b> open</span><span><b>2</b> done</span><span><b id="stat-sponsored">1</b> sponsored</span>
+          </div>
+          <div class="flex gap-1.5 items-center">
+            <div class="menu">
+              <button class="btn" id="export-btn" aria-haspopup="true" aria-expanded="false">Export &#9662;</button>
+              <div class="menu-pop" id="export-pop" hidden>
+                <div class="menu-head">Take this list with you</div>
+                <button class="menu-item" data-fmt="csv">📄 CSV <small>Import into any task app</small></button>
+                <button class="menu-item" data-fmt="ics">📅 Calendar (.ics) <small>Drop the day into your calendar</small></button>
+                <button class="menu-item" data-fmt="md">📝 Markdown <small>Paste straight into a Google Doc</small></button>
+                <button class="menu-item" data-fmt="pdf">🖨️ PDF <small>Print-ready one pager</small></button>
+              </div>
+            </div>
+            <button class="btn" id="range-btn">Today &#9662;</button>
+          </div>
+        </div>
+
+        <div id="rows"></div>
+
+        <div class="mt-2.5 text-[11px] text-[color:var(--muted)] leading-relaxed" id="foot-note"></div>
+      </div>
+
+      <div class="toast" id="toast" hidden></div>
+    </div>
+
+    <p class="text-[11px] text-[color:var(--muted)] mt-2 leading-relaxed" contenteditable="true">
+      Guest, Friend and Coach are one permission model, not three pages. The share
+      link, the reactions, the comments and the reward offers already exist in the
+      repo today; the tier gating, the export bar and the coach role do not.
+    </p>
+  </section>
+
+  <!-- ═══ AT A GLANCE ═══ -->
+  <section class="card p-5 mt-6">
+    <h2 class="text-[15px] font-extrabold mb-3" contenteditable="true">At a glance</h2>
+    <ul class="space-y-3 text-[13.5px] leading-relaxed">
+      <li class="lane a" contenteditable="true"><b>Share page grows an export bar and real guest interaction</b> (P1, P2). CSV, calendar
+        file, Markdown for Docs, print-to-PDF, and a date range instead of just today. Comments and
+        reactions get threads on the row plus an owner-side inbox. There is currently zero export
+        code anywhere in the repo, so this lane is greenfield and cheap.</li>
+      <li class="lane b" contenteditable="true"><b>Bounty becomes three shapes, and the reward system gets a decision</b> (P3, P4). Today a
+        bounty is only a 2x multiplier, one per day. It grows into: double my points, name a
+        reward, or offer a reward at N points. P4 settles whether slot jackpots stop paying prizes
+        and only pay dollars into the Reserve, with tiered rewards demoted to randomization.</li>
+      <li class="lane c" contenteditable="true"><b>The friends layer gets turned on</b> (P5). Friendships, the allowlist, and a completion
+        feed are already written in <code class="text-[11.5px] bg-slate-100 px-1 rounded">social-store.js</code>
+        with no UI attached, so nothing in the app can reach them. This is mostly frontend work
+        against finished endpoints.</li>
+      <li class="lane d" contenteditable="true"><b>A coach role, in the Monarch advisor mould</b> (P6, biggest lift). Permissions today are
+        tier-only: guest, user, paid. This adds a per-owner grant so one named person gets viewer,
+        commenter, coach, or manager rights: full itinerary, point adjustments, sponsorship
+        approvals, and assigning tasks directly instead of suggesting them.</li>
+      <li class="lane e" contenteditable="true"><b>Pets become the social carrier</b> (P7). Leveling and upgrades against the existing
+        decor currency, send your pet to visit a friend's list, and let it carry comments and
+        nudges back. The courier mechanic already exists to build on.</li>
+    </ul>
+  </section>
+
+  <!-- ═══ READINESS ═══ -->
+  <section class="card p-5 mt-4">
+    <h2 class="text-[15px] font-extrabold mb-2" contenteditable="true">Readiness</h2>
+    <p class="text-[13.5px] leading-relaxed" contenteditable="true">
+      <span class="chip chip-pts" style="font-size:10.5px">READY WITH CAVEAT</span>
+      &nbsp;The repo audit is done and P1 can start immediately with no schema changes.
+      The caveat is P4: the reward-system question is unanswered, and P3's bounty shapes
+      partly depend on the answer, so P4 should be specced before P3 lands.
+    </p>
+  </section>
+
+  <!-- ═══ SEQUENCE ═══ -->
+  <section class="card p-5 mt-4">
+    <h2 class="text-[15px] font-extrabold mb-3" contenteditable="true">Order</h2>
+    <ol class="text-[13px] leading-relaxed space-y-1.5">
+      <li contenteditable="true"><span class="pin">1</span>P1 export, on its own. No schema, no dependencies.</li>
+      <li contenteditable="true"><span class="pin">2</span>P2 and P3 together, with P4 specced as a gate before P3 finishes.</li>
+      <li contenteditable="true"><span class="pin">3</span>P5 friends and feed, which unlocks identity for the next one.</li>
+      <li contenteditable="true"><span class="pin">4</span>P6 coach and manager roles.</li>
+      <li contenteditable="true"><span class="pin">5</span>P7 pets, whenever it sounds fun.</li>
+    </ol>
+  </section>
+
+  <footer class="text-[11px] text-[color:var(--muted)] text-center mt-7 leading-relaxed">
+    Proposed plan &middot; no PR yet &middot; full tabbed report available on request
+  </footer>
+</main>
+
+<script>
+(function(){
+  "use strict";
+
+  var TASKS = [
+    { id:"t1", time:"9:00a",  title:"Ship the AR settlement-date mapping", pts:120, done:false,
+      reacts:{"👍":2,"🔥":1}, mine:{}, bounty:0, sponsor:null,
+      cmts:[{who:"guest",name:"Priya",body:"This is the one blocking my Zapier step, thank you."}] },
+    { id:"t2", time:"10:30a", title:"Partner QBR draft for Q3", pts:90, done:false,
+      reacts:{"👍":1}, mine:{}, bounty:0, sponsor:null, cmts:[] },
+    { id:"t3", time:"1:00p",  title:"Rewrite the onboarding email sequence", pts:150, done:false,
+      reacts:{"🔥":3,"👀":1}, mine:{}, bounty:1, sponsor:"Dinner is on me — from Marcus",
+      cmts:[{who:"friend",name:"Marcus",body:"Bounty is live. Ship it today and dinner is on me."}] },
+    { id:"t4", time:"3:15p",  title:"Review the investor roster filters", pts:60, done:false,
+      reacts:{}, mine:{}, bounty:0, sponsor:null, cmts:[] },
+    { id:"t5", time:"8:00a",  title:"Morning brief + triage", pts:40, done:true,
+      reacts:{"👍":1}, mine:{}, bounty:0, sponsor:null, cmts:[] },
+    { id:"t6", time:"8:45a",  title:"Standup", pts:20, done:true,
+      reacts:{}, mine:{}, bounty:0, sponsor:null, cmts:[] }
+  ];
+
+  var ROLES = {
+    guest: {
+      note:"A guest holds the link and nothing else. They can read the day, export it into their own system, react, comment, and offer a reward. They cannot see points, place a bounty, or touch the plan.",
+      points:false, bounty:false, offer:true, react:true, comment:true, coach:false,
+      who:"guest", name:"You (guest)",
+      foot:"Guest view. Points and bounties are hidden. Guest-added tasks land in Drake's triage for approval rather than on the list."
+    },
+    friend: {
+      note:"A friend has their own DCC account. On top of everything a guest can do, they see the point values, can place a bounty on a task, and their completions show up in the shared feed.",
+      points:true, bounty:true, offer:true, react:true, comment:true, coach:false,
+      who:"friend", name:"You (Marcus)",
+      foot:"Friend view. Bounties stack on top of Drake's own, and the reward routes through his Reward Review unless he has allowlisted you."
+    },
+    coach: {
+      note:"A coach holds a named grant from Drake, the Monarch-advisor model. Full itinerary access, point adjustments, sponsorship approvals, and the ability to assign a task directly instead of suggesting it.",
+      points:true, bounty:true, offer:true, react:true, comment:true, coach:true,
+      who:"coach", name:"You (coach)",
+      foot:"Coach view. Every adjustment is attributed and lands in the reward event ledger, so Drake can always see who changed what."
+    }
+  };
+
+  var role = "guest";
+  var rowsEl = document.getElementById("rows");
+  var noteEl = document.getElementById("role-note");
+  var footEl = document.getElementById("foot-note");
+  var toastEl = document.getElementById("toast");
+  var toastTimer = null;
+
+  function esc(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+      return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c];
+    });
+  }
+
+  function toast(msg){
+    toastEl.textContent = msg;
+    toastEl.hidden = false;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ toastEl.hidden = true; }, 2400);
+  }
+
+  function cfg(){ return ROLES[role]; }
+
+  function reactHtml(t){
+    var c = cfg();
+    if (!c.react) return "";
+    var out = "";
+    ["👍","🔥","👀","🎉"].forEach(function(e){
+      var n = t.reacts[e] || 0;
+      if (!n && !t.mine[e]) return;
+      out += '<button class="react' + (t.mine[e] ? " mine" : "") + '" data-react="' + t.id + '" data-emoji="' + e + '">'
+           + e + ' <span style="font-size:10px;font-weight:700">' + n + '</span></button>';
+    });
+    out += '<button class="react" data-addreact="' + t.id + '" title="Add a reaction">+</button>';
+    return out;
+  }
+
+  function render(){
+    var c = cfg();
+    noteEl.textContent = c.note;
+    footEl.textContent = c.foot;
+
+    var sponsored = TASKS.filter(function(t){ return t.sponsor; }).length;
+    document.getElementById("stat-sponsored").textContent = String(sponsored);
+
+    rowsEl.innerHTML = TASKS.map(function(t){
+      var chips = "";
+      if (c.points) chips += '<span class="chip chip-pts">' + (t.pts * Math.pow(2, t.bounty)) + ' pts</span>';
+      if (t.bounty > 0) chips += ' <span class="chip chip-bounty">Bounty x' + Math.pow(2, t.bounty) + '</span>';
+      if (c.coach && !t.done) chips += ' <span class="chip chip-coach">Coach</span>';
+
+      var actions = reactHtml(t);
+      if (c.comment) {
+        actions += '<button class="btn" data-thread="' + t.id + '" style="padding:3px 9px">💬 '
+                 + (t.cmts.length || "Comment") + '</button>';
+      }
+      if (!t.done) {
+        if (c.bounty) {
+          actions += '<button class="btn gold" data-bounty="' + t.id + '" style="padding:3px 9px">🎯 Bounty</button>';
+        } else if (c.offer) {
+          actions += '<button class="btn" data-bounty="' + t.id + '" style="padding:3px 9px">🎁 Offer a reward</button>';
+        }
+      }
+      if (c.coach && !t.done) {
+        actions += '<button class="btn" data-adjust="' + t.id + '" style="padding:3px 9px">⚖︎ Adjust points</button>';
+        actions += '<button class="btn" data-assign="' + t.id + '" style="padding:3px 9px">＋ Assign a task</button>';
+      }
+
+      var thread = "";
+      if (c.comment) {
+        thread = '<div class="thread" data-threadfor="' + t.id + '" hidden>'
+          + (t.cmts.length
+              ? t.cmts.map(function(m){
+                  return '<div class="cmt"><b>' + esc(m.name) + '</b><span class="who ' + m.who + '">'
+                    + m.who + '</span><br>' + esc(m.body) + '</div>';
+                }).join("")
+              : '<div class="cmt" style="color:var(--muted)">No comments on this task yet.</div>')
+          + '<div class="cmt-form"><input type="text" placeholder="Add a comment as ' + esc(c.name) + '" data-cmtinput="' + t.id + '">'
+          + '<button class="btn primary" data-cmtsend="' + t.id + '">Post</button></div></div>';
+      }
+
+      var panel = '<div class="panel" data-panelfor="' + t.id + '" hidden>'
+        + '<h4>' + (c.bounty ? "Place a bounty" : "Offer a reward") + '</h4>'
+        + '<label class="shape" data-shape="mult"><span><span class="lbl">Double the points</span>'
+        + '<span class="sub">' + t.pts + ' pts becomes ' + (t.pts * 2) + ' pts. Stacks once on top of Drake\'s own bounty.</span></span></label>'
+        + '<label class="shape" data-shape="named"><span><span class="lbl">Name a reward</span>'
+        + '<span class="sub">You decide the prize and the cap. Routes through Reward Review.</span>'
+        + '<input type="text" placeholder="Dinner is on me" data-shapeinput="named"></span></label>'
+        + '<label class="shape" data-shape="threshold"><span><span class="lbl">Reward at N points</span>'
+        + '<span class="sub">Unlocks once the day crosses a point total, not on one task.</span>'
+        + '<input type="number" placeholder="500" data-shapeinput="threshold"></span></label>'
+        + '<div class="flex gap-1.5 mt-2"><button class="btn primary" data-bountysend="' + t.id + '">Send</button>'
+        + '<button class="btn" data-bountycancel="' + t.id + '">Cancel</button></div></div>';
+
+      return '<div class="row' + (t.bounty > 0 ? " bounty" : "") + (t.done ? " done" : "") + '">'
+        + '<div class="row-top"><span class="time">' + t.time + '</span>'
+        + '<span class="title">' + esc(t.title) + '</span>' + chips + '</div>'
+        + (t.sponsor ? '<div class="text-[10.5px] mt-1" style="color:#8a6300"><b>🎁 ' + esc(t.sponsor) + '</b></div>' : "")
+        + '<div class="row-actions">' + actions + '</div>'
+        + thread + panel + '</div>';
+    }).join("");
+  }
+
+  function find(id){
+    for (var i = 0; i < TASKS.length; i++) if (TASKS[i].id === id) return TASKS[i];
+    return null;
+  }
+
+  /* ── role switcher ── */
+  document.querySelectorAll(".role").forEach(function(b){
+    b.addEventListener("click", function(){
+      document.querySelectorAll(".role").forEach(function(x){ x.classList.remove("on"); });
+      b.classList.add("on");
+      role = b.dataset.role;
+      document.getElementById("demo-url").textContent =
+        role === "coach" ? "dcc.app/todo/x7k2m9  ·  coach grant from Drake"
+        : role === "friend" ? "dcc.app/todo/x7k2m9  ·  signed in as Marcus"
+        : "dcc.app/todo/x7k2m9";
+      render();
+      toast(role === "guest" ? "Guest view" : role === "friend" ? "Friend view" : "Coach view");
+    });
+  });
+
+  /* ── export menu ── */
+  var exportBtn = document.getElementById("export-btn");
+  var exportPop = document.getElementById("export-pop");
+  exportBtn.addEventListener("click", function(e){
+    e.stopPropagation();
+    var open = exportPop.hidden;
+    exportPop.hidden = !open;
+    exportBtn.setAttribute("aria-expanded", String(open));
+  });
+  document.addEventListener("click", function(){
+    exportPop.hidden = true;
+    exportBtn.setAttribute("aria-expanded", "false");
+  });
+  exportPop.addEventListener("click", function(e){
+    e.stopPropagation();
+    var item = e.target.closest("[data-fmt]");
+    if (!item) return;
+    var names = {
+      csv:"drake-2026-08-19.csv downloaded",
+      ics:"drake-2026-08-19.ics downloaded — open it to add the day to your calendar",
+      md:"Markdown copied — paste it into a Google Doc",
+      pdf:"Print dialog would open here"
+    };
+    toast(names[item.dataset.fmt]);
+    exportPop.hidden = true;
+  });
+
+  document.getElementById("range-btn").addEventListener("click", function(){
+    var opts = ["Today", "Tomorrow", "This week", "Next 30 days"];
+    var i = opts.indexOf(this.textContent.replace(" ▾", "").trim());
+    var next = opts[(i + 1) % opts.length];
+    this.textContent = next + " ▾";
+    toast("Range: " + next + ". Export follows the range.");
+  });
+
+  /* ── row interactions ── */
+  rowsEl.addEventListener("click", function(e){
+    var el;
+
+    if ((el = e.target.closest("[data-react]"))) {
+      var t = find(el.dataset.react), emoji = el.dataset.emoji;
+      if (!t) return;
+      if (t.mine[emoji]) { t.reacts[emoji] = Math.max(0, (t.reacts[emoji] || 1) - 1); delete t.mine[emoji]; }
+      else { t.reacts[emoji] = (t.reacts[emoji] || 0) + 1; t.mine[emoji] = true; }
+      render();
+      return;
+    }
+
+    if ((el = e.target.closest("[data-addreact]"))) {
+      var t2 = find(el.dataset.addreact);
+      if (!t2) return;
+      var pool = ["🎉","👀","🔥","👍"];
+      var pick = pool.find(function(x){ return !t2.mine[x]; }) || "🎉";
+      t2.reacts[pick] = (t2.reacts[pick] || 0) + 1;
+      t2.mine[pick] = true;
+      render();
+      return;
+    }
+
+    if ((el = e.target.closest("[data-thread]"))) {
+      var th = rowsEl.querySelector('[data-threadfor="' + el.dataset.thread + '"]');
+      if (th) th.hidden = !th.hidden;
+      return;
+    }
+
+    if ((el = e.target.closest("[data-cmtsend]"))) {
+      var id = el.dataset.cmtsend;
+      var input = rowsEl.querySelector('[data-cmtinput="' + id + '"]');
+      var task = find(id);
+      var body = input && input.value.trim();
+      if (!task || !body) { toast("Type a comment first."); return; }
+      task.cmts.push({ who: cfg().who, name: cfg().name, body: body });
+      render();
+      var th2 = rowsEl.querySelector('[data-threadfor="' + id + '"]');
+      if (th2) th2.hidden = false;
+      toast("Comment posted. Drake sees it in his share inbox.");
+      return;
+    }
+
+    if ((el = e.target.closest("[data-bounty]"))) {
+      var p = rowsEl.querySelector('[data-panelfor="' + el.dataset.bounty + '"]');
+      if (p) p.hidden = !p.hidden;
+      return;
+    }
+
+    if ((el = e.target.closest("[data-bountycancel]"))) {
+      var pc = rowsEl.querySelector('[data-panelfor="' + el.dataset.bountycancel + '"]');
+      if (pc) pc.hidden = true;
+      return;
+    }
+
+    if ((el = e.target.closest(".shape"))) {
+      var host = el.closest(".panel");
+      host.querySelectorAll(".shape").forEach(function(s){ s.classList.remove("on"); });
+      el.classList.add("on");
+      return;
+    }
+
+    if ((el = e.target.closest("[data-bountysend]"))) {
+      var bid = el.dataset.bountysend;
+      var task2 = find(bid);
+      var panel = rowsEl.querySelector('[data-panelfor="' + bid + '"]');
+      var chosen = panel && panel.querySelector(".shape.on");
+      if (!chosen) { toast("Pick one of the three shapes first."); return; }
+      var shape = chosen.dataset.shape;
+      var c = cfg();
+      if (shape === "mult") {
+        if (!c.bounty) { toast("Doubling points needs a DCC account. Switch to Friend."); return; }
+        task2.bounty = Math.min(2, task2.bounty + 1);
+        toast("Bounty placed. " + task2.pts + " pts becomes " + (task2.pts * Math.pow(2, task2.bounty)) + " pts.");
+      } else if (shape === "named") {
+        var nameInput = panel.querySelector('[data-shapeinput="named"]');
+        var label = (nameInput && nameInput.value.trim()) || "Dinner is on me";
+        task2.sponsor = label + " — from " + c.name;
+        toast(c.who === "coach"
+          ? "Reward attached and auto-approved on your coach grant."
+          : "Reward sent to Drake's Reward Review for approval.");
+      } else {
+        var nInput = panel.querySelector('[data-shapeinput="threshold"]');
+        var n = parseInt(nInput && nInput.value, 10) || 500;
+        toast("Reward armed at " + n + " points. It unlocks on the day total, not this task.");
+      }
+      if (panel) panel.hidden = true;
+      render();
+      return;
+    }
+
+    if ((el = e.target.closest("[data-adjust]"))) {
+      var ta = find(el.dataset.adjust);
+      if (!ta) return;
+      ta.pts = ta.pts + 30;
+      render();
+      toast("Points adjusted to " + ta.pts + ". Logged to the reward ledger as a coach change.");
+      return;
+    }
+
+    if ((el = e.target.closest("[data-assign]"))) {
+      TASKS.splice(4, 0, {
+        id: "t" + (TASKS.length + 1), time: "4:30p",
+        title: "Coach assignment: 20 min walk before the day closes",
+        pts: 50, done: false, reacts: {}, mine: {}, bounty: 0, sponsor: null, cmts: []
+      });
+      render();
+      toast("Task assigned straight onto the itinerary. No triage approval needed.");
+      return;
+    }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

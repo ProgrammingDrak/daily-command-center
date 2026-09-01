@@ -134,6 +134,7 @@
     <div class="dcc-settings-wrap" id="dcc-settings-wrap">
       <button class="admin-link dcc-settings-button" id="dcc-settings-button" type="button" aria-haspopup="true" aria-expanded="false" title="Open settings">Settings</button>
       <div class="dcc-settings-menu" id="dcc-settings-menu" role="menu" aria-hidden="true">
+        <button type="button" id="dcc-day-start" role="menuitem">Start of day</button>
         <button type="button" id="dcc-schedule-defaults" role="menuitem">Schedule default times</button>
         <button type="button" id="dcc-setup-integrations" role="menuitem">Setup &amp; integrations</button>
         <button type="button" id="dcc-replay-tutorial" role="menuitem">Replay tutorial</button>
@@ -228,7 +229,7 @@
         <button class="svt-btn" data-view="actual">Actual</button>
       </span>
       <span class="sched-drag-hint sched-drag-hint-desktop" style="margin-left:10px">Drag to reorder &middot; +/- to adjust time &middot; Check to complete</span>
-      <span class="sched-drag-hint sched-drag-hint-touch" style="margin-left:10px">Press &amp; hold to reorder &middot; tap a row for details</span>
+      <span class="sched-drag-hint sched-drag-hint-touch" style="margin-left:10px">Press &amp; hold to reorder &middot; drag right to nest &middot; tap a row for details</span>
     </span>
   </div>
   <!-- The Itinerary add-task bar lives in the bottom-right "+" launcher. -->
@@ -243,10 +244,13 @@
   <div id="glymphatic-brief-root"></div>
 </div>
 
-<!-- Floating Trivial bubble: at-a-glance count of available trivial tasks -->
-<button class="float-trivial" id="float-trivial" type="button" style="display:none" title="Trivial tasks">
-  <span class="float-trivial-count" id="float-trivial-count">0</span>
-</button>
+<!-- Anytime dock: the collapsed pill for work with no time in it (anytime-dock.js).
+     This slot used to hold a #float-trivial bubble that nothing referenced; the
+     trivial lane's UI was retired and left the button stranded. Same corner, same
+     job, live this time. Hidden until the first anytime task exists. -->
+<button class="anytime-dock anytime-dock--capsule" id="anytime-dock" type="button"
+        style="display:none" aria-expanded="false" aria-controls="anytime-panel"
+        aria-label="Anytime tasks"></button>
 
 <!-- Task manager modal. The historic drawer IDs remain because task renderers and
      mobile navigation target them, but the surface now opens as a modal. -->
@@ -310,11 +314,12 @@
             <div id="triage-high" style="margin-bottom:12px"></div>
             <div id="triage-medium" style="margin-bottom:12px"></div>
             <div id="triage-low" style="margin-bottom:12px"></div>
-            <details style="margin-top:16px">
+            <details id="triage-history-section" style="margin-top:16px">
               <summary style="font-size:12px;font-weight:600;color:var(--text-muted);cursor:pointer;padding:8px 0">
-                Resolved Today <span id="triage-resolved-count" style="opacity:0.6">(0)</span>
+                Resolution history <span id="triage-resolved-count" style="opacity:0.6">(0)</span>
               </summary>
               <div id="triage-resolved"></div>
+              <button id="triage-history-more" class="btn btn-ghost" type="button" hidden>Load more</button>
             </details>
           </div>
         </details>
@@ -506,6 +511,9 @@
     <button class="dcc-radial-item" data-action="catchup" style="--i:3" type="button" title="Catch up (reschedule unfinished tasks)" aria-label="Catch up on unfinished tasks">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
     </button>
+    <button class="dcc-radial-item" data-action="anytime" style="--i:4" type="button" title="Anytime (tasks with no set time)" aria-label="Anytime tasks">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+    </button>
   </div>
 
   <!-- The "+" circle -->
@@ -599,6 +607,27 @@
     <div class="sched-picker-footer">
       <button class="sched-picker-cancel" id="sched-defaults-reset">Reset to defaults</button>
       <button class="sched-picker-confirm" id="sched-defaults-save">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- Start of day (Settings) -->
+<div class="sched-picker-overlay" id="day-start-overlay">
+  <div class="sched-picker">
+    <div class="sched-picker-hdr">
+      <h3>Start of day</h3>
+      <button class="pvb-close" id="day-start-close">&times;</button>
+    </div>
+    <div class="sched-picker-body">
+      <div class="sched-picker-hint">Tasks are never scheduled for you before this time. You can still set an earlier time by hand, and meetings keep their real time.</div>
+      <div class="sched-after-custom">
+        <input id="day-start-input" type="time" class="sched-picker-input" />
+      </div>
+      <div class="sched-picker-hint" id="day-start-note"></div>
+    </div>
+    <div class="sched-picker-footer">
+      <button class="sched-picker-cancel" id="day-start-reset">Reset to 7:00 AM</button>
+      <button class="sched-picker-confirm" id="day-start-save">Save</button>
     </div>
   </div>
 </div>
@@ -1974,7 +2003,7 @@
 <script src="/public/js/measured-task-window.js?v=measured-task-window-1"></script>
 <script src="/public/js/task-model.js?v=task-model-1"></script>
 <!-- day-context.js: the one day-context + free-slot engine (window.DCC.getDayContext/findSlot); must load before state.js/schedule.js consume it -->
-<script src="/public/js/day-context.js?v=day-context-1"></script>
+<script src="/public/js/day-context.js?v=day-context-2"></script>
 <script src="/public/js/core-ui.js?v=core-ui-1"></script>
 <script src="/public/js/block-editor.js"></script>
 <script src="/public/js/data.js"></script>
@@ -2044,6 +2073,13 @@
 <script src="/public/js/punishments.js"></script>
 <script src="/public/js/rewards-queue.js"></script>
 <script src="/public/js/unfinished-tasks.js"></script>
+<!-- Anytime lane: a target count inside a repeating window, with no time inside it.
+     anytime-store.js is the model (also require()d by anytime-model.test.js in Node),
+     anytime-dock.js is the corner pill + checklist, pet-nudge.js is the reminder run.
+     Store must precede the dock; pet-nudge only touches both at tick time. -->
+<script src="/public/js/anytime-store.js"></script>
+<script src="/public/js/anytime-dock.js"></script>
+<script src="/public/js/pet-nudge.js"></script>
 <script src="/public/js/side-drawers.js"></script>
 <script src="/public/js/budget.js"></script>
 <script src="/public/js/mobile-shell.js"></script>
@@ -2071,6 +2107,23 @@ window.USE_BLOCKSTORE = {
 <div id="save-status" class="save-status save-status--ok" title="All changes synced">
   <span class="save-status-dot"></span>
   <span class="save-status-tooltip" id="save-status-tooltip">All changes synced</span>
+</div>
+
+<!-- Anytime panel: the expanded checklist. NON-MODAL and no backdrop, following
+     .feedback-panel. It must never use one of the six overlay class names in
+     features.js _anyModalOpen(), or render() would defer app-wide the whole time
+     it is open. -->
+<div class="anytime-panel" id="anytime-panel" aria-hidden="true" role="dialog"
+     aria-label="Anytime tasks">
+  <div class="anytime-panel-head">
+    <strong>Anytime</strong>
+    <span class="anytime-panel-sub">no set time, just a target</span>
+    <button class="anytime-panel-close" type="button" aria-label="Close anytime tasks">&times;</button>
+  </div>
+  <div class="anytime-panel-body"></div>
+  <div class="anytime-panel-foot">
+    <button class="anytime-panel-add" type="button">+ Add anytime task</button>
+  </div>
 </div>
 
 <div class="feedback-panel" id="feedback-panel" aria-hidden="true">

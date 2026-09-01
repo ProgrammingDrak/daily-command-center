@@ -7,16 +7,21 @@
 // Gate: touch/coarse pointers only. A mouse always early-returns, so desktop's
 // native HTML5 drag path is byte-identical and the two systems never collide.
 //
-// Gesture: press-and-hold ~300ms to lift a row → drag up/down to reorder,
-// mid-row to nest as a ride-along, drag-right to nest as a subtask. A plain tap
-// falls through to the row's open-space click (open details); a vertical swipe
-// before the hold scrolls the page as usual.
+// Gesture: press-and-hold ~300ms to lift a row → drag up/down to reorder, drag
+// RIGHT to nest. Sideways offset picks the mode, vertical position picks the
+// slot: <48px right = reorder (blue bar), 48px+ = wrap inside (purple), 112px+ =
+// nest as a subtask (teal). Desktop's mid-row nest band is 25%-75% of a row's
+// height; on a phone that leaves ~12px edges no thumb can hit, so touch trades
+// the band for an explicit horizontal mode. A plain tap falls through to the
+// row's open-space click (open details); a vertical swipe before the hold
+// scrolls the page as usual.
 (function () {
   "use strict";
 
   var HOLD_MS = 300;      // press duration that promotes a touch to a lift
   var MOVE_CANCEL = 10;   // px of pre-lift movement that reads as a scroll, not a hold
-  var INDENT_PX = 40;     // rightward drag that flips ride-along nest → subtask nest
+  var NEST_PX = 48;       // rightward drag that switches reorder → nest (ride-along)
+  var SUB_PX = 112;       // further right → nest as a subtask (shares the parent's pie)
   var EDGE = 64;          // px from viewport edge that triggers auto-scroll
   var EDGE_STEP = 12;     // px per frame auto-scroll speed
   var SUPPRESS_CLICK_MS = 450;
@@ -78,7 +83,7 @@
       ghost: null,
       offsetY: 0,
       prevTargetId: null,
-      prevIndent: false,
+      prevMode: null,
       holdTimer: setTimeout(lift, HOLD_MS)
     };
     // Listen in capture phase so we see moves even after pointer capture.
@@ -113,6 +118,15 @@
     startAutoScroll();
   }
 
+  // Sideways offset from the lift point picks the drop mode. Reorder is the
+  // default so a straight up/down drag can never silently re-parent a task.
+  function modeFor(x) {
+    var dx = x - state.startX;
+    if (dx >= SUB_PX) return "sub";
+    if (dx >= NEST_PX) return "nest";
+    return "reorder";
+  }
+
   function onMove(e) {
     if (!state || e.pointerId !== state.pointerId) return;
     state.lastX = e.clientX;
@@ -130,16 +144,16 @@
     state.ghost.style.transform =
       "translate(" + (e.clientX - state.startX) + "px," + (e.clientY - state.startY) + "px)";
 
-    var indent = (e.clientX - state.startX) > INDENT_PX;   // drag-right = subtask nest
+    var mode = modeFor(e.clientX);
     var tgt = targetUnder(e.clientX, e.clientY);
     var tgtId = tgt ? tgt.dataset.id : null;
 
-    if (tgtId !== state.prevTargetId || indent !== state.prevIndent) {
+    if (tgtId !== state.prevTargetId || mode !== state.prevMode) {
       if (state.prevTargetId && state.prevTargetEl && window.DCC_DRAG) DCC_DRAG.leave(state.prevTargetEl);
-      if (tgt && tgtId !== state.id && window.DCC_DRAG) DCC_DRAG.over(tgt, tgtId, e.clientY, indent);
+      if (tgt && tgtId !== state.id && window.DCC_DRAG) DCC_DRAG.over(tgt, tgtId, e.clientY, mode);
       state.prevTargetId = tgtId;
       state.prevTargetEl = tgt;
-      state.prevIndent = indent;
+      state.prevMode = mode;
     }
   }
 
@@ -148,11 +162,11 @@
     if (!state.lifted) { reset(); return; }    // tap — let the click open details
 
     e.preventDefault();
-    var indent = (e.clientX - state.startX) > INDENT_PX;
+    var mode = modeFor(e.clientX);
     var tgt = targetUnder(e.clientX, e.clientY);
     // drop() runs the mutation + recalcTimes + render() through the shared resolver.
     if (tgt && tgt.dataset.id !== state.id && window.DCC_DRAG) {
-      DCC_DRAG.drop(tgt, tgt.dataset.id, e.clientY, indent);
+      DCC_DRAG.drop(tgt, tgt.dataset.id, e.clientY, mode);
     }
     suppressClickUntil = Date.now() + SUPPRESS_CLICK_MS;  // swallow the trailing click
     reset();

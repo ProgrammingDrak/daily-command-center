@@ -32,7 +32,12 @@ function dOver(e,id){
   // work during the meeting, while Shift+drop creates a pie subtask relevant to
   // the meeting. Only the existing carryover and cycle guards block nesting.
   const canNest=!draggingCarryover&&targetEv&&!(typeof _isAncestor==="function"&&_isAncestor(dragId,id));
-  if(canNest&&y>h*0.25&&y<h*0.75){
+  // A touch drag carries an explicit mode (see the DCC_DRAG facade): the finger's
+  // sideways offset picks reorder vs nest, because a phone row's 25% edge band is
+  // far too small to hit with a thumb. A mouse drag leaves dccMode undefined and
+  // keeps the mid-row band below, so the desktop path is unchanged.
+  const wantsNest=e.dccMode?(e.dccMode!=="reorder"):(y>h*0.25&&y<h*0.75);
+  if(canNest&&wantsNest){
     tgt.classList.add("drag-over-nest");
     tgt.classList.toggle("drag-over-nest-sub",!!e.shiftKey);
     return;
@@ -60,6 +65,19 @@ function _meetingBlocks(){
     .sort((a,b)=>a.s-b.s);
 }
 
+// The user's start of day, as a floor on the cascade anchor. Guarded rather than a
+// bare DCC.dayStartMinutes call: four other suites slice this file into a node:vm
+// context WITHOUT day-context.js installed (push-is-a-move places rows at 00:45,
+// subtask-unified-row at 00:00), and a floor applied there would move assertions that
+// have nothing to do with this feature. No module in the context means no floor.
+// In the browser the module always exists -- index.html loads day-context.js well
+// before this file -- so the 0 is unreachable in production.
+function _dayStartFloor(){
+  const D = typeof DCC !== "undefined" ? DCC : (typeof window !== "undefined" ? window.DCC : null);
+  if(!D || typeof D.dayStartMinutes !== "function")return 0;
+  return D.dayStartMinutes(typeof __state !== "undefined" ? __state : null);
+}
+
 // Return the earliest start >= cursor where duration d fits without overlapping any meeting
 function _freeStart(cursor, d, meetingBlocks){
   let s=cursor, changed=true;
@@ -70,6 +88,24 @@ function _freeStart(cursor, d, meetingBlocks){
     }
   }
   return s;
+}
+
+// ── Does the cascade have to leave this row's start alone? ──
+// THE one answer, so the two cascades (recalcTimes + recalcTimesTagAware) and their two
+// passes each cannot drift. Three separate reasons, and the difference between the last
+// two is the whole point:
+//   _locked        sticky; the user must explicitly unlock before anything moves it.
+//   _userSetStart  a HUMAN named this time (pinStartTime / the placement picker / a timed
+//                  server placement). Holds even under orderWins.
+//   _pinnedStart   DERIVED: task-model.js stamps one on every top-level row that carries a
+//                  stored start, so it is true for nearly the whole day. A drag
+//                  (orderWins) has to demote these or reordering could never re-time
+//                  anything -- which is exactly why it must NOT be the flag that protects
+//                  a hand-typed start.
+function _holdsTime(ev,opts){
+  if(!ev)return false;
+  if(ev._locked||ev._userSetStart)return true;
+  return !(opts&&opts.orderWins)&&!!ev._pinnedStart;
 }
 
 // Tag-aware helpers (used by recalcTimesTagAware)
@@ -93,19 +129,25 @@ function recalcTimesTagAware(schedBlocks){
   if(!active.length) return;
 
   const firstOrig = DCC.TaskModel.selectActive(INIT_SCHED)[0];
-  const tagAnchorCandidates = active.map(ev => pt(ev.start));
+  // Same exclusion as recalcTimes: a held row's start is not the day's anchor.
+  const tagAnchorPool = active.filter(ev => !_holdsTime(ev));
+  const tagAnchorCandidates = (tagAnchorPool.length ? tagAnchorPool : active).map(ev => pt(ev.start));
   if(firstOrig) tagAnchorCandidates.push(pt(firstOrig.start));
   let fallbackCursor = Math.min.apply(null, tagAnchorCandidates);
   if(typeof viewMode !== "undefined" && viewMode === "today" && typeof now === "function"){
     fallbackCursor = Math.min(fallbackCursor, now());
   }
+  // Floor AFTER the now() pull-back, or opening the app at 05:30 would repack the
+  // whole day from 05:30 -- the exact complaint the setting exists to answer.
+  const tagFloor = _dayStartFloor();
+  fallbackCursor = Math.max(tagFloor, fallbackCursor);
 
   // Pass 1: place pinned/locked tasks and collect them as blockers alongside meetings.
   const blockers = _meetingBlocks().slice();
   active.forEach(ev => {
     if(isNested(ev)) return; // nested (ride-along/subtask): lives under its parent, never a blocker
     if(isFixedTimeBlock(ev)) return;
-    if(ev._pinnedStart || ev._locked){
+    if(_holdsTime(ev)){
       const ps = pt(ev._pinnedStart || ev.start);
       ev.start = fmt(ps);
       const d = _isSeqShell(ev) ? _layoutShellChildren(ev) : dur(ev);
@@ -116,8 +158,13 @@ function recalcTimesTagAware(schedBlocks){
   blockers.sort((a, b) => a.s - b.s);
 
   // Per-block free-slot cursor (starts at block's start time)
+  // Per-block free-slot cursor, floored the same way. This is the PRIMARY placement
+  // path in tag-aware mode (fallbackCursor above only catches the no-match case), so
+  // leaving it unclamped would let a 05:00 tagged block keep placing at 05:00 and
+  // quietly defeat the whole setting. A block that ends before the floor now fails
+  // the `slotEnd <= pt(b.end)` fit test below and correctly falls through.
   const nextFree = {};
-  schedBlocks.forEach(b => { nextFree[b.id] = pt(b.start); });
+  schedBlocks.forEach(b => { nextFree[b.id] = Math.max(tagFloor, pt(b.start)); });
 
   active.forEach(ev => {
     if(isNested(ev)) return; // nested (ride-along/subtask): doesn't consume the cascade cursor
@@ -125,7 +172,7 @@ function recalcTimesTagAware(schedBlocks){
       fallbackCursor = Math.max(fallbackCursor, pt(ev.end));
       return;
     }
-    if(ev._pinnedStart || ev._locked){
+    if(_holdsTime(ev)){
       fallbackCursor = Math.max(fallbackCursor, pt(ev.end));
       return;
     }
@@ -167,9 +214,14 @@ function recalcTimesTagAware(schedBlocks){
 // pinned (or locked) task as immovable. Unpinned tasks flow around all of
 // them so inserting an Urgent task at a fixed time bumps later tasks
 // forward.
-// opts.orderWins (drag reflow): list order is truth — pinned tasks join the
-// chain and their pins re-sync to the new starts; only meetings/OOO/breaks
-// and _locked tasks still hold.
+// opts.orderWins (drag reflow): list order is truth — DERIVED pins (_pinnedStart)
+// join the chain and re-sync to the new starts; meetings/OOO/breaks, _locked tasks
+// and _userSetStart tasks still hold. That last one is the fix for "I set a task to
+// 06:00 and the next drag moved it": _pinnedStart cannot mean "the user chose this",
+// because task-model.js derives one for every timed row. See _holdsTime.
+// opts.reachBackFor (a dragged ev id): when that task lands FIRST in the chain, let
+// the anchor reach back to just before the day's earliest held item, so a drop at the
+// very top lands BEFORE a meeting or a hand-set start instead of after it.
 // When any schedule block has acceptedTags, delegates to recalcTimesTagAware.
 function recalcTimes(opts){
   opts=opts||{};
@@ -194,7 +246,7 @@ function recalcTimes(opts){
   active.forEach(ev=>{
     if(isNested(ev))return;          // nested (ride-along/subtask): lives under its parent, never a blocker
     if(isFixedTimeBlock(ev))return;     // already represented in _meetingBlocks()
-    if(ev._locked||(!opts.orderWins&&ev._pinnedStart)){
+    if(_holdsTime(ev,opts)){
       const ps=pt(ev._pinnedStart||ev.start);
       ev.start=fmt(ps);
       // A pinned/locked shell derives its span from its children, laid out from
@@ -210,8 +262,16 @@ function recalcTimes(opts){
   // unpinned tasks fill morning slots even when INIT_SCHED's first item is a
   // late event (e.g. an evening "Personal" block) and the user has only
   // user-added tasks earlier in the day.
+  //
+  // A HELD row is excluded from the candidates. Its start says where THAT task must be,
+  // not where free work should begin. Before user-set starts existed this could not bite
+  // (meetings are never in `active`, and a lock is rare), but a hand-set 06:00 would
+  // otherwise drag the anchor to 06:00 and pack the whole day from there on the next
+  // drag — the opposite of "leave that one task alone". Falls back to the full set when
+  // every row is held, so the anchor can never be Infinity.
   const firstOrig=INIT_SCHED.find(ev=>!isDone(ev)&&!isDeleted(ev));
-  const anchorCandidates=active.map(ev=>pt(ev.start));
+  const anchorPool=active.filter(ev=>!_holdsTime(ev,opts));
+  const anchorCandidates=(anchorPool.length?anchorPool:active).map(ev=>pt(ev.start));
   if(firstOrig)anchorCandidates.push(pt(firstOrig.start));
   let cursor=Math.min.apply(null,anchorCandidates);
 
@@ -222,6 +282,38 @@ function recalcTimes(opts){
     cursor=Math.min(cursor,now());
   }
 
+  // The user's start of day, applied AFTER the now() pull-back above. Without it,
+  // opening the app at 05:30 repacks every unpinned task from 05:30, and a stray
+  // 00:00 row drags the anchor to midnight. Held rows (_locked / _userSetStart) are
+  // excluded from the anchor pool already, so a hand-typed 06:00 keeps its slot and
+  // does NOT pull the chain back down.
+  const floorMin=_dayStartFloor();
+  cursor=Math.max(floorMin,cursor);
+
+  // The anchor above is a FLOOR no drop position can beat: it is the minimum of every
+  // current start, so a task dropped at the very top can only ever reach the day's
+  // earliest existing slot. Once a meeting or a hand-set start holds that slot, "drag it
+  // above that" silently landed the task AFTER it -- the reported "it will not let me
+  // schedule it earlier". When the drag put this task first in the chain, reach the
+  // anchor back to just before the earliest held item so the drop means what it looks
+  // like. Clamped at 00:00; every other drop is untouched.
+  if(opts.reachBackFor&&blockers.length){
+    const top=active.filter(ev=>!isNested(ev)&&!isFixedTimeBlock(ev));
+    const mv=top[0];
+    if(mv&&mv.id===opts.reachBackFor&&!_holdsTime(mv,opts)){
+      const firstHold=Math.min.apply(null,blockers.map(b=>b.s));
+      const d=_isSeqShell(mv)?_shellSpan(mv):dur(mv);
+      const reach=Math.min(cursor,firstHold-d);
+      // The floor must NOT turn this into a no-op. When the earliest held item is
+      // itself before the floor (a real 06:00 meeting, or a hand-set 06:00 row),
+      // clamping the reach-back to the floor would land the drop AFTER the very
+      // thing the user dragged above -- silently, which is the exact bug the
+      // reach-back exists to fix. So the floor applies only when there is room for
+      // it above the earliest hold; otherwise fall back to the original 00:00 clamp.
+      cursor=firstHold>floorMin?Math.max(floorMin,reach):Math.max(0,reach);
+    }
+  }
+
   // Pass 2: cascade non-pinned, non-locked, non-meeting tasks around all blockers.
   const repinned=[];
   active.forEach(ev=>{
@@ -230,7 +322,7 @@ function recalcTimes(opts){
       cursor=Math.max(cursor,pt(ev.end));
       return;
     }
-    if(ev._locked||(!opts.orderWins&&ev._pinnedStart)){
+    if(_holdsTime(ev,opts)){
       cursor=Math.max(cursor,pt(ev.end));
       return;
     }
@@ -473,11 +565,19 @@ function _reorderActive(movedId,targetId,after){
   let ai=0;for(let i=0;i<scheduled.length;i++){if(!isDone(scheduled[i]))scheduled[i]=active[ai++];}
 }
 function _clearPin(ev){
-  if(ev&&ev._pinnedStart){
+  if(!ev)return;
+  if(ev._pinnedStart){
     delete ev._pinnedStart;
     if(typeof loadPinnedStarts==="function"&&typeof savePinnedStarts==="function"){
       const pins=loadPinnedStarts();if(pins[ev.id]){delete pins[ev.id];savePinnedStarts(pins);}
     }
+  }
+  // Dragging a task IS the user handing its time back to the cascade, so the row this
+  // runs on gives up its hand-set intent too. Only the DRAGGED task reaches here --
+  // every other user-set start on the day now survives the reflow (recalcTimes below).
+  if(ev._userSetStart){
+    if(typeof _setUserSetStart==="function")_setUserSetStart(ev,ev.id,false);
+    else delete ev._userSetStart;
   }
 }
 function _finishDrag(old){
@@ -503,7 +603,7 @@ function dDrop(e,tid){
     }
     return;
   }
-  const clearCls=()=>document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","pin-drop-target"));
+  const clearCls=()=>document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub","pin-drop-target"));
   // External drag of a preset task group card: add the whole group to the day.
   if(window._dragFromTaskGroup){
     const gid=window._dragFromTaskGroup; window._dragFromTaskGroup=null;
@@ -576,7 +676,7 @@ function dDrop(e,tid){
   if(wasUntimed&&!target.untimed){
     moved.untimed=false;
     const _d=dur(moved)||30;
-    const _s=pt(target.start)||(typeof now==="function"?Math.ceil(now()/15)*15:8*60);
+    const _s=pt(target.start)||Math.max(_dayStartFloor(),typeof now==="function"?Math.ceil(now()/15)*15:8*60);
     moved.start=fmt(_s);moved.end=fmt(_s+_d);
   }
 
@@ -585,7 +685,8 @@ function dDrop(e,tid){
   // mid-row band doesn't silently turn the scheduled task into a subtask.
   const r=e.currentTarget.getBoundingClientRect();
   const y=e.clientY-r.top,h=r.height;
-  const nest=(!wasUntimed&&y>h*0.25&&y<h*0.75&&!_isAncestor(moved.id,target.id));
+  const nestZone=e.dccMode?(e.dccMode!=="reorder"):(y>h*0.25&&y<h*0.75);
+  const nest=(!wasUntimed&&nestZone&&!_isAncestor(moved.id,target.id));
   const after=y>=h/2;
 
   // ---- Case A: dragging a WRAP -> move it; its ride-alongs follow by the same delta ----
@@ -595,7 +696,9 @@ function dDrop(e,tid){
     const oldStart=pt(moved.start);
     _clearPin(moved);
     _reorderActive(moved.id,target.id,after);
-    recalcTimes({orderWins:true});
+    // Top-level reorder, so it may have landed first: let the anchor reach back.
+    // recalcTimes ignores this unless the task really is first in the chain.
+    recalcTimes({orderWins:true,reachBackFor:moved.id});
     _shiftWrapChildren(moved,oldStart);
     _finishDrag(old);return;
   }
@@ -645,7 +748,9 @@ function dDrop(e,tid){
     const wasNested=!!parentIdOf(moved);
     _promoteMutate(moved);
     _reorderActive(moved.id,target.id,after);
-    recalcTimes({orderWins:true});
+    // Same reach-back as the wrap branch: a drop at the very top of the list should
+    // land BEFORE the day's first held item, not after it.
+    recalcTimes({orderWins:true,reachBackFor:moved.id});
     if(wasNested){_persistPromoted(moved);if(typeof showToast==="function")showToast("Promoted to its own task","success",2200);}
   }
   _finishDrag(old);
@@ -657,15 +762,18 @@ function dDrop(e,tid){
 // real DragEvent is four members; a synthetic object carries them. dragId is a
 // module-private `let`, so exposing begin()/end() here is the one hook the
 // adapter needs — the mutation/reflow logic below is reused untouched.
-function _dccSynthEvt(rowEl, clientY, shift){
+// mode is "reorder" | "nest" | "sub"; dccMode is what dOver/dDrop read instead of
+// the mid-row band, and "sub" is the touch stand-in for the desktop Shift key.
+function _dccSynthEvt(rowEl, clientY, mode){
   return { currentTarget: rowEl, target: rowEl, clientY: clientY,
-           shiftKey: !!shift, preventDefault(){}, stopPropagation(){} };
+           dccMode: mode || "reorder", shiftKey: mode === "sub",
+           preventDefault(){}, stopPropagation(){} };
 }
 window.DCC_DRAG = {
   begin(id, rowEl){ dragId = id; if(rowEl) rowEl.classList.add("dragging"); },
-  over(rowEl, id, y, shift){ if(rowEl) dOver(_dccSynthEvt(rowEl, y, shift), id); },
-  leave(rowEl){ if(rowEl) dLeave(_dccSynthEvt(rowEl, 0, false)); },
-  drop(rowEl, tid, y, shift){ if(rowEl) dDrop(_dccSynthEvt(rowEl, y, shift), tid); },
+  over(rowEl, id, y, mode){ if(rowEl) dOver(_dccSynthEvt(rowEl, y, mode), id); },
+  leave(rowEl){ if(rowEl) dLeave(_dccSynthEvt(rowEl, 0, "reorder")); },
+  drop(rowEl, tid, y, mode){ if(rowEl) dDrop(_dccSynthEvt(rowEl, y, mode), tid); },
   end(){ dEnd(); },
   activeId(){ return dragId; }
 };

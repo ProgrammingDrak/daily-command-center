@@ -2346,7 +2346,12 @@
   /* Radial HUD: three items fan into the upper-left quadrant */
   .dcc-radial{position:absolute;bottom:0;right:0;width:48px;height:48px;pointer-events:none}
   .dcc-radial-item{position:absolute;bottom:1px;right:1px;width:46px;height:46px;border-radius:50%;background:var(--card);border:1px solid var(--border);color:var(--text);cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(0,0,0,0.4);
-    --angle:calc(182deg + var(--i) * 30deg); --radius:104px;
+    /* Five items fan from 182deg (left) to 272deg (straight up). The step and
+       the radius move together: at 22.5deg the radius must reach 138px to keep
+       the same 53.8px centre-to-centre chord the 4-item/30deg/104px fan had, so
+       neighbouring 46px icons keep their gap. A 5th item on the old 30deg step
+       would sit at 302deg, i.e. 55px past the right edge of the viewport. */
+    --angle:calc(182deg + var(--i) * 22.5deg); --radius:138px;
     transform:rotate(var(--angle)) translate(0) rotate(calc(-1 * var(--angle))) scale(0);
     opacity:0;pointer-events:none;transition:transform 0.24s cubic-bezier(.2,.8,.3,1.2),opacity 0.18s,background 0.12s,border-color 0.12s;transition-delay:calc(var(--i) * 35ms)}
   .dcc-radial-item:hover{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -2624,7 +2629,9 @@
 
     /* ── "+" launcher (bottom-right) ── */
     #dcc-launcher{right:8px!important;bottom:8px!important}
-    .dcc-radial-item{--radius:96px!important}
+    /* Same 22.5deg step as desktop, so the radius floor is set by the chord, not
+       by the old 4-item spacing: 130px keeps a 50.7px chord past a 46px icon. */
+    .dcc-radial-item{--radius:130px!important}
 
     /* ── Triage cards ─────────────────────────────────────────── */
     .tri-card{padding:10px}
@@ -3391,6 +3398,193 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .pet-courier,.pet-courier-dust,.pet-courier-drop,.pet-courier-chip,.pet-courier-envelope{animation:none}
   .pet-courier{transition:none}
 }
+
+/* == ANYTIME (anytime-dock.js, pet-nudge.js) ==================================
+   Work with no time inside it: a target count in a repeating window. Two pieces
+   of chrome, both bottom-right, both NON-MODAL.
+
+   z-index 430 is deliberate: it sits beside .feedback-panel (421), the app's
+   other backdrop-free corner panel, and below the mobile tab bar (440), whose
+   existing bottom-lift block already moves both clear. It must stay under the
+   launcher FAB (1500) and #mobile-more-sheet (1199).
+
+   The pill has four treatments behind one class (--capsule is what ships; --ring,
+   --pips and --bar were built and compared side by side). Every treatment shares
+   the base rule, so DOCK_STYLE in anytime-dock.js is a one-line swap.
+   ------------------------------------------------------------------------- */
+
+/* ── the collapsed pill ── */
+.anytime-dock{position:fixed;right:16px;bottom:96px;z-index:430;
+  border:1px solid var(--border);background:var(--card);color:var(--text);
+  font:inherit;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,0.45);
+  display:flex;align-items:stretch;flex-direction:column;gap:6px;
+  transition:background 0.12s,border-color 0.16s,transform 0.12s}
+.anytime-dock:hover{background:var(--card-hover)}
+.anytime-dock:active{transform:scale(0.97)}
+.anytime-dock:focus-visible{outline:2px solid var(--accent-light);outline-offset:2px}
+.anytime-dock.done{border-color:var(--green)}
+.anytime-dock.panel-open{border-color:var(--accent)}
+.anytime-dock.nudging{border-color:var(--amber);animation:anytimeDockPulse 1.6s ease-in-out infinite}
+@keyframes anytimeDockPulse{
+  0%,100%{box-shadow:0 6px 20px rgba(0,0,0,0.45),0 0 0 0 rgba(245,158,11,0.5)}
+  50%{box-shadow:0 6px 20px rgba(0,0,0,0.45),0 0 0 9px rgba(245,158,11,0)}}
+.anytime-dock-badge{position:absolute;top:-5px;right:-5px;min-width:17px;height:17px;padding:0 4px;
+  border-radius:var(--r-full,999px);background:var(--accent);color:#fff;font-size:10px;font-weight:800;
+  display:grid;place-items:center;border:2px solid var(--bg)}
+.anytime-dock-top{display:flex;align-items:center;gap:7px}
+.anytime-dock-glyph{font-size:15px;line-height:1}
+.anytime-dock-frac{font-size:12px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:0.01em}
+.anytime-dock-ring,.anytime-dock-pips{display:none}
+.anytime-dock-track{height:4px;border-radius:var(--r-full,999px);background:rgba(148,163,184,0.2);overflow:hidden}
+.anytime-dock-fill{display:block;height:100%;border-radius:var(--r-full,999px);
+  background:var(--accent-light);width:calc(var(--anytime-p,0) * 100%);transition:width 0.24s ease}
+.anytime-dock.done .anytime-dock-fill{background:var(--green)}
+
+/* --capsule (shipping): the fraction is the point. Under 90px wide. */
+.anytime-dock--capsule{border-radius:var(--r-full,999px);padding:8px 14px 9px;min-width:86px}
+
+/* --ring: smallest footprint, no numbers. */
+.anytime-dock--ring{width:52px;height:52px;border-radius:var(--r-full,999px);padding:0;
+  align-items:center;justify-content:center;flex-direction:row}
+.anytime-dock--ring .anytime-dock-frac,.anytime-dock--ring .anytime-dock-track{display:none}
+.anytime-dock--ring .anytime-dock-glyph{font-size:20px;position:relative;z-index:1}
+.anytime-dock--ring .anytime-dock-ring{display:block;position:absolute;inset:-1px;border-radius:var(--r-full,999px);
+  background:conic-gradient(var(--accent-light) calc(var(--anytime-p,0) * 1turn),rgba(148,163,184,0.18) 0);
+  -webkit-mask:radial-gradient(circle,transparent 61%,#000 63%);mask:radial-gradient(circle,transparent 61%,#000 63%)}
+.anytime-dock--ring.done .anytime-dock-ring{background:conic-gradient(var(--green) 1turn,var(--green) 0)}
+
+/* --pips: one dot per required check; countable, but dies past ~8. */
+.anytime-dock--pips{border-radius:var(--r-lg,14px);padding:9px 13px;flex-direction:row;align-items:center;gap:10px}
+.anytime-dock--pips .anytime-dock-frac,.anytime-dock--pips .anytime-dock-track{display:none}
+.anytime-dock--pips .anytime-dock-glyph{font-size:17px}
+.anytime-dock--pips .anytime-dock-pips{display:flex;gap:4px}
+.anytime-pip{width:7px;height:7px;border-radius:var(--r-full,999px);background:rgba(148,163,184,0.28)}
+.anytime-pip.on{background:var(--accent-light)}
+.anytime-dock--pips.done .anytime-pip.on{background:var(--green)}
+
+/* --bar: names the item too; widest. */
+.anytime-dock--bar{border-radius:var(--r-lg,12px);padding:8px 12px;min-width:150px}
+
+/* ── the expanded panel ── */
+.anytime-panel{display:none;position:fixed;right:16px;bottom:158px;z-index:430;
+  width:min(360px,calc(100vw - 32px));max-height:min(66vh,520px);
+  background:var(--card);border:1px solid var(--border);border-radius:var(--r-lg,12px);
+  box-shadow:0 14px 38px rgba(0,0,0,0.55);flex-direction:column;overflow:hidden}
+.anytime-panel.open{display:flex;animation:anytimePanelIn 0.16s ease}
+@keyframes anytimePanelIn{from{opacity:0;transform:translateY(8px) scale(0.98)}to{opacity:1;transform:none}}
+.anytime-panel-head{display:flex;align-items:baseline;gap:8px;padding:11px 12px 10px 14px;
+  border-bottom:1px solid var(--border);flex-shrink:0}
+.anytime-panel-head strong{font-size:var(--fs-md,13px)}
+.anytime-panel-sub{flex:1;min-width:0;font-size:var(--fs-xs,11px);color:var(--text-muted);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.anytime-panel-close{background:none;border:none;color:var(--text-muted);font-size:20px;line-height:1;
+  cursor:pointer;padding:0 2px}
+.anytime-panel-close:hover{color:var(--text)}
+.anytime-panel-body{flex:1;min-height:0;overflow-y:auto;padding:6px 0}
+.anytime-panel-foot{border-top:1px solid var(--border);padding:8px 10px;flex-shrink:0}
+.anytime-panel-add{width:100%;padding:8px 10px;border-radius:var(--r-md,8px);
+  border:1px dashed var(--border);background:transparent;color:var(--text-muted);
+  font-size:var(--fs-sm,12px);font-weight:600;cursor:pointer}
+.anytime-panel-add:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.08)}
+.anytime-empty{padding:26px 20px;text-align:center;color:var(--text-muted);
+  font-size:var(--fs-sm,12px);line-height:1.6}
+
+/* ── groups ── */
+.anytime-group + .anytime-group{margin-top:6px;border-top:1px solid var(--border);padding-top:6px}
+.anytime-group-head{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:5px 14px;font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;
+  color:var(--text-muted)}
+.anytime-group-head em{font-style:normal;font-weight:600;letter-spacing:0.02em;text-transform:none;opacity:0.8}
+.anytime-group-count{font-variant-numeric:tabular-nums;opacity:0.75}
+
+/* ── rows ── */
+.anytime-row{display:flex;align-items:center;gap:8px;padding:6px 12px 6px 10px;transition:background 0.12s}
+.anytime-row:hover{background:var(--card-hover)}
+.anytime-row.is-done .anytime-row-title{color:var(--text-muted);text-decoration:line-through}
+.anytime-row.is-off{opacity:0.55}
+.anytime-chk{width:24px;height:24px;border-radius:var(--r-sm,6px)}
+.anytime-chk svg{width:13px;height:13px}
+.anytime-row-glyph{font-size:14px;line-height:1;width:16px;text-align:center;flex-shrink:0}
+.anytime-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.anytime-row-title{font-size:var(--fs-sm,13px);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.anytime-row-hint{display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text-muted)}
+.anytime-row-hint svg{flex-shrink:0;opacity:0.8}
+.anytime-row-count{font-size:var(--fs-xs,11px);font-weight:800;font-variant-numeric:tabular-nums;
+  color:var(--text-muted);flex-shrink:0}
+.anytime-row-count em{font-style:normal;font-weight:600;opacity:0.75}
+.anytime-row.is-done .anytime-row-count{color:var(--green)}
+.anytime-chip{font-size:10px;font-weight:700;padding:2px 6px;border-radius:var(--r-full,999px);flex-shrink:0}
+.anytime-streak{background:var(--amber-bg);color:var(--amber)}
+.anytime-step{width:22px;height:22px;border-radius:var(--r-sm,6px);border:1px solid var(--border);
+  background:transparent;color:var(--text-muted);font-size:13px;font-weight:800;line-height:1;
+  cursor:pointer;flex-shrink:0;display:grid;place-items:center}
+.anytime-step:hover:not(:disabled){border-color:var(--accent);color:var(--accent-light)}
+.anytime-step:disabled{opacity:0.3;cursor:default}
+.anytime-icon-btn{width:22px;height:22px;border-radius:var(--r-sm,6px);border:1px solid transparent;
+  background:transparent;color:var(--text-muted);cursor:pointer;flex-shrink:0;display:grid;place-items:center}
+.anytime-row:hover .anytime-icon-btn{border-color:var(--border)}
+.anytime-icon-btn:hover{color:var(--text)}
+
+/* ── the add / edit form (inside DCC.modal) ── */
+.anytime-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-3,10px)}
+.anytime-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.anytime-field > span{font-size:10px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:var(--text-muted)}
+.anytime-field--grow{grid-column:span 2}
+.anytime-field--full{grid-column:span 2}
+.anytime-field--tiny{max-width:100%}
+/* :not([type=checkbox]) matters: the day toggles are inputs too, and the text-field
+   padding/background turned them into big pale squares. */
+.anytime-form input:not([type="checkbox"]),.anytime-form select{width:100%;padding:7px 9px;
+  border-radius:var(--r-md,7px);border:1px solid var(--border);background:var(--bg-elev,var(--bg));
+  color:var(--text);font-size:var(--fs-base,16px);font-family:inherit}
+.anytime-form input:focus,.anytime-form select:focus{outline:none;border-color:var(--accent)}
+/* A default checkbox renders as a stark white square on this dark theme, louder
+   than anything else in the panel. Same treatment as .chk elsewhere in the app. */
+.anytime-form input[type="checkbox"]{appearance:none;-webkit-appearance:none;
+  width:14px;height:14px;border-radius:3px;border:1.5px solid var(--border);
+  background:transparent;cursor:pointer;position:relative;flex-shrink:0}
+.anytime-form input[type="checkbox"]:checked{background:var(--accent);border-color:var(--accent)}
+.anytime-form input[type="checkbox"]:checked:after{content:"";position:absolute;left:3px;top:0px;
+  width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.anytime-form input[type="checkbox"]:focus-visible{outline:2px solid var(--accent-light);outline-offset:1px}
+.anytime-days{display:flex;flex-wrap:wrap;gap:4px}
+.anytime-day{display:flex;align-items:center;gap:4px;padding:4px 7px;border:1px solid var(--border);
+  border-radius:var(--r-full,999px);font-size:11px;cursor:pointer;color:var(--text-muted)}
+.anytime-day input{margin:0}
+.anytime-day:has(input:checked){border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.1)}
+
+/* ── the pet's speech bubble (pet-nudge.js) ──
+   Shares the .pet-courier sprite, gait and dust; this is the one piece the
+   courier never needed, because it delivers an envelope instead of a sentence.
+   Above the runner's own z-index so it is never covered by the pet. */
+.pet-nudge-bubble{position:fixed;z-index:10008;
+  max-width:min(280px,calc(100vw - 24px));padding:8px 12px 9px;
+  border-radius:var(--r-lg,12px);border:1px solid var(--amber);
+  background:var(--card);color:var(--text);text-align:left;font:inherit;cursor:pointer;
+  box-shadow:0 10px 28px rgba(0,0,0,0.5),0 0 22px rgba(245,158,11,0.28);
+  display:flex;flex-direction:column;gap:2px;
+  animation:anytimeBubbleIn 0.3s cubic-bezier(.18,1.3,.24,1) both}
+.pet-nudge-bubble:hover{background:var(--card-hover)}
+/* --pet-nudge-tail is set by pet-nudge.js to the pet's x within the bubble, so a
+   bubble pushed away from the right edge still points at the pet. */
+.pet-nudge-bubble:after{content:"";position:absolute;left:var(--pet-nudge-tail,50%);bottom:-7px;
+  width:12px;height:12px;margin-left:-6px;background:var(--card);
+  border-right:1px solid var(--amber);border-bottom:1px solid var(--amber);transform:rotate(45deg)}
+.pet-nudge-bubble-lead{font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:var(--amber)}
+.pet-nudge-bubble-text{font-size:var(--fs-sm,12px);font-weight:600;line-height:1.4}
+.pet-nudge-bubble.leaving{animation:anytimeBubbleOut 0.45s ease forwards}
+@keyframes anytimeBubbleIn{0%{opacity:0;transform:translateY(10px) scale(0.86)}
+  100%{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes anytimeBubbleOut{0%{opacity:1}100%{opacity:0;transform:translateY(-8px) scale(0.96)}}
+/* The pet holds still while it talks, rather than jogging in place. */
+.pet-courier.talking{animation:petCourierDeposit 0.32s cubic-bezier(.18,1.3,.24,1) both}
+
+/* Same guard the pet-courier block carries. The nudge still lands: pet-nudge.js
+   skips the run under reduced motion and delivers a toast instead. */
+@media (prefers-reduced-motion:reduce){
+  .anytime-dock,.anytime-panel,.pet-nudge-bubble{animation:none}
+  .anytime-dock,.anytime-dock-fill{transition:none}
+}
 .slot-coin-field{position:fixed;inset:0;z-index:9998;pointer-events:none;overflow:hidden;opacity:0;transition:opacity 0.24s ease}
 .slot-coin-field.active{opacity:1}
 .slot-coin-ground{position:absolute;left:0;right:0;bottom:0;height:10px;background:linear-gradient(180deg,rgba(250,204,21,0.18),rgba(120,75,14,0.36));box-shadow:0 -8px 24px rgba(250,204,21,0.12)}
@@ -4121,7 +4315,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   body{padding-bottom:calc(74px + env(safe-area-inset-bottom,0px))!important}
   #dcc-launcher{right:10px!important;bottom:calc(80px + env(safe-area-inset-bottom,0px))!important}
   .feedback-panel{bottom:calc(138px + env(safe-area-inset-bottom,0px))!important}
-  .float-trivial{bottom:calc(82px + env(safe-area-inset-bottom,0px))!important}
+  .anytime-dock{bottom:calc(82px + env(safe-area-inset-bottom,0px))!important;right:10px!important}
+  .anytime-panel{bottom:calc(146px + env(safe-area-inset-bottom,0px))!important;right:8px!important;left:8px!important;width:auto!important;max-height:min(60vh,440px)!important}
 
   /* ── Bottom navigation bar ── */
   #mobile-tabbar{

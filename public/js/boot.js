@@ -8,8 +8,13 @@
 
   try {
     // Fetch all data endpoints in parallel
-    const [dayState, upcoming, archives, tomorrow, local, brainRecent, brainGlobals, prepFiles] = await Promise.all([
-      fetch('/api/state/day').then(r => r.json()).catch(() => null),
+    const [syncBootstrap, legacyDayState, upcoming, archives, tomorrow, local, brainRecent, brainGlobals, prepFiles] = await Promise.all([
+      window.DCC_DELTA_SYNC_ENABLED
+        ? fetch('/api/sync/bootstrap').then(r => r.ok ? r.json() : null).catch(() => null)
+        : Promise.resolve(null),
+      window.DCC_DELTA_SYNC_ENABLED
+        ? Promise.resolve(null)
+        : fetch('/api/state/day').then(r => r.json()).catch(() => null),
       fetch('/api/state/upcoming').then(r => r.json()).catch(() => []),
       fetch('/api/state/archives').then(r => r.json()).catch(() => ({})),
       fetch('/api/state/tomorrow').then(r => r.json()).catch(() => null),
@@ -18,6 +23,8 @@
       fetch('/api/brain/globals').then(r => r.json()).catch(() => ({})),
       fetch('/api/prep').then(r => r.json()).catch(() => ({})),
     ]);
+    const dayState = (syncBootstrap && syncBootstrap.dayState) || legacyDayState;
+    window.__DCC_SYNC_BOOTSTRAP__ = syncBootstrap;
 
     // Populate window globals (same shape the rest of the app expects)
     window.__DCC_STATE__ = dayState;
@@ -74,8 +81,12 @@
   // Load BlockStore data for today (primary data source)
   if (window.blockStore && viewDate) {
     try {
-      await window.blockStore.loadDay(viewDate);
-      await window.blockStore.loadGlobals();
+      if (window.DCC_DELTA_SYNC_ENABLED && window.__DCC_SYNC_BOOTSTRAP__) {
+        window.blockStore.hydrateSyncSnapshot(window.__DCC_SYNC_BOOTSTRAP__);
+      } else {
+        await window.blockStore.loadDay(viewDate);
+        await window.blockStore.loadGlobals();
+      }
       // Build the global tag index so tag-aware scheduling can resolve ancestors
       if (typeof buildTagIndex === 'function') {
         window.__TAGS__ = buildTagIndex([...window.blockStore.getByType('tag'),...window.blockStore.getByType('block').filter(b=>(b.properties||{}).name&&(b.properties||{}).color!==undefined)]);

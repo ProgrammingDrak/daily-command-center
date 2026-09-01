@@ -16,7 +16,7 @@
   const deferredBlockIds = new Set();
   const deferredUndeletedIds = new Set();
   const MAX_DEFERRED_BLOCK_IDS = 500;
-  const TASK_REFRESH_INTERVAL_MS = 60 * 1000;
+  const TASK_REFRESH_INTERVAL_MS = window.DCC_DELTA_SYNC_ENABLED ? 5 * 60 * 1000 : 60 * 1000;
 
   function isEditing(){
     const active = document.activeElement;
@@ -120,6 +120,39 @@
   }
   window._dccEventOffView = _dccEventOffView;
 
+  async function applyDccStateSnapshot(dayState, reloadBlocks){
+    if(!dayState)return;
+    window.__DCC_STATE__=dayState;
+    __state=dayState;
+    __data=transformState(__state);
+    INIT_SCHED=__data.sched;
+    INIT_CONSIDER=__data.consider;
+    INIT_BACKLOG=__data.bklog;
+    INIT_TRIAGE=__data.triageItems;
+    INIT_NOTIFICATIONS=__data.notifications;
+    if(reloadBlocks&&window.blockStore&&viewDate){
+      try{await window.blockStore.loadDay(viewDate);}catch(e){}
+    }
+    if(typeof refoldTaskStateFromBlockCache==='function')refoldTaskStateFromBlockCache();
+    else{
+      scheduled=JSON.parse(JSON.stringify(INIT_SCHED));
+      consider=JSON.parse(JSON.stringify(INIT_CONSIDER));
+      backlog=JSON.parse(JSON.stringify(INIT_BACKLOG));
+      if(typeof reloadPersistedEdits==='function')reloadPersistedEdits();
+    }
+    if(typeof render==='function')render();
+    if(typeof buildTriage==='function')buildTriage();
+    if(typeof buildNotifications==='function')buildNotifications();
+    if(typeof updateStats==='function')updateStats();
+    if(typeof window.notifyTriageArrivals==='function')window.notifyTriageArrivals();
+  }
+
+  window.addEventListener("dcc-sync-day-state",function(event){
+    applyDccStateSnapshot(event.detail,false).catch(function(error){
+      console.error("[sync] Day-state apply failed:",error);
+    });
+  });
+
   // Refresh DCC-owned state only (schedule, triage, meetings)
   // Does NOT touch user blocks — those are in SQLite and never overwritten.
   // Also reloads BlockStore cache so cross-tab edits are picked up.
@@ -159,39 +192,7 @@
         fetch('/api/state/upcoming').then(r => r.json()).catch(() => []),
       ]);
       if(dayState){
-        window.__DCC_STATE__ = dayState;
-        __state = dayState;
-        __data = transformState(__state);
-        INIT_SCHED = __data.sched;
-        INIT_CONSIDER = __data.consider;
-        INIT_BACKLOG = __data.bklog;
-        INIT_TRIAGE = __data.triageItems;
-        INIT_NOTIFICATIONS = __data.notifications;
-
-        // Reload BlockStore cache so reloadPersistedEdits() reads fresh cross-tab data
-        if(window.blockStore && viewDate) {
-          try { await window.blockStore.loadDay(viewDate); } catch(e) {}
-        }
-
-        // Re-apply user edits from blocks (Phase 4+) or localStorage (Phase 0-3)
-        if(typeof refoldTaskStateFromBlockCache === 'function') refoldTaskStateFromBlockCache();
-        else {
-          scheduled = JSON.parse(JSON.stringify(INIT_SCHED));
-          consider = JSON.parse(JSON.stringify(INIT_CONSIDER));
-          backlog = JSON.parse(JSON.stringify(INIT_BACKLOG));
-          if(typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
-        }
-
-        if(typeof render === 'function') render();
-        if(typeof buildTriage === 'function') buildTriage();
-        if(typeof buildNotifications === 'function') buildNotifications();
-        if(typeof updateStats === 'function') updateStats();
-        // INIT_TRIAGE is committed and painted by here, so the courier can diff the
-        // active items against what Drake has already been shown. It decides for
-        // itself whether anything is new — this fires on every refresh, not just a
-        // sweep, because a deferred refresh (isEditing above) retries with no event
-        // and would lose the "triage-check-ingest" source.
-        if(typeof window.notifyTriageArrivals === 'function') window.notifyTriageArrivals();
+        await applyDccStateSnapshot(dayState,true);
       }
       if(upcoming) window.__DCC_UPCOMING__ = upcoming;
       showIndicator("Updated!", "var(--green)");
@@ -354,10 +355,11 @@
 
           // DCC state updated via refresh/state APIs. Carries msg.date -> scoped.
           case 'dcc-state-changed':
-            refreshDccState(msg);
-            // Also notify BlockStore if it's tracking DCC state
-            if(window.blockStore) {
+            if(window.DCC_DELTA_SYNC_ENABLED&&window.blockStore){
               window.blockStore.handleDccStateChanged(msg);
+            }else{
+              refreshDccState(msg);
+              if(window.blockStore)window.blockStore.handleDccStateChanged(msg);
             }
             break;
 

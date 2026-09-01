@@ -1,3 +1,54 @@
+let _triageHistoryItems=[];
+let _triageHistoryCursor=null;
+let _triageHistoryLoaded=false;
+let _triageHistoryLoading=false;
+
+function renderTriageHistory(){
+  const resEl=document.getElementById("triage-resolved");
+  const resCount=document.getElementById("triage-resolved-count");
+  const more=document.getElementById("triage-history-more");
+  if(resCount)resCount.textContent="("+_triageHistoryItems.length+(_triageHistoryCursor?"+":"")+")";
+  if(resEl){
+    resEl.innerHTML=_triageHistoryItems.map(row=>{
+      const item=row.item_json||{};
+      const title=row.title||item.title||row.triage_id||"Resolved item";
+      const detail=item.notes||item.resolution||row.resolution||"";
+      const at=row.resolved_at?new Date(row.resolved_at).toLocaleString():"";
+      return '<div class="tri-resolved-card" data-tri-id="'+DCC.esc(row.triage_id||"")+'">'+
+        '<div class="tri-card-header"><div class="tri-title">✅ '+DCC.esc(title)+'</div></div>'+
+        '<div class="tri-meta">'+DCC.esc(detail)+(at?' · '+DCC.esc(at):'')+'</div></div>';
+    }).join("");
+  }
+  if(more)more.hidden=!_triageHistoryCursor;
+}
+
+async function loadTriageHistory(reset){
+  if(_triageHistoryLoading)return;
+  _triageHistoryLoading=true;
+  try{
+    const before=!reset&&_triageHistoryCursor?"&before="+encodeURIComponent(_triageHistoryCursor):"";
+    const response=await fetch("/api/triage/history?limit=50"+before);
+    if(!response.ok)throw new Error("History request failed");
+    const data=await response.json();
+    _triageHistoryItems=reset?(data.items||[]):_triageHistoryItems.concat(data.items||[]);
+    _triageHistoryCursor=data.nextCursor||null;
+    _triageHistoryLoaded=true;
+    renderTriageHistory();
+  }catch(error){
+    const target=document.getElementById("triage-resolved");
+    if(target)target.textContent="Could not load resolution history.";
+  }finally{_triageHistoryLoading=false;}
+}
+
+setTimeout(function(){
+  const section=document.getElementById("triage-history-section");
+  const more=document.getElementById("triage-history-more");
+  if(section)section.addEventListener("toggle",function(){
+    if(section.open&&!_triageHistoryLoaded)loadTriageHistory(true);
+  });
+  if(more)more.addEventListener("click",function(){loadTriageHistory(false);});
+},0);
+
 // ======== ACTION ITEMS TAB ========
 function getAllActionItems(){
   // Collect from 3 sources:
@@ -1733,25 +1784,7 @@ function buildTriage() {
     }
   }
 
-  // Resolved items
-  const resolved = (__state && __state.triage && __state.triage.resolved_items) || [];
-  const resEl = document.getElementById("triage-resolved");
-  const resCount = document.getElementById("triage-resolved-count");
-  if (resCount) resCount.textContent = "(" + resolved.length + ")";
-  if (resEl) {
-    resEl.innerHTML = resolved.map(r =>
-      '<div class="tri-resolved-card" data-tri-id="' + r.id + '">' +
-        '<div class="tri-card-header" style="display:flex;align-items:center;gap:8px">' +
-          '<div class="tri-title">\u2705 ' + (r.title || r.id || "Resolved item") + '</div>' +
-          notesButton({id: r.id, title: r.title || r.id}) +
-          (r.needs_review ? '<span class="review-badge" data-review-id="' + r.id + '" data-review-type="triage" data-evidence="' + (r.evidence_summary || '').replace(/"/g, '&quot;') + '" data-evidence-link="' + (r.evidence_link || '').replace(/"/g, '&quot;') + '" title="Auto-resolved -- click to review">Needs Review</span>' : '') +
-        '</div>' +
-        '<div class="tri-meta">' + (r.notes || r.resolution || "") +
-          (r.evidence_summary ? ' <span style="color:var(--text-muted);font-size:10px">\u00b7 ' + r.evidence_summary + '</span>' : '') +
-        '</div>' +
-      '</div>'
-    ).join('');
-  }
+  renderTriageHistory();
 
   // Wire checkmark click handlers (event delegation)
   document.querySelectorAll(".tri-check").forEach(chk => {

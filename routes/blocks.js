@@ -28,6 +28,7 @@ const createTaskTiming = require("../lib/task-timing");
 const { planAllocations } = createTaskTiming;
 const MAX_REALLOCATABLE_SEC = 36 * 3600;
 const TaskModel = require("../public/js/task-model");
+const scheduleSettingsStore = require("../schedule-settings-store");
 const createMaterializeGuard = require("../lib/materialize-guard");
 const { dedupeStatus } = createMaterializeGuard;
 const createResponsibilityStore = require("../responsibility-store");
@@ -212,7 +213,19 @@ module.exports = function mount(app, ctx) {
 
   // The responsibility domain + slot engine + apply-forward engine live in
   // responsibility-store.js; instantiate it here with the server-scope deps.
-  const respStore = createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership, appTimeZone: ctx.APP_TIME_ZONE });
+  const respStore = createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership,
+    // Reads through the SAME blockDB this module was handed, so a harness's fake is
+    // honoured and no code path reaches a real pool behind the test's back.
+    // A settings read that fails must never break auto-scheduling: null means
+    // "no floor", i.e. exactly the pre-feature behaviour.
+    getDayStartMinutes: async (workspaceId) => {
+      try { return await scheduleSettingsStore.getDayStartMinutes(workspaceId, { blockDB }); }
+      catch (e) {
+        console.error("[schedule] day-start read failed (non-fatal):", e.message);
+        return null;
+      }
+    },
+    appTimeZone: ctx.APP_TIME_ZONE });
 
   // The shared no-resurrection contract (lib/materialize-guard.js). Used here by the
   // task-group schedule route; routes/dcc.js and meeting-materializer.js hold the
@@ -346,7 +359,8 @@ module.exports = function mount(app, ctx) {
       if (plan.item) {
         const properties = waitingItems.normalizeProperties(
           waitingCascade.completedItemProperties(at), plan.item.properties || {});
-        await blockDB.updateBlock(plan.item.id, { properties });
+        const updatedItem = await blockDB.updateBlock(plan.item.id, { properties });
+        await syncSlack(updatedItem);
         blockIds.push(plan.item.id);
       }
     } catch (error) {
@@ -1042,6 +1056,15 @@ module.exports = function mount(app, ctx) {
     let existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
+    if (!existing.deleted_at && (existing.properties || {}).kind === "delegated_item"
+      && !waitingItems.isTaskDependency(existing)) {
+      const deleted = await deleteWaitingCluster({
+        itemId: existing.id,
+        workspaceId: req.workspaceId,
+        broadcastAction: "delete",
+      });
+      return { id: existing.id, deleted_at: deleted.item.deleted_at };
+    }
     let result;
     let props = existing.properties || {};
     const closedDependencyIds = [];
@@ -1138,6 +1161,15 @@ module.exports = function mount(app, ctx) {
     const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
+    if (existing.deleted_at && (existing.properties || {}).kind === "delegated_item"
+      && Array.isArray((existing.properties || {}).slackDelegateClusterIds)) {
+      const restored = await restoreWaitingCluster({
+        itemId: existing.id,
+        workspaceId: req.workspaceId,
+        broadcastAction: "undelete",
+      });
+      return restored.item;
+    }
     const result = await blockDB.undeleteBlock(req.params.id);
     if (!isCompleted(result)) await transitionLinkedTriage(result, "scheduled", Date.now());
     // Unconditional, unlike the triage restore above: a meeting follow-up that comes
@@ -1564,7 +1596,12 @@ module.exports = function mount(app, ctx) {
   // load-bearing subtree move should not be churned by the P8 extraction.
   app.post("/api/blocks/:id/reschedule", async (req, res) => {
     try {
-      const { targetDate, parentStart, parentEnd, placement, _clientId } = req.body || {};
+      const { targetDate, parentStart, parentEnd, placement, userSetStart, _clientId } = req.body || {};
+      // Did a HUMAN name the landing time? A timed placement cannot answer that on its
+      // own: the client sends parentStart for an auto-slotted move too. Only an explicit
+      // true marks the start as user-chosen, which is what stops the client's drag
+      // reflow from re-timing it later.
+      if (userSetStart != null && typeof userSetStart !== "boolean") return res.status(400).json({ error: "Invalid userSetStart (want boolean)" });
       if (!targetDate || !isValidDate(targetDate)) return res.status(400).json({ error: "Invalid targetDate" });
       // parentStart/parentEnd are written straight into properties.start/end; guard the
       // format so a hand-crafted call can't poison a task's time fields with junk.
@@ -1648,10 +1685,15 @@ module.exports = function mount(app, ctx) {
           if (dateChanged) properties.rescheduledFrom = { date: fromDate, at: now };
           if (place && place.kind === "timed") {
             properties.start = place.start; properties.end = place.end; properties._pinnedStart = place.start;
+            // Absence is the only value that has ever meant "not user-set", same rule the
+            // lock axis follows, so an auto-slotted move DELETES a stale flag rather than
+            // storing false. Otherwise a task that was hand-placed once would keep
+            // resisting reflow after the scheduler later re-slotted it.
+            if (userSetStart === true) properties.userSetStart = true; else delete properties.userSetStart;
             delete properties.all_day; delete properties.all_day_start; delete properties.all_day_end;
           } else if (place && place.kind === "all_day") {
             properties.all_day = true; properties.all_day_start = targetDate; properties.all_day_end = place.endDate;
-            delete properties.start; delete properties.end; delete properties._pinnedStart;
+            delete properties.start; delete properties.end; delete properties._pinnedStart; delete properties.userSetStart;
           }
         } else {
           if (timeDelta && properties.start && properties.end) {
@@ -2589,39 +2631,51 @@ module.exports = function mount(app, ctx) {
     return { ok: true, status: "completed", item: updated };
   }));
 
-  // Finish the work itself, not merely the current check-in cycle. Close the
-  // Waiting record and complete its linked task too when one still exists.
-  app.post("/api/waiting-items/:id/complete", route(async (req, res) => {
-    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
-    if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Waiting item not found" }); return; }
-    assertBlockOwnership(existing, req.workspaceId);
-    if (waitingItems.isTaskDependency(existing) && (existing.properties || {}).status !== "ready") {
-      res.status(409).json({ error: "Complete the prerequisite before completing this blocked task" });
-      return;
+  // One server path closes a Waiting item and its linked task. The HTTP route and
+  // Slack's 👥 -> ✅ lifecycle both call this function, so reminders, timing, task
+  // completion, and the Waiting record cannot drift between those two surfaces.
+  async function completeWaitingItem({
+    itemId, completedAt: requestedCompletedAt, completedBy = "waiting",
+    linkedTaskRef: requestedLinkedTaskRef = null, req = null,
+    userId: knownUserId, workspaceId: knownWorkspaceId,
+    broadcastAction = "waiting-completed",
+  }) {
+    const existing = await blockDB.getBlockIncludingDeleted(itemId);
+    if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") {
+      throw clientError("Waiting item not found", 404);
     }
-    const completedAt = String(req.body && req.body.completedAt || new Date().toISOString());
-    if (Number.isNaN(new Date(completedAt).getTime())) { res.status(400).json({ error: "completedAt must be a valid timestamp" }); return; }
+    const workspaceId = knownWorkspaceId !== undefined ? knownWorkspaceId : req && req.workspaceId;
+    assertBlockOwnership(existing, workspaceId);
+    if (waitingItems.isTaskDependency(existing) && (existing.properties || {}).status !== "ready") {
+      throw clientError("Complete the prerequisite before completing this blocked task", 409);
+    }
+    const completedAt = String(requestedCompletedAt || new Date().toISOString());
+    if (Number.isNaN(new Date(completedAt).getTime())) throw clientError("completedAt must be a valid timestamp");
 
     const properties = waitingItems.normalizeProperties({
       status: "done",
       completedAt,
-      completedBy: "waiting",
+      completedBy,
       snoozedUntil: null,
       checkInScheduledFor: null,
       checkInTaskId: null,
+      ...(requestedLinkedTaskRef ? { linkedBlockId: requestedLinkedTaskRef } : {}),
     }, existing.properties || {});
 
-    const linkedBlockId = String((existing.properties || {}).linkedBlockId || "").trim();
+    const linkedBlockId = String(requestedLinkedTaskRef || (existing.properties || {}).linkedBlockId || "").trim();
     let linkedTask = linkedBlockId
-      ? await blockDB.findUniqueLiveBlockByReference(linkedBlockId, req.workspaceId)
+      ? await blockDB.findUniqueLiveBlockByReference(linkedBlockId, workspaceId)
       : null;
     let updated;
     let blockIds = [existing.id];
     let dependencyTransitions = [];
     if (linkedTask && !linkedTask.deleted_at) {
-      assertBlockOwnership(linkedTask, req.workspaceId);
-      if (!isWorkTaskRow(linkedTask)) { res.status(400).json({ error: "Linked block is not a task" }); return; }
-      const { userId, workspaceId } = await resolveOwnerStrict(req);
+      assertBlockOwnership(linkedTask, workspaceId);
+      if (!isWorkTaskRow(linkedTask)) throw clientError("Linked block is not a task");
+      const owner = knownUserId !== undefined && knownWorkspaceId !== undefined
+        ? { userId: knownUserId, workspaceId: knownWorkspaceId }
+        : await resolveOwnerStrict(req);
+      const userId = owner.userId;
       const mutationId = `waiting:${existing.id}:${Date.parse(completedAt)}`;
       const result = await blockDB.setTaskCompletion({
         taskRef: linkedTask.id,
@@ -2647,13 +2701,192 @@ module.exports = function mount(app, ctx) {
       linkedTask = null;
       updated = await blockDB.updateBlock(existing.id, { properties });
     }
+    await syncSlack(updated);
     // The item and its linked task are closed above; the reminders were never anyone's
     // job. `trigger` is the item, so the cascade skips it and takes only what is left.
     const cascaded = await cascadeWaitingCompletion({
       req, trigger: { id: existing.id }, itemId: existing.id, completedAt,
+      userId: knownUserId, workspaceId: knownWorkspaceId,
     });
-    broadcast("blocks-changed", { action: "waiting-completed", blockIds: blockIds.concat(cascaded.blockIds), dependencyTransitions, date: linkedTask && linkedTask.date || null }, req.workspaceId);
+    broadcast("blocks-changed", { action: broadcastAction, blockIds: blockIds.concat(cascaded.blockIds), dependencyTransitions, date: linkedTask && linkedTask.date || null }, workspaceId);
     return { ok: true, status: "completed", item: updated, task: linkedTask, dependencyTransitions };
+  }
+
+  // Reopening intentionally does not resurrect completed reminders. It reverses
+  // only the Waiting item and its durable work row, matching the cluster rule above.
+  async function reopenWaitingItem({
+    itemId, taskRef, reopenedAt: requestedReopenedAt,
+    userId, workspaceId, broadcastAction = "waiting-reopened",
+  }) {
+    const existing = await blockDB.getBlockIncludingDeleted(itemId);
+    if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") {
+      throw clientError("Waiting item not found", 404);
+    }
+    assertBlockOwnership(existing, workspaceId);
+    const linkedTask = await blockDB.findUniqueLiveBlockByReference(taskRef, workspaceId);
+    if (!linkedTask || linkedTask.deleted_at) throw clientError("Linked task not found", 404);
+    assertBlockOwnership(linkedTask, workspaceId);
+    if (!isWorkTaskRow(linkedTask)) throw clientError("Linked block is not a task");
+
+    const reopenedAt = String(requestedReopenedAt || new Date().toISOString());
+    if (Number.isNaN(new Date(reopenedAt).getTime())) throw clientError("reopenedAt must be a valid timestamp");
+    const properties = waitingItems.normalizeProperties({ status: "open" }, existing.properties || {});
+    delete properties.completedAt;
+    delete properties.completedBy;
+    delete properties.doneAt;
+    delete properties.done;
+    delete properties.completed;
+
+    const mutationId = `waiting-reopen:${existing.id}:${Date.parse(reopenedAt)}`;
+    const result = await blockDB.setTaskCompletion({
+      taskRef: linkedTask.id,
+      completed: false,
+      completedAt: null,
+      taskDate: linkedTask.date || null,
+      mutationId,
+      expectedRevision: (linkedTask.properties || {})._completionRevision || null,
+      userId,
+      workspaceId,
+      companionUpdates: [{ id: existing.id, properties, expectedUpdatedAt: existing.updated_at }],
+    });
+    await normalizeCompletionWork(result, false, {
+      atMs: Date.parse(reopenedAt), actor: userId ? `dcc:${userId}` : "dcc", mutationId,
+    });
+    const updated = (result.companionBlocks || []).find(row => row.id === existing.id) || existing;
+    for (const row of result.affectedTasks || []) await syncSlack(row);
+    await syncSlack(updated);
+    broadcast("blocks-changed", {
+      action: broadcastAction,
+      blockIds: result.broadcastIds || [existing.id, linkedTask.id],
+      dependencyTransitions: result.dependencyTransitions || [],
+      date: linkedTask.date || null,
+    }, workspaceId);
+    return { ok: true, status: "reopened", item: updated, task: result.task || linkedTask };
+  }
+
+  // A Waiting deletion owns its generated reminders and delegate-only work task.
+  // Store those row ids before deletion so removing and restoring the Slack
+  // reaction applies one reversible mutation to the whole cluster.
+  async function deleteWaitingCluster({
+    itemId, deletedAt: requestedDeletedAt, workspaceId,
+    broadcastAction = "delegated-delete",
+  }) {
+    const existing = await blockDB.getBlockIncludingDeleted(itemId);
+    if (!existing || (existing.properties || {}).kind !== "delegated_item") {
+      throw clientError("Waiting item not found", 404);
+    }
+    assertBlockOwnership(existing, workspaceId);
+    if (existing.deleted_at) return { item: existing, tasks: [], blockIds: [existing.id] };
+
+    const deletedAtMs = Number.isFinite(Date.parse(requestedDeletedAt))
+      ? Date.parse(requestedDeletedAt)
+      : Date.now();
+    const clusterTasks = typeof blockDB.getWaitingClusterTasks === "function"
+      ? await blockDB.getWaitingClusterTasks(existing.id, workspaceId)
+      : [];
+    const linkedRef = String((existing.properties || {}).linkedBlockId || "").trim();
+    if (linkedRef && !clusterTasks.some(row => String(row.id) === linkedRef)) {
+      const linked = await blockDB.findUniqueLiveBlockByReference(linkedRef, workspaceId);
+      if (linked && (linked.properties || {}).source === "slack-delegate-completion") clusterTasks.push(linked);
+    }
+    const tasks = [...new Map(clusterTasks
+      .filter(row => row && !row.deleted_at && (row.properties || {}).source !== "slack-bookmark")
+      .map(row => [String(row.id), row])).values()];
+    for (const task of tasks) {
+      assertBlockOwnership(task, workspaceId);
+      if ((task.properties || {}).startedAt) {
+        await pauseWork({
+          block: task,
+          atMs: deletedAtMs,
+          actor: "waiting-delete",
+          actionId: `waiting-delete:${existing.id}:${task.id}:${deletedAtMs}`,
+        });
+      }
+    }
+
+    const properties = {
+      ...(existing.properties || {}),
+      slackDelegateChangedAt: new Date(deletedAtMs).toISOString(),
+      slackDelegateClusterIds: tasks.map(row => row.id),
+    };
+    await blockDB.batchOp([
+      { op: "update", id: existing.id, properties },
+      ...tasks.map(row => ({ op: "delete", id: row.id })),
+      { op: "delete", id: existing.id },
+    ]);
+    const deletedItem = { ...existing, properties, deleted_at: new Date(deletedAtMs).toISOString() };
+    await syncSlack(deletedItem);
+    for (const task of tasks) await syncSlack({ ...task, deleted_at: deletedItem.deleted_at });
+    const blockIds = [existing.id, ...tasks.map(row => row.id)];
+    broadcast("blocks-changed", { action: broadcastAction, blockIds }, workspaceId);
+    return { item: deletedItem, tasks, blockIds };
+  }
+
+  async function restoreWaitingCluster({
+    itemId, restoredAt: requestedRestoredAt, workspaceId,
+    broadcastAction = "slack-delegate-restore",
+  }) {
+    const existing = await blockDB.getBlockIncludingDeleted(itemId);
+    if (!existing || (existing.properties || {}).kind !== "delegated_item") {
+      throw clientError("Waiting item not found", 404);
+    }
+    assertBlockOwnership(existing, workspaceId);
+    const restoredAtMs = Number.isFinite(Date.parse(requestedRestoredAt))
+      ? Date.parse(requestedRestoredAt)
+      : Date.now();
+    const clusterIds = Array.isArray((existing.properties || {}).slackDelegateClusterIds)
+      ? (existing.properties || {}).slackDelegateClusterIds.map(String)
+      : [];
+    const client = await pool.connect();
+    const restored = [];
+    try {
+      await client.query("BEGIN");
+      const item = existing.deleted_at
+        ? await blockDB.undeleteBlock(existing.id, client)
+        : existing;
+      const properties = {
+        ...(item.properties || {}),
+        slackDelegateChangedAt: new Date(restoredAtMs).toISOString(),
+      };
+      restored.push(await blockDB.updateBlock(item.id, { properties }, client));
+      for (const id of clusterIds) {
+        const row = await blockDB.getBlockIncludingDeleted(id, client, true);
+        if (!row || !row.deleted_at) continue;
+        const restoredRow = await blockDB.undeleteBlock(id, client);
+        const next = { ...(restoredRow.properties || {}) };
+        delete next.startedAt;
+        delete next.activeWorkSessionId;
+        delete next.startedBy;
+        restored.push(JSON.stringify(next) === JSON.stringify(restoredRow.properties || {})
+          ? restoredRow
+          : await blockDB.updateBlock(id, { properties: next }, client));
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    for (const row of restored) await syncSlack(row);
+    const blockIds = restored.map(row => row.id);
+    broadcast("blocks-changed", { action: broadcastAction, blockIds }, workspaceId);
+    return { item: restored.find(row => String(row.id) === String(existing.id)) || existing, tasks: restored.slice(1), blockIds };
+  }
+
+  ctx.completeWaitingItem = completeWaitingItem;
+  ctx.reopenWaitingItem = reopenWaitingItem;
+  ctx.deleteWaitingCluster = deleteWaitingCluster;
+  ctx.restoreWaitingCluster = restoreWaitingCluster;
+
+  // Finish the work itself, not merely the current check-in cycle. Close the
+  // Waiting record and complete its linked task too when one still exists.
+  app.post("/api/waiting-items/:id/complete", route(async (req) => {
+    return completeWaitingItem({
+      itemId: req.params.id,
+      completedAt: req.body && req.body.completedAt,
+      req,
+    });
   }));
 
   app.post("/api/waiting-items/:id/unblock", route(async (req, res) => {
@@ -2744,9 +2977,8 @@ module.exports = function mount(app, ctx) {
       broadcast("blocks-changed", { action: "delegated-delete", blockIds: [req.params.id].concat(affectedIds) }, req.workspaceId);
       return result;
     }
-    const result = await blockDB.deleteBlock(req.params.id);
-    broadcast("blocks-changed", { action: "delegated-delete", blockIds: [req.params.id].concat(affectedIds) }, req.workspaceId);
-    return result;
+    const result = await deleteWaitingCluster({ itemId: req.params.id, workspaceId: req.workspaceId });
+    return { id: req.params.id, deleted_at: result.item.deleted_at };
   }));
 
 };

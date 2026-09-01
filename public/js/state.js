@@ -673,6 +673,13 @@ function _clearTaskPinAndLock(ev){
     delete ev._pinnedStart;
     try{const pins=loadPinnedStarts();delete pins[ev.id];savePinnedStarts(pins)}catch(e){}
   }
+  // The auto-slot paths that call this (Move to Today, earliest-slot re-place) are the
+  // user asking to give the time BACK to the scheduler, so the hand-set intent goes too.
+  // Safe on a row that just moved days: persistRowProp resolves against the viewed day
+  // and returns null for a row that is no longer on it, so no write lands.
+  if(ev._userSetStart&&typeof _setUserSetStart==="function"){
+    try{_setUserSetStart(ev,ev.id,false)}catch(e){delete ev._userSetStart}
+  }
   if(ev._locked){
     delete ev._locked;
     try{const locks=new Set(loadLockedSet());locks.delete(ev.id);saveLockedSet([...locks])}catch(e){}
@@ -691,7 +698,12 @@ function _placeTaskAtNextTodaySlot(id){
 
   const roundTo15=m=>Math.ceil(m/15)*15;
   const active=scheduled.find(isActive);
-  const cursor=roundTo15(active?pt(active.end):now());
+  // Floored by the user's start of day, exactly like the non-today arm below
+  // (_placeTaskAtEarliestCurrentDateSlot). state.js:1631 picks between the two on
+  // isActualToday, so clamping only one would mean "next free slot" respects the
+  // floor on every day EXCEPT today -- which is the day it matters most.
+  const _floor=(typeof DCC!=="undefined"&&DCC.dayStartMinutes)?DCC.dayStartMinutes(__state):0;
+  const cursor=Math.max(_floor,roundTo15(active?pt(active.end):now()));
   const blockers=(typeof _meetingBlocks==="function")?_meetingBlocks().slice():[];
   const startMin=(typeof _freeStart==="function")?_freeStart(cursor,d,blockers):cursor;
   const startStr=fmt(startMin);
@@ -725,7 +737,10 @@ function _placeTaskAtEarliestCurrentDateSlot(id){
   if(typeof saveDeletedState==="function")saveDeletedState();
 
   const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
-  const startMin=blocks.length?pt(blocks[0].start):7*60;
+  // Floor, not a source: a 05:00 first block still bounds the day, it just stops
+  // being where "earliest slot" lands. recalcTimes() below re-flows collisions.
+  const _floor=(typeof DCC!=="undefined"&&DCC.dayStartMinutes)?DCC.dayStartMinutes(__state):0;
+  const startMin=Math.max(_floor,blocks.length?pt(blocks[0].start):7*60);
   moved.start=fmt(startMin);
   moved.end=fmt(startMin+d);
   scheduled.unshift(moved);
@@ -761,6 +776,7 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
     item.start=pinned;
     item.end=fmt(pt(pinned)+(dur(ev)||30));
     item._pinnedStart=pinned;
+    item._userSetStart=true;   // persistAddedTask stamps `userSetStart` on the new row
   }
   let block=null;
   try{
@@ -1050,7 +1066,10 @@ async function unscheduleRow(blockId,opts){
   // and renders the row untimed either way, so leaving it behind just means the next
   // reader has to know to ignore it. _pinnedStart would additionally survive a round
   // trip and pin the task to a stale slot the moment it is scheduled again.
-  delete props.start;delete props.end;delete props._pinnedStart;
+  // `userSetStart` goes with the start it describes. Keeping it would re-assert a
+  // hand-set time the row no longer carries, and reflow holds a user-set start
+  // unconditionally -- so a stale flag is worse here than a stale `_pinnedStart` was.
+  delete props.start;delete props.end;delete props._pinnedStart;delete props.userSetStart;
   return _writeRowDate(blockId,block,props,null);
 }
 
@@ -1648,7 +1667,10 @@ async function rescheduleTaskToDate(id,targetDate,opts){
         :await _computeRescheduleSlot(ev,targetDate);
       let result=null;
       try{
-        result=await window.blockStore.rescheduleBlock(srcBlock.id,targetDate,{parentStart:slot&&slot.start,parentEnd:slot&&slot.end,fromDate});
+        // `userSetStart:!!pinned` is the whole distinction the server cannot make for
+        // itself: BOTH branches above send a parentStart, but only the pinned one came
+        // from a person picking a time.
+        result=await window.blockStore.rescheduleBlock(srcBlock.id,targetDate,{parentStart:slot&&slot.start,parentEnd:slot&&slot.end,fromDate,userSetStart:!!pinned});
       }catch(e){
         // blockStore stamps e.permanent using its single permanence rule
         // (400/404 final; 401/403 auth blips and 5xx/network stay buffered).

@@ -42,6 +42,81 @@
   // Resolved from the block list returned by loadDay() so callsites can look up
   // the cached root reliably, not a naive "day-root-<date>" that misses.
   let _currentDayRootId = null;
+  let _syncCursor = null;
+  let _syncWorkspaceId = null;
+  let _syncPullPromise = null;
+
+  function syncCursorKey(workspaceId) {
+    return "dcc-sync-cursor:" + String(workspaceId || "default");
+  }
+
+  function saveSyncCursor(workspaceId, cursor) {
+    _syncWorkspaceId = workspaceId || _syncWorkspaceId;
+    _syncCursor = Number(cursor);
+    if (!Number.isSafeInteger(_syncCursor) || _syncCursor < 0) _syncCursor = null;
+    if (_syncWorkspaceId && _syncCursor !== null) {
+      try { localStorage.setItem(syncCursorKey(_syncWorkspaceId), String(_syncCursor)); } catch (e) {}
+    }
+  }
+
+  function hydrateSyncSnapshot(snapshot) {
+    if (!snapshot || !Array.isArray(snapshot.blocks) || !Array.isArray(snapshot.globals)) return null;
+    _currentDate = snapshot.date || _currentDate;
+    _currentDayRootId = null;
+    _dayCache.clear();
+    _globalCache.clear();
+    for (const block of snapshot.globals) cacheSet(block);
+    for (const block of snapshot.blocks) cacheSet(block);
+    const root = snapshot.blocks.find((block) => block.type === "day_root");
+    if (root) _currentDayRootId = root.id;
+    saveSyncCursor(snapshot.workspaceId, snapshot.cursor);
+    return snapshot.blocks;
+  }
+
+  async function pullSyncChanges(dateStr) {
+    if (!window.DCC_DELTA_SYNC_ENABLED || !dateStr) return null;
+    if (_syncPullPromise) return _syncPullPromise;
+    _syncPullPromise = (async () => {
+      if (_syncCursor === null || _currentDate !== dateStr) {
+        const snapshot = await apiGet("/api/sync/bootstrap?date=" + encodeURIComponent(dateStr));
+        hydrateSyncSnapshot(snapshot);
+        if (snapshot.dayState) window.dispatchEvent(new CustomEvent("dcc-sync-day-state", { detail: snapshot.dayState }));
+        return { ...snapshot, bootstrap: true };
+      }
+      if (hasPendingWritesNow()) return null;
+      let combined = { blocks: [], deletedBlockIds: [], dayState: null, hasMore: false, cursor: _syncCursor };
+      do {
+        let delta;
+        try {
+          delta = await apiGet("/api/sync/pull?date=" + encodeURIComponent(dateStr) + "&cursor=" + encodeURIComponent(_syncCursor));
+        } catch (error) {
+          if (!error || error.status !== 410) throw error;
+          const snapshot = await apiGet("/api/sync/bootstrap?date=" + encodeURIComponent(dateStr));
+          hydrateSyncSnapshot(snapshot);
+          if (snapshot.dayState) window.dispatchEvent(new CustomEvent("dcc-sync-day-state", { detail: snapshot.dayState }));
+          return { ...snapshot, bootstrap: true };
+        }
+        for (const id of delta.deletedBlockIds || []) {
+          cacheDelete(id);
+          _tombstones.add(id);
+        }
+        for (const block of delta.blocks || []) cacheSet(block);
+        saveSyncCursor(_syncWorkspaceId, delta.cursor);
+        combined = {
+          blocks: combined.blocks.concat(delta.blocks || []),
+          deletedBlockIds: combined.deletedBlockIds.concat(delta.deletedBlockIds || []),
+          dayState: delta.dayState || combined.dayState,
+          hasMore: !!delta.hasMore,
+          cursor: delta.cursor,
+        };
+      } while (combined.hasMore && !hasPendingWritesNow());
+      if (combined.dayState) {
+        window.dispatchEvent(new CustomEvent("dcc-sync-day-state", { detail: combined.dayState }));
+      }
+      return combined;
+    })().finally(() => { _syncPullPromise = null; });
+    return _syncPullPromise;
+  }
 
   // ── Save Status Helpers ──
   function setSaving() {
@@ -1196,13 +1271,16 @@
     // of subtree size, one broadcast the origin client ignores (own clientId) — so
     // no snap-back, no duplication, no stranded children. The moved blocks now live
     // on targetDate, so evict them from the current-day cache.
-    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate, placement } = {}) {
+    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate, placement, userSetStart } = {}) {
       const previous = _rescheduleChains.get(blockId) || Promise.resolve();
       const run = previous.catch(() => {}).then(async () => {
       setSaving();
       // fromDate: the viewed origin day, used by the server when the block row
       // itself is undated (task-bar pending_tasks) so the move can't 400.
-      const body = { targetDate, parentStart, parentEnd, fromDate, placement };
+      // userSetStart: TRUE only when a human named the landing time. A timed placement
+      // alone cannot say that — an auto-slotted cross-day move sends parentStart too —
+      // and the flag is what makes the client cascade leave the start alone.
+      const body = { targetDate, parentStart, parentEnd, fromDate, placement, userSetStart };
       const walId = walPush({ op: "reschedule", id: blockId, data: body });
       try {
         let result;
@@ -1295,6 +1373,11 @@
       let entry = null;
       const load = (async () => {
         try {
+          if (window.DCC_DELTA_SYNC_ENABLED) {
+            const delta = await pullSyncChanges(dateStr);
+            if (!delta) return null;
+            return [..._dayCache.values()];
+          }
           const blocks = await apiGet("/api/blocks?date=" + dateStr);
           // A different date won, or a write started after this GET. In either case,
           // applying the response would replace newer cache state with an old snapshot.
@@ -1327,6 +1410,9 @@
 
     // Load global blocks (unified blocks without dates + legacy global types)
     async loadGlobals() {
+      if (window.DCC_DELTA_SYNC_ENABLED && _syncCursor !== null) {
+        return [..._globalCache.values()];
+      }
       const types = ["block", ...LEGACY_GLOBAL_TYPES].join(",");
       const allowInitialHydration = _globalCache.size === 0;
       if (hasPendingWritesNow() && !allowInitialHydration) return null;
@@ -1498,6 +1584,10 @@
       if (typeof window.notifyReadyTaskDependencies === "function") {
         window.notifyReadyTaskDependencies(event.dependencyTransitions || []);
       }
+      if (window.DCC_DELTA_SYNC_ENABLED && _currentDate) {
+        _mutationGeneration++;
+        return pullSyncChanges(_currentDate);
+      }
       // A row-level reconciliation that starts after a full-day GET must win. Bump
       // the same generation used by loadDay so the older snapshot cannot clear and
       // replace the just-refreshed foreign row when it resolves later.
@@ -1538,6 +1628,7 @@
     async handleDccStateChanged(event) {
       // Only refresh if it's for the current date
       if (event.date === _currentDate || !event.date) {
+        if (window.DCC_DELTA_SYNC_ENABLED && _currentDate) return pullSyncChanges(_currentDate);
         return await this.loadDccState(event.date || _currentDate);
       }
       return null;
@@ -1545,6 +1636,8 @@
 
     // ── WAL ──
     replayWAL,
+    hydrateSyncSnapshot,
+    pullSyncChanges,
 
     // Passive refreshes must not replace optimistic client state with a server snapshot
     // while a write is queued, debounced, active, or replaying.
@@ -1565,7 +1658,8 @@
         globalCacheSize: _globalCache.size,
         walEntries: walGet().length,
         deadLetterEntries: (() => { try { return JSON.parse(localStorage.getItem(WAL_DEAD_LETTER_KEY) || "[]").length; } catch { return 0; } })(),
-        completionMetrics: { ..._completionMetrics }
+        completionMetrics: { ..._completionMetrics },
+        syncCursor: _syncCursor,
       };
     }
   };

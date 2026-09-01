@@ -80,6 +80,15 @@ boot since the filesystem is ephemeral.
   follow the `urgency.js` single-source pattern.
 - **Boy-scout CSS tokens**: any PR touching a CSS block converts that block's
   hard-coded sizes to the tokens in `public/css/tokens.css` (once it lands).
+- **Earliest auto-placeable minute is ONE function**: `DCC.dayStartMinutes`
+  (`public/js/day-context.js`), the user's start of day. Four slot engines exist
+  (`day-context.js` `findSlot`, `responsibility-store.js` `loadDaySlottingContext`,
+  `drag.js` `recalcTimes` + `recalcTimesTagAware`, `glymphatic-brief.js`
+  `gbPlanTasks`) and every one of them clamps `max(floor, derived)` through that
+  helper. It is a floor, never a source: schedule blocks still bound the day.
+  Never re-derive it locally — that is the drift `day-context.js` was created to
+  end. Explicit intent outranks it: `properties.userSetStart` rows are held by
+  `_holdsTime` and are exempt.
 
 ## Budget Tank (`budget-store.js`, `routes/budget.js`, `public/js/budget.js`)
 
