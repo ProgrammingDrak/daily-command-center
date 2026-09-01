@@ -446,29 +446,6 @@ test("quick-task: a lost key race reports skipped_duplicate, not a 500 and not a
   assert.equal(created.length, 0);
 });
 
-test("brief/log-done: a lost key race follows the WINNER's date into the ledger key", async () => {
-  // The double-credit trap A2 documented, reached through the race instead of the
-  // lookup: keying the ledger to the POSTED date would mint a second credit row for a
-  // block already credited under its own date.
-  const winner = { id: "winner-ld", date: "2026-07-28", deleted_at: null, properties: { title: "Won" } };
-  const { app, credits } = mountDcc({ dedupeCreate: winner });
-  const { status, json } = await call(app, "POST", "/api/dcc/brief/log-done", { title: "Ship it", date: "2026-07-30", idempotency_key: "day-review:2026-07-30:x" });
-
-  assert.equal(status, 200);
-  assert.equal(json.status, "skipped_duplicate");
-  assert.equal(credits.length, 1);
-  assert.equal(credits[0].source_key, "2026-07-28:winner-ld", "keyed to the row's own day, not the posted one");
-});
-
-test("brief/push-next: a lost key race reports skipped_duplicate", async () => {
-  const winner = { id: "winner-pn", date: "2026-07-31", deleted_at: null, properties: { title: "Won" } };
-  const { app, created } = mountDcc({ dedupeCreate: winner });
-  const { json } = await call(app, "POST", "/api/dcc/brief/push-next", { title: "Tomorrow", date: "2026-07-31", idempotency_key: "day-review-followup:2026-07-31:y" });
-  assert.equal(json.status, "skipped_duplicate");
-  assert.equal(json.block.id, "winner-pn");
-  assert.equal(created.length, 0);
-});
-
 // ── Scope: a dedupe answer is a row the caller did not supply ─────────────────
 
 const sweepItem = (key) => ({ type: "block", properties: { kind: "sweep_suite_task", title: "Sweep thing", idempotency_key: key } });

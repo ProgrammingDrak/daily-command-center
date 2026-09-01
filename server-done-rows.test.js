@@ -2,11 +2,11 @@
 // done row instead of vanishing.
 //
 // The gap: three writers mark completion on the block row itself —
-// routes/dcc.js (Day in Review's Approve), routes/slack-events.js (the ✅ reaction)
+// routes/slack-events.js (the ✅ reaction)
 // and the MCP tools — all writing status:"done"/done:true/completedAt. The client
 // only ever read completions out of day_root._done, and the itinerary fold
 // EXCLUDED status==="done", so those tasks were dropped from the list entirely: no
-// row, no checkmark, no points line, and Day in Review's Approve looked broken.
+// row, no checkmark, no points line, and the ✅ reaction looked broken.
 //
 // Two halves are under test:
 //   1. the fold seeds manualDone/doneAt from the row (persistence.js)
@@ -45,7 +45,7 @@ function seed(props, existingDoneAt) {
 test("a row marked done by the server seeds manualDone", () => {
   assert.deepEqual(seed({ status: "done" }).done, ["t1"]);
   assert.deepEqual(seed({ done: true }).done, ["t1"]);
-  // Day in Review writes all three flags; any one of them is enough.
+  // A server-side completion writes all three flags; any one of them is enough.
   assert.deepEqual(seed({ status: "done", done: true, completed: true }).done, ["t1"]);
 });
 

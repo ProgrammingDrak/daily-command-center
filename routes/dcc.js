@@ -4,7 +4,7 @@
 const createMaterializeGuard = require("../lib/materialize-guard");
 // Pure helpers come off the module, persistence comes off the factory — the layering
 // lib/task-timing.js and responsibility-store.js both state in their headers.
-const { assertNotResurrecting, dedupeStatus } = createMaterializeGuard;
+const { dedupeStatus } = createMaterializeGuard;
 const triageSuppressions = require("../triage-suppressions");
 
 module.exports = function mount(app, ctx) {
@@ -13,7 +13,7 @@ module.exports = function mount(app, ctx) {
     dccIntelligence, getDayFilePath, getTodayStr, isValidDate, meetingAutomation, meetingIdentity, meetingSignals,
     readDayStateMirror,
     meetingMaterializer, previousDateStr,
-    readJSON, readTriageSuppressionsForWorkspace, resolveOwnerLenient, resolveOwnerStrict, slotStore, writeJSON,
+    readJSON, readTriageSuppressionsForWorkspace, resolveOwnerLenient, resolveOwnerStrict, writeJSON,
   } = ctx;
   const materializeGuard = createMaterializeGuard({ blockDB });
 
@@ -121,7 +121,8 @@ module.exports = function mount(app, ctx) {
     }
   });
 
-  // Shared idempotency lookup for the brief's Day-in-Review writes and quick-task:
+  // Shared idempotency lookup for quick-task (the Day-in-Review writers that used
+  // to share it were removed 2026-08-20):
   // does a block carrying this idempotency_key already exist? Returns the row (live
   // OR tombstoned) or null; callers branch on deleted_at via dedupeStatus.
   //
@@ -311,7 +312,7 @@ module.exports = function mount(app, ctx) {
     // "glymphatic_brief" is deliberately NOT in this list. A publish owns the brief's
     // authored content but not the user's answers about it, and a blind replace here
     // erased `decisions` / `decision_log` on every nightly publish -- so every
-    // Day-in-Review card the user had already approved or dismissed went back to
+    // front-page proposal the user had already accepted or dropped went back to
     // pending. It is merged below instead, the same way `triage` is.
     const DCC_SECTIONS = ["schedule", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "meta", "report_card", "orchestrator", "mutations", "completions", "personal", "meetings"];
     // "pushed" is LEGACY as of C3 (the pushed subsystem is deleted; a push is a real move
@@ -663,7 +664,7 @@ module.exports = function mount(app, ctx) {
   // Postgres row. `saveDccState` is NOT a plain `DO UPDATE SET state_json =
   // EXCLUDED.state_json` any more: its ON CONFLICT clause carves out
   // `glymphatic_brief.decisions` and `.decision_log` and COALESCEs the STORED values back
-  // over the incoming ones, so a publish cannot erase a Day-in-Review answer. Everything
+  // over the incoming ones, so a publish cannot erase a front-page decision. Everything
   // else in state_json is still replaced wholesale. That
   // is what made `server.js buildDayResponse` unfixable on its own, and it is recorded in a
   // comment above that function: with the file as base, the skeleton `ensureSkeletonDays`
@@ -792,43 +793,12 @@ module.exports = function mount(app, ctx) {
   // durable day-state data. This is the seed of M2 actuals: every reviewed task
   // has a decision record even before outcome controls land. Morning scheduling
   // reads decisions to build the next day's itinerary.
-  // A Day in Review packet lives in its own day's row and, for one day, in the next
-  // day's too (that is how "yesterday's review" shows up on today's screen). The next
-  // night's run overwrites the borrowed row, so a tab left open across that boundary
-  // posts yesterday's item ids at a row that now holds a different packet — and the
-  // user gets a 400 they cannot act on for a button they can still see. Walking the
-  // recent rows for the packet that actually owns the id settles the decision where it
-  // belongs instead. Probe-only: it never mints a row for a day that has none.
-  const DECISION_LOOKBACK_DAYS = 7;
-  async function saveDecisionOnOwningDay(day, decision, userId, workspaceId, firstError) {
-    const tried = new Set([day]);
-    const candidates = [];
-    if (firstError && firstError.reviewDate) candidates.push(firstError.reviewDate);
-    let cursor = day;
-    for (let back = 0; back < DECISION_LOOKBACK_DAYS; back++) {
-      cursor = previousDateStr(cursor);
-      candidates.push(cursor);
-    }
-    for (const candidate of candidates) {
-      if (!candidate || tried.has(candidate) || !isValidDate(candidate)) continue;
-      tried.add(candidate);
-      try {
-        const result = await blockDB.saveDccBriefDecision(candidate, decision, userId, workspaceId, null, { probe: true });
-        return { date: candidate, result };
-      } catch (error) {
-        if (error && error.code === "packet_mismatch") continue;
-        throw error;
-      }
-    }
-    return null;
-  }
-
   app.post("/api/dcc/brief/decision", async (req, res) => {
     try {
       const { date, task_id, action, time } = req.body || {};
-      const VALID = new Set(["accept", "schedule", "backlog", "drop", "dismiss", "reset", "approve", "push-next"]);
+      const VALID = new Set(["accept", "schedule", "backlog", "drop", "reset"]);
       if (typeof task_id !== "string" || !task_id.trim() || task_id.length > 500 || !VALID.has(action)) {
-        return res.status(400).json({ error: "Expected { task_id, action: accept|schedule|backlog|drop|dismiss|reset|approve|push-next }" });
+        return res.status(400).json({ error: "Expected { task_id, action: accept|schedule|backlog|drop|reset }" });
       }
       if (date != null && !isValidDate(date)) return res.status(400).json({ error: "Invalid date" });
       const normalizedTime = time == null || time === "" ? null : time;
@@ -838,194 +808,24 @@ module.exports = function mount(app, ctx) {
       const day = date || new Date().toISOString().slice(0, 10);
       const { userId, workspaceId } = resolveOwnerLenient(req);
       const decision = { taskId: task_id.trim(), action, time: normalizedTime };
-      let settledDay = day;
-      let result;
+      const result = await blockDB.saveDccBriefDecision(day, decision, userId, workspaceId, buildSkeletonState(day));
       try {
-        result = await blockDB.saveDccBriefDecision(day, decision, userId, workspaceId, buildSkeletonState(day));
-      } catch (error) {
-        if (!error || error.code !== "packet_mismatch") throw error;
-        const owner = await saveDecisionOnOwningDay(day, decision, userId, workspaceId, error);
-        if (!owner) throw error;
-        settledDay = owner.date;
-        result = owner.result;
-        console.log(`[brief-decision] ${decision.taskId} settled on ${settledDay} (posted at ${day})`);
-      }
-      try {
-        writeJSON(getDayFilePath(settledDay), result.state);
+        writeJSON(getDayFilePath(day), result.state);
         writeJSON(DAY_STATE_FILE, result.state);
       } catch (mirrorError) {
         console.error("[brief-decision] file mirror failed (db save succeeded):", mirrorError.message);
       }
-      broadcast("dcc-state-changed", { source: "brief-decision", date: settledDay }, workspaceId);
+      broadcast("dcc-state-changed", { source: "brief-decision", date: day }, workspaceId);
       res.json({
         ok: true,
-        date: settledDay,
+        date: day,
         task_id: task_id.trim(),
         action,
-        changed: result.changed,
-        ...(settledDay === day ? {} : { requested_date: day })
+        changed: result.changed
       });
     } catch (e) {
       console.error("[brief decision] failed:", e);
       res.status(e.status || 500).json({ error: e.message || "decision save failed" });
-    }
-  });
-
-  // Day-in-Review "Approve": Drake confirms an inferred did-item ("yeah I did
-  // that"), and it lands on the itinerary as an ALREADY-COMPLETED task that banks
-  // slot points. Session-scoped on purpose (NOT in DCC_ENDPOINTS) so it runs as
-  // the logged-in user — slot credit keys off req.session identity. Composes the
-  // three primitives the app already has (create block, mark done, credit points)
-  // the way dcc_task_ops --complete does, but server-side. Idempotent on
-  // idempotency_key (block) and on `<date>:<block_id>` (points ledger), so a
-  // re-approve or a re-published brief neither duplicates the task nor double-pays.
-  app.post("/api/dcc/brief/log-done", async (req, res) => {
-    try {
-      const body = req.body || {};
-      const title = String(body.title || "").trim();
-      if (!title) return res.status(400).json({ error: "Missing title" });
-      const date = isValidDate(body.date) ? body.date : getTodayStr();
-      const { userId, workspaceId } = await resolveOwnerStrict(req);
-      const idemKey = body.idempotency_key || body.idempotencyKey || null;
-      const minutes = Math.max(1, Math.round(Number(body.minutes || body.duration || body.durationMinutes || body.estimatedMinutes || 30)));
-      const start = (typeof body.start === "string" && /^\d{2}:\d{2}$/.test(body.start)) ? body.start : null;
-      const tags = Array.isArray(body.tags) ? body.tags : [];
-      const nowIso = new Date().toISOString();
-
-      const existing = await findBriefBlock(workspaceId, idemKey);
-      // A tombstoned match stops here, BEFORE the credit below. Previously a deleted
-      // match fell through as a plain duplicate and still ran earnTaskCredit against
-      // the dead row's id: harmless when the task was credited before it was deleted
-      // (ON CONFLICT absorbs the repeat), but real points for a task the user removed
-      // when it was not. Returning the row id keeps the caller idempotent either way.
-      if (assertNotResurrecting(existing).skip) {
-        return res.json({ ok: true, date, status: dedupeStatus(existing), block: { id: existing.id, title }, credit: null });
-      }
-      let blockId, duplicate = false;
-      // effectiveDate follows the ROW, not the request. The lookup above is date-blind
-      // now, so a live match can live on a different date than the one being posted, and
-      // when it does the row's own day is the authoritative one for EVERY consumer below:
-      //   - the ledger key is `<date>:<blockId>`, so the request date would mint a SECOND
-      //     credit row for a block already credited under its own date — a silent
-      //     double-credit of exactly the kind this project has spent two phases unpicking
-      //   - the broadcast tells open tabs which day to reconcile; naming the posted day
-      //     leaves the completed row invisible until someone navigates to its real day
-      //   - the response tells the caller where the item landed, which it uses to build
-      //     its next request
-      // Applying this to the ledger alone would be worse than not applying it at all: the
-      // next reader would reasonably assume the row's date won everywhere. Inert today
-      // (`day-review:<date>:` keys embed the date, and it equals `date` on the create
-      // path), and live the moment a date-blind key vocabulary is pointed here.
-      // An undated row falls back to the request date rather than keying `null:<id>`.
-      let effectiveDate = date;
-      if (existing) {
-        blockId = existing.id;
-        duplicate = true;
-        if (existing.date) effectiveDate = existing.date;
-      } else {
-        const props = {
-          title,
-          status: "done", done: true, completed: true,
-          kind: body.kind || "task", type: body.type || "task",
-          estimatedMinutes: minutes, durationMinutes: minutes,
-          priority: body.priority ? String(body.priority) : "Medium",
-          tags,
-          source: body.source || "day-review",
-          created_by: body.created_by || "day-review",
-          created_at: nowIso, completedAt: nowIso, doneAt: nowIso, completedBy: "day-review",
-        };
-        if (start) { props.start = start; props.end = addMinutesHHMM(start, minutes); }
-        if (idemKey) props.idempotency_key = idemKey;
-        if (body.notes) props.notes = body.notes;
-        if (Array.isArray(body.evidence)) props.evidence = body.evidence;
-        const created = await blockDB.createItineraryTask({ date, properties: props, userId, workspaceId, score: true });
-        blockId = created.id;
-        // A3: a concurrent writer can win the key between the lookup above and this
-        // insert, and db.createBlock resolves that by returning the live winner rather
-        // than raising. Take the SAME branch the lookup would have taken — including
-        // following the winner's own date, because the paragraph above applies with
-        // full force here: keying the ledger to the posted date would mint a second
-        // credit row for a block already credited under its own.
-        if (created._resolvedExisting) {
-          duplicate = true;
-          if (created.date) effectiveDate = created.date;
-        }
-      }
-
-      // Credit is idempotent on source_key; it also mirrors the key the in-app
-      // reconcile uses, so an approve here and a later reconcile dedupe.
-      let credit = null;
-      try {
-        credit = await slotStore.earnTaskCredit(workspaceId, userId, {
-          source_key: `${effectiveDate}:${blockId}`,
-          task_id: blockId, title, type: body.type || "task", tags,
-          duration_minutes: minutes, completed_at: nowIso,
-        });
-      } catch (e) {
-        console.error("[brief log-done] credit failed (non-fatal):", e.message);
-      }
-
-      // The THIRD dedupe-broadcast site in this file, and the one that legitimately
-      // differs from quick-task and push-next: even when no block row changed, this
-      // endpoint may have just awarded slot credit, and open tabs need to hear about
-      // that. So the condition is "something happened", not "a row was created" —
-      // announce on a real create, or when earnTaskCredit reports a fresh award.
-      if (!duplicate || (credit && credit.awarded)) {
-        broadcast("blocks-changed", { action: "brief-log-done", blockIds: [blockId], date: effectiveDate }, workspaceId);
-      }
-      res.json({
-        ok: true, date: effectiveDate,
-        status: duplicate ? "skipped_duplicate" : "created",
-        block: { id: blockId, title },
-        credit: credit ? { awarded: !!credit.awarded, credits: credit.credits || 0 } : null,
-      });
-    } catch (e) {
-      console.error("[brief log-done] failed:", e);
-      res.status(e.status || 500).json({ error: e.message || "log-done failed" });
-    }
-  });
-
-  // Day-in-Review "Push to tomorrow": an undone follow-up surfaced next to a
-  // did-item becomes a fresh OPEN task on a future date (default tomorrow).
-  // Session-scoped and tag-preserving (goes through the /api/blocks path, unlike
-  // quick-task which drops tags). Idempotent on idempotency_key.
-  app.post("/api/dcc/brief/push-next", async (req, res) => {
-    try {
-      const body = req.body || {};
-      const title = String(body.title || "").trim();
-      if (!title) return res.status(400).json({ error: "Missing title" });
-      // Default target is tomorrow (the "push it to the next day" case); callers
-      // normally pass an explicit date.
-      const tomorrowStr = new Date(new Date(`${getTodayStr()}T12:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10);
-      const date = isValidDate(body.date) ? body.date : tomorrowStr;
-      const { userId, workspaceId } = await resolveOwnerStrict(req);
-      const idemKey = body.idempotency_key || body.idempotencyKey || null;
-
-      const existing = await findBriefBlock(workspaceId, idemKey);
-      // Was a flat "skipped_duplicate" for both cases; a tombstone now says so, which
-      // is the difference between "you already pushed this" and "you deleted this".
-      if (existing) return res.json({ ok: true, date, status: dedupeStatus(existing), block: { id: existing.id, title } });
-
-      const minutes = Math.max(1, Math.round(Number(body.minutes || body.duration || body.durationMinutes || body.estimatedMinutes || 30)));
-      const props = {
-        title, status: "open",
-        kind: body.kind || "task", type: body.type || "task",
-        estimatedMinutes: minutes, durationMinutes: minutes,
-        priority: body.priority ? String(body.priority) : "Medium",
-        tags: Array.isArray(body.tags) ? body.tags : [],
-        source: body.source || "day-review-followup", created_by: "day-review",
-        created_at: new Date().toISOString(),
-      };
-      if (idemKey) props.idempotency_key = idemKey;
-      if (body.notes) props.notes = body.notes;
-      const created = await blockDB.createItineraryTask({ date, properties: props, userId, workspaceId, score: true });
-      if (!created._resolvedExisting) broadcast("blocks-changed", { action: "brief-push-next", blockIds: [created.id], date }, workspaceId);
-      // A3: same as quick-task — a lost key race is resolved in db.createBlock, and the
-      // honest status is the one the lookup above would have returned.
-      res.json({ ok: true, date, status: created._resolvedExisting ? dedupeStatus(created) : "created", block: { id: created.id, title } });
-    } catch (e) {
-      console.error("[brief push-next] failed:", e);
-      res.status(e.status || 500).json({ error: e.message || "push-next failed" });
     }
   });
 

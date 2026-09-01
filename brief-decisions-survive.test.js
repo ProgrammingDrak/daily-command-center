@@ -1,7 +1,7 @@
 "use strict";
 
 // The Day-in-Review regression: brief `pages` were carried forward across every
-// rebuild while `decisions` (the record of "I already approved/dismissed this card")
+// rebuild while `decisions` (the record of "I already accepted/dropped this proposal")
 // were dropped, so every nightly publish re-offered work the user had already
 // answered. Nothing asserted this before; the section shipped for months with
 // `['current','history']` as the only keys that ever reached disk.
@@ -10,16 +10,16 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const dccIntelligence = require("./dcc-intelligence");
 
-const DECISIONS = { "dr-session-abc": { action: "approved", decided_at: "2026-08-17T12:00:00.000Z" } };
+const DECISIONS = { "front-task-abc": { action: "accept", decided_at: "2026-08-17T12:00:00.000Z" } };
 
 function stateWithDecisions() {
   return {
     date: "2026-08-17",
     glymphatic_brief: {
-      current: { pages: [{ id: "day-review", items: [{ id: "dr-session-abc", title: "Log the session" }] }] },
+      current: { pages: [{ id: "front", tasks: [{ id: "front-task-abc", title: "Ship the thing" }] }] },
       history: [],
       decisions: { ...DECISIONS },
-      decision_log: [{ task_id: "dr-session-abc", action: "approved" }],
+      decision_log: [{ task_id: "front-task-abc", action: "accept" }],
     },
   };
 }
@@ -31,8 +31,8 @@ test("buildBrief carries decisions and decision_log forward", () => {
   assert.deepStrictEqual(rebuilt.decisions, DECISIONS, "decisions must survive a rebuild");
   assert.equal(rebuilt.decision_log.length, 1, "decision_log must survive a rebuild");
   // The asymmetry that made this so confusing: the items were always carried forward.
-  const page = rebuilt.current.pages.find((p) => p.id === "day-review");
-  assert.ok(page && page.items.length === 1, "the items were never the thing being lost");
+  const page = rebuilt.current.pages.find((p) => p.id === "front");
+  assert.ok(page && page.tasks.length === 1, "the tasks were never the thing being lost");
 });
 
 test("buildBrief returns an empty decisions map rather than undefined", () => {
@@ -46,7 +46,7 @@ test("buildBrief returns an empty decisions map rather than undefined", () => {
 
 test("mergeBriefForIngest keeps existing decisions when a publish omits them", () => {
   const merged = dccIntelligence.mergeBriefForIngest(
-    { current: { pages: ["old"] }, decisions: { ...DECISIONS }, decision_log: [{ task_id: "dr-session-abc" }] },
+    { current: { pages: ["old"] }, decisions: { ...DECISIONS }, decision_log: [{ task_id: "front-task-abc" }] },
     { current: { pages: ["fresh"] } }
   );
   assert.deepStrictEqual(merged.decisions, DECISIONS, "a publish must not erase the user's answers");
@@ -59,23 +59,23 @@ test("mergeBriefForIngest keeps existing decisions when a publish omits them", (
 // document a contract Postgres silently reverses on every UPDATE.
 test("a stored decision always beats an incoming one for the same id", () => {
   const merged = dccIntelligence.mergeBriefForIngest(
-    { decisions: { a: { action: "approved" } } },
-    { decisions: { a: { action: "dismissed" }, b: { action: "approved" } } }
+    { decisions: { a: { action: "accept" } } },
+    { decisions: { a: { action: "drop" }, b: { action: "accept" } } }
   );
-  assert.equal(merged.decisions.a.action, "approved", "a publish must not overwrite the user's answer");
-  assert.equal(merged.decisions.b.action, "approved", "but it may introduce an id the store has never seen");
+  assert.equal(merged.decisions.a.action, "accept", "a publish must not overwrite the user's answer");
+  assert.equal(merged.decisions.b.action, "accept", "but it may introduce an id the store has never seen");
 });
 
 test("a round-tripped decision_log does not double, and stays capped", () => {
   // GET /api/state/day hands back the whole section, log included, so a publisher that
   // echoes what it read is the NORMAL shape here, not an edge case.
-  const entry = { task_id: "dr-session-abc", action: "approved", time: null, at: "2026-08-17T12:00:00.000Z" };
+  const entry = { task_id: "front-task-abc", action: "accept", time: null, at: "2026-08-17T12:00:00.000Z" };
   let brief = { decision_log: [entry] };
   for (let i = 0; i < 6; i++) brief = dccIntelligence.mergeBriefForIngest(brief, { ...brief });
   assert.deepStrictEqual(brief.decision_log, [entry], "a round-tripped log must not grow");
 
   const many = Array.from({ length: 260 }, (_, i) => ({
-    task_id: `t${i}`, action: "approve", time: null, at: `2026-08-17T12:00:${String(i % 60).padStart(2, "0")}.000Z`,
+    task_id: `t${i}`, action: "accept", time: null, at: `2026-08-17T12:00:${String(i % 60).padStart(2, "0")}.000Z`,
   }));
   const capped = dccIntelligence.mergeBriefForIngest({ decision_log: many }, {});
   assert.equal(capped.decision_log.length, 200, "matches the .slice(-200) cap saveDccBriefDecision uses");
@@ -84,7 +84,7 @@ test("a round-tripped decision_log does not double, and stays capped", () => {
 
 test("mergeBriefForIngest drops malformed log entries instead of storing them", () => {
   const merged = dccIntelligence.mergeBriefForIngest(
-    { decision_log: [null, "nope", { task_id: "ok", action: "approve", at: "2026-08-17T12:00:00.000Z" }] },
+    { decision_log: [null, "nope", { task_id: "ok", action: "accept", at: "2026-08-17T12:00:00.000Z" }] },
     {}
   );
   assert.equal(merged.decision_log.length, 1);

@@ -109,7 +109,7 @@ const briefSrc = fs
   .readFileSync(__dirname + "/public/js/glymphatic-brief.js", "utf8")
   .replace(
     "window.buildGlymphaticBrief = buildGlymphaticBrief;",
-    "window.buildGlymphaticBrief = buildGlymphaticBrief; window.__gbTestRenderPage = gbRenderPage;"
+    "window.buildGlymphaticBrief = buildGlymphaticBrief; window.__gbTestRenderPage = gbRenderPage; window.__gbTestPages = gbPages;"
   );
 vm.runInContext(briefSrc, sandbox);
 const renderPage = sandbox.window.__gbTestRenderPage;
@@ -133,3 +133,32 @@ assert.ok(emptyHtml.includes("No machine activity detected"), "empty page render
 assert.ok(emptyHtml.includes("No health-metrics history yet"), "empty page renders trend empty state");
 
 console.log("glymphatic-brief-pages: brain-health renderer smoke passed");
+
+// ── Retired page id: `day-review` (the task scan, ripped out 2026-08-20) ──────
+//
+// Rows written before the rip-out still carry a `day-review` page in their stored
+// packet, and dr-* keys in `decisions`. Those rows must keep rendering. gbPages keeps
+// an explicit filter for the id so the dead page never reaches gbRenderPage, which
+// would otherwise dump it as raw JSON under a phantom tab.
+const gbPages = sandbox.window.__gbTestPages;
+assert.strictEqual(typeof gbPages, "function", "__gbTestPages hook injected");
+
+const mixed = gbPages({ pages: [{ id: "day-review", items: [{ id: "dr-abc" }] }, { id: "canvas", canvas_html: "<p>x</p>" }] });
+assert.deepStrictEqual(mixed.map((p) => p.id), ["canvas"], "the retired page is filtered out, the canvas survives");
+
+// The worst legacy shape: the scan page was the ONLY page. gbPages returns null rather
+// than an empty array, which is what drops buildGlymphaticBrief into its legacy
+// non-paged layout instead of rendering an empty tab.
+assert.strictEqual(gbPages({ pages: [{ id: "day-review", items: [] }] }), null,
+  "a packet whose only page was the scan renders the legacy layout, not an empty tab");
+
+// And it must not crash on the shapes a real stored row can hold.
+assert.strictEqual(gbPages({}), null);
+assert.strictEqual(gbPages({ pages: [] }), null);
+assert.strictEqual(gbPages(null), null);
+
+// A stale dr-* decision is inert: nothing left looks decisions up by scan id.
+const renderedCanvas = renderPage({ id: "canvas", canvas_html: "<p>CANVAS</p>" }, {}, {});
+assert.ok(renderedCanvas.includes("gb-canvas-frame"), "canvas still renders as the sandboxed iframe");
+
+console.log("glymphatic-brief-pages: retired day-review id tolerated");

@@ -45,7 +45,6 @@ const gcalAuth = require("./gcal-auth");
 const dccIntelligence = require("./dcc-intelligence");
 const triageSuppressions = require("./triage-suppressions");
 const scheduleSettingsStore = require("./schedule-settings-store");
-const dayReviewRepeats = require("./day-review-repeats");
 const waitingItems = require("./waiting-items");
 const syncStore = require("./sync-store");
 
@@ -627,23 +626,14 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   // hottest read path in the app (both state endpoints, plus the anonymous share poll
   // through buildPublicTodoShare). All swallow their own errors and resolve to [],
   // so Promise.all adds no rejection path.
-  const [scheduleBlocks, suppressions, waitingRows, recentReviewRows, scheduleSettings] = await Promise.all([
+  const [scheduleBlocks, suppressions, waitingRows, scheduleSettings] = await Promise.all([
     getScheduleBlocks(userId, workspaceId),
     readTriageSuppressionsForWorkspace(ws),
     typeof blockDB.getDelegatedItems === "function"
       ? blockDB.getDelegatedItems(ws).catch((e) => { console.error("[waiting] read overlay failed (non-fatal):", e.message); return []; })
       : Promise.resolve([]),
-    // Gated on userId, not just on capability. buildPublicTodoShare reaches this same
-    // builder anonymously as buildDayResponse(date, null, workspaceId) and its client
-    // polls every 15 seconds per open viewer, while never reading glymphatic_brief at
-    // all. Ungated, every one of those polls pulled seven whole day packets out of a
-    // pool capped at 10 and threw them away.
-    userId && typeof blockDB.getDccStateRange === "function"
-      ? blockDB.getDccStateRange(addDays(dateStr, -dayReviewRepeats.LOOKBACK_DAYS), addDays(dateStr, -1), ws)
-        .catch((e) => { console.error("[day-review] repeat overlay failed (non-fatal):", e.message); return []; })
-      : Promise.resolve([]),
-    // The user's start of day, gated on userId for the same reason recentReviewRows
-    // above is: buildPublicTodoShare reaches this builder anonymously and its client
+    // The user's start of day is gated on userId. buildPublicTodoShare reaches this
+    // builder anonymously and its client
     // polls every 15s per open viewer against a pool capped at 10. A share viewer
     // never auto-places anything, so the floor is dead weight on that path -- and
     // day-context.js falls back to the 07:00 default when the field is absent.
@@ -673,12 +663,6 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   // THIS date, because the client renders one day's "Completed" list and its Undo from
   // it (see the scoping note in triage-suppressions.js).
   result.triage = triageSuppressions.applyTriageSuppressions(result.triage, suppressions, { date: dateStr, timeZone: APP_TIME_ZONE });
-  // Day Review publishers key cards by their source session. Repeated low-value
-  // sessions therefore receive a fresh id and evade an earlier id-based dismissal.
-  // Apply the seven-day Loose Ends decision window on read, and collapse exact
-  // duplicates inside the packet. Raw packets and their audit ledgers remain intact.
-  const reviewed = dayReviewRepeats.applyDayReviewRepeatOverlay(result, recentReviewRows);
-  if (reviewed && reviewed.glymphatic_brief) result.glymphatic_brief = reviewed.glymphatic_brief;
   // The `result._deleted` surfacing query that used to sit here is GONE (A2 step 6).
   // #253 added it for exactly one consumer, carryover-review.js, so that pass would not
   // re-offer a timeline task the user had deleted. C1 (#261) deleted carryover-review.js

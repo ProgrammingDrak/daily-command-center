@@ -2086,6 +2086,10 @@
 <script src="/public/js/task-groups.js?v=preset-task-groups-1"></script>
 <script src="/public/js/setup-wizards.js"></script>
 <script src="/public/js/onboarding-tour.js"></script>
+<!-- journal.js: Journal + mood tagging (DCC.Journal). Was inside glymphatic-brief.js
+     until the Day-in-Review scan was ripped out; catch-up.js renders it, so it must
+     parse before catch-up.js reads window.DCC.Journal at call time. -->
+<script src="/public/js/journal.js"></script>
 <!-- catch-up.js: the morning "here's what slipped" prompt; needs unfinished-tasks.js (DCC.Carryover) below it at call time, not parse time -->
 <script src="/public/js/catch-up.js"></script>
 <script src="/public/js/boot.js"></script>
