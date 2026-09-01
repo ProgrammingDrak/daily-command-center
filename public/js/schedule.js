@@ -1544,6 +1544,11 @@ function addTaskUniversal(barEl){
       break;
     case"backlog":addNewTask(title,durMin);break;
     case"urgent":insertTaskNow(title,durMin);break;
+    case"anytime":{
+      if(window.DCC&&DCC.AnytimeDock&&typeof DCC.AnytimeDock.openCreate==="function")DCC.AnytimeDock.openCreate(title);
+      else if(typeof showToast==="function")showToast("Anytime tasks are still loading. Try again in a moment.","info");
+      break;
+    }
     // Retro-logging: the task already happened — create it and check it off in
     // one gesture so points/streaks/persistence flow through the normal path.
     case"done":insertTaskNow(title,durMin,{onScheduled:r=>{if(r&&r.localId&&typeof toggleDone==="function")toggleDone(r.localId);}});break;
@@ -2154,6 +2159,7 @@ const TASK_DESTINATIONS=[
   {value:"done",    icon:"✅", label:"Completed"},
   {value:"schedule",icon:"📅", label:"Schedule…"},
   {value:"backlog", icon:"💡", label:"Backlog / Idea"},
+  {value:"anytime", icon:"💧", label:"Anytime"},
   {value:"shell",   icon:"🐚", label:"Shell"},
   {value:"wrap",    icon:"🎁", label:"Wrap"},
   {value:"habit",   icon:"🔁", label:"Habit"},

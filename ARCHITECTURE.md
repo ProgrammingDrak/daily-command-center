@@ -80,6 +80,20 @@ boot since the filesystem is ephemeral.
   follow the `urgency.js` single-source pattern.
 - **Boy-scout CSS tokens**: any PR touching a CSS block converts that block's
   hard-coded sizes to the tokens in `public/css/tokens.css` (once it lands).
+
+## Anytime tasks (`public/js/anytime-store.js`)
+
+Anytime tasks track a target count inside a repeating window. They never own a
+scheduled minute. The definition is a dateless `block` with
+`properties.kind="anytime_item"`. Today’s counters live under `_anytime` on the
+current `day_root`.
+
+- `anytime_item` must remain excluded by `db.js`, `pg-schema.js`, and
+  `public/js/task-model.js`. These rows must never enter itineraries or backlog.
+- Windows align to `DCC.dayStartMinutes`. The period must divide 1,440 minutes.
+- Nudges run only on today’s view. State is stamped before pet delivery.
+- The dock is non-modal. Do not give it any blocking overlay class.
+- Definitions use existing JSON properties. No data migration is required.
 - **Earliest auto-placeable minute is ONE function**: `DCC.dayStartMinutes`
   (`public/js/day-context.js`), the user's start of day. Four slot engines exist
   (`day-context.js` `findSlot`, `responsibility-store.js` `loadDaySlottingContext`,

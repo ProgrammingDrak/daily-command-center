@@ -13,6 +13,25 @@ const app = express();
 app.use(express.json());
 const reviewBlocks = new Map();
 
+function ensureReviewDayRoot(date) {
+  const id = `day-root-review-${date}`;
+  if (reviewBlocks.has(id)) return reviewBlocks.get(id);
+  const now = new Date().toISOString();
+  const rootBlock = {
+    id,
+    type: "day_root",
+    parent_id: null,
+    date,
+    sort_order: 0,
+    properties: {},
+    created_at: now,
+    updated_at: now,
+    deleted_at: null,
+  };
+  reviewBlocks.set(id, rootBlock);
+  return rootBlock;
+}
+
 function localDateKey(date = new Date()) {
   return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
 }
@@ -67,6 +86,7 @@ app.get("/api/events", (req, res) => {
   req.on("close", () => clearInterval(keepAlive));
 });
 app.get("/api/blocks", (req, res) => {
+  if (req.query.date) ensureReviewDayRoot(String(req.query.date));
   let blocks = liveReviewBlocks();
   if (req.query.date) blocks = blocks.filter((block) => block.date === req.query.date);
   if (req.query.type) {

@@ -1615,6 +1615,8 @@ const SURFACES = {
   triage:          {build:()=>{if(typeof buildTriage==="function")buildTriage();},              isVisible:()=>true},
   actionItems:     {build:()=>{if(typeof buildActionItemsTab==="function")buildActionItemsTab();},isVisible:()=>true},
   trivial:         {build:()=>{if(typeof buildTrivialTasks==="function")buildTrivialTasks();},  isVisible:()=>true},
+  // Body-level dock stays visible across tabs and must never show stale counts.
+  anytime:         {build:()=>{if(typeof buildAnytime==="function")buildAnytime();},             isVisible:()=>true},
   scheduled:       {build:()=>{if(typeof buildScheduled==="function")buildScheduled();},        isVisible:()=>true},
   scheduleSoon:    {build:()=>{if(typeof buildScheduleSoon==="function")buildScheduleSoon();},  isVisible:()=>true},
   glymphaticBrief: {build:()=>{if(typeof buildGlymphaticBrief==="function")buildGlymphaticBrief();},isVisible:()=>true},

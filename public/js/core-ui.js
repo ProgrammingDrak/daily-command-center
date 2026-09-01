@@ -199,6 +199,23 @@
   }
 
   DCC.overlay = { open, get activeBlocking() { return activeBlocking; } };
+
+  DCC.reducedMotion = function reducedMotion() {
+    try { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }
+    catch (error) { return false; }
+  };
+
+  // Interruptions degrade to quiet UI while another interaction owns attention.
+  DCC.busyElsewhere = function busyElsewhere() {
+    if (typeof document.hidden === "boolean" && document.hidden) return true;
+    const active = document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.contentEditable === "true")) return true;
+    if (DCC.overlay.activeBlocking) return true;
+    if (typeof window._anyModalOpen === "function" && window._anyModalOpen()) return true;
+    const catchup = document.getElementById("catchup-overlay") || document.getElementById("unfinished-overlay");
+    return !!(catchup && catchup.classList && catchup.classList.contains("open"));
+  };
+
   DCC.modal = function modal(opts) { return open(Object.assign({}, opts || {}, { kind: "modal" })); };
   DCC.sheet = function sheet(opts) { return open(Object.assign({}, opts || {}, { kind: "sheet" })); };
 })();

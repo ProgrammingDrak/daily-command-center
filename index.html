@@ -248,10 +248,24 @@
   <div id="actual-view" style="display:none"></div>
 </div>
 
-<!-- Floating Trivial bubble: at-a-glance count of available trivial tasks -->
-<button class="float-trivial" id="float-trivial" type="button" style="display:none" title="Trivial tasks">
-  <span class="float-trivial-count" id="float-trivial-count">0</span>
-</button>
+<!-- Anytime dock: work with a target, but no set time. Hidden until needed. -->
+<button class="anytime-dock anytime-dock--capsule" id="anytime-dock" type="button"
+        style="display:none" aria-expanded="false" aria-controls="anytime-panel"
+        aria-label="Anytime tasks"></button>
+
+<!-- Non-modal. Overlay class names would freeze app-wide rendering while open. -->
+<div class="anytime-panel" id="anytime-panel" aria-hidden="true" role="dialog"
+     aria-label="Anytime tasks">
+  <div class="anytime-panel-head">
+    <strong>Anytime</strong>
+    <span class="anytime-panel-sub">no set time, just a target</span>
+    <button class="anytime-panel-close" type="button" aria-label="Close anytime tasks">&times;</button>
+  </div>
+  <div class="anytime-panel-body"></div>
+  <div class="anytime-panel-foot">
+    <button class="anytime-panel-add" type="button">+ Add anytime task</button>
+  </div>
+</div>
 
 <!-- Task manager modal. The historic drawer IDs remain because task renderers and
      mobile navigation target them, but the surface now opens as a modal. -->
@@ -2089,6 +2103,10 @@
 <script src="/public/js/punishments.js"></script>
 <script src="/public/js/rewards-queue.js"></script>
 <script src="/public/js/unfinished-tasks.js"></script>
+<!-- Store must precede the dock. Pet nudges use both at tick time. -->
+<script src="/public/js/anytime-store.js"></script>
+<script src="/public/js/anytime-dock.js"></script>
+<script src="/public/js/pet-nudge.js"></script>
 <script src="/public/js/side-drawers.js"></script>
 <script src="/public/js/budget.js"></script>
 <script src="/public/js/mobile-shell.js"></script>
