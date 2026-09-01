@@ -2664,9 +2664,9 @@ function openDurationSheet(ev){
     '<div class="dur-sheet-handle"></div>'+
     '<div class="dur-sheet-head">Duration<span class="dur-sheet-task"></span></div>'+
     '<div class="dur-sheet-stepper">'+
-      '<button class="dur-sheet-step" data-d="-15" type="button" aria-label="Minus 15 minutes">&minus;15</button>'+
+      '<button class="dur-sheet-step" data-d="-15" type="button" aria-label="Decrease duration">&minus;</button>'+
       '<div class="dur-sheet-val" id="dur-sheet-val"></div>'+
-      '<button class="dur-sheet-step" data-d="15" type="button" aria-label="Plus 15 minutes">+15</button>'+
+      '<button class="dur-sheet-step" data-d="15" type="button" aria-label="Increase duration">+</button>'+
     '</div>'+
     '<div class="dur-sheet-presets"></div>'+
     '<div class="dur-sheet-custom"><input type="number" min="1" step="1" inputmode="numeric" class="dur-sheet-input" aria-label="Custom minutes"><span class="dur-sheet-unit">min</span></div>'+
@@ -2701,7 +2701,7 @@ function openDurationSheet(ev){
   function commit(){ const v=val; close(); setDurAbsolute(ev.id,v); }
   function onKey(e){ if(e.key==="Escape"){e.preventDefault();close();} }
 
-  sheet.querySelectorAll(".dur-sheet-step").forEach(s=>s.addEventListener("click",e=>{e.stopPropagation();setVal(val+parseInt(s.dataset.d,10));}));
+  sheet.querySelectorAll(".dur-sheet-step").forEach(s=>s.addEventListener("click",e=>{e.stopPropagation();setVal(stepDuration(val,parseInt(s.dataset.d,10)));}));
   input.addEventListener("input",e=>{e.stopPropagation();const v=parseInt(input.value,10);if(v>0)setVal(v);});
   input.addEventListener("keydown",e=>{e.stopPropagation();if(e.key==="Enter"){e.preventDefault();commit();}});
   input.addEventListener("click",e=>e.stopPropagation());
