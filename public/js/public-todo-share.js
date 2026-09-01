@@ -1,6 +1,7 @@
 (function(){
   const token = location.pathname.split("/").filter(Boolean).pop();
   let current = null;
+  let loadPromise = null;
   const filters = {
     types: new Set(["task", "repeat"]),
     status: "all",
@@ -456,11 +457,15 @@
 
   async function load(){
     if (!token) return showError("Missing share token.");
-    try {
-      render(await api("/api/public/todo-share/" + encodeURIComponent(token)));
-    } catch (e) {
-      showError(e.message);
-    }
+    if (loadPromise) return loadPromise;
+    loadPromise = (async function(){
+      try {
+        render(await api("/api/public/todo-share/" + encodeURIComponent(token)));
+      } catch (e) {
+        showError(e.message);
+      }
+    })().finally(function(){loadPromise=null;});
+    return loadPromise;
   }
 
   async function submitCreateTask(){
@@ -833,5 +838,9 @@
   bindControls();
   bindExport();
   load();
-  setInterval(load, 15000);
+  if(token&&typeof EventSource!=="undefined"){
+    const events=new EventSource("/api/public/todo-share/"+encodeURIComponent(token)+"/events");
+    events.onmessage=function(event){if(event.data==="changed")load();};
+  }
+  setInterval(load, 5*60*1000);
 })();

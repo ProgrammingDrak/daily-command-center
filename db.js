@@ -2230,6 +2230,47 @@ async function getDccState(date, workspaceId) {
   return { ...row, state_json: typeof row.state_json === "string" ? JSON.parse(row.state_json) : row.state_json };
 }
 
+// Hot-path projection. Historical Sweep ledgers stay stored, but never cross the
+// Supabase pooler during routine dashboard reads.
+async function getDccStateCompact(date, workspaceId, client) {
+  const { rows } = await (client || pool).query(
+    `SELECT date, user_id, workspace_id, updated_at,
+       jsonb_strip_nulls(jsonb_build_object(
+         'date', to_jsonb(to_char(date, 'YYYY-MM-DD')),
+         'last_updated_at', state_json->'last_updated_at',
+         'last_updated_by', state_json->'last_updated_by',
+         'triage', jsonb_build_object(
+           'open_items', COALESCE(state_json#>'{triage,open_items}', '[]'::jsonb),
+           'metrics', COALESCE(state_json#>'{triage,metrics}', '{}'::jsonb),
+           'cycle_count', COALESCE(state_json#>'{triage,cycle_count}', '0'::jsonb)
+         ),
+         'schedule', jsonb_strip_nulls(jsonb_build_object(
+           'working_hours', state_json#>'{schedule,working_hours}',
+           'tasks_couldnt_fit', state_json#>'{schedule,tasks_couldnt_fit}',
+           'end_time', state_json#>'{schedule,end_time}',
+           'day_start', state_json#>'{schedule,day_start}'
+         )),
+         'sweep', state_json->'sweep',
+         'glymphatic_brief', state_json->'glymphatic_brief',
+         'notifications', state_json->'notifications',
+         'completions', jsonb_build_object(
+           'tasks', COALESCE((
+             SELECT jsonb_agg(entry)
+               FROM jsonb_array_elements(COALESCE(state_json#>'{completions,tasks}', '[]'::jsonb)) AS completion(entry)
+              WHERE entry->>'needs_review' = 'true'
+                AND COALESCE(entry->>'reviewed', 'false') <> 'true'
+           ), '[]'::jsonb)
+         )
+       )) AS state_json
+       FROM dcc_state
+      WHERE date = $1 AND workspace_id = $2`,
+    [date, workspaceId || "ws-1"]
+  );
+  if (!rows[0]) return null;
+  const row = rows[0];
+  return { ...row, state_json: typeof row.state_json === "string" ? JSON.parse(row.state_json) : row.state_json };
+}
+
 async function purgeSoftDeleted(olderThanDays = 30) {
   const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - olderThanDays);
   const result = await pool.query("DELETE FROM blocks WHERE deleted_at IS NOT NULL AND deleted_at < $1", [cutoff.toISOString()]);
@@ -2273,8 +2314,28 @@ async function getBlocksByDateRange(startDate, endDate, workspaceId) {
 
 async function getDccStateRange(startDate, endDate, workspaceId) {
   const { rows } = workspaceId
-    ? await pool.query(`SELECT * FROM dcc_state WHERE date >= $1 AND date <= $2 AND workspace_id = $3 ORDER BY date ASC`, [startDate, endDate, workspaceId])
-    : await pool.query(`SELECT * FROM dcc_state WHERE date >= $1 AND date <= $2 ORDER BY date ASC`, [startDate, endDate]);
+    ? await pool.query(`SELECT date, workspace_id, updated_at,
+          jsonb_build_object(
+            'date', to_char(date, 'YYYY-MM-DD'),
+            'schedule', jsonb_build_object(
+              'timeline', COALESCE(state_json#>'{schedule,timeline}', '[]'::jsonb)
+            ),
+            'glymphatic_brief', COALESCE(state_json->'glymphatic_brief', '{}'::jsonb)
+          ) AS state_json
+        FROM dcc_state
+        WHERE date >= $1 AND date <= $2 AND workspace_id = $3
+        ORDER BY date ASC`, [startDate, endDate, workspaceId])
+    : await pool.query(`SELECT date, workspace_id, updated_at,
+          jsonb_build_object(
+            'date', to_char(date, 'YYYY-MM-DD'),
+            'schedule', jsonb_build_object(
+              'timeline', COALESCE(state_json#>'{schedule,timeline}', '[]'::jsonb)
+            ),
+            'glymphatic_brief', COALESCE(state_json->'glymphatic_brief', '{}'::jsonb)
+          ) AS state_json
+        FROM dcc_state
+        WHERE date >= $1 AND date <= $2
+        ORDER BY date ASC`, [startDate, endDate]);
   return rows.map(row => ({ ...row, state_json: typeof row.state_json === "string" ? JSON.parse(row.state_json) : row.state_json }));
 }
 
@@ -2442,7 +2503,7 @@ module.exports = {
   getBlocksByDate, getBlocksByDateIncludingDeleted, getCalendarMeetingContextBySourceIds, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
-  ensureDccStateTable, backfillLegacyTriageSuppressions, saveDccState, saveDccBriefDecision, getDccState, purgeSoftDeleted, getOperations,
+  ensureDccStateTable, backfillLegacyTriageSuppressions, saveDccState, saveDccBriefDecision, getDccState, getDccStateCompact, purgeSoftDeleted, getOperations,
   parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers,
   getTaskTimeEntries,
   getResponsibilityBlocks, findResponsibilityBySlug, getBlocksByKind,
