@@ -23,6 +23,19 @@ function safeLimit(value) {
   return Number.isSafeInteger(limit) ? Math.min(MAX_LIMIT, Math.max(1, limit)) : DEFAULT_LIMIT;
 }
 
+function parseHistoryCursor(value) {
+  if (!value) return { beforeAt: null, beforeId: null };
+  const match = /^(\d+)\|(\d+)$/.exec(String(value));
+  const epochMs = match ? Number(match[1]) : NaN;
+  if (!match || !Number.isSafeInteger(epochMs)) {
+    const error = new Error("invalid history cursor");
+    error.status = 400;
+    error.code = "invalid_cursor";
+    throw error;
+  }
+  return { beforeAt: new Date(epochMs).toISOString(), beforeId: match[2] };
+}
+
 function dateString(value) {
   if (!value) return null;
   if (value instanceof Date) return value.toISOString().slice(0, 10);
@@ -146,6 +159,7 @@ async function pull({ workspaceId, date, cursor: rawCursor, limit: rawLimit }) {
     }
     const rowDate = dateString(row.date);
     if (rowDate === date || isGlobalBlock(row)) blocks.push(row);
+    else deletedBlockIds.push(event.entity_id);
   }
 
   const stateChanged = [...latest.values()].some(
@@ -184,13 +198,7 @@ async function recordTriageHistory(workspaceId, events, client) {
 
 async function listTriageHistory(workspaceId, options = {}) {
   const limit = Math.min(100, Math.max(1, Number(options.limit) || 50));
-  let beforeAt = null;
-  let beforeId = null;
-  if (options.before) {
-    const [encodedAt, encodedId] = String(options.before).split("|");
-    beforeAt = encodedAt ? new Date(Number(encodedAt)).toISOString() : null;
-    beforeId = Number(encodedId || 0);
-  }
+  const { beforeAt, beforeId } = parseHistoryCursor(options.before);
   const { rows } = await pool.query(
     `SELECT id, triage_id, resolved_at, resolution, title, source, item_json
        FROM triage_history
@@ -251,5 +259,6 @@ module.exports = {
   listTriageHistory,
   pruneSyncEvents,
   safeCursor,
+  parseHistoryCursor,
   isGlobalBlock,
 };

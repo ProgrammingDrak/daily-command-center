@@ -16,6 +16,29 @@ CREATE TABLE IF NOT EXISTS triage_history (
 CREATE INDEX IF NOT EXISTS idx_triage_history_workspace_resolved
   ON triage_history(workspace_id, resolved_at DESC, id DESC);
 
+INSERT INTO triage_history(workspace_id, triage_id, resolved_at, resolution, title, source, item_json)
+SELECT s.workspace_id,
+       item->>'id',
+       CASE
+         WHEN COALESCE(item->>'resolved_at', '') ~ '^\d{4}-\d{2}-\d{2}T'
+           THEN (item->>'resolved_at')::timestamptz
+         ELSE s.updated_at
+       END,
+       COALESCE(NULLIF(item->>'resolved_reason', ''), NULLIF(item->>'reason', ''), 'done'),
+       COALESCE(item->>'title', ''),
+       COALESCE(NULLIF(item->>'source', ''), NULLIF(item->>'type', ''), ''),
+       item
+  FROM dcc_state s
+ CROSS JOIN LATERAL jsonb_array_elements(
+   CASE WHEN jsonb_typeof(s.state_json#>'{triage,resolved_items}') = 'array'
+     THEN s.state_json#>'{triage,resolved_items}' ELSE '[]'::jsonb END
+ ) item
+ WHERE COALESCE(item->>'id', '') <> ''
+   AND NOT EXISTS (
+     SELECT 1 FROM triage_history existing WHERE existing.workspace_id = s.workspace_id
+   )
+ON CONFLICT(workspace_id, triage_id, resolved_at) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS sync_events (
   seq           BIGSERIAL PRIMARY KEY,
   workspace_id  TEXT NOT NULL,
@@ -42,26 +65,28 @@ DECLARE
   entity_key TEXT;
   event_date DATE;
   event_operation TEXT;
+  row_data JSONB;
 BEGIN
   IF TG_OP = 'DELETE' THEN
-    ws := COALESCE(OLD.workspace_id, 'ws-1');
-    event_date := OLD.date;
+    row_data := to_jsonb(OLD);
+    ws := COALESCE(row_data->>'workspace_id', 'ws-1');
+    event_date := NULLIF(row_data->>'date', '')::date;
     event_operation := 'delete';
-    entity_key := CASE WHEN TG_TABLE_NAME = 'dcc_state'
-      THEN OLD.date::text ELSE OLD.id::text END;
   ELSE
-    ws := COALESCE(NEW.workspace_id, 'ws-1');
-    event_date := NEW.date;
+    row_data := to_jsonb(NEW);
+    ws := COALESCE(row_data->>'workspace_id', 'ws-1');
+    event_date := NULLIF(row_data->>'date', '')::date;
     event_operation := CASE
-      WHEN TG_TABLE_NAME = 'blocks' AND NEW.deleted_at IS NOT NULL THEN 'delete'
+      WHEN TG_TABLE_NAME = 'blocks' AND NULLIF(row_data->>'deleted_at', '') IS NOT NULL THEN 'delete'
       ELSE 'upsert' END;
-    entity_key := CASE WHEN TG_TABLE_NAME = 'dcc_state'
-      THEN NEW.date::text ELSE NEW.id::text END;
   END IF;
+  entity_key := CASE WHEN TG_TABLE_NAME = 'dcc_state'
+    THEN row_data->>'date' ELSE row_data->>'id' END;
 
   INSERT INTO sync_events(workspace_id, entity_type, entity_id, operation, entity_date)
   VALUES (ws, TG_TABLE_NAME, entity_key, event_operation, event_date);
-  RETURN COALESCE(NEW, OLD);
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 

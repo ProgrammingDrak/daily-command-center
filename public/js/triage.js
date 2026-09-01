@@ -1784,7 +1784,7 @@ function buildTriage() {
     }
   }
 
-  renderTriageHistory();
+  if (typeof renderTriageHistory === "function") renderTriageHistory();
 
   // Wire checkmark click handlers (event delegation)
   document.querySelectorAll(".tri-check").forEach(chk => {
