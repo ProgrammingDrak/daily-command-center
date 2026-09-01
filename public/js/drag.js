@@ -32,7 +32,12 @@ function dOver(e,id){
   // work during the meeting, while Shift+drop creates a pie subtask relevant to
   // the meeting. Only the existing carryover and cycle guards block nesting.
   const canNest=!draggingCarryover&&targetEv&&!(typeof _isAncestor==="function"&&_isAncestor(dragId,id));
-  if(canNest&&y>h*0.25&&y<h*0.75){
+  // A touch drag carries an explicit mode (see the DCC_DRAG facade): the finger's
+  // sideways offset picks reorder vs nest, because a phone row's 25% edge band is
+  // far too small to hit with a thumb. A mouse drag leaves dccMode undefined and
+  // keeps the mid-row band below, so the desktop path is unchanged.
+  const wantsNest=e.dccMode?(e.dccMode!=="reorder"):(y>h*0.25&&y<h*0.75);
+  if(canNest&&wantsNest){
     tgt.classList.add("drag-over-nest");
     tgt.classList.toggle("drag-over-nest-sub",!!e.shiftKey);
     return;
@@ -612,7 +617,7 @@ function dDrop(e,tid){
     }
     return;
   }
-  const clearCls=()=>document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","pin-drop-target"));
+  const clearCls=()=>document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub","pin-drop-target"));
   // External drag of a preset task group card: add the whole group to the day.
   if(window._dragFromTaskGroup){
     const gid=window._dragFromTaskGroup; window._dragFromTaskGroup=null;
@@ -694,7 +699,8 @@ function dDrop(e,tid){
   // mid-row band doesn't silently turn the scheduled task into a subtask.
   const r=e.currentTarget.getBoundingClientRect();
   const y=e.clientY-r.top,h=r.height;
-  const nest=(!wasUntimed&&y>h*0.25&&y<h*0.75&&!_isAncestor(moved.id,target.id));
+  const nestZone=e.dccMode?(e.dccMode!=="reorder"):(y>h*0.25&&y<h*0.75);
+  const nest=(!wasUntimed&&nestZone&&!_isAncestor(moved.id,target.id));
   const after=y>=h/2;
 
   // ---- Case A: dragging a WRAP -> move it; its ride-alongs follow by the same delta ----
@@ -770,15 +776,18 @@ function dDrop(e,tid){
 // real DragEvent is four members; a synthetic object carries them. dragId is a
 // module-private `let`, so exposing begin()/end() here is the one hook the
 // adapter needs — the mutation/reflow logic below is reused untouched.
-function _dccSynthEvt(rowEl, clientY, shift){
+// mode is "reorder" | "nest" | "sub"; dccMode is what dOver/dDrop read instead of
+// the mid-row band, and "sub" is the touch stand-in for the desktop Shift key.
+function _dccSynthEvt(rowEl, clientY, mode){
   return { currentTarget: rowEl, target: rowEl, clientY: clientY,
-           shiftKey: !!shift, preventDefault(){}, stopPropagation(){} };
+           dccMode: mode || "reorder", shiftKey: mode === "sub",
+           preventDefault(){}, stopPropagation(){} };
 }
 window.DCC_DRAG = {
   begin(id, rowEl){ dragId = id; if(rowEl) rowEl.classList.add("dragging"); },
-  over(rowEl, id, y, shift){ if(rowEl) dOver(_dccSynthEvt(rowEl, y, shift), id); },
-  leave(rowEl){ if(rowEl) dLeave(_dccSynthEvt(rowEl, 0, false)); },
-  drop(rowEl, tid, y, shift){ if(rowEl) dDrop(_dccSynthEvt(rowEl, y, shift), tid); },
+  over(rowEl, id, y, mode){ if(rowEl) dOver(_dccSynthEvt(rowEl, y, mode), id); },
+  leave(rowEl){ if(rowEl) dLeave(_dccSynthEvt(rowEl, 0, "reorder")); },
+  drop(rowEl, tid, y, mode){ if(rowEl) dDrop(_dccSynthEvt(rowEl, y, mode), tid); },
   end(){ dEnd(); },
   activeId(){ return dragId; }
 };
