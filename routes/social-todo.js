@@ -2,7 +2,7 @@
 // ctx carries shared server-scope helpers/stores; see server.js where ctx is built.
 
 module.exports = function mount(app, ctx) {
-  const { APP_TIME_ZONE, DAY_STATE_FILE, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, coerceDateString, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getTodayStr, intParam, isValidDate, notFound, path, pool, readJSON, route, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON } = ctx;
+  const { APP_TIME_ZONE, DAY_STATE_FILE, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, coerceDateString, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getTodayStr, intParam, isValidDate, notFound, path, pool, readJSON, registerPublicSse, route, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON } = ctx;
 
 // The ONE serializer behind both export surfaces (this route and the browser
 // download in public/js/public-todo-share.js). Pure + UMD, so requiring the
@@ -1311,6 +1311,17 @@ app.post("/api/todo-share/sponsorships/:id/status", async (req, res) => {
     broadcast("todo-share-changed", { action: "sponsorship-status", id: sponsorship.id }, req.workspaceId);
     res.json({ sponsorship, reward, bounty });
   } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+});
+
+app.get("/api/public/todo-share/:token/events", async (req, res) => {
+  try {
+    const share = await findTodoShareByToken(req.params.token);
+    if (!share) return res.status(404).end();
+    return registerPublicSse(share.workspace_id, req, res);
+  } catch (error) {
+    console.error("[public-todo] event stream failed:", error.message);
+    return res.status(503).end();
+  }
 });
 
 app.get("/api/public/todo-share/:token", async (req, res) => {

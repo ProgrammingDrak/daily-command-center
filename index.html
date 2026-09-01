@@ -300,11 +300,12 @@
             <div id="triage-high" style="margin-bottom:12px"></div>
             <div id="triage-medium" style="margin-bottom:12px"></div>
             <div id="triage-low" style="margin-bottom:12px"></div>
-            <details style="margin-top:16px">
+            <details id="triage-history-section" style="margin-top:16px">
               <summary style="font-size:12px;font-weight:600;color:var(--text-muted);cursor:pointer;padding:8px 0">
-                Resolved Today <span id="triage-resolved-count" style="opacity:0.6">(0)</span>
+                Resolution history <span id="triage-resolved-count" style="opacity:0.6">(0)</span>
               </summary>
               <div id="triage-resolved"></div>
+              <button id="triage-history-more" class="btn btn-ghost" type="button" hidden>Load more</button>
             </details>
           </div>
         </details>
