@@ -194,16 +194,15 @@ test("all five materialize paths skip a soft-deleted match", async () => {
   assert.equal(res.created, 0, "and never re-created");
   assert.equal(created.length, 0);
 
-  // 2-4. quick-task, brief log-done, brief push-next — all three reach the guard
-  // through routes/dcc.js findBriefBlock, which is now a one-line delegate. The
-  // route-level assertions live in delete-contract.test.js; here we pin that the
-  // shared lookup they share returns the tombstone at all.
-  const db = fakeDB([row("gone", { idempotency_key: "day-review:2026-07-30:7" }, TOMB)]);
+  // 2. quick-task reaches the guard through routes/dcc.js findBriefBlock, which is now
+  // a one-line delegate. (The brief log-done / push-next writers that used to share it
+  // went away with the Day-in-Review scan, 2026-08-20.) The route-level assertions live
+  // in delete-contract.test.js; here we pin that the shared lookup returns the tombstone
+  // at all.
+  const db = fakeDB([row("gone", { idempotency_key: "qt:2026-07-30:7" }, TOMB)]);
   const guard = createMaterializeGuard({ blockDB: db });
-  for (const caller of ["quick-task", "brief/log-done", "brief/push-next"]) {
-    const hit = await guard.findForDedupe("ws-1", { idempotencyKey: "day-review:2026-07-30:7" });
-    assert.equal(dedupeStatus(hit), "skipped_deleted", `${caller} must see the tombstone`);
-  }
+  const hit = await guard.findForDedupe("ws-1", { idempotencyKey: "qt:2026-07-30:7" });
+  assert.equal(dedupeStatus(hit), "skipped_deleted", "quick-task must see the tombstone");
 
   // 5. task groups: the path #253 left with no guard of any kind.
   const tgDb = fakeDB([{ ...row("tg-gone", { taskGroupId: "g1" }, TOMB), date: "2026-07-30" }]);

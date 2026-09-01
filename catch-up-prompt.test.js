@@ -610,15 +610,19 @@ const rowsOf = (ctx) => allRowsOf(ctx)
   .filter(r => r.className && r.className.indexOf("carryover-row") > -1);
 const titleOf = (r) => r.querySelector(".carryover-row-title").textContent;
 
-function installDayReview(ctx, count) {
-  const packet = { packetDate: TODAY, reviewDate: ymd(1) };
-  ctx.window.DCC.DayReview = {
-    load: async () => packet,
-    pendingCount: () => count,
-    renderPending: () => '<article class="cu-review-card">Review cards</article>',
-    renderJournal: () => '<section class="gb-journal">Journal</section>'
+// The Journal is a section, not a countable loose end: it never contributes to the
+// pill count, and its only job in this suite is to be REACHABLE. `pending` mirrors
+// journal.js isPending() -- "no entry written for the viewed day yet".
+function installJournal(ctx, opts) {
+  const pending = !!(opts && opts.pending);
+  let scoped = 0;
+  ctx.window.DCC.Journal = {
+    ensureScope: async () => { scoped++; return "ws-1:1"; },
+    render: () => '<section class="gb-journal">Journal</section>',
+    isPending: () => pending,
+    setHost: () => {}
   };
-  return packet;
+  return { scopedCalls: () => scoped };
 }
 
 function waitingCtx(draftOverrides) {
@@ -733,11 +737,11 @@ test("the unified modal follows the requested section order", async () => {
     [TRI("s1"), TRI("g1", { source: "gmail" })],
     { fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION] }) }) }
   );
-  installDayReview(ctx, 2);
+  installJournal(ctx, { pending: true });
   await openLooseEnds(ctx);
   assert.deepEqual(
     [...allRowsOf(ctx)].filter(r => r.className === "cu-section-label").map(r => r.textContent),
-    ["Slipped tasks", "Slack", "Gmail", "Automated Action Items from Meetings", "Day in Review"]
+    ["Slipped tasks", "Slack", "Gmail", "Automated Action Items from Meetings", "Journal"]
   );
   const journal = [...allRowsOf(ctx)].find(r => r.className === "cu-journal-wrap");
   assert.match(journal.innerHTML, /Journal/);
@@ -770,24 +774,27 @@ test("every Loose Ends row uses checkmark, title, calendar, Today, Drop, Details
   }
 });
 
-test("an unaddressed Day in Review keeps the Loose Ends reminder after close", async () => {
+test("an unwritten Journal does NOT inflate the Loose Ends pill", async () => {
+  // The inverse of the old Day-in-Review contract. A pending journal entry is a
+  // section to offer, never an outstanding item, so on an otherwise-clear day the
+  // pill must stay at zero even though the prompt still opens for the journal.
   const d = ymd(1);
-  const { ctx, saved } = load({ [d]: [dayRoot()] }, [d]);
+  const { ctx } = load({ [d]: [dayRoot()] }, [d]);
   const pill = ctx.document.createElement("button"); pill.id = "loose-ends-pill"; pill.hidden = true; ctx.document.body.appendChild(pill);
   const count = ctx.document.createElement("span"); count.id = "loose-ends-pill-count"; ctx.document.body.appendChild(count);
-  installDayReview(ctx, 3);
-  await openLooseEnds(ctx);
-  assert.equal(pill.hidden, false);
-  assert.equal(count.textContent, "3");
-  ctx.document.getElementById("catchup-overlay").querySelector("#catchup-close").fire("click");
-  assert.ok(saved._catchUpReviewed, "closing suppresses a second automatic prompt");
-  assert.equal(pill.hidden, false, "the reminder remains until the decisions are handled");
+  installJournal(ctx, { pending: true });
+  await ctx.window.initCatchUp();
+  assert.equal(count.textContent, "0");
+  assert.equal(pill.hidden, false, "the Journal remains reachable without inflating the count");
+  assert.equal(pill.getAttribute("aria-label"), "Open Journal");
 });
 
-test("a completed Day in Review still opens the morning Journal once", async () => {
+test("an unwritten Journal remains reachable from the zero-count reminder", async () => {
+  // The reason the Journal is its own packet-free section: on a day with zero loose
+  // ends it is the ONLY thing to show, and it must still be offered exactly once.
   const d = ymd(1);
   const { ctx, saved } = load({ [d]: [dayRoot()] }, [d]);
-  installDayReview(ctx, 0);
+  installJournal(ctx, { pending: true });
   await openLooseEnds(ctx);
   const overlay = ctx.document.getElementById("catchup-overlay");
   assert.equal(overlay.classList.contains("open"), true);
@@ -795,12 +802,14 @@ test("a completed Day in Review still opens the morning Journal once", async () 
   assert.equal(saved._catchUpReviewed, undefined);
 });
 
-test("a Day in Review load failure never marks the morning reviewed", async () => {
+test("a Journal scope failure never marks the morning reviewed", async () => {
   const d = ymd(1);
   const { ctx, saved } = load({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d]);
-  ctx.window.DCC.DayReview = {
-    load: async () => { throw new Error("temporarily unavailable"); },
-    pendingCount: () => 0
+  ctx.window.DCC.Journal = {
+    ensureScope: async () => { throw new Error("temporarily unavailable"); },
+    render: () => "",
+    isPending: () => false,
+    setHost: () => {}
   };
   await openLooseEnds(ctx);
   assert.equal(saved._catchUpReviewed, undefined);
@@ -810,9 +819,11 @@ test("a Day in Review load failure never marks the morning reviewed", async () =
 
 test("fresh sweep arrivals update Loose Ends without opening it", async () => {
   const { ctx, saved } = triageCtx({}, [], [TRI("s1")]);
-  ctx.window.DCC.DayReview = {
-    load: async () => { throw new Error("temporarily unavailable"); },
-    pendingCount: () => 0
+  ctx.window.DCC.Journal = {
+    ensureScope: async () => { throw new Error("temporarily unavailable"); },
+    render: () => "",
+    isPending: () => false,
+    setHost: () => {}
   };
   const opened = await ctx.window.DCC.CatchUp.openArrivals(["s1"]);
   assert.equal(opened, true);
@@ -831,7 +842,7 @@ test("fresh arrivals stay unreviewed when slipped tasks or meeting follow-ups fa
       ? async () => { throw new Error("meetings unavailable"); }
       : async () => ({ ok: true, json: async () => ({ items: [] }) });
     const { ctx, saved } = triageCtx({}, [], [TRI("s1")], { fetch });
-    installDayReview(ctx, 0);
+    installJournal(ctx, { pending: false });
     if (failedSource === "slipped") ctx.window.DCC.Carryover.collect = async () => { throw new Error("tasks unavailable"); };
     assert.equal(await ctx.window.DCC.CatchUp.openArrivals(["s1"]), true);
     assert.equal(ctx.document.getElementById("catchup-overlay"), null);
@@ -1102,7 +1113,9 @@ test("the modal traps keyboard focus and closes on Escape", () => {
 });
 
 test("the Journal mood dialog uses semantic choices and its own focus trap", () => {
-  const source = require("node:fs").readFileSync(require.resolve("./public/js/glymphatic-brief.js"), "utf8");
+  // Moved out of glymphatic-brief.js into its own module when the Day-in-Review scan
+  // was ripped out (2026-08-20). Same markup, same focus trap, new home.
+  const source = require("node:fs").readFileSync(require.resolve("./public/js/journal.js"), "utf8");
   assert.match(source, /class="gb-mood[^\n]*aria-pressed=/);
   assert.match(source, /class="gb-act[^\n]*aria-pressed=/);
   assert.match(source, /aria-labelledby="gb-mood-title"/);

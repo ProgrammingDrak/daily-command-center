@@ -594,7 +594,7 @@ module.exports = function mount(app, ctx) {
   // idempotency_key included. Skipping on the tombstone would find the tombstone OF THE
   // VERY ROW BEING RESTORED, create nothing, and hand the client back a dead id — undo
   // silently failing on every task carrying a key (199 of 3,106 rows on the prod
-  // restore: slack-bookmark, day-review, quick-task, and now task groups).
+  // restore: slack-bookmark, quick-task, and now task groups).
   //
   // The safe direction is also the simple one: these routes deduped on NOTHING before
   // this phase, so a live-match skip is strictly better than main and a tombstone skip
@@ -636,7 +636,7 @@ module.exports = function mount(app, ctx) {
   // hand a write-only Sweep Suite token any row in the workspace it names, just by
   // guessing that row's key — and several key vocabularies are guessable to a
   // semi-insider (`slack-bookmark:<channel>:<ts>` is readable off any Slack message,
-  // and `day-review:<date>:<id>` / `tg:<group>:<date>:<i>` are structured). It would
+  // and `tg:<group>:<date>:<i>` is structured). It would
   // also read back tombstones, which A2 deliberately made GET /:id 404 on.
   //
   // 404 rather than 403, matching assertBlockOwnership: the fact being withheld is
@@ -1479,7 +1479,7 @@ module.exports = function mount(app, ctx) {
   }));
 
   // dcc_state rows keyed by date for the client range cache. db.getDccStateRange
-  // existed but was never routed — loadDateRange (day-review, Catch up, the
+  // existed but was never routed — loadDateRange (Catch up, the
   // Unfinished section) 404'd here and silently returned an empty cache.
   app.get("/api/dcc-state/range", route(async (req, res) => {
     const { start, end } = req.query;

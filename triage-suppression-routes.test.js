@@ -359,21 +359,21 @@ test("there is no GET route duplicating what the day response already carries", 
 const BRIEF_STATE = {
   date: "2026-08-06",
   glymphatic_brief: {
-    current: { pages: [{ id: "day-review", items: [{ id: "dr-abc" }] }] },
-    decisions: { "dr-abc": { action: "approved", decided_at: "2026-08-06T10:00:00.000Z" } },
-    decision_log: [{ task_id: "dr-abc", action: "approved", time: null, at: "2026-08-06T10:00:00.000Z" }],
+    current: { pages: [{ id: "front", tasks: [{ id: "front-abc" }] }] },
+    decisions: { "front-abc": { action: "accept", decided_at: "2026-08-06T10:00:00.000Z" } },
+    decision_log: [{ task_id: "front-abc", action: "accept", time: null, at: "2026-08-06T10:00:00.000Z" }],
   },
 };
 
-test("a nightly publish cannot reset an answered Day-in-Review card to pending", async () => {
+test("a nightly publish cannot reset an answered front-page decision to pending", async () => {
   const { app, saved } = mountSuppressions([], BRIEF_STATE);
   const res = await callDcc(app, "POST", "/api/ingest/day-state", {
     date: "2026-08-06",
-    glymphatic_brief: { current: { pages: [{ id: "day-review", items: [{ id: "dr-abc" }] }] } },
+    glymphatic_brief: { current: { pages: [{ id: "front", tasks: [{ id: "front-abc" }] }] } },
   });
   assert.equal(res.status, 200);
   const brief = saved.at(-1).state.glymphatic_brief;
-  assert.equal(brief.decisions["dr-abc"].action, "approved", "the user's answer must survive the publish");
+  assert.equal(brief.decisions["front-abc"].action, "accept", "the user's answer must survive the publish");
   assert.equal(brief.decision_log.length, 1, "and so must its ledger entry");
 });
 
@@ -381,10 +381,10 @@ test("a publish still owns the brief's authored content", async () => {
   const { app, saved } = mountSuppressions([], BRIEF_STATE);
   await callDcc(app, "POST", "/api/ingest/day-state", {
     date: "2026-08-06",
-    glymphatic_brief: { current: { pages: [{ id: "day-review", items: [{ id: "dr-fresh" }] }] } },
+    glymphatic_brief: { current: { pages: [{ id: "front", tasks: [{ id: "front-fresh" }] }] } },
   });
   const pages = saved.at(-1).state.glymphatic_brief.current.pages;
-  assert.deepStrictEqual(pages, [{ id: "day-review", items: [{ id: "dr-fresh" }] }]);
+  assert.deepStrictEqual(pages, [{ id: "front", tasks: [{ id: "front-fresh" }] }]);
 });
 
 test("a publish that omits glymphatic_brief leaves the whole section untouched", async () => {
@@ -394,7 +394,7 @@ test("a publish that omits glymphatic_brief leaves the whole section untouched",
     triage: { open_items: [] },
   });
   const brief = saved.at(-1).state.glymphatic_brief;
-  assert.equal(brief.decisions["dr-abc"].action, "approved");
+  assert.equal(brief.decisions["front-abc"].action, "accept");
   assert.deepStrictEqual(brief.current.pages, BRIEF_STATE.glymphatic_brief.current.pages);
 });
 

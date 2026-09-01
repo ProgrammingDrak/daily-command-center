@@ -21,7 +21,6 @@ const recurrence = require("./lib/recurrence");
 // cannot drift apart on which types are never carried over.
 const TaskTypes = require("./public/js/task-types");
 const { plannedWindowOf } = require("./lib/task-timing");
-const dayReviewRepeats = require("./day-review-repeats");
 
 // ── Workspace Bootstrap ──
 
@@ -2108,39 +2107,26 @@ async function saveDccState(date, stateJson, userId, workspaceId) {
   );
 }
 
-// A Day in Review packet is generated for ONE day (its `review_date`) and published
-// into that day's row AND the next day's, so "yesterday's review" is reachable from
-// today's screen. The next night's run then overwrites the borrowed row with its own
-// packet — which is how a tab that has been open across that boundary ends up posting
-// yesterday's item ids at a row that now holds today's packet. `opts.probe` is the
-// caller's way to ASK a row whether it owns a target without creating anything: the
-// route walks recent days with it to find the packet an id really belongs to, and a
-// probe must never mint an empty dcc_state row for a day the user never opened.
-async function saveDccBriefDecision(date, input, userId, workspaceId, emptyState, opts = {}) {
+// Records one front-page brief decision (accept / schedule / backlog / drop / reset)
+// on the day's dcc_state row. Serialized with FOR UPDATE so two tabs deciding at once
+// cannot lose one another's write, and the audit trail in `decision_log` is capped at
+// 200 entries. saveDccState COALESCEs `decisions` / `decision_log` forward on every
+// publish, so a nightly ingest can never erase an answer recorded here.
+async function saveDccBriefDecision(date, input, userId, workspaceId, emptyState) {
   const wsId = workspaceId || (userId ? `ws-${userId}` : "ws-1");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    if (!opts.probe) {
-      await client.query(
-        `INSERT INTO dcc_state (date, state_json, user_id, workspace_id, updated_at)
-         VALUES ($1, $2, $3, $4, NOW())
-         ON CONFLICT(date, workspace_id) DO NOTHING`,
-        [date, emptyState || { date }, userId || null, wsId]
-      );
-    }
+    await client.query(
+      `INSERT INTO dcc_state (date, state_json, user_id, workspace_id, updated_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT(date, workspace_id) DO NOTHING`,
+      [date, emptyState || { date }, userId || null, wsId]
+    );
     const { rows } = await client.query(
       "SELECT state_json FROM dcc_state WHERE date = $1 AND workspace_id = $2 FOR UPDATE",
       [date, wsId]
     );
-    if (opts.probe && !(rows[0] && rows[0].state_json)) {
-      const error = new Error(`No Day in Review packet stored for ${date}`);
-      error.status = 400;
-      error.code = "packet_mismatch";
-      error.packetDate = date;
-      error.reviewDate = null;
-      throw error;
-    }
     const state = rows[0] && rows[0].state_json ? rows[0].state_json : (emptyState || { date });
     let briefSource = state.glymphatic_brief || state.glymphaticBrief || null;
     if (!state.glymphatic_brief && state.glymphaticBrief) {
@@ -2148,54 +2134,12 @@ async function saveDccBriefDecision(date, input, userId, workspaceId, emptyState
       delete state.glymphaticBrief;
       briefSource = state.glymphatic_brief;
     }
-    let decisionSignature = "";
-    if (["approve", "push-next", "dismiss"].includes(input.action)) {
-      briefSource = briefSource || {};
-      const current = briefSource.current || briefSource;
-      const pages = current && Array.isArray(current.pages) ? current.pages : [];
-      const page = pages.find(candidate => candidate && candidate.id === "day-review") || {};
-      const items = Array.isArray(page.items) ? page.items : (Array.isArray(current.did_today) ? current.did_today : []);
-      const parentItem = items.find(item => item && item.id === input.taskId) || null;
-      let followupItem = null;
-      for (const item of items) {
-        const hit = Array.isArray(item && item.followups)
-          ? item.followups.find(follow => follow && follow.id === input.taskId)
-          : null;
-        if (hit) { followupItem = hit; break; }
-      }
-      const parent = !!parentItem;
-      const followup = !!followupItem;
-      // The content signature is derived HERE, while the item is still in the row, and
-      // stored on the decision itself. A packet lives in its own day's row and, for one
-      // day, in the borrowed next-day row; the client reviews the borrowed copy, so the
-      // decision lands there and the next night's publish replaces that row's items.
-      // Re-deriving the signature later by joining decision ids back to items therefore
-      // finds nothing (verified in prod: 2026-08-17 held 34 decisions against 24 item
-      // ids). Carrying it on the decision, which saveDccState COALESCEs forward forever,
-      // is what makes the suppression outlive the packet it came from.
-      decisionSignature = dayReviewRepeats.itemSignature(parentItem || followupItem);
-      const validTarget = input.action === "approve" ? parent
-        : (input.action === "push-next" ? followup : (parent || followup));
-      if (!validTarget) {
-        const reviewDate = typeof page.review_date === "string" ? page.review_date : null;
-        const error = new Error(
-          `Decision target does not belong to the Day in Review packet stored for ${date}` +
-          (reviewDate && reviewDate !== date ? ` (that packet reviews ${reviewDate})` : "")
-        );
-        error.status = 400;
-        error.code = "packet_mismatch";
-        error.packetDate = date;
-        error.reviewDate = reviewDate;
-        throw error;
-      }
-    }
     const brief = briefSource || (state.glymphatic_brief = { history: [], current: null });
     const decisions = brief.decisions || (brief.decisions = {});
     const prior = decisions[input.taskId] || null;
     const at = new Date().toISOString();
     const next = input.action === "reset" ? null : {
       action: input.action, time: input.time || null, decided_at: at,
-      ...(decisionSignature ? { signature: decisionSignature } : {}),
     };
     const changed = input.action === "reset"
       ? !!prior

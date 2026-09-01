@@ -17,8 +17,9 @@ function reviewState() {
       decisions: {},
       current: {
         pages: [{
-          id: "day-review",
-          items: [{ id: "did-1", followups: [{ id: "follow-1" }] }]
+          id: "front",
+          done_today: [],
+          tasks: [{ id: "task-1" }, { id: "task-2" }]
         }]
       }
     }
@@ -51,13 +52,13 @@ function makePool(initialState) {
   };
 }
 
-test("atomic brief decisions preserve separate parent and follow-up choices", async () => {
+test("atomic brief decisions preserve separate per-task choices", async () => {
   const pool = makePool(reviewState());
   const db = loadDbWithPool(pool);
-  await db.saveDccBriefDecision("2026-08-14", { taskId: "did-1", action: "approve" }, 1, "ws-1", reviewState());
-  await db.saveDccBriefDecision("2026-08-14", { taskId: "follow-1", action: "push-next" }, 1, "ws-1", reviewState());
-  assert.equal(pool.state().glymphatic_brief.decisions["did-1"].action, "approve");
-  assert.equal(pool.state().glymphatic_brief.decisions["follow-1"].action, "push-next");
+  await db.saveDccBriefDecision("2026-08-14", { taskId: "task-1", action: "accept" }, 1, "ws-1", reviewState());
+  await db.saveDccBriefDecision("2026-08-14", { taskId: "task-2", action: "backlog" }, 1, "ws-1", reviewState());
+  assert.equal(pool.state().glymphatic_brief.decisions["task-1"].action, "accept");
+  assert.equal(pool.state().glymphatic_brief.decisions["task-2"].action, "backlog");
   assert.equal(pool.state().glymphatic_brief.decision_log.length, 2);
   assert.ok(pool.log.some(entry => /FOR UPDATE/.test(entry.text)));
 });
@@ -65,21 +66,10 @@ test("atomic brief decisions preserve separate parent and follow-up choices", as
 test("repeating the same decision does not duplicate audit history", async () => {
   const pool = makePool(reviewState());
   const db = loadDbWithPool(pool);
-  await db.saveDccBriefDecision("2026-08-14", { taskId: "did-1", action: "approve" }, 1, "ws-1", reviewState());
-  const result = await db.saveDccBriefDecision("2026-08-14", { taskId: "did-1", action: "approve" }, 1, "ws-1", reviewState());
+  await db.saveDccBriefDecision("2026-08-14", { taskId: "task-1", action: "accept" }, 1, "ws-1", reviewState());
+  const result = await db.saveDccBriefDecision("2026-08-14", { taskId: "task-1", action: "accept" }, 1, "ws-1", reviewState());
   assert.equal(result.changed, false);
   assert.equal(pool.state().glymphatic_brief.decision_log.length, 1);
-});
-
-test("Day in Review decisions reject IDs outside the packet", async () => {
-  const pool = makePool(reviewState());
-  const db = loadDbWithPool(pool);
-  await assert.rejects(
-    () => db.saveDccBriefDecision("2026-08-14", { taskId: "foreign", action: "approve" }, 1, "ws-1", reviewState()),
-    error => error.status === 400
-  );
-  assert.equal(pool.state().glymphatic_brief.decisions.foreign, undefined);
-  assert.ok(pool.log.some(entry => entry.text === "ROLLBACK"));
 });
 
 test("atomic decisions normalize legacy camel-case brief state", async () => {
@@ -88,10 +78,10 @@ test("atomic decisions normalize legacy camel-case brief state", async () => {
   delete legacy.glymphatic_brief;
   const pool = makePool(legacy);
   const db = loadDbWithPool(pool);
-  await db.saveDccBriefDecision("2026-08-14", { taskId: "did-1", action: "approve" }, 1, "ws-1", legacy);
+  await db.saveDccBriefDecision("2026-08-14", { taskId: "task-1", action: "accept" }, 1, "ws-1", legacy);
   assert.equal(pool.state().glymphaticBrief, undefined);
-  assert.equal(pool.state().glymphatic_brief.decisions["did-1"].action, "approve");
-  assert.equal(pool.state().glymphatic_brief.current.pages[0].id, "day-review");
+  assert.equal(pool.state().glymphatic_brief.decisions["task-1"].action, "accept");
+  assert.equal(pool.state().glymphatic_brief.current.pages[0].id, "front");
 });
 
 test("whole-day saves cannot resurrect a decision removed by an atomic reset", async () => {
