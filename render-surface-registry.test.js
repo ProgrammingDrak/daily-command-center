@@ -118,7 +118,7 @@ test("the badge-coupled + always-visible surfaces stay registered (regression gu
   const keys = JSON.parse(vm.runInContext("JSON.stringify(Object.keys(SURFACES))", c));
   // delegated + meetingAutoPanels were buildSchedule side effects that must remain
   // their own surfaces now that buildSchedule is gated off.
-  for (const k of ["delegated", "meetingAutoPanels", "scheduleTriage", "listView", "taskMenusBadge"]) {
+  for (const k of ["delegated", "meetingAutoPanels", "scheduleTriage", "listView", "taskMenusBadge", "anytime"]) {
     assert.ok(keys.includes(k), "missing surface: " + k);
   }
 });

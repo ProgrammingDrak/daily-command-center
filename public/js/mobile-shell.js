@@ -83,6 +83,7 @@
     { label:"Share list",       icon:"🔗", find(){ return byId("todo-share-open"); } },
     { label:"Refresh reactions",icon:"🔄", find(){ return byId("todo-reactions-toggle"); } },
     { label:"Sticky Notes",     icon:"📌", find(){ return byId("sn-open-btn"); } },
+    { label:"Anytime",          icon:"💧", find(){ return byId("anytime-dock"); } },
     { label:"Start of day",     icon:"🌅", find(){ return byId("dcc-day-start"); } },
     { label:"Replay tutorial",  icon:"🎓", find(){ return byId("dcc-replay-tutorial"); } },
     { label:"Sign out",         icon:"⏻", find(){ return byId("dcc-sign-out"); } }

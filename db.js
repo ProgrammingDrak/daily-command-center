@@ -151,6 +151,8 @@ function parseBlock(row) {
 const NON_TASK_KINDS = new Set([
   "delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone", "slack_done_intent",
   "meeting_prep", "meeting_transcript", "meeting_summary", "proposed_action_item",
+  // Dateless Anytime definitions are configuration, not task rows.
+  "anytime_item",
 ]);
 function isTaskRow(block) {
   if (!block) return false;
