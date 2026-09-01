@@ -502,7 +502,7 @@ function renderDmSessions(){
   list.querySelectorAll('.dm-sess-dur-btn').forEach(btn=>{
     btn.addEventListener('click',function(){
       const idx=parseInt(this.dataset.idx),d=parseInt(this.dataset.d);
-      _dmSessions[idx].durationMin=Math.max(5,_dmSessions[idx].durationMin+d);
+      _dmSessions[idx].durationMin=stepDuration(_dmSessions[idx].durationMin,d,{min:5});
       renderDmSessions();
     });
   });
