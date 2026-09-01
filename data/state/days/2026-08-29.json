@@ -1,0 +1,89 @@
+{
+  "date": "2026-08-29",
+  "last_updated_at": "2026-08-19T20:00:21.957Z",
+  "last_updated_by": "skeleton",
+  "watermarks": {},
+  "triage": {
+    "open_items": [],
+    "resolved_items": [],
+    "cycle_count": 0
+  },
+  "sweep": {
+    "source_health": [],
+    "readers": [],
+    "open_item_count": 0,
+    "meetings_count": 0
+  },
+  "glymphatic_brief": {
+    "history": [],
+    "current": {
+      "id": "brief-2026-08-29",
+      "date": "2026-08-29",
+      "title": "Glymphatic Brief",
+      "summary": "",
+      "triage": null,
+      "lessons": [],
+      "disregarded": [],
+      "suggested_tasks": [],
+      "pages": [
+        {
+          "id": "canvas",
+          "label": "Organism",
+          "canvas_html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>\n:root{--bg:#0f1115;--card:#191d24;--ink:#e8eaf0;--dim:#9aa3b2;--acc:#5eead4;--ok:#34d399;--bad:#f87171;--line:#2a2f3a}\n*{box-sizing:border-box;margin:0}body{background:var(--bg);color:var(--ink);\nfont:13px/1.5 -apple-system,system-ui,sans-serif;padding:14px}\nh1{font-size:16px}.sub{color:var(--dim);font-size:11px;margin-bottom:12px}\n.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px}\n.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}\n.card h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--acc);margin-bottom:8px}\n.kv{display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed var(--line);font-size:12px}\n.kv:last-child{border-bottom:0}.kv .k{color:var(--dim);white-space:nowrap}.kv .d{color:var(--dim);text-align:right}\n.ok{color:var(--ok)}.bad{color:var(--bad)}ul{padding-left:16px}li{font-size:12px;color:var(--dim);margin:2px 0}\n.upd{font:11px ui-monospace,Menlo,monospace;color:var(--dim);padding:2px 0;border-bottom:1px dashed var(--line)}\n.upd:last-child{border-bottom:0}\ndetails.job{border-bottom:1px dashed var(--line)}details.job:last-of-type{border-bottom:0}\ndetails.job>summary{display:flex;justify-content:space-between;gap:8px;align-items:baseline;padding:4px 0;cursor:pointer;font-size:12px;list-style:none}\ndetails.job>summary::-webkit-details-marker{display:none}\ndetails.job>summary::before{content:\"\\25B8\";color:var(--dim);margin-right:6px;font-size:9px}\ndetails.job[open]>summary::before{content:\"\\25BE\"}\ndetails.job>summary .k{color:var(--ink);white-space:nowrap}details.job>summary .d{color:var(--dim);text-align:right}\n.jline{display:flex;justify-content:space-between;gap:8px;padding:2px 0 2px 18px;font-size:11px;color:var(--dim)}\n.jline .k{color:var(--dim);white-space:nowrap}.jline .d{color:var(--dim);text-align:right}\n.lbl{padding:5px 0 1px 18px;font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--acc);opacity:.75}\n.step{display:flex;gap:6px;padding:1px 0 1px 18px;font:11px ui-monospace,Menlo,monospace;color:var(--dim)}\n.step .d{margin-left:auto;color:var(--dim)}\n.foot{padding-top:9px;font-size:11px;color:var(--dim)}</style></head><body>\n<h1>The Organism</h1>\n<div class=\"sub\">Living system document \u00b7 rebuilt 2026-08-30 05:05 by the night heartbeat</div>\n<div class=\"grid\">\n<div class=\"card\"><h2>Personality</h2><ul><li>Answer first. No preamble.</li><li>Max 15 words per sentence.</li><li>Max 3 sentences per block.</li></ul>\n  <div class=\"kv\"><span class=\"k\">Soul last changed</span><span class=\"d\">2026-08-19 \u00b7 Make the STE + ADHD voice rule binding for Claude AND Codex</span></div></div>\n<div class=\"card\"><h2>Schedule</h2><details class=\"job\"><summary><span class=\"k\">Night Consolidation</span><span class=\"d\">8.4h ago</span></summary><div class=\"jline\"><span class=\"k\">scheduled</span><span class=\"d\">17:00 mac \u00b7 17:10 darrow</span></div><div class=\"lbl\">last run \u00b7 by machine</div><div class=\"jline\"><span class=\"k\">macbook-air-4</span><span class=\"d\">08-29 20:43 \u00b7 full \u00b7 global \u2713</span></div><div class=\"jline\"><span class=\"k\">darrow</span><span class=\"d\">08-29 20:33 \u00b7 full</span></div><div class=\"jline\"><span class=\"k\">mac</span><span class=\"d\">08-23 20:41 \u00b7 full \u00b7 global \u2713</span></div><div class=\"lbl\">latest run steps</div><div class=\"step\"><span class=\"ok\">\u2713</span> sync-in<span class=\"d\">20:00</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> sync-claim<span class=\"d\">20:00</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> evidence<span class=\"d\">20:06</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> read-calendar<span class=\"d\">20:08</span></div><div class=\"step\"><span class=\"bad\">\u2717</span> git-backup<span class=\"d\">20:08</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> steward<span class=\"d\">20:08</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> worklog<span class=\"d\">20:08</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> ai-surfaces<span class=\"d\">20:08</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> collector<span class=\"d\">20:08</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> effectors-pull<span class=\"d\">20:08</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> organism-dashboard<span class=\"d\">20:08</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> prune-triage<span class=\"d\">20:08</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> deep-lanes<span class=\"d\">20:26</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> deep-skeptic<span class=\"d\">20:42</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> deep-apply<span class=\"d\">20:43</span></div><div class=\"step\"><span class=\"bad\">\u2717</span> deep-run<span class=\"d\">20:43</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> sweep-publish<span class=\"d\">20:43</span></div><div class=\"step\"><span class=\"bad\">\u2717</span> outputs-sync<span class=\"d\">20:43</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> sync-out<span class=\"d\">20:43</span></div></details><details class=\"job\"><summary><span class=\"k\">Morning Awakening</span><span class=\"d\">0.1h ago</span></summary><div class=\"jline\"><span class=\"k\">scheduled</span><span class=\"d\">07:00 mac \u00b7 07:10 darrow</span></div><div class=\"lbl\">last run \u00b7 by machine</div><div class=\"jline\"><span class=\"k\">macbook-air-4</span><span class=\"d\">08-30 05:00 \u00b7 light \u00b7 global \u2713</span></div><div class=\"jline\"><span class=\"k\">darrow</span><span class=\"d\">08-29 07:14 \u00b7 light</span></div><div class=\"jline\"><span class=\"k\">mac</span><span class=\"d\">08-23 05:05 \u00b7 light \u00b7 global \u2713</span></div><div class=\"lbl\">latest run steps</div><div class=\"step\"><span class=\"ok\">\u2713</span> sync-in<span class=\"d\">05:00</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> sync-claim<span class=\"d\">05:00</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> evidence<span class=\"d\">05:05</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> sweep-freshness<span class=\"d\">05:05</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> active-projects<span class=\"d\">05:05</span></div><div class=\"step\"><span class=\"ok\">\u2713</span> sweep-publish<span class=\"d\">05:05</span></div></details><details class=\"job\"><summary><span class=\"k\">Sweep</span><span class=\"ok\">19.1h ago</span></summary><div class=\"jline\"><span class=\"k\">last swept</span><span class=\"d\">2026-08-29 13:59Z</span></div></details><details class=\"job\"><summary><span class=\"k\">Git backup</span><span class=\"d\">git-backup: 4 failure(s): autosourcer:fetch:</span></summary><div class=\"jline\">git-backup: 4 failure(s): autosourcer:fetch:no-access clever-code-review-plugin:fetch:no-access clever-dashboards:fetch:no-access consolidated-portal:fetch:no-access (pushed 5 refs)</div></details><details class=\"job\"><summary><span class=\"k\">Flags</span><span class=\"d\">10 open \u00b7 1 shipped</span></summary><div class=\"step\">ai-surfaces drift: 1 surface(s) no longer match their source (workspace-agents:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)</div><div class=\"step\">ai-surfaces drift: 2 surface(s) no longer match their source (claude-global: codex-global:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)</div><div class=\"step\">ai-surfaces drift: 1 surface(s) no longer match their source (workspace-agents:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)</div><div class=\"step\">ai-surfaces drift: 2 surface(s) no longer match their source (claude-global: codex-global:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)</div><div class=\"step\">ai-surfaces drift: 1 surface(s) no longer match their source (workspace-agents:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)</div><div class=\"step\">ai-surfaces drift: 2 surface(s) no longer match their source (claude-global: codex-global:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)</div></details><div class=\"foot\">Full dashboard \u2192 outputs/organism/organism-dashboard.html</div></div>\n<div class=\"card\"><h2>Skills</h2><div class=\"kv\"><span class=\"k\">brain-core v0.2.72 (35)</span><span class=\"d\">brain-prune, brainupdate, building-blocks, call-coach, commentable-doc, cross-agent-review, daily-glymphatic-review, data-table-design, dcc-task, deploy-and-close, evidence-collector, feature-broadcast, feature-report, glymphatic, glymphatic-deep, lessons-router, markup-layer, meeting-review, plan-critique, plan-dashboard, prod-drift-check, project-cleanup, project-plan, project-retrospective, recording-review, register-mcp-perms, session-handoff, share-html, share-skill, ship-it, stable-preview, submit-for-review, workspace-hygiene, workspace-launch, workspace-steward</span></div><div class=\"kv\"><span class=\"k\">clever-pa v0.3.1 (12)</span><span class=\"d\">board-cleanup, close-action-item, create-action-item, data-layer, end-of-day-assessment, knowledge-manager, meeting-router, morning-scheduling, review-and-triage, schedule, transcript-retriever, user-context</span></div><div class=\"kv\"><span class=\"k\">dcc-task-ops v0.1.16 (6)</span><span class=\"d\">add-dcc-subtasks, capture-chat-actions, complete-dcc-task, create-dcc-task, read-dcc-tasks, update-dcc-task</span></div><div class=\"kv\"><span class=\"k\">sweep-suite v0.2.28 (8)</span><span class=\"d\">draft-replies, publish-dcc-state, read-calendar, read-custom, read-gmail, read-notion, read-slack, review-meetings</span></div></div>\n<div class=\"card\" style=\"grid-column:1/-1\"><h2>Most recent updates (when \u00b7 what)</h2><div class=\"upd\">08-30 05:05 \u00b7 brain-sync: 2026-08-30 05:05 from MacBook-Air-4</div><div class=\"upd\">08-30 05:00 \u00b7 brain-sync: 2026-08-30 05:00 from MacBook-Air-4</div><div class=\"upd\">08-30 05:00 \u00b7 Merge remote-tracking branch &#x27;origin/main&#x27;</div><div class=\"upd\">08-30 05:00 \u00b7 brain-sync: 2026-08-30 05:00 from MacBook-Air-4</div><div class=\"upd\">08-30 01:08 \u00b7 Merge remote-tracking branch &#x27;origin/main&#x27;</div><div class=\"upd\">08-30 01:08 \u00b7 brain-sync: 2026-08-30 01:08 from Darrow</div></div>\n</div></body></html>",
+          "height": 980,
+          "summary": "Quiet night: nothing new shipped; systems ran clean.",
+          "shipped": [
+            "quiet night"
+          ],
+          "open_flags": [
+            "[2026-08-20] ai-surfaces drift: 1 surface(s) no longer match their source (workspace-agents:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)",
+            "[2026-08-21] ai-surfaces drift: 2 surface(s) no longer match their source (claude-global: codex-global:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)",
+            "[2026-08-22] ai-surfaces drift: 1 surface(s) no longer match their source (workspace-agents:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)",
+            "[2026-08-22] ai-surfaces drift: 2 surface(s) no longer match their source (claude-global: codex-global:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)",
+            "[2026-08-23] ai-surfaces drift: 1 surface(s) no longer match their source (workspace-agents:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)",
+            "[2026-08-23] ai-surfaces drift: 2 surface(s) no longer match their source (claude-global: codex-global:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)",
+            "[2026-08-24] ai-surfaces drift: 1 surface(s) no longer match their source (workspace-agents:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)",
+            "[2026-08-25] ai-surfaces drift: 2 surface(s) no longer match their source (claude-global: codex-global:). Review the diff, then run `python3 claude-brain/scripts/ai_surfaces.py --render`. (from the night heartbeat ai-surfaces step)"
+          ],
+          "metrics": [
+            {
+              "label": "Sweep freshness",
+              "value": "19.1h ago"
+            },
+            {
+              "label": "Git backup",
+              "value": "git-backup: 4 failure(s): autosourcer:fetch:no-access clever-code-review-plugin:fetch:n..."
+            },
+            {
+              "label": "Active projects",
+              "value": "11 active \u00b7 no new PRs by others"
+            }
+          ],
+          "heartbeats": [
+            "2026-08-29 night \u00b7 macbook-air-4: full +global",
+            "2026-08-29 morning \u00b7 macbook-air-4: light +global",
+            "2026-08-29 night \u00b7 darrow: full",
+            "2026-08-28 night \u00b7 macbook-air-4: full +global",
+            "2026-08-28 morning \u00b7 macbook-air-4: light +global",
+            "2026-08-28 night \u00b7 darrow: full"
+          ],
+          "dashboard": "outputs/organism/organism-dashboard.html"
+        }
+      ],
+      "generated_at": "2026-08-30T05:05:47-04:00"
+    }
+  },
+  "completions": {
+    "tasks": []
+  },
+  "schedule": {
+    "working_hours": {
+      "start": "07:00",
+      "end": "17:30"
+    },
+    "timeline": [],
+    "tasks_scheduled": [],
+    "tasks_couldnt_fit": [],
+    "stats": {}
+  }
+}
