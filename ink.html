@@ -51,7 +51,9 @@
   .shelf-head h1 { font-size: 22px; margin: 0; font-weight: 620; letter-spacing: -0.01em; }
   .shelf-head .sub { color: var(--muted); font-size: 13px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px; }
+  .book-wrap { position: relative; min-width: 0; }
   .book { text-align: left; display: flex; flex-direction: column; gap: 9px; }
+  .book-wrap .book { width: 100%; }
   .book .spine {
     aspect-ratio: 3/4; border-radius: 10px; position: relative; overflow: hidden;
     box-shadow: 0 6px 18px rgba(0,0,0,.34); transition: transform .12s ease;
@@ -69,6 +71,23 @@
   }
   .book .title { font-size: 13.5px; font-weight: 560; }
   .book .meta { font-size: 11.5px; color: var(--muted); }
+  .book-actions {
+    position: absolute; top: 9px; right: 9px; width: 34px; height: 34px;
+    display: grid; place-items: center; border: 1px solid rgba(255,255,255,.2);
+    border-radius: 8px; background: rgba(20,20,31,.88); font-size: 22px;
+    line-height: 1; box-shadow: 0 4px 12px rgba(0,0,0,.25);
+  }
+  .book-actions:hover, .book-actions:focus-visible { background: var(--chrome-3); }
+  .book-menu {
+    position: fixed; z-index: 20; min-width: 150px; padding: 6px;
+    border: 1px solid var(--edge); border-radius: 10px; background: var(--chrome-2);
+    box-shadow: 0 16px 36px rgba(0,0,0,.5);
+  }
+  .book-menu button {
+    display: block; width: 100%; padding: 9px 11px; border-radius: 7px; text-align: left;
+  }
+  .book-menu button:hover, .book-menu button:focus-visible { background: var(--chrome-3); }
+  .book-menu button.danger { color: var(--danger); }
   .new-book .spine {
     background: none; border: 1.5px dashed var(--edge); display: grid; place-items: center;
     color: var(--muted); font-size: 30px; box-shadow: none;
@@ -136,6 +155,7 @@
   .row button { padding: 9px 15px; border-radius: 9px; background: var(--chrome-3); }
   .row button.primary { background: var(--accent); }
   .row button.danger { background: transparent; color: var(--danger); margin-right: auto; }
+  .delete-row button.danger { margin-right: 0; background: var(--danger); color: white; }
 </style>
 </head>
 <body>
@@ -207,6 +227,21 @@
     <button class="danger" id="bookDelete">Delete</button>
     <button id="bookCancel">Cancel</button>
     <button class="primary" id="bookSave">Save</button>
+  </div>
+</dialog>
+
+<div class="book-menu hidden" id="bookMenu" role="menu" aria-label="Notebook actions">
+  <button id="bookMenuOpen" role="menuitem">Open</button>
+  <button id="bookMenuRename" role="menuitem">Rename</button>
+  <button class="danger" id="bookMenuDelete" role="menuitem">Delete</button>
+</div>
+
+<dialog id="deleteBookDlg">
+  <h2>Delete notebook?</h2>
+  <p id="deleteBookMessage"></p>
+  <div class="row delete-row">
+    <button id="deleteBookCancel">Cancel</button>
+    <button class="danger" id="deleteBookConfirm">Delete</button>
   </div>
 </dialog>
 

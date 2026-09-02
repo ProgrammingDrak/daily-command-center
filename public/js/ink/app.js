@@ -17,6 +17,7 @@
   const HIGHLIGHTS = ["#ffe66d", "#a8e6a1", "#9fd6ff", "#ffc2e0"];
   const SIZES = [1.6, 2.6, 4.2, 7];
   const COVERS = ["slate", "moss", "clay", "plum", "ink", "sand"];
+  const BOOK_ACTION_ICON = "⋮";
   const SAVE_DEBOUNCE_MS = 700;
 
   const $ = (id) => document.getElementById(id);
@@ -34,6 +35,10 @@
     newCancel: $("newCancel"), coverPicks: $("coverPicks"),
     bookDlg: $("bookDlg"), bookTitle: $("bookTitle"), bookSave: $("bookSave"),
     bookCancel: $("bookCancel"), bookDelete: $("bookDelete"),
+    bookMenu: $("bookMenu"), bookMenuOpen: $("bookMenuOpen"),
+    bookMenuRename: $("bookMenuRename"), bookMenuDelete: $("bookMenuDelete"),
+    deleteBookDlg: $("deleteBookDlg"), deleteBookMessage: $("deleteBookMessage"),
+    deleteBookCancel: $("deleteBookCancel"), deleteBookConfirm: $("deleteBookConfirm"),
   };
 
   let ink = null;
@@ -43,6 +48,10 @@
   let saveTimer = null;
   let localStatus = "";
   let remoteStatus = "";
+  let menuNotebook = null;
+  let menuTrigger = null;
+  let editingNotebook = null;
+  let deletingNotebook = null;
 
   const coverColor = (name) =>
     getComputedStyle(document.documentElement).getPropertyValue(`--cover-${name}`).trim() || "#47506b";
@@ -50,12 +59,15 @@
   // ── shelf ──────────────────────────────────────────────────────────────────
 
   async function renderShelf() {
+    closeBookMenu();
     const books = await Store.listNotebooks();
     el.books.innerHTML = "";
 
     for (const nb of books) {
       const pages = await Store.listPages(nb.id);
       const unsynced = pages.filter((p) => p.dirty === 1 && p.data).length;
+      const wrap = document.createElement("div");
+      wrap.className = "book-wrap";
       const card = document.createElement("button");
       card.className = "book";
       card.innerHTML = `
@@ -67,7 +79,23 @@
         <span class="meta">${relTime(nb.updated)}</span>`;
       card.querySelector(".title").textContent = nb.title;
       card.addEventListener("click", () => openNotebook(nb.id));
-      el.books.appendChild(card);
+      card.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        showBookMenu(nb, null, { x: event.clientX, y: event.clientY });
+      });
+      const actions = document.createElement("button");
+      actions.className = "book-actions";
+      actions.textContent = BOOK_ACTION_ICON;
+      actions.setAttribute("aria-label", `Actions for ${nb.title}`);
+      actions.setAttribute("aria-haspopup", "menu");
+      actions.setAttribute("aria-expanded", "false");
+      actions.setAttribute("aria-controls", "bookMenu");
+      actions.addEventListener("click", (event) => {
+        event.stopPropagation();
+        showBookMenu(nb, actions);
+      });
+      wrap.append(card, actions);
+      el.books.appendChild(wrap);
     }
 
     const add = document.createElement("button");
@@ -84,6 +112,68 @@
     el.shelfStatus.textContent = st.unsynced ? `${st.unsynced} page${st.unsynced === 1 ? "" : "s"} to sync` : "";
     el.shelfStatus.className = "status" + (st.unsynced ? "" : " ok");
   }
+
+  function closeBookMenu({ restoreFocus = false } = {}) {
+    el.bookMenu.classList.add("hidden");
+    if (menuTrigger) menuTrigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus && menuTrigger) menuTrigger.focus();
+    menuNotebook = null;
+    menuTrigger = null;
+  }
+
+  function showBookMenu(notebook, trigger, point = null) {
+    const isSameOpenMenu = menuNotebook && menuNotebook.id === notebook.id && !el.bookMenu.classList.contains("hidden");
+    closeBookMenu();
+    if (isSameOpenMenu && trigger) return;
+    menuNotebook = notebook;
+    menuTrigger = trigger;
+    if (trigger) trigger.setAttribute("aria-expanded", "true");
+    el.bookMenu.classList.remove("hidden");
+    const rect = trigger ? trigger.getBoundingClientRect() : null;
+    const left = point ? point.x : rect.left;
+    const top = point ? point.y : rect.bottom + 5;
+    const menuRect = el.bookMenu.getBoundingClientRect();
+    el.bookMenu.style.left = `${Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8))}px`;
+    el.bookMenu.style.top = `${Math.max(8, Math.min(top, window.innerHeight - menuRect.height - 8))}px`;
+    el.bookMenuOpen.focus();
+  }
+
+  function openBookDialog(notebook) {
+    closeBookMenu();
+    editingNotebook = notebook;
+    el.bookTitle.value = notebook.title;
+    el.bookDlg.showModal();
+    setTimeout(() => el.bookTitle.focus(), 40);
+  }
+
+  async function requestNotebookDeletion(notebook) {
+    closeBookMenu();
+    deletingNotebook = notebook;
+    const pages = await Store.listPages(notebook.id);
+    const pageLabel = `${pages.length} ${pages.length === 1 ? "page" : "pages"}`;
+    el.deleteBookMessage.textContent = `Delete “${notebook.title}” and its ${pageLabel}? This cannot be undone.`;
+    el.deleteBookDlg.showModal();
+  }
+
+  document.addEventListener("click", (event) => {
+    if (!el.bookMenu.classList.contains("hidden") && !el.bookMenu.contains(event.target)) closeBookMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !el.bookMenu.classList.contains("hidden")) closeBookMenu({ restoreFocus: true });
+  });
+  el.shelf.addEventListener("scroll", () => closeBookMenu());
+  el.bookMenu.addEventListener("click", (event) => event.stopPropagation());
+  el.bookMenuOpen.addEventListener("click", async () => {
+    const notebook = menuNotebook;
+    closeBookMenu();
+    if (notebook) await openNotebook(notebook.id);
+  });
+  el.bookMenuRename.addEventListener("click", () => {
+    if (menuNotebook) openBookDialog(menuNotebook);
+  });
+  el.bookMenuDelete.addEventListener("click", () => {
+    if (menuNotebook) requestNotebookDeletion(menuNotebook);
+  });
 
   function relTime(ts) {
     const s = Math.floor((Date.now() - ts) / 1000);
@@ -219,22 +309,44 @@
     await renderShelf();
   });
 
-  el.nbName.addEventListener("click", () => {
-    el.bookTitle.value = current.notebook.title;
-    el.bookDlg.showModal();
-  });
-  el.bookCancel.addEventListener("click", () => el.bookDlg.close());
+  el.nbName.addEventListener("click", () => openBookDialog(current.notebook));
+  el.bookCancel.addEventListener("click", () => { editingNotebook = null; el.bookDlg.close(); });
   el.bookSave.addEventListener("click", async () => {
-    const nb = await Store.renameNotebook(current.notebook.id, el.bookTitle.value);
+    if (!editingNotebook) return;
+    const nb = await Store.renameNotebook(editingNotebook.id, el.bookTitle.value);
+    editingNotebook = null;
     el.bookDlg.close();
-    if (nb) { current.notebook = nb; el.nbName.textContent = nb.title; }
+    if (!nb) return;
+    if (el.writer.classList.contains("on") && current.notebook && current.notebook.id === nb.id) {
+      current.notebook = nb;
+      el.nbName.textContent = nb.title;
+    } else {
+      await renderShelf();
+    }
   });
-  el.bookDelete.addEventListener("click", async () => {
-    if (!confirm(`Delete "${current.notebook.title}" and all its pages? This cannot be undone.`)) return;
-    await Store.deleteNotebook(current.notebook.id);
+  el.bookDelete.addEventListener("click", () => {
+    if (!editingNotebook) return;
+    const notebook = editingNotebook;
+    editingNotebook = null;
     el.bookDlg.close();
-    el.writer.classList.remove("on");
-    el.shelf.classList.remove("hidden");
+    requestNotebookDeletion(notebook);
+  });
+  el.deleteBookCancel.addEventListener("click", () => {
+    deletingNotebook = null;
+    el.deleteBookDlg.close();
+  });
+  el.deleteBookConfirm.addEventListener("click", async () => {
+    if (!deletingNotebook) return;
+    const notebook = deletingNotebook;
+    deletingNotebook = null;
+    await Store.deleteNotebook(notebook.id);
+    el.deleteBookDlg.close();
+    if (current.notebook && current.notebook.id === notebook.id) {
+      current.notebook = null;
+      current.pages = [];
+      el.writer.classList.remove("on");
+      el.shelf.classList.remove("hidden");
+    }
     await renderShelf();
   });
 
