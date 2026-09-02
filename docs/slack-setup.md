@@ -21,9 +21,11 @@ Removing a reaction reverses it, including the points.
 
 In the app's settings:
 
-- **OAuth & Permissions → Bot Token Scopes**: `reactions:read`, `users:read`,
-  `users:read.email`, `channels:history`, `groups:history`. Install to the
-  workspace and copy the bot token (`xoxb-…`).
+- **OAuth & Permissions → Bot Token Scopes**: `reactions:read`,
+  `reactions:write`, `users:read`, `users:read.email`, `channels:history`,
+  `groups:history`. Install to the workspace and copy the bot token (`xoxb-…`).
+  The write scope lets DCC completion, reopening, and deletion update Slack.
+  Reinstall the app after adding this scope to refresh an existing token.
 - **Event Subscriptions → Request URL**: `https://<your-dcc-host>/api/slack/events`.
   The URL verification handshake is signature-checked, so the signing secret has
   to be set on the server before Slack will verify.
