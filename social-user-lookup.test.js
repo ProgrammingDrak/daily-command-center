@@ -17,6 +17,7 @@
 // shipped closure rather than a copy of it.
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 
 const USERS = [
   // A password signup: username, no email.
@@ -109,4 +110,18 @@ test("a partial match is not a match -- this is not a directory", async () => {
   // Exactness is the privacy property: no prefix walking a name or an address.
   await assert.rejects(() => call({ q: "drak" }), e => e.statusCode === 404);
   await assert.rejects(() => call({ q: "collins" }), e => e.statusCode === 404);
+});
+
+test("the Social tab shows the viewer's handle and labels email lookup honestly", () => {
+  const html = fs.readFileSync(require.resolve("./index.html"), "utf8");
+  const client = fs.readFileSync(require.resolve("./public/js/social.js"), "utf8");
+
+  assert.match(html, /id="social-you-name"/);
+  assert.match(html, /id="social-you-copy"/);
+  assert.match(html, /id="social-lookup-input"[^>]*placeholder="Username or email"/);
+  assert.match(client, /api\("\/api\/me"\)/);
+  assert.match(client, /navigator\.clipboard\.writeText\(myUsername\)/);
+  assert.match(client, /lookup\?q=" \+ encodeURIComponent\(identifier\)/);
+  assert.match(client, /Enter a username or email\./);
+  assert.match(client, /Copy blocked here\. Your username is /);
 });

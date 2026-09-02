@@ -299,14 +299,20 @@
   async function sendRequest() {
     const input = document.getElementById("social-lookup-input");
     const status = document.getElementById("social-lookup-status");
-    const username = input ? input.value.trim() : "";
-    if (!username) return;
+    const identifier = input ? input.value.trim() : "";
+    if (!identifier) {
+      if (status) {
+        status.className = "social-status error";
+        status.textContent = "Enter a username or email.";
+      }
+      return;
+    }
     if (status) { status.textContent = ""; status.className = "social-status"; }
     try {
       // Two steps on purpose: the lookup gives a clear "no such user" before any
       // friendship row is written, so a typo does not create a pending request
       // against nobody.
-      const user = await api("/api/social/users/lookup?q=" + encodeURIComponent(username));
+      const user = await api("/api/social/users/lookup?q=" + encodeURIComponent(identifier));
       await api("/api/social/friends/request", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
