@@ -603,9 +603,10 @@
             '<div class="carryover-row-title"></div>' +
             // Any other day lives behind the same calendar button the itinerary rows
             // use. It replaced a bare <input type="date"> + Move pair, which was an
-            // unstyled OS date picker sitting on a dark modal (.resched-date-input is
-            // only styled inside .resched-popover) and a second spelling of "move
-            // this to a day" three buttons away from the first.
+            // unstyled date field sitting on a dark modal and a second spelling of
+            // "move this to a day" three buttons away from the first. (The popover
+            // it opens has since dropped its own Move button too: the day pick
+            // commits, so there is one gesture, not two.)
             window.DCC.dateButtonHtml("unf-cal", "Move to a day") +
           '</div>' +
           '<div class="carryover-row-meta">' + (d > 0 ? esc(fmtDur(d)) : "step") +

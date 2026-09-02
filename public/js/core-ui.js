@@ -11,6 +11,32 @@
   const BLOCKING = new Set(["modal", "drawer", "sheet"]);
   let activeBlocking = null;
 
+  // ── nested layers ────────────────────────────────────────────────────────
+  // A popover closes on an outside interaction (Overlay Controller contract).
+  // But a layer the popover itself OPENED -- the shared date/time picker, whose
+  // overlay is appended to <body> and so is a sibling, not a child -- is not
+  // "outside": the user is still working the popover's own sub-picker. Every
+  // "close on outside" listener in the app is registered capture-phase on
+  // document, so it fires BEFORE the picker's own day-cell handler and would
+  // otherwise destroy the popover mid-pick. A layer opts in by carrying
+  // data-dcc-layer="above" while it is open (see time-picker.js); this is the
+  // one place that knows the rule.
+  const LAYER_ABOVE = '[data-dcc-layer="above"]';
+
+  // Did this event land inside a layer stacked above the caller? Capture-phase
+  // listeners must treat that as "not outside".
+  function eventInLayerAbove(event) {
+    const target = event && event.target;
+    if (!target || typeof target.closest !== "function") return false;
+    return !!target.closest(LAYER_ABOVE);
+  }
+
+  // Is such a layer open right now? Escape belongs to the topmost layer, so a
+  // popover under one must let the first Escape through and keep itself open.
+  function layerAboveOpen() {
+    return !!document.querySelector(LAYER_ABOVE);
+  }
+
   function visibleFocusable(root) {
     return Array.from(root.querySelectorAll(FOCUSABLE)).filter((node) =>
       !node.hidden && node.getAttribute("aria-hidden") !== "true" && node.getClientRects().length
@@ -174,6 +200,7 @@
 
     function onOutside(event) {
       if (kind !== "popover" || panel.contains(event.target) || (opts.anchor && opts.anchor.contains(event.target))) return;
+      if (eventInLayerAbove(event)) return;   // the user is in a sub-picker we opened
       close("outside");
     }
 
@@ -198,7 +225,12 @@
     return handle;
   }
 
-  DCC.overlay = { open, get activeBlocking() { return activeBlocking; } };
+  DCC.overlay = {
+    open,
+    eventInLayerAbove,
+    layerAboveOpen,
+    get activeBlocking() { return activeBlocking; }
+  };
 
   DCC.reducedMotion = function reducedMotion() {
     try { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }
