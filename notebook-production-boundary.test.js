@@ -27,6 +27,24 @@ test("notebook settings expose the existing deletion control", () => {
   assert.match(SHELL, /<button class="danger" id="bookDelete">Delete<\/button>/);
 });
 
+test("notebook cards expose one shared action menu", () => {
+  assert.match(APP, /const BOOK_ACTION_ICON = "⋮";/);
+  assert.match(APP, /actions\.setAttribute\("aria-label", `Actions for \$\{nb\.title\}`\)/);
+  assert.match(APP, /card\.addEventListener\("contextmenu"/);
+  assert.match(SHELL, /id="bookMenuOpen" role="menuitem">Open<\/button>/);
+  assert.match(SHELL, /id="bookMenuRename" role="menuitem">Rename<\/button>/);
+  assert.match(SHELL, /id="bookMenuDelete" role="menuitem">Delete<\/button>/);
+});
+
+test("notebook deletion names its target and waits for in-app confirmation", () => {
+  assert.match(SHELL, /<dialog id="deleteBookDlg">/);
+  assert.match(APP, /deletingNotebook = notebook;/);
+  assert.match(APP, /Delete “\$\{notebook\.title\}” and its \$\{pageLabel\}\? This cannot be undone\./);
+  assert.match(APP, /el\.deleteBookConfirm\.addEventListener\("click", async \(\) => \{/);
+  assert.match(APP, /await Store\.deleteNotebook\(notebook\.id\)/);
+  assert.doesNotMatch(APP, /confirm\(`Delete "\$\{current\.notebook\.title\}/);
+});
+
 test("the browser partitions storage before opening it", () => {
   const configureAt = APP.indexOf("Store.configureOwner(owner)");
   const openAt = APP.indexOf("await Store.open()");
