@@ -47,9 +47,9 @@ function mustSlice(src, re, what) {
   return m[0];
 }
 
-const LAYER_CONST = mustSlice(CORE_UI_SRC, /^  const LAYER_ABOVE = .*$/m, "core-ui LAYER_ABOVE");
-const IN_LAYER = mustSlice(CORE_UI_SRC, /^  function eventInLayerAbove\(event\) \{[\s\S]*?\n  \}/m, "eventInLayerAbove");
-const LAYER_OPEN = mustSlice(CORE_UI_SRC, /^  function layerAboveOpen\(\) \{[\s\S]*?\n  \}/m, "layerAboveOpen");
+const LAYER_CONST = mustSlice(CORE_UI_SRC, /^ {2}const LAYER_ABOVE = .*$/m, "core-ui LAYER_ABOVE");
+const IN_LAYER = mustSlice(CORE_UI_SRC, /^ {2}function eventInLayerAbove\(event\) \{[\s\S]*?\n {2}\}/m, "eventInLayerAbove");
+const LAYER_OPEN = mustSlice(CORE_UI_SRC, /^ {2}function layerAboveOpen\(\) \{[\s\S]*?\n {2}\}/m, "layerAboveOpen");
 const POSITION = mustSlice(POPOVER_SRC, /^function _positionPopoverNear\(anchorEl,pop,opts\)\{[\s\S]*?\n\}/m, "_positionPopoverNear");
 const OPEN_POPOVER = mustSlice(POPOVER_SRC, /^function openSchedulePopover\(cfg\)\{[\s\S]*?\n\}/m, "openSchedulePopover");
 
@@ -208,9 +208,9 @@ test("layerAboveOpen reports whether a layer is currently stacked above", () => 
 
 // ── the marker on the picker's own overlay ──────────────────────────────────
 test("the shared picker marks its overlay while open and unmarks it on close", () => {
-  const ENSURE = mustSlice(PICKER_SRC, /^  function ensureOverlay\(\) \{[\s\S]*?\n  \}/m, "time-picker ensureOverlay");
-  const OPEN = mustSlice(PICKER_SRC, /^  function open\(anchor, closeCb\) \{[\s\S]*?\n  \}/m, "time-picker open");
-  const CLOSE = mustSlice(PICKER_SRC, /^  function close\(\) \{[\s\S]*?\n  \}/m, "time-picker close");
+  const ENSURE = mustSlice(PICKER_SRC, /^ {2}function ensureOverlay\(\) \{[\s\S]*?\n {2}\}/m, "time-picker ensureOverlay");
+  const OPEN = mustSlice(PICKER_SRC, /^ {2}function open\(anchor, closeCb\) \{[\s\S]*?\n {2}\}/m, "time-picker open");
+  const CLOSE = mustSlice(PICKER_SRC, /^ {2}function close\(\) \{[\s\S]*?\n {2}\}/m, "time-picker close");
   const ctx = makeContext();
   vm.runInContext(
     "var overlay=null,card=null,onClose=null;function position(){}" +
@@ -331,13 +331,95 @@ test("the date chip starts unset instead of showing a day nobody chose", async (
     "a seeded value made the chip read like a selection (\"Fri, Sep 4\") that no one picked");
 });
 
+// ── the two fields that must not commit out from under each other ──────────
+// Regression guard. pick + allowTime is the one configuration with a SECOND
+// field, and its time is only ever staged (pickDay reads it at commit time).
+// While the time row rendered BELOW the day row, a user working top to bottom
+// picked the day first, committed with timeStr null, and watched the time chip
+// they were reaching for vanish. Both allowTime callers consume that argument
+// (schedule-tab.js _unfSchedulePopover, meeting-automation.js scheduleRecapAction),
+// so the drop landed a carryover or a recap action with no start.
+test("pick mode with allowTime commits the staged start time", async () => {
+  const ctx = makeContext();
+  const picked = [];
+  const { pop } = await openPopover(ctx, { mode: "pick", allowTime: true, header: 'Move "x" to…' });
+  ctx.__cfg.onPick = (dateStr, timeStr) => { picked.push([dateStr, timeStr]); };
+
+  const timeInput = pop.querySelector(".resched-time-input");
+  assert.ok(timeInput, "allowTime renders a bare time field");
+  timeInput.value = "14:00";                 // staged, exactly as the wheel leaves it
+
+  const dateInput = pop.querySelector(".resched-date-input");
+  dateInput.value = "2026-10-01";
+  dateInput.dispatchEvent({ type: "change" });
+  await new Promise((r) => setTimeout(r, 0));
+
+  assert.deepEqual(picked, [["2026-10-01", "14:00"]],
+    "the day pick must carry the time the user already set, not null");
+});
+
+test("pick mode with allowTime still allows no time at all", async () => {
+  const ctx = makeContext();
+  const picked = [];
+  const { pop } = await openPopover(ctx, { mode: "pick", allowTime: true });
+  ctx.__cfg.onPick = (dateStr, timeStr) => { picked.push([dateStr, timeStr]); };
+  const dateInput = pop.querySelector(".resched-date-input");
+  dateInput.value = "2026-10-02";
+  dateInput.dispatchEvent({ type: "change" });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(picked, [["2026-10-02", null]],
+    "onPick's second arg is documented nullable; skipping the time is a real choice");
+});
+
+test("the pick-mode time row renders above the day row", async () => {
+  const ctx = makeContext();
+  const { pop } = await openPopover(ctx, { mode: "pick", allowTime: true });
+  const html = pop.innerHTML;
+  const time = html.indexOf("resched-time-only");
+  const day = html.indexOf("resched-quick");
+  assert.ok(time > -1 && day > -1, "both rows render");
+  assert.ok(time < day,
+    "order IS the fix: every day affordance commits on the pick, so the staged " +
+    "time has to sit above them or a top-to-bottom user loses it");
+});
+
+// ── the shared controller applies its own rule ─────────────────────────────
+// core-ui.js defines the nested-layer rule, and its Escape handler is registered
+// capture-phase for EVERY kind -- the blocking kinds never register onOutside at
+// all. Without the guard, one Escape aimed at a sub-picker tore down the host
+// drawer, sheet or modal and its unsaved edits (day-review.js's time editor and
+// the glymphatic brief both render an <input type="time"> into an overlay body).
+test("core-ui's Escape defers to a layer above before closing itself", () => {
+  const ONKEY = mustSlice(CORE_UI_SRC, /^ {4}function onKey\(event\) \{[\s\S]*?\n {4}\}/m, "core-ui onKey");
+  const ctx = makeContext();
+  vm.runInContext(
+    "(function(){" + LAYER_CONST + LAYER_OPEN +
+    "var blocking=true,panel={contains:function(){return false},focus:function(){},querySelectorAll:function(){return []}};" +
+    "window.__closes=0;window.__prevented=0;" +
+    "function close(){window.__closes++}function goBack(){return false}" +
+    "function visibleFocusable(){return []}" +
+    ONKEY + "window.__onKey=onKey;})();",
+    ctx
+  );
+  const esc = () => ({ key: "Escape", preventDefault() { ctx.window.__prevented++; } });
+
+  ctx.document.querySelector = (sel) => (sel === '[data-dcc-layer="above"]' ? {} : null);
+  ctx.window.__onKey(esc());
+  assert.equal(ctx.window.__closes, 0, "the first Escape belongs to the open sub-picker");
+  assert.equal(ctx.window.__prevented, 0, "and must not be swallowed, or the picker never sees it");
+
+  ctx.document.querySelector = () => null;      // the picker closed itself
+  ctx.window.__onKey(esc());
+  assert.equal(ctx.window.__closes, 1, "with no layer above, Escape closes the overlay as before");
+});
+
 // ── the second surface with the same shape ──────────────────────────────────
 // Run the real closure, not a regex over it: a source match still passes when
 // the guard's condition has been neutered (a `&& false` left the string
 // "eventInLayerAbove" sitting in an inert branch and the assertion never
 // noticed). Driving the function is what makes this test able to fail.
 test("the slots winnings menu keeps its own guard", () => {
-  const guard = mustSlice(SLOTS_SRC, /^    function onOutside\(e\)\{[\s\S]*?\n    \}/m, "slots winnings onOutside");
+  const guard = mustSlice(SLOTS_SRC, /^ {4}function onOutside\(e\)\{[\s\S]*?\n {4}\}/m, "slots winnings onOutside");
   const ctx = makeContext();
   vm.runInContext(
     "var menu={contains:function(n){return n&&n.inMenu===true}};" +

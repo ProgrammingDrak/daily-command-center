@@ -90,6 +90,20 @@ function openSchedulePopover(cfg){
   // is never a dead end. (A disabled button reads as "broken".)
   pop.innerHTML=
     '<div class="resched-header">'+header+'</div>'+
+    // Pick mode normally hides time; allowTime opts a bare time input in (no dur
+    // stepper) so callers like the recap action scheduler can pin an optional start.
+    //
+    // It renders ABOVE the day row on purpose. The time here is only ever STAGED
+    // (pickDay reads it at commit time), and every day affordance commits on the
+    // pick -- Today, Tomorrow and the 📅 chip alike. Below the day row, a user
+    // working top to bottom committed with timeStr null and watched the time chip
+    // they were reaching for disappear. Time first, day last, so the staged value
+    // is always the one that ships. Skipping the time is still valid: onPick's
+    // second arg is documented as nullable.
+    ((mode==="pick"&&cfg.allowTime)?(
+    '<div class="resched-adjust resched-time-only">'+
+      '<div class="resched-time"><input type="time" class="resched-time-input" /></div>'+
+    '</div>'):'')+
     (showDate?(
     '<div class="resched-quick">'+
       '<button class="resched-btn" data-target="today">Today</button>'+
@@ -113,13 +127,8 @@ function openSchedulePopover(cfg){
       '<div class="resched-time">'+
         '<input type="time" class="resched-time-input" />'+
       '</div>'+
-    '</div>'):'')+
-    // Pick mode normally hides time; allowTime opts a bare time input in (no dur
-    // stepper) so callers like the recap action scheduler can pin an optional start.
-    ((mode==="pick"&&cfg.allowTime)?(
-    '<div class="resched-adjust resched-time-only">'+
-      '<div class="resched-time"><input type="time" class="resched-time-input" /></div>'+
     '</div>'):'');
+
 
   function closePop(){
     pop.remove();

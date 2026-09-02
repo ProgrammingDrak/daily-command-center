@@ -185,6 +185,13 @@
 
     function onKey(event) {
       if (event.key === "Escape") {
+        // Escape belongs to the TOPMOST layer. This listener is capture-phase and
+        // registered for every kind (the blocking kinds never register onOutside at
+        // all), so without this the first Escape aimed at a sub-picker tore down the
+        // host drawer/sheet/modal and its unsaved edits -- the same nested-layer bug
+        // one layer up. Live for day-review.js's time editor and the glymphatic
+        // brief, both of which render an <input type="time"> into an overlay body.
+        if (layerAboveOpen()) return;
         event.preventDefault();
         if (!goBack()) close("escape");
         return;
