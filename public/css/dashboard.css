@@ -5423,6 +5423,12 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .recap-action.is-dropped .recap-action-text{text-decoration:line-through}
 /* Pick-mode popover with allowTime: bare time input, right-aligned, no dur stepper */
 .resched-time-only{justify-content:flex-end}
+/* In pick + allowTime the optional time row renders FIRST, because it only stages
+   a value that the day pick then commits. .resched-adjust's separator was drawn
+   for a section that comes LAST, so first it put a divider directly under the
+   header and left the day row unseparated. Flip the divider to the bottom. */
+.resched-popover .resched-adjust.resched-time-only{margin-top:0;padding-top:0;border-top:none;
+  margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border)}
 /* Native work sessions */
 .active-work-dock{margin:0 0 12px;border:1px solid rgba(34,211,238,.28);background:rgba(8,145,178,.08);border-radius:12px;padding:10px 12px}
 .active-work-head,.active-work-row{display:flex;align-items:center;gap:10px}

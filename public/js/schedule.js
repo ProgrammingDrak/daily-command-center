@@ -1617,6 +1617,18 @@ function _schedTimeLabel(hhmm){
   return h+(min?":"+String(min).padStart(2,"0"):"")+" "+ap;
 }
 
+// Escape belongs to the TOPMOST layer. The shared date/time picker (time-picker.js)
+// opens its own overlay on document.body, ABOVE these modals and outside their
+// subtree, so a first Escape aimed at the calendar or the wheel must not tear the
+// host modal down with it. #sched-picker-overlay is the destination of every day
+// pick (moveTaskViaPlacement), and it hosts BOTH #sched-date-input and
+// #sched-custom-time, so without this the user dismissing the calendar also lost
+// the placement step and any edit made to the task title. DCC.overlay owns the
+// rule; see eventInLayerAbove / layerAboveOpen in core-ui.js.
+function _schedLayerAbove(){
+  return !!(window.DCC&&window.DCC.overlay&&typeof window.DCC.overlay.layerAboveOpen==="function"
+    &&window.DCC.overlay.layerAboveOpen());
+}
 let _schedPickerTitle="",_schedPickerDur=30,_schedPickerOptions={},_schedPickerDate="";
 let _schedPickerOnPlace=null,_schedPickerVerb="";
 function _schedSetHeader(verb){
@@ -1989,7 +2001,7 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options,placement){
   const commitCustom=()=>{if(customTime&&/^\d{2}:\d{2}$/.test(customTime.value||"")&&_schedPickerDate)_schedCommit(_schedPickerDate,customTime.value)};
   if(customGo)customGo.addEventListener("click",commitCustom);
   if(customTime)customTime.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();commitCustom()}});
-  document.addEventListener("keydown",e=>{if(e.key==="Escape"&&overlay.classList.contains("open"))closeSchedulePicker()});
+  document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!_schedLayerAbove()&&overlay.classList.contains("open"))closeSchedulePicker()});
 })();
 
 // Settings → "Schedule default times": customize the After-step time presets.
@@ -2032,7 +2044,7 @@ function closeSchedDefaults(){const ov=document.getElementById("sched-defaults-o
   if(resetBtn)resetBtn.addEventListener("click",()=>{saveSchedTimePresets(SCHED_TIME_PRESETS_DEFAULT.slice());_renderSchedDefaultsList()});
   const saveBtn=document.getElementById("sched-defaults-save");
   if(saveBtn)saveBtn.addEventListener("click",closeSchedDefaults);
-  document.addEventListener("keydown",e=>{if(e.key==="Escape"&&ov.classList.contains("open"))closeSchedDefaults()});
+  document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!_schedLayerAbove()&&ov.classList.contains("open"))closeSchedDefaults()});
 })();
 // Settings -> "Start of day": the floor no auto-placement may start before.
 // Stored server-side (workspace-scoped) and served back on every day response as
@@ -2146,7 +2158,7 @@ function _applyDayStart(value){
       _renderDayStartNote();
     }catch(e){if(window.DCC&&DCC.toast)DCC.toast("Could not reset start of day")}
   });
-  document.addEventListener("keydown",e=>{if(e.key==="Escape"&&ov.classList.contains("open"))closeDayStart()});
+  document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!_schedLayerAbove()&&ov.classList.contains("open"))closeDayStart()});
 })();
 
 // ======== TASK DESTINATIONS (shared registry + radial menu) ========

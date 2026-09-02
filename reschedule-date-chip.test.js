@@ -413,6 +413,84 @@ test("core-ui's Escape defers to a layer above before closing itself", () => {
   assert.equal(ctx.window.__closes, 1, "with no layer above, Escape closes the overlay as before");
 });
 
+// ── every host of the shared picker defers Escape ──────────────────────────
+// The picker's overlay is a body-level SIBLING of whatever opened it, so a modal
+// that closes itself on a document-level Escape steals the keystroke meant for
+// the calendar and takes the host down with it. #sched-picker-overlay matters
+// most: it is the DESTINATION of every day pick (moveTaskViaPlacement), and it
+// hosts both #sched-date-input and #sched-custom-time, so the bug landed one
+// step after the fix above. The vault editor is worse in kind, not degree -- its
+// close() clears the draft, so an Escape aimed at the Date chip discarded the
+// note in progress.
+// Per CLOSER, not per file. Two earlier versions of this test were weaker than
+// they looked, and both are worth remembering: a total-occurrence count still
+// passed after one of schedule.js's three call sites was deleted (the helper's own
+// definition kept the tally up), and a fixed 8-line lookahead swept in unrelated
+// Enter handlers that merely sat near a closer. So: only document-level keydown
+// registrations count, and each one's block ends where its own parens balance.
+const ESCAPE_HOSTS = [
+  { file: "public/js/schedule.js", guard: "_schedLayerAbove()", closers: 3,
+    why: "#sched-picker-overlay (the destination of every day pick), #sched-defaults-overlay, #day-start-overlay" },
+  { file: "public/js/vault-editor.js", guard: "layerAboveOpen()", closers: 1,
+    why: "#vault-editor-overlay hosts the #ed-date chip and close() drops the draft" }
+];
+
+function documentEscapeClosers(src) {
+  const lines = src.split("\n");
+  const out = [];
+  lines.forEach((line, i) => {
+    if (!/document\.addEventListener\(\s*"keydown"/.test(line)) return;
+    let depth = 0, seen = false, block = "";
+    for (let j = i; j < Math.min(lines.length, i + 20); j++) {
+      block += lines[j] + "\n";
+      for (const ch of lines[j]) {
+        if (ch === "(") { depth++; seen = true; }
+        else if (ch === ")") depth--;
+      }
+      if (seen && depth <= 0) break;
+    }
+    if (/Escape/.test(block)) out.push({ line: i + 1, block });
+  });
+  return out;
+}
+
+test("every Escape closer in a picker-hosting file defers to the layer above", () => {
+  ESCAPE_HOSTS.forEach((host) => {
+    const src = fs.readFileSync(require.resolve("./" + host.file), "utf8");
+    const blocks = documentEscapeClosers(src);
+    assert.equal(blocks.length, host.closers,
+      host.file + ": expected " + host.closers + " document-level Escape closer(s) (" + host.why +
+      "), found " + blocks.length + " - the pattern moved, fix this test rather than the assertion");
+    blocks.forEach((b) => {
+      assert.ok(b.block.includes(host.guard),
+        host.file + ":" + b.line + " closes on Escape without consulting " + host.guard +
+        " - an Escape aimed at the shared picker's calendar will tear this host down with it");
+    });
+  });
+});
+
+test("the schedule.js Escape guard actually defers, and still closes when alone", () => {
+  const SRC = fs.readFileSync(require.resolve("./public/js/schedule.js"), "utf8");
+  const HELPER = mustSlice(SRC, /^function _schedLayerAbove\(\)\{[\s\S]*?\n\}/m, "_schedLayerAbove");
+  const ctx = makeContext();
+  vm.runInContext(
+    "(function(){" + LAYER_CONST + LAYER_OPEN +
+    "window.DCC.overlay.layerAboveOpen=layerAboveOpen;" + HELPER +
+    "var overlay={classList:{contains:function(){return true}}};" +
+    "window.__closes=0;function closeSchedulePicker(){window.__closes++}" +
+    'document.addEventListener("keydown",function(e){if(e.key==="Escape"&&!_schedLayerAbove()&&overlay.classList.contains("open"))closeSchedulePicker()});' +
+    "})();",
+    ctx
+  );
+  ctx.document.querySelector = (sel) => (sel === '[data-dcc-layer="above"]' ? {} : null);
+  ctx.document.fire("keydown", { key: "Escape" });
+  assert.equal(ctx.window.__closes, 0,
+    "the placement step must survive an Escape aimed at its own calendar");
+  ctx.document.querySelector = () => null;
+  ctx.document.fire("keydown", { key: "Escape" });
+  assert.equal(ctx.window.__closes, 1, "with no layer above, Escape still closes the placement step");
+});
+
 // ── the second surface with the same shape ──────────────────────────────────
 // Run the real closure, not a regex over it: a source match still passes when
 // the guard's condition has been neutered (a `&& false` left the string
