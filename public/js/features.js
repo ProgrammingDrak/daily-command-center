@@ -188,6 +188,15 @@ let _addModalTaskId = null;
 let _addModalEditing = false;
 let _addModalDraftTitle = '';
 let _addModalDraftTags = [];
+// The modal now opens in EDIT mode, so Save is one click from every open -- including
+// opens where taskAnchorById missed and the tag draft seeded empty (delegated.js does
+// this deliberately). Persisting an untouched draft there writes tags:[] over the row's
+// real tags, so only the picker firing marks tags writable.
+let _addModalTagsDirty = false;
+// Serialized blocks as the notes editor was seeded. closeAddModal flushes notes only
+// when they actually changed, so opening and dismissing never materializes a task's
+// description into stored notes.
+let _addModalNotesSnapshot = null;
 let _addModalDraftRecordingReview = false;
 let _addModalOpener = null;
 const _addModalControlState = new WeakMap();
@@ -410,6 +419,7 @@ function openAddModal(taskId, taskTitle) {
   _addModalBlockId = (anchor && anchor.blockId) || null;
   _addModalDraftTitle = (taskEntry && taskEntry.title) || taskTitle || '';
   _addModalDraftTags = taskEntry && Array.isArray(taskEntry.tags) ? taskEntry.tags.slice() : [];
+  _addModalTagsDirty = false;
   _addModalDraftRecordingReview = !!(taskEntry && taskEntry.recordingReview);
   _amSetupTitle(taskId, taskEntry, taskTitle);
 
@@ -427,6 +437,7 @@ function openAddModal(taskId, taskTitle) {
     var currentTags = _addModalDraftTags.slice();
     createTagPicker(tagContainer, currentTags, function(newIds) {
       _addModalDraftTags = newIds.slice();
+      _addModalTagsDirty = true;
     });
   }
 
@@ -468,6 +479,7 @@ function openAddModal(taskId, taskTitle) {
   var initialBlocks=typeof noteBlocksForTask === 'function' ? noteBlocksForTask(taskId, noteVal, taskEntry) : null;
   if(window._amBlockEditor) window._amBlockEditor.destroy();
   window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks);
+  _addModalNotesSnapshot = _addModalNotesFingerprint();
 
   // Render combined items list
   renderModalItems(taskId);
@@ -481,7 +493,15 @@ function openAddModal(taskId, taskTitle) {
   _setAddModalPageInert(taskOverlay, true);
   selectAddModalTab('overview');
   if(window.DCCWorkSessions&&typeof window.DCCWorkSessions.renderHistory==='function')window.DCCWorkSessions.renderHistory(_addModalBlockId);
-  setAddModalMode(false);
+  // Clicking a task IS the edit gesture: the modal opens ready to type, so nobody
+  // has to find an "Edit" button first. Read mode still exists -- Save and Cancel
+  // both land there, and the Edit button re-enters it from that state.
+  // Archived days are the exception. They stay read-only on open, the same contract
+  // every other editing affordance keeps (_canPlaceBounty / canEditBounty in
+  // schedule-tab.js, the .view-readonly rules in dashboard.css). The List view is one
+  // ungated click away on an archive day, and its row handler opens this modal.
+  var archived = typeof viewMode !== 'undefined' && viewMode === 'archive';
+  setAddModalMode(!archived);
   setTimeout(function() { document.getElementById('add-modal-close')?.focus(); }, 80);
 }
 
@@ -535,7 +555,7 @@ function saveAddModalEdits() {
     taskEntry.tags = _addModalDraftTags.slice();
     taskEntry.recordingReview = _addModalDraftRecordingReview;
   }
-  _persistTaskTags(_addModalTaskId, _addModalDraftTags.slice());
+  if (_addModalTagsDirty) _persistTaskTags(_addModalTaskId, _addModalDraftTags.slice());
   var recordingReview = document.getElementById('am-recording-review');
   if (recordingReview && recordingReview.style.display !== 'none') {
     _persistMeetingFlag(_addModalTaskId, 'recording_review', _addModalDraftRecordingReview);
@@ -551,6 +571,9 @@ function cancelAddModalEdits() {
   var taskId = _addModalTaskId;
   var fallbackTitle = taskForRepeatResponsibility(taskId, _addModalDraftTitle).title;
   openAddModal(taskId, fallbackTitle);
+  // openAddModal now opens in edit mode, so Cancel has to step back out of it
+  // explicitly -- otherwise discarding the drafts would leave the fields hot.
+  setAddModalMode(false);
 }
 
 // Repaint only the read-only metadata while this modal is open. Rebuilding the
@@ -627,6 +650,12 @@ function _amSetupTitle(taskId, taskEntry, fallbackTitle) {
 
 function closeAddModal() {
   var overlay = document.getElementById('add-modal-overlay');
+  // The modal now opens in edit mode, so the X, Escape, and the backdrop are ordinary exits
+  // from a LIVE edit session rather than from a read view. Flush typed notes before the
+  // editor is torn down. Commute deliberately stays on the Save path only: persisting it on
+  // every close is the {to:0,back:0} carryover wipe documented in state.js setTaskCommuteTimes.
+  var notesNow = _addModalNotesFingerprint();
+  if (notesNow !== null && notesNow !== _addModalNotesSnapshot) _writeAddModalNotes();
   var returnFocus = _addModalOpener;
   var returnTaskId = _addModalTaskId;
   overlay.classList.remove('open');
@@ -1344,16 +1373,29 @@ function toggleSnCreateTask(){
 // calling closeAddModal instead would have run its trailing _flushDeferredRender() +
 // render() -- and that refold races a following switchToDate, leaving the day's task array
 // empty. Persisting without closing avoids both.
+// Serialized shape of what the notes editor currently holds. Lets closeAddModal tell an
+// untouched open from a real edit, so dismissing a modal you only looked at never writes.
+function _addModalNotesFingerprint() {
+  if (!window._amBlockEditor || typeof window._amBlockEditor.getBlocks !== 'function') return null;
+  try { return JSON.stringify(window._amBlockEditor.getBlocks()); } catch (e) { return null; }
+}
+
+// Write the notes editor into storage for the open task. Shared by the Save path and by
+// closeAddModal's dismissal flush, so the two can never drift.
+function _writeAddModalNotes() {
+  if (!_addModalTaskId || !window._amBlockEditor) return;
+  var notes = loadNotes();
+  if (!window._amBlockEditor.isEmpty()) {
+    var blocks = window._amBlockEditor.getBlocks();
+    notes[_addModalTaskId] = { blocks: blocks, html: window._amBlockEditor.toHtml(), text: window._amBlockEditor.toMarkdown() };
+  } else { delete notes[_addModalTaskId]; }
+  saveNotes(notes);
+  _addModalNotesSnapshot = _addModalNotesFingerprint();
+}
+
 function persistAddModalEdits() {
   persistAddModalCommute();
-  if (_addModalTaskId && window._amBlockEditor) {
-    var notes = loadNotes();
-    if (!window._amBlockEditor.isEmpty()) {
-      var blocks = window._amBlockEditor.getBlocks();
-      notes[_addModalTaskId] = { blocks: blocks, html: window._amBlockEditor.toHtml(), text: window._amBlockEditor.toMarkdown() };
-    } else { delete notes[_addModalTaskId]; }
-    saveNotes(notes);
-  }
+  _writeAddModalNotes();
 }
 window.persistAddModalEdits = persistAddModalEdits;
 

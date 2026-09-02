@@ -73,6 +73,42 @@ test("task details provide explicit read and edit controls", () => {
   assert.match(details, /titleControl\.tabIndex = _addModalEditing \? 0 : -1/);
 });
 
+test("clicking a task opens the details modal already in edit mode", () => {
+  const details = read("public/js/features.js");
+  // Bound each slice to exactly one top-level function, and fail loudly if it moved, so an
+  // assertion can never pass on a same-named call that lives in a different function.
+  const fnBody = (name) => {
+    const at = details.indexOf("function " + name + "(");
+    assert.ok(at >= 0, name + " not found in features.js -- code moved or was renamed");
+    const end = details.indexOf("\n}\n", at);
+    assert.ok(end > at, name + " body end not found in features.js");
+    return details.slice(at, end + 3);
+  };
+
+  const open = fnBody("openAddModal");
+  // Edit on open, except on an archive day, which keeps the repo-wide read-only contract.
+  assert.match(open, /var archived = typeof viewMode !== 'undefined' && viewMode === 'archive';/);
+  assert.match(open, /setAddModalMode\(!archived\)/);
+  assert.doesNotMatch(open, /setAddModalMode\(false\)/);
+
+  // Cancel only lands in read mode because it runs AFTER openAddModal, which ends in edit
+  // mode. Hoisting it above that call would silently restore the hot-fields regression.
+  const cancel = fnBody("cancelAddModalEdits");
+  assert.match(cancel, /openAddModal\(taskId, fallbackTitle\);[\s\S]*setAddModalMode\(false\)/);
+
+  // Save is one click from every open now, so an untouched tag draft must not be written.
+  const save = fnBody("saveAddModalEdits");
+  assert.match(save, /if \(_addModalTagsDirty\) _persistTaskTags\(_addModalTaskId, _addModalDraftTags\.slice\(\)\);/);
+  assert.match(open, /_addModalTagsDirty = false;/);
+  assert.match(details, /createTagPicker\(tagContainer, currentTags, function\(newIds\) \{[\s\S]*?_addModalTagsDirty = true;/);
+
+  // The X, Escape, and the backdrop now exit a live edit session, so notes flush on close.
+  const close = fnBody("closeAddModal");
+  assert.match(close, /notesNow !== _addModalNotesSnapshot\) _writeAddModalNotes\(\)/);
+  // Commute stays on the Save path only: persisting it on close is the state.js carryover wipe.
+  assert.doesNotMatch(close, /persistAddModalCommute|persistAddModalEdits/);
+});
+
 test("Task Manager uses Quick add without duplicating task creation", () => {
   const index = read("index.html");
   const css = read("public/css/ui-optimization.css");
