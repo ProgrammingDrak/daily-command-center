@@ -464,9 +464,9 @@ function renderDmSessions(){
         '</div>'+
       '</div>'+
       '<div class="dm-sess-dur-wrap">'+
-        '<button class="dm-sess-dur-btn" data-idx="'+i+'" data-d="-15">\u2212</button>'+
-        '<span class="dm-sess-dur-val">'+ms(s.durationMin)+'</span>'+
-        '<button class="dm-sess-dur-btn" data-idx="'+i+'" data-d="15">+</button>'+
+        '<button type="button" class="dm-sess-dur-btn" data-idx="'+i+'" data-d="-15" aria-label="Decrease session duration">\u2212</button>'+
+        '<span class="dm-sess-dur-val" role="status" aria-live="polite">'+ms(s.durationMin)+'</span>'+
+        '<button type="button" class="dm-sess-dur-btn" data-idx="'+i+'" data-d="15" aria-label="Increase session duration">+</button>'+
       '</div>'+
       '<span class="dm-sess-arrow">\u2192</span>'+
       '<span class="dm-sess-end">'+endStr+'</span>'+

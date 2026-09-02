@@ -71,3 +71,34 @@ test("non-numeric input degrades to the first grid rung", () => {
   assert.equal(step(undefined, 15), 15);
   assert.equal(step(NaN, 15), 15);
 });
+
+test("zero or invalid deltas hold the current duration", () => {
+  assert.equal(step(20, 0), 20);
+  assert.equal(step(20, undefined), 20);
+  assert.equal(step(20, NaN), 20);
+});
+
+test("all four duration steppers use the shared helper", () => {
+  const schedule = fs.readFileSync(require.resolve("./public/js/schedule.js"), "utf8");
+  const popover = fs.readFileSync(require.resolve("./public/js/schedule-popover.js"), "utf8");
+  const sheet = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
+  const triage = fs.readFileSync(require.resolve("./public/js/triage.js"), "utf8");
+
+  assert.match(schedule, /n=stepDuration\(c,delta\)/);
+  assert.match(popover, /stagedDur=stepDuration\(stagedDur,d,\{min:15\}\)/);
+  assert.match(sheet, /setVal\(stepDuration\(val,parseInt\(s\.dataset\.d,10\)\)\)/);
+  assert.match(triage, /durationMin=stepDuration\(_dmSessions\[idx\]\.durationMin,d,\{min:5\}\)/);
+});
+
+test("stepper controls keep native keyboard and accessible button semantics", () => {
+  const card = fs.readFileSync(require.resolve("./public/js/itinerary-card.js"), "utf8");
+  const popover = fs.readFileSync(require.resolve("./public/js/schedule-popover.js"), "utf8");
+  const sheet = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
+  const triage = fs.readFileSync(require.resolve("./public/js/triage.js"), "utf8");
+
+  for (const source of [card, popover, sheet, triage]) {
+    assert.match(source, /type=[\\"']button[\\"']/);
+    assert.match(source, /aria-label=[\\"']Decrease[^\\"']*duration[\\"']/);
+    assert.match(source, /aria-label=[\\"']Increase[^\\"']*duration[\\"']/);
+  }
+});

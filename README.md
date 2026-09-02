@@ -24,6 +24,17 @@ replace either source.
 Page and notebook deletion are local-only today. The UI does not expose them.
 A future deletion flow needs durable tombstones before it can safely ship.
 
+## Duration stepping
+
+Task durations support any positive whole-minute value.
+
+- Presets set exact values.
+- Custom fields preserve off-grid values.
+- Plus snaps upward to the next 15-minute increment.
+- Minus snaps downward without reaching zero.
+- Repeated presses continue across the 15-minute grid.
+- Every duration stepper uses `stepDuration()` from `public/js/state.js`.
+
 ## Ship It
 
 | Setting | Value |

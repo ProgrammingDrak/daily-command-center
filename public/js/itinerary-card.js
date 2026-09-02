@@ -301,9 +301,9 @@
           (guest||subTimeless?'':'<div class="dur">'+
             // Task cards: read-only badge (adjust via the radial's Duration…);
             // meetings keep the ±15 stepper and the tappable badge.
-            (isMeeting(ev)?'<button class="dbtn" data-id="'+ev.id+'" data-d="-15">&minus;</button>':'')+
+            (isMeeting(ev)?'<button type="button" class="dbtn" data-id="'+ev.id+'" data-d="-15" aria-label="Decrease duration">&minus;</button>':'')+
             '<div><div class="dbadge'+(isMeeting(ev)?'':' dbadge-readonly')+'">'+ms(d)+'</div>'+(changed?'<div class="est-act">was '+ms(od)+' <span class="'+(delta>0?"dover":"dunder")+'">'+( delta>0?"+":"")+delta+'m</span></div>':'')+'</div>'+
-            (isMeeting(ev)?'<button class="dbtn" data-id="'+ev.id+'" data-d="15">+</button>':'')+
+            (isMeeting(ev)?'<button type="button" class="dbtn" data-id="'+ev.id+'" data-d="15" aria-label="Increase duration">+</button>':'')+
           '</div>')+
           (hasDetail?chevron:'')+
         '</div>'+

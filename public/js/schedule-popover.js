@@ -103,9 +103,9 @@ function openSchedulePopover(cfg){
     ((showTime&&mode!=="pick")?(
     '<div class="resched-adjust">'+
       '<div class="resched-dur">'+
-        '<button class="resched-dur-btn" type="button" data-d="-15" title="Shorter">&minus;</button>'+
-        '<span class="resched-dur-label"></span>'+
-        '<button class="resched-dur-btn" type="button" data-d="15" title="Longer">+</button>'+
+        '<button class="resched-dur-btn" type="button" data-d="-15" title="Shorter" aria-label="Decrease duration">&minus;</button>'+
+        '<span class="resched-dur-label" role="status" aria-live="polite"></span>'+
+        '<button class="resched-dur-btn" type="button" data-d="15" title="Longer" aria-label="Increase duration">+</button>'+
       '</div>'+
       '<div class="resched-time">'+
         '<input type="time" class="resched-time-input" />'+

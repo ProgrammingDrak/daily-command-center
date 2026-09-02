@@ -41,7 +41,7 @@ function buildActualView(dateStr){
 // Duration presets: popover on desktop, bottom sheet on touch/narrow. Shared
 // by the radial's "Duration…" spoke and the meeting card's duration badge.
 function openDurPopover(ev,anchorEl){
-  if(isCoarseOrNarrowViewport()){ openDurationSheet(ev); return; }
+  if(isCoarseOrNarrowViewport()){ openDurationSheet(ev,anchorEl); return; }
   document.querySelectorAll(".dur-popover").forEach(p=>p.remove());
   const curMin=dur(ev);
   const pages=[[15,30,45,60,90,120],[150,180,210,240,300,360]];
@@ -56,18 +56,20 @@ function openDurPopover(ev,anchorEl){
     const grid=document.createElement("div");grid.className="dur-presets";
     pages[page].forEach(m=>{
       const btn=document.createElement("button");
+      btn.type="button";
       btn.className="dur-preset"+(m===curMin?" dur-current":"");
       btn.textContent=ms(m);
+      btn.setAttribute("aria-label","Set duration to "+ms(m));
       btn.addEventListener("click",e2=>{e2.stopPropagation();closePop();setDurAbsolute(ev.id,m);});
       grid.appendChild(btn);
     });
     pop.appendChild(grid);
     const nav=document.createElement("div");nav.className="dur-nav";
-    const prev=document.createElement("button");prev.className="dur-nav-btn";prev.innerHTML="&#8592;";prev.disabled=page===0;
+    const prev=document.createElement("button");prev.type="button";prev.className="dur-nav-btn";prev.innerHTML="&#8592;";prev.setAttribute("aria-label","Previous duration presets");prev.disabled=page===0;
     prev.addEventListener("click",e2=>{e2.stopPropagation();if(page>0){page--;renderPage();}});
     const dots=document.createElement("div");dots.className="dur-nav-dots";
     pages.forEach((_,i)=>{const d=document.createElement("span");d.className="dur-nav-dot"+(i===page?" active":"");dots.appendChild(d);});
-    const next=document.createElement("button");next.className="dur-nav-btn";next.innerHTML="&#8594;";next.disabled=page===pages.length-1;
+    const next=document.createElement("button");next.type="button";next.className="dur-nav-btn";next.innerHTML="&#8594;";next.setAttribute("aria-label","Next duration presets");next.disabled=page===pages.length-1;
     next.addEventListener("click",e2=>{e2.stopPropagation();if(page<pages.length-1){page++;renderPage();}});
     nav.appendChild(prev);nav.appendChild(dots);nav.appendChild(next);
     pop.appendChild(nav);
@@ -75,7 +77,7 @@ function openDurPopover(ev,anchorEl){
     const custom=document.createElement("div");custom.className="dur-custom";
     const cInput=document.createElement("input");cInput.type="number";cInput.className="dur-custom-input";
     cInput.min="1";cInput.step="1";cInput.value=String(curMin);cInput.setAttribute("aria-label","Custom minutes");
-    const cBtn=document.createElement("button");cBtn.className="dur-custom-btn";cBtn.textContent="Set";
+    const cBtn=document.createElement("button");cBtn.type="button";cBtn.className="dur-custom-btn";cBtn.textContent="Set";
     const applyCustom=()=>{const v=Math.max(1,Math.round(parseInt(cInput.value,10)||0));if(v){closePop();setDurAbsolute(ev.id,v);}};
     cBtn.addEventListener("click",e2=>{e2.stopPropagation();applyCustom();});
     cInput.addEventListener("click",e2=>e2.stopPropagation());
@@ -2688,7 +2690,7 @@ function isCoarseOrNarrowViewport(){
   }catch(_){ return window.innerWidth <= 540; }
 }
 
-function openDurationSheet(ev){
+function openDurationSheet(ev,returnFocusEl){
   document.querySelectorAll(".dur-sheet-backdrop").forEach(s=>s.remove());
   const DUR_PRESETS=[15,30,45,60,90,120,150,180,210,240,300,360];
   let val=Math.max(1,dur(ev)||30);
@@ -2697,12 +2699,15 @@ function openDurationSheet(ev){
   backdrop.className="dur-sheet-backdrop";
   const sheet=document.createElement("div");
   sheet.className="dur-sheet";
+  sheet.setAttribute("role","dialog");
+  sheet.setAttribute("aria-modal","true");
+  sheet.setAttribute("aria-labelledby","dur-sheet-title");
   sheet.innerHTML=
     '<div class="dur-sheet-handle"></div>'+
-    '<div class="dur-sheet-head">Duration<span class="dur-sheet-task"></span></div>'+
+    '<div class="dur-sheet-head" id="dur-sheet-title">Duration<span class="dur-sheet-task"></span></div>'+
     '<div class="dur-sheet-stepper">'+
       '<button class="dur-sheet-step" data-d="-15" type="button" aria-label="Decrease duration">&minus;</button>'+
-      '<div class="dur-sheet-val" id="dur-sheet-val"></div>'+
+      '<div class="dur-sheet-val" id="dur-sheet-val" role="status" aria-live="polite"></div>'+
       '<button class="dur-sheet-step" data-d="15" type="button" aria-label="Increase duration">+</button>'+
     '</div>'+
     '<div class="dur-sheet-presets"></div>'+
@@ -2734,6 +2739,7 @@ function openDurationSheet(ev){
     backdrop.classList.remove("open");
     setTimeout(()=>backdrop.remove(),200);
     document.removeEventListener("keydown",onKey,true);
+    if(returnFocusEl&&returnFocusEl.isConnected)returnFocusEl.focus();
   }
   function commit(){ const v=val; close(); setDurAbsolute(ev.id,v); }
   function onKey(e){ if(e.key==="Escape"){e.preventDefault();close();} }
@@ -2750,5 +2756,9 @@ function openDurationSheet(ev){
 
   setVal(val);
   // next frame: trigger slide-up transition
-  requestAnimationFrame(()=>backdrop.classList.add("open"));
+  requestAnimationFrame(()=>{
+    backdrop.classList.add("open");
+    input.focus();
+    input.select();
+  });
 }
