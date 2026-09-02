@@ -5501,7 +5501,18 @@
     menu.style.top = top + "px";
     menu.style.zIndex = "9999";
     function close(){ menu.remove(); document.removeEventListener("click", onOutside, true); }
-    function onOutside(e){ if(!menu.contains(e.target) && e.target !== anchor && !anchor.contains(e.target)) close(); }
+    // The two custom-range date fields are enhanced into 📅 chips whose calendar
+    // opens in its own <body>-level overlay, ABOVE this menu. This listener is
+    // capture-phase on document, so it fires before the calendar's day cell can
+    // report the pick -- without the guard, choosing a date closed the menu and
+    // the value landed on a detached input. Survival only: Apply still needs
+    // BOTH ends of the range, so a pick must not commit anything here.
+    function onOutside(e){
+      if(menu.contains(e.target) || e.target === anchor || anchor.contains(e.target)) return;
+      if(window.DCC && window.DCC.overlay && typeof window.DCC.overlay.eventInLayerAbove === "function"
+        && window.DCC.overlay.eventInLayerAbove(e)) return;
+      close();
+    }
     menu.querySelectorAll(".slot-wm-item[data-range]").forEach(btn => {
       btn.addEventListener("click", e => {
         e.stopPropagation();

@@ -1039,10 +1039,10 @@
   .resched-popover .resched-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
   .resched-popover .resched-btn:disabled{opacity:0.35;cursor:default}
   .resched-popover .resched-custom{display:flex;gap:6px;align-items:stretch}
-  .resched-popover .resched-date-input{flex:1;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:5px;padding:5px 8px;color:var(--text);font-size:11px;outline:none;color-scheme:dark}
-  .resched-popover .resched-date-input:focus{border-color:var(--accent)}
-  .resched-popover .resched-go{padding:5px 10px;border-radius:5px;border:1px solid var(--accent);background:rgba(59,130,246,0.18);color:var(--accent-light);font-size:11px;font-weight:600;cursor:pointer}
-  .resched-popover .resched-go:hover{background:rgba(59,130,246,0.32)}
+  /* time-picker.js swaps the date/time inputs for .tw-field chips (the input
+     itself becomes type="hidden"), so the chip is the control that has to match
+     the quick buttons: full row, centered, same 11px. */
+  .resched-popover .tw-field{flex:1;justify-content:center;font-size:11px}
   /* Completion-date confirm modal */
   .cdc-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:475;align-items:center;justify-content:center}
   .cdc-overlay.open{display:flex}
@@ -2697,10 +2697,6 @@ span.waiting-pill{cursor:default}
 .resched-popover .resched-dur-btn:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
 .resched-popover .resched-dur-label{flex:1;text-align:center;font-size:11px;font-weight:600;color:var(--text)}
 .resched-popover .resched-time{display:flex;gap:6px;align-items:stretch}
-.resched-popover .resched-time-input{flex:1;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:5px;padding:5px 8px;color:var(--text);font-size:11px;outline:none;color-scheme:dark}
-.resched-popover .resched-time-input:focus{border-color:var(--accent)}
-.resched-popover .resched-time-go{padding:5px 10px;border-radius:5px;border:1px solid var(--accent);background:rgba(59,130,246,0.18);color:var(--accent-light);font-size:11px;font-weight:600;cursor:pointer}
-.resched-popover .resched-time-go:hover{background:rgba(59,130,246,0.32)}
 .resched-popover .resched-tool[data-tool=delegate]:hover{border-color:var(--waiting);color:var(--waiting-ink);background:var(--waiting-bg)}
 /* Urgency progress meter (mirrors .repeat-resp-meter). */
 .delegated-card-meter{height:5px;border-radius:999px;background:rgba(255,255,255,0.07);overflow:hidden;margin:7px 0 4px;border:1px solid rgba(255,255,255,0.05)}
@@ -4589,7 +4585,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .sched-drag-hint-desktop{display:none}
   .sched-drag-hint-touch{display:inline}
   /* Task creation — 16px inputs so iOS doesn't auto-zoom; roomier quick-add. */
-  .tab-title,#qa-title,.resched-date-input{font-size:16px}
+  .tab-title,#qa-title{font-size:16px}
   .subtask-add-pop{padding:8px}
   .subtask-add-pop .sub-add-input{font-size:16px;width:60vw;max-width:240px;padding:10px 12px}
   .subtask-add-pop .sub-add-go{padding:10px 15px;font-size:15px;border-radius:8px}
@@ -5427,6 +5423,12 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .recap-action.is-dropped .recap-action-text{text-decoration:line-through}
 /* Pick-mode popover with allowTime: bare time input, right-aligned, no dur stepper */
 .resched-time-only{justify-content:flex-end}
+/* In pick + allowTime the optional time row renders FIRST, because it only stages
+   a value that the day pick then commits. .resched-adjust's separator was drawn
+   for a section that comes LAST, so first it put a divider directly under the
+   header and left the day row unseparated. Flip the divider to the bottom. */
+.resched-popover .resched-adjust.resched-time-only{margin-top:0;padding-top:0;border-top:none;
+  margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border)}
 /* Native work sessions */
 .active-work-dock{margin:0 0 12px;border:1px solid rgba(34,211,238,.28);background:rgba(8,145,178,.08);border-radius:12px;padding:10px 12px}
 .active-work-head,.active-work-row{display:flex;align-items:center;gap:10px}

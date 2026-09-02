@@ -4,6 +4,10 @@
 //   mode "reschedule" — an existing scheduled task: day picks advance to the
 //     shared placement step (moveTaskViaPlacement), duration ±15 applies
 //     immediately, time pins the start on the current day.
+//   Every day and time pick COMMITS on the pick itself -- the quick buttons,
+//     the 📅 chip and the time wheel all behave the same way. There is no
+//     separate confirm button; cfg.actionLabel is accepted for back-compat but
+//     no longer renders anything.
 //   mode "create"     — a task that doesn't exist yet (quick-add "Schedule…"
 //     destination): duration and time are STAGED; picking a day commits —
 //     with a time via commitScheduledTask, today-without-time via
@@ -79,11 +83,6 @@ function openSchedulePopover(cfg){
     mode==="reschedule"?('Move "'+escHtml(ev.title)+'" to…'):
     mode==="create"?('Schedule "'+escHtml(cfg.title)+'" for…'):
     escHtml(cfg.header||"Schedule for…");
-  const goLabel=
-    mode==="reschedule"?"Move":
-    mode==="create"?"Schedule":
-    escHtml(cfg.actionLabel||"Go");
-
   const pop=document.createElement("div");
   pop.className="dur-popover resched-popover";
   // Both quick buttons stay enabled. When the task is already on the day you're
@@ -91,14 +90,32 @@ function openSchedulePopover(cfg){
   // is never a dead end. (A disabled button reads as "broken".)
   pop.innerHTML=
     '<div class="resched-header">'+header+'</div>'+
+    // Pick mode normally hides time; allowTime opts a bare time input in (no dur
+    // stepper) so callers like the recap action scheduler can pin an optional start.
+    //
+    // It renders ABOVE the day row on purpose. The time here is only ever STAGED
+    // (pickDay reads it at commit time), and every day affordance commits on the
+    // pick -- Today, Tomorrow and the 📅 chip alike. Below the day row, a user
+    // working top to bottom committed with timeStr null and watched the time chip
+    // they were reaching for disappear. Time first, day last, so the staged value
+    // is always the one that ships. Skipping the time is still valid: onPick's
+    // second arg is documented as nullable.
+    ((mode==="pick"&&cfg.allowTime)?(
+    '<div class="resched-adjust resched-time-only">'+
+      '<div class="resched-time"><input type="time" class="resched-time-input" /></div>'+
+    '</div>'):'')+
     (showDate?(
     '<div class="resched-quick">'+
       '<button class="resched-btn" data-target="today">Today</button>'+
       '<button class="resched-btn" data-target="tomorrow">Tomorrow</button>'+
     '</div>'+
+    // time-picker.js auto-enhances this input into the 📅 chip (the input
+    // itself goes type="hidden" and keeps the value). Picking a day COMMITS --
+    // same as Today / Tomorrow -- so there is no second confirm button to hunt
+    // for. The chip's own label is the picker's "Pick a date" placeholder,
+    // matching the placement modal's chip (index.html #sched-pick-date-btn).
     '<div class="resched-custom">'+
       '<input type="date" class="resched-date-input" />'+
-      '<button class="resched-go">'+goLabel+'</button>'+
     '</div>'):'')+
     ((showTime&&mode!=="pick")?(
     '<div class="resched-adjust">'+
@@ -109,23 +126,37 @@ function openSchedulePopover(cfg){
       '</div>'+
       '<div class="resched-time">'+
         '<input type="time" class="resched-time-input" />'+
-        (mode==="reschedule"?'<button class="resched-time-go" type="button">Set time</button>':'')+
       '</div>'+
-    '</div>'):'')+
-    // Pick mode normally hides time; allowTime opts a bare time input in (no dur
-    // stepper) so callers like the recap action scheduler can pin an optional start.
-    ((mode==="pick"&&cfg.allowTime)?(
-    '<div class="resched-adjust resched-time-only">'+
-      '<div class="resched-time"><input type="time" class="resched-time-input" /></div>'+
     '</div>'):'');
+
 
   function closePop(){
     pop.remove();
     document.removeEventListener("click",onOutside,true);
     document.removeEventListener("keydown",onKey,true);
   }
-  function onOutside(e){if(!pop.contains(e.target)&&e.target!==anchorEl)closePop()}
-  function onKey(e){if(e.key==="Escape")closePop()}
+  // The date / time chips open time-picker.js's overlay, which lives in <body>
+  // -- a SIBLING of this popover. Both listeners below are capture-phase on
+  // document, so they fire BEFORE the calendar's own day-cell handler: without
+  // the guard, clicking a day removed this popover first and the pick then
+  // landed on a detached input (calendar closed, nothing moved). The shared
+  // controller owns the rule: DCC.overlay.eventInLayerAbove (core-ui.js).
+  function _inPickerLayer(e){
+    return !!(window.DCC&&window.DCC.overlay&&typeof window.DCC.overlay.eventInLayerAbove==="function"
+      &&window.DCC.overlay.eventInLayerAbove(e));
+  }
+  function _pickerLayerOpen(){
+    return !!(window.DCC&&window.DCC.overlay&&typeof window.DCC.overlay.layerAboveOpen==="function"
+      &&window.DCC.overlay.layerAboveOpen());
+  }
+  function onOutside(e){
+    if(pop.contains(e.target)||e.target===anchorEl)return;
+    if(_inPickerLayer(e))return;
+    closePop();
+  }
+  // Escape belongs to the topmost layer: the first one closes the calendar (the
+  // picker's own handler), a second one closes this popover.
+  function onKey(e){if(e.key==="Escape"&&!_pickerLayerOpen())closePop()}
 
   const timeInput=pop.querySelector(".resched-time-input");
 
@@ -183,21 +214,22 @@ function openSchedulePopover(cfg){
     });
   });
 
-  // Custom date (present only when the date section is shown)
+  // Custom date (present only when the date section is shown). No value seed:
+  // the chip reads "Pick a date" instead of showing a day nobody chose.
+  //
+  // One listener, both worlds: the enhanced chip writes the day and fires
+  // `change` (time-picker.js), and a bare <input type="date"> fires the same
+  // event if time-picker.js is ever absent. Same wiring the placement modal
+  // already uses for its own date step (schedule.js #sched-date-input).
   const dateInput=pop.querySelector(".resched-date-input");
   if(dateInput){
-    // Default to two days out (or tomorrow's tomorrow) so it differs from the quick buttons
-    const seed=new Date();seed.setDate(seed.getDate()+2);
-    const pad=n=>String(n).padStart(2,"0");
-    dateInput.value=seed.getFullYear()+"-"+pad(seed.getMonth()+1)+"-"+pad(seed.getDate());
-    pop.querySelector(".resched-go").addEventListener("click",e=>{
-      e.stopPropagation();
+    dateInput.addEventListener("change",()=>{
       const v=dateInput.value;
       if(!v||!/^\d{4}-\d{2}-\d{2}$/.test(v)){if(typeof showToast==="function")showToast("Pick a valid date","error");return}
+      // Pick mode owns the write and can be slow; say so on the chip, exactly
+      // like the quick buttons do.
+      if(mode==="pick"){const chip=pop.querySelector(".tw-field-date");if(chip)chip.textContent="Scheduling...";}
       pickDay(v);
-    });
-    dateInput.addEventListener("keydown",e=>{
-      if(e.key==="Enter"){e.preventDefault();pop.querySelector(".resched-go").click()}
     });
   }
 
@@ -227,20 +259,20 @@ function openSchedulePopover(cfg){
         refreshDurLabel();
       });
     });
-    if(mode==="reschedule"){
-      // Time: pin the start to a chosen time on the current day (no date change).
-      if(timeInput)timeInput.value=ev.start||"";
-      pop.querySelector(".resched-time-go").addEventListener("click",e=>{
-        e.stopPropagation();
-        const v=timeInput?timeInput.value:"";
+    if(mode==="reschedule"&&timeInput){
+      // Time: pin the start to a chosen time on the current day (no date
+      // change). The wheel already has its own Set button, so a second one here
+      // was one click too many -- and the same nested-layer bug meant the pick
+      // never reached it. Seeding the value first is safe: a programmatic
+      // assignment does not fire `change`.
+      timeInput.value=ev.start||"";
+      timeInput.addEventListener("change",()=>{
+        const v=timeInput.value;
         if(!v||!/^\d{2}:\d{2}$/.test(v)){if(typeof showToast==="function")showToast("Pick a valid time","error");return}
         closePop();
         if(typeof pinStartTime==="function")pinStartTime(cfg.id,v);
         if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
         if(typeof showToast==="function")showToast("Start pinned to "+(typeof f12==="function"?f12(v):v),"success");
-      });
-      timeInput&&timeInput.addEventListener("keydown",e=>{
-        if(e.key==="Enter"){e.preventDefault();pop.querySelector(".resched-time-go").click()}
       });
     }
     // Create mode: the time input is read at day-pick time — no button, staging
@@ -260,7 +292,8 @@ function openReschedulePopover(id,anchorEl){
 // Generic "pick a day" popover for callers that create a task rather than move
 // one (e.g. delegated follow-ups). opts: {header, actionLabel, allowTime,
 // onPick(dateStr, timeStr)}. With allowTime, a bare time input is shown and its
-// HH:MM (or null) is passed as the second onPick arg.
+// HH:MM (or null) is passed as the second onPick arg. The day pick itself
+// commits, so actionLabel is inert (kept so existing callers need no edit).
 function openDatePickPopover(anchorEl,opts){
   opts=opts||{};
   openSchedulePopover({mode:"pick",anchorEl,header:opts.header,actionLabel:opts.actionLabel,allowTime:opts.allowTime,onPick:opts.onPick});

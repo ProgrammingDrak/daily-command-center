@@ -2670,7 +2670,19 @@ document.getElementById("block-editor-save").addEventListener("click",saveBlockE
 document.getElementById("block-editor-clear")?.addEventListener("click",beClearAll);
 document.getElementById("block-editor-overlay").addEventListener("click",e=>{if(e.target===e.currentTarget)closeBlockEditor()});
 document.getElementById("block-editor-manage-tags")?.addEventListener("click",()=>{ if(typeof openTagManager==='function') openTagManager(); });
-document.addEventListener("keydown",e=>{if(e.key==="Escape"&&document.getElementById("block-editor-overlay").classList.contains("open"))closeBlockEditor()});
+// The fifth host of the shared picker. Each block card's start/end buttons open
+// the time wheel (beOpenTimePicker -> openClockPicker -> openTimeWheel), whose
+// overlay is a body-level SIBLING of this modal. This closer is registered at
+// script-parse time, so it runs BEFORE the picker's own Escape handler and used to
+// swallow the keystroke: closeBlockEditor() empties _beBlocks and _beOriginal, and
+// Save is the only commit path, so every staged block edit was discarded by an
+// Escape aimed at the wheel. DCC.overlay owns the rule (core-ui.js).
+document.addEventListener("keydown",e=>{
+  if(e.key!=="Escape"||!document.getElementById("block-editor-overlay").classList.contains("open"))return;
+  if(window.DCC&&window.DCC.overlay&&typeof window.DCC.overlay.layerAboveOpen==="function"
+    &&window.DCC.overlay.layerAboveOpen())return;
+  closeBlockEditor();
+});
 
 // PIN 3: wire the copy-forward confirm modal buttons
 document.getElementById("bs-confirm-cancel")?.addEventListener("click", _closeBsConfirm);

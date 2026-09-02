@@ -37,7 +37,17 @@
     overlay.className = "vault-ed-overlay";
     overlay.innerHTML = `<div class="vault-ed-card" role="dialog" aria-modal="true"><div class="vault-ed-inner"></div></div>`;
     overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) close(); });
-    document.addEventListener("keydown", (e) => { if (overlay && overlay.classList.contains("open") && e.key === "Escape") close(); });
+    // Escape belongs to the topmost layer. The Date field is auto-enhanced by
+    // time-picker.js into a chip whose calendar opens on document.body, ABOVE this
+    // card and outside its subtree. close() also clears `st`, and the next
+    // buildForm() overwrites the form, so an Escape meant for the calendar used to
+    // discard the whole note in progress. DCC.overlay owns the rule (core-ui.js).
+    document.addEventListener("keydown", (e) => {
+      if (!overlay || !overlay.classList.contains("open") || e.key !== "Escape") return;
+      if (window.DCC && window.DCC.overlay && typeof window.DCC.overlay.layerAboveOpen === "function"
+        && window.DCC.overlay.layerAboveOpen()) return;
+      close();
+    });
     document.body.appendChild(overlay);
     return overlay;
   }

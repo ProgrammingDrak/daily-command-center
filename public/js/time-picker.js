@@ -50,7 +50,18 @@
     document.body.appendChild(overlay);
     overlay.addEventListener("click", function (e) { if (e.target === overlay) close(); });
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && overlay.classList.contains("open")) close();
+      if (e.key !== "Escape" || !overlay.classList.contains("open")) return;
+      // CONSUME it. The marker below tells a host's own dismissal listener to keep
+      // out of the way, but a marker can only be read while it is still set, so it
+      // only protects hosts whose listener runs BEFORE this one. Capture-phase
+      // hosts and hosts registered at script-parse time win that race; a host that
+      // lazily registers a bubble listener after the first picker use loses it, and
+      // its listener saw the marker already cleared. Stopping propagation here
+      // removes the race for every host, present and future: the layer that owns
+      // the keystroke is the one that swallows it.
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+      close();
     });
     card.addEventListener("click", function (e) { e.stopPropagation(); });
   }
@@ -74,11 +85,22 @@
     ensureOverlay();
     onClose = closeCb || null;
     overlay.classList.add("open");
+    // This overlay floats ABOVE whatever opened it, and it lives in <body> --
+    // a SIBLING of any anchored popover that owns the field being edited, not a
+    // child of it. Every hand-rolled "close on outside click" listener is
+    // registered capture-phase on document, so it fires BEFORE a day cell's own
+    // handler and used to destroy that popover mid-pick (calendar closed, value
+    // written to a detached input, nothing moved). The marker is how those
+    // listeners tell "the user left" from "the user is still in my sub-picker":
+    // see DCC.overlay.eventInLayerAbove in core-ui.js. Any future floating layer
+    // opts in the same way -- one attribute, no central allowlist.
+    overlay.setAttribute("data-dcc-layer", "above");
     position(anchor);
   }
   function close() {
     if (!overlay) return;
     overlay.classList.remove("open");
+    overlay.removeAttribute("data-dcc-layer");
     var cb = onClose; onClose = null;
     if (cb) cb();
   }
