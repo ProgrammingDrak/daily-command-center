@@ -64,14 +64,17 @@ const lookup = mountLookup();
 const call = (query) => lookup({ query, session: { userId: 1 } }, { status: () => ({ json: () => {} }) });
 
 test("lookup resolves an exact username", async () => {
-  assert.deepEqual(await call({ q: "drake" }), { id: 1, username: "drake" });
+  const found = await call({ q: "drake" });
+  assert.equal(found.id, 1);
+  assert.equal(found.username, "drake");
 });
 
 test("lookup resolves an exact email to that person's handle", async () => {
   // The point of the whole change: a Google account is addressable by the only
   // string its owner actually knows.
-  assert.deepEqual(await call({ q: "collins.okoye@movewithclever.com" }),
-    { id: 4, username: "collins-okoye" });
+  const found = await call({ q: "collins.okoye@movewithclever.com" });
+  assert.equal(found.id, 4);
+  assert.equal(found.username, "collins-okoye");
 });
 
 test("a username beats an email that spells the same string", async () => {
@@ -94,7 +97,9 @@ test("nobody can register an email-shaped username to intercept lookups", async 
 test("the old ?username= caller still works", async () => {
   // public/js/social.js now sends ?q=, but a stale cached bundle sends the old
   // name. Dropping it would break "add a friend" for anyone mid-deploy.
-  assert.deepEqual(await call({ username: "drake" }), { id: 1, username: "drake" });
+  const found = await call({ username: "drake" });
+  assert.equal(found.id, 1);
+  assert.equal(found.username, "drake");
 });
 
 test("the response carries the handle and the id, and nothing else", async () => {
