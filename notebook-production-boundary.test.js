@@ -7,6 +7,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const ROOT = __dirname;
+const SHELL = fs.readFileSync(path.join(ROOT, "ink.html"), "utf8");
 const SERVER = fs.readFileSync(path.join(ROOT, "server.js"), "utf8");
 const APP = fs.readFileSync(path.join(ROOT, "public/js/ink/app.js"), "utf8");
 const SYNC = fs.readFileSync(path.join(ROOT, "public/js/ink/sync.js"), "utf8");
@@ -20,6 +21,10 @@ test("production serves the notebook shell through the admin boundary", () => {
     SERVER,
     /hasServiceToken\(req, "dcc"\)[^\n]*notebook-page-ingest|notebook-page-ingest[^\n]*hasServiceToken\(req, "dcc"\)/,
   );
+});
+
+test("notebook settings expose the existing deletion control", () => {
+  assert.match(SHELL, /<button class="danger" id="bookDelete">Delete<\/button>/);
 });
 
 test("the browser partitions storage before opening it", () => {
