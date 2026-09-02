@@ -40,6 +40,22 @@ function fmtMoney(cents, opts){
 }
 function dur(ev){return pt(ev.end)-pt(ev.start)}
 function origDur(id){const o=INIT_SCHED.find(e=>e.id===id);return o?dur(o):0}
+// Snap-then-step. The +/- buttons land on the 15-minute grid first, then walk
+// it: 5 -> 15 -> 30 -> 45, and 50 -> 45 -> 30 on the way down. A value already at
+// or under the grain holds instead of collapsing to 0 -- presets and the custom
+// field are still the way to reach off-grid durations.
+function stepDuration(current,delta,opts){
+  opts=opts||{};
+  const c=Math.max(1,Math.round(Number(current)||0));
+  const d=Number(delta);
+  if(!Number.isFinite(d)||d===0)return c;
+  const grain=Math.abs(d),min=Math.max(1,Math.round(Number(opts.min)||1));
+  const n=d>0?(Math.floor(c/grain)+1)*grain:(Math.ceil(c/grain)-1)*grain;
+  // Minus never raises the value -- when the next rung down falls under the
+  // floor it holds where it is, so an off-grid 7m stays 7m instead of jumping.
+  if(d<0)return Math.max(n<min?c:n,1);
+  return Math.max(n,min);
+}
 function isMeeting(ev){return ev.type==="meeting"||ev.type==="oneone"}
 // Registry-backed shims for the combined `isMeeting(ev)||ooo||break` predicate
 // that used to be copy-pasted at ~a dozen call sites. Bare globals so call sites

@@ -1021,7 +1021,7 @@ function toggleDone(id,opts){
 }
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
-  const c=dur(ev),n=Math.max(1,c+delta);if(n===c)return;
+  const c=dur(ev),n=stepDuration(c,delta);if(n===c)return;
   const s=pt(ev.start);ev.end=String(Math.floor((s+n)/60)).padStart(2,"0")+":"+String((s+n)%60).padStart(2,"0");
   if(ev.meta)ev.meta=ev.meta.replace(/·\s*\d+h?\s*\d*m?/,"· "+ms(n));
   durChanges[id]={original:origDur(id)||c,current:n};log("duration",id,c+"->"+n);
