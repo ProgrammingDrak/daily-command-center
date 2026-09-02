@@ -9,7 +9,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 
 const mountVault = require("./routes/vault");
-const { notebookPageRecord, upsertPageSection, upsertPageEntry, splitSections } = mountVault;
+const { notebookPageRecord, upsertPageSection, upsertPageEntry, splitSections, notebookVaultSlug, validateNotebookInk } = mountVault;
 
 const INK = "a".repeat(64);
 const IMG = "b".repeat(64);
@@ -23,6 +23,7 @@ const rec = (over = {}) => notebookPageRecord(Object.assign({
   ink: { hash: INK },
   image: { hash: IMG },
   ocrSource: "vision",
+  ocrStatus: "complete",
 }, over));
 
 // ── the projection ────────────────────────────────────────────────────────────
@@ -40,7 +41,7 @@ test("record embeds the image, cites the ink, and carries the transcript", () =>
 });
 
 test("a page with only a diagram is valid, not a failed upload", () => {
-  const r = rec({ transcript: "" });
+  const r = rec({ transcript: "", ocrStatus: "partial", inkGap: 0.8 });
   assert.match(r.sectionText, /_No recognized text on this page\._/);
   assert.strictEqual(r.transcript, "");
 });
@@ -63,6 +64,31 @@ test("bad input is refused rather than written", () => {
   assert.throws(() => rec({ image: null }), /page image/);
   assert.throws(() => rec({ confidence: 1.4 }), /confidence/);
   assert.throws(() => rec({ transcript: "x".repeat(200001) }), /too large/);
+  assert.throws(() => rec({ transcript: "", ocrStatus: "complete" }), /requires a transcript/);
+  assert.throws(() => rec({ transcript: "text", ocrStatus: "pending", ocrSource: "none" }), /cannot include/);
+  assert.throws(() => rec({ transcript: "", ocrStatus: "pending", ocrSource: "vision" }), /source must be none/);
+});
+
+test("OCR-looking page headings stay transcript text", () => {
+  const r = rec({ transcript: "line one\n## Page 99\nline two" });
+  assert.match(r.sectionText, /\\## Page 99/);
+  const out = upsertPageSection("", 1, r.sectionText);
+  assert.strictEqual(out.match(/^## Page \d+$/gm).length, 1);
+});
+
+test("stable notebook identity survives title changes", () => {
+  const id = "nb_abcdefghijklmnop";
+  assert.strictEqual(notebookVaultSlug(id), notebookVaultSlug(id));
+  assert.match(notebookVaultSlug(id), /^notebooks\/ink-[a-f0-9]{16}$/);
+  assert.notStrictEqual(notebookVaultSlug(id), notebookVaultSlug("nb_qrstuvwxyzabcdef"));
+  assert.throws(() => notebookVaultSlug("Morning Pages"), /notebookId/);
+});
+
+test("the server rejects malformed durable stroke sources", () => {
+  const valid = Buffer.from(JSON.stringify({ v: 1, w: 1275, h: 1650, strokes: [{ tool: "pen", color: "#111111", size: 2.5, pts: [1, 2, 0.5] }] }));
+  assert.strictEqual(validateNotebookInk(valid).strokes.length, 1);
+  assert.throws(() => validateNotebookInk(Buffer.from("{")), /valid JSON/);
+  assert.throws(() => validateNotebookInk(Buffer.from(JSON.stringify({ v: 1, w: 10, h: 10, strokes: [{ tool: "pen", color: "#111", size: 2, pts: [1, 2, 9] }] }))), /invalid point/);
 });
 
 // ── the upsert rule: the whole reason this filing model works ─────────────────

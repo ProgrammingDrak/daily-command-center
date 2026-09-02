@@ -24,6 +24,7 @@
   // the server's inline media tier so blobs commit straight into git.
   const RENDER_SCALE = 1.6;
   const JPEG_QUALITY = 0.82;
+  const RETRY_DELAYS = [30000, 120000, 600000, 1800000];
 
   function create(deps) {
     const Store = deps.store;
@@ -32,7 +33,8 @@
 
     let running = false;
     let queuedAgain = false;
-    let backoff = 0;
+    let retryIndex = 0;
+    let retryTimer = null;
 
     function canvasToBlob(canvas, type, quality) {
       return new Promise((resolve, reject) => {
@@ -62,17 +64,18 @@
         return { skipped: "orphan" };
       }
 
+      // Capture before every early exit. A blank page can become nonblank while
+      // this task is running, so its acknowledgement needs the same CAS guard.
+      const sentHash = Store.hashOf(record.data);
       const page = Strokes.deserialize(record.data);
       if (Strokes.isBlank(page)) {
         // Never create a vault node for a page nobody wrote on.
-        await Store.markSynced(record.id, null);
-        return { skipped: "blank" };
+        const cleared = await Store.markSynced(record.id, null, sentHash);
+        return { skipped: "blank", stillDirty: !cleared };
       }
 
       // Captured BEFORE the upload so we can tell whether the page changed
       // while it was in flight.
-      const sentHash = Store.hashOf(record.data);
-
       const canvas = renderPage(page);
       const imageBlob = await canvasToBlob(canvas, "image/jpeg", JPEG_QUALITY);
       const inkBlob = new Blob([Strokes.serialize(page)], { type: "application/json" });
@@ -81,9 +84,11 @@
       form.append("ink", inkBlob, `page-${record.index + 1}.json`);
       form.append("image", imageBlob, `page-${record.index + 1}.jpg`);
       form.append("notebookTitle", notebook.title);
+      form.append("notebookId", notebook.id);
       form.append("pageNumber", String(record.index + 1));
       form.append("transcript", record.transcript || "");
-      form.append("ocrSource", record.transcript ? "client" : "pending");
+      form.append("ocrStatus", record.transcript ? "complete" : "pending");
+      form.append("ocrSource", record.transcript ? "client" : "none");
 
       const res = await fetch(ENDPOINT, { method: "POST", body: form, credentials: "same-origin" });
       if (!res.ok) {
@@ -101,27 +106,32 @@
 
     async function syncNow() {
       if (running) { queuedAgain = true; return; }
+      clearTimeout(retryTimer);
+      retryTimer = null;
       running = true;
       try {
         for (;;) {
           const dirty = await Store.dirtyPages();
-          if (!dirty.length) { onStatus({ state: "clean", pending: 0 }); backoff = 0; break; }
+          if (!dirty.length) { onStatus({ state: "clean", pending: 0 }); retryIndex = 0; break; }
           onStatus({ state: "syncing", pending: dirty.length });
 
           let progressed = false;
+          let firstError = null;
           for (const record of dirty) {
             try {
               const out = await uploadPage(record);
               if (!out.stillDirty) progressed = true;
             } catch (e) {
-              // 4xx means this page will never be accepted as-is. Retrying it
-              // forever would block every page behind it, so leave it dirty,
-              // report it, and move on rather than spinning.
-              const status = e && e.status;
-              onStatus({ state: "error", pending: dirty.length, message: describe(e), fatal: status >= 400 && status < 500 });
-              backoff = Math.min(backoff ? backoff * 2 : 5000, 300000);
-              return;
+              // One malformed page must not block every healthy page behind it.
+              if (!firstError) firstError = e;
             }
+          }
+          if (firstError) {
+            const status = firstError && firstError.status;
+            const fatal = status >= 400 && status < 500;
+            onStatus({ state: "error", pending: (await Store.dirtyPages()).length, message: describe(firstError), fatal });
+            if (!fatal && status !== 401 && status !== 403) scheduleRetry();
+            break;
           }
           if (!progressed) break;   // nothing moved; avoid a hot loop
         }
@@ -129,6 +139,13 @@
         running = false;
         if (queuedAgain) { queuedAgain = false; setTimeout(syncNow, 50); }
       }
+    }
+
+    function scheduleRetry() {
+      if (retryTimer) return;
+      const delay = RETRY_DELAYS[Math.min(retryIndex, RETRY_DELAYS.length - 1)];
+      retryIndex += 1;
+      retryTimer = setTimeout(() => { retryTimer = null; syncNow(); }, delay);
     }
 
     function describe(e) {
@@ -143,14 +160,14 @@
     // Deliberately NOT on every stroke: that would put the network in the middle
     // of writing, which is the one place it must never be.
     function start() {
-      window.addEventListener("online", () => syncNow());
+      window.addEventListener("online", () => { retryIndex = 0; syncNow(); });
       document.addEventListener("visibilitychange", () => { if (!document.hidden) syncNow(); });
-      setInterval(() => { if (navigator.onLine) syncNow(); }, 60000);
+      setInterval(() => { if (navigator.onLine) syncNow(); }, 300000);
       syncNow();
     }
 
-    return { syncNow, start, renderPage, RENDER_SCALE };
+    return { syncNow, start, renderPage, RENDER_SCALE, RETRY_DELAYS };
   }
 
-  return { create, RENDER_SCALE };
+  return { create, RENDER_SCALE, RETRY_DELAYS };
 });

@@ -19,15 +19,26 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  const DB_NAME = "mycelium-ink";
+  const DB_PREFIX = "mycelium-ink";
   const DB_VERSION = 1;
 
   let dbPromise = null;
+  let dbName = null;
+
+  function configureOwner(owner) {
+    if (dbPromise) throw new Error("local owner must be configured before opening storage");
+    const key = String(owner || "").trim();
+    if (!key) throw new Error("local owner required");
+    // Hashing keeps account identifiers out of the browser's database list.
+    dbName = `${DB_PREFIX}-${hashOf(key)}`;
+    return dbName;
+  }
 
   function open() {
     if (dbPromise) return dbPromise;
+    if (!dbName) return Promise.reject(new Error("local owner is not configured"));
     dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      const req = indexedDB.open(dbName, DB_VERSION);
       req.onupgradeneeded = (e) => {
         const db = req.result;
         if (!db.objectStoreNames.contains("notebooks")) {
@@ -227,7 +238,7 @@
   }
 
   return {
-    open, uid, hashOf,
+    open, configureOwner, uid, hashOf,
     createNotebook, listNotebooks, getNotebook, renameNotebook, deleteNotebook,
     addPage, listPages, getPage, savePage, deletePage,
     dirtyPages, markSynced, stats,

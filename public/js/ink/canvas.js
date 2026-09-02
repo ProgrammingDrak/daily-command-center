@@ -19,9 +19,9 @@
 //     Without it you rest your hand and get a stripe across the page.
 
 (function (root, factory) {
-  if (typeof module === "object" && module.exports) module.exports = factory();
-  else root.InkCanvas = factory();
-})(typeof self !== "undefined" ? self : this, function () {
+  if (typeof module === "object" && module.exports) module.exports = factory(null);
+  else root.InkCanvas = factory(root);
+})(typeof self !== "undefined" ? self : this, function (root) {
   "use strict";
 
   const S = (typeof module === "object" && module.exports)

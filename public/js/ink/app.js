@@ -41,7 +41,8 @@
   let current = { notebook: null, pages: [], index: 0 };
   let newCover = COVERS[0];
   let saveTimer = null;
-  let lastStatus = { state: "clean", pending: 0 };
+  let localStatus = "";
+  let remoteStatus = "";
 
   const coverColor = (name) =>
     getComputedStyle(document.documentElement).getPropertyValue(`--cover-${name}`).trim() || "#47506b";
@@ -294,13 +295,14 @@
   // ── status ─────────────────────────────────────────────────────────────────
 
   function setStatus(s) {
-    if (s.state !== "syncing" && s.state !== "error") lastStatus = s;
-    const label = {
-      unsaved: "…", saved: "saved", clean: "synced",
-      syncing: `syncing ${s.pending || ""}`.trim(),
-      error: s.message || "sync failed",
-    }[s.state] || "";
+    if (s.state === "unsaved") localStatus = "Saving locally";
+    else if (s.state === "saved") localStatus = "Saved locally";
+    else if (s.state === "clean") remoteStatus = "Synced";
+    else if (s.state === "syncing") remoteStatus = `Syncing ${s.pending || ""}`.trim();
+    else if (s.state === "error") remoteStatus = s.message === "offline" ? "Offline" : (s.message || "Needs attention");
+    const label = [localStatus, remoteStatus].filter(Boolean).join(" · ");
     el.syncStatus.textContent = label;
+    el.syncStatus.setAttribute("aria-label", label || "Notebook save status");
     el.syncStatus.className = "status" + (s.state === "error" ? " warn" : s.state === "clean" ? " ok" : "");
   }
 
@@ -313,10 +315,26 @@
 
   (async function boot() {
     try {
+      const ownerStorageKey = "mycelium-ink-owner";
+      let owner = null;
+      try {
+        const response = await fetch("/api/me", { credentials: "same-origin", cache: "no-store" });
+        if (!response.ok) throw Object.assign(new Error(`identity ${response.status}`), { status: response.status });
+        const me = await response.json();
+        owner = String(me.workspaceId || (me.userId ? `user-${me.userId}` : "")).trim();
+        if (!owner) throw new Error("identity response had no owner");
+        localStorage.setItem(ownerStorageKey, owner);
+      } catch (e) {
+        // Offline reopening uses the last verified owner. An online 401/403
+        // never falls back, so switching accounts cannot expose another store.
+        if (!e.status) owner = localStorage.getItem(ownerStorageKey);
+        if (!owner) throw e;
+      }
+      Store.configureOwner(owner);
       await Store.open();
     } catch (e) {
       el.shelfEmpty.classList.remove("hidden");
-      el.shelfEmpty.textContent = `Local storage is unavailable, so nothing could be loaded (${e.message}). Private browsing blocks it on some browsers.`;
+      el.shelfEmpty.textContent = `The private local notebook could not open (${e.message}). Sign in once online before using it offline.`;
       return;
     }
     sync = window.InkSync.create({ store: Store, strokes: S, onStatus: setStatus });

@@ -8,6 +8,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#14141f">
+<link rel="manifest" href="/public/ink-manifest.webmanifest">
+<link rel="apple-touch-icon" href="/public/icons/apple-touch-icon.png">
 <title>Mycelium Ink</title>
 <style>
   /* One palette object. Cover colours are named here and nowhere else, so the
@@ -184,7 +186,7 @@
     <button class="tbtn" id="nextBtn" title="Next page">›</button>
     <span class="sep"></span>
     <button class="tbtn" id="addPageBtn" title="Add a page">+</button>
-    <button class="tbtn" id="delPageBtn" title="Delete this page">🗑</button>
+    <button class="tbtn" id="delPageBtn" title="Delete this page" hidden>🗑</button>
   </div>
 </section>
 
@@ -202,7 +204,7 @@
   <h2>Notebook</h2>
   <input type="text" id="bookTitle" autocomplete="off">
   <div class="row">
-    <button class="danger" id="bookDelete">Delete</button>
+    <button class="danger" id="bookDelete" hidden>Delete</button>
     <button id="bookCancel">Cancel</button>
     <button class="primary" id="bookSave">Save</button>
   </div>
@@ -213,5 +215,9 @@
 <script src="/public/js/ink/canvas.js"></script>
 <script src="/public/js/ink/sync.js"></script>
 <script src="/public/js/ink/app.js"></script>
+<script>
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/ink-sw.js").catch(() => {});
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+</script>
 </body>
 </html>
