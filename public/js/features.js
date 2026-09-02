@@ -481,7 +481,10 @@ function openAddModal(taskId, taskTitle) {
   _setAddModalPageInert(taskOverlay, true);
   selectAddModalTab('overview');
   if(window.DCCWorkSessions&&typeof window.DCCWorkSessions.renderHistory==='function')window.DCCWorkSessions.renderHistory(_addModalBlockId);
-  setAddModalMode(false);
+  // Clicking a task IS the edit gesture: the modal opens ready to type, so nobody
+  // has to find an "Edit" button first. Read mode still exists -- Save and Cancel
+  // both land there, and the Edit button re-enters it from that state.
+  setAddModalMode(true);
   setTimeout(function() { document.getElementById('add-modal-close')?.focus(); }, 80);
 }
 
@@ -551,6 +554,9 @@ function cancelAddModalEdits() {
   var taskId = _addModalTaskId;
   var fallbackTitle = taskForRepeatResponsibility(taskId, _addModalDraftTitle).title;
   openAddModal(taskId, fallbackTitle);
+  // openAddModal now opens in edit mode, so Cancel has to step back out of it
+  // explicitly -- otherwise discarding the drafts would leave the fields hot.
+  setAddModalMode(false);
 }
 
 // Repaint only the read-only metadata while this modal is open. Rebuilding the

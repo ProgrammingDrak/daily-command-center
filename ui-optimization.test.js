@@ -73,6 +73,15 @@ test("task details provide explicit read and edit controls", () => {
   assert.match(details, /titleControl\.tabIndex = _addModalEditing \? 0 : -1/);
 });
 
+test("clicking a task opens the details modal already in edit mode", () => {
+  const details = read("public/js/features.js");
+  const open = details.slice(details.indexOf("function openAddModal("), details.indexOf("function selectAddModalTab("));
+  assert.match(open, /setAddModalMode\(true\)/);
+  assert.doesNotMatch(open, /setAddModalMode\(false\)/);
+  const cancel = details.slice(details.indexOf("function cancelAddModalEdits("), details.indexOf("function refreshOpenAddModalDetails("));
+  assert.match(cancel, /setAddModalMode\(false\)/);
+});
+
 test("Task Manager uses Quick add without duplicating task creation", () => {
   const index = read("index.html");
   const css = read("public/css/ui-optimization.css");
