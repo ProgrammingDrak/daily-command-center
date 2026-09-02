@@ -60,6 +60,17 @@ store module → Postgres. Errors that escape a handler hit the global error
 middleware at the bottom of `server.js`: logged with stack server-side,
 generic message to the client in production.
 
+## Social identity lookup
+
+The Social tab shows the signed-in user's DCC username from `/api/me`.
+Friend requests and access grants resolve one exact username or email through
+`GET /api/social/users/lookup?q=...`. The route uses the login resolver, so
+Google-created accounts remain addressable by their verified email.
+
+The lookup is session-only. It never lists users, accepts partial matches, or
+returns an email. Its response contains only the matched user ID and username.
+The legacy `username` query parameter remains valid for cached clients.
+
 ## Operational notes
 
 `npm start` runs schema patch then server. `npm test` runs the `node --test`

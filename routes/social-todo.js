@@ -1080,10 +1080,22 @@ app.get("/api/social/friends", route(req => socialStore.listFriends(req.session.
 
 app.get("/api/social/friends/requests", route(req => socialStore.listFriendRequests(req.session.userId)));
 
-// Find a user to friend or sponsor, by exact username.
+// Find a user to friend, grant access to, or sponsor -- by exact username OR
+// exact email. Email matters because a Google-signed-in account never picked a
+// username: the server derived one from the email (auth.js slugifyUsername), so
+// the person often does not know their own handle and cannot tell a friend what
+// to type. findUserByLogin is the SAME resolver the login form uses, and it
+// prefers a username hit over an email hit, so a username that happens to look
+// like somebody else's email cannot be shadowed. Still exact-match only: this
+// is not a directory and never returns a list. The `username` query name is
+// kept so old callers keep working; `q` is the honest name for either form.
 app.get("/api/social/users/lookup", route(async (req) => {
-  const user = await auth.findUserByUsername(String(req.query.username || "").trim());
+  const identifier = String(req.query.q || req.query.username || req.query.email || "").trim();
+  if (!identifier) throw badRequest("username or email required");
+  const user = await auth.findUserByLogin(identifier);
   if (!user) throw notFound("User not found");
+  // Only ever the handle and id. The email is deliberately NOT echoed back: a
+  // signed-in stranger could otherwise walk usernames to harvest addresses.
   return { id: user.id, username: user.username };
 }));
 

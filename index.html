@@ -1800,9 +1800,23 @@
       <div>
         <h2 class="social-title">Social</h2>
         <div class="social-subtitle">Friends see what you choose to publish. Nothing is shared automatically.</div>
+        <!-- Adding a friend needs a handle, and nothing in the app used to say
+             what YOURS is -- a Google sign-in never picked one. Hidden until
+             /api/me answers, so it never flashes an empty chip. -->
+        <div class="social-you" id="social-you" hidden>
+          <span class="social-you-label">Your username</span>
+          <button class="social-you-chip" id="social-you-copy" type="button" title="Copy your username">
+            <span id="social-you-name">&hellip;</span>
+            <span class="social-you-hint">Copy</span>
+          </button>
+          <span class="social-you-note">Send this to a friend so they can add you.</span>
+        </div>
       </div>
       <div class="social-add">
-        <input id="social-lookup-input" type="text" maxlength="60" placeholder="Add a friend by username" autocomplete="off">
+        <!-- The label carries "add a friend" so the input can carry the SHORT
+             truth. At this width a longer placeholder was truncated mid-word. -->
+        <span class="social-add-label">Add a friend</span>
+        <input id="social-lookup-input" type="text" maxlength="120" placeholder="Username or email" autocomplete="off">
         <button id="social-lookup-send" class="social-btn primary" type="button">Send request</button>
       </div>
     </div>
@@ -1882,7 +1896,7 @@
           <div class="social-share-channel"><strong>Guest activity</strong><p>Refresh reactions without changing access grants.</p><button class="social-btn" data-social-refresh-guests type="button">Refresh guest activity</button></div>
         </div>
         <div class="social-grant-add">
-          <input id="social-grant-username" type="text" maxlength="60" placeholder="Username" autocomplete="off">
+          <input id="social-grant-username" type="text" maxlength="120" placeholder="Username or email" autocomplete="off">
           <select id="social-grant-role" aria-label="Role to grant">
             <option value="viewer">Viewer &mdash; can see my day</option>
             <option value="commenter">Commenter &mdash; can also comment</option>
