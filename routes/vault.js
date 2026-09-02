@@ -282,6 +282,229 @@ function journalIngestRecord({ source, transcript, highlights, lowConfidence, cl
   return { type, frontmatter, body, sourceId, sourceAnchor, transcript: cleanTranscript };
 }
 
+// ── Notebook page ingest (Mycelium Ink) ──
+// An iPad app writes handwritten pages here. A notebook is ONE node and each
+// page is a `## Page N` section, keyed by that number. Keying on the page number
+// rather than on content is what makes an edit REPLACE a page instead of
+// appending a second copy of it -- an edited page necessarily has a new ink
+// hash, so hash-keyed dedup alone would silently duplicate.
+//
+// Ink strokes are the source of truth; the rendered image is what keeps a page
+// readable if Apple's undocumented stroke format ever stops parsing, and is
+// what the DCC vault tab displays. Both ship, because a free Apple ID cannot use
+// iCloud and the vault is therefore the only backup of the ink.
+const NOTEBOOK_PAGE_SCHEMA_VERSION = 1;
+// Fraction of inked area Vision covered with no text box before the page is
+// marked partially unread. Mirrors INK_GAP_BAR in mycelium-ink's ocr-gate.swift;
+// keep the two in step.
+const NOTEBOOK_INK_GAP_BAR = 0.2;
+
+// Ink is an OPEN stroke format (public/js/ink/strokes.js): plain JSON you can
+// read in a text editor in twenty years. The Apple-only version of this stored
+// PKDrawing blobs, which only Apple can read and only on Apple hardware -- the
+// wrong trade for a vault meant to outlive the app.
+const NOTEBOOK_INK_TYPES = new Map([
+  ["application/json", new Set(["json", "strokes"])],
+  ["text/json", new Set(["json", "strokes"])],
+]);
+const NOTEBOOK_IMAGE_TYPES = new Map([
+  ["image/jpeg", new Set(["jpg", "jpeg"])],
+  ["image/png", new Set(["png"])],
+]);
+const NOTEBOOK_OCR_STATUSES = new Set(["pending", "complete", "partial", "failed"]);
+const NOTEBOOK_OCR_SOURCES = new Set(["none", "client", "claude", "vision"]);
+const NOTEBOOK_INK_MAX_BYTES = 2 * 1024 * 1024;
+const NOTEBOOK_INK_MAX_POINTS = 500000;
+
+function notebookVaultSlug(notebookId) {
+  const id = String(notebookId || "").trim();
+  if (!/^nb_[a-z0-9]{12,96}$/i.test(id)) throw new Error("valid notebookId required");
+  return `notebooks/ink-${crypto.createHash("sha256").update(id).digest("hex").slice(0, 16)}`;
+}
+
+// Reject hostile or corrupt stroke JSON before it becomes the durable source.
+// The client parser is intentionally forgiving for recovery. The server is not.
+function validateNotebookInk(buffer) {
+  if (!Buffer.isBuffer(buffer) || !buffer.length) throw new Error("ink strokes required");
+  if (buffer.length > NOTEBOOK_INK_MAX_BYTES) throw new Error("ink stroke file is too large");
+  let page;
+  try { page = JSON.parse(buffer.toString("utf8")); }
+  catch { throw new Error("ink must contain valid JSON"); }
+  if (!page || page.v !== 1 || !Number.isFinite(page.w) || !Number.isFinite(page.h)
+      || page.w < 1 || page.h < 1 || page.w > 10000 || page.h > 10000
+      || !Array.isArray(page.strokes)) {
+    throw new Error("ink must match the version 1 stroke format");
+  }
+  let points = 0;
+  for (const stroke of page.strokes) {
+    if (!stroke || !["pen", "highlighter"].includes(stroke.tool)
+        || !/^#[0-9a-f]{3,8}$/i.test(String(stroke.color || ""))
+        || !Number.isFinite(stroke.size) || stroke.size <= 0 || stroke.size > 200
+        || !Array.isArray(stroke.pts) || stroke.pts.length < 3 || stroke.pts.length % 3 !== 0) {
+      throw new Error("ink contains an invalid stroke");
+    }
+    points += stroke.pts.length / 3;
+    if (points > NOTEBOOK_INK_MAX_POINTS) throw new Error("ink contains too many points");
+    for (let i = 0; i < stroke.pts.length; i += 3) {
+      const x = stroke.pts[i]; const y = stroke.pts[i + 1]; const pressure = stroke.pts[i + 2];
+      if (![x, y, pressure].every(Number.isFinite)
+          || x < -page.w || x > page.w * 2 || y < -page.h || y > page.h * 2
+          || pressure < 0 || pressure > 1) {
+        throw new Error("ink contains an invalid point");
+      }
+    }
+  }
+  return page;
+}
+
+function validNotebookImageBytes(buffer, mime) {
+  if (!Buffer.isBuffer(buffer)) return false;
+  if (mime === "image/png") return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"));
+  if (mime === "image/jpeg") return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  return false;
+}
+
+function escapeNotebookTranscript(text) {
+  // A transcript line that looks like our section delimiter must stay text.
+  // Otherwise OCR of a written "## Page 2" can corrupt later page upserts.
+  return String(text || "").replace(/^##(\s+)/gm, "\\##$1");
+}
+
+function sameNotebookProjection(a, b) {
+  return !!a && !!b
+    && a.ink === b.ink
+    && a.image === b.image
+    && a.ocr_status === b.ocr_status
+    && a.ocr_source === b.ocr_source
+    && a.transcript === b.transcript
+    && a.ocr_partial === b.ocr_partial;
+}
+
+// Split a body into its leading preamble and its `## ` sections, preserving
+// each section's text verbatim. Used to rewrite ONE page without disturbing
+// anything else in the note (a hand-written intro, a trailing `## Links`).
+function splitSections(body) {
+  const lines = String(body || "").split("\n");
+  const preamble = [];
+  const sections = [];
+  let cur = null;
+  for (const line of lines) {
+    const m = /^##\s+(.*\S)\s*$/.exec(line);
+    if (m) {
+      if (cur) sections.push(cur);
+      cur = { heading: m[1], lines: [] };
+    } else if (cur) {
+      cur.lines.push(line);
+    } else {
+      preamble.push(line);
+    }
+  }
+  if (cur) sections.push(cur);
+  return { preamble: preamble.join("\n"), sections };
+}
+
+function pageNumberOf(heading) {
+  const m = /^Page\s+(\d+)$/i.exec(String(heading || "").trim());
+  return m ? Number(m[1]) : null;
+}
+
+// Insert or replace one page section, keeping page sections in numeric order and
+// every non-page section (Links, notes) in its original relative order at the end.
+// Pure and total: exported for tests.
+function upsertPageSection(body, n, sectionText) {
+  const { preamble, sections } = splitSections(body);
+  const pages = [];
+  const others = [];
+  for (const sec of sections) {
+    const num = pageNumberOf(sec.heading);
+    if (num == null) others.push(sec);
+    else if (num !== n) pages.push({ num, text: `## ${sec.heading}\n${sec.lines.join("\n")}`.replace(/\s+$/, "") });
+  }
+  pages.push({ num: n, text: sectionText.replace(/\s+$/, "") });
+  pages.sort((a, b) => a.num - b.num);
+  const otherText = others.map((sec) => `## ${sec.heading}\n${sec.lines.join("\n")}`.replace(/\s+$/, ""));
+  const head = preamble.replace(/\s+$/, "");
+  return [head, ...pages.map((p) => p.text), ...otherText].filter((part) => part !== "").join("\n\n") + "\n";
+}
+
+// Same upsert rule for the frontmatter page index.
+function upsertPageEntry(pages, entry) {
+  const list = Array.isArray(pages) ? pages.filter((p) => p && Number(p.page) !== Number(entry.page)) : [];
+  list.push(entry);
+  list.sort((a, b) => Number(a.page) - Number(b.page));
+  return list;
+}
+
+// The page -> markdown projection. ONE function, called by the endpoint and by
+// its tests, so a surface can never render from a narrower private variant.
+function notebookPageRecord({ pageNumber, transcript, confidence, ink, image, ocrSource, ocrStatus, inkGap }) {
+  const n = Number(pageNumber);
+  if (!Number.isInteger(n) || n < 1 || n > 10000) throw new Error("pageNumber must be an integer from 1 to 10000");
+  if (!ink || !/^[a-f0-9]{64}$/i.test(ink.hash || "")) throw new Error("valid ink blob required");
+  if (!image || !/^[a-f0-9]{64}$/i.test(image.hash || "")) throw new Error("valid page image required");
+
+  // A page carrying only a diagram has no words on it. That is a real page, not
+  // a failed upload, so an empty transcript is allowed here (unlike the journal
+  // pilot, where the transcript IS the payload).
+  const text = String(transcript == null ? "" : transcript).trim();
+  if (text.length > 200000) throw new Error("transcript is too large");
+
+  let status = String(ocrStatus || (text ? "complete" : "pending")).trim().toLowerCase();
+  let source = String(ocrSource || (status === "pending" ? "none" : "client")).trim().toLowerCase();
+  if (!NOTEBOOK_OCR_STATUSES.has(status)) throw new Error("ocrStatus must be pending, complete, partial, or failed");
+  if (!NOTEBOOK_OCR_SOURCES.has(source)) throw new Error("ocrSource must be none, client, claude, or vision");
+  if ((status === "pending" || status === "failed") && text) throw new Error(`${status} OCR cannot include a transcript`);
+  if (status === "complete" && !text) throw new Error("complete OCR requires a transcript");
+  if (status === "pending" && source !== "none") throw new Error("pending OCR source must be none");
+  if ((status === "complete" || status === "partial") && source === "none") throw new Error(`${status} OCR requires a source`);
+
+  let score = null;
+  if (confidence != null && String(confidence).trim() !== "") {
+    score = Number(confidence);
+    if (!Number.isFinite(score) || score < 0 || score > 1) throw new Error("confidence must be between 0 and 1");
+  }
+  let gap = null;
+  if (inkGap != null && String(inkGap).trim() !== "") {
+    gap = Number(inkGap);
+    if (!Number.isFinite(gap) || gap < 0 || gap > 1) throw new Error("inkGap must be between 0 and 1");
+  }
+
+  const inkId = `media:sha256:${ink.hash.toLowerCase()}`;
+  const imageId = `media:sha256:${image.hash.toLowerCase()}`;
+  const inkShort = ink.hash.slice(0, 12).toLowerCase();
+  const imageShort = image.hash.slice(0, 12).toLowerCase();
+  const meta = [`ink: ${inkId}`, `ocr: ${source}`];
+  if (score != null) meta.push(`confidence: ${score}`);
+  if (gap != null) meta.push(`ink-gap: ${gap}`);
+  meta.push(`schema: ${NOTEBOOK_PAGE_SCHEMA_VERSION}`);
+
+  // Vision's worst failure is silent omission: an unreadable line yields no
+  // observation at all, so the transcript reads clean while missing content.
+  // A high ink gap means pixels were inked that no recognized text covers, so
+  // say so in the page itself rather than letting it pass as complete.
+  const partial = status === "partial" || (gap != null && gap > NOTEBOOK_INK_GAP_BAR);
+  if (partial) status = "partial";
+  const parts = [`## Page ${n}`, `![Page ${n}](${imageId})`, `<!-- ${meta.join("; ")} -->`];
+  if (partial) parts.push("> Some ink on this page was not recognized. The image above is authoritative.");
+  else if (status === "pending") parts.push("_Transcription pending. The image above is authoritative._");
+  else if (status === "failed") parts.push("> Transcription failed. The image above is authoritative.");
+  if (text) parts.push(escapeNotebookTranscript(text));
+  else if (partial) parts.push("_No recognized text on this page._");
+  const sectionText = parts.join("\n\n");
+
+  // Key is `page`, not `n`: bare `n` is a boolean-ish token in YAML 1.1, so
+  // emitters quote it and stricter parsers can read it as `false`. Not a trap to
+  // leave in a vault meant to be read by many tools for a long time.
+  const entry = { page: n, ink: inkShort, image: imageShort, updated: new Date().toISOString().slice(0, 10) };
+  entry.ocr_status = status;
+  entry.ocr_source = source;
+  entry.transcript = crypto.createHash("sha256").update(text).digest("hex").slice(0, 12);
+  if (score != null) entry.confidence = score;
+  if (partial) entry.ocr_partial = true;
+
+  return { n, sectionText, entry, inkId, imageId, transcript: text, partial, ocrStatus: status };
+}
+
 // ── Media serving v2 (B3): resolution + render helpers ──
 // The editor embeds attachments as `![alt](media:sha256:<hex>)`. These helpers
 // turn a manifest into (a) the element kind the client should render and (b) the
@@ -504,6 +727,7 @@ function mount(app, ctx) {
   const { VAULT_REPO_URL } = ctx;
   const journalIngestQueues = new Map();
   const mediaWriteQueues = new Map();
+  const notebookQueues = new Map();
 
   async function withQueuedLock(queue, key, fn) {
     const previous = queue.get(key) || Promise.resolve();
@@ -520,6 +744,8 @@ function mount(app, ctx) {
 
   const withJournalIngestLock = (key, fn) => withQueuedLock(journalIngestQueues, key, fn);
   const withMediaWriteLock = (hash, fn) => withQueuedLock(mediaWriteQueues, hash, fn);
+  // One notebook node is rewritten per page sync, so serialize by notebook.
+  const withNotebookLock = (slug, fn) => withQueuedLock(notebookQueues, slug, fn);
 
   // multer: in-memory, 12 MB request cap (the gate-v2 hard error fires above 10
   // MB inside the handler; multer rejects >12 MB before we ever buffer it).
@@ -1570,6 +1796,141 @@ app.post("/api/vault/attach", (req, res) => {
   });
 });
 
+  // Mycelium Ink (iPad) syncs one handwritten page. Sibling of
+  // journal-image-ingest, with three deliberate differences:
+  //
+  //  1. TWO blobs per page. Strokes are the editable source of truth, in an open
+  //     JSON format; the rendered image is what any tool can display forever and
+  //     what server-side OCR reads. The device is the primary store, so the
+  //     vault is the only backup the ink has.
+  //  2. Keyed by PAGE NUMBER, not by content hash. An edited page has new bytes,
+  //     so hash-keyed dedup alone would append a second copy of the same page.
+  //  3. An empty transcript is valid. A page holding only a diagram has no words
+  //     on it and is still a real page.
+  app.post("/api/vault/notebook-page-ingest", (req, res) => {
+    // This is Drake's personal vault, not a multi-tenant DCC data surface.
+    // Fail closed when the host does not supply the admin-session predicate.
+    if (typeof ctx.isAdminSession !== "function" || !ctx.isAdminSession(req)) {
+      return res.status(403).json({ error: "Personal vault access required" });
+    }
+    if (!vaultReady(res)) return;
+    const fields = upload.fields([{ name: "ink", maxCount: 1 }, { name: "image", maxCount: 1 }]);
+    fields(req, res, async (err) => {
+      if (err) {
+        if (err.code === "LIMIT_FILE_SIZE") return res.status(413).json({ error: "big media goes through mycelium-media ingest" });
+        return res.status(400).json({ error: err.message });
+      }
+      const inkFile = req.files && req.files.ink && req.files.ink[0];
+      const imageFile = req.files && req.files.image && req.files.image[0];
+      if (!inkFile) return res.status(400).json({ error: "ink strokes required" });
+      if (!imageFile) return res.status(400).json({ error: "page image required" });
+
+      const typeOk = (file, table) => {
+        const mime = String(file.mimetype || "").toLowerCase();
+        const allowed = table.get(mime);
+        return !!allowed && allowed.has(ext(file.originalname, ""));
+      };
+      if (!typeOk(inkFile, NOTEBOOK_INK_TYPES)) return res.status(400).json({ error: "ink must be a .json stroke file" });
+      if (!typeOk(imageFile, NOTEBOOK_IMAGE_TYPES)) return res.status(400).json({ error: "page image must be a JPEG or PNG with a matching extension" });
+      if (!validNotebookImageBytes(imageFile.buffer, String(imageFile.mimetype || "").toLowerCase())) {
+        return res.status(400).json({ error: "page image bytes do not match its declared type" });
+      }
+
+      const b = req.body || {};
+      const title = String(b.notebookTitle || b.notebook || "").trim().replace(/\s+/g, " ").slice(0, 200);
+      if (!title) return res.status(400).json({ error: "notebookTitle required" });
+      let slug;
+      try {
+        slug = notebookVaultSlug(b.notebookId);
+        validateNotebookInk(inkFile.buffer);
+      } catch (e) {
+        return res.status(400).json({ error: e.message });
+      }
+      // Notebooks are never a sensitive dir. Refuse rather than silently
+      // writing plaintext ink somewhere that is supposed to be encrypted.
+      if (isSensitiveSlug(slug)) return res.status(400).json({ error: "notebooks cannot be written to a sensitive path" });
+
+      let record;
+      try {
+        record = notebookPageRecord({
+          pageNumber: b.pageNumber,
+          transcript: b.transcript,
+          confidence: b.confidence,
+          ocrSource: b.ocrSource,
+          ocrStatus: b.ocrStatus,
+          inkGap: b.inkGap,
+          ink: { hash: crypto.createHash("sha256").update(inkFile.buffer).digest("hex") },
+          image: { hash: crypto.createHash("sha256").update(imageFile.buffer).digest("hex") },
+        });
+      } catch (e) {
+        return res.status(400).json({ error: e.message });
+      }
+
+      return withNotebookLock(slug, async () => {
+        // Idempotency covers both ink and its derived OCR projection. OCR may
+        // arrive later for identical ink, and must replace the pending section.
+        const existing = ctx.vault.get(slug);
+        if (existing) {
+          const prior = (existing.frontmatter && Array.isArray(existing.frontmatter.pages) ? existing.frontmatter.pages : [])
+            .find((pg) => pg && Number(pg.page) === record.n);
+          if (sameNotebookProjection(prior, record.entry)) {
+            return res.status(200).json({ slug, page: record.n, created: false, deduplicated: true });
+          }
+        }
+
+        let ink = null;
+        let image = null;
+        try {
+          ink = await ingestMedia(inkFile.buffer, inkFile.originalname || `page-${record.n}.json`, inkFile.mimetype, { sensitive: false, deferNotify: true });
+          image = await ingestMedia(imageFile.buffer, imageFile.originalname || `page-${record.n}.jpg`, imageFile.mimetype, {
+            sensitive: false, deferNotify: true, textSidecar: record.transcript || undefined,
+          });
+
+          const today = ctx.getTodayStr ? ctx.getTodayStr() : new Date().toISOString().slice(0, 10);
+          let created = false;
+          await ctx.vault.mutate(slug, (current) => {
+            created = !current;
+            const prevFm = (current && current.frontmatter) || {};
+            const frontmatter = Object.assign({}, prevFm, {
+              type: "notebook",
+              title,
+              date: prevFm.date || today,
+              updated: today,
+              pages: upsertPageEntry(prevFm.pages, record.entry),
+            });
+            if (!frontmatter.summary) frontmatter.summary = `Handwritten notebook: ${title}.`;
+            const base = current && String(current.body || "").trim()
+              ? current.body
+              : `# ${title}\n\n<!-- generated: page sections are written from handwriting OCR and are rewritten on every sync. Hand edits will be lost. -->\n`;
+            return { frontmatter, body: upsertPageSection(base, record.n, record.sectionText) };
+          });
+
+          // Only now are the blobs permanent: a failed vault write rolls them back.
+          ink.commit();
+          image.commit();
+          if (ctx.syncMgr) ctx.syncMgr.notifyChange({ slug, message: `notebook page ${slug.slice(-16)} p${record.n}` });
+
+          return res.status(created ? 201 : 200).json({
+            slug,
+            page: record.n,
+            created,
+            deduplicated: false,
+            partial: record.partial,
+            ocrStatus: record.ocrStatus,
+            ink: record.inkId,
+            image: record.imageId,
+          });
+        } catch (e) {
+          if (ink && ink.rollback) await ink.rollback();
+          if (image && image.rollback) await image.rollback();
+          if (e && e.code === "TOO_BIG") return res.status(413).json({ error: e.message });
+          console.error("[vault] notebook page ingest failed:", e.message);
+          return res.status(500).json({ error: "notebook page ingest failed" });
+        }
+      });
+    });
+  });
+
 // ── Media serving v2 ──
 // In-memory hash12 -> {path, mtimeMs, manifest} index, replacing B2's per-request
 // walk. Built lazily on first use (routes mount before vault init, so there's no
@@ -1828,6 +2189,16 @@ module.exports.mediaPlacement = mediaPlacement;
 module.exports.journalIngestRecord = journalIngestRecord;
 module.exports.normalizeTextList = normalizeTextList;
 module.exports.validCaptureDate = validCaptureDate;
+// Notebook page ingest pure helpers (vault-notebook-page.test.js).
+module.exports.notebookPageRecord = notebookPageRecord;
+module.exports.upsertPageSection = upsertPageSection;
+module.exports.upsertPageEntry = upsertPageEntry;
+module.exports.splitSections = splitSections;
+module.exports.notebookVaultSlug = notebookVaultSlug;
+module.exports.validateNotebookInk = validateNotebookInk;
+module.exports.validNotebookImageBytes = validNotebookImageBytes;
+module.exports.sameNotebookProjection = sameNotebookProjection;
+module.exports.escapeNotebookTranscript = escapeNotebookTranscript;
 // B3 media-serving pure helpers (vault-b3.test.js).
 module.exports.mediaKind = mediaKind;
 module.exports.mediaCandidates = mediaCandidates;

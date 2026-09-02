@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover + safe-area padding below, so the toolbar clears the
+     home indicator when this is installed to an iPad home screen. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#14141f">
+<link rel="manifest" href="/public/ink-manifest.webmanifest">
+<link rel="apple-touch-icon" href="/public/icons/apple-touch-icon.png">
+<title>Mycelium Ink</title>
+<style>
+  /* One palette object. Cover colours are named here and nowhere else, so the
+     whole look changes from this block. */
+  :root {
+    --chrome: #14141f;
+    --chrome-2: #1e1e2d;
+    --chrome-3: #2a2a3d;
+    --edge: #33334a;
+    --text: #e8e8f0;
+    --muted: #9a9ab0;
+    --accent: #7c6cf0;
+    --paper: #fffdf8;
+    --danger: #e0576b;
+    --ok: #4ac08a;
+
+    --cover-slate: #47506b;
+    --cover-moss: #4a6b54;
+    --cover-clay: #8a5a44;
+    --cover-plum: #5f4468;
+    --cover-ink: #2f3a52;
+    --cover-sand: #8a7a55;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--chrome); color: var(--text);
+    font: 15px/1.45 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+    /* The pen must never scroll or zoom the page. */
+    overscroll-behavior: none;
+    touch-action: manipulation;
+  }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  .hidden { display: none !important; }
+
+  /* ── shelf ───────────────────────────────────────────────────────────── */
+  #shelf { height: 100%; overflow-y: auto; padding: max(24px, env(safe-area-inset-top)) 24px 40px; }
+  .shelf-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
+  .shelf-head h1 { font-size: 22px; margin: 0; font-weight: 620; letter-spacing: -0.01em; }
+  .shelf-head .sub { color: var(--muted); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px; }
+  .book { text-align: left; display: flex; flex-direction: column; gap: 9px; }
+  .book .spine {
+    aspect-ratio: 3/4; border-radius: 10px; position: relative; overflow: hidden;
+    box-shadow: 0 6px 18px rgba(0,0,0,.34); transition: transform .12s ease;
+    /* The lighter left edge reads as a spine without needing an image. */
+    background-image: linear-gradient(100deg, rgba(255,255,255,.17) 0 7%, rgba(0,0,0,.16) 7.5% 10%, transparent 10.5%);
+  }
+  .book:active .spine { transform: scale(.97); }
+  .book .spine .count {
+    position: absolute; bottom: 8px; right: 10px; font-size: 11px;
+    color: rgba(255,255,255,.72); letter-spacing: .02em;
+  }
+  .book .spine .badge {
+    position: absolute; top: 8px; right: 8px; width: 8px; height: 8px;
+    border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px rgba(0,0,0,.28);
+  }
+  .book .title { font-size: 13.5px; font-weight: 560; }
+  .book .meta { font-size: 11.5px; color: var(--muted); }
+  .new-book .spine {
+    background: none; border: 1.5px dashed var(--edge); display: grid; place-items: center;
+    color: var(--muted); font-size: 30px; box-shadow: none;
+  }
+  .empty { color: var(--muted); font-size: 14px; padding: 36px 0; max-width: 46ch; }
+
+  /* ── writing view ────────────────────────────────────────────────────── */
+  #writer { height: 100%; display: none; flex-direction: column; }
+  #writer.on { display: flex; }
+  .bar {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+    background: var(--chrome-2); border-bottom: 1px solid var(--edge); flex-wrap: wrap;
+    padding-top: max(8px, env(safe-area-inset-top));
+  }
+  .bar .grow { flex: 1; }
+  .bar .name { font-weight: 580; font-size: 14.5px; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tbtn {
+    width: 38px; height: 34px; border-radius: 8px; display: grid; place-items: center;
+    background: var(--chrome-3); font-size: 15px; line-height: 1;
+  }
+  .tbtn.on { background: var(--accent); }
+  .tbtn:disabled { opacity: .34; cursor: default; }
+  .swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; }
+  .swatch.on { border-color: var(--text); }
+  .sizes { display: flex; gap: 5px; align-items: center; }
+  .size-dot { width: 26px; height: 26px; border-radius: 8px; background: var(--chrome-3); display: grid; place-items: center; }
+  .size-dot.on { background: var(--accent); }
+  .size-dot i { display: block; border-radius: 50%; background: var(--text); }
+  .sep { width: 1px; height: 22px; background: var(--edge); margin: 0 3px; }
+  .status { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+  .status.warn { color: var(--danger); }
+  .status.ok { color: var(--ok); }
+
+  #stage { flex: 1; position: relative; display: grid; place-items: center; padding: 14px; min-height: 0; background: #0e0e16; }
+  #wrap { position: relative; width: 100%; height: 100%; display: grid; place-items: center; }
+  #wrap canvas {
+    position: absolute; border-radius: 3px;
+    /* Without this the browser eats the pen for scrolling and nothing draws. */
+    touch-action: none;
+  }
+  #base { background: var(--paper); box-shadow: 0 8px 30px rgba(0,0,0,.45); }
+  #live { pointer-events: none; }
+
+  .pager {
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+    background: var(--chrome-2); border-top: 1px solid var(--edge);
+  }
+  .pager .pg { font-size: 12.5px; color: var(--muted); min-width: 92px; text-align: center; }
+
+  dialog {
+    border: none; border-radius: 14px; background: var(--chrome-2); color: var(--text);
+    padding: 20px; width: min(360px, 90vw); box-shadow: 0 24px 60px rgba(0,0,0,.5);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.55); }
+  dialog h2 { margin: 0 0 12px; font-size: 16px; }
+  dialog input[type=text] {
+    width: 100%; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--edge);
+    background: var(--chrome); color: var(--text); margin-bottom: 14px;
+  }
+  .covers { display: flex; gap: 9px; margin-bottom: 16px; flex-wrap: wrap; }
+  .cover-pick { width: 34px; height: 34px; border-radius: 8px; border: 2px solid transparent; }
+  .cover-pick.on { border-color: var(--text); }
+  .row { display: flex; gap: 9px; justify-content: flex-end; }
+  .row button { padding: 9px 15px; border-radius: 9px; background: var(--chrome-3); }
+  .row button.primary { background: var(--accent); }
+  .row button.danger { background: transparent; color: var(--danger); margin-right: auto; }
+</style>
+</head>
+<body>
+
+<section id="shelf">
+  <div class="shelf-head">
+    <h1>Mycelium Ink</h1>
+    <span class="sub" id="shelfSub"></span>
+    <span class="grow" style="flex:1"></span>
+    <span class="status" id="shelfStatus"></span>
+  </div>
+  <div class="grid" id="books"></div>
+  <p class="empty hidden" id="shelfEmpty">
+    No notebooks yet. Make one and start writing. Pages sync into the Mycelium
+    vault on their own, so anything you write here is readable later.
+  </p>
+</section>
+
+<section id="writer">
+  <div class="bar">
+    <button class="tbtn" id="backBtn" title="Back to shelf">‹</button>
+    <span class="name" id="nbName"></span>
+    <span class="sep"></span>
+    <button class="tbtn" id="penBtn" title="Pen">✎</button>
+    <button class="tbtn" id="hlBtn" title="Highlighter">▬</button>
+    <button class="tbtn" id="eraseBtn" title="Eraser">⌫</button>
+    <span class="sep"></span>
+    <span id="swatches" style="display:flex;gap:6px"></span>
+    <span class="sep"></span>
+    <span class="sizes" id="sizes"></span>
+    <span class="sep"></span>
+    <button class="tbtn" id="undoBtn" title="Undo">↶</button>
+    <button class="tbtn" id="redoBtn" title="Redo">↷</button>
+    <span class="grow"></span>
+    <span class="status" id="syncStatus"></span>
+  </div>
+
+  <div id="stage">
+    <div id="wrap">
+      <canvas id="base"></canvas>
+      <canvas id="live"></canvas>
+    </div>
+  </div>
+
+  <div class="pager">
+    <button class="tbtn" id="prevBtn" title="Previous page">‹</button>
+    <span class="pg" id="pgLabel"></span>
+    <button class="tbtn" id="nextBtn" title="Next page">›</button>
+    <span class="sep"></span>
+    <button class="tbtn" id="addPageBtn" title="Add a page">+</button>
+    <button class="tbtn" id="delPageBtn" title="Delete this page" hidden>🗑</button>
+  </div>
+</section>
+
+<dialog id="newDlg">
+  <h2>New notebook</h2>
+  <input type="text" id="newTitle" placeholder="Morning pages" autocomplete="off">
+  <div class="covers" id="coverPicks"></div>
+  <div class="row">
+    <button id="newCancel">Cancel</button>
+    <button class="primary" id="newCreate">Create</button>
+  </div>
+</dialog>
+
+<dialog id="bookDlg">
+  <h2>Notebook</h2>
+  <input type="text" id="bookTitle" autocomplete="off">
+  <div class="row">
+    <button class="danger" id="bookDelete" hidden>Delete</button>
+    <button id="bookCancel">Cancel</button>
+    <button class="primary" id="bookSave">Save</button>
+  </div>
+</dialog>
+
+<script src="/public/js/ink/strokes.js"></script>
+<script src="/public/js/ink/store.js"></script>
+<script src="/public/js/ink/canvas.js"></script>
+<script src="/public/js/ink/sync.js"></script>
+<script src="/public/js/ink/app.js"></script>
+<script>
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/ink-sw.js").catch(() => {});
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+</script>
+</body>
+</html>
