@@ -43,7 +43,12 @@ function mountLookup() {
   const app = { get: record("GET"), post: record("POST"), patch: record("PATCH"), delete: record("DELETE"), put: record("PUT") };
   const err = (code) => (msg) => { const e = new Error(msg); e.statusCode = code; return e; };
   require("./routes/social-todo.js")(app, {
-    auth: { findUserByLogin: async (v) => findUserByLogin(v) },
+    auth: {
+      findUserByLogin: async (v) => findUserByLogin(v),
+      // Keep the old resolver as a mutation trip-wire. If the route regresses
+      // to username-only lookup, the email test must fail for that reason.
+      findUserByUsername: async (v) => USERS.find(u => u.username === String(v || "").trim()) || null
+    },
     badRequest: err(400),
     notFound: err(404),
     route: (fn) => fn,
@@ -93,7 +98,7 @@ test("the old ?username= caller still works", async () => {
 });
 
 test("the response carries the handle and the id, and nothing else", async () => {
-  const found = await call({ q: "collins.okoye@movewithclever.com" });
+  const found = await call({ q: "drake" });
   assert.deepEqual(Object.keys(found).sort(), ["id", "username"]);
 });
 
