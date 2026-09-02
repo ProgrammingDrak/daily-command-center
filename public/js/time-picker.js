@@ -50,7 +50,18 @@
     document.body.appendChild(overlay);
     overlay.addEventListener("click", function (e) { if (e.target === overlay) close(); });
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && overlay.classList.contains("open")) close();
+      if (e.key !== "Escape" || !overlay.classList.contains("open")) return;
+      // CONSUME it. The marker below tells a host's own dismissal listener to keep
+      // out of the way, but a marker can only be read while it is still set, so it
+      // only protects hosts whose listener runs BEFORE this one. Capture-phase
+      // hosts and hosts registered at script-parse time win that race; a host that
+      // lazily registers a bubble listener after the first picker use loses it, and
+      // its listener saw the marker already cleared. Stopping propagation here
+      // removes the race for every host, present and future: the layer that owns
+      // the keystroke is the one that swallows it.
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+      close();
     });
     card.addEventListener("click", function (e) { e.stopPropagation(); });
   }

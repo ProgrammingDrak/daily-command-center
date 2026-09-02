@@ -469,7 +469,10 @@ test("every Escape closer in a picker-hosting file defers to the layer above", (
   });
 });
 
-test("the schedule.js Escape guard actually defers, and still closes when alone", () => {
+// Covers the HELPER's semantics. The three call sites that use it are held by the
+// source-scan test above; a review pass proved this one alone still passed when a
+// call site was deleted, so the pair is the guard, not either half.
+test("_schedLayerAbove reports the layer, and a closer using it still closes when alone", () => {
   const SRC = fs.readFileSync(require.resolve("./public/js/schedule.js"), "utf8");
   const HELPER = mustSlice(SRC, /^function _schedLayerAbove\(\)\{[\s\S]*?\n\}/m, "_schedLayerAbove");
   const ctx = makeContext();
@@ -489,6 +492,65 @@ test("the schedule.js Escape guard actually defers, and still closes when alone"
   ctx.document.querySelector = () => null;
   ctx.document.fire("keydown", { key: "Escape" });
   assert.equal(ctx.window.__closes, 1, "with no layer above, Escape still closes the placement step");
+});
+
+// ── the picker consumes the Escape it acts on ──────────────────────────────
+// The marker only protects a host whose dismissal listener runs BEFORE the
+// picker's own. Capture-phase hosts and hosts registered at script-parse time win
+// that race; one that lazily registers a bubble listener after the first picker
+// use LOSES it, reads an already-cleared marker, and closes anyway. The vault
+// editor was exactly that case, and its payload is a discarded note. Consuming the
+// keystroke in the layer that owns it removes the race for every host.
+test("the picker stops the Escape it consumes from reaching its host", () => {
+  const ENSURE = mustSlice(PICKER_SRC, /^ {2}function ensureOverlay\(\) \{[\s\S]*?\n {2}\}/m, "time-picker ensureOverlay");
+  const ctx = makeContext();
+  vm.runInContext(
+    "(function(){var overlay=null,card=null,onClose=null;function close(){window.__closed=1;}" +
+    ENSURE + "ensureOverlay();window.__overlay=overlay;})();",
+    ctx
+  );
+  const overlay = ctx.window.__overlay;
+  overlay.classList.add("open");
+
+  let stopped = 0, immediate = 0;
+  ctx.document.fire("keydown", {
+    key: "Escape",
+    stopPropagation() { stopped++; },
+    stopImmediatePropagation() { immediate++; }
+  });
+  assert.equal(ctx.window.__closed, 1, "the picker closes on its own Escape");
+  assert.equal(stopped, 1, "and stops the event, or a later-registered host closes too");
+  assert.equal(immediate, 1,
+    "stopImmediatePropagation is the one that matters: the host's listener is on the " +
+    "SAME target (document), so plain stopPropagation would not hold it back");
+});
+
+test("a closed picker leaves Escape alone", () => {
+  const ENSURE = mustSlice(PICKER_SRC, /^ {2}function ensureOverlay\(\) \{[\s\S]*?\n {2}\}/m, "time-picker ensureOverlay");
+  const ctx = makeContext();
+  vm.runInContext(
+    "(function(){var overlay=null,card=null,onClose=null;function close(){window.__closed=1;}" +
+    ENSURE + "ensureOverlay();window.__overlay=overlay;})();",
+    ctx
+  );
+  let stopped = 0;
+  ctx.document.fire("keydown", { key: "Escape", stopPropagation() { stopped++; },
+    stopImmediatePropagation() { stopped++; } });
+  assert.equal(ctx.window.__closed, undefined, "nothing to close");
+  assert.equal(stopped, 0,
+    "the overlay element is never removed from the DOM, so a closed picker must not " +
+    "swallow every Escape in the app");
+});
+
+// ── the fifth host ─────────────────────────────────────────────────────────
+test("the block editor defers Escape to the time wheel it opens", () => {
+  const src = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
+  const blocks = documentEscapeClosers(src).filter((b) => /block-editor-overlay/.test(b.block));
+  assert.equal(blocks.length, 1, "the block editor's Escape closer moved, fix this test");
+  assert.ok(blocks[0].block.includes("layerAboveOpen()"),
+    "each block card's start/end button opens the time wheel, and closeBlockEditor() " +
+    "empties _beBlocks with Save as the only commit path, so an unguarded Escape " +
+    "discarded every staged block edit");
 });
 
 // ── the second surface with the same shape ──────────────────────────────────
