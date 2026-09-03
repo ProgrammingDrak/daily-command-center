@@ -1,13 +1,18 @@
 // ======== DRAG ========
 let dragId=null;
+// Where this drag was lifted from. The drop MODE is a sideways offset from this
+// point (see _dragMode), so a mouse drag and a touch drag answer the same
+// question the same way. Null until dStart records it.
+let dragStartX=null;
 function dStart(e,id){
   dragId=id;
+  dragStartX=(typeof e.clientX==="number")?e.clientX:null;
   e.dataTransfer.effectAllowed="move";
   e.dataTransfer.setData("text/plain",id); // required for Firefox
   const el=e.target.closest(".tl-item");if(el)el.classList.add("dragging");
   const listEl=e.target.closest(".it-list-item");if(listEl)listEl.classList.add("dragging");
 }
-function dEnd(){dragId=null;window._dragNowPill=false;document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("dragging","drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub","pin-drop-target"))}
+function dEnd(){dragId=null;dragStartX=null;window._dragNowPill=false;document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("dragging","drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub","pin-drop-target"))}
 function dOver(e,id){
   e.preventDefault();
   // Dragging the live now-pill: highlight the hovered card as the pin target
@@ -26,11 +31,12 @@ function dOver(e,id){
   // Dragging a past-day carryover ("Unfinished") never nests — its drops are
   // reorder-within-Unscheduled or schedule-into-today, so show only edge feedback.
   const draggingCarryover=(typeof _unfRecById==="function")&&_unfRecById(dragId);
-  // Drop on the body of a task = nest inside it; drop near the top/bottom edge = reorder to that slot.
-  // Plain body-drop = ride-along (own time/points); hold Shift = subtask (shares the parent's pie).
-  // Meetings are valid parents too: a normal body-drop represents concurrent
-  // work during the meeting, while Shift+drop creates a pie subtask relevant to
-  // the meeting. Only the existing carryover and cycle guards block nesting.
+  // Vertical position picks the SLOT, a sideways drag picks the MODE (_dragMode):
+  // straight up/down reorders, drag right nests as a ride-along (own time/points),
+  // further right or Shift nests as a subtask (shares the parent's pie).
+  // Meetings are valid parents too: a ride-along nest represents concurrent work
+  // during the meeting, while a subtask nest is pie work relevant to the meeting.
+  // Only the existing carryover and cycle guards block nesting.
   // An Unscheduled row never nests: dDrop gates its nest on !wasUntimed, so without
   // the same term here the purple "wrap inside" overlay promises a nest that the drop
   // then refuses, and the task lands top-level instead. Cursor position used to decide
@@ -38,23 +44,43 @@ function dOver(e,id){
   const draggingEv=(typeof scheduled!=="undefined")?scheduled.find(x=>x.id===dragId):null;
   const draggingUntimed=!!(draggingEv&&draggingEv.untimed);
   const canNest=!draggingCarryover&&!draggingUntimed&&targetEv&&!(typeof _isAncestor==="function"&&_isAncestor(dragId,id));
-  if(canNest&&_nestZone(e,y,h)){
+  if(canNest&&_nestZone(e)){
     tgt.classList.add("drag-over-nest");
-    tgt.classList.toggle("drag-over-nest-sub",!!e.shiftKey);
+    tgt.classList.toggle("drag-over-nest-sub",_dragMode(e)==="sub");
     return;
   }
   tgt.classList.toggle("drag-over-top",y<h/2);
   tgt.classList.toggle("drag-over-bottom",y>=h/2);
 }
 function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub","pin-drop-target")}
-// Does this drop land in the "nest inside the target" zone? THE one answer, so the
-// hover feedback (dOver) and the actual drop (dDrop) cannot drift apart -- the same
-// reason _holdsTime exists for the two cascades. A touch drag states its mode
-// outright (see the DCC_DRAG facade), because a phone row's 25% edge band is far too
-// small to hit with a thumb. A mouse DragEvent carries no dccMode and keeps the band.
-function _nestZone(e,y,h){
-  return e.dccMode?(e.dccMode!=="reorder"):(y>h*0.25&&y<h*0.75);
+// ── Drop mode: "reorder" | "nest" | "sub" ──────────────────────────────
+// ONE gesture on every device. Vertical position picks the SLOT; the sideways
+// offset from the lift point picks the MODE. Desktop used to read a mid-row band
+// (25%-75% of the row height) instead, which on a 64px row leaves ~16px reorder
+// edges -- the same unhittable geometry a phone row had before touch traded the
+// band for this offset (#345). Reorder is the DEFAULT, so a straight up-and-down
+// drag can never silently re-parent a task.
+const DRAG_NEST_PX=48;   // rightward drag that switches reorder -> nest (ride-along)
+const DRAG_SUB_PX=112;   // further right -> nest as a subtask (shares the parent's pie)
+function _modeForDx(dx){
+  if(dx>=DRAG_SUB_PX)return "sub";
+  if(dx>=DRAG_NEST_PX)return "nest";
+  return "reorder";
 }
+// THE one mode answer, so the hover feedback (dOver) and the actual drop (dDrop)
+// cannot drift apart -- the same reason _holdsTime exists for the two cascades.
+// A touch drag states its mode outright through the DCC_DRAG facade; a mouse
+// DragEvent carries the cursor, so it derives the same answer from the same
+// thresholds. Shift stays the desktop shorthand for "as subtask". A drag with no
+// recorded lift point (one that bypassed dStart: a backlog card, a preset task
+// group, a week-calendar event) resolves to reorder instead of guessing.
+function _dragMode(e){
+  if(e.dccMode)return e.dccMode;
+  if(e.shiftKey)return "sub";
+  if(typeof dragStartX!=="number"||typeof e.clientX!=="number")return "reorder";
+  return _modeForDx(e.clientX-dragStartX);
+}
+function _nestZone(e){return _dragMode(e)!=="reorder";}
 
 // ── Scheduling helpers ──
 
@@ -703,12 +729,12 @@ function dDrop(e,tid){
     moved.start=fmt(_s);moved.end=fmt(_s+_d);
   }
 
-  // Drop zone from cursor position over the target row. A drop OUT of the
-  // Unscheduled queue always means "schedule here" — never nest — so the
-  // mid-row band doesn't silently turn the scheduled task into a subtask.
+  // Slot from the cursor's vertical position, mode from _dragMode. A drop OUT of
+  // the Unscheduled queue always means "schedule here", never nest, so a sideways
+  // drift can't silently turn the scheduled task into a subtask.
   const r=e.currentTarget.getBoundingClientRect();
   const y=e.clientY-r.top,h=r.height;
-  const nest=(!wasUntimed&&_nestZone(e,y,h)&&!_isAncestor(moved.id,target.id));
+  const nest=(!wasUntimed&&_nestZone(e)&&!_isAncestor(moved.id,target.id));
   const after=y>=h/2;
 
   // ---- Case A: dragging a WRAP -> move it; its ride-alongs follow by the same delta ----
@@ -729,9 +755,9 @@ function dDrop(e,tid){
   const newWrapId=nest?target.id:null;
   let joined=null;
 
-  if(newWrapId&&e.shiftKey){
+  if(newWrapId&&_dragMode(e)==="sub"){
     // ---- Case B': NEST as a SUBTASK (umbrella; shares the parent's point pie and
-    // travels with it). Shift held during the drop selects this over a ride-along. ----
+    // travels with it). Shift, or a far-right drag, selects this over a ride-along. ----
     if(typeof reparentAsSubtask==="function")reparentAsSubtask(moved.id,newWrapId);
     _finishDrag(old);return;
   }
@@ -797,5 +823,8 @@ window.DCC_DRAG = {
   leave(rowEl){ if(rowEl) dLeave(_dccSynthEvt(rowEl, 0, "reorder")); },
   drop(rowEl, tid, y, mode){ if(rowEl) dDrop(_dccSynthEvt(rowEl, y, mode), tid); },
   end(){ dEnd(); },
-  activeId(){ return dragId; }
+  activeId(){ return dragId; },
+  // The one threshold set. touch-drag.js calls this instead of keeping a second
+  // copy of 48/112, so retuning the gesture is a one-file edit.
+  modeForDx(dx){ return _modeForDx(dx); }
 };

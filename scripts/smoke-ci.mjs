@@ -124,6 +124,43 @@ const looseEndsMobile = await page.evaluate(() => {
 });
 check("Loose Ends mobile pill is visible in its own full-width row", !!looseEndsMobile && Object.values(looseEndsMobile).every(Boolean), JSON.stringify(looseEndsMobile));
 
+// The reorder drop indicator must actually PAINT. It is a pseudo-element pushed
+// fully outside the row box, so `overflow:hidden` on the row erases it while
+// every unit test stays green: dOver puts the right class on the right row and
+// CSS then eats the paint. That shipped (ui-optimization.css added the clip in
+// #342) and drag-to-reschedule lost all reorder feedback on web AND mobile.
+// Asserted at both widths because the clip rule carries no media query.
+for (const width of [375, 1280]) {
+  await page.setViewportSize({ width, height: 812 });
+  const indicator = await page.evaluate(() => {
+    const list = document.getElementById("list-view");
+    if (!list) return null;
+    const probe = document.createElement("div");
+    probe.className = "it-list-item";
+    probe.style.minHeight = "64px";
+    list.appendChild(probe);
+    const read = (cls, pseudo) => {
+      probe.className = "it-list-item " + cls;
+      const row = getComputedStyle(probe);
+      const bar = getComputedStyle(probe, pseudo);
+      return {
+        unclipped: row.overflow === "visible",
+        // A sibling row would paint over the bottom silhouette without this.
+        stacked: row.zIndex !== "auto" && Number(row.zIndex) >= 1,
+        // Proves the indicator rule itself still exists and is not transparent.
+        tall: parseFloat(bar.height) >= 20,
+        painted: bar.backgroundColor !== "rgba(0, 0, 0, 0)" && bar.backgroundColor !== "transparent"
+      };
+    };
+    const result = { top: read("drag-over-top", "::before"), bottom: read("drag-over-bottom", "::after") };
+    probe.remove();
+    return result;
+  });
+  const ok = !!indicator && [indicator.top, indicator.bottom].every((side) => side && Object.values(side).every(Boolean));
+  check(`reorder drop indicator is visible @${width}`, ok, JSON.stringify(indicator));
+}
+await page.setViewportSize({ width: 375, height: 812 });
+
 // budget tank renders from the live API (aquarium + /api/budget/state shape).
 // The aquarium builds after an async fetch of /api/budget/state — poll for it
 // rather than a fixed wait, so headless CI timing variance doesn't flake.

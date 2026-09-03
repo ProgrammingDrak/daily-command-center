@@ -66,9 +66,14 @@ function makeDragDay(scheduled) {
   return context;
 }
 
-function dropEvent({ clientY = 50, height = 100, shiftKey = false } = {}) {
+// LIFT_X is where startDrag lifts from. dropEvent defaults its cursor to the
+// same X, so the default gesture is a straight vertical drag = reorder. Nesting
+// is a deliberate sideways offset (drag.js DRAG_NEST_PX / DRAG_SUB_PX) or Shift.
+const LIFT_X = 300;
+
+function dropEvent({ clientY = 50, height = 100, shiftKey = false, clientX = LIFT_X } = {}) {
   return {
-    preventDefault() {}, shiftKey, clientY,
+    preventDefault() {}, shiftKey, clientY, clientX,
     currentTarget: {
       getBoundingClientRect: () => ({ top: 0, left: 0, height }),
       classList: { remove() {}, toggle() {}, add() {} },
@@ -77,23 +82,28 @@ function dropEvent({ clientY = 50, height = 100, shiftKey = false } = {}) {
 }
 
 function startDrag(context, id) {
-  context.dStart({ dataTransfer: { effectAllowed: "", setData() {} }, target: { closest: () => null } }, id);
+  context.dStart(
+    { dataTransfer: { effectAllowed: "", setData() {} }, target: { closest: () => null }, clientX: LIFT_X },
+    id,
+  );
 }
 
-test("body-drop nests a task inside a meeting as concurrent work", () => {
+test("a sideways drag nests a task inside a meeting as concurrent work", () => {
   const tasks = [
     { id: "meeting", title: "Planning", type: "meeting", start: "10:00", end: "11:00" },
     { id: "task", title: "Clear inbox", type: "task", start: "09:00", end: "09:30" },
   ];
   const context = makeDragDay(tasks);
   startDrag(context, "task");
-  context.dDrop(dropEvent(), "meeting");
+  // +60px right of the lift point: past DRAG_NEST_PX, so this is a ride-along
+  // nest. A straight vertical drag would reorder instead.
+  context.dDrop(dropEvent({ clientX: LIFT_X + 60 }), "meeting");
   const nested = tasks.find((task) => task.id === "task");
   assert.equal(nested.wrapId, "meeting");
   assert.equal(nested.subtaskOf ?? null, null);
 });
 
-test("Shift+body-drop makes a task a meeting subtask", () => {
+test("Shift makes a task a meeting subtask, with no sideways drag needed", () => {
   const tasks = [
     { id: "meeting", title: "Planning", type: "oneone", start: "10:00", end: "11:00" },
     { id: "task", title: "Review agenda", type: "task", start: "09:00", end: "09:30" },

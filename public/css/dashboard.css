@@ -710,8 +710,10 @@
   .tl-item{position:relative;margin-bottom:8px;transition:transform 0.12s,opacity 0.2s}
   .tl-item:hover{transform:translateX(3px)}
   .tl-item.dragging{opacity:0.35}
-  .tl-item.drag-over-top{margin-top:4px;border-top:2px solid var(--accent)}
-  .tl-item.drag-over-bottom{margin-bottom:4px;border-bottom:2px solid var(--accent)}
+  /* Indicator itself is the blue silhouette further down this file; these only
+     open the gap it sits in. */
+  .tl-item.drag-over-top{margin-top:4px}
+  .tl-item.drag-over-bottom{margin-bottom:4px}
 
   .tl-time{display:none}
   .tl-time .et{font-size:9px;font-weight:400;color:#64748b;display:block;margin-top:1px}
@@ -1274,8 +1276,6 @@
      subtask/unfinished rows (no open-space handler) stay default. */
   .it-list-item:not(.sub):not(.unfinished-row):not(.movable){cursor:pointer}
   .it-list-item.dragging{opacity:0.35}
-  .it-list-item.drag-over-top{border-top:2px solid var(--accent)}
-  .it-list-item.drag-over-bottom{border-bottom:2px solid var(--accent)}
   .it-list-item.active{box-shadow:inset 3px 0 0 var(--accent)}
   .src-jump{font-size:10px;font-weight:700;color:var(--cyan);text-decoration:none;border:1px solid var(--cyan);border-radius:5px;padding:0 6px;line-height:1.6;flex:none;opacity:0.85}
   .src-jump:hover{opacity:1;background:var(--cyan-bg)}
