@@ -50,3 +50,30 @@ test("retired stat strip is gone and the progress bar exposes its useful control
   assert.match(scheduleTab, /openAddModal\(ev\.id,ev\.title\)/);
   assert.match(css, /\.progress-now\{[^}]*background:#0075eb/);
 });
+
+test("a task segment opens that task's details modal", () => {
+  let opened = null;
+  const children = [];
+  const context = {
+    f12: (value) => value,
+    ms: (value) => value + "m",
+    openAddModal: (id, title) => { opened = { id, title }; },
+    document: {
+      createElement: (tagName) => ({
+        tagName,
+        style: {},
+        listeners: {},
+        setAttribute(name, value) { this[name] = value; },
+        addEventListener(name, handler) { this.listeners[name] = handler; },
+      }),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(slice("addPS"), context);
+  context.track = { appendChild: (node) => children.push(node) };
+  context.task = { id: "task-1", title: "Focus block", start: "09:00", end: "10:00" };
+  vm.runInContext('addPS(track,540,600,"Focus block","#60a5fa",false,600,task)', context);
+  assert.equal(children[0].tagName, "button");
+  children[0].listeners.click();
+  assert.deepEqual(opened, { id: "task-1", title: "Focus block" });
+});
