@@ -128,9 +128,8 @@ test("selectVisible hides retired occurrence anchors but keeps promoted children
 
 test("selectDayScoped drops day-agnostic rows, and the exported status wrappers agree", () => {
   // Same gap that let a selectTopLevel pass-through through: the PREDICATE was covered, the
-  // SET was not, and the set is what the call sites use. selectDayScoped feeds three
-  // user-visible numbers -- buildProgress's day bar, _remainingForScope, and
-  // _pointEligibleScheduleItems (the day's point totals).
+  // SET was not, and the set is what the call sites use. selectDayScoped feeds
+  // buildProgress's day bar and other date-specific task surfaces.
   const pool = [T("a"), T("d", { _dateless: true }), untimed("u")];
   assert.deepEqual(ids(TaskModel.selectDayScoped(pool)), ["a", "u"], "_dateless rows are not this day's plan");
   assert.deepEqual(TaskModel.selectDayScoped(null), []);

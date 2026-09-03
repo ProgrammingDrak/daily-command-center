@@ -189,42 +189,6 @@
   /* ── Tomorrow Mode indicator ── */
   .view-tomorrow .header h1::after{content:" -- Tomorrow";font-size:14px;font-weight:400;color:var(--accent);margin-left:8px}
 
-  .stats{display:grid;grid-template-columns:1.25fr 1fr 1.15fr;gap:10px;margin-bottom:18px;position:relative}
-  .stat{background:var(--card);border:1px solid var(--border);border-radius:9px;padding:12px;text-align:center;cursor:pointer;transition:border-color 0.12s,background 0.12s}
-  .stat:hover{border-color:rgba(255,255,255,0.15);background:var(--card-hover)}
-  .stat.sp-open{border-color:rgba(59,130,246,0.5);background:rgba(59,130,246,0.06)}
-  .stat .v{font-size:24px;font-weight:700;margin-bottom:1px}
-  .stat .l{font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px}
-  .stat-sub{font-size:10px;color:var(--text-muted);margin-top:4px;font-weight:700}
-  .stat-points{position:relative;overflow:hidden}
-  .stat-points::before{content:"";position:absolute;inset:0;background:linear-gradient(135deg,rgba(245,158,11,0.12),transparent 52%,rgba(34,211,238,0.08));pointer-events:none}
-  .stat-points>*{position:relative}
-  .points-pop{display:inline-block;animation:pointsPop 0.85s cubic-bezier(0.22,1,0.36,1)}
-  @keyframes pointsPop{
-    0%{transform:scale(1);text-shadow:none}
-    22%{transform:scale(1.32);text-shadow:0 0 14px rgba(245,158,11,0.85),0 0 4px rgba(245,158,11,0.6)}
-    100%{transform:scale(1);text-shadow:none}
-  }
-  @media (prefers-reduced-motion: reduce){.points-pop{animation:none}}
-  .stat-combined{display:flex;align-items:center;padding:0;cursor:default}
-  .stat-combined:hover{background:var(--card);border-color:var(--border)}
-  .stat-combined .stat-half{flex:1;padding:12px 8px;text-align:center;cursor:pointer;border-radius:8px;transition:background 0.12s}
-  .stat-combined .stat-half:hover{background:rgba(255,255,255,0.05)}
-  .stat-combined .stat-sep{width:1px;height:32px;background:var(--border);flex-shrink:0}
-  #stat-popover{display:none;position:fixed;z-index:200;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;min-width:240px;max-width:320px;box-shadow:0 8px 28px rgba(0,0,0,0.5)}
-  .sp-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin-bottom:10px}
-  .sp-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px}
-  .sp-row:last-of-type{border-bottom:none}
-  .sp-row.sp-active{background:rgba(59,130,246,0.08);border-radius:4px;margin:0 -4px;padding:5px 4px}
-  .sp-edit-btn{background:none;border:1px solid var(--border);border-radius:4px;color:var(--text-muted);font-size:10px;padding:3px 8px;cursor:pointer;transition:all 0.12s}
-  .sp-edit-btn:hover{border-color:var(--accent);color:var(--accent-light)}
-  .sp-point-goals{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
-  .sp-point-goal{display:flex;flex-direction:column;gap:4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-muted)}
-  .sp-point-goal input{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font:inherit;font-size:13px;font-weight:700;padding:6px 8px;outline:none}
-  .sp-point-goal input:focus{border-color:var(--accent)}
-  .sp-point-meter{height:8px;background:rgba(255,255,255,0.08);border-radius:999px;overflow:hidden;margin:8px 0}
-  .sp-point-meter-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--amber),var(--green))}
-  .sp-point-note{font-size:11px;color:var(--text-muted);line-height:1.4;margin-top:8px}
   /* ── Block editor: card-based rows ── */
   .be-card{background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden;transition:border-color 0.15s}
   .be-card:hover{border-color:rgba(255,255,255,0.12)}
@@ -567,22 +531,22 @@
     .todo-share-linkbox button,.todo-share-offer-actions button{min-height:44px}
   }
 
-  /* Quick-add tag row */
-  .sp-time{font-size:10px;color:var(--text-muted);font-variant-numeric:tabular-nums;width:64px;flex-shrink:0}
-  .sp-label{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .sp-dur{font-size:10px;color:var(--text-muted);flex-shrink:0;font-variant-numeric:tabular-nums;margin-left:6px}
-  .sp-empty{font-size:12px;color:var(--text-muted);padding:6px 0}
-  .sp-note{font-size:10px;color:var(--text-muted);margin-top:10px;padding-top:8px;border-top:1px solid var(--border);line-height:1.5}
-  .sp-section{font-size:11px;font-weight:600;color:var(--text);padding:4px 0}
-
   .progress-wrap{margin-bottom:18px}
   .progress-box{background:var(--card);border:1px solid var(--border);border-radius:9px;padding:14px}
-  .progress-label{display:flex;justify-content:space-between;margin-bottom:8px;font-size:12px}
+  .progress-label{display:flex;justify-content:space-between;gap:12px;margin-bottom:8px;font-size:12px}
+  .progress-label span:first-child{font-weight:600}
+  .progress-label span:last-child{color:var(--text-muted);font-variant-numeric:tabular-nums}
+  .progress-track-shell{position:relative}
   .progress-track{height:18px;background:rgba(255,255,255,0.05);border-radius:9px;overflow:hidden;display:flex;gap:1px}
-  .pseg{height:100%;border-radius:2px;position:relative;cursor:default}
-  .pseg:hover{opacity:0.85}
-  .pseg .tip,.prail-seg .tip{display:none;position:absolute;bottom:calc(100%+5px);left:50%;transform:translateX(-50%);background:#1a1a2e;color:var(--text);padding:4px 8px;border-radius:4px;font-size:10px;white-space:nowrap;z-index:10;pointer-events:none}
-  .pseg:hover .tip,.prail-seg:hover .tip{display:block}
+  .pseg{appearance:none;height:100%;min-width:1px;margin:0;padding:0;border:0;border-radius:2px;position:relative;cursor:default}
+  button.pseg{cursor:pointer;transition:filter 120ms ease,box-shadow 120ms ease}
+  button.pseg:hover{filter:brightness(1.14)}
+  button.pseg:focus-visible{z-index:2;outline:2px solid #93c5fd;outline-offset:-2px;box-shadow:0 0 0 2px #07101d}
+  .progress-now{position:absolute;z-index:3;top:-4px;bottom:-4px;width:2px;background:#0075eb;transform:translateX(-1px);box-shadow:0 0 0 1px rgba(7,16,29,.72);pointer-events:none}
+  .progress-now::before{content:"";position:absolute;top:0;left:50%;width:6px;height:6px;border-radius:50%;background:#60a5fa;transform:translate(-50%,-50%)}
+  .progress-axis{display:flex;justify-content:space-between;margin-top:5px;color:var(--text-muted);font-size:10px;font-variant-numeric:tabular-nums}
+  .prail-seg .tip{display:none;position:absolute;bottom:calc(100%+5px);left:50%;transform:translateX(-50%);background:#1a1a2e;color:var(--text);padding:4px 8px;border-radius:4px;font-size:10px;white-space:nowrap;z-index:10;pointer-events:none}
+  .prail-seg:hover .tip{display:block}
   .progress-rails{position:relative;height:4px;margin-top:2px}
   .prail-seg{position:absolute;top:0;height:3px;border-radius:2px;background:rgba(226,232,240,0.55)}
   .prail-seg.done{opacity:0.35}
@@ -1734,7 +1698,7 @@
   .block-hdr-time{flex:1;opacity:0.55}
   .block-hdr-edit{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:12px;padding:2px 5px;border-radius:4px;opacity:0;transition:opacity 0.15s;line-height:1}
   .tl-block-header:hover .block-hdr-edit{opacity:1}
-  @media(max-width:760px){.stats{grid-template-columns:repeat(2,1fr)} body{padding:14px 14px 110px}}
+  @media(max-width:760px){body{padding:14px 14px 110px}}
 
   /* Quick-add bar */
   /* ======== UNIVERSAL TASK ADD BAR ======== */
@@ -2458,27 +2422,6 @@
     .dn-quick{
       min-height:44px;padding:0 10px;font-size:10px;
       display:inline-flex;align-items:center;justify-content:center;
-    }
-
-    /* ── Stats ────────────────────────────────────────────────────
-       stat-combined (Time Left | Tasks) spans full first row.
-       Completed + Block Ends share the second row.
-    ────────────────────────────────────────────────────────────── */
-    .stats{
-      display:grid;
-      grid-template-columns:1fr 1fr;
-      gap:6px;
-      margin-bottom:12px;
-    }
-    .stat-combined{grid-column:1/-1}
-    .stat-combined .stat-half{padding:10px 12px}
-    .stat .v{font-size:18px}
-    .stat .l{font-size:9px}
-
-    /* ── Stat popover: full width on mobile ─────────────────────── */
-    #stat-popover{
-      left:12px!important;right:12px!important;
-      width:auto!important;max-width:none!important;
     }
 
     /* ── Progress bar ────────────────────────────────────────────── */
@@ -4277,29 +4220,6 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
     min-height:44px;margin-left:0;padding:6px 10px;
   }
   .header>div:last-child{display:none!important}  /* owner buttons + clock → More sheet */
-
-  /* ── Stats: condensed single-row hero strip ── */
-  .stats{
-    display:flex!important;
-    grid-template-columns:none!important;
-    flex-wrap:nowrap;
-    gap:6px;
-    margin-bottom:12px;
-    position:relative;
-  }
-  .stats>.stat{
-    flex:1 1 0;min-width:0;
-    padding:7px 4px;
-    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;
-  }
-  .stats>.stat-combined{
-    flex:1.7 1 0;padding:0;flex-direction:row;
-  }
-  .stats>.stat-combined .stat-half{padding:7px 4px;display:flex;flex-direction:column;align-items:center;gap:0}
-  .stats>.stat-combined .stat-sep{height:22px}
-  .stats .stat .v{font-size:15px;margin-bottom:0;line-height:1.1}
-  .stats .stat .l{font-size:8px;line-height:1.15;text-align:center;white-space:normal;max-width:100%}
-  .stats .stat-points .stat-sub{display:none}  /* "Available: --" subline */
 
   /* ── Progress: tighter ── */
   .progress-box{padding:10px 12px}

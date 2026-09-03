@@ -20,9 +20,9 @@
       selector: "#date-nav"
     },
     {
-      title: "Read The Vital Signs",
-      body: "The stats show time left, tasks left, completions, points, and the current block at a glance.",
-      selector: ".stats"
+      title: "Read The Day",
+      body: "The timeline shows your workday, current time, and completed tasks at a glance.",
+      selector: ".progress-wrap"
     },
     {
       title: "Work The Itinerary",

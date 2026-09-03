@@ -195,27 +195,16 @@
   </div>
 </div>
 
-<div class="stats">
-  <div class="stat stat-combined">
-    <div class="stat-half" onclick="toggleRemainingStatScope(event)" title="Click to switch day/block remaining scope"><div class="v" style="color:var(--accent-light)" id="s-time">--</div><div class="l" id="s-time-label">Day Time Left</div></div>
-    <div class="stat-sep"></div>
-    <div class="stat-half" onclick="toggleRemainingStatScope(event)" title="Click to switch day/block remaining scope"><div class="v" style="color:var(--accent-light)" id="s-tasks">--</div><div class="l" id="s-tasks-label">Day Tasks Left</div></div>
-  </div>
-  <div class="stat" onclick="showStatPopover('s-done',event)"><div class="v" style="color:var(--green)" id="s-done">--</div><div class="l">Completed</div></div>
-  <div class="stat stat-points" onclick="showStatPopover('s-points',event)">
-    <div class="v" style="color:var(--amber)" id="s-points">--</div>
-    <div class="l">Points Earned / Planned</div>
-    <div class="stat-sub" id="s-points-available">Available: --</div>
-  </div>
-</div>
-<div id="stat-popover"></div>
-
 <div class="progress-wrap">
-  <div class="progress-box">
-    <div class="progress-label"><span>Day Progress</span><span id="ppct">--</span></div>
-    <div class="progress-track" id="ptrack"></div>
+  <section class="progress-box" aria-labelledby="day-progress-title">
+    <div class="progress-label"><span id="day-progress-title">Day Progress</span><span id="ppct">--</span></div>
+    <div class="progress-track-shell">
+      <div class="progress-track" id="ptrack"></div>
+      <span class="progress-now" id="pnow" role="img" hidden></span>
+    </div>
     <div class="progress-rails" id="prails"></div>
-  </div>
+    <div class="progress-axis"><time id="pstart">--</time><time id="pend">--</time></div>
+  </section>
 </div>
 
 <div class="tabs" id="tab-bar">

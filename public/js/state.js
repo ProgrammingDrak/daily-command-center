@@ -1413,7 +1413,6 @@ function moveTaskToTrivial(id){
   }
   if(typeof buildSchedule==='function')buildSchedule();
   if(typeof buildTrivialTasks==='function')buildTrivialTasks();
-  if(typeof updateStats==='function')updateStats();
   if(typeof showToast==="function")showToast("Moved to trivial","success");
 }
 

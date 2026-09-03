@@ -13,7 +13,7 @@ const commonStates = Object.freeze([
 const onboarding = Object.freeze([
   { id: "welcome", target: null, state: "dense" },
   { id: "date-controls", target: "#date-nav", state: "dense" },
-  { id: "vital-signs", target: ".stats", state: "dense" },
+  { id: "day-progress", target: ".progress-wrap", state: "dense" },
   { id: "itinerary", target: "#tab-schedule", state: "long-text" },
   { id: "task-manager", target: "#sidecar-tabs", state: "dense" },
   { id: "notes", target: "#sn-open-btn", state: "long-text" },

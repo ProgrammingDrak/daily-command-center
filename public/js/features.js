@@ -103,7 +103,6 @@ function toggleTrivialFlag(evId){
   // Rebuild schedule (hides/shows side-project items) and side-project reminders.
   if(typeof buildSchedule==='function')buildSchedule();
   if(typeof buildTrivialTasks==='function')buildTrivialTasks();
-  if(typeof updateStats==='function')updateStats();
 }
 
 // Link/unlink small side tasks to schedule items. Internal names stay legacy-compatible.
@@ -1664,7 +1663,6 @@ const SURFACES = {
   glymphaticBrief: {build:()=>{if(typeof buildGlymphaticBrief==="function")buildGlymphaticBrief();},isVisible:()=>true},
   upcoming:        {build:()=>{if(typeof buildUpcoming==="function")buildUpcoming();},          isVisible:()=>!!document.getElementById("upcoming-board")},
   progress:        {build:()=>{if(typeof buildProgress==="function")buildProgress();},          isVisible:()=>true},
-  stats:           {build:()=>{if(typeof updateStats==="function")updateStats();},              isVisible:()=>true},
   sync:            {build:()=>{if(typeof updateSync==="function")updateSync();},                isVisible:()=>true},
   snBadge:         {build:()=>{if(typeof updateSnBadge==="function")updateSnBadge();},          isVisible:()=>true},
   taskMenusBadge:  {build:()=>{if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();},isVisible:()=>true},
