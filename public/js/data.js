@@ -7,7 +7,6 @@ const TC={
   oneone: {tag:"1:1",cls:"tag-oneone",color:"#f59e0b"},
   break:  {tag:"Break",cls:"tag-break",color:"#22c55e"},
   ooo:    {tag:"OOO",cls:"tag-ooo",color:"#64748b"},
-  shell:  {tag:"Shell",cls:"tag-shell",color:"#e2e8f0"}
 };
 // Type label/tag-class/color now live in the TASK_TYPES registry (task-types.js)
 // alongside behavior — one entry per type. cfg() is a thin shim over it so every

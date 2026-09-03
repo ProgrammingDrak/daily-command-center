@@ -431,7 +431,9 @@ function normalizePublicTask(input, doneIds, calendarsById = new Map(), opts = {
     gcalCalendarId: calendar ? calendar.id : "",
     tags,
     createdByGuest: !!input.createdByGuestName,
-    redacted
+    redacted,
+    wrapId: input.wrapId || null,
+    subtaskOf: input.subtaskOf || null
   };
   task.durationMinutes = taskMinutes(task.start, task.end, input.duration || input.estimated_minutes || input.durMin);
   task.points = publicTaskPoints(task);
@@ -595,6 +597,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
   for (const block of blocks) {
     const p = block.properties || {};
     if (block.type === "day_root") continue;
+    if (p.retiredContainerHidden === true) continue;
     const kind = p.kind || block.type;
     if (["delegated_item"].includes(kind)) continue;
     if (!p.title && !p.label) continue;
@@ -621,6 +624,8 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
       completed: p.completed,
       tags: p.tags,
       createdByGuestName: p.createdByGuestName,
+      wrapId: p.wrapId,
+      subtaskOf: p.subtaskOf,
       kind
     }, doneIds, calendarsById, { redacted, tagsById });
     addTask(task);
@@ -736,8 +741,9 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
     calendars: Array.from(calendarsById.values()),
     // Work/personal time-block sections so the guest itinerary mirror can render
     // the same block headers the owner sees (name + range only; not sensitive).
-    blocks: ((state.schedule && state.schedule.blocks) || []).map(b => ({
-      id: b.id || "", name: b.name || "", start: b.start || "", end: b.end || "", blockType: b.blockType || ""
+    blocks: ((state.schedule && (state.schedule.timeBlocks || state.schedule.blocks)) || []).map(b => ({
+      id: b.id || "", name: b.name || "", start: b.start || "", end: b.end || "",
+      activeDays: Array.isArray(b.activeDays) ? b.activeDays : ["mon", "tue", "wed", "thu", "fri"]
     })),
     rewards,
     viewer: {

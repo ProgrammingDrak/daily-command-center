@@ -248,11 +248,12 @@ function normalizeTemplateTree(tree, opts = {}) {
     if (++count > MAX_NODES) return null;
     const out = {
       title: String(n.title || "").slice(0, 300),
-      type: isRoot ? "shell" : (typeof n.type === "string" && n.type ? n.type : "task"),
+      type: isRoot ? "task" : (typeof n.type === "string" && n.type ? n.type : "task"),
       priority: PRIORITIES.includes(n.priority) ? n.priority : "Medium",
       detail: typeof n.detail === "string" ? n.detail.slice(0, 2000) : ""
     };
-    if (!isRoot) {
+    if (isRoot) out.occurrenceAnchor = !!(n.occurrenceAnchor || n.type === "shell");
+    else {
       out.edge = n.edge === "subtask" ? "subtask" : "wrap";
       out.durationMin = Math.max(1, Math.min(1440, Math.round(Number(n.durationMin) || 30)));
     }
@@ -262,7 +263,7 @@ function normalizeTemplateTree(tree, opts = {}) {
   }
   const root = node(tree.root, 0, true);
   if (!root || !root.title) return null;
-  return { version: 1, root };
+  return { version: 2, root };
 }
 
 // Build the `responsibility_task` properties for a given slot. Shared by the
@@ -320,7 +321,7 @@ function parseOffersAmpAlert(text) {
 // ── Persistence-touching operations ──
 // Factory: the caller injects blockDB, the two server-scope helpers
 // (getScheduleBlocks, getTodayStr), and the shared assertBlockOwnership guard.
-function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership, getDayStartMinutes = async () => null, appTimeZone = "America/New_York" }) {
+function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership, getDayStartMinutes = async () => null, appTimeZone = "America/New_York" }) {
   // Read the day_root row for a date WITHOUT creating one. ensureDayRoot()
   // would insert a row as a side effect of a read, which a GET must never do,
   // so the id derivation (and its ws-1 legacy fallback) is mirrored here as a
@@ -624,9 +625,8 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     // an index (every blocks index is partial on deleted_at IS NULL) and sequential-scans,
     // so it already dominates this function; stacking two more serial round trips behind
     // it is latency for nothing.
-    const [allBlocks, dayBlocks, floorMin] = await Promise.all([
+    const [allBlocks, floorMin] = await Promise.all([
       blockDB.getBlocksByDateIncludingDeleted(dateStr, workspaceId),
-      getScheduleBlocks(userId, workspaceId),
       getDayStartMinutes(workspaceId),
     ]);
     const blocks = allBlocks.filter(b => !b.deleted_at);
@@ -635,7 +635,6 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
         .filter(b => b.deleted_at && (b.properties || {}).kind === "responsibility_task" && (b.properties || {}).responsibilityId)
         .map(b => b.properties.responsibilityId)
     );
-    const workBlocks = dayBlocks.filter(b => (b.blockType || b.type) === "work");
     // The user's start of day is a FLOOR on top of the derived bound, never a
     // replacement for it: a 05:00 work block still bounds the day, it just stops
     // pulling auto-placement into the small hours. Same contract the client engine
@@ -643,14 +642,14 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     // one floor, four slot engines, no fifth spelling of it.
     // A null floor means "not wired" (the DI default, and every test stub), which
     // must mean NO clamp rather than a silently invented 07:00 policy.
-    const derivedStart = workBlocks[0] ? hhmmToMinutes(workBlocks[0].start) : 9 * 60;
+    const derivedStart = 9 * 60;
     const dayStart = floorMin == null ? derivedStart : Math.max(floorMin, derivedStart);
     // Clamped up to dayStart for the same reason the client does it in
     // public/js/day-context.js buildDayContext: raising dayStart past the end of a
     // short plan would otherwise invert the window here while the client's stayed
     // valid, and firstFreeSlot's `|| Math.max(dayStart, nowMin)` fallback would place
     // a task the client had already refused. Same clamp, same shape, both engines.
-    const dayEnd = Math.max(dayStart, workBlocks.length ? hhmmToMinutes(workBlocks[workBlocks.length - 1].end) : 17 * 60);
+    const dayEnd = Math.max(dayStart, 17 * 60);
     const blockers = blocks
       .filter(b => (b.properties || {}).start && (b.properties || {}).end)
       .map(b => ({ s: hhmmToMinutes(b.properties.start), e: hhmmToMinutes(b.properties.end) }));
@@ -794,7 +793,7 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
 
     const rows = [];
     let cursor = startMin;
-    function appendNode(node, parentRowId, parentLocalId, isRoot) {
+    function appendNode(node, parentRowId, parentLocalId, isRoot, depth) {
       const rowId = isRoot ? rootId : crypto.randomUUID();
       const localId = isRoot ? rootLocalId : `repeat-child-${crypto.randomUUID().slice(0, 12)}`;
       const timed = isRoot || node.edge !== "subtask";
@@ -807,16 +806,19 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
         local_id: localId,
         title: node.title,
         detail: node.detail || "",
-        type: isRoot ? "shell" : (node.type || "task"),
+        type: "task",
         duration: nodeDuration,
         priority: node.priority || (isRoot ? "High" : "Medium"),
-        meta: isRoot ? "Scheduled repeat shell" : "Scheduled repeat step",
+        meta: isRoot ? "Scheduled repeat anchor" : "Scheduled repeat step",
       };
       if (isRoot) {
         properties.idempotency_key = key;
         properties.start = occurrence.start;
         properties.end = occurrence.start;
-        properties.isWrap = true;
+        properties.retiredContainerHidden = true;
+        properties.occurrenceAnchor = true;
+      } else if (depth === 1) {
+        properties.rel = "root";
       } else if (node.edge === "subtask") {
         properties.subtaskOf = parentLocalId;
         properties.rel = "subtask";
@@ -826,14 +828,14 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
         properties.start = nodeStart;
         properties.end = minutesToHHMM(hhmmToMinutes(nodeStart) + nodeDuration);
       }
-      const row = { date: occurrence.date, id: rowId, parent_id: parentRowId || null, properties };
+      const row = { date: occurrence.date, id: rowId, parent_id: depth === 1 ? null : (parentRowId || null), properties };
       rows.push(row);
-      for (const child of node.children || []) appendNode(child, rowId, localId, false);
+      for (const child of node.children || []) appendNode(child, rowId, localId, false, depth + 1);
       return row;
     }
-    const rootRow = appendNode(template.root, null, null, true);
+    const rootRow = appendNode(template.root, null, null, true, 0);
     const elapsed = Math.max(0, cursor - startMin);
-    if (startMin + elapsed > 1440) throw badLifecycle("Scheduled shell work cannot cross midnight");
+    if (startMin + elapsed > 1440) throw badLifecycle("Scheduled repeat work cannot cross midnight");
     rootRow.properties.duration = elapsed;
     rootRow.properties.end = minutesToHHMM(startMin + elapsed);
     return rows;

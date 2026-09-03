@@ -121,6 +121,11 @@ test("selectVisible hides deleted AND side-project-flagged rows", () => {
   assert.deepEqual(ids(TaskModel.selectVisible(pool, res([], ["del"], ["triv"]))), ["a"]);
 });
 
+test("selectVisible hides retired occurrence anchors but keeps promoted children", () => {
+  const pool=[T("anchor",{retiredContainerHidden:true}),T("child")];
+  assert.deepEqual(ids(TaskModel.selectVisible(pool,res())),["child"]);
+});
+
 test("selectDayScoped drops day-agnostic rows, and the exported status wrappers agree", () => {
   // Same gap that let a selectTopLevel pass-through through: the PREDICATE was covered, the
   // SET was not, and the set is what the call sites use. selectDayScoped feeds three

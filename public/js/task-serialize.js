@@ -138,6 +138,9 @@
       triageId: src.triageId || null,
       linkedBlockId: src.linkedBlockId || null,
       linkedTagId: src.linkedTagId || null,
+      retiredContainerHidden: src.retiredContainerHidden === true,
+      occurrenceAnchor: src.occurrenceAnchor === true,
+      point_multiplier: src.point_multiplier == null ? undefined : Number(src.point_multiplier),
       commuteMinutes: commuteMinutes,
       commuteToMinutes: src.commuteToMinutes || src.commute_to_minutes || commuteMinutes || null,
       commuteBackMinutes: src.commuteBackMinutes || src.commute_back_minutes || src.commuteReturnMinutes || src.commute_return_minutes || null

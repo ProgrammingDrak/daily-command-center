@@ -175,6 +175,10 @@ const budgetState = await page.evaluate(() =>
 );
 check("GET /api/budget/state shape", budgetState === true, String(budgetState));
 check("Money Changer uses Bank Units", (await page.evaluate(() => document.querySelector(".bt-changer")?.textContent.includes("1 pt = 1 Bank Unit"))) === true);
+// A period rollover prompt can appear on the first Budget visit. Snooze it so
+// this smoke check can inspect the purchase form without changing budget data.
+const rolloverLater = page.locator('[data-act="rollover-later"]');
+if (await rolloverLater.isVisible().catch(() => false)) await rolloverLater.click();
 await page.locator('[data-card="discretionary"]').click();
 await page.locator('[data-finance-purchase-form] input[name="description"]').fill("Dinner for me and Fae");
 await page.locator('[data-finance-purchase-form] input[name="amount"]').fill("100");

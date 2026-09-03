@@ -61,6 +61,11 @@ test("privacy defaults to public but a private task stays private (the hardcoded
   assert.equal(TaskModel.fromBlock(block({ properties: { publicVisibility: "private" } })).publicVisibility, "private");
 });
 
+test("retired container anchors project their hidden marker", () => {
+  const ev=TaskModel.fromBlock(block({properties:{title:"anchor",retiredContainerHidden:true}}));
+  assert.equal(ev.retiredContainerHidden,true);
+});
+
 test("dateless rows are untimed and flagged _dateless; a stored start is ignored", () => {
   const ev = TaskModel.fromBlock(block({ date: null, properties: { local_id: "bl-1", start: "11:00", kind: "backlog" } }));
   assert.equal(ev._dateless, true);
@@ -148,7 +153,7 @@ const BASE_KEYS = [
   "prepStatus", "priority", "publicVisibility", "recapStatus", "recordingReview",
   "recurrenceOverride", "repeatMode", "repeatOccurrenceInstant", "repeatOccurrenceKey", "repeatOccurrenceRootId", "repeatSeriesId",
   "rescheduledFrom", "reschedulePlacement", "responsibilityId", "responsibilityScore",
-  "responsibilityTitle", "rsvp_status", "source", "sourceKey", "sourceLabel", "sourceTaskId", "source_id", "start", "startedAt", "status",
+  "responsibilityTitle", "retiredContainerHidden", "rsvp_status", "source", "sourceKey", "sourceLabel", "sourceTaskId", "source_id", "start", "startedAt", "status",
   "subtaskOf", "tags", "taskGroupId", "title", "triageId", "type", "untimed", "wrapId"
 ].sort();
 
@@ -203,7 +208,7 @@ test("every projected key round-trips its property, including the ones nothing a
     triageId: "ti", delegatedItemId: "di", linkedBlockId: "lb", linkedTagId: "lt",
     ampUrl: "https://amp", hubspotUrl: "https://hs", wrapId: "w", isWrap: true,
     subtaskOf: "p", reschedulePlacement: "earliest", rescheduledFrom: "2026-07-27",
-    sourceTaskId: "st"
+    sourceTaskId: "st", retiredContainerHidden: false
     // no _pinnedStart: a subtask never pins its start, even with a stored time.
   });
 });

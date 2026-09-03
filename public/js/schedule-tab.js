@@ -902,6 +902,16 @@ function buildListView(){
     g.innerHTML='<span>'+ms(mins)+'</span>';
     return g;
   }
+  function timeBlockDividerEl(block,isCurrent){
+    const TB=DCC.TimeBlocks;
+    const el=document.createElement("button");
+    el.type="button";
+    el.className="time-block-divider variant-"+TB.DIVIDER_VARIANT+(isCurrent?" current":"");
+    if(block.id)el.dataset.blockId=block.id;
+    el.innerHTML='<strong>'+escHtml(block.name)+'</strong>'+(block.start?'<small>'+escHtml(TB.rangeLabel(block))+'</small>':'');
+    el.addEventListener("click",()=>openBlockEditor(block.id||null));
+    return el;
+  }
 
   // Parents with at least one child anywhere in the visible list -- these are the
   // rows the Collapse all / Expand all controls act on.
@@ -935,7 +945,11 @@ function buildListView(){
   // too) and gated on the subtree being finished (so a done step with open steps under
   // it stays visible with its children nested, instead of hiding live work).
   section("Work list",activeIds.size);
-  if(!day.timed.length){
+  const timeBlocks=(DCC.TimeBlocks&&DCC.TimeBlocks.forDate)
+    ? DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate)
+    : [];
+  const useTimeBlockGroups=timeBlocks.length>0;
+  if(!day.timed.length&&!timeBlocks.length){
     const empty=document.createElement("div");
     empty.className="it-list-empty";
     empty.textContent=viewDate===actualToday?"Nothing scheduled for today.":"Nothing scheduled on this day.";
@@ -953,17 +967,36 @@ function buildListView(){
     // where the parent lives, so it must NOT be promoted to a top-level row here.
     // A row whose parent is genuinely gone from `visible` (deleted, side-project) is
     // still promoted and still visible.
-    let rank=0, prevEnd=null;
-    DCC.TaskModel.selectTree(day.timed,{pool:visible}).forEach(node=>{
-      const isSub=_isSubRow(node);
-      if(!node.depth&&_rowIsTimed(node.ev)){
-        const gm=_gapMarkerMins(prevEnd,pt(node.ev.start));
-        if(gm!=null) wrap.appendChild(gapEl(gm));
-        prevEnd=pt(node.ev.end);
+    let rank=0;
+    const tree=DCC.TaskModel.selectTree(day.timed,{pool:visible});
+    function emitGroup(nodes){
+      let prevEnd=null;
+      nodes.forEach(node=>{
+        const isSub=_isSubRow(node);
+        if(!node.depth&&_rowIsTimed(node.ev)){
+          const gm=_gapMarkerMins(prevEnd,pt(node.ev.start));
+          if(gm!=null)wrap.appendChild(gapEl(gm));
+          prevEnd=pt(node.ev.end);
+        }
+        wrap.appendChild(emitNode(node,isSub?0:rank++,isDone(node.ev)?"done":"open"));
+      });
+    }
+    if(useTimeBlockGroups){
+      const grouped=DCC.TimeBlocks.groupTree(tree,timeBlocks);
+      const now=new Date();
+      const nowMin=now.getHours()*60+now.getMinutes();
+      grouped.groups.forEach(({block,nodes})=>{
+        const current=isTodayView&&nowMin>=DCC.TimeBlocks.minutes(block.start,false)&&nowMin<DCC.TimeBlocks.minutes(block.end,true);
+        wrap.appendChild(timeBlockDividerEl(block,current));
+        emitGroup(nodes);
+      });
+      if(grouped.outside.nodes.length){
+        wrap.appendChild(timeBlockDividerEl({name:"Outside Time Blocks"},false));
+        emitGroup(grouped.outside.nodes);
       }
-      const displayIdx=isSub?0:rank++;            // only non-subtasks consume a number
-      wrap.appendChild(emitNode(node,displayIdx,isDone(node.ev)?"done":"open"));
-    });
+    }else{
+      emitGroup(tree);
+    }
   }
   // Unscheduled: untimed tasks for this day. Past-day unfinished work is handled
   // exclusively through Loose Ends.
@@ -1110,16 +1143,17 @@ function buildSchedule(){
     : [];
 
   // Schedule block section headers
-  const schedBlocks=((__state&&__state.schedule&&__state.schedule.blocks)||[]).slice().sort((a,b)=>a.start.localeCompare(b.start));
+  const schedBlocks=(DCC.TimeBlocks&&DCC.TimeBlocks.forDate)
+    ? DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate)
+    : [];
   let blockPtr=0;
   function parseHHMM(t){const[h,m]=t.split(':').map(Number);return h*60+m;}
-  function fmtBlk12(hhmm){const[h,m]=hhmm.split(':').map(Number);const a=h>=12?'PM':'AM',h12=h%12||12;return h12+':'+(m<10?'0':'')+m+' '+a;}
   function injectBlockHeaders(beforeMin){
     while(blockPtr<schedBlocks.length&&parseHHMM(schedBlocks[blockPtr].start)<=beforeMin){
       const blk=schedBlocks[blockPtr];
-      const dot=blk.blockType==='work'?'var(--accent-light)':blk.blockType==='personal'?'var(--purple,#a78bfa)':'var(--text-muted)';
-      const hdr=document.createElement('div');hdr.className='tl-block-header';hdr.dataset.blockId=blk.id||'';
-      hdr.innerHTML='<span class="block-hdr-dot" style="background:'+dot+'"></span>'+'<span class="block-hdr-name">'+blk.name+'</span>'+'<span class="block-hdr-time">'+fmtBlk12(blk.start)+' \u2013 '+fmtBlk12(blk.end)+'</span>'+'<button class="block-hdr-edit" onclick="event.stopPropagation();openBlockEditor(\''+(blk.id||'')+'\''+')" title="Edit time blocks">\u270E</button>';
+      const hdr=document.createElement('button');hdr.type='button';hdr.className='time-block-divider variant-'+DCC.TimeBlocks.DIVIDER_VARIANT;hdr.dataset.blockId=blk.id||'';
+      hdr.innerHTML='<strong>'+escHtml(blk.name)+'</strong><small>'+escHtml(DCC.TimeBlocks.rangeLabel(blk))+'</small>';
+      hdr.addEventListener('click',()=>openBlockEditor(blk.id||null));
       tl.appendChild(hdr);blockPtr++;
     }
   }
@@ -1774,13 +1808,9 @@ function _roundGoal(value){
   return Math.max(0, Math.round((Number(value)||0)/5)*5);
 }
 function _defaultDayPointGoals(){
-  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
-  const workMinutes=blocks
-    .filter(b=>(b.blockType||b.type||"work")==="work")
-    .reduce((sum,b)=>sum+Math.max(0,pt(b.end||"00:00")-pt(b.start||"00:00")),0);
   const fallbackMin=300, fallbackMax=480;
-  const min=workMinutes>0?_roundGoal(workMinutes*0.65):fallbackMin;
-  const max=workMinutes>0?_roundGoal(workMinutes):fallbackMax;
+  const min=fallbackMin;
+  const max=fallbackMax;
   return {min:Math.max(60,min),max:Math.max(Math.max(60,min),max)};
 }
 function _storedDayPointGoals(){
@@ -1945,7 +1975,8 @@ function showStatPopover(statId, event) {
       break;
     }
     case 's-block': {
-      const blocks = (__state&&__state.schedule&&__state.schedule.blocks)||[];
+      const sourceBlocks = (__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[];
+      const blocks = DCC.TimeBlocks ? DCC.TimeBlocks.forDate(sourceBlocks,viewDate) : [];
       if (!blocks.length) {
         const last = scheduled.length ? scheduled[scheduled.length-1] : null;
         html = '<div class="sp-title">Day Ends</div>';
@@ -1963,7 +1994,7 @@ function showStatPopover(statId, event) {
         return '<div class="sp-row'+(isCurrent?' sp-active':'')+'" style="opacity:'+(isPast?'0.4':'1')+'">'
           +'<span class="sp-time">'+f12(b.start).replace(' ','')+'–'+f12(b.end).replace(' ','')+'</span>'
           +'<span class="sp-label">'+b.name+'</span>'
-          +'<span class="sp-dur">'+(b.blockType||b.type)+(isCurrent?' (now)':'')+'</span></div>';
+          +'<span class="sp-dur">'+(isCurrent?'Now':'')+'</span></div>';
       }).join('');
       html += '<div class="sp-note" style="display:flex;justify-content:flex-end"><button class="sp-edit-btn" onclick="openBlockEditor()">✎ Edit Blocks</button></div>';
       break;
@@ -1989,707 +2020,173 @@ document.addEventListener('click', function(e) {
 });
 
 // ======== BLOCK EDITOR ========
-let _beBlocks = []; // working copy
-let _beOriginal = []; // PIN 3: pristine snapshot captured at open(), used for diff on save
-
-function _isDefaultScheduleBlock(b){
-  return !!(b && (b.type === 'schedule_block' || b._blockType === 'schedule_block'));
-}
-
-function _isDatedBlockEditorBlock(b){
-  return !!(b && b._date);
-}
-
-function openBlockEditor(blockId){
-  // Close popover
-  const popover = document.getElementById('stat-popover');
-  if(popover){ popover.style.display='none'; popover.dataset.openFor=''; }
-  document.querySelectorAll('.stat.sp-open').forEach(el=>el.classList.remove('sp-open'));
-
-  // Read blocks from blockStore (has full props incl. acceptedTags), fall back to state
-  const raw = (window.blockStore && [...window.blockStore.getByType('schedule_block'),...window.blockStore.getByType('block').filter(b=>(b.properties||{}).blockType&&(b.properties||{}).start&&(b.properties||{}).end&&(b.properties||{}).name)]) || [];
-  if(raw.length) {
-    _beBlocks = raw.map(b => ({
-      id: b.id,
-      type: b.type,
-      _blockType: b.type,
-      _date: b.date || null,
-      parent_id: b.parent_id || null,
-      sort_order: b.sort_order || 0,
-      _isNew: false,
-      ...(b.properties || {})
-    }));
-  } else {
-    const src = (__state&&__state.schedule&&__state.schedule.blocks)||[];
-    _beBlocks = JSON.parse(JSON.stringify(src));
-  }
-
-  // PIN 3: capture pristine snapshot for diff-on-save copy-forward flow
-  _beOriginal = JSON.parse(JSON.stringify(_beBlocks));
-
-  renderBlockEditor();
-  document.getElementById("block-editor-overlay").classList.add("open");
-
-  // Scroll to and briefly highlight the clicked block
-  if(blockId) {
-    const idx = _beBlocks.findIndex(b => b.id === blockId);
-    if(idx !== -1) {
-      setTimeout(() => {
-        const row = document.querySelector('.be-card[data-idx="'+idx+'"]');
-        if(row) {
-          row.scrollIntoView({ behavior:'smooth', block:'nearest' });
-          row.classList.add('be-row-highlight');
-          setTimeout(() => row.classList.remove('be-row-highlight'), 1500);
-        }
-      }, 60);
-    }
-  }
-}
-
+// Time Block editor v2. This deliberately replaces the former planning-block
+// controls. A Time Block has only name, range, order, and active days.
+const TIME_BLOCK_EDITOR_VIEW_VARIANT="stacked-days";
+let _beBlocks=[];
+let _beOriginal=[];
+let _beDragIdx=null;
+let _beView="blocks";
 function closeBlockEditor(){
   document.getElementById("block-editor-overlay").classList.remove("open");
-  _beBlocks = [];
-  _beOriginal = []; // PIN 3: drop snapshot
+  _beBlocks=[];_beOriginal=[];_beView="blocks";
+}
+function beUpdate(idx,field,value){if(_beBlocks[idx])_beBlocks[idx][field]=value;}
+function _beBlocksEqual(a,b){
+  const clean=list=>list.map(x=>({id:x.id,name:x.name,start:x.start,end:x.end,activeDays:DCC.TimeBlocks.activeDays(x.activeDays),sort_order:x.sort_order}));
+  return JSON.stringify(clean(a))===JSON.stringify(clean(b));
+}
+function beDragStart(e,idx){_beDragIdx=idx;if(e.dataTransfer)e.dataTransfer.effectAllowed="move";e.currentTarget?.classList.add("be-dragging");}
+function beDragOver(e,idx){if(_beDragIdx===null||_beDragIdx===idx)return;e.preventDefault();e.currentTarget?.classList.add("be-drag-over");}
+function beDragLeave(e){e.currentTarget?.classList.remove("be-drag-over");}
+function beDragEnd(){_beDragIdx=null;document.querySelectorAll(".be-dragging,.be-drag-over").forEach(el=>el.classList.remove("be-dragging","be-drag-over"));}
+function openBlockEditor(blockId){
+  const popover=document.getElementById("stat-popover");
+  if(popover){popover.style.display="none";popover.dataset.openFor="";}
+  document.querySelectorAll(".stat.sp-open").forEach(el=>el.classList.remove("sp-open"));
+  const raw=(window.blockStore&&window.blockStore.getByType("schedule_block"))||[];
+  if(raw.length){
+    _beBlocks=raw.slice().sort((a,b)=>(Number(a.sort_order)||0)-(Number(b.sort_order)||0))
+      .map((b,i)=>({...DCC.TimeBlocks.normalize(b.properties||{},i),id:b.id,sort_order:b.sort_order||((i+1)*1000),_isNew:false}));
+  }else{
+    const src=(__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[];
+    _beBlocks=src.map((b,i)=>({...DCC.TimeBlocks.normalize(b,i),sort_order:b.sort_order||((i+1)*1000),_isNew:false}));
+  }
+  _beOriginal=JSON.parse(JSON.stringify(_beBlocks));
+  _beView="blocks";
+  renderBlockEditor();
+  document.getElementById("block-editor-overlay").classList.add("open");
+  if(blockId)setTimeout(()=>document.querySelector('.be-card[data-block-id="'+CSS.escape(blockId)+'"]')?.scrollIntoView({behavior:"smooth",block:"center"}),50);
 }
 
 function renderBlockEditor(){
-  const body = document.getElementById("block-editor-body");
-  // Separate top-level and nested
-  const topLevel = _beBlocks.filter(b=>!b.parent_id);
-  let html = '';
-  topLevel.forEach((b,i) => {
-    const idx = _beBlocks.indexOf(b);
-    html += renderBlockRow(b, idx, false);
-    // Render children
-    const children = _beBlocks.filter(c=>c.parent_id===b.id);
-    children.forEach(c => {
-      const cidx = _beBlocks.indexOf(c);
-      html += renderBlockRow(c, cidx, true);
-    });
-    html += '<div class="be-card-add-sub"><button onclick="beAddChild('+idx+')">+ Add sub-block</button></div>';
+  const body=document.getElementById("block-editor-body");
+  document.querySelectorAll("[data-be-view]").forEach(button=>{
+    const selected=button.dataset.beView===_beView;
+    button.classList.toggle("active",selected);
+    button.setAttribute("aria-selected",String(selected));
+    button.tabIndex=selected?0:-1;
   });
-  html += '<div class="be-add-root"><button onclick="beAddBlock()">+ Add Block</button></div>';
-  body.innerHTML = html;
-  mountBlockEditorTagPickers();
-  beCheckOverlaps();
-}
-
-function mountBlockEditorTagPickers(){
-  document.querySelectorAll('.be-tag-picker').forEach(el => {
-    const idx = parseInt(el.dataset.idx);
-    const b = _beBlocks[idx];
-    if(!b) return;
-    if(typeof createTagPicker === 'function') {
-      createTagPicker(el, b.acceptedTags || [], ids => {
-        if(_beBlocks[idx]) _beBlocks[idx].acceptedTags = ids;
-      });
-    }
-  });
-}
-
-function beDuration(start, end){
-  // Returns a "1h 30m" style string from two HH:MM values
-  if(!start||!end) return '';
-  const s = start.split(':').map(Number), e = end.split(':').map(Number);
-  const mins = (e[0]*60+e[1]) - (s[0]*60+s[1]);
-  if(mins <= 0) return '';
-  const h = Math.floor(mins/60), m = mins%60;
-  return h && m ? h+'h '+m+'m' : h ? h+'h' : m+'m';
-}
-
-function renderBlockRow(b, idx, nested){
-  const bt = b.blockType||b.type||'work';
-  const prot = b.protected;
-  const warn = b.warnThreshold||0;
-  const dur = beDuration(b.start||'09:00', b.end||'17:00');
-  const barClass = bt === 'personal' ? 'personal' : bt === 'break' ? 'break' : 'work';
-  // PIN 6: only top-level blocks are draggable (nested children stay grouped under their parent)
-  const dragAttrs = nested ? '' : (
-    ' draggable="true"'
-    +' ondragstart="beDragStart(event,'+idx+')"'
-    +' ondragover="beDragOver(event,'+idx+')"'
-    +' ondragleave="beDragLeave(event,'+idx+')"'
-    +' ondrop="beDragDrop(event,'+idx+')"'
-    +' ondragend="beDragEnd(event)"'
-  );
-
-  return '<div class="be-card'+(nested?' nested':'')+'" data-idx="'+idx+'"'+dragAttrs+'>'
-    +'<div class="be-card-inner">'
-      +'<div class="be-bar '+barClass+'"></div>'
-      +'<div class="be-card-content">'
-        // ── Row 1: name ──
-        +'<div class="be-row-name">'
-          +'<input class="be-card-name" value="'+esc(b.name||'')+'" placeholder="Block name" title="Block name" onchange="beUpdate('+idx+',&apos;name&apos;,this.value)">'
-          +'<button class="be-card-delete" onclick="beDelete('+idx+')" title="Delete block">\u00d7</button>'
-        +'</div>'
-        // ── Row 2: times + duration — PIN 6: clock-face picker instead of native time inputs ──
-        +'<div class="be-row-time">'
-          +'<button type="button" class="be-card-time" title="Start time" id="be-start-'+idx+'" onclick="beOpenTimePicker('+idx+',&apos;start&apos;,this)">'+f12(b.start||'09:00')+'</button>'
-          +'<span class="be-time-arrow">\u2192</span>'
-          +'<button type="button" class="be-card-time" title="End time" id="be-end-'+idx+'" onclick="beOpenTimePicker('+idx+',&apos;end&apos;,this)">'+f12(b.end||'17:00')+'</button>'
-          +'<input class="be-dur-input" value="'+dur+'" title="Duration \u2014 edit to adjust end time" id="be-dur-'+idx+'" onchange="beDurChanged('+idx+',this.value)" placeholder="0m">'
-          +'<button class="be-dur-preset-btn" title="Duration presets" onclick="beOpenDurPresets('+idx+',this)">&#9662;</button>'
-        +'</div>'
-        // ── Row 3: type, protected, warn ──
-        +'<div class="be-row-settings">'
-          +'<select class="be-type-select" title="Block category" onchange="beUpdate('+idx+',&apos;blockType&apos;,this.value);beUpdateBar('+idx+',this.value)">'
-            +'<option value="work"'+(bt==='work'?' selected':'')+'>Work</option>'
-            +'<option value="personal"'+(bt==='personal'?' selected':'')+'>Personal</option>'
-          +'</select>'
-          +'<button class="be-pill'+(prot?' active':'')+'" title="Protected boundary \u2014 tasks cannot overflow past the end of this block" onclick="beToggleProtected('+idx+')">'
-            +'<span class="be-pill-icon">\ud83d\udee1</span>'
-            +'<span class="be-pill-label">Protected</span>'
-          +'</button>'
-          +'<div class="be-warn-pill" title="Warn you this many minutes before the block ends (0 = off)">'
-            +'<span class="be-warn-icon">\u26a0\ufe0f</span>'
-            +'<span class="be-warn-label">Warn</span>'
-            +'<input type="number" class="be-warn-num" value="'+warn+'" min="0" max="120" placeholder="0" onchange="beUpdate('+idx+',&apos;warnThreshold&apos;,parseInt(this.value)||0)">'
-            +'<span class="be-warn-label">min</span>'
-          +'</div>'
-        +'</div>'
-        // ── Row 4: accepts tags (full width) ──
-        +'<div class="be-row-tags">'
-          +'<span class="be-tags-label">Accepts</span>'
-          +'<div class="be-tag-picker" data-idx="'+idx+'"></div>'
-        +'</div>'
-      +'</div>'
-    +'</div>'
-  +'</div>';
-}
-
-function beRefreshDur(idx){
-  const b = _beBlocks[idx];
-  if(!b) return;
-  const el = document.getElementById('be-dur-'+idx);
-  if(el) el.value = beDuration(b.start||'09:00', b.end||'17:00');
-}
-
-// Parse a duration string like "2h", "30m", "1h 30m", "1.5h" → total minutes
-function beParseDur(str){
-  if(!str) return 0;
-  str = str.trim().toLowerCase();
-  let mins = 0;
-  // "1.5h" style
-  const decMatch = str.match(/^(\d+\.?\d*)\s*h$/);
-  if(decMatch) return Math.round(parseFloat(decMatch[1]) * 60);
-  // "1h 30m" or "1h30m"
-  const hm = str.match(/(\d+)\s*h\s*(\d+)\s*m?/);
-  if(hm) return parseInt(hm[1])*60 + parseInt(hm[2]);
-  // "2h"
-  const hOnly = str.match(/^(\d+)\s*h$/);
-  if(hOnly) return parseInt(hOnly[1])*60;
-  // "45m" or just "45"
-  const mOnly = str.match(/^(\d+)\s*m?$/);
-  if(mOnly) return parseInt(mOnly[1]);
-  return 0;
-}
-
-// When duration input changes, update end time
-function beDurChanged(idx, val){
-  const b = _beBlocks[idx];
-  if(!b) return;
-  const mins = beParseDur(val);
-  if(mins <= 0) return;
-  const s = (b.start||'09:00').split(':').map(Number);
-  const endMins = s[0]*60 + s[1] + mins;
-  const eh = Math.floor(endMins/60), em = endMins%60;
-  const endStr = String(eh).padStart(2,'0')+':'+String(em).padStart(2,'0');
-  b.end = endStr;
-  const endEl = document.getElementById('be-end-'+idx);
-  if(endEl) endEl.value = endStr;
-  // Refresh the duration display to normalized format
-  const durEl = document.getElementById('be-dur-'+idx);
-  if(durEl) durEl.value = beDuration(b.start, b.end);
-  beCheckOverlaps();
-}
-
-// Duration preset popover for block editor
-function beOpenDurPresets(idx, btn){
-  // Close any existing preset popover
-  document.querySelectorAll('.be-dur-popover').forEach(p=>p.remove());
-  const presets = [30, 60, 90, 120, 180, 240];
-  const b = _beBlocks[idx];
-  if(!b) return;
-  // Current duration in minutes
-  const curMins = beParseDur(beDuration(b.start||'09:00', b.end||'17:00'));
-  const pop = document.createElement('div');
-  pop.className = 'be-dur-popover';
-  const grid = document.createElement('div');
-  grid.className = 'dur-presets';
-  presets.forEach(m => {
-    const pbtn = document.createElement('button');
-    pbtn.className = 'dur-preset' + (m === curMins ? ' dur-current' : '');
-    pbtn.textContent = ms(m);
-    pbtn.addEventListener('click', e => { e.stopPropagation(); pop.remove(); beSetDurPreset(idx, m); });
-    grid.appendChild(pbtn);
-  });
-  pop.appendChild(grid);
-  // Position relative to button
-  const rect = btn.getBoundingClientRect();
-  pop.style.position = 'fixed';
-  pop.style.top = (rect.bottom + 4) + 'px';
-  pop.style.left = rect.left + 'px';
-  pop.style.zIndex = '9999';
-  document.body.appendChild(pop);
-  function onOutside(e){ if(!pop.contains(e.target) && e.target !== btn){ pop.remove(); document.removeEventListener('click', onOutside, true); } }
-  setTimeout(() => document.addEventListener('click', onOutside, true), 0);
-}
-
-function beSetDurPreset(idx, mins){
-  const b = _beBlocks[idx];
-  if(!b) return;
-  const s = (b.start||'09:00').split(':').map(Number);
-  const endMins = s[0]*60 + s[1] + mins;
-  const eh = Math.floor(endMins/60), em = endMins%60;
-  b.end = String(eh).padStart(2,'0') + ':' + String(em).padStart(2,'0');
-  const endEl = document.getElementById('be-end-'+idx);
-  if(endEl) endEl.value = b.end;
-  const durEl = document.getElementById('be-dur-'+idx);
-  if(durEl) durEl.value = beDuration(b.start, b.end);
-  beCheckOverlaps();
-}
-
-// Check for overlapping blocks and show/hide warnings
-function beCheckOverlaps(){
-  // Sort top-level blocks by start time for comparison
-  const topLevel = _beBlocks.filter(b => !b.parent_id);
-  topLevel.sort((a,b) => (a.start||'').localeCompare(b.start||''));
-
-  // Clear all existing overlap warnings
-  document.querySelectorAll('.be-card').forEach(c => c.classList.remove('be-overlap'));
-  document.querySelectorAll('.be-overlap-warn').forEach(w => w.remove());
-
-  let hasOverlap = false;
-  for(let i = 0; i < topLevel.length - 1; i++){
-    const curr = topLevel[i], next = topLevel[i+1];
-    if(!curr.end || !next.start) continue;
-    if(curr.end > next.start){
-      hasOverlap = true;
-      // Mark both cards
-      const currIdx = _beBlocks.indexOf(curr);
-      const nextIdx = _beBlocks.indexOf(next);
-      const currCard = document.querySelector('.be-card[data-idx="'+currIdx+'"]');
-      const nextCard = document.querySelector('.be-card[data-idx="'+nextIdx+'"]');
-      if(currCard){
-        currCard.classList.add('be-overlap');
-        if(!currCard.querySelector('.be-overlap-warn')){
-          const w = document.createElement('div');
-          w.className = 'be-overlap-warn';
-          w.textContent = 'Overlaps with '+esc(next.name||'next block')+' (starts '+f12(next.start)+')';
-          currCard.querySelector('.be-card-content').appendChild(w);
-        }
-      }
-      if(nextCard) nextCard.classList.add('be-overlap');
-    }
+  body.setAttribute("aria-labelledby",_beView==="week"?"block-editor-tab-week":"block-editor-tab-blocks");
+  if(_beView==="week"){
+    body.innerHTML=renderBlockWeekView();
+    return;
   }
-
-  // Toggle save button
-  const saveBtn = document.getElementById('block-editor-save');
-  if(saveBtn){
-    saveBtn.disabled = hasOverlap;
-    saveBtn.title = hasOverlap ? 'Fix overlapping blocks before saving' : '';
-  }
+  body.innerHTML=_beBlocks.map((b,idx)=>renderBlockRow(b,idx)).join("")+
+    '<div class="be-add-root"><button onclick="beAddBlock()">+ Add Time Block</button></div>';
 }
 
-function esc(s){ return window.DCC.esc(s); } // was a 2-entity escaper; DCC.esc covers all five
-
-function beUpdate(idx, field, value){
-  if(_beBlocks[idx]) _beBlocks[idx][field] = value;
+function renderBlockWeekView(){
+  const groups=DCC.TimeBlocks.groupByDay(_beBlocks);
+  return '<div class="be-week-view variant-'+TIME_BLOCK_EDITOR_VIEW_VARIANT+'">'+groups.map(group=>
+    '<section class="be-week-day" data-day="'+group.day+'"><h4>'+group.name+'</h4>'+
+      (group.blocks.length?group.blocks.map(block=>
+        '<button class="be-week-block" type="button" onclick="beEditFromWeek(&apos;'+escHtml(block.id)+'&apos;)"><strong>'+escHtml(block.name)+'</strong><small>'+escHtml(DCC.TimeBlocks.rangeLabel(block))+'</small></button>'
+      ).join(''):'<div class="be-week-empty">No Time Blocks</div>')+
+    '</section>'
+  ).join('')+'</div>';
 }
 
-// ─── PIN 6: Clock-face picker + auto-reflow ─────────────────────────────────
-function beOpenTimePicker(idx, field, anchorEl){
-  const b = _beBlocks[idx];
-  if(!b) return;
-  const current = (field === 'start' ? b.start : b.end) || '09:00';
-  if(typeof openClockPicker !== 'function') return;
-  openClockPicker(current, anchorEl, function(timeStr){
-    if(!_beBlocks[idx]) return;
-    _beBlocks[idx][field] = timeStr;
-    beSortBlocks();
-    renderBlockEditor(); // full rebuild — mounts pickers fresh, checks overlaps
-  });
-}
-
-// Sort top-level blocks by start time in place. Children remain grouped under
-// their parent because renderBlockEditor iterates top-level first, then attaches
-// each parent's children immediately after it.
-function beSortBlocks(){
-  const top = _beBlocks.filter(b => !b.parent_id);
-  top.sort((a,b) => (a.start || '').localeCompare(b.start || ''));
-  const children = _beBlocks.filter(b => b.parent_id);
-  _beBlocks = [...top, ...children];
-}
-
-// ─── PIN 6: Drag-and-drop top-level blocks ──────────────────────────────────
-let _beDragIdx = null;
-function beDragStart(e, idx){
-  _beDragIdx = idx;
-  if(e.dataTransfer){ e.dataTransfer.effectAllowed = 'move'; }
-  if(e.currentTarget) e.currentTarget.classList.add('be-dragging');
-}
-function beDragOver(e, idx){
-  if(_beDragIdx === null || _beDragIdx === idx) return;
-  e.preventDefault();
-  if(e.dataTransfer){ e.dataTransfer.dropEffect = 'move'; }
-  if(e.currentTarget) e.currentTarget.classList.add('be-drag-over');
-}
-function beDragLeave(e){
-  if(e.currentTarget) e.currentTarget.classList.remove('be-drag-over');
-}
-function beDragDrop(e, targetIdx){
-  e.preventDefault();
-  if(e.currentTarget) e.currentTarget.classList.remove('be-drag-over');
-  if(_beDragIdx === null || _beDragIdx === targetIdx) return;
-  const dragged = _beBlocks[_beDragIdx];
-  const target = _beBlocks[targetIdx];
-  _beDragIdx = null;
-  if(!dragged || !target) return;
-  // Only top-level blocks can be reordered via drag (children stay grouped)
-  if(dragged.parent_id || target.parent_id) return;
-  // Snap dragged block's start to the target's end; preserve dragged duration
-  const duration = pt(dragged.end) - pt(dragged.start);
-  dragged.start = target.end;
-  dragged.end = fmt(pt(target.end) + duration);
-  beSortBlocks();
-  renderBlockEditor();
-}
-function beDragEnd(e){
-  _beDragIdx = null;
-  document.querySelectorAll('.be-card.be-dragging').forEach(el => el.classList.remove('be-dragging'));
-  document.querySelectorAll('.be-card.be-drag-over').forEach(el => el.classList.remove('be-drag-over'));
-}
-
-function beToggleProtected(idx){
-  if(!_beBlocks[idx]) return;
-  _beBlocks[idx].protected = !_beBlocks[idx].protected;
+function setBlockEditorView(view){
+  _beView=view==="week"?"week":"blocks";
   renderBlockEditor();
 }
 
-function beUpdateBar(idx, type){
-  const card = document.querySelector('.be-card[data-idx="'+idx+'"]');
-  if(!card) return;
-  const bar = card.querySelector('.be-bar');
-  if(!bar) return;
-  bar.className = 'be-bar ' + (type === 'personal' ? 'personal' : type === 'break' ? 'break' : 'work');
+function beEditFromWeek(blockId){
+  setBlockEditorView("blocks");
+  setTimeout(()=>document.querySelector('.be-card[data-block-id="'+CSS.escape(blockId)+'"]')?.scrollIntoView({behavior:"smooth",block:"center"}),0);
 }
 
-function beDelete(idx){
-  const b = _beBlocks[idx];
-  if(!b) return;
-  // Delete children too
-  _beBlocks = _beBlocks.filter(c => c.parent_id !== b.id);
-  _beBlocks.splice(_beBlocks.indexOf(b), 1);
-  renderBlockEditor();
+function renderBlockRow(b,idx){
+  const dayLabels={mon:"M",tue:"T",wed:"W",thu:"T",fri:"F",sat:"S",sun:"S"};
+  const days=DCC.TimeBlocks.activeDays(b.activeDays);
+  const checks=DCC.TimeBlocks.DAYS.map(day=>
+    '<label class="be-day'+(days.includes(day)?' active':'')+'" title="'+DCC.TimeBlocks.DAY_NAMES[day]+'"><input type="checkbox" '+(days.includes(day)?'checked ':'')+'onchange="beToggleDay('+idx+',&apos;'+day+'&apos;,this.checked)"><span>'+dayLabels[day]+'</span></label>'
+  ).join('');
+  return '<div class="be-card time-block-card" data-idx="'+idx+'" data-block-id="'+escHtml(b.id||'')+'" draggable="true" ondragstart="beDragStart(event,'+idx+')" ondragover="beDragOver(event,'+idx+')" ondragleave="beDragLeave(event)" ondrop="beDragDrop(event,'+idx+')" ondragend="beDragEnd(event)">'
+    +'<div class="be-card-inner"><div class="be-drag-handle" title="Drag to reorder">⠿</div><div class="be-card-content">'
+    +'<div class="be-row-name"><input class="be-card-name" value="'+escHtml(b.name||'')+'" placeholder="Time Block name" onchange="beUpdate('+idx+',&apos;name&apos;,this.value)"><button class="be-card-delete" onclick="beDelete('+idx+')" title="Delete Time Block">×</button></div>'
+    +'<div class="be-row-time simple"><label>Start<input class="be-time-input" value="'+escHtml(b.start||'09:00')+'" inputmode="numeric" placeholder="09:00" onchange="beUpdate('+idx+',&apos;start&apos;,this.value)"></label><span>to</span><label>End<input class="be-time-input" value="'+escHtml(b.end||'17:00')+'" inputmode="numeric" placeholder="17:00 or 24:00" onchange="beUpdate('+idx+',&apos;end&apos;,this.value)"></label></div>'
+    +'<div class="be-row-days"><span>Active days</span><div class="be-days">'+checks+'</div></div>'
+    +'</div></div></div>';
 }
 
-function beClearAll(){
-  if(!_beBlocks.length) return;
-  if(!confirm('Remove all '+_beBlocks.length+' time block'+(_beBlocks.length===1?'':'s')+'? This takes effect when you click Save.')) return;
-  _beBlocks = [];
+function beToggleDay(idx,day,checked){
+  if(!_beBlocks[idx])return;
+  const days=new Set(DCC.TimeBlocks.activeDays(_beBlocks[idx].activeDays));
+  if(checked)days.add(day);else days.delete(day);
+  _beBlocks[idx].activeDays=DCC.TimeBlocks.DAYS.filter(d=>days.has(d));
   renderBlockEditor();
 }
 
 function beAddBlock(){
-  _beBlocks.push({
-    id: '_new_'+Date.now()+'_'+Math.random().toString(36).substr(2,4),
-    parent_id: null, name:'', blockType:'work', start:'09:00', end:'17:00',
-    protected:false, warnThreshold:0, sort_order:_beBlocks.length, _isNew:true
-  });
+  _beBlocks.push({id:"_new_"+Date.now(),name:"",start:"09:00",end:"17:00",activeDays:DCC.TimeBlocks.WEEKDAYS.slice(),sort_order:(_beBlocks.length+1)*1000,_isNew:true});
   renderBlockEditor();
 }
 
-function beAddChild(parentIdx){
-  const parent = _beBlocks[parentIdx];
-  if(!parent) return;
-  _beBlocks.push({
-    id: '_new_'+Date.now()+'_'+Math.random().toString(36).substr(2,4),
-    parent_id: parent.id, name:'', blockType:parent.blockType||'work',
-    start:parent.start, end:parent.end,
-    protected:false, warnThreshold:0, sort_order:_beBlocks.length, _isNew:true
-  });
+function beDelete(idx){_beBlocks.splice(idx,1);renderBlockEditor();}
+
+function beDragDrop(e,targetIdx){
+  e.preventDefault();
+  if(_beDragIdx===null||_beDragIdx===targetIdx)return;
+  const moved=_beBlocks.splice(_beDragIdx,1)[0];
+  _beBlocks.splice(targetIdx,0,moved);
+  _beDragIdx=null;
   renderBlockEditor();
 }
 
-// PIN 3: deep-compare _beBlocks vs _beOriginal for "no net change" early-exit.
-// Sort by id so children reorder doesn't create false diffs.
-function _beBlocksEqual(a, b){
-  if (a.length !== b.length) return false;
-  var sa = [...a].sort(function(x,y){return (x.id||'').localeCompare(y.id||'');});
-  var sb = [...b].sort(function(x,y){return (x.id||'').localeCompare(y.id||'');});
-  return JSON.stringify(sa) === JSON.stringify(sb);
-}
-
-// PIN 3: build the update/create/delete diff between _beOriginal and _beBlocks.
-// Top-level blocks only. Nested children are NOT propagated forward in v1.
-function _computeBlockDiff(){
-  var origTop = _beOriginal.filter(function(b){return !b.parent_id;});
-  var curTop  = _beBlocks.filter(function(b){return !b.parent_id;});
-  var origById = {};
-  origTop.forEach(function(b){origById[b.id]=b;});
-  var curById = {};
-  curTop.forEach(function(b){curById[b.id]=b;});
-
-  var PROP_KEYS = ['name','blockType','start','end','protected','warnThreshold','acceptedTags'];
-  function props(b){
-    return {
-      name: b.name || '',
-      blockType: b.blockType || 'work',
-      start: b.start || '',
-      end: b.end || '',
-      protected: !!b.protected,
-      warnThreshold: b.warnThreshold || 0,
-      acceptedTags: b.acceptedTags || []
-    };
-  }
-
-  var updates = [], creates = [], deletes = [];
-
-  // Updates: same id, any changed prop
-  curTop.forEach(function(c){
-    if (c._isNew || (typeof c.id === 'string' && c.id.indexOf('_new_') === 0)) return;
-    var o = origById[c.id];
-    if (!o) return;
-    var cp = props(c), op = props(o);
-    var changed = false;
-    for (var k = 0; k < PROP_KEYS.length; k++){
-      var key = PROP_KEYS[k];
-      if (JSON.stringify(cp[key]) !== JSON.stringify(op[key])){ changed = true; break; }
-    }
-    if (changed){
-      updates.push({
-        id: c.id,
-        match: { name: op.name, blockType: op.blockType, sort_order: o.sort_order || 0 },
-        originalValues: op,
-        newValues: cp
-      });
-    }
-  });
-
-  // Creates: in current, not in original
-  curTop.forEach(function(c){
-    if (!origById[c.id]){
-      creates.push({
-        block: {
-          type: 'block',
-          properties: props(c),
-          sort_order: c.sort_order || 0
-        }
-      });
-    }
-  });
-
-  // Deletes: in original, not in current
-  origTop.forEach(function(o){
-    if (!curById[o.id]){
-      deletes.push({
-        match: { name: o.name || '', blockType: o.blockType || 'work', sort_order: o.sort_order || 0 },
-        originalValues: props(o)
-      });
-    }
-  });
-
-  return { updates: updates, creates: creates, deletes: deletes };
-}
-
-// PIN 3: the existing single-day write flow, extracted so both "today only"
-// and "today + future" confirm-modal paths can reuse it.
 async function _applyBlocksToday(){
-  var current = (__state && __state.schedule && __state.schedule.blocks) || [];
-  var newIds = new Set(_beBlocks.map(function(b){return b.id;}));
-  for (var i = 0; i < current.length; i++){
-    var old = current[i];
-    if (!newIds.has(old.id)) await blockStore.deleteBlock(old.id);
+  const originalIds=new Set(_beOriginal.filter(b=>!String(b.id).startsWith("_new_")).map(b=>b.id));
+  const currentIds=new Set(_beBlocks.filter(b=>!String(b.id).startsWith("_new_")).map(b=>b.id));
+  for(const id of originalIds){if(!currentIds.has(id))await blockStore.deleteBlock(id);}
+  for(let i=0;i<_beBlocks.length;i++){
+    const b=_beBlocks[i];
+    const props={name:b.name.trim(),start:b.start,end:b.end,activeDays:DCC.TimeBlocks.activeDays(b.activeDays)};
+    if(b._isNew||String(b.id).startsWith("_new_"))await blockStore.createBlock("schedule_block",props,{date:null,sortOrder:(i+1)*1000});
+    else await blockStore.updateBlock(b.id,props,{sort_order:(i+1)*1000});
   }
-  for (var j = 0; j < _beBlocks.length; j++){
-    var b = _beBlocks[j];
-    var bProps = {
-      name: (b.name || '').trim(),
-      blockType: b.blockType || 'work',
-      start: b.start,
-      end: b.end,
-      protected: !!b.protected,
-      warnThreshold: b.warnThreshold || 0,
-      acceptedTags: b.acceptedTags || []
-    };
-    if (b._isNew || (typeof b.id === 'string' && b.id.indexOf('_new_') === 0)){
-      const createType = b._createAsScheduleBlock ? 'schedule_block' : 'block';
-      const createDate = createType === 'schedule_block' ? null : undefined;
-      await blockStore.createBlock(createType, bProps, { parentId: b.parent_id, date: createDate, sortOrder: (j + 1) * 1000 });
-    } else {
-      await blockStore.updateBlock(b.id, bProps);
-    }
+  const resp=await fetch('/api/state/day');
+  const state=await resp.json();
+  if(state.schedule)__state.schedule=state.schedule;
+  if(window.__DCC_TOMORROW__){
+    const tomorrow=await fetch('/api/state/tomorrow').then(r=>r.json());
+    if(tomorrow&&tomorrow.schedule)window.__DCC_TOMORROW__=tomorrow;
   }
-  // Refresh state
-  try {
-    var resp = await fetch('/api/state/day');
-    var state = await resp.json();
-    if (state.schedule) __state.schedule = state.schedule;
-  } catch(e){}
-  // Schedule blocks are global (stored date-less), so a save here changes the
-  // blocks rendered on every day. switchToDate() builds the "tomorrow" view from
-  // the boot-cached window.__DCC_TOMORROW__ snapshot, so refresh it too —
-  // otherwise the tomorrow view shows stale blocks after an edit/Clear All.
-  try {
-    if (typeof window !== 'undefined' && window.__DCC_TOMORROW__) {
-      var tResp = await fetch('/api/state/tomorrow');
-      var tState = await tResp.json();
-      if (tState && tState.schedule) window.__DCC_TOMORROW__ = tState;
-    }
-  } catch(e){}
-  var blocks = (__state && __state.schedule && __state.schedule.blocks) || [];
-  var wb = blocks.filter(function(b){return (b.blockType||b.type)==='work';});
-  if (wb.length) EOD = pt(wb[wb.length-1].end);
-  updateStats();
 }
 
 async function saveBlockEditor(){
-  // Check overlaps first
-  const topLevel = _beBlocks.filter(b => !b.parent_id);
-  topLevel.sort((a,b) => (a.start||'').localeCompare(b.start||''));
-  for(let i = 0; i < topLevel.length - 1; i++){
-    if(topLevel[i].end > topLevel[i+1].start){
-      showToast(topLevel[i].name+" overlaps with "+topLevel[i+1].name+" \u2014 fix before saving","error");
-      return;
-    }
-  }
-  // Validate
+  if(!_beBlocks.length){showToast("Keep at least one Time Block","error");return;}
   for(const b of _beBlocks){
-    if(!b.name||!b.name.trim()){ showToast("Block name is required","error"); return; }
-    if(!b.start||!b.end){ showToast("Start and end times are required","error"); return; }
-    if(b.start>=b.end){ showToast(b.name+": start must be before end","error"); return; }
-    // Validate children fit within parent
-    if(b.parent_id){
-      const parent = _beBlocks.find(p=>p.id===b.parent_id);
-      if(parent && (b.start<parent.start||b.end>parent.end)){
-        showToast(b.name+" must fit within "+parent.name,"error"); return;
-      }
+    if(!String(b.name||"").trim()){showToast("Time Block name is required","error");return;}
+    const start=DCC.TimeBlocks.minutes(b.start,false),end=DCC.TimeBlocks.minutes(b.end,true);
+    if(start===null){showToast(b.name+": use a start from 00:00 to 23:59","error");return;}
+    if(end===null){showToast(b.name+": use an end from 00:00 to 24:00","error");return;}
+    if(start>=end){showToast(b.name+": start must be before end","error");return;}
+    if(!DCC.TimeBlocks.activeDays(b.activeDays).length){showToast(b.name+": select at least one day","error");return;}
+  }
+  for(let i=0;i<_beBlocks.length;i++)for(let j=i+1;j<_beBlocks.length;j++){
+    const shared=DCC.TimeBlocks.activeDays(_beBlocks[i].activeDays).some(d=>DCC.TimeBlocks.activeDays(_beBlocks[j].activeDays).includes(d));
+    if(shared&&DCC.TimeBlocks.minutes(_beBlocks[i].start,false)<DCC.TimeBlocks.minutes(_beBlocks[j].end,true)&&DCC.TimeBlocks.minutes(_beBlocks[j].start,false)<DCC.TimeBlocks.minutes(_beBlocks[i].end,true)){
+      showToast(_beBlocks[i].name+" overlaps "+_beBlocks[j].name,"error");return;
     }
   }
-
-  // PIN 3: no net change -> close silently without prompting
-  if (_beBlocksEqual(_beBlocks, _beOriginal)){
-    closeBlockEditor();
-    showToast("No changes","success");
-    return;
-  }
-
-  // PIN 3: prompt for scope (today only vs today + future days)
-  _openBsConfirm();
-}
-
-// PIN 3: confirm-modal open/close helpers
-function _openBsConfirm(){
-  var overlay = document.getElementById('bs-confirm-overlay');
-  if (overlay) overlay.classList.add('open');
-}
-function _closeBsConfirm(){
-  var overlay = document.getElementById('bs-confirm-overlay');
-  if (overlay) overlay.classList.remove('open');
-}
-
-// PIN 3: "Today only" path — existing single-day write flow.
-async function _onBsConfirmTodayOnly(){
-  _closeBsConfirm();
-  try {
-    await _applyBlocksToday();
-    closeBlockEditor();
-    render();
-    showToast("Time blocks saved","success");
-  } catch(e){
-    showToast("Save failed: "+(e&&e.message||e),"error");
-  }
-}
-
-// PIN 3: "Today + future days" path — apply to today, then POST the diff to
-// /api/blocks/apply-forward so the server can ripple the changes to every
-// future day that still matches the original values.
-async function _onBsConfirmTodayAndFuture(){
-  _closeBsConfirm();
-  var diff;
-  try { diff = _computeBlockDiff(); }
-  catch(e){ showToast("Could not compute diff: "+(e&&e.message||e),"error"); return; }
-
-  try {
-    var topBlocks = _beBlocks.filter(function(b){return !b.parent_id;});
-    var topOriginals = _beOriginal.filter(function(b){return !b.parent_id;});
-    var usesDefaultScheduleBlocks = topBlocks.some(_isDefaultScheduleBlock) || topOriginals.some(_isDefaultScheduleBlock);
-    var usesDatedBlocks = topBlocks.some(_isDatedBlockEditorBlock) || topOriginals.some(_isDatedBlockEditorBlock);
-    if (usesDefaultScheduleBlocks){
-      _beBlocks.forEach(function(b){
-        if (b._isNew || (typeof b.id === 'string' && b.id.indexOf('_new_') === 0)) b._createAsScheduleBlock = true;
-      });
-    }
-    await _applyBlocksToday();
-
-    var fromDate = (typeof __state !== 'undefined' && __state && __state.date) ? __state.date : null;
-    if (usesDefaultScheduleBlocks && !usesDatedBlocks){
-      closeBlockEditor();
-      render();
-      showToast("Updated default time blocks for today + future days","success");
-      return;
-    }
-    if (!fromDate){
-      closeBlockEditor();
-      render();
-      showToast("Saved today, but could not propagate: unknown current date","error");
-      return;
-    }
-    var resp = await fetch('/api/blocks/apply-forward', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fromDate: fromDate, diff: diff })
-    });
-    if (!resp.ok){
-      var msg = 'HTTP '+resp.status;
-      try { var j = await resp.json(); msg = j.error || msg; } catch(e){}
-      closeBlockEditor();
-      render();
-      showToast("Saved today; propagate failed: "+msg,"error");
-      return;
-    }
-    var res = await resp.json();
-    closeBlockEditor();
-    render();
-    var summary = "Updated today + "+(res.daysUpdated||0)+" future day"+
-      ((res.daysUpdated||0)===1?"":"s");
-    if (res.skippedCount && res.skippedCount > 0){
-      summary += " ("+res.skippedCount+" customized block"+
-        (res.skippedCount===1?"":"s")+" skipped)";
-    }
-    showToast(summary,"success");
-  } catch(e){
-    showToast("Save failed: "+(e&&e.message||e),"error");
-  }
+  if(_beBlocksEqual(_beBlocks,_beOriginal)){closeBlockEditor();showToast("No changes","success");return;}
+  try{await _applyBlocksToday();closeBlockEditor();render();showToast("Time Blocks saved","success");}
+  catch(e){showToast("Save failed: "+(e&&e.message||e),"error");}
 }
 
 // Wire editor modal controls
 document.getElementById("block-editor-close").addEventListener("click",closeBlockEditor);
 document.getElementById("block-editor-cancel").addEventListener("click",closeBlockEditor);
 document.getElementById("block-editor-save").addEventListener("click",saveBlockEditor);
-document.getElementById("block-editor-clear")?.addEventListener("click",beClearAll);
+document.querySelectorAll("[data-be-view]").forEach(button=>button.addEventListener("click",()=>setBlockEditorView(button.dataset.beView)));
 document.getElementById("block-editor-overlay").addEventListener("click",e=>{if(e.target===e.currentTarget)closeBlockEditor()});
-document.getElementById("block-editor-manage-tags")?.addEventListener("click",()=>{ if(typeof openTagManager==='function') openTagManager(); });
-// The fifth host of the shared picker. Each block card's start/end buttons open
-// the time wheel (beOpenTimePicker -> openClockPicker -> openTimeWheel), whose
-// overlay is a body-level SIBLING of this modal. This closer is registered at
-// script-parse time, so it runs BEFORE the picker's own Escape handler and used to
-// swallow the keystroke: closeBlockEditor() empties _beBlocks and _beOriginal, and
-// Save is the only commit path, so every staged block edit was discarded by an
-// Escape aimed at the wheel. DCC.overlay owns the rule (core-ui.js).
 document.addEventListener("keydown",e=>{
   if(e.key!=="Escape"||!document.getElementById("block-editor-overlay").classList.contains("open"))return;
   if(window.DCC&&window.DCC.overlay&&typeof window.DCC.overlay.layerAboveOpen==="function"
     &&window.DCC.overlay.layerAboveOpen())return;
   closeBlockEditor();
 });
-
-// PIN 3: wire the copy-forward confirm modal buttons
-document.getElementById("bs-confirm-cancel")?.addEventListener("click", _closeBsConfirm);
-document.getElementById("bs-confirm-today")?.addEventListener("click", _onBsConfirmTodayOnly);
-document.getElementById("bs-confirm-future")?.addEventListener("click", _onBsConfirmTodayAndFuture);
-document.getElementById("bs-confirm-overlay")?.addEventListener("click", e=>{ if(e.target===e.currentTarget) _closeBsConfirm(); });
-
 
 // ======== MOBILE DURATION BOTTOM SHEET ========
 // Touch / narrow viewports get a slide-up sheet instead of the fixed duration

@@ -295,6 +295,29 @@ async function audit() {
   // surfaced rather than folded away.
   const closure = nums(await one(CLOSURE_AUDIT_SQL));
 
+  const retiredContainers = nums(await one(`
+    WITH legacy AS (
+      SELECT b.id, COALESCE(NULLIF(b.properties->>'local_id', ''), b.id) AS local_id,
+             b.properties->>'type' AS legacy_type
+        FROM blocks b
+       WHERE b.deleted_at IS NULL AND b.properties->>'type' IN ('shell', 'wrap')
+    )
+    SELECT count(*) FILTER (WHERE legacy_type = 'shell') AS legacy_shells,
+           count(*) FILTER (WHERE legacy_type = 'wrap') AS legacy_wraps,
+           (SELECT count(*) FROM blocks b WHERE b.deleted_at IS NULL
+             AND b.properties->>'retiredContainerHidden' = 'true') AS hidden_occurrence_anchors,
+           (SELECT count(*) FROM blocks b WHERE b.deleted_at IS NULL
+             AND b.properties->>'retiredContainerPromotedFrom' IS NOT NULL) AS promoted_children,
+           (SELECT count(*) FROM blocks b WHERE b.deleted_at IS NULL
+             AND b.properties->>'kind' = 'responsibility_item'
+             AND b.properties#>>'{templateTree,root,type}' = 'shell') AS legacy_recurring_templates,
+           (SELECT count(*) FROM blocks b WHERE b.deleted_at IS NULL
+             AND (b.properties->>'wrapId' IN (SELECT id::text FROM legacy)
+               OR b.properties->>'wrapId' IN (SELECT local_id FROM legacy)
+               OR b.properties->>'subtaskOf' IN (SELECT id::text FROM legacy)
+               OR b.properties->>'subtaskOf' IN (SELECT local_id FROM legacy))) AS direct_children_still_attached
+      FROM legacy`));
+
   const { rows: migrations } = await pool.query(
     "SELECT filename, applied_at, duration_ms, notes FROM schema_migrations ORDER BY filename");
 
@@ -356,6 +379,11 @@ async function audit() {
       // so the pair catches both "index missing" and "index somehow bypassed".
       a3_idempotencyEnforced:
         a3IndexesPresent.idx_blocks_idem_unique && idempotency.dupe_groups_live === 0,
+      retiredContainersComplete:
+        retiredContainers.legacy_shells === 0
+        && retiredContainers.legacy_wraps === 0
+        && retiredContainers.legacy_recurring_templates === 0
+        && retiredContainers.direct_children_still_attached === 0,
     },
 
     // Not blockers — judgement calls that belong to a human before a read flip.
@@ -421,6 +449,7 @@ async function audit() {
     completion,
     overlay: { done: overlayDone, deleted: overlayDeleted },
     idempotency,
+    retiredContainers,
     // A1's census plus C5's closure simulation, in one object. The `closure_*` keys
     // are what the gate reads; `exact_match_would_double_credit` is the same
     // simulation with the closure removed, i.e. the size of the bug that was fixed.

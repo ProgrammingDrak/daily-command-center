@@ -20,6 +20,7 @@ const recurrence = require("./lib/recurrence");
 // derives its fixed-time skip set from isFixed() so the server and the carryover lane
 // cannot drift apart on which types are never carried over.
 const TaskTypes = require("./public/js/task-types");
+const TimeBlocks = require("./public/js/time-blocks");
 const { plannedWindowOf } = require("./lib/task-timing");
 
 // ── Workspace Bootstrap ──
@@ -81,6 +82,12 @@ function validateBlock(type, properties) {
   if (!VALID_TYPES.has(type)) throw new Error(`Unknown block type: ${type}`);
   const size = JSON.stringify(properties).length;
   if (size > 100000) throw new Error(`Block properties exceed 100KB limit (${size} bytes)`);
+  if (type === "schedule_block") {
+    if (!TimeBlocks.valid(properties)) throw new Error("Invalid Time Block name or time range");
+    if (Array.isArray(properties.activeDays) && TimeBlocks.activeDays(properties.activeDays).length === 0) {
+      throw new Error("Time Block requires at least one active day");
+    }
+  }
 }
 
 // ── Block CRUD ──
@@ -247,6 +254,11 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
   // pushes the same `c.block.properties` reference once per future date into one
   // batchOp, so mutating in place would give N rows one row's stamped values.
   const props = typeof properties === "string" ? JSON.parse(properties) : { ...(properties || {}) };
+  const requestedTaskType = String(props.type || "").trim().toLowerCase();
+  if (requestedTaskType === "shell" || requestedTaskType === "wrap") {
+    props.type = "task";
+    if (requestedTaskType === "shell" && props.point_multiplier == null) props.point_multiplier = 0;
+  }
   validateBlock(type, props);
   const q = client || pool;
 
@@ -935,6 +947,14 @@ async function updateBlock(id, fields, client) {
     let newProps = existing.properties;
     if (properties !== undefined) {
       const parsed = typeof properties === "string" ? JSON.parse(properties) : properties;
+      const requestedTaskType = String(parsed && parsed.type || "").trim().toLowerCase();
+      const existingTaskType = String(existing.properties && existing.properties.type || "").trim().toLowerCase();
+      if ((requestedTaskType === "shell" || requestedTaskType === "wrap")
+          && requestedTaskType !== existingTaskType) {
+        const error = new Error("Shell and Wrap task types are retired");
+        error.statusCode = 400;
+        throw error;
+      }
       validateBlock(existing.type, parsed);
       newProps = applyCompletionIntent(existing.properties, parsed, completionIntent, now,
         isTaskRow({ type: existing.type, properties: existing.properties }), completionMutationId);

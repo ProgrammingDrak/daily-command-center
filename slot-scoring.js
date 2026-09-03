@@ -35,14 +35,16 @@ const IMPORTANCE_MULTIPLIERS = {
 let TaskTypes = null;
 try { TaskTypes = require("./public/js/task-types"); } catch (e) { /* fallback below */ }
 const NON_EARNING_TYPES = new Set(
-  TaskTypes ? TaskTypes.nonEarningTypes() : ["meeting", "break", "ooo", "shell"]
+  TaskTypes ? TaskTypes.nonEarningTypes() : ["meeting", "break", "ooo"]
 );
 // The unconditional tier: these never earn duration points, even with a
 // positive point_multiplier or a full-tier tag (unlike meeting/break, which a
 // positive multiplier can rescue).
 const HARD_ZERO_TYPES = new Set(
-  TaskTypes && TaskTypes.hardZeroTypes ? TaskTypes.hardZeroTypes() : ["ooo", "shell"]
+  TaskTypes && TaskTypes.hardZeroTypes ? TaskTypes.hardZeroTypes() : ["ooo"]
 );
+// Keep pre-migration Shell scoring stable during the rollout window.
+HARD_ZERO_TYPES.add("shell");
 const FOCUSED_TAGS = new Set(["deep-work", "deep work", "build", "coding", "writing", "analysis"]);
 const LIGHT_TAGS = new Set(["admin", "email", "errand", "chore"]);
 
@@ -226,8 +228,9 @@ function resolveBountyCount(input = {}) {
 
 function isNonEarningTaskType(input = {}) {
   const type = normalizeText(input.type ?? input.kind);
-  // Unconditional tier (ooo: time off; shell: its points arrive only as a
-  // rollup bonus via points_override) — no multiplier check can rescue these.
+  // Preserve historical Shell totals until migration 007 converts each row.
+  if (type === "shell") return true;
+  // Unconditional tier. No multiplier check can rescue these types.
   if (HARD_ZERO_TYPES.has(type)) return true;
   if (!NON_EARNING_TYPES.has(type)) return false;
   const multiplier = Number(input.point_multiplier ?? input.pointMultiplier);

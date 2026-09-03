@@ -236,6 +236,27 @@
       redacted: !!task.redacted
     };
   }
+  function guestTree(tasks){
+    const byId=new Map(tasks.map(task=>[String(task.id),task]));
+    const children=new Map();
+    tasks.forEach(task=>{
+      const parent=task.wrapId||task.subtaskOf;
+      if(parent&&byId.has(String(parent))){
+        if(!children.has(String(parent)))children.set(String(parent),[]);
+        children.get(String(parent)).push(task);
+      }
+    });
+    const nodes=[];
+    const seen=new Set();
+    function walk(task,depth){
+      if(seen.has(task.id))return;seen.add(task.id);
+      nodes.push({ev:task,depth});
+      (children.get(String(task.id))||[]).forEach(child=>walk(child,depth+1));
+    }
+    tasks.filter(task=>!byId.has(String(task.wrapId||task.subtaskOf||""))).forEach(task=>walk(task,0));
+    tasks.forEach(task=>walk(task,0));
+    return nodes;
+  }
   function guestCfg(type){ return GUEST_TC[type] || GUEST_TC.task; }
   function guestTagColor(ev){ return (ev && ev.tags && ev.tags[0] && ev.tags[0].color) || null; }
   function guestTagChipsHtml(ev){
@@ -311,13 +332,18 @@
   }
 
   function blockHeaderEl(blk){
-    const dot = blk.blockType === 'work' ? 'var(--accent-light)' : blk.blockType === 'personal' ? 'var(--purple,#a78bfa)' : 'var(--text-muted)';
     const el = document.createElement("div");
-    el.className = "tl-block-header";
+    el.className = "time-block-divider variant-" + window.DCC.TimeBlocks.DIVIDER_VARIANT;
     el.innerHTML =
-      '<span class="block-hdr-dot" style="background:' + dot + '"></span>' +
-      '<span class="block-hdr-name">' + esc(blk.name) + '</span>' +
-      '<span class="block-hdr-time">' + esc(fmtTime(blk.start)) + ' – ' + esc(fmtTime(blk.end)) + '</span>';
+      '<strong>' + esc(blk.name) + '</strong>' +
+      (blk.start ? '<small>' + esc(window.DCC.TimeBlocks.rangeLabel(blk)) + '</small>' : '');
+    return el;
+  }
+
+  function gapEl(mins){
+    const el=document.createElement("div");
+    el.className="it-list-gap";
+    el.innerHTML="<span>"+esc(guestMs(mins))+"</span>";
     return el;
   }
 
@@ -338,7 +364,7 @@
       if (filters.sort === "status") return String(a.status || "").localeCompare(String(b.status || "")) || timeKey(a).localeCompare(timeKey(b));
       if (filters.sort === "title") return String(a.title || "").localeCompare(String(b.title || ""));
       if (filters.sort === "duration") return (Number(a.durationMinutes) || 0) - (Number(b.durationMinutes) || 0) || timeKey(a).localeCompare(timeKey(b));
-      return (a.status === "done") - (b.status === "done") || timeKey(a).localeCompare(timeKey(b));
+      return timeKey(a).localeCompare(timeKey(b)) || String(a.id).localeCompare(String(b.id));
     });
     return items;
   }
@@ -354,42 +380,37 @@
     const list = document.getElementById("todo-public-list");
     if (!list) return;
     const visible = visibleTasks(tasks);
-    const active = visible.filter(task => task.status !== "done");
-    const completed = visible.filter(task => task.status === "done");
     updateStats(tasks);
     list.innerHTML = "";
-    if (!active.length && !completed.length) {
+    const blocks = window.DCC.TimeBlocks
+      ? window.DCC.TimeBlocks.forDate((current && current.blocks) || [],current && current.date)
+      : [];
+    const useTimeBlockGroups=blocks.length>0;
+    if (!visible.length && !blocks.length) {
       list.innerHTML = '<div class="todo-public-empty">No matching items are active right now.</div>';
       return;
     }
     const frag = document.createDocumentFragment();
-
-    // Mirror the owner order: completed one-liners first, "Up Next" divider, then
-    // active full cards (with work/personal block headers in time order).
-    completed.forEach(task => frag.appendChild(compactRowEl(task)));
-    if (completed.length && active.length) {
-      const d = document.createElement("div");
-      d.className = "divider";
-      d.innerHTML = '<span>Up Next</span>';
-      frag.appendChild(d);
+    function emitGroup(group){
+      let prevEnd=null;
+      group.forEach(node=>{
+        const task=node.ev;
+        const start=window.DCC.TimeBlocks.minutes(task.start,false);
+        if(!node.depth&&prevEnd!==null&&start!==null&&start-prevEnd>=15)frag.appendChild(gapEl(start-prevEnd));
+        const end=window.DCC.TimeBlocks.minutes(task.end,true);
+        if(!node.depth&&end!==null)prevEnd=end;
+        const el=task.status==="done"?compactRowEl(task):renderGuestCard(task);
+        if(node.depth)el.style.marginLeft=(node.depth*22)+"px";
+        frag.appendChild(el);
+      });
     }
-
-    const useHeaders = filters.sort === "time";
-    const blocks = useHeaders
-      ? (current && current.blocks || []).slice().filter(b => b.start).sort((a, b) => String(a.start).localeCompare(String(b.start)))
-      : [];
-    let bptr = 0;
-    function injectHeaders(beforeStart){
-      while (bptr < blocks.length && String(blocks[bptr].start) <= beforeStart) {
-        frag.appendChild(blockHeaderEl(blocks[bptr]));
-        bptr++;
-      }
+    if(useTimeBlockGroups){
+      const grouped=window.DCC.TimeBlocks.groupTree(guestTree(visible),blocks);
+      grouped.groups.forEach(({block,nodes})=>{frag.appendChild(blockHeaderEl(block));emitGroup(nodes);});
+      if(grouped.outside.nodes.length){frag.appendChild(blockHeaderEl({name:"Outside Time Blocks"}));emitGroup(grouped.outside.nodes);}
+    }else{
+      visible.forEach(task=>frag.appendChild(task.status==="done"?compactRowEl(task):renderGuestCard(task)));
     }
-    active.forEach(task => {
-      if (useHeaders && task.start) injectHeaders(task.start);
-      frag.appendChild(renderGuestCard(task));
-    });
-    if (useHeaders) injectHeaders("99:99");
 
     list.appendChild(frag);
   }

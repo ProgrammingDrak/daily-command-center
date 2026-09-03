@@ -20,6 +20,7 @@ const session = require("express-session");
 const pgSession = require("connect-pg-simple")(session);
 const pool = require("./pg-pool");
 const blockDB = require("./db");
+const timeBlockRules = require("./public/js/time-blocks");
 const auth = require("./auth");
 const VaultStore = require("./vault-store");
 const SyncManager = require("./sync-manager");
@@ -642,6 +643,9 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
         .catch((e) => { console.error("[schedule] day-start read failed (non-fatal):", e.message); return null; })
       : Promise.resolve(null),
   ]);
+  // Time Blocks are the canonical visual-grouping contract. Keep `blocks` as a
+  // temporary alias while older clients finish moving to `timeBlocks`.
+  result.schedule.timeBlocks = scheduleBlocks;
   result.schedule.blocks = scheduleBlocks;
   // Stamped at READ time, exactly like schedule.blocks above, so a saved day file can
   // never serve a stale floor and a changed setting takes effect on the next fetch.
@@ -687,38 +691,55 @@ async function readTriageSuppressionsForWorkspace(workspaceId) {
   }
 }
 
+const DEFAULT_TIME_BLOCKS = timeBlockRules.DEFAULTS.map(({ name, start, end, activeDays }) => ({ name, start, end, activeDays }));
+
+async function seedDefaultTimeBlocks(userId, workspaceId) {
+  if (!userId && !workspaceId) return;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const scope = workspaceId || userId;
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`time-block-seed:${scope}`]);
+    const { rows: [existing] } = workspaceId
+      ? await client.query("SELECT COUNT(*) AS cnt FROM blocks WHERE type='schedule_block' AND workspace_id=$1 AND deleted_at IS NULL", [workspaceId])
+      : await client.query("SELECT COUNT(*) AS cnt FROM blocks WHERE type='schedule_block' AND user_id=$1 AND deleted_at IS NULL", [userId]);
+    if (Number(existing.cnt) === 0) {
+      for (let i = 0; i < DEFAULT_TIME_BLOCKS.length; i++) {
+        await blockDB.createBlock({
+          type: "schedule_block",
+          properties: DEFAULT_TIME_BLOCKS[i],
+          sort_order: (i + 1) * 1000,
+          user_id: userId || null,
+          workspace_id: workspaceId || null,
+        }, client);
+      }
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 async function getScheduleBlocks(userId, workspaceId) {
   try {
-    const { rows } = workspaceId
+    let { rows } = workspaceId
       ? await pool.query("SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND workspace_id=$1 AND deleted_at IS NULL ORDER BY sort_order", [workspaceId])
       : userId ? await pool.query("SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND user_id=$1 AND deleted_at IS NULL ORDER BY sort_order", [userId])
       : await pool.query("SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL ORDER BY sort_order");
-    return rows.map(r => { const props = typeof r.properties === "string" ? JSON.parse(r.properties) : r.properties; return { ...props, id: r.id, parent_id: r.parent_id, sort_order: r.sort_order }; });
-  } catch(e) { return []; }
-}
-
-async function seedScheduleBlocksFromYAML(userId, workspaceId) {
-  try {
-    const { rows: [existing] } = workspaceId
-      ? await pool.query("SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND workspace_id=$1 AND deleted_at IS NULL", [workspaceId])
-      : userId ? await pool.query("SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND user_id=$1 AND deleted_at IS NULL", [userId])
-      : await pool.query("SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL");
-    if (parseInt(existing.cnt) > 0) return;
-    if (!fs.existsSync(USER_CONTEXT_FILE)) return;
-    const raw = fs.readFileSync(USER_CONTEXT_FILE, "utf8");
-    const match = raw.match(/\bblocks:\s*\r?\n((?:[ \t]+.*\r?\n?)*)/m);
-    if (!match) return;
-    const blocks = []; let current = null;
-    for (const line of match[1].split(/\r?\n/)) {
-      const nm = line.match(/^\s+-\s+name:\s+"?([^"\n]+)"?\s*$/); const tp = line.match(/^\s+type:\s+(\w+)/);
-      const st = line.match(/^\s+start:\s+"?(\d{2}:\d{2})"?/); const en = line.match(/^\s+end:\s+"?(\d{2}:\d{2})"?/);
-      if (nm) { current = { name: nm[1].trim() }; blocks.push(current); }
-      else if (tp && current) current.blockType = tp[1]; else if (st && current) current.start = st[1]; else if (en && current) current.end = en[1];
+    if (!rows.length && (workspaceId || userId)) {
+      await seedDefaultTimeBlocks(userId, workspaceId);
+      ({ rows } = workspaceId
+        ? await pool.query("SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND workspace_id=$1 AND deleted_at IS NULL ORDER BY sort_order", [workspaceId])
+        : await pool.query("SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND user_id=$1 AND deleted_at IS NULL ORDER BY sort_order", [userId]));
     }
-    const valid = blocks.filter(b => b.name && b.blockType && b.start && b.end);
-    for (let i = 0; i < valid.length; i++) { await blockDB.createBlock({ type: "schedule_block", properties: { name: valid[i].name, blockType: valid[i].blockType, start: valid[i].start, end: valid[i].end, protected: false, warnThreshold: 0 }, sort_order: (i + 1) * 1000, user_id: userId || null, workspace_id: workspaceId || null }); }
-    if (valid.length) console.log("[seed] Migrated " + valid.length + " schedule blocks from YAML");
-  } catch(e) { console.error("[seed] Error seeding schedule blocks:", e.message); }
+    return rows.map((r) => {
+      const props = typeof r.properties === "string" ? JSON.parse(r.properties) : r.properties;
+      return { id: r.id, name: props.name || "", start: props.start || "", end: props.end || "", activeDays: Array.isArray(props.activeDays) ? props.activeDays : ["mon", "tue", "wed", "thu", "fri"] };
+    });
+  } catch(e) { return []; }
 }
 
 function ensureSkeletonDays() {
