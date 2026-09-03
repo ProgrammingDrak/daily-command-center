@@ -386,7 +386,7 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .it-list-meta > :is(.tag-chip,.pet-privacy-toggle,.habit-streak,.points-chip,.prep-flag,.recap-flag,.pri-chip,.commute-chip) { display: none; }
 .it-list-item:hover .it-list-meta > *,
 .it-list-item:focus-within .it-list-meta > * { display: inline-flex; }
-.it-list-meta > :is(.start-time,.it-list-untimed,.task-progress-pill,.it-list-now,.tag) { display: inline-flex; }
+.it-list-meta > :is(.start-time,.it-list-untimed,.it-list-duration,.task-progress-pill,.it-list-now,.tag) { display: inline-flex; }
 .it-list-title-row .it-list-privacy {
   display: inline-flex;
   align-items: center;
@@ -741,7 +741,7 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
   .add-modal { width: 100%; }
   .it-list-item .it-list-actions { opacity: 1; }
   .it-list-item .it-list-meta > * { display: none; }
-  .it-list-item .it-list-meta > :is(.start-time,.it-list-untimed,.task-progress-pill,.it-list-now,.tag) { display: inline-flex; }
+  .it-list-item .it-list-meta > :is(.start-time,.it-list-untimed,.it-list-duration,.task-progress-pill,.it-list-now,.tag) { display: inline-flex; }
   .bt-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .bt-finance-purchase-form { grid-template-columns: 1fr; }
   .bt-finance-editor .dcc-collection-tools { grid-template-columns: 1fr; }

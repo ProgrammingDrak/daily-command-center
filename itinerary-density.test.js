@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const scheduleSource = fs.readFileSync(path.join(__dirname, "public/js/schedule-tab.js"), "utf8");
+const listRowSource = fs.readFileSync(path.join(__dirname, "public/js/itinerary-card.js"), "utf8");
 const dashboardCss = fs.readFileSync(path.join(__dirname, "public/css/dashboard.css"), "utf8");
 const optimizationCss = fs.readFileSync(path.join(__dirname, "public/css/ui-optimization.css"), "utf8");
 
@@ -26,13 +27,14 @@ function cssRule(selectorPattern) {
 }
 
 test("list rows keep one completion control in a compact utility rail", () => {
-  assert.match(scheduleSource, /class="it-list-utility"/);
-  assert.match(scheduleSource, /class="it-list-nav"/);
-  assert.doesNotMatch(scheduleSource, /class="wrap-collapse-spacer"/);
-  assert.doesNotMatch(scheduleSource, /<button class="chk-quick"/);
-  assert.match(scheduleSource, /quick-complete-control/);
-  assert.match(scheduleSource, /bindQuickCompleteControl/);
-  assert.doesNotMatch(scheduleSource, /label:"Complete without notes"/);
+  assert.match(listRowSource, /class="it-list-utility"/);
+  assert.match(listRowSource, /class="it-list-nav"/);
+  assert.doesNotMatch(listRowSource, /class="wrap-collapse-spacer"/);
+  assert.doesNotMatch(listRowSource, /<button class="chk-quick"/);
+  assert.match(listRowSource, /quick-complete-control/);
+  assert.match(listRowSource, /bindQuickCompleteControl/);
+  assert.doesNotMatch(listRowSource, /label:"Complete without notes"/);
+  assert.match(scheduleSource, /renderItineraryListRow\(ev,/);
   assert.match(optimizationCss, /\.it-list-item:not\(\.done\) \.it-list-utility/);
   assert.match(optimizationCss, /\.it-list-item:not\(\.done\) \.quick-complete-control::before/);
 });
@@ -112,7 +114,7 @@ test("the quick-complete bolt is a shared inline SVG, not the raw emoji", () => 
   }
 
   // The behaviour the swap must not touch.
-  assert.match(scheduleSource, /bindQuickCompleteControl\(completionButton/);
+  assert.match(cardSource, /bindQuickCompleteControl"\)\(completionButton/);
   assert.match(optimizationCss, /\.quick-complete-control\.flash::before \{ animation:qflash/);
   assert.match(optimizationCss, /quick-complete-control:hover::before/);
 });

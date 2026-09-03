@@ -604,7 +604,8 @@
   // single-task + flat-default-subtasks path. Either way the created task carries
   // responsibilityId so checking it off resets the cadence. Shared by the sidebar
   // score button, the triage "Add to day" card, and the manage-modal row.
-  function scheduleRepeatResponsibility(id){
+  function scheduleRepeatResponsibility(id,opts){
+    opts=opts||{};
     const item=_items.find(i=>i.id===id);
     if(!item)return;
     const p=item.properties||{};
@@ -623,16 +624,15 @@
         responsibilityTitle:title,
         source:"responsibility",
         tags:tags,
+        targetId:opts.targetId||null,
+        after:!!opts.after,
+        orderWins:!!opts.orderWins,
         onScheduled:function(info){ registerOpenInstance(id,info); }
       });
       return;
     }
-    if(typeof openSchedulePicker!=="function"){
-      if(typeof showToast==="function")showToast("Schedule picker unavailable","error");
-      return;
-    }
     const defaults=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
-    openSchedulePicker(title,dur,{
+    const scheduleOpts={
       responsibilityId:id,
       responsibilityTitle:title,
       capacityBucket:p.capacityBucket||null,
@@ -654,7 +654,20 @@
         }catch(e){console.warn("[responsibilities] parent or subtask persistence failed",e);return;}
         registerOpenInstance(id,info);
       }
-    });
+    };
+    // A drag already chose its exact itinerary placement. Reuse the standard
+    // create-and-reflow path instead of reopening the picker.
+    if(opts.targetId&&typeof insertTaskFromDrawer==="function"){
+      insertTaskFromDrawer(title,dur,Object.assign(scheduleOpts,{
+        targetId:opts.targetId,after:!!opts.after,orderWins:!!opts.orderWins
+      }));
+      return;
+    }
+    if(typeof openSchedulePicker!=="function"){
+      if(typeof showToast==="function")showToast("Schedule picker unavailable","error");
+      return;
+    }
+    openSchedulePicker(title,dur,scheduleOpts);
   }
 
   // THE PAUSE, client half. The scheduling paths above mint the instance in the

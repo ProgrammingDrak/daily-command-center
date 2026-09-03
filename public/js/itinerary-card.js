@@ -316,6 +316,85 @@
     return el;
   }
 
+  // ======== SHARED ITINERARY LIST ROW ========
+  // One DOM skeleton and one interaction binder for every task-like row in the
+  // visible itinerary. Callers keep source-specific policy in callbacks. Missing
+  // callbacks remove controls, so a projected queue item never exposes a dead
+  // task action before it becomes a persisted block.
+  function renderItineraryListRow(ev, opts){
+    opts=opts||{};
+    ev=ev||{};
+    var escHtml=opts.escHtml||W("escHtml")||defEsc;
+    var done=!!opts.done;
+    var movable=!!opts.draggable;
+    var inProgress=!!opts.inProgress;
+    var classes="it-list-item"+(done?" done":"")+(movable?" movable":"")+
+      (inProgress?" task-in-progress":"")+(opts.extraClass?" "+opts.extraClass:"");
+    var el=document.createElement("div");
+    el.className=classes;
+    el.dataset.id=ev.id||"";
+    if(opts.dataset){for(var key in opts.dataset){if(opts.dataset[key]!=null)el.dataset[key]=opts.dataset[key];}}
+    if(opts.depth)el.style.marginLeft=(opts.depth*22)+"px";
+    if(movable){
+      el.draggable=true;
+      if(typeof opts.onDragStart==="function")el.addEventListener("dragstart",function(e){opts.onDragStart(e,ev);});
+      if(typeof opts.onDragEnd==="function")el.addEventListener("dragend",function(e){opts.onDragEnd(e,ev);});
+    }
+    if(typeof opts.onDragOver==="function")el.addEventListener("dragover",function(e){opts.onDragOver(e,ev);});
+    if(typeof opts.onDragLeave==="function")el.addEventListener("dragleave",function(e){opts.onDragLeave(e,ev);});
+    if(typeof opts.onDrop==="function")el.addEventListener("drop",function(e){opts.onDrop(e,ev);});
+
+    var quickTitle=opts.completionTitle||"Click to quick complete. Hold for completion notes. Shift+Enter also opens notes.";
+    var completionControl=typeof opts.onComplete!=="function" ? '' : (done
+      ? '<button class="chk it-list-check on" title="Uncheck">'+ckSvg+'</button>'
+      : '<button class="it-list-check quick-complete-control'+(opts.completionBlocked?' chk-blocked':'')+'" title="'+escHtml(quickTitle)+'" aria-label="'+escHtml(quickTitle)+'"><span aria-hidden="true">'+_boltSvg+'</span></button>');
+    var scheduleButton=typeof opts.onSchedule==="function"
+      ? '<button class="btn-schedule" data-schedule-id="'+escHtml(ev.id||"")+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>' : '';
+    var radialButton=typeof opts.onRadial==="function"
+      ? '<button class="btn-task-radial" data-radial-id="'+escHtml(ev.id||"")+'" data-tooltip="'+escHtml(opts.radialTitle||"Task actions…")+'" aria-label="'+escHtml(opts.radialLabel||"Task actions")+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>' : '';
+    var deleteButton=typeof opts.onDelete==="function"
+      ? '<button class="btn-del-task" data-del-id="'+escHtml(ev.id||"")+'" data-tooltip="'+escHtml(opts.deleteTitle||"Remove from schedule")+'" aria-label="'+escHtml(opts.deleteLabel||"Remove from schedule")+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>' : '';
+    var addButton=typeof opts.onAdd==="function"
+      ? '<button class="btn-add-menu row-add-menu" data-add-id="'+escHtml(ev.id||"")+'" title="Add a task before / after / inside">+</button>' : '';
+    el.innerHTML=
+      (inProgress?'<span class="task-progress-ring" aria-hidden="true"></span>':'')+
+      '<div class="it-list-utility">'+
+        '<div class="it-list-nav"><div class="grip it-list-grip" title="'+escHtml(opts.gripTitle||"Fixed item")+'">'+gripSvg+'</div></div>'+
+        '<div class="it-list-check-col">'+completionControl+'</div>'+
+      '</div>'+
+      '<div class="bar" style="background:'+(opts.barColor||"")+'"></div>'+
+      '<div class="it-list-main">'+
+        '<div class="it-list-title-row">'+(opts.collapseHtml||"")+'<span class="ttl" title="'+escHtml(ev.title||"")+'">'+escHtml(ev.title||"")+'</span>'+(opts.titleExtrasHtml||"")+addButton+'</div>'+
+        '<div class="it-list-meta">'+(opts.metaHtml||"")+scheduleButton+'</div>'+
+      '</div>'+
+      '<div class="it-list-actions">'+(opts.actionsBeforeHtml||"")+radialButton+deleteButton+'</div>';
+
+    var completionButton=el.querySelector(".it-list-check");
+    if(completionButton&&typeof opts.onComplete==="function"){
+      if(done)completionButton.addEventListener("click",function(e){e.stopPropagation();opts.onComplete(e,ev);});
+      else if(typeof W("bindQuickCompleteControl")==="function"){
+        W("bindQuickCompleteControl")(completionButton,function(){opts.onComplete(null,ev);},
+          typeof opts.onCompleteWithNotes==="function"?function(){opts.onCompleteWithNotes(ev);}:function(){opts.onComplete(null,ev);});
+      }else completionButton.addEventListener("click",function(e){e.stopPropagation();opts.onComplete(e,ev);});
+    }
+    var schedule=el.querySelector(".btn-schedule");
+    if(schedule)schedule.addEventListener("click",function(e){e.stopPropagation();opts.onSchedule(schedule,e,ev);});
+    var radial=el.querySelector(".btn-task-radial");
+    if(radial)radial.addEventListener("click",function(e){e.stopPropagation();opts.onRadial(radial,e,ev);});
+    var del=el.querySelector(".btn-del-task");
+    if(del)del.addEventListener("click",function(e){e.stopPropagation();opts.onDelete(del,e,ev);});
+    var collapse=el.querySelector(".wrap-collapse");
+    if(collapse&&typeof opts.onCollapse==="function")collapse.addEventListener("click",function(e){e.stopPropagation();opts.onCollapse(collapse,e,ev);});
+    var add=el.querySelector(".row-add-menu");
+    if(add)add.addEventListener("click",function(e){e.stopPropagation();opts.onAdd(add,e,ev);});
+    if(typeof opts.onOpen==="function")el.addEventListener("click",function(e){
+      if(e.target.closest("button,a,input,textarea,.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag,.recap-flag"))return;
+      opts.onOpen(e,ev);
+    });
+    if(typeof opts.afterRender==="function")opts.afterRender(el,ev);
+    return el;
+  }
+
   // ======== SHARED COMPACT ROW ========
   // One skeleton for every ".tl-compact" one-liner in the timeline: done tasks,
   // completed triage, completed side-projects, pushed-to-tomorrow, and
@@ -401,6 +480,7 @@
   }
 
   window.renderItineraryCard = renderItineraryCard;
+  window.renderItineraryListRow = renderItineraryListRow;
   window.renderCompactRow = renderCompactRow;
   window.subShareChipHtml = subShareChipHtml;
   window.itineraryPointsChip = itineraryPointsChip;

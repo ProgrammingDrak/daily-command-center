@@ -163,6 +163,12 @@
       alertType: p.alertType || null,
       publicVisibility: p.publicVisibility || "public",
       triageId: p.triageId || null,
+      triageKey: p.triageKey || null,
+      triageTitle: p.triageTitle || "",
+      triageType: p.triageType || "",
+      triageSourceRef: p.triageSourceRef || "",
+      triageReceivedAt: p.triageReceivedAt || "",
+      triageConversationId: p.triageConversationId || "",
       delegatedItemId: p.delegatedItemId || null,
       linkedBlockId: p.linkedBlockId || null,
       linkedTagId: p.linkedTagId || null,
@@ -194,6 +200,69 @@
     if (hasStoredTime && !task.subtaskOf) task._pinnedStart = p.start;
     if (p.userSetStart && !task.subtaskOf) task._userSetStart = true;
     return task;
+  }
+
+  // Project a Sweep Suite triage record into the same event shape the itinerary
+  // renders. The source record stays authoritative until an action materializes
+  // a task. Source-only fields live under __triage so they cannot masquerade as
+  // persisted task properties.
+  function fromTriageItem(item) {
+    item = item || {};
+    const rawPriority = String(item.priority || "medium").toLowerCase();
+    const priority = rawPriority === "high" || rawPriority === "urgent" || rawPriority === "critical"
+      ? "High" : (rawPriority === "low" ? "Low" : "Medium");
+    const duration = Math.max(5, parseInt(
+      item.estimated_minutes || item.estimatedMinutes || item.durMin ||
+      item.duration_minutes || item.durationMinutes || 5,
+      10
+    ) || 5);
+    const sourceId = item.id || "unknown";
+    return {
+      id: "triage-" + sourceId,
+      title: item.title || "Triage item",
+      type: "triage",
+      start: "00:00",
+      end: _fmt(duration),
+      untimed: true,
+      durMin: duration,
+      durationMinutes: duration,
+      duration_minutes: duration,
+      priority: priority,
+      source: "triage",
+      source_id: item.link || item.source_url || "",
+      meta: "Triage item",
+      detail: [item.summary, item.notes].filter(Boolean).join("\n\n"),
+      tags: ["triage"],
+      publicVisibility: "private",
+      __triage: { sourceId: sourceId, item: item }
+    };
+  }
+
+  // Due responsibilities are definitions, not task rows. This projection gives
+  // their open occurrence the standard itinerary shape without persisting one.
+  function fromDueResponsibility(item) {
+    item = item || {};
+    const duration = Math.max(1, Number(item.estimatedMinutes) || 30);
+    const sourceId = item.id || "unknown";
+    return {
+      id: "responsibility-" + sourceId,
+      title: item.title || "Recurring responsibility",
+      type: "triage",
+      start: "00:00",
+      end: _fmt(duration),
+      untimed: true,
+      durMin: duration,
+      durationMinutes: duration,
+      duration_minutes: duration,
+      priority: "High",
+      source: "responsibility",
+      source_id: "",
+      meta: "Recurring responsibility",
+      detail: "",
+      tags: ["responsibility"],
+      publicVisibility: "private",
+      __responsibility: { sourceId: sourceId, item: item }
+    };
   }
 
   // Slack's ⌛ state is durable task data, separate from the schedule's "Now"
@@ -772,6 +841,8 @@
 
   return {
     fromBlock: fromBlock,
+    fromTriageItem: fromTriageItem,
+    fromDueResponsibility: fromDueResponsibility,
     isInProgress: isInProgress,
     isTaskRow: isTaskRow,
     foldsIntoItinerary: foldsIntoItinerary,

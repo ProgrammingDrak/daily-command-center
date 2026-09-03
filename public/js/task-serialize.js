@@ -136,6 +136,12 @@
       // a scheduled triage row landed with triageId null and the strip's
       // ev.triageId === triageId dedupe could never match.
       triageId: src.triageId || null,
+      triageKey: src.triageKey || null,
+      triageTitle: src.triageTitle || "",
+      triageType: src.triageType || "",
+      triageSourceRef: src.triageSourceRef || "",
+      triageReceivedAt: src.triageReceivedAt || "",
+      triageConversationId: src.triageConversationId || "",
       linkedBlockId: src.linkedBlockId || null,
       linkedTagId: src.linkedTagId || null,
       retiredContainerHidden: src.retiredContainerHidden === true,

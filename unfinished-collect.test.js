@@ -323,10 +323,10 @@ test("carryover keeps its canonical completion and scheduling affordances", () =
     "carryover completion must route through its canonical handler");
   assert.ok(/\(subTimeless\?'':\(ev\.untimed\?/.test(schedTabSource),
     "the start-time cell must not be gated on isUnfRow");
-  assert.ok(/\(!subTimeless&&!isDoneRow&&!isMeeting\(ev\)\?'<button class="btn-schedule"/.test(schedTabSource),
+  assert.ok(/onSchedule:\(!subTimeless&&!isDoneRow&&!isMeeting\(ev\)\)\?/.test(schedTabSource),
     "the Schedule… button must not be gated on isUnfRow");
   // Both carryover schedule affordances route to the shared true-move.
-  assert.ok(/if\(isUnfRow\)\{_unfSchedulePopover\(ev,el,stSpan\);return;\}/.test(schedTabSource));
+  assert.ok(/if\(isUnfRow\)\{_unfSchedulePopover\(ev,rowEl,stSpan\);return;\}/.test(schedTabSource));
   assert.ok(/if\(isUnfRow\)\{_unfSchedulePopover\(ev,el,sb\);return;\}/.test(schedTabSource));
 });
 

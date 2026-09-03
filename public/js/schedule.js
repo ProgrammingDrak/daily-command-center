@@ -37,6 +37,7 @@ function persistAddedTask(item,targetDate){
       notionUrl:item.notionUrl||"",
       calUrl:item.calUrl||"",
       source:item.source||"manual",
+      source_id:item.source_id||"",
       tags:item.tags||[],
       idempotency_key:item.idempotency_key||item.idempotencyKey||null,
       responsibilityId:item.responsibilityId||null,
@@ -46,6 +47,12 @@ function persistAddedTask(item,targetDate){
       alertKey:item.alertKey||null,
       alertType:item.alertType||null,
       triageId:item.triageId||null,
+      triageKey:item.triageKey||null,
+      triageTitle:item.triageTitle||"",
+      triageType:item.triageType||"",
+      triageSourceRef:item.triageSourceRef||"",
+      triageReceivedAt:item.triageReceivedAt||"",
+      triageConversationId:item.triageConversationId||"",
       delegatedItemId:item.delegatedItemId||null,
       linkedBlockId:item.linkedBlockId||null,
       linkedTagId:item.linkedTagId||null,
@@ -199,7 +206,8 @@ function insertTaskNow(titleArg, durMinArg, opts){
   // "doesn't fit" task and asked you to push things to tomorrow was removed
   // 2026-07 -- tasks just get added; the day can run long.)
   scheduled.splice(insertAt, 0, newItem);
-  recalcTimes();
+  if(opts.targetId&&typeof _reorderActive==="function")_reorderActive(newItem.id,opts.targetId,!!opts.after);
+  recalcTimes(opts.orderWins?{orderWins:true}:undefined);
   const pins=loadPinnedStarts();pins[id]=startStr;savePinnedStarts(pins);
   // The dated block from persistAddedTask is the single record. The old extra
   // savePendingTasks push here minted a dateless kind:"pending_task" twin with
@@ -211,27 +219,30 @@ function insertTaskNow(titleArg, durMinArg, opts){
   if(typeof opts.onScheduled==="function"){
     try{opts.onScheduled({localId:id,blockId:id,start:startStr,dateStr:(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||null,persisted:Promise.resolve(persistence)});}catch(e){}
   }
+  return newItem;
 }
 
 function insertTaskFromDrawer(title, durMin, opts){
   opts=opts||{};
   const id=qaId();
-  const newItem={id,title,type:"task",start:"00:00",end:fmt(durMin),
-    meta:(opts.meta||"Action item")+" \u00b7 "+ms(durMin),detail:opts.detail||"",source:opts.source||"manual",
-    notionUrl:opts.notionUrl||"",priority:opts.priority||"High",
-    tags:opts.tags||[],triageId:opts.triageId||null};
+  const fields=schedulePickerFields(durMin,Object.assign({},opts,{meta:(opts.meta||"Action item")+" \u00b7 "+ms(durMin)}));
+  const newItem=Object.assign({id,title,type:opts.type||"task",start:"00:00",end:fmt(durMin)},fields);
   const activeIdx=scheduled.findIndex(isActive);
   const insertAt = activeIdx !== -1 ? activeIdx + 1 :
     (()=>{const firstOpen=DCC.TaskModel.selectOpen(scheduled)[0];
       const fi=firstOpen?scheduled.indexOf(firstOpen):-1;
       return fi===-1?scheduled.length:fi;})();
   scheduled.splice(insertAt, 0, newItem);
-  persistAddedTask(newItem);
-  recalcTimes();
+  if(opts.targetId&&typeof _reorderActive==="function")_reorderActive(newItem.id,opts.targetId,!!opts.after);
+  recalcTimes(opts.orderWins?{orderWins:true}:undefined);
+  const persistence=persistAddedTask(newItem);
   
   log("scheduled",id,"Drawer-added: "+title);
   render();
   checkBlockWarnings(newItem);
+  if(typeof opts.onScheduled==="function"){
+    try{opts.onScheduled({localId:id,blockId:id,start:newItem.start,dateStr:(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||null,persisted:Promise.resolve(persistence)});}catch(e){}
+  }
   return newItem;
 }
 

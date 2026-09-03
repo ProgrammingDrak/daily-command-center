@@ -106,6 +106,30 @@ test("triageId survives serialization (the scheduled-triage dedupe link)", () =>
     "and through the block form, which is what scheduleTaskOnDate writes");
 });
 
+test("triage provenance survives every task creation path", () => {
+  const provenance = {
+    triageId: "slack:dm:D1:1",
+    triageKey: "slack|D1:1",
+    triageTitle: "Reply to Alex",
+    triageType: "slack",
+    triageSourceRef: "C1:123",
+    triageReceivedAt: "2026-09-03T12:00:00Z",
+    triageConversationId: "D1",
+  };
+  assert.deepEqual(taskCommonProps(provenance), {
+    ...taskCommonProps({}),
+    ...provenance,
+  });
+  assert.deepEqual(taskBlockProps(provenance, { local_id: "x" }), {
+    ...taskCommonProps({}),
+    ...provenance,
+    local_id: "x",
+    duration: null,
+    start: undefined,
+    end: undefined,
+  });
+});
+
 test("source_id survives every shared task serialization path", () => {
   const url = "https://cleverrealestate.slack.com/archives/C1/p123";
   assert.equal(taskCommonProps({ source_id: url }).source_id, url);

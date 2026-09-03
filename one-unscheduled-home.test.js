@@ -29,6 +29,7 @@ const TaskModel = require("./public/js/task-model.js");
 const scheduleSource = fs.readFileSync(require.resolve("./public/js/schedule.js"), "utf8");
 const stateSource = fs.readFileSync(require.resolve("./public/js/state.js"), "utf8");
 const tabSource = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
+const listRowSource = fs.readFileSync(require.resolve("./public/js/itinerary-card.js"), "utf8");
 
 function mustSlice(src, re, what) {
   const m = src.match(re);
@@ -905,36 +906,19 @@ test("a carryover settlement evicts the itinerary cache and renders once", () =>
 });
 
 test("the row + and the row click are no longer gated on isUnfRow, and the bounty still is", () => {
-  // Anchored on the ternary that immediately precedes the button literal, read BACKWARDS
-  // from it, so the span is exactly the gate and nothing else. The first version of this
-  // used a loose `[^?]*` and the mutation check showed it did not trip when isUnfRow was
-  // put back — it had matched a different span.
-  const at = tabSource.indexOf('<button class="btn-add-menu row-add-menu"');
-  assert.ok(at > 0, "the + button literal must still be findable");
-  const before = tabSource.slice(Math.max(0, at - 120), at);
-  const gate = before.slice(before.lastIndexOf("+("));
-  assert.ok(/isDoneRow/.test(gate), "sanity: the slice really is the gate expression — " + JSON.stringify(gate));
-  assert.equal(/isUnfRow/.test(gate), false,
-    "the + must render on carryover rows now — gate was " + JSON.stringify(gate));
-  assert.equal(/isMeeting\(ev\)/.test(gate), false,
-    "meetings can own concurrent nested work or relevant subtasks now");
-
-  // The details-modal click listener must be attached unconditionally.
-  //
-  // THIS ASSERTION WAS VACUOUS TWICE. `indexOf('el.addEventListener("click",e=>{')`
-  // matches as a SUBSTRING of `del.addEventListener("click",e=>{` about 1.5kB earlier, so
-  // the 60-char window landed on the delete button's handler and the isUnfRow regex could
-  // never match whatever the row listener looked like. Mutation-proved: restoring
-  // `if(!isUnfRow)` on the real listener left the suite green. Anchored now on the
-  // listener's own first line, with a negative lookbehind so `del.`/`bb.`/`am.` cannot
-  // match, and the sanity assert below fails loudly if the anchor ever drifts again.
-  const m = /([\s\S]{0,60})(?<![\w.$])el\.addEventListener\("click",e=>\{\s*\n\s*if\(e\.target\.closest\("button,a,input/.exec(tabSource);
-  assert.ok(m, "the row's open-space click listener must still be findable");
-  // The guard pattern is deliberately WIDER than the exact form C1 used: `if(!isUnfRow){`
-  // and `if(!isUnfRow&&!isDoneRow)` both slipped past a `/if\(!isUnfRow\)\s*$/` test. This
-  // assertion has been vacuous twice, so the anchor is precise and the guard match is loose.
-  assert.equal(/if\s*\([^)]*isUnfRow[^)]*\)\s*\{?\s*$/.test(m[1]), false,
-    "the row's open-space click must not be behind an isUnfRow gate any more — saw " + JSON.stringify(m[1].slice(-40)));
+  assert.match(listRowSource, /typeof opts\.onAdd==="function"/,
+    "the shared renderer gates + on capability, not task source");
+  assert.match(listRowSource, /typeof opts\.onOpen==="function"/,
+    "the shared renderer gates row opening on capability, not task source");
+  const rowStart = tabSource.indexOf("  function row(");
+  const rowEnd = tabSource.indexOf("  function emitNode(", rowStart);
+  assert.ok(rowStart >= 0 && rowEnd > rowStart, "the list row caller must remain findable");
+  const rowCall = tabSource.slice(rowStart, rowEnd);
+  assert.match(rowCall, /onAdd:!isDoneRow\?/,
+    "carryover and meeting rows retain the + capability");
+  assert.match(rowCall, /onOpen:\(\)=>/,
+    "carryover rows retain the open-space details capability");
+  assert.doesNotMatch(rowCall, /onAdd:[^\n]*isUnfRow/);
 
   // The bounty is still deliberately off, and that is a product decision, not a gap.
   assert.ok(/!isUnfRow&&_canPlaceBounty\(ev,isDoneRow\)/.test(tabSource),
