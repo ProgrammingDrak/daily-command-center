@@ -4,24 +4,21 @@
 // promote the desktop drag does, by driving the drag.js resolver through the
 // window.DCC_DRAG facade (dOver/dDrop reused untouched — no logic duplicated).
 //
-// Gate: touch/coarse pointers only. A mouse always early-returns, so desktop's
-// native HTML5 drag path is byte-identical and the two systems never collide.
+// Gate: non-mouse pointers only. A mouse always early-returns, so it keeps the
+// native HTML5 drag path and the two systems never collide.
 //
 // Gesture: press-and-hold ~300ms to lift a row → drag up/down to reorder, drag
 // RIGHT to nest. Sideways offset picks the mode, vertical position picks the
-// slot: <48px right = reorder (blue bar), 48px+ = wrap inside (purple), 112px+ =
-// nest as a subtask (teal). Desktop's mid-row nest band is 25%-75% of a row's
-// height; on a phone that leaves ~12px edges no thumb can hit, so touch trades
-// the band for an explicit horizontal mode. A plain tap falls through to the
-// row's open-space click (open details); a vertical swipe before the hold
-// scrolls the page as usual.
+// slot. The thresholds are NOT duplicated here: DCC_DRAG.modeForDx (drag.js) is
+// the one answer, and a mouse drag now derives its mode from the same call, so
+// web and mobile share one gesture. A plain tap falls through to the row's
+// open-space click (open details); a vertical swipe before the hold scrolls the
+// page as usual.
 (function () {
   "use strict";
 
   var HOLD_MS = 300;      // press duration that promotes a touch to a lift
   var MOVE_CANCEL = 10;   // px of pre-lift movement that reads as a scroll, not a hold
-  var NEST_PX = 48;       // rightward drag that switches reorder → nest (ride-along)
-  var SUB_PX = 112;       // further right → nest as a subtask (shares the parent's pie)
   var EDGE = 64;          // px from viewport edge that triggers auto-scroll
   var EDGE_STEP = 12;     // px per frame auto-scroll speed
   var SUPPRESS_CLICK_MS = 450;
@@ -36,15 +33,6 @@
   var state = null;           // active gesture, or null
   var suppressClickUntil = 0;
   var rafId = 0;
-
-  function isTouchMode() {
-    // Reuse the app's coarse/narrow signal when present; fall back to matchMedia.
-    if (typeof isCoarseOrNarrowViewport === "function") {
-      try { return isCoarseOrNarrowViewport(); } catch (e) { /* fall through */ }
-    }
-    return (window.matchMedia && window.matchMedia("(hover: none) and (pointer: coarse)").matches) ||
-           window.innerWidth <= 760;
-  }
 
   function reset() {
     if (!state) return;
@@ -64,8 +52,12 @@
 
   function onDown(e) {
     if (state) return;                         // one pointer at a time
-    if (e.pointerType === "mouse") return;     // desktop keeps native HTML5 drag
-    if (!isTouchMode()) return;
+    // pointerType is the whole gate. A viewport-width test used to sit here too,
+    // which silently killed finger reorder on every touch laptop and on a tablet
+    // wider than 540px: those pass this line, failed that one, and native HTML5
+    // drag never fires for touch input either. Mouse keeps native drag; any
+    // finger or pen gets the press-and-hold path.
+    if (e.pointerType === "mouse") return;
     suppressClickUntil = 0;                    // a fresh press clears any stale drop-suppress window
     var row = e.target.closest(".it-list-item.movable");
     if (!row || !listView.contains(row)) return;
@@ -118,13 +110,12 @@
     startAutoScroll();
   }
 
-  // Sideways offset from the lift point picks the drop mode. Reorder is the
-  // default so a straight up/down drag can never silently re-parent a task.
+  // Sideways offset from the lift point picks the drop mode. The thresholds live
+  // in drag.js (DRAG_NEST_PX / DRAG_SUB_PX) so the mouse path and this one cannot
+  // disagree. With the facade missing, reorder: never silently re-parent.
   function modeFor(x) {
-    var dx = x - state.startX;
-    if (dx >= SUB_PX) return "sub";
-    if (dx >= NEST_PX) return "nest";
-    return "reorder";
+    if (!window.DCC_DRAG || typeof DCC_DRAG.modeForDx !== "function") return "reorder";
+    return DCC_DRAG.modeForDx(x - state.startX);
   }
 
   function onMove(e) {

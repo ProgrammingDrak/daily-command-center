@@ -283,6 +283,14 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
   padding-inline-start: var(--sp-3);
   overflow: hidden;
 }
+/* ...but NOT while the row is a reorder drop target. The blue drop indicator
+   (dashboard.css .drag-over-top/.drag-over-bottom) is a pseudo-element pushed
+   fully OUTSIDE the row box, so the clip above erased every trace of reorder
+   feedback on web and mobile and drag-to-reschedule read as broken. z-index is
+   not optional here: the bottom silhouette paints below the row, and the NEXT
+   sibling row would otherwise cover it. */
+.it-list-item:not(.done).drag-over-top,
+.it-list-item:not(.done).drag-over-bottom { overflow: visible; z-index: 8; }
 .it-list-item:not(.done) > .bar {
   position: absolute;
   inset-block: var(--sp-2);
