@@ -12,9 +12,8 @@ test("owner task surfaces render the durable in-progress class and label", () =>
   assert.match(card, /inProgress\?'<span class="task-progress-ring"/);
   assert.match(card, /task-progress-pill[^\n]+In progress/);
   assert.match(list, /isInProgress\(ev,isDoneRow\)/);
-  assert.match(list, /inProgress\?" task-in-progress":""/);
-  assert.match(list, /inProgress\?'<span class="task-progress-ring"/);
-  assert.match(list, /task-progress-pill[^\n]+In progress/);
+  assert.match(list, /inProgress:inProgress/);
+  assert.match(list, /metaHtml:metaHtml/);
 });
 
 test("guest cards exclude private work-state styling", () => {

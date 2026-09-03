@@ -433,6 +433,12 @@ async function _unfScheduleIntoToday(rec,targetEv,after){
 // scheduled[]-only logic. Returns "handled" (done) or "passthrough" (not an
 // Unscheduled-row drop → let dDrop's normal path run).
 function handleUnscheduledDrop(movedId,targetId,e){
+  // Queue-backed triage rows are projected task events. Their adapter owns the
+  // source mutation, while this remains the single itinerary drop router.
+  if(typeof window.handleItineraryTriageDrop==="function"){
+    const triageResult=window.handleItineraryTriageDrop(movedId,targetId,e);
+    if(triageResult==="handled")return"handled";
+  }
   const movedUnf=_unfRecById(movedId);
   const movedEv=(typeof scheduled!=="undefined")?scheduled.find(x=>x.id===movedId):null;
   const movedUntimed=!!(movedEv&&movedEv.untimed);
@@ -738,7 +744,6 @@ function buildListView(){
     // Expand and reorder controls share one compact navigation cell. Rows without
     // children do not need an empty chevron column.
     const chev=(node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'';
-    const el=document.createElement("div");
     const tt=window.TaskTypes?window.TaskTypes.get(ev):null;
     // Delegated look (delegated.js waitingChipHtml): a check-in reminder and the
     // original task it chases share the --waiting hue and each carry a labelled pill,
@@ -749,11 +754,6 @@ function buildListView(){
     let progressTime="";
     if(inProgress&&ev.startedAt){const parsedStart=new Date(ev.startedAt);if(!isNaN(parsedStart.getTime()))progressTime=parsedStart.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});}
     const inProgressChip=inProgress?'<span class="task-progress-pill" title="Started'+(progressTime?' at '+progressTime:'')+'">In progress</span>':'';
-    el.className="it-list-item"+(isDoneRow?" done":"")+(isUnfRow?" unfinished-row":"")+(subRow?" sub":"")+(isActive(ev)&&!isUnfRow?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"")+(inProgress?" task-in-progress":"")+(waitChip?" waiting-row":"");
-    if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
-    el.dataset.id=ev.id;
-    if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
-    if(!isDoneRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
     // ── Info parity with the (retired) rich card: surface points, progress, and
     // status the desktop card showed. Gated to open rows so done and carryover rows
     // stay quiet. New chips are null-safe, non-interactive spans, so the row's
@@ -788,104 +788,52 @@ function buildListView(){
     // first (one click silently does two things), or leave it off. Drake's call,
     // 2026-08-03: leave it off until the semantics are chosen. Not a missing feature.
     const gripTitle=movable?('Drag to reorder'+(subRow?'':', position '+(idx+1))):'Fixed item';
-    const quickCompleteTitle='Click to quick complete. Hold for completion notes. Shift+Enter also opens notes.';
-    const completionControl=isDoneRow
-      ? '<button class="chk it-list-check on" title="Uncheck">'+ckSvg+'</button>'
-      : '<button class="it-list-check quick-complete-control'+(chkBlocked?' chk-blocked':'')+'" title="'+quickCompleteTitle+'" aria-label="'+quickCompleteTitle+'"><span aria-hidden="true">'+_boltSvg+'</span></button>';
-    el.innerHTML=
-      (inProgress?'<span class="task-progress-ring" aria-hidden="true"></span>':'')+
-      '<div class="it-list-utility">'+
-        '<div class="it-list-nav"><div class="grip it-list-grip" title="'+gripTitle+'">'+gripSvg+'</div></div>'+
-        '<div class="it-list-check-col">'+
-          completionControl+
-        '</div>'+
-      '</div>'+
-      '<div class="bar" style="background:'+(isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#a31c43)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)))+'"></div>'+
-      '<div class="it-list-main">'+
-        // The "+" renders on carryover rows and meetings too. A meeting can own
-        // concurrent nested work or relevant subtasks; only done rows skip it.
-        '<div class="it-list-title-row">'+chev+'<span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
-        '<div class="it-list-meta">'+
-          inProgressChip+
-          nowChip+
-          '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+
-          chipSlot+streakChip+
-          (subTimeless?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
-          // Schedule/reschedule right where the time is labeled (and next to
-          // "Unscheduled" for untimed tasks). Reschedulable rows only — carryovers
-          // very much included: getting a task off a past day and onto a real one
-          // is the whole point of the lane.
-          (!subTimeless&&!isDoneRow&&!isMeeting(ev)?'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>':'')+
-          (isUnfRow?'<span class="it-list-unfinished">Unfinished from '+escHtml(_unfSlashDate(r.sourceDate))+'</span>':'')+
-          (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
-          // Prep briefing chip: same markup + CSS as the timeline card (itinerary-card.js),
-          // reading prepStatus off the block fold (persistence.js). The list view is the
-          // visible itinerary, so without this the chip never painted for the owner.
-          (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" style="cursor:pointer" title="View prep briefing">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" style="cursor:pointer" title="Prep pending — open to view or generate">&#9675; Prep</span>':'')+
-          // Recap chip: lights green once a summary lands (recap_status ready, set by
-          // applyArtifacts). Distinct class from .prep-flag so it wires independently
-          // and opens the modal straight to the Recap tab. Renders on done rows too,
-          // so the recap is findable after the meeting is marked complete.
-          (ev.recapStatus==='ready'?'<span class="recap-flag" style="cursor:pointer" title="View recap & action items">&#9670; Recap</span>':'')+
-          recQueued+recFlag+priChip+
-          (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
-          (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
-          (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'')+
-        '</div>'+
-      '</div>'+
-      '<div class="it-list-actions">'+
-        // Row keeps bounty / delete visible; notes open via the row's open-space
-        // click and schedule sits by the time label (see .it-list-meta). Every
-        // other action rides the radial behind the arrow trigger.
-        (!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+
-        workButton+
-        (!isDoneRow?'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="Task actions…" aria-label="Task actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
-        (!isDoneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule" aria-label="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+
-      '</div>';
-
-    const completionButton=el.querySelector(".it-list-check");
     const completeNow=()=>{
       // Unfinished completes on its ORIGIN day, not today. _unfComplete carries
       // the subtree so a carryover parent's children do not stay unfinished.
       if(isUnfRow){_unfComplete(ev,el);return;}
       toggleDone(ev.id);
     };
-    if(isDoneRow){completionButton.addEventListener("click",e=>{e.stopPropagation();completeNow();});}
-    else bindQuickCompleteControl(completionButton,completeNow,chkBlocked?completeNow:()=>openDoneModal(ev.id,ev.title,completeNow,ev));
-    const stSpan=el.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfSchedulePopover(ev,el,stSpan);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:stSpan,view:"time"});});
-    // Prep chip opens the prep briefing (radial Prep/Recap spoke), not the row's
-    // details modal. stopPropagation keeps the row click from also firing.
-    const pf=el.querySelector(".prep-flag");
-    if(pf)pf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev,{defaultTab:"prep"});});
-    // Recap chip opens the same modal straight to the Recap tab.
-    const rf=el.querySelector(".recap-flag");
-    if(rf)rf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev,{defaultTab:"recap"});});
-    const sb=el.querySelector(".btn-schedule");
-    if(sb)sb.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfSchedulePopover(ev,el,sb);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});});
-    const pb=el.querySelector(".btn-task-radial");
-    if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb,isUnfRow?{carryover:{
-      move:(trig)=>_unfSchedulePopover(ev,el,trig),
-      backlog:()=>_unfToBacklog(ev,el),
-      drop:()=>_unfDrop(ev,el)
-    }}:undefined);});
-    const bb=el.querySelector(".btn-bounty");
-    if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
-    const del=el.querySelector(".btn-del-task");
-    if(del)del.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfDrop(ev,el);return;}openDeleteConfirm(del.dataset.delId);});
-    const cc=el.querySelector(".wrap-collapse");
-    if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render("schedule");}});
-    // Row-level quick add: same universal popover the radial's ➕ spoke opens.
-    const am=el.querySelector(".row-add-menu");
-    if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
-    // Open space on the row opens the task-details modal (same as the pen).
-    // C4: carryover rows included. openAddModal resolves through taskAnchorById now, so
-    // it renders the row's real details instead of an empty shell, and its tag/flag
-    // writes target the origin day's ROW id instead of searching a cache that never held
-    // it. Notes are keyed by ev id in localStorage, which was already stable for a
-    // carryover, so they needed nothing.
-    el.addEventListener("click",e=>{
-      if(e.target.closest("button,a,input,textarea,.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag,.recap-flag"))return;
-      if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);
+    const metaHtml=inProgressChip+nowChip+
+      '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+chipSlot+streakChip+
+      (subTimeless?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+      (isUnfRow?'<span class="it-list-unfinished">Unfinished from '+escHtml(_unfSlashDate(r.sourceDate))+'</span>':'')+
+      (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
+      (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" style="cursor:pointer" title="View prep briefing">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" style="cursor:pointer" title="Prep pending — open to view or generate">&#9675; Prep</span>':'')+
+      (ev.recapStatus==='ready'?'<span class="recap-flag" style="cursor:pointer" title="View recap & action items">&#9670; Recap</span>':'')+
+      recQueued+recFlag+priChip+
+      (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
+      (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
+      (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'');
+    const el=renderItineraryListRow(ev,{
+      done:isDoneRow,
+      draggable:movable,
+      inProgress:inProgress,
+      completionBlocked:chkBlocked,
+      depth:node&&node.depth,
+      extraClass:(isUnfRow?"unfinished-row ":"")+(subRow?"sub ":"")+(isActive(ev)&&!isUnfRow?"active ":"")+(isRideAlong(ev)?"ride-along ":"")+(isWrap(ev)?"wrap-parent ":"")+(tt&&tt.cardClass?tt.cardClass+" ":"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?"row-bounty ":"")+(waitChip?"waiting-row":""),
+      gripTitle:gripTitle,
+      collapseHtml:chev,
+      titleExtrasHtml:dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip,
+      metaHtml:metaHtml,
+      barColor:isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#a31c43)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)),
+      actionsBeforeHtml:(!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+workButton,
+      onComplete:completeNow,
+      onCompleteWithNotes:chkBlocked?completeNow:()=>openDoneModal(ev.id,ev.title,completeNow,ev),
+      onSchedule:(!subTimeless&&!isDoneRow&&!isMeeting(ev))?(sb)=>{if(isUnfRow){_unfSchedulePopover(ev,el,sb);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});}:null,
+      onRadial:!isDoneRow?(pb)=>openTaskRadial(ev,pb,isUnfRow?{carryover:{move:(trig)=>_unfSchedulePopover(ev,el,trig),backlog:()=>_unfToBacklog(ev,el),drop:()=>_unfDrop(ev,el)}}:undefined):null,
+      onDelete:!isDoneRow?()=>{if(isUnfRow){_unfDrop(ev,el);return;}openDeleteConfirm(ev.id);}:null,
+      onAdd:!isDoneRow?(am)=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}:null,
+      onCollapse:()=>{if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render("schedule");}},
+      onOpen:()=>{if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);},
+      onDragStart:(e)=>dStart(e,ev.id),onDragEnd:dEnd,
+      onDragOver:!isDoneRow?(e)=>dOver(e,ev.id):null,onDragLeave:!isDoneRow?dLeave:null,onDrop:!isDoneRow?(e)=>dDrop(e,ev.id):null,
+      afterRender:(rowEl)=>{
+        const stSpan=rowEl.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfSchedulePopover(ev,rowEl,stSpan);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:stSpan,view:"time"});});
+        const pf=rowEl.querySelector(".prep-flag");if(pf)pf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev,{defaultTab:"prep"});});
+        const rf=rowEl.querySelector(".recap-flag");if(rf)rf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev,{defaultTab:"recap"});});
+        const bb=rowEl.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
+      }
     });
     return el;
   }
@@ -2123,7 +2071,6 @@ function beAddBlock(){
   _beBlocks.push({id:"_new_"+Date.now(),name:"",start:"09:00",end:"17:00",activeDays:DCC.TimeBlocks.WEEKDAYS.slice(),sort_order:(_beBlocks.length+1)*1000,_isNew:true});
   renderBlockEditor();
 }
-
 function beDelete(idx){_beBlocks.splice(idx,1);renderBlockEditor();}
 
 function beDragDrop(e,targetIdx){

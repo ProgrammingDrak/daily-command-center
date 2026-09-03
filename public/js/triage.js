@@ -1160,22 +1160,15 @@ function triagePriorityLabel(priority){
 // Triage responses are quick by default (a reply, a check) -- default 5 minutes,
 // floor 5, and the card carries a picker to bump it up when the case needs more.
 function triageDuration(item){
-  return Math.max(5,parseInt(item&&(
-    item.estimated_minutes||item.estimatedMinutes||item.durMin||item.duration_minutes||item.durationMinutes
-  )||5,10)||5);
+  const ev=window.DCC&&window.DCC.TaskModel&&window.DCC.TaskModel.fromTriageItem(item);
+  return ev?ev.durMin:5;
 }
 function triageTaskPayload(item){
-  const durMin=triageDuration(item);
+  const ev=window.DCC.TaskModel.fromTriageItem(item);
   return {
-    id:"triage-"+(item.id||Date.now()),
-    task_id:"triage-"+(item.id||Date.now()),
-    title:item.title||"Triage item completed",
+    ...ev,
+    task_id:ev.id,
     type:"task",
-    priority:triagePriorityLabel(item.priority),
-    source:"triage",
-    tags:["triage"],
-    duration_minutes:durMin,
-    durMin:durMin,
     urgent:String(item.priority||"").toLowerCase()==="high"
   };
 }
@@ -1400,33 +1393,66 @@ async function scheduleTriageItem(triageId){
   const durMin=triageDuration(item);
   const opts=triageTaskProps(triageId,item);
   const record=async function(taskId){ return recordTriageScheduled(triageId,item,taskId,"Triage item scheduled"); };
+  const afterCreate=async function(info){
+    try{
+      if(info&&info.persisted)await info.persisted;
+      await record(info&&(info.localId||info.blockId));
+    }catch(e){
+      if(typeof showToast==="function")showToast("Task could not be created: "+(e.message||e),"error");
+    }
+  };
   if(typeof openSchedulePicker==="function"){
-    openSchedulePicker(item.title,durMin,Object.assign({},opts,{
-      onScheduled:async function(info){ await record(info&&(info.localId||info.blockId)); }
-    }));
+    openSchedulePicker(item.title,durMin,Object.assign({},opts,{onScheduled:afterCreate}));
     return;
   }
   // Fallback if the picker markup isn't present: schedule directly.
-  const newTask=insertTaskFromDrawer(item.title,durMin,opts);
-  await record(newTask&&newTask.id);
+  insertTaskFromDrawer(item.title,durMin,Object.assign({},opts,{onScheduled:afterCreate}));
 }
 window.scheduleTriageOnDate=scheduleTriageOnDate;
 window.activeTriageItems=activeTriageItems;
-function buildScheduleTriageCard(item){
+function _runTriageDraftAction(item){
+  const action=triageDraftAction(item);
+  if(!action)return;
+  if(action.kind==="link"){
+    if(typeof window.open==="function")window.open(action.href,"_blank","noopener");
+    return;
+  }
+  if(action.kind==="status")return;
+  if(action.kind==="copy"){copyTriageDraft(item.id);return;}
+  const link=document.createElement("a");
+  link.href=action.href;link.dataset.copyDraft=item.id;
+  activateTriageDraftAction(null,link);
+}
+function _openTriageSource(item){
+  const href=window.DCC.safeUrl(item.link||item.source_url);
+  if(href&&typeof window.open==="function")window.open(href,"_blank","noopener");
+}
+function _openTriageRowRadial(item,trigger){
+  const actions=[
+    {icon:"📅",label:"Schedule…",onPick:()=>scheduleTriageItem(item.id)},
+    {icon:"✓",label:"Complete with notes",onPick:()=>openDoneModal(item.id,item.title,(note)=>dismissTriage(item.id,note||"",false),null)}
+  ];
+  const draft=triageDraftAction(item);
+  if(draft)actions.push({icon:"✉",label:draft.label,onPick:()=>_runTriageDraftAction(item)});
+  else if(window.DCC.safeUrl(item.link||item.source_url))actions.push({icon:"↗",label:item.link_label||item.action_label||"Open source",onPick:()=>_openTriageSource(item)});
+  if(item.waiting_item_id)actions.push({icon:"🔔",label:"Open Waiting task",onPick:()=>{if(typeof window.openWaitingItem==="function")window.openWaitingItem(item.waiting_item_id);}});
+  actions.push({icon:"🗑",label:"Delete",onPick:()=>deleteTriageItem(item.id)});
+  openRadialMenu(trigger,actions,{a0:90,a1:270,r:140,labelStagger:true,clampY:true});
+}
+function _openResponsibilityRowRadial(item,trigger){
+  openRadialMenu(trigger,[
+    {icon:"📅",label:"Schedule…",onPick:()=>window.scheduleRepeatResponsibility(item.id)},
+    {icon:"✓",label:"Complete",onPick:()=>window.completeRepeatResponsibility(item.id)},
+    {icon:"↷",label:"Skip this cycle",onPick:()=>window.skipRepeatResponsibility(item.id)},
+    {icon:"⏸",label:"Pause",onPick:()=>window.pauseRepeatResponsibility(item.id,null)}
+  ],{a0:90,a1:270,r:140,labelStagger:true,clampY:true});
+}
+function _triageRowMeta(item,ev){
   const pri=triagePriorityLabel(item.priority);
   const priCls=pri==="High"?"pri-hi":pri==="Low"?"pri-lo":"pri-med";
-  // A check-in reminder is coloured by WHAT IT IS, not by the priority it inherited
-  // from its Waiting item -- that is the whole point of the shared --waiting hue.
-  const barColor=isWaitingCheckIn(item)?"var(--waiting,#a31c43)":(pri==="High"?"var(--red)":pri==="Low"?"var(--text-muted)":"var(--amber)");
-  const safeTitle=(item.title||"Triage item").replace(/"/g,'&quot;');
-  // Scheme-allowlist the draft/source URLs: they come from the sweep, so never
-  // let a javascript:/data: URI reach an href.
-  // safeUrlAttr, not safeUrl: these land straight in an href, and the scheme check
-  // alone does not stop a swept URL from closing the attribute and opening an
-  // event handler. Same helper the catch-up modal's row link uses.
   const srcHref=window.DCC.safeUrlAttr(item.link||item.source_url);
   const draftAction=triageDraftAction(item);
-  const scheduleDraftAction=!draftAction?'':
+  const draftHtml=!draftAction?'':
     (draftAction.kind==="copy-link"
       ? '<a href="'+draftAction.href+'" target="_blank" rel="noreferrer" class="schedule-triage-copy" data-copy-draft="'+DCC.esc(item.id)+'" onclick="event.stopPropagation()" style="color:var(--green);text-decoration:none;font-weight:600">Review and Send</a>'
       : draftAction.kind==="link"
@@ -1434,25 +1460,37 @@ function buildScheduleTriageCard(item){
         : draftAction.kind==="copy"
           ? '<button type="button" class="schedule-triage-copy" data-copy-draft="'+DCC.esc(item.id)+'" style="border:0;background:transparent;color:var(--green);font:inherit;font-weight:600;cursor:pointer;padding:0">Copy Draft</button>'
           : '<span style="color:var(--green);font-weight:600">Draft ready</span>');
-  return '<div class="board-card schedule-triage-card'+(isWaitingCheckIn(item)?' waiting-checkin-card':'')+'" data-schedule-triage-id="'+item.id+'">'+
-    '<div class="bar" style="background:'+barColor+'"></div>'+
-    '<div class="body">'+
-      '<div class="title-row"><span class="ttl" title="'+safeTitle+'">'+DCC.esc(item.title||"Triage item")+'</span>'+waitingCheckInPillHtml(item)+triEscBadge(item.escalation)+'</div>'+
-      '<div class="meta"><span class="'+priCls+'">'+pri+'</span>'+triagePointsChip(item)+triageReceivedDateHtml(item)+'<span>'+ms(triageDuration(item))+'</span>'+
-        (srcHref&&!draftAction?'<a href="'+srcHref+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">'+DCC.esc(item.link_label||item.action_label||"Open")+'</a>':'')+
-        waitingItemLinkHtml(item,'schedule-triage-open-waiting')+
-        scheduleDraftAction+
-      '</div>'+
-      (item.summary?'<div class="schedule-triage-summary">'+DCC.esc(item.summary)+'</div>':'')+
-      (item.draft_preview?'<div class="schedule-triage-summary" style="border-left:2px solid var(--green);padding-left:8px;opacity:.9">'+DCC.esc(item.draft_preview)+'</div>':'')+
-    '</div>'+
-    '<button class="add-btn schedule-triage-schedule" data-triage-id="'+item.id+'">Schedule</button>'+
-    '<button class="add-btn schedule-triage-done" data-triage-id="'+item.id+'" data-triage-title="'+safeTitle+'" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>'+
-    '<button class="tri-quick schedule-triage-quick" data-triage-id="'+DCC.esc(item.id)+'" title="Quick complete">'+_triBoltSvg+'</button>'+
-    '<button class="tri-delete-btn schedule-triage-delete" data-triage-id="'+item.id+'" title="'+DCC.esc(waitingCheckInDeleteTitle(item))+'" aria-label="Delete triage item">'+
-      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>'+
-    '</button>'+
-  '</div>';
+  return '<span class="tag tag-triage">Triage</span>'+triagePointsChip(item)+
+    '<span class="it-list-duration" title="Estimated completion time">'+ms(ev.durMin)+'</span>'+triageReceivedDateHtml(item)+
+    '<span class="'+priCls+'">'+pri+'</span>'+
+    (srcHref&&!draftAction?'<a href="'+srcHref+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">'+DCC.esc(item.link_label||item.action_label||"Open")+'</a>':'')+
+    waitingItemLinkHtml(item,'schedule-triage-open-waiting')+draftHtml;
+}
+function buildScheduleTriageCard(item){
+  const ev=window.DCC.TaskModel.fromTriageItem(item);
+  const pri=ev.priority;
+  const barColor=isWaitingCheckIn(item)?"var(--waiting,#a31c43)":(pri==="High"?"var(--red)":pri==="Low"?"var(--text-muted)":"var(--amber)");
+  return renderItineraryListRow(ev,{
+    draggable:true,
+    extraClass:"triage-source-row"+(isWaitingCheckIn(item)?" waiting-checkin-card":""),
+    dataset:{scheduleTriageId:item.id},
+    gripTitle:"Drag to reorder or schedule",
+    barColor:barColor,
+    titleExtrasHtml:waitingCheckInPillHtml(item)+triEscBadge(item.escalation),
+    metaHtml:_triageRowMeta(item,ev),
+    onComplete:()=>dismissTriage(item.id,"",false),
+    onCompleteWithNotes:()=>openDoneModal(item.id,item.title,(note)=>dismissTriage(item.id,note||"",false),null),
+    onSchedule:()=>scheduleTriageItem(item.id),
+    onRadial:(trigger)=>_openTriageRowRadial(item,trigger),
+    onDelete:()=>deleteTriageItem(item.id),
+    deleteTitle:waitingCheckInDeleteTitle(item),deleteLabel:"Delete triage item",
+    onDragStart:(e)=>dStart(e,ev.id),onDragEnd:dEnd,
+    onDragOver:(e)=>dOver(e,ev.id),onDragLeave:dLeave,onDrop:(e)=>dDrop(e,ev.id),
+    afterRender:(el)=>{
+      el.querySelectorAll(".schedule-triage-copy").forEach(btn=>btn.addEventListener("click",e=>activateTriageDraftAction(e,btn)));
+      el.querySelectorAll(".schedule-triage-open-waiting").forEach(btn=>btn.addEventListener("click",e=>{e.stopPropagation();if(typeof window.openWaitingItem==="function")window.openWaitingItem(btn.dataset.waitingItem);}));
+    }
+  });
 }
 // Virtual card for a due repeat responsibility (see getDueRepeatResponsibilities
 // in responsibilities.js). It is NOT a real triage item — it's a live view of a
@@ -1460,87 +1498,100 @@ function buildScheduleTriageCard(item){
 // shell chip) mark it apart from swept triage items.
 function buildRecurringTriageCard(r){
   const barColor=(r.overdue||r.score>=85)?"var(--red)":(r.score>=70?"var(--amber)":"var(--accent-light)");
-  const safeTitle=DCC.esc(r.title||"Recurring");
+  const ev=window.DCC.TaskModel.fromDueResponsibility(r);
   // .tri-esc's pill sizing is CSS-scoped to .tri-card-header, which these cards
   // aren't under — inline the pill shape so they match the escalation-chip look;
   // the tri-esc-* modifier still supplies the (unscoped) background color.
   const chipStyle='font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:2px 7px;border-radius:100px';
   const shellChip=r.isShell?'<span class="tri-esc tri-esc-attention" style="'+chipStyle+'" title="Drops a saved shell of '+r.childCount+' task'+(r.childCount===1?'':'s')+'">&#128026; '+r.childCount+'</span>':'';
-  return '<div class="board-card schedule-triage-card recurring-triage-card" data-resp-id="'+r.id+'">'+
-    '<div class="bar" style="background:'+barColor+'"></div>'+
-    '<div class="body">'+
-      '<div class="title-row"><span class="ttl" title="'+safeTitle+'">'+DCC.esc(r.title||"Recurring")+'</span>'+
-        '<span class="tri-esc tri-esc-normal" style="'+chipStyle+'" title="Recurring responsibility">&#128260; Recurring</span>'+shellChip+'</div>'+
-      '<div class="meta"><span>'+r.cadenceLabel+'</span><span>'+r.dueLabel+'</span><span>'+ms(r.estimatedMinutes)+'</span></div>'+
-    '</div>'+
-    '<button class="add-btn resp-triage-add" data-resp-id="'+r.id+'">Schedule</button>'+
-    '<button class="add-btn resp-triage-done" data-resp-id="'+r.id+'" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>'+
-    // Skip is deliberately distinct from Done: it hides the item until its next
-    // occurrence WITHOUT claiming it was done, so Drake stops having to lie about
-    // having finished something to make a card go away. Server-side and
-    // cross-device, unlike the browser-local one-day snooze it replaces.
-    '<button class="add-btn resp-triage-skip" data-resp-id="'+r.id+'" style="background:rgba(234,179,8,0.15);color:var(--amber)" title="Skip this cycle (not done, just not now)">Skip</button>'+
-    '<button class="tri-quick resp-triage-pause" data-resp-id="'+r.id+'" title="Pause this responsibility">&#9208;</button>'+
-  '</div>';
+  return renderItineraryListRow(ev,{
+    draggable:true,
+    extraClass:"triage-source-row recurring-triage-card",
+    dataset:{respId:r.id},
+    gripTitle:"Drag to reorder or schedule",
+    barColor:barColor,
+    titleExtrasHtml:'<span class="tri-esc tri-esc-normal" style="'+chipStyle+'" title="Recurring responsibility">&#128260; Recurring</span>'+shellChip,
+    metaHtml:'<span class="tag tag-triage">Triage</span><span class="it-list-duration" title="Estimated completion time">'+ms(ev.durMin)+'</span><span>'+DCC.esc(r.cadenceLabel||"")+'</span><span>'+DCC.esc(r.dueLabel||"")+'</span>',
+    onComplete:()=>window.completeRepeatResponsibility(r.id),
+    onCompleteWithNotes:()=>window.completeRepeatResponsibility(r.id),
+    onSchedule:()=>window.scheduleRepeatResponsibility(r.id),
+    onRadial:(trigger)=>_openResponsibilityRowRadial(r,trigger),
+    onDragStart:(e)=>dStart(e,ev.id),onDragEnd:dEnd,
+    onDragOver:(e)=>dOver(e,ev.id),onDragLeave:dLeave,onDrop:(e)=>dDrop(e,ev.id)
+  });
 }
+let _itineraryTriageEvents=new Map();
+function _orderedItineraryTriageRows(rows){
+  const order=typeof loadUnscheduledOrder==="function"?loadUnscheduledOrder():[];
+  if(!order.length)return rows;
+  const pos=new Map(order.map((id,index)=>[id,index]));
+  return rows.slice().sort((a,b)=>{
+    const ai=pos.has(a.ev.id)?pos.get(a.ev.id):Number.MAX_SAFE_INTEGER;
+    const bi=pos.has(b.ev.id)?pos.get(b.ev.id):Number.MAX_SAFE_INTEGER;
+    return ai===bi?a.index-b.index:ai-bi;
+  });
+}
+function _saveItineraryTriageOrder(ids){
+  if(typeof saveUnscheduledOrder!=="function")return;
+  const current=typeof loadUnscheduledOrder==="function"?loadUnscheduledOrder():[];
+  saveUnscheduledOrder(current.filter(id=>!/^triage-|^responsibility-/.test(id)).concat(ids));
+}
+async function _scheduleTriageAtDrop(record,target,after){
+  if(record.kind==="responsibility"){
+    window.scheduleRepeatResponsibility(record.source.id,{targetId:target.id,after:after,orderWins:true});
+    return;
+  }
+  const item=record.source;
+  const opts=Object.assign({},triageTaskProps(item.id,item),{
+    targetId:target.id,after:after,orderWins:true,
+    onScheduled:async info=>{
+      try{if(info&&info.persisted)await info.persisted;}catch(e){if(typeof showToast==="function")showToast("Task could not be created: "+e.message,"error");return;}
+      await recordTriageScheduled(item.id,item,info&&(info.localId||info.blockId),"Triage item scheduled");
+    }
+  });
+  if(typeof insertTaskFromDrawer==="function")insertTaskFromDrawer(item.title,triageDuration(item),opts);
+}
+function handleItineraryTriageDrop(movedId,targetId,e){
+  const moved=_itineraryTriageEvents.get(movedId);
+  if(!moved)return"passthrough";
+  const rect=e.currentTarget.getBoundingClientRect();
+  const after=(e.clientY-rect.top)>=rect.height/2;
+  if(_itineraryTriageEvents.has(targetId)){
+    const ids=Array.from(document.querySelectorAll("#schedule-triage-section .it-list-item[data-id]"),el=>el.dataset.id);
+    const from=ids.indexOf(movedId);if(from>=0)ids.splice(from,1);
+    const to=ids.indexOf(targetId);ids.splice(to<0?ids.length:(after?to+1:to),0,movedId);
+    _saveItineraryTriageOrder(ids);buildScheduleTriage();
+    return"handled";
+  }
+  const target=(typeof scheduled!=="undefined"&&Array.isArray(scheduled))?scheduled.find(ev=>ev.id===targetId):null;
+  if(target&&!target.untimed)_scheduleTriageAtDrop(moved,target,after);
+  return"handled";
+}
+window.handleItineraryTriageDrop=handleItineraryTriageDrop;
 function buildScheduleTriage(){
   const el=document.getElementById("schedule-triage-section");
   if(!el)return;
   const items=activeTriageItems();
   const recurring=(typeof window.getDueRepeatResponsibilities==="function")?window.getDueRepeatResponsibilities():[];
   if((!items.length&&!recurring.length)||schedView!=="list"){
+    _itineraryTriageEvents=new Map();
     el.style.display="none";
     el.innerHTML="";
     return;
   }
   el.style.display="";
-  // Swept triage items first (external, genuinely time-sensitive), then the
-  // recurring responsibilities coming due — each tagged so the two don't blur.
   el.innerHTML=
     '<div class="schedule-triage-header">'+
       '<div><span class="schedule-triage-kicker">Triage</span><span class="schedule-triage-count">'+(items.length+recurring.length)+'</span></div>'+
       '<span class="schedule-triage-sub">Needs attention before it disappears into the day</span>'+
     '</div>'+
-    '<div class="schedule-triage-list">'+items.map(buildScheduleTriageCard).join('')+recurring.map(buildRecurringTriageCard).join('')+'</div>';
-  el.querySelectorAll(".resp-triage-add").forEach(btn=>{
-    btn.addEventListener("click",e=>{e.stopPropagation();if(typeof window.scheduleRepeatResponsibility==="function")window.scheduleRepeatResponsibility(btn.dataset.respId);});
-  });
-  el.querySelectorAll(".resp-triage-done").forEach(btn=>{
-    btn.addEventListener("click",e=>{e.stopPropagation();if(typeof window.completeRepeatResponsibility==="function")window.completeRepeatResponsibility(btn.dataset.respId);});
-  });
-  el.querySelectorAll(".resp-triage-skip").forEach(btn=>{
-    btn.addEventListener("click",e=>{e.stopPropagation();if(typeof window.skipRepeatResponsibility==="function")window.skipRepeatResponsibility(btn.dataset.respId);});
-  });
-  el.querySelectorAll(".resp-triage-pause").forEach(btn=>{
-    btn.addEventListener("click",e=>{e.stopPropagation();if(typeof window.pauseRepeatResponsibility==="function")window.pauseRepeatResponsibility(btn.dataset.respId,null);});
-  });
-  el.querySelectorAll(".schedule-triage-schedule").forEach(btn=>{
-    btn.addEventListener("click",e=>{e.stopPropagation();scheduleTriageItem(btn.dataset.triageId);});
-  });
-  el.querySelectorAll(".schedule-triage-done").forEach(btn=>{
-    btn.addEventListener("click",e=>{
-      e.stopPropagation();
-      openDoneModal(btn.dataset.triageId,btn.dataset.triageTitle,(noteText)=>dismissTriage(btn.dataset.triageId,noteText||"",false),null);
-    });
-  });
-  el.querySelectorAll(".schedule-triage-delete").forEach(btn=>{
-    btn.addEventListener("click",e=>{e.stopPropagation();deleteTriageItem(btn.dataset.triageId);});
-  });
-  el.querySelectorAll(".schedule-triage-quick").forEach(btn=>{
-    btn.addEventListener("click",e=>{e.stopPropagation();dismissTriage(btn.dataset.triageId,"",false);});
-  });
-  el.querySelectorAll(".schedule-triage-copy").forEach(btn=>{
-    btn.addEventListener("click",e=>{activateTriageDraftAction(e,btn);});
-  });
-  el.querySelectorAll(".schedule-triage-open-waiting").forEach(btn=>{
-    btn.addEventListener("click",e=>{
-      e.stopPropagation();
-      if(typeof window.openWaitingItem==="function")window.openWaitingItem(btn.dataset.waitingItem);
-    });
-  });
-  // NOTE: .schedule-triage-delete is wired ONCE, above. A second identical pass
-  // used to live here, so one click ran deleteTriageItem twice — two day-state
-  // POSTs and two independent Undo toasts for one item.
+    '<div class="schedule-triage-list"></div>';
+  const rows=items.map((source,index)=>({kind:"triage",source,index,ev:window.DCC.TaskModel.fromTriageItem(source)}))
+    .concat(recurring.map((source,index)=>({kind:"responsibility",source,index:items.length+index,ev:window.DCC.TaskModel.fromDueResponsibility(source)})));
+  const ordered=_orderedItineraryTriageRows(rows);
+  _itineraryTriageEvents=new Map(ordered.map(record=>[record.ev.id,record]));
+  const list=el.querySelector(".schedule-triage-list");
+  ordered.forEach(record=>list.appendChild(record.kind==="triage"?buildScheduleTriageCard(record.source):buildRecurringTriageCard(record.source)));
 }
 
 function buildScheduled() {
