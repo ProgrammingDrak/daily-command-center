@@ -82,14 +82,12 @@ body.dcc-schedule-full #tab-schedule { width: 100%; max-width: none; }
 }
 .tabs::-webkit-scrollbar { display: none; }
 .tab { min-height: var(--target-min); white-space: nowrap; }
-.stats,
 .progress-wrap {
   max-height: 180px;
   overflow: hidden;
   opacity: 1;
   transition: max-height 160ms ease, opacity 120ms ease, margin 160ms ease;
 }
-body.dcc-shell-scrolled .stats,
 body.dcc-shell-scrolled .progress-wrap { max-height: 0; margin-block: 0; opacity: 0; pointer-events: none; }
 
 /* Utilities menu */
@@ -756,7 +754,6 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 @media (max-width: 480px) {
   .date-nav { flex-wrap: wrap; }
   .dn-date { max-width: 170px; }
-  .stats { grid-template-columns: 1fr; }
   .bt-summary-grid { grid-template-columns: 1fr; }
   .bt-finance-card { min-height: 140px; }
   .social-role-ladder { grid-template-columns: 1fr; }

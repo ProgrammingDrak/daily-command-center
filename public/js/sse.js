@@ -143,7 +143,6 @@
     if(typeof render==='function')render();
     if(typeof buildTriage==='function')buildTriage();
     if(typeof buildNotifications==='function')buildNotifications();
-    if(typeof updateStats==='function')updateStats();
     if(typeof window.notifyTriageArrivals==='function')window.notifyTriageArrivals();
   }
 
@@ -304,7 +303,6 @@
     }
     if(typeof refreshOpenAddModalDetails === 'function') refreshOpenAddModalDetails({fromBlockStore:true});
     if(typeof render === 'function') render();
-    if(typeof updateStats === 'function') updateStats();
     if(typeof loadResponsibilities === 'function') loadResponsibilities();
     if(typeof loadTaskMenus === 'function') loadTaskMenus();
     if(typeof loadTaskGroups === 'function') loadTaskGroups();

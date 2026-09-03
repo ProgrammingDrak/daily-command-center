@@ -605,7 +605,7 @@ window.__habitStreakCount=_habitStreakCount;
 
 // Pure decision cores for the List-view idle-gap marker, hoisted to top level so
 // they can be sliced into a node:vm test (itinerary-gap.test.js), same pattern as
-// _isShellEv / _remainingForScope.
+// _isShellEv / _progressRange.
 //   _rowIsTimed: is this a row that sits on the clock and can anchor a gap? A
 //     done "Unscheduled" task renders inline yet carries a stored 00:00-based end
 //     (see the ev.untimed branch in row()), so untimed rows are excluded.
@@ -1646,33 +1646,93 @@ function _scheduleTaskHasDelegate(taskId){
 }
 
 // ======== PROGRESS ========
+const DAY_PROGRESS_VARIANT="quiet-axis";
+
+function _progressRange(dayItems,state){
+  const schedule=(state&&state.schedule)||{};
+  const workingHours=schedule.working_hours||{};
+  let start=pt(workingHours.start||schedule.day_start||"07:00");
+  let end=pt(workingHours.end||schedule.end_time||"17:30");
+  (dayItems||[]).forEach(ev=>{
+    const itemStart=pt(ev&&ev.start),itemEnd=pt(ev&&ev.end);
+    if(itemEnd<=itemStart)return;
+    start=Math.min(start,itemStart);
+    end=Math.max(end,itemEnd);
+  });
+  if(end<=start)end=start+60;
+  return {start,end,total:end-start};
+}
+
+function _progressLocalDateKey(value){
+  const date=value instanceof Date?value:new Date(value);
+  if(Number.isNaN(date.getTime()))return "";
+  return date.getFullYear()+"-"+String(date.getMonth()+1).padStart(2,"0")+"-"+String(date.getDate()).padStart(2,"0");
+}
+
+function _progressNowPercent(dateKey,nowValue,start,end){
+  const nowDate=nowValue instanceof Date?nowValue:new Date(nowValue);
+  if(Number.isNaN(nowDate.getTime())||dateKey!==_progressLocalDateKey(nowDate)||end<=start)return null;
+  const nowMinutes=nowDate.getHours()*60+nowDate.getMinutes();
+  if(nowMinutes<start||nowMinutes>end)return null;
+  return Math.max(0,Math.min(100,((nowMinutes-start)/(end-start))*100));
+}
+
+function updateProgressNow(nowValue){
+  const marker=document.getElementById("pnow"),track=document.getElementById("ptrack");
+  if(!marker||!track)return;
+  const start=Number(track.dataset.startMin),end=Number(track.dataset.endMin);
+  const nowDate=nowValue instanceof Date?nowValue:new Date();
+  const pct=_progressNowPercent(track.dataset.date||"",nowDate,start,end);
+  marker.hidden=pct===null;
+  if(pct===null)return;
+  marker.style.left=pct+"%";
+  const label="Current time "+f12(fmt(nowDate.getHours()*60+nowDate.getMinutes()));
+  marker.title=label;
+  marker.setAttribute("aria-label",label);
+}
+
 function buildProgress(){
-  const track=document.getElementById("ptrack"),ds=pt("08:45"),de=pt("17:30"),tot=de-ds;
-  track.innerHTML="";let cursor=ds;
+  const track=document.getElementById("ptrack");
+  if(!track)return;
   const dayItems=DCC.TaskModel.selectDayScoped(scheduled); // Unscheduled-everywhere rows aren't today's plan
-  dayItems.forEach(ev=>{
-    const s=pt(ev.start),e=pt(ev.end);
+  const range=_progressRange(dayItems,typeof __state!=="undefined"?__state:null);
+  const ds=range.start,de=range.end,tot=range.total;
+  const stateDate=(typeof __state!=="undefined"&&__state&&__state.date)||"";
+  const viewKey=(typeof viewDate!=="undefined"&&viewDate)||stateDate;
+  const box=track.closest(".progress-box");
+  if(box)box.dataset.variant=DAY_PROGRESS_VARIANT;
+  track.dataset.startMin=String(ds);
+  track.dataset.endMin=String(de);
+  track.dataset.date=viewKey;
+  track.setAttribute("aria-label","Schedule from "+f12(fmt(ds))+" to "+f12(fmt(de))+". Select a task segment for details.");
+  const startLabel=document.getElementById("pstart"),endLabel=document.getElementById("pend");
+  if(startLabel){startLabel.textContent=f12(fmt(ds));startLabel.dateTime=fmt(ds);}
+  if(endLabel){endLabel.textContent=f12(fmt(de));endLabel.dateTime=fmt(de);}
+  track.innerHTML="";
+  let cursor=ds;
+  dayItems.slice().sort((a,b)=>pt(a.start)-pt(b.start)||pt(a.end)-pt(b.end)).forEach(ev=>{
+    const rawStart=pt(ev.start),rawEnd=pt(ev.end);
+    if(rawEnd<=rawStart||rawEnd<=ds||rawStart>=de)return;
+    const s=Math.max(ds,rawStart),e=Math.min(de,rawEnd);
     if(s>cursor)addPS(track,cursor,s,"Free","rgba(255,255,255,0.08)",false,tot);
+    const visibleStart=Math.max(s,cursor);
+    if(e<=visibleStart)return;
     // Shells are wrappers, not work: their own slot stays near-empty in the
     // main row; the rail underneath (buildShellRails) marks the whole span.
-    if(_isShellEv(ev))addPS(track,s,e,"⟦ "+ev.title+" ⟧","rgba(226,232,240,0.10)",isDone(ev),tot);
-    else addPS(track,s,e,ev.title,cfg(ev.type).color,isDone(ev),tot);
-    cursor=e;
+    if(_isShellEv(ev))addPS(track,visibleStart,e,"⟦ "+ev.title+" ⟧","rgba(226,232,240,0.10)",isDone(ev),tot,ev);
+    else addPS(track,visibleStart,e,ev.title,cfg(ev.type).color,isDone(ev),tot,ev);
+    cursor=Math.max(cursor,e);
   });
   if(cursor<de)addPS(track,cursor,de,"Free","rgba(255,255,255,0.08)",false,tot);
   buildShellRails(dayItems,ds,tot);
   // Shells are wrappers, not tasks — they don't count toward the day's done tally.
   const counted=dayItems.filter(ev=>!_isShellEv(ev));
   const dc=DCC.TaskModel.selectDone(counted).length;
-  document.getElementById("ppct").textContent=dc+"/"+counted.length+" done ("+Math.round(dc/(counted.length||1)*100)+"%)";
+  document.getElementById("ppct").textContent=dc+" / "+counted.length+" done · "+Math.round(dc/(counted.length||1)*100)+"%";
+  updateProgressNow();
 }
 function _isShellEv(ev){
   return (window.TaskTypes&&window.TaskTypes.isRollup(ev))||String(ev.type||"").toLowerCase()==="shell";
-}
-// Completed real tasks for the day — excludes shell wrappers so they stay out
-// of the Completed count/time and the completed popover list.
-function _dayDoneTasks(){
-  return DCC.TaskModel.selectDone(scheduled).filter(ev=>!_isShellEv(ev));
 }
 // One silver rail per shell under the track, spanning the shell's slot plus
 // every ride-along child (wrapId), so the wrapper reads as a grouping, not a task.
@@ -1684,289 +1744,33 @@ function buildShellRails(dayItems,ds,tot){
   shells.forEach(sh=>{
     let s=pt(sh.start),e=pt(sh.end);
     dayItems.filter(c=>c.wrapId===sh.id).forEach(c=>{s=Math.min(s,pt(c.start));e=Math.max(e,pt(c.end));});
+    s=Math.max(ds,s);e=Math.min(ds+tot,e);
+    if(e<=s)return;
     const seg=document.createElement("div");seg.className="prail-seg"+(isDone(sh)?" done":"");
     seg.style.cssText="left:"+(((s-ds)/tot)*100)+"%;width:"+(((e-s)/tot)*100)+"%";
-    seg.innerHTML='<div class="tip">⟦ '+sh.title+' ⟧ ('+ms(e-s)+')'+(isDone(sh)?' ✓':'')+'</div>';
+    const tip=document.createElement("div");tip.className="tip";
+    tip.textContent="⟦ "+sh.title+" ⟧ ("+ms(e-s)+")"+(isDone(sh)?" ✓":"");
+    seg.appendChild(tip);
     rails.appendChild(seg);
   });
 }
-function addPS(track,s,e,title,color,done,tot){
-  const w=((e-s)/tot)*100,seg=document.createElement("div");seg.className="pseg";
-  seg.style.cssText="width:"+w+"%;background:"+color+";opacity:"+(done?0.4:1);
-  seg.innerHTML='<div class="tip">'+title+' ('+ms(e-s)+')'+(done?' \u2713':'')+'</div>';track.appendChild(seg);
-}
-
-// ======== STATS ========
-function _actualMin(ev){
-  // Actual session totals are projected directly from the canonical task row.
-  if(ev.actualMinutes!=null)return Number(ev.actualMinutes)||0;
-  try{const s=loadSessions();if(s[ev.id]&&s[ev.id].length)return s[ev.id].reduce((a,x)=>a+x.durationMin,0);}catch(e){}
-  return dur(ev);
-}
-const REMAINING_STAT_SCOPE_KEY="pa-remaining-stat-scope";
-// Time-block containers removed 2026-07 -> remaining stats are always day-scoped.
-// (Kept the fn so its many call sites are untouched; toggle is now a no-op.)
-function _remainingStatScope(){ return "day"; }
-function _setRemainingStatScope(scope){
-  try{localStorage.setItem(REMAINING_STAT_SCOPE_KEY,scope==="block"?"block":"day");}catch(e){}
-}
-function _currentBlockWindow(){
-  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
-  if(!blocks.length)return null;
-  const now=new Date();
-  const nowMin=now.getHours()*60+now.getMinutes();
-  for(const b of blocks){
-    const bStart=pt(b.start),bEnd=pt(b.end);
-    if(nowMin>=bStart&&nowMin<bEnd)return {block:b,start:bStart,end:bEnd};
+function addPS(track,s,e,title,color,done,tot,ev){
+  const w=((e-s)/tot)*100;
+  if(w<=0)return;
+  const seg=document.createElement(ev?"button":"span");
+  seg.className="pseg";
+  if(ev)seg.type="button";
+  seg.style.cssText="flex:0 0 "+w+"%;background:"+color+";opacity:"+(done?0.45:1);
+  const detail=title+" · "+(ev?f12(ev.start)+" - "+f12(ev.end):ms(e-s))+(done?" · Done":"");
+  seg.title=detail;
+  if(ev){
+    seg.setAttribute("aria-label","Open details for "+detail);
+    seg.addEventListener("click",()=>{if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+  }else{
+    seg.setAttribute("aria-hidden","true");
   }
-  return null;
+  track.appendChild(seg);
 }
-function _remainingForScope(scope){
-  // _dateless rows (Unscheduled-everywhere) aren't part of this day's plan.
-  // Shells are wrappers, not work — they never count as remaining tasks/time.
-  const rem=DCC.TaskModel.selectDayScoped(DCC.TaskModel.selectOpen(scheduled)).filter(ev=>!_isShellEv(ev));
-  if(scope!=="block")return rem;
-  const win=_currentBlockWindow();
-  if(!win)return [];
-  return rem.filter(ev=>pt(ev.start)<win.end&&pt(ev.end)>win.start);
-}
-function _remainingEmptyMessage(scope){
-  return scope==="block"&&!_currentBlockWindow()?"No active block.":"Nothing left!";
-}
-function _remainingScopeLabel(scope){
-  return scope==="block"?"Block":"Day";
-}
-function _updateRemainingStatLabels(scope){
-  const scopeLabel=_remainingScopeLabel(scope);
-  const timeLabel=document.getElementById("s-time-label");
-  const tasksLabel=document.getElementById("s-tasks-label");
-  const hint="Click to show "+(scope==="block"?"day":"block")+" remaining";
-  if(timeLabel)timeLabel.textContent=scopeLabel+" Time Left";
-  if(tasksLabel)tasksLabel.textContent=scopeLabel+" Tasks Left";
-  document.querySelectorAll(".stat-combined .stat-half").forEach(el=>{el.title=hint;});
-}
-const DAY_POINT_GOALS_KEY="pa-day-point-goals-v1";
-function _statEsc(value){
-  return String(value==null?"":value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
-}
-function _currentViewDateKey(){
-  return (__state&&__state.date)||new Date().toISOString().split("T")[0];
-}
-function _roundGoal(value){
-  return Math.max(0, Math.round((Number(value)||0)/5)*5);
-}
-function _defaultDayPointGoals(){
-  const fallbackMin=300, fallbackMax=480;
-  const min=fallbackMin;
-  const max=fallbackMax;
-  return {min:Math.max(60,min),max:Math.max(Math.max(60,min),max)};
-}
-function _storedDayPointGoals(){
-  try{
-    const parsed=JSON.parse(localStorage.getItem(DAY_POINT_GOALS_KEY)||"{}");
-    return parsed&&typeof parsed==="object"?parsed:{};
-  }catch(e){return{};}
-}
-function getDayPointGoals(){
-  const dateKey=_currentViewDateKey();
-  const all=_storedDayPointGoals();
-  const defaults=_defaultDayPointGoals();
-  const saved=all[dateKey]||{};
-  const min=_roundGoal(saved.min!=null?saved.min:defaults.min);
-  const max=_roundGoal(saved.max!=null?saved.max:defaults.max);
-  return {min, max:Math.max(min,max)};
-}
-function setDayPointGoal(field,value){
-  const dateKey=_currentViewDateKey();
-  const all=_storedDayPointGoals();
-  const current=getDayPointGoals();
-  current[field]=_roundGoal(value);
-  if(field==="min"&&current.max<current.min) current.max=current.min;
-  if(field==="max"&&current.max<current.min) current.min=current.max;
-  all[dateKey]=current;
-  try{localStorage.setItem(DAY_POINT_GOALS_KEY,JSON.stringify(all));}catch(e){}
-  updateStats();
-  const popover=document.getElementById("stat-popover");
-  if(popover&&popover.dataset.openFor==="s-points"){
-    const card=document.querySelector(".stat-points");
-    popover.dataset.openFor="";
-    if(card) showStatPopover("s-points",{stopPropagation:function(){},currentTarget:card});
-  }
-}
-function _estimatedTaskPoints(ev){
-  if(!ev)return 0;
-  const bountyCount=typeof getBountyCountForTask==="function"?getBountyCountForTask(ev.id):((typeof isBountyTask==="function"&&isBountyTask(ev.id))?1:0);
-  const bounty=bountyCount>0;
-  const payload=window.TaskPoints&&typeof window.TaskPoints.buildPayload==="function"
-    ? window.TaskPoints.buildPayload(ev,{bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1})
-    : {type:ev.type,duration_minutes:typeof dur==="function"?dur(ev):(ev.durMin||30),priority:ev.priority,bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1};
-  const scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"
-    ? window.TaskPoints.estimate(payload)
-    : {eligible:(typeof pointEligible==="function")?pointEligible(ev):((typeof isMeeting!=="function"||!isMeeting(ev))&&ev.type!=="ooo"&&ev.type!=="break"),awardPoints:Math.max(1,Math.round(typeof dur==="function"?dur(ev):(ev.durMin||30)))};
-  return scoring&&scoring.eligible?Math.max(0,Number(scoring.awardPoints)||0):0;
-}
-function _pointEligibleScheduleItems(){
-  // Visible (not deleted, not side-project-flagged) AND scoped to this day —
-  // day-agnostic Unscheduled rows earn nothing here.
-  return DCC.TaskModel.selectDayScoped(DCC.TaskModel.selectVisible(scheduled));
-}
-function _dayPointSummary(){
-  const items=_pointEligibleScheduleItems();
-  const done=DCC.TaskModel.selectDone(items);
-  const remaining=DCC.TaskModel.selectOpen(items);
-  const earned=done.reduce((sum,ev)=>sum+_estimatedTaskPoints(ev),0);
-  const remainingPoints=remaining.reduce((sum,ev)=>sum+_estimatedTaskPoints(ev),0);
-  const scheduledPoints=earned+remainingPoints;
-  const goals=getDayPointGoals();
-  return {
-    items,done,remaining,earned,remainingPoints,scheduledPoints,
-    minGoal:goals.min,
-    maxGoal:goals.max,
-    neededToMin:Math.max(0,goals.min-scheduledPoints),
-    availableToMax:Math.max(0,goals.max-scheduledPoints)
-  };
-}
-function toggleRemainingStatScope(event){
-  // No-op since time-block containers were removed (stats are day-scoped).
-  if(event)event.stopPropagation();
-}
-function updateStats(){
-  const done=_dayDoneTasks(), scope=_remainingStatScope(), rem=_remainingForScope(scope);
-  const remMin=rem.reduce((a,ev)=>a+dur(ev),0);
-  const doneMin=done.reduce((a,ev)=>a+_actualMin(ev),0);
-  document.getElementById("s-time").textContent=remMin>0?ms(remMin):"0m";
-  document.getElementById("s-tasks").textContent=rem.length;
-  document.getElementById("s-done").textContent=done.length+" / "+ms(doneMin);
-  const pointSummary=_dayPointSummary();
-  const pointEl=document.getElementById("s-points");
-  const pointAvailEl=document.getElementById("s-points-available");
-  if(pointEl)pointEl.textContent=pointSummary.earned+" / "+pointSummary.scheduledPoints;
-  if(pointAvailEl)pointAvailEl.textContent="Available: "+pointSummary.availableToMax+" pts";
-  const sBlock=document.getElementById("s-block");
-  if(sBlock)sBlock.textContent=getCurrentBlockEnd();
-  _updateRemainingStatLabels(scope);
-}
-// Block Ends stat tile removed 2026-07 (time-block containers gone). Kept the
-// fn as a guarded no-op in case a stale reference calls it.
-function getCurrentBlockEnd(){ return "--"; }
-
-// ======== STAT POPOVERS ========
-function showStatPopover(statId, event) {
-  event.stopPropagation();
-  const popover = document.getElementById('stat-popover');
-  const wasOpen = popover.dataset.openFor === statId;
-  // Close any open card highlight
-  document.querySelectorAll('.stat.sp-open').forEach(el => el.classList.remove('sp-open'));
-  if (wasOpen) { popover.style.display = 'none'; popover.dataset.openFor = ''; return; }
-  let html = '';
-  switch(statId) {
-    case 's-time': {
-      const scope = _remainingStatScope();
-      const rem = _remainingForScope(scope);
-      html = '<div class="sp-title">'+_remainingScopeLabel(scope)+' Time Remaining</div>';
-      if (!rem.length) { html += '<div class="sp-empty">'+_remainingEmptyMessage(scope)+'</div>'; break; }
-      html += rem.map(ev => '<div class="sp-row"><span class="sp-time">'+f12(ev.start).replace(' ','')+'</span><span class="sp-label">'+ev.title+'</span><span class="sp-dur">'+ms(dur(ev))+'</span></div>').join('');
-      const total = rem.reduce((a,ev) => a+dur(ev), 0);
-      html += '<div class="sp-note">Total: '+ms(total)+'</div>';
-      break;
-    }
-    case 's-tasks': {
-      const scope = _remainingStatScope();
-      const rem = _remainingForScope(scope);
-      html = '<div class="sp-title">'+_remainingScopeLabel(scope)+' Remaining Tasks</div>';
-      if (!rem.length) { html += '<div class="sp-empty">'+_remainingEmptyMessage(scope)+'</div>'; break; }
-      html += rem.map(ev => '<div class="sp-row"><span class="sp-time">'+f12(ev.start).replace(' ','')+'</span><span class="sp-label">'+ev.title+'</span></div>').join('');
-      break;
-    }
-    case 's-done': {
-      const done = _dayDoneTasks();
-      const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
-      const triageDone=typeof completedTriageTasksForDate==="function"?completedTriageTasksForDate(viewDate):[];
-      html = '<div class="sp-title">Completed Today</div>';
-      if (!done.length&&!triageDone.length) { html += '<div class="sp-empty">Nothing checked off yet.</div>'; break; }
-      html += done.map(ev => {
-        const t = doneAt[ev.id] ? new Date(doneAt[ev.id]).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '—';
-        const actual=_actualMin(ev), planned=dur(ev);
-        const diff=actual-planned, diffLabel=diff>0?'+'+ms(diff):diff<0?'-'+ms(-diff):'';
-        return '<div class="sp-row"><span class="sp-time">'+t+'</span><span class="sp-label">'+ev.title+'</span><span class="sp-dur">'+ms(actual)+(diffLabel?' <span style="font-size:10px;opacity:0.6">('+diffLabel+')</span>':'')+'</span></div>';
-      }).join('');
-      html += triageDone.map(ev => {
-        const t = ev.completedAt ? new Date(ev.completedAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '—';
-        const planned=ev.durMin||30;
-        // DCC.esc: a triage title is third-party text (swept Gmail subjects, Slack message bodies) and a handled one now PERSISTS server-side, so it replays here on every device on every load.
-        return '<div class="sp-row"><span class="sp-time">'+t+'</span><span class="sp-label">'+DCC.esc(ev.title)+'</span><span class="sp-dur">'+ms(planned)+' <span style="font-size:10px;opacity:0.6">(triage)</span></span></div>';
-      }).join('');
-      const totalActual=done.reduce((a,ev)=>a+_actualMin(ev),0)+triageDone.reduce((a,ev)=>a+(ev.durMin||30),0), totalPlanned=done.reduce((a,ev)=>a+dur(ev),0)+triageDone.reduce((a,ev)=>a+(ev.durMin||30),0);
-      html+='<div class="sp-note">Actual: '+ms(totalActual)+' / Planned: '+ms(totalPlanned)+'</div>';
-      break;
-    }
-    case 's-points': {
-      const summary=_dayPointSummary();
-      const maxForMeter=Math.max(1,summary.maxGoal);
-      const scheduledPct=Math.max(0,Math.min(100,Math.round((summary.scheduledPoints/maxForMeter)*100)));
-      html = '<div class="sp-title">Day Point Budget</div>';
-      html += '<div class="sp-row"><span class="sp-label">Earned from completed tasks</span><span class="sp-dur">'+summary.earned+' pts</span></div>';
-      html += '<div class="sp-row"><span class="sp-label">Still scheduled</span><span class="sp-dur">'+summary.remainingPoints+' pts</span></div>';
-      html += '<div class="sp-row"><span class="sp-label">Planned total</span><span class="sp-dur">'+summary.scheduledPoints+' pts</span></div>';
-      html += '<div class="sp-point-meter" title="'+summary.scheduledPoints+' of '+summary.maxGoal+' max points allocated"><div class="sp-point-meter-fill" style="width:'+scheduledPct+'%"></div></div>';
-      html += '<div class="sp-row"><span class="sp-label">Needed to minimum</span><span class="sp-dur">'+summary.neededToMin+' pts</span></div>';
-      html += '<div class="sp-row"><span class="sp-label">Available to allocate</span><span class="sp-dur">'+summary.availableToMax+' pts</span></div>';
-      html += '<div class="sp-point-goals">'
-        +'<label class="sp-point-goal">Minimum goal<input type="number" min="0" step="5" value="'+summary.minGoal+'" onchange="setDayPointGoal(&apos;min&apos;,this.value)"></label>'
-        +'<label class="sp-point-goal">Maximum goal<input type="number" min="0" step="5" value="'+summary.maxGoal+'" onchange="setDayPointGoal(&apos;max&apos;,this.value)"></label>'
-        +'</div>';
-      if(summary.remaining.length){
-        html += '<div class="sp-title" style="margin-top:12px">Scheduled Points</div>';
-        html += summary.remaining.map(ev => '<div class="sp-row"><span class="sp-time">'+f12(ev.start).replace(' ','')+'</span><span class="sp-label">'+_statEsc(ev.title)+'</span><span class="sp-dur">'+_estimatedTaskPoints(ev)+' pts</span></div>').join('');
-      }
-      html += '<div class="sp-point-note">This is display-only for now. The over-allocation warning can plug into these same totals later.</div>';
-      break;
-    }
-    case 's-block': {
-      const sourceBlocks = (__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[];
-      const blocks = DCC.TimeBlocks ? DCC.TimeBlocks.forDate(sourceBlocks,viewDate) : [];
-      if (!blocks.length) {
-        const last = scheduled.length ? scheduled[scheduled.length-1] : null;
-        html = '<div class="sp-title">Day Ends</div>';
-        if (!last) { html += '<div class="sp-empty">No tasks scheduled.</div>'; break; }
-        html += '<div class="sp-row"><span class="sp-label">'+last.title+'</span><span class="sp-dur">ends '+f12(last.end).replace(' ','')+'</span></div>';
-        break;
-      }
-      html = '<div class="sp-title">Time Blocks</div>';
-      const now = new Date();
-      const nowMin = now.getHours()*60+now.getMinutes();
-      html += blocks.map(b => {
-        const bStart=pt(b.start),bEnd=pt(b.end);
-        const isCurrent=nowMin>=bStart&&nowMin<bEnd;
-        const isPast=nowMin>=bEnd;
-        return '<div class="sp-row'+(isCurrent?' sp-active':'')+'" style="opacity:'+(isPast?'0.4':'1')+'">'
-          +'<span class="sp-time">'+f12(b.start).replace(' ','')+'–'+f12(b.end).replace(' ','')+'</span>'
-          +'<span class="sp-label">'+b.name+'</span>'
-          +'<span class="sp-dur">'+(isCurrent?'Now':'')+'</span></div>';
-      }).join('');
-      html += '<div class="sp-note" style="display:flex;justify-content:flex-end"><button class="sp-edit-btn" onclick="openBlockEditor()">✎ Edit Blocks</button></div>';
-      break;
-    }
-  }
-  popover.innerHTML = html;
-  const rect = event.currentTarget.getBoundingClientRect();
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - 328));
-  popover.style.top = (rect.bottom + 8) + 'px';
-  popover.style.left = left + 'px';
-  popover.style.display = 'block';
-  popover.dataset.openFor = statId;
-  event.currentTarget.classList.add('sp-open');
-}
-document.addEventListener('click', function(e) {
-  const popover = document.getElementById('stat-popover');
-  if (!popover) return;
-  if (!e.target.closest('.stat') && !e.target.closest('#stat-popover')) {
-    popover.style.display = 'none';
-    popover.dataset.openFor = '';
-    document.querySelectorAll('.stat.sp-open').forEach(el => el.classList.remove('sp-open'));
-  }
-});
-
 // ======== BLOCK EDITOR ========
 // Time Block editor v2. This deliberately replaces the former planning-block
 // controls. A Time Block has only name, range, order, and active days.
@@ -1989,9 +1793,6 @@ function beDragOver(e,idx){if(_beDragIdx===null||_beDragIdx===idx)return;e.preve
 function beDragLeave(e){e.currentTarget?.classList.remove("be-drag-over");}
 function beDragEnd(){_beDragIdx=null;document.querySelectorAll(".be-dragging,.be-drag-over").forEach(el=>el.classList.remove("be-dragging","be-drag-over"));}
 function openBlockEditor(blockId){
-  const popover=document.getElementById("stat-popover");
-  if(popover){popover.style.display="none";popover.dataset.openFor="";}
-  document.querySelectorAll(".stat.sp-open").forEach(el=>el.classList.remove("sp-open"));
   const raw=(window.blockStore&&window.blockStore.getByType("schedule_block"))||[];
   if(raw.length){
     _beBlocks=raw.slice().sort((a,b)=>(Number(a.sort_order)||0)-(Number(b.sort_order)||0))

@@ -70,7 +70,6 @@
     }
     if(typeof buildTriage === "function")buildTriage();
     if(typeof buildNotifications === "function")buildNotifications();
-    if(typeof updateStats === "function")updateStats();
   }
 
   async function gbRefresh(){

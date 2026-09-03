@@ -2,15 +2,14 @@
 //
 // These are separate from derivation-call-sites.test.js because they came from a different
 // place. That file covers the four fixes the phase set out to make. This one covers the
-// nine call sites that had to change because the guard, once it was written honestly, said
+// call sites that had to change because the guard, once it was written honestly, said
 // they were duplicating a canonical question -- plus the hand-rolled done/open splits the
 // consistency lane found sitting two lines below a converted call.
 //
 // Every one of these was untested BEFORE the phase too, so a mutation to the routed version
 // went uncaught in round 3: pet-home dropping its deleted filter, point-plan reading the
-// wrong parent edge, the sync duplicate-check losing its open test, wrapBandwidth counting
-// subtasks as ride-alongs, and _dayPointSummary inverting done/remaining -- which silently
-// swaps the day's EARNED and REMAINING point totals. Routing them is only half the job; if a
+// wrong parent edge, the sync duplicate-check losing its open test, and wrapBandwidth counting
+// subtasks as ride-alongs. Routing them is only half the job; if a
 // mutation to the new form is invisible, the layer bought nothing here.
 //
 // Behavioural where the function is sliceable, source-asserted (with negative controls)
@@ -79,46 +78,6 @@ test("state.js isRideAlong delegates — the wrap edge has one definition too", 
   assert.match(stateCode, /const kids=_TM\(\)\.ridersOf\(ev\.id,pool\);/);
   assert.equal(/wrapParentId\(k\)===ev\.id&&relOf\(k\)==="ride-along"/.test(stateCode), false,
     "the hand-rolled rider filter must stay gone");
-});
-
-// ─────────────────────── the day's POINTS: done vs remaining ───────────────────────
-
-test("_dayPointSummary puts DONE points in earned and OPEN points in remaining", () => {
-  // Inverting these two selectors swaps the day's earned and remaining point totals with no
-  // other symptom. It is two identifiers apart and nothing caught it.
-  const ctx = ctxWith(
-    {
-      isDone: (ev) => ev.id === "done",
-      isDeleted: () => false,
-      loadTrivialFlags: () => ({}),
-      scheduled: [T("done", { _pts: 10 }), T("open", { _pts: 3 })],
-      getDayPointGoals: () => ({ min: 0, max: 0 }),
-      _estimatedTaskPoints: (ev) => ev._pts,
-    },
-    [
-      one(schedTabSrc, /function _pointEligibleScheduleItems\(\)\{[\s\S]*?\n\}/, "_pointEligibleScheduleItems"),
-      one(schedTabSrc, /function _dayPointSummary\(\)\{[\s\S]*?\n\}/, "_dayPointSummary"),
-    ]
-  );
-  const s = out(ctx, "_dayPointSummary()");
-  assert.equal(s.earned, 10, "earned comes from the DONE rows");
-  assert.equal(s.remainingPoints, 3, "remaining comes from the OPEN rows");
-  assert.equal(s.scheduledPoints, 13);
-  assert.deepEqual(s.done.map((e) => e.id), ["done"]);
-  assert.deepEqual(s.remaining.map((e) => e.id), ["open"]);
-});
-
-test("_pointEligibleScheduleItems excludes deleted, side-project AND day-agnostic rows", () => {
-  const ctx = ctxWith(
-    {
-      isDone: () => false,
-      isDeleted: (ev) => ev.id === "del",
-      loadTrivialFlags: () => ({ triv: true }),
-      scheduled: [T("keep"), T("del"), T("triv"), T("dateless", { _dateless: true })],
-    },
-    [one(schedTabSrc, /function _pointEligibleScheduleItems\(\)\{[\s\S]*?\n\}/, "_pointEligibleScheduleItems")]
-  );
-  assert.deepEqual(out(ctx, "_pointEligibleScheduleItems().map(e=>e.id)"), ["keep"]);
 });
 
 // ─────────────────────────── pet home: a live guest-facing surface ───────────────────────

@@ -428,7 +428,6 @@
     if(typeof buildScheduled==="function")buildScheduled();
     if(typeof buildScheduleSoon==="function")buildScheduleSoon();
     if(typeof buildProgress==="function")buildProgress();
-    if(typeof updateStats==="function")updateStats();
     if(typeof updateSync==="function")updateSync();
     if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();
     if(typeof schedView!=="undefined"&&schedView==="actual"&&typeof buildActualView==="function")buildActualView();

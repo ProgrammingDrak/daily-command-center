@@ -121,12 +121,11 @@
   if (typeof loadTaskMenus === 'function') loadTaskMenus();
   if (typeof loadTaskGroups === 'function') loadTaskGroups();
   if (typeof buildDelegated === 'function') buildDelegated();
-  if (typeof updateStats === 'function') updateStats();
   if (typeof updateDateNav === 'function') updateDateNav();
   if (typeof initCatchUp === 'function') initCatchUp();
   window.dispatchEvent(new CustomEvent('dcc:data-ready', { detail: { date: viewDate } }));
-  // Refresh stats every 60s to keep "Block Ends" current
-  setInterval(() => { if(typeof updateStats === 'function') updateStats(); }, 60000);
+  // Keep the current-time marker aligned without rebuilding the segments.
+  setInterval(() => { if(typeof updateProgressNow === 'function') updateProgressNow(); }, 60000);
 })();
 
 updateClock();
