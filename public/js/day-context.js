@@ -33,9 +33,9 @@
 //   - anchorNow (default true): when placing on the actual today, start the
 //     search at the next quarter-hour >= now, not the day's start.
 //     (_scheduleTaskOnDate used to always start at the day's start.)
-//   - Day bounds: first/last of state.schedule.blocks, falling back to
-//     07:00-17:30 when the day has no plan. (_scheduleTaskOnDate fell back to
-//     08:00.) A task may run up to 60 min past dayEnd before "no slot" fires.
+//   - Day bounds: stable operational defaults of 07:00-17:30. Time Blocks are
+//     display-only and never affect placement. A task may run up to 60 minutes
+//     past dayEnd before "no slot" fires.
 //   - Start of day: the user's floor (state.schedule.day_start, default 07:00)
 //     clamps dayStart upward. See the dayStartMinutes block below -- it is THE
 //     answer for all four slot engines, not just this one.
@@ -184,14 +184,8 @@
       .filter((e) => e && (e.type === "ooo" || e.type === "break"))
       .map((e) => ({ s: _pt(e.start), e: _pt(e.end) }))
       .sort((a, b) => a.s - b.s);
-    const stBlocks = sched.blocks || [];
-    // FLOOR, not a source: the user's start of day clamps whatever the day's plan
-    // implies, so a 05:00 block still bounds the day but stops pulling auto-placement
-    // into it. max(), never assignment -- a later first block still wins.
-    const dayStart = Math.max(
-      dayStartMinutes(state),
-      stBlocks.length ? _pt(stBlocks[0].start) : 7 * 60
-    );
+    // Time Blocks are visual dividers. They never change slotting boundaries.
+    const dayStart = dayStartMinutes(state);
     // Raising dayStart must never invert the window. A day whose plan ends before the
     // floor (an early-only Saturday block) would otherwise give dayEnd < dayStart.
     // responsibility-store.js loadDaySlottingContext applies the SAME clamp, so the two
@@ -206,7 +200,7 @@
     // pre-existing and is not what this change is fixing.
     const dayEnd = Math.max(
       dayStart,
-      stBlocks.length ? _pt(stBlocks[stBlocks.length - 1].end) : 17 * 60 + 30
+      17 * 60 + 30
     );
     return {
       dateStr: dateStr,

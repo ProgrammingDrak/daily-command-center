@@ -173,7 +173,8 @@
       subtaskOf: p.subtaskOf || null,
       reschedulePlacement: p.reschedulePlacement || null,
       rescheduledFrom: p.rescheduledFrom || null,
-      sourceTaskId: p.sourceTaskId || null
+      sourceTaskId: p.sourceTaskId || null,
+      retiredContainerHidden: p.retiredContainerHidden === true
     };
     if (p.commuteMinutes || p.commute_minutes) task.commuteMinutes = p.commuteMinutes || p.commute_minutes;
     if (p.commuteToMinutes || p.commute_to_minutes) task.commuteToMinutes = p.commuteToMinutes || p.commute_to_minutes;
@@ -463,7 +464,7 @@
   // project. The base every section in `selectDay` is carved out of.
   function selectVisible(items, opts) {
     const x = _deletedFn(opts), triv = _trivialFlags(opts);
-    return _arr(items).filter(function (ev) { return !!ev && !x(ev) && !triv[ev.id]; });
+    return _arr(items).filter(function (ev) { return !!ev && !x(ev) && !triv[ev.id] && !ev.retiredContainerHidden; });
   }
   function selectDayScoped(items) { return _arr(items).filter(isDayScoped); }
   function selectTopLevel(items) { return _arr(items).filter(function (ev) { return !!ev && !isNested(ev); }); }

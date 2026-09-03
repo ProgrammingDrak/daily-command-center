@@ -268,13 +268,6 @@ function recalcTimesTagAware(schedBlocks){
 // When any schedule block has acceptedTags, delegates to recalcTimesTagAware.
 function recalcTimes(opts){
   opts=opts||{};
-  // Tag-aware mode: delegate when any block has accepted tags configured.
-  // Block tag constraints outrank list order, so orderWins is ignored here.
-  const schedBlocks = (__state && __state.schedule && __state.schedule.blocks) || [];
-  if(schedBlocks.some(b => (b.acceptedTags || []).length > 0)){
-    recalcTimesTagAware(schedBlocks);
-    return;
-  }
 
   // Untimed tasks (no start; e.g. Slack-bookmark inserts) are excluded from the
   // cascade -- they live in the Unscheduled section, not the timeline, so they
@@ -598,7 +591,7 @@ function _dropAtTargetLevel(moved,target,after){
   if(wrapEv){
     if(!isWrap(wrapEv)){wrapEv.isWrap=true;_persistEvWrap(wrapEv);}
     _chainWrapChildren(wrapEv);
-    if(typeof showToast==="function")showToast('Wrapped inside "'+wrapEv.title+'"',"success",2200);
+    if(typeof showToast==="function")showToast('Nested inside "'+wrapEv.title+'"',"success",2200);
   }
   _persistEvWrap(moved);
   _reconcilePrev();
@@ -777,7 +770,7 @@ function dDrop(e,tid){
     const bWs=wrapEv?pt(wrapEv.start):0;
     recalcTimes({orderWins:true});
     if(wrapEv)_shiftWrapChildren(wrapEv,bWs);
-    if(typeof showToast==="function"&&wrapEv)showToast('Wrapped inside "'+wrapEv.title+'"',"success",2200);
+    if(typeof showToast==="function"&&wrapEv)showToast('Nested inside "'+wrapEv.title+'"',"success",2200);
   }else if(!wasUntimed&&(joined=_dropAtTargetLevel(moved,target,after))){
     // ---- Case C': edge drop on a NESTED row -> joined the target's level;
     // (An Unscheduled-origin drop skips this join too — see the nest guard above:

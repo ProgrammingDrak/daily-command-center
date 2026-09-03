@@ -11,14 +11,14 @@
   const NON_EARNING = new Set(
     (typeof window !== "undefined" && window.TaskTypes && window.TaskTypes.nonEarningTypes)
       ? window.TaskTypes.nonEarningTypes()
-      : ["meeting", "break", "ooo", "shell"]
+      : ["meeting", "break", "ooo"]
   );
   // Unconditional zero (no tag/multiplier can rescue). Meeting/break are only
   // in NON_EARNING and a matched tier tag DOES rescue them (mirrors backend).
   const HARD_ZERO = new Set(
     (typeof window !== "undefined" && window.TaskTypes && window.TaskTypes.hardZeroTypes)
       ? window.TaskTypes.hardZeroTypes()
-      : ["ooo", "shell"]
+      : ["ooo"]
   );
   const FOCUSED_TAGS = new Set(["deep-work", "deep work", "build", "coding", "writing", "analysis"]);
   const LIGHT_TAGS = new Set(["admin", "email", "errand", "chore"]);
@@ -79,6 +79,8 @@
     // matched tier tag (rescues meeting/break), then meeting/break -> zero, then
     // unsorted default -> full.
     const type = norm(input.type || input.kind);
+    // Preserve historical Shell totals until migration 007 converts each row.
+    if(type === "shell") return { tier: "none", multiplier: 0 };
     if(HARD_ZERO.has(type)) return { tier: "none", multiplier: 0 };
     const matched = matchTagTier(input);
     if(matched) return matched;

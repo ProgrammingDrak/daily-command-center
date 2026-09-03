@@ -70,10 +70,17 @@ app.get("/api/me", (_req, res) => res.json({
 }));
 app.get("/api/state/day", (req, res) => {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || "")) ? String(req.query.date) : localDateKey();
+  const timeBlocks = [
+    { id: "review-morning", name: "Morning Workout", start: "06:30", end: "09:00", activeDays: ["mon", "tue", "wed", "thu", "fri"] },
+    { id: "review-clever", name: "Clever", start: "09:00", end: "17:30", activeDays: ["mon", "tue", "wed", "thu", "fri"] },
+    { id: "review-post-work", name: "Post Work", start: "17:30", end: "19:00", activeDays: ["mon", "tue", "wed", "thu", "fri"] },
+    { id: "review-evening", name: "Evening", start: "19:00", end: "22:00", activeDays: ["mon", "tue", "wed", "thu", "fri"] },
+    { id: "review-bedtime", name: "Bedtime", start: "22:00", end: "24:00", activeDays: ["mon", "tue", "wed", "thu", "fri"] },
+  ];
   res.json({
     ...emptyState,
     date,
-    schedule: { blocks: [], timeline: [], tasks_couldnt_fit: [], end_time: "17:30" },
+    schedule: { timeBlocks, blocks: timeBlocks, timeline: [], tasks_couldnt_fit: [], end_time: "17:30" },
   });
 });
 app.get("/api/events", (req, res) => {

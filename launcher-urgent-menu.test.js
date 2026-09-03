@@ -107,7 +107,7 @@ test("launcher shows all task types and submits the visible selection directly",
   const {launcherBar, submissions, radialCalls} = loaded;
   assert.deepEqual(
     launcherBar.parts.destination.options.map(option => option.value),
-    ["urgent", "done", "schedule", "backlog", "anytime", "shell", "wrap", "habit", "meeting"]
+    ["urgent", "done", "schedule", "backlog", "anytime", "habit", "meeting"]
   );
   assert.equal(launcherBar.parts.destination.style.display, "");
 
@@ -118,7 +118,7 @@ test("launcher shows all task types and submits the visible selection directly",
   }
 
   assert.deepEqual(submissions.map(item => item.destination),
-    ["urgent", "done", "schedule", "backlog", "anytime", "shell", "wrap", "habit", "meeting"]);
+    ["urgent", "done", "schedule", "backlog", "anytime", "habit", "meeting"]);
   assert.equal(radialCalls.length, 0, "launcher Add must not reopen the full destination radial");
 });
 
@@ -130,20 +130,20 @@ test("launcher markup starts on Urgent without changing other add bars", () => {
     ["15", "30", "45", "60", "90", "120", "urgent", "schedule", "backlog"]);
   assert.match(sticky, /option value="schedule"/);
   assert.match(sticky, /option value="backlog"/);
-  assert.match(sticky, /option value="shell"/);
+  assert.doesNotMatch(sticky, /option value="(?:shell|wrap)"/);
   assert.match(launcher, /<select class="tab-dest" aria-label="Task type">/);
 });
 
-test("launcher quick radial contains only Wrap, Habit, and Meeting and only changes selection", () => {
+test("launcher quick radial contains only Habit and Meeting and only changes selection", () => {
   const loaded = loadDestinationSection();
   const {context, launcherBar, submissions, radialCalls} = loaded;
   context.openLauncherTaskTypeRadial(new FakeElement());
   assert.equal(radialCalls.length, 1);
   const call = radialCalls[0];
-  assert.deepEqual(Array.from(call.items, item => item.label), ["Wrap", "Habit", "Meeting"]);
+  assert.deepEqual(Array.from(call.items, item => item.label), ["Habit", "Meeting"]);
   assert.equal(call.options.backdrop, false);
 
-  call.items[1].onPick();
+  call.items[0].onPick();
   assert.equal(launcherBar.parts.destination.value, "habit");
   assert.equal(launcherBar.parts.title.focused, true);
   assert.equal(submissions.length, 0, "picking a quick type must not submit the task");
@@ -156,7 +156,7 @@ test("regular add bars retain the full modal destination radial", () => {
   regularBar.parts.title.value = "Regular task";
   regularBar.parts.add.emit("click", {stopPropagation(){}});
   assert.equal(radialCalls.length, 1);
-  assert.equal(radialCalls[0].items.length, 9);
+  assert.equal(radialCalls[0].items.length, 7);
   assert.notEqual(radialCalls[0].options.backdrop, false);
 });
 

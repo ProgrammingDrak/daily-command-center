@@ -1346,6 +1346,47 @@
     font-variant-numeric:tabular-nums;user-select:none}
   .it-list-gap::before,.it-list-gap::after{content:"";flex:1;height:1px;
     background:rgba(255,255,255,0.06)}
+  .time-block-divider{display:flex;align-items:center;gap:8px;width:100%;border:0;
+    background:transparent;color:var(--text-muted);padding:4px;margin:5px 0 0;
+    font:inherit;text-align:left;cursor:pointer;user-select:none}
+  .time-block-divider::after{content:"";height:1px;flex:1;background:rgba(255,255,255,0.06)}
+  .time-block-divider strong{color:var(--text);font-size:11px;font-weight:700;letter-spacing:.2px}
+  .time-block-divider small{font-size:9px;font-weight:500;color:var(--text-muted);font-variant-numeric:tabular-nums}
+  .time-block-divider:hover strong,.time-block-divider:focus-visible strong{color:var(--accent-light)}
+  .time-block-divider:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+  .time-block-divider.current strong{color:var(--accent-light)}
+  .time-block-divider.current::after{background:linear-gradient(90deg,var(--accent),rgba(255,255,255,0.06))}
+  .time-block-card .be-card-inner{align-items:stretch}
+  .time-block-card .be-drag-handle{display:flex;align-items:center;padding:0 8px;color:var(--text-muted);cursor:grab}
+  .be-row-time.simple{display:flex;align-items:end;gap:8px}
+  .be-row-time.simple label{display:grid;gap:3px;color:var(--text-muted);font-size:9px;text-transform:uppercase;letter-spacing:.4px}
+  .be-time-input{width:108px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 8px;color:var(--text);font:inherit;font-variant-numeric:tabular-nums}
+  .be-time-input:focus{border-color:var(--accent);outline:none}
+  .be-row-days{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;color:var(--text-muted);font-size:10px}
+  .be-days{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
+  .be-day input{position:absolute;opacity:0;pointer-events:none}
+  .be-day span{display:grid;place-items:center;width:27px;height:27px;border:1px solid var(--border);border-radius:50%;cursor:pointer;font-weight:700}
+  .be-day.active span{background:rgba(0,117,235,.18);border-color:var(--accent);color:var(--accent-light)}
+  .be-view-tabs{display:flex;gap:4px;padding:10px 16px 0;border-bottom:1px solid var(--border)}
+  .block-editor-modal{width:680px;max-width:calc(100vw - 32px)}
+  .be-view-tabs button{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--text-muted);padding:7px 10px 9px;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
+  .be-view-tabs button:hover{color:var(--text)}
+  .be-view-tabs button.active{border-bottom-color:var(--accent);color:var(--accent-light)}
+  .be-view-tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+  .be-week-view{display:grid;gap:12px}
+  .be-week-view.variant-stacked-days{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .be-week-day{min-width:0;border-top:1px solid var(--border);padding-top:8px}
+  .be-week-day:nth-child(-n+2){border-top:0}
+  .be-week-day h4{margin:0 0 7px;color:var(--text-muted);font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase}
+  .be-week-block{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;color:var(--text);padding:5px 2px;text-align:left;cursor:pointer}
+  .be-week-block::after{content:"";height:1px;flex:1;background:rgba(255,255,255,0.06)}
+  .be-week-block strong{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .be-week-block small{color:var(--text-muted);font-size:9px;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .be-week-block:hover strong,.be-week-block:focus-visible strong{color:var(--accent-light)}
+  .be-week-block:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+  .be-week-empty{padding:7px 2px;color:var(--text-muted);font-size:10px;font-style:italic}
+  @media(max-width:760px){.be-week-view.variant-stacked-days{grid-template-columns:1fr}.be-week-day:nth-child(2){border-top:1px solid var(--border)}}
+  @media(max-width:480px){.be-row-time.simple{align-items:center}.be-row-days{align-items:flex-start;flex-direction:column}.be-days{justify-content:flex-start}.be-time-input{width:96px}}
 
   .actual-timeline{padding-left:105px;position:relative}
   .actual-timeline::before{content:'';position:absolute;left:74px;top:0;bottom:0;width:2px;background:var(--border)}

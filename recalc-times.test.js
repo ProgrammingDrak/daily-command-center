@@ -434,7 +434,7 @@ test("orderWins: untimed rows are excluded and don't poison the anchor", () => {
   assert.equal(find(sched, "c").start, "09:30");
 });
 
-test("tag-aware mode still outranks orderWins: pinned task does not bump", () => {
+test("Time Blocks never change orderWins reflow", () => {
   const sched = [
     t("a", "09:00", "09:30"),
     t("p", "10:00", "10:30", { _pinnedStart: "10:00" }),
@@ -442,7 +442,7 @@ test("tag-aware mode still outranks orderWins: pinned task does not bump", () =>
   const blocks = [{ id: "b1", start: "09:00", end: "12:00", acceptedTags: ["deep"] }];
   const { context } = makeDay(sched, { blocks });
   context.recalcTimes({ orderWins: true });
-  assert.equal(find(sched, "p").start, "10:00"); // tag-aware pass keeps the pin
+  assert.equal(find(sched, "p").start, "09:30");
 });
 
 // ---- _dropAtTargetLevel: edge drops on nested rows join the target's level ----
@@ -647,11 +647,11 @@ test("reach-back with a hold just ABOVE the floor still lands the drop before it
 // recalcTimesTagAware is the OTHER cascade: when any schedule block has acceptedTags,
 // recalcTimes delegates to it and the per-block cursor -- not fallbackCursor -- is where
 // tasks actually land. Reverting that one clamp used to leave every test in the repo green.
-test("floor: a tagged block starting before the floor still places at the floor", () => {
+test("floor: Time Block starts never move a task", () => {
   const sched = [t("a", "09:00", "09:30", { tags: ["deep"] })];
   const blocks = [{ id: "b1", start: "05:00", end: "17:00", acceptedTags: ["deep"] }];
   makeDay(sched, { blocks, dayStart: "07:00" }).context.recalcTimes({ orderWins: true });
-  assert.equal(find(sched, "a").start, "07:00", "05:00 without the nextFree clamp");
+  assert.equal(find(sched, "a").start, "09:00");
 });
 
 test("floor: the tag-aware FALLBACK cursor is floored too, for a task no block accepts", () => {

@@ -59,10 +59,10 @@ test("buildDayContext sorts meetings by start", () => {
   assert.deepEqual(ctx.meetings.map((m) => m.s), [540, 720]);
 });
 
-test("buildDayContext takes day bounds from the first/last schedule block", () => {
+test("buildDayContext ignores Time Blocks when choosing day bounds", () => {
   const ctx = buildDayContext(OTHER_DAY, state([], [{ start: "08:15", end: "09:00" }, { start: "16:00", end: "18:45" }]), []);
-  assert.equal(ctx.dayStart, 8 * 60 + 15);
-  assert.equal(ctx.dayEnd, 18 * 60 + 45);
+  assert.equal(ctx.dayStart, 7 * 60);
+  assert.equal(ctx.dayEnd, 17 * 60 + 30);
 });
 
 test("buildDayContext falls back to 07:00-17:30 when the day has no plan", () => {
@@ -143,11 +143,10 @@ test("findSlot honors duration > durMin > start/end precedence", () => {
 
 // ── findSlot: no-room ────────────────────────────────────────────────────
 
-test("findSlot returns null when the task would run >60min past dayEnd", () => {
+test("findSlot uses the operational dayEnd, not a Time Block end", () => {
   const ctx = buildDayContext(OTHER_DAY, state([], [{ start: "07:00", end: "08:00" }]), [
-    block("block", "07:00", "08:30", "a"),
+    block("block", "07:00", "18:30", "a"),
   ]);
-  // dayEnd=08:00, grace to 09:00. A 90-min task from 08:30 ends 10:00 > 09:00.
   const slot = findSlot({ id: "t1", durMin: 90 }, ctx, OFF);
   assert.equal(slot, null);
 });
@@ -305,10 +304,10 @@ test("buildDayContext: the floor CLAMPS an early first block", () => {
   assert.equal(buildDayContext(OTHER_DAY, early, []).dayEnd, 17 * 60 + 30, "dayEnd untouched");
 });
 
-test("buildDayContext: the floor never LOWERS a later first block", () => {
+test("buildDayContext: a later Time Block does not move the floor", () => {
   const late = state([], [{ start: "09:00", end: "17:30" }]);
   late.schedule.day_start = "07:00";
-  assert.equal(buildDayContext(OTHER_DAY, late, []).dayStart, 9 * 60);
+  assert.equal(buildDayContext(OTHER_DAY, late, []).dayStart, 7 * 60);
 });
 
 test("buildDayContext: the floor also clamps the no-plan fallback", () => {
@@ -351,21 +350,21 @@ test("findSlot: a now() AFTER the floor still wins, so the floor is a floor and 
 // A plan that ends BEFORE the floor must not invert the window. Both engines clamp
 // dayEnd up to dayStart (responsibility-store.js loadDaySlottingContext does the same),
 // so neither can read a negative window and disagree about what it means.
-test("buildDayContext: the floor never inverts the day window", () => {
+test("buildDayContext: the operational day remains valid when blocks end early", () => {
   const early = state([], [{ start: "06:00", end: "08:00" }]);
   early.schedule.day_start = "10:00";
   const ctx = buildDayContext(OTHER_DAY, early, []);
   assert.equal(ctx.dayStart, 10 * 60);
-  assert.equal(ctx.dayEnd, 10 * 60, "clamped up to dayStart, not left at 08:00");
+  assert.equal(ctx.dayEnd, 17 * 60 + 30);
   assert.ok(ctx.dayEnd >= ctx.dayStart);
 });
 
 // Documenting the deliberate consequence, so a future change cannot quietly widen it:
 // such a day is only the 60 minute grace wide.
-test("findSlot: a plan ending before the floor gives the grace window and no more", () => {
+test("findSlot: an early-ending Time Block does not shorten placement", () => {
   const early = state([], [{ start: "06:00", end: "08:00" }]);
   early.schedule.day_start = "10:00";
   const ctx = buildDayContext(OTHER_DAY, early, []);
   assert.deepEqual(findSlot({ duration: 60 }, ctx, OFF), { start: "10:00", end: "11:00", duration: 60 });
-  assert.equal(findSlot({ duration: 90 }, ctx, OFF), null, "no window to place into");
+  assert.deepEqual(findSlot({ duration: 90 }, ctx, OFF), { start: "10:00", end: "11:30", duration: 90 });
 });

@@ -86,7 +86,7 @@ function userMovable(ev){
 // nested inside it are "ride-alongs": concurrent work done within the wrap's
 // time window. Ride-alongs carry wrapId = their parent's id; they do not push
 // the cascade and render indented under their parent.
-function isWrap(ev){return !!(ev&&(ev.isWrap||ev.type==="wrap"||(Array.isArray(ev.tags)&&ev.tags.includes("wrap"))));}
+function isWrap(ev){return !!(ev&&(ev.isWrap||(Array.isArray(ev.tags)&&ev.tags.includes("wrap"))));}
 function wrapParentId(ev){return ev&&ev.wrapId?ev.wrapId:null;}
 function isRideAlong(ev){return _TM().isRideAlong(ev);}
 // Reorder a flat list so each wrap is immediately followed by its ride-along
@@ -766,11 +766,8 @@ function _placeTaskAtEarliestCurrentDateSlot(id){
   deletedSet.delete(id);
   if(typeof saveDeletedState==="function")saveDeletedState();
 
-  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
-  // Floor, not a source: a 05:00 first block still bounds the day, it just stops
-  // being where "earliest slot" lands. recalcTimes() below re-flows collisions.
   const _floor=(typeof DCC!=="undefined"&&DCC.dayStartMinutes)?DCC.dayStartMinutes(__state):0;
-  const startMin=Math.max(_floor,blocks.length?pt(blocks[0].start):7*60);
+  const startMin=Math.max(_floor,7*60);
   moved.start=fmt(startMin);
   moved.end=fmt(startMin+d);
   scheduled.unshift(moved);

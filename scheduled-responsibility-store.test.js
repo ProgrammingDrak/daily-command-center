@@ -188,7 +188,7 @@ test("past dates never backfill and a concurrent idempotency loser is harmless",
   assert.deepEqual(await store(racingDb).materializeScheduledRepeatsForDate({ date: "2026-07-11", workspaceId: "ws-1" }), []);
 });
 
-test("shell templates create one complete tree in one materialization transaction", async () => {
+test("retired templates create an anchor and promoted children atomically", async () => {
   const shell = definition({ properties: {
     templateTree: { version: 1, root: {
       title: "Morning routine", type: "shell", children: [
@@ -203,9 +203,13 @@ test("shell templates create one complete tree in one materialization transactio
   assert.equal(db.calls.createTrees.length, 1);
   const rows = db.calls.createTrees[0];
   assert.equal(rows.length, 3);
-  assert.equal(rows[0].properties.type, "shell");
-  assert.equal(rows[1].parent_id, rows[0].id);
-  assert.equal(rows[2].parent_id, rows[0].id);
+  assert.equal(rows[0].properties.type, "task");
+  assert.equal(rows[0].properties.retiredContainerHidden, true);
+  assert.equal(rows[0].properties.occurrenceAnchor, true);
+  assert.equal(rows[1].parent_id, null);
+  assert.equal(rows[2].parent_id, null);
+  assert.equal(rows[1].properties.rel, "root");
+  assert.equal(rows[2].properties.rel, "root");
   assert.ok(rows.every((row) => row.properties.repeatOccurrenceKey === "2026-07-11T09:00"));
 });
 

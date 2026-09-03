@@ -318,7 +318,7 @@ test("upsertResponsibility: new slug -> createBlock; existing slug -> updateBloc
   assert.equal(withExisting.calls.updateBlock[0].fields.properties.createdAt, "2020-01-01T00:00:00Z");
 });
 
-test("upsertResponsibility: a valid shell templateTree round-trips (normalized) into the saved props", async () => {
+test("upsertResponsibility: a legacy template becomes a non-rendered occurrence anchor", async () => {
   const fresh = makeFakeBlockDB();
   const store = makeStore(fresh);
   await store.upsertResponsibility({
@@ -335,7 +335,9 @@ test("upsertResponsibility: a valid shell templateTree round-trips (normalized) 
     userId: 1, workspaceId: "ws-1",
   });
   const saved = fresh.calls.createBlock[0].properties;
-  assert.equal(saved.templateTree.root.type, "shell");
+  assert.equal(saved.templateTree.version, 2);
+  assert.equal(saved.templateTree.root.type, "task");
+  assert.equal(saved.templateTree.root.occurrenceAnchor, true);
   assert.equal(saved.templateTree.root.children.length, 2);
   assert.equal(saved.templateTree.root.children[0].durationMin, 20);
   assert.equal(saved.templateTree.root.children[1].durationMin, 15); // string coerced to number
@@ -343,7 +345,7 @@ test("upsertResponsibility: a valid shell templateTree round-trips (normalized) 
 });
 
 // ── Pure: templateTree normalization ──
-test("normalizeTemplateTree: enforces a shell root, clamps durations, defaults edge/priority", () => {
+test("normalizeTemplateTree: retires the shell root and preserves its children", () => {
   const out = normalizeTemplateTree({ root: {
     title: "Sh", type: "task", // forced to shell
     children: [
@@ -352,8 +354,9 @@ test("normalizeTemplateTree: enforces a shell root, clamps durations, defaults e
       { title: "c" },                            // missing duration -> default 30
     ],
   } });
-  assert.equal(out.version, 1);
-  assert.equal(out.root.type, "shell");
+  assert.equal(out.version, 2);
+  assert.equal(out.root.type, "task");
+  assert.equal(out.root.occurrenceAnchor, false);
   assert.equal(out.root.children[0].durationMin, 1);
   assert.equal(out.root.children[0].edge, "wrap");     // default edge
   assert.equal(out.root.children[0].priority, "Medium");
@@ -516,33 +519,28 @@ test("start of day: a floor EARLIER than the work day changes nothing", async ()
   assert.equal(out.block.properties.start, "09:00", "the work block still wins");
 });
 
-// The real bug this feature exists for: an early block dragging placement into the
-// small hours. Here the work day itself starts at 05:00.
-test("start of day: an 05:00 work day no longer places at 05:00", async () => {
+test("start of day: Time Blocks never move server placement", async () => {
   const early = [{ blockType: "work", start: "05:00", end: "17:00" }];
   const responsibility = { id: "r1", properties: { title: "Task", estimatedMinutes: 30, kind: "responsibility_item" } };
 
   const before = await makeStore(makeFakeBlockDB({ blocksByDate: { "2026-07-12": [] } }), { scheduleBlocks: early })
     .scheduleResponsibilityTask({ responsibility, date: "2026-07-12", userId: 1, workspaceId: "ws-1" });
-  assert.equal(before.block.properties.start, "05:00", "unwired: the pre-feature behaviour");
+  assert.equal(before.block.properties.start, "09:00");
 
   const after = await makeStore(makeFakeBlockDB({ blocksByDate: { "2026-07-12": [] } }), { scheduleBlocks: early, dayStartMinutes: 7 * 60 })
     .scheduleResponsibilityTask({ responsibility, date: "2026-07-12", userId: 1, workspaceId: "ws-1" });
-  assert.equal(after.block.properties.start, "07:00");
+  assert.equal(after.block.properties.start, "09:00");
 });
 
-test("start of day: an unwired store applies NO floor, so the default is never invented", async () => {
+test("start of day: an unwired store uses the stable 09:00 server bound", async () => {
   const fake = makeFakeBlockDB({ blocksByDate: { "2026-07-12": [] } });
   const store = makeStore(fake, { scheduleBlocks: [{ blockType: "work", start: "05:00", end: "17:00" }] });
   const responsibility = { id: "r1", properties: { title: "Task", estimatedMinutes: 30, kind: "responsibility_item" } };
   const out = await store.scheduleResponsibilityTask({ responsibility, date: "2026-07-12", userId: 1, workspaceId: "ws-1" });
-  assert.equal(out.block.properties.start, "05:00");
+  assert.equal(out.block.properties.start, "09:00");
 });
 
-test("start of day: the server clamps dayEnd up too, so the window is never inverted", async () => {
-  // Plan ends 08:00, floor 10:00. Without the dayEnd clamp the server window would be
-  // [600, 480] while the client's is [600, 600], and firstFreeSlot's fallback would
-  // place a task the client had already refused.
+test("start of day: Time Blocks never shorten the server day", async () => {
   const fake = makeFakeBlockDB({ blocksByDate: { "2026-07-12": [] } });
   const store = makeStore(fake, {
     scheduleBlocks: [{ blockType: "work", start: "06:00", end: "08:00" }],
@@ -550,6 +548,6 @@ test("start of day: the server clamps dayEnd up too, so the window is never inve
   });
   const ctx = await store.loadDaySlottingContext("2026-07-12", 1, "ws-1");
   assert.equal(ctx.dayStart, 600);
-  assert.equal(ctx.dayEnd, 600, "clamped up to dayStart, matching buildDayContext");
+  assert.equal(ctx.dayEnd, 17 * 60);
   assert.ok(ctx.dayEnd >= ctx.dayStart);
 });

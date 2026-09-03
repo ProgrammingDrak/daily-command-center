@@ -110,13 +110,10 @@ function initKeys() {
   // PIN 1: rebind the pinned-active-task key and reload state on date change
   PINNED_ACTIVE_KEY = "pa-pinned-active-" + d;
   try { _pinnedActiveId = JSON.parse(localStorage.getItem(PINNED_ACTIVE_KEY) || "null"); } catch(e) { _pinnedActiveId = null; }
-  // Recalculate EOD from loaded state (prefer last work block end)
-  if(__state && __state.schedule && __state.schedule.blocks){
-    const wb=__state.schedule.blocks.filter(b=>(b.blockType||b.type)==='work');
-    if(wb.length){ EOD = pt(wb[wb.length-1].end); }
-  } else if (__state && __state.schedule && __state.schedule.end_time) {
+  // Time Blocks are visual dividers and never define the operational day.
+  if (__state && __state.schedule && __state.schedule.end_time) {
     EOD = pt(__state.schedule.end_time);
-  }
+  } else EOD = pt("17:30");
 }
 
 // C6c: derived from the children's own `sort_order`, now that it is one number space (see

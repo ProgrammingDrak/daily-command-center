@@ -47,49 +47,6 @@
     triage: { label: "Triage", tagCls: "tag-triage" },
     focus:  { label: "Focus",  tagCls: "tag-focus", color: "#22d3ee" },
 
-    // Container whose points roll up from its children. Earns nothing of its
-    // own; auto-completes when the last child completes and banks bonusPct of
-    // the children's total as a points_override through the normal ledger.
-    shell: {
-      label: "Shell",
-      tagCls: "tag-shell",
-      color: "#e2e8f0",
-      barColor: "#e2e8f0",
-      cardClass: "card-shell",
-      earnsOwnPoints: false,
-      hardZero: true,
-      rollupMode: "children",
-      bonusPct: 0.10,
-      autoCompleteWhenChildrenDone: true,
-      blockManualCompleteWithOpenChildren: true,
-      childEdge: "wrap",
-      // A shell has no length of its own: its span is the SUM of its children,
-      // which stack sequentially back-to-back from the shell's anchor time. Add
-      // or remove a child and the shell grows/shrinks; the reflow shifts
-      // everything after it. (drag.js _layoutShellChildren / recalcTimes.)
-      childLayout: "sequential",
-      durationFromChildren: true,
-      dragMovesSubtree: true,
-      actualTimeMode: "none",
-    },
-
-    // Wrap = shell's container/drag behavior, MINUS the rollup economics. A wrap
-    // earns its OWN duration points (a long focus block is real work), its
-    // ride-along children earn independently, and it never auto-completes — you
-    // check it off yourself. Shares shell's wrap childEdge + dragMovesSubtree so
-    // children attach as ride-alongs and travel with the parent on drag. Unlike a
-    // shell (hardZero, non-earning), the day surfaces a wrap as work. Spec: the
-    // dcc-wraps-feature memory.
-    wrap: {
-      label: "Wrap",
-      tagCls: "tag-wrap",
-      color: "#818cf8",
-      cardClass: "card-wrap",
-      childEdge: "wrap",
-      dragMovesSubtree: true,
-      // earnsOwnPoints:true, no hardZero, no rollup, no auto-complete (defaults).
-    },
-
     // Recurring self-care/discipline task. Earns points and moves like a normal
     // task; no rollup. The row shows a streak chip counting consecutive prior
     // days a same-titled habit was completed (display-only, computed from range
@@ -107,13 +64,39 @@
     ooo:     { label: "OOO",     tagCls: "tag-ooo",     color: "#64748b", earnsOwnPoints: false, hardZero: true, movable: false, fixedTime: true, actualTimeMode: "none" },
   };
 
+  // Read-only compatibility for rows that have not passed migration 007 yet.
+  // These types stay outside TYPES, so no creation surface or registry listing
+  // can offer them. Remove this map after the legacy fields are dropped.
+  const LEGACY_READ_RULES = {
+    shell: {
+      label: "Task",
+      earnsOwnPoints: false,
+      hardZero: true,
+      rollupMode: "children",
+      bonusPct: 0.10,
+      autoCompleteWhenChildrenDone: true,
+      blockManualCompleteWithOpenChildren: true,
+      childEdge: "wrap",
+      childLayout: "sequential",
+      durationFromChildren: true,
+      dragMovesSubtree: true,
+      actualTimeMode: "none",
+    },
+    wrap: {
+      label: "Task",
+      childEdge: "wrap",
+      dragMovesSubtree: true,
+    },
+  };
+
   function normType(evOrType) {
     if (evOrType == null) return "";
     const t = typeof evOrType === "string" ? evOrType : (evOrType.type || evOrType.kind || "");
     return String(t).trim().toLowerCase();
   }
   function get(evOrType) {
-    const entry = TYPES[normType(evOrType)];
+    const type = normType(evOrType);
+    const entry = TYPES[type] || LEGACY_READ_RULES[type];
     return entry ? Object.assign({}, DEFAULTS, entry) : Object.assign({}, DEFAULTS);
   }
   function rule(evOrType, key) {

@@ -538,7 +538,7 @@ test("★★ db.js assigns the day's next slot instead of defaulting to 0", () =
   assert.match(dbCode, /if \(sortOrderToUse == null && isTaskRow/);
   assert.equal(/sortOrderToUse === 0/.test(dbCode), false, "an explicit 0 must not be read as unset");
   assert.equal(/sort_order \|\| 0, user_id/.test(dbCode), false, "the old `sort_order || 0` insert default must be gone");
-  for (const [f, pat] of [["server.js", /sort_order: \(i \+ 1\) \* 1000/], ["public/js/schedule-tab.js", /sortOrder: \(j \+ 1\) \* 1000/], ["public/js/sync.js", /sortOrder: \(i \+ 1\) \* 1000/], ["public/js/sync.js", /sortOrder:\(idx \+ 1\) \* 1000|sortOrder: \(idx \+ 1\) \* 1000/]]) {
+  for (const [f, pat] of [["server.js", /sort_order: \(i \+ 1\) \* 1000/], ["public/js/schedule-tab.js", /sortOrder:\s*\([ij]\s*\+\s*1\)\s*\*\s*1000/], ["public/js/sync.js", /sortOrder: \(i \+ 1\) \* 1000/], ["public/js/sync.js", /sortOrder:\(idx \+ 1\) \* 1000|sortOrder: \(idx \+ 1\) \* 1000/]]) {
     assert.match(fs.readFileSync(require.resolve("./" + f), "utf8"), pat, f + " still passes a 0-based index");
   }
   // updateBlock is the OTHER day-changing writer, and the most-used one

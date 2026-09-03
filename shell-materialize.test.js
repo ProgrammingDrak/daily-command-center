@@ -64,7 +64,7 @@ test("attachTemplateChildren: ignores empty/invalid nodes and non-arrays", () =>
   context.attachTemplateChildren("root", undefined);
 });
 
-test("_shellAlreadyOnDay: true only when a live rollup with that responsibilityId is on the day", () => {
+test("_shellAlreadyOnDay dedupes any live responsibility occurrence", () => {
   const rollupIds = new Set(["sh"]);
   const context = {
     console,
@@ -80,7 +80,7 @@ test("_shellAlreadyOnDay: true only when a live rollup with that responsibilityI
   vm.runInContext(dedupeSrc, context);
 
   assert.equal(context._shellAlreadyOnDay("r1"), true);  // live shell for r1
-  assert.equal(context._shellAlreadyOnDay("r2"), false); // r2's block isn't a rollup
+  assert.equal(context._shellAlreadyOnDay("r2"), true);
   assert.equal(context._shellAlreadyOnDay("r3"), false); // nothing for r3
   assert.equal(context._shellAlreadyOnDay(""), false);   // no id
 

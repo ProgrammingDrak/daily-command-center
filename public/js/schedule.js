@@ -1,10 +1,5 @@
 // ======== OVERFLOW DETECTION ========
 let EOD = (function(){
-  // Prefer last work-type block end
-  if(__state&&__state.schedule&&__state.schedule.blocks){
-    const wb=__state.schedule.blocks.filter(b=>(b.blockType||b.type)==='work');
-    if(wb.length) return pt(wb[wb.length-1].end);
-  }
   if(__state&&__state.schedule&&__state.schedule.end_time){
     const t=__state.schedule.end_time;
     return pt(t.length>5?t.substring(11,16):t);
@@ -24,7 +19,7 @@ function persistAddedTask(item,targetDate){
   // dur() is end-start, which is meaningless on an untimed item (no start yet,
   // e.g. a future-day create from the schedule popover) — fall back to durMin.
   const _computedDur=dur(item);
-  const _itemDur=(Number.isFinite(_computedDur)&&_computedDur>0)?_computedDur:(item.durMin||30);
+  const _itemDur=item.occurrenceAnchor?0:((Number.isFinite(_computedDur)&&_computedDur>0)?_computedDur:(item.durMin||30));
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
     // Write to blockstore — will be reloaded via property-based query on refresh
     const date=targetDate||((typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)?__state.date:null));
@@ -54,6 +49,9 @@ function persistAddedTask(item,targetDate){
       delegatedItemId:item.delegatedItemId||null,
       linkedBlockId:item.linkedBlockId||null,
       linkedTagId:item.linkedTagId||null,
+      retiredContainerHidden:item.retiredContainerHidden===true,
+      occurrenceAnchor:item.occurrenceAnchor===true,
+      point_multiplier:item.point_multiplier==null?undefined:Number(item.point_multiplier),
       ampUrl:item.ampUrl||null,
       hubspotUrl:item.hubspotUrl||null,
       commuteMinutes:item.commuteMinutes||null,
@@ -162,7 +160,7 @@ function insertTaskNow(titleArg, durMinArg, opts){
   // A shell has no length of its own — it starts zero-length and derives its
   // span from the children that get added to it (durationFromChildren).
   const durFromKids=window.TaskTypes&&window.TaskTypes.rule(opts.type,"durationFromChildren");
-  const durMin=durFromKids?0:(durMinArg||30);
+  const durMin=(durFromKids||opts.occurrenceAnchor)?0:(durMinArg||30);
   const id=qaId();
 
   // Pin start to the next free 15-minute slot from now, stepping past any
@@ -244,19 +242,22 @@ function insertTaskFromDrawer(title, durMin, opts){
 // and its kind is never "responsibility_task" (which the itinerary fold in
 // persistence.js rejects). Recurses into nested children. The shell root is
 // created by materializeShellTemplate, which then calls this in its onScheduled.
-function attachTemplateChildren(parentLocalId,children){
+function attachTemplateChildren(parentLocalId,children,promoteDirect){
   if(!parentLocalId||!Array.isArray(children))return;
   children.forEach(function(node){
     if(!node||!node.title)return;
     var created=null;
-    if(node.edge==="subtask"){
+    if(promoteDirect){
+      var directDur=Math.max(1,Number(node.durationMin)||30);
+      if(typeof insertTaskNow==="function")created=insertTaskNow(node.title,directDur,{priority:node.priority||"Medium",type:"task",detail:node.detail||""});
+    }else if(node.edge==="subtask"){
       if(typeof addSubtask==="function")created=addSubtask(parentLocalId,node.title);
     }else{
       var d=Math.max(1,Number(node.durationMin)||30);
       if(typeof addStackedTask==="function")created=addStackedTask(parentLocalId,node.title,d,{priority:node.priority||"Medium",type:node.type||"task",detail:node.detail||""});
     }
     if(created&&created.id&&Array.isArray(node.children)&&node.children.length){
-      attachTemplateChildren(created.id,node.children);
+      attachTemplateChildren(created.id,node.children,false);
     }
   });
 }
@@ -265,9 +266,7 @@ window.attachTemplateChildren=attachTemplateChildren;
 // Idempotency: is a shell for this responsibility already live on the viewed day?
 function _shellAlreadyOnDay(responsibilityId){
   if(!responsibilityId||typeof scheduled==="undefined")return false;
-  return DCC.TaskModel.selectNotDeleted(scheduled).some(function(e){
-    return e.responsibilityId===responsibilityId&&window.TaskTypes&&window.TaskTypes.isRollup(e);
-  });
+  return DCC.TaskModel.selectNotDeleted(scheduled).some(function(e){return e.responsibilityId===responsibilityId;});
 }
 window._shellAlreadyOnDay=_shellAlreadyOnDay;
 
@@ -280,23 +279,29 @@ function materializeShellTemplate(templateTree,opts){
   if(!templateTree||!templateTree.root)return null;
   var root=templateTree.root;
   if(opts.responsibilityId&&_shellAlreadyOnDay(opts.responsibilityId)){
-    if(typeof showToast==="function")showToast('"'+(root.title||"Shell")+'" is already on today',"info");
+    if(typeof showToast==="function")showToast('"'+(root.title||"Repeat")+'" is already on today',"info");
     return null;
   }
   var curDate=(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||"";
   var rootId=null;
   insertTaskNow(root.title,0,{
-    type:root.type||"shell",
+    type:"task",
+    retiredContainerHidden:true,
+    occurrenceAnchor:true,
+    point_multiplier:0,
     responsibilityId:opts.responsibilityId||null,
     responsibilityTitle:opts.responsibilityTitle||root.title,
     priority:root.priority||"High",
     source:opts.source||"responsibility",
     tags:opts.tags||["responsibility"],
     detail:root.detail||"",
+    targetId:opts.targetId||null,
+    after:!!opts.after,
+    orderWins:!!opts.orderWins,
     idempotencyKey:opts.responsibilityId?("resp-shell:"+opts.responsibilityId+":"+curDate):null,
     onScheduled:function(info){
       rootId=info&&info.localId;
-      if(rootId)attachTemplateChildren(rootId,root.children||[]);
+      if(rootId)attachTemplateChildren(rootId,root.children||[],true);
       if(typeof opts.onScheduled==="function"){try{opts.onScheduled(info);}catch(e){}}
     }
   });
@@ -616,10 +621,10 @@ function _autoCompleteShellAncestors(id,sourceDate){
       Promise.resolve(write).then(result=>{
         if(result&&result.pending)return;
         awardSlotTaskCredit(parent,{sourceDate:sourceDate,completedAt:completedAt.toISOString(),awardPoints:bonus,sourceKey:"completion:"+((result&&result.mutationId)||parent.id)});
-        if(typeof showToast==="function")showToast('"'+(parent.title||"Shell")+'" complete!'+(bonus?" +"+bonus+" pt bonus":""),"success",3200);
+        if(typeof showToast==="function")showToast('"'+(parent.title||"Task group")+'" complete!'+(bonus?" +"+bonus+" pt bonus":""),"success",3200);
       }).catch(error=>{
         manualDone.delete(parent.id);delete doneAt[parent.id];render();
-        if(typeof showToast==="function")showToast(error.message||"Shell completion was not saved","error",4200);
+        if(typeof showToast==="function")showToast(error.message||"Task group completion was not saved","error",4200);
       });
     } else if(!isDone(parent)){
       return; // an open non-rollup ancestor blocks everything above it
@@ -1552,10 +1557,8 @@ function addTaskUniversal(barEl){
     // Retro-logging: the task already happened — create it and check it off in
     // one gesture so points/streaks/persistence flow through the normal path.
     case"done":insertTaskNow(title,durMin,{onScheduled:r=>{if(r&&r.localId&&typeof toggleDone==="function")toggleDone(r.localId);}});break;
-    case"shell":insertTaskNow(title,durMin,{type:"shell"});break;
     // Wrap: a container that earns its own points (a long focus block); children
     // ride along. insertTaskNow flags it isWrap from birth (dragMovesSubtree).
-    case"wrap":insertTaskNow(title,durMin,{type:"wrap"});break;
     // Habit: recurring earn; the row grows a streak chip from prior completions.
     case"habit":insertTaskNow(title,durMin,{type:"habit"});break;
     // Manually-added meeting: no source_id, so the calendar materializer never
@@ -1645,7 +1648,7 @@ function openSchedulePicker(title,durMin,options){
   const overlay=document.getElementById("sched-picker-overlay");
   if(!overlay){
     // Fallback if modal markup isn't present: schedule after current.
-    insertTaskNow(title,durMin);
+    insertTaskNow(title,durMin,options);
     return;
   }
   _schedSetHeader("Schedule");
@@ -1880,7 +1883,10 @@ function schedulePickerFields(durMin,options){
     responsibilityId:options.responsibilityId||null,
     responsibilityTitle:options.responsibilityTitle||null,
     capacityBucket:options.capacityBucket||null,
-    idempotency_key:options.idempotencyKey||options.idempotency_key||null
+    idempotency_key:options.idempotencyKey||options.idempotency_key||null,
+    retiredContainerHidden:options.retiredContainerHidden===true,
+    occurrenceAnchor:options.occurrenceAnchor===true,
+    point_multiplier:options.point_multiplier==null?undefined:Number(options.point_multiplier)
   });
 }
 // Resolve a chosen day (dateStr) + time (HH:MM) into a real task. If that day is
@@ -2059,20 +2065,7 @@ function _dayStartValue(){
 function _renderDayStartNote(){
   const note=document.getElementById("day-start-note");
   if(!note)return;
-  // The server-side scheduler derives its own bound from WORK blocks only, so a floor
-  // earlier than the first work block changes nothing there. Say so rather than let
-  // the setting look broken.
-  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
-  const work=blocks.filter(b=>(b.blockType||b.type)==="work");
   note.textContent="";
-  if(!work.length)return;
-  // Only true while the work day starts LATER than the floor. Printed unconditionally it
-  // told a user with a 10:00 floor and a 09:00 work block that work "still begins" at
-  // 09:00, the opposite of max(floor, derived). Reads the picker, not the saved value.
-  const input=document.getElementById("day-start-input");
-  const picked=(window.DCC&&DCC.normalizeDayStart&&DCC.normalizeDayStart(input&&input.value))||_dayStartValue();
-  if(pt(work[0].start)<=pt(picked))return;
-  note.textContent="Your work day starts at "+_schedTimeLabel(work[0].start)+". Auto-scheduled work still begins then.";
 }
 function openDayStart(){
   const ov=document.getElementById("day-start-overlay");
@@ -2172,8 +2165,6 @@ const TASK_DESTINATIONS=[
   {value:"schedule",icon:"📅", label:"Schedule…"},
   {value:"backlog", icon:"💡", label:"Backlog / Idea"},
   {value:"anytime", icon:"💧", label:"Anytime"},
-  {value:"shell",   icon:"🐚", label:"Shell"},
-  {value:"wrap",    icon:"🎁", label:"Wrap"},
   {value:"habit",   icon:"🔁", label:"Habit"},
   {value:"meeting", icon:"👥", label:"Meeting"}
 ];
@@ -2307,7 +2298,7 @@ function openLauncherTaskTypeRadial(anchorBtn){
   const bar=document.getElementById("task-add-launcher");
   const sel=bar&&bar.querySelector(".tab-dest");
   if(!bar||!sel)return;
-  const quickTypes=TASK_DESTINATIONS.filter(d=>d.value==="wrap"||d.value==="habit"||d.value==="meeting");
+  const quickTypes=TASK_DESTINATIONS.filter(d=>d.value==="habit"||d.value==="meeting");
   _openDestRadial(bar,sel,anchorBtn,{
     destinations:quickTypes,a0:188,a1:268,r:88,labelGap:34,backdrop:false,
     onPick:d=>{
@@ -2512,26 +2503,5 @@ function saveUnscheduledOrder(ids){
 
 // ======== BLOCK BOUNDARY WARNINGS ========
 function checkBlockWarnings(task){
-  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
-  if(!blocks.length||!task) return;
-  const taskStart=pt(task.start), taskEnd=pt(task.end);
-  for(const b of blocks){
-    const bStart=pt(b.start), bEnd=pt(b.end);
-    const bt=b.blockType||b.type;
-    // Protected boundary: warn if task overlaps a protected block
-    if(b.protected && taskStart<bEnd && taskEnd>bStart && bt==='personal'){
-      showToast("⚠ \""+task.title+"\" overlaps protected block \""+b.name+"\"","error",8000);
-    }
-    // Threshold warning: warn if remaining time in current block is low
-    if(b.warnThreshold && b.warnThreshold>0){
-      const now=new Date();
-      const nowMin=now.getHours()*60+now.getMinutes();
-      if(nowMin>=bStart && nowMin<bEnd){
-        const remaining=bEnd-nowMin;
-        if(remaining<=b.warnThreshold){
-          showToast("⏱ Only "+remaining+"m left in \""+b.name+"\"","error",6000);
-        }
-      }
-    }
-  }
+  return task;
 }

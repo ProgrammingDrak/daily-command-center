@@ -179,7 +179,6 @@
         <option value="schedule">Schedule</option>
         <option value="backlog">Backlog and Ideas</option>
         <option value="urgent" selected>Urgent</option>
-        <option value="shell">Shell (container)</option>
       </select>
       <button class="tab-add">+ Add</button>
     </div>
@@ -461,15 +460,17 @@
 
 <!-- Block editor modal -->
 <div class="completion-modal-overlay" id="block-editor-overlay">
-  <div class="completion-modal" style="max-width:560px">
+  <div class="completion-modal block-editor-modal" style="max-width:680px">
     <div class="completion-modal-hdr">
       <h3>Time Blocks</h3>
-      <button class="secondary" id="block-editor-manage-tags" style="font-size:11px;padding:3px 8px;margin-right:6px">Manage Tags</button>
       <button class="completion-modal-close" id="block-editor-close">&times;</button>
     </div>
-    <div class="completion-modal-body" id="block-editor-body" style="padding:12px 16px;max-height:60vh;overflow-y:auto"></div>
+    <div class="be-view-tabs" role="tablist" aria-label="Time Block views">
+      <button class="active" id="block-editor-tab-blocks" type="button" role="tab" data-be-view="blocks" aria-selected="true">All Blocks</button>
+      <button id="block-editor-tab-week" type="button" role="tab" data-be-view="week" aria-selected="false" tabindex="-1">By Day</button>
+    </div>
+    <div class="completion-modal-body" id="block-editor-body" role="tabpanel" aria-labelledby="block-editor-tab-blocks" style="padding:12px 16px;max-height:60vh;overflow-y:auto"></div>
     <div class="completion-actions">
-      <button class="secondary" id="block-editor-clear" style="margin-right:auto">Clear All</button>
       <button class="secondary" id="block-editor-cancel">Cancel</button>
       <button class="primary" id="block-editor-save">Save</button>
     </div>
@@ -752,24 +753,6 @@
     <div class="del-confirm-actions">
       <button class="del-cancel" id="del-cancel">Cancel</button>
       <button class="del-go" id="del-go">Remove</button>
-    </div>
-  </div>
-</div>
-
-<!-- PIN 3: block-save confirm (today only vs today + future) -->
-<div class="del-confirm-overlay" id="bs-confirm-overlay">
-  <div class="del-confirm-box bs-confirm-box">
-    <div class="del-confirm-title">Apply these changes where?</div>
-    <div class="del-confirm-msg">
-      "Today only" updates this day. "Today + future days" also applies
-      your top-level block changes to every future day that still matches
-      the original values. Nested sub-blocks stay per-day and are not
-      touched on future days.
-    </div>
-    <div class="del-confirm-actions">
-      <button class="del-cancel" id="bs-confirm-cancel">Cancel</button>
-      <button class="del-go" id="bs-confirm-today">Today only</button>
-      <button class="del-go" id="bs-confirm-future" style="margin-left:6px">Today + future days</button>
     </div>
   </div>
 </div>
@@ -2036,6 +2019,7 @@
 
 <!-- core.js MUST load first: every later script may use window.DCC at parse time -->
 <script src="/public/js/core.js?v=core-1"></script>
+<script src="/public/js/time-blocks.js?v=time-blocks-1"></script>
 <!-- task-types.js next: the per-type rules registry; points.js and the renderers read it at parse time -->
 <script src="/public/js/task-types.js?v=task-types-1"></script>
 <!-- task-serialize.js: the one task-property serializer (window.DCC.taskBlockProps/taskCommonProps); must load before state.js/schedule.js/unfinished-tasks.js consume it -->

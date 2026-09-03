@@ -1676,7 +1676,7 @@ module.exports = function mount(app, ctx) {
       const isShell = parentProps.type === "shell" || parentProps.kind === "shell";
       if (isShell && place && place.kind === "timed" && oldParentStart != null && oldParentEnd != null &&
           newParentEnd - newParentStart !== oldParentEnd - oldParentStart) {
-        return res.status(400).json({ error: "Shell duration is derived from its children" });
+        return res.status(400).json({ error: "Container duration is derived from its children" });
       }
       const moves = subtreeIds.map(bid => {
         const b = byId.get(bid);
@@ -1724,7 +1724,7 @@ module.exports = function mount(app, ctx) {
       });
       if (place && place.kind === "timed" && (parentProps.isWrap || parentProps.type === "wrap" || parentProps.kind === "wrap")) {
         const latestChildEnd = moves.slice(1).reduce((latest, move) => Math.max(latest, toMin((move.properties || {}).end) || -1), -1);
-        if (latestChildEnd > toMin(place.end)) return res.status(400).json({ error: "Wrap cannot end before its latest timed child" });
+        if (latestChildEnd > toMin(place.end)) return res.status(400).json({ error: "A parent task cannot end before its latest timed child" });
       }
 
       // One tombstone per (moved task, origin day) so the amber list stays clean
