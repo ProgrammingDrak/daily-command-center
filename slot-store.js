@@ -43,6 +43,9 @@ const SPIN_COST_LENIENCY = 0.9;
 const SPIN_COST_MIN_DAYS = 3;
 const DEFAULT_MAINTENANCE_HOURS_PER_DAY = 4;
 const DEFAULT_ADVANCEMENT_HOURS_PER_DAY = 5;
+const DEFAULT_DESIRED_HOURS_PER_WEEK = 50;
+const WEEKS_PER_MONTH = 52 / 12;
+const MAX_MISS_SHIELDS = 50;
 const DEFAULT_BANK_BUILDER_HIT_RATE = 0.9;
 // Jackpot is the rare headline event, not a near-daily occurrence: ~1 in 100
 // spins. Like a real slot's PAR sheet, the headline symbol owns a tiny slice of
@@ -198,6 +201,12 @@ const SPONSOR_TYPES = new Set(["self", "accountability_partner", "romantic_partn
 const REWARD_KINDS = new Set(["miss", "free", "small_paid", "bank_gated", "sponsor", "choice", "reroll"]);
 const PAYMENT_SOURCES = new Set(["self", "sponsored", "free"]);
 const DEFAULT_SOURCE_WEIGHTS = { self: 45, sponsored: 25, free: 30 };
+// Category roll for a jackpot: pick a funding category, then spin that category's
+// wheel (rewards weighted by chance_shares). Replaces the old source x tier roll.
+// Categories ARE the payment sources: free = Free Self Care, self = Reward Reserve
+// Funded, sponsored = Sponsored. Editable in Advanced; defaults below.
+const DEFAULT_CATEGORY_WEIGHTS = { free: 60, self: 25, sponsored: 15 };
+const CATEGORY_LABELS = { free: "Free Self Care", self: "Reward Reserve Funded", sponsored: "Sponsored" };
 const MAX_BANKROLL_GOAL_CENTS = 10000000;
 const DEFAULT_REWARD_TIERS = [
   { id: "tier_i", label: "Tier 1", weight: 36, active: true },
@@ -432,6 +441,18 @@ function normalizeSourceWeights(value) {
   };
 }
 
+// Category roll weights (free / self / sponsored). Stored as raw weights; the
+// roll is proportional, so they need not sum to 100, but the UI presents/edits
+// them as percentages that sum to 100.
+function normalizeCategoryWeights(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  return {
+    free: clampInt(raw.free ?? DEFAULT_CATEGORY_WEIGHTS.free, 0, 1000000),
+    self: clampInt(raw.self ?? DEFAULT_CATEGORY_WEIGHTS.self, 0, 1000000),
+    sponsored: clampInt(raw.sponsored ?? raw.sponsor ?? DEFAULT_CATEGORY_WEIGHTS.sponsored, 0, 1000000),
+  };
+}
+
 function normalizeBankrollGoal(value) {
   const raw = value && typeof value === "object" ? value : {};
   const rewardId = raw.reward_id ?? raw.rewardId;
@@ -478,6 +499,12 @@ function normalizeHours(value, fallback) {
   return Math.max(0, Math.min(16, Math.round(n * 4) / 4));
 }
 
+function normalizeWeeklyHours(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.max(1, Math.min(168, Math.round(n * 4) / 4));
+}
+
 function normalizeProfileNotes(value) {
   return String(value == null ? "" : value).trim().slice(0, 1000);
 }
@@ -501,6 +528,10 @@ function normalizeEconomyProfile(value = {}) {
     advancement_hours_per_day: normalizeHours(
       raw.advancement_hours_per_day ?? raw.advancementHoursPerDay,
       DEFAULT_ADVANCEMENT_HOURS_PER_DAY
+    ),
+    desired_hours_per_week: normalizeWeeklyHours(
+      raw.desired_hours_per_week ?? raw.desiredHoursPerWeek,
+      DEFAULT_DESIRED_HOURS_PER_WEEK
     ),
     target_daily_spins: DEFAULT_TARGET_DAILY_SPINS,
     monthly_discretionary_cents: monthly,
@@ -937,6 +968,7 @@ function normalizeSlotSettings(settings = {}) {
     active_multiplier: normalizeActiveMultiplier(raw.active_multiplier ?? raw.activeMultiplier, normalizeMultiplierCharges(raw.multiplier_charges || raw.multiplierCharges)),
     bankroll_pacing: raw.bankroll_pacing && typeof raw.bankroll_pacing === "object" ? { ...derived.bankroll_pacing, ...raw.bankroll_pacing } : derived.bankroll_pacing,
     payment_source_weights: normalizeSourceWeights(raw.payment_source_weights || raw.paymentSourceWeights),
+    category_weights: normalizeCategoryWeights(raw.category_weights || raw.categoryWeights),
     reward_tiers: normalizeRewardTiers(raw.reward_tiers || raw.rewardTiers),
     reroll_credits: clampInt(raw.reroll_credits ?? raw.rerollCredits ?? 0, 0, 1000),
     jackpot_spin_credits: clampInt(raw.jackpot_spin_credits ?? raw.jackpotSpinCredits ?? 0, 0, 1000),
@@ -1215,13 +1247,12 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents, tankUsage) 
   const expired = !!row.expires_at && new Date(row.expires_at).getTime() <= Date.now();
   const usesExhausted = row.uses_remaining != null && Number(row.uses_remaining) <= 0;
   const lifespanExhausted = expired || usesExhausted;
-  // The jackpot only ever rolls into active tiers and sources whose weight > 0
-  // (see tierOptions/sourceOptions + bucketForSourceTier). A reward assigned to a
-  // deactivated tier or a zeroed-out source is therefore unwinnable; surface that
-  // as a lock instead of letting it read as eligible/green in the UI.
+  // The jackpot rolls a category, then that category's wheel (chance_shares).
+  // A reward whose category weight is zeroed out is therefore unwinnable; surface
+  // that as a lock instead of letting it read as eligible/green in the UI. Tiers
+  // no longer gate eligibility.
   const settings = (account && account.settings) || {};
-  const tierActive = tierOptions(settings).some(t => String(t.id) === String(row.tier_id || "tier_i"));
-  const sourceEnabled = sourceOptions(settings).some(s => s.id === paymentSource && Number(s.weight) > 0);
+  const categoryEnabled = categoryOptions(settings).some(c => c.id === paymentSource && Number(c.weight) > 0);
   return {
     ...row,
     payment_source: paymentSource,
@@ -1234,7 +1265,7 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents, tankUsage) 
     expires_at: row.expires_at || null,
     uses_remaining: row.uses_remaining != null ? Number(row.uses_remaining) : null,
     lifespan_exhausted: lifespanExhausted,
-    eligible: !!row.active && chanceShares > 0 && tierActive && sourceEnabled && !bankCapLocked && !reserveLocked && !bankrollGoalExcluded && !lifespanExhausted && !tankLocked && !tankClaimed,
+    eligible: !!row.active && chanceShares > 0 && categoryEnabled && !bankCapLocked && !reserveLocked && !bankrollGoalExcluded && !lifespanExhausted && !tankLocked && !tankClaimed,
     jackpot_type: jackpotType(row),
     bankroll_goal_excluded: bankrollGoalExcluded,
     reserve_cost_cents: threshold,
@@ -1245,8 +1276,7 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents, tankUsage) 
     locked_reason: !row.active ? "inactive" :
       chanceShares <= 0 ? "zero_weight" :
       lifespanExhausted ? "expired" :
-      !tierActive ? "tier_inactive" :
-      !sourceEnabled ? "source_disabled" :
+      !categoryEnabled ? "source_disabled" :
       bankrollGoalExcluded ? "bankroll_goal" :
       tankLocked ? "tank_locked" :
       tankClaimed ? "tank_claimed" :
@@ -1399,8 +1429,8 @@ async function getWinningsSummaryCustom(workspaceId, from, to, exec = pool) {
   return { won: (r && r.won) || 0, banked: (r && r.banked) || 0, from, to };
 }
 
-async function getPendingBankDeposit(workspaceId) {
-  const { rows: [pending] } = await pool.query(
+async function getPendingBankDeposit(workspaceId, exec = pool) {
+  const { rows: [pending] } = await exec.query(
     `SELECT
        COALESCE(SUM(bank_delta_cents), 0)::int AS cents,
        COUNT(*)::int AS count,
@@ -1476,6 +1506,44 @@ function buildBankrollGoalState(account, rewardRows, bankUsage, funding, tankUsa
     missing: !row,
     funded_at: goal.funded_at || null,
     celebration_spin_claimed_at: goal.celebration_spin_claimed_at || null,
+  };
+}
+
+function desiredMinutesPerMonth(settings) {
+  const profile = (settings && settings.economy_profile) || {};
+  const hoursPerWeek = normalizeWeeklyHours(
+    profile.desired_hours_per_week,
+    DEFAULT_DESIRED_HOURS_PER_WEEK
+  );
+  return Math.max(1, Math.round(hoursPerWeek * WEEKS_PER_MONTH * 60));
+}
+
+function buildPointExchangeState(account, goalState) {
+  const settings = normalizeSlotSettings(account && account.settings);
+  const minutesPerMonth = desiredMinutesPerMonth(settings);
+  const goal = goalState || {};
+  const enabled = !!goal.enabled && Number(goal.target_cents) > 0;
+  const targetCents = enabled ? Number(goal.target_cents) : 0;
+  const currentTotalCents = Number(goal.total_cents) || 0;
+  const remainingCents = enabled ? Math.max(0, targetCents - currentTotalCents) : 0;
+  const centsPerPoint = enabled ? targetCents / minutesPerMonth : 0;
+  const pointsPerShield = Math.max(1, Math.round(minutesPerMonth / MAX_MISS_SHIELDS));
+  const shields = Number(settings.next_spin_modifiers && settings.next_spin_modifiers.miss_shield) || 0;
+  return {
+    enabled,
+    cents_per_point: centsPerPoint,
+    points_per_shield: pointsPerShield,
+    minutes_per_month: minutesPerMonth,
+    desired_hours_per_week: settings.economy_profile.desired_hours_per_week,
+    target_cents: targetCents,
+    current_total_cents: currentTotalCents,
+    remaining_cents: remainingCents,
+    points_to_fill: enabled && centsPerPoint > 0 ? Math.ceil(remainingCents / centsPerPoint) : 0,
+    point_balance: Number(account && account.point_balance) || 0,
+    miss_shield: shields,
+    max_miss_shields: MAX_MISS_SHIELDS,
+    shield_capacity: Math.max(0, MAX_MISS_SHIELDS - shields),
+    funded: enabled && remainingCents <= 0,
   };
 }
 
@@ -1570,6 +1638,7 @@ async function getState(workspaceId, userId, options = {}) {
       shortfallPenalty: account.settings.shortfall_penalty,
       scoringRationale: account.settings.scoring_rationale,
       bankrollGoalModeEnabled: isBankrollGoalModeActive(account.settings),
+      pointExchange: buildPointExchangeState(account, bankrollGoal),
     },
   };
 }
@@ -1617,6 +1686,9 @@ async function updateSettings(workspaceId, userId, body = {}) {
     bankroll_pacing: derived.bankroll_pacing,
     payment_source_weights: normalizeSourceWeights(
       body.payment_source_weights || body.paymentSourceWeights || current.payment_source_weights || DEFAULT_SOURCE_WEIGHTS
+    ),
+    category_weights: normalizeCategoryWeights(
+      body.category_weights || body.categoryWeights || current.category_weights || DEFAULT_CATEGORY_WEIGHTS
     ),
     reward_tiers: rewardTiers,
     reroll_credits: clampInt(
@@ -1769,6 +1841,109 @@ async function clearBankrollGoal(workspaceId, userId) {
     [workspaceId, JSON.stringify({ bankroll_goal: nextGoal })]
   );
   return getState(workspaceId, userId);
+}
+
+async function convertPointsToReserve(workspaceId, userId, body = {}) {
+  const requestedPoints = Math.floor(Number(body.points ?? body.amount));
+  if (!Number.isFinite(requestedPoints) || requestedPoints <= 0) {
+    throw badRequest("Enter how many points to convert.");
+  }
+  await ensureAccount(workspaceId, userId);
+  const client = await pool.connect();
+  let exchangeResult;
+  try {
+    await client.query("BEGIN");
+    const { rows: [row] } = await client.query(
+      "SELECT * FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+      [workspaceId]
+    );
+    if (!row) throw notFound("Slot account not found");
+
+    const account = accountWithSettings(row);
+    const goal = account.settings.bankroll_goal || {};
+    const targetCents = goal.enabled ? Math.max(0, Number(goal.target_cents) || 0) : 0;
+    if (!goal.enabled || targetCents <= 0) {
+      throw badRequest("Set a Reward Reserve goal before converting points.");
+    }
+    const pointBalance = Number(row.point_balance) || 0;
+    if (requestedPoints > pointBalance) {
+      throw badRequest("You only have " + pointBalance + (pointBalance === 1 ? " point." : " points."));
+    }
+
+    const pending = await getPendingBankDeposit(workspaceId, client);
+    const currentTotalCents = (Number(row.bank_balance_cents) || 0) + (Number(pending.cents) || 0);
+    const quote = buildPointExchangeState(account, {
+      enabled: true,
+      target_cents: targetCents,
+      total_cents: currentTotalCents,
+    });
+    const pointsForReserve = Math.min(requestedPoints, quote.points_to_fill);
+    const depositCents = Math.min(
+      Math.round(pointsForReserve * quote.cents_per_point),
+      quote.remaining_cents
+    );
+    const overflowPoints = requestedPoints - pointsForReserve;
+    const shieldsToAdd = Math.min(
+      Math.floor(overflowPoints / quote.points_per_shield),
+      quote.shield_capacity
+    );
+    const pointsForShields = shieldsToAdd * quote.points_per_shield;
+    const pointsSpent = pointsForReserve + pointsForShields;
+    if (depositCents <= 0 && shieldsToAdd <= 0) {
+      const minimum = quote.remaining_cents > 0
+        ? Math.max(1, Math.ceil(1 / quote.cents_per_point))
+        : quote.points_per_shield;
+      throw badRequest("Convert at least " + minimum + " points for the next reserve step.");
+    }
+
+    const nextModifiers = normalizeNextSpinModifiers({
+      ...(account.settings.next_spin_modifiers || {}),
+      miss_shield: quote.miss_shield + shieldsToAdd,
+    });
+    await client.query(
+      `UPDATE slot_accounts
+       SET point_balance = GREATEST(0, point_balance - $2),
+           bank_balance_cents = bank_balance_cents + $3,
+           settings = COALESCE(settings, '{}'::jsonb) || $4::jsonb,
+           updated_at = NOW()
+       WHERE workspace_id = $1`,
+      [workspaceId, pointsSpent, depositCents, JSON.stringify({ next_spin_modifiers: nextModifiers })]
+    );
+    await client.query(
+      `INSERT INTO slot_point_ledger
+         (workspace_id, user_id, delta, source_type, source_key, description, metadata)
+       VALUES ($1,$2,$3,'point_exchange',$4,$5,$6)`,
+      [
+        workspaceId,
+        userId || null,
+        -pointsSpent,
+        "exchange-" + crypto.randomUUID(),
+        "Converted " + pointsSpent + " points to Reward Reserve",
+        JSON.stringify({
+          deposit_cents: depositCents,
+          shields_added: shieldsToAdd,
+          points_for_reserve: pointsForReserve,
+          points_for_shields: pointsForShields,
+          cents_per_point: quote.cents_per_point,
+        }),
+      ]
+    );
+    await client.query("COMMIT");
+    exchangeResult = {
+      points_spent: pointsSpent,
+      points_for_reserve: pointsForReserve,
+      points_for_shields: pointsForShields,
+      deposit_cents: depositCents,
+      shields_added: shieldsToAdd,
+      requested_points: requestedPoints,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { ...(await getState(workspaceId, userId)), exchange_result: exchangeResult };
 }
 
 async function setNextSpinTileOverride(workspaceId, userId, body = {}) {
@@ -2502,6 +2677,30 @@ function tierOptions(settings) {
     .map(tier => ({ ...tier, weight: Number(tier.weight) || 0 }));
 }
 
+// The three jackpot categories with their roll weights. A category maps 1:1 to a
+// payment_source. This replaces the source x tier grid: a jackpot rolls ONE
+// category, then spins that category's wheel (rewards by chance_shares).
+function categoryOptions(settings) {
+  const weights = normalizeSlotSettings(settings).category_weights;
+  return [
+    { id: "free", label: CATEGORY_LABELS.free, weight: weights.free },
+    { id: "self", label: CATEGORY_LABELS.self, weight: weights.self },
+    { id: "sponsored", label: CATEGORY_LABELS.sponsored, weight: weights.sponsored },
+  ];
+}
+
+// A category's wheel: every eligible reward in that category (any tier), with a
+// positive slice count (chance_shares). Tier is ignored by selection now.
+function bucketForCategory(rewards, category) {
+  const id = category && category.id;
+  return (rewards || []).filter(r =>
+    r &&
+    r.eligible &&
+    normalizePaymentSource(r.payment_source, r.kind) === id &&
+    (Number(r.chance_shares ?? r.weight) || 0) > 0
+  );
+}
+
 function tierStageForReward(settings, reward) {
   const tierId = String((reward && reward.tier_id) || "tier_i");
   return tierOptions(settings).find(tier => String(tier.id) === tierId) ||
@@ -2777,36 +2976,29 @@ function bucketForSourceTier(rewards, source, tier) {
 
 function chooseBucketAttempt(rewards, settings, rng) {
   const normalized = normalizeSlotSettings(settings);
-  const source = chooseWeighted(sourceOptions(normalized), "weight", rng) || sourceOptions(normalized)[0];
-  const tiers = tierOptions(normalized);
-  let tier = chooseWeighted(tiers, "weight", rng) || tiers[0] || DEFAULT_REWARD_TIERS[0];
-  // A banked tier_up booster bumps this jackpot toward a higher (rarer) tier.
-  const tierUp = (normalized.next_spin_modifiers && normalized.next_spin_modifiers.tier_up) || 0;
-  if (tierUp > 0 && tiers.length) {
-    const idx = tiers.findIndex(t => String(t.id) === String(tier.id));
-    if (idx >= 0) tier = tiers[Math.min(tiers.length - 1, idx + tierUp)] || tier;
-  }
+  const categories = categoryOptions(normalized);
+  const category = chooseWeighted(categories, "weight", rng) || categories[0];
+  // `source` carries the rolled category (its id is the payment_source). `tier` is
+  // retired from selection and set from the won reward later in selectThreeStageOutcome.
   return {
-    source,
-    tier,
-    bucket: bucketForSourceTier(rewards, source, tier),
+    source: category,
+    tier: null,
+    bucket: bucketForCategory(rewards, category),
   };
 }
 
 function chooseExistingBucketAttempt(rewards, settings, rng) {
   const normalized = normalizeSlotSettings(settings);
   const attempts = [];
-  for (const source of sourceOptions(normalized)) {
-    for (const tier of tierOptions(normalized)) {
-      const bucket = bucketForSourceTier(rewards, source, tier);
-      if (!bucket.length) continue;
-      attempts.push({
-        source,
-        tier,
-        bucket,
-        weight: Math.max(0, Number(source.weight) || 0) * Math.max(0, Number(tier.weight) || 0),
-      });
-    }
+  for (const category of categoryOptions(normalized)) {
+    const bucket = bucketForCategory(rewards, category);
+    if (!bucket.length) continue;
+    attempts.push({
+      source: category,
+      tier: null,
+      bucket,
+      weight: Math.max(0, Number(category.weight) || 0),
+    });
   }
   return chooseWeighted(attempts, "weight", rng) || attempts[0] || null;
 }
@@ -2820,15 +3012,12 @@ function bucketTotalShares(bucket) {
 // so it can land on the same face or on another empty bucket - the caller
 // (chooseSpinDiceReroll) re-prompts when `bucket` comes back empty.
 function rollDieReroll(rewards, settings, from, die, rng = crypto.randomInt) {
+  // Tiers are retired: there is a single die (the category). Either die choice
+  // re-rolls the category wheel. `die` is accepted for signature/back-compat.
   const normalized = normalizeSlotSettings(settings);
-  let source = (from && from.payment_source) || sourceOptions(normalized)[0];
-  let tier = (from && from.tier) || tierOptions(normalized)[0];
-  if (die === "source") {
-    source = chooseWeighted(sourceOptions(normalized), "weight", rng) || source;
-  } else if (die === "tier") {
-    tier = chooseWeighted(tierOptions(normalized), "weight", rng) || tier;
-  }
-  return { source, tier, bucket: bucketForSourceTier(rewards, source, tier) };
+  const categories = categoryOptions(normalized);
+  const category = chooseWeighted(categories, "weight", rng) || categories[0];
+  return { source: category, tier: null, bucket: bucketForCategory(rewards, category) };
 }
 
 // The non-jackpot floor. A rare explicit true miss, otherwise a weighted draw
@@ -2905,9 +3094,12 @@ function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
       dice_reroll: null,
     };
   }
-  const { source, tier, bucket } = finalAttempt;
+  const { source, bucket } = finalAttempt;
   const selected = chooseWeighted(bucket, "chance_shares", rng);
-  // Roll the run length AFTER the reward is chosen so the existing source/tier/
+  // Tiers no longer gate selection; surface the won reward's own tier so snapshots
+  // and the screen keep a coherent (cosmetic) tier value.
+  const tier = tierStageForReward(normalized, selected);
+  // Roll the run length AFTER the reward is chosen so the existing category/
   // reward draws keep their positions in the rng stream.
   const jackpotSpins = rollJackpotSpins(normalized, rng);
   return {
@@ -4144,6 +4336,12 @@ function notFound(message) {
   return err;
 }
 
+function badRequest(message) {
+  const err = new Error(message);
+  err.statusCode = 400;
+  return err;
+}
+
 module.exports = {
   ensureSchema,
   getState,
@@ -4154,6 +4352,7 @@ module.exports = {
   clearNextSpinTileOverride,
   setBankrollGoal,
   clearBankrollGoal,
+  convertPointsToReserve,
   chooseSpinDiceReroll,
   chooseSpinGamble,
   combineMultiplierCharges,
@@ -4175,6 +4374,10 @@ module.exports = {
   sweepPendingBankBuildersInTx,
   chooseWeighted,
   _test: {
+    normalizeRewardInput,
+    normalizeCategoryWeights,
+    categoryOptions,
+    bucketForCategory,
     buildSpinScreen,
     calculateScreenBankPayout,
     emptyScreenBankPayout,
@@ -4184,6 +4387,8 @@ module.exports = {
     normalizeNextSpinTileOverride,
     applyTileOverrideToScreen,
     buildBankrollGoalState,
+    buildPointExchangeState,
+    desiredMinutesPerMonth,
     buildBankrollGoalCelebrationScreen,
     rollDieReroll,
     chooseExistingBucketAttempt,

@@ -55,6 +55,20 @@ app.delete("/api/slot/bankroll-goal", async (req, res) => {
   }
 });
 
+app.post("/api/slot/exchange", async (req, res) => {
+  try {
+    const result = await slotStore.convertPointsToReserve(
+      req.workspaceId,
+      req.session.userId,
+      req.body || {}
+    );
+    broadcast("slot-changed", { action: "point-exchange" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
 app.post("/api/slot/bankroll-goal/celebration-spin", async (req, res) => {
   try {
     const spin = await slotStore.celebrationSpinForBankrollGoal(req.workspaceId, req.session.userId);
