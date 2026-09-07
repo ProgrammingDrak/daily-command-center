@@ -61,6 +61,12 @@ module.exports = function mount(app, ctx) {
     return { block };
   }));
 
+  app.post("/api/budget/blocks/:id/split", route(async (req) => {
+    const result = await budgetStore.splitTankBlock(req.workspaceId, req.params.id);
+    broadcast("slot-changed", { action: "budget-split" }, req.workspaceId);
+    return result;
+  }));
+
   app.delete("/api/budget/blocks/:id", route(async (req) => {
     const result = await budgetStore.removeTankBlock(req.workspaceId, req.params.id, {
       keepReward: req.query.keep_reward === "1" || req.query.keep_reward === "true",

@@ -392,6 +392,7 @@
       amtInput("item-amt", b.value_cents) +
       '<span class="bt-row-fund">' + esc(info.label) + "</span>" +
       (b.claimable ? '<button class="bt-claim-btn" data-act="claim">Claim</button>' : "") +
+      '<button class="bt-row-btn" data-act="split-block" title="Split this purchase into two funding steps">Split</button>' +
       '<button class="bt-row-btn bt-row-btn--danger" data-act="del-block">' + (confirming ? "Sure?" : "×") + "</button>" +
       "</div>";
   }
@@ -1245,6 +1246,19 @@
       if (act === "add-block") { openForm(null); return; }
       if (act === "cancel-block") { _form = null; render(); return; }
       if (act === "save-block") { saveForm(); return; }
+      if (act === "split-block") {
+        const row = btn.closest("[data-id]");
+        btn.disabled = true;
+        try {
+          await api("POST", "/api/budget/blocks/" + row.dataset.id + "/split");
+          toast("Purchase split into two funding steps", "success");
+          await loadBudget();
+        } catch (err) {
+          toast(err.message || "Could not split purchase", "error");
+          btn.disabled = false;
+        }
+        return;
+      }
       if (act === "del-block") {
         const row = btn.closest("[data-id]");
         const id = Number(row.dataset.id);
