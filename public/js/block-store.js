@@ -19,6 +19,9 @@
   let _dayCache = new Map();   // id → block (cleared on date switch)
   let _globalCache = new Map(); // id → block (persistent across dates)
   let _currentDate = null;
+  let _lastMutationVersion = 0;
+  let _retryTimer = null;
+  let _retryDelayMs = 750;
   // Server IDs for day_root are workspace-prefixed (e.g. "day-root-ws-1-2026-04-24").
   // Resolved from the block list returned by loadDay() so callsites can look up
   // the cached root reliably, not a naive "day-root-<date>" that misses.
@@ -73,6 +76,58 @@
       localStorage.setItem(WAL_DEAD_LETTER_KEY, JSON.stringify(dead.slice(-50)));
     } catch {}
     walRemove(entry._walId);
+  }
+
+  function nextMutationVersion() {
+    _lastMutationVersion = Math.max(Date.now(), _lastMutationVersion + 1);
+    return _lastMutationVersion;
+  }
+
+  function applyCompletionChangesToBlock(block, changes) {
+    if (!block) return block;
+    const props = block.properties || {};
+    const prior = props._done || {};
+    const ids = new Set(Array.isArray(prior.ids) ? prior.ids : []);
+    const at = { ...(prior.at || {}) };
+    const mutations = { ...(prior.mutations || {}) };
+    for (const change of changes || []) {
+      const id = String(change.id || "");
+      const version = Number(change.version) || 0;
+      if (!id || version <= (Number(mutations[id]) || 0)) continue;
+      mutations[id] = version;
+      if (change.completed) {
+        ids.add(id);
+        at[id] = change.completedAt || new Date(version).toISOString();
+      } else {
+        ids.delete(id);
+        delete at[id];
+      }
+    }
+    return { ...block, properties: { ...props, _done: { ids: [...ids], at, mutations } }, updated_at: new Date().toISOString() };
+  }
+
+  function mergePendingCompletionState(incoming, current) {
+    if (!incoming || !current || incoming.type !== "day_root" || current.type !== "day_root") return incoming;
+    const incomingDone = (incoming.properties || {})._done || {};
+    const currentDone = (current.properties || {})._done || {};
+    const changes = [];
+    for (const [id, rawVersion] of Object.entries(currentDone.mutations || {})) {
+      const version = Number(rawVersion) || 0;
+      if (version > (Number((incomingDone.mutations || {})[id]) || 0)) {
+        changes.push({ id, version, completed: (currentDone.ids || []).includes(id), completedAt: (currentDone.at || {})[id] });
+      }
+    }
+    return changes.length ? applyCompletionChangesToBlock(incoming, changes) : incoming;
+  }
+
+  function scheduleReplay() {
+    if (_retryTimer) return;
+    const delay = _retryDelayMs;
+    _retryDelayMs = Math.min(30000, Math.round(_retryDelayMs * 1.8));
+    _retryTimer = setTimeout(() => {
+      _retryTimer = null;
+      if (navigator.onLine !== false && walGet().length > 0) replayWAL();
+    }, delay);
   }
 
   // Migrate any entries left over from the sessionStorage era. Older clients
@@ -147,6 +202,8 @@
   const LEGACY_GLOBAL_TYPES = new Set(["sticky_note", "trivial_task", "life_capture", "pending_task", "schedule_block", "tag"]);
 
   function cacheSet(block) {
+    const current = _dayCache.get(block.id) || _globalCache.get(block.id) || null;
+    block = mergePendingCompletionState(block, current);
     // Remove any prior entry in either cache so a block can migrate between
     // global and day partitions without leaving a stale duplicate behind.
     _dayCache.delete(block.id);
@@ -217,7 +274,7 @@
     if (!entry || !err) return false;
     if (err.status === 401 || err.status === 403) return false;
     if (err.status === 400) return true;
-    if ((entry.op === "update" || entry.op === "delete" || entry.op === "reschedule") && err.status === 404) return true;
+    if ((entry.op === "update" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "completion" || entry.op === "properties-patch") && err.status === 404) return true;
     return false;
   }
 
@@ -229,32 +286,42 @@
     _replaying = true;
     console.log("[BlockStore] Replaying", entries.length, "buffered writes...");
     let succeeded = 0, failed = 0, dropped = 0;
-    // A reschedule that couldn't send within this window is stale: the user has
-    // long since retried or moved on, and replaying it now silently yanks the
-    // task to wherever the old attempt pointed (the pre-#167 "reversal" bug).
-    const RESCHEDULE_REPLAY_MAX_AGE_MS = 15 * 60 * 1000;
+    let replayChangedVisibleState = false;
     for (const entry of entries) {
-      if (entry.op === "reschedule" && entry.timestamp && (Date.now() - Date.parse(entry.timestamp)) > RESCHEDULE_REPLAY_MAX_AGE_MS) {
-        walMoveToDeadLetter(entry, "stale reschedule (>15min old)");
-        dropped++;
-        continue;
-      }
       try {
+        let result = null;
         switch (entry.op) {
           case "create":
-            await apiPost("/api/blocks", entry.data);
+            result = await apiPost("/api/blocks", entry.data);
+            if (result && result.id) cacheSet(result);
             break;
           case "update":
-            await apiPatch("/api/blocks/" + entry.id, entry.data);
+            result = await apiPatch("/api/blocks/" + entry.id, entry.data);
+            if (result && result.id) cacheSet(result);
             break;
           case "delete":
             await apiDelete("/api/blocks/" + entry.id);
+            cacheDelete(entry.id);
             break;
           case "batch":
-            await apiPost("/api/blocks/batch", entry.data);
+            result = await apiPost("/api/blocks/batch", entry.data);
+            (result.blocks || []).forEach(b => { if (b && b.id) cacheSet(b); });
             break;
           case "reschedule":
-            await apiPost("/api/blocks/" + entry.id + "/reschedule", entry.data);
+            result = await apiPost("/api/blocks/" + entry.id + "/reschedule", entry.data);
+            (result.moved || []).forEach(id => cacheDelete(id));
+            (result.created || []).forEach(b => { if (b && b.id) cacheSet(b); });
+            replayChangedVisibleState = true;
+            break;
+          case "completion":
+            result = await apiPost("/api/blocks/" + entry.id + "/completion", entry.data);
+            if (result && result.id) cacheSet(result);
+            replayChangedVisibleState = true;
+            break;
+          case "properties-patch":
+            result = await apiPost("/api/blocks/" + entry.id + "/properties", entry.data);
+            if (result && result.id) cacheSet(result);
+            replayChangedVisibleState = true;
             break;
         }
         walRemove(entry._walId);
@@ -271,12 +338,17 @@
       }
     }
     _replaying = false;
+    if (replayChangedVisibleState && typeof document.dispatchEvent === "function" && typeof CustomEvent === "function") {
+      document.dispatchEvent(new CustomEvent("blockstore-replay-complete"));
+    }
     if (failed === 0) {
+      _retryDelayMs = 750;
       console.log("[BlockStore] WAL replay complete (", succeeded, "writes,", dropped, "stale dropped )");
       setSaved();
     } else {
       console.warn("[BlockStore] WAL replay:", succeeded, "ok,", dropped, "stale dropped,", failed, "still queued for retry");
       setError(failed + " edits pending — will retry");
+      scheduleReplay();
     }
   }
 
@@ -350,6 +422,70 @@
       }
     },
 
+    // Atomically apply task-level completion deltas to the day root. The cache
+    // changes before the request for instant UI, while the WAL makes the intent
+    // durable before it leaves the browser.
+    async setTaskCompletions(dayRootId, changes) {
+      const normalized = (changes || []).map(change => ({
+        id: String(change.id || ""),
+        completed: !!change.completed,
+        completedAt: change.completed ? (change.completedAt || new Date().toISOString()) : null,
+        version: Number(change.version) || nextMutationVersion()
+      })).filter(change => change.id);
+      if (!normalized.length) return cacheGet(dayRootId);
+
+      setSaving();
+      const existing = cacheGet(dayRootId);
+      const optimistic = applyCompletionChangesToBlock(existing, normalized);
+      if (optimistic) cacheSet(optimistic);
+      const body = { changes: normalized };
+      const walId = walPush({ op: "completion", id: dayRootId, data: body });
+      try {
+        const block = await apiPost("/api/blocks/" + dayRootId + "/completion", body);
+        cacheSet(block);
+        walRemove(walId);
+        setSaved();
+        return block;
+      } catch (e) {
+        if (isPermanentReplayFailure({ op: "completion" }, e)) {
+          walMoveToDeadLetter({ _walId: walId, op: "completion", id: dayRootId, data: body }, `${e.status || "error"} ${e.message || ""}`.trim());
+          setError("Completion save rejected: " + (e.message || e.status));
+        } else {
+          setError("Completion queued and will retry automatically");
+          scheduleReplay();
+        }
+        return optimistic || existing;
+      }
+    },
+
+    // Merge selected properties server-side under a row lock. This is the safe
+    // path for day-root state, where full replacement could erase a concurrent
+    // task completion.
+    async patchBlockProperties(id, patch) {
+      setSaving();
+      const existing = cacheGet(id);
+      const optimistic = existing ? { ...existing, properties: { ...(existing.properties || {}), ...(patch || {}) }, updated_at: new Date().toISOString() } : null;
+      if (optimistic) cacheSet(optimistic);
+      const body = { patch: patch || {} };
+      const walId = walPush({ op: "properties-patch", id, data: body });
+      try {
+        const block = await apiPost("/api/blocks/" + id + "/properties", body);
+        cacheSet(block);
+        walRemove(walId);
+        setSaved();
+        return block;
+      } catch (e) {
+        if (isPermanentReplayFailure({ op: "properties-patch" }, e)) {
+          walMoveToDeadLetter({ _walId: walId, op: "properties-patch", id, data: body }, `${e.status || "error"} ${e.message || ""}`.trim());
+          setError("Save rejected: " + (e.message || e.status));
+        } else {
+          setError("Save queued and will retry automatically");
+          scheduleReplay();
+        }
+        return optimistic || existing;
+      }
+    },
+
     // Debounced update for content editing (notes, descriptions)
     updateBlockDebounced(id, properties, delay = 300) {
       debouncedUpdate(id, properties, delay);
@@ -404,7 +540,7 @@
       setSaving();
       // fromDate: the viewed origin day, used by the server when the block row
       // itself is undated (task-bar pending_tasks) so the move can't 400.
-      const body = { targetDate, parentStart, parentEnd, fromDate };
+      const body = { targetDate, parentStart, parentEnd, fromDate, mutationVersion: nextMutationVersion() };
       const walId = walPush({ op: "reschedule", id: blockId, data: body });
       try {
         const result = await apiPost("/api/blocks/" + blockId + "/reschedule", body);
@@ -427,6 +563,7 @@
           setError("Reschedule rejected — " + (e.message || e.status));
         } else {
           setError("Reschedule failed — buffered for retry");
+          scheduleReplay();
         }
         throw e;
       }

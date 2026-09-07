@@ -10,6 +10,8 @@
 
 const crypto = require("crypto");
 const pool = require("./pg-pool");
+const { applyCompletionChanges, compareMutationVersion } = require("./lib/task-mutations");
+const { collectSubtreeBlockIds } = require("./lib/reschedule");
 // slot-scoring is standalone (it only pulls in public/js/task-types), so this
 // stays acyclic; createItineraryTask uses it to stamp points at write time.
 const { scoreTaskPoints } = require("./slot-scoring");
@@ -128,6 +130,79 @@ async function updateBlock(id, { properties, sort_order, parent_id, date }) {
   await pool.query(`UPDATE blocks SET properties = $1, sort_order = $2, parent_id = $3, date = $4, updated_at = $5 WHERE id = $6`, [newProps, newSortOrder, newParentId, newDate, now, id]);
   await pool.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'update', $2, $3, $4)`, [id, existing.properties, newProps, now]);
   return { id, type: existing.type, parent_id: newParentId, date: normalizeDate(newDate), properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps, sort_order: newSortOrder, created_at: existing.created_at, updated_at: now, deleted_at: null };
+}
+
+// Merge completion deltas while holding the day_root row lock. The previous
+// full-property replacement could lose rapid clicks and cross-tab writes. Each
+// task carries its newest mutation version, so delayed retries cannot undo it.
+async function updateTaskCompletions(id, changes) {
+  const client = await pool.connect();
+  const now = new Date().toISOString();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [id]);
+    const existing = rows[0];
+    if (!existing) throw new Error(`Block not found: ${id}`);
+    if (existing.deleted_at) throw new Error(`Block is deleted: ${id}`);
+    if (existing.type !== "day_root") throw new Error("Completion state can only be stored on a day_root");
+
+    const properties = typeof existing.properties === "string" ? JSON.parse(existing.properties) : (existing.properties || {});
+    const merged = applyCompletionChanges(properties._done, changes);
+    const newProps = { ...properties, _done: merged.state };
+    validateBlock(existing.type, newProps);
+    if (merged.applied > 0) {
+      await client.query("UPDATE blocks SET properties = $1, updated_at = $2 WHERE id = $3", [newProps, now, id]);
+      await client.query(
+        "INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'completion', $2, $3, $4)",
+        [id, properties, newProps, now]
+      );
+    }
+    await client.query("COMMIT");
+    return {
+      id,
+      type: existing.type,
+      parent_id: existing.parent_id,
+      date: normalizeDate(existing.date),
+      properties: newProps,
+      sort_order: existing.sort_order,
+      created_at: existing.created_at,
+      updated_at: merged.applied > 0 ? now : existing.updated_at,
+      deleted_at: null,
+      applied: merged.applied,
+    };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Merge selected top-level properties under a row lock. Day-root features use
+// this instead of replacing the entire properties object, so saving a timer,
+// pin, or dismissal can never erase a completion written at the same moment.
+async function patchBlockProperties(id, patch) {
+  const client = await pool.connect();
+  const now = new Date().toISOString();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [id]);
+    const existing = rows[0];
+    if (!existing) throw new Error(`Block not found: ${id}`);
+    if (existing.deleted_at) throw new Error(`Block is deleted: ${id}`);
+    const oldProps = typeof existing.properties === "string" ? JSON.parse(existing.properties) : (existing.properties || {});
+    const newProps = { ...oldProps, ...(patch || {}) };
+    validateBlock(existing.type, newProps);
+    await client.query("UPDATE blocks SET properties = $1, updated_at = $2 WHERE id = $3", [newProps, now, id]);
+    await client.query("INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'patch', $2, $3, $4)", [id, oldProps, newProps, now]);
+    await client.query("COMMIT");
+    return { id, type: existing.type, parent_id: existing.parent_id, date: normalizeDate(existing.date), properties: newProps, sort_order: existing.sort_order, created_at: existing.created_at, updated_at: now, deleted_at: null };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 async function deleteBlock(id) {
@@ -254,20 +329,46 @@ async function batchOp(operations) {
 //
 // NOTE: batchOp() can't be reused here — its "update" branch calls updateBlock(),
 // which uses `pool` directly, so batched updates run OUTSIDE the transaction.
-async function rescheduleBlocks(moves, creates) {
+async function rescheduleBlocks(moves, creates, intent) {
   const now = new Date().toISOString();
   const client = await pool.connect();
   const results = [];
   try {
     await client.query("BEGIN");
+    let lockedParent = null;
+    if (intent && intent.parentId) {
+      const { rows } = await client.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [intent.parentId]);
+      lockedParent = rows[0];
+      if (!lockedParent) throw new Error(`Block not found: ${intent.parentId}`);
+      if (lockedParent.deleted_at) throw new Error(`Block is deleted: ${intent.parentId}`);
+      const currentProps = typeof lockedParent.properties === "string" ? JSON.parse(lockedParent.properties) : (lockedParent.properties || {});
+      const verdict = compareMutationVersion(currentProps.rescheduleMutationVersion, intent.version);
+      if (verdict === "invalid") throw new Error("Invalid reschedule mutation version");
+      if (verdict === "stale" || verdict === "duplicate") {
+        await client.query("COMMIT");
+        return {
+          blocks: [],
+          stale: verdict === "stale",
+          idempotent: verdict === "duplicate",
+          current: parseBlock(lockedParent),
+        };
+      }
+    }
     for (const m of moves) {
-      const { rows } = await client.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [m.id]);
-      const existing = rows[0];
+      let existing = null;
+      if (lockedParent && m.id === intent.parentId) existing = lockedParent;
+      else {
+        const { rows } = await client.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [m.id]);
+        existing = rows[0];
+      }
       if (!existing) throw new Error(`Block not found: ${m.id}`);
       if (existing.deleted_at) throw new Error(`Block is deleted: ${m.id}`);
       let newProps = existing.properties;
-      if (m.properties !== undefined) {
-        const parsed = typeof m.properties === "string" ? JSON.parse(m.properties) : m.properties;
+      if (m.properties !== undefined || m.propertyPatch !== undefined) {
+        const base = typeof existing.properties === "string" ? JSON.parse(existing.properties) : (existing.properties || {});
+        const parsed = m.properties !== undefined
+          ? (typeof m.properties === "string" ? JSON.parse(m.properties) : m.properties)
+          : { ...base, ...(m.propertyPatch || {}) };
         validateBlock(existing.type, parsed);
         newProps = parsed;
       }
@@ -286,7 +387,104 @@ async function rescheduleBlocks(moves, creates) {
   } finally {
     client.release();
   }
-  return { blocks: results };
+  return { blocks: results, stale: false, idempotent: false };
+}
+
+// Authoritative reschedule transaction. Subtree discovery happens after the
+// parent row lock is acquired, so two overlapping moves cannot split children
+// across dates. The newest mutation version wins and duplicate delivery is a
+// successful no-op.
+async function rescheduleTask({ parentId, targetDate, fromDate, parentStart, parentEnd, mutationVersion }) {
+  const client = await pool.connect();
+  const now = new Date().toISOString();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [parentId]);
+    const parentRow = rows[0];
+    if (!parentRow) throw new Error(`Block not found: ${parentId}`);
+    if (parentRow.deleted_at) throw new Error(`Block is deleted: ${parentId}`);
+    const parent = parseBlock(parentRow);
+    const verdict = compareMutationVersion(parent.properties.rescheduleMutationVersion, mutationVersion);
+    if (verdict === "invalid") throw new Error("Invalid reschedule mutation version");
+    if (verdict === "stale" || verdict === "duplicate") {
+      await client.query("COMMIT");
+      return { moved: [], created: [], parentId, fromDate: parent.date || fromDate, targetDate: parent.date || targetDate, stale: verdict === "stale", idempotent: verdict === "duplicate" };
+    }
+
+    const sourceDate = parent.date || fromDate;
+    if (!sourceDate) throw new Error("Block has no source date to move from");
+    if (sourceDate === targetDate) {
+      await client.query("COMMIT");
+      return { moved: [], created: [], parentId, fromDate: sourceDate, targetDate, stale: false, idempotent: true };
+    }
+
+    const workspaceId = parentRow.workspace_id || null;
+    const dated = workspaceId
+      ? await client.query("SELECT * FROM blocks WHERE date = $1 AND workspace_id = $2 AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC", [sourceDate, workspaceId])
+      : await client.query("SELECT * FROM blocks WHERE date = $1 AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC", [sourceDate]);
+    const linked = "(properties->>'subtaskOf' IS NOT NULL OR properties->>'wrapId' IS NOT NULL)";
+    const undated = workspaceId
+      ? await client.query(`SELECT * FROM blocks WHERE date IS NULL AND type = 'block' AND ${linked} AND workspace_id = $1 AND deleted_at IS NULL`, [workspaceId])
+      : await client.query(`SELECT * FROM blocks WHERE date IS NULL AND type = 'block' AND ${linked} AND deleted_at IS NULL`);
+    const dayBlocks = [...dated.rows, ...undated.rows]
+      .map(parseBlock)
+      .filter(b => b.type === "block" && (b.properties || {}).local_id);
+    const subtreeIds = collectSubtreeBlockIds(dayBlocks, parent);
+    const moved = [];
+
+    for (const id of subtreeIds) {
+      let existing = id === parentId ? parentRow : null;
+      if (!existing) {
+        const locked = await client.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [id]);
+        existing = locked.rows[0];
+      }
+      if (!existing || existing.deleted_at) throw new Error(`Block unavailable during reschedule: ${id}`);
+      const oldProps = typeof existing.properties === "string" ? JSON.parse(existing.properties) : (existing.properties || {});
+      let newProps = oldProps;
+      if (id === parentId) {
+        newProps = {
+          ...oldProps,
+          rescheduledFrom: { date: sourceDate, at: now },
+          rescheduleMutationVersion: mutationVersion,
+        };
+        if (parentStart) { newProps.start = parentStart; newProps._pinnedStart = parentStart; }
+        if (parentEnd) newProps.end = parentEnd;
+        validateBlock(existing.type, newProps);
+      }
+      await client.query("UPDATE blocks SET properties = $1, date = $2, updated_at = $3 WHERE id = $4", [newProps, targetDate, now, id]);
+      await client.query("INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'reschedule', $2, $3, $4)", [id, oldProps, newProps, now]);
+      moved.push(id);
+    }
+
+    const existingTomb = dayBlocks.find(b => (b.properties || {}).kind === "reschedule_tombstone" && (b.properties || {}).movedBlockId === parentId);
+    const created = [];
+    if (!existingTomb) {
+      created.push(await createBlock({
+        type: "block",
+        date: sourceDate,
+        user_id: parentRow.user_id || null,
+        workspace_id: workspaceId,
+        properties: {
+          local_id: "resched-tomb-" + parentId,
+          kind: "reschedule_tombstone",
+          title: parent.properties.title || "Task",
+          priority: parent.properties.priority || "Medium",
+          movedBlockId: parentId,
+          sourceLocalId: parent.properties.local_id || null,
+          rescheduledFrom: { date: sourceDate },
+          rescheduledTo: targetDate,
+          at: now,
+        }
+      }, client));
+    }
+    await client.query("COMMIT");
+    return { moved, created, parentId, fromDate: sourceDate, targetDate, stale: false, idempotent: false };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 // ── Reorder with Auto-Rebalance ──
@@ -462,10 +660,10 @@ async function getDccStateRange(startDate, endDate, workspaceId) {
 
 module.exports = {
   pool, BLOCK_SCHEMAS, VALID_TYPES, validateBlock,
-  createBlock, updateBlock, deleteBlock,
+  createBlock, updateBlock, updateTaskCompletions, patchBlockProperties, deleteBlock,
   getBlocksByDate, getBlocksByDateIncludingDeleted, getUndatedTaskBlocks, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
-  batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
+  batchOp, rescheduleBlocks, rescheduleTask, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
   ensureDccStateTable, saveDccState, getDccState, purgeSoftDeleted, getOperations,
   parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers
 };

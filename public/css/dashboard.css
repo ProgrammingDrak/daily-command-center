@@ -1059,6 +1059,9 @@
   .tl-item:hover .btn-del-task{opacity:0.4}
   .btn-del-task:hover{opacity:1!important;color:var(--red,#ef4444);background:rgba(239,68,68,0.1)}
   .btn-triv-link,.btn-task-radial,.btn-bounty,.btn-repeat-resp{width:22px;height:22px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;transition:border-color 0.12s,color 0.12s,background 0.12s,opacity 0.12s;flex-shrink:0}
+  /* Meeting cards use their direct controls while wide. The compact container
+     rules reveal this complete-menu fallback when those controls are hidden. */
+  .btn-meeting-radial{display:none}
   .btn-triv-link:hover{border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.08)}
   .btn-triv-link.triv-active{border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.12)}
   .btn-task-radial:hover{border-color:var(--amber,#f59e0b);color:var(--amber,#f59e0b);background:rgba(245,158,11,0.1)}
@@ -4379,6 +4382,51 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .subtask-add-pop .sub-add-go{padding:10px 15px;font-size:15px;border-radius:8px}
   .subtask-add-pop .sub-add-more{font-size:20px;padding:6px 9px}
 }
+/* Split panes and side-by-side app layouts can make a card mobile-sized while
+   the browser viewport remains wide. Mirror the essential mobile card layout
+   against the card container so its full radial menu remains reachable. */
+@container (max-width:760px){
+  .card{grid-template-columns:auto minmax(0,1fr) auto !important;grid-template-rows:auto !important;column-gap:8px !important;row-gap:2px !important;padding:9px 11px !important;align-items:center !important}
+  .card .grip,.card>.bar{display:none !important}
+  .card .chk{grid-column:1 !important;grid-row:1 !important}
+  .card>.body{grid-column:2 !important;grid-row:1 !important;min-width:0}
+  .card .chk-col{grid-column:3 !important;grid-row:1 !important;display:flex !important;flex-direction:column !important;gap:6px !important;align-items:center !important;align-self:center !important}
+  .card .chk-quick{display:inline-flex !important}
+  .card .notes-btn,.card .btn-repeat-resp,.card .btn-meeting-auto,.card .pomo-btn,
+  .card .btn-move-menu,.card .btn-del-task,.card .dur,.card>svg:last-child{display:none !important}
+  .card .btn-task-radial{display:inline-flex !important;grid-column:3 !important;grid-row:2 !important;width:38px;height:38px;justify-self:center}
+  .card .btn-bounty{display:inline-flex !important;grid-column:3 !important;grid-row:3 !important;width:38px;height:38px;justify-self:center}
+}
+
+/* Responsive rows keep the complete four-button toolbar. A compact 2x2 cluster
+   fits narrow desktop windows and phones without stealing the title column. */
+@media (max-width:760px){
+  .it-list-item:not(.subtask-row){grid-template-columns:auto minmax(0,1fr) 82px !important}
+  .it-list-item:not(.subtask-row) .it-list-actions{
+    display:grid !important;
+    grid-template-columns:repeat(2,38px) !important;
+    grid-template-rows:repeat(2,38px) !important;
+    gap:6px !important;
+    align-items:center !important;
+    justify-content:end !important;
+  }
+  .it-list-actions .notes-btn{display:inline-flex !important;grid-column:1;grid-row:1;width:38px;height:38px}
+  .it-list-actions .btn-bounty{grid-column:2;grid-row:1}
+  .it-list-actions .btn-task-radial{grid-column:1;grid-row:2}
+  .it-list-actions .btn-del-task{display:inline-flex !important;grid-column:2;grid-row:2;width:38px;height:38px}
+}
+
+@container (max-width:760px){
+  .card{grid-template-columns:44px minmax(0,1fr) 38px 38px !important;grid-template-rows:44px 44px !important;column-gap:6px !important}
+  .card .chk{grid-column:1 !important;grid-row:1 !important}
+  .card .chk-col{grid-column:1 !important;grid-row:2 !important}
+  .card>.body{grid-column:2 !important;grid-row:1 / span 2 !important}
+  .card .notes-btn{display:inline-flex !important;grid-column:3 !important;grid-row:1 !important;width:38px;height:38px;justify-self:center}
+  .card .btn-bounty{grid-column:4 !important;grid-row:1 !important}
+  .card .btn-task-radial{grid-column:3 !important;grid-row:2 !important}
+  .card .btn-del-task{display:inline-flex !important;grid-column:4 !important;grid-row:2 !important;width:38px;height:38px;justify-self:center}
+}
+
 /* Touch devices (no hover): guarantee hover-revealed actions are always shown.
  * CONVENTION: any control that defaults to opacity:0 and is revealed by a
  * parent :hover MUST be listed here, or it is unreachable on a phone. Tooltips

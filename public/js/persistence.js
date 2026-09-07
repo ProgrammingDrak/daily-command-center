@@ -46,7 +46,7 @@ function _bsSaveProp(key, value) {
   const id = window.blockStore.getDayRootId();
   const root = window.blockStore.get(id);
   if (!root) return false;
-  window.blockStore.updateBlock(id, { ...root.properties, [key]: value });
+  window.blockStore.patchBlockProperties(id, { [key]: value });
   return true;
 }
 

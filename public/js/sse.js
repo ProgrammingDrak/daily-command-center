@@ -95,6 +95,18 @@
   window.refreshPaStateFromServer = refreshDccState;
   window.refreshDccStateFromServer = refreshDccState;
 
+  // A WAL replay uses this tab's client id, so its SSE echo is intentionally
+  // ignored. Refresh explicitly after replay so a queued completion or move is
+  // visibly confirmed without requiring a manual reload.
+  document.addEventListener("blockstore-replay-complete", async function(){
+    if(!window.blockStore || !viewDate) return;
+    try { await window.blockStore.loadDay(viewDate); } catch(e) {}
+    if(typeof reloadPersistedEdits === "function") reloadPersistedEdits();
+    if(typeof render === "function") render();
+    if(typeof updateStats === "function") updateStats();
+    if(typeof showToast === "function") showToast("Queued task changes are now saved","success");
+  });
+
   // Handle block changes from another tab
   async function handleBlockEvent(msg){
     if(!window.blockStore) return;

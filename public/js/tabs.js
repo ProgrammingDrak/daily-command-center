@@ -349,7 +349,7 @@ function saveSubtasks(data){
   if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v)&&window.blockStore){
     var dayRootId=window.blockStore.getDayRootId();
     var root=window.blockStore.get(dayRootId);
-    if(root){window.blockStore.updateBlock(dayRootId,Object.assign({},root.properties,{_subtasks:data}));}
+    if(root){window.blockStore.patchBlockProperties(dayRootId,{_subtasks:data});}
     return;
   }
   try{localStorage.setItem(SUBTASK_KEY,JSON.stringify(data));scheduleIDBSave()}catch(e){}

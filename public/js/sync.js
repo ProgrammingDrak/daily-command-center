@@ -146,12 +146,27 @@ function saveDoneState() {
     const dayRoot = window.blockStore.getDayRootId();
     const root = window.blockStore.get(dayRoot);
     if (root) {
-      const props = { ...root.properties, _done: { ids: [...manualDone], at: doneAt } };
-      window.blockStore.updateBlock(dayRoot, props);
+      const persisted = new Set((((root.properties || {})._done || {}).ids) || []);
+      const changes = [];
+      for (const id of manualDone) {
+        if (!persisted.has(id)) {
+          const rawAt = doneAt[id];
+          const completedAt = rawAt instanceof Date ? rawAt.toISOString() : (rawAt || new Date().toISOString());
+          changes.push({ id, completed: true, completedAt });
+        }
+      }
+      for (const id of persisted) {
+        if (!manualDone.has(id)) changes.push({ id, completed: false });
+      }
+      if (changes.length) return window.blockStore.setTaskCompletions(dayRoot, changes);
+      return Promise.resolve(root);
     }
-    return;
+    // The day root is normally loaded before the UI becomes interactive. Keep
+    // a local mirror in the narrow cold-start failure window instead of losing
+    // the click completely.
   }
   localStorage.setItem(DONE_KEY, JSON.stringify({ ids: [...manualDone], at: doneAt })); scheduleIDBSave();
+  return Promise.resolve(null);
 }
 
 let SESSIONS_KEY = "pa-sessions-" + (__state ? __state.date : "unknown");
@@ -441,4 +456,3 @@ function exportPendingTasks(){
   if(!el){el=document.createElement("script");el.id="pending-tasks-export";el.type="application/json";document.body.appendChild(el);}
   el.textContent=JSON.stringify(loadPendingTasks());
 }
-

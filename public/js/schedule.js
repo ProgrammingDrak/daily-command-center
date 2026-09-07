@@ -309,17 +309,11 @@ async function commitDoneOnDate(id,dateStr){
       const blocks=await fetch("/api/blocks?date="+dateStr).then(r=>r.json());
       const dayRoot=Array.isArray(blocks)?blocks.find(b=>b.type==="day_root"):null;
       if(dayRoot){
-        const props=dayRoot.properties||{};
-        const existing=props._done||{ids:[],at:{}};
-        const ids=new Set(existing.ids||[]);ids.add(id);
-        const at={...(existing.at||{})};at[id]=nowIso;
-        await fetch("/api/blocks/"+dayRoot.id,{
-          method:"PATCH",
-          headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({properties:{...props,_done:{ids:[...ids],at}}})
-        });
+        await window.blockStore.setTaskCompletions(dayRoot.id,[{id,completed:true,completedAt:nowIso}]);
       }
-    }catch(e){}
+    }catch(e){
+      if(typeof showToast==="function")showToast("Completion queued and will retry automatically","info");
+    }
   }
   log("checked-on",id,"Marked done on "+dateStr);
   awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:_pointAwardOverride(id)});

@@ -241,10 +241,11 @@
           '</div>'+
           (guest?'':notesButton(ev))+
           (guest?'':(isMeeting(ev)?'<button class="btn-meeting-auto" data-meeting-auto-id="'+(ev.meetingBlockId||ev.id)+'" data-tooltip="Meeting prep and follow-ups"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v4"/><path d="M12 17v4"/><path d="M3 12h4"/><path d="M17 12h4"/><path d="M5.6 5.6l2.8 2.8"/><path d="M15.6 15.6l2.8 2.8"/><path d="M18.4 5.6l-2.8 2.8"/><path d="M8.4 15.6l-2.8 2.8"/></svg></button>':''))+
-          // Meetings keep their direct pomodoro button; task cards start one
-          // from the radial. Row keeps only notes / radial / delete / done.
+          // Meetings keep their direct pomodoro button on wide cards. They also
+          // get a radial trigger that compact-card CSS reveals when those direct
+          // controls are hidden.
           (guest?'':(isMeeting(ev)?'<button class="pomo-btn" data-pomo-id="'+ev.id+'" data-pomo-source="schedule" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+_pomoSvg+'</button>':''))+
-          (guest?'':(!isMeeting(ev)?'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="Task actions…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':''))+
+          (guest?'':'<button class="btn-task-radial'+(isMeeting(ev)?' btn-meeting-radial':'')+'" data-radial-id="'+ev.id+'" data-tooltip="Task actions…" aria-label="Task actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>')+
           bountyControl+
           (guest?'':'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>')+
           (guest?'':'<div class="dur">'+

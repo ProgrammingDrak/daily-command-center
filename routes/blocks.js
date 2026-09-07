@@ -3,7 +3,6 @@
 
 const validate = require("../middleware/validate");
 const schemas = require("../middleware/schemas");
-const { collectSubtreeBlockIds } = require("../lib/reschedule");
 const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 
 module.exports = function mount(app, ctx) {
@@ -319,6 +318,42 @@ app.get("/api/blocks/:id", async (req, res) => { const block = await blockDB.get
 app.get("/api/blocks/:id/children", async (req, res) => { try { const parent = await blockDB.getBlock(req.params.id); if (!parent) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(parent, req.workspaceId); res.json(await blockDB.getChildren(req.params.id, req.workspaceId)); } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); } });
 app.post("/api/blocks/reorder", async (req, res) => { try { const { items, _clientId } = req.body; if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array" }); for (const item of items) { const block = await blockDB.getBlock(item.id); if (block) assertBlockOwnership(block, req.workspaceId); } await blockDB.reorderBlocks(items); broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId }, req.workspaceId); res.json({ ok: true, reordered: items.length }); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
 
+// Completion is a first-class atomic mutation, not a replacement of the whole
+// day_root properties blob. Per-task versions make delayed WAL retries safe:
+// an old completion or uncompletion can never overwrite the user's newer click.
+app.post("/api/blocks/:id/completion", async (req, res) => {
+  try {
+    const changes = req.body && req.body.changes;
+    if (!Array.isArray(changes) || !changes.length || changes.length > 500) {
+      return res.status(400).json({ error: "changes must be an array of 1-500 completion mutations" });
+    }
+    for (const change of changes) {
+      if (!change || !String(change.id || "").trim()) return res.status(400).json({ error: "Every completion change needs an id" });
+      if (!Number.isSafeInteger(Number(change.version)) || Number(change.version) <= 0) return res.status(400).json({ error: "Every completion change needs a positive integer version" });
+      if (change.completedAt != null && Number.isNaN(Date.parse(change.completedAt))) return res.status(400).json({ error: "Invalid completedAt" });
+    }
+    const existing = await blockDB.getBlock(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Block not found" });
+    assertBlockOwnership(existing, req.workspaceId);
+    const result = await blockDB.updateTaskCompletions(req.params.id, changes);
+    broadcast("blocks-changed", { action: "completion", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId);
+    res.json(result);
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+});
+
+app.post("/api/blocks/:id/properties", async (req, res) => {
+  try {
+    const patch = req.body && req.body.patch;
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) return res.status(400).json({ error: "patch must be an object" });
+    const existing = await blockDB.getBlock(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Block not found" });
+    assertBlockOwnership(existing, req.workspaceId);
+    const result = await blockDB.patchBlockProperties(req.params.id, patch);
+    broadcast("blocks-changed", { action: "properties-patch", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId);
+    res.json(result);
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+});
+
 // ── Reschedule: move a task (and its whole subtask subtree) to another date ──
 // A TRUE MOVE: the parent block and every descendant keep their ids and just
 // change `date`, all in one transaction, with a single broadcast. Replaces the
@@ -331,6 +366,8 @@ app.post("/api/blocks/reorder", async (req, res) => { try { const { items, _clie
 app.post("/api/blocks/:id/reschedule", async (req, res) => {
   try {
     const { targetDate, parentStart, parentEnd, _clientId } = req.body || {};
+    const requestedVersion = Number(req.body && req.body.mutationVersion);
+    const mutationVersion = Number.isSafeInteger(requestedVersion) && requestedVersion > 0 ? requestedVersion : Date.now();
     if (!targetDate || !isValidDate(targetDate)) return res.status(400).json({ error: "Invalid targetDate" });
     // parentStart/parentEnd are written straight into properties.start/end; guard the
     // format so a hand-crafted call can't poison a task's time fields with junk.
@@ -347,58 +384,20 @@ app.post("/api/blocks/:id/reschedule", async (req, res) => {
     if (bodyFromDate != null && !isValidDate(bodyFromDate)) return res.status(400).json({ error: "Invalid fromDate" });
     const fromDate = parent.date || bodyFromDate;
     if (!fromDate) return res.status(400).json({ error: "Block has no source date to move from" });
-    if (fromDate === targetDate) return res.status(400).json({ error: "Already on that date" });
-    const parentLocalId = (parent.properties || {}).local_id || null;
 
-    // Gather the origin day's task blocks and walk the subtaskOf/wrapId tree.
-    // Undated task blocks ride along as walk candidates: they only move if their
-    // subtaskOf/wrapId chain links them into the parent's subtree.
-    const dayBlocks = [
-      ...(await blockDB.getBlocksByDate(fromDate, req.workspaceId)),
-      ...(await blockDB.getUndatedTaskBlocks(req.workspaceId))
-    ].filter(b => b.type === "block" && (b.properties || {}).local_id);
-    const subtreeIds = collectSubtreeBlockIds(dayBlocks, parent);
-    const byId = new Map(dayBlocks.map(b => [b.id, b]));
-    byId.set(parent.id, parent); // parent may lack local_id and be absent from dayBlocks
-    const now = new Date().toISOString();
-    const moves = subtreeIds.map(bid => {
-      const b = byId.get(bid);
-      if (bid !== parent.id) return { id: bid, date: targetDate };
-      const properties = { ...((b && b.properties) || {}), rescheduledFrom: { date: fromDate, at: now } };
-      if (parentStart) { properties.start = parentStart; properties._pinnedStart = parentStart; }
-      if (parentEnd) properties.end = parentEnd;
-      return { id: bid, date: targetDate, properties };
+    // The database re-reads the parent and discovers its subtree only after it
+    // owns the row lock. This is what makes simultaneous moves indivisible.
+    const result = await blockDB.rescheduleTask({
+      parentId: parent.id,
+      targetDate,
+      fromDate,
+      parentStart,
+      parentEnd,
+      mutationVersion,
     });
-
-    // One tombstone per (moved task, origin day) so the amber list stays clean
-    // across repeated reschedules. Reuse an existing one instead of piling up.
-    const creates = [];
-    const existingTomb = dayBlocks.find(b => (b.properties || {}).kind === "reschedule_tombstone" && (b.properties || {}).movedBlockId === parent.id);
-    if (!existingTomb) {
-      creates.push({
-        type: "block",
-        date: fromDate,
-        user_id: parent.user_id || req.session.userId || null,
-        workspace_id: parent.workspace_id || req.workspaceId || null,
-        properties: {
-          local_id: "resched-tomb-" + parent.id,
-          kind: "reschedule_tombstone",
-          title: (parent.properties || {}).title || "Task",
-          priority: (parent.properties || {}).priority || "Medium",
-          movedBlockId: parent.id,
-          sourceLocalId: parentLocalId,
-          rescheduledFrom: { date: fromDate },
-          rescheduledTo: targetDate,
-          at: now
-        }
-      });
-    }
-
-    const result = await blockDB.rescheduleBlocks(moves, creates);
-    const movedIds = moves.map(m => m.id);
-    const created = result.blocks.slice(moves.length); // tombstone(s) appended after moves
-    broadcast("blocks-changed", { action: "reschedule", blockIds: result.blocks.map(b => b.id), clientId: _clientId }, req.workspaceId);
-    res.json({ moved: movedIds, created, parentId: parent.id, fromDate, targetDate, count: movedIds.length });
+    const changedIds = [...(result.moved || []), ...(result.created || []).map(b => b.id)];
+    if (changedIds.length) broadcast("blocks-changed", { action: "reschedule", blockIds: changedIds, clientId: _clientId }, req.workspaceId);
+    res.json({ ...result, count: (result.moved || []).length });
   } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
 });
 
