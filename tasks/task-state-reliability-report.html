@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Task State Reliability - Shipped</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body{font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#fafaf9;color:#292524}
+    .shell{max-width:70rem;margin:auto;padding:2rem 1.25rem 5rem}.card{background:#fff;border:1px solid #e7e5e4;border-radius:1rem;padding:1.25rem;margin:1rem 0}
+    .report-section>summary{cursor:pointer;list-style:none;font-weight:700;font-size:1.05rem}.report-section>summary::-webkit-details-marker{display:none}
+    .tab{padding:.85rem 1rem;border-bottom:2px solid transparent;color:#78716c;white-space:nowrap}.tab.active{border-color:#0284c7;color:#0369a1}
+    .panel.hidden{display:none}.pill{display:inline-block;padding:.2rem .55rem;border-radius:999px;font-size:.75rem;font-weight:700;background:#dcfce7;color:#166534;margin:.2rem}
+    .warn{background:#fef3c7;color:#92400e}.muted{background:#f5f5f4;color:#57534e}.code-block{background:#1e1e2e;color:#cdd6f4;border-radius:.75rem;padding:1rem;white-space:pre-wrap;overflow:auto;font:12px/1.55 ui-monospace,monospace}
+    .added{color:#a6e3a1}.removed{color:#f38ba8}.flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem}.flow>div{padding:1rem;border:1px solid #bae6fd;background:#f0f9ff;border-radius:.8rem}
+    table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:.65rem;border-bottom:1px solid #e7e5e4;vertical-align:top}
+    [contenteditable=true]{outline:none;border-radius:4px}[contenteditable=true]:hover{background:rgba(14,165,233,.04)}[contenteditable=true]:focus{background:rgba(14,165,233,.08);box-shadow:0 0 0 2px rgba(14,165,233,.15)}
+  </style>
+</head>
+<body>
+  <header class="shell" style="padding-bottom:1rem">
+    <p class="text-sm font-semibold text-sky-700" contenteditable="true">SHIPPED FEATURE REPORT</p>
+    <h1 class="text-4xl font-bold mt-2" contenteditable="true">Task state reliability</h1>
+    <p class="text-stone-600 mt-2" contenteditable="true">Rapid reschedules now land in order, stale subtree moves cannot strand nested work, and production is verified on the merged revision.</p>
+    <div class="mt-3"><span class="pill" contenteditable="true">PR #294 merged</span><span class="pill" contenteditable="true">Production verified</span><span class="pill" contenteditable="true">2,600 stress assertions</span><span class="pill muted" contenteditable="true">No schema migration</span></div>
+  </header>
+
+  <nav class="bg-white border-y border-stone-200 sticky top-0 z-40 overflow-x-auto">
+    <div class="max-w-6xl mx-auto flex">
+      <button class="tab active" data-tab="howto">How to Use</button><button class="tab" data-tab="report">Report</button><button class="tab" data-tab="technical">Technical Review</button><button class="tab" data-tab="checklist">Checklist</button><button class="tab" data-tab="pr">Pull Request</button>
+    </div>
+  </nav>
+
+  <main class="shell">
+    <section id="howto" class="panel">
+      <details class="report-section card" open><summary>What was broken</summary><p class="mt-3" contenteditable="true">Two moves of the same task could overlap. In one narrow server interleaving, a request rebuilt the subtree from an old day after another move committed, then moved the parent without its children. The visible result was a task that seemed not to stay rescheduled or nested work left behind.</p></details>
+      <details class="report-section card" open><summary>What's fixed</summary><p class="mt-3" contenteditable="true">Use the same reschedule controls as before. Moves for one task are now sent in click order, while moves for unrelated tasks remain parallel. If another tab changes the task during the server transaction, the stale plan is rejected before any write and automatically rebuilt once.</p></details>
+      <details class="report-section card" open><summary>How to confirm</summary><ol class="list-decimal pl-6 mt-3 space-y-2"><li contenteditable="true">Move a task with subtasks to another day. Expected: the parent and every nested task appear together on the destination day.</li><li contenteditable="true">Move the same task twice quickly. Expected: the second destination wins and remains after refresh.</li><li contenteditable="true">Complete and un-complete a task, then refresh. Expected: the final state remains exactly as selected.</li></ol></details>
+      <details class="report-section card" open><summary>Who's affected</summary><p class="mt-3" contenteditable="true">Anyone using the itinerary, carryover review, calendar placement, or completion-date flow benefits. There is no new UI to learn and no recovery step required.</p></details>
+    </section>
+
+    <section id="report" class="panel hidden">
+      <details class="report-section card" open><summary>Summary</summary><p class="mt-3" contenteditable="true">The fix closes the remaining race between route-level subtree discovery and transaction-level row locks. It also prevents rapid same-task clicks from racing each other in one browser tab.</p><div class="mt-3"><span class="pill" contenteditable="true">5 files</span><span class="pill" contenteditable="true">167 additions</span><span class="pill warn" contenteditable="true">Low write-path risk</span><span class="pill muted" contenteditable="true">0 breaking changes</span></div></details>
+      <details class="report-section card" open><summary>Before and after</summary><div class="grid md:grid-cols-2 gap-4 mt-4"><div class="border-l-4 border-rose-400 bg-rose-50 p-4 rounded"><h3 class="font-semibold text-rose-800" contenteditable="true">Before</h3><p class="mt-2" contenteditable="true">Request A reads Monday. Request B moves the full tree to Tuesday. Request A queries Monday, sees no children, and can move only the parent to Wednesday.</p></div><div class="border-l-4 border-emerald-400 bg-emerald-50 p-4 rounded"><h3 class="font-semibold text-emerald-800" contenteditable="true">After</h3><p class="mt-2" contenteditable="true">The transaction locks the parent and compares its date and version to the route snapshot. Any mismatch rolls back before a write, then the client retries from current state.</p></div></div></details>
+      <details class="report-section card" open><summary>Reliability flow</summary><div class="flow mt-4"><div><strong contenteditable="true">1. User intent</strong><p contenteditable="true">Same-task moves enter a per-row queue.</p></div><div><strong contenteditable="true">2. Fresh snapshot</strong><p contenteditable="true">The route discovers the current subtree.</p></div><div><strong contenteditable="true">3. Locked check</strong><p contenteditable="true">Date and version are verified under row lock.</p></div><div><strong contenteditable="true">4. Atomic result</strong><p contenteditable="true">All rows move, or none do.</p></div></div></details>
+      <details class="report-section card" open><summary>Non-code changes</summary><table class="mt-3"><thead><tr><th>Where</th><th>Change</th><th>Status</th></tr></thead><tbody><tr><td contenteditable="true">Railway</td><td contenteditable="true">Automatic deploy of merge f3bfed6a</td><td contenteditable="true">Verified</td></tr><tr><td contenteditable="true">Database</td><td contenteditable="true">No schema or data migration</td><td contenteditable="true">N/A</td></tr><tr><td contenteditable="true">Dependencies</td><td contenteditable="true">No production dependency change</td><td contenteditable="true">N/A</td></tr></tbody></table></details>
+      <details class="report-section card" open><summary>Confidence assessment</summary><p class="mt-3" contenteditable="true">Overall confidence: 98%. Full repository tests, CI tests, browser smoke, exact-revision production canary, deterministic conflict tests, and 25 repeated focused runs all passed. The remaining 2% reflects ordinary operational uncertainty, not a known defect.</p><div class="w-full bg-stone-200 rounded h-2 mt-3"><div class="bg-emerald-500 h-2 rounded" style="width:98%"></div></div></details>
+    </section>
+
+    <section id="technical" class="panel hidden">
+      <details class="report-section card" open><summary>Branch overview</summary><p class="mt-3" contenteditable="true">One reviewed commit was built from production-matching main 1976b8f, merged through PR #294, and deployed as f3bfed6a. The original dirty main worktree was not modified.</p></details>
+      <details class="report-section card" open><summary>Production database impact</summary><p class="mt-3" contenteditable="true">No DDL, migration, backfill, or destructive SQL was added. db.js changed only the existing reschedule transaction: after SELECT FOR UPDATE it compares the route's expected date and updated_at value with the locked row. A mismatch throws RESCHEDULE_STALE and rolls back.</p></details>
+      <details class="report-section card" open><summary>Issue found and resolved</summary><div class="border-l-4 border-rose-500 bg-rose-50 p-4 rounded mt-3"><span class="pill warn" contenteditable="true">High before fix</span><h3 class="font-semibold mt-2" contenteditable="true">Stale subtree plan could strand children</h3><p class="mt-2" contenteditable="true">Scenario: parent snapshot read, competing atomic move commits, origin-day pool read returns empty, stale request moves only the parent.</p><p class="mt-2" contenteditable="true">Code: routes/blocks.js and db.js reschedule path.</p><p class="mt-2" contenteditable="true">Resolution: optimistic snapshot tokens validated under the parent row lock, with a bounded client retry.</p><p class="mt-2" contenteditable="true">Impact now: stale plans change zero rows.</p></div></details>
+      <details class="report-section card" open><summary>Per-area review</summary><table class="mt-3"><thead><tr><th>Area</th><th>What changed</th><th>Blast radius</th></tr></thead><tbody><tr><td contenteditable="true">Client</td><td contenteditable="true">Per-task promise chain and one stale retry</td><td contenteditable="true">Only reschedule calls; unrelated tasks remain parallel</td></tr><tr><td contenteditable="true">Route</td><td contenteditable="true">Snapshot metadata added to move plans and error code returned</td><td contenteditable="true">Existing response remains compatible</td></tr><tr><td contenteditable="true">Transaction</td><td contenteditable="true">Locked date/version precondition</td><td contenteditable="true">Rollback before UPDATE on conflict</td></tr><tr><td contenteditable="true">Completion</td><td contenteditable="true">No production code changed</td><td contenteditable="true">Regression suite passed</td></tr></tbody></table></details>
+      <details class="report-section card" open><summary>What's safe to push</summary><ul class="list-disc pl-6 mt-3"><li contenteditable="true">No schema, data, auth, or API payload migration.</li><li contenteditable="true">Normal moves keep the existing transaction and response shape.</li><li contenteditable="true">Conflict behavior is fail-closed: all rows move or the transaction rolls back.</li><li contenteditable="true">The retry is limited to the specific RESCHEDULE_STALE code.</li></ul></details>
+      <details class="report-section card" open><summary>Recommendation</summary><p class="mt-3" contenteditable="true">Shipped and verified. No blocking follow-up is required.</p></details>
+    </section>
+
+    <section id="checklist" class="panel hidden">
+      <details class="report-section card" open><summary>Pre-launch - Code readiness</summary><label class="block mt-3"><input type="checkbox" checked> <span contenteditable="true">Current production main used as base</span></label><label class="block mt-2"><input type="checkbox" checked> <span contenteditable="true">Full test suite and lint gate passed</span></label><label class="block mt-2"><input type="checkbox" checked> <span contenteditable="true">No secrets, flags, dependencies, or migrations added</span></label></details>
+      <details class="report-section card" open><summary>Post-launch - Deploy verification</summary><label class="block mt-3"><input type="checkbox" checked> <span contenteditable="true">PR #294 merged</span></label><label class="block mt-2"><input type="checkbox" checked> <span contenteditable="true">Railway health reports status ok and database ok</span></label><label class="block mt-2"><input type="checkbox" checked> <span contenteditable="true">Production reports exact revision f3bfed6a</span></label><label class="block mt-2"><input type="checkbox" checked> <span contenteditable="true">GitHub test, smoke, and canary jobs passed</span></label></details>
+      <details class="report-section card" open><summary>Post-launch - Edge cases</summary><label class="block mt-3"><input type="checkbox" checked> <span contenteditable="true">Rapid same-task moves preserve click order</span></label><label class="block mt-2"><input type="checkbox" checked> <span contenteditable="true">Different tasks still move concurrently</span></label><label class="block mt-2"><input type="checkbox" checked> <span contenteditable="true">Cross-tab stale plan rolls back and retries</span></label><label class="block mt-2"><input type="checkbox" checked> <span contenteditable="true">Completion, un-completion, WAL, and refresh regressions pass</span></label></details>
+    </section>
+
+    <section id="pr" class="panel hidden">
+      <details class="report-section card" open><summary>Pull request</summary><p class="mt-3" contenteditable="true"><a class="text-sky-700 underline" href="https://github.com/ProgrammingDrak/daily-command-center/pull/294">PR #294: Make task rescheduling race-safe</a></p><p class="mt-2" contenteditable="true">Merged to main on August 8, 2026. Five files changed, with deterministic tests for the database precondition and client ordering.</p></details>
+      <details class="report-section card" open><summary>Key diff</summary><pre class="code-block mt-3"><span class="added">+ validate expectedDate and expectedUpdatedAt after SELECT FOR UPDATE</span>
+ throw RESCHEDULE_STALE before any UPDATE
+
+ serialize reschedule intents per task id
+ retry only the named stale-snapshot conflict once
+
+ test rapid same-task moves, unrelated parallel moves,
+ cross-date stale plans, and same-day stale placement</pre></details>
+      <details class="report-section card" open><summary>Test plan and result</summary><ul class="list-disc pl-6 mt-3"><li contenteditable="true">Full repository suite: passed.</li><li contenteditable="true">Focused suite: 104 assertions per run.</li><li contenteditable="true">Stress repetitions: 25, totaling 2,600 focused assertions.</li><li contenteditable="true">GitHub test, smoke, and exact-revision canary: passed.</li><li contenteditable="true">ESLint: zero errors; existing unrelated warnings remain.</li></ul></details>
+      <details class="report-section card" open><summary>Files changed</summary><table class="mt-3"><thead><tr><th>File</th><th>Purpose</th><th>Risk</th></tr></thead><tbody><tr><td contenteditable="true">db.js</td><td contenteditable="true">Locked optimistic precondition</td><td contenteditable="true">Low</td></tr><tr><td contenteditable="true">routes/blocks.js</td><td contenteditable="true">Snapshot tokens and coded conflict</td><td contenteditable="true">Low</td></tr><tr><td contenteditable="true">public/js/block-store.js</td><td contenteditable="true">Per-task ordering and retry</td><td contenteditable="true">Low</td></tr><tr><td contenteditable="true">block-store-wal.test.js</td><td contenteditable="true">Client concurrency coverage</td><td contenteditable="true">None</td></tr><tr><td contenteditable="true">reschedule-optimistic-lock.test.js</td><td contenteditable="true">Transaction conflict coverage</td><td contenteditable="true">None</td></tr></tbody></table></details>
+    </section>
+  </main>
+  <script>
+    document.querySelectorAll('.tab').forEach(button=>button.addEventListener('click',()=>{
+      document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(x=>x.classList.add('hidden'));
+      button.classList.add('active');document.getElementById(button.dataset.tab).classList.remove('hidden');
+    }));
+  </script>
+</body>
+</html>
