@@ -34,6 +34,16 @@ test("Budget entry is purchase-first and card categories are automatic rollups",
   assert.doesNotMatch(budgetSource, /data-role="cat-name"/);
 });
 
+test("Planned purchases expose an atomic split action beside drag ordering", () => {
+  const routeSource = fs.readFileSync("routes/budget.js", "utf8");
+  const storeSource = fs.readFileSync("budget-store.js", "utf8");
+  assert.match(budgetSource, /data-act="split-block"/);
+  assert.match(budgetSource, /\/api\/budget\/blocks\/" \+ row\.dataset\.id \+ "\/split/);
+  assert.match(routeSource, /\/api\/budget\/blocks\/:id\/split/);
+  assert.match(storeSource, /async function splitTankBlock/);
+  assert.match(storeSource, /orderedIds\.splice\(sourceIndex \+ 1/);
+});
+
 test("Reward Vault is a keyboard-contained Budget drawer", () => {
   assert.match(budgetSource, /role="dialog" aria-modal="true" aria-labelledby="rv-title"/);
   assert.match(budgetSource, /data-act="vault-open"/);

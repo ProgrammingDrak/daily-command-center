@@ -602,6 +602,85 @@ async function updateTankBlock(workspaceId, id, body) {
   }
 }
 
+function nextSplitTitle(rows, title) {
+  const base = String(title || "Planned purchase").replace(/\s+\(\d+\)$/, "").trim();
+  const titles = new Set(rows.map(row => String(row.title || "")));
+  let copyNumber = 2;
+  while (titles.has(`${base} (${copyNumber})`)) copyNumber += 1;
+  return `${base} (${copyNumber})`;
+}
+
+async function splitTankBlock(workspaceId, id) {
+  const rewardId = parseInt(id, 10);
+  if (!Number.isFinite(rewardId)) throw badRequest("Invalid block id");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `SELECT * FROM slot_rewards
+        WHERE workspace_id = $1 AND tank_position IS NOT NULL AND deleted_at IS NULL
+        ORDER BY tank_position ASC, id ASC
+        FOR UPDATE`,
+      [workspaceId]
+    );
+    const sourceIndex = rows.findIndex(row => Number(row.id) === rewardId);
+    if (sourceIndex < 0) throw notFound("Tank block not found");
+    const source = rows[sourceIndex];
+    if (Number(source.value_cents) < 2) throw badRequest("Purchase amount is too small to split");
+    if (source.tank_claimed_period || Number(source.uses_remaining) === 0) {
+      throw badRequest("Claimed purchases cannot be split");
+    }
+
+    const copyValueCents = Math.floor(Number(source.value_cents) / 2);
+    const originalValueCents = Number(source.value_cents) - copyValueCents;
+    const copyTitle = nextSplitTitle(rows, source.title);
+    const { rows: [original] } = await client.query(
+      `UPDATE slot_rewards
+          SET value_cents = $3, updated_at = NOW()
+        WHERE workspace_id = $1 AND id = $2
+        RETURNING *`,
+      [workspaceId, rewardId, originalValueCents]
+    );
+    const { rows: [copy] } = await client.query(
+      `INSERT INTO slot_rewards
+         (workspace_id, title, kind, sponsor_type, sponsor_splits, weight, chance_shares,
+          payment_source, tier_id, active, sponsor_active, value_cents, bank_delta_cents,
+          duration_minutes, requires_confirmation, cooldown_days, unlock_threshold_cents,
+          notes, uses_remaining, sort_order, owner_user_id, created_by_user_id,
+          tank_position, tank_unlock_cents, tank_category, tank_color, tank_recurring,
+          source_reward_id)
+       SELECT workspace_id, $3, kind, sponsor_type, sponsor_splits, weight, chance_shares,
+              payment_source, tier_id, active, sponsor_active, $4, bank_delta_cents,
+              duration_minutes, requires_confirmation, cooldown_days, unlock_threshold_cents,
+              notes, CASE WHEN tank_recurring THEN NULL ELSE 1 END, sort_order,
+              owner_user_id, created_by_user_id, tank_position, 0, tank_category, tank_color,
+              tank_recurring, source_reward_id
+         FROM slot_rewards
+        WHERE workspace_id = $1 AND id = $2
+       RETURNING *`,
+      [workspaceId, rewardId, copyTitle, copyValueCents]
+    );
+
+    const orderedIds = rows.map(row => Number(row.id));
+    orderedIds.splice(sourceIndex + 1, 0, Number(copy.id));
+    for (let index = 0; index < orderedIds.length; index += 1) {
+      await client.query(
+        `UPDATE slot_rewards SET tank_position = $3, updated_at = NOW()
+          WHERE workspace_id = $1 AND id = $2`,
+        [workspaceId, orderedIds[index], (index + 1) * TANK_POSITION_STEP]
+      );
+    }
+    await recomputeTankThresholds(client, workspaceId);
+    await client.query("COMMIT");
+    return { original, copy, reordered: orderedIds.length };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 // Remove from the tank. keepReward leaves the row in the slot catalog;
 // otherwise soft-delete it the same way slot-store's deleteReward does.
 async function removeTankBlock(workspaceId, id, { keepReward = false } = {}) {
@@ -1223,6 +1302,7 @@ module.exports = {
   getTankBlockRows,
   addTankBlock,
   updateTankBlock,
+  splitTankBlock,
   removeTankBlock,
   reorderTank,
   updateBudgetConfig,

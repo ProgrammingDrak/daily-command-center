@@ -104,6 +104,22 @@ function createMockPool(options = {}) {
       const max = live.length ? Math.max(...live.map(r => r.tank_position)) : 0;
       return { rows: [{ next: max + 1000, count: live.length }] };
     }
+    if (text.includes("INSERT INTO slot_rewards") && text.includes("SELECT workspace_id")) {
+      const source = state.tankRows.find(r => r.id === params[1] && r.tank_position != null && !r.deleted_at);
+      if (!source) return { rows: [] };
+      const row = {
+        ...source,
+        id: state.nextId++,
+        title: params[2],
+        value_cents: params[3],
+        uses_remaining: source.tank_recurring ? null : 1,
+        tank_unlock_cents: 0,
+        tank_claimed_period: null,
+      };
+      state.tankRows.push(row);
+      state.insertedRewards.push(row);
+      return { rows: [{ ...row }] };
+    }
     if (text.includes("INSERT INTO slot_rewards")) {
       const row = {
         id: state.nextId++,
@@ -187,6 +203,12 @@ function createMockPool(options = {}) {
       const row = state.tankRows.find(r => r.id === params[1] && r.tank_position != null && !r.deleted_at);
       if (row) row.tank_position = params[2];
       return { rows: row ? [{ id: row.id }] : [] };
+    }
+    if (text.includes("SET value_cents = $3") && text.includes("RETURNING *")) {
+      const row = state.tankRows.find(r => r.id === params[1] && r.tank_position != null && !r.deleted_at);
+      if (!row) return { rows: [] };
+      row.value_cents = params[2];
+      return { rows: [{ ...row }] };
     }
     if (text.includes("SET title = $3")) {
       const row = state.tankRows.find(r => r.id === params[1] && r.tank_position != null && !r.deleted_at);
@@ -406,6 +428,39 @@ test("reorderTank renumbers the whole tank on position collisions", async () => 
   const byId = Object.fromEntries(mock.state.tankRows.map(r => [r.id, r.tank_unlock_cents]));
   assert.equal(byId[2], 10000);
   assert.equal(byId[1], 15000);
+});
+
+test("splitTankBlock halves a purchase and inserts its copy next in funding order", async () => {
+  const mock = createMockPool({
+    tankRows: [
+      tankRow(1, 10001, 1000, { title: "Dining: Dinner" }),
+      tankRow(2, 2000, 2000),
+    ],
+  });
+  const store = loadStoreWithMock(mock);
+
+  const result = await store.splitTankBlock(WS, 1);
+
+  assert.equal(result.original.value_cents, 5001);
+  assert.equal(result.copy.value_cents, 5000);
+  assert.equal(result.copy.title, "Dining: Dinner (2)");
+  assert.deepEqual(
+    mock.state.tankRows
+      .filter(row => row.tank_position != null)
+      .sort((a, b) => a.tank_position - b.tank_position)
+      .map(row => [row.id, row.tank_position, row.tank_unlock_cents]),
+    [[1, 1000, 5001], [result.copy.id, 2000, 10001], [2, 3000, 12001]]
+  );
+});
+
+test("splitTankBlock rejects purchases that cannot divide into positive amounts", async () => {
+  const mock = createMockPool({ tankRows: [tankRow(1, 1, 1000)] });
+  const store = loadStoreWithMock(mock);
+
+  await assert.rejects(() => store.splitTankBlock(WS, 1), e => e.statusCode === 400);
+
+  assert.equal(mock.state.tankRows[0].value_cents, 1);
+  assert.ok(mock.state.rolledBack);
 });
 
 test("updateTankBlock amount change reflows thresholds above it", async () => {
