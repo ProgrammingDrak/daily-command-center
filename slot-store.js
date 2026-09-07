@@ -43,6 +43,9 @@ const SPIN_COST_LENIENCY = 0.9;
 const SPIN_COST_MIN_DAYS = 3;
 const DEFAULT_MAINTENANCE_HOURS_PER_DAY = 4;
 const DEFAULT_ADVANCEMENT_HOURS_PER_DAY = 5;
+const DEFAULT_DESIRED_HOURS_PER_WEEK = 50;
+const WEEKS_PER_MONTH = 52 / 12;
+const MAX_MISS_SHIELDS = 50;
 const DEFAULT_BANK_BUILDER_HIT_RATE = 0.9;
 // Jackpot is the rare headline event, not a near-daily occurrence: ~1 in 100
 // spins. Like a real slot's PAR sheet, the headline symbol owns a tiny slice of
@@ -496,6 +499,12 @@ function normalizeHours(value, fallback) {
   return Math.max(0, Math.min(16, Math.round(n * 4) / 4));
 }
 
+function normalizeWeeklyHours(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.max(1, Math.min(168, Math.round(n * 4) / 4));
+}
+
 function normalizeProfileNotes(value) {
   return String(value == null ? "" : value).trim().slice(0, 1000);
 }
@@ -519,6 +528,10 @@ function normalizeEconomyProfile(value = {}) {
     advancement_hours_per_day: normalizeHours(
       raw.advancement_hours_per_day ?? raw.advancementHoursPerDay,
       DEFAULT_ADVANCEMENT_HOURS_PER_DAY
+    ),
+    desired_hours_per_week: normalizeWeeklyHours(
+      raw.desired_hours_per_week ?? raw.desiredHoursPerWeek,
+      DEFAULT_DESIRED_HOURS_PER_WEEK
     ),
     target_daily_spins: DEFAULT_TARGET_DAILY_SPINS,
     monthly_discretionary_cents: monthly,
@@ -1416,8 +1429,8 @@ async function getWinningsSummaryCustom(workspaceId, from, to, exec = pool) {
   return { won: (r && r.won) || 0, banked: (r && r.banked) || 0, from, to };
 }
 
-async function getPendingBankDeposit(workspaceId) {
-  const { rows: [pending] } = await pool.query(
+async function getPendingBankDeposit(workspaceId, exec = pool) {
+  const { rows: [pending] } = await exec.query(
     `SELECT
        COALESCE(SUM(bank_delta_cents), 0)::int AS cents,
        COUNT(*)::int AS count,
@@ -1493,6 +1506,44 @@ function buildBankrollGoalState(account, rewardRows, bankUsage, funding, tankUsa
     missing: !row,
     funded_at: goal.funded_at || null,
     celebration_spin_claimed_at: goal.celebration_spin_claimed_at || null,
+  };
+}
+
+function desiredMinutesPerMonth(settings) {
+  const profile = (settings && settings.economy_profile) || {};
+  const hoursPerWeek = normalizeWeeklyHours(
+    profile.desired_hours_per_week,
+    DEFAULT_DESIRED_HOURS_PER_WEEK
+  );
+  return Math.max(1, Math.round(hoursPerWeek * WEEKS_PER_MONTH * 60));
+}
+
+function buildPointExchangeState(account, goalState) {
+  const settings = normalizeSlotSettings(account && account.settings);
+  const minutesPerMonth = desiredMinutesPerMonth(settings);
+  const goal = goalState || {};
+  const enabled = !!goal.enabled && Number(goal.target_cents) > 0;
+  const targetCents = enabled ? Number(goal.target_cents) : 0;
+  const currentTotalCents = Number(goal.total_cents) || 0;
+  const remainingCents = enabled ? Math.max(0, targetCents - currentTotalCents) : 0;
+  const centsPerPoint = enabled ? targetCents / minutesPerMonth : 0;
+  const pointsPerShield = Math.max(1, Math.round(minutesPerMonth / MAX_MISS_SHIELDS));
+  const shields = Number(settings.next_spin_modifiers && settings.next_spin_modifiers.miss_shield) || 0;
+  return {
+    enabled,
+    cents_per_point: centsPerPoint,
+    points_per_shield: pointsPerShield,
+    minutes_per_month: minutesPerMonth,
+    desired_hours_per_week: settings.economy_profile.desired_hours_per_week,
+    target_cents: targetCents,
+    current_total_cents: currentTotalCents,
+    remaining_cents: remainingCents,
+    points_to_fill: enabled && centsPerPoint > 0 ? Math.ceil(remainingCents / centsPerPoint) : 0,
+    point_balance: Number(account && account.point_balance) || 0,
+    miss_shield: shields,
+    max_miss_shields: MAX_MISS_SHIELDS,
+    shield_capacity: Math.max(0, MAX_MISS_SHIELDS - shields),
+    funded: enabled && remainingCents <= 0,
   };
 }
 
@@ -1587,6 +1638,7 @@ async function getState(workspaceId, userId, options = {}) {
       shortfallPenalty: account.settings.shortfall_penalty,
       scoringRationale: account.settings.scoring_rationale,
       bankrollGoalModeEnabled: isBankrollGoalModeActive(account.settings),
+      pointExchange: buildPointExchangeState(account, bankrollGoal),
     },
   };
 }
@@ -1789,6 +1841,109 @@ async function clearBankrollGoal(workspaceId, userId) {
     [workspaceId, JSON.stringify({ bankroll_goal: nextGoal })]
   );
   return getState(workspaceId, userId);
+}
+
+async function convertPointsToReserve(workspaceId, userId, body = {}) {
+  const requestedPoints = Math.floor(Number(body.points ?? body.amount));
+  if (!Number.isFinite(requestedPoints) || requestedPoints <= 0) {
+    throw badRequest("Enter how many points to convert.");
+  }
+  await ensureAccount(workspaceId, userId);
+  const client = await pool.connect();
+  let exchangeResult;
+  try {
+    await client.query("BEGIN");
+    const { rows: [row] } = await client.query(
+      "SELECT * FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+      [workspaceId]
+    );
+    if (!row) throw notFound("Slot account not found");
+
+    const account = accountWithSettings(row);
+    const goal = account.settings.bankroll_goal || {};
+    const targetCents = goal.enabled ? Math.max(0, Number(goal.target_cents) || 0) : 0;
+    if (!goal.enabled || targetCents <= 0) {
+      throw badRequest("Set a Reward Reserve goal before converting points.");
+    }
+    const pointBalance = Number(row.point_balance) || 0;
+    if (requestedPoints > pointBalance) {
+      throw badRequest("You only have " + pointBalance + (pointBalance === 1 ? " point." : " points."));
+    }
+
+    const pending = await getPendingBankDeposit(workspaceId, client);
+    const currentTotalCents = (Number(row.bank_balance_cents) || 0) + (Number(pending.cents) || 0);
+    const quote = buildPointExchangeState(account, {
+      enabled: true,
+      target_cents: targetCents,
+      total_cents: currentTotalCents,
+    });
+    const pointsForReserve = Math.min(requestedPoints, quote.points_to_fill);
+    const depositCents = Math.min(
+      Math.round(pointsForReserve * quote.cents_per_point),
+      quote.remaining_cents
+    );
+    const overflowPoints = requestedPoints - pointsForReserve;
+    const shieldsToAdd = Math.min(
+      Math.floor(overflowPoints / quote.points_per_shield),
+      quote.shield_capacity
+    );
+    const pointsForShields = shieldsToAdd * quote.points_per_shield;
+    const pointsSpent = pointsForReserve + pointsForShields;
+    if (depositCents <= 0 && shieldsToAdd <= 0) {
+      const minimum = quote.remaining_cents > 0
+        ? Math.max(1, Math.ceil(1 / quote.cents_per_point))
+        : quote.points_per_shield;
+      throw badRequest("Convert at least " + minimum + " points for the next reserve step.");
+    }
+
+    const nextModifiers = normalizeNextSpinModifiers({
+      ...(account.settings.next_spin_modifiers || {}),
+      miss_shield: quote.miss_shield + shieldsToAdd,
+    });
+    await client.query(
+      `UPDATE slot_accounts
+       SET point_balance = GREATEST(0, point_balance - $2),
+           bank_balance_cents = bank_balance_cents + $3,
+           settings = COALESCE(settings, '{}'::jsonb) || $4::jsonb,
+           updated_at = NOW()
+       WHERE workspace_id = $1`,
+      [workspaceId, pointsSpent, depositCents, JSON.stringify({ next_spin_modifiers: nextModifiers })]
+    );
+    await client.query(
+      `INSERT INTO slot_point_ledger
+         (workspace_id, user_id, delta, source_type, source_key, description, metadata)
+       VALUES ($1,$2,$3,'point_exchange',$4,$5,$6)`,
+      [
+        workspaceId,
+        userId || null,
+        -pointsSpent,
+        "exchange-" + crypto.randomUUID(),
+        "Converted " + pointsSpent + " points to Reward Reserve",
+        JSON.stringify({
+          deposit_cents: depositCents,
+          shields_added: shieldsToAdd,
+          points_for_reserve: pointsForReserve,
+          points_for_shields: pointsForShields,
+          cents_per_point: quote.cents_per_point,
+        }),
+      ]
+    );
+    await client.query("COMMIT");
+    exchangeResult = {
+      points_spent: pointsSpent,
+      points_for_reserve: pointsForReserve,
+      points_for_shields: pointsForShields,
+      deposit_cents: depositCents,
+      shields_added: shieldsToAdd,
+      requested_points: requestedPoints,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { ...(await getState(workspaceId, userId)), exchange_result: exchangeResult };
 }
 
 async function setNextSpinTileOverride(workspaceId, userId, body = {}) {
@@ -4181,6 +4336,12 @@ function notFound(message) {
   return err;
 }
 
+function badRequest(message) {
+  const err = new Error(message);
+  err.statusCode = 400;
+  return err;
+}
+
 module.exports = {
   ensureSchema,
   getState,
@@ -4191,6 +4352,7 @@ module.exports = {
   clearNextSpinTileOverride,
   setBankrollGoal,
   clearBankrollGoal,
+  convertPointsToReserve,
   chooseSpinDiceReroll,
   chooseSpinGamble,
   combineMultiplierCharges,
@@ -4225,6 +4387,8 @@ module.exports = {
     normalizeNextSpinTileOverride,
     applyTileOverrideToScreen,
     buildBankrollGoalState,
+    buildPointExchangeState,
+    desiredMinutesPerMonth,
     buildBankrollGoalCelebrationScreen,
     rollDieReroll,
     chooseExistingBucketAttempt,

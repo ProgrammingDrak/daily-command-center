@@ -114,6 +114,12 @@ function createMockPool(options = {}) {
       state.rewardRows[idx] = { ...state.rewardRows[idx], active: false, weight: 0, deleted_at: "now" };
       return { rowCount: 1, rows: [] };
     }
+    if (text.includes("SET point_balance = GREATEST") && text.includes("bank_balance_cents = bank_balance_cents +")) {
+      state.pointBalance = Math.max(0, state.pointBalance - (params[1] || 0));
+      state.bankBalance += params[2] || 0;
+      state.settings = { ...state.settings, ...JSON.parse(params[3]) };
+      return { rows: [{ workspace_id: params[0], point_balance: state.pointBalance, bank_balance_cents: state.bankBalance, settings: state.settings }] };
+    }
     if (text.includes("UPDATE slot_accounts") && text.includes("settings = COALESCE(settings")) {
       const jsonParam = params.find(p => typeof p === "string" && p.trim().startsWith("{"));
       if (jsonParam) state.settings = { ...state.settings, ...JSON.parse(jsonParam) };
@@ -2656,6 +2662,68 @@ test("spinBatch refuses up front when points can't cover the whole batch", async
     /Not enough points/,
   );
   assert.equal(pool.state.pointBalance, 30, "nothing is charged when the batch can't afford itself");
+});
+
+test("point exchange quotes a full month of work against the active reserve goal", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const exchange = store._test.buildPointExchangeState(
+    { point_balance: 5000, settings: {} },
+    { enabled: true, target_cents: 13000, total_cents: 0 }
+  );
+
+  assert.equal(exchange.enabled, true);
+  assert.equal(exchange.minutes_per_month, 13000);
+  assert.equal(exchange.cents_per_point, 1);
+  assert.equal(exchange.points_to_fill, 13000);
+  assert.equal(exchange.points_per_shield, 260);
+});
+
+test("convertPointsToReserve moves points and writes an audit entry atomically", async () => {
+  const mockPool = createMockPool({
+    pointBalance: 1000,
+    bankBalance: 0,
+    settings: {
+      points_v2_migrated_at: "already",
+      points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already",
+      points_v3_spin_cost_migrated_at: "already",
+      bankroll_goal: { enabled: true, target_cents: 13000 },
+      economy_profile: { desired_hours_per_week: 50 },
+    },
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const result = await store.convertPointsToReserve("ws-1", 7, { points: 260 });
+
+  assert.equal(result.exchange_result.points_spent, 260);
+  assert.equal(result.exchange_result.deposit_cents, 260);
+  assert.equal(mockPool.state.pointBalance, 740);
+  assert.equal(mockPool.state.bankBalance, 260);
+  assert.equal(mockPool.state.ledgerDelta, -260);
+  assert.equal(mockPool.state.ledgerMetadata.deposit_cents, 260);
+  assert.ok(mockPool.calls.some(call => String(call.sql).includes("FOR UPDATE")));
+  assert.ok(mockPool.calls.some(call => String(call.sql) === "COMMIT"));
+});
+
+test("convertPointsToReserve rejects an unaffordable exchange without changing balances", async () => {
+  const mockPool = createMockPool({
+    pointBalance: 10,
+    bankBalance: 25,
+    settings: {
+      points_v2_migrated_at: "already",
+      points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already",
+      points_v3_spin_cost_migrated_at: "already",
+      bankroll_goal: { enabled: true, target_cents: 13000 },
+    },
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  await assert.rejects(() => store.convertPointsToReserve("ws-1", 7, { points: 11 }), /only have 10 points/);
+
+  assert.equal(mockPool.state.pointBalance, 10);
+  assert.equal(mockPool.state.bankBalance, 25);
+  assert.ok(mockPool.calls.some(call => String(call.sql) === "ROLLBACK"));
 });
 
 // Guard for the multi-tenant seedRewards bug: the default-reward INSERT used to
