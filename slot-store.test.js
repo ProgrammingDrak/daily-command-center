@@ -2093,3 +2093,52 @@ test("spinBatch refuses up front when points can't cover the whole batch", async
   );
   assert.equal(pool.state.pointBalance, 30, "nothing is charged when the batch can't afford itself");
 });
+
+// ── Points → Reward Reserve money changer ──────────────────────────────────
+test("desiredMinutesPerMonth defaults to 50h/week and honors a custom value", () => {
+  const store = require("./slot-store");
+  assert.equal(store._test.desiredMinutesPerMonth({}), 13000, "50h/wk * 52/12 wk/mo * 60 = 13000");
+  assert.equal(
+    store._test.desiredMinutesPerMonth({ economy_profile: { desired_hours_per_week: 25 } }),
+    6500,
+    "halving desired hours halves the monthly minutes"
+  );
+});
+
+test("exchange rate: a full month of points funds the entire reserve goal 1:1", () => {
+  const store = require("./slot-store");
+  const account = { point_balance: 5000, settings: {} };
+  const goal = { enabled: true, target_cents: 13000, total_cents: 0 };
+  const ex = store._test.buildPointExchangeState(account, goal);
+  assert.equal(ex.enabled, true);
+  assert.equal(ex.minutes_per_month, 13000);
+  // One bank unit (one point) is worth target / minutes.
+  assert.equal(ex.cents_per_point, 1);
+  // Converting a whole month's worth of points delivers the whole target.
+  assert.equal(Math.round(ex.cents_per_point * ex.minutes_per_month), goal.target_cents);
+  assert.equal(ex.points_to_fill, 13000);
+  assert.equal(ex.points_per_shield, 260, "13000 / 50-shield cap = 260 points per shield");
+  assert.equal(ex.remaining_cents, 13000);
+  assert.equal(ex.funded, false);
+});
+
+test("exchange state: a fully funded goal reads as funded with no remaining", () => {
+  const store = require("./slot-store");
+  const ex = store._test.buildPointExchangeState(
+    { point_balance: 100, settings: {} },
+    { enabled: true, target_cents: 13000, total_cents: 13000 }
+  );
+  assert.equal(ex.remaining_cents, 0);
+  assert.equal(ex.points_to_fill, 0);
+  assert.equal(ex.funded, true);
+});
+
+test("exchange state: no active goal disables the converter", () => {
+  const store = require("./slot-store");
+  const ex = store._test.buildPointExchangeState(
+    { point_balance: 100, settings: {} },
+    { enabled: false, target_cents: 0, total_cents: 0 }
+  );
+  assert.equal(ex.enabled, false);
+  assert.equal(ex.cents_per_point, 0);
+});

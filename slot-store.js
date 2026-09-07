@@ -31,6 +31,11 @@ const SPIN_COST_LENIENCY = 0.9;
 const SPIN_COST_MIN_DAYS = 3;
 const DEFAULT_MAINTENANCE_HOURS_PER_DAY = 4;
 const DEFAULT_ADVANCEMENT_HOURS_PER_DAY = 5;
+// Desired total work each week, used by the points->reserve money changer to
+// price a point. Advanced UI to customize comes later; 50h/week is the default.
+const DEFAULT_DESIRED_HOURS_PER_WEEK = 50;
+const WEEKS_PER_MONTH = 52 / 12; // average calendar weeks in a month
+const MAX_MISS_SHIELDS = 50;     // mirror of the next_spin_modifiers.miss_shield clamp
 const DEFAULT_BANK_BUILDER_HIT_RATE = 0.9;
 // Jackpot is the rare headline event, not a near-daily occurrence: ~1 in 100
 // spins. Like a real slot's PAR sheet, the headline symbol owns a tiny slice of
@@ -487,6 +492,14 @@ function normalizeHours(value, fallback) {
   return Math.max(0, Math.min(16, Math.round(n * 4) / 4));
 }
 
+// Weekly desired-work hours. Unlike the per-day rhythm fields (0-16h/day), this
+// is a weekly total, so it gets its own band (1-168h, quarter-hour increments).
+function normalizeWeeklyHours(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.max(1, Math.min(168, Math.round(n * 4) / 4));
+}
+
 function normalizeProfileNotes(value) {
   return String(value == null ? "" : value).trim().slice(0, 1000);
 }
@@ -510,6 +523,10 @@ function normalizeEconomyProfile(value = {}) {
     advancement_hours_per_day: normalizeHours(
       raw.advancement_hours_per_day ?? raw.advancementHoursPerDay,
       DEFAULT_ADVANCEMENT_HOURS_PER_DAY
+    ),
+    desired_hours_per_week: normalizeWeeklyHours(
+      raw.desired_hours_per_week ?? raw.desiredHoursPerWeek,
+      DEFAULT_DESIRED_HOURS_PER_WEEK
     ),
     target_daily_spins: DEFAULT_TARGET_DAILY_SPINS,
     monthly_discretionary_cents: monthly,
@@ -1343,6 +1360,54 @@ function buildBankrollGoalState(account, rewardRows, bankUsage, funding) {
   };
 }
 
+// ── Points → Reward Reserve money changer ──────────────────────────────────
+// One point converts to one "bank unit". One bank unit is worth
+// (reward reserve goal) / (minutes of desired work each month), so converting a
+// full month's worth of points 1:1 funds the entire reserve goal. Overflow past
+// a fully-funded goal spills into miss shields (the same shield the reels grant),
+// priced so a whole month of overflow tops out the 50-shield cap.
+function desiredMinutesPerMonth(settings) {
+  const profile = (settings && settings.economy_profile) || {};
+  const hoursPerWeek = normalizeWeeklyHours(profile.desired_hours_per_week, DEFAULT_DESIRED_HOURS_PER_WEEK);
+  return Math.max(1, Math.round(hoursPerWeek * WEEKS_PER_MONTH * 60));
+}
+
+// The single source of truth for the converter's numbers, surfaced to the client
+// (so the modal previews live) and reused by convertPointsToReserve on submit.
+function buildPointExchangeState(account, goalState) {
+  const settings = normalizeSlotSettings(account && account.settings);
+  const minutesPerMonth = desiredMinutesPerMonth(settings);
+  const desiredHoursPerWeek = normalizeWeeklyHours(
+    settings.economy_profile && settings.economy_profile.desired_hours_per_week,
+    DEFAULT_DESIRED_HOURS_PER_WEEK
+  );
+  const goal = goalState || {};
+  const enabled = !!goal.enabled && (goal.target_cents || 0) > 0;
+  const targetCents = enabled ? goal.target_cents : 0;
+  const centsPerPoint = enabled ? targetCents / minutesPerMonth : 0;
+  const pointsPerShield = Math.max(1, Math.round(minutesPerMonth / MAX_MISS_SHIELDS));
+  const currentTotalCents = goal.total_cents || 0;
+  const remainingCents = enabled ? Math.max(0, targetCents - currentTotalCents) : 0;
+  const shields = (settings.next_spin_modifiers && settings.next_spin_modifiers.miss_shield) || 0;
+  return {
+    enabled,
+    points_per_bank_unit: 1,
+    cents_per_point: centsPerPoint,
+    points_per_shield: pointsPerShield,
+    minutes_per_month: minutesPerMonth,
+    desired_hours_per_week: desiredHoursPerWeek,
+    target_cents: targetCents,
+    current_total_cents: currentTotalCents,
+    remaining_cents: remainingCents,
+    points_to_fill: enabled && centsPerPoint > 0 ? Math.ceil(remainingCents / centsPerPoint) : 0,
+    point_balance: (account && account.point_balance) || 0,
+    miss_shield: shields,
+    max_miss_shields: MAX_MISS_SHIELDS,
+    shield_capacity: Math.max(0, MAX_MISS_SHIELDS - shields),
+    funded: enabled && remainingCents <= 0,
+  };
+}
+
 async function getState(workspaceId, userId) {
   const account = accountWithSettings(await ensureAccount(workspaceId, userId));
   const spinCostBasis = await learnedSpinCost(workspaceId);
@@ -1409,6 +1474,7 @@ async function getState(workspaceId, userId) {
       shortfallPenalty: account.settings.shortfall_penalty,
       scoringRationale: account.settings.scoring_rationale,
       bankrollGoalModeEnabled: isBankrollGoalModeActive(account.settings),
+      pointExchange: buildPointExchangeState(account, bankrollGoal),
     },
   };
 }
@@ -1611,6 +1677,108 @@ async function clearBankrollGoal(workspaceId, userId) {
     [workspaceId, JSON.stringify({ bankroll_goal: nextGoal })]
   );
   return getState(workspaceId, userId);
+}
+
+// Money changer: spend points to fund the Reward Reserve goal at
+// (target / desired minutes per month) cents per point. Fills the goal first,
+// then spills overflow into miss shields. Transactional + FOR UPDATE locked so a
+// double-submit can't double-spend, mirroring spin()'s account mutation.
+async function convertPointsToReserve(workspaceId, userId, body = {}) {
+  const requestedPoints = Math.floor(Number(body.points ?? body.amount));
+  if (!Number.isFinite(requestedPoints) || requestedPoints <= 0) {
+    throw badRequest("Enter how many points to convert.");
+  }
+  await ensureAccount(workspaceId, userId);
+  const pendingBefore = await getPendingBankDeposit(workspaceId);
+  let resultInfo = null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [row] } = await client.query(
+      "SELECT * FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+      [workspaceId]
+    );
+    if (!row) throw notFound("Slot account not found");
+    const account = accountWithSettings(row);
+    const settings = account.settings;
+    const goal = settings.bankroll_goal || {};
+    const targetCents = goal.enabled ? Math.max(0, goal.target_cents || 0) : 0;
+    if (!goal.enabled || targetCents <= 0) {
+      throw badRequest("Set a Reward Reserve goal before converting points.");
+    }
+    const balance = row.point_balance || 0;
+    if (requestedPoints > balance) {
+      throw badRequest("You only have " + balance + (balance === 1 ? " point." : " points."));
+    }
+    const minutesPerMonth = desiredMinutesPerMonth(settings);
+    const centsPerPoint = targetCents / minutesPerMonth;
+    const pointsPerShield = Math.max(1, Math.round(minutesPerMonth / MAX_MISS_SHIELDS));
+    const currentTotal = (row.bank_balance_cents || 0) + (pendingBefore.cents || 0);
+    const remainingToGoal = Math.max(0, targetCents - currentTotal);
+    // Points spent on the reserve, capped so the deposit never overfills the goal.
+    const pointsToFill = centsPerPoint > 0 ? Math.ceil(remainingToGoal / centsPerPoint) : 0;
+    const pointsForReserve = Math.min(requestedPoints, pointsToFill);
+    const depositCents = Math.min(Math.round(pointsForReserve * centsPerPoint), remainingToGoal);
+    // Overflow past a full goal buys miss shields, capped at the 50-shield ceiling.
+    const overflowPoints = requestedPoints - pointsForReserve;
+    const currentShields = (settings.next_spin_modifiers && settings.next_spin_modifiers.miss_shield) || 0;
+    const shieldCapacity = Math.max(0, MAX_MISS_SHIELDS - currentShields);
+    const shieldsToAdd = Math.min(Math.floor(overflowPoints / pointsPerShield), shieldCapacity);
+    const pointsForShields = shieldsToAdd * pointsPerShield;
+    const pointsSpent = pointsForReserve + pointsForShields;
+    if (pointsSpent <= 0) {
+      throw badRequest(
+        shieldCapacity <= 0
+          ? "Your reserve goal is full and your miss shields are maxed out."
+          : "Need at least " + pointsPerShield + " points to buy a shield once the goal is full."
+      );
+    }
+    const nextModifiers = normalizeNextSpinModifiers({
+      ...(settings.next_spin_modifiers || {}),
+      miss_shield: currentShields + shieldsToAdd,
+    });
+    await client.query(
+      `UPDATE slot_accounts
+       SET point_balance = GREATEST(0, point_balance - $2),
+           bank_balance_cents = bank_balance_cents + $3,
+           settings = COALESCE(settings, '{}'::jsonb) || $4::jsonb,
+           updated_at = NOW()
+       WHERE workspace_id = $1`,
+      [workspaceId, pointsSpent, depositCents, JSON.stringify({ next_spin_modifiers: nextModifiers })]
+    );
+    // Audit trail in the points ledger (negative delta = points removed).
+    const sourceKey = "exchange-" + (userId || "x") + "-" + new Date().toISOString() + "-" + pointsSpent;
+    await client.query(
+      `INSERT INTO slot_point_ledger (workspace_id, user_id, delta, source_type, source_key, description, metadata)
+       VALUES ($1,$2,$3,'point_exchange',$4,$5,$6)
+       ON CONFLICT (workspace_id, source_type, source_key) DO NOTHING`,
+      [workspaceId, userId || null, -pointsSpent, sourceKey,
+        "Converted " + pointsSpent + " points to Reward Reserve",
+        JSON.stringify({
+          deposit_cents: depositCents,
+          shields_added: shieldsToAdd,
+          points_for_reserve: pointsForReserve,
+          points_for_shields: pointsForShields,
+          cents_per_point: centsPerPoint,
+        })]
+    );
+    await client.query("COMMIT");
+    resultInfo = {
+      points_spent: pointsSpent,
+      points_for_reserve: pointsForReserve,
+      points_for_shields: pointsForShields,
+      deposit_cents: depositCents,
+      shields_added: shieldsToAdd,
+      requested_points: requestedPoints,
+    };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+  const state = await getState(workspaceId, userId);
+  return { ...state, exchange_result: resultInfo };
 }
 
 async function setNextSpinTileOverride(workspaceId, userId, body = {}) {
@@ -3868,6 +4036,12 @@ function notFound(message) {
   return err;
 }
 
+function badRequest(message) {
+  const err = new Error(message);
+  err.statusCode = 400;
+  return err;
+}
+
 module.exports = {
   ensureSchema,
   getState,
@@ -3876,6 +4050,7 @@ module.exports = {
   clearNextSpinTileOverride,
   setBankrollGoal,
   clearBankrollGoal,
+  convertPointsToReserve,
   chooseSpinDiceReroll,
   chooseSpinGamble,
   combineMultiplierCharges,
@@ -3906,6 +4081,8 @@ module.exports = {
     normalizeNextSpinTileOverride,
     applyTileOverrideToScreen,
     buildBankrollGoalState,
+    buildPointExchangeState,
+    desiredMinutesPerMonth,
     buildBankrollGoalCelebrationScreen,
     rollDieReroll,
     chooseExistingBucketAttempt,
