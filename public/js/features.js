@@ -46,7 +46,7 @@ function saveTrivialFlags(f){
   if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v)&&window.blockStore){
     const dayRootId=window.blockStore.getDayRootId();
     const root=window.blockStore.get(dayRootId);
-    if(root){window.blockStore.updateBlock(dayRootId,{...root.properties,_trivialFlags:f});}
+    if(root){window.blockStore.patchBlockProperties(dayRootId,{_trivialFlags:f});}
     return;
   }
   try{localStorage.setItem(TRIV_FLAGS_KEY,JSON.stringify(f));scheduleIDBSave()}catch(e){}

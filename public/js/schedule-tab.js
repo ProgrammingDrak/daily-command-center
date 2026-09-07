@@ -191,6 +191,10 @@ function _canPlaceBounty(ev,isDoneRow){
   return true;
 }
 const _bountyBtnSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
+function openTaskNotes(ev){
+  if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);
+  else if(typeof openNotesDrawer==="function")openNotesDrawer(ev.id,ev.title);
+}
 function buildTaskRadialItems(ev,trig){
   const items=[
     // Move/convert actions live one level down: this spoke chains into the
@@ -203,6 +207,11 @@ function buildTaskRadialItems(ev,trig){
   // toggle is meaningless for them (toggleLock no-ops on meetings), so omit it.
   if(!isMeeting(ev))items.push({icon:ev._locked?"🔓":"🔒", label:ev._locked?"Unlock":"Lock", onPick:()=>{if(typeof toggleLock==="function")toggleLock(ev.id);}});
   items.push({icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}});
+  // Compact cards hide their inline notes and delete buttons, so both actions
+  // must also live in the radial menu. This is the only complete action surface
+  // available when the command center is narrow or running on a phone.
+  items.push({icon:"📝", label:"Notes & actions", onPick:()=>openTaskNotes(ev)});
+  items.push({icon:"🗑", label:"Delete task", onPick:()=>{if(typeof openDeleteConfirm==="function")openDeleteConfirm(ev.id);}});
   return items;
 }
 // Sub-fan: everything that moves or converts the task, grouped so the top
@@ -2343,4 +2352,3 @@ function openDurationSheet(ev){
   // next frame: trigger slide-up transition
   requestAnimationFrame(()=>backdrop.classList.add("open"));
 }
-

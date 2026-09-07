@@ -1,10 +1,6 @@
-// Contract tests for the blockstore WAL's reschedule hardening: the 15-minute
-// stale-replay gate in replayWAL() (guards the pre-#167 reversal, where a
-// buffered reschedule replayed long after the user moved on and yanked the
-// task back) and the permanence split in rescheduleBlock() (400/404 drop the
-// WAL entry so a clone fallback can't double-move; 401/403/5xx/network stay
-// buffered for replay). Harness pattern: recalc-times.test.js (raw source in
-// a node:vm context with stubbed globals).
+// Contract tests for durable, versioned BlockStore replay. Reschedules never
+// expire now: the server's mutation version rejects stale intents safely, so a
+// temporary outage cannot silently discard the user's requested move.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -48,6 +44,7 @@ function makeStore(opts = {}) {
     document: { addEventListener: () => {}, visibilityState: "visible" },
     fetch: async (url, init) => {
       fetchCalls.push({ url, init });
+      if (opts.fetchImpl) return opts.fetchImpl(url, init, fetchCalls);
       if (opts.fetchStatus && opts.fetchStatus !== 200) {
         return { ok: false, status: opts.fetchStatus, statusText: "err", json: async () => ({ error: "nope" }) };
       }
@@ -72,21 +69,11 @@ function seedWal(storage, entries) {
   storage.set(WAL_KEY, JSON.stringify(entries));
 }
 
-test("replayWAL dead-letters a reschedule entry older than 15 minutes without replaying it", async () => {
+test("replayWAL replays an old versioned reschedule instead of discarding the user's intent", async () => {
   const { store, storage, fetchCalls } = makeStore();
-  seedWal(storage, [{ op: "reschedule", id: "b1", data: { targetDate: "2026-07-10" }, _walId: "w1", timestamp: minsAgo(16) }]);
+  seedWal(storage, [{ op: "reschedule", id: "b1", data: { targetDate: "2026-07-10", mutationVersion: 123 }, _walId: "w1", timestamp: minsAgo(60) }]);
   await store.replayWAL();
-  assert.equal(fetchCalls.length, 0, "stale reschedule must not hit the server");
-  assert.equal(wal(storage).length, 0, "entry leaves the WAL");
-  assert.equal(dead(storage).length, 1, "entry lands in the dead letter");
-  assert.match(dead(storage)[0].reason, /stale reschedule/);
-});
-
-test("replayWAL replays a reschedule exactly at the 15-minute boundary (gate is strictly older-than)", async () => {
-  const { store, storage, fetchCalls } = makeStore();
-  seedWal(storage, [{ op: "reschedule", id: "b1", data: { targetDate: "2026-07-10" }, _walId: "w1", timestamp: minsAgo(15) }]);
-  await store.replayWAL();
-  assert.equal(fetchCalls.length, 1, "boundary-age entry still replays");
+  assert.equal(fetchCalls.length, 1, "durable intent must reach the server");
   assert.equal(dead(storage).length, 0);
   assert.equal(wal(storage).length, 0, "replayed entry is removed on success");
 });
@@ -126,4 +113,58 @@ test("rescheduleBlock keeps the WAL entry on a 503 and on a network error", asyn
   const sNet = makeStore({ fetchReject: true });
   await assert.rejects(() => sNet.store.rescheduleBlock("b1", "2026-07-10", {}), (e) => !e.permanent);
   assert.equal(wal(sNet.storage).length, 1);
+});
+
+test("rescheduleBlock stamps every move with a positive monotonic mutation version", async () => {
+  const { store, fetchCalls } = makeStore();
+  await store.rescheduleBlock("b1", "2026-07-10", {});
+  await store.rescheduleBlock("b1", "2026-07-11", {});
+  const bodies = fetchCalls.map(call => JSON.parse(call.init.body));
+  assert.ok(Number.isSafeInteger(bodies[0].mutationVersion));
+  assert.ok(bodies[1].mutationVersion > bodies[0].mutationVersion);
+});
+
+test("completion mutations stay in the WAL across a network failure and replay", async () => {
+  const failed = makeStore({ fetchReject: true });
+  await failed.store.setTaskCompletions("day-root-1", [{ id: "task-1", completed: true }]);
+  assert.equal(wal(failed.storage).length, 1);
+  assert.equal(wal(failed.storage)[0].op, "completion");
+
+  failed.context.fetch = async (url, init) => {
+    failed.fetchCalls.push({ url, init });
+    return { ok: true, status: 200, json: async () => ({ id: "day-root-1", type: "day_root", properties: { _done: { ids: ["task-1"] } } }) };
+  };
+  await failed.store.replayWAL();
+  assert.equal(wal(failed.storage).length, 0);
+});
+
+test("day-root property patches are durable without replacing completion state", async () => {
+  const failed = makeStore({ fetchReject: true });
+  await failed.store.patchBlockProperties("day-root-1", { _pomoState: { running: true } });
+  assert.equal(wal(failed.storage).length, 1);
+  assert.equal(wal(failed.storage)[0].op, "properties-patch");
+  assert.deepEqual(wal(failed.storage)[0].data.patch, { _pomoState: { running: true } });
+});
+
+test("an older completion response cannot overwrite a newer optimistic click", async () => {
+  const pending = [];
+  const root = { id: "root", type: "day_root", date: "2026-08-08", properties: { date: "2026-08-08", _done: { ids: [], at: {}, mutations: {} } } };
+  const harness = makeStore({
+    fetchImpl: async (url) => {
+      if (url.startsWith("/api/blocks?date=")) return { ok: true, status: 200, json: async () => [root] };
+      return new Promise(resolve => pending.push(resolve));
+    }
+  });
+  await harness.store.loadDay("2026-08-08");
+  const first = harness.store.setTaskCompletions("root", [{ id: "task", completed: true }]);
+  const second = harness.store.setTaskCompletions("root", [{ id: "task", completed: false }]);
+  const bodies = harness.fetchCalls.slice(1).map(call => JSON.parse(call.init.body));
+  const v1 = bodies[0].changes[0].version;
+  const v2 = bodies[1].changes[0].version;
+  pending[1]({ ok: true, status: 200, json: async () => ({ ...root, properties: { ...root.properties, _done: { ids: [], at: {}, mutations: { task: v2 } } } }) });
+  await second;
+  pending[0]({ ok: true, status: 200, json: async () => ({ ...root, properties: { ...root.properties, _done: { ids: ["task"], at: { task: new Date(v1).toISOString() }, mutations: { task: v1 } } } }) });
+  await first;
+  assert.equal(harness.store.get("root").properties._done.ids.includes("task"), false);
+  assert.equal(harness.store.get("root").properties._done.mutations.task, v2);
 });

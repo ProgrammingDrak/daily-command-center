@@ -465,7 +465,7 @@ function savePushedState(){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.pushed&&window.blockStore){
     const dayRoot=window.blockStore.getDayRootId();
     const root=window.blockStore.get(dayRoot);
-    if(root){window.blockStore.updateBlock(dayRoot,{...root.properties,_pushed:{ids:[...pushedSet],at:pushedAt}})}
+    if(root){window.blockStore.patchBlockProperties(dayRoot,{_pushed:{ids:[...pushedSet],at:pushedAt}})}
     return;
   }
   localStorage.setItem(PUSHED_KEY,JSON.stringify({ids:[...pushedSet],at:pushedAt}));scheduleIDBSave();
@@ -542,7 +542,7 @@ function saveDurChanges(){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.duration&&window.blockStore){
     const dayRoot=window.blockStore.getDayRootId();
     const root=window.blockStore.get(dayRoot);
-    if(root){window.blockStore.updateBlock(dayRoot,{...root.properties,_durChanges:durChanges})}
+    if(root){window.blockStore.patchBlockProperties(dayRoot,{_durChanges:durChanges})}
     return;
   }
   try{localStorage.setItem(DUR_KEY,JSON.stringify(durChanges));scheduleIDBSave()}catch(e){}
@@ -1194,14 +1194,19 @@ async function rescheduleTaskToDate(id,targetDate,opts){
           // Transient/network failure: the blockstore WAL replays it on
           // reconnect. Cloning now would race that replay into a duplicate.
           if(!opts.silent&&typeof showToast==="function")showToast("Connection hiccup — move queued, will retry","info");
+          _removeSubtreeFromScheduled(id);
+          log("reschedule-queued",id,"Move queued for "+targetDate+": "+ev.title);
+          if(typeof recalcTimes==="function")recalcTimes();
+          render();
           return;
         }
         console.warn("[reschedule] true move rejected ("+(e.message||e.status)+"), falling back to clone move");
       }
       if(result){
         _removeSubtreeFromScheduled(id);
-        log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
-        if(!opts.silent&&typeof showToast==="function")showToast("Moved to "+_prettyDateLabel(targetDate),"success");
+        const confirmedTarget=result.targetDate||targetDate;
+        log("rescheduled",id,"Moved to "+confirmedTarget+": "+ev.title);
+        if(!opts.silent&&typeof showToast==="function")showToast((result.stale?"Already moved to ":"Moved to ")+_prettyDateLabel(confirmedTarget),"success");
         if(typeof recalcTimes==="function")recalcTimes();
         render();
         return result;
@@ -1311,7 +1316,7 @@ function saveDeletedState(){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.deleted&&window.blockStore){
     const dayRoot=window.blockStore.getDayRootId();
     const root=window.blockStore.get(dayRoot);
-    if(root){window.blockStore.updateBlock(dayRoot,{...root.properties,_deleted:[...deletedSet]})}
+    if(root){window.blockStore.patchBlockProperties(dayRoot,{_deleted:[...deletedSet]})}
     return;
   }
   localStorage.setItem(DELETED_KEY,JSON.stringify([...deletedSet]));scheduleIDBSave();
