@@ -6,6 +6,7 @@
   let rewardPrice = "all";
   let rewardEligibility = "all";
   let rewardSort = "category";
+  let rewardMode = "simple";
   let editingId = null;
   let sponsorSplitsDraft = [];
   let isSpinning = false;
@@ -19,7 +20,6 @@
   let shieldGrowTimer = null; // so rapid shield growth can't orphan a .grow-clearing timeout
   let refreshSlotsAfterSpin = false;
   let pendingDeleteRewardId = null;
-  let pendingTierDelete = null;
   let draggedRewardId = null;
   let bankDetailsOpen = false;
   let activeSlotSection = "machine";
@@ -69,6 +69,16 @@
     { id: "sponsored", label: "Sponsored" },
     { id: "free", label: "Free" }
   ];
+  // The three jackpot categories shown on the rewards page. A category maps 1:1 to a
+  // payment_source; mirrors slot-store.js categoryOptions/CATEGORY_LABELS. A jackpot
+  // rolls ONE category (by category_weights) then spins that category's wheel.
+  const CATEGORY_DEFS = [
+    { id: "free", label: "Free Self Care" },
+    { id: "self", label: "Reward Reserve Funded" },
+    { id: "sponsored", label: "Sponsored" }
+  ];
+  const DEFAULT_CATEGORY_WEIGHTS = { free: 60, self: 25, sponsored: 15 };
+  const DEFAULT_JACKPOT_HIT_RATE = 0.01;
   const DEFAULT_REWARD_TIERS = [
     { id: "tier_i", label: "Tier 1", weight: 36, active: true },
     { id: "tier_ii", label: "Tier 2", weight: 24, active: true },
@@ -77,7 +87,6 @@
     { id: "tier_v", label: "Tier 5", weight: 8, active: true },
     { id: "tier_vi", label: "Tier 6", weight: 6, active: true }
   ];
-  const TIER_PERCENT_TOTAL = 100;
   const FORM_SUBTITLES = {
     miss: "No-prize outcome",
     free: "Free outcome",
@@ -554,7 +563,7 @@
     try {
       localStorage.setItem(REWARD_VIEW_KEY, JSON.stringify({
         search: rewardSearch, category: rewardCategory, price: rewardPrice,
-        eligibility: rewardEligibility, sort: rewardSort
+        eligibility: rewardEligibility, sort: rewardSort, mode: rewardMode
       }));
     } catch(_e){ /* storage unavailable; view state just stays per-session */ }
   }
@@ -568,6 +577,82 @@
     if(typeof saved.price === "string") rewardPrice = saved.price;
     if(typeof saved.eligibility === "string") rewardEligibility = saved.eligibility;
     if(typeof saved.sort === "string") rewardSort = saved.sort;
+    if(saved.mode === "simple" || saved.mode === "advanced") rewardMode = saved.mode;
+  }
+
+  // Simple hides the probability numbers + slice editing; Advanced reveals them.
+  // The mode drives a .simple-view/.advanced-view class on the reward list, the
+  // reward form, and the category-odds editor; CSS hides .slot-advanced-only nodes
+  // in Simple. Persisted with the rest of the reward view state.
+  function applyRewardMode(){
+    const advanced = rewardMode === "advanced";
+    ["slot-reward-list", "slot-reward-form", "slot-category-odds"].forEach(id => {
+      const el = document.getElementById(id);
+      if(!el) return;
+      el.classList.toggle("advanced-view", advanced);
+      el.classList.toggle("simple-view", !advanced);
+    });
+    document.querySelectorAll("#slot-reward-view-toggle .svt-btn").forEach(btn => {
+      const on = btn.dataset.rewardMode === rewardMode;
+      btn.classList.toggle("active", on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+
+  function setRewardMode(mode){
+    rewardMode = mode === "advanced" ? "advanced" : "simple";
+    persistRewardView();
+    applyRewardMode();
+    renderCategoryOdds();
+    renderRewards();
+    if(document.getElementById("slot-reward-form") && document.getElementById("slot-reward-form").style.display !== "none"){
+      updateOddsHint();
+    }
+  }
+
+  // ── Shared probability model (mirrors slot-store.js selection math) ──
+  // P(jackpot)=jackpot_hit_rate; P(category)=weight/Σweights;
+  // P(within)=slice/Σ slices of active rewards in that category; P(overall)=product.
+  function categoryWeights(){
+    const settings = (slotState && slotState.account && slotState.account.settings) || {};
+    const w = settings.category_weights || {};
+    return {
+      free: Number.isFinite(Number(w.free)) ? Number(w.free) : DEFAULT_CATEGORY_WEIGHTS.free,
+      self: Number.isFinite(Number(w.self)) ? Number(w.self) : DEFAULT_CATEGORY_WEIGHTS.self,
+      sponsored: Number.isFinite(Number(w.sponsored != null ? w.sponsored : w.sponsor)) ? Number(w.sponsored != null ? w.sponsored : w.sponsor) : DEFAULT_CATEGORY_WEIGHTS.sponsored
+    };
+  }
+
+  function categoryWeightTotal(weights){
+    const w = weights || categoryWeights();
+    return (w.free || 0) + (w.self || 0) + (w.sponsored || 0);
+  }
+
+  function jackpotHitRate(){
+    const settings = (slotState && slotState.account && slotState.account.settings) || {};
+    const rate = Number(settings.jackpot_hit_rate);
+    return Number.isFinite(rate) ? Math.max(0, Math.min(1, rate)) : DEFAULT_JACKPOT_HIT_RATE;
+  }
+
+  // Σ slices for the active, in-draw rewards of a category. excludeId drops one
+  // reward (the one being edited) and addShares folds in its pending slice count so
+  // the form can preview the post-save odds live.
+  function categorySliceTotal(catId, excludeId, addShares){
+    const rewards = (slotState && slotState.rewards) || [];
+    const sum = rewards
+      .filter(r => excludeId == null || String(r.id) !== String(excludeId))
+      .filter(r => r && r.kind !== "miss" && r.active !== false && normalizeRewardSource(r) === catId && rewardShares(r) > 0)
+      .reduce((acc, r) => acc + rewardShares(r), 0);
+    return sum + (addShares || 0);
+  }
+
+  function pctLabel(fraction){
+    const pct = (fraction || 0) * 100;
+    if(pct <= 0) return "0%";
+    if(pct >= 10) return pct.toFixed(0) + "%";
+    if(pct >= 1) return pct.toFixed(1) + "%";
+    if(pct >= 0.1) return pct.toFixed(2) + "%";
+    return pct.toFixed(3) + "%";
   }
 
   function applyRewardViewControls(){
@@ -589,6 +674,7 @@
     renderPiggyBank(false);
     renderReserveGoalCard(false);
     renderWinningsCard();
+    renderExchangeStall();
     renderSettings();
     const bu = slotState.bankUsage || {};
     const constants = slotState.constants || {};
@@ -596,7 +682,8 @@
     setText("slot-weekly-cap", "Monthly Discretionary Spending: " + money(bu.month || 0) + " / " + money(bu.monthlyGoal || 0) + " unlocked; " + money(bu.monthlyRemaining || 0) + " still locked");
     setText("slot-shortfall-line", "Shortfall consequence: " + (constants.shortfallPenalty || "Leftover goal amount gets redirected."));
     renderBankrollManager();
-    renderTierManager();
+    renderCategoryOdds();
+    applyRewardMode();
     renderRewards();
     if(!isSpinning) renderHistory();
     renderSpinHistory();
@@ -728,7 +815,7 @@
   function switchSlotSection(section){
     activeSlotSection = section || "machine";
     applySlotSection();
-    if(activeSlotSection === "rewards") renderRewards();
+    if(activeSlotSection === "rewards") { renderCategoryOdds(); applyRewardMode(); renderRewards(); }
     if(activeSlotSection === "rewards") renderBankrollManager();
     if(activeSlotSection === "rules") {
       renderSettings();
@@ -846,70 +933,9 @@
     return rewardTiers().filter(tier => tier.active !== false);
   }
 
-  function tierPercentTotal(tiers){
-    return (tiers || [])
-      .filter(tier => tier && tier.active !== false)
-      .reduce((sum, tier) => sum + (Math.max(0, parseInt(tier.weight, 10) || 0)), 0);
-  }
-
-  function tierPercentError(tiers){
-    const active = (tiers || []).filter(tier => tier && tier.active !== false);
-    if(!active.length) return "Keep at least one active jackpot tier.";
-    const total = tierPercentTotal(active);
-    return total === TIER_PERCENT_TOTAL
-      ? ""
-      : "Tier percentages must add up to 100%. Current active total: " + total + "%.";
-  }
-
-  function balanceTierPercentages(tiers, protectedId){
-    const balanced = (tiers || []).map(tier => ({
-      ...tier,
-      weight: Math.max(0, parseInt(tier && tier.weight, 10) || 0)
-    }));
-    const active = balanced.filter(tier => tier.active !== false);
-    if(!active.length) return balanced;
-    let diff = tierPercentTotal(active) - TIER_PERCENT_TOTAL;
-    if(diff > 0){
-      const candidates = active
-        .filter(tier => String(tier.id) !== String(protectedId))
-        .sort((a, b) => b.weight - a.weight)
-        .concat(active.filter(tier => String(tier.id) === String(protectedId)));
-      for(const tier of candidates){
-        if(diff <= 0) break;
-        const take = Math.min(tier.weight, diff);
-        tier.weight -= take;
-        diff -= take;
-      }
-    } else if(diff < 0){
-      const target = active.find(tier => String(tier.id) === String(protectedId)) || active[active.length - 1];
-      target.weight += Math.abs(diff);
-    }
-    return balanced;
-  }
-
-  function tierRarityMeta(index, total){
-    if(index === 0) {
-      return {
-        badge: "Easiest",
-        hint: "Lowest tier. Best for common, everyday rewards."
-      };
-    }
-    if(index === total - 1) {
-      return {
-        badge: "Rarest",
-        hint: "Highest tier. Save this for the rarest rewards."
-      };
-    }
-    return {
-      badge: "Rarer",
-      hint: "Higher than Tier " + index + ". Use for more special rewards."
-    };
-  }
-
-  function rewardTiersExcept(id){
-    return rewardTiers().filter(tier => String(tier.id) !== String(id));
-  }
-
+  // Tiers are inert in selection (Phase 3) and no longer managed in the UI, but the
+  // backend still stamps a cosmetic tier on outcomes and rewards carry a tier_id, so
+  // these read helpers stay to label the spin screen and reward search.
   function tierById(id){
     return rewardTiers().find(tier => String(tier.id) === String(id)) || activeRewardTiers()[0] || DEFAULT_REWARD_TIERS[0];
   }
@@ -917,6 +943,12 @@
   function sourceLabel(id){
     const source = PAYMENT_SOURCES.find(s => s.id === id || (id === "sponsor" && s.id === "sponsored"));
     return source ? source.label : "Self";
+  }
+
+  function categoryLabel(id){
+    const key = id === "sponsor" ? "sponsored" : id;
+    const cat = CATEGORY_DEFS.find(c => c.id === key);
+    return cat ? cat.label : CATEGORY_DEFS[0].label;
   }
 
   function normalizeRewardSource(reward){
@@ -1268,278 +1300,99 @@
     });
   }
 
-  function renderTierManager(){
-    const el = document.getElementById("slot-tier-manager");
+  // The jackpot category-odds editor replaces the old tier ladder. Advanced mode
+  // shows three editable weights (must sum to 100) that PUT to category_weights;
+  // Simple mode shows the same odds read-only. Category id === payment_source.
+  function renderCategoryOdds(){
+    const el = document.getElementById("slot-category-odds");
     if(!el || !slotState) return;
-    const tiers = rewardTiers();
-    const tierTotal = tierPercentTotal(tiers);
-    const tierTotalClass = tierTotal === TIER_PERCENT_TOTAL ? "good" : "warn";
-    if(pendingTierDelete && !tiers.some(tier => String(tier.id) === String(pendingTierDelete.tierId))){
-      pendingTierDelete = null;
-    }
-    el.innerHTML =
-      '<div class="slot-tier-manager-head">' +
-        '<div class="slot-tier-title-block">' +
-          '<strong>Jackpot tier ladder</strong>' +
-          '<span>Tier 1 is the easiest/common bucket. Higher tiers should be rarer rewards with lower odds.</span>' +
-        '</div>' +
-        '<div class="slot-tier-total-pill ' + tierTotalClass + '">' +
-          '<span>Active total</span>' +
-          '<strong>' + tierTotal + '%</strong>' +
-        '</div>' +
-        '<button class="slot-mini primary" id="slot-add-tier" type="button">Add tier</button>' +
-      '</div>' +
-      '<div class="slot-tier-ladder-guide" aria-hidden="true">' +
-        '<span>Easy / common</span>' +
-        '<i></i>' +
-        '<span>Rare / special</span>' +
-      '</div>' +
-      '<div class="slot-tier-manager-list">' +
-        tiers.map((tier, index) => {
-          const meta = tierRarityMeta(index, tiers.length);
-          const weight = Math.max(0, Math.min(100, parseInt(tier.weight, 10) || 0));
-          return '<div class="slot-tier-row' + (tier.active === false ? ' is-inactive' : '') + '" data-tier-id="' + esc(tier.id) + '" style="--tier-percent:' + weight + '%">' +
-            '<div class="slot-tier-step">' +
-              '<span>Tier</span>' +
-              '<strong>' + (index + 1) + '</strong>' +
-            '</div>' +
-            '<div class="slot-tier-main">' +
-              '<div class="slot-tier-name-line">' +
-                '<input class="slot-tier-label" value="' + esc(tier.label) + '" aria-label="Tier ' + (index + 1) + ' label">' +
-                '<span class="slot-tier-rarity">' + esc(meta.badge) + '</span>' +
-              '</div>' +
-              '<p>' + esc(meta.hint) + '</p>' +
-              '<div class="slot-tier-meter" aria-hidden="true"><span></span></div>' +
-            '</div>' +
-            '<label class="slot-tier-percent-field">' +
-              '<span>Chance</span>' +
-              '<b><input class="slot-tier-weight" type="number" min="0" max="100" step="1" value="' + esc(weight) + '" aria-label="Tier ' + (index + 1) + ' percentage chance"><em>%</em></b>' +
-            '</label>' +
-            '<div class="slot-tier-actions">' +
-              '<button class="slot-mini slot-tier-up" type="button" ' + (index === 0 ? "disabled" : "") + '>Up</button>' +
-              '<button class="slot-mini slot-tier-down" type="button" ' + (index === tiers.length - 1 ? "disabled" : "") + '>Down</button>' +
-              '<button class="slot-mini slot-tier-toggle" type="button">' + (tier.active === false ? "Enable" : "Disable") + '</button>' +
-              '<button class="slot-mini danger slot-tier-delete" type="button">Delete</button>' +
-            '</div>' +
-          '</div>';
-        }).join("") +
-      '</div>' +
-      tierDeletePanelHtml();
-    const add = el.querySelector("#slot-add-tier");
-    if(add) add.addEventListener("click", addTier);
-    el.querySelectorAll(".slot-tier-label,.slot-tier-weight").forEach(input => {
-      input.addEventListener("change", persistTierManager);
-      input.addEventListener("keydown", e => { if(e.key === "Enter") persistTierManager(); });
-    });
-    el.querySelectorAll(".slot-tier-up").forEach(btn => btn.addEventListener("click", () => moveTier(btn.closest(".slot-tier-row").dataset.tierId, -1)));
-    el.querySelectorAll(".slot-tier-down").forEach(btn => btn.addEventListener("click", () => moveTier(btn.closest(".slot-tier-row").dataset.tierId, 1)));
-    el.querySelectorAll(".slot-tier-toggle").forEach(btn => btn.addEventListener("click", () => toggleTier(btn.closest(".slot-tier-row").dataset.tierId)));
-    el.querySelectorAll(".slot-tier-delete").forEach(btn => btn.addEventListener("click", () => deleteTier(btn.closest(".slot-tier-row").dataset.tierId)));
-    const applyAll = el.querySelector("#slot-tier-delete-apply-all");
-    if(applyAll) applyAll.addEventListener("click", applyTierDeleteTargetToAll);
-    const confirmDelete = el.querySelector("#slot-confirm-tier-delete");
-    if(confirmDelete) confirmDelete.addEventListener("click", confirmTierDelete);
-    const cancelDelete = el.querySelector("#slot-cancel-tier-delete");
-    if(cancelDelete) cancelDelete.addEventListener("click", () => {
-      pendingTierDelete = null;
-      renderTierManager();
-    });
-    el.querySelectorAll(".slot-tier-delete-target").forEach(select => {
-      select.addEventListener("change", () => {
-        if(!pendingTierDelete) return;
-        pendingTierDelete.assignments[String(select.dataset.rewardId)] = select.value;
-      });
-    });
-  }
-
-  function tierDeletePanelHtml(){
-    if(!pendingTierDelete || !slotState) return "";
-    const sourceTier = tierById(pendingTierDelete.tierId);
-    const targets = rewardTiersExcept(pendingTierDelete.tierId);
-    if(!targets.length) return "";
-    const rewards = tierRewards(pendingTierDelete.tierId);
-    const targetOptions = targets.map(tier => '<option value="' + esc(tier.id) + '">' + esc(tier.label) + '</option>').join("");
-    const applyValue = pendingTierDelete.applyTargetId || (targets[0] && targets[0].id) || "";
-    return '<div class="slot-tier-delete-panel" role="dialog" aria-label="Move rewards before deleting tier">' +
-      '<div class="slot-tier-delete-head">' +
-        '<div><strong>Delete ' + esc(sourceTier.label) + '</strong><span>' + rewards.length + ' reward' + (rewards.length === 1 ? '' : 's') + ' need a new tier.</span></div>' +
-        '<div class="slot-tier-delete-apply">' +
-          '<select id="slot-tier-delete-apply-target" aria-label="Apply target tier">' + targetOptions.replace('value="' + esc(applyValue) + '"', 'value="' + esc(applyValue) + '" selected') + '</select>' +
-          '<button class="slot-mini" id="slot-tier-delete-apply-all" type="button">Apply to all</button>' +
-        '</div>' +
-      '</div>' +
-      '<div class="slot-tier-delete-list">' +
-        rewards.map(reward => {
-          const selected = pendingTierDelete.assignments[String(reward.id)] || applyValue;
-          return '<label class="slot-tier-delete-reward">' +
-            '<span>' + esc(reward.title || "Reward") + '</span>' +
-            '<select class="slot-tier-delete-target" data-reward-id="' + esc(reward.id) + '" aria-label="Move ' + esc(reward.title || "reward") + ' to tier">' +
-              targetOptions.replace('value="' + esc(selected) + '"', 'value="' + esc(selected) + '" selected') +
-            '</select>' +
+    const weights = categoryWeights();
+    const total = categoryWeightTotal(weights);
+    const advanced = rewardMode === "advanced";
+    const totalClass = total === 100 ? "good" : "warn";
+    const rows = CATEGORY_DEFS.map(cat => {
+      const w = Math.max(0, Math.round(Number(weights[cat.id]) || 0));
+      const share = total > 0 ? (w / total) : 0;
+      if(advanced){
+        return '<label class="slot-cat-odds-row" data-cat="' + esc(cat.id) + '">' +
+            '<span class="slot-cat-odds-name">' + esc(cat.label) + '</span>' +
+            '<span class="slot-cat-odds-input"><input class="slot-cat-weight" type="number" min="0" max="100" step="1" value="' + esc(w) + '" data-cat="' + esc(cat.id) + '" aria-label="' + esc(cat.label) + ' odds"><em>%</em></span>' +
+            '<span class="slot-cat-odds-share">&asymp; ' + pctLabel(share) + ' of jackpots</span>' +
           '</label>';
-        }).join("") +
+      }
+      return '<div class="slot-cat-odds-row is-readonly" data-cat="' + esc(cat.id) + '">' +
+          '<span class="slot-cat-odds-name">' + esc(cat.label) + '</span>' +
+          '<span class="slot-cat-odds-share">' + pctLabel(share) + '</span>' +
+        '</div>';
+    }).join("");
+    el.innerHTML =
+      '<div class="slot-cat-odds-head">' +
+        '<div class="slot-cat-odds-title-block">' +
+          '<strong>Jackpot category odds</strong>' +
+          '<span>How often a jackpot rolls each category before spinning its wheel.</span>' +
+        '</div>' +
+        (advanced
+          ? '<div class="slot-cat-odds-total ' + totalClass + '"><span>Total</span><strong>' + total + '%</strong></div>'
+          : '') +
       '</div>' +
-      '<div class="slot-tier-delete-actions">' +
-        '<button class="slot-small-btn primary" id="slot-confirm-tier-delete" type="button">Move rewards and delete</button>' +
-        '<button class="slot-small-btn" id="slot-cancel-tier-delete" type="button">Cancel</button>' +
-      '</div>' +
-    '</div>';
+      '<div class="slot-cat-odds-list">' + rows + '</div>' +
+      (advanced
+        ? '<div class="slot-cat-odds-actions">' +
+            '<button class="slot-small-btn primary" id="slot-save-category-odds" type="button">Save odds</button>' +
+            '<span class="slot-cat-odds-note' + (total === 100 ? '' : ' warn') + '" id="slot-cat-odds-msg">' + (total === 100 ? 'Adds up to 100%.' : 'Must add up to 100% (now ' + total + '%).') + '</span>' +
+          '</div>'
+        : '');
+    if(advanced){
+      el.querySelectorAll(".slot-cat-weight").forEach(input => {
+        input.addEventListener("input", updateCategoryOddsTotal);
+      });
+      const saveBtn = el.querySelector("#slot-save-category-odds");
+      if(saveBtn) saveBtn.addEventListener("click", saveCategoryWeights);
+    }
   }
 
-  function collectTierRows(){
-    const rows = Array.from(document.querySelectorAll("#slot-tier-manager .slot-tier-row"));
-    const current = new Map(rewardTiers().map(tier => [String(tier.id), tier]));
-    return rows.map((row, index) => {
-      const tier = current.get(String(row.dataset.tierId)) || {};
-      return {
-        id: row.dataset.tierId,
-        label: (row.querySelector(".slot-tier-label").value || tier.label || ("Tier " + (index + 1))).trim(),
-        weight: Math.max(0, parseInt(row.querySelector(".slot-tier-weight").value, 10) || 0),
-        active: tier.active !== false,
-        sort: index
-      };
+  function collectCategoryWeightInputs(){
+    const out = {};
+    document.querySelectorAll("#slot-category-odds .slot-cat-weight").forEach(input => {
+      out[input.dataset.cat] = Math.max(0, parseInt(input.value, 10) || 0);
     });
+    return out;
   }
 
-  function tierSlug(label){
-    return String(label || "tier").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || ("tier_" + Date.now());
+  function updateCategoryOddsTotal(){
+    const weights = collectCategoryWeightInputs();
+    const total = (weights.free || 0) + (weights.self || 0) + (weights.sponsored || 0);
+    const pill = document.querySelector("#slot-category-odds .slot-cat-odds-total");
+    if(pill){
+      pill.classList.toggle("good", total === 100);
+      pill.classList.toggle("warn", total !== 100);
+      const strong = pill.querySelector("strong");
+      if(strong) strong.textContent = total + "%";
+    }
+    const msg = document.getElementById("slot-cat-odds-msg");
+    if(msg){
+      msg.textContent = total === 100 ? "Adds up to 100%." : "Must add up to 100% (now " + total + "%).";
+      msg.classList.toggle("warn", total !== 100);
+    }
   }
 
-  async function saveTierSettings(tiers){
-    const error = tierPercentError(tiers);
-    if(error){
-      setResult(error);
+  async function saveCategoryWeights(){
+    const weights = collectCategoryWeightInputs();
+    const total = (weights.free || 0) + (weights.self || 0) + (weights.sponsored || 0);
+    if(total !== 100){
+      setResult("Category odds must add up to 100%. Current total: " + total + "%.");
       return;
     }
-    const current = (slotState && slotState.constants) || {};
     try {
-      const saved = await api("/api/slot/settings", {
+      await api("/api/slot/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          payment_source_weights: current.paymentSourceWeights || {},
-          reward_tiers: tiers,
-          economy_profile: current.economyProfile || {},
-          point_tag_tiers: pointTagTierDraft || current.pointTagTiers || {},
-          shortfall_penalty: current.shortfallPenalty || "",
-        })
+        body: JSON.stringify({ category_weights: weights })
       });
-      const moved = saved && saved.reward_reassignments && saved.reward_reassignments.tier;
-      if(moved){
-        setResult("Tiers saved. Moved " + moved + " reward" + (moved === 1 ? "" : "s") + " out of a deactivated tier so they stay in the draw.");
-      }
+      setResult("Jackpot category odds saved.");
       await loadSlots();
     } catch(e) {
       setResult(e.message);
-    }
-  }
-
-  function persistTierManager(){
-    saveTierSettings(collectTierRows());
-  }
-
-  function addTier(){
-    const tiers = collectTierRows();
-    const label = "Tier " + (tiers.length + 1);
-    let id = tierSlug(label);
-    while(tiers.some(t => t.id === id)) id = id + "_" + String(Date.now()).slice(-4);
-    tiers.push({ id, label, weight: 1, active: true, sort: tiers.length });
-    saveTierSettings(balanceTierPercentages(tiers, id));
-  }
-
-  function moveTier(id, delta){
-    const tiers = collectTierRows();
-    const idx = tiers.findIndex(t => String(t.id) === String(id));
-    const next = idx + delta;
-    if(idx < 0 || next < 0 || next >= tiers.length) return;
-    const [tier] = tiers.splice(idx, 1);
-    tiers.splice(next, 0, tier);
-    tiers.forEach((t, i) => t.sort = i);
-    saveTierSettings(tiers);
-  }
-
-  function toggleTier(id){
-    const tiers = collectTierRows();
-    const tier = tiers.find(t => String(t.id) === String(id));
-    if(tier) tier.active = !tier.active;
-    if(tier && tier.active === false) tier.weight = 0;
-    if(tier && tier.active !== false && tier.weight <= 0) tier.weight = 1;
-    saveTierSettings(balanceTierPercentages(tiers, id));
-  }
-
-  function tierRewards(id){
-    return ((slotState && slotState.rewards) || [])
-      .filter(r => r && r.kind !== "miss" && String(r.tier_id || "tier_i") === String(id));
-  }
-
-  function defaultDeleteTargetTier(id, tiers){
-    const idx = tiers.findIndex(tier => String(tier.id) === String(id));
-    const target = tiers[idx + 1] || tiers[idx - 1] || tiers.find(tier => String(tier.id) !== String(id));
-    return target ? target.id : "";
-  }
-
-  function deleteTier(id){
-    const tiers = collectTierRows();
-    if(tiers.length <= 1) {
-      setResult("Keep at least one tier.");
-      return;
-    }
-    const rewards = tierRewards(id);
-    if(!rewards.length){
-      pendingTierDelete = null;
-      saveTierSettings(balanceTierPercentages(tiers.filter(t => String(t.id) !== String(id)).map((t, i) => ({ ...t, sort: i }))));
-      return;
-    }
-    const targetTierId = defaultDeleteTargetTier(id, tiers);
-    pendingTierDelete = {
-      tierId: String(id),
-      applyTargetId: targetTierId,
-      assignments: rewards.reduce((map, reward) => {
-        map[String(reward.id)] = targetTierId;
-        return map;
-      }, {})
-    };
-    renderTierManager();
-    const panel = document.querySelector(".slot-tier-delete-panel");
-    if(panel) panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }
-
-  function applyTierDeleteTargetToAll(){
-    if(!pendingTierDelete) return;
-    const select = document.getElementById("slot-tier-delete-apply-target");
-    const targetId = select && select.value;
-    if(!targetId) return;
-    pendingTierDelete.applyTargetId = targetId;
-    tierRewards(pendingTierDelete.tierId).forEach(reward => {
-      pendingTierDelete.assignments[String(reward.id)] = targetId;
-    });
-    renderTierManager();
-  }
-
-  async function confirmTierDelete(){
-    if(!pendingTierDelete || !slotState) return;
-    const tiers = collectTierRows();
-    const deletingId = pendingTierDelete.tierId;
-    const assignments = { ...pendingTierDelete.assignments };
-    const rewards = tierRewards(deletingId);
-    const validTargets = new Set(rewardTiersExcept(deletingId).map(tier => String(tier.id)));
-    if(rewards.some(reward => !validTargets.has(String(assignments[String(reward.id)] || "")))){
-      setResult("Choose a destination tier for each reward.");
-      return;
-    }
-    try {
-      for(const reward of rewards){
-        const tierId = assignments[String(reward.id)];
-        const payload = payloadFromReward(reward, { tier_id: tierId });
-        Object.assign(reward, payload);
-        await api("/api/slot/rewards/" + reward.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      }
-      pendingTierDelete = null;
-      await saveTierSettings(balanceTierPercentages(tiers.filter(t => String(t.id) !== String(deletingId)).map((t, i) => ({ ...t, sort: i }))));
-      setResult("Tier deleted and rewards moved.");
-    } catch(e) {
-      setResult(e.message);
-      await loadSlots();
     }
   }
 
@@ -1551,23 +1404,23 @@
       list.innerHTML = '<div class="slot-empty">No rewards match this view.</div>';
       return;
     }
-    const tiers = rewardEligibility === "archived" ? rewardTiers() : activeRewardTiers();
-    const tierOptionsHtml = tiers.map(t => '<option value="' + esc(t.id) + '">' + esc(t.label) + '</option>').join("");
-    const sourceOptionsHtml = PAYMENT_SOURCES.map(s => '<option value="' + esc(s.id) + '">' + esc(s.label) + '</option>').join("");
-    list.innerHTML = PAYMENT_SOURCES.map(source => {
-      const sourceRewards = rewards.filter(r => normalizeRewardSource(r) === source.id);
-      const count = sourceRewards.length;
-      return '<section class="slot-source-section" data-source="' + esc(source.id) + '">' +
-        '<div class="slot-source-head"><h4>' + esc(source.label) + '</h4><span>' + count + ' reward' + (count === 1 ? '' : 's') + '</span></div>' +
-        '<div class="slot-tier-board">' +
-          tiers.map(tier => {
-            const bucket = sourceRewards.filter(r => String(r.tier_id || "tier_i") === String(tier.id));
-            const totalShares = bucket.reduce((sum, r) => sum + rewardShares(r), 0);
-            return '<div class="slot-tier-column" data-source="' + esc(source.id) + '" data-tier-id="' + esc(tier.id) + '">' +
-              '<div class="slot-tier-column-head"><strong>' + esc(tier.label) + '</strong><span>' + totalShares + ' shares</span></div>' +
-              (bucket.length ? bucket.map(r => rewardCardHtml(r, tierOptionsHtml, sourceOptionsHtml)).join("") : '<div class="slot-empty small">No rewards here.</div>') +
-            '</div>';
-          }).join("") +
+    const sourceOptionsHtml = CATEGORY_DEFS.map(c => '<option value="' + esc(c.id) + '">' + esc(c.label) + '</option>').join("");
+    const weights = categoryWeights();
+    const weightTotal = categoryWeightTotal(weights);
+    // Group by the 3 jackpot categories (tier nesting retired). Each category body
+    // is a drop zone so drag-to-recategorize still works; tier is preserved as-is.
+    list.innerHTML = CATEGORY_DEFS.map(cat => {
+      const catRewards = rewards.filter(r => normalizeRewardSource(r) === cat.id);
+      const count = catRewards.length;
+      const totalShares = catRewards.reduce((sum, r) => sum + rewardShares(r), 0);
+      const pCat = weightTotal > 0 ? (weights[cat.id] || 0) / weightTotal : 0;
+      const meta = '<span>' + count + ' reward' + (count === 1 ? '' : 's') + '</span>' +
+        '<span class="slot-advanced-only">' + totalShares + ' slice' + (totalShares === 1 ? '' : 's') + '</span>' +
+        '<span class="slot-advanced-only">rolls ' + pctLabel(pCat) + ' of jackpots</span>';
+      return '<section class="slot-category-section" data-source="' + esc(cat.id) + '">' +
+        '<div class="slot-source-head"><h4>' + esc(cat.label) + '</h4>' + meta + '</div>' +
+        '<div class="slot-category-drop" data-source="' + esc(cat.id) + '">' +
+          (catRewards.length ? catRewards.map(r => rewardCardHtml(r, sourceOptionsHtml)).join("") : '<div class="slot-empty small">No rewards in this category yet.</div>') +
         '</div>' +
       '</section>';
     }).join("");
@@ -1580,13 +1433,13 @@
       pendingDeleteRewardId = null;
       renderRewards();
     }));
-    list.querySelectorAll(".slot-card-source,.slot-card-tier,.slot-card-shares,.slot-card-active").forEach(input => {
+    list.querySelectorAll(".slot-card-source,.slot-card-shares,.slot-card-active").forEach(input => {
       input.addEventListener("change", () => quickUpdateReward(input.closest(".slot-reward-row")));
     });
     attachRewardDragHandlers(list);
   }
 
-  function rewardCardHtml(r, tierOptionsHtml, sourceOptionsHtml){
+  function rewardCardHtml(r, sourceOptionsHtml){
       const archived = r.active === false;
       const value = r.value_cents ? '<span>' + money(r.value_cents) + '</span>' : '';
       const time = rewardDurationMinutes(r) ? '<span>' + esc(rewardDurationLabel(r)) + '</span>' : '';
@@ -1605,15 +1458,13 @@
         '<div class="slot-reward-main">' +
           '<div class="slot-reward-title">' + esc(r.title) + '</div>' +
           '<div class="slot-reward-meta">' +
-            '<span>' + esc(sourceLabel(normalizeRewardSource(r))) + '</span>' +
-            '<span>' + esc(tierById(r.tier_id).label) + '</span>' +
-            '<span>' + esc(oddsLabel) + '</span>' +
+            '<span>' + esc(categoryLabel(normalizeRewardSource(r))) + '</span>' +
+            '<span class="slot-advanced-only">' + esc(oddsLabel) + '</span>' +
             value + time + bank + privateChip + usesChip + expiresChip + goalExcluded + statsChip + locked +
           '</div>' +
-          '<div class="slot-reward-inline-edit">' +
-            '<select class="slot-card-source" aria-label="Paid by">' + sourceOptionsHtml.replace('value="' + esc(normalizeRewardSource(r)) + '"', 'value="' + esc(normalizeRewardSource(r)) + '" selected') + '</select>' +
-            '<select class="slot-card-tier" aria-label="Tier">' + tierOptionsHtml.replace('value="' + esc(r.tier_id || "tier_i") + '"', 'value="' + esc(r.tier_id || "tier_i") + '" selected') + '</select>' +
-            '<input class="slot-card-shares" type="number" min="0" step="1" value="' + esc(rewardShares(r)) + '" aria-label="Reward chances">' +
+          '<div class="slot-reward-inline-edit slot-advanced-only">' +
+            '<select class="slot-card-source" aria-label="Category">' + sourceOptionsHtml.replace('value="' + esc(normalizeRewardSource(r)) + '"', 'value="' + esc(normalizeRewardSource(r)) + '" selected') + '</select>' +
+            '<input class="slot-card-shares" type="number" min="0" step="1" value="' + esc(rewardShares(r)) + '" aria-label="Wheel slice">' +
             '<label class="slot-card-active"><input type="checkbox" ' + (r.active !== false ? 'checked' : '') + '> Active</label>' +
           '</div>' +
         '</div>' +
@@ -1648,11 +1499,11 @@
       });
       card.addEventListener("dragend", () => {
         draggedRewardId = null;
-        document.querySelectorAll(".slot-tier-column.drag-over").forEach(col => col.classList.remove("drag-over"));
+        document.querySelectorAll(".slot-category-drop.drag-over").forEach(col => col.classList.remove("drag-over"));
         card.classList.remove("dragging");
       });
     });
-    list.querySelectorAll(".slot-tier-column").forEach(column => {
+    list.querySelectorAll(".slot-category-drop").forEach(column => {
       column.addEventListener("dragover", event => {
         if(!draggedRewardId) return;
         event.preventDefault();
@@ -1668,7 +1519,7 @@
         column.classList.remove("drag-over");
         const id = event.dataTransfer.getData("text/plain") || draggedRewardId;
         const orderedIds = orderedIdsAfterDrop(column, id, event.clientY);
-        moveRewardToBucket(id, column.dataset.tierId, column.dataset.source, orderedIds);
+        moveRewardToBucket(id, column.dataset.source, orderedIds);
       });
     });
   }
@@ -1690,13 +1541,14 @@
     return ids;
   }
 
-  async function moveRewardToBucket(id, tierId, source, orderedIds){
+  // Dropping a card into a category section recategorizes it (payment_source) and
+  // reorders the destination. Tier is inert in selection now, so it is preserved.
+  async function moveRewardToBucket(id, source, orderedIds){
     const reward = findReward(id);
-    if(!reward || !tierId) return;
+    if(!reward) return;
     const nextSource = source || normalizeRewardSource(reward);
-    const sameTier = String(reward.tier_id || "tier_i") === String(tierId);
-    const sameSource = normalizeRewardSource(reward) === nextSource;
-    const bucketChanged = !(sameTier && sameSource);
+    const tierId = reward.tier_id || "tier_i";
+    const bucketChanged = normalizeRewardSource(reward) !== nextSource;
     const order = Array.isArray(orderedIds) && orderedIds.length ? orderedIds : [String(id)];
     // Renumber the destination bucket with clean spacing so the order is exact and
     // never collides. Send the whole bucket so the server stores the same order.
@@ -1711,7 +1563,7 @@
       if(bucketChanged){
         const payload = payloadFromReward(reward, { payment_source: nextSource, tier_id: tierId });
         await api("/api/slot/rewards/" + reward.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-        setResult("Moved " + (reward.title || "reward") + " to " + tierById(tierId).label + ".");
+        setResult("Moved " + (reward.title || "reward") + " to " + categoryLabel(nextSource) + ".");
       }
       await api("/api/slot/rewards/reorder", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) });
       await loadSlots();
@@ -1721,15 +1573,15 @@
     }
   }
 
+  // The within-category odds for a reward: its slice over the sum of active slices
+  // in its category. This is the P(within) factor of the overall jackpot odds.
   function oddsText(reward, rewards){
     const shares = rewardShares(reward);
     const source = normalizeRewardSource(reward);
-    const tierId = String((reward && reward.tier_id) || "tier_i");
-    const bucket = (rewards || []).filter(r => r && r.kind !== "miss" && r.active !== false && normalizeRewardSource(r) === source && String(r.tier_id || "tier_i") === tierId && rewardShares(r) > 0);
+    const bucket = (rewards || []).filter(r => r && r.kind !== "miss" && r.active !== false && normalizeRewardSource(r) === source && rewardShares(r) > 0);
     const total = bucket.reduce((sum, r) => sum + rewardShares(r), 0);
-    const pct = total > 0 && shares > 0 ? (shares / total) * 100 : 0;
-    const pctText = pct >= 10 ? pct.toFixed(0) : pct >= 1 ? pct.toFixed(1) : pct > 0 ? pct.toFixed(2) : "0";
-    return shares + " chance" + (shares === 1 ? "" : "s") + " in bucket (~" + pctText + "%)";
+    const pct = total > 0 && shares > 0 ? (shares / total) : 0;
+    return shares + " slice" + (shares === 1 ? "" : "s") + " (~" + pctLabel(pct) + " of category)";
   }
 
   function filterRewards(rewards){
@@ -1826,7 +1678,7 @@
       inactive: "inactive",
       zero_weight: "zero weight",
       tier_inactive: "tier off",
-      source_disabled: "source off",
+      source_disabled: "category off",
       bankroll_goal: "goal mode",
       bank_too_small: "bank locked",
       bank_cap: "bucket full",
@@ -1853,15 +1705,15 @@
       const screenBank = snap.source_type === "slot_screen_bank_builder";
       const stages = snap.slot_stages || {};
       const stageLabel = stages.empty_bucket
-        ? "empty bucket"
+        ? "empty category"
         : stages.dice_reroll
-        ? "dice rerolled -> " + ((stages.payment_source && stages.payment_source.label) || "Source") + " / " + ((stages.tier && stages.tier.label) || "Tier")
+        ? "re-rolled -> " + (stages.payment_source ? categoryLabel(stages.payment_source.id) : "category")
         : stages.bank_builder_hit
         ? "bank builder"
         : stages.jackpot_hit === false
         ? "jackpot miss"
-        : stages.payment_source && stages.tier
-        ? (stages.payment_source.label + " / " + stages.tier.label)
+        : stages.payment_source
+        ? categoryLabel(stages.payment_source.id)
         : "";
       const metaLabel = stageLabel || (taskDrip ? "task bank drip" : screenBank ? "Bank Building hit" : "needs 3 in a row");
       const bank = s.bank_delta_cents ? ' <span class="slot-history-bank">+' + money(s.bank_delta_cents) + '</span>' : '';
@@ -2316,7 +2168,7 @@
     isSpinning = true;
     clearSlotResultActions();
     const bonusRewardRoll = hasBonusRewardSpin(slotState);
-    setResult(bonusRewardRoll ? "Bonus reward roll: skipping the machine and going straight to tier + payer." : "Pulling the lever...");
+    setResult(bonusRewardRoll ? "Bonus reward roll: skipping the machine and going straight to the category." : "Pulling the lever...");
     const petHelps = Math.random() < 0.42;
     slotPetReact(bonusRewardRoll ? "happy" : (petHelps ? "pull" : "idle"), bonusRewardRoll ? "Dice time." : (petHelps ? "I got it." : "Here we go."), 1200);
     if(!bonusRewardRoll) slotPlay("lever");
@@ -2436,13 +2288,13 @@
       slotPlay("jackpotHit");
       const jackpotSpins = Math.max(1, Number(stages.jackpot_spins || 1));
       const jackpotLevel = Math.max(1, Number(stages.jackpot_level || 1));
-      setResult(bonusRewardRoll ? "Bonus reward roll. Roll for tier and payer." : jackpotBonusMessage(jackpotLevel, jackpotSpins));
+      setResult(bonusRewardRoll ? "Bonus reward roll. Roll for a category." : jackpotBonusMessage(jackpotLevel, jackpotSpins));
       if(!bonusRewardRoll) await animateJackpotBurst();
       setResult(bonusRewardRoll
-        ? "Bonus reward roll: one die for tier, one for who pays."
+        ? "Bonus reward roll: rolling for a category."
         : jackpotSpins > 1
-        ? "Reward spin 1 of " + jackpotSpins + ": roll the dice for tier and payer."
-        : "Two dice roll now: one for tier, one for who pays.");
+        ? "Reward spin 1 of " + jackpotSpins + ": rolling for a category."
+        : "Rolling for a category now.");
       updateStageTrack("bucket", "spinning");
       let diceReroll = stages.dice_reroll || null;
       if(diceReroll && diceReroll.from && diceReroll.awaiting) {
@@ -2463,7 +2315,7 @@
           });
           if(!rerollDie) break;
           updateStageTrack("bucket", "spinning");
-          setResult((rerollDie === "tier" ? "Tier" : "Paid by") + " die re-rolling. Jackpot stays locked.");
+          setResult("Category re-rolling. Jackpot stays locked.");
           spinRow = await chooseDiceReroll(spinRow.id, rerollDie);
           snap = spinRow.reward_snapshot || {};
           stages = snap.slot_stages || {};
@@ -2488,7 +2340,7 @@
         renderSlotResultActions(spinRow);
         return;
       }
-      setResult("Tier and payer locked. Grab the wheel rim and spin it.");
+      setResult("Category locked. Grab the wheel rim and spin it.");
       updateStageTrack("reward", "spinning");
       // If a takeover screen (jackpot choice / reward decision) is going to open
       // the instant the wheel stops, skip the wheel's "Nice" acknowledgement so
@@ -2701,13 +2553,11 @@
   }
 
   function bucketStageSymbols(stages){
-    const source = (stages && stages.payment_source && stages.payment_source.label) || "Source";
-    const tier = (stages && stages.tier && stages.tier.label) || "Tier";
-    const sourceSym = String(source).toUpperCase();
-    const tierSym = String(tier).toUpperCase().replace(/\s+/g, " ");
+    const src = stages && stages.payment_source;
+    const category = src ? (categoryLabel(src.id) || src.label || "Category") : "Category";
+    const sym = String(category).toUpperCase().replace(/\s+/g, " ");
     const board = Array.from({ length: 15 }, () => "MISS");
-    [0, 1, 2, 6, 10].forEach(i => { board[i] = tierSym; });
-    [4, 8, 12, 13, 14].forEach(i => { board[i] = sourceSym; });
+    [0, 1, 2, 4, 6, 8, 10, 12, 13, 14].forEach(i => { board[i] = sym; });
     return board;
   }
 
@@ -2720,7 +2570,7 @@
     document.querySelectorAll(".slot-jackpot-burst").forEach(el => el.remove());
     const burst = document.createElement("div");
     burst.className = "slot-jackpot-burst";
-    burst.innerHTML = '<strong>JACKPOT</strong><span>Tier dice loading...</span>';
+    burst.innerHTML = '<strong>JACKPOT</strong><span>Category loading...</span>';
     frame.appendChild(burst);
     slotPetReact("happy", "JACKPOT!", 1800);
     slotPlay("jackpotHit");
@@ -2730,16 +2580,16 @@
     burst.remove();
   }
 
+  // A jackpot rolls a single category (Free Self Care / Reward Reserve Funded /
+  // Sponsored); tiers are retired. This animates one category die. The empty-category
+  // case offers a single "re-roll" (the backend re-rolls the category regardless of
+  // the die arg, which still must be a valid {tier,source} value at the route).
   async function animateBucketDice(stages, options){
     const opts = options || {};
     const frame = document.querySelector(".slot-reels-frame");
-    const tier = (stages && stages.tier) || {};
     const source = (stages && stages.payment_source) || {};
-    const tierOptions = activeRewardTiers().map(t => t.label);
-    const sourceOptions = PAYMENT_SOURCES.map(s => s.label);
-    const tierLabel = tier.label || tierById(tier.id).label || "Tier I";
-    const sourceLabelText = source.label || sourceLabel(source.id) || "Self";
-    const rerollDie = opts.rerollDie || null;
+    const categoryOptions = CATEGORY_DEFS.map(c => c.label);
+    const categoryText = source.label || categoryLabel(source.id) || CATEGORY_DEFS[0].label;
     const reels = document.querySelectorAll(".slot-cell");
     const settledSymbols = bucketStageSymbols(stages);
     reels.forEach((cell, index) => {
@@ -2751,24 +2601,20 @@
     const stage = document.createElement("div");
     stage.className = "slot-jackpot-dice-stage";
     stage.innerHTML =
-      '<div class="slot-jackpot-die" data-die="tier"><span>Tier die</span><strong>...</strong></div>' +
-      '<div class="slot-jackpot-die" data-die="source"><span>Paid by die</span><strong>...</strong></div>';
+      '<div class="slot-jackpot-die" data-die="source"><span>Category</span><strong>...</strong></div>';
     frame.appendChild(stage);
-    const tierValue = stage.querySelector('[data-die="tier"] strong');
-    const sourceValue = stage.querySelector('[data-die="source"] strong');
+    const categoryValue = stage.querySelector('[data-die="source"] strong');
     const start = Date.now();
     slotPlay("reelStart");
     await new Promise(resolve => {
       const timer = setInterval(() => {
         const tick = Math.floor((Date.now() - start) / 95);
-        if(tierValue) tierValue.textContent = rerollDie && rerollDie !== "tier" ? tierLabel : (tierOptions[tick % tierOptions.length] || "Tier I");
-        if(sourceValue) sourceValue.textContent = rerollDie && rerollDie !== "source" ? sourceLabelText : (sourceOptions[(tick + 1) % sourceOptions.length] || "Self");
+        if(categoryValue) categoryValue.textContent = categoryOptions[tick % categoryOptions.length] || categoryText;
         if(tick % 3 === 0) slotPlay("tick", { tick });
       }, 95);
       setTimeout(() => {
         clearInterval(timer);
-        if(tierValue) tierValue.textContent = tierLabel;
-        if(sourceValue) sourceValue.textContent = sourceLabelText;
+        if(categoryValue) categoryValue.textContent = categoryText;
         stage.classList.add("locked");
         slotPlay("tierLock");
         resolve();
@@ -2778,23 +2624,21 @@
       updateStageTrack("bucket", "empty");
       stage.classList.add("interactive", "reroll-ready");
       setResult(opts.again
-        ? "Still nothing there. Pick a die to re-roll again."
-        : "No rewards in that bucket. Pick which die to re-roll.");
+        ? "Still nothing there. Re-roll for another category."
+        : "No rewards in that category. Re-roll for another.");
       const note = document.createElement("div");
       note.className = "slot-dice-note";
-      note.textContent = "No rewards live in that bucket. Re-roll either die.";
+      note.textContent = "No rewards live in that category. Re-roll for another.";
       stage.appendChild(note);
-      // Either die is always re-rollable - the re-roll is a real random roll, so
-      // by alternating dice you can always reach a bucket that has rewards.
-      stage.querySelectorAll(".slot-jackpot-die").forEach(dieEl => {
-        const dieName = dieEl.dataset.die;
+      const dieEl = stage.querySelector(".slot-jackpot-die");
+      if(dieEl){
         const btn = document.createElement("button");
         btn.className = "slot-die-reroll-btn";
         btn.type = "button";
         btn.textContent = "Re-roll";
-        btn.setAttribute("aria-label", "Re-roll " + (dieName === "tier" ? "tier die" : "paid by die"));
+        btn.setAttribute("aria-label", "Re-roll category");
         dieEl.appendChild(btn);
-      });
+      }
       const firstButton = stage.querySelector(".slot-die-reroll-btn:not(:disabled)");
       if(firstButton) firstButton.focus();
       slotPlay("emptyBucket");
@@ -2806,8 +2650,9 @@
           if(event) event.preventDefault();
           stage.removeEventListener("click", finish);
           stage.removeEventListener("keydown", finish);
-          const die = btn.closest(".slot-jackpot-die");
-          resolve((die && die.dataset.die) || "source");
+          // "source" is a valid die value at the route; the backend re-rolls the
+          // category either way now that tiers are inert.
+          resolve("source");
         };
         stage.addEventListener("click", finish);
         stage.addEventListener("keydown", finish);
@@ -2827,14 +2672,14 @@
     stage.remove();
   }
 
+  // The wheel shows the whole category's reward pool (all tiers) — selection no
+  // longer narrows by tier, so the displayed wheel must not either.
   function jackpotBucketRewards(stages){
     const source = stages && stages.payment_source && stages.payment_source.id;
-    const tier = stages && stages.tier && stages.tier.id;
     return (slotState && slotState.rewards || [])
       .filter(r => r && r.kind !== "miss" && r.active !== false && rewardShares(r) > 0)
       .filter(r => !r.bankroll_goal_excluded)
-      .filter(r => !source || normalizeRewardSource(r) === source)
-      .filter(r => !tier || String(r.tier_id || "tier_i") === String(tier));
+      .filter(r => !source || normalizeRewardSource(r) === source);
   }
 
   async function animateRewardWheel(spinRow, snap, stages, opts){
@@ -4179,9 +4024,8 @@
     // animation callers, but the deposit is no longer hidden from the text.)
     const rewardHeadline = () => {
       if(stages.empty_bucket) {
-        const source = stages.payment_source && stages.payment_source.label ? stages.payment_source.label : sourceLabel(snap.payment_source);
-        const tier = stages.tier && stages.tier.label ? stages.tier.label : tierById(snap.tier_id).label;
-        return source + " " + tier + " was empty. No jackpot reroll; roll the dice again after adding rewards to a bucket.";
+        const category = stages.payment_source ? categoryLabel(stages.payment_source.id) : categoryLabel(snap.payment_source);
+        return "The " + category + " category was empty. No jackpot reroll; roll again after adding rewards to that category.";
       }
       if(snap.kind === "points" || stages.outcome === "coin"){
         const coin = stages.coin || {};
@@ -4218,9 +4062,8 @@
       const jackpotPrefix = stages.jackpot_hit ? jackpotHitLabel(jackpotLevel, jackpotSpins) + ". " : "";
       if(spinRow.status === "pending" && snap.requires_jackpot_choice) return jackpotPrefix + "Pick a prize from the list.";
       if(spinRow.status === "pending") return "Prize pending confirmation: " + (snap.title || "Reward");
-      const source = snap.payment_source ? sourceLabel(snap.payment_source) + " " : "";
-      const tier = snap.tier_id ? tierById(snap.tier_id).label + ": " : "";
-      return "Prize reveal: " + source + tier + (snap.title || "Reward");
+      const category = snap.payment_source ? categoryLabel(snap.payment_source) + ": " : "";
+      return "Prize reveal: " + category + (snap.title || "Reward");
     };
 
     // Pure bank spin: nothing rolled but the deposit, so the bank line is the whole story.
@@ -4247,8 +4090,8 @@
 
   function jackpotBonusMessage(level, spins){
     const count = Math.max(1, Number(spins || 1));
-    if(count <= 1) return jackpotHitLabel(level, count) + ". Roll the dice for tier and payer.";
-    return jackpotHitLabel(level, count) + " earned. Roll the dice now for reward 1; " + (count - 1) + " bonus dice roll" + (count === 2 ? " is" : "s are") + " banked after this.";
+    if(count <= 1) return jackpotHitLabel(level, count) + ". Roll for a category.";
+    return jackpotHitLabel(level, count) + " earned. Roll now for reward 1; " + (count - 1) + " bonus roll" + (count === 2 ? " is" : "s are") + " banked after this.";
   }
 
   function setResult(text){
@@ -4994,7 +4837,6 @@
     setText("slot-form-heading", reward ? "Edit reward" : "New reward");
     val("slot-form-title", reward ? reward.title : "");
     val("slot-form-source", reward ? normalizeRewardSource(reward) : "free");
-    populateTierSelect(reward ? reward.tier_id : "tier_i");
     val("slot-form-kind", reward ? reward.kind : "free");
     val("slot-form-sponsor", reward ? reward.sponsor_type : "self");
     val("slot-form-weight", reward ? rewardShares(reward) : 10);
@@ -5032,7 +4874,7 @@
       form.querySelectorAll('[data-slot-field="value"]').forEach(el => el.hidden = !needsPrice);
       form.querySelectorAll('[data-slot-field="sponsor"]').forEach(el => el.hidden = !usesSponsor);
     }
-    setText("slot-form-subtitle", sourceLabel(source) + " " + (tierById((document.getElementById("slot-form-tier") || {}).value).label || "Tier I"));
+    setText("slot-form-subtitle", categoryLabel(source) + (needsPrice ? "" : " outcome"));
     if(!usesSponsor) {
       val("slot-form-sponsor", "self");
       sponsorSplitsDraft = [];
@@ -5046,16 +4888,6 @@
     if(!needsPrice) val("slot-form-value", "");
     renderSponsorSplits();
     updateOddsHint();
-  }
-
-  function populateTierSelect(selectedId){
-    const select = document.getElementById("slot-form-tier");
-    if(!select) return;
-    const tiers = activeRewardTiers();
-    select.innerHTML = tiers.map(tier =>
-      '<option value="' + esc(tier.id) + '">' + esc(tier.label) + '</option>'
-    ).join("");
-    select.value = selectedId && tiers.some(t => String(t.id) === String(selectedId)) ? selectedId : (tiers[0] && tiers[0].id) || "tier_i";
   }
 
   function sponsorSplitsForReward(reward){
@@ -5107,21 +4939,39 @@
     });
   }
 
+  // Live 4-part odds breakdown for the reward form (Advanced only; in Simple the
+  // slice field is hidden so a default count is auto-assigned). Mirrors the backend
+  // selection math: P(jackpot) x P(category) x P(within) = P(overall).
   function updateOddsHint(){
     const note = document.getElementById("slot-form-weight-note");
     const input = document.getElementById("slot-form-weight");
     if(!note || !input) return;
+    if(rewardMode !== "advanced"){
+      note.textContent = "This reward lands about as often as the others in its category.";
+      return;
+    }
     const weight = parseInt(input.value, 10) || 0;
-    const rewards = (slotState && slotState.rewards) || [];
     const source = (document.getElementById("slot-form-source") || {}).value || "free";
-    const tierId = (document.getElementById("slot-form-tier") || {}).value || "tier_i";
-    const total = rewards
-      .filter(r => !editingId || String(r.id) !== String(editingId))
-      .filter(r => r.kind !== "miss" && r.active !== false && normalizeRewardSource(r) === source && String(r.tier_id || "tier_i") === String(tierId) && rewardShares(r) > 0)
-      .reduce((sum, r) => sum + rewardShares(r), 0) + weight;
-    const pct = total > 0 && weight > 0 ? (weight / total) * 100 : 0;
-    const pctText = pct >= 10 ? pct.toFixed(0) : pct >= 1 ? pct.toFixed(1) : pct > 0 ? pct.toFixed(2) : "0";
-    note.textContent = weight ? (weight + " chances is about " + pctText + "% inside this source+tier bucket.") : "0 chances keeps this out of the draw.";
+    const weights = categoryWeights();
+    const weightTotal = categoryWeightTotal(weights);
+    const pJackpot = jackpotHitRate();
+    const pCategory = weightTotal > 0 ? (weights[source] || 0) / weightTotal : 0;
+    const withinTotal = categorySliceTotal(source, editingId, weight);
+    const pWithin = withinTotal > 0 && weight > 0 ? weight / withinTotal : 0;
+    const pOverall = pJackpot * pCategory * pWithin;
+    if(weight <= 0){
+      note.innerHTML = '<span class="slot-prob-warn">0 slices keeps this reward out of the draw.</span>';
+      return;
+    }
+    note.innerHTML = '<span class="slot-prob-breakdown">' +
+      '<span class="slot-prob-chip"><b>Jackpot</b>' + pctLabel(pJackpot) + '</span>' +
+      '<span class="slot-prob-op">x</span>' +
+      '<span class="slot-prob-chip"><b>Category</b>' + pctLabel(pCategory) + '</span>' +
+      '<span class="slot-prob-op">x</span>' +
+      '<span class="slot-prob-chip"><b>This slice</b>' + pctLabel(pWithin) + '</span>' +
+      '<span class="slot-prob-op">=</span>' +
+      '<span class="slot-prob-chip total"><b>Overall</b>' + pctLabel(pOverall) + '</span>' +
+    '</span>';
   }
 
   function val(id, value){
@@ -5137,7 +4987,10 @@
   function formPayload(){
     const valueDollars = parseFloat(document.getElementById("slot-form-value").value || "0") || 0;
     const source = (document.getElementById("slot-form-source") || {}).value || "free";
-    const tierId = (document.getElementById("slot-form-tier") || {}).value || "tier_i";
+    // Tier is inert in selection (Phase 3) and no longer edited in the form. Preserve
+    // an existing reward's tier_id and default new ones, so the column stays populated
+    // and the backend (which still emits a cosmetic tier) keeps working.
+    const tierId = (editingId && findReward(editingId) || {}).tier_id || "tier_i";
     const valueCents = Math.round(valueDollars * 100);
     const existing = editingId ? findReward(editingId) : null;
     // The form has no kind selector and derives a kind from source+value. That
@@ -5240,12 +5093,11 @@
     const reward = findReward(row.dataset.id);
     if(!reward) return;
     const source = row.querySelector(".slot-card-source").value;
-    const tier = row.querySelector(".slot-card-tier").value;
     const shares = Math.max(0, parseInt(row.querySelector(".slot-card-shares").value, 10) || 0);
     const active = !!(row.querySelector(".slot-card-active input") && row.querySelector(".slot-card-active input").checked);
     const payload = payloadFromReward(reward, {
       payment_source: source,
-      tier_id: tier,
+      tier_id: reward.tier_id || "tier_i",
       weight: shares,
       chance_shares: shares,
       active
@@ -5537,6 +5389,253 @@
       });
     });
     setTimeout(() => document.addEventListener("click", onOutside, true), 0);
+  }
+
+  // ── Points → Reward Reserve money changer ────────────────────────────────
+  // A cartoon merchant runs a little stall on the machine view. Click him to
+  // open the exchange modal, where points trade 1:1 into bank units worth
+  // (reserve goal / desired minutes per month) each. Overflow buys miss shields.
+  let exchangeDraftPoints = "";
+
+  function pointExchange(){
+    return (slotState && slotState.constants && slotState.constants.pointExchange) || {};
+  }
+
+  // The merchant himself, as inline SVG so it ships with no external assets.
+  function exchangeVendorSvg(){
+    return '' +
+      '<svg class="slot-vendor-svg" viewBox="0 0 120 120" aria-hidden="true" focusable="false">' +
+        '<defs>' +
+          '<linearGradient id="vendAwn" x1="0" y1="0" x2="0" y2="1">' +
+            '<stop offset="0" stop-color="#ff7b6b"/><stop offset="1" stop-color="#e94f3d"/>' +
+          '</linearGradient>' +
+        '</defs>' +
+        // stall posts + counter
+        '<rect x="14" y="40" width="6" height="74" rx="2" fill="#8a5a2b"/>' +
+        '<rect x="100" y="40" width="6" height="74" rx="2" fill="#8a5a2b"/>' +
+        '<rect x="10" y="92" width="100" height="16" rx="3" fill="#a9712f"/>' +
+        '<rect x="10" y="92" width="100" height="5" rx="2" fill="#c98a44"/>' +
+        // striped awning
+        '<path d="M8 26 H112 V44 L8 44 Z" fill="url(#vendAwn)"/>' +
+        '<g fill="#fff" opacity="0.85">' +
+          '<path d="M20 44 l7 -18 h10 l-7 18 Z"/><path d="M44 44 l7 -18 h10 l-7 18 Z"/>' +
+          '<path d="M68 44 l7 -18 h10 l-7 18 Z"/><path d="M92 44 l7 -18 h6 v18 Z"/>' +
+        '</g>' +
+        // vendor body
+        '<rect x="44" y="70" width="32" height="26" rx="9" fill="#3b7dd8"/>' +
+        // head
+        '<circle cx="60" cy="60" r="15" fill="#f6c89a"/>' +
+        // visor cap
+        '<path d="M45 56 a15 15 0 0 1 30 0 Z" fill="#1f8a5b"/>' +
+        '<rect x="44" y="55" width="32" height="4" rx="2" fill="#16744b"/>' +
+        // eyes + grin + mustache
+        '<circle cx="54" cy="60" r="2.2" fill="#3a2a1a"/><circle cx="66" cy="60" r="2.2" fill="#3a2a1a"/>' +
+        '<path d="M53 67 q7 6 14 0" stroke="#7a4a26" stroke-width="2.4" fill="none" stroke-linecap="round"/>' +
+        '<path d="M52 65 q8 4 16 0" stroke="#5b3a1d" stroke-width="3" fill="none" stroke-linecap="round"/>' +
+        // arm holding a coin
+        '<circle class="slot-vendor-coin" cx="86" cy="80" r="9" fill="#ffd34d" stroke="#e0a500" stroke-width="2"/>' +
+        '<text class="slot-vendor-coin-mark" x="86" y="84" text-anchor="middle" font-size="10" fill="#9a6b00">$</text>' +
+      '</svg>';
+  }
+
+  function renderExchangeStall(){
+    const el = document.getElementById("slot-exchange-stall");
+    if(!el || !slotState) return;
+    const ex = pointExchange();
+    const pitch = ex.enabled
+      ? (ex.funded ? "Reserve full — trade for shields!" : "Trade points for cash!")
+      : "Pick a Reward Reserve goal to trade";
+    el.innerHTML =
+      '<button class="slot-exchange-stall-btn" id="slot-exchange-open" type="button" aria-haspopup="dialog">' +
+        '<span class="slot-exchange-sign">Convert Points Here!</span>' +
+        '<span class="slot-exchange-vendor">' + exchangeVendorSvg() + '</span>' +
+        '<span class="slot-exchange-coins" aria-hidden="true"><i>🪙</i><i>🪙</i><i>🪙</i></span>' +
+        '<span class="slot-exchange-pitch">' + esc(pitch) + '</span>' +
+      '</button>';
+    const open = el.querySelector("#slot-exchange-open");
+    if(open) open.addEventListener("click", openExchangeModal);
+  }
+
+  function openExchangeModal(){
+    exchangeDraftPoints = "";
+    renderExchangeModal();
+  }
+
+  function closeExchangeModal(){
+    const modal = document.getElementById("slot-exchange-modal");
+    if(modal) modal.remove();
+  }
+
+  // Mirror of the server's split: fill the goal first, overflow buys shields.
+  function previewExchange(points){
+    const ex = pointExchange();
+    const cpp = ex.cents_per_point || 0;
+    // Never preview spending more than the player actually has (the server
+    // enforces this too; clamping here keeps the preview honest).
+    const balance = ex.point_balance || 0;
+    const p = Math.min(balance, Math.max(0, Math.floor(Number(points) || 0)));
+    const pointsToFill = ex.points_to_fill || 0;
+    const pointsForReserve = Math.min(p, pointsToFill);
+    const depositCents = Math.min(Math.round(pointsForReserve * cpp), ex.remaining_cents || 0);
+    const overflow = p - pointsForReserve;
+    const perShield = ex.points_per_shield || 1;
+    const capacity = ex.shield_capacity || 0;
+    const shields = Math.min(Math.floor(overflow / perShield), capacity);
+    const pointsForShields = shields * perShield;
+    const pointsSpent = pointsForReserve + pointsForShields;
+    return {
+      pointsForReserve, depositCents, shields, pointsForShields, pointsSpent,
+      leftover: Math.max(0, p - pointsSpent),
+    };
+  }
+
+  function renderExchangeModal(){
+    let modal = document.getElementById("slot-exchange-modal");
+    if(!modal){
+      modal = document.createElement("div");
+      modal.id = "slot-exchange-modal";
+      modal.className = "slot-exchange-modal";
+      document.body.appendChild(modal);
+    }
+    const ex = pointExchange();
+    const balance = (slotState && slotState.account && slotState.account.point_balance) || 0;
+    if(!ex.enabled){
+      modal.innerHTML =
+        '<div class="slot-exchange-backdrop"></div>' +
+        '<section class="slot-exchange-dialog" role="dialog" aria-modal="true" aria-label="Money changer">' +
+          '<button class="slot-icon-btn slot-exchange-close" type="button" aria-label="Close">&times;</button>' +
+          '<div class="slot-exchange-scene"><div class="slot-exchange-vendor big">' + exchangeVendorSvg() + '</div>' +
+            '<div class="slot-exchange-bubble">"No goal, no trade, friend! Set a Reward Reserve goal and come on back."</div></div>' +
+          '<div class="slot-exchange-body">' +
+            '<button class="slot-small-btn primary" id="slot-exchange-goto-goal" type="button">Choose a goal</button>' +
+          '</div>' +
+        '</section>';
+      wireExchangeModalChrome(modal);
+      const goto = modal.querySelector("#slot-exchange-goto-goal");
+      if(goto) goto.addEventListener("click", () => { closeExchangeModal(); switchSlotSection("rewards"); });
+      return;
+    }
+    const draft = exchangeDraftPoints === "" ? "" : Math.max(0, Math.floor(Number(exchangeDraftPoints) || 0));
+    const pv = previewExchange(draft || 0);
+    const cpp = ex.cents_per_point || 0;
+    const rateLine = "100 points ≈ " + money(Math.round(100 * cpp)) + " toward your reserve";
+    const goalName = (slotState.bankrollGoal && slotState.bankrollGoal.reward && slotState.bankrollGoal.reward.title) || "your goal";
+    const previewLines = (draft && pv.pointsSpent > 0)
+      ? '<div class="slot-exchange-gets">' +
+          (pv.depositCents > 0 ? '<div class="slot-exchange-get money"><span>💵 ' + money(pv.depositCents) + '</span><small>into ' + esc(goalName) + '</small></div>' : '') +
+          (pv.shields > 0 ? '<div class="slot-exchange-get shield"><span>🛡️ ' + pv.shields + ' shield' + (pv.shields === 1 ? '' : 's') + '</span><small>overflow bonus</small></div>' : '') +
+          '<div class="slot-exchange-spend">Spends ' + pv.pointsSpent + ' pts' + (pv.leftover > 0 ? ' · ' + pv.leftover + ' can’t be used yet' : '') + '</div>' +
+        '</div>'
+      : '<div class="slot-exchange-gets muted">Enter how many points to trade.</div>';
+    const resultLine = '<div class="slot-exchange-result" id="slot-exchange-result"></div>';
+    modal.innerHTML =
+      '<div class="slot-exchange-backdrop"></div>' +
+      '<section class="slot-exchange-dialog" role="dialog" aria-modal="true" aria-label="Money changer">' +
+        '<button class="slot-icon-btn slot-exchange-close" type="button" aria-label="Close">&times;</button>' +
+        '<div class="slot-exchange-scene">' +
+          '<div class="slot-exchange-vendor big">' + exchangeVendorSvg() + '</div>' +
+          '<div class="slot-exchange-bubble">"Step right up! Your points are good as gold here."</div>' +
+        '</div>' +
+        '<div class="slot-exchange-body">' +
+          '<div class="slot-exchange-rate">' + esc(rateLine) + '</div>' +
+          '<label class="slot-exchange-input-wrap"><span>Points to convert</span>' +
+            '<input id="slot-exchange-input" type="number" inputmode="numeric" min="0" step="1" max="' + balance + '" value="' + (draft === "" ? "" : draft) + '" placeholder="0"></label>' +
+          '<div class="slot-exchange-quick">' +
+            '<button class="slot-mini" data-exchange-quick="fill" type="button">Fill goal</button>' +
+            '<button class="slot-mini" data-exchange-quick="max" type="button">All ' + balance + ' pts</button>' +
+          '</div>' +
+          previewLines +
+          '<button class="slot-exchange-go" id="slot-exchange-submit" type="button"' + ((draft && pv.pointsSpent > 0) ? '' : ' disabled') + '>Convert!</button>' +
+          resultLine +
+        '</div>' +
+      '</section>';
+    wireExchangeModalChrome(modal);
+    const input = modal.querySelector("#slot-exchange-input");
+    if(input){
+      input.addEventListener("input", () => {
+        exchangeDraftPoints = input.value;
+        // Re-render only the preview + button to keep focus/caret in the field.
+        const pv2 = previewExchange(Math.max(0, Math.floor(Number(input.value) || 0)));
+        const submit = modal.querySelector("#slot-exchange-submit");
+        if(submit) submit.disabled = !(Number(input.value) > 0 && pv2.pointsSpent > 0);
+        refreshExchangePreview(modal, input.value, pv2, goalName);
+      });
+      setTimeout(() => input.focus(), 30);
+    }
+    modal.querySelectorAll("[data-exchange-quick]").forEach(btn => btn.addEventListener("click", () => {
+      const kind = btn.dataset.exchangeQuick;
+      const val = kind === "fill" ? Math.min(balance, ex.points_to_fill || 0) : balance;
+      exchangeDraftPoints = String(val);
+      renderExchangeModal();
+    }));
+    const submit = modal.querySelector("#slot-exchange-submit");
+    if(submit) submit.addEventListener("click", submitExchange);
+  }
+
+  function refreshExchangePreview(modal, rawValue, pv, goalName){
+    const host = modal.querySelector(".slot-exchange-gets");
+    if(!host) return;
+    const draft = Math.max(0, Math.floor(Number(rawValue) || 0));
+    if(!(draft && pv.pointsSpent > 0)){
+      host.className = "slot-exchange-gets muted";
+      host.innerHTML = "Enter how many points to trade.";
+      return;
+    }
+    host.className = "slot-exchange-gets";
+    host.innerHTML =
+      (pv.depositCents > 0 ? '<div class="slot-exchange-get money"><span>💵 ' + money(pv.depositCents) + '</span><small>into ' + esc(goalName) + '</small></div>' : '') +
+      (pv.shields > 0 ? '<div class="slot-exchange-get shield"><span>🛡️ ' + pv.shields + ' shield' + (pv.shields === 1 ? '' : 's') + '</span><small>overflow bonus</small></div>' : '') +
+      '<div class="slot-exchange-spend">Spends ' + pv.pointsSpent + ' pts' + (pv.leftover > 0 ? ' · ' + pv.leftover + ' can’t be used yet' : '') + '</div>';
+  }
+
+  function wireExchangeModalChrome(modal){
+    const backdrop = modal.querySelector(".slot-exchange-backdrop");
+    if(backdrop) backdrop.addEventListener("click", closeExchangeModal);
+    const close = modal.querySelector(".slot-exchange-close");
+    if(close) close.addEventListener("click", closeExchangeModal);
+  }
+
+  async function submitExchange(){
+    const modal = document.getElementById("slot-exchange-modal");
+    if(!modal) return;
+    const input = modal.querySelector("#slot-exchange-input");
+    const submit = modal.querySelector("#slot-exchange-submit");
+    const result = modal.querySelector("#slot-exchange-result");
+    const points = Math.max(0, Math.floor(Number(input && input.value) || 0));
+    if(points <= 0) return;
+    if(submit){ submit.disabled = true; submit.textContent = "Trading…"; }
+    try {
+      const state = await api("/api/slot/exchange", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ points }),
+      });
+      slotState = state;
+      const r = state.exchange_result || {};
+      const dialog = modal.querySelector(".slot-exchange-dialog");
+      if(dialog) dialog.classList.add("celebrate");
+      const parts = [];
+      if(r.deposit_cents > 0) parts.push("💵 " + money(r.deposit_cents) + " banked");
+      if(r.shields_added > 0) parts.push("🛡️ +" + r.shields_added + " shield" + (r.shields_added === 1 ? "" : "s"));
+      if(result){
+        result.className = "slot-exchange-result success";
+        result.innerHTML = '<strong>Sold!</strong> ' + esc(parts.join("  ·  ") || (r.points_spent + " points converted"));
+      }
+      slotPetReact("happy", "Cha-ching! Points converted.", 2200);
+      // Refresh the underlying view, then re-render the modal with new numbers.
+      exchangeDraftPoints = "";
+      renderSlots();
+      setTimeout(() => {
+        const stillOpen = document.getElementById("slot-exchange-modal");
+        if(stillOpen) renderExchangeModal();
+      }, 1400);
+    } catch(e){
+      if(result){
+        result.className = "slot-exchange-result error";
+        result.textContent = e.message || "Could not convert.";
+      }
+      if(submit){ submit.disabled = false; submit.textContent = "Convert!"; }
+    }
   }
 
   function renderBankrollManager(){
@@ -6071,8 +6170,6 @@
     });
     const sourceSelect = document.getElementById("slot-form-source");
     if(sourceSelect) sourceSelect.addEventListener("change", syncRewardFormUi);
-    const tierSelect = document.getElementById("slot-form-tier");
-    if(tierSelect) tierSelect.addEventListener("change", syncRewardFormUi);
     const valueInput = document.getElementById("slot-form-value");
     if(valueInput) valueInput.addEventListener("input", syncRewardFormUi);
     const sponsorSelect = document.getElementById("slot-form-sponsor");
@@ -6091,6 +6188,12 @@
     });
     rehydrateRewardView();
     applyRewardViewControls();
+    const viewToggle = document.getElementById("slot-reward-view-toggle");
+    if(viewToggle) viewToggle.addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".svt-btn");
+      if(btn && btn.dataset.rewardMode) setRewardMode(btn.dataset.rewardMode);
+    });
+    applyRewardMode();
     const rewardSearchInput = document.getElementById("slot-reward-search");
     if(rewardSearchInput) rewardSearchInput.addEventListener("input", () => {
       rewardSearch = rewardSearchInput.value || "";

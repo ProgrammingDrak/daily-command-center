@@ -1399,7 +1399,7 @@
             <div class="slot-result-actions" id="slot-result-actions" aria-live="polite"></div>
             <div class="slot-stage-track" id="slot-stage-track" aria-live="polite">
               <span class="slot-stage-chip" data-stage="jackpot">Miss / Bank / Jackpot</span>
-              <span class="slot-stage-chip" data-stage="bucket">Tier + Source</span>
+              <span class="slot-stage-chip" data-stage="bucket">Category</span>
               <span class="slot-stage-chip" data-stage="reward">Reward</span>
             </div>
             <div class="slot-actions">
@@ -1450,6 +1450,7 @@
               </div>
             </div>
             <button class="slot-winnings-card" id="slot-winnings-card" type="button" aria-label="Winnings — tap to flip view, hold for ranges"></button>
+            <div class="slot-exchange-stall" id="slot-exchange-stall"></div>
             <div class="slot-pet-companion" id="slot-pet-companion" aria-live="polite">
               <div class="slot-pet-speech" id="slot-pet-speech">Ready.</div>
               <button class="slot-lever" id="slot-helper-lever" type="button" aria-label="Pull lever"><span></span></button>
@@ -1471,10 +1472,14 @@
       <section class="slots-panel">
         <div class="slots-panel-hdr">
           <h3>Outcome Pool</h3>
+          <span class="sched-view-toggle" id="slot-reward-view-toggle" role="group" aria-label="Reward detail level">
+            <button class="svt-btn active" data-reward-mode="simple" type="button">Simple</button>
+            <button class="svt-btn" data-reward-mode="advanced" type="button">Advanced</button>
+          </span>
           <button id="slot-add-reward-btn" class="slot-small-btn" type="button">Add reward</button>
         </div>
         <div class="slot-bankroll-manager" id="slot-bankroll-manager"></div>
-        <div class="slot-tier-manager" id="slot-tier-manager"></div>
+        <div class="slot-category-odds" id="slot-category-odds"></div>
         <div class="slot-reward-form" id="slot-reward-form" style="display:none">
           <div class="slot-form-head">
             <div>
@@ -1490,19 +1495,15 @@
           <input id="slot-form-kind" type="hidden" value="free">
           <div class="slot-form-grid">
             <label class="slot-field">
-              <span>Paid by</span>
+              <span>Category</span>
               <select id="slot-form-source">
-                <option value="self">Self</option>
+                <option value="free">Free Self Care</option>
+                <option value="self">Reward Reserve Funded</option>
                 <option value="sponsored">Sponsored</option>
-                <option value="free">Free</option>
               </select>
             </label>
-            <label class="slot-field">
-              <span>Tier</span>
-              <select id="slot-form-tier"></select>
-            </label>
-            <label class="slot-field">
-              <span>Reward chances</span>
+            <label class="slot-field slot-field-full slot-advanced-only">
+              <span>Reward chances (wheel slice)</span>
               <input id="slot-form-weight" type="number" min="0" step="1" placeholder="16">
               <em id="slot-form-weight-note">Higher shares make this more likely.</em>
             </label>

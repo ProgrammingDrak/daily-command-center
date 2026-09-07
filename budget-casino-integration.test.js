@@ -44,6 +44,22 @@ test("Planned purchases expose an atomic split action beside drag ordering", () 
   assert.match(storeSource, /orderedIds\.splice\(sourceIndex \+ 1/);
 });
 
+test("Casino exposes category odds, reward views, and point exchange", () => {
+  const routeSource = fs.readFileSync("routes/slots.js", "utf8");
+  const storeSource = fs.readFileSync("slot-store.js", "utf8");
+
+  assert.match(html, /id="slot-reward-view-toggle"/);
+  assert.match(html, /data-reward-mode="simple"/);
+  assert.match(html, /data-reward-mode="advanced"/);
+  assert.match(html, /id="slot-category-odds"/);
+  assert.match(html, /id="slot-exchange-stall"/);
+  assert.match(slotsSource, /category_weights: weights/);
+  assert.match(slotsSource, /\/api\/slot\/exchange/);
+  assert.match(routeSource, /\/api\/slot\/exchange/);
+  assert.match(storeSource, /async function convertPointsToReserve/);
+  assert.match(storeSource, /function bucketForCategory/);
+});
+
 test("Reward Vault is a keyboard-contained Budget drawer", () => {
   assert.match(budgetSource, /role="dialog" aria-modal="true" aria-labelledby="rv-title"/);
   assert.match(budgetSource, /data-act="vault-open"/);
