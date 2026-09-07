@@ -86,7 +86,12 @@
              '<span class="bt-row-name">'+esc(b.name)+'</span>'+
              '<span class="bt-row-amt" data-role="amt" title="Click to edit">'+fmtMoney(b.amount)+'</span>'+
              '<span class="bt-row-fund" data-role="fund"></span>'+
-             (editMode ? '<button class="bt-row-del" data-act="del" title="Remove">&times;</button>' : '')+
+             (editMode ?
+               '<button class="bt-row-btn" data-act="up"  title="Fund sooner (move up)">&#9650;</button>'+
+               '<button class="bt-row-btn" data-act="down" title="Fund later (move down)">&#9660;</button>'+
+               '<button class="bt-row-btn bt-row-dup" data-act="dup" title="Split into a portion + a copy">&#10697;</button>'+
+               '<button class="bt-row-del" data-act="del" title="Remove">&times;</button>'
+               : '')+
            '</div>';
   }
 
@@ -252,6 +257,52 @@
     saveConfig(); render();
   }
 
+  // Pick a fresh "(n)" name so split copies read as siblings of the original.
+  function nextCopyName(group, name){
+    const base = name.replace(/\s*\(\d+\)\s*$/, "");
+    const taken = new Set(config[group].map(b=>b.name));
+    let n = 2;
+    while(taken.has(base+" ("+n+")")) n++;
+    return base+" ("+n+")";
+  }
+
+  // Duplicate a category, splitting its amount in two. The original keeps the
+  // larger half and stays in place; the copy lands right after it. Now only a
+  // portion of the category needs funding to unlock — the rest waits its turn,
+  // and you can slide other categories between the two halves with ▲ / ▼.
+  function dupCategory(id){
+    for(const k of ["necessities","discretionary"]){
+      const i = config[k].findIndex(b=>b.id===id);
+      if(i < 0) continue;
+      const src = config[k][i];
+      const portion = Math.round((src.amount||0) / 2);
+      src.amount = (src.amount||0) - portion;
+      config[k].splice(i+1, 0, {
+        id: k+"-"+Date.now().toString(36),
+        name: nextCopyName(k, src.name),
+        amount: portion,
+        color: src.color
+      });
+      saveConfig(); render();
+      return;
+    }
+  }
+
+  // Reorder a category within its group (its fill priority). "up" = funded
+  // sooner (toward the bottom of the tank), "down" = funded later.
+  function moveCategory(id, dir){
+    for(const k of ["necessities","discretionary"]){
+      const arr = config[k];
+      const i = arr.findIndex(b=>b.id===id);
+      if(i < 0) continue;
+      const j = i + (dir === "up" ? -1 : 1);
+      if(j < 0 || j >= arr.length) return;
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+      saveConfig(); render();
+      return;
+    }
+  }
+
   // ---- event wiring (delegated on root, bound once) ---------------------
   function bind(){
     const root = document.getElementById("budget-root");
@@ -272,6 +323,16 @@
       const act = e.target.dataset.act;
       if(act === "toggle-edit"){ editMode = !editMode; render(); return; }
       if(act === "add"){ addCategory(e.target.dataset.group); return; }
+      if(act === "dup"){
+        const row = e.target.closest(".bt-row");
+        if(row) dupCategory(row.dataset.id);
+        return;
+      }
+      if(act === "up" || act === "down"){
+        const row = e.target.closest(".bt-row");
+        if(row) moveCategory(row.dataset.id, act);
+        return;
+      }
       if(act === "del"){
         const row = e.target.closest(".bt-row");
         if(row) delCategory(row.dataset.id);

@@ -1,0 +1,18 @@
+2026-06-30 20:02:47.813 EDT [14880] LOG:  starting PostgreSQL 18.3 on x86_64-windows, compiled by msvc-19.44.35222, 64-bit
+2026-06-30 20:02:47.823 EDT [14880] LOG:  listening on IPv6 address "::1", port 5432
+2026-06-30 20:02:47.823 EDT [14880] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-06-30 20:02:48.193 EDT [27784] LOG:  database system was interrupted; last known up at 2026-06-29 14:42:23 EDT
+2026-06-30 20:02:58.219 EDT [27784] LOG:  syncing data directory (fsync), elapsed time: 10.02 s, current path: ./base/44934/1259_vm
+2026-06-30 20:03:01.514 EDT [27784] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-06-30 20:03:01.531 EDT [27784] LOG:  redo starts at 0/214A6550
+2026-06-30 20:03:01.532 EDT [27784] LOG:  invalid record length at 0/214A6658: expected at least 24, got 0
+2026-06-30 20:03:01.532 EDT [27784] LOG:  redo done at 0/214A6620 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-06-30 20:03:01.549 EDT [4560] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-06-30 20:03:01.578 EDT [4560] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 2 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.005 s, sync=0.007 s, total=0.030 s; sync files=3, longest=0.003 s, average=0.003 s; distance=0 kB, estimate=0 kB; lsn=0/214A6658, redo lsn=0/214A6658
+2026-06-30 20:03:01.608 EDT [14880] LOG:  database system is ready to accept connections
+2026-06-30 20:03:23.089 EDT [18072] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-06-30 20:08:01.592 EDT [4560] LOG:  checkpoint starting: time
+2026-06-30 20:08:03.914 EDT [4560] LOG:  checkpoint complete: wrote 21 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=2.288 s, sync=0.019 s, total=2.322 s; sync files=10, longest=0.006 s, average=0.002 s; distance=102 kB, estimate=102 kB; lsn=0/214C00C8, redo lsn=0/214C0070
+2026-07-01 00:03:02.283 EDT [4560] LOG:  checkpoint starting: time
+2026-07-01 00:03:02.448 EDT [4560] LOG:  checkpoint complete: wrote 1 buffers (0.0%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.117 s, sync=0.005 s, total=0.167 s; sync files=2, longest=0.003 s, average=0.003 s; distance=4 kB, estimate=92 kB; lsn=0/214C12F0, redo lsn=0/214C1298

@@ -4613,6 +4613,10 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-row.bt--filling .bt-row-fund{color:var(--amber)}
 .bt-row.bt--locked{opacity:.5}
 .bt-row.bt--locked .bt-row-fund{color:var(--text-muted)}
+.bt-row-btn{background:none;border:none;color:var(--text-muted);font-size:12px;
+  cursor:pointer;line-height:1;padding:0 3px}
+.bt-row-btn:hover{color:var(--accent-light)}
+.bt-row-dup{font-size:14px}
 .bt-row-del{margin-left:4px;background:none;border:none;color:var(--red);font-size:16px;
   cursor:pointer;line-height:1;padding:0 4px}
 .bt-add{margin-top:6px;background:none;border:1px dashed var(--border);color:var(--text-muted);
