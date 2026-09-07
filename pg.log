@@ -1,0 +1,61 @@
+2026-06-23 18:49:21.302 EDT [51516] LOG:  starting PostgreSQL 18.3 on x86_64-windows, compiled by msvc-19.44.35222, 64-bit
+2026-06-23 18:49:21.308 EDT [51516] LOG:  listening on IPv6 address "::1", port 5432
+2026-06-23 18:49:21.309 EDT [51516] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-06-23 18:49:21.582 EDT [16500] LOG:  database system was interrupted; last known up at 2026-06-22 21:33:40 EDT
+2026-06-23 18:49:30.216 EDT [16500] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-06-23 18:49:30.225 EDT [16500] LOG:  redo starts at 0/212BCD78
+2026-06-23 18:49:30.225 EDT [16500] LOG:  invalid record length at 0/212BCEB8: expected at least 24, got 0
+2026-06-23 18:49:30.225 EDT [16500] LOG:  redo done at 0/212BCE80 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-06-23 18:49:30.237 EDT [59128] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-06-23 18:49:30.256 EDT [59128] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 2 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.003 s, sync=0.005 s, total=0.021 s; sync files=3, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/212BCEB8, redo lsn=0/212BCEB8
+2026-06-23 18:49:30.273 EDT [51516] LOG:  database system is ready to accept connections
+2026-06-23 18:51:25.525 EDT [51516] LOG:  client backend (PID 17208) was terminated by exception 0xC0000142
+2026-06-23 18:51:25.525 EDT [51516] HINT:  See C include file "ntstatus.h" for a description of the hexadecimal value.
+2026-06-23 18:51:25.525 EDT [51516] LOG:  terminating any other active server processes
+2026-06-23 18:51:25.535 EDT [51516] LOG:  all server processes terminated; reinitializing
+2026-06-23 18:51:25.608 EDT [51516] LOG:  startup process (PID 42980) was terminated by exception 0xC0000142
+2026-06-23 18:51:25.608 EDT [51516] HINT:  See C include file "ntstatus.h" for a description of the hexadecimal value.
+2026-06-23 18:51:25.608 EDT [51516] LOG:  aborting startup due to startup process failure
+2026-06-23 18:51:25.610 EDT [51516] LOG:  database system is shut down
+2026-06-23 18:51:56.614 EDT [54068] LOG:  starting PostgreSQL 18.3 on x86_64-windows, compiled by msvc-19.44.35222, 64-bit
+2026-06-23 18:51:56.618 EDT [54068] LOG:  listening on IPv6 address "::1", port 5432
+2026-06-23 18:51:56.618 EDT [54068] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-06-23 18:51:56.690 EDT [56748] LOG:  database system was interrupted; last known up at 2026-06-23 18:49:30 EDT
+2026-06-23 18:51:58.918 EDT [56748] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-06-23 18:51:58.923 EDT [56748] LOG:  redo starts at 0/212BCF30
+2026-06-23 18:51:58.923 EDT [56748] LOG:  invalid record length at 0/212BCF68: expected at least 24, got 0
+2026-06-23 18:51:58.923 EDT [56748] LOG:  redo done at 0/212BCF30 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-06-23 18:51:58.930 EDT [28584] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-06-23 18:51:58.947 EDT [28584] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 2 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.003 s, sync=0.005 s, total=0.019 s; sync files=3, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/212BCF68, redo lsn=0/212BCF68
+2026-06-23 18:51:58.961 EDT [54068] LOG:  database system is ready to accept connections
+2026-06-23 18:54:14.806 EDT [20512] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-06-23 18:55:41.893 EDT [57568] FATAL:  role "offic" does not exist
+2026-06-23 18:56:58.955 EDT [28584] LOG:  checkpoint starting: time
+2026-06-23 18:57:02.591 EDT [28584] LOG:  checkpoint complete: wrote 33 buffers (0.2%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=3.595 s, sync=0.031 s, total=3.636 s; sync files=33, longest=0.004 s, average=0.001 s; distance=106 kB, estimate=106 kB; lsn=0/212D7A08, redo lsn=0/212D79B0
+2026-06-23 19:01:58.595 EDT [28584] LOG:  checkpoint starting: time
+2026-06-23 19:01:59.818 EDT [28584] LOG:  checkpoint complete: wrote 11 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=1.204 s, sync=0.011 s, total=1.224 s; sync files=11, longest=0.002 s, average=0.001 s; distance=50 kB, estimate=100 kB; lsn=0/212E44E0, redo lsn=0/212E4488
+2026-06-23 19:36:31.033 EDT [47868] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-06-23 19:36:47.033 EDT [57944] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-06-23 19:36:47.033 EDT [44276] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-06-23 19:36:58.865 EDT [28584] LOG:  checkpoint starting: time
+2026-06-23 19:37:01.294 EDT [28584] LOG:  checkpoint complete: wrote 22 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=2.397 s, sync=0.023 s, total=2.429 s; sync files=22, longest=0.002 s, average=0.002 s; distance=84 kB, estimate=99 kB; lsn=0/212F9738, redo lsn=0/212F96E0
+2026-06-23 19:41:58.309 EDT [28584] LOG:  checkpoint starting: time
+2026-06-23 19:42:01.385 EDT [28584] LOG:  checkpoint complete: wrote 28 buffers (0.2%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=3.045 s, sync=0.023 s, total=3.077 s; sync files=26, longest=0.002 s, average=0.001 s; distance=102 kB, estimate=102 kB; lsn=0/21313160, redo lsn=0/213130D0
+2026-06-23 19:46:58.394 EDT [28584] LOG:  checkpoint starting: time
+2026-06-23 19:46:58.632 EDT [28584] LOG:  checkpoint complete: wrote 2 buffers (0.0%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.225 s, sync=0.004 s, total=0.239 s; sync files=3, longest=0.002 s, average=0.002 s; distance=10 kB, estimate=93 kB; lsn=0/21315930, redo lsn=0/213158D8
+2026-06-23 20:07:37.058 EDT [54892] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-06-23 20:11:58.671 EDT [28584] LOG:  checkpoint starting: time
+2026-06-23 20:11:59.364 EDT [28584] LOG:  checkpoint complete: wrote 6 buffers (0.0%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.669 s, sync=0.013 s, total=0.694 s; sync files=6, longest=0.006 s, average=0.003 s; distance=30 kB, estimate=86 kB; lsn=0/2131D328, redo lsn=0/2131D2D0
+2026-06-24 22:32:44.890 EDT [54068] LOG:  autovacuum worker (PID 56436) was terminated by exception 0xC0000142
+2026-06-24 22:32:44.890 EDT [54068] HINT:  See C include file "ntstatus.h" for a description of the hexadecimal value.
+2026-06-24 22:32:44.891 EDT [54068] LOG:  terminating any other active server processes
+2026-06-24 22:32:44.936 EDT [54068] LOG:  all server processes terminated; reinitializing
+2026-06-24 22:32:45.109 EDT [54068] LOG:  startup process (PID 41912) was terminated by exception 0xC0000142
+2026-06-24 22:32:45.109 EDT [54068] HINT:  See C include file "ntstatus.h" for a description of the hexadecimal value.
+2026-06-24 22:32:45.109 EDT [54068] LOG:  aborting startup due to startup process failure
+2026-06-24 22:32:45.114 EDT [54068] LOG:  database system is shut down
