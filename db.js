@@ -2354,6 +2354,15 @@ async function findResponsibilityBySlug(slug, workspaceId) {
 }
 
 // Generic "all type='block' rows of this kind", oldest first (task_menu, task_group).
+async function findTaskByTriageSource(workspaceId, triageId, triageKey) {
+  const { rows } = await pool.query(
+    `SELECT * FROM blocks WHERE type='block' AND workspace_id IS NOT DISTINCT FROM $1
+      AND (properties->>'triageId'=$2 OR ($3<>'' AND properties->>'triageKey'=$3))
+      ORDER BY (deleted_at IS NULL) DESC, created_at ASC LIMIT 1`,
+    [workspaceId || null, String(triageId), String(triageKey || "")]);
+  return rows[0] ? parseBlock(rows[0]) : null;
+}
+
 async function getBlocksByKind(kind, workspaceId) {
   const { rows } = workspaceId
     ? await pool.query(`SELECT * FROM blocks WHERE type='block' AND properties->>'kind'=$1 AND workspace_id=$2 AND deleted_at IS NULL ORDER BY created_at ASC`, [kind, workspaceId])
@@ -2466,7 +2475,7 @@ module.exports = {
   undeleteBlock, updateDeletedBlockProperties, getBlockIncludingDeleted, findByIdempotencyKey, getBlocksByIdempotencyKeys, getRepeatSeriesBlocks, withRepeatSeriesLock, isIdempotencyConflict,
   getCarryoverPool, carryoverSkipTypes, getSubtree, isTaskRow,
   isCompletedTaskProps, applyCompletionIntent, setTaskCompletion, propagateResponsibilityDone,
-  getBlocksByDate, getBlocksByDateIncludingDeleted, getCalendarMeetingContextBySourceIds, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,
+  findTaskByTriageSource, getBlocksByDate, getBlocksByDateIncludingDeleted, getCalendarMeetingContextBySourceIds, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
   ensureDccStateTable, backfillLegacyTriageSuppressions, saveDccState, saveDccBriefDecision, getDccState, getDccStateCompact, purgeSoftDeleted, getOperations,

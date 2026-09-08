@@ -135,6 +135,8 @@
       // break: every picker-based create path serializes through this function, so
       // a scheduled triage row landed with triageId null and the strip's
       // ev.triageId === triageId dedupe could never match.
+      triageContext: src.triageContext || null,
+      triageBlock: src.triageBlock === true,
       triageId: src.triageId || null,
       triageKey: src.triageKey || null,
       triageTitle: src.triageTitle || "",

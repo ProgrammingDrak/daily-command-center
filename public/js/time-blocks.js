@@ -8,6 +8,7 @@
   const DAYS=WEEKDAYS.concat(["sat","sun"]);
   const DAY_NAMES={mon:"Monday",tue:"Tuesday",wed:"Wednesday",thu:"Thursday",fri:"Friday",sat:"Saturday",sun:"Sunday"};
   const DIVIDER_VARIANT="hairline";
+  const TRIAGE_BLOCK={id:"triage",name:"Triage",fixed:true};
   const DEFAULTS=[
     {name:"Morning Workout",start:"06:30",end:"09:00"},
     {name:"Clever",start:"09:00",end:"17:30"},
@@ -67,6 +68,15 @@
     });
     return {groups,outside};
   }
+  function partitionTriageTree(nodes){
+    const triage=[],remaining=[];
+    let inTriage=false;
+    (nodes||[]).forEach(node=>{
+      if(!node.depth)inTriage=!!(node.ev.triageBlock&&node.ev.untimed);
+      (inTriage?triage:remaining).push(node);
+    });
+    return {triage,remaining};
+  }
   function formatTime(value){
     if(value==="24:00")return "Midnight";
     const n=minutes(value,false);if(n===null)return String(value||"");
@@ -75,5 +85,5 @@
   }
   function rangeLabel(block){return formatTime(block.start)+" - "+formatTime(block.end);}
 
-  return {WEEKDAYS,DAYS,DAY_NAMES,DEFAULTS,DIVIDER_VARIANT,dayKey,isWeekday,activeDays,minutes,valid,normalize,forDate,groupByDay,blockForTask,groupTree,formatTime,rangeLabel};
+  return {TRIAGE_BLOCK,partitionTriageTree,WEEKDAYS,DAYS,DAY_NAMES,DEFAULTS,DIVIDER_VARIANT,dayKey,isWeekday,activeDays,minutes,valid,normalize,forDate,groupByDay,blockForTask,groupTree,formatTime,rangeLabel};
 });

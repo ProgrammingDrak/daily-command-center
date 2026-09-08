@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import express from "express";
+import createTaskTiming from "../lib/task-timing.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -120,6 +121,33 @@ app.post("/api/blocks", (req, res) => {
   };
   reviewBlocks.set(block.id, block);
   res.status(201).json(block);
+});
+// Exercise the actual work-session domain against the disposable review store.
+const reviewTiming = createTaskTiming({
+  pool: { query: async () => ({ rows: [] }) },
+  blockDB: {
+    getBlock: async id => reviewBlocks.get(id),
+    getBlockIncludingDeleted: async id => reviewBlocks.get(id),
+    getTaskTimeEntries: async id => liveReviewBlocks().filter(row => row.type === "time_entry" && row.properties.blockId === id),
+    updateBlock: async (id, patch) => { const row = { ...reviewBlocks.get(id), ...patch }; reviewBlocks.set(id, row); return row; },
+    createBlock: async input => { const row = { id: randomUUID(), ...input }; reviewBlocks.set(row.id, row); return row; },
+    deleteBlock: async id => { const row = reviewBlocks.get(id); row.deleted_at = new Date().toISOString(); return row; },
+    ensureDayRoot: async date => ensureReviewDayRoot(date).id,
+  },
+});
+app.post("/api/blocks/:id/work", async (req, res) => {
+  try {
+    const block = reviewBlocks.get(req.params.id);
+    if (!block) return res.status(404).json({ error: "Block not found" });
+    const operation = req.body.action === "start" ? reviewTiming.startWork : reviewTiming.pauseWork;
+    await operation({ block, atMs: Date.parse(req.body.at), actionId: req.body.actionId, actor: "review" });
+    res.json({ block: reviewBlocks.get(block.id) });
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+app.get("/api/blocks/:id/work", async (req, res) => {
+  const block = reviewBlocks.get(req.params.id);
+  if (!block) return res.status(404).json({ error: "Block not found" });
+  res.json({ block, sessions: await reviewTiming.getSessions(block) });
 });
 app.patch("/api/blocks/:id", (req, res) => {
   const block = reviewBlocks.get(req.params.id);

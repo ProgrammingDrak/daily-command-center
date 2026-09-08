@@ -117,3 +117,19 @@ test("linked triage follows task completion, reopen, deletion, and undo", async 
   assert.equal(active.length, 1);
   assert.equal(active[0].properties.reason, "scheduled");
 });
+
+
+test("deleting a Triage task suppresses its source, and ordinary Undo restores the link", async () => {
+  const {app,rows}=mountApp();
+  rows["task-1"].properties.triageBlock=true;
+  const deleted=await request(app,"/api/blocks/task-1",{method:"DELETE"});
+  assert.equal(deleted.status,200);
+  const suppression=Object.values(rows).find(row=>(row.properties||{}).kind==="triage_suppression");
+  assert.equal(suppression.properties.reason,"deleted");
+  assert.equal(suppression.properties.active,true);
+  const restored=await request(app,"/api/blocks/task-1/undelete",{method:"POST"});
+  assert.equal(restored.status,200);
+  const active=Object.values(rows).filter(row=>(row.properties||{}).kind==="triage_suppression"&&row.properties.active!==false);
+  assert.equal(active.length,1);
+  assert.equal(active[0].properties.reason,"scheduled");
+});

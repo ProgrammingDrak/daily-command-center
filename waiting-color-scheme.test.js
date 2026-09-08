@@ -69,12 +69,11 @@ test("check-in ids and names are escaped into the pill", () => {
 });
 
 test("both triage card builders paint the waiting hue and carry the pill", () => {
-  // Itinerary Triage strip (the card that used to look like any other medium-priority item)
-  const strip = mustSlice(TRIAGE_SRC, /^function buildScheduleTriageCard\(item\)\{[\s\S]*?\n\}/m, "buildScheduleTriageCard");
-  assert.match(strip, /isWaitingCheckIn\(item\)\?"var\(--waiting/);
-  assert.match(strip, /waiting-checkin-card/);
-  assert.match(strip, /waitingCheckInPillHtml\(item\)/);
-  assert.match(strip, /waitingCheckInDeleteTitle\(item\)/);
+  // The normal task renderer now supplies the Waiting hue and source pill.
+  const strip = fs.readFileSync(__dirname + "/public/js/schedule-tab.js", "utf8");
+  assert.match(strip, /waitingCheckInPillHtml\(triageSource\)/);
+  assert.match(strip, /waitChip\?"waiting-row"/);
+  assert.match(strip, /waitChip\?'var\(--waiting/);
   // Triage tab
   const tab = mustSlice(TRIAGE_SRC, /^function buildTriageCard\(item\) \{[\s\S]*?\n\}/m, "buildTriageCard");
   assert.match(tab, /isWaitingCheckIn\(item\) \? "var\(--waiting/);
@@ -326,4 +325,11 @@ test("one token defines the family, and the pill is styled once", () => {
   // Text takes the readable member of the family; bars and borders take the deep one.
   assert.match(CSS_SRC, /--waiting-ink:#f0a3b6;/);
   assert.match(CSS_SRC, /^\.waiting-pill\{[^}]*color:var\(--waiting-ink\)/m);
+});
+
+ test("shared rows preserve a source check-in pill before trying the task fallback", () => {
+  const source = fs.readFileSync(__dirname + "/public/js/schedule-tab.js", "utf8");
+  const expression = source.match(/const waitChip=([^;]+);/)[1];
+  assert.equal(vm.runInNewContext(expression, { sourceWaitingChip: "check-in", window: {}, ev: {} }), "check-in");
+  assert.equal(vm.runInNewContext(expression, { sourceWaitingChip: "", window: { waitingRowChipHtml: () => "task" }, ev: {} }), "task");
 });

@@ -347,9 +347,9 @@ function _orderUnscheduled(rows){
 // so walk every section tagged .uns-group and keep ONE persisted order across both.
 function _unscheduledRowIds(){
   const ids=[];
-  document.querySelectorAll("#list-view .it-list-section.uns-group").forEach(sec=>{
+  document.querySelectorAll('#list-view .it-list-section.uns-group, #list-view .time-block-divider[data-block-id="triage"]').forEach(sec=>{
     let n=sec.nextElementSibling;
-    while(n&&!n.classList.contains("it-list-section")){
+    while(n&&!n.classList.contains("it-list-section")&&!n.classList.contains("time-block-divider")){
       if(n.classList.contains("it-list-item")&&n.dataset.id)ids.push(n.dataset.id);
       n=n.nextElementSibling;
     }
@@ -433,12 +433,6 @@ async function _unfScheduleIntoToday(rec,targetEv,after){
 // scheduled[]-only logic. Returns "handled" (done) or "passthrough" (not an
 // Unscheduled-row drop → let dDrop's normal path run).
 function handleUnscheduledDrop(movedId,targetId,e){
-  // Queue-backed triage rows are projected task events. Their adapter owns the
-  // source mutation, while this remains the single itinerary drop router.
-  if(typeof window.handleItineraryTriageDrop==="function"){
-    const triageResult=window.handleItineraryTriageDrop(movedId,targetId,e);
-    if(triageResult==="handled")return"handled";
-  }
   const movedUnf=_unfRecById(movedId);
   const movedEv=(typeof scheduled!=="undefined")?scheduled.find(x=>x.id===movedId):null;
   const movedUntimed=!!(movedEv&&movedEv.untimed);
@@ -748,7 +742,9 @@ function buildListView(){
     // Delegated look (delegated.js waitingChipHtml): a check-in reminder and the
     // original task it chases share the --waiting hue and each carry a labelled pill,
     // so deleting the reminder is never mistaken for deleting the task itself.
-    const waitChip=(typeof window.waitingRowChipHtml==="function")?window.waitingRowChipHtml(ev):'';
+    const triageSource=typeof triageTaskSourceItem==="function"?triageTaskSourceItem(ev):null;
+    const sourceWaitingChip=triageSource&&typeof waitingCheckInPillHtml==="function"?waitingCheckInPillHtml(triageSource):"";
+    const waitChip=sourceWaitingChip||((typeof window.waitingRowChipHtml==="function")?window.waitingRowChipHtml(ev):'');
     const chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
     const inProgress=!!(window.DCC&&window.DCC.TaskModel&&typeof window.DCC.TaskModel.isInProgress==="function"&&window.DCC.TaskModel.isInProgress(ev,isDoneRow));
     let progressTime="";
@@ -796,12 +792,13 @@ function buildListView(){
     };
     const metaHtml=inProgressChip+nowChip+
       '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+chipSlot+streakChip+
-      (subTimeless?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+      (subTimeless?'':(ev.untimed?(ev.triageBlock?'<span class="it-list-duration" title="Estimated completion time">'+ms(dur(ev))+'</span>':'<span class="it-list-untimed">Unscheduled</span>'):(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
       (isUnfRow?'<span class="it-list-unfinished">Unfinished from '+escHtml(_unfSlashDate(r.sourceDate))+'</span>':'')+
       (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
       (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" style="cursor:pointer" title="View prep briefing">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" style="cursor:pointer" title="Prep pending — open to view or generate">&#9675; Prep</span>':'')+
       (ev.recapStatus==='ready'?'<span class="recap-flag" style="cursor:pointer" title="View recap & action items">&#9670; Recap</span>':'')+
       recQueued+recFlag+priChip+
+      (typeof triageTaskSourceActionsHtml==="function"?triageTaskSourceActionsHtml(ev):"")+
       (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
       (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
       (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'');
@@ -829,6 +826,7 @@ function buildListView(){
       onDragStart:(e)=>dStart(e,ev.id),onDragEnd:dEnd,
       onDragOver:!isDoneRow?(e)=>dOver(e,ev.id):null,onDragLeave:!isDoneRow?dLeave:null,onDrop:!isDoneRow?(e)=>dDrop(e,ev.id):null,
       afterRender:(rowEl)=>{
+        if(typeof wireTriageTaskSourceActions==="function")wireTriageTaskSourceActions(rowEl);
         const stSpan=rowEl.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfSchedulePopover(ev,rowEl,stSpan);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:stSpan,view:"time"});});
         const pf=rowEl.querySelector(".prep-flag");if(pf)pf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev,{defaultTab:"prep"});});
         const rf=rowEl.querySelector(".recap-flag");if(rf)rf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev,{defaultTab:"recap"});});
@@ -852,12 +850,12 @@ function buildListView(){
   }
   function timeBlockDividerEl(block,isCurrent){
     const TB=DCC.TimeBlocks;
-    const el=document.createElement("button");
-    el.type="button";
+    const el=document.createElement(block.fixed?"div":"button");
+    if(!block.fixed)el.type="button";
     el.className="time-block-divider variant-"+TB.DIVIDER_VARIANT+(isCurrent?" current":"");
     if(block.id)el.dataset.blockId=block.id;
     el.innerHTML='<strong>'+escHtml(block.name)+'</strong>'+(block.start?'<small>'+escHtml(TB.rangeLabel(block))+'</small>':'');
-    el.addEventListener("click",()=>openBlockEditor(block.id||null));
+    if(!block.fixed)el.addEventListener("click",()=>openBlockEditor(block.id||null));
     return el;
   }
 
@@ -893,6 +891,19 @@ function buildListView(){
   // too) and gated on the subtree being finished (so a done step with open steps under
   // it stays visible with its children nested, instead of hiding live work).
   section("Work list",activeIds.size);
+  const triageTree=DCC.TimeBlocks.partitionTriageTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible}));
+  const triageIds=new Set(triageTree.triage.map(node=>node.ev.id));
+  wrap.appendChild(timeBlockDividerEl(DCC.TimeBlocks.TRIAGE_BLOCK,false));
+  triageTree.triage.forEach((node,index)=>wrap.appendChild(emitNode(node,index,isDone(node.ev)?"done":"open")));
+  const triageState=typeof triageTaskLoadState==="function"?triageTaskLoadState():{};
+  if(triageState.loading||triageState.error){
+    const status=document.createElement(triageState.error?"button":"div");
+    status.className="it-list-empty";
+    status.textContent=triageState.error?"Triage could not load. Retry":"Loading Triage tasks…";
+    if(triageState.error)status.addEventListener("click",()=>buildScheduleTriage());
+    wrap.appendChild(status);
+  }
+
   const timeBlocks=(DCC.TimeBlocks&&DCC.TimeBlocks.forDate)
     ? DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate)
     : [];
@@ -916,7 +927,7 @@ function buildListView(){
     // A row whose parent is genuinely gone from `visible` (deleted, side-project) is
     // still promoted and still visible.
     let rank=0;
-    const tree=DCC.TaskModel.selectTree(day.timed,{pool:visible});
+    const tree=DCC.TaskModel.selectTree(day.timed.filter(ev=>!triageIds.has(ev.id)),{pool:visible});
     function emitGroup(nodes){
       let prevEnd=null;
       nodes.forEach(node=>{
@@ -949,18 +960,19 @@ function buildListView(){
   // Unscheduled: untimed tasks for this day. Past-day unfinished work is handled
   // exclusively through Loose Ends.
   const uMode=_sectionSort("unscheduled");
-  if(day.unscheduledRoots.length){
+  const unscheduledRoots=day.unscheduledRoots.filter(ev=>!triageIds.has(ev.id));
+  if(unscheduledRoots.length){
     // The header counts and the drag/sort order apply to ROOTS; children follow their
     // parent through selectTree. Before C6a this section rendered a flat list of roots
     // and a subtask of an untimed parent was promoted into the WORK LIST as a
     // standalone numbered row -- the parent sat down here, its step sat up there.
-    section("Unscheduled",day.unscheduledRoots.length,"unscheduled","uns-group");
+    section("Unscheduled",unscheduledRoots.length,"unscheduled","uns-group");
     const rootOrder=_sectionSortIsManual(uMode)
-      ? _orderUnscheduled(day.unscheduledRoots)
-      : _applySectionSort(day.unscheduledRoots,uMode,ev=>ev.title,_unsCreated);
+      ? _orderUnscheduled(unscheduledRoots)
+      : _applySectionSort(unscheduledRoots,uMode,ev=>ev.title,_unsCreated);
     const rootIds=new Set(rootOrder.map(ev=>ev.id));
     let uRank=0;
-    DCC.TaskModel.selectTree(rootOrder.concat(day.unscheduled.filter(ev=>!rootIds.has(ev.id))),{pool:visible})
+    DCC.TaskModel.selectTree(rootOrder.concat(day.unscheduled.filter(ev=>!rootIds.has(ev.id)&&!triageIds.has(ev.id))),{pool:visible})
       .forEach(node=>{
         // The real mode, not a hardcoded "open". A done row only folds once its whole
         // subtree is finished, so a done step with unfinished steps under it legitimately

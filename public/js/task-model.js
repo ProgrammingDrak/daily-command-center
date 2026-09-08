@@ -74,7 +74,7 @@
     const p = block.properties || {};
     // API task blocks have no local_id; key on the row id.
     const taskId = p.local_id || block.id;
-    const d = p.duration || p.estimatedMinutes || 30;
+    const d = p.subtaskOf && p.duration === 0 ? 0 : (p.duration || p.estimatedMinutes || 30);
     // A dateless row is unscheduled by definition: any stored start on it is
     // stale (e.g. stamped by an old reflow), so ignore it and keep the row
     // in the Unscheduled section until a drag gives it a real slot.
@@ -162,6 +162,8 @@
       alertKey: p.alertKey || null,
       alertType: p.alertType || null,
       publicVisibility: p.publicVisibility || "public",
+      triageContext: p.triageContext || null,
+      triageBlock: p.triageBlock === true,
       triageId: p.triageId || null,
       triageKey: p.triageKey || null,
       triageTitle: p.triageTitle || "",
@@ -396,7 +398,7 @@
       if (p.done === true) continue;
       // Dependency-parked tasks live in Waiting until their prerequisite is
       // released. They remain dateless but must not duplicate into Backlog.
-      if (p.dependencyWaitingItemId) continue;
+      if (p.dependencyWaitingItemId || (p.triageBlock && p.kind !== "backlog")) continue;
       // A titleless row cannot render on either surface; both consumers dropped it.
       if (!p.title) continue;
       if (!b.date) { out.push(b); continue; }

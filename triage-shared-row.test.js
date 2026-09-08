@@ -65,27 +65,12 @@ test("due responsibilities project into recurring untimed task rows", () => {
   assert.equal(task.__responsibility.sourceId, item.id);
 });
 
-test("all itinerary task families use one list row renderer", () => {
-  const triageBuilder = between(triageSource, "function buildScheduleTriageCard", "function buildRecurringTriageCard");
-  const recurringBuilder = between(triageSource, "function buildRecurringTriageCard", "let _itineraryTriageEvents");
-
+test("Triage renders through the normal task list without a second row builder", () => {
+  assert.match(scheduleSource, /triageTree\.triage\.forEach[\s\S]*?emitNode\(node,index,isDone\(node\.ev\)/);
   assert.match(scheduleSource, /renderItineraryListRow\(ev,/);
-  assert.match(triageBuilder, /renderItineraryListRow\(ev,/);
-  assert.match(recurringBuilder, /renderItineraryListRow\(ev,/);
-  for (const className of ["it-list-utility", "it-list-main", "it-list-actions"]) {
-    assert.match(rowSource, new RegExp(`class="${className}"`));
-  }
-});
-
-test("triage rows show estimated duration without a synthetic clock range", () => {
-  const triageBuilder = between(triageSource, "function _triageRowMeta", "function buildRecurringTriageCard");
-  const recurringBuilder = between(triageSource, "function buildRecurringTriageCard", "let _itineraryTriageEvents");
-
-  assert.match(triageBuilder, /class="it-list-duration"/);
-  assert.match(recurringBuilder, /class="it-list-duration"/);
-  assert.doesNotMatch(triageBuilder, /class="start-time/);
-  assert.doesNotMatch(recurringBuilder, /class="start-time/);
-  assert.match(optimizationCss, /\.it-list-duration/);
+  assert.doesNotMatch(triageSource, /function buildScheduleTriageCard|function buildRecurringTriageCard|renderItineraryListRow\(/);
+  assert.match(scheduleSource, /DCC\.TimeBlocks\.TRIAGE_BLOCK/);
+  assert.match(scheduleSource, /class="it-list-duration" title="Estimated completion time"/);
 });
 
 test("shared controls appear only when their capability callback exists", () => {
@@ -96,34 +81,14 @@ test("shared controls appear only when their capability callback exists", () => 
   assert.match(rowSource, /typeof opts\.onAdd==="function"/);
 });
 
-test("triage actions retain durable source handlers", () => {
-  const builder = between(triageSource, "function buildScheduleTriageCard", "function buildRecurringTriageCard");
-  const scheduler = between(triageSource, "async function scheduleTriageItem", "window.scheduleTriageOnDate");
-  assert.match(builder, /onComplete:\(\)=>dismissTriage/);
-  assert.match(builder, /onCompleteWithNotes:[^\n]*openDoneModal/);
-  assert.match(builder, /onSchedule:\(\)=>scheduleTriageItem/);
-  assert.match(builder, /onDelete:\(\)=>deleteTriageItem/);
-  assert.match(scheduler, /if\(info&&info\.persisted\)await info\.persisted;/);
-  assert.ok(scheduler.indexOf("await info.persisted") < scheduler.indexOf("await record("));
-  assert.match(scheduler, /catch\(e\)[\s\S]*Task could not be created/);
-  assert.doesNotMatch(scheduler.slice(scheduler.indexOf("catch(e)")), /recordTriageScheduled/);
-});
-
-test("triage reorder and placement reuse itinerary movement primitives", () => {
-  assert.match(scheduleSource, /handleItineraryTriageDrop\(movedId,targetId,e\)/);
-  assert.match(triageSource, /saveUnscheduledOrder\(/);
-  assert.match(triageSource, /targetId:target\.id,after:after,orderWins:true/);
-  assert.match(scheduleCoreSource, /_reorderActive\(newItem\.id,opts\.targetId,!!opts\.after\)/);
-  assert.match(scheduleCoreSource, /source_id:item\.source_id\|\|""/);
-  assert.match(scheduleCoreSource, /triageKey:item\.triageKey\|\|null/);
-});
-
-test("recurring triage exposes schedule complete skip and pause actions", () => {
-  const radial = between(triageSource, "function _openResponsibilityRowRadial", "function _triageRowMeta");
-  for (const label of ["Schedule…", "Complete", "Skip this cycle", "Pause"]) {
-    assert.match(radial, new RegExp(`label:"${label}"`));
-  }
-  assert.match(responsibilitySource, /function scheduleRepeatResponsibility\(id,opts\)/);
+test("Triage source ingestion creates durable tasks before rendering controls", () => {
+  assert.match(triageSource, /api\/triage\/tasks\/materialize/);
+  assert.match(triageSource, /await window\.blockStore\.handleBlocksChanged\(/);
+  assert.match(triageSource, /reloadPersistedEdits\(\)/);
+  assert.match(scheduleSource, /onDelete:[^\n]*openDeleteConfirm\(ev\.id\)/);
+  assert.match(scheduleSource, /itineraryActionButtonsHtml\(ev,isDoneRow\)/);
+  assert.match(scheduleSource, /placeBounty\(bb\.dataset\.bountyId\)/);
+  assert.doesNotMatch(scheduleSource, /handleItineraryTriageDrop/);
 });
 
 test("the detailed Triage tab remains separate and obsolete strip CSS is gone", () => {
@@ -131,4 +96,37 @@ test("the detailed Triage tab remains separate and obsolete strip CSS is gone", 
   assert.match(triageSource, /class="tri-card/);
   assert.doesNotMatch(dashboardCss, /\.schedule-triage-card/);
   assert.doesNotMatch(dashboardCss, /\.schedule-triage-summary/);
+});
+
+test("materialized tasks reconcile through delta sync and remain retryable until cached", async () => {
+  const vm = require("node:vm");
+  for (const hydrated of [true, false]) {
+    let syncCalls = 0;
+    let resolveRender;
+    const rendered = new Promise(resolve => { resolveRender = resolve; });
+    const context = {
+      Set, Intl, viewDate: "2026-09-08",
+      activeTriageItems: () => [{ id: "source", title: "Reply" }],
+      triageDuration: () => 15,
+      triageTaskProps: id => ({ triageId: id }),
+      fetch: async () => ({ ok: true, json: async () => ({ blocks: [{ id: "task", date: null, props: {} }] }) }),
+      window: { blockStore: {
+        getCurrentDate: () => "2026-09-08",
+        handleBlocksChanged: async event => {
+          syncCalls++;
+          assert.equal(event.blockIds[0], "task");
+        },
+        get: () => hydrated ? { id: "task" } : null
+      } },
+      buildListView: () => resolveRender(),
+      reloadPersistedEdits: () => {}
+    };
+    vm.createContext(context);
+    vm.runInContext(between(triageSource, "const _triageMaterializedSources", "function buildScheduled()"), context);
+    vm.runInContext("buildScheduleTriage()", context);
+    await rendered;
+    assert.equal(syncCalls, 1);
+    assert.equal(vm.runInContext('_triageMaterializedSources.has("item:source")', context), hydrated);
+    assert.equal(Boolean(vm.runInContext("triageTaskLoadState().error", context)), !hydrated);
+  }
 });

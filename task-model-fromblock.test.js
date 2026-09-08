@@ -154,7 +154,7 @@ const BASE_KEYS = [
   "recurrenceOverride", "repeatMode", "repeatOccurrenceInstant", "repeatOccurrenceKey", "repeatOccurrenceRootId", "repeatSeriesId",
   "rescheduledFrom", "reschedulePlacement", "responsibilityId", "responsibilityScore",
   "responsibilityTitle", "retiredContainerHidden", "rsvp_status", "source", "sourceKey", "sourceLabel", "sourceTaskId", "source_id", "start", "startedAt", "status",
-  "subtaskOf", "tags", "taskGroupId", "title", "triageConversationId", "triageId", "triageKey",
+  "subtaskOf", "tags", "taskGroupId", "title", "triageBlock", "triageContext", "triageConversationId", "triageId", "triageKey",
   "triageReceivedAt", "triageSourceRef", "triageTitle", "triageType", "type", "untimed", "wrapId"
 ].sort();
 
@@ -180,7 +180,7 @@ test("every projected key round-trips its property, including the ones nothing a
       repeatOccurrenceKey: "2026-07-28T09:00", repeatOccurrenceInstant: "2026-07-28T13:00:00.000Z",
       repeatOccurrenceRootId: "row-9", recurrenceOverride: true,
       alertKey: "ak", alertType: "at", publicVisibility: "private",
-      triageId: "ti", triageKey: "slack|D1:1", triageTitle: "Original title", triageType: "slack",
+      triageBlock: false, triageContext: null, triageId: "ti", triageKey: "slack|D1:1", triageTitle: "Original title", triageType: "slack",
       triageSourceRef: "C1:123", triageReceivedAt: "2026-07-28T12:00:00Z", triageConversationId: "D1",
       delegatedItemId: "di", linkedBlockId: "lb", linkedTagId: "lt",
       ampUrl: "https://amp", hubspotUrl: "https://hs", wrapId: "w", isWrap: true,
@@ -208,7 +208,7 @@ test("every projected key round-trips its property, including the ones nothing a
     repeatOccurrenceKey: "2026-07-28T09:00", repeatOccurrenceInstant: "2026-07-28T13:00:00.000Z",
     repeatOccurrenceRootId: "row-9", recurrenceOverride: true,
     alertKey: "ak", alertType: "at", publicVisibility: "private",
-    triageId: "ti", triageKey: "slack|D1:1", triageTitle: "Original title", triageType: "slack",
+    triageBlock: false, triageContext: null, triageId: "ti", triageKey: "slack|D1:1", triageTitle: "Original title", triageType: "slack",
     triageSourceRef: "C1:123", triageReceivedAt: "2026-07-28T12:00:00Z", triageConversationId: "D1",
     delegatedItemId: "di", linkedBlockId: "lb", linkedTagId: "lt",
     ampUrl: "https://amp", hubspotUrl: "https://hs", wrapId: "w", isWrap: true,
