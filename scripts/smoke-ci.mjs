@@ -62,6 +62,22 @@ for (let attempt = 0; attempt < 10 && !loggedIn; attempt++) {
 }
 check("login", loggedIn === true, String(loggedIn));
 
+// The smoke owns product behavior after onboarding. Suppress the tutorial in
+// this disposable test account so its timed launch cannot intercept later clicks.
+const onboardingSuppressed = await page.evaluate(() =>
+  fetch("/api/me/onboarding", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      dailyCommandCenterTour: {
+        version: 2,
+        dismissedAt: new Date().toISOString()
+      }
+    })
+  }).then((response) => response.ok).catch(() => false)
+);
+check("onboarding tutorial suppressed", onboardingSuppressed === true, String(onboardingSuppressed));
+
 await page.goto(`${BASE}/`, { waitUntil: "load" });
 // Wait for the DCC core to bootstrap rather than a fixed sleep (cold CI runners
 // are slower); fall through on timeout so the next check FAILs cleanly.
