@@ -975,7 +975,8 @@ const POST_SCHEMA_STATEMENTS = [
       SELECT p_type IS DISTINCT FROM 'day_root'
          AND p_type IS DISTINCT FROM 'time_entry'
          AND COALESCE(p_props->>'kind', '') NOT IN
-             ('delegated_item', 'task_group', 'reschedule_tombstone', 'triage_suppression', 'slack_reaction_tombstone', 'slack_done_intent',
+             ('delegated_item', 'task_group', 'project', 'task_facet', 'task_view',
+              'reschedule_tombstone', 'triage_suppression', 'slack_reaction_tombstone', 'slack_done_intent',
               'meeting_prep', 'meeting_transcript', 'meeting_summary', 'proposed_action_item',
               'anytime_item')
          AND (COALESCE(p_props->>'kind', '') NOT LIKE 'responsibility%'
@@ -1216,14 +1217,25 @@ const POST_SCHEMA_STATEMENTS = [
         AND properties->>'kind' = 'delegated_item'
         AND properties->>'blockerType' = 'task';
   `],
-  ["idx_blocks_task_dependency_dependent_active", `
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_blocks_task_dependency_dependent_active
-      ON blocks (workspace_id, (properties->>'linkedBlockId'))
+  ["idx_blocks_task_dependency_edge", `
+    DROP INDEX IF EXISTS idx_blocks_task_dependency_dependent_active;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_blocks_task_dependency_edge
+      ON blocks (workspace_id, (properties->>'blockerBlockId'), (properties->>'linkedBlockId'))
       WHERE deleted_at IS NULL
         AND type = 'block'
         AND properties->>'kind' = 'delegated_item'
         AND properties->>'blockerType' = 'task'
         AND COALESCE(properties->>'status', 'open') IN ('open', 'ready');
+  `],
+  ["idx_blocks_project", `
+    CREATE INDEX IF NOT EXISTS idx_blocks_project
+      ON blocks (workspace_id, (properties->>'projectId'), created_at)
+      WHERE deleted_at IS NULL;
+  `],
+  ["idx_blocks_facet_values", `
+    CREATE INDEX IF NOT EXISTS idx_blocks_facet_values
+      ON blocks USING GIN ((properties->'facetValues'))
+      WHERE deleted_at IS NULL AND type = 'block';
   `],
 
   // Serves db.getBlocksByDateIncludingDeleted, the tombstone-inclusive day load
