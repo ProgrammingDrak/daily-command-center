@@ -1008,6 +1008,7 @@ require("./routes/social-todo")(app, ctx);
 require("./routes/pet-home")(app, ctx);
 require("./routes/blocks")(app, ctx);
 require("./routes/sync")(app, ctx);
+require("./routes/projects")(app, ctx);
 require("./routes/dcc")(app, ctx);
 require("./routes/evaluation")(app, ctx);
 require("./routes/schedule-settings")(app, ctx);

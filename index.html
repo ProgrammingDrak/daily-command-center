@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="/public/css/tokens.css?v=tokens-1">
 <link rel="stylesheet" href="/public/css/core-ui.css?v=core-ui-1">
 <link rel="stylesheet" href="/public/css/dashboard.css">
+<link rel="stylesheet" href="/public/css/task-library.css?v=task-library-1">
 <link rel="stylesheet" href="/public/css/calendar-week.css?v=calendar-week-1">
 <link rel="stylesheet" href="/public/css/vault.css?v=vault-b6-1">
 <link rel="stylesheet" href="/public/css/ui-optimization.css?v=dcc-ui-1">
@@ -72,7 +73,7 @@
         </select>
         <select class="tab-dest">
           <option value="schedule">Schedule</option>
-          <option value="backlog">Backlog and Ideas</option>
+          <option value="backlog">Task Library (Solo)</option>
           <option value="urgent" selected>Urgent</option>
         </select>
         <button class="tab-add">+ Add</button>
@@ -177,7 +178,7 @@
       </select>
       <select class="tab-dest">
         <option value="schedule">Schedule</option>
-        <option value="backlog">Backlog and Ideas</option>
+        <option value="backlog">Task Library (Solo)</option>
         <option value="urgent" selected>Urgent</option>
       </select>
       <button class="tab-add">+ Add</button>
@@ -290,6 +291,19 @@
       </div>
       <div class="tm-accordion">
 
+        <details class="tm-section tm-task-library-section" id="tm-task-library-section" data-sidecar-label="Task Library" open>
+          <summary class="tm-section-header">
+            <span class="tm-chevron"></span>
+            Task Library
+            <span class="badge" id="task-library-count">0</span>
+          </summary>
+          <div class="tm-section-body tm-task-library-body" id="tm-task-library">
+            <div id="task-library-root" aria-live="polite">
+              <div class="task-library-loading">Loading your task library…</div>
+            </div>
+          </div>
+        </details>
+
         <details class="tm-section" id="tm-triage-section" open>
           <summary class="tm-section-header">
             <span class="tm-chevron"></span>
@@ -340,27 +354,11 @@
           </div>
         </details>
 
-        <details class="tm-section" id="tm-backlog-section">
-          <summary class="tm-section-header">
-            <span class="tm-chevron"></span>
-            Backlog and Ideas
-            <span class="badge" id="backlog-count">0</span>
-          </summary>
-          <div class="tm-section-body" id="tm-backlog">
-            <div class="board" id="backlog-board"></div>
-          </div>
-        </details>
-
-        <details class="tm-section" id="tm-side-projects-section">
-          <summary class="tm-section-header">
-            <span class="tm-chevron"></span>
-            Side Projects
-            <span class="badge" id="side-projects-section-count" style="display:none">0</span>
-          </summary>
-          <div class="tm-section-body" id="tm-side-projects">
-            <div id="triage-side-projects"></div>
-          </div>
-        </details>
+        <!-- Compatibility sinks for legacy renderers during the Task Library migration. -->
+        <div hidden aria-hidden="true">
+          <span id="backlog-count">0</span><div id="backlog-board"></div>
+          <span id="side-projects-section-count">0</span><div id="triage-side-projects"></div>
+        </div>
 
         <!-- Repeat responsibilities: due ones surface in the Itinerary triage
              strip; the full library lives in a dedicated manage modal. -->
@@ -481,7 +479,7 @@
       <select class="tab-dest" aria-label="Task type">
         <option value="urgent" selected>Urgent</option>
         <option value="schedule">Schedule</option>
-        <option value="backlog">Backlog and Ideas</option>
+        <option value="backlog">Task Library (Solo)</option>
       </select>
       <button class="tab-add">+ Add</button>
     </div>
@@ -2081,6 +2079,7 @@
 <script src="/public/js/catch-up.js"></script>
 <script src="/public/js/boot.js"></script>
 <script src="/public/js/block-store.js"></script>
+<script src="/public/js/task-library.js?v=task-library-1"></script>
 <script src="/public/js/day-review.js"></script>
 <script src="/public/js/delegated.js"></script>
 <script src="/public/js/pet-home.js"></script>

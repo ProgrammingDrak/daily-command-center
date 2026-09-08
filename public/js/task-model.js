@@ -131,6 +131,11 @@
       calendarAccountEmail: p.account_email || "",
       tags: Array.isArray(p.tags) ? p.tags : [],
       kind: p.kind || "",
+      projectId: p.projectId || null,
+      projectParentTaskId: p.projectParentTaskId || null,
+      projectRole: p.projectRole || "leaf",
+      projectOrder: Number.isFinite(Number(p.projectOrder)) ? Number(p.projectOrder) : null,
+      facetValues: p.facetValues && typeof p.facetValues === "object" ? p.facetValues : {},
       // Meeting affordances (join link / location / RSVP), and the block id
       // the meeting-automation panel keys off (itinerary-card.js).
       location: p.location || "",
@@ -303,7 +308,8 @@
   // proposed_action_item.citation.startOffset is not an itinerary start time; approval
   // creates a separate action row that can later become a real scheduled task.
   const NON_TASK_KINDS = [
-    "delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone", "slack_done_intent",
+    "delegated_item", "task_group", "project", "task_facet", "task_view",
+    "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone", "slack_done_intent",
     "meeting_prep", "meeting_transcript", "meeting_summary", "proposed_action_item",
     // This dateless definition belongs only to the Anytime surface.
     "anytime_item"
@@ -398,7 +404,9 @@
       if (p.done === true) continue;
       // Dependency-parked tasks live in Waiting until their prerequisite is
       // released. They remain dateless but must not duplicate into Backlog.
-      if (p.dependencyWaitingItemId || (p.triageBlock && p.kind !== "backlog")) continue;
+      if (p.dependencyWaitingItemId ||
+          (Array.isArray(p.dependencyWaitingItemIds) && p.dependencyWaitingItemIds.length) ||
+          (p.triageBlock && p.kind !== "backlog")) continue;
       // A titleless row cannot render on either surface; both consumers dropped it.
       if (!p.title) continue;
       if (!b.date) { out.push(b); continue; }
