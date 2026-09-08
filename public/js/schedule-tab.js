@@ -947,6 +947,7 @@ function buildListView(){
       grouped.groups.forEach(({block,nodes})=>{
         const current=isTodayView&&nowMin>=DCC.TimeBlocks.minutes(block.start,false)&&nowMin<DCC.TimeBlocks.minutes(block.end,true);
         wrap.appendChild(timeBlockDividerEl(block,current));
+        wrap.appendChild(timeBlockDropZoneEl(block));
         emitGroup(nodes);
       });
       if(grouped.outside.nodes.length){
@@ -1114,7 +1115,7 @@ function buildSchedule(){
       const hdr=document.createElement('button');hdr.type='button';hdr.className='time-block-divider variant-'+DCC.TimeBlocks.DIVIDER_VARIANT;hdr.dataset.blockId=blk.id||'';
       hdr.innerHTML='<strong>'+escHtml(blk.name)+'</strong><small>'+escHtml(DCC.TimeBlocks.rangeLabel(blk))+'</small>';
       hdr.addEventListener('click',()=>openBlockEditor(blk.id||null));
-      tl.appendChild(hdr);blockPtr++;
+      tl.appendChild(hdr);tl.appendChild(timeBlockDropZoneEl(blk));blockPtr++;
     }
   }
 

@@ -157,15 +157,15 @@ test("mouse drag straight down reorders, even at the row's dead centre", () => {
   assert.equal(moved.subtaskOf ?? null, null);
 });
 
-test("mouse drag RIGHT nests, further right nests as a subtask", () => {
+test("mouse drag LEFT nests, RIGHT nests as a subtask", () => {
   const nested = (() => {
     const tasks = twoTasks();
     const context = makeDragDay(tasks);
     startDrag(context, "moved", 300);
-    context.dDrop(mouseEvt(fakeRow(100), 8, 360), "target");   // +60px = past NEST_PX
+    context.dDrop(mouseEvt(fakeRow(100), 8, 240), "target");   // -60px selects Nest
     return tasks.find((t) => t.id === "moved");
   })();
-  assert.equal(nested.wrapId, "target", "60px right is a ride-along nest, from a row EDGE");
+  assert.equal(nested.wrapId, "target", "60px left is a ride-along nest, from a row EDGE");
   assert.equal(nested.subtaskOf ?? null, null);
 
   const tasks = twoTasks();
@@ -256,17 +256,13 @@ test("an Unscheduled row is never offered a nest it will not get", () => {
 });
 
 test("_modeForDx pins the exact reorder / nest / sub boundaries", () => {
-  // The thresholds ARE the feature. Asserted as behaviour, not as the names of two
-  // constants: a source regex still matches after DRAG_NEST_PX becomes 4, after the
-  // two comparisons are swapped so "sub" turns into dead code, or after the two
-  // values trade places. Every one of those ships a different gesture.
   const { _modeForDx } = makeDragDay(twoTasks());
-  assert.equal(_modeForDx(-200), "reorder", "dragging LEFT must never re-parent");
+  assert.equal(_modeForDx(-200), "nest");
+  assert.equal(_modeForDx(-48), "nest");
+  assert.equal(_modeForDx(-47), "reorder");
   assert.equal(_modeForDx(0), "reorder");
   assert.equal(_modeForDx(47), "reorder");
-  assert.equal(_modeForDx(48), "nest", "DRAG_NEST_PX is inclusive");
-  assert.equal(_modeForDx(111), "nest");
-  assert.equal(_modeForDx(112), "sub", "DRAG_SUB_PX is inclusive");
+  assert.equal(_modeForDx(48), "sub");
   assert.equal(_modeForDx(400), "sub");
 });
 
@@ -277,7 +273,7 @@ test("touch reads the thresholds from drag.js instead of keeping a second copy",
   // Declarations, not mentions: the comment above modeFor names drag.js's constants.
   assert.equal(/(?:var|let|const)\s+(?:NEST|SUB)_PX/.test(touchSource), false,
     "no threshold constants declared in touch-drag.js");
-  assert.match(touchSource, /DCC_DRAG\.modeForDx\(x - state\.startX\)/);
+  assert.match(touchSource, /DCC_DRAG\.modeForPoint\(x, y\)/);
 
   // And the facade really exposes it, with the same answers.
   const { window: win, _modeForDx } = makeDragDay(twoTasks());
@@ -300,10 +296,11 @@ test("mouse hover feedback agrees with the mouse drop, at every offset", () => {
   assert.ok(straight.classes.has("drag-over-top") || straight.classes.has("drag-over-bottom"));
 
   const right = fakeRow(100);
-  context.dOver(mouseEvt(right, 8, 360), "target");
-  assert.ok(right.classes.has("drag-over-nest"), "60px right nests from a row EDGE");
+  context.dOver(mouseEvt(right, 8, 240), "target");
+  assert.ok(right.classes.has("drag-over-nest"), "60px left nests from a row EDGE");
   assert.equal(right.classes.has("drag-over-nest-sub"), false);
 
+  startDrag(context, "moved", 300);
   const far = fakeRow(100);
   context.dOver(mouseEvt(far, 50, 440), "target");
   assert.ok(far.classes.has("drag-over-nest-sub"), "140px right is the subtask overlay");
@@ -314,9 +311,9 @@ test("mouse hover feedback agrees with the mouse drop, at every offset", () => {
 });
 
 test("the touch gesture picks its mode from the sideways offset, reorder by default", () => {
-  assert.match(touchSource, /function modeFor\(x\)/);
+  assert.match(touchSource, /function modeFor\(x, y\)/);
   // With the facade missing, reorder: a missing dependency must not re-parent.
-  assert.match(touchSource, /modeForDx !== "function"\) return "reorder";/);
+  assert.match(touchSource, /modeForPoint !== "function"\) return "reorder";/);
   // Both the hover feedback and the drop must carry the same mode.
   assert.match(touchSource, /DCC_DRAG\.over\(tgt, tgtId, e\.clientY, mode\)/);
   assert.match(touchSource, /DCC_DRAG\.drop\(tgt, tgt\.dataset\.id, e\.clientY, mode\)/);
@@ -329,4 +326,96 @@ test("finger reorder is gated on pointer type ONLY, not on viewport width", () =
   // silently, with no affordance missing and nothing in the console.
   assert.match(touchSource, /if \(e\.pointerType === "mouse"\) return;/);
   assert.equal(/isTouchMode/.test(touchSource), false, "no viewport-width gate on the lift");
+});
+
+for (const [dx, expected] of [[-48, 'nest'], [48, 'sub']]) {
+  test(`${expected} tolerates 32px vertical drift, resets at 33px, and requires a fresh swipe`, () => {
+    const c = makeDragDay(twoTasks());
+    const api = c.window.DCC_DRAG;
+    api.begin('moved', null, 300);
+    assert.equal(api.modeForPoint(300 + dx, 100), expected);
+    assert.equal(api.modeForPoint(300, 132), expected, 'horizontal wobble does not cancel the selection');
+    assert.equal(api.modeForPoint(300, 133), 'reorder');
+    assert.equal(api.modeForPoint(300, 133), 'reorder', 'hover and drop resolve identically');
+    assert.equal(api.modeForPoint(300 + Math.sign(dx) * 47, 133), 'reorder');
+    assert.equal(api.modeForPoint(300 + dx, 133), expected);
+    api.end();
+    api.begin('moved', null, 300);
+    assert.equal(api.modeForPoint(300, 100), 'reorder', 'a new drag forgets the old mode');
+  });
+}
+
+test('mouse hover and release keep Nest through small vertical movement', () => {
+  const tasks = twoTasks(), c = makeDragDay(tasks), row = fakeRow(100);
+  startDrag(c, 'moved', 300);
+  c.dOver(mouseEvt(row, 40, 250), 'target');
+  c.dOver(mouseEvt(row, 65, 290), 'target');
+  assert.ok(row.classes.has('drag-over-nest'));
+  c.dDrop(mouseEvt(row, 65, 290), 'target');
+  assert.equal(tasks.find(t => t.id === 'moved').wrapId, 'target');
+});
+
+function blockTarget(start = '19:00') {
+  const el = fakeRow(36);
+  el.dataset = { blockId: 'evening', blockStart: start };
+  el.classList.add('time-block-drop-zone');
+  return el;
+}
+
+function blockDay(tasks) {
+  const c = makeDragDay(tasks);
+  const rows = new Map(tasks.map(t => [t.id, { id: t.id, properties: { ...t } }]));
+  tasks.forEach(t => { t._blockId = t.id; });
+  c.window.blockStore.get = id => rows.get(id);
+  c.window.blockStore.updateBlock = (id, properties) => rows.set(id, { id, properties });
+  c._setUserSetStart = (ev, id, on) => { ev._userSetStart = on; };
+  const scheduleSource = fs.readFileSync(require.resolve('./public/js/schedule.js'), 'utf8');
+  vm.runInContext(sourceFunction(scheduleSource, 'pinStartTime'), c);
+  return { c, rows };
+}
+
+for (const origin of ['scheduled', 'unscheduled', 'subtask', 'ride-along']) {
+  test(`${origin} task drops at an empty block start with duration and persisted promotion`, () => {
+    const tasks = twoTasks();
+    const moved = tasks[1];
+    if (origin === 'unscheduled') { moved.untimed = true; moved.start = '00:00'; moved.end = '00:30'; }
+    if (origin === 'subtask') { moved.subtaskOf = 'target'; moved.start = moved.end = '00:00'; }
+    if (origin === 'ride-along') moved.wrapId = 'target';
+    const { c, rows } = blockDay(tasks), api = c.window.DCC_DRAG, el = blockTarget();
+    api.begin('moved', null, 300);
+    api.over(el, undefined, 18, 'nest');
+    assert.ok(el.classes.has('drag-over-block'), 'target needs no task id');
+    api.drop(el, undefined, 18, 'nest');
+    assert.equal(moved.start, '19:00');
+    assert.equal(moved.end, '19:30');
+    assert.equal(moved.untimed, false);
+    assert.equal(moved.wrapId ?? null, null);
+    assert.equal(moved.subtaskOf ?? null, null);
+    assert.equal(moved._pinnedStart, '19:00');
+    assert.equal(rows.get('moved').properties.start, '19:00');
+    assert.equal(rows.get('moved').properties.subtaskOf, null);
+    assert.equal(rows.get('moved').properties.duration, 30);
+    assert.equal(api.activeId(), null);
+  });
+}
+
+test('moving a parent to a block carries children by the same time delta', () => {
+  const tasks = twoTasks();
+  tasks.push({ id: 'child', type: 'task', wrapId: 'moved', start: '10:05', end: '10:15' });
+  const { c, rows } = blockDay(tasks);
+  c.window.DCC_DRAG.begin('moved', null, 300);
+  c.window.DCC_DRAG.drop(blockTarget(), undefined, 18, 'reorder');
+  assert.equal(tasks.find(t => t.id === 'child').start, '19:05');
+  assert.equal(tasks.find(t => t.id === 'child').end, '19:15');
+  assert.equal(rows.get('child').properties.start, '19:05');
+});
+
+test('locked tasks and invalid block times never get scheduled', () => {
+  for (const locked of [false, true]) {
+    const tasks = twoTasks(), { c } = blockDay(tasks);
+    tasks[1]._locked = locked;
+    c.window.DCC_DRAG.begin('moved', null, 300);
+    c.window.DCC_DRAG.drop(blockTarget(locked ? '19:00' : '24:00'), undefined, 18, 'reorder');
+    assert.equal(tasks[1].start, '10:00');
+  }
 });

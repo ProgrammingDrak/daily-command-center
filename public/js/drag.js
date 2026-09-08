@@ -4,15 +4,69 @@ let dragId=null;
 // point (see _dragMode), so a mouse drag and a touch drag answer the same
 // question the same way. Null until dStart records it.
 let dragStartX=null;
+let dragGesture=null;
+let nativeDragGhost=null;
+const DRAG_SIDE_PX=48;
+const DRAG_RESET_Y_PX=32;
+function _beginDragGesture(x){
+  dragGesture=typeof x==="number"?{originX:x,mode:"reorder",anchorY:null}:null;
+}
+function _resolveDragGesture(x,y){
+  if(!dragGesture||typeof x!=="number")return "reorder";
+  if(dragGesture.mode!=="reorder"){
+    if(Math.abs(y-dragGesture.anchorY)>DRAG_RESET_Y_PX){
+      _beginDragGesture(x);
+      return "reorder";
+    }
+    return dragGesture.mode;
+  }
+  dragGesture.mode=_modeForDx(x-dragGesture.originX);
+  if(dragGesture.mode!=="reorder")dragGesture.anchorY=y;
+  return dragGesture.mode;
+}
+function _nativeDragMove(e){
+  if(!nativeDragGhost)return;
+  const mode=_dragMode(e);
+  nativeDragGhost.el.dataset.dragMode=mode;
+  nativeDragGhost.el.style.transform="translate("+(e.clientX-nativeDragGhost.x)+"px,"+(e.clientY-nativeDragGhost.y)+"px)";
+}
+function _startNativeDragGhost(e,row){
+  if(!row||!e.dataTransfer.setDragImage)return;
+  const r=row.getBoundingClientRect(),ghost=row.cloneNode(true);
+  ghost.removeAttribute("id");
+  ghost.setAttribute("aria-hidden","true");
+  ghost.querySelectorAll("[id]").forEach(el=>el.removeAttribute("id"));
+  ghost.classList.remove("dragging");
+  ghost.classList.add("it-drag-ghost");
+  Object.assign(ghost.style,{left:r.left+"px",top:r.top+"px",width:r.width+"px",marginLeft:"0"});
+  ghost.dataset.dragMode="reorder";
+  // Hide the browser's immutable drag image; our clone can change opacity live.
+  const blank=document.createElement("canvas");blank.width=1;blank.height=1;
+  Object.assign(blank.style,{position:"fixed",left:"-10px",top:"-10px",pointerEvents:"none"});
+  document.body.appendChild(blank);
+  e.dataTransfer.setDragImage(blank,0,0);
+  document.body.appendChild(ghost);
+  nativeDragGhost={el:ghost,blank,x:e.clientX,y:e.clientY};
+  document.addEventListener("dragover",_nativeDragMove,true);
+}
 function dStart(e,id){
   dragId=id;
   dragStartX=(typeof e.clientX==="number")?e.clientX:null;
+  _beginDragGesture(dragStartX);
   e.dataTransfer.effectAllowed="move";
   e.dataTransfer.setData("text/plain",id); // required for Firefox
   const el=e.target.closest(".tl-item");if(el)el.classList.add("dragging");
   const listEl=e.target.closest(".it-list-item");if(listEl)listEl.classList.add("dragging");
+  _startNativeDragGhost(e,listEl||el);
 }
-function dEnd(){dragId=null;dragStartX=null;window._dragNowPill=false;document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("dragging","drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub","pin-drop-target"))}
+function dEnd(){
+  dragId=null;dragStartX=null;dragGesture=null;window._dragNowPill=false;
+  if(nativeDragGhost){
+    nativeDragGhost.el.remove();nativeDragGhost.blank.remove();nativeDragGhost=null;
+    document.removeEventListener("dragover",_nativeDragMove,true);
+  }
+  document.querySelectorAll(".tl-item,.it-list-item,.time-block-drop-zone").forEach(el=>el.classList.remove("dragging","drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub","pin-drop-target","drag-over-block"));
+}
 function dOver(e,id){
   e.preventDefault();
   // Dragging the live now-pill: highlight the hovered card as the pin target
@@ -32,8 +86,8 @@ function dOver(e,id){
   // reorder-within-Unscheduled or schedule-into-today, so show only edge feedback.
   const draggingCarryover=(typeof _unfRecById==="function")&&_unfRecById(dragId);
   // Vertical position picks the SLOT, a sideways drag picks the MODE (_dragMode):
-  // straight up/down reorders, drag right nests as a ride-along (own time/points),
-  // further right or Shift nests as a subtask (shares the parent's pie).
+  // straight up/down reorders, drag left nests as a ride-along (own time/points),
+  // right or Shift nests as a subtask (shares the parent's pie).
   // Meetings are valid parents too: a ride-along nest represents concurrent work
   // during the meeting, while a subtask nest is pie work relevant to the meeting.
   // Only the existing carryover and cycle guards block nesting.
@@ -60,11 +114,9 @@ function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-b
 // edges -- the same unhittable geometry a phone row had before touch traded the
 // band for this offset (#345). Reorder is the DEFAULT, so a straight up-and-down
 // drag can never silently re-parent a task.
-const DRAG_NEST_PX=48;   // rightward drag that switches reorder -> nest (ride-along)
-const DRAG_SUB_PX=112;   // further right -> nest as a subtask (shares the parent's pie)
 function _modeForDx(dx){
-  if(dx>=DRAG_SUB_PX)return "sub";
-  if(dx>=DRAG_NEST_PX)return "nest";
+  if(dx>=DRAG_SIDE_PX)return "sub";
+  if(dx<=-DRAG_SIDE_PX)return "nest";
   return "reorder";
 }
 // THE one mode answer, so the hover feedback (dOver) and the actual drop (dDrop)
@@ -78,9 +130,47 @@ function _dragMode(e){
   if(e.dccMode)return e.dccMode;
   if(e.shiftKey)return "sub";
   if(typeof dragStartX!=="number"||typeof e.clientX!=="number")return "reorder";
-  return _modeForDx(e.clientX-dragStartX);
+  return _resolveDragGesture(e.clientX,e.clientY);
 }
 function _nestZone(e){return _dragMode(e)!=="reorder";}
+
+// A block is a time target, never a synthetic parent task.
+function timeBlockDropZoneEl(block){
+  const el=document.createElement("div");
+  el.className="time-block-drop-zone";
+  el.dataset.blockId=block.id;
+  el.dataset.blockStart=block.start;
+  el.setAttribute("aria-label","Schedule at "+block.start+" in "+block.name);
+  el.addEventListener("dragover",dBlockOver);
+  el.addEventListener("dragleave",()=>el.classList.remove("drag-over-block"));
+  el.addEventListener("drop",dBlockDrop);
+  return el;
+}
+function _blockDragTask(){
+  if(window._dragNowPill||window._dragFromTaskGroup||window._dragFromBacklog)return null;
+  const moved=scheduled.find(ev=>ev.id===dragId);
+  return moved&&!moved._locked&&!isDone(moved)?moved:null;
+}
+function dBlockOver(e){
+  if(!_blockDragTask())return;
+  e.preventDefault();e.stopPropagation();
+  if(e.dataTransfer)e.dataTransfer.dropEffect="move";
+  e.currentTarget.classList.add("drag-over-block");
+}
+function dBlockDrop(e){
+  e.preventDefault();e.stopPropagation();
+  const moved=_blockDragTask(),start=e.currentTarget.dataset.blockStart;
+  if(!moved||!/^([01]\d|2[0-3]):[0-5]\d$/.test(start||"")){dEnd();return;}
+  const old=JSON.stringify(scheduled),oldStart=pt(moved.start);
+  if(parentIdOf(moved))_promoteMutate(moved);
+  const duration=dur(moved)||30;
+  moved.untimed=false;
+  moved.end=fmt(pt(moved.start)+duration);
+  pinStartTime(moved.id,start);
+  _shiftWrapChildren(moved,oldStart);
+  _persistPromoted(moved);
+  _finishDrag(old);
+}
 
 // ── Scheduling helpers ──
 
@@ -626,7 +716,7 @@ function _finishDrag(old){
   if(typeof saveTaskOrder==="function")saveTaskOrder();
   if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
   if(typeof log==="function")log("reorder",dragId,old);
-  dragId=null;
+  dEnd();
   document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub"));
   render();
 }
@@ -811,13 +901,14 @@ function _dccSynthEvt(rowEl, clientY, mode){
            preventDefault(){}, stopPropagation(){} };
 }
 window.DCC_DRAG = {
-  begin(id, rowEl){ dragId = id; if(rowEl) rowEl.classList.add("dragging"); },
-  over(rowEl, id, y, mode){ if(rowEl) dOver(_dccSynthEvt(rowEl, y, mode), id); },
-  leave(rowEl){ if(rowEl) dLeave(_dccSynthEvt(rowEl, 0, "reorder")); },
-  drop(rowEl, tid, y, mode){ if(rowEl) dDrop(_dccSynthEvt(rowEl, y, mode), tid); },
+  begin(id, rowEl, x){ dragId = id; _beginDragGesture(x); if(rowEl) rowEl.classList.add("dragging"); },
+  over(rowEl, id, y, mode){ if(rowEl){const e=_dccSynthEvt(rowEl,y,mode);if(rowEl.classList.contains("time-block-drop-zone"))dBlockOver(e);else dOver(e,id);} },
+  leave(rowEl){ if(rowEl){rowEl.classList.remove("drag-over-block");dLeave(_dccSynthEvt(rowEl, 0, "reorder"));} },
+  drop(rowEl, tid, y, mode){ if(rowEl){const e=_dccSynthEvt(rowEl,y,mode);if(rowEl.classList.contains("time-block-drop-zone"))dBlockDrop(e);else dDrop(e,tid);} },
   end(){ dEnd(); },
   activeId(){ return dragId; },
   // The one threshold set. touch-drag.js calls this instead of keeping a second
-  // copy of 48/112, so retuning the gesture is a one-file edit.
-  modeForDx(dx){ return _modeForDx(dx); }
+  // copy of gesture thresholds, so retuning stays a one-file edit.
+  modeForDx(dx){ return _modeForDx(dx); },
+  modeForPoint(x,y){ return _resolveDragGesture(x,y); }
 };

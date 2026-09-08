@@ -8,8 +8,8 @@
 // native HTML5 drag path and the two systems never collide.
 //
 // Gesture: press-and-hold ~300ms to lift a row → drag up/down to reorder, drag
-// RIGHT to nest. Sideways offset picks the mode, vertical position picks the
-// slot. The thresholds are NOT duplicated here: DCC_DRAG.modeForDx (drag.js) is
+// LEFT to nest, RIGHT for a subtask. Sideways offset picks the mode, vertical position picks the
+// slot. The thresholds are NOT duplicated here: DCC_DRAG.modeForPoint (drag.js) is
 // the one answer, and a mouse drag now derives its mode from the same call, so
 // web and mobile share one gesture. A plain tap falls through to the row's
 // open-space click (open details); a vertical swipe before the hold scrolls the
@@ -98,6 +98,9 @@
     // elementFromPoint sees the row beneath it, not the ghost.
     var ghost = state.row.cloneNode(true);
     ghost.classList.add("it-drag-ghost");
+    ghost.removeAttribute("id");
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.querySelectorAll("[id]").forEach(function(el){ el.removeAttribute("id"); });
     ghost.style.left = r.left + "px";
     ghost.style.top = r.top + "px";
     ghost.style.width = r.width + "px";
@@ -106,16 +109,15 @@
     state.ghost = ghost;
 
     listView.classList.add("it-drag-lifting");
-    if (window.DCC_DRAG) DCC_DRAG.begin(state.id, state.row);  // dims the source row
+    if (window.DCC_DRAG) DCC_DRAG.begin(state.id, state.row, state.startX);
     startAutoScroll();
   }
 
-  // Sideways offset from the lift point picks the drop mode. The thresholds live
-  // in drag.js (DRAG_NEST_PX / DRAG_SUB_PX) so the mouse path and this one cannot
-  // disagree. With the facade missing, reorder: never silently re-parent.
-  function modeFor(x) {
-    if (!window.DCC_DRAG || typeof DCC_DRAG.modeForDx !== "function") return "reorder";
-    return DCC_DRAG.modeForDx(x - state.startX);
+  // Shared gesture state holds the mode through small vertical movements.
+  // With the facade missing, reorder: never silently re-parent.
+  function modeFor(x, y) {
+    if (!window.DCC_DRAG || typeof DCC_DRAG.modeForPoint !== "function") return "reorder";
+    return DCC_DRAG.modeForPoint(x, y);
   }
 
   function onMove(e) {
@@ -135,17 +137,19 @@
     state.ghost.style.transform =
       "translate(" + (e.clientX - state.startX) + "px," + (e.clientY - state.startY) + "px)";
 
-    var mode = modeFor(e.clientX);
+    var mode = modeFor(e.clientX, e.clientY);
+    state.ghost.dataset.dragMode = mode;
     var tgt = targetUnder(e.clientX, e.clientY);
     var tgtId = tgt ? tgt.dataset.id : null;
 
-    if (tgtId !== state.prevTargetId || mode !== state.prevMode) {
-      if (state.prevTargetId && state.prevTargetEl && window.DCC_DRAG) DCC_DRAG.leave(state.prevTargetEl);
-      if (tgt && tgtId !== state.id && window.DCC_DRAG) DCC_DRAG.over(tgt, tgtId, e.clientY, mode);
+    if (tgt !== state.prevTargetEl || mode !== state.prevMode) {
+      if (state.prevTargetEl && window.DCC_DRAG) DCC_DRAG.leave(state.prevTargetEl);
       state.prevTargetId = tgtId;
       state.prevTargetEl = tgt;
       state.prevMode = mode;
     }
+    // Refresh within a row too, so crossing its midpoint updates the blue outline.
+    if (tgt && tgtId !== state.id && window.DCC_DRAG) DCC_DRAG.over(tgt, tgtId, e.clientY, mode);
   }
 
   function onUp(e) {
@@ -153,7 +157,7 @@
     if (!state.lifted) { reset(); return; }    // tap — let the click open details
 
     e.preventDefault();
-    var mode = modeFor(e.clientX);
+    var mode = modeFor(e.clientX, e.clientY);
     var tgt = targetUnder(e.clientX, e.clientY);
     // drop() runs the mutation + recalcTimes + render() through the shared resolver.
     if (tgt && tgt.dataset.id !== state.id && window.DCC_DRAG) {
@@ -175,7 +179,7 @@
   function targetUnder(x, y) {
     var el = document.elementFromPoint(x, y);
     if (!el) return null;
-    var row = el.closest(".it-list-item");
+    var row = el.closest(".it-list-item,.time-block-drop-zone");
     if (!row || !listView.contains(row)) return null;
     if (row.classList.contains("done") || row.classList.contains("resched-away-row")) return null;
     return row;

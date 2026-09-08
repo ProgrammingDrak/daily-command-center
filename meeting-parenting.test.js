@@ -95,9 +95,9 @@ test("a sideways drag nests a task inside a meeting as concurrent work", () => {
   ];
   const context = makeDragDay(tasks);
   startDrag(context, "task");
-  // +60px right of the lift point: past DRAG_NEST_PX, so this is a ride-along
+  // 60px left of the lift point selects a ride-along
   // nest. A straight vertical drag would reorder instead.
-  context.dDrop(dropEvent({ clientX: LIFT_X + 60 }), "meeting");
+  context.dDrop(dropEvent({ clientX: LIFT_X - 60 }), "meeting");
   const nested = tasks.find((task) => task.id === "task");
   assert.equal(nested.wrapId, "meeting");
   assert.equal(nested.subtaskOf ?? null, null);
