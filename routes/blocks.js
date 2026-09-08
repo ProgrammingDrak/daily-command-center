@@ -381,6 +381,7 @@ module.exports = function mount(app, ctx) {
     const active = rows
       .map((row) => ({ row, suppression: triageSuppressions.suppressionFromBlock(row) }))
       .filter(({ suppression }) => suppression && suppression.active && suppression.triage_id === triageId);
+    if (reason === "release" && props.triageBlock) reason = "deleted";
     if (reason === "release") {
       let released = 0;
       for (const { row, suppression } of active) {
@@ -394,8 +395,8 @@ module.exports = function mount(app, ctx) {
       return released;
     }
     const deleted = active.find(({ suppression }) => suppression.reason === "deleted");
-    if (deleted) return deleted.suppression;
-    const nextReason = reason === "scheduled" ? "scheduled" : "done";
+    if (deleted && !props.triageBlock) return deleted.suppression;
+    const nextReason = reason === "scheduled" ? "scheduled" : reason === "deleted" ? "deleted" : "done";
     const at = new Date(Number.isFinite(atMs) ? atMs : Date.now()).toISOString();
     if (active.length) {
       let last = null;
@@ -701,6 +702,23 @@ module.exports = function mount(app, ctx) {
       if (createdIds.length) broadcast("blocks-changed", { action: "create", blockIds: createdIds, clientId: body._clientId }, workspaceId);
     }
     return results.length === 1 ? results[0] : results;
+  }));
+
+  const triageTaskStore = require("../triage-task-store")({ blockDB, respStore, linkTriage: transitionLinkedTriage });
+  app.post("/api/triage/tasks/materialize", route(async (req, res) => {
+    if (req.dccServiceAuth) return res.status(403).json({ error: "Owner session required" });
+    const body = req.body || {};
+    if (!Array.isArray(body.items) || !Array.isArray(body.responsibilityIds) ||
+        body.items.length + body.responsibilityIds.length > 250) {
+      return res.status(400).json({ error: "Expected at most 250 Triage sources" });
+    }
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const blocks = await triageTaskStore.materialize({
+      items: body.items, responsibilityIds: body.responsibilityIds,
+      userId, workspaceId, tz: body.tz || ctx.APP_TIME_ZONE,
+    });
+    if (blocks.length) broadcast("blocks-changed", { action: "triage-materialize", blockIds: blocks.map(b => b.id) }, workspaceId);
+    return { blocks };
   }));
 
   // Completion is a state transition, not a full-document block edit. This route is

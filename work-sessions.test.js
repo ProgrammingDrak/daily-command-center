@@ -303,3 +303,17 @@ test("the same external action id cannot collide across tasks or workspaces", as
   assert.equal(sessions(two).length, 1);
   assert.notEqual(sessions(one)[0].id, sessions(two)[0].id);
 });
+
+
+test("Triage tasks use the same Start and Pause lifecycle while remaining unscheduled", async () => {
+  const {timing, task, sessions} = harness();
+  const row = task({triageBlock:true, duration:60, start:null, end:null}, {date:null});
+  const started=Date.parse("2026-09-08T14:00:00Z");
+  await timing.startWork({block:row,atMs:started,actionId:"triage-start"});
+  assert.equal(row.properties.startedAt,"2026-09-08T14:00:00.000Z");
+  await timing.pauseWork({block:row,atMs:started+10*60_000,actionId:"triage-pause"});
+  assert.equal(row.properties.actualMinutes,10);
+  assert.equal(sessions(row).length,1);
+  assert.equal(row.date,null);
+  assert.equal(row.properties.triageBlock,true);
+});

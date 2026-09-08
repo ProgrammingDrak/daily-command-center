@@ -64,7 +64,7 @@ test("nothing in public/js reads the retired `ev.nested` field any more", () => 
 // promoting it to a numbered top-level row. Pool it on `day.timed` and the layer still
 // passes every unit test while the surface reverts to pre-C6a behaviour.
 test("★ the work list pools its tree on `visible`, not on the section it is rendering", () => {
-  const rx = /selectTree\(day\.timed,\{pool:visible\}\)/;
+  const rx = /selectTree\(day\.timed\.filter\(ev=>!triageIds\.has\(ev\.id\)\),\{pool:visible\}\)/;
   assert.match(schedTabCode, rx,
     "the work list must resolve roots against the whole visible day, or a child whose parent " +
     "is Unscheduled/folded gets promoted to a top-level row again");
@@ -75,7 +75,7 @@ test("★ the work list pools its tree on `visible`, not on the section it is re
 });
 
 test("★ the Unscheduled section renders a TREE, not a flat list of roots", () => {
-  const rx = /selectTree\(rootOrder\.concat\(day\.unscheduled\.filter\(ev=>!rootIds\.has\(ev\.id\)\)\),\{pool:visible\}\)[\s\S]{0,400}?wrap\.appendChild\(emitNode\(node,_isSubRow\(node\)\?0:uRank\+\+,isDone\(node\.ev\)\?"done":"open"\)\);/;
+  const rx = /selectTree\(rootOrder\.concat\(day\.unscheduled\.filter\(ev=>!rootIds\.has\(ev\.id\)&&!triageIds\.has\(ev\.id\)\)\),\{pool:visible\}\)[\s\S]{0,400}?wrap\.appendChild\(emitNode\(node,_isSubRow\(node\)\?0:uRank\+\+,isDone\(node\.ev\)\?"done":"open"\)\);/;
   assert.match(schedTabCode, rx,
     "roots + their closure must go through selectTree and emitNode WITH the real done/open " +
     "mode, or a step of an untimed parent renders as a standalone numbered row in the Work " +
@@ -85,10 +85,10 @@ test("★ the Unscheduled section renders a TREE, not a flat list of roots", () 
   // this bug into review, must both fail this assertion.
   assert.equal(rx.test('unsRows.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));'), false);
   assert.equal(rx.test('rootOrder.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));'), false);
-  assert.equal(rx.test('DCC.TaskModel.selectTree(rootOrder.concat(day.unscheduled.filter(ev=>!rootIds.has(ev.id))),{pool:visible}).forEach(node=>{wrap.appendChild(emitNode(node,_isSubRow(node)?0:uRank++,"open"));});'), false,
+  assert.equal(rx.test('DCC.TaskModel.selectTree(rootOrder.concat(day.unscheduled.filter(ev=>!rootIds.has(ev.id)&&!triageIds.has(ev.id))),{pool:visible}).forEach(node=>{wrap.appendChild(emitNode(node,_isSubRow(node)?0:uRank++,"open"));});'), false,
     "the hardcoded mode must be rejected");
   // And the badge counts ROOTS, so it matches what you can point at.
-  assert.match(schedTabCode, /section\("Unscheduled",day\.unscheduledRoots\.length,"unscheduled","uns-group"\)/);
+  assert.match(schedTabCode, /section\("Unscheduled",unscheduledRoots\.length,"unscheduled","uns-group"\)/);
 });
 
 test("★ buildSchedule's compact Done section lists done + nestedDone, and excludes only the fold", () => {

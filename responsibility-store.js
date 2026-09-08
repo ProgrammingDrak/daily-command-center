@@ -322,6 +322,7 @@ function parseOffersAmpAlert(text) {
 // Factory: the caller injects blockDB, the two server-scope helpers
 // (getScheduleBlocks, getTodayStr), and the shared assertBlockOwnership guard.
 function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership, getDayStartMinutes = async () => null, appTimeZone = "America/New_York" }) {
+  const materializeGuard = require("./lib/materialize-guard")({ blockDB });
   // Read the day_root row for a date WITHOUT creating one. ensureDayRoot()
   // would insert a row as a side effect of a read, which a GET must never do,
   // so the id derivation (and its ws-1 legacy fallback) is mirrored here as a
@@ -847,6 +848,51 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
       : work(null);
   }
 
+  // Readiness tasks use the same stored task tree as scheduled occurrences.
+  // Only placement differs: no date or clock until the user schedules the task.
+  async function materializeTriageResponsibility({ id, userId, workspaceId, tz }) {
+    return withSeriesLock(id, workspaceId, async client => {
+      const item = await getResponsibilityBlock(id, workspaceId, { tz, client });
+      if (!item) return [];
+      const p = item.properties || {};
+      if (p.kind !== "responsibility_item" || p.repeatType === "scheduled") return [];
+      if (p.openInstanceBlockId || p.openInstanceLocalId) {
+        const existing = await findInstanceBlock({ instanceId: p.openInstanceBlockId,
+          localId: p.openInstanceLocalId, instanceDate: p.openInstanceDate, workspaceId });
+        return existing ? [existing] : [];
+      }
+      if (p.suppressed || (p.status || "active") !== "active" ||
+          !(Number(p.importanceScore) >= recurrence.DUE_THRESHOLD || p.preferredDue)) return [];
+      const key = `triage-responsibility:${id}:${getTodayStr()}`;
+      const existing = await materializeGuard.findForDedupe(workspaceId, { idempotencyKey: key });
+      if (existing) return [existing];
+      const rows = scheduledRowsForOccurrence(item, { date: null, start: "00:00", occurrenceKey: key });
+      const root = rows[0];
+      rows.forEach((row, index) => {
+        const props = row.properties;
+        for (const field of Object.keys(props)) if (field.startsWith("repeat")) delete props[field];
+        delete props.retiredContainerHidden;
+        delete props.occurrenceAnchor;
+        Object.assign(props, { kind: "responsibility_task", triageBlock: true,
+          publicVisibility: "private", start: null, end: null,
+          idempotency_key: index ? `${key}:child:${index}` : key,
+          tags: ["responsibility", p.domain, p.area, p.capacityBucket].filter(Boolean) });
+        if (index) { delete props.responsibilityId; delete props.responsibilityTitle; }
+        props.meta = index ? "Responsibility subtask" : "Responsibility";
+        if (index && !row.parent_id) {
+          row.parent_id = root.id;
+          props.subtaskOf = root.properties.local_id;
+          props.rel = "subtask";
+        }
+      });
+      root.properties.duration = Math.max(5, Number(p.estimatedMinutes) || root.properties.duration || 30);
+      const blocks = await blockDB.createItineraryTasks(rows, { userId, workspaceId }, client);
+      await applyLifecycle(id, workspaceId, { existing: item, tz, client }, props =>
+        recurrence.applySchedule(props, { blockId: blocks[0].id, localId: blocks[0].properties.local_id, date: null }));
+      return blocks;
+    });
+  }
+
   function activeScheduledDefinition(block) {
     const props = (block && block.properties) || {};
     return !!block && !block.deleted_at && props.kind === "responsibility_item" && props.repeatType === "scheduled"
@@ -1343,6 +1389,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     upsertResponsibility,
     loadDaySlottingContext,
     scheduleResponsibilityTask,
+    materializeTriageResponsibility,
     materializeScheduledRepeatsForDate,
     catchUpScheduledRepeats,
     changeScheduledSeries,

@@ -397,7 +397,7 @@ test("the Unscheduled badge no longer sums two different things", () => {
   assert.ok(sumRx.test('section("Unscheduled",_CO_.rootsOf(unfPool).length+day.unscheduledRoots.length,"unscheduled","uns-group");'),
     "...and on a summed badge whose first term is a call, which [^)]* could not reach");
   // C6a: the section renders a SUBTREE now, so the badge counts ROOTS explicitly.
-  assert.ok(/section\("Unscheduled",day\.unscheduledRoots\.length,"unscheduled","uns-group"\)/.test(schedTabSource));
+  assert.ok(/section\("Unscheduled",unscheduledRoots\.length,"unscheduled","uns-group"\)/.test(schedTabSource));
   assert.equal(/section\("Unfinished"/.test(schedTabSource), false,
     "unfinished rows belong exclusively to the Loose Ends pill");
 });
