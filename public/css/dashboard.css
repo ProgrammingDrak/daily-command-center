@@ -4417,15 +4417,15 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .wrap-bw{display:inline-flex;align-items:center;gap:3px;font-size:9px;color:var(--text-muted);border:1px dashed var(--border);border-radius:6px;padding:1px 6px;white-space:nowrap}
 .it-list-item.wrap-parent .ttl,.tl-item.wrap-parent .ttl{font-weight:700}
 /* Drag feedback: "wrap inside this task" = opaque purple overlay on the target. */
-.it-list-item.drag-over-nest,.tl-item.drag-over-nest{position:relative}
+.it-list-item.drag-over-nest,.tl-item.drag-over-nest{position:relative;z-index:10000}
 .it-list-item.drag-over-nest::after,.tl-item.drag-over-nest::after{
-  content:"\2935  wrap inside";display:flex;align-items:center;justify-content:center;gap:6px;
+  content:"\2190  Nest";display:flex;align-items:center;justify-content:center;gap:6px;
   position:absolute;inset:0;z-index:7;pointer-events:none;border-radius:8px;
   font-size:11px;font-weight:700;letter-spacing:.02em;color:#fff;
   background:rgba(147,51,234,0.66);border:2px solid #9333ea}
 /* Shift held over the nest zone = nest as a SUBTASK (umbrella) instead of a ride-along. */
 .it-list-item.drag-over-nest-sub::after,.tl-item.drag-over-nest-sub::after{
-  content:"\2935  as subtask";background:rgba(13,148,136,0.72);border:2px solid #14b8a6}
+  content:"Subtask  \2192";background:rgba(13,148,136,0.72);border:2px solid #14b8a6}
 /* Drag feedback: reorder to a new slot = a blue "ghost" of the task at the drop point. */
 .it-list-item.drag-over-top,.tl-item.drag-over-top,
 .it-list-item.drag-over-bottom,.tl-item.drag-over-bottom{position:relative;border:none}
@@ -4437,7 +4437,11 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .it-list-item.drag-over-bottom::after,.tl-item.drag-over-bottom::after{bottom:0;transform:translateY(calc(100% + 3px))}
 /* ── Touch drag-to-reorder (long-press lift; see touch-drag.js). The floating
    clone MUST stay pointer-events:none so elementFromPoint sees the row beneath. ── */
-.it-drag-ghost{position:fixed;z-index:9999;margin:0;pointer-events:none;opacity:.96;border-radius:10px;background:var(--card);border:1px solid var(--accent);box-shadow:0 10px 28px rgba(0,0,0,.45);transform:scale(1.02);will-change:transform}
+:root{--task-drag-opacity:.65;--task-drag-nest-opacity:.35}
+.it-drag-ghost{position:fixed;z-index:9999;margin:0;pointer-events:none;opacity:var(--task-drag-opacity);transition:none;border-radius:10px;background:var(--card);border:1px solid var(--accent);box-shadow:0 10px 28px rgba(0,0,0,.45);will-change:transform}
+.it-drag-ghost[data-drag-mode="nest"],.it-drag-ghost[data-drag-mode="sub"]{opacity:var(--task-drag-nest-opacity)}
+.time-block-drop-zone{height:36px;min-height:36px;width:100%;box-sizing:border-box;border:1.5px dashed transparent;border-radius:8px}
+.time-block-drop-zone.drag-over-block{background:rgba(59,130,246,.20);border-color:#3b82f6}
 .it-list-view.it-drag-lifting{touch-action:none;-webkit-user-select:none;user-select:none}
 /* "Now" + priority chips added to the List row meta (info parity with the card). */
 .it-list-now{display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.3px;padding:1px 6px;border-radius:6px;color:var(--accent-light,#60a5fa);border:1px solid var(--accent,#3b82f6);background:rgba(59,130,246,.14);white-space:nowrap;line-height:1.4}
