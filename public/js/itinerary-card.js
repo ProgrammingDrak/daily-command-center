@@ -214,7 +214,7 @@
     var timeHtml;
     var unscheduled=!ev.start||ev.untimed;
     if(subTimeless||unscheduled){
-      timeHtml='<div class="tl-time'+(hasPrep?' has-prep':'')+'">'+(subTimeless?'':'<span class="it-list-untimed">Unscheduled</span>')+'</div>';
+      timeHtml='<div class="tl-time'+(hasPrep?' has-prep':'')+'">'+(subTimeless?'':'<span class="it-list-untimed">Unplanned</span>')+'</div>';
     }else{
       timeHtml='<div class="tl-time'+(hasPrep?' has-prep':'')+'">'+f12(ev.start).replace(" ","<br>")+'<span class="et">'+f12(ev.end)+'</span>';
       if(hasPrep){timeHtml+='<span class="prep-line"></span>';}
@@ -260,7 +260,7 @@
 
     // Inline clock (lock indicator + start/end). Empty for a timeless subtask.
     var tinlineHtml=(subTimeless||unscheduled)
-      ? '<span class="tinline">'+(unscheduled?'<span class="it-list-untimed">Unscheduled</span>':'')+'</span>'
+      ? '<span class="tinline">'+(unscheduled?'<span class="it-list-untimed">Unplanned</span>':'')+'</span>'
       : '<span class="tinline">'+(ev._locked||isMeeting(ev)?'<span class="lock-ind" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' · Now':'')+'</span>';
     // Chip slot: shell rollup, else own pie bar, else (subtask) its pie slice, else the points chip.
     var chipSlotHtml=shellChip?shellChip:(pplan?pieBarHtml:(sub?subSliceHtml:pointsChip(ev)));

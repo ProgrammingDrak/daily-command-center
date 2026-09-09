@@ -110,3 +110,13 @@ test("getUndatedTaskBlocks is gone from the db surface", async () => {
   assert.equal(typeof db.getRescheduleSubtreePool, "function");
   assert.equal(typeof db.getRescheduleTombstone, "function");
 });
+
+test('shared grouping explicitly opts into global Triage roots without dropping tenant or task boundaries',async()=>{
+  const pool=recorder(),db=loadDbWithMock(pool);
+  await db.getRescheduleSubtreePool('2026-09-09','ws-1',{includeTriageRoots:true});
+  const {sql,params}=pool.log[0];
+  assert.match(sql,/b\.properties->>'triageBlock' = 'true'/);
+  assert.match(sql,/b\.workspace_id IS NOT DISTINCT FROM \$2/);
+  assert.match(sql,/b\.deleted_at IS NULL/);
+  assert.deepEqual(params,['2026-09-09','ws-1']);
+});

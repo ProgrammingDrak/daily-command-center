@@ -1,3 +1,4 @@
+const { collectSubtreeBlockIds } = require("../lib/reschedule");
 // Extracted from server.js — mounted via routes/index pattern: module.exports(app, ctx).
 // ctx carries shared server-scope helpers/stores; see server.js where ctx is built.
 
@@ -220,7 +221,8 @@ function publicTaskIdentityIds(input) {
     input.block_id,
     input.source_id,
     input.sourceId,
-    input.gcal_event_id
+    input.gcal_event_id,
+    input.triageId
   ];
   return [...new Set(ids.map(v => String(v || "").trim()).filter(Boolean))];
 }
@@ -415,6 +417,8 @@ function normalizePublicTask(input, doneIds, calendarsById = new Map(), opts = {
     blockId: input.blockId || input.block_id || "",
     title: redacted ? "Private task" : String(input.title || "Untitled task").slice(0, 220),
     detail: redacted ? "" : String(input.detail || input.notes || "").slice(0, 500),
+    triageBlock: input.triageBlock === true,
+    untimed: input.untimed === true || (input.untimed !== false && !localTimeFromAny(input.start)),
     start: localTimeFromAny(input.start),
     end: localTimeFromAny(input.end),
     priority: redacted ? "" : String(input.priority || "").slice(0, 40),
@@ -475,8 +479,19 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
     console.error("[public-share] tombstone read failed for " + date + ", refusing to publish:", e.message);
     throw e;
   }
-  const dayRows = filterLegacyGcalBlocks(allRows);
-  const blocks = dayRows.filter(b => b && !b.deleted_at);
+  // Only global Triage trees belong in this dated view, never backlog or Loose Ends.
+  const poolRows=typeof blockDB.getRescheduleSubtreePool==="function"
+    ?await blockDB.getRescheduleSubtreePool(date,share.workspace_id,{includeTriageRoots:true}):[];
+  const globalIds=new Set();
+  for(const row of poolRows){
+    if(!row.date && row.properties?.triageBlock && !row.properties.subtaskOf && !row.properties.wrapId && !row.parent_id && row.properties.kind!=="backlog" && !row.deleted_at){
+      collectSubtreeBlockIds(poolRows,row).forEach(id=>globalIds.add(id));
+    }
+  }
+  const existingIds=new Set(allRows.map(row=>row.id));
+  const dayRows = filterLegacyGcalBlocks(allRows.concat(poolRows.filter(row=>!row.date&&globalIds.has(row.id)&&!existingIds.has(row.id))));
+  const blocks = dayRows.filter(b => b && !b.deleted_at && b.properties?.kind!=="backlog");
+  const blockById=new Map(blocks.map(block=>[block.id,block]));
   const tombstoned = dayRows.filter(b => b && b.deleted_at);
   const root = blocks.find(b => b.type === "day_root");
   const rootProps = root && root.properties ? root.properties : {};
@@ -547,6 +562,46 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
     tasks.push(task);
   };
 
+  for (const block of blocks) {
+    const p = block.properties || {};
+    if (block.type === "day_root") continue;
+    if (p.retiredContainerHidden === true) continue;
+    const kind = p.kind || block.type;
+    if (["delegated_item"].includes(kind)) continue;
+    if (!p.title && !p.label) continue;
+    const redacted = p.publicVisibility === "private";
+    const id = p.local_id || block.id;
+    const task = normalizePublicTask({
+      id,
+      local_id: p.local_id,
+      blockId: block.id,
+      block_id: block.id,
+      title: p.title || p.label,
+      triageBlock: p.triageBlock,
+      untimed: !block.date || (!p.start && !p.all_day),
+      start: p.start,
+      end: p.end,
+      duration: p.duration,
+      priority: p.priority,
+      detail: p.detail || p.notes,
+      source: p.source || block.type,
+      source_id: p.source_id || p.gcal_event_id,
+      triageId: p.triageId,
+      gcal_event_id: p.gcal_event_id,
+      gcal_calendar_id: p.gcal_calendar_id,
+      calendarName: p.calendarName || p.calendar_name,
+      calendarColor: p.calendarColor || p.calendar_color,
+      is_recurring: p.is_recurring,
+      completed: p.completed,
+      tags: p.tags,
+      createdByGuestName: p.createdByGuestName,
+      wrapId: p.wrapId,
+      subtaskOf: p.subtaskOf || (blockById.get(block.parent_id)?.type!=="day_root" && (blockById.get(block.parent_id)?.properties?.local_id || blockById.get(block.parent_id)?.id)) || null,
+      kind
+    }, doneIds, calendarsById, { redacted, tagsById });
+    addTask(task);
+  }
+
   for (const item of ((state.schedule && state.schedule.timeline) || [])) {
     if (!item) continue;
     const redacted = item.publicVisibility === "private";
@@ -556,6 +611,8 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
       blockId: item.block_id || item.blockId || "",
       block_id: item.block_id || item.blockId || "",
       title: item.label || item.title,
+      triageBlock: item.triageBlock,
+      untimed: item.untimed,
       start: item.start,
       end: item.end,
       priority: item.priority,
@@ -581,6 +638,8 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
       id: item.id,
       local_id: item.local_id,
       title: item.title,
+      triageBlock: true,
+      untimed: true,
       duration: item.duration_minutes || item.durationMinutes || item.estimated_minutes,
       priority: item.priority,
       detail: item.summary || item.notes,
@@ -594,42 +653,6 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
     addTask(task);
   }
 
-  for (const block of blocks) {
-    const p = block.properties || {};
-    if (block.type === "day_root") continue;
-    if (p.retiredContainerHidden === true) continue;
-    const kind = p.kind || block.type;
-    if (["delegated_item"].includes(kind)) continue;
-    if (!p.title && !p.label) continue;
-    const redacted = p.publicVisibility === "private";
-    const id = p.local_id || block.id;
-    const task = normalizePublicTask({
-      id,
-      local_id: p.local_id,
-      blockId: block.id,
-      block_id: block.id,
-      title: p.title || p.label,
-      start: p.start,
-      end: p.end,
-      duration: p.duration,
-      priority: p.priority,
-      detail: p.detail || p.notes,
-      source: p.source || block.type,
-      source_id: p.source_id || p.gcal_event_id,
-      gcal_event_id: p.gcal_event_id,
-      gcal_calendar_id: p.gcal_calendar_id,
-      calendarName: p.calendarName || p.calendar_name,
-      calendarColor: p.calendarColor || p.calendar_color,
-      is_recurring: p.is_recurring,
-      completed: p.completed,
-      tags: p.tags,
-      createdByGuestName: p.createdByGuestName,
-      wrapId: p.wrapId,
-      subtaskOf: p.subtaskOf,
-      kind
-    }, doneIds, calendarsById, { redacted, tagsById });
-    addTask(task);
-  }
 
   const { rows: sponsors } = await pool.query(
     `SELECT id, task_id, task_date, task_title, sponsor_name, sponsor_user_id, kind, reward_title, note, value_cents, status, created_at

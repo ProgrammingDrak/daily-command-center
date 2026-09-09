@@ -82,20 +82,20 @@ test("nested tasks stay with their root assignment",()=>{
     {depth:1,ev:{id:"child",start:"14:00",end:"14:30"}},
     {depth:0,ev:{id:"late",start:"19:00",end:"19:30"}},
   ];
-  const grouped=TimeBlocks.groupTree(nodes,blocks);
-  assert.deepEqual(grouped.groups[0].nodes.map(n=>n.ev.id),["root","child"]);
-  assert.deepEqual(grouped.groups[3].nodes.map(n=>n.ev.id),["late"]);
+  const grouped=TimeBlocks.groupItineraryTree(nodes,blocks);
+  assert.deepEqual(grouped[1].nodes.map(n=>n.ev.id),["root","child"]);
+  assert.deepEqual(grouped[4].nodes.map(n=>n.ev.id),["late"]);
 });
 
 test("owner and shared itineraries use the same grouping and gap reset",()=>{
   const owner=fs.readFileSync("public/js/schedule-tab.js","utf8");
   const shared=fs.readFileSync("public/js/public-todo-share.js","utf8");
-  assert.match(owner,/TimeBlocks\.groupTree\(tree,timeBlocks\)/);
-  assert.match(shared,/TimeBlocks\.groupTree\(guestTree\(visible\),blocks\)/);
-  assert.match(owner,/function emitGroup\(nodes\)\{\s*let prevEnd=null;/);
-  assert.match(shared,/function emitGroup\(group\)\{\s*let prevEnd=null;/);
-  assert.match(owner,/const useTimeBlockGroups=timeBlocks\.length>0/);
-  assert.match(shared,/const useTimeBlockGroups=blocks\.length>0/);
+  assert.match(owner,/TimeBlocks\.groupItineraryTree\(DCC\.TaskModel\.selectTree/);
+  assert.match(shared,/TimeBlocks\.groupItineraryTree\(guestTree\(visible\),blocks\)/);
+  assert.match(owner,/let prevEnd=null;\s*nodes\.forEach/);
+  assert.match(shared,/function emitGroup\(group,timed\)\{\s*let prevEnd=null;/);
+  assert.match(owner,/TimeBlockView\.header/);
+  assert.match(shared,/TimeBlockView\.header/);
 });
 
 test("editor offers all-day controls and a grouped By Day tab",()=>{
@@ -108,5 +108,37 @@ test("editor offers all-day controls and a grouped By Day tab",()=>{
 
 test("only today's owner itinerary can highlight the current block",()=>{
   const owner=fs.readFileSync("public/js/schedule-tab.js","utf8");
-  assert.match(owner,/const current=isTodayView&&nowMin>=/);
+  assert.match(owner,/const current=block\.timed&&block\.start&&isTodayView&&nowMin>=/);
+});
+
+test("permanent blocks survive empty weekdays, weekends, and filtered views",()=>{
+  for(const date of ['2026-09-09','2026-09-12']){
+    const groups=TimeBlocks.groupItineraryTree([],TimeBlocks.forDate(blocks,date));
+    assert.equal(groups[0].block.id,'triage');assert.equal(groups.at(-1).block.id,'unplanned');
+    assert.ok(groups.every(group=>!group.nodes.length));
+    assert.ok(groups.every(group=>group.block.collapsible));
+    assert.equal(TimeBlocks.forDate([TimeBlocks.TRIAGE_BLOCK,TimeBlocks.UNPLANNED_BLOCK],date).length,0);
+  }
+});
+
+test("each root owns its descendants regardless of completion, timing, or Triage flags",()=>{
+  const nodes=[
+    {depth:0,ev:{id:'triage',untimed:true,triageBlock:true,status:'done'}},
+    {depth:1,ev:{id:'triage-child',start:'09:00'}},
+    {depth:0,ev:{id:'timed',start:'09:00',triageBlock:true}},
+    {depth:1,ev:{id:'untimed-child',untimed:true}},
+    {depth:0,ev:{id:'outside',start:'01:00',untimed:false,status:'done'}},
+    {depth:0,ev:{id:'unplanned',start:'10:00',untimed:true}},
+    {depth:1,ev:{id:'grandparent',triageBlock:true}},
+    {depth:2,ev:{id:'grandchild',start:'17:00'}},
+  ];
+  const groups=TimeBlocks.groupItineraryTree(nodes,blocks);
+  const ids=group=>group.nodes.map(node=>node.ev.id);
+  assert.deepEqual(ids(groups[0]),['triage','triage-child']);
+  assert.deepEqual(ids(groups[2]),['timed','untimed-child']);
+  assert.deepEqual(ids(groups.at(-2)),['outside']);
+  assert.deepEqual(ids(groups.at(-1)),['unplanned','grandparent','grandchild']);
+  assert.equal(new Set(groups.flatMap(ids)).size,nodes.length);
+  assert.equal(groups.flatMap(ids).length,nodes.length);
+  assert.notEqual(TimeBlocks.collapseKey('2026-09-09',TimeBlocks.TRIAGE_BLOCK),TimeBlocks.collapseKey('2026-09-10',TimeBlocks.TRIAGE_BLOCK));
 });

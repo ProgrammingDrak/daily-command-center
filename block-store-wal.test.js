@@ -1020,3 +1020,17 @@ test("rapid moves of one task are sent in click order while different tasks stay
     .map((call) => JSON.parse(call.init.body).targetDate);
   assert.deepEqual(b1Bodies, ["2026-07-10", "2026-07-11"], "the newest click lands last");
 });
+
+test('Unplanned placement stays in WAL offline and replays the same identity and date',async()=>{
+  const opts={fetchReject:true},h=makeStore(opts);
+  await assert.rejects(h.store.rescheduleBlock('same-task','2026-09-09',{fromDate:'2026-09-09',placement:{kind:'unplanned',durations:{'same-task':25}}}));
+  const queued=JSON.parse(h.storage.get(WAL_KEY));
+  assert.equal(queued.length,1);assert.equal(queued[0].data.placement.kind,'unplanned');
+  opts.fetchReject=false;opts.fetchBody={blocks:[{id:'same-task',type:'block',date:'2026-09-09',properties:{duration:25}}]};
+  await h.store.replayWAL();
+  assert.equal(JSON.parse(h.storage.get(WAL_KEY)||'[]').length,0);
+  const writes=h.fetchCalls.filter(call=>call.url.includes('/same-task/reschedule'));
+  assert.equal(writes.length,2);
+  assert.equal(JSON.parse(writes[1].init.body).targetDate,'2026-09-09');
+  assert.equal(JSON.parse(writes[1].init.body).placement.kind,'unplanned');
+});

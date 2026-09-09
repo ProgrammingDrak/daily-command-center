@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import express from "express";
+import reschedule from "../lib/reschedule.js";
 import createTaskTiming from "../lib/task-timing.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -62,13 +63,16 @@ const emptyState = {
 
 app.post("/api/auth/login", (_req, res) => res.json({ ok: true }));
 app.get("/api/auth/me", (_req, res) => res.json({ ok: true, authenticated: true, user: { id: 1, username: "review", name: "Review User" } }));
-app.get("/api/health", (_req, res) => res.json({ status: "ok", database: "fixture", reviewOnly: true }));
+app.get("/api/health", (_req, res) => res.json({ status: "ok", database: "fixture", placementCapabilities: ["timed","all_day","unplanned"], reviewOnly: true }));
 app.get("/api/app-config", (_req, res) => res.json({ environment: "review", integrations: {}, features: {} }));
 app.get("/api/me", (_req, res) => res.json({
   id: 1,
   username: "review",
   onboardingState: { dailyCommandCenterTour: { version: 2, completedAt: "2026-01-01T00:00:00.000Z" } },
 }));
+app.get("/api/state/archives", (_req,res)=>res.json({"2026-09-12":{date:"2026-09-12"}}));
+app.get("/api/state/upcoming", (_req,res)=>res.json([]));
+app.get("/api/state/tomorrow", (_req,res)=>res.json(null));
 app.get("/api/state/day", (req, res) => {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || "")) ? String(req.query.date) : localDateKey();
   const timeBlocks = [
@@ -121,6 +125,26 @@ app.post("/api/blocks", (req, res) => {
   };
   reviewBlocks.set(block.id, block);
   res.status(201).json(block);
+});
+// Placement preview uses the same subtree and property transformation as production.
+app.post("/api/blocks/:id/reschedule",(req,res)=>{
+  try{
+    const parent=reviewBlocks.get(req.params.id);
+    if(!parent)return res.status(404).json({error:"Block not found"});
+    if(req.body.placement?.kind!=="unplanned")return res.status(400).json({error:"Unsupported review placement"});
+    const ids=reschedule.collectSubtreeBlockIds(liveReviewBlocks(),parent);
+    const blocks=ids.map(id=>{const row=reviewBlocks.get(id);return {...row,date:req.body.targetDate,parent_id:id===parent.id?null:row.parent_id,properties:reschedule.unplannedProperties(row,parent.id,req.body.placement.durations)};});
+    blocks.forEach(row=>reviewBlocks.set(row.id,row));
+    res.json({moved:ids,blocks,created:[],targetDate:req.body.targetDate});
+  }catch(error){res.status(error.statusCode||400).json({error:error.message});}
+});
+app.get("/api/public/todo-share/:token",(req,res)=>{
+  const date=req.query.date||localDateKey();
+  const tasks=liveReviewBlocks().filter(row=>row.type==="block"&&(row.date===date||(!row.date&&row.properties.triageBlock))).map(row=>{
+    const p=row.properties,redacted=p.publicVisibility==="private";
+    return {id:p.local_id||row.id,blockId:row.id,title:redacted?"Private task":p.title,detail:redacted?"":p.notes,start:p.start,end:p.end,untimed:!p.start,triageBlock:!!p.triageBlock,wrapId:p.wrapId,subtaskOf:p.subtaskOf,status:p.completed||p.status==="done"?"done":"open",itemType:"task",durationMinutes:p.duration,redacted};
+  });
+  res.json({date,tasks,blocks:[{id:"work",name:"Clever",start:"09:00",end:"17:30",activeDays:["mon","tue","wed","thu","fri"]}],workspaceName:"Review itinerary",calendars:[],capabilities:{},updatedAt:new Date().toISOString()});
 });
 // Exercise the actual work-session domain against the disposable review store.
 const reviewTiming = createTaskTiming({

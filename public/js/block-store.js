@@ -635,6 +635,7 @@
     for (const entry of entries) {
       if (entry.op === "reschedule" && entry.timestamp && (Date.now() - Date.parse(entry.timestamp)) > RESCHEDULE_REPLAY_MAX_AGE_MS) {
         walMoveToDeadLetter(entry, "stale reschedule (>15min old)");
+        if(entry.data?.placement?.kind==="unplanned"&&typeof showToast==="function")showToast("Queued Unplanned move expired. Move the task again.","error");
         dropped++;
         continue;
       }
@@ -686,9 +687,15 @@
           case "undelete":
             await apiPost("/api/blocks/" + entry.id + "/undelete", {});
             break;
-          case "reschedule":
-            await apiPost("/api/blocks/" + entry.id + "/reschedule", entry.data);
+          case "reschedule": {
+            const result=await apiPost("/api/blocks/" + entry.id + "/reschedule", entry.data);
+            (result.blocks||[]).forEach(cacheSet);
+            if(entry.data.placement?.kind==="unplanned" && window.DCC?.TimeBlocks && typeof isCollapsed==="function"){
+              const key=window.DCC.TimeBlocks.collapseKey(entry.data.targetDate,window.DCC.TimeBlocks.UNPLANNED_BLOCK);
+              if(isCollapsed(key))toggleCollapsed(key);
+            }
             break;
+          }
           case "work": {
             const result = await apiPost("/api/blocks/" + entry.id + "/work", entry.data);
             if (result && result.block) cacheSet(result.block);
@@ -728,6 +735,7 @@
             else cacheDelete(entry.id);
             setError("Completion rejected" + (e.requestId ? " (request " + e.requestId + ")" : ""));
           }
+          if(entry.op==="reschedule"&&entry.data?.placement?.kind==="unplanned"&&typeof showToast==="function")showToast("Unplanned move rejected: "+e.message,"error");
           dropped++;
           console.warn("[BlockStore] WAL replay moved stale entry to dead-letter:", entry.op, entry.id || "", e.message);
           continue;

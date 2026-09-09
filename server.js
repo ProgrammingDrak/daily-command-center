@@ -960,6 +960,7 @@ app.get("/api/health", async (req, res) => {
       database: "ok",
       databaseConfigured: dbConfig.configured,
       revision: REVISION,
+      placementCapabilities: ["timed", "all_day", "unplanned"],
       port: PORT,
       sseClients: sseClients.size,
       datesStored: m.dates.length,

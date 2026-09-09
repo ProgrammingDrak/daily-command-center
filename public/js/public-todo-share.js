@@ -221,6 +221,9 @@
     return {
       id: task.id,
       title: task.redacted ? "🔒 Private task" : task.title,
+      untimed: task.untimed,
+      subtaskOf: task.subtaskOf,
+      wrapId: task.wrapId,
       start: task.start || "",
       end: task.end || "",
       type: type,
@@ -331,13 +334,15 @@
     return el;
   }
 
-  function blockHeaderEl(blk){
-    const el = document.createElement("div");
-    el.className = "time-block-divider variant-" + window.DCC.TimeBlocks.DIVIDER_VARIANT;
-    el.innerHTML =
-      '<strong>' + esc(blk.name) + '</strong>' +
-      (blk.start ? '<small>' + esc(window.DCC.TimeBlocks.rangeLabel(blk)) + '</small>' : '');
-    return el;
+  function guestCollapseKey(block){return "dcc-guest:"+location.pathname+":"+window.DCC.TimeBlocks.collapseKey(current.date,block);}
+  function guestCollapsed(block){try{return localStorage.getItem(guestCollapseKey(block))==="1";}catch(_error){return false;}}
+  function blockHeaderEl(block){
+    return window.DCC.TimeBlockView.header(block,{key:guestCollapseKey(block),collapsed:guestCollapsed(block),onToggle:()=>{
+      try{localStorage.setItem(guestCollapseKey(block),guestCollapsed(block)?"0":"1");}catch(_error){}
+      renderTasks(current.tasks||[]);
+      const button=Array.from(document.querySelectorAll("[data-time-block-toggle]")).find(el=>el.dataset.timeBlockToggle===guestCollapseKey(block));
+      if(button)button.focus();
+    }});
   }
 
   function gapEl(mins){
@@ -385,18 +390,13 @@
     const blocks = window.DCC.TimeBlocks
       ? window.DCC.TimeBlocks.forDate((current && current.blocks) || [],current && current.date)
       : [];
-    const useTimeBlockGroups=blocks.length>0;
-    if (!visible.length && !blocks.length) {
-      list.innerHTML = '<div class="todo-public-empty">No matching items are active right now.</div>';
-      return;
-    }
     const frag = document.createDocumentFragment();
-    function emitGroup(group){
+    function emitGroup(group,timed){
       let prevEnd=null;
       group.forEach(node=>{
         const task=node.ev;
         const start=window.DCC.TimeBlocks.minutes(task.start,false);
-        if(!node.depth&&prevEnd!==null&&start!==null&&start-prevEnd>=15)frag.appendChild(gapEl(start-prevEnd));
+        if(timed&&!node.depth&&prevEnd!==null&&start!==null&&start-prevEnd>=15)frag.appendChild(gapEl(start-prevEnd));
         const end=window.DCC.TimeBlocks.minutes(task.end,true);
         if(!node.depth&&end!==null)prevEnd=end;
         const el=task.status==="done"?compactRowEl(task):renderGuestCard(task);
@@ -404,13 +404,18 @@
         frag.appendChild(el);
       });
     }
-    if(useTimeBlockGroups){
-      const grouped=window.DCC.TimeBlocks.groupTree(guestTree(visible),blocks);
-      grouped.groups.forEach(({block,nodes})=>{frag.appendChild(blockHeaderEl(block));emitGroup(nodes);});
-      if(grouped.outside.nodes.length){frag.appendChild(blockHeaderEl({name:"Outside Time Blocks"}));emitGroup(grouped.outside.nodes);}
-    }else{
-      visible.forEach(task=>frag.appendChild(task.status==="done"?compactRowEl(task):renderGuestCard(task)));
+    const groups=window.DCC.TimeBlocks.groupItineraryTree(guestTree(visible),blocks);
+    const controls=document.createElement("div");controls.className="it-list-controls";
+    for(const collapse of [false,true]){
+      const button=document.createElement("button");button.type="button";button.className="it-list-ctrl-btn";button.textContent=collapse?"Collapse all":"Expand all";
+      button.addEventListener("click",()=>{for(const {block} of groups){try{localStorage.setItem(guestCollapseKey(block),collapse?"1":"0");}catch(_error){}}renderTasks(current.tasks||[]);});
+      controls.appendChild(button);
     }
+    frag.appendChild(controls);
+    groups.forEach(({block,nodes})=>{
+      frag.appendChild(blockHeaderEl(block));
+      if(!guestCollapsed(block))emitGroup(nodes,block.timed);
+    });
 
     list.appendChild(frag);
   }

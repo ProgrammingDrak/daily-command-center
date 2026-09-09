@@ -8,7 +8,25 @@
   const DAYS=WEEKDAYS.concat(["sat","sun"]);
   const DAY_NAMES={mon:"Monday",tue:"Tuesday",wed:"Wednesday",thu:"Thursday",fri:"Friday",sat:"Saturday",sun:"Sunday"};
   const DIVIDER_VARIANT="hairline";
-  const TRIAGE_BLOCK={id:"triage",name:"Triage",fixed:true};
+  const TRIAGE_BLOCK=Object.freeze({id:"triage",name:"Triage",permanent:true,collapsible:true,editable:false,timed:false,sortable:false,dropTarget:null});
+  const UNPLANNED_BLOCK=Object.freeze({id:"unplanned",name:"Unplanned",permanent:true,collapsible:true,editable:false,timed:false,sortable:true,dropTarget:"unplanned"});
+  const OUTSIDE_BLOCK=Object.freeze({id:null,name:"Outside Time Blocks",collapsible:true,editable:false,timed:true,sortable:false,dropTarget:null});
+  function collapseKey(date,block){return "time-block:"+JSON.stringify([date,block.id||null]);}
+  function groupItineraryTree(nodes,blocks){
+    const triage={block:TRIAGE_BLOCK,nodes:[]},unplanned={block:UNPLANNED_BLOCK,nodes:[]},outside={block:OUTSIDE_BLOCK,nodes:[]};
+    const groups=(blocks||[]).map(block=>({block:Object.assign({},block,{collapsible:true,editable:true,timed:true,sortable:false,dropTarget:"timed"}),nodes:[]}));
+    const byId=new Map(groups.map(g=>[g.block.id,g]));
+    let bucket=null;
+    (nodes||[]).forEach(node=>{
+      if(!node.depth||!bucket){
+        const task=node.ev;
+        const untimed=task.untimed===true||(task.untimed!==false&&minutes(task.start,false)===null);
+        bucket=untimed?(task.triageBlock?triage:unplanned):(byId.get((blockForTask(task,blocks)||{}).id)||outside);
+      }
+      bucket.nodes.push(node);
+    });
+    return [triage,...groups,...(outside.nodes.length?[outside]:[]),unplanned];
+  }
   const DEFAULTS=[
     {name:"Morning Workout",start:"06:30",end:"09:00"},
     {name:"Clever",start:"09:00",end:"17:30"},
@@ -54,29 +72,6 @@
     if(start===null)return null;
     return (blocks||[]).find(b=>start>=minutes(b.start,false)&&start<minutes(b.end,true))||null;
   }
-  function groupTree(nodes,blocks){
-    const groups=(blocks||[]).map(block=>({block,nodes:[]}));
-    const byId=new Map(groups.map(group=>[group.block.id,group]));
-    const outside={block:null,nodes:[]};
-    let bucket=outside;
-    (nodes||[]).forEach(node=>{
-      if(!node.depth){
-        const block=blockForTask(node.ev,blocks);
-        bucket=block?(byId.get(block.id)||outside):outside;
-      }
-      bucket.nodes.push(node);
-    });
-    return {groups,outside};
-  }
-  function partitionTriageTree(nodes){
-    const triage=[],remaining=[];
-    let inTriage=false;
-    (nodes||[]).forEach(node=>{
-      if(!node.depth)inTriage=!!(node.ev.triageBlock&&node.ev.untimed);
-      (inTriage?triage:remaining).push(node);
-    });
-    return {triage,remaining};
-  }
   function formatTime(value){
     if(value==="24:00")return "Midnight";
     const n=minutes(value,false);if(n===null)return String(value||"");
@@ -85,5 +80,5 @@
   }
   function rangeLabel(block){return formatTime(block.start)+" - "+formatTime(block.end);}
 
-  return {TRIAGE_BLOCK,partitionTriageTree,WEEKDAYS,DAYS,DAY_NAMES,DEFAULTS,DIVIDER_VARIANT,dayKey,isWeekday,activeDays,minutes,valid,normalize,forDate,groupByDay,blockForTask,groupTree,formatTime,rangeLabel};
+  return {TRIAGE_BLOCK,UNPLANNED_BLOCK,OUTSIDE_BLOCK,collapseKey,groupItineraryTree,WEEKDAYS,DAYS,DAY_NAMES,DEFAULTS,DIVIDER_VARIANT,dayKey,isWeekday,activeDays,minutes,valid,normalize,forDate,groupByDay,blockForTask,formatTime,rangeLabel};
 });
