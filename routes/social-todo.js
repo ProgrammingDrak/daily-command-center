@@ -221,8 +221,7 @@ function publicTaskIdentityIds(input) {
     input.block_id,
     input.source_id,
     input.sourceId,
-    input.gcal_event_id,
-    input.triageId
+    input.gcal_event_id
   ];
   return [...new Set(ids.map(v => String(v || "").trim()).filter(Boolean))];
 }
@@ -586,7 +585,6 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
       detail: p.detail || p.notes,
       source: p.source || block.type,
       source_id: p.source_id || p.gcal_event_id,
-      triageId: p.triageId,
       gcal_event_id: p.gcal_event_id,
       gcal_calendar_id: p.gcal_calendar_id,
       calendarName: p.calendarName || p.calendar_name,
@@ -630,8 +628,9 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
     addTask(task);
   }
 
+  const canonicalTriageIds=new Set(blocks.map(block=>String(block.properties?.triageId||"" )).filter(Boolean));
   for (const item of ((state.triage && state.triage.open_items) || [])) {
-    if (!item) continue;
+    if (!item || canonicalTriageIds.has(String(item.id))) continue;
     const vis = item.publicVisibility;
     if (vis !== "public" && vis !== "private") continue;
     const task = normalizePublicTask({

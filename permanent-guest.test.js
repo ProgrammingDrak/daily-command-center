@@ -35,4 +35,5 @@ test('canonical Unplanned placement defeats stale intake and keeps done tasks in
   assert.equal(tasks.length,1);assert.equal(tasks[0].id,'m');
   assert.equal(tasks[0].triageBlock,false);assert.equal(tasks[0].untimed,true);
   assert.equal(tasks[0].status,'done');assert.equal(tasks[0].title,'Private task');
+  assert.ok(!tasks[0].identityIds.includes('source'),'intake deduplication does not widen the guest identity projection');
 });
