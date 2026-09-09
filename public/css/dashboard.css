@@ -1310,15 +1310,21 @@
     font-variant-numeric:tabular-nums;user-select:none}
   .it-list-gap::before,.it-list-gap::after{content:"";flex:1;height:1px;
     background:rgba(255,255,255,0.06)}
-  .time-block-divider{display:flex;align-items:center;gap:8px;width:100%;border:0;
-    background:transparent;color:var(--text-muted);padding:4px;margin:5px 0 0;
-    font:inherit;text-align:left;cursor:pointer;user-select:none}
-  .time-block-divider::after{content:"";height:1px;flex:1;background:rgba(255,255,255,0.06)}
-  .time-block-divider strong{color:var(--text);font-size:11px;font-weight:700;letter-spacing:.2px}
+  .time-block-divider{display:flex;align-items:center;gap:8px;min-height:0;border:0;
+    background:transparent;color:var(--text-muted);padding:0;margin:-2px 4px;
+    font:inherit;font-size:10px;line-height:16px;text-align:left;cursor:pointer;user-select:none}
+  .time-block-divider::before,.time-block-divider::after{content:"";height:1px;flex:1;background:rgba(255,255,255,0.06)}
+  .time-block-divider::before{display:none}
+  .time-block-toggle,.time-block-edit{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:0;min-width:0;padding:0;border:0;background:transparent;color:inherit;font:inherit;line-height:inherit;cursor:pointer}
+  .time-block-chevron{width:10px;flex:none;font-size:11px}
+  .time-block-edit{width:16px;height:16px;flex:none;color:var(--text-muted);opacity:0;pointer-events:none}
+  .time-block-divider:hover .time-block-edit,.time-block-divider:has(:focus-visible) .time-block-edit,.time-block-edit:focus{opacity:1;pointer-events:auto}
+  .time-block-edit:hover{color:var(--accent-light)}
+  .time-block-toggle:focus-visible,.time-block-edit:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+  .time-block-divider strong{color:var(--text-muted);font-size:9px;font-weight:500;letter-spacing:normal}
   .time-block-divider small{font-size:9px;font-weight:500;color:var(--text-muted);font-variant-numeric:tabular-nums}
-  .time-block-divider:hover strong,.time-block-divider:focus-visible strong{color:var(--accent-light)}
   .time-block-divider:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
-  .time-block-divider.current strong{color:var(--accent-light)}
+  .time-block-divider.current::before{background:linear-gradient(270deg,var(--accent),rgba(255,255,255,0.06))}
   .time-block-divider.current::after{background:linear-gradient(90deg,var(--accent),rgba(255,255,255,0.06))}
   .time-block-card .be-card-inner{align-items:stretch}
   .time-block-card .be-drag-handle{display:flex;align-items:center;padding:0 8px;color:var(--text-muted);cursor:grab}
@@ -4426,8 +4432,10 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 :root{--task-drag-opacity:.65;--task-drag-nest-opacity:.35}
 .it-drag-ghost{position:fixed;z-index:9999;margin:0;pointer-events:none;opacity:var(--task-drag-opacity);transition:none;border-radius:10px;background:var(--card);border:1px solid var(--accent);box-shadow:0 10px 28px rgba(0,0,0,.45);will-change:transform}
 .it-drag-ghost[data-drag-mode="nest"],.it-drag-ghost[data-drag-mode="sub"]{opacity:var(--task-drag-nest-opacity)}
-.time-block-drop-zone{height:36px;min-height:36px;width:100%;box-sizing:border-box;border:1.5px dashed transparent;border-radius:8px}
-.time-block-drop-zone.drag-over-block{background:rgba(59,130,246,.20);border-color:#3b82f6}
+.time-block-drop-zone{position:relative;height:0;min-height:0;margin-top:-7px;width:100%;pointer-events:none}
+.time-block-drop-zone::before{content:"";display:none;position:absolute;left:0;right:0;bottom:-7px;height:26px;box-sizing:border-box;border:1.5px dashed transparent;border-radius:8px}
+.it-list-view:has(.it-list-item.dragging) .time-block-drop-zone::before{display:block;pointer-events:auto}
+.time-block-drop-zone.drag-over-block::before{background:rgba(59,130,246,.20);border-color:#3b82f6}
 .it-list-view.it-drag-lifting{touch-action:none;-webkit-user-select:none;user-select:none}
 /* "Now" + priority chips added to the List row meta (info parity with the card). */
 .it-list-now{display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.3px;padding:1px 6px;border-radius:6px;color:var(--accent-light,#60a5fa);border:1px solid var(--accent,#3b82f6);background:rgba(59,130,246,.14);white-space:nowrap;line-height:1.4}
