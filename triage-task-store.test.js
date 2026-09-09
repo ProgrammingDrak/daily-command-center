@@ -140,8 +140,30 @@ test('recurring Triage honors paused, skipped, scheduled, and not-yet-due defini
 test('Triage grouping keeps whole subtrees together and releases the same task when scheduled', () => {
   const task={id:'root', triageBlock:true, untimed:true};
   const nodes=[{ev:{id:'normal'},depth:0},{ev:task,depth:0},{ev:{id:'child'},depth:1},{ev:{id:'unscheduled',untimed:true},depth:0}];
-  assert.deepEqual(TB.partitionTriageTree(nodes).triage.map(n=>n.ev.id), ['root','child']);
+  assert.deepEqual(TB.groupItineraryTree(nodes,[])[0].nodes.map(n=>n.ev.id), ['root','child']);
   task.untimed=false; task.start='09:00';
-  assert.deepEqual(TB.partitionTriageTree(nodes).triage, []);
-  assert.equal(TB.TRIAGE_BLOCK.fixed,true);
+  assert.deepEqual(TB.groupItineraryTree(nodes,[])[0].nodes, []);
+  assert.equal(TB.TRIAGE_BLOCK.permanent,true);
+  assert.equal(TB.TRIAGE_BLOCK.collapsible,true);
+});
+
+test('Unplanned placement survives repeated intake without a new task or restored Triage flag',async()=>{
+  const f=fixture(),[first]=await f.store.materialize({...owner,items:[source]});
+  first.properties=require('./lib/reschedule').unplannedProperties(first,first.id);
+  first.date='2026-09-09';
+  const [again]=await f.store.materialize({...owner,items:[source]});
+  assert.equal(again.id,first.id);assert.equal(f.rows.size,1);
+  assert.equal(again.date,'2026-09-09');assert.equal(again.properties.triageBlock,undefined);
+  assert.equal(again.properties.triageId,source.triageId);
+  assert.equal(again.properties.source_id,source.source_id);
+  const ev=TM.fromBlock(again);assert.equal(ev.untimed,true);
+  assert.deepEqual(TB.groupItineraryTree([{ev,depth:0}],[]).at(-1).nodes.map(n=>n.ev.id),[ev.id]);
+});
+
+test('a promoted zero-duration step retains its effective duration after reload',()=>{
+  const block={id:'step',date:'2026-09-09',properties:{local_id:'step',subtaskOf:'parent',duration:0}};
+  block.properties=require('./lib/reschedule').unplannedProperties(block,block.id,{step:0});
+  const ev=TM.fromBlock(block);
+  assert.equal(ev.start,'00:00');assert.equal(ev.end,'00:00');
+  assert.equal(ev.subtaskOf,null);assert.equal(ev.untimed,true);
 });

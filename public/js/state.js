@@ -1372,6 +1372,33 @@ async function moveTaskToToday(id){
 // task on that day as an anchor, and Earliest free), so placement is chosen
 // the same way app-wide. Falls back to a direct auto-slot move when the picker
 // isn't available (e.g. embeds without the overlay markup).
+async function moveTaskToUnplanned(id){
+  const ev=scheduled.find(task=>task.id===id);
+  if(!ev||ev._locked||isDone(ev))return false;
+  const fromDate=viewDate,targetDate=viewDate,row=_findTaskBlockForDate(id,fromDate,ev);
+  if(!row||!window.blockStore)return false;
+  // Remember verified support so disconnected moves can enter the normal write queue.
+  let supported=false;
+  try{supported=sessionStorage.getItem("dcc-unplanned-placement")==="1";}catch(_error){}
+  if(!supported){
+    try{const response=await fetch("/api/health",{cache:"no-store"});const health=await response.json();supported=response.ok&&health.placementCapabilities?.includes("unplanned");}
+    catch(_error){}
+    if(!supported){showToast("Connect once to enable Unplanned movement","info");return false;}
+    try{sessionStorage.setItem("dcc-unplanned-placement","1");}catch(_error){}
+  }
+  const durations={};
+  // Reuse the existing task-tree projection to preserve effective UI durations.
+  const tree=DCC.TaskModel.selectTree(scheduled,{pool:scheduled});let depth=null;
+  tree.forEach(node=>{if(node.ev.id===id)depth=node.depth;else if(depth!==null&&node.depth<=depth)depth=null;if(depth!==null){const block=_findTaskBlockForDate(node.ev.id,fromDate,node.ev);if(block){const minutes=dur(node.ev);durations[block.id]=Number.isFinite(minutes)&&minutes>=0?minutes:_positiveDuration(node.ev.duration,30);}}});
+  try{
+    await window.blockStore.rescheduleBlock(row.id,targetDate,{fromDate,placement:{kind:"unplanned",durations}});
+  }catch(error){showToast(error.permanent?(error.message||"Move rejected"):"Move queued. It will retry when connected.",error.permanent?"error":"info");return false;}
+  const key=DCC.TimeBlocks.collapseKey(targetDate,DCC.TimeBlocks.UNPLANNED_BLOCK);
+  if(isCollapsed(key))toggleCollapsed(key);
+  if(viewDate===targetDate){refoldTaskStateFromBlockCache();render();}
+  showToast("Moved to Unplanned","success");return true;
+}
+
 function moveTaskViaPlacement(id,dateStr,opts){
   opts=opts||{};
   const ev=opts.task||scheduled.find(e=>e.id===id);

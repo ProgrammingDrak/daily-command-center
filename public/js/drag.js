@@ -139,8 +139,9 @@ function timeBlockDropZoneEl(block){
   const el=document.createElement("div");
   el.className="time-block-drop-zone";
   el.dataset.blockId=block.id;
-  el.dataset.blockStart=block.start;
-  el.setAttribute("aria-label","Schedule at "+block.start+" in "+block.name);
+  el.dataset.blockStart=block.start||"";
+  el.dataset.placement=block.dropTarget||"timed";
+  el.setAttribute("aria-label",block.dropTarget==="unplanned"?"Move to Unplanned":"Schedule at "+block.start+" in "+block.name);
   el.addEventListener("dragover",dBlockOver);
   el.addEventListener("dragleave",()=>el.classList.remove("drag-over-block"));
   el.addEventListener("drop",dBlockDrop);
@@ -157,9 +158,13 @@ function dBlockOver(e){
   if(e.dataTransfer)e.dataTransfer.dropEffect="move";
   e.currentTarget.classList.add("drag-over-block");
 }
-function dBlockDrop(e){
+async function dBlockDrop(e){
   e.preventDefault();e.stopPropagation();
   const moved=_blockDragTask(),start=e.currentTarget.dataset.blockStart;
+  if(e.currentTarget.dataset.placement==="unplanned"){
+    dEnd();if(moved&&typeof moveTaskToUnplanned==="function")await moveTaskToUnplanned(moved.id);
+    return;
+  }
   if(!moved||!/^([01]\d|2[0-3]):[0-5]\d$/.test(start||"")){dEnd();return;}
   const old=JSON.stringify(scheduled),oldStart=pt(moved.start);
   if(parentIdOf(moved))_promoteMutate(moved);

@@ -382,7 +382,7 @@ test("an ORPHANED subtask renders as top-level, not as a subtask", () => {
   // row() while the caller withheld its number (or vice versa).
   assert.ok(/const subRow=_isSubRow\(node\);/.test(schedTabSource), "row() must gate the subtask variant on _isSubRow");
   assert.ok(/function emitNode\(node,idx,mode\)\{return row\(node\.ev,_isSubRow\(node\)\?0:idx,mode,node\);\}/.test(schedTabSource));
-  assert.ok(/const isSub=_isSubRow\(node\);/.test(schedTabSource), "the work list's rank counter must use the same rule");
+  assert.ok(/emitNode\(node,_isSubRow\(node\)\?0:rank\+\+/.test(schedTabSource), "the work list's rank counter must use the same rule");
   assert.ok(!/rel==="subtask"\?0:/.test(schedTabSource), "no rank counter may still gate on rel alone");
 });
 
@@ -400,7 +400,7 @@ test("the Unscheduled badge no longer sums two different things", () => {
   assert.ok(sumRx.test('section("Unscheduled",_CO_.rootsOf(unfPool).length+day.unscheduledRoots.length,"unscheduled","uns-group");'),
     "...and on a summed badge whose first term is a call, which [^)]* could not reach");
   // C6a: the section renders a SUBTREE now, so the badge counts ROOTS explicitly.
-  assert.ok(/section\("Unscheduled",unscheduledRoots\.length,"unscheduled","uns-group"\)/.test(schedTabSource));
+  assert.ok(/section\("",0,"unscheduled"\)/.test(schedTabSource));
   assert.equal(/section\("Unfinished"/.test(schedTabSource), false,
     "unfinished rows belong exclusively to the Loose Ends pill");
 });

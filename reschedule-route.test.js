@@ -335,3 +335,41 @@ test("an undated row with no fromDate is refused, not moved from nowhere", async
   assert.match(body.error, /no source date/i);
   assert.equal(calls.reschedule.length, 0);
 });
+
+test("Unplanned keeps the date and moves the full Triage subtree without changing identity",async()=>{
+  const parent=blk('B1','p',{subtaskOf:'old-parent',parent_id:'old-row',properties:{start:'09:00',end:'09:45',duration:30,triageBlock:true,userSetStart:true,_pinnedStart:true,all_day:true,triageId:'source',triageKey:'dedupe',notes:'notes',workSessions:[{minutes:12}]}});
+  const child=blk('B2','c',{subtaskOf:'p',parent_id:'B1',properties:{triageBlock:true,duration:0,status:'done'}});
+  const {app,calls}=mountApp({parent,pool:[parent,child]});
+  const response=await post(app,'B1',{targetDate:FROM,placement:{kind:'unplanned',durations:{B1:45,B2:0}}});
+  assert.equal(response.status,200,JSON.stringify(response.body));
+  const {moves,creates}=calls.reschedule[0];
+  assert.deepEqual(moves.map(m=>m.id),['B1','B2']);assert.equal(creates.length,0);
+  assert.ok(moves.every(m=>m.date===FROM));assert.equal(moves[0].parentId,null);
+  assert.equal(moves[1].properties.subtaskOf,'p');assert.equal(moves[1].properties.status,'done');
+  assert.equal(moves[1].properties.duration,0);assert.equal(moves[0].properties.duration,45);
+  for(const key of ['triageBlock','_pinnedStart','userSetStart','all_day','subtaskOf'])assert.equal(moves[0].properties[key],undefined,key);
+  assert.equal(moves[1].properties.triageBlock,undefined);
+  assert.equal(moves[0].properties.start,null);assert.equal(moves[0].properties.end,null);
+  for(const key of ['local_id','triageId','triageKey','notes','workSessions'])assert.deepEqual(moves[0].properties[key],parent.properties[key]);
+});
+
+test("Unplanned refuses protected descendants and completed roots before any transaction",async()=>{
+  for(const props of [{locked:true},{_locked:true},{source:'calendar'},{gcal_calendar_id:'calendar'}]){
+    const parent=blk('B1','p'),child=blk('B2','c',{subtaskOf:'p',properties:props});
+    const {app,calls}=mountApp({parent,pool:[parent,child]});
+    assert.equal((await post(app,'B1',{targetDate:FROM,placement:{kind:'unplanned'}})).status,409);
+    assert.equal(calls.reschedule.length,0);
+  }
+  const parent=blk('B1','p',{properties:{completed:true}}),{app,calls}=mountApp({parent,pool:[parent]});
+  assert.equal((await post(app,'B1',{targetDate:FROM,placement:{kind:'unplanned'}})).status,409);
+  assert.equal(calls.reschedule.length,0);
+});
+
+test("Unplanned rejects foreign duration overrides and derives stored time spans",async()=>{
+  const parent=blk('B1','p',{properties:{start:'10:00',end:'10:55',duration:30}});
+  const {app,calls}=mountApp({parent,pool:[parent]});
+  assert.equal((await post(app,'B1',{targetDate:FROM,placement:{kind:'unplanned',durations:{stranger:5}}})).status,400);
+  assert.equal(calls.reschedule.length,0);
+  assert.equal((await post(app,'B1',{targetDate:FROM,placement:{kind:'unplanned'}})).status,200);
+  assert.equal(calls.reschedule[0].moves[0].properties.duration,55);
+});

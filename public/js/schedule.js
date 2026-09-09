@@ -1124,9 +1124,10 @@ let PINNED_KEY = "pa-pinned-starts-" + ((__state && __state.date) ? __state.date
 // which is why 120 rows carried it and the overlay carried 178 entries across 64 day_roots.
 // Canonical first, overlay as a counted fallback for entries no row carries yet.
 function loadPinnedStarts(){
-  const out={};
+  const out={},explicitlyUntimed=new Set();
   let rowCount=0;
   _orderableRows().forEach(b=>{
+    if(b.properties.start===null&&b.properties.end===null){explicitlyUntimed.add(_evIdOfRow(b));return;}
     const v=b.properties._pinnedStart;
     if(v){out[_evIdOfRow(b)]=v;rowCount++;}
   });
@@ -1134,13 +1135,13 @@ function loadPinnedStarts(){
     const v=_bsProp("_pinnedStarts",null);
     if(v&&typeof v==="object"){
       let fb=0;
-      Object.keys(v).forEach(id=>{if(out[id]===undefined&&v[id]){out[id]=v[id];fb++;}});
+      Object.keys(v).forEach(id=>{if(!explicitlyUntimed.has(id)&&out[id]===undefined&&v[id]){out[id]=v[id];fb++;}});
       _c6bFallback("pinnedStarts",fb);
     }
     if(rowCount||Object.keys(out).length)return out;
   }
   if(Object.keys(out).length)return out;
-  try{return JSON.parse(localStorage.getItem(PINNED_KEY)||"{}")}catch(e){return{}}
+  try{return Object.fromEntries(Object.entries(JSON.parse(localStorage.getItem(PINNED_KEY)||"{}")).filter(([id])=>!explicitlyUntimed.has(id)))}catch(e){return{}}
 }
 // Callers hand in the whole map (they load, mutate one key, save), so this diffs against the
 // rows and writes only what moved. Every entry is pushed to its row even if it was previously

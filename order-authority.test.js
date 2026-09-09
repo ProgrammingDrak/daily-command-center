@@ -671,3 +671,8 @@ test("★ the pin and lock reads tolerate 003 NOT having run — no merge-then-a
   const fb = run(pre, "window.__DCC_C6B_FALLBACK");
   assert.ok(fb.pinnedStarts >= 1 && fb.lockedTasks >= 1, "and the canary counts what is still overlay-only: " + JSON.stringify(fb));
 });
+
+test('explicit Unplanned placement cannot resurrect a retired overlay pin',()=>{
+  const c=ctx([row('a',1000,{start:null,end:null})],{_pinnedStarts:{a:'09:00'}});
+  assert.deepEqual(run(c,'loadPinnedStarts()'),{});
+});

@@ -74,7 +74,7 @@
     const p = block.properties || {};
     // API task blocks have no local_id; key on the row id.
     const taskId = p.local_id || block.id;
-    const d = p.subtaskOf && p.duration === 0 ? 0 : (p.duration || p.estimatedMinutes || 30);
+    const d = p.duration === 0 && (p.subtaskOf || (p.start === null && p.end === null)) ? 0 : (p.duration || p.estimatedMinutes || 30);
     // A dateless row is unscheduled by definition: any stored start on it is
     // stale (e.g. stamped by an old reflow), so ignore it and keep the row
     // in the Unscheduled section until a drag gives it a real slot.

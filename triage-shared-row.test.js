@@ -66,10 +66,10 @@ test("due responsibilities project into recurring untimed task rows", () => {
 });
 
 test("Triage renders through the normal task list without a second row builder", () => {
-  assert.match(scheduleSource, /triageTree\.triage\.forEach[\s\S]*?emitNode\(node,index,isDone\(node\.ev\)/);
+  assert.match(scheduleSource, /groups\.forEach[\s\S]*?emitNode\(node,_isSubRow\(node\)\?0:rank\+\+,isDone\(node\.ev\)/);
   assert.match(scheduleSource, /renderItineraryListRow\(ev,/);
   assert.doesNotMatch(triageSource, /function buildScheduleTriageCard|function buildRecurringTriageCard|renderItineraryListRow\(/);
-  assert.match(scheduleSource, /DCC\.TimeBlocks\.TRIAGE_BLOCK/);
+  assert.match(scheduleSource, /DCC\.TimeBlocks\.groupItineraryTree/);
   assert.match(scheduleSource, /class="it-list-duration" title="Estimated completion time"/);
 });
 

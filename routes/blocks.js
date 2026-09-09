@@ -21,7 +21,7 @@
 
 const validate = require("../middleware/validate");
 const schemas = require("../middleware/schemas");
-const { collectSubtreeBlockIds } = require("../lib/reschedule");
+const { collectSubtreeBlockIds, unplannedProperties } = require("../lib/reschedule");
 const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 const { route } = require("../lib/route-helpers");
 const createTaskTiming = require("../lib/task-timing");
@@ -1645,7 +1645,7 @@ module.exports = function mount(app, ctx) {
       if (parentStart != null && !isHHMM(parentStart)) return res.status(400).json({ error: "Invalid parentStart (want HH:MM)" });
       if (parentEnd != null && !isHHMM(parentEnd)) return res.status(400).json({ error: "Invalid parentEnd (want HH:MM)" });
       const place = placement || ((parentStart || parentEnd) ? { kind: "timed", start: parentStart, end: parentEnd } : null);
-      if (place && place.kind !== "timed" && place.kind !== "all_day") return res.status(400).json({ error: "Invalid placement kind" });
+      if (place && place.kind !== "timed" && place.kind !== "all_day" && place.kind !== "unplanned") return res.status(400).json({ error: "Invalid placement kind" });
       if (place && place.kind === "timed" && (!isHHMM(place.start) || !isHHMM(place.end))) {
         return res.status(400).json({ error: "Timed placement requires HH:MM start and end" });
       }
@@ -1714,9 +1714,16 @@ module.exports = function mount(app, ctx) {
           newParentEnd - newParentStart !== oldParentEnd - oldParentStart) {
         return res.status(400).json({ error: "Container duration is derived from its children" });
       }
+      if(place&&place.kind==="unplanned"&&place.durations!=null){
+        if(typeof place.durations!=="object"||Array.isArray(place.durations)||Object.entries(place.durations).some(([id,value])=>!subtreeIds.includes(id)||!Number.isFinite(value)||value<0||value>1440))return res.status(400).json({error:"Invalid Unplanned durations"});
+      }
       const moves = subtreeIds.map(bid => {
         const b = byId.get(bid);
         const properties = { ...((b && b.properties) || {}) };
+        if(place&&place.kind==="unplanned")return {
+          id:bid,date:targetDate,properties:unplannedProperties(b,parent.id,place.durations),
+          ...(bid===parent.id?{parentId:null}:{}),expectedDate:b.date,expectedUpdatedAt:b.updated_at
+        };
         if (bid === parent.id) {
           if (dateChanged) properties.rescheduledFrom = { date: fromDate, at: now };
           if (place && place.kind === "timed") {

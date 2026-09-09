@@ -62,3 +62,14 @@ test("same-day stale placement is rejected by its version even when the date mat
   );
   assert.ok(!pool.queries.some((sql) => sql.startsWith("UPDATE blocks")));
 });
+
+test("Unplanned promotion updates both parent edge spaces in the existing transaction",async()=>{
+  const rows=[{id:'parent',type:'block',date:'2026-09-09',parent_id:'outer',properties:{subtaskOf:'outer-local'},sort_order:1},{id:'child',type:'block',date:'2026-09-09',parent_id:'parent',properties:{subtaskOf:'parent'},sort_order:2}];
+  const writes=[],queries=[];
+  const client={release(){},async query(sql,params){queries.push(sql);if(sql.startsWith('SELECT *'))return {rows:[rows.find(row=>row.id===params[0])]};if(sql.startsWith('UPDATE'))writes.push(params);return {rows:[]};}};
+  const db=loadDbWithMock({connect:async()=>client,query:async()=>({rows:[]})});
+  const result=await db.rescheduleBlocks([{id:'parent',date:'2026-09-09',parentId:null,properties:{duration:30}},{id:'child',date:'2026-09-09',properties:{subtaskOf:'parent',duration:0}}],[]);
+  assert.equal(writes[0][5],null);assert.equal(writes[1][5],'parent');
+  assert.equal(result.blocks[0].parent_id,null);assert.equal(result.blocks[1].parent_id,'parent');
+  assert.equal(queries.at(-1),'COMMIT');
+});

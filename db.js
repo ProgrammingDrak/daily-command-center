@@ -1653,7 +1653,7 @@ async function getCalendarMeetingContextBySourceIds(sourceIds, workspaceId) {
 //
 // One query, not two: this replaces a getBlocksByDate + getUndatedTaskBlocks pair the
 // route used to concatenate (getUndatedTaskBlocks is deleted — this was its only caller).
-async function getRescheduleSubtreePool(fromDate, workspaceId) {
+async function getRescheduleSubtreePool(fromDate, workspaceId, { includeTriageRoots = false } = {}) {
   const isTask = `(b.properties->>'local_id' IS NOT NULL OR b.properties->>'kind' = 'task')`;
   const linked = `(b.properties->>'subtaskOf' IS NOT NULL OR b.properties->>'wrapId' IS NOT NULL)`;
   const { rows } = await pool.query(
@@ -1663,7 +1663,7 @@ async function getRescheduleSubtreePool(fromDate, workspaceId) {
           AND b.deleted_at IS NULL
           AND b.type = 'block'
           AND ${isTask}
-          AND (b.date = $1 OR (b.date IS NULL AND ${linked}))
+          AND (b.date = $1 OR (b.date IS NULL AND ${includeTriageRoots ? "(" + linked + " OR b.properties->>'triageBlock' = 'true')" : linked}))
        UNION
        SELECT c.* FROM blocks c
          JOIN task_pool p ON (
@@ -1835,14 +1835,15 @@ async function rescheduleBlocks(moves, creates) {
       if (dayChanged && isTaskRow({ type: existing.type, properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps })) {
         newSortOrder = await nextSortOrderForDay(client, { date: newDate, workspace_id: existing.workspace_id });
       }
-      await client.query(`UPDATE blocks SET properties = $1, date = $2, sort_order = $3, updated_at = $4 WHERE id = $5`, [newProps, newDate, newSortOrder, now, m.id]);
+      const newParentId=Object.prototype.hasOwnProperty.call(m,"parentId")?m.parentId:existing.parent_id;
+      await client.query(`UPDATE blocks SET properties = $1, date = $2, sort_order = $3, updated_at = $4, parent_id = $6 WHERE id = $5`, [newProps, newDate, newSortOrder, now, m.id,newParentId]);
       await client.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'update', $2, $3, $4)`, [m.id, existing.properties, newProps, now]);
       // Same tenant fields as updateBlock above, and load-bearing in the same
       // array: the loop below pushes createBlock results into THIS `results`, and
       // the route splits it into `blocks` and `created`. Without these the two
       // halves of one reschedule response would disagree about whether a row
       // knows its workspace.
-      results.push({ id: m.id, type: existing.type, parent_id: existing.parent_id, date: normalizeDate(newDate), properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps, sort_order: newSortOrder, user_id: existing.user_id, workspace_id: existing.workspace_id, created_at: existing.created_at, updated_at: now, deleted_at: null });
+      results.push({ id: m.id, type: existing.type, parent_id: newParentId, date: normalizeDate(newDate), properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps, sort_order: newSortOrder, user_id: existing.user_id, workspace_id: existing.workspace_id, created_at: existing.created_at, updated_at: now, deleted_at: null });
     }
     for (const c of (creates || [])) {
       results.push(await createBlock(c, client));

@@ -349,9 +349,9 @@ function _orderUnscheduled(rows){
 // so walk every section tagged .uns-group and keep ONE persisted order across both.
 function _unscheduledRowIds(){
   const ids=[];
-  document.querySelectorAll('#list-view .it-list-section.uns-group, #list-view .time-block-divider[data-block-id="triage"]').forEach(sec=>{
+  document.querySelectorAll('#list-view .time-block-divider.uns-group, #list-view .time-block-divider[data-block-id="triage"]').forEach(sec=>{
     let n=sec.nextElementSibling;
-    while(n&&!n.classList.contains("it-list-section")&&!n.classList.contains("time-block-divider")){
+    while(n&&!n.classList.contains("time-block-divider")&&(!n.classList.contains("it-list-section")||n.dataset.section==="unscheduled")){
       if(n.classList.contains("it-list-item")&&n.dataset.id)ids.push(n.dataset.id);
       n=n.nextElementSibling;
     }
@@ -746,7 +746,7 @@ function createTaskListRowRenderer(context){
     };
     const metaHtml=inProgressChip+nowChip+
       '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+chipSlot+streakChip+
-      (subTimeless?'':(ev.untimed?(ev.triageBlock?'<span class="it-list-duration" title="Estimated completion time">'+ms(dur(ev))+'</span>':'<span class="it-list-untimed">Unscheduled</span>'):(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+      (subTimeless?'':(ev.untimed?(ev.triageBlock?'<span class="it-list-duration" title="Estimated completion time">'+ms(dur(ev))+'</span>':'<span class="it-list-untimed">Unplanned</span>'):(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
       (isUnfRow?'<span class="it-list-unfinished">Unfinished from '+escHtml(_unfSlashDate(r.sourceDate))+'</span>':'')+
       (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
       (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" style="cursor:pointer" title="View prep briefing">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" style="cursor:pointer" title="Prep pending — open to view or generate">&#9675; Prep</span>':'')+
@@ -827,8 +827,6 @@ function createTaskListRowRenderer(context){
 }
 window.createTaskListRowRenderer=createTaskListRowRenderer;
 
-const TIME_BLOCK_DISCLOSURE_ICONS={expanded:"▾",collapsed:"▸"};
-
 function buildListView(){
   const wrap=document.getElementById("list-view");
   if(!wrap)return;
@@ -895,72 +893,16 @@ function buildListView(){
     g.innerHTML='<span>'+ms(mins)+'</span>';
     return g;
   }
-  function timeBlockCollapseKey(block){return "time-block:"+JSON.stringify([viewDate,block.id||null]);}
+  function timeBlockCollapseKey(block){return DCC.TimeBlocks.collapseKey(viewDate,block);}
   function timeBlockDividerEl(block,isCurrent){
-    const TB=DCC.TimeBlocks;
-    if(block.fixed){
-      const fixed=document.createElement("div");
-      fixed.className="time-block-divider variant-"+TB.DIVIDER_VARIANT;
-      fixed.innerHTML='<strong>'+escHtml(block.name)+'</strong>';
-      return fixed;
-    }
-    const key=timeBlockCollapseKey(block),collapsed=isCollapsed(key);
-    const el=document.createElement("div");
-    el.className="time-block-divider variant-"+TB.DIVIDER_VARIANT+(isCurrent?" current":"");
-    if(block.id)el.dataset.blockId=block.id;
-    const toggle=document.createElement("button");
-    toggle.type="button";
-    toggle.className="time-block-toggle";
-    toggle.dataset.timeBlockToggle=key;
-    toggle.setAttribute("aria-expanded",String(!collapsed));
-    toggle.title=(block.start?TB.rangeLabel(block)+" · ":"")+(collapsed?"Expand ":"Collapse ")+block.name;
-    toggle.innerHTML='<span class="time-block-chevron" aria-hidden="true">'+TIME_BLOCK_DISCLOSURE_ICONS[collapsed?"collapsed":"expanded"]+'</span><strong>'+escHtml(block.name)+'</strong>';
-    let holdTimer=null,pressStart=null,suppressClick=false;
-    const clearHold=()=>{clearTimeout(holdTimer);holdTimer=null;pressStart=null;};
-    toggle.addEventListener("click",()=>{
-      clearHold();
-      if(suppressClick){suppressClick=false;return;}
-      toggleCollapsed(key);
-      buildListView();
-      Array.from(wrap.querySelectorAll("[data-time-block-toggle]")).find(button=>button.dataset.timeBlockToggle===key)?.focus({preventScroll:true});
-    });
-    const edit=document.createElement("button");
-    edit.type="button";
-    edit.className="time-block-edit";
-    edit.title=block.id?"Edit "+block.name:"Edit time blocks";
-    edit.setAttribute("aria-label",edit.title);
-    edit.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m16 3 5 5-13 13H3v-5L16 3Z M13 6l5 5"/></svg>';
-    edit.addEventListener("click",()=>openBlockEditor(block.id||null));
-    // A hold reveals the edit control without collapsing the block.
-    toggle.addEventListener("pointerdown",event=>{
-      if(event.button!==0)return;
-      clearHold();
-      suppressClick=false;
-      pressStart={x:event.clientX,y:event.clientY};
-      holdTimer=setTimeout(()=>{
-        clearHold();
-        if(!toggle.isConnected)return;
-        suppressClick=true;
-        edit.focus({preventScroll:true});
-      },QUICK_COMPLETE_HOLD_MS);
-    });
-    toggle.addEventListener("pointermove",event=>{
-      if(pressStart&&Math.hypot(event.clientX-pressStart.x,event.clientY-pressStart.y)>8)clearHold();
-    });
-    ["pointerup","pointercancel","pointerleave"].forEach(type=>toggle.addEventListener(type,clearHold));
-    toggle.addEventListener("contextmenu",event=>event.preventDefault());
-    el.appendChild(toggle);
-    el.appendChild(edit);
-    return el;
+    const key=timeBlockCollapseKey(block);
+    return DCC.TimeBlockView.header(block,{key,collapsed:isCollapsed(key),current:isCurrent,
+      onToggle:()=>{toggleCollapsed(key);buildListView();Array.from(wrap.querySelectorAll("[data-time-block-toggle]")).find(button=>button.dataset.timeBlockToggle===key)?.focus({preventScroll:true});},
+      onEdit:()=>openBlockEditor(block.id)});
   }
-
-  const timeBlocks=(DCC.TimeBlocks&&DCC.TimeBlocks.forDate)
-    ? DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate)
-    : [];
-  const useTimeBlockGroups=timeBlocks.length>0;
-  // Batch controls include editable time blocks and nested task parents.
-  const parentIds=visible.filter(ev=>childrenOf(ev.id,visible).length>0).map(ev=>ev.id)
-    .concat(timeBlocks.map(timeBlockCollapseKey),useTimeBlockGroups?[timeBlockCollapseKey({})]:[]);
+  const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
+  const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible}),timeBlocks);
+  const parentIds=visible.filter(ev=>childrenOf(ev.id,visible).length>0).map(ev=>ev.id).concat(groups.map(g=>timeBlockCollapseKey(g.block)));
   if(parentIds.length){
     const controls=document.createElement("div");
     controls.className="it-list-controls";
@@ -990,93 +932,32 @@ function buildListView(){
   // too) and gated on the subtree being finished (so a done step with open steps under
   // it stays visible with its children nested, instead of hiding live work).
   section("Work list",activeIds.size);
-  const triageTree=DCC.TimeBlocks.partitionTriageTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible}));
-  const triageIds=new Set(triageTree.triage.map(node=>node.ev.id));
-  wrap.appendChild(timeBlockDividerEl(DCC.TimeBlocks.TRIAGE_BLOCK,false));
-  triageTree.triage.forEach((node,index)=>wrap.appendChild(emitNode(node,index,isDone(node.ev)?"done":"open")));
-  const triageState=typeof triageTaskLoadState==="function"?triageTaskLoadState():{};
-  if(triageState.loading||triageState.error){
-    const status=document.createElement(triageState.error?"button":"div");
-    status.className="it-list-empty";
-    status.textContent=triageState.error?"Triage could not load. Retry":"Loading Triage tasks…";
-    if(triageState.error)status.addEventListener("click",()=>buildScheduleTriage());
-    wrap.appendChild(status);
-  }
-
-  if(!day.timed.length&&!timeBlocks.length){
-    const empty=document.createElement("div");
-    empty.className="it-list-empty";
-    empty.textContent=viewDate===actualToday?"Nothing scheduled for today.":"Nothing scheduled on this day.";
-    wrap.appendChild(empty);
-  }else{
-    // Idle-gap markers between consecutive TOP-LEVEL timed rows. Gate on
-    // node.depth===0: selectTree renders roots at depth 0 and nests
-    // subtasks AND ride-alongs at depth>=1 -- both carry their own times and
-    // would otherwise clobber prevEnd or inject a stray marker inside a wrap.
-    // _rowIsTimed excludes untimed rows; _gapMarkerMins owns the null/threshold
-    // logic (see their defs above).
-    //
-    // pool:visible is the orphan fix. A row whose parent is in `visible` but not in
-    // `day.timed` (it is Unscheduled, or a fully-done fold) renders under that parent
-    // where the parent lives, so it must NOT be promoted to a top-level row here.
-    // A row whose parent is genuinely gone from `visible` (deleted, side-project) is
-    // still promoted and still visible.
-    let rank=0;
-    const tree=DCC.TaskModel.selectTree(day.timed.filter(ev=>!triageIds.has(ev.id)),{pool:visible});
-    function emitGroup(nodes){
-      let prevEnd=null;
-      nodes.forEach(node=>{
-        const isSub=_isSubRow(node);
-        if(!node.depth&&_rowIsTimed(node.ev)){
-          const gm=_gapMarkerMins(prevEnd,pt(node.ev.start));
-          if(gm!=null)wrap.appendChild(gapEl(gm));
-          prevEnd=pt(node.ev.end);
-        }
-        wrap.appendChild(emitNode(node,isSub?0:rank++,isDone(node.ev)?"done":"open"));
-      });
+  let rank=0;
+  const now=new Date(),nowMin=now.getHours()*60+now.getMinutes();
+  groups.forEach(({block,nodes})=>{
+    const current=block.timed&&block.start&&isTodayView&&nowMin>=DCC.TimeBlocks.minutes(block.start,false)&&nowMin<DCC.TimeBlocks.minutes(block.end,true);
+    const header=timeBlockDividerEl(block,current);
+    if(block.sortable){header.dataset.section="unscheduled";header.classList.add("uns-group");}
+    wrap.appendChild(header);
+    if(block.dropTarget)wrap.appendChild(timeBlockDropZoneEl(block));
+    if(isCollapsed(timeBlockCollapseKey(block)))return;
+    if(block.id==="triage"){
+      const state=typeof triageTaskLoadState==="function"?triageTaskLoadState():{};
+      if(state.loading||state.error){const status=document.createElement(state.error?"button":"div");status.className="it-list-empty";status.textContent=state.error?"Triage could not load. Retry":"Loading Triage tasks…";if(state.error)status.addEventListener("click",()=>buildScheduleTriage());wrap.appendChild(status);}
     }
-    if(useTimeBlockGroups){
-      const grouped=DCC.TimeBlocks.groupTree(tree,timeBlocks);
-      const now=new Date();
-      const nowMin=now.getHours()*60+now.getMinutes();
-      grouped.groups.forEach(({block,nodes})=>{
-        const current=isTodayView&&nowMin>=DCC.TimeBlocks.minutes(block.start,false)&&nowMin<DCC.TimeBlocks.minutes(block.end,true);
-        wrap.appendChild(timeBlockDividerEl(block,current));
-        wrap.appendChild(timeBlockDropZoneEl(block));
-        if(!isCollapsed(timeBlockCollapseKey(block)))emitGroup(nodes);
-      });
-      if(grouped.outside.nodes.length){
-        wrap.appendChild(timeBlockDividerEl({name:"Outside Time Blocks"},false));
-        if(!isCollapsed(timeBlockCollapseKey({})))emitGroup(grouped.outside.nodes);
-      }
-    }else{
-      emitGroup(tree);
+    if(block.sortable){
+      section("",0,"unscheduled");
+      const chunks=[];nodes.forEach(node=>{if(!node.depth||!chunks.length)chunks.push([]);chunks[chunks.length-1].push(node);});
+      const roots=chunks.map(chunk=>chunk[0].ev),mode=_sectionSort("unscheduled");
+      const ordered=_sectionSortIsManual(mode)?_orderUnscheduled(roots):_applySectionSort(roots,mode,ev=>ev.title,_unsCreated);
+      const byId=new Map(chunks.map(chunk=>[chunk[0].ev.id,chunk]));nodes=ordered.flatMap(ev=>byId.get(ev.id));
     }
-  }
-  // Unscheduled: untimed tasks for this day. Past-day unfinished work is handled
-  // exclusively through Loose Ends.
-  const uMode=_sectionSort("unscheduled");
-  const unscheduledRoots=day.unscheduledRoots.filter(ev=>!triageIds.has(ev.id));
-  if(unscheduledRoots.length){
-    // The header counts and the drag/sort order apply to ROOTS; children follow their
-    // parent through selectTree. Before C6a this section rendered a flat list of roots
-    // and a subtask of an untimed parent was promoted into the WORK LIST as a
-    // standalone numbered row -- the parent sat down here, its step sat up there.
-    section("Unscheduled",unscheduledRoots.length,"unscheduled","uns-group");
-    const rootOrder=_sectionSortIsManual(uMode)
-      ? _orderUnscheduled(unscheduledRoots)
-      : _applySectionSort(unscheduledRoots,uMode,ev=>ev.title,_unsCreated);
-    const rootIds=new Set(rootOrder.map(ev=>ev.id));
-    let uRank=0;
-    DCC.TaskModel.selectTree(rootOrder.concat(day.unscheduled.filter(ev=>!rootIds.has(ev.id)&&!triageIds.has(ev.id))),{pool:visible})
-      .forEach(node=>{
-        // The real mode, not a hardcoded "open". A done row only folds once its whole
-        // subtree is finished, so a done step with unfinished steps under it legitimately
-        // renders HERE -- and hardcoding "open" gave it an unchecked box titled "Mark done"
-        // whose click un-completed it.
-        wrap.appendChild(emitNode(node,_isSubRow(node)?0:uRank++,isDone(node.ev)?"done":"open"));
-      });
-  }
+    let prevEnd=null;
+    nodes.forEach(node=>{
+      if(block.timed&&!node.depth&&_rowIsTimed(node.ev)){const gap=_gapMarkerMins(prevEnd,pt(node.ev.start));if(gap!=null)wrap.appendChild(gapEl(gap));prevEnd=pt(node.ev.end);}
+      wrap.appendChild(emitNode(node,_isSubRow(node)?0:rank++,isDone(node.ev)?"done":"open"));
+    });
+  });
   // Past-day unfinished work belongs in Loose Ends. Do not duplicate that queue
   // below today's task list; the header pill is its single visible entry point.
 
