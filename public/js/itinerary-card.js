@@ -365,7 +365,7 @@
       '<div class="bar" style="background:'+(opts.barColor||"")+'"></div>'+
       '<div class="it-list-main">'+
         '<div class="it-list-title-row">'+(opts.collapseHtml||"")+'<span class="ttl" title="'+escHtml(ev.title||"")+'">'+escHtml(ev.title||"")+'</span>'+(opts.titleExtrasHtml||"")+addButton+'</div>'+
-        '<div class="it-list-meta">'+(opts.metaHtml||"")+scheduleButton+'</div>'+
+        '<div class="it-list-meta">'+(opts.metaHtml||"")+(ev.sourceContext?'<span class="task-source-context">'+escHtml(ev.sourceContext)+'</span>':'')+scheduleButton+'</div>'+
       '</div>'+
       '<div class="it-list-actions">'+(opts.actionsBeforeHtml||"")+radialButton+deleteButton+'</div>';
 

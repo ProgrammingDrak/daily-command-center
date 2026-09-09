@@ -32,6 +32,32 @@ function fixture() {
 const source = {title: 'Reply to the partner', triageId: 'inbound-1', triageKey: 'slack|D1:42', duration: 25, source_id: 'https://example.test/thread', triageContext: {draft_preview: 'Saved draft'}};
 const owner = {workspaceId: 'ws-1', userId: 1};
 
+test('Slack naming and source metadata survive materialization, moves, and manual renames', async () => {
+  const fs = require('node:fs');
+  const vm = require('node:vm');
+  const {taskCommonProps} = require('./public/js/task-serialize');
+  const code = fs.readFileSync(require.resolve('./public/js/triage.js'), 'utf8');
+  const body = code.slice(code.indexOf('function triageTaskProps('), code.indexOf('// Already on the schedule?'));
+  const context = vm.createContext({window:{DCC:{taskSourceUrl:item=>item.source_ref}},triagePriorityLabel:x=>x,triageItemKeyFor:item=>item.id});
+  vm.runInContext(body, context);
+  const raw = {id:'slack:mention:C1:42',type:'slack',title:'#finance: <@U123|Drake>, please review the report',source_ref:'https://example.slack.com/archives/C1/p42'};
+  const request = {title:raw.title,...context.triageTaskProps(raw.id,raw)};
+  const f=fixture();
+  const [row]=await f.store.materialize({...owner,items:[request]});
+  const moved=taskCommonProps(TM.fromBlock(row));
+  assert.equal(moved.title,'Review the report');
+  assert.equal(moved.generatedTitle,moved.title);
+  assert.equal(moved.originalTitle,raw.title);
+  assert.equal(moved.sourceContext,'#finance');
+  assert.equal(moved.source_id,raw.source_ref);
+  assert.equal(moved.triageId,raw.id);
+  row.properties.title='My manual title';
+  const [repeated]=await f.store.materialize({...owner,items:[request]});
+  assert.equal(repeated.id,row.id);
+  assert.equal(repeated.properties.title,'My manual title');
+  assert.equal(f.rows.size,1);
+});
+
 test('materialized Triage uses normal stored tasks and retains identity across reloads and days', async () => {
   const f = fixture();
   const [first] = await f.store.materialize({...owner, items: [source]});

@@ -1,3 +1,4 @@
+const { normalizeTriageItem } = require("./public/js/slack-titles");
 // ======== TRIAGE SUPPRESSIONS ========
 //
 // The durable, date-independent record of "I already handled this triage item".
@@ -311,7 +312,7 @@ function mergeTriageForIngest(existing, incoming) {
   return {
     ...previous,
     ...next,
-    open_items: Array.from(byId.values()),
+    open_items: Array.from(byId.values()).map(normalizeTriageItem),
     resolved_items: (Array.isArray(next.resolved_items) ? next.resolved_items : [])
       .filter((item) => !reopenedIds.has(String(item && item.id || ""))),
   };

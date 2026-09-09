@@ -1,5 +1,6 @@
 "use strict";
 
+const { normalizeTriageItem } = require("./public/js/slack-titles");
 const crypto = require("node:crypto");
 const { createMaterializeGuard } = require("./lib/materialize-guard");
 const { taskCommonProps } = require("./public/js/task-serialize");
@@ -10,7 +11,8 @@ module.exports = function createTriageTaskStore({ blockDB, respStore, linkTriage
   const guard = createMaterializeGuard({ blockDB });
   async function materialize({ items, responsibilityIds, userId, workspaceId, tz }) {
     const blocks = [];
-    for (const item of items || []) {
+    for (const rawItem of items || []) {
+      const item = normalizeTriageItem(rawItem);
       if (!item || !item.triageId || !String(item.title || "").trim()) continue;
       const identity = String(item.triageKey || item.triageId);
       const key = "triage-task:" + crypto.createHash("sha256").update(identity).digest("hex");

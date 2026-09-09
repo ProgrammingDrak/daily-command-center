@@ -300,10 +300,10 @@ test("🔖 creates a useful captured task keyed by channel:ts before AI is avail
   const p = blocks[0].properties;
   assert.equal(p.idempotency_key, "slack-bookmark:C1:222.2");
   assert.equal(p.estimatedMinutes, 5);
-  assert.equal(p.title, "Please review the launch checklist with Alex tomorrow");
+  assert.equal(p.title, "Review the launch checklist with Alex tomorrow");
   assert.equal(p.captureTitle, p.title);
   assert.equal(p.capture_status, "captured");
-  assert.equal(p.enrichment_status, "waiting_for_key");
+  assert.equal(p.enrichment_status, "complete");
   assert.equal(p.source, "slack-bookmark");
   assert.equal(p.status, "open");
   // source_id must be an http(s) URL so the DCC row renders the "Slack ↗" pill
@@ -325,7 +325,7 @@ test("👥 creates a delegated item with tomorrow's check-in and removes an unto
   assert.equal(item.date, null);
   assert.equal(item.properties.kind, "delegated_item");
   assert.equal(item.properties.idempotency_key, "slack-delegate:C1:222.3");
-  assert.equal(item.properties.myTask, "Please review the launch checklist with Alex tomorrow");
+  assert.equal(item.properties.myTask, "Review the launch checklist with Alex tomorrow");
   assert.equal(item.properties.waitingReason, "delegated");
   assert.equal(item.properties.checkInMode, "date");
   assert.equal(item.properties.checkInDate, "2026-07-29");
@@ -774,112 +774,59 @@ test("delayed bookmark capture never replaces user-authored notes", async () => 
   assert.equal(blocks[0].properties.source_message_preview, "Please investigate the failed renewal workflow");
 });
 
-test("Haiku enriches from the full thread while retaining capture metadata", async () => {
+test("bookmark titles use local rules even when an Anthropic key is configured", async () => {
   const { handler, blocks, setFetch, calls } = makeHarness({ anthropicKey: "test-anthropic" });
+  const raw = "Hey <@U123|Drake Shadwell (EST)>, can you review <https://example.com/report|the payment report>?";
   setFetch(async (url) => {
-    if (String(url).includes("reactions.get")) return { ok: true, status: 200, json: async () => ({ ok: true, message: { ts: "222.5", thread_ts: "222.0", text: "Can you get this launch issue sorted with Jamie?", user: "U1" } }) };
-    if (String(url).includes("conversations.replies")) return { ok: true, status: 200, json: async () => ({ ok: true, messages: [
-      { ts: "222.0", user: "U2", text: "Launch is blocked on the pricing approval." },
-      { ts: "222.5", user: "U1", text: "Can you get this launch issue sorted with Jamie?" },
-      { ts: "222.6", user: "U3", text: "Jamie has the approval packet." },
-    ] }) };
-    if (String(url).includes("api.anthropic.com")) return { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: JSON.stringify({ title: "Get Jamie's pricing approval for launch", summary: "The launch is blocked until Jamie completes the pricing approval packet." }) }] }) };
+    const value = String(url);
+    assert.ok(value.startsWith("https://slack.com/api/"), "only Slack requests are allowed");
+    assert.ok(!value.includes("conversations.replies"), "titling must not fetch a full thread");
+    if (value.includes("reactions.get")) return { ok: true, status: 200, json: async () => ({ ok: true, message: { ts: "222.5", thread_ts: "222.0", text: raw, user: "U1" } }) };
+    if (value.includes("chat.getPermalink")) return { ok: true, status: 200, json: async () => ({ ok: true, permalink: "https://example.slack.com/archives/C1/p2225?thread_ts=222.0&cid=C1" }) };
     return { ok: true, status: 200, json: async () => ({ ok: true }) };
   });
   await post(handler, reaction("bookmark", "222.5", "222.9"));
   const props = blocks[0].properties;
-  assert.equal(props.title, "Get Jamie's pricing approval for launch");
-  assert.equal(props.captureTitle, "Can you get this launch issue sorted with Jamie?");
-  assert.equal(props.aiSummary, "The launch is blocked until Jamie completes the pricing approval packet.");
-  assert.equal(props.detail, props.aiSummary);
+  assert.equal(props.title, "Review the payment report");
+  assert.equal(props.source_message_preview, raw);
+  assert.ok(props.notes.includes(raw));
+  assert.equal(props.source_id, "https://example.slack.com/archives/C1/p2225?thread_ts=222.0&cid=C1");
+  assert.equal(props.contact.threadTs, "222.0");
   assert.equal(props.enrichment_status, "complete");
-  const anthropicCall = calls.fetch.find((c) => c.url.includes("api.anthropic.com"));
-  const payload = JSON.parse(anthropicCall.init.body);
-  const promptData = JSON.parse(payload.messages[0].content);
-  assert.equal(promptData.thread.length, 3, "the root, reacted message, and reply reach Haiku");
+  assert.equal(props.enrichment_model, "slack-rules-v1");
+  assert.equal(props.enrichment_next_attempt_at, null);
+  assert.equal(props.aiSummary, undefined);
+  assert.ok(calls.fetch.length > 0);
+  assert.ok(calls.fetch.every(call => call.url.startsWith("https://slack.com/api/")));
 });
 
-test("thread enrichment paginates replies and stores Slack's canonical permalink", async () => {
-  const { handler, blocks, setFetch, calls } = makeHarness({ anthropicKey: "test-anthropic" });
-  setFetch(async (url) => {
-    const value = String(url);
-    if (value.includes("reactions.get")) return { ok: true, status: 200, json: async () => ({ ok: true, message: {
-      ts: "222.55", thread_ts: "222.50", text: "Please resolve the final launch dependency", user: "U1",
-    } }) };
-    if (value.includes("chat.getPermalink")) return { ok: true, status: 200, json: async () => ({
-      ok: true,
-      permalink: "https://example.slack.com/archives/C1/p22255?thread_ts=222.50&cid=C1",
-    }) };
-    if (value.includes("conversations.replies")) {
-      const cursor = new URL(value).searchParams.get("cursor");
-      return cursor === "page-2"
-        ? { ok: true, status: 200, json: async () => ({ ok: true, messages: [{ ts: "222.56", user: "U2", text: "The final approval arrived." }], response_metadata: { next_cursor: "" } }) }
-        : { ok: true, status: 200, json: async () => ({ ok: true, messages: [{ ts: "222.50", user: "U3", text: "Launch dependency thread." }, { ts: "222.55", user: "U1", text: "Please resolve the final launch dependency" }], response_metadata: { next_cursor: "page-2" } }) };
-    }
-    if (value.includes("api.anthropic.com")) return { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: JSON.stringify({ title: "Resolve the final launch dependency", summary: "The final approval has arrived." }) }] }) };
-    return { ok: true, status: 200, json: async () => ({ ok: true }) };
-  });
-  await post(handler, reaction("bookmark", "222.55", "222.9"));
-  assert.equal(blocks[0].properties.source_id, "https://example.slack.com/archives/C1/p22255?thread_ts=222.50&cid=C1");
-  assert.deepEqual(blocks[0].properties.contact, {
-    channel: "slack",
-    address: "C1",
-    sourceRef: "https://example.slack.com/archives/C1/p22255?thread_ts=222.50&cid=C1",
-    threadTs: "222.50",
-    messageTs: "222.55",
-  });
-  const replyCalls = calls.fetch.filter((c) => c.url.includes("conversations.replies"));
-  assert.equal(replyCalls.length, 2);
-  assert.equal(new URL(replyCalls[1].url).searchParams.get("cursor"), "page-2");
-  const anthropicCall = calls.fetch.find((c) => c.url.includes("api.anthropic.com"));
-  const prompt = JSON.parse(JSON.parse(anthropicCall.init.body).messages[0].content);
-  assert.ok(prompt.thread.some((message) => message.text === "The final approval arrived."));
-});
-
-test("Haiku metadata never overwrites a title edited while enrichment is running", async () => {
-  const { handler, blocks, setFetch } = makeHarness({ anthropicKey: "test-anthropic" });
-  setFetch(async (url) => {
-    if (String(url).includes("reactions.get")) return { ok: true, status: 200, json: async () => ({
-      ok: true,
-      message: { ts: "222.51", thread_ts: "222.51", text: "Please investigate the customer billing failure today", user: "U1" },
-    }) };
-    if (String(url).includes("conversations.replies")) {
-      blocks[0].properties.title = "Keep my manually edited title";
-      return { ok: true, status: 200, json: async () => ({ ok: true, messages: [
-        { ts: "222.51", user: "U1", text: "Please investigate the customer billing failure today" },
-      ] }) };
-    }
-    if (String(url).includes("api.anthropic.com")) return { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: JSON.stringify({
-      title: "Investigate customer billing failure",
-      summary: "A customer billing failure needs investigation today.",
-    }) }] }) };
-    return { ok: true, status: 200, json: async () => ({ ok: true }) };
-  });
+test("old enrichment retries settle locally without overwriting a manual title", async () => {
+  const { handler, api, blocks, calls } = makeHarness({ anthropicKey: "test-anthropic" });
   await post(handler, reaction("bookmark", "222.51", "222.59"));
+  const props = blocks[0].properties;
+  props.title = "Keep my manually edited title";
+  props.enrichment_model = "old-model";
+  props.enrichment_status = "retry";
+  const before = calls.fetch.length;
+  await api.enrichBlock(blocks[0].id);
   assert.equal(blocks[0].properties.title, "Keep my manually edited title");
-  assert.equal(blocks[0].properties.aiTitle, "Investigate customer billing failure");
-  assert.equal(blocks[0].properties.aiSummary, "A customer billing failure needs investigation today.");
+  assert.equal(blocks[0].properties.enrichment_status, "complete");
+  assert.equal(calls.fetch.length, before);
 });
 
-test("malformed Haiku output keeps the useful fallback and schedules a retry", async () => {
-  const { handler, blocks, setFetch } = makeHarness({ anthropicKey: "test-anthropic" });
-  setFetch(async (url) => {
-    if (String(url).includes("reactions.get")) return { ok: true, status: 200, json: async () => ({
-      ok: true,
-      message: { ts: "222.52", text: "Please investigate the customer billing failure today", user: "U1" },
-    }) };
-    if (String(url).includes("conversations.replies")) return { ok: true, status: 200, json: async () => ({ ok: true, messages: [
-      { ts: "222.52", user: "U1", text: "Please investigate the customer billing failure today" },
-    ] }) };
-    if (String(url).includes("api.anthropic.com")) return { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: "not json" }] }) };
-    return { ok: true, status: 200, json: async () => ({ ok: true }) };
-  });
+test("an untouched legacy capture gets a readable title without model calls", async () => {
+  const { handler, api, blocks, calls } = makeHarness();
   await post(handler, reaction("bookmark", "222.52", "222.59"));
-  const p = blocks[0].properties;
-  assert.equal(p.title, "Please investigate the customer billing failure today");
-  assert.equal(p.enrichment_status, "retry");
-  assert.equal(p.enrichment_attempts, 1);
-  assert.ok(Date.parse(p.enrichment_next_attempt_at) > Date.now());
+  Object.assign(blocks[0].properties, {
+    title: "<@U123|Drake>, please approve the proposal",
+    captureTitle: "<@U123|Drake>, please approve the proposal",
+    source_message_preview: "<@U123|Drake>, please approve the proposal",
+    enrichment_model: "old-model", enrichment_status: "waiting_for_key",
+  });
+  const before = calls.fetch.length;
+  await api.enrichBlock(blocks[0].id);
+  assert.equal(blocks[0].properties.title, "Approve the proposal");
+  assert.equal(calls.fetch.length, before);
 });
 
 test("server reconciliation searches both portable reactions and backfills each record type", async () => {
