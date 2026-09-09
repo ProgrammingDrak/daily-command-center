@@ -2,9 +2,9 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const source=fs.readFileSync('public/js/state.js','utf8');
 function harness({supported=true,failure=null}={}){
   const calls=[],toasts=[],collapsed=new Set(),storage=new Map(supported?[['dcc-unplanned-placement','1']]:[]);
-  const context={viewDate:'2026-09-09',scheduled:[{id:'task',start:'10:00',duration:45},{id:'child',subtaskOf:'task',duration:0}],
+  const context={viewDate:'2026-09-09',scheduled:[{id:'task',start:'10:00',duration:45},{id:'child',subtaskOf:'task',start:'00:00',end:'00:00'}],
     DCC:{TimeBlocks:require('./public/js/time-blocks'),TaskModel:{selectTree:tasks=>tasks.map((ev,i)=>({ev,depth:i}))}},
-    isDone:()=>false,_findTaskBlockForDate:id=>({id}),dur:ev=>ev.duration,_positiveDuration:(n,f)=>n||f,
+    isDone:()=>false,_findTaskBlockForDate:id=>({id}),dur:ev=>ev.duration??0,_positiveDuration:(n,f)=>n||f,
     sessionStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},fetch:async()=>{throw new Error('offline');},
     isCollapsed:key=>collapsed.has(key),toggleCollapsed:key=>collapsed.delete(key),refoldTaskStateFromBlockCache:()=>calls.push('refold'),render:()=>calls.push('render'),showToast:(...args)=>toasts.push(args),
     window:{blockStore:{rescheduleBlock:async(...args)=>{calls.push(args);if(failure)throw failure;}}}};

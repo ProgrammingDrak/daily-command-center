@@ -1389,7 +1389,7 @@ async function moveTaskToUnplanned(id){
   const durations={};
   // Reuse the existing task-tree projection to preserve effective UI durations.
   const tree=DCC.TaskModel.selectTree(scheduled,{pool:scheduled});let depth=null;
-  tree.forEach(node=>{if(node.ev.id===id)depth=node.depth;else if(depth!==null&&node.depth<=depth)depth=null;if(depth!==null){const block=_findTaskBlockForDate(node.ev.id,fromDate,node.ev);if(block)durations[block.id]=node.ev.subtaskOf&&node.ev.duration===0?0:_positiveDuration(dur(node.ev),node.ev.duration||30);}});
+  tree.forEach(node=>{if(node.ev.id===id)depth=node.depth;else if(depth!==null&&node.depth<=depth)depth=null;if(depth!==null){const block=_findTaskBlockForDate(node.ev.id,fromDate,node.ev);if(block){const minutes=dur(node.ev);durations[block.id]=Number.isFinite(minutes)&&minutes>=0?minutes:_positiveDuration(node.ev.duration,30);}}});
   try{
     await window.blockStore.rescheduleBlock(row.id,targetDate,{fromDate,placement:{kind:"unplanned",durations}});
   }catch(error){showToast(error.permanent?(error.message||"Move rejected"):"Move queued. It will retry when connected.",error.permanent?"error":"info");return false;}

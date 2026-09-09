@@ -159,3 +159,11 @@ test('Unplanned placement survives repeated intake without a new task or restore
   const ev=TM.fromBlock(again);assert.equal(ev.untimed,true);
   assert.deepEqual(TB.groupItineraryTree([{ev,depth:0}],[]).at(-1).nodes.map(n=>n.ev.id),[ev.id]);
 });
+
+test('a promoted zero-duration step retains its effective duration after reload',()=>{
+  const block={id:'step',date:'2026-09-09',properties:{local_id:'step',subtaskOf:'parent',duration:0}};
+  block.properties=require('./lib/reschedule').unplannedProperties(block,block.id,{step:0});
+  const ev=TM.fromBlock(block);
+  assert.equal(ev.start,'00:00');assert.equal(ev.end,'00:00');
+  assert.equal(ev.subtaskOf,null);assert.equal(ev.untimed,true);
+});
