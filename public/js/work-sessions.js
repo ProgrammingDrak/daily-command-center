@@ -27,7 +27,11 @@
     if (!task || !window.blockStore) return null;
     if (task._blockId && window.blockStore.get(task._blockId)) return window.blockStore.get(task._blockId);
     var anchor = typeof taskAnchorById === "function" ? taskAnchorById(task.id) : null;
-    if (anchor && anchor.blockId) return window.blockStore.get(anchor.blockId) || null;
+    if (anchor && anchor.blockId) {
+      var anchored = window.blockStore.get(anchor.blockId);
+      if (anchored) return anchored;
+    }
+    if (task.__unf && task.__unf.sourceBlock) return task.__unf.sourceBlock;
     var rows = window.blockStore.getByType ? window.blockStore.getByType("block") : [];
     return rows.find(function (row) {
       var p = row.properties || {};
@@ -66,13 +70,20 @@
     if (result && result.block && window.DCC && window.DCC.TaskModel) {
       var fresh = window.DCC.TaskModel.fromBlock(result.block, { deriveEnd: true });
       Object.assign(task, fresh);
+      if (task.__unf) task.__unf.sourceBlock = result.block;
     }
     refresh();
     if (typeof render === "function") render("schedule");
+    if (typeof window.dispatchEvent === "function" && typeof window.CustomEvent === "function") {
+      window.dispatchEvent(new window.CustomEvent("dcc:work-session-changed", { detail: { id: task.id } }));
+    }
     return result;
   }
 
   function findTask(id) {
+    var carryover = window.DCC && window.DCC.Carryover;
+    var carried = carryover && typeof carryover.get === "function" ? carryover.get(id) : null;
+    if (carried) return carried;
     var pools = [];
     if (typeof scheduled !== "undefined" && Array.isArray(scheduled)) pools.push(scheduled);
     if (typeof backlog !== "undefined" && Array.isArray(backlog)) pools.push(backlog);
@@ -101,6 +112,8 @@
 
   function activeTasks() {
     var pools = [];
+    var carryover = window.DCC && window.DCC.Carryover;
+    if (carryover && typeof carryover.rows === "function") pools.push(carryover.rows());
     if (typeof scheduled !== "undefined" && Array.isArray(scheduled)) pools.push(scheduled);
     if (typeof backlog !== "undefined" && Array.isArray(backlog)) pools.push(backlog);
     if (window.blockStore && window.blockStore.getByType) {
@@ -119,6 +132,8 @@
 
   function availableTasks() {
     var pools = [];
+    var carryover = window.DCC && window.DCC.Carryover;
+    if (carryover && typeof carryover.rows === "function") pools.push(carryover.rows());
     if (typeof scheduled !== "undefined" && Array.isArray(scheduled)) pools.push(scheduled);
     if (typeof backlog !== "undefined" && Array.isArray(backlog)) pools.push(backlog);
     if (window.blockStore && window.blockStore.getByType) {
@@ -284,7 +299,9 @@
       return;
     }
     if (button.dataset.workComplete === "true") {
-      if (typeof toggleDone === "function") {
+      if (task.__unf && window.DCC && window.DCC.Carryover) {
+        Promise.resolve(window.DCC.Carryover.complete(task, window.DCC.Carryover.rows())).finally(refresh);
+      } else if (typeof toggleDone === "function") {
         var completion = toggleDone(task.id);
         refresh();
         Promise.resolve(completion).finally(refresh);

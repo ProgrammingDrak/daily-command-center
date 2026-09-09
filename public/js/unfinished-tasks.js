@@ -81,7 +81,8 @@
   // every one of them into this lane. One done predicate, and it is the one below.
   // One shape for every return path -- callers destructure `truncated` without having
   // to know which branch produced the payload.
-  const EMPTY = () => ({ rows: [], total: 0, scanned: 0, truncated: false });
+  let collectedRows = [];
+  const EMPTY = () => { collectedRows = []; return { rows: [], total: 0, scanned: 0, truncated: false }; };
   async function collectUnfinished(opts) {
     opts = opts || {};
     const days = (opts.days === null) ? null : (opts.days || SCAN_DAYS);
@@ -161,6 +162,7 @@
       const ev = TaskModel.fromBlock(b, { deriveEnd: true });
       ev.__unf = {
         sourceId: b.id,
+        sourceBlock: b,
         sourceLocalId: p.local_id || null,
         sourceDate: date || null,
         createdAt: b.created_at || null,
@@ -179,8 +181,9 @@
     // server off the dates it actually touched rather than by the client off the days
     // it walked. The modal's footer copy reads it. `truncated` says the server's LIMIT
     // clipped the raw pool, which makes `total` a floor rather than an exact count.
+    collectedRows = rows.slice(0, MAX_ROWS);
     return {
-      rows: rows.slice(0, MAX_ROWS), total,
+      rows: collectedRows, total,
       scanned: Number(payload.scanned) || 0,
       truncated: !!(payload && payload.truncated)
     };
@@ -222,6 +225,7 @@
   // behaves the same whether it started in Loose Ends or the itinerary.
   function settle(action, ev, removed) {
     const result = { removed: Array.isArray(removed) ? removed : [] };
+    collectedRows = collectedRows.filter(row => !result.removed.includes(row.id));
     if (typeof window.dispatchEvent === "function" && typeof window.CustomEvent === "function") {
       window.dispatchEvent(new window.CustomEvent("dcc:carryover-settled", {
         detail: { action, removed: result.removed.slice(), sourceDate: originOf(ev).sourceDate || null }
@@ -696,6 +700,8 @@
   DCC.Carryover = {
     SCAN_DAYS: SCAN_DAYS,
     collect: collectUnfinished,
+    rows: () => collectedRows,
+    get: id => collectedRows.find(row => String(row.id) === String(id) || String(row.__unf.sourceId) === String(id)) || null,
     descendants: descendants,
     openRows: openRows,
     rootsOf: rootsOf,

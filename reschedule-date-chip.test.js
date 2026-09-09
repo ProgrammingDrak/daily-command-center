@@ -229,6 +229,32 @@ test("the shared picker marks its overlay while open and unmarks it on close", (
 });
 
 // ── the popover ─────────────────────────────────────────────────────────────
+test("an uncached carryover uses the normal day and placement steps", async () => {
+  const stateSource = fs.readFileSync(require.resolve("./public/js/state.js"), "utf8");
+  const moveSource = mustSlice(stateSource, /^function moveTaskViaPlacement\(id,dateStr,opts\)\{[\s\S]*?\n\}/m, "moveTaskViaPlacement");
+  let placement;
+  const moved = [];
+  const task = { id: "past-task", title: "Past-day task", __unf: { sourceDate: "2026-09-01" } };
+  const ctx = makeContext({
+    scheduled: [], __tomorrowDate: null,
+    openPlacementPicker: (config) => { placement = config; },
+    rescheduleTaskToDate: () => assert.fail("Must use the origin-aware writer"),
+  });
+  vm.runInContext(moveSource, ctx);
+  const { pop } = await openPopover(ctx, {
+    mode: "reschedule", id: task.id, task, view: "date",
+    onMove: (date, time) => moved.push({ date, time, sourceDate: task.__unf.sourceDate }),
+  });
+  const tomorrow = pop.querySelectorAll(".resched-btn").find(button => button.dataset.target === "tomorrow");
+  tomorrow.dispatchEvent({ type: "click", stopPropagation() {} });
+  assert.equal(pop.removed, true);
+  assert.equal(placement.title, task.title);
+  assert.equal(placement.day, "2026-09-03");
+  assert.equal(moved.length, 0, "Choosing a day must not bypass the placement step");
+  await placement.onPlace("2026-09-03", "14:45", task.title);
+  assert.deepEqual(moved, [{ date: "2026-09-03", time: "14:45", sourceDate: "2026-09-01" }]);
+});
+
 test("a day picked in the calendar survives the outside-click listener", async () => {
   const ctx = makeContext();
   const { pop } = await openPopover(ctx, { mode: "reschedule", id: "t1", view: "date" });

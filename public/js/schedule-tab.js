@@ -288,6 +288,8 @@ function buildCarryoverRadialItems(ev,trig,acts){
   if(window.DCCWorkSessions&&window.DCCWorkSessions.policy(ev)==="work_sessions"){
     items.unshift({icon:ev.startedAt?"⏸":"▶",label:ev.startedAt?"Pause work":"Start work",onPick:()=>window.DCCWorkSessions.act(ev,ev.startedAt?"pause":"start")});
   }
+  if(acts.details)items.push({icon:"📝",label:"Notes & actions",onPick:()=>acts.details()});
+  items.push({icon:"➕",label:"Add task…",onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}});
   items.push({icon:"🗑", label:"Drop", onPick:()=>acts.drop()});
   return items;
 }
@@ -362,6 +364,9 @@ function _unsCreated(ev){return (ev&&(ev.createdAt||(ev.__unf&&ev.__unf.sourceDa
 // Resolve a past-day carryover ("Unfinished from …") row by its id. Null when the
 // id isn't a carryover.
 function _unfRecById(id){
+  const carryover=window.DCC&&window.DCC.Carryover;
+  const current=carryover&&typeof carryover.get==="function"?carryover.get(id):null;
+  if(current)return current;
   if(!_unfinishedCache||!Array.isArray(_unfinishedCache.rows))return null;
   return _unfinishedCache.rows.find(ev=>ev.id===id)||null;
 }
@@ -616,62 +621,12 @@ function _gapMarkerMins(prevEndMin,startMin){
   return g>=15?g:null;
 }
 
-function buildListView(){
-  const wrap=document.getElementById("list-view");
-  if(!wrap)return;
-  wrap.innerHTML="";
-  const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
-  // isActive() is time-of-day only (no date), so the "Now" chip must be gated to
-  // today or it would light up on a past/future day whose times overlap the clock.
-  const isTodayView=viewDate===((window.DCC&&DCC.dates&&DCC.dates.todayKey)?DCC.dates.todayKey():new Date().toISOString().split("T")[0]);
-  const actualToday=(typeof _actualTodayStr==="function")?_actualTodayStr():viewDate;
-  // Loose Ends owns past-day unfinished work now. Keep carryovers out of the task
-  // list derivation entirely, including the old hidden fetch and second render.
-  const unfPool=[];
-
-  // C6a: ONE derivation for the whole view. `day.visible` is the universe (not
-  // deleted, not side-project-flagged), `day.unscheduled` is the Unscheduled SUBTREE,
-  // `day.timed` is the work list with done rows inline, `day.folded` are the done
-  // rows that render inside a still-visible parent, and `day.carryover` is
-  // yesterday's leftovers — empty unless this IS today.
-  const day=DCC.TaskModel.selectDay(scheduled,viewDate,{today:actualToday,carryoverPool:unfPool});
-  const visible=day.visible;
-  // The old `doneItems` here was DEAD -- computed and never read; buildListView
-  // renders done rows inline in the work list, it has no Done section. Deleted
-  // rather than routed, so the fold predicate lives in exactly one surface
-  // (buildSchedule's compact Done section) instead of two, one of them unused.
-  //
-  // The "Work list" badge deliberately counts every open point-eligible row in
-  // `visible`, INCLUDING the Unscheduled ones -- that is what it has always counted,
-  // and `day.open` would silently narrow it to the timed section. Behaviour
-  // preserved; the mismatch between the badge's name and its population is noted in
-  // the phase handoff rather than fixed here.
-  const activeIds=new Set(DCC.TaskModel.selectOpen(visible).filter(ev=>pointEligible(ev)).map(ev=>ev.id));
-  const ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
-  const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
-
-  // groupClass tags a section as part of the Unscheduled drag group so
-  // _unscheduledRowIds can span the split Unscheduled / Unfinished headers.
-  function section(title,count,sortKey,groupClass){
-    const el=document.createElement("div");
-    el.className="it-list-section"+(groupClass?" "+groupClass:"");
-    if(sortKey)el.dataset.section=sortKey;   // drag reorder reads rows under [data-section]
-    let html='<span>'+title+'</span>'+(count?'<b>'+count+'</b>':'');
-    if(sortKey){
-      const mode=_sectionSort(sortKey);
-      html+='<span class="it-sort-toggle">'+
-        '<button class="it-sort-btn'+(_sectionSortIsManual(mode)?' on':'')+'" data-mode="manual" title="Manual order — drag rows to arrange">⇅ Manual</button>'+
-        '<button class="it-sort-btn'+(mode==="alpha"?' on':'')+'" data-mode="alpha" title="Sort A to Z">A–Z</button>'+
-        '<button class="it-sort-btn'+(mode==="created"?' on':'')+'" data-mode="created" title="Sort by time of creation (newest first)">New</button>'+
-      '</span>';
-    }
-    el.innerHTML=html;
-    if(sortKey)el.querySelectorAll(".it-sort-btn").forEach(b=>b.addEventListener("click",e=>{
-      e.stopPropagation();_setSectionSort(sortKey,b.dataset.mode);buildListView();
-    }));
-    wrap.appendChild(el);
-  }
-
+// Full task presentation and controls, shared by the itinerary and Loose Ends.
+function _isSubRow(node){return !!(node&&node.rel==="subtask"&&node.depth>0);}
+function createTaskListRowRenderer(context){
+  context=context||{};
+  const unfPool=context.pool||[];
+  const isTodayView=!!context.isTodayView;
   function listPrivacyChip(ev){
     if(!ev||isFixed(ev))return "";
     const visibility=ev.publicVisibility==="private"?"private":"public";
@@ -705,7 +660,6 @@ function buildListView(){
   // "Subtask" label with nothing above it to belong to. Common in the carryover
   // lane, where a done parent is excluded and its open child is not.
   // Ride-alongs are unaffected (their rel is "ride-along", never "subtask").
-  function _isSubRow(node){return !!(node&&node.rel==="subtask"&&node.depth>0);}
 
   function row(ev,idx,mode,node){
     const isDoneRow=mode==="done";
@@ -818,11 +772,11 @@ function buildListView(){
       onComplete:completeNow,
       onCompleteWithNotes:chkBlocked?completeNow:()=>openDoneModal(ev.id,ev.title,completeNow,ev),
       onSchedule:(!subTimeless&&!isDoneRow&&!isMeeting(ev))?(sb)=>{if(isUnfRow){_unfSchedulePopover(ev,el,sb);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});}:null,
-      onRadial:!isDoneRow?(pb)=>openTaskRadial(ev,pb,isUnfRow?{carryover:{move:(trig)=>_unfSchedulePopover(ev,el,trig),backlog:()=>_unfToBacklog(ev,el),drop:()=>_unfDrop(ev,el)}}:undefined):null,
+      onRadial:!isDoneRow?(pb)=>openTaskRadial(ev,pb,isUnfRow?{carryover:{move:(trig)=>_unfSchedulePopover(ev,el,trig),backlog:()=>_unfToBacklog(ev,el),drop:()=>_unfDrop(ev,el),details:()=>context.onOpen?context.onOpen(ev):openTaskNotes(ev)}}:undefined):null,
       onDelete:!isDoneRow?()=>{if(isUnfRow){_unfDrop(ev,el);return;}openDeleteConfirm(ev.id);}:null,
       onAdd:!isDoneRow?(am)=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}:null,
       onCollapse:()=>{if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render("schedule");}},
-      onOpen:()=>{if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);},
+      onOpen:()=>{if(context.onOpen){context.onOpen(ev);return;}if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);},
       onDragStart:(e)=>dStart(e,ev.id),onDragEnd:dEnd,
       onDragOver:!isDoneRow?(e)=>dOver(e,ev.id):null,onDragLeave:!isDoneRow?dLeave:null,onDrop:!isDoneRow?(e)=>dDrop(e,ev.id):null,
       afterRender:(rowEl)=>{
@@ -836,9 +790,100 @@ function buildListView(){
     return el;
   }
 
-  // Every node — top-level task OR nested subtask — renders through the same row()
-  // builder. row() reads node.rel to apply the lighter subtask variant. Subtasks
-  // take no rank number (row() renders "·" for them), so idx is a don't-care there.
+  // ── Carryover row actions ───────────────────────────────────────────────────
+  // A carryover writes to its ORIGIN day, so it can't ride toggleDone /
+  // moveTaskViaPlacement / openDeleteConfirm — each resolves its id against today's
+  // scheduled[], which a past-day row isn't in, and would silently no-op. These are
+  // thin bindings over DCC.Carryover (unfinished-tasks.js), the ONE implementation
+  // the Catch up modal and the morning prompt use too, so completion/move/drop can't
+  // drift between the three surfaces. Every one carries the subtree.
+  function _unfBusy(el,on){el.querySelectorAll("button,input").forEach(x=>{x.disabled=!!on;});}
+  function _unfSettle(el,res){
+    if(!res)_unfBusy(el,false);
+    if(typeof context.onSettle==="function")context.onSettle(el,res);
+    return res;
+  }
+  function _CO(){return window.DCC&&window.DCC.Carryover;}
+  async function _unfComplete(ev,el){const C=_CO();if(!C)return;_unfBusy(el,true);_unfSettle(el,await C.complete(ev,unfPool));}
+  async function _unfDrop(ev,el){const C=_CO();if(!C)return;_unfBusy(el,true);_unfSettle(el,await C.drop(ev,unfPool));}
+  async function _unfToBacklog(ev,el){const C=_CO();if(!C)return;_unfBusy(el,true);_unfSettle(el,await C.toBacklog(ev,unfPool));}
+  async function _unfMoveTo(ev,el,targetDate,slot){
+    const C=_CO();if(!C)return;
+    _unfBusy(el,true);
+    return _unfSettle(el,await C.moveTo(ev,targetDate,{pool:unfPool,slot:slot}));
+  }
+  // Every task uses the same day picker and placement step. Only the origin
+  // writer changes for a carryover; the UI never falls back to a date-only form.
+  function _unfSchedulePopover(ev,el,anchorEl){
+    openSchedulePopover({
+      mode:"reschedule",id:ev.id,task:ev,anchorEl,view:"date",
+      onMove:(dateStr,timeStr)=>{
+        const d=Math.max(1,dur(ev)||30);
+        return _unfMoveTo(ev,el,dateStr,timeStr?{start:timeStr,end:fmt(pt(timeStr)+d)}:null);
+      }
+    });
+  }
+  return row;
+}
+window.createTaskListRowRenderer=createTaskListRowRenderer;
+
+function buildListView(){
+  const wrap=document.getElementById("list-view");
+  if(!wrap)return;
+  wrap.innerHTML="";
+  const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
+  // isActive() is time-of-day only (no date), so the "Now" chip must be gated to
+  // today or it would light up on a past/future day whose times overlap the clock.
+  const isTodayView=viewDate===((window.DCC&&DCC.dates&&DCC.dates.todayKey)?DCC.dates.todayKey():new Date().toISOString().split("T")[0]);
+  const actualToday=(typeof _actualTodayStr==="function")?_actualTodayStr():viewDate;
+  // Loose Ends owns past-day unfinished work now. Keep carryovers out of the task
+  // list derivation entirely, including the old hidden fetch and second render.
+  const unfPool=[];
+
+  // C6a: ONE derivation for the whole view. `day.visible` is the universe (not
+  // deleted, not side-project-flagged), `day.unscheduled` is the Unscheduled SUBTREE,
+  // `day.timed` is the work list with done rows inline, `day.folded` are the done
+  // rows that render inside a still-visible parent, and `day.carryover` is
+  // yesterday's leftovers — empty unless this IS today.
+  const day=DCC.TaskModel.selectDay(scheduled,viewDate,{today:actualToday,carryoverPool:unfPool});
+  const visible=day.visible;
+  // The old `doneItems` here was DEAD -- computed and never read; buildListView
+  // renders done rows inline in the work list, it has no Done section. Deleted
+  // rather than routed, so the fold predicate lives in exactly one surface
+  // (buildSchedule's compact Done section) instead of two, one of them unused.
+  //
+  // The "Work list" badge deliberately counts every open point-eligible row in
+  // `visible`, INCLUDING the Unscheduled ones -- that is what it has always counted,
+  // and `day.open` would silently narrow it to the timed section. Behaviour
+  // preserved; the mismatch between the badge's name and its population is noted in
+  // the phase handoff rather than fixed here.
+  const activeIds=new Set(DCC.TaskModel.selectOpen(visible).filter(ev=>pointEligible(ev)).map(ev=>ev.id));
+  const ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
+  const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
+
+  // groupClass tags a section as part of the Unscheduled drag group so
+  // _unscheduledRowIds can span the split Unscheduled / Unfinished headers.
+  function section(title,count,sortKey,groupClass){
+    const el=document.createElement("div");
+    el.className="it-list-section"+(groupClass?" "+groupClass:"");
+    if(sortKey)el.dataset.section=sortKey;   // drag reorder reads rows under [data-section]
+    let html='<span>'+title+'</span>'+(count?'<b>'+count+'</b>':'');
+    if(sortKey){
+      const mode=_sectionSort(sortKey);
+      html+='<span class="it-sort-toggle">'+
+        '<button class="it-sort-btn'+(_sectionSortIsManual(mode)?' on':'')+'" data-mode="manual" title="Manual order — drag rows to arrange">⇅ Manual</button>'+
+        '<button class="it-sort-btn'+(mode==="alpha"?' on':'')+'" data-mode="alpha" title="Sort A to Z">A–Z</button>'+
+        '<button class="it-sort-btn'+(mode==="created"?' on':'')+'" data-mode="created" title="Sort by time of creation (newest first)">New</button>'+
+      '</span>';
+    }
+    el.innerHTML=html;
+    if(sortKey)el.querySelectorAll(".it-sort-btn").forEach(b=>b.addEventListener("click",e=>{
+      e.stopPropagation();_setSectionSort(sortKey,b.dataset.mode);buildListView();
+    }));
+    wrap.appendChild(el);
+  }
+
+  const row=createTaskListRowRenderer({pool:unfPool,isTodayView});
   function emitNode(node,idx,mode){return row(node.ev,_isSubRow(node)?0:idx,mode,node);}
   // Idle-gap marker between two spaced-out timed rows (fixed tiny height; see
   // .it-list-gap CSS). Label via ms() -> "45m" / "1h 30m".
@@ -1021,42 +1066,7 @@ function buildListView(){
     });
   }
 
-  // ── Carryover row actions ───────────────────────────────────────────────────
-  // A carryover writes to its ORIGIN day, so it can't ride toggleDone /
-  // moveTaskViaPlacement / openDeleteConfirm — each resolves its id against today's
-  // scheduled[], which a past-day row isn't in, and would silently no-op. These are
-  // thin bindings over DCC.Carryover (unfinished-tasks.js), the ONE implementation
-  // the Catch up modal and the morning prompt use too, so completion/move/drop can't
-  // drift between the three surfaces. Every one carries the subtree.
-  function _unfBusy(el,on){el.querySelectorAll("button,input").forEach(x=>{x.disabled=!!on;});}
-  function _unfSettle(el,res){
-    if(!res)_unfBusy(el,false);
-  }
-  function _CO(){return window.DCC&&window.DCC.Carryover;}
-  async function _unfComplete(ev,el){const C=_CO();if(!C)return;_unfBusy(el,true);_unfSettle(el,await C.complete(ev,unfPool));}
-  async function _unfDrop(ev,el){const C=_CO();if(!C)return;_unfBusy(el,true);_unfSettle(el,await C.drop(ev,unfPool));}
-  async function _unfToBacklog(ev,el){const C=_CO();if(!C)return;_unfBusy(el,true);_unfSettle(el,await C.toBacklog(ev,unfPool));}
-  async function _unfMoveTo(ev,el,targetDate,slot){
-    const C=_CO();if(!C)return;
-    _unfBusy(el,true);
-    _unfSettle(el,await C.moveTo(ev,targetDate,{pool:unfPool,slot:slot}));
-  }
-  // The carryover Schedule… / click-the-time affordance: the shared day picker with
-  // an optional start time, landing on the same true-move. Same popover the rest of
-  // the app schedules with — a carryover just can't use its reschedule mode, which
-  // requires the row to be in scheduled[].
-  function _unfSchedulePopover(ev,el,anchorEl){
-    if(typeof openDatePickPopover!=="function")return;
-    openDatePickPopover(anchorEl,{
-      header:'Move "'+escHtml(ev.title)+'" to…',
-      actionLabel:"Move",
-      allowTime:true,
-      onPick:(dateStr,timeStr)=>{
-        const d=Math.max(1,dur(ev)||30);
-        _unfMoveTo(ev,el,dateStr,timeStr?{start:timeStr,end:fmt(pt(timeStr)+d)}:null);
-      }
-    });
-  }
+
 }
 
 // ======== SCHEDULE TAB ========
