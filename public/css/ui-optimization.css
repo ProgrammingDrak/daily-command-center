@@ -270,7 +270,9 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .carryover-footer { position: sticky; z-index: 2; background: var(--surface-base); }
 .carryover-hdr { top: 0; }
 .carryover-footer { bottom: 0; }
-.cu-select { width: var(--target-min); height: var(--target-min); accent-color: var(--brand); }
+.cu-select { width: 16px; height: 16px; min-width: 16px; min-height: 16px; margin: 4px 0; accent-color: var(--brand); }
+.cu-select[hidden] { display: none; }
+.carryover-list .it-list-utility:has(.cu-select:not([hidden])) { flex-direction: column; }
 .cu-bulk-select { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--ink-muted); font-size: var(--fs-xs); }
 
 /* Daily itinerary uses primary information first. */

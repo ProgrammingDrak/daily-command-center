@@ -1779,30 +1779,19 @@
   .carryover-row{display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px}
   .carryover-row-info{flex:1;min-width:0}
   .carryover-row-title{font-size:13px;color:var(--text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;min-width:0}
-  .cu-unified-row{align-items:flex-start;flex-wrap:wrap;transition:border-color 120ms ease,background 120ms ease}
-  .cu-unified-row:hover{border-color:rgba(96,165,250,0.55)}
-  .cu-complete{width:28px;height:28px;flex:0 0 28px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text-muted);cursor:pointer;transition:all 120ms ease}
-  .cu-complete:hover{border-color:var(--green);color:var(--green);background:var(--green-bg)}
-  .cu-complete:focus-visible,.cu-details-action:focus-visible{outline:2px solid var(--accent-light);outline-offset:2px}
-  .cu-unified-row .carryover-row-actions{margin-top:1px;flex-wrap:wrap;justify-content:flex-end}
-  .cu-details{flex:0 0 100%;min-width:0;margin-top:2px;padding:10px 12px 10px 38px;border-top:1px solid var(--border);color:var(--text-muted)}
+  .cu-title-line{display:flex;align-items:center;gap:2px;min-width:0}
+  .cu-title-line .btn-schedule svg{pointer-events:none}
+  .carryover-row-meta{font-size:11px;color:var(--text-muted);margin-top:2px}
+  .cu-details{flex:0 0 100%;min-width:0;margin-top:2px;padding:10px 0;border-top:1px solid var(--border);color:var(--text-muted)}
   .cu-details[hidden]{display:none}
   .cu-details-full-title{font-size:12px;font-weight:700;line-height:1.4;color:var(--text);margin-bottom:8px;overflow-wrap:anywhere}
   .cu-details-body{display:flex;flex-direction:column;gap:9px;font-size:11px;line-height:1.5}
   .cu-details-label{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--accent-light);margin-bottom:3px}
   .cu-details-text{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text-muted)}
-  /* The name and its calendar button share one line. `flex:0 1 auto` keeps the button
-     hugging the END OF THE NAME rather than right-aligned at the column edge (which
-     is what flex:1 does, and it reads as a column of unrelated icons). min-width:0
-     preserves the ellipsis, so a long name truncates and the button follows it
-     instead of being shoved out of the row. */
-  .cu-title-line{display:flex;align-items:center;gap:2px;min-width:0}
-  .cu-title-line .btn-schedule svg{pointer-events:none}
   /* Only shown when both kinds of row are on screen at once. */
   .cu-section-label{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin:4px 0 -2px}
   .cu-tri-link{color:var(--accent-light);text-decoration:none}
   .cu-tri-link:hover{text-decoration:underline}
-  .carryover-row-meta{font-size:11px;color:var(--text-muted);margin-top:2px}
   .carryover-row-actions{display:flex;gap:4px;flex-shrink:0}
   .carryover-btn{padding:5px 10px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
   .carryover-btn:hover{color:var(--text);background:rgba(255,255,255,0.05)}
@@ -1815,8 +1804,6 @@
   .cu-journal-wrap .gb-section{margin-top:0}
   @media(max-width:480px){
     .carryover-overlay{padding:12px}
-    .cu-unified-row .carryover-row-actions{flex:0 0 100%;min-width:0;padding-left:38px;justify-content:flex-start}
-    .cu-unified-row .carryover-btn{flex:1 1 calc(33.333% - 3px);min-width:0;padding-left:6px;padding-right:6px}
     .header .loose-ends-pill{min-height:44px;margin-left:0;padding-left:10px}
   }
 
@@ -2649,7 +2636,6 @@ span.waiting-pill{cursor:default}
  * around the row, so a delegated row still reads as an ordinary row of work
  * (Drake, 2026-08-18). .waiting-row / .waiting-checkin-card / .cu-waiting-checkin
  * stay on as markers for the bar color and as JS/test hooks. */
-.cu-title-line .waiting-pill{flex:0 0 auto;margin-left:4px}
 .delegated-card-body{flex:1;min-width:0}
 .delegated-card-title{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px}
 .delegated-card-link{font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border:1px solid var(--waiting-border);background:var(--waiting-bg);border-radius:999px;padding:1px 6px;color:var(--waiting-ink);flex-shrink:0}

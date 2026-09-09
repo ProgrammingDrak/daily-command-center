@@ -105,7 +105,10 @@ test("rows are full evs: every field the row builder reads survives collection",
   assert.equal(ev.start, "09:00");
   assert.equal(ev.end, "09:30");
   // provenance for the amber chip + the origin-day writes
-  assert.deepEqual(plain(ev.__unf), { sourceId: "t1", sourceLocalId: "t1", sourceDate: d, createdAt: d + "T09:00:00.000Z", done: false });
+  const { sourceBlock, ...stamp } = plain(ev.__unf);
+  assert.deepEqual(stamp, { sourceId: "t1", sourceLocalId: "t1", sourceDate: d, createdAt: d + "T09:00:00.000Z", done: false });
+  assert.equal(sourceBlock.id, "t1");
+  assert.equal(sourceBlock.properties.publicVisibility, "private");
 });
 
 test("children are kept WITH their edge — timeless subtasks included", async () => {

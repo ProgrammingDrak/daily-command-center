@@ -102,29 +102,47 @@
   function openOf(pool) { return window.DCC.Carryover.openRows(pool); }
   function rootsOf(pool) { return window.DCC.Carryover.rootsOf(pool); }
 
-  // ── the row-level calendar button ──
-  // Same glyph and same class as the itinerary rows' reschedule control, wired to
-  // the same anchored day picker. The Today / Drop / Details actions stay identical
-  // across row types; the calendar reaches any other day without leaving the modal. Rows here aren't entries
-  // in scheduled[], so the picker runs in its date-only "pick" mode and the caller
-  // owns the write (see DCC.wireDateButton in core.js).
-  function calBtn(cls, label, disabled) {
-    const html = window.DCC.dateButtonHtml(cls, label);
-    return disabled ? html.replace("<button ", '<button disabled title="Delegated items stay with their owner" ') : html;
-  }
-  function completeBtn(title) {
-    return '<button type="button" class="cu-complete" aria-label="' + esc("Mark done: " + title) + '" title="Already done">' +
-      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>' +
-    '</button>';
-  }
-  function rowActions(scope, detailsClass, title, opts) {
-    opts = opts || {};
-    const todayDisabled = opts.todayDisabled ? ' disabled title="Delegated items stay with their owner"' : "";
-    return '<div class="carryover-row-actions">' +
-      '<button type="button" class="carryover-btn carryover-btn-schedule cu-today ' + scope + '-today" aria-label="' + esc("Schedule today: " + title) + '"' + todayDisabled + '>Today</button>' +
-      '<button type="button" class="carryover-btn carryover-btn-drop cu-drop ' + scope + '-drop" aria-label="' + esc("Drop: " + title) + '">Drop</button>' +
-      '<button type="button" class="carryover-btn cu-details-action ' + detailsClass + '" aria-label="' + esc("Show details for " + title) + '">Details</button>' +
-    '</div>';
+  // All row markup, controls, and interaction wiring belong to the itinerary.
+  // Loose Ends supplies only metadata and the durable actions for each source.
+  function reviewRow(ev, opts) {
+    const schedule = opts.onDate ? trigger => window.openDatePickPopover(trigger, {
+      header: opts.dateHeader || 'Move "' + ev.title + '" to…',
+      actionLabel: opts.dateAction || "Move",
+      onPick: opts.onDate
+    }) : undefined;
+    const el = ev.__unf
+      ? window.createTaskListRowRenderer({pool:opts.pool,onSettle:opts.onSettle,onOpen:opts.onDetails})(ev,opts.index||0,"unfinished")
+      : window.renderItineraryListRow(ev, {
+      extraClass: opts.extraClass,
+      barColor: opts.barColor || "var(--accent-light)",
+      metaHtml: opts.metaHtml,
+      titleExtrasHtml: opts.titleExtrasHtml,
+      onComplete: opts.onComplete,
+      onCompleteWithNotes: opts.onCompleteWithNotes || opts.onComplete,
+      completionTitle: opts.onCompleteWithNotes ? undefined : "Mark done: " + ev.title,
+      onSchedule: schedule,
+      onDelete: opts.onDelete,
+      deleteLabel: opts.deleteLabel || "Drop task",
+      deleteTitle: opts.deleteLabel || "Drop task",
+      onOpen: opts.onDetails,
+      onRadial: trigger => {
+        const actions = [];
+        if (schedule) actions.push({ icon: "📅", label: "Schedule…", onPick: () => schedule(trigger) });
+        if (opts.onToday) actions.push({ icon: "📅", label: "Today", onPick: () => opts.onToday(trigger) });
+        actions.push({ icon: "↗", label: "Details", onPick: opts.onDetails });
+        window.openRadialMenu(trigger, actions, { a0: 90, a1: 270, r: 140, labelStagger: true, clampY: true });
+      }
+    });
+    const title = el.querySelector(".ttl");
+    title.textContent = ev.title;
+    if (opts.detailId) {
+      const host = document.createElement("div");
+      host.innerHTML = detailShell(opts.detailId, "Details for " + ev.title);
+      host.addEventListener("click", event => event.stopPropagation());
+      el.querySelector(".it-list-main").appendChild(host);
+    }
+    if (ev.__unf && opts.extraClass) el.classList.add(opts.extraClass);
+    return el;
   }
   function detailShell(id, label) {
     return '<div class="cu-details" id="' + id + '" role="region" aria-label="' + esc(label) + '" hidden>' +
@@ -148,12 +166,6 @@
     container.appendChild(section);
     return true;
   }
-  function wireCal(btn, title, onPick) {
-    // Raw title: the popover escapes the whole header itself (schedule-popover.js), so
-    // escaping here too renders a literal &#39; for any apostrophe.
-    window.DCC.wireDateButton(btn, { header: 'Move "' + title + '" to…', actionLabel: "Move", onPick: onPick });
-  }
-
   // ── triage rows ──
   // Swept items (Slack mentions, mail needing a reply) ride in this same modal:
   // the morning recap covers everything waiting on Drake, whether it slipped off
@@ -294,7 +306,7 @@
         '</div>' +
         '<div class="carryover-footer">' +
           '<label class="cu-bulk-select"><input type="checkbox" id="catchup-select-all"> Select schedulable</label>' +
-          '<button class="carryover-btn carryover-btn-schedule" id="catchup-all">Move schedulable items to today</button>' +
+          '<button class="carryover-btn carryover-btn-schedule" id="catchup-all">Move to today</button>' +
           '<button class="carryover-skip" id="catchup-skip">Leave them</button>' +
         '</div>' +
       '</div>';
@@ -402,7 +414,7 @@
       const fallback = overlay.classList.contains("open")
         ? overlay.querySelector("#catchup-skip")
         : document.getElementById("dcc-launcher-btn");
-      const target = (next || previous)?.querySelector(".cu-complete") || fallback;
+      const target = (next || previous)?.querySelector(".it-list-check") || fallback;
       if (target && typeof target.focus === "function") target.focus();
     };
     const forgetRow = (el, map, id) => {
@@ -448,11 +460,11 @@
       input.dataset.bulkKind = kind;
       input.dataset.bulkId = String(id);
       input.setAttribute("aria-label", "Select for bulk scheduling");
-      el.prepend(input);
+      input.hidden = true;
+      el.querySelector(".it-list-utility").appendChild(input);
     };
 
     const addTriageRow = (item, before) => {
-      const el = document.createElement("div");
       const title = item.title || "Untitled";
       const detailId = "cu-triage-details-" + (++detailSeq);
       // Delegated check-ins wear the shared --waiting look here too: the recap envelope
@@ -462,25 +474,28 @@
       const checkInPill = isCheckIn
         ? '<span class="waiting-pill checkin" title="Check-in reminder: this handles the reminder only. The delegated task stays open in Waiting.">&#128276; Check-in</span>'
         : "";
-      el.className = "carryover-row cu-unified-row cu-triage-row" + (isCheckIn ? " cu-waiting-checkin" : "");
-      const safe = (window.DCC && window.DCC.safeUrl) || (u => "");
+      const safe = (window.DCC && window.DCC.safeUrl) || (() => "");
       const href = safe(item.draft_link || item.draft_url) || safe(item.link || item.source_url);
-      el.innerHTML =
-        completeBtn(title) +
-        '<div class="carryover-row-info">' +
-          '<div class="cu-title-line">' +
-            '<div class="carryover-row-title"></div>' +
-            checkInPill +
-            calBtn("cu-cal", "Schedule on a day: " + title) +
-          '</div>' +
-          '<div class="carryover-row-meta">' + esc(triageMeta(item)) +
-            (href ? ' · <a class="cu-tri-link" href="' + esc(href) + '" target="_blank" rel="noopener">Open</a>' : '') +
-          '</div>' +
-        '</div>' +
-        rowActions("cu-tri", "cu-details-toggle cu-tri-details", title) +
-        detailShell(detailId, "Details for " + title);
-      const titleEl = el.querySelector(".carryover-row-title");
-      const toggleEl = el.querySelector(".cu-tri-details");
+      const ev = window.DCC.TaskModel.fromTriageItem(item);
+      const el = reviewRow(ev, {
+        extraClass: "cu-triage-row" + (isCheckIn ? " cu-waiting-checkin waiting-checkin-card" : ""),
+        barColor: isCheckIn ? "var(--waiting)" : "var(--amber)",
+        titleExtrasHtml: checkInPill,
+        metaHtml: '<span>' + esc(triageMeta(item)) +
+          (href ? ' · <a class="cu-tri-link" href="' + esc(href) + '" target="_blank" rel="noopener">Open</a>' : '') + '</span>',
+        detailId,
+        onComplete: () => runTri(async () => typeof dismissTriage === "function" && !!(await dismissTriage(item.id, "Already done", false))),
+        onDate: date => place(date),
+        onToday: () => place(todayStr()),
+        onDelete: () => {
+          if (typeof deleteTriageItem !== "function") return;
+          deleteTriageItem(item.id);
+          forget();
+        },
+        onDetails: () => toggleDetails()
+      });
+      const titleEl = el.querySelector(".ttl");
+      const toggleEl = titleEl;
       const detailEl = el.querySelector(".cu-details");
       const detailBody = el.querySelector(".cu-details-body");
       detailEl.hidden = true;
@@ -496,20 +511,20 @@
         appendDetailSection(detailBody, "Details", [item.detail, item.description, item.notes])
       ].some(Boolean);
       if (!hasDetails) detailBody.textContent = "No additional details on this item.";
-      toggleEl.addEventListener("click", () => {
+      const toggleDetails = () => {
         const opening = detailEl.hidden;
         detailEl.hidden = !opening;
         toggleEl.setAttribute("aria-expanded", opening ? "true" : "false");
         toggleEl.setAttribute("aria-label", (opening ? "Hide" : "Show") + " details for " + title);
         el.classList[opening ? "add" : "remove"]("details-open");
-      });
+      };
       const busy = (on) => el.querySelectorAll("button").forEach(b => { b.disabled = !!on; });
       const forget = () => forgetRow(el, triEls, item.id);
       // A refused schedule (no free slot, already on the day) leaves the row alone
       // and re-enables it, same contract the task rows use.
       const runTri = async (fn) => {
         const focused = document.activeElement && el.contains(document.activeElement)
-          ? document.activeElement : el.querySelector(".cu-complete");
+          ? document.activeElement : el.querySelector(".it-list-check");
         busy(true);
         if (await fn()) forget();
         else {
@@ -517,24 +532,10 @@
           if (focused && typeof focused.focus === "function") focused.focus();
         }
       };
-      el.querySelector(".cu-complete").addEventListener("click", e => {
-        e.stopPropagation();
-        runTri(async () => {
-          if (typeof dismissTriage !== "function") return false;
-          return !!(await dismissTriage(item.id, "Already done", false));
-        });
-      });
       const place = (d2) => runTri(async () => {
         if (typeof scheduleTriageOnDate !== "function") return false;
         return !!(await scheduleTriageOnDate(item.id, d2));
       });
-      el.querySelector(".cu-tri-today").addEventListener("click", () => place(todayStr()));
-      el.querySelector(".cu-tri-drop").addEventListener("click", () => {
-        if (typeof deleteTriageItem !== "function") return;
-        deleteTriageItem(item.id);   // durable + its own 8s Undo toast
-        forget();
-      });
-      wireCal(el.querySelector(".cu-cal"), item.title || "Untitled", place);
       triEls.set(item.id, el);
       addBulkSelect(el, "triage", item.id);
       activeReviewRows.add(el);
@@ -580,25 +581,28 @@
       const shouldCopyDraft = !!(draft && draft.draft_preview && !draftHref);
       const urgency = api.itemUrgency(item);
       const blocker = api.blockerLabel(item);
-      const el = document.createElement("div");
-      el.className = "carryover-row cu-unified-row cu-waiting-row";
-      el.innerHTML =
-        completeBtn(task) +
-        '<div class="carryover-row-info">' +
-          '<div class="cu-title-line"><div class="carryover-row-title"></div>' +
-            calBtn("cu-cal", "Snooze until another day: " + task) +
-          '</div>' +
-          '<div class="carryover-row-meta"></div>' +
-        '</div>' +
-        rowActions("cu-wait", "cu-wait-details", task) +
-        detailShell(detailId, "Waiting details for " + task);
-      const titleEl = el.querySelector(".carryover-row-title");
-      const detailsToggle = el.querySelector(".cu-wait-details");
+      const ev = window.DCC.TaskModel.fromBlock(item);
+      ev.title = task;
+      const el = reviewRow(ev, {
+        extraClass: "cu-waiting-row waiting-checkin-card",
+        barColor: "var(--waiting)",
+        metaHtml: '<span>' + esc(blocker + " · " + api.dueLabel(item) + " · urgency " + urgency.score) + '</span>',
+        detailId,
+        onComplete: () => runWaiting(() => api.completeCheckIn(item.id)),
+        onDate: date => runWaiting(() => api.snooze(item.id, date)),
+        dateHeader: 'Snooze "' + task + '" until…',
+        dateAction: "Snooze",
+        onToday: trigger => api.scheduleCheckIn(item.id, trigger, forget, todayStr()),
+        onDelete: () => runWaiting(() => api.snooze(item.id, nextDayStr())),
+        deleteLabel: "Dismiss until tomorrow",
+        onDetails: () => toggleDetails()
+      });
+      const titleEl = el.querySelector(".ttl");
+      const detailsToggle = titleEl;
       const details = el.querySelector(".cu-details");
       const detailBody = el.querySelector(".cu-details-body");
       titleEl.textContent = task;
       titleEl.title = task;
-      el.querySelector(".carryover-row-meta").textContent = blocker + " · " + api.dueLabel(item) + " · urgency " + urgency.score;
       details.hidden = true;
       detailsToggle.setAttribute("aria-expanded", "false");
       detailsToggle.setAttribute("aria-controls", detailId);
@@ -614,30 +618,16 @@
         '<button class="carryover-btn cu-wait-schedule">Schedule check-in</button>' +
         '<button class="carryover-btn carryover-btn-schedule cu-wait-unblock">Unblock</button>';
       detailBody.appendChild(detailActions);
-      detailsToggle.addEventListener("click", () => {
+      const toggleDetails = () => {
         const opening = details.hidden;
         details.hidden = !opening;
         detailsToggle.setAttribute("aria-expanded", opening ? "true" : "false");
         detailsToggle.setAttribute("aria-label", (opening ? "Hide" : "Show") + " details for " + task);
         el.classList[opening ? "add" : "remove"]("details-open");
-      });
+      };
       const busy = on => el.querySelectorAll("button").forEach(button => { button.disabled = !!on; });
       const forget = () => forgetRow(el, waitingEls, item.id);
       const runWaiting = async fn => { busy(true); if (await fn()) forget(); else busy(false); };
-      el.querySelector(".cu-complete").addEventListener("click", e => {
-        e.stopPropagation();
-        runWaiting(() => api.completeCheckIn(item.id));
-      });
-      el.querySelector(".cu-wait-drop").setAttribute("title", "Dismiss until tomorrow");
-      el.querySelector(".cu-wait-drop").addEventListener("click", () => {
-        runWaiting(() => api.snooze(item.id, nextDayStr()));
-      });
-      el.querySelector(".cu-wait-today").addEventListener("click", event => api.scheduleCheckIn(item.id, event.currentTarget, forget, todayStr()));
-      window.DCC.wireDateButton(el.querySelector(".cu-cal"), {
-        header: 'Snooze "' + task + '" until…',
-        actionLabel: "Snooze",
-        onPick: date => runWaiting(() => api.snooze(item.id, date))
-      });
       el.querySelector(".cu-wait-schedule").addEventListener("click", event => api.scheduleCheckIn(item.id, event.currentTarget, forget));
       el.querySelector(".cu-wait-unblock").addEventListener("click", () => runWaiting(() => api.unblock(item.id)));
       const draftLink = el.querySelector(".cu-wait-draft");
@@ -666,32 +656,28 @@
     });
 
     meetingActions.forEach(item => {
-      const el = document.createElement("div");
       const mine = item.owner !== "other";
-      el.className = "carryover-row cu-unified-row cu-meeting-row";
-      el.innerHTML =
-        completeBtn(item.title || "Meeting follow-up") +
-        '<div class="carryover-row-info">' +
-          '<div class="cu-title-line">' +
-            '<div class="carryover-row-title"></div>' +
-            calBtn("cu-cal", "Schedule on a day: " + (item.title || "Meeting follow-up"), !mine) +
-          '</div>' +
-          '<div class="carryover-row-meta">' + esc(item.meetingTitle || "Meeting") +
-            (item.meetingDate ? " · " + esc(prettyDate(item.meetingDate)) : "") +
-            " · " + esc(item.priority || "Medium") +
-            (mine ? "" : " · delegated") +
-          '</div>' +
-        '</div>' +
-        rowActions("cu-mtg", "cu-mtg-details", item.title || "Meeting follow-up", { todayDisabled: !mine });
-      const meetingTitleEl = el.querySelector(".carryover-row-title");
-      meetingTitleEl.textContent = item.title || "Meeting follow-up";
-      meetingTitleEl.title = item.title || "Meeting follow-up";
-      el.querySelector(".cu-mtg-details").setAttribute("aria-label", "Open recap for " + (item.title || "Meeting follow-up"));
+      const el = reviewRow(window.DCC.TaskModel.fromTriageItem(item), {
+        extraClass: "cu-meeting-row",
+        metaHtml: '<span>' + esc(item.meetingTitle || "Meeting") +
+          (item.meetingDate ? " · " + esc(prettyDate(item.meetingDate)) : "") +
+          " · " + esc(item.priority || "Medium") + (mine ? "" : " · delegated") + '</span>',
+        onComplete: () => runMeeting(() => completeMeetingAction(item)),
+        onDate: mine ? date => place(date) : undefined,
+        onToday: mine ? () => place(todayStr()) : undefined,
+        onDelete: () => runMeeting(() => dismissMeetingAction(item)),
+        onDetails: () => {
+          if (typeof openPrepModal === "function") openPrepModal({
+            id: item.meetingId, meetingBlockId: item.meetingId,
+            title: item.meetingTitle || "Meeting", start: item.meetingStart, end: item.meetingEnd
+          }, { defaultTab: "recap" });
+        }
+      });
       const busy = on => el.querySelectorAll("button").forEach(b => { b.disabled = !!on; });
       const forget = () => forgetRow(el, meetingEls, item.id);
       const runMeeting = async fn => {
         const focused = document.activeElement && el.contains(document.activeElement)
-          ? document.activeElement : el.querySelector(".cu-complete");
+          ? document.activeElement : el.querySelector(".it-list-check");
         busy(true);
         if (await fn()) forget();
         else {
@@ -700,55 +686,25 @@
         }
       };
       const place = date => runMeeting(() => placeMeetingAction(item, date));
-      el.querySelector(".cu-complete").addEventListener("click", e => {
-        e.stopPropagation();
-        runMeeting(() => completeMeetingAction(item));
-      });
-      if (mine) {
-        el.querySelector(".cu-mtg-today").addEventListener("click", () => place(todayStr()));
-        wireCal(el.querySelector(".cu-cal"), item.title || "Meeting follow-up", place);
-      }
-      el.querySelector(".cu-mtg-details").addEventListener("click", () => {
-        if (typeof openPrepModal === "function") openPrepModal({
-          id: item.meetingId, meetingBlockId: item.meetingId,
-          title: item.meetingTitle || "Meeting", start: item.meetingStart, end: item.meetingEnd
-        }, { defaultTab: "recap" });
-      });
-      el.querySelector(".cu-mtg-drop").addEventListener("click", () => runMeeting(() => dismissMeetingAction(item)));
       meetingEls.set(item.id, el);
       if (mine) addBulkSelect(el, "meeting", item.id);
-      else el.querySelectorAll("button:disabled").forEach(button => {
-        button.title = "Delegated follow-ups stay with their owner.";
-        button.setAttribute("aria-label", "Unavailable. Delegated follow-up stays with its owner.");
-      });
       activeReviewRows.add(el);
       (item.origin === "signaled" ? signaledMeetingRows : automatedMeetingRows).push(el);
     });
 
-    roots.forEach(ev => {
-      const el = document.createElement("div");
-      const kids = CO.descendants(ev, pool).length;
-      const d = (typeof dur === "function") ? Math.max(0, dur(ev)) : 0;
-      const durLabel = d > 0 ? ((typeof ms === "function") ? ms(d) : d + "m") : "step";
+    roots.forEach((ev, index) => {
       const title = ev.title || "Untitled";
       const detailId = "cu-task-details-" + (++detailSeq);
-      el.className = "carryover-row cu-unified-row cu-task-row";
-      el.innerHTML =
-        completeBtn(title) +
-        '<div class="carryover-row-info">' +
-          '<div class="cu-title-line">' +
-            '<div class="carryover-row-title"></div>' +
-            calBtn("cu-cal", "Move to a day: " + title) +
-          '</div>' +
-          '<div class="carryover-row-meta">' + esc(durLabel) +
-            (kids ? " · +" + kids + " nested" : "") +
-            ' · from ' + esc(prettyDate((ev.__unf || {}).sourceDate)) +
-          '</div>' +
-        '</div>' +
-        rowActions("cu-task", "cu-details-toggle", title) +
-        detailShell(detailId, "Notes and details for " + title);
-      const titleEl = el.querySelector(".carryover-row-title");
-      const toggleEl = el.querySelector(".cu-details-toggle");
+      const el = reviewRow(ev, {
+        extraClass: "cu-task-row",
+        detailId,
+        pool,
+        index,
+        onSettle: (el, res) => settle(res, el),
+        onDetails: () => toggleDetails()
+      });
+      const titleEl = el.querySelector(".ttl");
+      const toggleEl = titleEl;
       const detailEl = el.querySelector(".cu-details");
       const detailBody = el.querySelector(".cu-details-body");
       detailEl.hidden = true;
@@ -785,30 +741,7 @@
         }
       };
       const toggleDetails = () => openDetails(detailEl.hidden);
-      toggleEl.addEventListener("click", toggleDetails);
 
-      const busy = (on) => el.querySelectorAll("button").forEach(b => { b.disabled = !!on; });
-      // Capture this row BEFORE disabling its buttons. Browsers move focus off a
-      // disabled control immediately, so inspecting document.activeElement after
-      // the async write returns is already too late to restore keyboard position.
-      const run = async (fn) => {
-        const focused = document.activeElement && el.contains(document.activeElement)
-          ? document.activeElement : el.querySelector(".cu-complete");
-        busy(true);
-        if (!settle(await fn(), el)) {
-          busy(false);
-          if (focused && typeof focused.focus === "function") focused.focus();
-        }
-      };
-      el.querySelector(".cu-complete").addEventListener("click", e => {
-        e.stopPropagation();
-        run(() => CO.complete(ev, pool));
-      });
-      el.querySelector(".cu-today").addEventListener("click", () => run(() => CO.moveTo(ev, todayStr(), { pool })));
-      el.querySelector(".cu-drop").addEventListener("click", () => run(() => CO.drop(ev, pool)));
-      // The calendar pick lands in the SAME mover the day buttons use — one write
-      // path, so an arbitrary day can't behave differently from Today.
-      wireCal(el.querySelector(".cu-cal"), title, (d2) => run(() => CO.moveTo(ev, d2, { pool })));
       rowEls.set(ev.id, el);
       addBulkSelect(el, "task", ev.id);
       activeReviewRows.add(el);
@@ -846,7 +779,10 @@
     const selectAll = overlay.querySelector("#catchup-select-all");
     if (selectAll) {
       selectAll.checked = false;
-      selectAll.onchange = () => overlay.querySelectorAll(".cu-select").forEach(input => { input.checked = selectAll.checked; });
+      selectAll.onchange = () => overlay.querySelectorAll(".cu-select").forEach(input => {
+        input.hidden = !selectAll.checked;
+        input.checked = selectAll.checked;
+      });
     }
 
 
@@ -916,7 +852,7 @@
     if (!overlay.classList.contains("open")) _returnFocus = document.activeElement;
     overlay.classList.add("open");
     if (cfg.focus !== false) {
-      const first = overlay.querySelector(".cu-complete, #catchup-close");
+      const first = overlay.querySelector(".it-list-check, #catchup-close");
       if (first && typeof first.focus === "function") first.focus();
     }
   }
@@ -1084,6 +1020,7 @@
     return true;
   }
 
+  window.addEventListener("dcc:work-session-changed", () => refreshReminder({ focus: false }));
   window.initCatchUp = initCatchUp;
   const DCC = (window.DCC = window.DCC || {});
   DCC.CatchUp = {
