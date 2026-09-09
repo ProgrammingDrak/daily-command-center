@@ -438,7 +438,7 @@ function normalizePublicTask(input, doneIds, calendarsById = new Map(), opts = {
     wrapId: input.wrapId || null,
     subtaskOf: input.subtaskOf || null
   };
-  task.durationMinutes = taskMinutes(task.start, task.end, input.duration || input.estimated_minutes || input.durMin);
+  task.durationMinutes = taskMinutes(task.start, task.end, input.duration ?? input.estimated_minutes ?? input.durMin);
   task.points = publicTaskPoints(task);
   task.status = publicTaskStatus(task, doneIds);
   return task;
