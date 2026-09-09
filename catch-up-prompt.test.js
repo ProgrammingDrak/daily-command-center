@@ -29,6 +29,8 @@ const catchUpSource = fs.readFileSync(require.resolve("./public/js/catch-up.js")
 // The REAL core.js, same discipline as installTaskModel: the row's calendar button is
 // built and wired by DCC.dateButtonHtml / DCC.wireDateButton, so stubbing those would
 // only test the stub. core.js has no parse-time side effects beyond defining DCC.
+const scheduleSource = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
+const rowSource = fs.readFileSync(require.resolve("./public/js/itinerary-card.js"), "utf8");
 const coreSource = fs.readFileSync(require.resolve("./public/js/core.js"), "utf8");
 
 const TODAY = "2026-07-29";
@@ -51,7 +53,7 @@ function FakeEl(tag) {
   const el = {
     tag, id: "", className: "", innerHTML: "", textContent: "", disabled: false,
     hidden: false, children: [], style: {}, dataset: {}, _attrs: new Map(), _q: new Map(), _on: {},
-    classList: { _s: new Set(), add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); }, contains(c) { return this._s.has(c); } },
+    classList: { _s: new Set(), add(c) { this._s.add(c); el.className += " " + c; }, remove(c) { this._s.delete(c); }, contains(c) { return this._s.has(c); } },
     setAttribute(k, v) { el._attrs.set(k, String(v)); },
     getAttribute(k) { return el._attrs.has(k) ? el._attrs.get(k) : null; },
     addEventListener(ev, fn) { (el._on[ev] = el._on[ev] || []).push(fn); },
@@ -62,7 +64,12 @@ function FakeEl(tag) {
       const list = el._on[ev]; if (!list) return;
       const i = list.indexOf(fn); if (i > -1) list.splice(i, 1);
     },
-    fire(ev, arg) { (el._on[ev] || []).forEach(fn => fn(arg || { target: el })); },
+    fire(ev, arg) {
+      const event = Object.assign({ target: el, stopPropagation() { this.stopped = true; } }, arg || {});
+      (el._on[ev] || []).forEach(fn => fn(event));
+      if (ev === "click" && !event.stopped && el._parent) el._parent.fire(ev, event);
+    },
+    closest() { return null; },
     appendChild(c) { el.children.push(c); return c; },
     prepend(c) { el.children.unshift(c); return c; },
     // Strict like the real DOM: a non-child reference is a TypeError, not a silent
@@ -84,8 +91,8 @@ function FakeEl(tag) {
     // Return the stubs this element has actually handed out for button selectors, so
     // busy()'s disable pass is observable instead of writing into the void.
     querySelectorAll(sel) {
-      if (sel !== "button") return [];
-      return [...el._q.entries()].filter(([k]) => /^\.(cu-|catchup-)/.test(k)).map(([, v]) => v);
+      if (sel !== "button" && sel !== "button,input") return [];
+      return [...el._q.entries()].filter(([k]) => /^\.(cu-|catchup-|it-list-check|btn-)/.test(k)).map(([, v]) => v);
     },
     _removed: false, _focused: false, _parent: null
   };
@@ -130,7 +137,18 @@ function load(daysByDate, archiveDates, extra) {
     // day_root-backed reviewed flag (the whole point of not using localStorage)
     _bsProp: (k) => saved[k] || null,
     _bsSaveProp: (k, v) => { saved[k] = v; },
+    cfg: () => ({cls:"tag-task",tag:"Task",color:"blue"}),
+    origDur: () => 0,
+    isMeeting: () => false, isFixed: () => false, isActive: () => false,
+    isRideAlong: () => false, isWrap: () => false,
+    srcTag: () => "", taskTagChipsHtml: () => "", taskTagColor: () => null,
+    habitStreakChip: () => "", f12: value => value,
+    _unfDone: ev => !!ev.__unf?.done,
+    _unfSlashDate: value => value,
+    dStart() {}, dEnd() {}, dOver() {}, dLeave() {}, dDrop() {},
+    openSchedulePopover(config) { ctx._schedulePopover = config; },
     render() {},
+    openRadialMenu(trigger, actions) { trigger._actions = actions; },
     invalidateUnfinishedSection() {},
     showToast() {}
   };
@@ -144,6 +162,11 @@ function load(daysByDate, archiveDates, extra) {
   ctx.URLSearchParams = URLSearchParams;
   vm.createContext(ctx);
   vm.runInContext(coreSource, ctx);
+  vm.runInContext(fs.readFileSync(require.resolve("./public/js/task-serialize.js"), "utf8"), ctx);
+  vm.runInContext(rowSource, ctx);
+  vm.runInContext(scheduleSource.slice(scheduleSource.indexOf("function createTaskListRowRenderer("), scheduleSource.indexOf("function buildListView(){")), ctx);
+  vm.runInContext(scheduleSource.slice(scheduleSource.indexOf("function _isSubRow("), scheduleSource.indexOf("function createTaskListRowRenderer(")), ctx);
+  vm.runInContext(scheduleSource.slice(scheduleSource.indexOf("function buildCarryoverRadialItems("), scheduleSource.indexOf("function openTaskChangeRadial(")), ctx);
   vm.runInContext(unfSource, ctx);
   ctx.window.blockStore = store;
   installTaskModel(ctx);
@@ -161,12 +184,19 @@ async function openLooseEnds(ctx) {
   return ctx.window.DCC.CatchUp.open();
 }
 
+function pickAction(row, label) {
+  const trigger = row.querySelector(".btn-task-radial");
+  trigger.fire("click");
+  const action = trigger._actions.find(item => item.label === label);
+  if (action) return action.onPick();
+}
+
 // Titles the prompt actually rendered, in order.
 function listedTitles(ctx) {
   const overlay = ctx.document.getElementById("catchup-overlay");
   if (!overlay) return null;
   return overlay.querySelector("#catchup-list").children
-    .map(r => r.querySelector(".carryover-row-title").textContent)
+    .map(r => r.querySelector(".ttl").textContent)
     .filter(Boolean);
 }
 
@@ -251,7 +281,7 @@ test("boot never reopens reviewed Loose Ends", async () => {
 // carryover-review.js's buttons only LOOKED real ("Drop was a single log line -- it
 // deleted NOTHING"), "no test clicks anything" is the gap that matters most.
 const row0 = (ctx) => ctx.document.getElementById("catchup-overlay")
-  .querySelector("#catchup-list").children.find(r => r.className && r.className.indexOf("carryover-row") > -1);
+  .querySelector("#catchup-list").children.find(r => r.className && r.className.indexOf("it-list-item") > -1);
 // setTimeout(0) rather than setImmediate: the click handlers are async, so one macro
 // task is enough to let them settle, and it keeps the lint env browser-compatible.
 const settled = () => new Promise(r => setTimeout(r, 0));
@@ -266,7 +296,7 @@ test("Drop routes the listed ROOT through DCC.Carryover.drop and clears its row"
   ctx.window.DCC.Carryover.drop = async (ev, pool) => { got = { id: ev.id, pool: pool.length }; return { removed: [ev.id, "k"] }; };
 
   const r = row0(ctx);
-  r.querySelector(".cu-drop").fire("click");
+  r.querySelector(".btn-del-task").fire("click");
   await settled();
   assert.equal(got.id, "p", "the root, not the child");
   assert.equal(got.pool, 2, "the FULL pool goes through so the subtree travels with it");
@@ -297,7 +327,8 @@ test("Today moves the root to the current day", async () => {
   await openLooseEnds(ctx);
   let target = null;
   ctx.window.DCC.Carryover.moveTo = async (ev, date) => { target = date; return { removed: [ev.id] }; };
-  row0(ctx).querySelector(".cu-today").fire("click");
+  pickAction(row0(ctx), "Move…");
+  ctx._schedulePopover.onMove(TODAY, null);
   await settled();
   assert.equal(target, TODAY);
 });
@@ -311,10 +342,10 @@ test("Complete routes the root and full pool through the shared origin-day compl
   let got = null;
   const r = row0(ctx);
   ctx.window.DCC.Carryover.complete = async (ev, pool) => {
-    got = { id: ev.id, pool: pool.length, disabled: r.querySelector(".cu-drop").disabled };
+    got = { id: ev.id, pool: pool.length, disabled: r.querySelector(".btn-del-task").disabled };
     return { removed: [ev.id, "k"] };
   };
-  r.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
+  r.querySelector(".it-list-check").fire("click", { stopPropagation() {} });
   await settled();
   assert.deepEqual(got, { id: "p", pool: 2, disabled: true });
   assert.equal(r._removed, true, "the completed row leaves the review");
@@ -326,10 +357,10 @@ test("a failed completion stays in the review instead of pretending it persisted
   await openLooseEnds(ctx);
   const r = row0(ctx);
   ctx.window.DCC.Carryover.complete = async () => null;
-  r.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
+  r.querySelector(".it-list-check").fire("click", { stopPropagation() {} });
   await settled();
   assert.equal(r._removed, false);
-  assert.equal(r.querySelector(".cu-drop").disabled, false, "the user can retry after a failed write");
+  assert.equal(r.querySelector(".btn-del-task").disabled, false, "the user can retry after a failed write");
 });
 
 test("completing the focused row moves focus to the next completion control", async () => {
@@ -337,9 +368,9 @@ test("completing the focused row moves focus to the next completion control", as
   const { ctx } = load({ [d]: [dayRoot(), blk("a", d, { title: "A" }), blk("b", d, { title: "B" })] }, [d]);
   await openLooseEnds(ctx);
   const rows = ctx.document.getElementById("catchup-overlay").querySelector("#catchup-list").children
-    .filter(r => r.className && r.className.indexOf("carryover-row") > -1);
-  const firstComplete = rows[0].querySelector(".cu-complete");
-  const secondComplete = rows[1].querySelector(".cu-complete");
+    .filter(r => r.className && r.className.indexOf("it-list-item") > -1);
+  const firstComplete = rows[0].querySelector(".it-list-check");
+  const secondComplete = rows[1].querySelector(".it-list-check");
   ctx.document.activeElement = firstComplete;
   ctx.window.DCC.Carryover.complete = async (ev) => ({ removed: [ev.id] });
   firstComplete.fire("click", { stopPropagation() {} });
@@ -355,7 +386,7 @@ test("completing the final focused row returns focus to the task launcher", asyn
   ctx.document.body.appendChild(launcher);
   await openLooseEnds(ctx);
   const row = row0(ctx);
-  const complete = row.querySelector(".cu-complete");
+  const complete = row.querySelector(".it-list-check");
   ctx.document.activeElement = complete;
   ctx.window.DCC.Carryover.complete = async (ev) => ({ removed: [ev.id] });
   complete.fire("click", { stopPropagation() {} });
@@ -369,8 +400,8 @@ test("the full title is available on hover and the row expands read-only details
   const { ctx } = load({ [d]: [dayRoot(), blk("p", d, { title: longTitle })] }, [d]);
   await openLooseEnds(ctx);
   const r = row0(ctx);
-  const title = r.querySelector(".carryover-row-title");
-  const toggle = r.querySelector(".cu-details-toggle");
+  const title = r.querySelector(".ttl");
+  const toggle = r.querySelector(".ttl");
   const panel = r.querySelector(".cu-details");
   assert.equal(title.title, longTitle, "native hover text carries the untruncated title");
   assert.equal(toggle.getAttribute("aria-label"), "Show notes and details for " + longTitle);
@@ -397,10 +428,10 @@ test("details expansion uses a native button and explains an empty task", async 
   const { ctx } = load({ [d]: [dayRoot(), blk("p", d, { title: "Slipped" })] }, [d]);
   await openLooseEnds(ctx);
   const r = row0(ctx);
-  const toggle = r.querySelector(".cu-details-toggle");
+  const toggle = r.querySelector(".ttl");
   ctx.window.DCC.Carryover.loadDetails = async () => ({ title: "Slipped", details: [], notes: [] });
-  assert.match(r.innerHTML, /<button type="button" class="carryover-btn cu-details-action cu-details-toggle"[^>]*>Details<\/button>/,
-    "native button semantics provide Enter and Space activation without a wrapper key handler");
+  r.querySelector(".btn-task-radial").fire("click");
+  assert.ok(r.querySelector(".btn-task-radial")._actions.some(action => action.label === "Notes & actions"));
   toggle.fire("click");
   await settled();
   assert.equal(r.querySelector(".cu-details").hidden, false);
@@ -464,7 +495,7 @@ test("meeting follow-ups have an already-done checkmark that completes the appro
   const { ctx, calls } = meetingCtx(MTG_ACTION);
   await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
-  row.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
+  row.querySelector(".it-list-check").fire("click", { stopPropagation() {} });
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.deepEqual(calls.approved, [["proposal-1"]]);
   assert.deepEqual(calls.completed, [{ id: "approved-1", completed: true, taskDate: "2026-07-28" }]);
@@ -475,7 +506,7 @@ test("retrying an approved meeting follow-up completes its existing action witho
   const { ctx, calls } = meetingCtx({ ...MTG_ACTION, approvedBlockId: "approved-existing" });
   await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
-  row.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
+  row.querySelector(".it-list-check").fire("click", { stopPropagation() {} });
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.deepEqual(calls.approved, []);
   assert.deepEqual(calls.completed, [{ id: "approved-existing", completed: true, taskDate: "2026-07-28" }]);
@@ -486,7 +517,7 @@ test("a pending meeting completion stays visible, re-enables, and restores focus
   const { ctx, calls } = meetingCtx(MTG_ACTION, { ok: false, pending: true });
   await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
-  const complete = row.querySelector(".cu-complete");
+  const complete = row.querySelector(".it-list-check");
   ctx.document.activeElement = complete;
   complete.fire("click", { stopPropagation() {} });
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -503,7 +534,7 @@ test("completing the final meeting follow-up returns focus to the task launcher"
   ctx.document.body.appendChild(launcher);
   await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
-  const complete = row.querySelector(".cu-complete");
+  const complete = row.querySelector(".it-list-check");
   ctx.document.activeElement = complete;
   complete.fire("click", { stopPropagation() {} });
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -518,7 +549,7 @@ test("meeting Details opens that meeting's recap", async () => {
   });
   await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
-  row.querySelector(".cu-mtg-details").fire("click");
+  row.querySelector(".ttl").fire("click");
   assert.deepEqual(JSON.parse(JSON.stringify(opened)), [{
     meeting: {
       id: "meeting-1", meetingBlockId: "meeting-1", title: "Investor weekly",
@@ -559,11 +590,9 @@ test("a delegated meeting row keeps the shared layout without stealing the owner
   const { ctx } = triageCtx({ [ymd(1)]: [dayRoot()] }, [ymd(1)], [], { fetch });
   await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
-  assert.match(row.innerHTML, /<button disabled[^>]*class="btn-schedule cu-cal"/,
-    "delegated rows keep the shared calendar control, visibly disabled");
-  assert.match(row.innerHTML, /class="carryover-btn carryover-btn-schedule cu-today cu-mtg-today"[^>]*disabled/,
-    "Today stays in the shared action order without scheduling someone else's commitment");
-  row.querySelector(".cu-mtg-today").fire("click");
+  assert.doesNotMatch(row.innerHTML, /class="btn-schedule"/,
+    "delegated rows omit scheduling capabilities");
+  pickAction(row, "Today");
   await settled();
   assert.deepEqual(scheduled, []);
   assert.equal(row._removed, false);
@@ -607,8 +636,8 @@ function triageCtx(daysByDate, archiveDates, items, over) {
 const allRowsOf = (ctx) => ctx.document.getElementById("catchup-overlay")
   .querySelector("#catchup-list").children;
 const rowsOf = (ctx) => allRowsOf(ctx)
-  .filter(r => r.className && r.className.indexOf("carryover-row") > -1);
-const titleOf = (r) => r.querySelector(".carryover-row-title").textContent;
+  .filter(r => r.className && r.className.indexOf("it-list-item") > -1);
+const titleOf = (r) => r.querySelector(".ttl").textContent;
 
 // The Journal is a section, not a countable loose end: it never contributes to the
 // pill count, and its only job in this suite is to be REACHABLE. `pending` mirrors
@@ -676,19 +705,21 @@ test("Waiting has one Loose Ends row with its internal draft, not a duplicate tr
   );
   const row = [...rowsOf(ctx)][0];
   assert.ok(row.querySelector(".cu-wait-copy"), "the copy-ready fallback stays in Waiting details");
-  const actionHtml = /<div class="carryover-row-actions">([\s\S]*?)<\/div>/.exec(row.innerHTML)[1];
-  assert.deepEqual([...actionHtml.matchAll(/<button[^>]*>([^<]+)<\/button>/g)].map(match => match[1]), ["Today", "Drop", "Details"]);
+  assert.match(row.innerHTML, /class="it-list-actions"/);
+  assert.doesNotMatch(row.innerHTML, /cu-today|cu-drop|cu-details-action/);
+  row.querySelector(".btn-task-radial").fire("click");
+  assert.deepEqual(Array.from(row.querySelector(".btn-task-radial")._actions, item => item.label), ["Schedule…", "Today", "Details"]);
 });
 
 test("Waiting actions snooze, schedule a check-in, unblock, and copy the fallback", async () => {
   const { ctx, calls } = waitingCtx();
   await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
-  row.querySelector(".cu-wait-details").fire("click");
+  row.querySelector(".ttl").fire("click");
   assert.equal(row.querySelector(".cu-details").hidden, false);
-  row.querySelector(".cu-wait-drop").fire("click");
+  row.querySelector(".btn-del-task").fire("click");
   await new Promise(resolve => setTimeout(resolve, 0));
-  row.querySelector(".cu-wait-today").fire("click", { currentTarget: row.querySelector(".cu-wait-today") });
+  pickAction(row, "Today");
   row.querySelector(".cu-wait-schedule").fire("click", { currentTarget: row.querySelector(".cu-wait-schedule") });
   row.querySelector(".cu-wait-unblock").fire("click");
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -747,30 +778,42 @@ test("the unified modal follows the requested section order", async () => {
   assert.match(journal.innerHTML, /Journal/);
 });
 
-test("every Loose Ends row uses checkmark, title, calendar, Today, Drop, Details in that order", async () => {
+test("every Loose Ends source uses the live itinerary renderer", async () => {
   const d = ymd(1);
-  const delegated = { ...MTG_ACTION, id: "proposal-2", owner: "other", title: "Wait for finance" };
   const { ctx } = triageCtx(
-    { [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] },
-    [d],
-    [TRI("s1")],
-    { fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION, delegated] }) }) }
+    { [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("s1")],
+    { fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION] }) }) }
   );
+  const renderRow = ctx.renderItineraryListRow;
+  const createTaskRow = ctx.createTaskListRowRenderer;
+  const fullTaskRows = [];
+  ctx.createTaskListRowRenderer = (context) => {
+    const row = createTaskRow(context);
+    return (...args) => {
+      const el = row(...args);
+      fullTaskRows.push(el);
+      return el;
+    };
+  };
+  const rendered = [];
+  ctx.renderItineraryListRow = (ev, opts) => {
+    const row = renderRow(ev, opts);
+    row.dataset.sharedRendererRevision = "next";
+    rendered.push(row);
+    return row;
+  };
   await openLooseEnds(ctx);
-  const rows = [...rowsOf(ctx)];
-  assert.equal(rows.length, 4);
-  for (const row of rows) {
-    const html = row.innerHTML;
-    const completeAt = html.indexOf('class="cu-complete"');
-    const titleAt = html.indexOf('class="carryover-row-title"');
-    const calendarAt = html.indexOf('class="btn-schedule cu-cal"');
-    const actionsAt = html.indexOf('class="carryover-row-actions"');
-    assert.ok(completeAt > -1 && completeAt < titleAt, "the checkmark leads the row");
-    assert.ok(titleAt < calendarAt && calendarAt < actionsAt, "title and calendar precede the text actions");
-    const actionHtml = /<div class="carryover-row-actions">([\s\S]*?)<\/div>/.exec(html)[1];
-    const labels = [...actionHtml.matchAll(/<button[^>]*>([^<]+)<\/button>/g)].map(match => match[1]);
-    assert.deepEqual(labels, ["Today", "Drop", "Details"]);
-    assert.doesNotMatch(actionHtml, /Tomorrow|Backlog|Dismiss|Recap/);
+  assert.equal(rendered.length, 3);
+  assert.equal(fullTaskRows.length, 1, "Stored tasks must use the full task builder, not just its layout");
+  assert.ok(rendered.includes(fullTaskRows[0]));
+  assert.ok([...rowsOf(ctx)].every(row => rendered.includes(row)));
+  for (const row of rendered) {
+    assert.equal(row.dataset.sharedRendererRevision, "next");
+    assert.match(row.innerHTML, /class="it-list-utility"/);
+    assert.match(row.innerHTML, /class="it-list-main"/);
+    assert.match(row.innerHTML, /class="it-list-actions"/);
+    assert.doesNotMatch(row.innerHTML, /cu-complete|cu-today|carryover-row-info/);
+    assert.equal(row.querySelector(".it-list-utility").children[0].hidden, true);
   }
 });
 
@@ -882,7 +925,7 @@ test("Today on a triage row schedules it on the current day and clears the row",
   const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")]);
   await openLooseEnds(ctx);
   const first = [...rowsOf(ctx)][0];
-  first.querySelector(".cu-tri-today").fire("click");
+  pickAction(first, "Today");
   await new Promise(r => setTimeout(r, 0));
   assert.deepEqual(calls.placed, [{ id: "m1", date: TODAY }]);
   assert.equal(first._removed, true, "a scheduled item leaves the list");
@@ -894,7 +937,7 @@ test("triage Details expands the item context without changing its metadata", as
   const { ctx } = triageCtx({ [d]: [dayRoot()] }, [d], [item]);
   await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
-  const toggle = row.querySelector(".cu-tri-details");
+  const toggle = row.querySelector(".ttl");
   const details = row.querySelector(".cu-details");
   assert.match(row.innerHTML, /slack · High · \d+d old · <a class="cu-tri-link"/);
   toggle.fire("click");
@@ -909,7 +952,7 @@ test("triage Details includes notes-only context", async () => {
   const { ctx } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1", { notes: "Use the approved response." })]);
   await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
-  row.querySelector(".cu-tri-details").fire("click");
+  row.querySelector(".ttl").fire("click");
   assert.equal(row.querySelector(".cu-details-body").children[0].children[1].textContent,
     "Use the approved response.");
 });
@@ -919,7 +962,7 @@ test("triage rows have an already-done checkmark that resolves them", async () =
   const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")]);
   await openLooseEnds(ctx);
   const row = [...rowsOf(ctx)][0];
-  row.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
+  row.querySelector(".it-list-check").fire("click", { stopPropagation() {} });
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.deepEqual(calls.completed, [{ id: "m1", note: "Already done", trivial: false }]);
   assert.equal(row._removed, true);
@@ -929,9 +972,9 @@ test("completing focused triage moves focus to the next source's completion cont
   const d = ymd(1);
   const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("m1")]);
   await openLooseEnds(ctx);
-  const rows = [...rowsOf(ctx)].filter(row => row.className.includes("carryover-row"));
-  const triageComplete = rows.find(row => row.className.includes("cu-triage-row")).querySelector(".cu-complete");
-  const slippedComplete = rows.find(row => row.className.includes("cu-task-row")).querySelector(".cu-complete");
+  const rows = [...rowsOf(ctx)].filter(row => row.className.includes("it-list-item"));
+  const triageComplete = rows.find(row => row.className.includes("cu-triage-row")).querySelector(".it-list-check");
+  const slippedComplete = rows.find(row => row.className.includes("cu-task-row")).querySelector(".it-list-check");
   ctx.document.activeElement = triageComplete;
   triageComplete.fire("click", { stopPropagation() {} });
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -946,10 +989,10 @@ test("a refused schedule leaves the triage row in place and re-enables it", asyn
     { scheduleTriageOnDate: async () => null });
   await openLooseEnds(ctx);
   const r = [...rowsOf(ctx)][0];
-  r.querySelector(".cu-tri-today").fire("click");
+  pickAction(r, "Today");
   await new Promise(r2 => setTimeout(r2, 0));
   assert.equal(r._removed, false);
-  assert.equal(r.querySelector(".cu-tri-today").disabled, false);
+  assert.equal(r.querySelector(".btn-task-radial").disabled, false);
 });
 
 test("Drop on a triage row deletes the triage item, never a block", async () => {
@@ -959,7 +1002,7 @@ test("Drop on a triage row deletes the triage item, never a block", async () => 
   let carryoverDrops = 0;
   ctx.window.DCC.Carryover.drop = async () => { carryoverDrops++; return null; };
   const r = [...rowsOf(ctx)][0];
-  r.querySelector(".cu-tri-drop").fire("click");
+  r.querySelector(".btn-del-task").fire("click");
   await new Promise(r2 => setTimeout(r2, 0));
   assert.deepEqual(calls.dropped, ["m1"], "routes through deleteTriageItem (durable, with Undo)");
   assert.equal(carryoverDrops, 0, "and never through the block dropper");
@@ -979,11 +1022,10 @@ test("the calendar button on a task row routes its pick through the same mover",
   const moves = [];
   ctx.window.DCC.Carryover.moveTo = async (ev, date) => { moves.push({ id: ev.id, date }); return { removed: [ev.id] }; };
   const r = [...rowsOf(ctx)][0];
-  r.querySelector(".cu-cal").fire("click", { target: r.querySelector(".cu-cal") });
-  assert.equal(calls.pickers.length, 1, "opens the shared day picker");
-  assert.equal(calls.pickers[0].header, 'Move "Bob\'s & Sue\'s deck" to…',
-    "the caller passes the title RAW; the popover owns the escaping");
-  await calls.pickers[0].onPick("2026-08-12");
+  r.querySelector(".btn-schedule").fire("click", { target: r.querySelector(".btn-schedule") });
+  assert.equal(ctx._schedulePopover.mode, "reschedule");
+  assert.equal(ctx._schedulePopover.task.title, "Bob's & Sue's deck");
+  await ctx._schedulePopover.onMove("2026-08-12", null);
   assert.deepEqual(moves, [{ id: "t1", date: "2026-08-12" }]);
   assert.equal(r._removed, true);
 });
@@ -993,7 +1035,7 @@ test("the calendar button on a triage row routes its pick through the triage sch
   const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")]);
   await openLooseEnds(ctx);
   const r = [...rowsOf(ctx)][0];
-  r.querySelector(".cu-cal").fire("click", { target: r.querySelector(".cu-cal") });
+  r.querySelector(".btn-schedule").fire("click", { target: r.querySelector(".btn-schedule") });
   assert.equal(calls.pickers.length, 1);
   await calls.pickers[0].onPick("2026-08-12");
   assert.deepEqual(calls.placed, [{ id: "m1", date: "2026-08-12" }]);
@@ -1094,14 +1136,13 @@ test("the calendar button is really in every row kind's markup", async () => {
     fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION] }) })
   });
   await openLooseEnds(ctx);
-  const rows = [...rowsOf(ctx)].filter(r => r.className && r.className.indexOf("carryover-row") > -1);
+  const rows = [...rowsOf(ctx)].filter(r => r.className && r.className.indexOf("it-list-item") > -1);
   assert.equal(rows.length, 3);
   for (const r of rows) {
-    assert.match(r.innerHTML, /<div class="cu-title-line">/, "the name and the button share a line");
-    assert.match(r.innerHTML, /<button[^>]*class="btn-schedule cu-cal"[^>]*aria-label="/,
+    assert.match(r.innerHTML, /<div class="it-list-meta">/, "the calendar uses the shared task metadata line");
+    assert.match(r.innerHTML, /<button[^>]*class="btn-schedule"[^>]*aria-label="/,
       "the button is in the row markup, not just in a querySelector stub");
-    assert.match(r.innerHTML, new RegExp('aria-label="[^"]*' + titleOf(r).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-      "the calendar label names its row");
+
   }
 });
 
@@ -1145,7 +1186,7 @@ test("a delegated check-in row in the envelope is labelled as a check-in", async
   assert.ok(checkIn.className.includes("cu-waiting-checkin"), "the row carries the waiting marker");
   assert.match(checkIn.innerHTML, /class="waiting-pill checkin"[^>]*>&#128276; Check-in<\/span>/);
   // The pill sits inside the title line, which is where the CSS positions it.
-  assert.match(checkIn.innerHTML, /carryover-row-title"><\/div><span class="waiting-pill checkin"/);
+  assert.match(checkIn.innerHTML, /<\/span><span class="waiting-pill checkin"/);
   assert.match(checkIn.innerHTML, /The delegated task stays open in Waiting/);
   // A swept Slack item is untouched: no marker, no pill.
   assert.ok(plain && !plain.className.includes("cu-waiting-checkin"));

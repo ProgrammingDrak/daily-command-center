@@ -64,7 +64,7 @@ function openSchedulePopover(cfg){
 
   let ev=null;
   if(mode==="reschedule"){
-    ev=scheduled.find(e=>e.id===cfg.id);
+    ev=cfg.task||scheduled.find(e=>e.id===cfg.id);
     if(!ev)return;
   }
 
@@ -165,7 +165,7 @@ function openSchedulePopover(cfg){
   async function pickDay(dateStr){
     if(mode==="reschedule"){
       closePop();
-      moveTaskViaPlacement(cfg.id,dateStr);
+      moveTaskViaPlacement(cfg.id,dateStr,{task:ev,onMove:cfg.onMove});
       return;
     }
     if(mode==="pick"){
@@ -207,7 +207,7 @@ function openSchedulePopover(cfg){
       const target=btn.dataset.target;
       const dateStr=target==="today"
         ?(mode==="reschedule"?today:(typeof _resolvedTodayDate==="function"?_resolvedTodayDate():today))
-        :(mode==="reschedule"?__tomorrowDate:(typeof _resolvedTomorrowDate==="function"?_resolvedTomorrowDate():__tomorrowDate));
+        :(typeof _resolvedTomorrowDate==="function"?_resolvedTomorrowDate():__tomorrowDate);
       if(!dateStr){if(typeof showToast==="function")showToast("No date available","error");return}
       if(mode==="pick")btn.textContent="Scheduling...";
       pickDay(dateStr);

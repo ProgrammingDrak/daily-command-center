@@ -1372,16 +1372,16 @@ async function moveTaskToToday(id){
 // task on that day as an anchor, and Earliest free), so placement is chosen
 // the same way app-wide. Falls back to a direct auto-slot move when the picker
 // isn't available (e.g. embeds without the overlay markup).
-function moveTaskViaPlacement(id,dateStr){
-  const ev=scheduled.find(e=>e.id===id);
-  if(!ev||typeof openPlacementPicker!=="function")return rescheduleTaskToDate(id,dateStr);
+function moveTaskViaPlacement(id,dateStr,opts){
+  opts=opts||{};
+  const ev=opts.task||scheduled.find(e=>e.id===id);
+  const move=(date,time)=>typeof opts.onMove==="function"?opts.onMove(date,time):rescheduleTaskToDate(id,date,{pinnedStart:time||null});
+  if(!ev||typeof openPlacementPicker!=="function")return move(dateStr,null);
   openPlacementPicker({
     title:ev.title,durMin:dur(ev)||30,verb:"Move",day:dateStr||null,
     onPlace:async(dStr,timeStr,editedTitle)=>{
-      // The picker's title is editable: persist a rename BEFORE the move so
-      // the true move carries the new title with it.
       if(editedTitle&&editedTitle!==ev.title)await _renameTaskForMove(ev,editedTitle);
-      rescheduleTaskToDate(id,dStr,{pinnedStart:timeStr||null});
+      return move(dStr,timeStr);
     }
   });
 }
@@ -1389,8 +1389,8 @@ function moveTaskViaPlacement(id,dateStr){
 // Rename a task in place: the live row plus its backing block.
 async function _renameTaskForMove(ev,newTitle){
   ev.title=newTitle;
-  const dateStr=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
-  const b=_findTaskBlockForDate(ev.id,dateStr,ev);
+  const dateStr=(ev.__unf&&ev.__unf.sourceDate)||((typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null));
+  const b=_findTaskBlockForDate(ev.id,dateStr,ev)||(ev.__unf&&ev.__unf.sourceBlock);
   if(b&&window.blockStore){
     try{await window.blockStore.updateBlock(b.id,{...(b.properties||{}),title:newTitle})}catch(e){}
   }
