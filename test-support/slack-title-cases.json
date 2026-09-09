@@ -1,0 +1,66 @@
+[
+  [
+    "Hey <@U123|Drake Shadwell (EST)>, can you review the payment report?",
+    "Review the payment report"
+  ],
+  [
+    "#leadership-plus: <@U123|Drake> / <@U456|Ben>, please approve the revised proposal.",
+    "Approve the revised proposal"
+  ],
+  [
+    "DM: &lt;@U123|Drake&gt;, update for tomorrow",
+    "Update for tomorrow"
+  ],
+  [
+    "Please send <@U456|Ben> the report",
+    "Send @Ben the report"
+  ],
+  [
+    "Can you check <https://example.com/report|the reconciliation report> before Friday?",
+    "Check the reconciliation report before Friday"
+  ],
+  [
+    "Can you please not send this yet?",
+    "Can you please not send this yet"
+  ],
+  [
+    "Do not approve this payment.",
+    "Do not approve this payment"
+  ],
+  [
+    "Hey team,\nPlease review the report.\nMore context follows.",
+    "Review the report"
+  ],
+  [
+    "Could you approve this? Then notify Ben.",
+    "Approve this"
+  ],
+  [
+    "Please ask Jamie for approval. Then send the final launch packet today",
+    "Ask Jamie for approval"
+  ],
+  [
+    "Send <@U123> the report",
+    "Send @someone the report"
+  ],
+  [
+    "<!here> Please check <#C123|leadership-plus>",
+    "Check #leadership-plus"
+  ],
+  [
+    "",
+    "Review Slack message"
+  ],
+  [
+    "<@U123|Drake>",
+    "Review Slack message"
+  ],
+  [
+    "One two three four five six seven eight nine ten eleven twelve thirteen fourteen",
+    "One two three four five six seven eight nine ten eleven twelve..."
+  ],
+  [
+    "Thanks, I will check later",
+    "Thanks, I will check later"
+  ]
+]

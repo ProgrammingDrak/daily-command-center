@@ -2,15 +2,15 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const capture = require("./lib/slack-capture");
 
-test("fallback title keeps short messages and cuts longer messages at 5-10 words", () => {
+test("fallback title uses readable rule-based excerpts", () => {
   assert.equal(capture.fallbackTitle("Fix the invoice"), "Fix the invoice");
   assert.equal(
     capture.fallbackTitle("Please ask Jamie for approval. Then send the final launch packet today"),
-    "Please ask Jamie for approval."
+    "Ask Jamie for approval"
   );
   assert.equal(
     capture.fallbackTitle("One two three four five six seven eight nine ten eleven twelve"),
-    "One two three four five six seven eight nine ten..."
+    "One two three four five six seven eight nine ten eleven twelve"
   );
 });
 

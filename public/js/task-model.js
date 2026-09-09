@@ -43,13 +43,13 @@
 // unscheduleTaskFromDate (deletes) and rescheduleTaskToDate (moves) -- so the next
 // person to add a fourth sees all of them at once. See `scheduleRowOnDay` there.
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === "object" && module.exports ? require("./slack-titles") : root.DCC && root.DCC.SlackTitles);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) {
     const DCC = (root.DCC = root.DCC || {});
     DCC.TaskModel = api;
   }
-})(typeof self !== "undefined" ? self : this, function () {
+})(typeof self !== "undefined" ? self : this, function (slackTitles) {
   // state.js owns the canonical pt/fmt/ms trio and is NOT a module, so prefer the
   // globals in the browser (zero drift by construction) and fall back to these
   // identical locals under node so the projection stays require()able + testable.
@@ -105,7 +105,7 @@
     // because pt("24:00") is 0 here.
     const end = p.end || ((opts.deriveEnd && p.start) ? _fmt(Math.min(24 * 60 - 1, _pt(p.start) + d)) : _fmt(d));
     const task = {
-      id: taskId, title: p.title, type: p.type || "task",
+      id: taskId, title: slackTitles ? slackTitles.displayTitle(p) : p.title, type: p.type || "task",
       _blockId: block.id,
       _dateless: dateless,   // day-agnostic row: Unscheduled everywhere, excluded from day stats
       createdAt: block.created_at || p.created_at || p.createdAt || null,
@@ -167,6 +167,10 @@
       alertKey: p.alertKey || null,
       alertType: p.alertType || null,
       publicVisibility: p.publicVisibility || "public",
+      sourceContext: p.sourceContext || (p.slack_channel_name && p.slack_channel_name !== "slack" ? "#" + p.slack_channel_name : "") || (slackTitles && slackTitles.sourceContext(p.originalTitle || p.triageTitle || "")) || "",
+      originalTitle: p.originalTitle || "",
+      generatedTitle: p.generatedTitle || "",
+      titleNamingVersion: p.titleNamingVersion || "",
       triageContext: p.triageContext || null,
       triageBlock: p.triageBlock === true,
       triageId: p.triageId || null,

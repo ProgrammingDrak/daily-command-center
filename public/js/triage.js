@@ -1262,6 +1262,10 @@ function triageTaskProps(triageId,item){
     tags:["triage"],
     triageId:triageId,
     triageContext:item,
+    originalTitle:item.originalTitle||"",
+    generatedTitle:item.generatedTitle||"",
+    titleNamingVersion:item.titleNamingVersion||"",
+    sourceContext:item.sourceContext||"",
     triageKey:triageItemKeyFor(item),
     triageTitle:item.title||"",
     triageType:item.type||item.source||"",
@@ -1280,6 +1284,8 @@ function triageTaskProps(triageId,item){
 function existingTriageTask(triageId,item,dateStr){
   const byId=scheduled.find(ev=>ev.triageId===triageId);
   if(byId)return byId;
+  // A shared excerpt is not identity. Distinct source messages remain distinct.
+  if(triageId)return null;
   const viewing=(typeof viewDate!=="undefined"&&viewDate)?viewDate:null;
   if(dateStr&&viewing&&dateStr!==viewing)return null;
   return DCC.TaskModel.selectActive(scheduled).find(ev=>ev.source==="triage"&&ev.title===item.title);
@@ -1515,7 +1521,7 @@ function buildScheduled() {
         '<div class="board-card" style="margin-bottom:6px">' +
           '<div class="bar" style="background:' + c.color + '"></div>' +
           '<div class="body">' +
-            '<div class="title-row"><span class="ttl">' + ev.title + '</span>' + (isBounty ? '<span class="bounty-chip' + bountySponsorAttr + '>Bounty x' + Math.pow(2, bountyCount) + '</span>' : '') + '</div>' +
+            '<div class="title-row"><span class="ttl">' + DCC.esc(ev.title) + '</span>' + (isBounty ? '<span class="bounty-chip' + bountySponsorAttr + '>Bounty x' + Math.pow(2, bountyCount) + '</span>' : '') + '</div>' +
             '<div class="meta"><span class="tag ' + c.cls + '">' + c.tag + '</span><span>' + f12(ev.start) + ' – ' + f12(ev.end) + '</span><span>' + ms(dur(ev)) + '</span></div>' +
           '</div>' +
           (!isMeeting(ev) && canEditBounty && (!bountyPlaced || isBounty) ? '<button class="add-btn sched-bounty-btn" data-id="' + ev.id + '" style="background:rgba(251,191,36,0.12);color:var(--amber)">Bounty</button>' : '') +
@@ -1541,7 +1547,7 @@ function buildScheduled() {
         '<div class="board-card" style="margin-bottom:6px;' + (done ? 'opacity:0.4;' : '') + '">' +
           '<div class="bar" style="background:' + c.color + '"></div>' +
           '<div class="body">' +
-            '<div class="title-row"><span class="ttl"' + (done ? ' style="text-decoration:line-through"' : '') + '>' + ev.title + '</span>' + (isBounty ? '<span class="bounty-chip' + (done ? ' done' : '') + (bountyMeta.hasSponsor ? ' bounty-chip-sponsor' : '') + '"' + bountySponsorTitle + '>Bounty x' + Math.pow(2, bountyCount) + '</span>' : '') + '</div>' +
+            '<div class="title-row"><span class="ttl"' + (done ? ' style="text-decoration:line-through"' : '') + '>' + DCC.esc(ev.title) + '</span>' + (isBounty ? '<span class="bounty-chip' + (done ? ' done' : '') + (bountyMeta.hasSponsor ? ' bounty-chip-sponsor' : '') + '"' + bountySponsorTitle + '>Bounty x' + Math.pow(2, bountyCount) + '</span>' : '') + '</div>' +
             '<div class="meta"><span class="tag ' + c.cls + '">' + c.tag + '</span><span>' + f12(ev.start) + ' – ' + f12(ev.end) + '</span><span>' + ms(dur(ev)) + '</span></div>' +
           '</div>' +
           '<button class="add-btn sched-repeat-btn" data-id="' + ev.id + '" title="Turn into a repeat responsibility">Repeat</button>' +

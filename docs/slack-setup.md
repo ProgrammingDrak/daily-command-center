@@ -41,7 +41,6 @@ SLACK_BOT_TOKEN=xoxb-…            # OAuth & Permissions
 SLACK_TEAM_ALLOWLIST=T0XXXXXXX    # your workspace's team ID
 SLACK_WORKSPACE_HOST=example.slack.com
 SLACK_DELEGATE_IMPORT_AFTER=2026-08-18T00:00:00.000Z
-ANTHROPIC_API_KEY=…               # optional, for the AI title and summary
 ```
 
 `SLACK_DELEGATE_IMPORT_AFTER` must be set once to the rollout instant and then
@@ -155,3 +154,16 @@ Its four steps:
    `onboarding_state.setup.triageLastSeenAt` when the caller sends a non-Mozilla
    user agent, which `dcc_client.py`'s urllib login does. A heuristic, used only to
    flip a checkmark, never to authorize anything.
+
+### Task naming
+
+Slack bookmarks and delegated captures use local text rules, with no model calls.
+The rules remove leading mentions and greetings, decode links and named mentions,
+and shorten clear requests into task titles. Triage uses the same naming rules.
+Source links and original message previews remain available. Manual task renames
+win over automatic refreshes. Unknown mention names display as `@someone`.
+
+The legacy desktop bookmark poller and Sweep Suite reader use the matching
+`slack_titles.py` helper in the brain repository. Deploy both repository changes
+and sync the brain on each polling machine to retire its previous Claude call.
+No Anthropic key or model configuration is needed for Slack naming.

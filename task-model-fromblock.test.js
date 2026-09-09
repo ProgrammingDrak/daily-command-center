@@ -145,6 +145,7 @@ test("pure: the source block is never mutated", () => {
 // `if(task.reschedulePlacement==="earliest"&&!task.subtaskOf)scheduled.unshift(task)`)
 // and wrapId/isWrap, which drive ride-along nesting in the carryover lane.
 const BASE_KEYS = [
+  "sourceContext", "originalTitle", "generatedTitle", "titleNamingVersion",
   "_blockId", "_dateless", "actualMinutes", "aiSummary", "alertKey", "alertType", "allDay", "allDayEnd", "allDayStart", "ampUrl", "calUrl",
   "calendarAccountEmail", "calendarAccountKey", "calendarColor", "calendarId", "calendarName", "capacityBucket",
   "completedAt", "createdAt", "dashboardRef", "delegatedItemId", "detail", "end", "hangout_link",
@@ -180,6 +181,7 @@ test("every projected key round-trips its property, including the ones nothing a
       repeatOccurrenceKey: "2026-07-28T09:00", repeatOccurrenceInstant: "2026-07-28T13:00:00.000Z",
       repeatOccurrenceRootId: "row-9", recurrenceOverride: true,
       alertKey: "ak", alertType: "at", publicVisibility: "private",
+      sourceContext: "#leadership-plus", originalTitle: "Original source text", generatedTitle: "T", titleNamingVersion: "slack-rules-v1",
       triageBlock: false, triageContext: null, triageId: "ti", triageKey: "slack|D1:1", triageTitle: "Original title", triageType: "slack",
       triageSourceRef: "C1:123", triageReceivedAt: "2026-07-28T12:00:00Z", triageConversationId: "D1",
       delegatedItemId: "di", linkedBlockId: "lb", linkedTagId: "lt",
@@ -212,7 +214,8 @@ test("every projected key round-trips its property, including the ones nothing a
     repeatOccurrenceKey: "2026-07-28T09:00", repeatOccurrenceInstant: "2026-07-28T13:00:00.000Z",
     repeatOccurrenceRootId: "row-9", recurrenceOverride: true,
     alertKey: "ak", alertType: "at", publicVisibility: "private",
-    triageBlock: false, triageContext: null, triageId: "ti", triageKey: "slack|D1:1", triageTitle: "Original title", triageType: "slack",
+    sourceContext: "#leadership-plus", originalTitle: "Original source text", generatedTitle: "T", titleNamingVersion: "slack-rules-v1",
+      triageBlock: false, triageContext: null, triageId: "ti", triageKey: "slack|D1:1", triageTitle: "Original title", triageType: "slack",
     triageSourceRef: "C1:123", triageReceivedAt: "2026-07-28T12:00:00Z", triageConversationId: "D1",
     delegatedItemId: "di", linkedBlockId: "lb", linkedTagId: "lt",
     ampUrl: "https://amp", hubspotUrl: "https://hs", wrapId: "w", isWrap: true,

@@ -1,4 +1,5 @@
 "use strict";
+const { normalizeTriageItem } = require("./public/js/slack-titles");
 
 const ACTIVE_TOP_LEVEL = [
   "date",
@@ -27,7 +28,7 @@ function compactActiveState(value) {
 
   const triage = object(state.triage);
   result.triage = {
-    open_items: Array.isArray(triage.open_items) ? triage.open_items : [],
+    open_items: Array.isArray(triage.open_items) ? triage.open_items.map(normalizeTriageItem) : [],
     metrics: object(triage.metrics),
     cycle_count: Number(triage.cycle_count || 0),
   };
