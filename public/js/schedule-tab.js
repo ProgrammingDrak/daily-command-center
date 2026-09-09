@@ -827,6 +827,8 @@ function createTaskListRowRenderer(context){
 }
 window.createTaskListRowRenderer=createTaskListRowRenderer;
 
+const TIME_BLOCK_DISCLOSURE_ICONS={expanded:"▾",collapsed:"▸"};
+
 function buildListView(){
   const wrap=document.getElementById("list-view");
   if(!wrap)return;
@@ -893,20 +895,72 @@ function buildListView(){
     g.innerHTML='<span>'+ms(mins)+'</span>';
     return g;
   }
+  function timeBlockCollapseKey(block){return "time-block:"+JSON.stringify([viewDate,block.id||null]);}
   function timeBlockDividerEl(block,isCurrent){
     const TB=DCC.TimeBlocks;
-    const el=document.createElement(block.fixed?"div":"button");
-    if(!block.fixed)el.type="button";
+    if(block.fixed){
+      const fixed=document.createElement("div");
+      fixed.className="time-block-divider variant-"+TB.DIVIDER_VARIANT;
+      fixed.innerHTML='<strong>'+escHtml(block.name)+'</strong>';
+      return fixed;
+    }
+    const key=timeBlockCollapseKey(block),collapsed=isCollapsed(key);
+    const el=document.createElement("div");
     el.className="time-block-divider variant-"+TB.DIVIDER_VARIANT+(isCurrent?" current":"");
     if(block.id)el.dataset.blockId=block.id;
-    el.innerHTML='<strong>'+escHtml(block.name)+'</strong>'+(block.start?'<small>'+escHtml(TB.rangeLabel(block))+'</small>':'');
-    if(!block.fixed)el.addEventListener("click",()=>openBlockEditor(block.id||null));
+    const toggle=document.createElement("button");
+    toggle.type="button";
+    toggle.className="time-block-toggle";
+    toggle.dataset.timeBlockToggle=key;
+    toggle.setAttribute("aria-expanded",String(!collapsed));
+    toggle.title=(block.start?TB.rangeLabel(block)+" · ":"")+(collapsed?"Expand ":"Collapse ")+block.name;
+    toggle.innerHTML='<span class="time-block-chevron" aria-hidden="true">'+TIME_BLOCK_DISCLOSURE_ICONS[collapsed?"collapsed":"expanded"]+'</span><strong>'+escHtml(block.name)+'</strong>';
+    let holdTimer=null,pressStart=null,suppressClick=false;
+    const clearHold=()=>{clearTimeout(holdTimer);holdTimer=null;pressStart=null;};
+    toggle.addEventListener("click",()=>{
+      clearHold();
+      if(suppressClick){suppressClick=false;return;}
+      toggleCollapsed(key);
+      buildListView();
+      Array.from(wrap.querySelectorAll("[data-time-block-toggle]")).find(button=>button.dataset.timeBlockToggle===key)?.focus({preventScroll:true});
+    });
+    const edit=document.createElement("button");
+    edit.type="button";
+    edit.className="time-block-edit";
+    edit.title=block.id?"Edit "+block.name:"Edit time blocks";
+    edit.setAttribute("aria-label",edit.title);
+    edit.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m16 3 5 5-13 13H3v-5L16 3Z M13 6l5 5"/></svg>';
+    edit.addEventListener("click",()=>openBlockEditor(block.id||null));
+    // A hold reveals the edit control without collapsing the block.
+    toggle.addEventListener("pointerdown",event=>{
+      if(event.button!==0)return;
+      clearHold();
+      suppressClick=false;
+      pressStart={x:event.clientX,y:event.clientY};
+      holdTimer=setTimeout(()=>{
+        clearHold();
+        if(!toggle.isConnected)return;
+        suppressClick=true;
+        edit.focus({preventScroll:true});
+      },QUICK_COMPLETE_HOLD_MS);
+    });
+    toggle.addEventListener("pointermove",event=>{
+      if(pressStart&&Math.hypot(event.clientX-pressStart.x,event.clientY-pressStart.y)>8)clearHold();
+    });
+    ["pointerup","pointercancel","pointerleave"].forEach(type=>toggle.addEventListener(type,clearHold));
+    toggle.addEventListener("contextmenu",event=>event.preventDefault());
+    el.appendChild(toggle);
+    el.appendChild(edit);
     return el;
   }
 
-  // Parents with at least one child anywhere in the visible list -- these are the
-  // rows the Collapse all / Expand all controls act on.
-  const parentIds=visible.filter(ev=>childrenOf(ev.id,visible).length>0).map(ev=>ev.id);
+  const timeBlocks=(DCC.TimeBlocks&&DCC.TimeBlocks.forDate)
+    ? DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate)
+    : [];
+  const useTimeBlockGroups=timeBlocks.length>0;
+  // Batch controls include editable time blocks and nested task parents.
+  const parentIds=visible.filter(ev=>childrenOf(ev.id,visible).length>0).map(ev=>ev.id)
+    .concat(timeBlocks.map(timeBlockCollapseKey),useTimeBlockGroups?[timeBlockCollapseKey({})]:[]);
   if(parentIds.length){
     const controls=document.createElement("div");
     controls.className="it-list-controls";
@@ -949,10 +1003,6 @@ function buildListView(){
     wrap.appendChild(status);
   }
 
-  const timeBlocks=(DCC.TimeBlocks&&DCC.TimeBlocks.forDate)
-    ? DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate)
-    : [];
-  const useTimeBlockGroups=timeBlocks.length>0;
   if(!day.timed.length&&!timeBlocks.length){
     const empty=document.createElement("div");
     empty.className="it-list-empty";
@@ -993,11 +1043,11 @@ function buildListView(){
         const current=isTodayView&&nowMin>=DCC.TimeBlocks.minutes(block.start,false)&&nowMin<DCC.TimeBlocks.minutes(block.end,true);
         wrap.appendChild(timeBlockDividerEl(block,current));
         wrap.appendChild(timeBlockDropZoneEl(block));
-        emitGroup(nodes);
+        if(!isCollapsed(timeBlockCollapseKey(block)))emitGroup(nodes);
       });
       if(grouped.outside.nodes.length){
         wrap.appendChild(timeBlockDividerEl({name:"Outside Time Blocks"},false));
-        emitGroup(grouped.outside.nodes);
+        if(!isCollapsed(timeBlockCollapseKey({})))emitGroup(grouped.outside.nodes);
       }
     }else{
       emitGroup(tree);
