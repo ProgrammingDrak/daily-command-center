@@ -14,7 +14,7 @@ async function project(rows,poolRows,triage=[]){
   };
   vm.createContext(context);
   const start=source.indexOf('  let allRows;'),end=source.indexOf('\n  const { rows: sponsors }',start);
-  vm.runInContext(fn('publicTaskIdentityIds')+'\n'+fn('normalizePublicTask')+'\nasync function run(){'+source.slice(start,end)+'\nreturn tasks;}globalThis.result=run();',context);
+  vm.runInContext(fn('taskMinutes')+'\n'+fn('publicTaskIdentityIds')+'\n'+fn('normalizePublicTask')+'\nasync function run(){'+source.slice(start,end)+'\nreturn tasks;}globalThis.result=run();',context);
   return JSON.parse(JSON.stringify(await context.result));
 }
 const row=(id,date,properties,parent_id=null)=>({id,date,type:'block',workspace_id:'ws',properties:{kind:'task',local_id:id,...properties},parent_id});
@@ -36,4 +36,9 @@ test('canonical Unplanned placement defeats stale intake and keeps done tasks in
   assert.equal(tasks[0].triageBlock,false);assert.equal(tasks[0].untimed,true);
   assert.equal(tasks[0].status,'done');assert.equal(tasks[0].title,'Private task');
   assert.ok(!tasks[0].identityIds.includes('source'),'intake deduplication does not widen the guest identity projection');
+});
+
+test('guest duration projection preserves an untimed zero-duration step',async()=>{
+  const tasks=await project([row('zero','2026-09-09',{title:'Zero-duration step',duration:0,start:null,end:null})],[]);
+  assert.equal(tasks[0].durationMinutes,0);
 });

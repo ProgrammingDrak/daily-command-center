@@ -206,7 +206,7 @@ function taskMinutes(start, end, fallback) {
   const a = parse(start), b = parse(end);
   if (a != null && b != null && b > a) return b - a;
   const n = Number(fallback);
-  return Number.isFinite(n) && n > 0 ? n : 30;
+  return fallback != null && Number.isFinite(n) && n >= 0 ? n : 30;
 }
 
 function publicTaskIdentityIds(input) {
@@ -389,7 +389,7 @@ function calendarMeta(input, calendarsById) {
 // owner is earning for" on both public and redacted-private tasks.
 function publicTaskPoints(input) {
   const result = scoreTaskPoints({
-    duration_minutes: input.durationMinutes != null ? input.durationMinutes : (input.duration || input.estimated_minutes || input.durMin),
+    duration_minutes: input.durationMinutes != null ? input.durationMinutes : (input.duration ?? input.estimated_minutes ?? input.durMin),
     priority: input.priority,
     type: input.kind || input.type
   });
