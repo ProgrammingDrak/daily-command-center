@@ -1032,6 +1032,10 @@ module.exports = function mount(app, ctx) {
       const canonical = durable.task || task;
       const completion = await completeWork({ block: canonical, atMs: eventMs, actor: "slack-events", actionId: mutationId, normalizeExisting: true });
       if (!completion.changed && !durable.duplicate) return;
+      // Completion owns the active-work cleanup on both surfaces. completeWork
+      // closes the DCC session; remove the matching Slack signal immediately.
+      // The reconciliation loop remains the retry path if this write cannot land.
+      await removeSlackReaction(channel, ts, R_START);
       await awardSlackCompletion(canonical, completedIso);
 
       broadcast("blocks-changed", {

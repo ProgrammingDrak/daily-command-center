@@ -948,7 +948,11 @@ test("⌛ then ✅ records exact elapsed, points, and a time_entry", async () =>
   assert.equal(p.completed, true);
   assert.equal(p.actualMinutes, 40);
   assert.ok(p.completedAt, "completedAt stamped");
+  assert.equal(p.startedAt, undefined, "completion stops the active timer");
   assert.match(p.notes, /Bookmarked from Slack/);
+  assert.deepEqual(calls.reactionsRemove.at(-1).body, {
+    channel: "C1", timestamp: "444.4", name: "hourglass",
+  }, "completion removes the Slack hourglass immediately");
   // points credited with both estimate and actual
   assert.equal(calls.credit.length, 1);
   assert.equal(calls.credit[0].actual_minutes, 40);
