@@ -237,11 +237,66 @@
     return { notebooks: notebooks.length, unsynced: dirty.length };
   }
 
+  // ── archive ────────────────────────────────────────────────────────────────
+
+  // Hands whole notebooks to archive.js in the shape it expects. Reading every
+  // page of every notebook is fine here: export is a deliberate, occasional act,
+  // and it is never in the writing path.
+  async function exportEntries(ids) {
+    const wanted = ids && ids.length ? new Set(ids) : null;
+    const notebooks = (await listNotebooks()).filter((nb) => !wanted || wanted.has(nb.id));
+    const entries = [];
+    for (const notebook of notebooks) {
+      entries.push({ notebook, pages: await listPages(notebook.id) });
+    }
+    return entries;
+  }
+
+  async function notebookIds() {
+    return (await listNotebooks()).map((nb) => nb.id);
+  }
+
+  // Takes what archive.plan() decided. Pages are written BEFORE the notebook row,
+  // so a crash between the two transactions leaves invisible orphan pages rather
+  // than a notebook that opens empty and looks like the restore lost everything.
+  async function importNotebooks(planned) {
+    const now = Date.now();
+    const out = [];
+    for (const item of planned || []) {
+      const notebook = {
+        id: item.id,
+        title: item.title,
+        cover: item.cover || "slate",
+        created: item.created == null ? now : item.created,
+        updated: item.updated == null ? now : item.updated,
+      };
+      const pages = (item.pages || []).map((p, i) => ({
+        id: uid("pg"),
+        notebookId: notebook.id,
+        index: i,
+        data: p.data == null ? null : p.data,
+        updated: p.updated == null ? now : p.updated,
+        // Imported ink is unsynced by definition: nothing on THIS device has ever
+        // been acknowledged by the server for these pages, and after a restore the
+        // vault may be missing them entirely. A page nobody wrote on has nothing
+        // to send, so it does not join the queue.
+        dirty: p.data ? 1 : 0,
+        syncedHash: null,
+        transcript: p.transcript || "",
+      }));
+      if (pages.length) await tx("pages", "readwrite", (s) => { for (const p of pages) s.put(p); });
+      await tx("notebooks", "readwrite", (s) => s.put(notebook));
+      out.push({ notebook, pages: pages.length });
+    }
+    return out;
+  }
+
   return {
     open, configureOwner, uid, hashOf,
     createNotebook, listNotebooks, getNotebook, renameNotebook, deleteNotebook,
     addPage, listPages, getPage, savePage, deletePage,
     dirtyPages, markSynced, stats,
+    exportEntries, notebookIds, importNotebooks,
     _tx: tx,
   };
 });

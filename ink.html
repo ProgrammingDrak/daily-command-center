@@ -93,6 +93,15 @@
     color: var(--muted); font-size: 30px; box-shadow: none;
   }
   .empty { color: var(--muted); font-size: 14px; padding: 36px 0; max-width: 46ch; }
+  .shelf-acts { display: flex; gap: 8px; }
+  .shelf-act {
+    padding: 7px 12px; border-radius: 8px; background: var(--chrome-2);
+    border: 1px solid var(--edge); font-size: 12.5px; white-space: nowrap;
+  }
+  .shelf-act:hover, .shelf-act:focus-visible { background: var(--chrome-3); }
+  .shelf-act:disabled { opacity: .4; cursor: default; }
+  dialog p.note { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+  dialog p.note.warn { color: var(--danger); }
 
   /* ── writing view ────────────────────────────────────────────────────── */
   #writer { height: 100%; display: none; flex-direction: column; }
@@ -166,6 +175,10 @@
     <span class="sub" id="shelfSub"></span>
     <span class="grow" style="flex:1"></span>
     <span class="status" id="shelfStatus"></span>
+    <span class="shelf-acts">
+      <button class="shelf-act" id="exportAllBtn">Export all</button>
+      <button class="shelf-act" id="importBtn">Import</button>
+    </span>
   </div>
   <div class="grid" id="books"></div>
   <p class="empty hidden" id="shelfEmpty">
@@ -233,6 +246,7 @@
 <div class="book-menu hidden" id="bookMenu" role="menu" aria-label="Notebook actions">
   <button id="bookMenuOpen" role="menuitem">Open</button>
   <button id="bookMenuRename" role="menuitem">Rename</button>
+  <button id="bookMenuExport" role="menuitem">Export</button>
   <button class="danger" id="bookMenuDelete" role="menuitem">Delete</button>
 </div>
 
@@ -245,8 +259,21 @@
   </div>
 </dialog>
 
+<dialog id="archiveDlg">
+  <h2 id="archiveTitle">Import</h2>
+  <p class="note" id="archiveMessage"></p>
+  <div class="row">
+    <button class="primary" id="archiveClose">Close</button>
+  </div>
+</dialog>
+
+<!-- Import is a file the person picks, so the notebook never needs the network
+     to be restored: an archive on a USB stick works on a plane. -->
+<input type="file" id="importFile" accept="application/json,.json" hidden>
+
 <script src="/public/js/ink/strokes.js"></script>
 <script src="/public/js/ink/store.js"></script>
+<script src="/public/js/ink/archive.js"></script>
 <script src="/public/js/ink/canvas.js"></script>
 <script src="/public/js/ink/sync.js"></script>
 <script src="/public/js/ink/app.js"></script>
