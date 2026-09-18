@@ -10,6 +10,7 @@
   const S = window.InkStrokes;
   const Store = window.InkStore;
   const Canvas = window.InkCanvas;
+  const Archive = window.InkArchive;
 
   // Ink colours and nib sizes. Both lists live here and nowhere else, so the
   // whole palette swaps from this block.
@@ -37,8 +38,12 @@
     bookCancel: $("bookCancel"), bookDelete: $("bookDelete"),
     bookMenu: $("bookMenu"), bookMenuOpen: $("bookMenuOpen"),
     bookMenuRename: $("bookMenuRename"), bookMenuDelete: $("bookMenuDelete"),
+    bookMenuExport: $("bookMenuExport"),
     deleteBookDlg: $("deleteBookDlg"), deleteBookMessage: $("deleteBookMessage"),
     deleteBookCancel: $("deleteBookCancel"), deleteBookConfirm: $("deleteBookConfirm"),
+    exportAllBtn: $("exportAllBtn"), importBtn: $("importBtn"), importFile: $("importFile"),
+    archiveDlg: $("archiveDlg"), archiveTitle: $("archiveTitle"),
+    archiveMessage: $("archiveMessage"), archiveClose: $("archiveClose"),
   };
 
   let ink = null;
@@ -348,6 +353,111 @@
       el.shelf.classList.remove("hidden");
     }
     await renderShelf();
+  });
+
+  // ── archive ────────────────────────────────────────────────────────────────
+
+  function showArchiveResult(title, message, warn) {
+    el.archiveTitle.textContent = title;
+    el.archiveMessage.textContent = message;
+    el.archiveMessage.className = "note" + (warn ? " warn" : "");
+    el.archiveDlg.showModal();
+  }
+
+  el.archiveClose.addEventListener("click", () => el.archiveDlg.close());
+
+  function downloadArchive(archive, label) {
+    const blob = new Blob([Archive.serialize(archive)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = Archive.filename(archive, label);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Revoking immediately can cancel the download on some browsers, so let the
+    // current task finish first.
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return a.download;
+  }
+
+  async function exportNotebooks(ids, label) {
+    // A debounced save could still be pending, and exporting a backup that is
+    // missing the last thing written would be the worst possible bug here.
+    await savePage();
+    const entries = await Store.exportEntries(ids);
+    if (!entries.length) {
+      showArchiveResult("Export", "There is nothing to export yet.", true);
+      return;
+    }
+    const archive = Archive.build(entries);
+    const pages = archive.notebooks.reduce((n, nb) => n + nb.pages.length, 0);
+    const name = downloadArchive(archive, label);
+    const books = `${archive.notebooks.length} notebook${archive.notebooks.length === 1 ? "" : "s"}`;
+    showArchiveResult("Exported", `${books}, ${pages} page${pages === 1 ? "" : "s"}, saved as ${name}. Keep it somewhere other than this device.`);
+  }
+
+  el.exportAllBtn.addEventListener("click", async () => {
+    el.exportAllBtn.disabled = true;
+    try { await exportNotebooks(null, "shelf"); }
+    catch (e) { showArchiveResult("Export failed", String((e && e.message) || e), true); }
+    finally { el.exportAllBtn.disabled = false; }
+  });
+
+  el.bookMenuExport.addEventListener("click", async () => {
+    const notebook = menuNotebook;
+    closeBookMenu();
+    if (!notebook) return;
+    try { await exportNotebooks([notebook.id], notebook.title); }
+    catch (e) { showArchiveResult("Export failed", String((e && e.message) || e), true); }
+  });
+
+  el.importBtn.addEventListener("click", () => {
+    // Reset first: picking the same file twice in a row fires no change event
+    // otherwise, and a restore that silently does nothing is alarming.
+    el.importFile.value = "";
+    el.importFile.click();
+  });
+
+  el.importFile.addEventListener("change", async () => {
+    const file = el.importFile.files && el.importFile.files[0];
+    if (!file) return;
+    el.importBtn.disabled = true;
+    // Everything before the first write can fail safely. Once writing starts the
+    // honest answer changes, and claiming "nothing changed" after a half-written
+    // restore would send someone away from a shelf they needed to look at.
+    let writing = false;
+    try {
+      const archive = Archive.parse(await file.text());
+      const planned = Archive.plan(archive, {
+        existingIds: await Store.notebookIds(),
+        uid: Store.uid,
+      });
+      if (!planned.length) {
+        showArchiveResult("Import", "That archive has no notebooks in it.", true);
+        return;
+      }
+      writing = true;
+      await Store.importNotebooks(planned);
+      const sum = Archive.summarize(planned);
+      const parts = [`${sum.notebooks} notebook${sum.notebooks === 1 ? "" : "s"}, ${sum.pages} page${sum.pages === 1 ? "" : "s"}.`];
+      if (sum.collided) {
+        parts.push(`${sum.collided} already existed here and came in as a separate copy rather than replacing what you have.`);
+      }
+      parts.push("Everything imported will sync to the vault on its own.");
+      showArchiveResult("Imported", parts.join(" "));
+      await renderShelf();
+      if (sync) sync.syncNow();
+    } catch (e) {
+      const after = writing
+        ? " Part of that archive may already be on the shelf — check it before importing again."
+        : " Nothing on this device was changed.";
+      showArchiveResult("Import failed", `${String((e && e.message) || e)}${after}`, true);
+      if (writing) await renderShelf();
+    } finally {
+      el.importBtn.disabled = false;
+      el.importFile.value = "";
+    }
   });
 
   // ── toolbar ────────────────────────────────────────────────────────────────
