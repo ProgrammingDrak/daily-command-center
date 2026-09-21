@@ -278,7 +278,11 @@
     if (saved) current.pages[current.index] = saved;
     ink.clearDirty();
     setStatus({ state: "saved" });
-    if (sync) sync.syncNow();
+    // Nudge, never syncNow. The local save above is the durability guarantee and
+    // it has already happened; the upload is a 5.4-megapixel render on the pen's
+    // own thread, so it waits for a gap in the writing. Calling syncNow here is
+    // what made the app impossible to write in.
+    if (sync) sync.nudge();
   }
 
   async function goPage(delta) {
@@ -312,6 +316,10 @@
     el.writer.classList.remove("on");
     el.shelf.classList.remove("hidden");
     await renderShelf();
+    // Closing the notebook is a real pause, so this is a good moment to drain
+    // the queue. Still nudged rather than forced, so it lands after the shelf
+    // has painted instead of hitching the transition.
+    if (sync) sync.nudge(1200);
   });
 
   el.nbName.addEventListener("click", () => openBookDialog(current.notebook));
@@ -447,7 +455,10 @@
       parts.push("Everything imported will sync to the vault on its own.");
       showArchiveResult("Imported", parts.join(" "));
       await renderShelf();
-      if (sync) sync.syncNow();
+      // Nudged, not forced: a restored archive can be dozens of pages, and
+      // rendering every one of them right now would freeze the shelf that was
+      // just drawn. They are marked dirty, so they go on their own.
+      if (sync) sync.nudge(1500);
     } catch (e) {
       const after = writing
         ? " Part of that archive may already be on the shelf — check it before importing again."
@@ -559,7 +570,14 @@
       el.shelfEmpty.textContent = `The private local notebook could not open (${e.message}). Sign in once online before using it offline.`;
       return;
     }
-    sync = window.InkSync.create({ store: Store, strokes: S, onStatus: setStatus });
+    sync = window.InkSync.create({
+      store: Store,
+      strokes: S,
+      onStatus: setStatus,
+      // `ink` is created lazily when a notebook opens, so this is read at call
+      // time rather than captured.
+      isBusy: () => !!(ink && ink.isPenDown()),
+    });
     await renderShelf();
     sync.start();
   })();
