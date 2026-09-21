@@ -113,11 +113,17 @@
   // long path with a single lineWidth would be cheaper but would draw dead,
   // uniform ink, which is the main thing that makes web ink feel like a toy.
 
+  // `opts.from` resumes partway through a stroke, so a caller that has already
+  // painted the first N points can append only what is new. Redrawing a whole
+  // stroke on every pointer sample is O(n^2) over the stroke -- a 900-point
+  // stroke costs 101,700 segment draws -- and it gets slower the longer the
+  // stroke gets, which is exactly backwards.
   function drawStroke(ctx, stroke, opts) {
     const n = pointCount(stroke);
     if (!n) return;
     const spec = toolSpec(stroke.tool);
     const scale = (opts && opts.scale) || 1;
+    const from = Math.max(1, Math.min((opts && opts.from) || 1, Math.max(1, n - 1)));
 
     ctx.save();
     ctx.globalAlpha = spec.alpha;
@@ -150,9 +156,12 @@
       return;
     }
 
-    let prev = pointAt(stroke, 0);
-    let mid = midpoint(prev, pointAt(stroke, 1));
-    for (let i = 1; i < n; i++) {
+    // The incoming midpoint for segment `from` is the one between it and the
+    // point before it, which is what makes a resumed draw join seamlessly onto
+    // what is already on the canvas.
+    let prev = pointAt(stroke, from - 1);
+    let mid = midpoint(prev, pointAt(stroke, from));
+    for (let i = from; i < n; i++) {
       const cur = pointAt(stroke, i);
       const nextMid = i + 1 < n ? midpoint(cur, pointAt(stroke, i + 1)) : cur;
       ctx.lineWidth = widthAt(stroke, cur.p) * scale;

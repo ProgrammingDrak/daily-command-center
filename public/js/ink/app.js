@@ -53,8 +53,20 @@
   let saveTimer = null;
   let localStatus = "";
   let remoteStatus = "";
+  let buildLabel = "";
   let menuNotebook = null;
   let menuTrigger = null;
+
+  // /api/health is public and carries the deployed commit. Offline, this stays
+  // empty and the shelf simply omits it.
+  async function loadBuildLabel() {
+    try {
+      const res = await fetch("/api/health", { cache: "no-store" });
+      if (!res.ok) return;
+      const health = await res.json();
+      if (health && health.revision) buildLabel = `build ${String(health.revision).slice(0, 7)}`;
+    } catch { /* offline; the label is a convenience, not a requirement */ }
+  }
   let editingNotebook = null;
   let deletingNotebook = null;
 
@@ -111,9 +123,13 @@
 
     el.shelfEmpty.classList.toggle("hidden", books.length > 0);
     const st = await Store.stats();
-    el.shelfSub.textContent = books.length
-      ? `${books.length} notebook${books.length === 1 ? "" : "s"}`
-      : "";
+    el.shelfSub.textContent = [
+      books.length ? `${books.length} notebook${books.length === 1 ? "" : "s"}` : "",
+      // Which build is actually running. A service worker plus an installed
+      // home-screen app makes "did the fix reach this device" genuinely hard to
+      // answer, and guessing at it wastes a round trip every time.
+      buildLabel,
+    ].filter(Boolean).join(" · ");
     el.shelfStatus.textContent = st.unsynced ? `${st.unsynced} page${st.unsynced === 1 ? "" : "s"} to sync` : "";
     el.shelfStatus.className = "status" + (st.unsynced ? "" : " ok");
   }
@@ -578,6 +594,7 @@
       // time rather than captured.
       isBusy: () => !!(ink && ink.isPenDown()),
     });
+    await loadBuildLabel();
     await renderShelf();
     sync.start();
   })();
