@@ -290,6 +290,10 @@
       setColor(color) { state.color = color; },
       setSize(size) { state.size = Number(size) || 2.6; },
       getPage: () => state.page,
+      // True while a stroke is actually under the pen. Sync asks this before
+      // taking the main thread for a full-page render, so a background upload
+      // can never stall the stroke someone is in the middle of drawing.
+      isPenDown: () => state.activePointer !== null,
       isDirty: () => state.dirty,
       clearDirty() { state.dirty = false; },
       loadPage(page) {
