@@ -53,18 +53,18 @@
   let saveTimer = null;
   let localStatus = "";
   let remoteStatus = "";
-  let buildLabel = "";
+  let serverBuildLabel = "";
   let menuNotebook = null;
   let menuTrigger = null;
 
-  // /api/health is public and carries the deployed commit. Offline, this stays
-  // empty and the shelf simply omits it.
-  async function loadBuildLabel() {
+  // /api/health reports the server commit, which can differ from cached app
+  // assets. Offline, the shelf omits this server label.
+  async function loadServerBuildLabel() {
     try {
       const res = await fetch("/api/health", { cache: "no-store" });
       if (!res.ok) return;
       const health = await res.json();
-      if (health && health.revision) buildLabel = `build ${String(health.revision).slice(0, 7)}`;
+      if (health && health.revision) serverBuildLabel = `server build ${String(health.revision).slice(0, 7)}`;
     } catch { /* offline; the label is a convenience, not a requirement */ }
   }
   let editingNotebook = null;
@@ -125,10 +125,8 @@
     const st = await Store.stats();
     el.shelfSub.textContent = [
       books.length ? `${books.length} notebook${books.length === 1 ? "" : "s"}` : "",
-      // Which build is actually running. A service worker plus an installed
-      // home-screen app makes "did the fix reach this device" genuinely hard to
-      // answer, and guessing at it wastes a round trip every time.
-      buildLabel,
+      // This is the server build. Cached app assets may be older.
+      serverBuildLabel,
     ].filter(Boolean).join(" · ");
     el.shelfStatus.textContent = st.unsynced ? `${st.unsynced} page${st.unsynced === 1 ? "" : "s"} to sync` : "";
     el.shelfStatus.className = "status" + (st.unsynced ? "" : " ok");
@@ -594,7 +592,7 @@
       // time rather than captured.
       isBusy: () => !!(ink && ink.isPenDown()),
     });
-    await loadBuildLabel();
+    await loadServerBuildLabel();
     await renderShelf();
     sync.start();
   })();
