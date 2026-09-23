@@ -44,6 +44,8 @@
   // When the pen starts moving again mid-cycle, wait this long and re-check
   // rather than fighting for the main thread.
   const BUSY_RECHECK_DELAY = 4000;
+  // A render that never answers must not strand a page as permanently syncing.
+  const WORKER_TIMEOUT_MS = 30000;
 
   function create(deps) {
     const Store = deps.store;
@@ -60,9 +62,101 @@
     let idleTimer = null;
 
     // Let the event loop run so queued pointer input is serviced before this
-    // takes the main thread for a long render.
+    // takes the main thread for a long render. Only the fallback path needs
+    // this; the worker path never touches the main thread.
     function yieldToInput() {
       return new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    // ── rendering, off the main thread where possible ────────────────────────
+    //
+    // The worker owns the expensive part. Timing the main-thread render was
+    // only ever choosing when to stutter; this removes the stutter instead.
+    // Safari 16.4+ has OffscreenCanvas with a 2D context, which covers current
+    // iPadOS. Anything older keeps the in-page render, which is why the idle
+    // scheduling below is still worth having.
+
+    let worker = null;
+    let workerUsable = typeof Worker === "function"
+      && typeof OffscreenCanvas === "function"
+      && typeof document !== "undefined";
+    let nextJobId = 1;
+    const jobs = new Map();
+
+    function retireWorker(reason) {
+      workerUsable = false;
+      if (worker) { try { worker.terminate(); } catch { /* already gone */ } }
+      worker = null;
+      for (const [, job] of jobs) job.reject(new Error(reason));
+      jobs.clear();
+    }
+
+    function ensureWorker() {
+      if (worker || !workerUsable) return worker;
+      try {
+        worker = new Worker("/public/js/ink/render-worker.js");
+        worker.onmessage = (e) => {
+          const msg = e.data || {};
+          const job = jobs.get(msg.id);
+          if (!job) return;
+          jobs.delete(msg.id);
+          if (msg.ok) job.resolve(msg);
+          else job.reject(new Error(msg.error || "render failed"));
+        };
+        // A worker that cannot start (blocked, offline and uncached, a parse
+        // error) must not take the notebook down with it.
+        worker.onerror = () => retireWorker("render worker failed");
+      } catch {
+        retireWorker("render worker unavailable");
+      }
+      return worker;
+    }
+
+    function renderInWorker(serializedInk) {
+      const w = ensureWorker();
+      if (!w) return Promise.reject(new Error("no render worker"));
+      const id = nextJobId++;
+      return new Promise((resolve, reject) => {
+        // A render that never answers must not strand the page forever -- but
+        // the timer has to be cleared when it does answer, or every successful
+        // render leaves a 30-second timer behind.
+        const timer = setTimeout(() => {
+          if (!jobs.has(id)) return;
+          jobs.delete(id);
+          reject(new Error("render worker timed out"));
+        }, WORKER_TIMEOUT_MS);
+        const settle = (fn) => (value) => { clearTimeout(timer); fn(value); };
+        jobs.set(id, { resolve: settle(resolve), reject: settle(reject) });
+        w.postMessage({
+          id,
+          ink: serializedInk,
+          scale: RENDER_SCALE,
+          type: "image/jpeg",
+          quality: JPEG_QUALITY,
+          background: "#ffffff",
+        });
+      });
+    }
+
+    // Produces the page JPEG, in the worker when it can and in the page when it
+    // cannot. The fallback is the original code path, unchanged.
+    async function renderImage(serializedInk, page) {
+      if (workerUsable) {
+        try {
+          const out = await renderInWorker(serializedInk);
+          if (out.blob && out.type === "image/jpeg") return out.blob;
+          // Safari hands back a PNG rather than refusing an unsupported type.
+          // The in-page encoder does support JPEG, so stop using the worker.
+          retireWorker(`worker encoded ${out.type || "an unknown type"}`);
+        } catch (e) {
+          // One failure is enough to stop trusting it; writing must not depend
+          // on a worker that is not working.
+          retireWorker(String((e && e.message) || e));
+        }
+      }
+      await yieldToInput();
+      if (isBusy()) throw Object.assign(new Error("pen is down"), { deferred: true });
+      return canvasToBlob(renderPage(page), "image/jpeg", JPEG_QUALITY);
     }
 
     function canvasToBlob(canvas, type, quality) {
@@ -103,18 +197,18 @@
         return { skipped: "blank", stillDirty: !cleared };
       }
 
-      // The render and encode below are the expensive part: a 2040x2640 canvas
-      // with one stroked path per segment, then a JPEG of 5.4 megapixels. Give
-      // the event loop a turn first, then check once more -- if the pen came
-      // down while this was queued, leave the page dirty and come back later.
-      await yieldToInput();
-      if (isBusy()) return { deferred: true, stillDirty: true };
-
-      // Captured BEFORE the upload so we can tell whether the page changed
-      // while it was in flight.
-      const canvas = renderPage(page);
-      const imageBlob = await canvasToBlob(canvas, "image/jpeg", JPEG_QUALITY);
-      const inkBlob = new Blob([Strokes.serialize(page)], { type: "application/json" });
+      // The expensive part -- 5.4 megapixels rasterised and JPEG-encoded -- now
+      // happens in a worker, so the pen's thread is free throughout. Only the
+      // fallback path can defer, and it says so by throwing.
+      const serializedInk = Strokes.serialize(page);
+      let imageBlob;
+      try {
+        imageBlob = await renderImage(serializedInk, page);
+      } catch (e) {
+        if (e && e.deferred) return { deferred: true, stillDirty: true };
+        throw e;
+      }
+      const inkBlob = new Blob([serializedInk], { type: "application/json" });
 
       const form = new FormData();
       form.append("ink", inkBlob, `page-${record.index + 1}.json`);
@@ -211,6 +305,9 @@
       clearTimeout(retryTimer);
       idleTimer = null;
       retryTimer = null;
+      if (worker) { try { worker.terminate(); } catch { /* already gone */ } }
+      worker = null;
+      jobs.clear();
     }
 
     function scheduleRetry() {

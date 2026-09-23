@@ -106,9 +106,37 @@
       for (const s of state.page.strokes) S.drawStroke(baseCtx, s, { scale: 1 });
     }
 
-    function redrawLive() {
+    // Points of `state.current` already painted onto the live layer.
+    let liveDrawn = 0;
+
+    // The live layer holds exactly one stroke, and it only ever grows, so on a
+    // pointermove it appends the new segments instead of clearing and redrawing
+    // the stroke from point zero. Redrawing from zero is O(n^2) over a stroke
+    // and gets worse the longer you write without lifting the pen.
+    //
+    // Appending is exact only for an opaque tool. The highlighter multiplies at
+    // 0.32 alpha, so re-touching its last segment would darken that one segment;
+    // it keeps the full redraw, which is affordable because a highlight is
+    // short. Everything else composites source-over at full alpha, where
+    // redrawing the joining segment over itself is invisible.
+
+    // Clearing the live layer and forgetting what is painted on it must happen
+    // together, or a later append draws onto a canvas that no longer holds the
+    // segments it is joining to.
+    function clearLive() {
       clear(liveCtx, live);
-      if (state.current) S.drawStroke(liveCtx, state.current, { scale: 1 });
+      liveDrawn = 0;
+    }
+
+    function redrawLive(append) {
+      const spec = state.current ? S.toolSpec(state.current.tool) : null;
+      const canAppend = !!(append && state.current && liveDrawn >= 2 && spec && spec.alpha >= 1);
+      if (!canAppend) clearLive();
+      if (!state.current) return;
+      // Resume one segment back: the previous last segment ends at the midpoint
+      // toward the new point, so it has to be redrawn to meet the new ink.
+      S.drawStroke(liveCtx, state.current, { scale: 1, from: canAppend ? liveDrawn - 1 : 1 });
+      liveDrawn = S.pointCount(state.current);
     }
 
     // ── history ──────────────────────────────────────────────────────────────
@@ -213,7 +241,7 @@
         const p = toPage(e);
         if (S.addPoint(state.current, p.x, p.y, e.pressure)) added = true;
       }
-      if (added) redrawLive();
+      if (added) redrawLive(true);
     }
 
     function onUp(ev) {
@@ -232,7 +260,7 @@
       if (!state.current) return;
       const stroke = state.current;
       state.current = null;
-      clear(liveCtx, live);
+      clearLive();
       if (S.pointCount(stroke) === 0) return;
 
       state.page.strokes.push(stroke);
@@ -258,7 +286,7 @@
       state.activePointer = null;
       state.current = null;
       state.erasing = null;
-      clear(liveCtx, live);
+      clearLive();
     }
 
     base.addEventListener("pointerdown", onDown);
@@ -302,7 +330,7 @@
         state.redo.length = 0;
         state.current = null;
         state.dirty = false;
-        clear(liveCtx, live);
+        clearLive();
         layout();
       },
       // Full-resolution render for upload and OCR, independent of how the page

@@ -63,6 +63,12 @@ test("the service worker excludes every API response", () => {
   assert.match(WORKER, /response\.ok && !response\.redirected/);
 });
 
+test("the shelf identifies the health revision as the server build", () => {
+  assert.match(APP, /fetch\("\/api\/health", \{ cache: "no-store" \}\)/);
+  assert.match(APP, /serverBuildLabel = `server build \$\{String\(health\.revision\)\.slice\(0, 7\)\}`/);
+  assert.match(APP, /serverBuildLabel,\s*\]\.filter\(Boolean\)\.join\(" · "\)/);
+});
+
 test("the canvas module boots in a browser without CommonJS globals", () => {
   const browserScope = { InkStrokes: {} };
   vm.runInNewContext(CANVAS, { self: browserScope });

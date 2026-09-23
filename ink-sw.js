@@ -3,13 +3,16 @@
 
 // Cache only the application shell. API responses and handwritten content stay
 // outside Cache Storage. IndexedDB remains the only local notebook data store.
-const CACHE = "mycelium-ink-shell-v2";
+const CACHE = "mycelium-ink-shell-v4";
 const SHELL = [
   "/ink",
   "/public/ink-manifest.webmanifest",
   "/public/js/ink/strokes.js",
   "/public/js/ink/store.js",
   "/public/js/ink/archive.js",
+  // Precached so rendering stays off the main thread offline too. Without it
+  // the worker cannot load and every page falls back to the in-page render.
+  "/public/js/ink/render-worker.js",
   "/public/js/ink/canvas.js",
   "/public/js/ink/sync.js",
   "/public/js/ink/app.js",
@@ -19,6 +22,13 @@ const SHELL = [
 ];
 
 self.addEventListener("install", (event) => {
+  // Take over as soon as the new shell is cached, rather than waiting for every
+  // client to close. Without this a new worker sits in "waiting" indefinitely:
+  // an installed home-screen app gets resumed rather than relaunched, so "all
+  // tabs closed" can mean days, which is long enough for a shipped fix to look
+  // like it never shipped. Paired with the clients.claim() below, an update
+  // lands on the next launch.
+  self.skipWaiting();
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
 });
 

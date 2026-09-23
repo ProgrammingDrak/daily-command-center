@@ -53,8 +53,20 @@
   let saveTimer = null;
   let localStatus = "";
   let remoteStatus = "";
+  let serverBuildLabel = "";
   let menuNotebook = null;
   let menuTrigger = null;
+
+  // /api/health reports the server commit, which can differ from cached app
+  // assets. Offline, the shelf omits this server label.
+  async function loadServerBuildLabel() {
+    try {
+      const res = await fetch("/api/health", { cache: "no-store" });
+      if (!res.ok) return;
+      const health = await res.json();
+      if (health && health.revision) serverBuildLabel = `server build ${String(health.revision).slice(0, 7)}`;
+    } catch { /* offline; the label is a convenience, not a requirement */ }
+  }
   let editingNotebook = null;
   let deletingNotebook = null;
 
@@ -111,9 +123,11 @@
 
     el.shelfEmpty.classList.toggle("hidden", books.length > 0);
     const st = await Store.stats();
-    el.shelfSub.textContent = books.length
-      ? `${books.length} notebook${books.length === 1 ? "" : "s"}`
-      : "";
+    el.shelfSub.textContent = [
+      books.length ? `${books.length} notebook${books.length === 1 ? "" : "s"}` : "",
+      // This is the server build. Cached app assets may be older.
+      serverBuildLabel,
+    ].filter(Boolean).join(" · ");
     el.shelfStatus.textContent = st.unsynced ? `${st.unsynced} page${st.unsynced === 1 ? "" : "s"} to sync` : "";
     el.shelfStatus.className = "status" + (st.unsynced ? "" : " ok");
   }
@@ -578,6 +592,7 @@
       // time rather than captured.
       isBusy: () => !!(ink && ink.isPenDown()),
     });
+    await loadServerBuildLabel();
     await renderShelf();
     sync.start();
   })();
