@@ -902,7 +902,22 @@ function buildListView(){
   }
   const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
   const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible}),timeBlocks);
-  const parentIds=visible.filter(ev=>childrenOf(ev.id,visible).length>0).map(ev=>ev.id).concat(groups.map(g=>timeBlockCollapseKey(g.block)));
+
+  // Task-container collapse state is independent from time-block collapse state.
+  // Collapse-all / expand-all intentionally operates only on nested task trees;
+  // the time-block headers retain their own manual collapse state.
+  const parentIds=visible.filter(ev=>childrenOf(ev.id,visible).length>0).map(ev=>ev.id);
+
+  // On the first visit to a day, start with every nested task/subtask container
+  // collapsed. After that first render, individual expand/collapse choices persist.
+  const collapseInitKey="pa-collapse-init-v2:"+viewDate;
+  try{
+    if(localStorage.getItem(collapseInitKey)!=="1"){
+      setCollapsedAll(parentIds,true);
+      localStorage.setItem(collapseInitKey,"1");
+    }
+  }catch(e){}
+
   if(parentIds.length){
     const controls=document.createElement("div");
     controls.className="it-list-controls";
