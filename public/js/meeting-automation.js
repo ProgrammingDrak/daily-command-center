@@ -434,7 +434,7 @@
     function applyActiveTab(){
       // Deep-linked to Recap but nothing's landed yet? Fall back to Prep if there's
       // a brief to show; otherwise stay on the (empty, still-editable) Recap tab.
-      if(activeTab==="recap"&&!recapHasContent(lastData)&&prepHasContent(lastData))activeTab="prep";
+      if(activeTab==="recap"&&!opts.forceRecap&&!recapHasContent(lastData)&&prepHasContent(lastData))activeTab="prep";
       modal.el.querySelectorAll(".prep-tab").forEach(b=>{
         const on=b.dataset.tab===activeTab; b.classList.toggle("active",on); b.setAttribute("aria-selected",on?"true":"false");
       });
@@ -519,4 +519,5 @@
   window.meetingAutomationPanelHtml=meetingAutomationPanelHtml;
   window.refreshMeetingAutomationPanels=refreshMeetingAutomationPanels;
   window.openPrepModal=openPrepModal;
+  window.scheduleRecapAction=scheduleRecapAction;
 })();

@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="/public/css/tokens.css?v=tokens-1">
 <link rel="stylesheet" href="/public/css/core-ui.css?v=core-ui-1">
 <link rel="stylesheet" href="/public/css/dashboard.css">
+<link rel="stylesheet" href="/public/css/meeting-reviews.css">
 <link rel="stylesheet" href="/public/css/task-library.css?v=task-library-1">
 <link rel="stylesheet" href="/public/css/calendar-week.css?v=calendar-week-1">
 <link rel="stylesheet" href="/public/css/vault.css?v=vault-b6-1">
@@ -210,6 +211,7 @@
 
 <div class="tabs" id="tab-bar">
   <button class="tab active" data-tab="schedule">Itinerary</button>
+  <button class="tab" data-tab="meeting-reviews">Meeting Reviews <span class="badge" id="meeting-reviews-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="pet-home" id="pet-home-tab-btn">Pet Home <span class="badge" id="pet-home-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="budget" id="budget-tab-btn">Budget</button>
   <button class="tab" data-tab="social" id="social-tab-btn">Social <span class="badge" id="social-badge" style="display:none">0</span></button>
@@ -1245,6 +1247,10 @@
   </div>
 </div>
 
+<div class="tab-content" id="tab-meeting-reviews">
+  <div id="meeting-reviews-root"></div>
+</div>
+
 <div class="tab-content" id="tab-pet-home">
   <div class="pet-shell">
     <div class="pet-topline">
@@ -2051,6 +2057,7 @@
 <!-- Mycelium vault tab: vendored markdown libs (no build step) load before vault-tab.js -->
 <script src="/public/js/vendor/marked.min.js?v=marked-12.0.2"></script>
 <script src="/public/js/vendor/purify.min.js?v=purify-3.1.7"></script>
+<script src="/public/js/meeting-reviews.js"></script>
 <!-- d3 v7 (vendored UMD, pinned; powers the B4a timeline's scale/zoom) -->
 <script src="/public/js/vendor/d3.v7.9.0.min.js?v=d3-7.9.0"></script>
 <script src="/public/js/vault-editor.js?v=vault-b6-1"></script>

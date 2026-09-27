@@ -372,11 +372,10 @@
             // to open it even after he marked the meeting done. Fires independently
             // of the re-render below (which handleBlockEvent may skip mid-reschedule).
             if(msg.recapArrived){
-              try{ if(window.DCC&&typeof window.DCC.toast==="function")window.DCC.toast('Recap ready'+(msg.meetingTitle?': '+msg.meetingTitle:''),'success'); }catch(e){}
-              try{
-                const catchUp=window.DCC&&window.DCC.CatchUp;
-                if(catchUp&&typeof catchUp.openMeetingActions==="function")catchUp.openMeetingActions();
-              }catch(e){}
+              try{ if(window.DCC&&typeof window.DCC.toast==="function")window.DCC.toast('Meeting review ready'+(msg.meetingTitle?': '+msg.meetingTitle:''),'success'); }catch(e){}
+            }
+            if(String(msg.action||"").startsWith("meeting-")){
+              try{ window.DCC?.MeetingReviews?.refresh(); }catch(e){}
             }
             handleBlockEvent(msg);
             break;

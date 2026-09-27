@@ -218,75 +218,6 @@
     syncIndicator();
   }
 
-  // ── meeting follow-ups ──
-  // Recap actions are durable child blocks, intentionally excluded from ordinary
-  // task and carryover queries until Drake approves one. This read model keeps
-  // that approval boundary while making the proposals visible beside Sweep triage.
-  async function loadMeetingActions() {
-    if (typeof fetch !== "function") return [];
-    const res = await fetch("/api/meetings/actions/proposed");
-    const body = await res.json();
-    if (!res.ok || !Array.isArray(body.items)) throw new Error("Meeting follow-ups unavailable");
-    return body.items;
-  }
-  async function postJson(url, body) {
-    const res = await fetch(url, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body || {})
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Request failed");
-    return data;
-  }
-  async function placeMeetingAction(item, date) {
-    try {
-      const url = "/api/meetings/" + encodeURIComponent(item.meetingId) + "/actions/" +
-        encodeURIComponent(item.id) + "/schedule";
-      await postJson(url, { date: date });
-      return true;
-    } catch (e) {
-      if (typeof showToast === "function") showToast(e.message || "Could not schedule meeting follow-up", "error");
-      return false;
-    }
-  }
-  async function completeMeetingAction(item) {
-    try {
-      let actionBlockId = item.approvedBlockId || null;
-      if (!actionBlockId) {
-        const approved = await postJson(
-          "/api/meetings/" + encodeURIComponent(item.meetingId) + "/actions/approve",
-          { actionIds: [item.id] }
-        );
-        const block = (approved.approvedBlocks || [])[0];
-        const proposal = (approved.proposedActions || []).find(action => action.id === item.id);
-        actionBlockId = (block && block.id) || (proposal && proposal.approvedBlockId) || null;
-      }
-      if (!actionBlockId) return false;
-      if (!window.blockStore || typeof window.blockStore.setTaskCompletion !== "function") {
-        throw new Error("Completion writer unavailable");
-      }
-      const result = await window.blockStore.setTaskCompletion(actionBlockId, true, {
-        completedAt: new Date().toISOString(), taskDate: item.meetingDate || null
-      });
-      return !!(result && result.ok === true);
-    } catch (e) {
-      if (typeof showToast === "function") showToast(e.message || "Could not complete meeting follow-up", "error");
-      return false;
-    }
-  }
-  async function dismissMeetingAction(item) {
-    try {
-      await postJson(
-        "/api/meetings/" + encodeURIComponent(item.meetingId) + "/actions/" + encodeURIComponent(item.id) + "/dismiss",
-        {}
-      );
-      return true;
-    } catch (e) {
-      if (typeof showToast === "function") showToast(e.message || "Could not dismiss meeting follow-up", "error");
-      return false;
-    }
-  }
-
   // ── modal (reuses the .carryover-* CSS) ──
   function ensureModal() {
     let overlay = document.getElementById("catchup-overlay");
@@ -354,7 +285,6 @@
     const gmail = triage.filter(item => triageLane(item) === "gmail");
     const otherTriage = triage.filter(item => triageLane(item) === "other");
     const olderTriage = cfg.olderTriage || [];
-    const meetingActions = cfg.meetingActions || [];
     const journalApi = window.DCC && window.DCC.Journal;
     // Empty until journal.js has resolved the owner scope (see its render() note), so
     // this doubles as "is there a Journal section this pass".
@@ -371,19 +301,16 @@
       " from the last two weeks" + (total > openCount ? " (showing " + openCount + " of " + total + ")" : "");
     const triagePhrase = triage.length + " Sweep item" + (triage.length === 1 ? "" : "s") + " waiting";
     const waitingPhrase = waiting.length + " Waiting item" + (waiting.length === 1 ? "" : "s") + " due for a decision";
-    const meetingPhrase = meetingActions.length + " meeting follow-up" + (meetingActions.length === 1 ? "" : "s");
     const phrases = [];
     if (roots.length) phrases.push(taskPhrase);
     if (waiting.length) phrases.push(waitingPhrase);
     if (triage.length) phrases.push(triagePhrase);
-    if (meetingActions.length) phrases.push(meetingPhrase);
     hintEl.textContent = phrases.join(phrases.length > 2 ? ", " : " and ") +
       ". Handle what matters now, or close this and come back from the reminder above.";
     listEl.innerHTML = "";
 
     const rowEls = new Map();   // unfinished rows, keyed by ev.id
     const triEls = new Map();   // triage rows, keyed by triage item id
-    const meetingEls = new Map(); // recap proposals, keyed by proposed-action id
     const waitingEls = new Map(); // Waiting rows, keyed by global item id
     const activeReviewRows = new Set();
     const taskRows = [];
@@ -391,15 +318,13 @@
     const slackRows = [];
     const gmailRows = [];
     const otherRows = [];
-    const signaledMeetingRows = [];
-    const automatedMeetingRows = [];
     let detailSeq = 0;
     // Closing on the last row is the same courtesy either list gives: once there is
     // nothing left to answer, the modal has no reason to sit there. An unexpanded
     // "older waiting" line still counts as something to answer — closing over it
     // would hide the queue it exists to advertise.
     let olderPending = olderTriage.length > 0;
-    const pendingDomCount = () => rowEls.size + waitingEls.size + triEls.size + meetingEls.size + (olderPending ? olderTriage.length : 0);
+    const pendingDomCount = () => rowEls.size + waitingEls.size + triEls.size + (olderPending ? olderTriage.length : 0);
     const updateCount = () => setIndicatorCount(pendingDomCount());
     const closeIfDrained = () => {
       updateCount();
@@ -655,43 +580,6 @@
       waitingRows.push(el);
     });
 
-    meetingActions.forEach(item => {
-      const mine = item.owner !== "other";
-      const el = reviewRow(window.DCC.TaskModel.fromTriageItem(item), {
-        extraClass: "cu-meeting-row",
-        metaHtml: '<span>' + esc(item.meetingTitle || "Meeting") +
-          (item.meetingDate ? " · " + esc(prettyDate(item.meetingDate)) : "") +
-          " · " + esc(item.priority || "Medium") + (mine ? "" : " · delegated") + '</span>',
-        onComplete: () => runMeeting(() => completeMeetingAction(item)),
-        onDate: mine ? date => place(date) : undefined,
-        onToday: mine ? () => place(todayStr()) : undefined,
-        onDelete: () => runMeeting(() => dismissMeetingAction(item)),
-        onDetails: () => {
-          if (typeof openPrepModal === "function") openPrepModal({
-            id: item.meetingId, meetingBlockId: item.meetingId,
-            title: item.meetingTitle || "Meeting", start: item.meetingStart, end: item.meetingEnd
-          }, { defaultTab: "recap" });
-        }
-      });
-      const busy = on => el.querySelectorAll("button").forEach(b => { b.disabled = !!on; });
-      const forget = () => forgetRow(el, meetingEls, item.id);
-      const runMeeting = async fn => {
-        const focused = document.activeElement && el.contains(document.activeElement)
-          ? document.activeElement : el.querySelector(".it-list-check");
-        busy(true);
-        if (await fn()) forget();
-        else {
-          busy(false);
-          if (focused && typeof focused.focus === "function") focused.focus();
-        }
-      };
-      const place = date => runMeeting(() => placeMeetingAction(item, date));
-      meetingEls.set(item.id, el);
-      if (mine) addBulkSelect(el, "meeting", item.id);
-      activeReviewRows.add(el);
-      (item.origin === "signaled" ? signaledMeetingRows : automatedMeetingRows).push(el);
-    });
-
     roots.forEach((ev, index) => {
       const title = ev.title || "Untitled";
       const detailId = "cu-task-details-" + (++detailSeq);
@@ -759,8 +647,6 @@
     appendRows("Gmail", gmailRows);
     appendRows("Other", otherRows);
     if (cfg._olderButton) listEl.appendChild(cfg._olderButton);
-    appendRows("Signaled Action Items from Meetings", signaledMeetingRows);
-    appendRows("Automated Action Items from Meetings", automatedMeetingRows);
     // Journal + mood tagging (public/js/journal.js). Packet-free: it renders whenever
     // the module is loaded, so the daily entry is reachable even on a morning with no
     // loose ends at all. Handing journal.js the host node lets a mood edit repaint just
@@ -774,7 +660,7 @@
       if (typeof journalApi.setHost === "function") journalApi.setHost(journalWrap);
     }
     updateCount();
-    const schedulableCount = rowEls.size + triEls.size + meetingActions.filter(item => item.owner !== "other").length;
+    const schedulableCount = rowEls.size + triEls.size;
     allBtn.style.display = schedulableCount ? "" : "none";
     const selectAll = overlay.querySelector("#catchup-select-all");
     if (selectAll) {
@@ -801,11 +687,9 @@
       const selectedIds = kind => new Set(selected.filter(input => input.dataset.bulkKind === kind).map(input => input.dataset.bulkId));
       const taskSelection = selectedIds("task");
       const triageSelection = selectedIds("triage");
-      const meetingSelection = selectedIds("meeting");
       const queue = [...rowEls.keys()].filter(id => !selected.length || taskSelection.has(String(id)));
       const triQueue = [...triEls.keys()].filter(id => !selected.length || triageSelection.has(String(id)));
-      const meetingQueue = meetingActions.filter(item => item.owner !== "other" && meetingEls.has(item.id) && (!selected.length || meetingSelection.has(String(item.id))));
-      const step = (n) => { allBtn.textContent = "Moving " + n + " of " + (queue.length + triQueue.length + meetingQueue.length) + "…"; };
+      const step = (n) => { allBtn.textContent = "Moving " + n + " of " + (queue.length + triQueue.length) + "…"; };
       let moved = 0;
       const target = todayStr();
       for (const id of queue) {
@@ -826,13 +710,8 @@
         // per-item toasts don't bury the summary one.
         if (await scheduleTriageOnDate(id, target, { deferRefold: true, silent: true })) placed++;
       }
-      let meetingPlaced = 0;
-      for (const item of meetingQueue) {
-        step(moved + placed + meetingPlaced + 1);
-        if (await placeMeetingAction(item, target)) meetingPlaced++;
-      }
-      // One refold for the whole batch, after BOTH loops have written.
-      if (moved || placed || meetingPlaced) await CO.refoldViewedDay(target);
+      // One refold for the whole batch, after both loops have written.
+      if (moved || placed) await CO.refoldViewedDay(target);
       if (placed) {
         if (typeof buildScheduleTriage === "function") buildScheduleTriage();
         if (typeof buildTriage === "function") buildTriage();
@@ -844,7 +723,6 @@
       const parts = [];
       if (moved) parts.push(moved + " unfinished task" + (moved === 1 ? "" : "s"));
       if (placed) parts.push(placed + " triage item" + (placed === 1 ? "" : "s"));
-      if (meetingPlaced) parts.push(meetingPlaced + " meeting follow-up" + (meetingPlaced === 1 ? "" : "s"));
       if (typeof showToast === "function" && parts.length) showToast("Moved " + parts.join(" and ") + " to today", "success");
     };
     allBtn.addEventListener("click", _allHandler, { once: true });
@@ -862,7 +740,7 @@
   // never inflate the pill count. It only decides whether the prompt opens (below).
   function snapshotCount(snapshot) {
     if (!snapshot) return 0;
-    return rootsOf(snapshot.res.rows).length + snapshot.waiting.length + snapshot.triage.length + snapshot.meetingActions.length;
+    return rootsOf(snapshot.res.rows).length + snapshot.waiting.length + snapshot.triage.length;
   }
 
   async function collectSnapshot() {
@@ -871,7 +749,6 @@
     const journalApi = window.DCC && window.DCC.Journal;
     const results = await Promise.allSettled([
       CO.collect(),
-      loadMeetingActions(),
       // Resolving the owner scope is what makes the journal's storage key correct. A
       // REJECTION here must keep `failed` true: initCatchUp refuses to mark the day
       // reviewed on a partial load, and silently treating a scope failure as "no
@@ -885,8 +762,7 @@
     const waitingTriage = allTriage.filter(item => waitingIds.has(String(item.waiting_item_id || "")));
     const snapshot = {
       res: results[0].status === "fulfilled" ? results[0].value : (_lastSnapshot ? _lastSnapshot.res : { rows: [], total: 0 }),
-      meetingActions: results[1].status === "fulfilled" ? results[1].value : (_lastSnapshot ? _lastSnapshot.meetingActions : []),
-      journalPending: results[2].status === "fulfilled" && journalApi && typeof journalApi.isPending === "function"
+      journalPending: results[1].status === "fulfilled" && journalApi && typeof journalApi.isPending === "function"
         ? journalApi.isPending()
         : (_lastSnapshot ? !!_lastSnapshot.journalPending : false),
       waiting,
@@ -910,7 +786,6 @@
         triage: snapshot.triage,
         waiting: snapshot.waiting,
         waitingTriage: snapshot.waitingTriage,
-        meetingActions: snapshot.meetingActions,
         loadFailed: snapshot.failed,
         focus: opts.focus
       });
@@ -974,8 +849,6 @@
     let res = { rows: [], total: 0 };
     let loadFailed = false;
     try { res = await CO.collect(); } catch (e) { loadFailed = true; }
-    let meetingActions = [];
-    try { meetingActions = await loadMeetingActions(); } catch (e) { loadFailed = true; }
     // This entry point builds its own snapshot instead of going through
     // collectSnapshot, so it has to resolve the journal's owner scope itself -- the
     // storage key embeds it, and rendering before it lands would file the entry under
@@ -984,39 +857,10 @@
     try { if (arrivalsJournal && arrivalsJournal.ensureScope) await arrivalsJournal.ensureScope(); }
     catch (e) { loadFailed = true; }
     const journalPending = !!(arrivalsJournal && typeof arrivalsJournal.isPending === "function" && arrivalsJournal.isPending());
-    _lastSnapshot = { res, triage: all, waiting, waitingTriage, meetingActions, journalPending, failed: loadFailed };
+    _lastSnapshot = { res, triage: all, waiting, waitingTriage, journalPending, failed: loadFailed };
     _journalPending = journalPending;
     setIndicatorCount(snapshotCount(_lastSnapshot));
     if (typeof showToast === "function") showToast(fresh.length + " new Loose End" + (fresh.length === 1 ? "" : "s"), "info");
-    return true;
-  }
-
-  // A recap can land at either scheduled sweep, after the once-per-day morning
-  // flag has already been set. The SSE handler calls this entry point so newly
-  // extracted meeting actions are elevated immediately instead of waiting for a
-  // manual trip back to the meeting card.
-  async function openMeetingActions() {
-    const CO = window.DCC && window.DCC.Carryover;
-    if (!CO) return false;
-    let meetingActions = [];
-    try { meetingActions = await loadMeetingActions(); } catch (e) { return false; }
-    if (!meetingActions.length) return false;
-    let res = { rows: [], total: 0 };
-    let loadFailed = false;
-    try { res = await CO.collect(); } catch (e) { loadFailed = true; }
-    // Same reason as openArrivals: own snapshot, so own scope resolution.
-    const meetingJournal = window.DCC && window.DCC.Journal;
-    try { if (meetingJournal && meetingJournal.ensureScope) await meetingJournal.ensureScope(); }
-    catch (e) { loadFailed = true; }
-    const waiting = typeof window.getAttentionWaitingItems === "function" ? window.getAttentionWaitingItems() : [];
-    const waitingIds = new Set(waiting.map(item => String(item.id)));
-    const rawTriage = activeTriage();
-    const waitingTriage = rawTriage.filter(item => waitingIds.has(String(item.waiting_item_id || "")));
-    const triage = rawTriage.filter(item => !waitingIds.has(String(item.waiting_item_id || "")));
-    const journalPending = !!(meetingJournal && typeof meetingJournal.isPending === "function" && meetingJournal.isPending());
-    _lastSnapshot = { res, triage, waiting, waitingTriage, meetingActions, journalPending, failed: loadFailed };
-    _journalPending = journalPending;
-    setIndicatorCount(snapshotCount(_lastSnapshot));
     return true;
   }
 
@@ -1027,8 +871,7 @@
     open: openReminder,
     refresh: refreshReminder,
     syncIndicator: syncIndicator,
-    openArrivals: openArrivals,
-    openMeetingActions: openMeetingActions
+    openArrivals: openArrivals
   };
   const pill = document.getElementById("loose-ends-pill");
   if (pill) pill.addEventListener("click", openReminder);

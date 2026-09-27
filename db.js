@@ -2407,6 +2407,14 @@ async function getBlocksByKind(kind, workspaceId) {
   return rows.map(parseBlock);
 }
 
+async function getBlocksByIds(ids, workspaceId) {
+  if (!ids.length) return [];
+  const { rows } = await pool.query(
+    `SELECT * FROM blocks WHERE id = ANY($1::text[]) AND (workspace_id = $2 OR workspace_id IS NULL) AND deleted_at IS NULL`,
+    [ids, workspaceId]);
+  return rows.map(parseBlock);
+}
+
 // /responsibilities/capture: does this workspace already have the trigger for a
 // given slug? Existence check only — returns the id row or null.
 async function findResponsibilityTriggerBySlug(slug, workspaceId) {
@@ -2518,7 +2526,7 @@ module.exports = {
   ensureDccStateTable, backfillLegacyTriageSuppressions, saveDccState, saveDccBriefDecision, getDccState, getDccStateCompact, purgeSoftDeleted, getOperations,
   parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers,
   getTaskTimeEntries,
-  getResponsibilityBlocks, findResponsibilityBySlug, getBlocksByKind,
+  getResponsibilityBlocks, findResponsibilityBySlug, getBlocksByKind, getBlocksByIds,
   findResponsibilityTriggerBySlug, findResponsibilityTaskByAlertKey, findBlockByLocalId, findUniqueLiveBlockByReference, getFutureDatesWithBlocks,
   getWaitingClusterTasks
 };

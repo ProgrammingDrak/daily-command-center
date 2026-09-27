@@ -5,6 +5,28 @@ module.exports = function mount(app, ctx) {
   const { broadcast, getTodayStr, isValidDate, meetingAutomation } = ctx;
 
 // ── Meeting Automation ──
+app.get("/api/meetings/reviews", async (req, res) => {
+  try {
+    res.json({ items: await meetingAutomation.listMeetingReviews({
+      workspaceId: req.workspaceId, today: getTodayStr(),
+    }) });
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+app.post("/api/meetings/:blockId/review/finish", async (req, res) => {
+  try {
+    const result = await meetingAutomation.finishMeetingReview(req.params.blockId, {
+      workspaceId: req.workspaceId,
+    });
+    broadcast("blocks-changed", { action: "meeting-review-finished", blockIds: [req.params.blockId] }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
 app.get("/api/meetings/actions/proposed", async (req, res) => {
   try {
     res.json({ items: await meetingAutomation.listProposedActions({ workspaceId: req.workspaceId, limit: req.query?.limit }) });
@@ -94,6 +116,18 @@ app.post("/api/meetings/:blockId/actions/:actionId/dismiss", async (req, res) =>
       workspaceId: req.workspaceId,
     });
     broadcast("blocks-changed", { action: "meeting-action-dismissed", blockIds: [req.params.blockId, req.params.actionId] }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+app.patch("/api/meetings/:blockId/actions/:actionId", async (req, res) => {
+  try {
+    const result = await meetingAutomation.updateProposedAction(req.params.blockId, req.params.actionId, {
+      workspaceId: req.workspaceId, text: req.body?.text,
+    });
+    broadcast("blocks-changed", { action: "meeting-action-edited", blockIds: [req.params.blockId, req.params.actionId] }, req.workspaceId);
     res.json(result);
   } catch (e) {
     res.status(e.statusCode || 500).json({ error: e.message });

@@ -33,6 +33,9 @@ function makeStore(seed) {
     async getBlocksByKind(kind, ws) {
       return store.filter((b) => (b.properties || {}).kind === kind && !b.deleted_at && (!ws || b.workspace_id === ws));
     },
+    async getBlocksByIds(ids, ws) {
+      return store.filter((b) => ids.includes(b.id) && !b.deleted_at && b.workspace_id === ws);
+    },
     async createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id }) {
       const b = { id: id || "blk-" + (++seq), type, parent_id: parent_id || null, date, properties, sort_order, user_id, workspace_id, deleted_at: null };
       store.push(b);
@@ -130,6 +133,60 @@ test("re-post is idempotent: dedupes proposed actions, upserts summary in place,
   assert.equal(childrenOf("m2", "proposed_action_item").length, 2);
   assert.equal(childrenOf("m2", "meeting_summary").length, 1); // upserted, not duplicated
   assert.equal((await mem.getBlock("m2")).properties.notes, undefined); // recap is never written to notes
+});
+
+test("meeting reviews group recaps, separate waiting meetings, and require action decisions", async () => {
+  seedMeeting("review-ready");
+  seedMeeting("review-waiting", { attendee_count: 2 });
+  seedMeeting("review-other", { attendee_count: 2 });
+  (await mem.getBlock("review-other")).workspace_id = "ws-2";
+  await automation.applyArtifacts("review-ready", {
+    workspaceId: "ws-1", userId: 1,
+    summary: { markdown: "Review summary" },
+    proposedActions: [{ text: "Send summary", owner: "drake" }],
+  });
+  const first = await automation.listMeetingReviews({ workspaceId: "ws-1", today: "2026-07-10" });
+  assert.deepEqual(first.filter(row => row.status === "ready" && row.id.startsWith("review-"))
+    .map(row => row.id), ["review-ready"]);
+  assert.ok(first.some(row => row.id === "review-waiting" && row.status === "waiting"));
+  assert.ok(!first.some(row => row.id === "review-other"));
+  await assert.rejects(
+    automation.finishMeetingReview("review-ready", { workspaceId: "ws-1" }),
+    { statusCode: 409 },
+  );
+  const action = childrenOf("review-ready", "proposed_action_item")[0];
+  await automation.updateProposedAction("review-ready", action.id, {
+    workspaceId: "ws-1", text: "Send edited summary",
+  });
+  assert.equal(action.properties.sourceText, "Send summary");
+  assert.equal(action.properties.text, "Send edited summary");
+  await automation.applyArtifacts("review-ready", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [{ text: "Send summary", owner: "drake" }],
+  });
+  assert.equal(childrenOf("review-ready", "proposed_action_item").length, 1,
+    "the original source action must not return after an edit");
+  await automation.dismissProposedAction("review-ready", action.id, { workspaceId: "ws-1" });
+  await automation.finishMeetingReview("review-ready", { workspaceId: "ws-1" });
+  assert.equal((await automation.listMeetingReviews({ workspaceId: "ws-1", today: "2026-07-10" }))
+    .find(row => row.id === "review-ready").status, "reviewed");
+  await automation.applyArtifacts("review-ready", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [{ text: "Book another call", owner: "drake" }],
+  });
+  assert.equal((await automation.listMeetingReviews({ workspaceId: "ws-1", today: "2026-07-10" }))
+    .find(row => row.id === "review-ready").status, "ready",
+    "new actions reopen an already reviewed meeting");
+});
+
+test("a manually written recap enters Meeting Reviews", async () => {
+  seedMeeting("review-manual", { attendee_count: 2 });
+  await automation.updateArtifactContent("review-manual", "meeting_summary", {
+    markdown: "### Recap\nAgreed on next steps.", html: "<h3>Recap</h3><p>Agreed on next steps.</p>",
+  }, { workspaceId: "ws-1", userId: 1 });
+  assert.equal((await mem.getBlock("review-manual")).properties.recap_status, "ready");
+  const reviews = await automation.listMeetingReviews({ workspaceId: "ws-1", today: "2026-07-10" });
+  assert.equal(reviews.find(row => row.id === "review-manual").status, "ready");
 });
 
 test("an explicit signal is stored with provenance and upgrades an automated duplicate in place", async () => {

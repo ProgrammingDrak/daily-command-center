@@ -40,6 +40,42 @@ test("GET proposed actions returns the cross-meeting elevation read model", asyn
   assert.deepEqual(seen, [{ workspaceId: "ws-1", limit: "12" }]);
 });
 
+test("meeting review routes remain workspace-scoped and broadcast completion", async () => {
+  const seen = [], broadcasts = [];
+  const app = appWith({
+    listMeetingReviews: async opts => {
+      seen.push(["list", opts]);
+      return [{ id: "m1", status: "ready" }];
+    },
+    finishMeetingReview: async (id, opts) => {
+      seen.push(["finish", id, opts]);
+      return { ok: true, meetingId: id };
+    },
+    updateProposedAction: async (id, actionId, opts) => {
+      seen.push(["edit", id, actionId, opts]);
+      return { proposedActions: [] };
+    },
+  }, broadcasts);
+  const list = await request(app, "/api/meetings/reviews");
+  assert.deepEqual(list.body.items, [{ id: "m1", status: "ready" }]);
+  const edit = await request(app, "/api/meetings/m1/actions/p1", {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "Edited" }),
+  });
+  assert.equal(edit.status, 200);
+  const finish = await request(app, "/api/meetings/m1/review/finish", {
+    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+  });
+  assert.equal(finish.status, 200);
+  assert.deepEqual(seen, [
+    ["list", { workspaceId: "ws-1", today: "2026-08-13" }],
+    ["edit", "m1", "p1", { workspaceId: "ws-1", text: "Edited" }],
+    ["finish", "m1", { workspaceId: "ws-1" }],
+  ]);
+  assert.deepEqual(broadcasts.map(row => row.data.action),
+    ["meeting-action-edited", "meeting-review-finished"]);
+});
+
 test("POST dismiss validates through the meeting service and broadcasts the removal", async () => {
   const seen = [], broadcasts = [];
   const app = appWith({
