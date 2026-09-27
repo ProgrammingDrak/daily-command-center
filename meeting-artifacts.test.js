@@ -33,6 +33,9 @@ function makeStore(seed) {
     async getBlocksByKind(kind, ws) {
       return store.filter((b) => (b.properties || {}).kind === kind && !b.deleted_at && (!ws || b.workspace_id === ws));
     },
+    async getBlocksByIds(ids, ws) {
+      return store.filter((b) => ids.includes(b.id) && !b.deleted_at && b.workspace_id === ws);
+    },
     async createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id }) {
       const b = { id: id || "blk-" + (++seq), type, parent_id: parent_id || null, date, properties, sort_order, user_id, workspace_id, deleted_at: null };
       store.push(b);
@@ -156,6 +159,7 @@ test("meeting reviews group recaps, separate waiting meetings, and require actio
     workspaceId: "ws-1", text: "Send edited summary",
   });
   assert.equal(action.properties.sourceText, "Send summary");
+  assert.equal(action.properties.text, "Send edited summary");
   await automation.applyArtifacts("review-ready", {
     workspaceId: "ws-1", userId: 1,
     proposedActions: [{ text: "Send summary", owner: "drake" }],

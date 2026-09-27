@@ -744,17 +744,20 @@ async function listMeetingReviews({ workspaceId, today } = {}) {
   if (!workspaceId) return [];
   const summaries = await blockDB.getBlocksByKind("meeting_summary", workspaceId);
   const meetingIds = [...new Set(summaries.map(row => row.parent_id).filter(Boolean))];
-  const ready = await Promise.all(meetingIds.map(async id => {
-    let meeting;
-    try { meeting = await loadMeeting(id, workspaceId); }
-    catch (error) {
-      if ([400, 404].includes(error.statusCode)) return null;
-      throw error;
-    }
+  const [meetings, proposals] = await Promise.all([
+    blockDB.getBlocksByIds(meetingIds, workspaceId),
+    blockDB.getBlocksByKind("proposed_action_item", workspaceId),
+  ]);
+  const actionsByMeeting = new Map();
+  for (const action of proposals) {
+    if (!actionsByMeeting.has(action.parent_id)) actionsByMeeting.set(action.parent_id, []);
+    actionsByMeeting.get(action.parent_id).push(action);
+  }
+  const ready = meetings.map(meeting => {
     const p = propsOf(meeting);
+    if (!(p.source === "gcal" || p.type === "meeting" || p.type === "oneone" || p.gcal_event_id || p.source_id)) return null;
     if (p.recap_status !== "ready") return null;
-    const artifacts = await loadArtifacts(id, workspaceId);
-    const actions = artifacts.filter(row => propsOf(row).kind === "proposed_action_item");
+    const actions = actionsByMeeting.get(meeting.id) || [];
     const unresolved = actions.filter(row => ["proposed", "approved"].includes(propsOf(row).status)).length;
     return {
       id: meeting.id, title: titleOf(meeting), date: meeting.date,
@@ -762,7 +765,7 @@ async function listMeetingReviews({ workspaceId, today } = {}) {
       reviewedAt: p.recap_reviewed_at || null,
       actionCount: actions.length, unresolvedCount: unresolved,
     };
-  }));
+  });
   const rows = ready.filter(Boolean);
   // Source searches remain separate from the ready badge. Only genuine recent
   // meetings with attendees enter the waiting lane.

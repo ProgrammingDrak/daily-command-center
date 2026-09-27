@@ -10,23 +10,15 @@
   let selectedId = null;
   let bundle = null;
   let detailRequest = 0;
+  let editingAction = false;
+  let refreshQueued = false;
 
-  const esc = value => String(value == null ? "" : value).replace(/[&<>"']/g, char => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[char]);
+  const esc = window.DCC.esc;
   const url = (id, suffix = "") => "/api/meetings/" + encodeURIComponent(id) + suffix;
   const toast = (message, type) => window.DCC && DCC.toast && DCC.toast(message, type);
 
   async function request(path, method = "GET", data) {
-    const options = { method, headers: {} };
-    if (data !== undefined) {
-      options.headers["Content-Type"] = "application/json";
-      options.body = JSON.stringify(data);
-    }
-    const response = await fetch(path, options);
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "Meeting review unavailable");
-    return body;
+    return DCC.api(path, { method, body: data, errorLabel: "Meeting review unavailable" });
   }
 
   function summaryHtml(markdown) {
@@ -87,7 +79,8 @@
       (source ? " · " + source : "") + '</span></div>' +
       (active ? '<div class="mr-action-controls">' +
         (status === "proposed" ? '<button type="button" data-mr-edit="' + esc(action.id) + '">Edit</button>' : "") +
-        '<button type="button" class="primary" data-mr-add="' + esc(action.id) + '">Add as task</button>' +
+        (action.owner === "other" ? '<span class="mr-owner-note">Owner: other</span>' :
+          '<button type="button" class="primary" data-mr-add="' + esc(action.id) + '">Add as task</button>') +
         '<button type="button" data-mr-dismiss="' + esc(action.id) + '">Dismiss</button></div>' :
         '<span class="mr-action-settled">' + (status === "placed" ? "Added as task" : "Dismissed") + '</span>') +
       '</div>';
@@ -149,8 +142,11 @@
     try {
       const result = await request("/api/meetings/reviews");
       items = Array.isArray(result.items) ? result.items : [];
+      if (editingAction) { refreshQueued = true; return; }
+      refreshQueued = false;
       renderQueue();
     } catch (error) {
+      if (editingAction) { toast(error.message, "error"); return; }
       const message = navigator.onLine === false
         ? "Meeting Reviews need a connection. Your local tasks remain available."
         : error.message;
@@ -160,9 +156,9 @@
 
   root.addEventListener("click", async event => {
     const filterButton = event.target.closest("[data-mr-filter]");
-    if (filterButton) { filter = filterButton.dataset.mrFilter; selectedId = null; bundle = null; renderQueue(); return; }
+    if (filterButton) { editingAction = false; filter = filterButton.dataset.mrFilter; selectedId = null; bundle = null; renderQueue(); return; }
     const meetingButton = event.target.closest("[data-mr-id]");
-    if (meetingButton) { selectedId = meetingButton.dataset.mrId; bundle = null; renderQueue(); return; }
+    if (meetingButton) { editingAction = false; selectedId = meetingButton.dataset.mrId; bundle = null; renderQueue(); return; }
     const open = event.target.closest("[data-mr-open]");
     if (open && window.openPrepModal) {
       const meeting = bundle && bundle.meeting || items.find(row => row.id === selectedId);
@@ -184,6 +180,7 @@
         const action = (bundle.proposedActions || []).find(row => row.id === id);
         if (!action) return;
         if (actionId.dataset.mrAdd) {
+          if (action.owner === "other") return;
           if (!window.scheduleRecapAction) throw new Error("Task scheduler unavailable");
           scheduleRecapAction(selectedId, action, actionId, new Map(), async () => { await refresh(); });
         } else if (actionId.dataset.mrDismiss) {
@@ -196,18 +193,26 @@
           input.className = "mr-edit-input";
           input.value = action.text || action.title || "";
           input.setAttribute("aria-label", "Edit proposed action");
+          editingAction = true;
           label.replaceWith(input);
           input.focus(); input.select();
+          let saving = false;
           const save = async () => {
-            if (!input.isConnected) return;
+            if (!input.isConnected || saving) return;
+            saving = true;
             try {
               await request(url(selectedId, "/actions/" + encodeURIComponent(id)), "PATCH", { text: input.value });
+              editingAction = false;
               await refresh();
-            } catch (error) { toast(error.message, "error"); input.focus(); }
+            } catch (error) { saving = false; toast(error.message, "error"); input.focus(); }
           };
           input.addEventListener("keydown", e => {
             if (e.key === "Enter") save();
-            if (e.key === "Escape") renderDetail();
+            if (e.key === "Escape") {
+              editingAction = false;
+              renderDetail();
+              if (refreshQueued) refresh();
+            }
           });
           input.addEventListener("blur", save, { once: true });
         }
