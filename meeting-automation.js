@@ -206,6 +206,8 @@ function serializeBundle(meeting, gcalRow, artifacts) {
       dashboardRef: propsOf(meeting).dashboard_ref || null,
       recordingArtifact: propsOf(meeting).recording_artifact || null,
       recordingSource: propsOf(meeting).recording_source || null,
+      recapReviewStatus: propsOf(meeting).recap_review_status || "pending",
+      recapReviewedAt: propsOf(meeting).recap_reviewed_at || null,
     },
     prep: newestByKind(artifacts, "meeting_prep") ? { id: newestByKind(artifacts, "meeting_prep").id, ...propsOf(newestByKind(artifacts, "meeting_prep")) } : null,
     transcript: newestByKind(artifacts, "meeting_transcript") ? { id: newestByKind(artifacts, "meeting_transcript").id, ...propsOf(newestByKind(artifacts, "meeting_transcript")) } : null,
@@ -412,6 +414,9 @@ async function updateArtifactContent(blockId, kind, { html, blocks, markdown }, 
   });
   // First-time prep create should light the itinerary chip, same as generatePrep.
   if (kind === "meeting_prep" && !existing) await markPrepReady(meeting.id);
+  if (kind === "meeting_summary" && (String(markdown || "").trim() || String(html || "").trim())) {
+    await markRecapReady(meeting.id);
+  }
   return getAutomation(meeting.id, workspaceId);
 }
 
@@ -733,6 +738,72 @@ async function listProposedActions({ workspaceId, limit = 50 } = {}) {
   return rows.slice(0, Math.max(1, Math.min(200, Number(limit) || 50)));
 }
 
+// Recaps remain meeting records until Drake reviews them. The queue groups
+// proposals by meeting, including recaps with no proposed actions.
+async function listMeetingReviews({ workspaceId, today } = {}) {
+  if (!workspaceId) return [];
+  const summaries = await blockDB.getBlocksByKind("meeting_summary", workspaceId);
+  const meetingIds = [...new Set(summaries.map(row => row.parent_id).filter(Boolean))];
+  const ready = await Promise.all(meetingIds.map(async id => {
+    let meeting;
+    try { meeting = await loadMeeting(id, workspaceId); }
+    catch (error) {
+      if ([400, 404].includes(error.statusCode)) return null;
+      throw error;
+    }
+    const p = propsOf(meeting);
+    if (p.recap_status !== "ready") return null;
+    const artifacts = await loadArtifacts(id, workspaceId);
+    const actions = artifacts.filter(row => propsOf(row).kind === "proposed_action_item");
+    const unresolved = actions.filter(row => ["proposed", "approved"].includes(propsOf(row).status)).length;
+    return {
+      id: meeting.id, title: titleOf(meeting), date: meeting.date,
+      status: p.recap_review_status === "reviewed" && !unresolved ? "reviewed" : "ready",
+      reviewedAt: p.recap_reviewed_at || null,
+      actionCount: actions.length, unresolvedCount: unresolved,
+    };
+  }));
+  const rows = ready.filter(Boolean);
+  // Source searches remain separate from the ready badge. Only genuine recent
+  // meetings with attendees enter the waiting lane.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(today || ""))) {
+    const start = new Date(`${today}T00:00:00Z`);
+    start.setUTCDate(start.getUTCDate() - 3);
+    const recent = await blockDB.getBlocksByDateRange(start.toISOString().slice(0, 10), today, workspaceId);
+    const known = new Set(rows.map(row => row.id));
+    for (const meeting of recent) {
+      const p = propsOf(meeting);
+      if (known.has(meeting.id) || p.recap_status === "ready") continue;
+      if (Number(p.attendee_count || 0) < 1) continue;
+      if (!(p.source === "gcal" || p.type === "meeting" || p.type === "oneone")) continue;
+      if (String(meeting.date || "") >= today) continue;
+      rows.push({ id: meeting.id, title: titleOf(meeting), date: meeting.date,
+        status: "waiting", reviewedAt: null, actionCount: 0, unresolvedCount: 0 });
+    }
+  }
+  rows.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || a.title.localeCompare(b.title));
+  return rows;
+}
+
+async function finishMeetingReview(blockId, { workspaceId } = {}) {
+  const meeting = await loadMeeting(blockId, workspaceId);
+  if (propsOf(meeting).recap_status !== "ready") {
+    throw Object.assign(new Error("Recap is not ready for review"), { statusCode: 409 });
+  }
+  const actions = (await loadArtifacts(meeting.id, workspaceId))
+    .filter(row => propsOf(row).kind === "proposed_action_item");
+  if (actions.some(row => ["proposed", "approved"].includes(propsOf(row).status))) {
+    throw Object.assign(new Error("Decide every proposed action before finishing"), { statusCode: 409 });
+  }
+  const p = propsOf(meeting);
+  if (p.recap_review_status !== "reviewed") {
+    await blockDB.updateBlock(meeting.id, { properties: {
+      ...p, recap_review_status: "reviewed", recap_reviewed_at: new Date().toISOString(),
+    } });
+  }
+  return { ok: true, meetingId: meeting.id };
+}
+
 async function dismissProposedAction(blockId, actionId, { workspaceId } = {}) {
   const meeting = await loadMeeting(blockId, workspaceId);
   const artifacts = await loadArtifacts(meeting.id, workspaceId);
@@ -748,6 +819,25 @@ async function dismissProposedAction(blockId, actionId, { workspaceId } = {}) {
   await blockDB.updateBlock(proposal.id, {
     properties: { ...p, status: "dismissed", dismissedAt: new Date().toISOString() },
   });
+  return getAutomation(meeting.id, workspaceId);
+}
+
+async function updateProposedAction(blockId, actionId, { workspaceId, text } = {}) {
+  const meeting = await loadMeeting(blockId, workspaceId);
+  const proposal = (await loadArtifacts(meeting.id, workspaceId))
+    .find(row => row.id === actionId && propsOf(row).kind === "proposed_action_item");
+  if (!proposal) throw Object.assign(new Error("Proposed action not found"), { statusCode: 404 });
+  const p = propsOf(proposal);
+  if (p.status !== "proposed") {
+    throw Object.assign(new Error("Only pending proposals can be edited"), { statusCode: 409 });
+  }
+  const value = String(text || "").trim();
+  if (!value || value.length > 500) {
+    throw Object.assign(new Error("Action text must be 1 to 500 characters"), { statusCode: 400 });
+  }
+  await blockDB.updateBlock(proposal.id, { properties: {
+    ...p, sourceText: p.sourceText || p.text || p.title, text: value, title: value,
+  } });
   return getAutomation(meeting.id, workspaceId);
 }
 
@@ -953,7 +1043,8 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
     const existing = await loadArtifacts(meeting.id, workspaceId);
     const existingByText = new Map(
       existing.filter(b => propsOf(b).kind === "proposed_action_item")
-        .map(b => [normalizedActionText(propsOf(b).text), b])
+        .flatMap(b => [propsOf(b).sourceText, propsOf(b).text]
+          .map(text => [normalizedActionText(text), b]))
         .filter(([key]) => key)
     );
     let idx = 0;
@@ -1083,8 +1174,11 @@ module.exports = {
   updateArtifactContent,
   ingestTranscript,
   listProposedActions,
+  listMeetingReviews,
+  finishMeetingReview,
   approveActions,
   dismissProposedAction,
+  updateProposedAction,
   placeApprovedAction,
   placeProposedAction,
   applyArtifacts,

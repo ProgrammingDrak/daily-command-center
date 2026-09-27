@@ -14,6 +14,15 @@ const port = Number(process.env.PORT || 8099);
 const app = express();
 app.use(express.json());
 const reviewBlocks = new Map();
+const meetingReviewFixture = [
+  { id: "review-investor", title: "Investor Network Weekly", date: "2026-09-25", status: "ready",
+    actions: [
+      { id: "review-action-1", text: "Send the revised investor brief", owner: "drake", status: "proposed" },
+      { id: "review-action-2", text: "Confirm the updated figures with Ben", owner: "other", status: "proposed" },
+    ] },
+  { id: "review-notes", title: "Partner planning", date: "2026-09-24", status: "waiting", actions: [] },
+  { id: "review-done", title: "Team check-in", date: "2026-09-23", status: "reviewed", actions: [] },
+];
 
 function ensureReviewDayRoot(date) {
   const id = `day-root-review-${date}`;
@@ -70,6 +79,55 @@ app.get("/api/me", (_req, res) => res.json({
   username: "review",
   onboardingState: { dailyCommandCenterTour: { version: 2, completedAt: "2026-01-01T00:00:00.000Z" } },
 }));
+app.get("/api/meetings/reviews", (_req, res) => res.json({ items: meetingReviewFixture.map(row => ({
+  id: row.id, title: row.title, date: row.date, status: row.status,
+  actionCount: row.actions.length,
+  unresolvedCount: row.actions.filter(action => ["proposed", "approved"].includes(action.status)).length,
+})) }));
+app.get("/api/meetings/:id/automation", (req, res) => {
+  const row = meetingReviewFixture.find(item => item.id === req.params.id);
+  if (!row) return res.status(404).json({ error: "Meeting not found" });
+  res.json({ meeting: { id: row.id, title: row.title, date: row.date },
+    summary: { markdown: "### Recap\nThe team reviewed the investor brief and next steps.\n\n### Decision\nShare revised figures before the next call." },
+    proposedActions: row.actions });
+});
+app.patch("/api/meetings/:id/actions/:actionId", (req, res) => {
+  const action = meetingReviewFixture.find(row => row.id === req.params.id)?.actions.find(row => row.id === req.params.actionId);
+  if (!action) return res.status(404).json({ error: "Action not found" });
+  action.text = String(req.body.text || "");
+  res.json({ ok: true });
+});
+app.post("/api/meetings/:id/actions/:actionId/dismiss", (req, res) => {
+  const action = meetingReviewFixture.find(row => row.id === req.params.id)?.actions.find(row => row.id === req.params.actionId);
+  if (!action) return res.status(404).json({ error: "Action not found" });
+  action.status = "dismissed";
+  res.json({ ok: true });
+});
+app.post("/api/meetings/:id/actions/approve", (req, res) => {
+  const row = meetingReviewFixture.find(item => item.id === req.params.id);
+  const action = row?.actions.find(item => (req.body.actionIds || []).includes(item.id));
+  if (!action) return res.status(404).json({ error: "Action not found" });
+  action.status = "approved";
+  action.approvedBlockId = "task-" + action.id;
+  res.json({ proposedActions: row.actions, approvedBlocks: [{ id: action.approvedBlockId }] });
+});
+app.post("/api/meetings/:id/actions/:actionId/place", (req, res) => {
+  const action = meetingReviewFixture.find(row => row.id === req.params.id)?.actions
+    .find(row => row.approvedBlockId === req.params.actionId);
+  if (!action) return res.status(404).json({ error: "Approved task not found" });
+  action.status = "placed";
+  action.placedDate = req.body.date;
+  res.json({ ok: true });
+});
+app.post("/api/meetings/:id/review/finish", (req, res) => {
+  const row = meetingReviewFixture.find(item => item.id === req.params.id);
+  if (!row) return res.status(404).json({ error: "Meeting not found" });
+  if (row.actions.some(action => ["proposed", "approved"].includes(action.status))) {
+    return res.status(409).json({ error: "Decide every proposed action before finishing" });
+  }
+  row.status = "reviewed";
+  res.json({ ok: true });
+});
 app.get("/api/state/archives", (_req,res)=>res.json({"2026-09-12":{date:"2026-09-12"}}));
 app.get("/api/state/upcoming", (_req,res)=>res.json([]));
 app.get("/api/state/tomorrow", (_req,res)=>res.json(null));

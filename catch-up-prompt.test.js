@@ -463,139 +463,16 @@ test("Move all to today drains the queue, defers the refold, and marks the day r
   assert.ok(saved._catchUpReviewed, "the day is marked reviewed when the batch closes it");
 });
 
-// ───────────────── meeting follow-ups from recap documents ─────────────────
-const MTG_ACTION = {
-  id: "proposal-1", meetingId: "meeting-1", meetingTitle: "Investor weekly",
-  meetingDate: "2026-07-28", meetingStart: "13:00", meetingEnd: "14:00",
-  title: "Send the updated investor brief", owner: "drake", priority: "High"
-};
-
-function meetingCtx(action, completionResult) {
-  const calls = { approved: [], completed: [] };
-  const fetch = async (url, opts) => {
-    const body = opts && opts.body ? JSON.parse(opts.body) : {};
-    if (url === "/api/meetings/actions/proposed") {
-      return { ok: true, json: async () => ({ items: [action] }) };
-    }
-    if (url.endsWith("/actions/approve")) {
-      calls.approved.push(body.actionIds);
-      return { ok: true, json: async () => ({ approvedBlocks: [{ id: "approved-1" }] }) };
-    }
-    throw new Error("Unexpected URL " + url);
-  };
-  const ctx = load({ [ymd(1)]: [dayRoot()] }, [ymd(1)], { fetch });
-  ctx.ctx.window.blockStore.setTaskCompletion = async (id, completed, opts) => {
-    calls.completed.push({ id, completed, taskDate: opts.taskDate });
-    return completionResult || { ok: true };
-  };
-  return Object.assign(ctx, { calls });
-}
-
-test("meeting follow-ups have an already-done checkmark that completes the approved action", async () => {
-  const { ctx, calls } = meetingCtx(MTG_ACTION);
-  await openLooseEnds(ctx);
-  const row = [...rowsOf(ctx)][0];
-  row.querySelector(".it-list-check").fire("click", { stopPropagation() {} });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.deepEqual(calls.approved, [["proposal-1"]]);
-  assert.deepEqual(calls.completed, [{ id: "approved-1", completed: true, taskDate: "2026-07-28" }]);
-  assert.equal(row._removed, true);
-});
-
-test("retrying an approved meeting follow-up completes its existing action without duplicating it", async () => {
-  const { ctx, calls } = meetingCtx({ ...MTG_ACTION, approvedBlockId: "approved-existing" });
-  await openLooseEnds(ctx);
-  const row = [...rowsOf(ctx)][0];
-  row.querySelector(".it-list-check").fire("click", { stopPropagation() {} });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.deepEqual(calls.approved, []);
-  assert.deepEqual(calls.completed, [{ id: "approved-existing", completed: true, taskDate: "2026-07-28" }]);
-  assert.equal(row._removed, true);
-});
-
-test("a pending meeting completion stays visible, re-enables, and restores focus", async () => {
-  const { ctx, calls } = meetingCtx(MTG_ACTION, { ok: false, pending: true });
-  await openLooseEnds(ctx);
-  const row = [...rowsOf(ctx)][0];
-  const complete = row.querySelector(".it-list-check");
-  ctx.document.activeElement = complete;
-  complete.fire("click", { stopPropagation() {} });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.deepEqual(calls.completed, [{ id: "approved-1", completed: true, taskDate: "2026-07-28" }]);
-  assert.equal(row._removed, false, "the row must remain until the canonical write is acknowledged");
-  assert.equal(complete.disabled, false, "the user can retry a queued or failed write");
-  assert.equal(complete._focused, true, "keyboard focus returns to the action that needs a retry");
-});
-
-test("completing the final meeting follow-up returns focus to the task launcher", async () => {
-  const { ctx } = meetingCtx(MTG_ACTION);
-  const launcher = ctx.document.createElement("button");
-  launcher.id = "dcc-launcher-btn";
-  ctx.document.body.appendChild(launcher);
-  await openLooseEnds(ctx);
-  const row = [...rowsOf(ctx)][0];
-  const complete = row.querySelector(".it-list-check");
-  ctx.document.activeElement = complete;
-  complete.fire("click", { stopPropagation() {} });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(launcher._focused, true);
-});
-
-test("meeting Details opens that meeting's recap", async () => {
-  const opened = [];
-  const { ctx } = triageCtx({ [ymd(1)]: [dayRoot()] }, [ymd(1)], [], {
-    fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION] }) }),
-    openPrepModal: (meeting, opts) => opened.push({ meeting, opts })
+// Meeting proposals are reviewed in the dedicated Meeting Reviews queue.
+test("Loose Ends never requests or renders meeting proposals", async () => {
+  const calls = [];
+  const d = ymd(1);
+  const { ctx } = load({ [d]: [dayRoot()] }, [d], {
+    fetch: async url => { calls.push(url); throw new Error("Unexpected fetch"); }
   });
   await openLooseEnds(ctx);
-  const row = [...rowsOf(ctx)][0];
-  row.querySelector(".ttl").fire("click");
-  assert.deepEqual(JSON.parse(JSON.stringify(opened)), [{
-    meeting: {
-      id: "meeting-1", meetingBlockId: "meeting-1", title: "Investor weekly",
-      start: "13:00", end: "14:00"
-    },
-    opts: { defaultTab: "recap" }
-  }]);
-  assert.equal(row._removed, false, "viewing the recap does not resolve the follow-up");
-});
-
-test("signaled meeting actions render above automated meeting actions", async () => {
-  const automated = { ...MTG_ACTION, id: "auto-1", title: "Automated follow-up", origin: "automated" };
-  const signaled = { ...MTG_ACTION, id: "signal-1", title: "Explicit follow-up", origin: "signaled" };
-  const { ctx } = triageCtx({ [ymd(1)]: [dayRoot()] }, [ymd(1)], [], {
-    fetch: async () => ({ ok: true, json: async () => ({ items: [automated, signaled] }) }),
-  });
-  await openLooseEnds(ctx);
-  const children = [...allRowsOf(ctx)];
-  const labels = children.filter(r => r.className === "cu-section-label").map(r => r.textContent);
-  assert.deepEqual(labels, ["Signaled Action Items from Meetings", "Automated Action Items from Meetings"]);
-  assert.ok(children.indexOf(children.find(r => titleOf(r) === "Explicit follow-up")) <
-    children.indexOf(children.find(r => titleOf(r) === "Automated follow-up")));
-});
-
-test("a delegated meeting row keeps the shared layout without stealing the owner's task", async () => {
-  const delegated = { ...MTG_ACTION, id: "delegated-1", owner: "other" };
-  const scheduled = [];
-  const fetch = async (url, opts) => {
-    if (url === "/api/meetings/actions/proposed") {
-      return { ok: true, json: async () => ({ items: [delegated] }) };
-    }
-    if (url.endsWith("/actions/delegated-1/schedule")) {
-      scheduled.push(JSON.parse(opts.body));
-      return { ok: true, json: async () => ({ ok: true }) };
-    }
-    throw new Error("Unexpected URL " + url);
-  };
-  const { ctx } = triageCtx({ [ymd(1)]: [dayRoot()] }, [ymd(1)], [], { fetch });
-  await openLooseEnds(ctx);
-  const row = [...rowsOf(ctx)][0];
-  assert.doesNotMatch(row.innerHTML, /class="btn-schedule"/,
-    "delegated rows omit scheduling capabilities");
-  pickAction(row, "Today");
-  await settled();
-  assert.deepEqual(scheduled, []);
-  assert.equal(row._removed, false);
+  assert.equal(calls.includes("/api/meetings/actions/proposed"), false);
+  assert.equal(ctx.document.getElementById("catchup-overlay"), null);
 });
 
 // ───────────────── triage rides along (the sweep's items) ─────────────────
@@ -766,13 +643,13 @@ test("the unified modal follows the requested section order", async () => {
     { [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] },
     [d],
     [TRI("s1"), TRI("g1", { source: "gmail" })],
-    { fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION] }) }) }
+    {}
   );
   installJournal(ctx, { pending: true });
   await openLooseEnds(ctx);
   assert.deepEqual(
     [...allRowsOf(ctx)].filter(r => r.className === "cu-section-label").map(r => r.textContent),
-    ["Slipped tasks", "Slack", "Gmail", "Automated Action Items from Meetings", "Journal"]
+    ["Slipped tasks", "Slack", "Gmail", "Journal"]
   );
   const journal = [...allRowsOf(ctx)].find(r => r.className === "cu-journal-wrap");
   assert.match(journal.innerHTML, /Journal/);
@@ -782,7 +659,7 @@ test("every Loose Ends source uses the live itinerary renderer", async () => {
   const d = ymd(1);
   const { ctx } = triageCtx(
     { [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("s1")],
-    { fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION] }) }) }
+    {}
   );
   const renderRow = ctx.renderItineraryListRow;
   const createTaskRow = ctx.createTaskListRowRenderer;
@@ -803,7 +680,7 @@ test("every Loose Ends source uses the live itinerary renderer", async () => {
     return row;
   };
   await openLooseEnds(ctx);
-  assert.equal(rendered.length, 3);
+  assert.equal(rendered.length, 2);
   assert.equal(fullTaskRows.length, 1, "Stored tasks must use the full task builder, not just its layout");
   assert.ok(rendered.includes(fullTaskRows[0]));
   assert.ok([...rowsOf(ctx)].every(row => rendered.includes(row)));
@@ -879,18 +756,13 @@ test("fresh sweep arrivals update Loose Ends without opening it", async () => {
   assert.equal(saved._catchUpReviewed, undefined, "closing a partial fresh modal never marks the morning reviewed");
 });
 
-test("fresh arrivals stay unreviewed when slipped tasks or meeting follow-ups fail to load", async () => {
-  for (const failedSource of ["slipped", "meetings"]) {
-    const fetch = failedSource === "meetings"
-      ? async () => { throw new Error("meetings unavailable"); }
-      : async () => ({ ok: true, json: async () => ({ items: [] }) });
-    const { ctx, saved } = triageCtx({}, [], [TRI("s1")], { fetch });
-    installJournal(ctx, { pending: false });
-    if (failedSource === "slipped") ctx.window.DCC.Carryover.collect = async () => { throw new Error("tasks unavailable"); };
-    assert.equal(await ctx.window.DCC.CatchUp.openArrivals(["s1"]), true);
-    assert.equal(ctx.document.getElementById("catchup-overlay"), null);
-    assert.equal(saved._catchUpReviewed, undefined, failedSource + " failure must keep the morning retryable");
-  }
+test("fresh arrivals stay unreviewed when slipped tasks fail to load", async () => {
+  const { ctx, saved } = triageCtx({}, [], [TRI("s1")]);
+  installJournal(ctx, { pending: false });
+  ctx.window.DCC.Carryover.collect = async () => { throw new Error("tasks unavailable"); };
+  assert.equal(await ctx.window.DCC.CatchUp.openArrivals(["s1"]), true);
+  assert.equal(ctx.document.getElementById("catchup-overlay"), null);
+  assert.equal(saved._catchUpReviewed, undefined, "a task failure must keep the morning retryable");
 });
 
 test("triage items ride along with the tasks that slipped, in their own section", async () => {
@@ -1133,11 +1005,11 @@ test("core.js's shared row helpers emit what the callers query for", () => {
 test("the calendar button is really in every row kind's markup", async () => {
   const d = ymd(1);
   const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("m1")], {
-    fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION] }) })
+    fetch: async () => ({ ok: true, json: async () => ({ items: [] }) })
   });
   await openLooseEnds(ctx);
   const rows = [...rowsOf(ctx)].filter(r => r.className && r.className.indexOf("it-list-item") > -1);
-  assert.equal(rows.length, 3);
+  assert.equal(rows.length, 2);
   for (const r of rows) {
     assert.match(r.innerHTML, /<div class="it-list-meta">/, "the calendar uses the shared task metadata line");
     assert.match(r.innerHTML, /<button[^>]*class="btn-schedule"[^>]*aria-label="/,
