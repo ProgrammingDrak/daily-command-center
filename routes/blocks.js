@@ -2486,6 +2486,7 @@ module.exports = function mount(app, ctx) {
     const body = req.body || {};
     if (!body.properties || typeof body.properties !== "object") { res.status(400).json({ error: "properties required" }); return; }
     const props = waitingItems.normalizeProperties(body.properties);
+    const convertTaskId = String(body.convertTaskId || "").trim();
     const newBlocker = body.newBlocker && typeof body.newBlocker === "object" ? body.newBlocker : null;
     if (newBlocker && props.blockerType === "task" && props.linkedBlockId && !props.blockerBlockId) {
       props.blockerBlockId = "__new_prerequisite__";
@@ -2494,6 +2495,40 @@ module.exports = function mount(app, ctx) {
     const named = v => typeof v === "string" && v.trim();
     if (!named(props.title) && !named(props.myTask) && !named(newBlocker && newBlocker.title)) { res.status(400).json({ error: "properties.title or properties.myTask required" }); return; }
     const { userId, workspaceId } = await resolveOwnerStrict(req);
+    if (convertTaskId && !waitingItems.isTaskDependency(props)) {
+      const client = await pool.connect();
+      let created;
+      let affected;
+      try {
+        await client.query("BEGIN");
+        const task = await blockDB.findUniqueLiveBlockByReference(convertTaskId, workspaceId, client, true);
+        if (!task || task.deleted_at || !blockDB.isTaskRow(task)) throw clientError("Selected task is no longer available", 409);
+        assertBlockOwnership(task, workspaceId);
+        if (isCompleted(task)) throw clientError("A completed task cannot move to Waiting", 409);
+        const subtree = await blockDB.getSubtree([task.id], workspaceId, client);
+        const rows = subtree.length ? subtree : [task];
+        if (rows.some(row => (row.properties || {}).dependencyWaitingItemId ||
+          ((row.properties || {}).dependencyWaitingItemIds || []).length)) {
+          throw clientError("Selected task is already waiting on another item", 409);
+        }
+        props.linkedBlockId = task.id;
+        props.myTask = String((task.properties || {}).title || props.myTask).slice(0, 300);
+        props.parksLinkedTask = true;
+        created = await blockDB.createBlock({
+          type: "block", parent_id: null, date: null, properties: props, sort_order: 0,
+          user_id: userId, workspace_id: workspaceId,
+        }, client);
+        affected = await setDependencyMarker(rows, created.id, client);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+      broadcast("blocks-changed", { action: "waiting-task-converted", blockIds: [created.id].concat(affected) }, workspaceId);
+      return created;
+    }
     if (waitingItems.isTaskDependency(props)) {
       const client = await pool.connect();
       let created;
@@ -2581,6 +2616,12 @@ module.exports = function mount(app, ctx) {
     const mergedIsDependency = waitingItems.isTaskDependency(merged);
     if (existingIsDependency !== mergedIsDependency) {
       throw clientError("Task dependencies must be created or removed as a complete link");
+    }
+    if ((existing.properties || {}).parksLinkedTask) {
+      if (String(merged.linkedBlockId || "") !== String((existing.properties || {}).linkedBlockId || "")) {
+        throw clientError("Release this Waiting task before linking a different task", 409);
+      }
+      merged.parksLinkedTask = true;
     }
     if (mergedIsDependency) {
       const client = await pool.connect();
@@ -3037,7 +3078,7 @@ module.exports = function mount(app, ctx) {
     const taskBlockId = String(req.body && req.body.taskBlockId || existingProps.linkedBlockId || "").trim();
     const date = req.body && req.body.date;
     if (!taskBlockId || !["schedule", "backlog"].includes(destination)) { res.status(400).json({ error: "taskBlockId and a valid destination are required" }); return; }
-    if (waitingItems.isTaskDependency(existing) && taskBlockId !== String(existingProps.linkedBlockId || "")) {
+    if ((waitingItems.isTaskDependency(existing) || existingProps.parksLinkedTask) && taskBlockId !== String(existingProps.linkedBlockId || "")) {
       res.status(400).json({ error: "Task dependency actions must target the linked blocked task" });
       return;
     }
@@ -3054,7 +3095,7 @@ module.exports = function mount(app, ctx) {
       unblockedDestination: destination,
       snoozedUntil: null,
     }, existing.properties || {});
-    if (waitingItems.isTaskDependency(existing)) {
+    if (waitingItems.isTaskDependency(existing) || existingProps.parksLinkedTask) {
       const subtree = await blockDB.getSubtree([task.id], req.workspaceId);
       const client = await pool.connect();
       let updated;
@@ -3097,7 +3138,7 @@ module.exports = function mount(app, ctx) {
     assertBlockOwnership(existing, req.workspaceId);
     if ((existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Delegated item not found" }); return; }
     const affectedIds = [];
-    if (waitingItems.isTaskDependency(existing)) {
+    if (waitingItems.isTaskDependency(existing) || (existing.properties || {}).parksLinkedTask) {
       const linked = await blockDB.findUniqueLiveBlockByReference((existing.properties || {}).linkedBlockId, req.workspaceId);
       const client = await pool.connect();
       let result;

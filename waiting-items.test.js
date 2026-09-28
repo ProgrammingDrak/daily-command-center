@@ -100,6 +100,23 @@ test("completing a triage cycle advances cadence exactly once", () => {
   assert.equal(repeated.status, "skipped_stale");
 });
 
+test("a dated follow-up ends after its check-in without starting a cadence", () => {
+  const current = item({ checkInMode: "date", checkInRepeat: false });
+  const result = Waiting.completeCycleProperties(current, "waiting:w-1:2026-08-11", "2026-08-11T15:00:00.000Z");
+  assert.equal(result.status, "completed");
+  assert.equal(result.properties.checkInDate, null);
+  const after = { ...current, properties: result.properties };
+  assert.equal(Waiting.dueDate(after), null);
+  assert.equal(Waiting.attentionFor(after, "2026-08-18"), null);
+  assert.equal(Waiting.completeCycleProperties(after, "waiting:w-1:2026-08-11", "2026-08-18T15:00:00.000Z").status, "skipped_stale");
+});
+
+test("legacy dated follow-ups keep their existing repeat behavior", () => {
+  const current = item({ checkInMode: "date" });
+  const result = Waiting.completeCycleProperties(current, "waiting:w-1:2026-08-11", "2026-08-11T15:00:00.000Z");
+  assert.equal(result.properties.checkInDate, "2026-08-18");
+});
+
 test("unblocked and completed rows never enter attention or triage", () => {
   for (const status of ["unblocked", "done"]) {
     const row = item({ status, completedAt: "2026-08-10T10:00:00.000Z" });

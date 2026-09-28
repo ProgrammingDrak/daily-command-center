@@ -94,6 +94,7 @@ function normalizeProperties(input, existing = {}) {
 function dueDate(item, timeZone = "America/New_York") {
   const props = normalizeProperties((item && item.properties) || {});
   if (validDate(props.checkInDate)) return props.checkInDate;
+  if (props.checkInRepeat === false) return null;
   const anchor = dateFromIso(props.lastCheckedAt || item && item.created_at || props.createdAt, timeZone);
   return anchor ? addDays(anchor, props.checkInDays) : null;
 }
@@ -266,7 +267,7 @@ function completeCycleProperties(item, cycleKey, completedAt, timeZone = "Americ
       ...props,
       lastCheckedAt: completedAt,
       lastCompletedCycleKey: cycleKey,
-      checkInDate: addDays(completedDate, props.checkInDays),
+      checkInDate: props.checkInRepeat === false ? null : addDays(completedDate, props.checkInDays),
       snoozedUntil: null,
       checkInScheduledFor: null,
       checkInTaskId: null,

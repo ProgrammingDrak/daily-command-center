@@ -127,6 +127,9 @@
       <button class="loose-ends-pill" id="loose-ends-pill" type="button" aria-controls="catchup-overlay" aria-haspopup="dialog" aria-label="Open Loose Ends" hidden>
         <span>Loose Ends</span><span class="loose-ends-pill-count" id="loose-ends-pill-count" aria-live="polite">0</span>
       </button>
+      <button class="waiting-pill-nav waiting-pill-nav--plum" id="waiting-pill-nav" type="button" aria-label="Open Waiting tasks" aria-controls="tm-delegated-blocked-section">
+        <span>Waiting</span><span class="waiting-pill-nav-count" id="waiting-pill-nav-count" aria-live="polite">0</span>
+      </button>
     </div>
     <div class="date-picker-drop" id="date-picker-drop" style="display:none"></div>
   </div>
@@ -754,74 +757,50 @@
       <input type="hidden" id="dm-id" />
       <input type="hidden" id="dm-linked-tag-id" />
       <input type="hidden" id="dm-linked-block-id" />
-      <label class="delegated-modal-label dm-create-detail">Task you're working on</label>
-      <select id="dm-task-link" class="delegated-modal-input dm-task-link dm-create-detail">
-        <option value="">— Type a new task below —</option>
+      <label class="delegated-modal-label" for="dm-task-link">Task you're working on</label>
+      <select id="dm-task-link" class="delegated-modal-input">
+        <option value="">Select a task</option>
       </select>
-      <input type="text" id="dm-my-task" class="delegated-modal-input dm-create-detail" maxlength="200" placeholder="Ship the Q2 review deck" />
-      <div class="dm-waiting-grid dm-create-detail">
-        <div>
-          <label class="delegated-modal-label">Waiting type</label>
-          <select id="dm-waiting-reason" class="delegated-modal-input">
-            <option value="blocked">Blocked</option>
-            <option value="delegated">Delegated</option>
-            <option value="both">Blocked and delegated</option>
-          </select>
-        </div>
-        <div>
-          <label class="delegated-modal-label">Blocker kind</label>
-          <select id="dm-blocker-kind" class="delegated-modal-input">
-            <option value="person">Person</option>
-            <option value="team">Team</option>
-            <option value="system">System</option>
-            <option value="place">Place</option>
-            <option value="other">Other</option>
-          </select>
-        </div>
-      </div>
-      <label class="delegated-modal-label" id="dm-blocker-name-label" for="dm-blocker-name">Who or where has it?</label>
-      <input type="text" id="dm-blocker-name" class="delegated-modal-input" maxlength="160" placeholder="Alex" />
-      <label class="delegated-modal-label" id="dm-blocker-title-label" for="dm-blocker-title">What is blocking it or being waited on?</label>
-      <input type="text" id="dm-blocker-title" class="delegated-modal-input" maxlength="240" placeholder="Get legal approval for the final language" />
-      <div class="dm-waiting-grid dm-create-detail">
-        <div>
-          <label class="delegated-modal-label">Contact channel</label>
-          <select id="dm-contact-channel" class="delegated-modal-input">
-            <option value="other">Other / none</option>
-            <option value="slack">Slack</option>
-            <option value="gmail">Gmail</option>
-          </select>
-        </div>
-        <div>
-          <label class="delegated-modal-label">Address or handle</label>
-          <input type="text" id="dm-contact-address" class="delegated-modal-input" maxlength="240" placeholder="alex@company.com or @alex" />
-        </div>
-      </div>
-      <label class="delegated-modal-label dm-create-detail">Conversation link <span class="dm-hint">(optional)</span></label>
-      <input type="url" id="dm-contact-source-ref" class="delegated-modal-input dm-create-detail" maxlength="600" placeholder="https://..." />
-      <label class="delegated-modal-label dm-create-detail">Check-in</label>
+      <input type="text" id="dm-new-task" class="delegated-modal-input dm-new-task" maxlength="200" placeholder="Name the task" hidden />
+      <input type="hidden" id="dm-my-task" />
+      <label class="delegated-modal-label" for="dm-blocker-name">Waiting on <span class="dm-hint">(optional person or thing)</span></label>
+      <input type="text" id="dm-blocker-name" class="delegated-modal-input" maxlength="160" placeholder="Alex, Legal, or vendor approval" />
+      <details class="dm-contact-details" id="dm-contact-details">
+        <summary>Contact details <span class="dm-hint">(optional)</span></summary>
+        <label class="delegated-modal-label" for="dm-contact-channel">Contact channel</label>
+        <select id="dm-contact-channel" class="delegated-modal-input">
+          <option value="other">Other / none</option>
+          <option value="slack">Slack</option>
+          <option value="gmail">Gmail</option>
+        </select>
+        <label class="delegated-modal-label" for="dm-contact-address">Address or handle</label>
+        <input type="text" id="dm-contact-address" class="delegated-modal-input" maxlength="240" placeholder="alex@company.com or @alex" />
+        <label class="delegated-modal-label" for="dm-contact-source-ref">Conversation link</label>
+        <input type="url" id="dm-contact-source-ref" class="delegated-modal-input" maxlength="600" placeholder="https://..." />
+      </details>
+      <label class="delegated-modal-label" for="dm-notes">Notes / what's blocking it</label>
+      <textarea id="dm-notes" class="delegated-modal-input" rows="3" maxlength="1000" placeholder="What is blocking it? Add any useful context."></textarea>
+      <label class="delegated-modal-label">Follow-up</label>
       <input type="hidden" id="dm-check-in-mode" value="date" />
-      <div class="dm-checkin-toggle dm-create-detail" role="tablist">
-        <button type="button" class="dm-checkin-tab active" data-checkin-mode="date">On a date</button>
-        <button type="button" class="dm-checkin-tab" data-checkin-mode="repeat">From cadence</button>
+      <div class="dm-followup-switch" role="group" aria-label="Follow-up schedule">
+        <button type="button" id="dm-mode-date" class="active" aria-pressed="true">On a date</button>
+        <button type="button" id="dm-mode-repeat" aria-pressed="false">From cadence</button>
       </div>
-      <div class="dm-checkin-pane dm-create-detail" id="dm-checkin-pane-date">
-        <div class="dm-quick-dates">
-          <button type="button" class="dm-quick-date" data-quick-date="today">Today</button>
-          <button type="button" class="dm-quick-date" data-quick-date="tomorrow">Tomorrow</button>
+      <div id="dm-date-fields">
+        <div class="dm-date-quick-actions">
+          <button type="button" data-dm-date="today">Today</button>
+          <button type="button" data-dm-date="tomorrow">Tomorrow</button>
         </div>
+        <label class="delegated-modal-label" for="dm-check-in-date">Check in on</label>
         <input type="date" id="dm-check-in-date" class="delegated-modal-input" />
       </div>
-      <div class="dm-checkin-pane dm-create-detail" id="dm-checkin-pane-repeat" style="display:none">
-        <div class="dm-hint">The first check-in is calculated from today.</div>
+      <div id="dm-cadence-fields" hidden>
+        <div class="dm-repeat-row">
+          <label class="dm-hint" for="dm-check-in-days">Remind me every</label>
+          <input type="number" id="dm-check-in-days" class="delegated-modal-input dm-repeat-days" min="1" max="365" step="1" value="7" />
+          <span class="dm-hint">days until done</span>
+        </div>
       </div>
-      <div class="dm-repeat-row dm-create-detail">
-        <span class="dm-hint">After a completed check-in, remind me again in</span>
-        <input type="number" id="dm-check-in-days" class="delegated-modal-input dm-repeat-days" min="1" max="365" step="1" placeholder="7" />
-        <span class="dm-hint">days</span>
-      </div>
-      <label class="delegated-modal-label dm-create-detail">Context / background</label>
-      <textarea id="dm-notes" class="delegated-modal-input dm-create-detail" rows="3" maxlength="1000" placeholder="Anything useful for the check-in message or your future self"></textarea>
       <div class="delegated-modal-actions">
         <button type="button" class="secondary" id="dm-cancel">Cancel</button>
         <button type="button" class="secondary" id="dm-mark-checked" style="display:none">Mark as checked-in</button>

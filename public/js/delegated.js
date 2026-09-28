@@ -1,8 +1,8 @@
 // ======== WAITING SIDEBAR MANAGER ========
 // Waiting items are global block rows with properties.kind="delegated_item".
-// Each one captures: the task I'm working on (myTask, optionally linked to a real
-// task via linkedBlockId), what I'm waiting on (title), who I'm waiting on
-// (delegatee.name), and how often to check in (checkInDays). The check-in cadence
+// Each one captures the task (myTask, optionally linked via linkedBlockId),
+// who or what it waits on (delegatee.name), notes, and a check-in cadence.
+// Legacy rows may still store a separate blocker description in title. The cadence
 // drives a creeping urgency score (green -> blue -> yellow -> red) using the shared
 // window.urgency helper, exactly like repeat responsibilities; logging a check-in
 // resets lastCheckedAt and the creep starts over.
@@ -426,15 +426,6 @@
     return 7;
   }
 
-  // Which check-in style an item uses. Explicit checkInMode wins; otherwise infer
-  // from the data (a stored checkInDate means a one-time date) so legacy items
-  // keep working with no migration.
-  function checkInModeFor(props) {
-    props = props || {};
-    if (props.checkInMode === "date" || props.checkInMode === "repeat") return props.checkInMode;
-    return props.checkInDate ? "date" : "repeat";
-  }
-
   // Parse a yyyy-mm-dd string as a LOCAL calendar date (avoids the UTC shift you
   // get from new Date("2026-06-25")). Returns null if unparseable.
   function parseLocalDate(s) {
@@ -457,6 +448,9 @@
   // the chosen calendar day, hitting 100 on that day.
   function itemUrgency(item) {
     const p = item.properties || {};
+    if (p.checkInRepeat === false && !p.checkInDate) {
+      return { score: 0, cls: "", timing: { cadence: 0, elapsed: 0, remaining: Infinity, progress: 0 } };
+    }
     const anchorIso = p.lastCheckedAt || item.created_at || p.createdAt || null;
     const now = new Date();
     const anchor = parseLocalDate(String(anchorIso || "").slice(0, 10)) || new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -541,6 +535,7 @@
     return items.filter(item => {
       if (!isOpenDelegated(item) || isSnoozed(item) || isTaskDependency(item)) return false;
       const p = item.properties || {};
+      if (p.checkInRepeat === false && !p.checkInDate) return false;
       // Once a real check-in task owns this cycle, Loose Ends no longer needs a
       // second decision row. The triage draft remains available for review/send.
       if (p.checkInTaskId && p.checkInScheduledFor && p.checkInScheduledFor >= todayStr()) return false;
@@ -560,6 +555,7 @@
 
   function cycleKey(item) {
     const p = item.properties || {};
+    if (p.checkInRepeat === false && !p.checkInDate) return null;
     let due = p.checkInDate || "";
     if (!due) {
       const anchor = parseLocalDate(String(p.lastCheckedAt || item.created_at || "").slice(0, 10)) || new Date();
@@ -584,6 +580,8 @@
 
   // Human-readable countdown, mirroring responsibilities' dueLabel.
   function dueLabel(item) {
+    const p = item.properties || {};
+    if (p.checkInRepeat === false && !p.checkInDate) return "Follow-up complete";
     const t = itemUrgency(item).timing;
     if (t.remaining < 0) return Math.abs(t.remaining) + "d overdue";
     if (t.remaining === 0) return "check in today";
@@ -609,7 +607,7 @@
     const rows = list.length ? list.map(renderCard).join("") : renderEmpty(true, all.length);
     mount.innerHTML =
       '<div class="delegated-sidebar-tools">' +
-        '<button type="button" class="delegated-mini-btn" data-delegated-action="new">Delegate</button>' +
+        '<button type="button" class="delegated-mini-btn" data-delegated-action="new">+ New</button>' +
         renderFilters() +
       '</div>' +
       '<div class="delegated-itinerary-list">' + rows + '</div>';
@@ -689,7 +687,8 @@
       done ? "done" : ""
     ].filter(Boolean).join(" ");
 
-    const badge = done
+    const followUpComplete = p.checkInRepeat === false && !p.checkInDate;
+    const badge = done || followUpComplete
       ? '<div class="delegated-card-score done">&#10003;</div>'
       : '<div class="delegated-card-score ' + cls + '">' + u.score + '</div>';
 
@@ -702,8 +701,8 @@
     const actionButtons = done ?
       '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
       '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button>' :
-      '<button type="button" data-delegated-action="check-in" data-id="' + esc(item.id) + '">Checked in</button>' +
-      '<button type="button" data-delegated-action="schedule" data-id="' + esc(item.id) + '">Schedule check-in</button>' +
+      (followUpComplete ? '' : '<button type="button" data-delegated-action="check-in" data-id="' + esc(item.id) + '">Checked in</button>' +
+      '<button type="button" data-delegated-action="schedule" data-id="' + esc(item.id) + '">Schedule check-in</button>') +
       '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
       '<button type="button" data-delegated-action="unblock" data-id="' + esc(item.id) + '" title="The blocker is gone. Put the actual task on your schedule.">Schedule task</button>' +
       '<button type="button" data-delegated-action="complete" data-id="' + esc(item.id) + '" title="The actual task is already finished.">Complete task</button>' +
@@ -717,7 +716,7 @@
           sub +
           '<span class="delegated-card-when">' + esc(dueLabel(item)) + '</span>' +
         '</div>' +
-        (done ? '' : '<div class="delegated-card-meter"><span class="' + u.cls + '" style="width:' + u.timing.progress + '%"></span></div>') +
+        (done || followUpComplete ? '' : '<div class="delegated-card-meter"><span class="' + u.cls + '" style="width:' + u.timing.progress + '%"></span></div>') +
         (note ? '<div class="delegated-card-note">' + esc(note) + '</div>' : '') +
       '</div>' +
       '<div class="delegated-card-actions">' + actionButtons + '</div>' +
@@ -731,7 +730,7 @@
         const action = btn.dataset.delegatedAction;
         const id = btn.dataset.id;
         if (action === "new") {
-          openDelegatedModal(null, { fastCreate: true });
+          openDelegatedModal(null);
         } else if (action === "check-in") {
           markDelegatedItemCheckedById(id);
         } else if (action === "schedule") {
@@ -770,13 +769,18 @@
 
   function updateBadge(openCount) {
     const countBadge = document.getElementById("delegated-blocked-count");
-    if (!countBadge) return;
-    if (openCount > 0) {
-      countBadge.textContent = openCount;
-      countBadge.style.display = "";
-    } else {
-      countBadge.style.display = "none";
+    if (countBadge) {
+      if (openCount > 0) {
+        countBadge.textContent = openCount;
+        countBadge.style.display = "";
+      } else {
+        countBadge.style.display = "none";
+      }
     }
+    const navCount = document.getElementById("waiting-pill-nav-count");
+    const navPill = document.getElementById("waiting-pill-nav");
+    if (navCount) navCount.textContent = String(openCount);
+    if (navPill) navPill.setAttribute("aria-label", "Open Waiting tasks, " + openCount + " open");
   }
 
   // Plain-text nudge used when scheduling a follow-up (copied to clipboard as a fallback).
@@ -925,7 +929,7 @@
       }
       closeDelegatedModal();
       await afterWaitingAction();
-      toast("Checked in. The next reminder is scheduled.", "success");
+      toast((item.properties || {}).checkInRepeat === false ? "Follow-up complete." : "Checked in. The next reminder is scheduled.", "success");
       return true;
     } catch (e) {
       toast("Could not complete check-in: " + (e.message || e), "error");
@@ -1169,20 +1173,6 @@
     return true;
   }
 
-  function setDelegatedModalMode(mode) {
-    const overlay = document.getElementById("delegated-modal-overlay");
-    const fastCreate = mode === "fast";
-    if (overlay) overlay.classList.toggle("fast-create", fastCreate);
-    const save = document.getElementById("dm-save");
-    if (save) save.textContent = fastCreate ? "Delegate" : "Save";
-    const whoLabel = document.getElementById("dm-blocker-name-label");
-    if (whoLabel) whoLabel.textContent = fastCreate ? "Who should I check in on?" : "Who or where has it?";
-    const workLabel = document.getElementById("dm-blocker-title-label");
-    if (workLabel) workLabel.textContent = fastCreate
-      ? "What are they doing that will unblock me?"
-      : "What is blocking it or being waited on?";
-  }
-
   function openDelegatedModal(idOrNull, prefill) {
     const overlay = document.getElementById("delegated-modal-overlay");
     if (!overlay) return;
@@ -1191,60 +1181,56 @@
     _pendingSourceTaskId = prefill.sourceTaskId || null;
     const item = idOrNull ? getDelegatedItemById(idOrNull) : null;
     const p = item ? (item.properties || {}) : {};
-    const fastCreate = !item && prefill.fastCreate === true;
 
     setVal("dm-id", idOrNull || "");
     setVal("dm-my-task", p.myTask || prefill.myTask || prefill.title || "");
+    setVal("dm-new-task", "");
     const contact = (p.contact && typeof p.contact === "object") ? p.contact : (prefill.contact || {});
     _pendingContactMeta = {
       threadTs: contact.threadTs || contact.thread_ts || "",
       messageTs: contact.messageTs || contact.message_ts || ""
     };
-    setVal("dm-waiting-reason", p.waitingReason || prefill.waitingReason || (fastCreate ? "delegated" : "blocked"));
-    setVal("dm-blocker-title", p.title || prefill.blockerTitle || "");
-    setVal("dm-blocker-name", (p.delegatee && p.delegatee.name) || prefill.blockerName || "");
-    setVal("dm-blocker-kind", (p.delegatee && p.delegatee.kind) || "person");
+    setVal("dm-blocker-name", (p.delegatee && p.delegatee.name) || p.title || prefill.blockerName || "");
     setVal("dm-contact-channel", contact.channel || "other");
     setVal("dm-contact-address", contact.address || "");
     setVal("dm-contact-source-ref", contact.sourceRef || contact.source_ref || p.source_id || "");
-    setVal("dm-notes", p.notes || "");
+    const legacyBlockerNote = (p.delegatee && p.delegatee.name && p.title && !(p.notes || "").includes(p.title)) ? p.title : "";
+    setVal("dm-notes", [legacyBlockerNote, p.notes].filter(Boolean).join("\n\n") || prefill.blockerTitle || "");
+    const contactDetails = document.getElementById("dm-contact-details");
+    if (contactDetails) contactDetails.open = !!(contact.address || contact.sourceRef || contact.source_ref || p.source_id);
     setVal("dm-linked-tag-id", p.linkedTagId || prefill.linkedTagId || "");
     setVal("dm-linked-block-id", p.linkedBlockId || prefill.linkedBlockId || "");
+    populateTaskLinkSelect(valueOf("dm-linked-block-id") || prefill.sourceTaskId, valueOf("dm-my-task"), prefill.sourceTaskId);
+    const taskSelect = document.getElementById("dm-task-link");
+    if (taskSelect) taskSelect.disabled = !!p.parksLinkedTask;
 
-    // Task-link picker: reflect the currently linked task (if any). Editing the
-    // free-text field afterward clears the link (wired in init).
-    populateTaskLinkSelect(valueOf("dm-linked-block-id"));
-
-    // Check-in controls. New items default to a one-time date; existing items
-    // restore whichever style they were saved with.
-    const mode = fastCreate ? "repeat" : (item ? checkInModeFor(p) : (prefill.checkInMode || "date"));
     setVal("dm-check-in-days", item ? checkInDaysFor(p) : (prefill.checkInDays || 7));
     setVal("dm-check-in-date", (item && p.checkInDate) ? p.checkInDate : (prefill.checkInDate || ""));
-    setCheckInMode(mode);
+    setCheckInMode(item ? (p.checkInRepeat === true ? "repeat" : p.checkInRepeat === false ? "date" : p.checkInMode || (p.checkInDate ? "date" : "repeat")) : (prefill.checkInMode || "date"));
 
-    setDelegatedModalMode(fastCreate ? "fast" : "full");
     const titleEl = document.getElementById("delegated-modal-title");
-    if (titleEl) titleEl.textContent = idOrNull ? "Edit Waiting item" : (fastCreate ? "Delegate work" : "New Waiting item");
+    if (titleEl) titleEl.textContent = idOrNull ? "Edit Waiting item" : "New Waiting item";
     const checkBtn = document.getElementById("dm-mark-checked");
-    if (checkBtn) checkBtn.style.display = (idOrNull && item && isOpenDelegated(item)) ? "" : "none";
+    if (checkBtn) checkBtn.style.display = (idOrNull && item && isOpenDelegated(item) && !(p.checkInRepeat === false && !p.checkInDate)) ? "" : "none";
 
     overlay.classList.add("open");
-    setTimeout(() => {
-      const t = document.getElementById(fastCreate ? "dm-blocker-name" : "dm-my-task");
-      if (t) t.focus();
-    }, 20);
+    setTimeout(() => { const t = document.getElementById("dm-task-link"); if (t) t.focus(); }, 20);
   }
 
   // Open the modal to create a Delegated / Blocked item from a task: the add-bar
   // destination ("Delegated / Blocked") or a convert action on an existing task.
-  // The typed/task text becomes "the task you're working on" (myTask). When a
-  // sourceTaskId is supplied, the original scheduled task is removed once saved.
+  // The task title becomes "the task you're working on" (myTask). When a
+  // sourceTaskId is supplied, the original task is parked when the item saves.
   function openDelegatedFromTask(task) {
     task = task || {};
     const title = String(task.title || task.text || "").trim();
     if (!title) { toast("Task title is required", "error"); return; }
     const sourceTaskId = task.sourceTaskId || task.linkedBlockId || null;
     const sourceBlock = resolveLinkedBlock(sourceTaskId);
+    if (sourceTaskId && !sourceBlock) {
+      toast("That task is still syncing. Try again shortly.", "error");
+      return;
+    }
     const sourceProps = sourceBlock ? (sourceBlock.properties || {}) : {};
     const slackContact = sourceProps.contact || (sourceProps.source === "slack-bookmark" || sourceProps.source === "slack-delegate" ? {
       channel: "slack",
@@ -1255,7 +1241,7 @@
     } : null);
     openDelegatedModal(null, {
       myTask: title,
-      sourceTaskId,
+      sourceTaskId: sourceBlock ? sourceBlock.id : null,
       linkedBlockId: sourceBlock && sourceBlock.id,
       waitingReason: slackContact ? "delegated" : "blocked",
       contact: slackContact || undefined
@@ -1267,22 +1253,67 @@
     if (el) el.value = value == null ? "" : value;
   }
 
-  // Tasks the user can link "the task you're working on" to: today's itinerary
-  // rows plus backlog items, deduped by id.
   function getLinkableTasks() {
     const out = [];
     const seen = new Set();
-    const push = (t) => {
-      if (!t) return;
-      const id = t._blockId || t.blockId || t.id || t.local_id;
-      const title = String(t.title || t.text || "").trim();
+    const push = (task) => {
+      if (!task) return;
+      const block = resolveLinkedBlock(task._blockId || task.blockId || task.id || task.local_id);
+      if (!block) return;
+      const id = block.id;
+      const title = String(task.title || task.text || "").trim();
       if (!id || !title || seen.has(String(id))) return;
       seen.add(String(id));
-      out.push({ id: String(id), title });
+      out.push({ id: String(id), sourceId: String(task.id || task.local_id || id), title });
     };
     if (typeof scheduled !== "undefined" && Array.isArray(scheduled)) scheduled.forEach(push);
     if (typeof backlog !== "undefined" && Array.isArray(backlog)) backlog.forEach(push);
     return out;
+  }
+
+  function syncTaskLinkSelection() {
+    const select = document.getElementById("dm-task-link");
+    const option = select && select.selectedOptions[0];
+    const creating = select && select.value === "__new__";
+    const newTask = document.getElementById("dm-new-task");
+    if (newTask) newTask.hidden = !creating;
+    setVal("dm-my-task", creating ? valueOf("dm-new-task").trim() : option ? (option.dataset.title || "") : "");
+    setVal("dm-linked-block-id", option ? (option.dataset.linkedId || "") : "");
+    _pendingSourceTaskId = !valueOf("dm-id") && option && option.dataset.convert === "true"
+      ? option.dataset.sourceId || null
+      : null;
+    if (creating && newTask) newTask.focus();
+  }
+
+  function populateTaskLinkSelect(selectedId, title, sourceTaskId) {
+    const select = document.getElementById("dm-task-link");
+    if (!select) return;
+    select.replaceChildren();
+    const addOption = (value, label, linkedId, sourceId, convert) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      option.dataset.title = label;
+      option.dataset.linkedId = linkedId || "";
+      option.dataset.sourceId = sourceId || "";
+      option.dataset.convert = convert ? "true" : "false";
+      select.appendChild(option);
+      return option;
+    };
+    addOption("", "Select a task", "", "", false).dataset.title = "";
+    const tasks = getLinkableTasks();
+    tasks.forEach(task => addOption(task.id, task.title, task.id, task.id, true));
+    addOption("__new__", "+ New Waiting task", "", "", false).dataset.title = "";
+    const matched = tasks.find(task => task.id === String(selectedId) || task.sourceId === String(selectedId));
+    if (matched) {
+      select.value = matched.id;
+    } else if (title) {
+      addOption("__current__", title, selectedId && selectedId !== sourceTaskId ? selectedId : "", sourceTaskId, !!sourceTaskId);
+      select.value = "__current__";
+    } else {
+      select.value = "";
+    }
+    syncTaskLinkSelection();
   }
 
   function closeTaskDependencyModal() {
@@ -1378,57 +1409,24 @@
     }
   }
 
-  function populateTaskLinkSelect(selectedId) {
-    const sel = document.getElementById("dm-task-link");
-    if (!sel) return;
-    const tasks = getLinkableTasks();
-    let html = '<option value="">— Type a new task below —</option>';
-    tasks.forEach(t => {
-      html += '<option value="' + esc(t.id) + '">' + esc(truncate(t.title, 80)) + '</option>';
-    });
-    sel.innerHTML = html;
-    // Only preselect when the linked id is actually present in the current list.
-    sel.value = (selectedId && tasks.some(t => t.id === String(selectedId))) ? String(selectedId) : "";
-  }
-
   function toDateInputValue(d) {
     const m = String(d.getMonth() + 1).padStart(2, "0");
     const day = String(d.getDate()).padStart(2, "0");
     return d.getFullYear() + "-" + m + "-" + day;
   }
 
-  // Fast delegation asks only for the person and their blocking work. The
-  // result still uses the canonical Waiting shape, so cards, check-ins, edits,
-  // Slack lifecycle actions, and attention reminders need no special reader.
-  function quickDelegateProperties(who, work, now) {
-    const checkIn = now instanceof Date ? new Date(now.getTime()) : new Date();
-    checkIn.setDate(checkIn.getDate() + 7);
-    return {
-      title: String(work || "").trim(),
-      myTask: "",
-      waitingReason: "delegated",
-      delegatee: { name: String(who || "").trim(), kind: "person" },
-      contact: { channel: "other", address: "", sourceRef: "" },
-      checkInMode: "repeat",
-      checkInDays: 7,
-      checkInDate: toDateInputValue(checkIn),
-      notes: "",
-      linkedTagId: null,
-      linkedBlockId: null,
-      status: "open"
-    };
-  }
-
-  // Show one check-in pane (date | repeat) and sync the toggle + hidden field.
   function setCheckInMode(mode) {
-    mode = mode === "repeat" ? "repeat" : "date";
-    setVal("dm-check-in-mode", mode);
-    const datePane = document.getElementById("dm-checkin-pane-date");
-    const repeatPane = document.getElementById("dm-checkin-pane-repeat");
-    if (datePane) datePane.style.display = mode === "date" ? "" : "none";
-    if (repeatPane) repeatPane.style.display = mode === "repeat" ? "" : "none";
-    document.querySelectorAll(".dm-checkin-tab").forEach(tab => {
-      tab.classList.toggle("active", tab.dataset.checkinMode === mode);
+    const selected = mode === "repeat" ? "repeat" : "date";
+    setVal("dm-check-in-mode", selected);
+    const dateFields = document.getElementById("dm-date-fields");
+    const cadenceFields = document.getElementById("dm-cadence-fields");
+    if (dateFields) dateFields.hidden = selected !== "date";
+    if (cadenceFields) cadenceFields.hidden = selected !== "repeat";
+    ["date", "repeat"].forEach(option => {
+      const button = document.getElementById("dm-mode-" + option);
+      if (!button) return;
+      button.classList.toggle("active", selected === option);
+      button.setAttribute("aria-pressed", String(selected === option));
     });
   }
 
@@ -1440,53 +1438,44 @@
 
   async function saveDelegatedItem() {
     const id = valueOf("dm-id") || null;
-    const blockerTitle = valueOf("dm-blocker-title").trim();
-    const blockerName = valueOf("dm-blocker-name").trim();
+    const convertedFrom = id ? null : _pendingSourceTaskId;
     const existing = id ? getDelegatedItemById(id) : null;
     const existingProps = existing ? (existing.properties || {}) : {};
-    const overlay = document.getElementById("delegated-modal-overlay");
-    const fastCreate = !id && !!(overlay && overlay.classList.contains("fast-create"));
-    let properties;
-
-    if (fastCreate) {
-      if (!blockerName) { toast("Name the person to check in on", "error"); return; }
-      if (!blockerTitle) { toast("Name the work that will unblock you", "error"); return; }
-      properties = quickDelegateProperties(blockerName, blockerTitle);
-    } else {
-      const myTaskVal = valueOf("dm-my-task").trim();
-      if (!myTaskVal) { toast("Name the task you're working on", "error"); return; }
-      if (!blockerTitle && !blockerName) { toast("Name what or who is blocking the task", "error"); return; }
-      const mode = valueOf("dm-check-in-mode") === "repeat" ? "repeat" : "date";
-      let checkInDays = parseInt(valueOf("dm-check-in-days"), 10);
-      if (!Number.isFinite(checkInDays) || checkInDays < 1) checkInDays = 7;
-      const checkInDate = mode === "date" ? (valueOf("dm-check-in-date") || "") : "";
-      if (mode === "date" && !checkInDate) { toast("Pick a check-in date, or use the cadence", "error"); return; }
-      const cadenceDate = new Date();
-      cadenceDate.setDate(cadenceDate.getDate() + checkInDays);
-      const effectiveCheckInDate = mode === "date" ? checkInDate : toDateInputValue(cadenceDate);
-      properties = {
-        title: blockerTitle,
-        myTask: myTaskVal,
-        waitingReason: valueOf("dm-waiting-reason") || "blocked",
-        delegatee: {
-          name: blockerName || null,
-          kind: valueOf("dm-blocker-kind") || "person"
-        },
-        contact: {
-          ...((existingProps.contact && typeof existingProps.contact === "object") ? existingProps.contact : (_pendingContactMeta || {})),
-          channel: valueOf("dm-contact-channel") || "other",
-          address: valueOf("dm-contact-address").trim(),
-          sourceRef: valueOf("dm-contact-source-ref").trim()
-        },
-        checkInMode: mode,
-        checkInDays,
-        checkInDate: effectiveCheckInDate,
-        notes: valueOf("dm-notes").trim() || "",
-        linkedTagId: valueOf("dm-linked-tag-id") || null,
-        linkedBlockId: valueOf("dm-linked-block-id") || null,
-        status: existing && (existing.properties || {}).status ? (existing.properties || {}).status : "open"
-      };
-    }
+    const myTaskVal = valueOf("dm-my-task").trim();
+    if (!myTaskVal) { toast("Select a task", "error"); return; }
+    const blockerName = valueOf("dm-blocker-name").trim();
+    const mode = valueOf("dm-check-in-mode") === "repeat" ? "repeat" : "date";
+    let checkInDays = parseInt(valueOf("dm-check-in-days"), 10);
+    if (!Number.isFinite(checkInDays) || checkInDays < 1) checkInDays = 7;
+    const checkInDate = valueOf("dm-check-in-date") || "";
+    const completedDatedFollowUp = existingProps.checkInRepeat === false && !existingProps.checkInDate;
+    if (mode === "date" && !checkInDate && !completedDatedFollowUp) { toast("Choose a follow-up date", "error"); return; }
+    const cadenceDate = new Date();
+    cadenceDate.setDate(cadenceDate.getDate() + checkInDays);
+    const effectiveCheckInDate = mode === "date" ? (checkInDate || null) : toDateInputValue(cadenceDate);
+    const properties = {
+      title: "",
+      myTask: myTaskVal,
+      waitingReason: existingProps.waitingReason || (blockerName ? "delegated" : "blocked"),
+      delegatee: {
+        name: blockerName || null,
+        kind: (existingProps.delegatee && existingProps.delegatee.kind) || "person"
+      },
+      contact: {
+        ...((existingProps.contact && typeof existingProps.contact === "object") ? existingProps.contact : (_pendingContactMeta || {})),
+        channel: valueOf("dm-contact-channel") || "other",
+        address: valueOf("dm-contact-address").trim(),
+        sourceRef: valueOf("dm-contact-source-ref").trim()
+      },
+      checkInMode: mode,
+      checkInRepeat: mode === "repeat",
+      checkInDays,
+      checkInDate: effectiveCheckInDate,
+      notes: valueOf("dm-notes").trim() || "",
+      linkedTagId: valueOf("dm-linked-tag-id") || null,
+      linkedBlockId: valueOf("dm-linked-block-id") || null,
+      status: existing && (existing.properties || {}).status ? (existing.properties || {}).status : "open"
+    };
 
     if (existing) {
       const p = existing.properties || {};
@@ -1506,7 +1495,7 @@
         resp = await fetch("/api/waiting-items", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ properties })
+          body: JSON.stringify({ properties, ...(convertedFrom ? { convertTaskId: convertedFrom } : {}) })
         });
       }
       if (!resp.ok) {
@@ -1514,14 +1503,9 @@
         try { err = (await resp.json()).error; } catch(e) { err = resp.statusText; }
         throw new Error(err || "Save failed");
       }
-      // Capture before close (closeDelegatedModal does not clear it, but be explicit).
-      const convertedFrom = id ? null : _pendingSourceTaskId;
       _pendingSourceTaskId = null;
       closeDelegatedModal();
-      await refreshDelegatedItems();
-      if (convertedFrom && typeof window.removeTaskForConversion === "function") {
-        window.removeTaskForConversion(convertedFrom);
-      }
+      await afterWaitingAction();
       toast(id ? "Waiting item updated" : (convertedFrom ? "Task moved to Waiting" : "Waiting item created"), "success");
     } catch (e) {
       toast("Save failed: " + (e.message || e), "error");
@@ -1613,35 +1597,27 @@
       await openOriginBlockFromChip(chip);
     });
 
-    // Task-link picker: selecting an existing task fills the working-task text and
-    // records the link; typing into the text box afterward breaks the link.
     const taskLink = document.getElementById("dm-task-link");
-    if (taskLink) taskLink.addEventListener("change", () => {
-      const opt = taskLink.options[taskLink.selectedIndex];
-      const id = taskLink.value;
-      setVal("dm-linked-block-id", id || "");
-      if (id && opt) setVal("dm-my-task", opt.textContent.trim());
+    if (taskLink) taskLink.addEventListener("change", syncTaskLinkSelection);
+    const newTask = document.getElementById("dm-new-task");
+    if (newTask) newTask.addEventListener("input", () => setVal("dm-my-task", newTask.value.trim()));
+    ["date", "repeat"].forEach(mode => {
+      const button = document.getElementById("dm-mode-" + mode);
+      if (button) button.addEventListener("click", () => setCheckInMode(mode));
     });
-    const myTask = document.getElementById("dm-my-task");
-    if (myTask) myTask.addEventListener("input", () => {
-      if (valueOf("dm-linked-block-id")) {
-        setVal("dm-linked-block-id", "");
-        const sel = document.getElementById("dm-task-link");
-        if (sel) sel.value = "";
-      }
+    document.querySelectorAll("[data-dm-date]").forEach(button => {
+      button.addEventListener("click", () => {
+        const date = new Date();
+        if (button.dataset.dmDate === "tomorrow") date.setDate(date.getDate() + 1);
+        setVal("dm-check-in-date", toDateInputValue(date));
+      });
     });
 
-    // Check-in mode toggle + quick-date shortcuts.
-    document.querySelectorAll(".dm-checkin-tab").forEach(tab => {
-      tab.addEventListener("click", () => setCheckInMode(tab.dataset.checkinMode));
-    });
-    document.querySelectorAll(".dm-quick-date").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const d = new Date();
-        if (btn.dataset.quickDate === "tomorrow") d.setDate(d.getDate() + 1);
-        setVal("dm-check-in-date", toDateInputValue(d));
-        setCheckInMode("date");
-      });
+    const waitingPill = document.getElementById("waiting-pill-nav");
+    if (waitingPill) waitingPill.addEventListener("click", () => {
+      if (typeof window.openTasksToSection === "function") {
+        window.openTasksToSection("tm-delegated-blocked-section", { solo: true });
+      }
     });
   }
 
