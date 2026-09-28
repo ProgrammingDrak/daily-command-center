@@ -240,6 +240,22 @@ test("reduced motion delivers without ever animating", async () => {
   assert.equal(h.stamped.length, 1);
 });
 
+test("the pet can deliver a timer check-in to the active-work dock", async () => {
+  const h = load({});
+  h.byId.set("active-work-dock", {
+    getBoundingClientRect: () => ({ left: 100, top: 200, width: 600, height: 80 }),
+  });
+  let opened = 0;
+  const delivery = h.api().deliverWorkCheckIn("Write report: Take two minutes to stretch.", {
+    open: () => { opened += 1; },
+  });
+  await h.settleAsync();
+  await delivery;
+
+  assert.equal(h.runners().length, 1);
+  assert.equal(opened, 1);
+});
+
 // ── 6. the run, and what follows it ──
 
 test("the pet runs, and the checklist opens only after it has", async () => {

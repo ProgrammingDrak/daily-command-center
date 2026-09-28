@@ -156,7 +156,8 @@ const BASE_KEYS = [
   "rescheduledFrom", "reschedulePlacement", "responsibilityId", "responsibilityScore",
   "responsibilityTitle", "retiredContainerHidden", "rsvp_status", "source", "sourceKey", "sourceLabel", "sourceTaskId", "source_id", "start", "startedAt", "status",
   "subtaskOf", "tags", "taskGroupId", "title", "triageBlock", "triageContext", "triageConversationId", "triageId", "triageKey",
-  "triageReceivedAt", "triageSourceRef", "triageTitle", "triageType", "type", "untimed", "wrapId"
+  "triageReceivedAt", "triageSourceRef", "triageTitle", "triageType", "type", "untimed",
+  "workAutoPauseReason", "workAutoPausedAt", "workCheckInAt", "workCheckInCount", "wrapId"
 ].sort();
 
 test("key-set guard: a bare block still projects EVERY key, so none can be dropped silently", () => {
@@ -188,6 +189,8 @@ test("every projected key round-trips its property, including the ones nothing a
       ampUrl: "https://amp", hubspotUrl: "https://hs", wrapId: "w", isWrap: true,
       subtaskOf: "p", reschedulePlacement: "earliest", rescheduledFrom: "2026-07-27",
       sourceTaskId: "st", status: "open", startedAt: "2026-07-28T15:00:00.000Z",
+      workCheckInAt: "2026-07-28T15:25:00.000Z", workCheckInCount: 3,
+      workAutoPausedAt: "2026-07-28T16:15:00.000Z", workAutoPauseReason: "two-missed-check-ins",
       completedAt: null, actualMinutes: 12, pointsDurationMinutes: 20, aiSummary: "Thread context",
       projectId: "griffin", projectParentTaskId: "baseboards", projectRole: "leaf",
       projectOrder: 2400, facetValues: { area: ["kitchen"], workstream: ["trim"] }
@@ -200,6 +203,8 @@ test("every projected key round-trips its property, including the ones nothing a
     status: "open", allDay: false, allDayStart: null, allDayEnd: null,
     sourceKey: "slack", sourceLabel: "Slack",
     startedAt: "2026-07-28T15:00:00.000Z", completedAt: null,
+    workCheckInAt: "2026-07-28T15:25:00.000Z", workCheckInCount: 3,
+    workAutoPausedAt: "2026-07-28T16:15:00.000Z", workAutoPauseReason: "two-missed-check-ins",
     actualMinutes: 12, pointsDurationMinutes: 20, aiSummary: "Thread context",
     notionUrl: "https://n", calUrl: "https://c", priority: "Low",
     calendarId: "", calendarName: "", calendarColor: "", calendarAccountKey: "", calendarAccountEmail: "",
