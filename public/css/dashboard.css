@@ -2690,6 +2690,8 @@ span.waiting-pill{cursor:default}
 .delegated-modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1050;align-items:center;justify-content:center}
 .delegated-modal-overlay.open{display:flex}
 .delegated-modal-box{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:24px;width:min(480px,90vw);max-height:90vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
+.delegated-modal-overlay.fast-create .delegated-modal-box{width:min(420px,90vw)}
+.delegated-modal-overlay.fast-create .dm-create-detail{display:none!important}
 .task-dependency-modal-box{width:min(520px,90vw)}
 .task-dependency-help{margin:-6px 0 14px;color:var(--text-muted);font-size:12px;line-height:1.45}
 .task-dependency-or{display:flex;align-items:center;gap:10px;margin:14px 0 2px;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}

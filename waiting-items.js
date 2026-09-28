@@ -176,7 +176,10 @@ function internalDraft(attention) {
     .replace(/^Blocked by [^:]+:\s*/i, "")
     .replace(/^Waiting on\s+/i, "");
   const task = String((attention && attention.task) || "the task");
-  return `${greeting}\n\nQuick check-in on ${dependency} for ${task}. Could you let me know where this stands and whether you need anything from me?\n\nThanks.`;
+  const subject = dependency.toLowerCase() === task.toLowerCase()
+    ? dependency
+    : `${dependency} for ${task}`;
+  return `${greeting}\n\nQuick check-in on ${subject}. Could you let me know where this stands and whether you need anything from me?\n\nThanks.`;
 }
 
 function triageId(attention) {
