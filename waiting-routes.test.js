@@ -507,6 +507,66 @@ test("a ready dependency can release its task to Backlog", async () => {
   assert.equal("dependencyWaitingItemId" in task.properties, false);
 });
 
+test("moving a selected task to Waiting preserves its block and child tasks", async () => {
+  const { app, task, rows, transactionQueries } = mountApp();
+  task.properties.duration = 75;
+  task.properties.detail = "Keep the original details";
+  const child = {
+    id: "task-child", type: "block", parent_id: task.id, date: TODAY,
+    workspace_id: MINE, user_id: 1,
+    properties: { kind: "task", title: "Review appendix", duration: 15 },
+  };
+  rows.set(child.id, child);
+  const created = await request(app, "/api/waiting-items", "POST", {
+    convertTaskId: task.id,
+    properties: { myTask: task.properties.title, checkInMode: "repeat", checkInDays: 7 },
+  });
+  assert.equal(created.status, 200);
+  assert.equal(created.body.properties.linkedBlockId, task.id);
+  assert.equal(created.body.properties.parksLinkedTask, true);
+  assert.equal(task.date, null);
+  assert.equal(child.date, null);
+  assert.equal(task.properties.duration, 75);
+  assert.equal(task.properties.detail, "Keep the original details");
+  assert.equal(task.properties.dependencyWaitingItemId, created.body.id);
+  assert.equal(child.properties.dependencyWaitingItemId, created.body.id);
+  assert.equal(task.deleted_at, undefined);
+  assert.ok(transactionQueries.includes("COMMIT"));
+
+  const relinked = await request(app, `/api/waiting-items/${created.body.id}`, "PATCH", {
+    properties: { linkedBlockId: child.id },
+  });
+  assert.equal(relinked.status, 409);
+  assert.equal(created.body.properties.linkedBlockId, task.id);
+
+  const removed = await request(app, `/api/waiting-items/${created.body.id}`, "DELETE");
+  assert.equal(removed.status, 200);
+  assert.equal(task.deleted_at, undefined);
+  assert.equal(task.properties.dependencyWaitingItemId, undefined);
+  assert.equal(child.properties.dependencyWaitingItemId, undefined);
+});
+
+test("a task already parked by another Waiting item cannot be converted twice", async () => {
+  const { app, task, rows } = mountApp();
+  task.properties.dependencyWaitingItemId = "another-waiting";
+  const result = await request(app, "/api/waiting-items", "POST", {
+    convertTaskId: task.id, properties: { myTask: task.properties.title },
+  });
+  assert.equal(result.status, 409);
+  assert.equal(task.date, TODAY);
+  assert.equal([...rows.values()].filter(row => row.id.startsWith("dependency-")).length, 0);
+});
+
+test("a completed task cannot move to Waiting", async () => {
+  const { app, task } = mountApp();
+  task.properties.status = "done";
+  const result = await request(app, "/api/waiting-items", "POST", {
+    convertTaskId: task.id, properties: { myTask: task.properties.title },
+  });
+  assert.equal(result.status, 409);
+  assert.equal(task.date, TODAY);
+});
+
 test("a dependency release cannot target an unrelated task", async () => {
   const { app, task, prerequisite, rows } = mountApp();
   const created = await request(app, "/api/waiting-items", "POST", { properties: {

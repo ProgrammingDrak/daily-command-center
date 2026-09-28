@@ -183,6 +183,7 @@ function buildTaskRadialItems(ev,trig){
     // Move/convert actions live one level down: this spoke chains into the
     // "Change task" sub-fan (openRadialMenu closes the current fan first).
     {icon:"🔀", label:"Change task…", onPick:()=>openTaskChangeRadial(ev,trig)},
+    {icon:"⏳", label:"Delegate / block", onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
     {icon:"⏱", label:"Duration…", onPick:()=>openDurPopover(ev,trig)},
   ];
   if(typeof window!=="undefined"&&window.DCCWorkSessions&&window.DCCWorkSessions.policy(ev)==="work_sessions"){
@@ -214,7 +215,6 @@ function buildTaskChangeItems(ev,trig){
     items.push({icon:"⬆", label:"Promote", onPick:()=>{if(typeof promoteToTopLevel==="function")promoteToTopLevel(ev.id);}});
   items.push(
     {icon:"🔄", label:"Convert…",  onPick:()=>openConvertToRadial(ev,trig)},
-    {icon:"🤝", label:"Delegate",  onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
     {icon:"🔒", label:"Blocked by task", onPick:()=>{if(typeof window.openTaskDependencyModal==="function")window.openTaskDependencyModal(ev._blockId||ev.blockId||ev.id);}},
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
     {icon:"💡", label:"Solo",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}},
