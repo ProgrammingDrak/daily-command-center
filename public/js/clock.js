@@ -26,6 +26,8 @@ function updateClock(){
     }
     // Window-based work has no event boundary. Check it once each minute.
     if(typeof window.anytimeNudgeTick==="function")window.anytimeNudgeTick();
+    // Active timers need acknowledgements even when their task card is untouched.
+    if(window.DCCWorkSessions&&typeof window.DCCWorkSessions.checkInTick==="function")window.DCCWorkSessions.checkInTick();
   }
   const timeStr=h12+":"+String(m).padStart(2,"0")+ap.toLowerCase();
   // Only update the live time indicator on today's page — not on historical pages

@@ -67,7 +67,7 @@
   // bubble has been pushed away from a viewport edge. The tail tracks the pet.
   // `petEl` is the live sprite, so the bubble can clear whatever height its
   // animation has actually given it instead of guessing from a constant.
-  function showBubble(text, at, petX, petEl) {
+  function showBubble(text, at, petX, petEl, onOpen) {
     removeBubble();
     const el = document.createElement("button");
     el.id = BUBBLE_ID;
@@ -75,7 +75,7 @@
     el.className = "pet-nudge-bubble";
     el.innerHTML = '<span class="pet-nudge-bubble-lead">Don’t forget</span>' +
       '<span class="pet-nudge-bubble-text">' + esc(text) + "</span>";
-    el.setAttribute("aria-label", "Don't forget: " + text + ". Open the anytime list.");
+    el.setAttribute("aria-label", "Don't forget: " + text + ". Open the reminder.");
 
     // MEASURE FAR FROM THE EDGE, THEN PIN AN EXPLICIT WIDTH. A position:fixed box
     // with only `left` set takes its shrink-to-fit width from `left` to the right
@@ -111,6 +111,7 @@
 
     el.addEventListener("click", () => {
       removeBubble();
+      if (typeof onOpen === "function") { onOpen(); return; }
       const d = dock();
       if (d) d.open();
     });
@@ -152,7 +153,7 @@
     }
   }
 
-  async function runNudge(text, target) {
+  async function runNudge(text, target, onOpen) {
     let ident = { color: "#f2b56b", glyph: "S", accessory: "" };
     if (window.PetHome && typeof window.PetHome.identity === "function") {
       try { ident = (await window.PetHome.identity()) || ident; } catch (e) {}
@@ -173,7 +174,7 @@
       await move(el, target.x - 120, target.y + 14, 440, 0);
       await move(el, target.x - 76, target.y, 200, 1);
       el.classList.add("talking");
-      showBubble(text, target, target.x - 76, el);
+      showBubble(text, target, target.x - 76, el, onOpen);
       await new Promise(r => setTimeout(r, 620));
       el.classList.remove("talking");
       await move(el, window.innerWidth + 90, target.y + 10, 480, 2);
@@ -208,6 +209,39 @@
       // while the pet is mid-screen. The bubble is already on screen either way.
       if (busyElsewhere()) return false;
       if (d) d.open();
+      removeBubble();
+      return true;
+    } finally { _running = false; }
+  }
+
+  async function deliverWorkCheckIn(text, options) {
+    options = options || {};
+    const open = typeof options.open === "function" ? options.open : function () {};
+    if (_running) {
+      if (typeof DCC.toast === "function") {
+        DCC.toast("Pet check-in: " + text, "info", 60000, { label: "Open", onClick: open });
+      }
+      return false;
+    }
+    const activeDock = document.getElementById("active-work-dock");
+    let target = { x: window.innerWidth - 90, y: window.innerHeight - 90 };
+    if (activeDock && typeof activeDock.getBoundingClientRect === "function") {
+      const rect = activeDock.getBoundingClientRect();
+      if (rect && rect.width > 0 && rect.height > 0) {
+        target = { x: rect.left + Math.min(rect.width - 20, Math.max(70, rect.width * 0.75)), y: rect.top + rect.height / 2 };
+      }
+    }
+    if (reducedMotion() || busyElsewhere()) {
+      if (typeof DCC.toast === "function") {
+        DCC.toast("Pet check-in: " + text, "info", 60000, { label: "Open", onClick: open });
+      }
+      return false;
+    }
+    _running = true;
+    try {
+      await runNudge(text, target, open);
+      if (busyElsewhere()) return false;
+      open();
       removeBubble();
       return true;
     } finally { _running = false; }
@@ -252,6 +286,8 @@
     tick: anytimeNudgeTick,
     nudgeText: nudgeText,
     deliver: deliver,
+    deliverWorkCheckIn: deliverWorkCheckIn,
     removeBubble: removeBubble
   };
+  DCC.PetNudge = DCC.AnytimeNudge;
 })();

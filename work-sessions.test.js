@@ -85,6 +85,51 @@ test("start, pause, and resume append sessions without moving the plan", async (
   assert.equal(row.properties.startedAt, undefined);
 });
 
+test("continuing acknowledges the timer without splitting its work session", async () => {
+  const { timing, task, sessions } = harness();
+  const row = task({}, { id: "check-in" });
+  const started = Date.parse("2026-09-28T13:00:00.000Z");
+  const checked = started + 25 * 60_000;
+  await timing.startWork({ block: row, atMs: started, actionId: "start" });
+  const sessionId = row.properties.activeWorkSessionId;
+
+  await timing.continueWork({ block: row, atMs: checked, actionId: "continue-1" });
+  assert.equal(row.properties.startedAt, new Date(started).toISOString());
+  assert.equal(row.properties.activeWorkSessionId, sessionId);
+  assert.equal(row.properties.workCheckInAt, new Date(checked).toISOString());
+  assert.equal(row.properties.workCheckInCount, 1);
+  assert.equal(sessions(row).length, 0);
+
+  const duplicate = await timing.continueWork({ block: row, atMs: checked, actionId: "continue-1" });
+  assert.equal(duplicate.reason, "duplicate");
+  assert.equal(row.properties.workCheckInCount, 1);
+
+  await timing.pauseWork({ block: row, atMs: checked + 25 * 60_000 });
+  assert.equal(row.properties.actualMinutes, 50);
+  assert.equal(sessions(row).length, 1);
+});
+
+test("automatic pauses preserve their reason and bounded cutoff", async () => {
+  const { timing, task, sessions } = harness();
+  const row = task({}, { id: "auto-pause" });
+  const started = Date.parse("2026-09-28T23:40:00.000Z");
+  const cutoff = started + 50 * 60_000;
+  await timing.startWork({ block: row, atMs: started, actionId: "start" });
+  await timing.pauseWork({
+    block: row,
+    atMs: cutoff,
+    actor: "dcc:timer-check-in",
+    actionId: "work-checkin-auto-pause:auto-pause",
+    pauseReason: "two-missed-check-ins",
+  });
+
+  assert.equal(row.properties.startedAt, undefined);
+  assert.equal(row.properties.actualMinutes, 50);
+  assert.equal(row.properties.workAutoPausedAt, new Date(cutoff).toISOString());
+  assert.equal(row.properties.workAutoPauseReason, "two-missed-check-ins");
+  assert.equal(sessions(row)[0].properties.endedBy, "dcc:timer-check-in");
+});
+
 test("multiple tasks may be active at once", async () => {
   const { timing, task } = harness();
   const one = task({}, { id: "one" });

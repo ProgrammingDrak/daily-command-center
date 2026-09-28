@@ -3,6 +3,19 @@
 (function () {
   "use strict";
 
+  var CHECK_IN_MINUTES = 25;
+  var MISSED_CHECK_IN_LIMIT = 2;
+  var MAX_SESSION_MINUTES = 8 * 60;
+  var BREAK_PROMPTS = [
+    "Take two minutes for water and a stretch.",
+    "Take two minutes to stand and look far away.",
+    "Take two minutes to breathe and reset.",
+    "Take two minutes to move your shoulders and hands.",
+  ];
+  var _promptedCheckIns = new Set();
+  var _autoPausing = new Set();
+  var _checkInTickRunning = false;
+
   function esc(value) {
     return String(value == null ? "" : value).replace(/[&<>"']/g, function (ch) {
       return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch];
@@ -60,13 +73,18 @@
       '<button class="work-action-btn complete" data-work-task="' + esc(task.id) + '" data-work-complete="true" title="Complete this task and save the active work session">Complete</button></span>';
   }
 
-  async function act(task, action) {
+  async function act(task, action, options) {
+    options = options || {};
     var block = blockFor(task);
     if (!block || !window.blockStore || typeof window.blockStore.workAction !== "function") {
       if (typeof showToast === "function") showToast("This task is not ready for work tracking", "error");
       return null;
     }
-    var result = await window.blockStore.workAction(block.id, action, { actor: "dcc" });
+    var result = await window.blockStore.workAction(block.id, action, {
+      actor: "dcc",
+      at: options.at,
+      actionId: options.actionId,
+    });
     if (result && result.block && window.DCC && window.DCC.TaskModel) {
       var fresh = window.DCC.TaskModel.fromBlock(result.block, { deriveEnd: true });
       Object.assign(task, fresh);
@@ -78,6 +96,111 @@
       window.dispatchEvent(new window.CustomEvent("dcc:work-session-changed", { detail: { id: task.id } }));
     }
     return result;
+  }
+
+  function checkInState(task, nowMs) {
+    nowMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+    var startedMs = Date.parse((task && task.startedAt) || "");
+    if (!Number.isFinite(startedMs)) return { active: false, due: false, shouldAutoPause: false };
+    var acknowledgedMs = Date.parse((task && task.workCheckInAt) || "");
+    var anchorMs = Number.isFinite(acknowledgedMs) && acknowledgedMs >= startedMs && acknowledgedMs <= nowMs
+      ? acknowledgedMs : startedMs;
+    var cadenceMs = CHECK_IN_MINUTES * 60_000;
+    var hardStopAtMs = startedMs + MAX_SESSION_MINUTES * 60_000;
+    var missed = Math.max(0, Math.floor((nowMs - anchorMs) / cadenceMs));
+    var autoPauseAtMs = Math.min(anchorMs + MISSED_CHECK_IN_LIMIT * cadenceMs, hardStopAtMs);
+    var shouldAutoPause = nowMs >= autoPauseAtMs;
+    var count = Math.max(0, Number((task && task.workCheckInCount) || 0));
+    return {
+      active: true,
+      due: missed >= 1 && !shouldAutoPause,
+      missed: Math.min(missed, MISSED_CHECK_IN_LIMIT),
+      prompt: BREAK_PROMPTS[count % BREAK_PROMPTS.length],
+      promptIndex: count % BREAK_PROMPTS.length,
+      anchorMs: anchorMs,
+      nextCheckInAtMs: anchorMs + cadenceMs,
+      autoPauseAtMs: autoPauseAtMs,
+      hardStopAtMs: hardStopAtMs,
+      shouldAutoPause: shouldAutoPause,
+    };
+  }
+
+  function checkInKey(task, state) {
+    return String(task.id) + ":" + String(task.startedAt) + ":" + String(state.anchorMs);
+  }
+
+  function focusCheckIn(taskId) {
+    var rows = document.querySelectorAll ? document.querySelectorAll("[data-work-checkin-task]") : [];
+    var row = Array.from(rows).find(function (candidate) {
+      return String(candidate.dataset.workCheckinTask) === String(taskId);
+    });
+    if (!row) return;
+    if (typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    var button = row.querySelector && row.querySelector('[data-work-action="continue"]');
+    if (button && typeof button.focus === "function") button.focus();
+  }
+
+  function deliverCheckIn(task, state) {
+    var key = checkInKey(task, state);
+    if (_promptedCheckIns.has(key)) return false;
+    _promptedCheckIns.add(key);
+    var text = (task.title || "Active work") + ": " + state.prompt;
+    var pet = window.DCC && window.DCC.PetNudge;
+    if (pet && typeof pet.deliverWorkCheckIn === "function") {
+      pet.deliverWorkCheckIn(text, { open: function () { focusCheckIn(task.id); } }).catch(function () {});
+    } else if (window.DCC && typeof window.DCC.toast === "function") {
+      window.DCC.toast("Pet check-in: " + text, "info", 60000, {
+        label: "Open",
+        onClick: function () { focusCheckIn(task.id); },
+      });
+    }
+    return true;
+  }
+
+  async function checkInTick(nowMs) {
+    if (_checkInTickRunning) return false;
+    _checkInTickRunning = true;
+    try {
+      var atMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+      var active = activeTasks();
+      refresh(atMs);
+      for (var i = 0; i < active.length; i++) {
+        var task = active[i];
+        var state = checkInState(task, atMs);
+        if (state.shouldAutoPause) {
+          var key = checkInKey(task, state) + ":auto";
+          if (_autoPausing.has(key)) continue;
+          _autoPausing.add(key);
+          var pauseAt = new Date(state.autoPauseAtMs).toISOString();
+          var safeTaskId = String(task.id).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80);
+          try {
+            await act(task, "auto-pause", {
+              at: pauseAt,
+              actionId: "work-checkin-auto-pause:" + safeTaskId + ":" + state.autoPauseAtMs,
+            });
+            if (window.DCC && typeof window.DCC.toast === "function") {
+              window.DCC.toast("Timer paused after two missed pet check-ins.", "info", 12000);
+            }
+          } catch (error) {
+            _autoPausing.delete(key);
+          }
+          continue;
+        }
+        if (state.due) deliverCheckIn(task, state);
+      }
+      return true;
+    } finally {
+      _checkInTickRunning = false;
+    }
+  }
+
+  function checkInHtml(task, nowMs) {
+    var state = checkInState(task, nowMs);
+    if (!state.due && !state.shouldAutoPause) return "";
+    if (state.shouldAutoPause) {
+      return '<div class="work-checkin work-checkin-pausing" data-work-checkin-task="' + esc(task.id) + '"><span class="work-checkin-pet" aria-hidden="true">🐾</span><span><strong>Safety pause</strong><small>Two pet check-ins were missed. Saving the timer at its safe cutoff.</small></span></div>';
+    }
+    return '<div class="work-checkin" data-work-checkin-task="' + esc(task.id) + '"><span class="work-checkin-pet" aria-hidden="true">🐾</span><span><strong>Pet check-in</strong><small>' + esc(state.prompt) + ' Pause, or continue working.</small></span><button class="work-action-btn pause" data-work-task="' + esc(task.id) + '" data-work-action="pause">Pause</button><button class="work-action-btn continue" data-work-task="' + esc(task.id) + '" data-work-action="continue">Continue</button></div>';
   }
 
   function findTask(id) {
@@ -188,14 +311,14 @@
     search.focus();
   }
 
-  function refresh() {
+  function refresh(nowMs) {
     var dock = document.getElementById("active-work-dock");
     if (!dock) return;
     var active = activeTasks();
     dock.hidden = !active.length;
     dock.innerHTML = active.length ? '<div class="active-work-head"><span>Active work</span><span>' + active.length + " running</span></div>" + active.map(function (task) {
       var total = Number(task.actualMinutes) || 0;
-      return '<div class="active-work-row"><span class="active-work-dot"></span><span class="active-work-title">' + esc(task.title || "Task") + '</span><span class="active-work-time">' + elapsedLabel(task.startedAt) + (total ? " · " + total + "m saved" : "") + '</span><button class="work-action-btn pause" data-work-task="' + esc(task.id) + '" data-work-action="pause">Pause</button><button class="work-action-btn complete" data-work-task="' + esc(task.id) + '" data-work-complete="true">Complete</button><button class="work-detail-btn" data-work-task="' + esc(task.id) + '" data-work-open="true">Details</button></div>';
+      return '<div class="active-work-row"><span class="active-work-dot"></span><span class="active-work-title">' + esc(task.title || "Task") + '</span><span class="active-work-time">' + elapsedLabel(task.startedAt) + (total ? " · " + total + "m saved" : "") + '</span><button class="work-action-btn pause" data-work-task="' + esc(task.id) + '" data-work-action="pause">Pause</button><button class="work-action-btn complete" data-work-task="' + esc(task.id) + '" data-work-complete="true">Complete</button><button class="work-detail-btn" data-work-task="' + esc(task.id) + '" data-work-open="true">Details</button>' + checkInHtml(task, nowMs) + '</div>';
     }).join("") : "";
   }
 
@@ -312,6 +435,24 @@
   });
 
   setInterval(refresh, 10000);
-  document.addEventListener("DOMContentLoaded", refresh);
-  window.DCCWorkSessions = { actionButtonHtml: actionButtonHtml, itineraryActionButtonsHtml: itineraryActionButtonsHtml, act: act, refresh: refresh, renderHistory: renderHistory, policy: policy, openPicker: openPicker };
+  document.addEventListener("DOMContentLoaded", function () {
+    refresh();
+    checkInTick();
+  });
+  window.DCCWorkSessions = {
+    actionButtonHtml: actionButtonHtml,
+    itineraryActionButtonsHtml: itineraryActionButtonsHtml,
+    act: act,
+    refresh: refresh,
+    renderHistory: renderHistory,
+    policy: policy,
+    openPicker: openPicker,
+    checkInState: checkInState,
+    checkInTick: checkInTick,
+    checkInHtml: checkInHtml,
+    CHECK_IN_MINUTES: CHECK_IN_MINUTES,
+    MISSED_CHECK_IN_LIMIT: MISSED_CHECK_IN_LIMIT,
+    MAX_SESSION_MINUTES: MAX_SESSION_MINUTES,
+    BREAK_PROMPTS: BREAK_PROMPTS.slice(),
+  };
 })();

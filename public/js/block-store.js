@@ -1083,10 +1083,20 @@
         if (action === "start") {
           properties.startedAt = data.at;
           properties.everStarted = true;
-        } else if (action === "pause") {
+          delete properties.workCheckInAt;
+          delete properties.workAutoPausedAt;
+          delete properties.workAutoPauseReason;
+        } else if (action === "continue") {
+          properties.workCheckInAt = data.at;
+          properties.workCheckInCount = Number(properties.workCheckInCount || 0) + 1;
+        } else if (action === "pause" || action === "auto-pause") {
           delete properties.startedAt;
           delete properties.activeWorkSessionId;
           delete properties.startedBy;
+          if (action === "auto-pause") {
+            properties.workAutoPausedAt = data.at;
+            properties.workAutoPauseReason = "two-missed-check-ins";
+          }
         }
         optimistic = { ...existing, properties, updated_at: data.at };
         cacheSet(optimistic);

@@ -249,7 +249,7 @@ module.exports = function mount(app, ctx) {
   // actualMinutes gets finalized. In-memory candidate filter first, so a day with
   // no orphaned timer costs zero queries. See lib/task-timing.js.
   const taskTiming = createTaskTiming({ pool, blockDB, timeZone: ctx.APP_TIME_ZONE });
-  const { reconcileTiming, startWork, pauseWork, completeWork, reopenWork } = taskTiming;
+  const { reconcileTiming, startWork, continueWork, pauseWork, completeWork, reopenWork } = taskTiming;
 
   async function syncSlack(blockOrId) {
     if (typeof ctx.syncSlackTaskReactions !== "function") return;
@@ -820,8 +820,8 @@ module.exports = function mount(app, ctx) {
       return;
     }
     const body = req.body || {};
-    if (body.action !== "start" && body.action !== "pause") {
-      res.status(400).json({ error: "action must be start or pause" });
+    if (!["start", "pause", "continue", "auto-pause"].includes(body.action)) {
+      res.status(400).json({ error: "action must be start, pause, continue, or auto-pause" });
       return;
     }
     if (body.actionId != null && !/^[A-Za-z0-9:_-]{1,160}$/.test(String(body.actionId))) {
@@ -830,9 +830,19 @@ module.exports = function mount(app, ctx) {
     }
     const atMs = body.at == null ? Date.now() : Date.parse(body.at);
     if (!Number.isFinite(atMs)) { res.status(400).json({ error: "at must be an ISO timestamp" }); return; }
-    const actor = req.session && req.session.userId ? `dcc:${req.session.userId}` : "dcc";
-    const operation = body.action === "start" ? startWork : pauseWork;
-    const result = await operation({ block: existing, atMs, actor, actionId: body.actionId || null });
+    const actor = body.action === "auto-pause"
+      ? "dcc:timer-check-in"
+      : (req.session && req.session.userId ? `dcc:${req.session.userId}` : "dcc");
+    const operation = body.action === "start" ? startWork
+      : body.action === "continue" ? continueWork
+        : pauseWork;
+    const result = await operation({
+      block: existing,
+      atMs,
+      actor,
+      actionId: body.actionId || null,
+      pauseReason: body.action === "auto-pause" ? "two-missed-check-ins" : null,
+    });
     const block = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (result.reason === "not-trackable") {
       res.status(409).json({ error: "This task type does not track active work", code: "WORK_NOT_TRACKABLE" });
