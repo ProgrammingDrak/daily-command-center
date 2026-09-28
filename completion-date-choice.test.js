@@ -46,6 +46,11 @@ const COMMIT_DONE_SRC = mustMatch(SCHEDULE_SRC, /async function commitDoneOnDate
 // Extends through `_refreshResponsibilityAfterDone` on purpose: that function IS part of
 // the completion write path now (C5b step 7 replaced D1's client cadence POST with it), so
 // stubbing it would leave the recurring-task half of a check-off untested.
+const OPTIMISTIC_SUBTASKS_SRC = mustMatch(
+  SCHEDULE_SRC,
+  /function _optimisticallyCompleteSubtasks\(id,completedAt\)\{[\s\S]*?function _rollbackOptimisticSubtasks\(changed\)\{[\s\S]*?\n\}/,
+  "the optimistic subtask helpers"
+);
 const ON_PARENT_SRC = mustMatch(SCHEDULE_SRC, /function _onParentCompleted\(id\)\{[\s\S]*?\n\}\n/, "_onParentCompleted");
 const PERSIST_DONE_SRC = mustMatch(
   SCHEDULE_SRC,
@@ -379,7 +384,7 @@ function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship th
   context.USE_BLOCKSTORE = context.window.USE_BLOCKSTORE;
   vm.createContext(context);
   installTaskModel(context);
-  vm.runInContext(TOGGLE_DONE_SRC + "\n" + COMMIT_DONE_SRC + "\n" + PERSIST_DONE_SRC, context);
+  vm.runInContext(TOGGLE_DONE_SRC + "\n" + COMMIT_DONE_SRC + "\n" + OPTIMISTIC_SUBTASKS_SRC + "\n" + PERSIST_DONE_SRC, context);
   context.__rows = rows;
   context.__dayRoot = dayRoot;
   // Wrap commitDoneOnDate so the chain's ordering is observable without stubbing it
@@ -439,6 +444,64 @@ test("the same-day fast path marks the ROW done (not just the in-memory registry
   assert.ok(t1.properties.completedAt);
   assert.ok(manualDone.has("t1"), "and the in-memory projection agrees");
   assert.equal(calls.patched.length, 0, "no overlay write");
+});
+
+test("the same-day fast path marks descendant rows done before persistence acknowledges", async () => {
+  const scheduled = [
+    { id: "t1", title: "Ship the thing", type: "task", start: "09:00", end: "09:30", _blockId: "row-t1" },
+    { id: "t1-kid", title: "A step", type: "task", subtaskOf: "t1", start: "09:00", end: "09:15", _blockId: "row-t1-kid" },
+  ];
+  const { context, manualDone } = makeChainCtx({ scheduled });
+  vm.runInContext("recalcTimes=()=>{};_clearPin=()=>{};_persistEvWrap=()=>{};\n" + ON_PARENT_SRC, context);
+
+  let acknowledge;
+  const pending = new Promise((resolve) => { acknowledge = resolve; });
+  context.window.blockStore.setTaskCompletion = () => pending;
+
+  const completion = vm.runInContext(`commitDoneOnDate("t1","${PAST}")`, context);
+  try {
+    assert.equal(manualDone.has("t1"), true, "the parent updates before the request settles");
+    assert.equal(manualDone.has("t1-kid"), true,
+      "the child must not wait through the parent request before disappearing onscreen");
+  } finally {
+    acknowledge({ ok: true, mutationId: "m-immediate", affectedTasks: [] });
+    await completion;
+  }
+});
+
+test("a rejected parent completion restores the exact descendant state", async () => {
+  const scheduled = [
+    { id: "t1", title: "Parent", type: "task", _blockId: "row-t1" },
+    { id: "kid-open", title: "Open child", type: "task", subtaskOf: "t1", _blockId: "row-open" },
+    { id: "grandchild", title: "Open grandchild", type: "task", subtaskOf: "kid-open", _blockId: "row-grandchild" },
+    { id: "kid-done", title: "Done child", type: "task", subtaskOf: "t1", _blockId: "row-done" },
+  ];
+  const rows = scheduled.map((task) => ({
+    id: task._blockId,
+    date: PAST,
+    type: "block",
+    properties: { local_id: task.id, title: task.title, status: "open", ...(task.subtaskOf ? { subtaskOf: task.subtaskOf } : {}) },
+  }));
+  const { context, manualDone } = makeChainCtx({ scheduled, rows });
+  const priorDoneAt = new Date("2026-07-19T10:00:00.000Z");
+  manualDone.add("kid-done");
+  context.doneAt["kid-done"] = priorDoneAt;
+  vm.runInContext("recalcTimes=()=>{};_clearPin=()=>{};_persistEvWrap=()=>{};\n" + ON_PARENT_SRC, context);
+
+  let rejectCompletion;
+  context.window.blockStore.setTaskCompletion = () => new Promise((resolve, reject) => { rejectCompletion = reject; });
+  const completion = vm.runInContext(`commitDoneOnDate("t1","${PAST}")`, context);
+
+  assert.equal(manualDone.has("kid-open"), true, "the child updates optimistically");
+  assert.equal(manualDone.has("grandchild"), true, "the full subtree updates optimistically");
+  rejectCompletion(new Error("Completion rejected"));
+  assert.equal(await completion, false);
+
+  assert.equal(manualDone.has("t1"), false, "the parent rolls back");
+  assert.equal(manualDone.has("kid-open"), false, "the newly completed child rolls back");
+  assert.equal(manualDone.has("grandchild"), false, "the newly completed grandchild rolls back");
+  assert.equal(manualDone.has("kid-done"), true, "a previously completed child stays completed");
+  assert.equal(context.doneAt["kid-done"], priorDoneAt, "its original completion time survives");
 });
 
 // ★ THE SAME-DAY PATH CASCADES TOO, and this test previously encoded the gap rather than
