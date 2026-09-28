@@ -519,8 +519,11 @@ async function commitDoneOnDate(id,dateStr,opts){
   const completedIso=completedAt.toISOString();
   const award=opts.awardPoints!==undefined?opts.awardPoints:_pointAwardOverride(id);
   const celebration=currentDate===dateStr?_beginCompletionCelebration(id):null;
+  let optimisticSubtasks=[];
   if(currentDate===dateStr){
-    manualDone.add(id);doneAt[id]=completedAt;log("checked",id);render();
+    manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
+    if(opts.cascade!==false)optimisticSubtasks=_optimisticallyCompleteSubtasks(id,completedAt);
+    render();
   }
   try{
     const result=await _persistDone(id,true,{ev:ev,dateStr:dateStr,completedAt:completedIso});
@@ -544,7 +547,11 @@ async function commitDoneOnDate(id,dateStr,opts){
     }
     return result;
   }catch(error){
-    if(currentDate===dateStr){manualDone.delete(id);delete doneAt[id];render();}
+    if(currentDate===dateStr){
+      manualDone.delete(id);delete doneAt[id];
+      _rollbackOptimisticSubtasks(optimisticSubtasks);
+      render();
+    }
     if(typeof showToast==="function")showToast(error.message||"Completion was not saved","error",4200);
     return false;
   }
@@ -679,6 +686,37 @@ function awardSlotTaskCredit(ev,opts){
   }
 }
 
+// Mark every subtask done before the server round-trip. The server persists the same
+// subtree atomically. Keep an exact snapshot so a permanent rejection restores only
+// the rows this click changed; already-completed descendants stay completed.
+function _optimisticallyCompleteSubtasks(id,completedAt){
+  const changed=[];
+  if(typeof scheduled==="undefined")return changed;
+  const at=(completedAt instanceof Date)?completedAt:new Date(completedAt||Date.now());
+  (function completeSubs(pid){
+    DCC.TaskModel.subtasksOf(pid,scheduled).forEach(c=>{
+      if(!manualDone.has(c.id)){
+        changed.push({
+          id:c.id,
+          hadDoneAt:Object.prototype.hasOwnProperty.call(doneAt,c.id),
+          doneAt:doneAt[c.id]
+        });
+        manualDone.add(c.id);doneAt[c.id]=at;
+      }
+      completeSubs(c.id);
+    });
+  })(id);
+  return changed;
+}
+function _rollbackOptimisticSubtasks(changed){
+  if(!Array.isArray(changed))return;
+  changed.forEach(entry=>{
+    manualDone.delete(entry.id);
+    if(entry.hadDoneAt)doneAt[entry.id]=entry.doneAt;
+    else delete doneAt[entry.id];
+  });
+}
+
 // When a parent task is completed:
 //   - subtasks (its steps) complete too, recursively;
 //   - unfinished ride-alongs (independent concurrent work) promote out to standalone tasks.
@@ -687,15 +725,7 @@ function _onParentCompleted(id){
   // 1) Reflect the server's atomic subtask cascade in memory. Persistence belongs to
   // POST /api/tasks/:taskRef/completion, so the browser must not issue one write per
   // child and leave a half-completed tree when any request fails.
-  (function completeSubs(pid){
-    DCC.TaskModel.subtasksOf(pid,scheduled).forEach(c=>{
-      if(!manualDone.has(c.id)){
-        const at=new Date();
-        manualDone.add(c.id);doneAt[c.id]=at;
-      }
-      completeSubs(c.id);
-    });
-  })(id);
+  _optimisticallyCompleteSubtasks(id,new Date());
   // 2) Promote unfinished ride-alongs to standalone open tasks. Rollup
   // containers (shells) never eject their children — they can only complete
   // when every child is already done, so there is nothing to promote.
