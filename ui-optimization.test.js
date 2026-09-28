@@ -59,6 +59,13 @@ test("daily execution uses canonical task and movement paths", () => {
   assert.match(read("public/js/catch-up.js"), /Loose Ends is user-opened/);
 });
 
+test("closing Loose Ends hides its workspace without a page refresh", () => {
+  const css = read("public/css/ui-optimization.css");
+  assert.match(css, /\.carryover-overlay\s*\{[^}]*display:\s*none;/);
+  assert.match(css, /\.carryover-overlay\.open\s*\{[^}]*display:\s*flex;/);
+  assert.doesNotMatch(css, /\.carryover-overlay\s*,\s*\.carryover-overlay\.open/);
+});
+
 test("task details provide explicit read and edit controls", () => {
   const index = read("index.html");
   const details = read("public/js/features.js");
