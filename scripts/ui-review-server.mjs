@@ -266,6 +266,60 @@ const reviewBudgetPurchases = [{ id: 1, title: "Headphones", item: "Headphones",
 let reviewReserveCents = 0;
 let reviewBudgetPoints = 50;
 const reviewConversions = new Map();
+function reviewReimbursementFixtures() {
+  return [
+  {
+    id: "review-reimbursement-dinner",
+    title: "Birthday dinner",
+    detail: "Dinner and tip at Northstar Cafe.",
+    direction: "owed_to_me",
+    totalCents: 14400,
+    purchaseDate: "2026-09-26",
+    paidViaMethod: "credit_card",
+    paidViaDetail: "Chase Sapphire",
+    repayToMethod: "venmo",
+    repayToDetail: "@review-user",
+    splitMode: "equal",
+    status: "partial",
+    dueCents: 9600,
+    paidCents: 4800,
+    outstandingCents: 4800,
+    viewerRole: "owner",
+    balanceKind: "receivable",
+    shareUrl: "/reimburse/review-dinner-token",
+    participants: [
+      { id: "review-self", name: "Review User", isSelf: true, shareCents: 4800, paidCents: 0, outstandingCents: 0, status: "included", payments: [] },
+      { id: "review-alex", name: "Alex", isSelf: false, shareCents: 4800, paidCents: 0, outstandingCents: 4800, status: "outstanding", payments: [] },
+      { id: "review-sam", name: "Sam", isSelf: false, shareCents: 4800, paidCents: 4800, outstandingCents: 0, status: "paid", payments: [{ id: "review-payment", amountCents: 4800, method: "zelle", methodDetail: "Paid Saturday" }] },
+    ],
+  },
+  {
+    id: "review-reimbursement-tickets",
+    title: "Concert tickets",
+    detail: "Morgan bought both tickets.",
+    direction: "i_owe",
+    totalCents: 18000,
+    purchaseDate: "2026-09-20",
+    paidViaMethod: "credit_card",
+    paidViaDetail: "Morgan's card",
+    repayToMethod: "cash_app",
+    repayToDetail: "$morgan",
+    counterpartyName: "Morgan",
+    splitMode: "amount",
+    status: "outstanding",
+    dueCents: 9000,
+    paidCents: 0,
+    outstandingCents: 9000,
+    viewerRole: "owner",
+    balanceKind: "payable",
+    shareUrl: "/reimburse/review-tickets-token",
+    participants: [
+      { id: "review-ticket-self", name: "Review User", isSelf: true, shareCents: 9000, paidCents: 0, outstandingCents: 9000, status: "outstanding", payments: [] },
+    ],
+  },
+  ];
+}
+let reviewReimbursements = reviewReimbursementFixtures();
 function resetReviewState() {
   reviewBlocks.clear();
   reviewBudgetSettings = {
@@ -282,6 +336,7 @@ function resetReviewState() {
   reviewReserveCents = 0;
   reviewBudgetPoints = 50;
   reviewConversions.clear();
+  reviewReimbursements = reviewReimbursementFixtures();
 }
 app.post("/api/review/reset", (_req, res) => {
   resetReviewState();
@@ -339,6 +394,88 @@ app.post("/api/budget/blocks", (req, res) => {
 });
 app.get("/api/budget/vault", (_req, res) => res.json({ items: [], milestones: { items: [], progress: { total: 0 } } }));
 app.get("/api/budget/sponsor-link", (_req, res) => res.json({ link: null }));
+app.get("/api/reimbursements", (_req, res) => res.json({ reimbursements: reviewReimbursements }));
+app.post("/api/reimbursements", (req, res) => {
+  const id = `review-reimbursement-${randomUUID()}`;
+  const totalCents = Math.max(1, Number(req.body?.totalCents) || 0);
+  reviewReimbursements.unshift({
+    id,
+    title: req.body?.title || "Review reimbursement",
+    detail: req.body?.detail || "",
+    direction: req.body?.direction || "owed_to_me",
+    totalCents,
+    purchaseDate: req.body?.purchaseDate || null,
+    paidViaMethod: req.body?.paidViaMethod || "other",
+    paidViaDetail: req.body?.paidViaDetail || "",
+    repayToMethod: req.body?.repayToMethod || "other",
+    repayToDetail: req.body?.repayToDetail || "",
+    splitMode: req.body?.splitMode || "equal",
+    status: "outstanding",
+    dueCents: totalCents,
+    paidCents: 0,
+    outstandingCents: totalCents,
+    viewerRole: "owner",
+    balanceKind: req.body?.direction === "i_owe" ? "payable" : "receivable",
+    shareUrl: `/reimburse/${id}-token`,
+    participants: [{ id: `${id}-person`, name: "Review person", isSelf: false, shareCents: totalCents, paidCents: 0, outstandingCents: totalCents, status: "outstanding", payments: [] }],
+  });
+  res.status(201).json({ reimbursement: { id } });
+});
+app.post("/api/reimbursements/:id/payments", (req, res) => {
+  const item = reviewReimbursements.find((row) => row.id === req.params.id);
+  const person = item?.participants.find((row) => row.id === req.body?.participantId);
+  if (!item || !person) return res.status(404).json({ error: "Reimbursement not found" });
+  const amount = Math.min(person.outstandingCents, Math.max(0, Number(req.body?.amountCents) || 0));
+  person.paidCents += amount;
+  person.outstandingCents -= amount;
+  person.status = person.outstandingCents ? "partial" : "paid";
+  person.payments.push({ id: randomUUID(), amountCents: amount, method: req.body?.method || "other", methodDetail: req.body?.methodDetail || "" });
+  item.paidCents += amount;
+  item.outstandingCents -= amount;
+  item.status = item.outstandingCents ? "partial" : "settled";
+  res.json({ payment: { id: randomUUID(), remainingCents: person.outstandingCents } });
+});
+app.delete("/api/reimbursements/:id", (req, res) => {
+  reviewReimbursements = reviewReimbursements.filter((row) => row.id !== req.params.id);
+  res.json({ archived: true });
+});
+app.get("/api/public/reimbursements/:token", (req, res) => {
+  const item = req.params.token.includes("tickets") ? reviewReimbursements[1] : reviewReimbursements[0];
+  if (!item) return res.status(404).json({ error: "Not found" });
+  res.json({
+    signedIn: false,
+    reimbursement: {
+      ...item,
+      ownerName: "Review User",
+      shareActive: true,
+      viewerParticipantId: null,
+      participants: item.participants.map((person) => ({
+        id: person.id,
+        name: person.name,
+        shareCents: person.shareCents,
+        paidCents: person.paidCents,
+        outstandingCents: person.outstandingCents,
+        status: person.status,
+        isSelf: person.isSelf,
+        accountBound: false,
+        available: true,
+      })),
+    },
+  });
+});
+app.post("/api/public/reimbursements/:token/payments", (req, res) => {
+  const item = req.params.token.includes("tickets") ? reviewReimbursements[1] : reviewReimbursements[0];
+  const person = item?.participants.find((row) => row.id === req.body?.participantId);
+  if (!item || !person) return res.status(404).json({ error: "Not found" });
+  const amount = Math.min(person.outstandingCents, Math.max(0, Number(req.body?.amountCents) || 0));
+  person.paidCents += amount;
+  person.outstandingCents -= amount;
+  person.status = person.outstandingCents ? "partial" : "paid";
+  item.paidCents += amount;
+  item.outstandingCents -= amount;
+  item.status = item.outstandingCents ? "partial" : "settled";
+  res.json({ payment: { id: randomUUID(), remainingCents: person.outstandingCents } });
+});
 app.get("/api/pet-home/state", (_req, res) => res.json({
   ...emptyState,
   shareUrl: null,
@@ -363,6 +500,7 @@ app.all("/api/*", (_req, res) => res.json(emptyState));
 app.get("/", (_req, res) => res.sendFile(path.join(root, "index.html")));
 app.get("/login", (_req, res) => res.sendFile(path.join(root, "login.html")));
 app.get("/admin", (_req, res) => res.sendFile(path.join(root, "admin.html")));
+app.get("/reimburse/:token", (_req, res) => res.sendFile(path.join(root, "reimburse.html")));
 app.use(express.static(root));
 
 app.listen(port, "127.0.0.1", () => {

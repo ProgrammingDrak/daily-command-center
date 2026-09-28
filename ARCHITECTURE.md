@@ -166,3 +166,24 @@ fish tank. Key invariants:
 - Config (necessities, income, period, legacy `cents_per_point`, `current_period`)
   lives in `slot_accounts.settings.budget_tank`. Mutations broadcast
   `slot-changed` so both the tank and the slots tab refresh.
+
+## Reimbursements (`reimbursement-store.js`, `routes/reimbursements.js`)
+
+The Budget tab also tracks money shared between people. Key invariants:
+
+- **One expense stays authoritative.** `reimbursements` owns the expense and
+  share token. `reimbursement_participants` owns each calculated share.
+  `reimbursement_payments` is the append-only repayment ledger.
+- **Splits preserve every cent.** Equal splits assign deterministic remainder
+  cents. Percentage splits must total exactly 100%. Exact splits must equal the
+  expense total.
+- **Links are live grants.** Tokens use 18 random bytes. Missing, disabled, and
+  archived links all return the same 404 response.
+- **Account links never copy expenses.** Exact email matches and explicit link
+  claims attach a participant or counterparty user ID. The same expense then
+  appears as payable or receivable in both accounts.
+- **Public links record payments, not transfer funds.** Supported providers can
+  open a prefilled payment page. The participant confirms the payment after the
+  provider transfers it.
+- **Writes are row-scoped.** Owners can record any share. Linked participants
+  can record their share. Linked counterparties can record money received.

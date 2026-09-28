@@ -947,6 +947,76 @@ CREATE TABLE IF NOT EXISTS budget_investments (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(workspace_id, period_key)
 );
+
+-- ── Reimbursements ──
+-- One expense stays authoritative in its creator's workspace. Participant and
+-- counterparty user links project that same row into another DCC account.
+CREATE TABLE IF NOT EXISTS reimbursements (
+  id                    TEXT PRIMARY KEY,
+  workspace_id          TEXT NOT NULL REFERENCES workspaces(id),
+  owner_user_id         INTEGER NOT NULL REFERENCES users(id),
+  direction             TEXT NOT NULL CHECK (direction IN ('owed_to_me', 'i_owe')),
+  title                 TEXT NOT NULL,
+  detail                TEXT NOT NULL DEFAULT '',
+  total_cents           INTEGER NOT NULL CHECK (total_cents > 0),
+  purchase_date         DATE,
+  split_mode            TEXT NOT NULL CHECK (split_mode IN ('equal', 'percentage', 'amount')),
+  paid_via_method       TEXT NOT NULL,
+  paid_via_detail       TEXT NOT NULL DEFAULT '',
+  repay_to_method       TEXT NOT NULL,
+  repay_to_detail       TEXT NOT NULL DEFAULT '',
+  counterparty_name     TEXT,
+  counterparty_email    TEXT,
+  counterparty_user_id  INTEGER REFERENCES users(id),
+  share_token           TEXT NOT NULL UNIQUE,
+  share_active          BOOLEAN NOT NULL DEFAULT TRUE,
+  archived_at           TIMESTAMPTZ,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_reimbursements_owner_created
+  ON reimbursements(owner_user_id, created_at DESC) WHERE archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_reimbursements_counterparty
+  ON reimbursements(counterparty_user_id, created_at DESC)
+  WHERE archived_at IS NULL AND counterparty_user_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS reimbursement_participants (
+  id                    TEXT PRIMARY KEY,
+  reimbursement_id      TEXT NOT NULL REFERENCES reimbursements(id) ON DELETE CASCADE,
+  name                  TEXT NOT NULL,
+  email                 TEXT,
+  user_id               INTEGER REFERENCES users(id),
+  is_self               BOOLEAN NOT NULL DEFAULT FALSE,
+  share_cents           INTEGER NOT NULL CHECK (share_cents >= 0),
+  share_percent_bp      INTEGER CHECK (share_percent_bp IS NULL OR (share_percent_bp >= 0 AND share_percent_bp <= 10000)),
+  claimed_at            TIMESTAMPTZ,
+  paid_at               TIMESTAMPTZ,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_reimbursement_participants_expense
+  ON reimbursement_participants(reimbursement_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_reimbursement_participants_user
+  ON reimbursement_participants(user_id, created_at DESC) WHERE user_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reimbursement_participants_one_account
+  ON reimbursement_participants(reimbursement_id, user_id) WHERE user_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS reimbursement_payments (
+  id                    TEXT PRIMARY KEY,
+  reimbursement_id      TEXT NOT NULL REFERENCES reimbursements(id) ON DELETE CASCADE,
+  participant_id        TEXT NOT NULL REFERENCES reimbursement_participants(id) ON DELETE CASCADE,
+  amount_cents          INTEGER NOT NULL CHECK (amount_cents > 0),
+  method                TEXT NOT NULL,
+  method_detail         TEXT NOT NULL DEFAULT '',
+  note                  TEXT NOT NULL DEFAULT '',
+  recorded_by_user_id   INTEGER REFERENCES users(id),
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_reimbursement_payments_participant
+  ON reimbursement_payments(participant_id, created_at);
 `;
 
 // ── Post-schema statements (canonical task model, transition-era) ──

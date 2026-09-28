@@ -1352,9 +1352,18 @@
 </div>
 
 <div class="tab-content" id="tab-budget">
+  <nav class="budget-section-tabs" aria-label="Budget sections">
+    <button class="budget-section-tab active" id="budget-tank-section-btn" type="button" aria-pressed="true">Budget Tank</button>
+    <button class="budget-section-tab" id="budget-reimbursements-section-btn" type="button" aria-pressed="false">
+      Reimbursements <span id="budget-reimbursement-badge" hidden>0</span>
+    </button>
+  </nav>
   <div id="budget-home">
     <div id="budget-root"></div>
   </div>
+  <section id="budget-reimbursements" class="reimbursement-shell" aria-labelledby="reimbursement-title" hidden>
+    <div id="reimbursement-root"></div>
+  </section>
   <section class="budget-casino" id="budget-casino" aria-labelledby="budget-casino-title" hidden>
     <div class="budget-casino-nav">
       <button class="budget-casino-back" id="budget-casino-back" type="button">&larr; Back to Money Changer</button>
@@ -2109,6 +2118,7 @@
 <script src="/public/js/pet-nudge.js?v=pet-nudge-2"></script>
 <script src="/public/js/side-drawers.js"></script>
 <script src="/public/js/budget.js"></script>
+<script src="/public/js/reimbursements.js"></script>
 <script src="/public/js/mobile-shell.js"></script>
 <script>
 // Feature flags — controls which features use the new BlockStore vs old localStorage.

@@ -20,7 +20,10 @@ DCC.tabs = DCC.tabs || (function () {
 // `activate`, not `render`: render also runs on every task completion, so the
 // friend-picker refresh belongs only on the tab path.
 DCC.tabs.register("pet-home", () => window.PetHome && typeof PetHome.activate === "function" && PetHome.activate());
-DCC.tabs.register("budget", () => typeof renderBudget === "function" && renderBudget());
+DCC.tabs.register("budget", () => {
+  if (window.Reimbursements && Reimbursements.isActive()) Reimbursements.activate();
+  else if (typeof renderBudget === "function") renderBudget();
+});
 DCC.tabs.register("tasks", () => {
   // PIN 9: mount the mini-month sidebar into the Task Menu split view. Cheap
   // (string concat); picks up the current _gcalSidebarState each time.
