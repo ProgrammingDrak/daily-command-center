@@ -1760,7 +1760,9 @@
   .sched-back{align-self:flex-start;background:none;border:none;color:var(--text-muted);font-size:12px;cursor:pointer;padding:2px 0}
   .sched-back:hover{color:var(--accent-light)}
   .sched-after-daylabel{color:var(--accent-light);text-transform:none;letter-spacing:0;font-weight:600}
-  .sched-after-tasks{display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;margin-top:2px}
+  /* Keep every immediate time choice still while the asynchronous task anchors load. */
+  .sched-after-task-label{margin-top:4px}
+  .sched-after-tasks{display:flex;flex:none;flex-direction:column;gap:6px;height:clamp(120px,25vh,200px);overflow-y:auto;margin-top:2px}
   .sched-after-task{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:12px;cursor:pointer;text-align:left;width:100%}
   .sched-after-task:hover{border-color:var(--accent)}
   .sched-after-task .sat-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

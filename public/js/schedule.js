@@ -1710,11 +1710,13 @@ async function _renderSchedAfterStep(dateStr){
   // Every task already on that day, "After <title> · ends <end>"
   const taskWrap=document.getElementById("sched-after-tasks");
   if(taskWrap){
+    taskWrap.setAttribute("aria-busy","true");
     taskWrap.innerHTML='<div class="sched-after-empty">Loading day&hellip;</div>';
     let items=[];
     try{items=await _schedDayTasks(dateStr)}catch(e){items=[]}
     // Guard against a stale render if the user navigated away meanwhile.
     if(_schedPickerDate!==dateStr)return;
+    taskWrap.setAttribute("aria-busy","false");
     taskWrap.innerHTML="";
     if(!items.length){
       taskWrap.innerHTML='<div class="sched-after-empty">No tasks scheduled that day yet.</div>';
