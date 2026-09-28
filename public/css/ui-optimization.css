@@ -247,15 +247,15 @@ body.tasks-drawer-open .dcc-launcher { right: calc(min(560px, 44vw) + var(--sp-4
 body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 
 /* Loose Ends is a dedicated non-blocking triage workspace. */
-.carryover-overlay,
-.carryover-overlay.open {
-  display: flex;
+.carryover-overlay {
+  display: none;
   justify-content: flex-end;
   align-items: stretch;
   padding: 0;
   background: transparent;
   pointer-events: none;
 }
+.carryover-overlay.open { display: flex; }
 .carryover {
   width: min(760px, 100vw);
   max-width: none;
