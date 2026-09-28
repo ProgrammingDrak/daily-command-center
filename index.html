@@ -547,13 +547,14 @@
       <!-- Step 2: after what -->
       <div class="sched-picker-step" id="sched-step-after" style="display:none">
         <button type="button" class="sched-back" id="sched-after-back">&lsaquo; Back</button>
-        <label class="sched-picker-label">After&hellip;<span class="sched-after-daylabel" id="sched-after-daylabel"></span></label>
+        <label class="sched-picker-label">Choose a time on<span class="sched-after-daylabel" id="sched-after-daylabel"></span></label>
         <div class="sched-chip-row" id="sched-after-chips"></div>
-        <div class="sched-after-tasks" id="sched-after-tasks"></div>
         <div class="sched-after-custom">
           <input id="sched-custom-time" type="time" class="sched-picker-input" />
           <button type="button" class="sched-chip sched-chip-alt" id="sched-custom-go">Use time</button>
         </div>
+        <label class="sched-picker-label sched-after-task-label">Or after a scheduled task</label>
+        <div class="sched-after-tasks" id="sched-after-tasks" aria-live="polite"></div>
       </div>
     </div>
   </div>

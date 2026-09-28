@@ -77,9 +77,11 @@ const DAY = "2099-01-05";
 function makeEl(tag) {
   const el = {
     tagName: tag, type: "", className: "", textContent: "", value: "", disabled: false,
-    innerHTML: "", children: [],
+    innerHTML: "", children: [], attrs: {},
     appendChild(c) { this.children.push(c); return c; },
     addEventListener(t, fn) { if (t === "click") el.onclick = fn; },
+    setAttribute(k, v) { this.attrs[k] = String(v); },
+    getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; },
     // Real enough to see _schedSetAfterBusy work. A hardcoded [] made both the
     // disable AND the re-enable unassertable, which would have let a permanently
     // disabled After step through while the packed-day test below still passed.
@@ -195,6 +197,42 @@ test("clicking the chip commits with a null time, which the create path resolves
   // dayStart 09:00, empty day -> the first free slot IS 09:00.
   assert.equal(h.rec.scheduled[0].start, "09:00");
   assert.equal(h.rec.scheduled[0].end, "09:30");
+});
+
+test("time choices are interactive while the task anchors are still loading", async () => {
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const h = harness({
+    dayContext: d => gate.then(() => h.ctx.DCC.buildDayContext(d, h.state, []))
+  });
+  h.run('_schedPickerOnPlace=function(){};_schedPickerDate="' + DAY + '";');
+  const rendering = h.run('_renderSchedAfterStep("' + DAY + '")');
+
+  const chips = h.els["sched-after-chips"].children;
+  assert.ok(chips.length > 1, "named times render before the day request settles");
+  assert.equal(chips[0].disabled, false, "Earliest free is immediately clickable");
+  assert.match(h.els["sched-after-tasks"].innerHTML, /Loading day/);
+  assert.equal(h.els["sched-after-tasks"].getAttribute("aria-busy"), "true");
+
+  release();
+  await rendering;
+  assert.equal(h.els["sched-after-tasks"].getAttribute("aria-busy"), "false");
+});
+
+test("time choices stay above a fixed-height asynchronous task region", () => {
+  const html = fs.readFileSync(require.resolve("./index.html"), "utf8");
+  const css = fs.readFileSync(require.resolve("./public/css/dashboard.css"), "utf8");
+  const start = html.indexOf('id="sched-step-after"');
+  const end = html.indexOf('id="sched-defaults-overlay"');
+  assert.ok(start >= 0 && end > start, "the After step markup exists");
+  const step = html.slice(start, end);
+  const chips = step.indexOf('id="sched-after-chips"');
+  const custom = step.indexOf('class="sched-after-custom"');
+  const tasks = step.indexOf('id="sched-after-tasks"');
+  assert.ok(chips >= 0 && custom > chips && tasks > custom,
+    "preset and custom time choices must render before the loading task list");
+  assert.match(css, /\.sched-after-tasks\{[^}]*height:clamp\(120px,25vh,200px\)[^}]*overflow-y:auto/,
+    "the task region must reserve its final height so centered controls cannot jump");
 });
 
 // ── 2. an engine-chosen start is not a user-named one ───────────────────────
