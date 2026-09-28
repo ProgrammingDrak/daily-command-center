@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 
-const { splitShares, totalsFor } = require("./reimbursement-store");
+const { claimEmailAllowed, splitShares, totalsFor } = require("./reimbursement-store");
 
 test("equal splits include the owner and preserve every cent", () => {
   const shares = splitShares({
@@ -68,6 +68,13 @@ test("duplicate participant emails are refused", () => {
       { name: "B", email: "SAME@example.com" },
     ],
   }), /email must be unique/);
+});
+
+test("share claims require the matching account email when one is supplied", () => {
+  assert.equal(claimEmailAllowed(null, "anyone@example.com"), true);
+  assert.equal(claimEmailAllowed("Alex@Example.com", "alex@example.com"), true);
+  assert.equal(claimEmailAllowed("alex@example.com", "sam@example.com"), false);
+  assert.equal(claimEmailAllowed("alex@example.com", null), false);
 });
 
 test("settlement totals support partial and complete repayments", () => {

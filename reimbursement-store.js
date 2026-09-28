@@ -38,6 +38,23 @@ function paymentMethod(value, field) {
   return method;
 }
 
+function claimEmailAllowed(expectedEmail, accountEmail) {
+  const expected = text(expectedEmail, 320).toLowerCase();
+  if (!expected) return true;
+  return expected === text(accountEmail, 320).toLowerCase();
+}
+
+async function assertClaimIdentity(client, userId, expectedEmail) {
+  if (!expectedEmail) return;
+  const { rows } = await client.query(
+    "SELECT email FROM users WHERE id = $1",
+    [userId]
+  );
+  if (!rows[0] || !claimEmailAllowed(expectedEmail, rows[0].email)) {
+    throw clientError("Sign in with the account for this share.", 403);
+  }
+}
+
 function splitShares({ totalCents, splitMode, includeSelf, selfValue, participants = [] }) {
   const total = cents(totalCents, "totalCents");
   if (total <= 0) throw clientError("The total must be greater than zero.");
@@ -320,7 +337,11 @@ function reimbursementStore(db = pool) {
       const accountByEmail = new Map();
       if (lookupEmails.length) {
         const { rows: accountRows } = await client.query(
-          "SELECT id, lower(email) AS email FROM users WHERE lower(email) = ANY($1::text[])",
+          `SELECT MIN(id)::int AS id, lower(email) AS email
+             FROM users
+            WHERE lower(email) = ANY($1::text[])
+            GROUP BY lower(email)
+           HAVING COUNT(*) = 1`,
           [lookupEmails]
         );
         accountRows.forEach((account) => accountByEmail.set(account.email, account.id));
@@ -532,6 +553,7 @@ function reimbursementStore(db = pool) {
             || (reimbursement.counterparty_user_id && reimbursement.counterparty_user_id !== userId)) {
           throw clientError("Not found.", 404);
         }
+        await assertClaimIdentity(client, userId, reimbursement.counterparty_email);
         await client.query(
           "UPDATE reimbursements SET counterparty_user_id = $2, updated_at = NOW() WHERE id = $1",
           [reimbursement.id, userId]
@@ -540,7 +562,8 @@ function reimbursementStore(db = pool) {
         return { linked: true };
       }
       const { rows } = await client.query(
-        `SELECT r.*, p.id AS participant_id, p.user_id AS participant_user_id
+        `SELECT r.*, p.id AS participant_id, p.user_id AS participant_user_id,
+                p.email AS participant_email
            FROM reimbursements r
            JOIN reimbursement_participants p ON p.reimbursement_id = r.id
           WHERE r.share_token = $1 AND r.share_active = TRUE AND r.archived_at IS NULL
@@ -553,6 +576,7 @@ function reimbursementStore(db = pool) {
           || (row.participant_user_id && row.participant_user_id !== userId)) {
         throw clientError("Not found.", 404);
       }
+      await assertClaimIdentity(client, userId, row.participant_email);
       await client.query(
         "UPDATE reimbursement_participants SET user_id = $2, claimed_at = NOW(), updated_at = NOW() WHERE id = $1",
         [participantId, userId]
@@ -591,6 +615,7 @@ function reimbursementStore(db = pool) {
           throw clientError("Sign in with the account linked to this reimbursement.", viewerUserId ? 404 : 401);
         }
         if (viewerUserId && !reimbursement.counterparty_user_id) {
+          await assertClaimIdentity(client, viewerUserId, reimbursement.counterparty_email);
           await client.query(
             "UPDATE reimbursements SET counterparty_user_id = $2, updated_at = NOW() WHERE id = $1",
             [reimbursement.id, viewerUserId]
@@ -601,6 +626,7 @@ function reimbursementStore(db = pool) {
           throw clientError("Sign in with the account linked to this share.", viewerUserId ? 404 : 401);
         }
         if (viewerUserId && !participant.user_id) {
+          await assertClaimIdentity(client, viewerUserId, participant.email);
           await client.query(
             "UPDATE reimbursement_participants SET user_id = $2, claimed_at = NOW(), updated_at = NOW() WHERE id = $1",
             [participant.id, viewerUserId]
@@ -638,5 +664,6 @@ module.exports = {
   reimbursementStore,
   splitShares,
   totalsFor,
+  claimEmailAllowed,
   PAYMENT_METHODS,
 };
