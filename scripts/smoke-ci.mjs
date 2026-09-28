@@ -119,21 +119,26 @@ for (const tab of TABS) {
 await page.evaluate(() => { document.querySelector('[data-tab="schedule"]')?.click?.(); });
 const looseEndsMobile = await page.evaluate(() => {
   const pill = document.getElementById("loose-ends-pill");
+  const waiting = document.getElementById("waiting-pill-nav");
   const nav = document.getElementById("date-nav");
-  if (!pill || !nav) return null;
+  if (!pill || !waiting || !nav) return null;
   const wasHidden = pill.hidden;
   pill.hidden = false;
   const box = pill.getBoundingClientRect();
+  const waitingBox = waiting.getBoundingClientRect();
   const navBox = nav.getBoundingClientRect();
   const otherBottoms = [...nav.children]
-    .filter((child) => child !== pill && getComputedStyle(child).display !== "none")
+    .filter((child) => child !== pill && child !== waiting && getComputedStyle(child).display !== "none")
     .map((child) => child.getBoundingClientRect().bottom);
   const result = {
     visible: getComputedStyle(pill).display !== "none" && box.width > 0 && box.height > 0,
     insideViewport: box.left >= 0 && box.right <= window.innerWidth,
     dedicatedRow: box.top >= Math.max(...otherBottoms),
     fullWidth: box.width >= navBox.width - 1,
-    touchHeight: box.height >= 44
+    touchHeight: box.height >= 44,
+    waitingBelow: waitingBox.top >= box.bottom,
+    waitingFullWidth: waitingBox.width >= navBox.width - 1,
+    waitingTouchHeight: waitingBox.height >= 44
   };
   pill.hidden = wasHidden;
   return result;
