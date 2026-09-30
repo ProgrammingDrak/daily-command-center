@@ -110,6 +110,14 @@ with a nonce reaction the wizard names.
 which is why the catch-up sweep is user tier only. Bot-tier actors skip it rather
 than failing every five minutes.
 
+Sweep Suite Slack findings that reach DCC as actionable triage items become tasks
+during day-state ingest. DCC adds a 🔖 reaction to each source message, using the
+linked user's token when available or the shared bot token otherwise. The task
+uses the same message identity as a manual bookmark, so a later ✅ in Slack
+completes that task without creating a duplicate. Only findings with a valid
+Slack channel and message timestamp are projected. The periodic reaction mirror
+retries writes that could not reach Slack during ingest.
+
 Setting `SLACK_USER_TOKEN` plus `DRAKE_SLACK_USER_ID` promotes exactly one
 identity to user tier. That pair predates the shared bot and remains the env
 fallback: it resolves before any database lookup, so an existing single-tenant

@@ -16,6 +16,7 @@ function mountApp() {
     },
   };
   let nextId = 1;
+  const slackSync = [];
   const blockDB = {
     VALID_TYPES: new Set(["block"]),
     getBlockIncludingDeleted: async id => rows[id] || null,
@@ -56,8 +57,18 @@ function mountApp() {
     getBlocksByKind: async (kind, workspaceId) => Object.values(rows).filter(row =>
       !row.deleted_at && row.workspace_id === workspaceId && (row.properties || {}).kind === kind),
     getDelegatedItems: async () => [],
+    findByIdempotencyKey: async (workspaceId, key) => Object.values(rows).find(row =>
+      row.workspace_id === workspaceId && (row.properties || {}).idempotency_key === key) || null,
+    createItineraryTask: async ({ date, properties, userId, workspaceId }) => {
+      const existing = await blockDB.findByIdempotencyKey(workspaceId, properties.idempotency_key);
+      if (existing) return existing;
+      const id = `task-${nextId++}`;
+      const row = { id, type: "block", date, properties, user_id: userId, workspace_id: workspaceId };
+      rows[id] = row;
+      return row;
+    },
   };
-  require("./routes/blocks.js")(app, {
+  const ctx = {
     blockDB,
     broadcast: () => {},
     crypto: require("node:crypto"),
@@ -70,8 +81,10 @@ function mountApp() {
       query: async () => ({ rows: [] }),
       connect: async () => ({ query: async () => ({ rows: [] }), release() {} }),
     },
-  });
-  return { app, rows };
+    syncSlackTaskReactions: async row => { slackSync.push(row.id); return true; },
+  };
+  require("./routes/blocks.js")(app, ctx);
+  return { app, rows, slackSync, ctx };
 }
 
 async function request(app, path, options = {}) {
@@ -90,6 +103,23 @@ function completion(app, completed) {
     body: JSON.stringify({ completed, completedAt: completed ? "2026-08-14T14:00:00Z" : null, mutationId: `completion-${completed}` }),
   });
 }
+
+test("a published Slack finding becomes a task and gets one bookmark projection", async () => {
+  const { ctx, rows, slackSync } = mountApp();
+  const item = {
+    id: "slack:mention:C123:1786622400.100000", type: "slack", title: "Review the report",
+    priority: "normal", channel_id: "C123", message_ts: "1786622400.100000",
+    thread_id: "1786622400.100000", source_ref: "https://example.slack.com/archives/C123/p1786622400100000",
+  };
+  await ctx.materializeScrapedSlackItems({ items: [item], userId: 1, workspaceId: MINE });
+  await ctx.materializeScrapedSlackItems({ items: [item], userId: 1, workspaceId: MINE });
+  const task = Object.values(rows).find(row => (row.properties || {}).source === "slack-bookmark");
+  assert.ok(task);
+  assert.equal(task.properties.idempotency_key, "slack-bookmark:C123:1786622400.100000");
+  assert.equal(task.properties.triageId, item.id);
+  assert.deepEqual(slackSync, [task.id]);
+  assert.equal(Object.values(rows).filter(row => (row.properties || {}).source === "slack-bookmark").length, 1);
+});
 
 test("linked triage follows task completion, reopen, deletion, and undo", async () => {
   const { app, rows } = mountApp();

@@ -30,7 +30,87 @@ function fixture() {
 }
 
 const source = {title: 'Reply to the partner', triageId: 'inbound-1', triageKey: 'slack|D1:42', duration: 25, source_id: 'https://example.test/thread', triageContext: {draft_preview: 'Saved draft'}};
+const scrapedSlack = {
+  title: 'Reply to the partner', triageId: 'slack:dm:D123:1786622400.100000',
+  triageKey: 'slack|slack:dm:D123:1786622400.100000', duration: 25,
+  triageType: 'slack', triageSourceRef: 'https://example.slack.com/archives/D123/p1786622400100000',
+  triageContext: {type: 'slack', channel_id: 'D123', message_ts: '1786622400.100000', thread_id: '1786622300.000001'},
+};
 const owner = {workspaceId: 'ws-1', userId: 1};
+
+test('scraped Slack tasks use the bookmark identity and keep their Triage link', async () => {
+  const f = fixture();
+  const projected = [];
+  const onSlackTask = async block => projected.push(block.id);
+  const [first] = await f.store.materialize({...owner, items: [scrapedSlack], onSlackTask});
+  const [again] = await f.store.materialize({...owner, items: [scrapedSlack], onSlackTask});
+  assert.equal(again.id, first.id);
+  assert.equal(f.rows.size, 1);
+  assert.equal(first.properties.source, 'slack-bookmark');
+  assert.equal(first.properties.idempotency_key, 'slack-bookmark:D123:1786622400.100000');
+  assert.equal(first.properties.slack_channel, 'D123');
+  assert.equal(first.properties.slack_ts, '1786622400.100000');
+  assert.equal(first.properties.slack_thread_ts, '1786622300.000001');
+  assert.equal(first.properties.triageId, scrapedSlack.triageId);
+  assert.deepEqual(projected, [first.id], 'only creation needs an immediate reaction write');
+});
+
+test('older Sweep Slack items recover bookmark coordinates from their ID', async () => {
+  const f = fixture();
+  const legacy = {
+    ...scrapedSlack,
+    triageContext: {
+      type: 'slack', id: scrapedSlack.triageId,
+      source_ref: scrapedSlack.triageSourceRef,
+    },
+  };
+  const [task] = await f.store.materialize({...owner, items: [legacy]});
+  assert.equal(task.properties.source, 'slack-bookmark');
+  assert.equal(task.properties.slack_channel, 'D123');
+  assert.equal(task.properties.slack_ts, '1786622400.100000');
+});
+
+test('Slack permalinks recover bookmark coordinates when the ID lacks them', () => {
+  const capture = createStore.slackCapture({triageContext: {
+    type: 'slack', id: 'slack:mention:opaque',
+    source_ref: 'https://example.slack.com/archives/C123/p1719315600001?thread_ts=1719315600.001',
+  }});
+  assert.deepEqual(capture, {channel: 'C123', ts: '1719315600.001', threadTs: '1719315600.001'});
+});
+
+test('a scraped Slack item reuses a manual bookmark without changing its title', async () => {
+  const f = fixture();
+  const manual = await f.db.createItineraryTask({workspaceId: owner.workspaceId, date: '2026-09-08', properties: {
+    title: 'My edited title', status: 'open', source: 'slack-bookmark',
+    idempotency_key: 'slack-bookmark:D123:1786622400.100000',
+  }});
+  const [linked] = await f.store.materialize({...owner, items: [scrapedSlack]});
+  assert.equal(linked.id, manual.id);
+  assert.equal(linked.properties.title, 'My edited title');
+  assert.equal(linked.properties.triageId, scrapedSlack.triageId);
+  assert.equal(f.rows.size, 1);
+});
+
+test('an older scraped Slack task gains bookmark sync on replay', async () => {
+  const f = fixture();
+  const legacy = await f.db.createItineraryTask({workspaceId: owner.workspaceId, date: null, properties: {
+    title: 'My edited title', status: 'open', source: 'triage', triageId: scrapedSlack.triageId,
+    idempotency_key: 'triage-task:' + require('node:crypto').createHash('sha256').update(scrapedSlack.triageKey).digest('hex'),
+  }});
+  const [upgraded] = await f.store.materialize({...owner, items: [scrapedSlack]});
+  assert.equal(upgraded.id, legacy.id);
+  assert.equal(upgraded.properties.title, 'My edited title');
+  assert.equal(upgraded.properties.source, 'slack-bookmark');
+  assert.equal(upgraded.properties.idempotency_key, 'slack-bookmark:D123:1786622400.100000');
+  assert.equal(f.rows.size, 1);
+});
+
+test('non-Slack Triage items never inherit a bookmark identity', async () => {
+  const f = fixture();
+  const [task] = await f.store.materialize({...owner, items: [{...scrapedSlack, triageContext: {...scrapedSlack.triageContext, type: 'gmail'}}]});
+  assert.equal(task.properties.source, 'triage');
+  assert.equal(task.properties.slack_channel, undefined);
+});
 
 test('Slack naming and source metadata survive materialization, moves, and manual renames', async () => {
   const fs = require('node:fs');

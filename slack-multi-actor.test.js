@@ -56,7 +56,7 @@ function makeHarness(opts = {}) {
     linked_via: row.linkedVia || "email",
   }));
   const users = opts.users || [];                    // [{ id, email }]
-  const calls = { fetch: [], usersInfo: [], reactionsAdd: [], searches: [], broadcast: [], credit: [], completion: [] };
+  const calls = { fetch: [], usersInfo: [], reactionsAdd: [], searches: [], broadcast: [], credit: [], completion: [], triage: [] };
   let seq = 0;
 
   // Slack profiles the bot token can see, keyed by member id.
@@ -102,6 +102,7 @@ function makeHarness(opts = {}) {
     getTodayStr: () => "2026-07-28",
     APP_TIME_ZONE: "America/New_York",
     broadcast: (ev, payload, workspaceId) => calls.broadcast.push({ ev, payload, workspaceId }),
+    transitionLinkedTriage: async (block, reason) => calls.triage.push({ id: block.id, reason }),
     slotStore: {
       earnTaskCredit: async (ws, uid, body) => { calls.credit.push({ ws, uid, body }); return { awarded: true }; },
       revokeTaskCredit: async () => ({ revoked: true }),
@@ -411,6 +412,35 @@ test("a bot-tier actor posts reactions with the bot token", async () => {
   assert.equal(h.calls.reactionsAdd.length, 1, "the 🔖 goes back on after an un-✅");
   assert.equal(h.calls.reactionsAdd[0].auth, `Bearer ${BOT_TOKEN}`, "no user token exists, so the bot speaks");
   assert.equal(h.calls.reactionsAdd[0].body.name, "bookmark");
+});
+
+test("a scraped Slack task gets a bookmark and its Slack check completes the same row", async () => {
+  const h = makeHarness({
+    identities: [{ slackUserId: "U_NORA", userId: 4, workspaceId: "ws-4" }],
+  });
+  const task = {
+    id: "scraped-task", type: "block", date: null, user_id: 4, workspace_id: "ws-4",
+    properties: {
+      title: "Reply to the partner", kind: "task", status: "open",
+      source: "slack-bookmark", triageId: "slack:dm:C1:1786622400.100000",
+      idempotency_key: "slack-bookmark:C1:1786622400.100000",
+      slack_channel: "C1", slack_ts: "1786622400.100000",
+    },
+  };
+  h.blocks.push(task);
+  await h.ctx.syncSlackTaskReactions(task);
+  assert.ok(h.calls.reactionsAdd.some(call => call.body.name === "bookmark" && call.body.timestamp === "1786622400.100000"));
+
+  await post(h.handler, envelope(reaction("bookmark", "U_NORA", "1786622400.100000", "1786622410.000000")));
+  assert.equal(h.blocks.length, 1, "the echoed bookmark must not create another task");
+  await post(h.handler, envelope(reaction("white_check_mark", "U_NORA", "1786622400.100000", "1786622500.000000")));
+  assert.equal(task.properties.status, "done");
+  assert.equal(h.calls.completion.at(-1).taskRef, task.id);
+  await post(h.handler, envelope(removal("white_check_mark", "U_NORA", "1786622400.100000", "1786622600.000000")));
+  assert.equal(task.properties.status, "open");
+  await post(h.handler, envelope(removal("bookmark", "U_NORA", "1786622400.100000", "1786622700.000000")));
+  assert.ok(task.deleted_at);
+  assert.deepEqual(h.calls.triage.map(call => call.reason), ["done", "scheduled", "release"]);
 });
 
 // ── Tier 2: the sweep is gated on SCOPES, not on having a token ─────────────
