@@ -8,8 +8,14 @@ const { taskCommonProps } = require("./public/js/task-serialize");
 function slackCapture(item) {
   const context = item.triageContext || {};
   if (context.type !== "slack") return null;
-  const channel = String(context.channel_id || "");
-  const ts = String(context.message_ts || "");
+  // Current Sweep packets have explicit coordinates. Older packets only have
+  // the source ID and permalink, and still need the same bookmark identity.
+  const idMatch = /:([CDG][A-Z0-9]+):(\d{10,}\.\d{1,6})$/.exec(String(context.id || item.triageId || ""));
+  const linkMatch = /^https:\/\/[^/]+\.slack\.com\/archives\/([CDG][A-Z0-9]+)\/p(\d{11,16})(?:[?#]|$)/.exec(
+    String(context.source_ref || item.triageSourceRef || ""));
+  const channel = String(context.channel_id || (idMatch && idMatch[1]) || (linkMatch && linkMatch[1]) || "");
+  const linkTs = linkMatch && `${linkMatch[2].slice(0, 10)}.${linkMatch[2].slice(10)}`;
+  const ts = String(context.message_ts || (idMatch && idMatch[2]) || linkTs || "");
   if (!/^[CDG][A-Z0-9]+$/.test(channel) || !/^\d{10,}\.\d{1,6}$/.test(ts)) return null;
   const threadTs = String(context.thread_id || ts);
   return { channel, ts, threadTs: /^\d{10,}\.\d{1,6}$/.test(threadTs) ? threadTs : ts };

@@ -55,6 +55,29 @@ test('scraped Slack tasks use the bookmark identity and keep their Triage link',
   assert.deepEqual(projected, [first.id], 'only creation needs an immediate reaction write');
 });
 
+test('older Sweep Slack items recover bookmark coordinates from their ID', async () => {
+  const f = fixture();
+  const legacy = {
+    ...scrapedSlack,
+    triageContext: {
+      type: 'slack', id: scrapedSlack.triageId,
+      source_ref: scrapedSlack.triageSourceRef,
+    },
+  };
+  const [task] = await f.store.materialize({...owner, items: [legacy]});
+  assert.equal(task.properties.source, 'slack-bookmark');
+  assert.equal(task.properties.slack_channel, 'D123');
+  assert.equal(task.properties.slack_ts, '1786622400.100000');
+});
+
+test('Slack permalinks recover bookmark coordinates when the ID lacks them', () => {
+  const capture = createStore.slackCapture({triageContext: {
+    type: 'slack', id: 'slack:mention:opaque',
+    source_ref: 'https://example.slack.com/archives/C123/p1719315600001?thread_ts=1719315600.001',
+  }});
+  assert.deepEqual(capture, {channel: 'C123', ts: '1719315600.001', threadTs: '1719315600.001'});
+});
+
 test('a scraped Slack item reuses a manual bookmark without changing its title', async () => {
   const f = fixture();
   const manual = await f.db.createItineraryTask({workspaceId: owner.workspaceId, date: '2026-09-08', properties: {
