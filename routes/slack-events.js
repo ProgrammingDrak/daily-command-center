@@ -250,6 +250,12 @@ module.exports = function mount(app, ctx) {
     const OWNER_WORKSPACE_ID = actor.workspaceId;
     const SLACK_HOST = actor.slackHost;
 
+    async function syncLinkedTriage(block, reason, atMs) {
+      if (!(block && (block.properties || {}).triageId) || typeof ctx.transitionLinkedTriage !== "function") return;
+      try { await ctx.transitionLinkedTriage(block, reason, atMs); }
+      catch (error) { console.error(`[slack-events] Triage ${reason} sync failed (non-fatal):`, error.message); }
+    }
+
     // `options.token` is "user_required" for the one method with no bot
     // equivalent (search.messages). Everything else prefers the actor's own user
     // token and falls back to the shared bot token, so a user-tier actor behaves
@@ -631,6 +637,7 @@ module.exports = function mount(app, ctx) {
           delete next.activeWorkSessionId;
           delete next.startedBy;
           if (JSON.stringify(next) !== JSON.stringify(restoredProps)) await blockDB.updateBlock(restored.id, { properties: next });
+          await syncLinkedTriage({ ...restored, properties: next }, "scheduled", eventMs);
           broadcast("blocks-changed", { action: "slack-bookmark-restore", blockIds: [existing.id], date: existing.date }, OWNER_WORKSPACE_ID);
         } else if (!Number.isFinite(previousMs) || eventMs > previousMs) {
           await blockDB.updateBlock(existing.id, { properties: { ...existingProps, slackBookmarkChangedAt: new Date(eventMs).toISOString() } });
@@ -911,6 +918,7 @@ module.exports = function mount(app, ctx) {
         await pauseWork({ block: task, atMs: eventMs, actor: "slack", actionId: `bookmark-remove:${channel}:${ts}:${eventMs}` });
       }
       await blockDB.deleteBlock(task.id);
+      await syncLinkedTriage(task, "release", eventMs);
       await removeSlackReaction(channel, ts, R_START);
       await removeSlackReaction(channel, ts, R_DONE);
       broadcast("blocks-changed", { action: "slack-bookmark-cancel", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
@@ -1012,6 +1020,7 @@ module.exports = function mount(app, ctx) {
           broadcastAction: "slack-delegate-done",
         });
         await awardSlackCompletion(result.task || task, completedIso);
+        await syncLinkedTriage(result.task || task, "done", eventMs);
         return;
       }
 
@@ -1037,6 +1046,7 @@ module.exports = function mount(app, ctx) {
       // The reconciliation loop remains the retry path if this write cannot land.
       await removeSlackReaction(channel, ts, R_START);
       await awardSlackCompletion(canonical, completedIso);
+      await syncLinkedTriage(canonical, "done", eventMs);
 
       broadcast("blocks-changed", {
         action: "slack-done",
@@ -1144,6 +1154,7 @@ module.exports = function mount(app, ctx) {
 
       // Back into the active queue on the Slack side too (E2 reads 🔖 as the queue).
       if (bookmark) await addSlackReaction(channel, ts, R_BOOKMARK);
+      await syncLinkedTriage(durable.task || task, "scheduled", eventMs);
 
       if (!reopenDelegate) {
         broadcast("blocks-changed", {

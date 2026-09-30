@@ -84,7 +84,7 @@ function mountSuppressions(seed = [], existingState = null) {
     writeJSON: () => {},
   };
   require("./routes/dcc.js")(app, ctx);
-  return { app, blocks, saved, broadcasts };
+  return { app, blocks, saved, broadcasts, ctx };
 }
 
 async function callDcc(app, method, path, body) {
@@ -125,6 +125,25 @@ test("the ingest door STORES the raw triage section, suppressed items and all", 
     "storage stays raw; filtering here would leave Undo nothing to restore"
   );
   assert.deepEqual(json.suppressed_resolutions.map((r) => r.id), ["gmail:abc"], "publisher can reconcile the exact hidden id");
+});
+
+test("ingest materializes scraped Slack work after saving, excluding handled items", async () => {
+  const handled = sup("s1", { triage_id: "slack:dm:D1:2", reason: "done" });
+  const scheduled = sup("s2", { triage_id: "slack:dm:D1:4", reason: "scheduled" });
+  const { app, saved, ctx } = mountSuppressions([handled, scheduled]);
+  const calls = [];
+  ctx.materializeScrapedSlackItems = async args => {
+    assert.equal(saved.length, 1, "the day state must be durable before task creation");
+    calls.push(args);
+  };
+  const slack = id => ({ id: `slack:dm:D1:${id}`, type: "slack", title: `Reply ${id}` });
+  const { status } = await callDcc(app, "POST", "/api/ingest/day-state", {
+    date: "2026-08-06",
+    triage: { open_items: [slack(1), slack(2), { id: "gmail:3", type: "email", title: "Email" }, slack(4)] },
+  });
+  assert.equal(status, 200);
+  assert.deepEqual(calls[0].items.map(item => item.id), ["slack:dm:D1:1"]);
+  assert.equal(calls[0].workspaceId, MINE);
 });
 
 test("ingest reconciliation admits a newer Gmail turn after a legacy cutoff", async () => {

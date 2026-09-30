@@ -453,12 +453,18 @@ module.exports = function mount(app, ctx) {
     // DCC decisions. A new publisher can move those exact ids into resolved_items;
     // older publishers ignore the additive response field.
     let suppressedResolutions = [];
+    let scrapedSlackItems = [];
     try {
       const suppressions = await readTriageSuppressionsForWorkspace(ingestWorkspaceId);
       const index = triageSuppressions.suppressionIndex(suppressions);
       const incomingOpen = incoming.triage && Array.isArray(incoming.triage.open_items)
         ? incoming.triage.open_items
         : [];
+      scrapedSlackItems = incomingOpen.filter((item) => {
+        if (!item || item.type !== "slack") return false;
+        const suppression = triageSuppressions.matchingSuppression(item, index);
+        return !suppression;
+      });
       suppressedResolutions = incomingOpen.map((item) => {
         const suppression = triageSuppressions.matchingSuppression(item, index);
         // A scheduled item is already placed work, not a handled source message.
@@ -490,6 +496,15 @@ module.exports = function mount(app, ctx) {
       }
     } catch (e) {
       console.error("[dcc-state ingest] suppression reconciliation failed (non-fatal):", e.message);
+    }
+    if (scrapedSlackItems.length && typeof ctx.materializeScrapedSlackItems === "function") {
+      try {
+        await ctx.materializeScrapedSlackItems({
+          items: scrapedSlackItems, userId: ingestUserId, workspaceId: ingestWorkspaceId,
+        });
+      } catch (e) {
+        console.error("[dcc-state ingest] Slack task materialization failed (non-fatal):", e.message);
+      }
     }
     // JSON day files are the best-effort local mirror (offline record, fast reads).
     try {

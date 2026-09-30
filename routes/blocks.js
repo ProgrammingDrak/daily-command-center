@@ -440,6 +440,7 @@ module.exports = function mount(app, ctx) {
     broadcast("dcc-state-changed", { source: "triage-suppression", action: "add" }, workspaceId);
     return suppression;
   }
+  ctx.transitionLinkedTriage = transitionLinkedTriage;
 
   // The meeting-action sibling of transitionLinkedTriage: a placed meeting follow-up
   // is a real day task, and deleting it left its ORIGINATING proposal stranded at
@@ -714,7 +715,36 @@ module.exports = function mount(app, ctx) {
     return results.length === 1 ? results[0] : results;
   }));
 
-  const triageTaskStore = require("../triage-task-store")({ blockDB, respStore, linkTriage: transitionLinkedTriage });
+  const createTriageTaskStore = require("../triage-task-store");
+  const triageTaskStore = createTriageTaskStore({ blockDB, respStore, linkTriage: transitionLinkedTriage });
+  // Sweep Suite publishes Slack findings while the browser may be closed.
+  // Materialize those findings at ingest so the bookmark appears immediately.
+  ctx.materializeScrapedSlackItems = async ({ items, userId, workspaceId }) => {
+    const requests = (items || []).filter(item => item && item.type === "slack" && item.id && item.title
+      && createTriageTaskStore.slackCapture({ triageContext: item }))
+      .map(item => {
+        const task = TaskModel.fromTriageItem(item);
+        return {
+          title: item.title, duration: task.durMin, priority: task.priority,
+          source_id: item.source_ref || item.link || "", meta: "Triage item",
+          detail: [item.summary, item.notes].filter(Boolean).join("\n\n"), tags: ["triage"],
+          triageId: item.id, triageKey: triageSuppressions.triageItemKey(item),
+          triageTitle: item.title, triageType: "slack", triageContext: item,
+          triageSourceRef: item.source_ref || item.link || "",
+          triageReceivedAt: item.received_at || "",
+          triageConversationId: item.conversation_id || item.thread_id || "",
+          originalTitle: item.originalTitle || "", generatedTitle: item.generatedTitle || "",
+          titleNamingVersion: item.titleNamingVersion || "", sourceContext: item.sourceContext || "",
+        };
+      });
+    if (!requests.length) return [];
+    const blocks = await triageTaskStore.materialize({
+      items: requests, responsibilityIds: [], userId, workspaceId,
+      tz: ctx.APP_TIME_ZONE, onSlackTask: syncSlack,
+    });
+    if (blocks.length) broadcast("blocks-changed", { action: "triage-materialize", blockIds: blocks.map(block => block.id) }, workspaceId);
+    return blocks;
+  };
   app.post("/api/triage/tasks/materialize", route(async (req, res) => {
     if (req.dccServiceAuth) return res.status(403).json({ error: "Owner session required" });
     const body = req.body || {};
@@ -726,6 +756,7 @@ module.exports = function mount(app, ctx) {
     const blocks = await triageTaskStore.materialize({
       items: body.items, responsibilityIds: body.responsibilityIds,
       userId, workspaceId, tz: body.tz || ctx.APP_TIME_ZONE,
+      onSlackTask: syncSlack,
     });
     if (blocks.length) broadcast("blocks-changed", { action: "triage-materialize", blockIds: blocks.map(b => b.id) }, workspaceId);
     return { blocks };
