@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { triageItemKey } = require("./triage-suppressions");
+const { sourceIds, keepExisting } = require("./lib/proposal-sources");
 
 const SOURCE_CONFIG_FILE = path.join("config", "dcc-sources.json");
 
@@ -148,6 +149,7 @@ function normalizeSuggestedTask(raw, index) {
     reason: raw.reason || raw.summary || raw.detail || "",
     tags: asArray(raw.tags).length ? raw.tags : ["DCC", "deep-sweep"],
     source_item_id: raw.source_item_id || raw.source_id || raw.id || null,
+    source_ref: raw.source_ref || raw.source_link || "",
   };
 }
 
@@ -312,7 +314,11 @@ function buildBrief({ state, openItems, meetings, health }) {
     .slice(0, 4)
     .map(taskFromMeeting);
   const deepTasks = asArray(deepContext.suggested_tasks).map(normalizeSuggestedTask);
-  const suggestedTasks = dedupeBy([...deepTasks, ...meetingTasks, ...triageTasks], (task) => task.id || task.title).slice(0, 12);
+  const blocked = new Set(asArray(deepContext.suppressed_source_ids));
+  const decisions = existingBrief.decisions || {};
+  const suggestedTasks = dedupeBy([...deepTasks, ...meetingTasks, ...triageTasks], (task) => task.id || task.title)
+    .filter(task => !sourceIds(task).some(id => blocked.has(id)) && !["drop", "backlog", "accept", "schedule"].includes((decisions[task.id] || {}).action))
+    .slice(0, 12);
   const readySources = health.filter((h) => h.status === "ok").length;
   const deepSummary = deepContext.summary ? `${deepContext.summary} ` : "";
   const summary = `${deepSummary}${openItems.length} open reader items and ${meetings.length} calendar meetings are ready for review. Suggestions stay review-first until you add them to the itinerary.`;
@@ -467,8 +473,10 @@ function mergeMeetings(existing, incoming) {
   return dedupeBy([...asArray(existing), ...asArray(incoming)], (meeting) => meeting.id || meeting.source_id || `${meeting.title || meeting.label}|${meeting.start}`);
 }
 
-function ingestDeepSweepPacket({ date, state, packet, source }) {
+function ingestDeepSweepPacket({ date, state, packet, source, suppressedSourceIds = [] }) {
   const normalized = normalizeDeepPacket(packet || {}, source);
+  if (state.deep_sweep && (asArray(state.deep_sweep.processed_packet_ids).includes(normalized.id) || state.deep_sweep.last_packet_id === normalized.id ||
+      asArray(state.deep_sweep.recent_packets).some(entry => entry.id === normalized.id))) return state;
   const runAt = new Date().toISOString();
   const base = {
     ...state,
@@ -477,6 +485,13 @@ function ingestDeepSweepPacket({ date, state, packet, source }) {
     mutations: asArray(state.mutations),
   };
   const existingContext = base.glymphatic_context || {};
+  const blocked = [...new Set([...asArray(existingContext.suppressed_source_ids), ...suppressedSourceIds,
+    ...Object.keys(base.done || {}).filter(id => base.done[id]),
+    ...Object.keys(base.deleted || {}).filter(id => base.deleted[id]),
+    ...Object.entries((base.glymphatic_brief || {}).decisions || {}).filter(([, decision]) =>
+      ["drop", "backlog", "accept", "schedule"].includes((decision || {}).action)).flatMap(([id]) => [id,
+        ...[...asArray(existingContext.suggested_tasks), ...asArray(base.glymphatic_brief?.current?.suggested_tasks)]
+          .filter(task => task.id === id).flatMap(sourceIds)])])];
   const nextContext = {
     ...existingContext,
     last_packet_id: normalized.id,
@@ -484,11 +499,13 @@ function ingestDeepSweepPacket({ date, state, packet, source }) {
     last_ingested_at: runAt,
     last_source: normalized.source,
     summary: normalized.summary || existingContext.summary || "",
-    suggested_tasks: dedupeBy([...asArray(existingContext.suggested_tasks), ...normalized.suggestedTasks], (task) => task.id || task.title).slice(0, 24),
-    lessons: dedupeBy([...asArray(existingContext.lessons), ...normalized.lessons], (item) => item.id || item.title || item.text || JSON.stringify(item)).slice(0, 24),
+    suggested_tasks: keepExisting(asArray(existingContext.suggested_tasks).length ? existingContext.suggested_tasks :
+      asArray(base.glymphatic_brief?.current?.suggested_tasks), normalized.suggestedTasks, blocked).slice(0, 24),
+    suppressed_source_ids: blocked,
+    lessons: dedupeBy([...normalized.lessons, ...asArray(existingContext.lessons)], (item) => item.id || item.title || item.text || JSON.stringify(item)).slice(0, 24),
     disregarded: dedupeBy([...asArray(existingContext.disregarded), ...normalized.disregarded], (item) => item.id || item.title || item.text || JSON.stringify(item)).slice(0, 24),
     retro: normalized.retro || existingContext.retro || null,
-    source_health: normalized.sourceHealth,
+    source_health: normalized.sourceHealth.length ? normalized.sourceHealth : asArray(existingContext.source_health),
     pages: normalized.pages.length ? normalized.pages : asArray(existingContext.pages),
   };
   const mergedOpenItems = mergeOpenItems(base.triage.open_items, normalized.openItems);
@@ -515,6 +532,7 @@ function ingestDeepSweepPacket({ date, state, packet, source }) {
     deep_sweep: {
       ...(base.deep_sweep || {}),
       last_packet_id: normalized.id,
+      processed_packet_ids: [...new Set([...asArray(base.deep_sweep?.processed_packet_ids), normalized.id])],
       last_packet_at: normalized.generated_at,
       last_ingested_at: runAt,
       last_source: normalized.source,

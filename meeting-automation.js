@@ -1043,7 +1043,8 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
   }
 
   if (Array.isArray(proposedActions) && proposedActions.length) {
-    const existing = await loadArtifacts(meeting.id, workspaceId);
+    const existing = await blockDB.getMeetingProposalAnchors(meeting.id, workspaceId);
+    const existingBySource = new Map(existing.filter(b => propsOf(b).source_item_id).map(b => [propsOf(b).source_item_id, b]));
     const existingByText = new Map(
       existing.filter(b => propsOf(b).kind === "proposed_action_item")
         .flatMap(b => [propsOf(b).sourceText, propsOf(b).text]
@@ -1057,7 +1058,13 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
       if (!textKey) continue;
       const origin = a && a.origin === "signaled" ? "signaled" : "automated";
       const signal = origin === "signaled" ? sanitizeSignal(a.signal) : null;
-      const duplicate = existingByText.get(textKey);
+      const sourceId = String((a && (a.source_item_id || a.source_id || a.id)) || "").trim();
+      let duplicate = (sourceId && existingBySource.get(sourceId)) || existingByText.get(textKey);
+      if (!duplicate && sourceId) {
+        const matches = await blockDB.getProposalSourceMatches(workspaceId, [sourceId]);
+        if (matches.length) continue; // Already a task/proposal anywhere, including tombstones.
+      }
+      if (duplicate && duplicate.deleted_at) continue;
       if (duplicate) {
         const prior = propsOf(duplicate);
         const priorCitation = citationOf(prior);
@@ -1124,6 +1131,9 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
       const created = await upsertArtifact({
         meeting, workspaceId, userId, kind: "proposed_action_item", sortOrder: 300 + idx,
         properties: {
+          ...(sourceId ? { source_item_id: sourceId,
+            id: "meeting-proposal:" + crypto.createHash("sha256").update(JSON.stringify([workspaceId, sourceId])).digest("hex"),
+            idempotency_key: "meeting-proposal:" + crypto.createHash("sha256").update(sourceId).digest("hex") } : {}),
           title: text,
           text,
           owner: (a.owner === "other" || a.owner === "others") ? "other" : "drake",
@@ -1137,7 +1147,8 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
         },
       });
       existingByText.set(textKey, created);
-      applied.proposedActions += 1;
+      if (sourceId) existingBySource.set(sourceId, created);
+      if (!created._resolvedExisting && !created.deleted_at) applied.proposedActions += 1;
       idx += 1;
     }
   }

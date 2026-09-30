@@ -2400,6 +2400,94 @@ async function findTaskByTriageSource(workspaceId, triageId, triageKey) {
   return rows[0] ? parseBlock(rows[0]) : null;
 }
 
+async function getProposalSourceMatches(workspaceId, sourceIds, client = pool) {
+  if (!workspaceId) throw new Error("proposal workspace required");
+  if (!sourceIds.length) return [];
+  const { sourceKeys } = require("./lib/proposal-sources");
+  const { rows } = await client.query(
+    `SELECT * FROM blocks WHERE type='block' AND workspace_id=$1
+      AND COALESCE(properties->>'kind', '') <> 'triage_suppression'
+      AND (properties->>'source_item_id'=ANY($2::text[])
+        OR properties->>'source_id'=ANY($2::text[])
+        OR properties->>'triageId'=ANY($2::text[])
+        OR properties->>'triageKey'=ANY($2::text[])
+        OR properties->>'glymphatic_task_id'=ANY($2::text[])
+        OR properties->>'idempotency_key'=ANY($2::text[]))`,
+    [workspaceId, sourceKeys(sourceIds)]);
+  return rows.map(parseBlock);
+}
+
+async function getMeetingProposalAnchors(parentId, workspaceId) {
+  if (!workspaceId) throw new Error("proposal workspace required");
+  const { rows } = await pool.query(
+    `SELECT * FROM blocks WHERE parent_id=$1 AND workspace_id=$2
+      AND properties->>'kind'='proposed_action_item' ORDER BY created_at ASC`,
+    [parentId, workspaceId]);
+  return rows.map(parseBlock);
+}
+
+async function mergeDccProposalPacket(date, packet, userId, workspaceId, emptyState, source, dryRun = false) {
+  if (!userId || !workspaceId) throw new Error("proposal owner required");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Serialize this on-demand writer across dates, including new-day rows.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`dcc-proposals:${workspaceId}`]);
+    const { rows } = await client.query("SELECT state_json FROM dcc_state WHERE date=$1 AND workspace_id=$2 FOR UPDATE", [date, workspaceId]);
+    const state = rows[0] ? rows[0].state_json : emptyState;
+    const intelligence = require("./dcc-intelligence");
+    const { sourceIds, sourceKeys } = require("./lib/proposal-sources");
+    const normalized = intelligence.normalizeDeepPacket(packet, source);
+    const ids = [...new Set([...(state.glymphatic_context?.suggested_tasks || []),
+      ...(state.glymphatic_brief?.current?.suggested_tasks || []), ...normalized.suggestedTasks].flatMap(sourceIds))];
+    const matches = await getProposalSourceMatches(workspaceId, ids, client);
+    const suppressed = new Set();
+    for (const id of ids) {
+      const keys = sourceKeys([id]);
+      if (matches.some(row => ["source_item_id", "source_id", "triageId", "triageKey", "glymphatic_task_id", "idempotency_key"]
+        .some(key => keys.includes((row.properties || {})[key])))) suppressed.add(id);
+    }
+    if (ids.length) {
+      const decisions = await client.query(
+        `SELECT entry.key, proposal.value AS proposal FROM dcc_state CROSS JOIN LATERAL
+          jsonb_each(CASE WHEN jsonb_typeof(state_json#>'{glymphatic_brief,decisions}')='object'
+            THEN state_json#>'{glymphatic_brief,decisions}' ELSE '{}'::jsonb END) entry
+         LEFT JOIN LATERAL jsonb_array_elements(
+           CASE WHEN jsonb_typeof(state_json#>'{glymphatic_context,suggested_tasks}')='array'
+             THEN state_json#>'{glymphatic_context,suggested_tasks}' ELSE '[]'::jsonb END ||
+           CASE WHEN jsonb_typeof(state_json#>'{glymphatic_brief,current,suggested_tasks}')='array'
+             THEN state_json#>'{glymphatic_brief,current,suggested_tasks}' ELSE '[]'::jsonb END
+         ) proposal ON proposal.value->>'id'=entry.key
+         WHERE workspace_id=$1
+           AND (entry.key=ANY($2::text[]) OR proposal.value->>'source_item_id'=ANY($2::text[])
+             OR proposal.value->>'source_id'=ANY($2::text[]) OR proposal.value->>'source_ref'=ANY($2::text[]))
+           AND entry.value->>'action' IN ('drop','backlog','accept','schedule')
+         UNION ALL
+         SELECT native.value AS key, NULL::jsonb AS proposal FROM dcc_state CROSS JOIN LATERAL
+           jsonb_array_elements_text(CASE WHEN jsonb_typeof(state_json#>'{glymphatic_context,suppressed_source_ids}')='array'
+             THEN state_json#>'{glymphatic_context,suppressed_source_ids}' ELSE '[]'::jsonb END) native
+         WHERE workspace_id=$1 AND native.value=ANY($2::text[])`, [workspaceId, ids]);
+      for (const row of decisions.rows) {
+        suppressed.add(row.key);
+        for (const id of sourceIds(row.proposal)) suppressed.add(id);
+      }
+    }
+    const next = intelligence.ingestDeepSweepPacket({ date, state, packet, source, suppressedSourceIds: [...suppressed] });
+    const duplicate = next === state;
+    if (!dryRun && !duplicate) {
+      await client.query(
+        `INSERT INTO dcc_state(date,state_json,user_id,workspace_id,updated_at) VALUES($1,$2,$3,$4,NOW())
+         ON CONFLICT(date,workspace_id) DO UPDATE SET state_json=EXCLUDED.state_json,
+           user_id=EXCLUDED.user_id, updated_at=EXCLUDED.updated_at`, [date, next, userId, workspaceId]);
+    }
+    await client.query(dryRun ? "ROLLBACK" : "COMMIT");
+    return { state: next, duplicate, suppressedSourceIds: [...suppressed].filter(id => normalized.suggestedTasks.some(task => sourceIds(task).includes(id))),
+      acceptedSourceIds: (next.glymphatic_context?.suggested_tasks || []).filter(task =>
+        normalized.suggestedTasks.some(incoming => incoming.id === task.id)).map(task => task.id) };
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+}
+
 async function getBlocksByKind(kind, workspaceId) {
   const { rows } = workspaceId
     ? await pool.query(`SELECT * FROM blocks WHERE type='block' AND properties->>'kind'=$1 AND workspace_id=$2 AND deleted_at IS NULL ORDER BY created_at ASC`, [kind, workspaceId])
@@ -2520,6 +2608,7 @@ module.exports = {
   undeleteBlock, updateDeletedBlockProperties, getBlockIncludingDeleted, findByIdempotencyKey, getBlocksByIdempotencyKeys, getRepeatSeriesBlocks, withRepeatSeriesLock, isIdempotencyConflict,
   getCarryoverPool, carryoverSkipTypes, getSubtree, isTaskRow,
   isCompletedTaskProps, applyCompletionIntent, setTaskCompletion, propagateResponsibilityDone,
+  getProposalSourceMatches, getMeetingProposalAnchors, mergeDccProposalPacket,
   findTaskByTriageSource, getBlocksByDate, getBlocksByDateIncludingDeleted, getCalendarMeetingContextBySourceIds, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,

@@ -376,8 +376,10 @@ test("a failed read with NO mirror throws rather than handing back a base to ful
 // push-is-a-move.test.js's source sweep.
 test("every routes/dcc.js mutation handler takes Postgres as its BASE state (blocker 3)", () => {
   const code = DCC_SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
-  assert.equal((code.match(/await readDccDayState\(/g) || []).length, 5,
+  assert.equal((code.match(/await readDccDayState\(/g) || []).length, 4,
     "a handler that stopped reading Postgres first re-arms the boot-skeleton promotion");
+  assert.match(code, /await blockDB\.mergeDccProposalPacket\(/,
+    "deep proposals use the atomic Postgres read-lock-merge primitive instead of a file base");
   assert.match(code, /await blockDB\.saveDccBriefDecision\(/,
     "brief decisions use the atomic Postgres read-lock-write primitive instead of a file base");
   assert.deepEqual(code.match(/(?:existing|state|sourceState)\s*=\s*readJSON\(getDayFilePath/g) || [], [],
