@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { triageItemKey } = require("./triage-suppressions");
-const { sourceIds, keepExisting } = require("./lib/proposal-sources");
+const { sourceIds, keepExisting, stateProposals } = require("./lib/proposal-sources");
 
 const SOURCE_CONFIG_FILE = path.join("config", "dcc-sources.json");
 
@@ -490,8 +490,7 @@ function ingestDeepSweepPacket({ date, state, packet, source, suppressedSourceId
     ...Object.keys(base.deleted || {}).filter(id => base.deleted[id]),
     ...Object.entries((base.glymphatic_brief || {}).decisions || {}).filter(([, decision]) =>
       ["drop", "backlog", "accept", "schedule"].includes((decision || {}).action)).flatMap(([id]) => [id,
-        ...[...asArray(existingContext.suggested_tasks), ...asArray(base.glymphatic_brief?.current?.suggested_tasks)]
-          .filter(task => task.id === id).flatMap(sourceIds)])])];
+        ...stateProposals(base).filter(task => task.id === id).flatMap(sourceIds)])])];
   const nextContext = {
     ...existingContext,
     last_packet_id: normalized.id,
@@ -508,6 +507,24 @@ function ingestDeepSweepPacket({ date, state, packet, source, suppressedSourceId
     source_health: normalized.sourceHealth.length ? normalized.sourceHealth : asArray(existingContext.source_health),
     pages: normalized.pages.length ? normalized.pages : asArray(existingContext.pages),
   };
+  if (packet.reviewed_findings === true) {
+    // The existing page renderer takes actions from front.tomorrow, not the
+    // separate suggestions list. Merge only reviewed findings into that surface.
+    const pages = nextContext.pages.length ? nextContext.pages : asArray(base.glymphatic_brief?.current?.pages);
+    const front = pages.find(page => page.id === "front");
+    const reviewed = nextContext.suggested_tasks.filter(task => normalized.suggestedTasks.some(incoming =>
+      sourceIds(incoming).some(id => sourceIds(task).includes(id))));
+    nextContext.pages = [...pages];
+    if (reviewed.length || front) {
+      const mergedFront = { ...(front || { id: "front", label: "Reviewed findings", summary: "Drakula reviewed findings. Choose what belongs in your plan." }),
+        tomorrow: keepExisting(asArray(front?.tomorrow), reviewed).filter(task =>
+          !sourceIds(task).some(id => blocked.includes(id)) || !!base.glymphatic_brief?.decisions?.[task.id]) };
+      nextContext.pages = front ? pages.map(page => page.id === "front" ? mergedFront : page) : [mergedFront, ...pages];
+    }
+    if (normalized.lessons.length && !pages.some(page => page.id === "process")) {
+      nextContext.pages.push({ id: "process", label: "Learning proposals", summary: "Reviewed proposals for filing; nothing is applied automatically." });
+    }
+  }
   const mergedOpenItems = mergeOpenItems(base.triage.open_items, normalized.openItems);
   const mergedMeetings = mergeMeetings(base.meetings, normalized.meetings);
   // Rebuild the brief immediately so an ingested packet (including its pages)

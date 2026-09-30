@@ -2436,10 +2436,9 @@ async function mergeDccProposalPacket(date, packet, userId, workspaceId, emptySt
     const { rows } = await client.query("SELECT state_json FROM dcc_state WHERE date=$1 AND workspace_id=$2 FOR UPDATE", [date, workspaceId]);
     const state = rows[0] ? rows[0].state_json : emptyState;
     const intelligence = require("./dcc-intelligence");
-    const { sourceIds, sourceKeys } = require("./lib/proposal-sources");
+    const { sourceIds, sourceKeys, stateProposals } = require("./lib/proposal-sources");
     const normalized = intelligence.normalizeDeepPacket(packet, source);
-    const ids = [...new Set([...(state.glymphatic_context?.suggested_tasks || []),
-      ...(state.glymphatic_brief?.current?.suggested_tasks || []), ...normalized.suggestedTasks].flatMap(sourceIds))];
+    const ids = [...new Set([...stateProposals(state), ...normalized.suggestedTasks].flatMap(sourceIds))];
     const matches = await getProposalSourceMatches(workspaceId, ids, client);
     const suppressed = new Set();
     for (const id of ids) {
@@ -2456,7 +2455,9 @@ async function mergeDccProposalPacket(date, packet, userId, workspaceId, emptySt
            CASE WHEN jsonb_typeof(state_json#>'{glymphatic_context,suggested_tasks}')='array'
              THEN state_json#>'{glymphatic_context,suggested_tasks}' ELSE '[]'::jsonb END ||
            CASE WHEN jsonb_typeof(state_json#>'{glymphatic_brief,current,suggested_tasks}')='array'
-             THEN state_json#>'{glymphatic_brief,current,suggested_tasks}' ELSE '[]'::jsonb END
+             THEN state_json#>'{glymphatic_brief,current,suggested_tasks}' ELSE '[]'::jsonb END ||
+           jsonb_path_query_array(state_json, '$.glymphatic_context.pages[*] ? (@.id == "front").tomorrow[*]') ||
+           jsonb_path_query_array(state_json, '$.glymphatic_brief.current.pages[*] ? (@.id == "front").tomorrow[*]')
          ) proposal ON proposal.value->>'id'=entry.key
          WHERE workspace_id=$1
            AND (entry.key=ANY($2::text[]) OR proposal.value->>'source_item_id'=ANY($2::text[])

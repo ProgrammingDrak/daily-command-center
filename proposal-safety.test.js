@@ -99,3 +99,30 @@ test("cross-date settled wrapper receipt resolves to submitted native identities
  const out=await db.mergeDccProposalPacket("2026-09-30",packet("new-packet","new-wrapper"),1,"ws-owned",{},"Drakula");
  assert.deepEqual(out.acceptedSourceIds,[]);assert.deepEqual(out.suppressedSourceIds,[ID]);
 });
+
+test("reviewed packets use the existing front review surface without replacing authored pages or accepted human edits",()=>{
+ const state=base();const accepted={id:"accepted",source_item_id:"gmail:accepted:source",title:"Human plan",reason:"Human rationale"};
+ state.glymphatic_context.pages=[{id:"front",label:"Human front",tomorrow:[accepted]},{id:"organism",summary:"Human page"}];
+ state.glymphatic_brief.decisions.accepted={action:"accept"};
+ const p=packet();p.reviewed_findings=true;
+ const out=ingestDeepSweepPacket({date:state.date,state,packet:p});
+ const front=out.glymphatic_brief.current.pages.find(x=>x.id==="front");
+ assert.equal(front.label,"Human front");assert.deepEqual(front.tomorrow[0],accepted);assert.equal(front.tomorrow[1].title,"Human edited title");
+ assert.deepEqual(out.glymphatic_brief.current.pages.find(x=>x.id==="organism"),state.glymphatic_context.pages[1]);
+});
+test("reviewed proposals create a visible front only when admitted and learning proposals retain authored pages",()=>{
+ const state=base();delete state.glymphatic_context;state.glymphatic_brief.current.pages=[{id:"organism",summary:"Keep"}];
+ const p=packet();p.reviewed_findings=true;
+ const out=ingestDeepSweepPacket({date:state.date,state,packet:p});assert.equal(out.glymphatic_brief.current.pages[0].id,"front");assert.equal(out.glymphatic_brief.current.pages[0].tomorrow[0].id,ID);
+ const dropped={...state,glymphatic_brief:{...state.glymphatic_brief,decisions:{[ID]:{action:"drop"}}}};
+ assert.deepEqual(ingestDeepSweepPacket({date:state.date,state:dropped,packet:p}).glymphatic_brief.current.pages,state.glymphatic_brief.current.pages);
+ const lesson={id:"learn",title:"Review learning",reason:"Evidence"};const l={id:"learning",reviewed_findings:true,lessons:[lesson]};
+ const learning=ingestDeepSweepPacket({date:state.date,state,packet:l});assert.equal(learning.glymphatic_brief.current.pages[0].id,"organism");assert.equal(learning.glymphatic_brief.current.pages[1].id,"process");assert.deepEqual(learning.glymphatic_brief.current.lessons,[lesson]);
+});
+
+test("handled native sources leave the pending front queue while recorded human choices remain",()=>{
+ const state=base();state.glymphatic_context.pages=[{id:"front",tomorrow:[{id:ID,source_item_id:ID,title:"Previously proposed"}]}];
+ const p={id:"next-reviewed",reviewed_findings:true,suggested_tasks:[{id:"other",title:"New finding"}]};
+ const out=ingestDeepSweepPacket({date:state.date,state,packet:p,suppressedSourceIds:[ID]});
+ assert.deepEqual(out.glymphatic_brief.current.pages[0].tomorrow.map(x=>x.id),["other"]);
+});
