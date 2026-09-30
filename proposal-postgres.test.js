@@ -32,6 +32,10 @@ test('proposal merge SQL scopes native suppressions, honors tombstones and settl
     await client.query(`UPDATE dcc_state SET state_json=jsonb_set(state_json,'{glymphatic_context,suggested_tasks}','[]'::jsonb) WHERE date='2026-09-29' AND workspace_id='ws-owned'`);
     const nextDay=await db.mergeDccProposalPacket('2026-10-01',{id:'later-day',suggested_tasks:[{id:'another-wrapper',source_item_id:settled,title:'Do not resurrect'}]},7,'ws-owned',{},'Drakula');
     assert.deepEqual(nextDay.acceptedSourceIds,[]);assert.deepEqual(nextDay.suppressedSourceIds,[settled]);
+    await client.query(`INSERT INTO blocks(id,type,workspace_id,properties,deleted_at) VALUES ('page-only-handled','block','ws-owned',$1,now())`,[{source_item_id:'gmail:page:handled'}]);
+    await client.query(`UPDATE dcc_state SET state_json=jsonb_set(state_json,'{glymphatic_context,pages}',$1::jsonb) WHERE date='2026-09-30' AND workspace_id='ws-owned'`,[JSON.stringify([{id:'front',tomorrow:[{id:'page-wrapper',source_item_id:'gmail:page:handled',title:'Handled page-only proposal'}]}])]);
+    const visible=await db.mergeDccProposalPacket('2026-09-30',{id:'visible-proof',reviewed_findings:true,suggested_tasks:[{id:'visible-new',source_item_id:'gmail:visible:new',title:'Fresh ordinary proposal'}]},7,'ws-owned',{},'Drakula');
+    assert.deepEqual(visible.state.glymphatic_brief.current.pages[0].tomorrow.map(x=>x.id),['visible-new']);
     const before=(await client.query(`SELECT state_json FROM dcc_state WHERE date='2026-09-30' AND workspace_id='ws-owned'`)).rows[0].state_json;
     const retry=await db.mergeDccProposalPacket('2026-09-30',packet,7,'ws-owned',{},'Drakula');
     assert.equal(retry.duplicate,true);
