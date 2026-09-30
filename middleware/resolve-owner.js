@@ -21,7 +21,7 @@
 // If you need a third precedence order, you are probably wrong — extend a mode
 // here instead of inlining a new chain in a route.
 
-const { pool } = require("../pg-pool");
+const pool = require("../pg-pool");
 
 function headerOwner(req) {
   return Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 0) || null;
