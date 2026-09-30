@@ -779,13 +779,29 @@ module.exports = function mount(app, ctx) {
     try {
       const body = req.body || {};
       const date = body.date || (body.packet && body.packet.date) || new Date().toISOString().slice(0, 10);
-      const existing = await readDccDayState(date, req, buildSkeletonState(date));
-      const nextState = dccIntelligence.ingestDeepSweepPacket({ date, state: existing, packet: body.packet || body, source: body.source });
-      await persistDccDay(date, nextState, req, "deep-sweep-ingest");
-      res.json({ ok: true, date, packet_id: nextState.deep_sweep.last_packet_id, pages: (nextState.glymphatic_brief?.current?.pages || []).length });
+      if (!isValidDate(date)) return res.status(400).json({ error: "Invalid date" });
+      let packet = body.packet || body;
+      // Existing local brief builders send a fixed generated_at rather than an id.
+      if (packet.id == null && typeof packet.generated_at === "string" && packet.generated_at.length <= 40 && Number.isFinite(Date.parse(packet.generated_at))) {
+        packet = { ...packet, id: dccIntelligence.normalizeDeepPacket(packet, body.source).id };
+      }
+      if (!packet.id || typeof packet.id !== "string" || packet.id.length > 500) return res.status(400).json({ error: "Stable packet id required" });
+      if (packet.suggested_tasks != null && !Array.isArray(packet.suggested_tasks)) return res.status(400).json({ error: "suggested_tasks must be an array" });
+      if (dccIntelligence.normalizeDeepPacket(packet, body.source).suggestedTasks.length > 100) return res.status(400).json({ error: "At most 100 proposals" });
+      const owner = await resolveOwnerStrict(req);
+      const result = await blockDB.mergeDccProposalPacket(date, packet, owner.userId, owner.workspaceId,
+        buildSkeletonState(date), body.source, body.dry_run === true);
+      const nextState = result.state;
+      if (body.dry_run !== true && !result.duplicate) {
+        try { writeJSON(getDayFilePath(date), nextState); } catch (mirrorError) { console.error("[deep-sweep ingest] mirror failed:", mirrorError.message); }
+        broadcast("dcc-state-changed", { source: "deep-sweep-ingest", date }, owner.workspaceId);
+      }
+      res.json({ ok: true, date, packet_id: packet.id, status: body.dry_run === true ? "dry_run" : result.duplicate ? "duplicate" : "merged",
+        owner, accepted_source_ids: result.acceptedSourceIds, suppressed_source_ids: result.suppressedSourceIds,
+        pages: (nextState.glymphatic_brief?.current?.pages || []).length });
     } catch (e) {
       console.error("[deep-sweep ingest] failed:", e);
-      res.status(500).json({ error: e.message || "deep-sweep ingest failed" });
+      res.status(e.status || e.statusCode || 500).json({ error: e.message || "deep-sweep ingest failed" });
     }
   });
 
