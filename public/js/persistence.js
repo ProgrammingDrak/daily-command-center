@@ -378,6 +378,10 @@ function reloadPersistedEdits() {
       const isFoldableTask=b=>{
         const p=b.properties||{};
         if(!TM.foldsIntoItinerary(b))return false;
+        // A Whenever pool row lives in the header pill, not in today's Unplanned list.
+        // typeof-guarded like the rest of this fold: a stale cached task-model.js must
+        // degrade to "shows in Unplanned", never to an empty itinerary.
+        if(typeof TM.isWheneverPoolRow==="function"&&TM.isWheneverPoolRow(b))return false;
         // C5b was told to DROP these two branches and deliberately did not, on the strength
         // of the measurement plus what the rest of the codebase still believes.
         //

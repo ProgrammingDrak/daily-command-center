@@ -423,6 +423,23 @@
     return out;
   }
 
+  // ── Whenever: chores with no set time (whenever.js owns the surface) ──
+  //
+  // A dateless backlog row on the Whenever stage. Its ONE home is the header pill's
+  // pool, so the itinerary fold (persistence.js isFoldableTask) skips it. Folded, it
+  // would sit in every day's Unplanned list, which is the opposite of background
+  // work, and it would render twice: in Unplanned and in the pool. It stays in
+  // selectUnscheduled on purpose, because `backlog[]` IS the pool's source and every
+  // backlog verb (addToSchedule, edit, delete) resolves rows there. Once dated it is
+  // ordinary work again (that is how Do it now brings one into the day), so the date
+  // test comes first. The stage is the stored value; whenever.js reads it from here.
+  const WHENEVER_STAGE = "Whenever";
+  function isWheneverPoolRow(block) {
+    block = block || {};
+    const p = block.properties || {};
+    return !block.date && p.kind === "backlog" && p.stage === WHENEVER_STAGE;
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
   // C6a: THE DERIVATION LAYER
   // ══════════════════════════════════════════════════════════════════════════
@@ -866,6 +883,8 @@
     foldsIntoItinerary: foldsIntoItinerary,
     backlogKey: backlogKey,
     selectUnscheduled: selectUnscheduled,
+    WHENEVER_STAGE: WHENEVER_STAGE,
+    isWheneverPoolRow: isWheneverPoolRow,
     // C6a — shape
     parentIdOf: parentIdOf,
     relOf: relOf,

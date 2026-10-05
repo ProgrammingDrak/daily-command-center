@@ -130,6 +130,9 @@
       <button class="waiting-pill-nav waiting-pill-nav--plum" id="waiting-pill-nav" type="button" aria-label="Open Waiting tasks" aria-controls="tm-delegated-blocked-section">
         <span>Waiting</span><span class="waiting-pill-nav-count" id="waiting-pill-nav-count" aria-live="polite">0</span>
       </button>
+      <button class="whenever-pill-nav whenever-theme--sage" id="whenever-pill-nav" type="button" aria-label="Open Whenever tasks" aria-controls="tm-whenever-section" title="Tasks with no set time. Knock one out when you have a free minute.">
+        <span data-whenever-label>Whenever</span><span class="whenever-pill-nav-count" id="whenever-pill-nav-count" aria-live="polite">0</span>
+      </button>
     </div>
     <div class="date-picker-drop" id="date-picker-drop" style="display:none"></div>
   </div>
@@ -385,6 +388,35 @@
           <div class="tm-section-body" id="tm-delegated-blocked">
             <div class="delegated-sidebar-list" id="delegated-blocked-list">
               <div class="delegated-empty">Nothing waiting yet.</div>
+            </div>
+          </div>
+        </details>
+
+        <!-- Whenever: dateless Task Library rows on the Whenever stage (whenever.js). -->
+        <details class="tm-section whenever-theme--sage" id="tm-whenever-section" data-sidecar-label="Whenever">
+          <summary class="tm-section-header">
+            <span class="tm-chevron"></span>
+            <span data-whenever-label>Whenever</span>
+            <span class="badge" id="whenever-count" style="display:none">0</span>
+          </summary>
+          <div class="tm-section-body" id="tm-whenever">
+            <div class="whenever-head">
+              <p class="whenever-intro">No set time. Knock one out when you have a free minute.</p>
+              <button type="button" class="whenever-pick" id="whenever-pick" disabled>Surprise me</button>
+            </div>
+            <form class="whenever-add" id="whenever-add" autocomplete="off">
+              <input type="text" id="whenever-add-title" placeholder="Laundry, grab the mail..." aria-label="New task with no set time" maxlength="200">
+              <select id="whenever-add-dur" aria-label="How long it takes">
+                <option value="5">5m</option>
+                <option value="15" selected>15m</option>
+                <option value="30">30m</option>
+                <option value="45">45m</option>
+                <option value="60">1h</option>
+              </select>
+              <button type="submit">Add</button>
+            </form>
+            <div class="whenever-list" id="whenever-list">
+              <div class="delegated-empty whenever-empty">Nothing here. Add the chores with no set time, like laundry or the mail.</div>
             </div>
           </div>
         </details>
@@ -2012,6 +2044,8 @@
 <script src="/public/js/measured-task-window.js?v=measured-task-window-1"></script>
 <script src="/public/js/slack-titles.js?v=slack-rules-v1"></script>
 <script src="/public/js/task-model.js?v=task-model-1"></script>
+<!-- Before schedule.js: its add-bar destinations read DCC.Whenever.LABEL at load. -->
+<script src="/public/js/whenever.js?v=whenever-1"></script>
 <!-- day-context.js: the one day-context + free-slot engine (window.DCC.getDayContext/findSlot); must load before state.js/schedule.js consume it -->
 <script src="/public/js/day-context.js?v=day-context-2"></script>
 <script src="/public/js/core-ui.js?v=core-ui-1"></script>

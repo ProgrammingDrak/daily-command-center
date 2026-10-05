@@ -593,10 +593,13 @@ test("addToSchedule promotes a backlog row IN PLACE — no delete, no create", (
     persistAddedTask: () => { throw new Error("persistAddedTask must NOT run for a block-backed backlog item"); },
     _reorderActive: () => {},
   });
-  ctx.addToSchedule("bl-1");
+  const write = ctx.addToSchedule("bl-1");
   assert.equal(ctx.backlog.length, 0, "it leaves the backlog");
   assert.equal(ctx.scheduled.length, 1, "and joins the day's plan");
   assert.equal(ctx.scheduled[0].id, "bl-1", "under its own id");
+  // whenever.js awaits this before pinning the start, which only writes rows already on
+  // the viewed day. Every other caller still fires and forgets.
+  assert.equal(typeof (write && write.then), "function", "addToSchedule returns the date write");
   return new Promise((r2) => setTimeout(r2, 0)).then(() => {
     assert.equal(calls.del.length, 0, "the tombstone is gone: this used to deleteBacklogBlock");
     assert.equal(calls.create.length, 0, "and this used to persistAddedTask a row with a NEW id");

@@ -14,7 +14,10 @@ test("Loose Ends gets a dedicated full-width row in the mobile date toolbar", ()
   );
 });
 
-test("Waiting gets its own touch-sized row below Loose Ends on mobile", () => {
+test("Waiting and Whenever share one touch-sized row below Loose Ends on mobile", () => {
   const mobileShell = css.slice(css.indexOf("@media (max-width:760px)"));
-  assert.match(mobileShell, /\.header \.date-nav \.waiting-pill-nav\{[^}]*flex:1 0 100%;[^}]*order:3;[^}]*min-height:44px/);
+  // Half a row each (minus half the 6px gap), so neither can ride up onto the date row
+  // and a third pill does not add a third full-width row to the phone header.
+  assert.match(mobileShell, /\.header \.date-nav \.waiting-pill-nav\{[^}]*flex:1 0 calc\(50% - 3px\);[^}]*order:3;[^}]*min-height:44px/);
+  assert.match(mobileShell, /\.header \.date-nav \.whenever-pill-nav\{[^}]*flex:1 0 calc\(50% - 3px\);[^}]*order:4;[^}]*min-height:44px/);
 });

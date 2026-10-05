@@ -1552,6 +1552,19 @@ async function _moveTaskToBacklogStage(id,stage,toastMsg){
 
 function moveTaskToBacklog(id){_moveTaskToBacklogStage(id,"Backlog","Moved to backlog");}
 function moveTaskToPriority(id){_moveTaskToBacklogStage(id,"Priority","Moved to priority");}
+// No set time after all (laundry, the mail): the same in-place unschedule, landing on
+// the Whenever stage so the header pill's pool picks it up. See whenever.js.
+//
+// The refold is the one difference from its siblings. They leave the ev on screen
+// because a backlog row still renders in Unplanned; a Whenever pool row does not
+// (TaskModel.isWheneverPoolRow keeps it out of the fold), so without the refold it
+// would linger there until the next reload and then vanish.
+async function moveTaskToWhenever(id){
+  const W=window.DCC&&window.DCC.Whenever;
+  const stage=(W&&W.STAGE)||"Whenever";
+  await _moveTaskToBacklogStage(id,stage,"Moved to "+((W&&W.LABEL)||"Whenever"));
+  if(typeof refoldTaskStateFromBlockCache==="function"){refoldTaskStateFromBlockCache();render();}
+}
 
 // Convert an existing scheduled task into a Delegated / Blocked item: open the
 // delegated modal prefilled with this task as "what you're working on". The

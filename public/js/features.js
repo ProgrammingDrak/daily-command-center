@@ -1658,6 +1658,8 @@ const SURFACES = {
   trivial:         {build:()=>{if(typeof buildTrivialTasks==="function")buildTrivialTasks();},  isVisible:()=>true},
   // Body-level dock stays visible across tabs and must never show stale counts.
   anytime:         {build:()=>{if(typeof buildAnytime==="function")buildAnytime();},             isVisible:()=>true},
+  // Writes the always-visible header pill count, so it builds every render like delegated.
+  whenever:        {build:()=>{if(typeof buildWhenever==="function")buildWhenever();},           isVisible:()=>true},
   scheduled:       {build:()=>{if(typeof buildScheduled==="function")buildScheduled();},        isVisible:()=>true},
   scheduleSoon:    {build:()=>{if(typeof buildScheduleSoon==="function")buildScheduleSoon();},  isVisible:()=>true},
   glymphaticBrief: {build:()=>{if(typeof buildGlymphaticBrief==="function")buildGlymphaticBrief();},isVisible:()=>true},

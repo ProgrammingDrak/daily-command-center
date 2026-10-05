@@ -159,6 +159,17 @@
   .waiting-pill-nav:hover{filter:brightness(1.25)}
   .waiting-pill-nav:focus-visible{outline:2px solid var(--waiting-nav-ink);outline-offset:2px}
   .waiting-pill-nav-count{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--waiting);color:#fff;font-size:10px;font-weight:800;border:2px solid var(--bg)}
+  /* Whenever (whenever.js): chores with no set time. Each theme class is one value of
+     the PILL_STYLE knob there and sets the five vars every Whenever rule reads, so the
+     pill and its drawer section always swap together. */
+  .whenever-theme--sage{--whenever-accent:#00b373;--whenever-soft:rgba(0,179,115,0.16);--whenever-line:rgba(0,179,115,0.58);--whenever-ink:#7ee0b8;--whenever-on-accent:#04130d}
+  .whenever-theme--teal{--whenever-accent:#14b8a6;--whenever-soft:rgba(20,184,166,0.16);--whenever-line:rgba(20,184,166,0.58);--whenever-ink:#82e6d9;--whenever-on-accent:#03201d}
+  .whenever-theme--amber{--whenever-accent:#f59e0b;--whenever-soft:rgba(245,158,11,0.15);--whenever-line:rgba(245,158,11,0.56);--whenever-ink:#fcd38a;--whenever-on-accent:#241500}
+  .whenever-theme--violet{--whenever-accent:#8b5cf6;--whenever-soft:rgba(139,92,246,0.18);--whenever-line:rgba(139,92,246,0.6);--whenever-ink:#cbb8ff;--whenever-on-accent:#ffffff}
+  .whenever-pill-nav{display:inline-flex;align-items:center;gap:7px;min-height:28px;padding:4px 7px 4px 11px;border:1px solid var(--whenever-line);border-radius:999px;background:var(--whenever-soft);color:var(--whenever-ink);font:inherit;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap;transition:filter 120ms ease}
+  .whenever-pill-nav:hover{filter:brightness(1.25)}
+  .whenever-pill-nav:focus-visible{outline:2px solid var(--whenever-ink);outline-offset:2px}
+  .whenever-pill-nav-count{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--whenever-accent);color:var(--whenever-on-accent);font-size:10px;font-weight:800;border:2px solid var(--bg)}
 
   /* ── Date Picker Dropdown ── */
   .date-picker-drop{position:absolute;z-index:200;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px;box-shadow:0 8px 24px rgba(0,0,0,0.3);min-width:260px;margin-top:6px}
@@ -2666,6 +2677,39 @@ span.waiting-pill{cursor:default}
 .delegated-sidebar-tools .delegated-mini-btn{align-self:flex-start;font-size:11px;padding:5px 12px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer;white-space:nowrap}
 .delegated-sidebar-tools .delegated-mini-btn:hover{background:var(--accent-light)}
 .delegated-sidebar-list .delegated-card-actions button{font-size:10px;padding:3px 7px}
+
+/* ======== WHENEVER SECTION (whenever.js) ======== */
+.whenever-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.whenever-intro{margin:0;font-size:12px;line-height:1.5;color:var(--text-muted)}
+.whenever-pick{flex-shrink:0;min-height:32px;padding:5px 12px;border:1px solid var(--whenever-line);border-radius:999px;background:var(--whenever-soft);color:var(--whenever-ink);font:inherit;font-size:11px;font-weight:700;cursor:pointer}
+.whenever-pick:hover:not(:disabled){filter:brightness(1.2)}
+.whenever-pick:disabled{opacity:.4;cursor:default}
+.whenever-add{display:flex;gap:6px;margin-bottom:12px}
+.whenever-add input{flex:1;min-width:0;min-height:36px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;font-size:13px}
+.whenever-add input:focus{outline:none;border-color:var(--whenever-accent);box-shadow:0 0 0 2px var(--whenever-soft)}
+.whenever-add select{min-height:36px;padding:0 6px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;font-size:12px}
+.whenever-add button{min-height:36px;padding:0 14px;border:0;border-radius:8px;background:var(--whenever-accent);color:var(--whenever-on-accent);font:inherit;font-size:12px;font-weight:800;cursor:pointer}
+.whenever-add button:hover{filter:brightness(1.1)}
+.whenever-list{display:flex;flex-direction:column;gap:6px}
+.whenever-row{display:flex;align-items:center;gap:10px;padding:8px 8px 8px 10px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--whenever-accent);border-radius:8px;transition:border-color .2s,box-shadow .2s,opacity .2s}
+.whenever-row.is-picked{border-color:var(--whenever-accent);box-shadow:0 0 0 2px var(--whenever-soft)}
+.whenever-row.is-busy{opacity:.55}
+.whenever-check{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:1.5px solid var(--border);border-radius:50%;background:transparent;color:transparent;cursor:pointer;transition:border-color .12s,color .12s}
+.whenever-check:hover,.whenever-check:focus-visible{border-color:var(--whenever-accent);color:var(--whenever-accent)}
+.whenever-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.whenever-title{font-size:13px;font-weight:600;color:var(--text);overflow-wrap:anywhere}
+.whenever-dur{font-size:11px;color:var(--text-muted)}
+.whenever-now{flex-shrink:0;min-height:30px;padding:4px 10px;border:1px solid var(--whenever-line);border-radius:6px;background:var(--whenever-soft);color:var(--whenever-ink);font:inherit;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}
+.whenever-now:hover:not(:disabled){filter:brightness(1.2)}
+.whenever-release{flex-shrink:0;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--text-muted);font-size:17px;line-height:1;cursor:pointer}
+.whenever-release:hover{background:rgba(255,255,255,0.06);color:var(--text)}
+.whenever-row button:disabled{cursor:progress}
+@media (max-width:760px){
+  .whenever-pick{min-height:40px}
+  .whenever-add input,.whenever-add select,.whenever-add button{min-height:44px}
+  .whenever-check,.whenever-release{width:40px;height:40px}
+  .whenever-now{min-height:40px;padding:4px 12px}
+}
 /* Convert-to-Delegated affordance inside the reschedule popover. */
 .resched-popover .resched-adjust{margin-top:8px;padding-top:8px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px}
 .resched-popover .resched-dur{display:flex;align-items:center;gap:6px}
@@ -4302,7 +4346,12 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
     flex:1 0 100%;order:2;justify-content:center;
     min-height:44px;margin-left:0;padding:6px 10px;
   }
-  .header .date-nav .waiting-pill-nav{flex:1 0 100%;order:3;justify-content:center;min-height:44px;padding:6px 10px}
+  /* Waiting and Whenever share ONE touch row below Loose Ends. Two half-width pills
+     keep the phone header the height it was before Whenever existed; a third full
+     row would push the itinerary another 50px down on every visit. The basis is a
+     half row minus half the 6px gap, so neither can ride up onto the date row. */
+  .header .date-nav .waiting-pill-nav{flex:1 0 calc(50% - 3px);order:3;justify-content:center;min-height:44px;padding:6px 10px;min-width:0}
+  .header .date-nav .whenever-pill-nav{flex:1 0 calc(50% - 3px);order:4;justify-content:center;min-height:44px;padding:6px 10px;min-width:0}
   .header>div:last-child{display:none!important}  /* owner buttons + clock → More sheet */
 
   /* ── Progress: tighter ── */

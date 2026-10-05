@@ -218,6 +218,8 @@ function buildTaskChangeItems(ev,trig){
     {icon:"🔒", label:"Blocked by task", onPick:()=>{if(typeof window.openTaskDependencyModal==="function")window.openTaskDependencyModal(ev._blockId||ev.blockId||ev.id);}},
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
     {icon:"💡", label:"Solo",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}},
+    // No set time after all: off the day and into the header pill's pool (whenever.js).
+    {icon:"🧺", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever", onPick:()=>{if(typeof moveTaskToWhenever==="function")moveTaskToWhenever(ev.id);}},
     // Delete lives on the radial so it's reachable on phones, where the row's
     // trash button is hidden by the mobile layout (dashboard.css).
     {icon:"🗑", label:"Delete",    onPick:()=>{if(typeof openDeleteConfirm==="function")openDeleteConfirm(ev.id);}}
