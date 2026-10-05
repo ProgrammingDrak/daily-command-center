@@ -16,7 +16,7 @@ const SHELL = [
   "/public/js/ink/canvas.js",
   "/public/js/ink/sync.js",
   "/public/js/ink/app.js",
-  "/favicon.ico",
+  "/public/icons/favicon.ico",
   "/public/icons/favicon-16x16.png",
   "/public/icons/favicon-32x32.png",
   "/public/icons/apple-touch-icon.png",
