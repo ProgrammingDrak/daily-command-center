@@ -1,0 +1,145 @@
+"use strict";
+
+// Pills are queues of OPEN work. Drake, 2026-10-05: "None of these pills (waiting,
+// loose ends, unscheduled, whenever) should have historical done sections. That is
+// tracked ON THE DAY THAT IT WAS COMPLETED." And the Waiting badge is a notification:
+// it counts only items overdue for a check-in.
+//
+// What these pin:
+//   1. Waiting has no Done filter, and All lists open items only
+//   2. the Waiting badge and the Overdue tab share ONE rule, and the badge hides at zero
+//   3. a done untimed task leaves the drawer's Unscheduled half and lands on its day,
+//      in the time block (and order) of its completion time
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+
+const DELEGATED = fs.readFileSync(require.resolve("./public/js/delegated.js"), "utf8");
+const TAB = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
+const TimeBlocks = require("./public/js/time-blocks.js");
+
+function slice(src, re, what) {
+  const m = src.match(re);
+  assert.ok(m, what + " not found; the source moved, fix the pattern");
+  return m[0];
+}
+const plain = (ctx, expr) => JSON.parse(vm.runInContext("JSON.stringify(" + expr + ")", ctx));
+
+// ── Waiting ──
+
+const WAITING = [
+  slice(DELEGATED, / {2}function isDoneDelegated\(item\) \{[\s\S]*?\n {2}\}/, "isDoneDelegated"),
+  slice(DELEGATED, / {2}function isOpenDelegated\(item\) \{[\s\S]*?\n {2}\}/, "isOpenDelegated"),
+  slice(DELEGATED, / {2}function isOverdue\(item\) \{[\s\S]*?\n {2}\}/, "isOverdue"),
+  slice(DELEGATED, / {2}function filterItems\(items, filter\) \{[\s\S]*?\n {2}\}/, "filterItems"),
+  slice(DELEGATED, / {2}function updateBadge\(overdueCount\) \{[\s\S]*?\n {2}\}/, "updateBadge"),
+].join("\n");
+
+const item = (id, props) => ({ id, properties: Object.assign({ title: id }, props) });
+const ITEMS = [
+  item("overdue", { remaining: -3 }),
+  item("upcoming", { remaining: 4 }),
+  item("done", { remaining: -9, status: "done", completedAt: "2026-10-01T10:00:00Z" }),
+  item("snoozed", { remaining: -2, snoozed: true }),
+  item("dependency", { remaining: -2, dependency: true }),
+  item("followed-up", { remaining: -5, checkInRepeat: false }),
+  item("check-in-booked", { remaining: -1, checkInTaskId: "t", checkInScheduledFor: "2026-10-06" }),
+];
+
+function waiting() {
+  const els = {};
+  const el = () => ({ textContent: "", style: {}, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } });
+  ["delegated-blocked-count", "waiting-pill-nav-count", "waiting-pill-nav"].forEach(id => { els[id] = el(); });
+  const ctx = {
+    document: { getElementById: id => els[id] || null },
+    itemUrgency: i => ({ timing: { remaining: i.properties.remaining } }),
+    isSnoozed: i => !!i.properties.snoozed,
+    isTaskDependency: i => !!i.properties.dependency,
+    todayStr: () => "2026-10-05",
+  };
+  vm.createContext(ctx);
+  vm.runInContext(WAITING, ctx);
+  ctx.ITEMS = ITEMS;
+  return { ctx, els };
+}
+
+test("Waiting has no Done filter, and All lists open items only", () => {
+  const { ctx } = waiting();
+  assert.deepEqual(plain(ctx, 'filterItems(ITEMS, "all").map(i => i.id)'),
+    ["overdue", "upcoming", "snoozed", "dependency", "followed-up", "check-in-booked"]);
+  assert.deepEqual(plain(ctx, 'filterItems(ITEMS, "done").map(i => i.id)'),
+    plain(ctx, 'filterItems(ITEMS, "all").map(i => i.id)'), "a stale 'done' filter falls back to open work");
+  const filters = slice(DELEGATED, / {2}function renderFilters\(\) \{[\s\S]*?\n {2}\}/, "renderFilters");
+  assert.doesNotMatch(filters, /"done"/, "the Done tab is gone");
+});
+
+test("the badge and the Overdue tab count only items overdue for a check-in", () => {
+  const { ctx, els } = waiting();
+  assert.deepEqual(plain(ctx, 'filterItems(ITEMS, "overdue").map(i => i.id)'), ["overdue"]);
+  assert.deepEqual(plain(ctx, 'filterItems(ITEMS, "upcoming").map(i => i.id)'),
+    ["upcoming", "snoozed", "dependency", "followed-up", "check-in-booked"]);
+  const counted = vm.runInContext('ITEMS.filter(isOverdue).length', ctx);
+  assert.equal(counted, 1);
+  ctx.updateBadge(counted);
+  assert.equal(els["waiting-pill-nav-count"].textContent, "1");
+  assert.equal(els["waiting-pill-nav-count"].style.display, "");
+  assert.match(els["waiting-pill-nav"].attrs["aria-label"], /1 overdue for a check-in/);
+  // The sidebar feeds the badge from this same rule.
+  assert.match(DELEGATED, /updateBadge\(all\.filter\(isOverdue\)\.length\)/);
+});
+
+test("the Waiting badge disappears when nothing is overdue", () => {
+  const { ctx, els } = waiting();
+  ctx.updateBadge(0);
+  assert.equal(els["waiting-pill-nav-count"].style.display, "none");
+  assert.equal(els["delegated-blocked-count"].style.display, "none");
+  assert.match(els["waiting-pill-nav"].attrs["aria-label"], /none overdue/);
+});
+
+// ── Unscheduled: done work goes to its day ──
+
+const FILE = [
+  slice(TAB, /function _completionMinute\(ev\)\{[\s\S]*?\n\}/, "_completionMinute"),
+  slice(TAB, /function _fileDoneUntimedOnTheDay\(groups,unscheduledGroup,timeBlocks\)\{[\s\S]*?\n\}/, "_fileDoneUntimedOnTheDay"),
+].join("\n");
+
+function filing(doneAt) {
+  const pt = s => { const m = /^(\d{1,2}):(\d{2})/.exec(String(s || "")); return m ? Number(m[1]) * 60 + Number(m[2]) : 0; };
+  const fmt = n => String(Math.floor(n / 60)).padStart(2, "0") + ":" + String(n % 60).padStart(2, "0");
+  const ctx = {
+    DCC: { TimeBlocks }, doneAt, pt, fmt,
+    isDone: ev => !!ev.done,
+    _rowIsTimed: ev => !ev.untimed,
+    Date,
+  };
+  vm.createContext(ctx);
+  vm.runInContext(FILE, ctx);
+  return ctx;
+}
+
+function localIso(h, m) { const d = new Date(2026, 9, 5, h, m); return d.toISOString(); }
+
+test("a done untimed task leaves Unscheduled and lands in the block, and order, of its completion", () => {
+  const blocks = [{ id: "am", name: "Morning", start: "08:00", end: "12:00" }, { id: "pm", name: "Afternoon", start: "12:00", end: "17:00" }];
+  const groups = TimeBlocks.groupItineraryTree([
+    { ev: { id: "t9", start: "09:00", end: "09:30" }, depth: 0 },
+    { ev: { id: "t11", start: "11:00", end: "11:30" }, depth: 0 },
+    { ev: { id: "open", untimed: true }, depth: 0 },
+    { ev: { id: "mail", untimed: true, done: true }, depth: 0 },
+    { ev: { id: "mail-step", untimed: true, done: true }, depth: 1 },
+    { ev: { id: "lost", untimed: true, done: true }, depth: 0 },
+  ], blocks);
+  const unscheduled = groups.find(g => g.block.id === TimeBlocks.UNPLANNED_BLOCK.id);
+  const ctx = filing({ mail: localIso(10, 15) });
+  ctx._fileDoneUntimedOnTheDay(groups, unscheduled, blocks);
+  const ids = g => Array.from(g.nodes, n => n.ev.id);
+  assert.deepEqual(ids(unscheduled), ["open"], "only open work stays in the pill");
+  const am = groups.find(g => g.block.id === "am");
+  assert.deepEqual(ids(am), ["t9", "mail", "mail-step", "t11"], "filed at 10:15, between 9:00 and 11:00, subtree attached");
+  const outside = groups.find(g => g.block === TimeBlocks.OUTSIDE_BLOCK);
+  assert.ok(outside, "an unknown completion time still lands on the day");
+  assert.deepEqual(ids(outside), ["lost"]);
+  assert.ok(groups.indexOf(outside) < groups.indexOf(unscheduled), "Outside sits before the pill's group");
+});

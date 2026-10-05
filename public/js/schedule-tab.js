@@ -757,7 +757,7 @@ function createTaskListRowRenderer(context){
     };
     const metaHtml=inProgressChip+nowChip+
       '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+chipSlot+streakChip+
-      (subTimeless?'':(ev.untimed?(ev.triageBlock?'<span class="it-list-duration" title="Estimated completion time">'+ms(dur(ev))+'</span>':'<span class="it-list-untimed">'+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled")+'</span>'):(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+      (subTimeless?'':(ev.untimed?(isDoneRow?'<span class="it-list-untimed">'+(_completionMinute(ev)!=null?'Done at '+f12(fmt(_completionMinute(ev))):'Done')+'</span>':ev.triageBlock?'<span class="it-list-duration" title="Estimated completion time">'+ms(dur(ev))+'</span>':'<span class="it-list-untimed">'+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled")+'</span>'):(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
       (isUnfRow?'<span class="it-list-unfinished">Unfinished from '+escHtml(_unfSlashDate(r.sourceDate))+'</span>':'')+
       (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
       (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" style="cursor:pointer" title="View prep briefing">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" style="cursor:pointer" title="Prep pending — open to view or generate">&#9675; Prep</span>':'')+
@@ -861,7 +861,42 @@ function _itineraryListModel(){
   const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
   const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible}),timeBlocks);
   const unscheduledGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.UNPLANNED_BLOCK.id)||{nodes:[]};
+  _fileDoneUntimedOnTheDay(groups,unscheduledGroup,timeBlocks);
   return {viewDate,isTodayView,unfPool,day,timeBlocks,groups,unscheduledGroup};
+}
+// Finished work is recorded on the day it was finished, never in a pill: the drawer's
+// Unscheduled half lists OPEN work only. A done untimed root (with its subtree) moves
+// into the work list's time block that contains its completion time, or into Outside
+// Time Blocks when that time falls between blocks or is unknown.
+function _completionMinute(ev){
+  const raw=(typeof doneAt!=="undefined"&&doneAt&&doneAt[ev.id])||ev.completedAt||null;
+  if(!raw)return null;
+  const d=raw instanceof Date?raw:new Date(raw);
+  return isNaN(d.getTime())?null:d.getHours()*60+d.getMinutes();
+}
+function _fileDoneUntimedOnTheDay(groups,unscheduledGroup,timeBlocks){
+  const chunks=[];
+  (unscheduledGroup.nodes||[]).forEach(node=>{if(!node.depth||!chunks.length)chunks.push([]);chunks[chunks.length-1].push(node);});
+  const open=[];
+  chunks.forEach(chunk=>{
+    const root=chunk[0].ev;
+    if(!isDone(root)){open.push(...chunk);return;}
+    const minute=_completionMinute(root);
+    const block=minute==null?null:DCC.TimeBlocks.blockForTask({start:fmt(minute)},timeBlocks);
+    let target=block?groups.find(g=>g.block.id===block.id):null;
+    if(!target){
+      target=groups.find(g=>g.block===DCC.TimeBlocks.OUTSIDE_BLOCK);
+      if(!target){target={block:DCC.TimeBlocks.OUTSIDE_BLOCK,nodes:[]};groups.splice(groups.indexOf(unscheduledGroup),0,target);}
+    }
+    // In time order among the block's timed roots, so it reads where it happened.
+    let at=target.nodes.length;
+    if(minute!=null){
+      const i=target.nodes.findIndex(n=>!n.depth&&_rowIsTimed(n.ev)&&pt(n.ev.start)>minute);
+      if(i>=0)at=i;
+    }
+    target.nodes.splice(at,0,...chunk);
+  });
+  unscheduledGroup.nodes=open;
 }
 // Apply the Unscheduled sort mode (Manual / A–Z / New) to a group's nodes, keeping
 // each root's subtree attached to it.
