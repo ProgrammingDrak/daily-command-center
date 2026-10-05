@@ -772,7 +772,7 @@ function createTaskListRowRenderer(context){
       collapseHtml:chev,
       titleExtrasHtml:dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip,
       metaHtml:metaHtml,
-      barColor:isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#a31c43)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)),
+      barColor:isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#7c3aed)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)),
       actionsBeforeHtml:(!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+workButton,
       onComplete:completeNow,
       onCompleteWithNotes:chkBlocked?completeNow:()=>openDoneModal(ev.id,ev.title,completeNow,ev),

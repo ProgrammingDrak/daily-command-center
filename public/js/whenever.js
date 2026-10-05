@@ -1,6 +1,6 @@
 // whenever.js — the header pill's doors for work with no time on it, in three kinds.
-// They sit in one capsule with Waiting (delegated.js owns that door), in triage order:
-// Triage, Waiting, Unscheduled, Whenever.
+// They share one capsule with Loose Ends (catch-up.js) and Waiting (delegated.js), in
+// triage order: Triage, Loose Ends, Waiting, Unscheduled, Whenever.
 //
 //   Triage       just came in: tasks triage.js made from your inboxes and due
 //                repeat responsibilities. This is the itinerary's old "Triage"
@@ -70,14 +70,14 @@
   // wears `queue-theme--<style>`; dashboard.css defines one var set per value.
   //   "sage" | "teal" | "amber" | "violet"
   // Sage for Whenever: calm, and green reads "free". Amber for Unscheduled: it is
-  // the half that wants action. Both stay clear of Loose Ends blue and Waiting plum.
+  // the half that wants action. Both stay clear of Loose Ends blue and Waiting violet.
   const PILL_STYLE = "sage";
   const UNSCHEDULED_STYLE = "amber";
-  // Triage's theme. Its neighbors are Loose Ends blue and Waiting plum.
-  //   "violet" | "indigo" | "slate" | "teal"
-  // Violet: reads "new, look at me" without the alarm of red, and stays clear of
-  // both neighbors. Slate was the calm runner-up.
-  const TRIAGE_STYLE = "violet";
+  // Triage's theme. It sits first, beside Loose Ends blue.
+  //   "crimson" | "red" | "slate" | "violet"
+  // Crimson, Drake's call (2026-10-05): Triage is the red door, and it took the
+  // maroon Waiting wore before Waiting went violet. "red" is the louder option.
+  const TRIAGE_STYLE = "crimson";
 
   // ── pure half (node-testable) ──
 

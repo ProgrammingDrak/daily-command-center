@@ -113,35 +113,31 @@ for (const tab of TABS) {
   check(`tab ${tab} no h-overflow @375`, overflow === false, String(overflow));
 }
 
-// Loose Ends is count-gated, so expose it just for layout measurement. The
+// Loose Ends is count-gated, so expose it just for layout measurement: the
+// capsule must fit its widest state, all five doors, on one phone row. The
 // catch-up unit tests own the count/hidden behavior; this browser smoke owns the
 // real mobile header cascade and viewport geometry.
 await page.evaluate(() => { document.querySelector('[data-tab="schedule"]')?.click?.(); });
-const looseEndsMobile = await page.evaluate(() => {
+const capsuleMobile = await page.evaluate(() => {
   const pill = document.getElementById("loose-ends-pill");
   const capsule = document.getElementById("queue-pill");
   const nav = document.getElementById("date-nav");
   if (!pill || !capsule || !nav) return null;
   const wasHidden = pill.hidden;
   pill.hidden = false;
-  const box = pill.getBoundingClientRect();
   const capsuleBox = capsule.getBoundingClientRect();
   const navBox = nav.getBoundingClientRect();
   const doors = [...capsule.querySelectorAll(".queue-seg")];
   const doorBoxes = doors.map((door) => door.getBoundingClientRect());
   const otherBottoms = [...nav.children]
-    .filter((child) => child !== pill && child !== capsule && getComputedStyle(child).display !== "none")
+    .filter((child) => child !== capsule && getComputedStyle(child).display !== "none")
     .map((child) => child.getBoundingClientRect().bottom);
   const result = {
-    visible: getComputedStyle(pill).display !== "none" && box.width > 0 && box.height > 0,
-    insideViewport: box.left >= 0 && box.right <= window.innerWidth,
-    dedicatedRow: box.top >= Math.max(...otherBottoms),
-    fullWidth: box.width >= navBox.width - 1,
-    touchHeight: box.height >= 44,
-    // Triage, Waiting, Unscheduled and Whenever are ONE capsule on ONE row below Loose
-    // Ends, so the phone header stays as tall as it was, and every label shows in full.
-    capsuleBelow: capsuleBox.top >= box.bottom,
-    fourDoorsInOrder: doors.map((door) => door.id).join() === "triage-pill-nav,waiting-pill-nav,unscheduled-pill-nav,whenever-pill-nav",
+    looseEndsVisible: getComputedStyle(pill).display !== "none" && pill.getBoundingClientRect().width > 0,
+    // Triage, Loose Ends, Waiting, Unscheduled and Whenever are ONE capsule on ONE row
+    // of its own, so the phone header stays as tall as it was, and every label shows.
+    fiveDoorsInOrder: doors.map((door) => door.id).join() === "triage-pill-nav,loose-ends-pill,waiting-pill-nav,unscheduled-pill-nav,whenever-pill-nav",
+    dedicatedRow: capsuleBox.top >= Math.max(...otherBottoms),
     doorsShareOneRow: doorBoxes.every((door) => Math.abs(door.top - doorBoxes[0].top) < 1),
     capsuleFillsNav: capsuleBox.width >= navBox.width - 1,
     capsuleInsideViewport: capsuleBox.left >= 0 && capsuleBox.right <= window.innerWidth,
@@ -151,7 +147,7 @@ const looseEndsMobile = await page.evaluate(() => {
   pill.hidden = wasHidden;
   return result;
 });
-check("Loose Ends mobile pill is visible in its own full-width row", !!looseEndsMobile && Object.values(looseEndsMobile).every(Boolean), JSON.stringify(looseEndsMobile));
+check("queue capsule fits one phone row with all five doors showing", !!capsuleMobile && Object.values(capsuleMobile).every(Boolean), JSON.stringify(capsuleMobile));
 
 // The reorder drop indicator must actually PAINT. It is a pseudo-element pushed
 // fully outside the row box, so `overflow:hidden` on the row erases it while

@@ -5,20 +5,20 @@ const path = require("node:path");
 
 const css = fs.readFileSync(path.join(__dirname, "public/css/dashboard.css"), "utf8");
 
-test("Loose Ends gets a dedicated full-width row in the mobile date toolbar", () => {
+test("Loose Ends is a door in the queue capsule, not a row of its own", () => {
   const mobileShell = css.slice(css.indexOf("@media (max-width:760px)"));
   assert.match(mobileShell, /\.header \.date-nav\{[^}]*flex-wrap:wrap/);
-  assert.match(
-    mobileShell,
-    /\.header \.date-nav \.loose-ends-pill\{[^}]*flex:1 0 100%;[^}]*order:2;[^}]*justify-content:center/
-  );
+  assert.doesNotMatch(css, /\.loose-ends-pill\{/, "Loose Ends styles as a .queue-seg now");
+  const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+  const capsule = html.slice(html.indexOf('id="queue-pill"'), html.indexOf('id="date-picker-drop"'));
+  assert.match(capsule, /id="loose-ends-pill"/);
 });
 
-test("the queue capsule takes one touch-sized row below Loose Ends on mobile, four equal doors", () => {
+test("the queue capsule takes one touch-sized row on mobile, every door label over its count", () => {
   const mobileShell = css.slice(css.indexOf("@media (max-width:760px)"));
-  // One row for all four doors, so the phone header is no taller than with two pills.
-  assert.match(mobileShell, /\.header \.date-nav \.queue-pill\{[^}]*flex:1 0 100%;[^}]*order:3/);
-  // Label over count: side by side, "Unscheduled" alone overflows a quarter of 375px.
-  assert.match(mobileShell, /\.header \.date-nav \.queue-seg\{[^}]*flex:1 1 0;[^}]*flex-direction:column;[^}]*min-height:48px/);
+  // One row for all five doors, so the phone header is no taller than before.
+  assert.match(mobileShell, /\.header \.date-nav \.queue-pill\{[^}]*flex:1 0 100%;[^}]*order:2/);
+  // Grow from the label's width: equal fifths of 375px would cut "Unscheduled" short.
+  assert.match(mobileShell, /\.header \.date-nav \.queue-seg\{[^}]*flex:1 1 auto;[^}]*flex-direction:column;[^}]*min-height:48px/);
   assert.doesNotMatch(mobileShell, /\.waiting-pill-nav\{/, "Waiting is a door in the capsule now, not its own pill");
 });

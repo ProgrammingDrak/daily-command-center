@@ -194,14 +194,20 @@ test("a pool item with no resolvable row refuses instead of pretending to save",
 
 // ── wiring contracts ──
 
-test("the header is ONE capsule with four doors in triage order: Triage, Waiting, Unscheduled, Whenever", () => {
+test("the header is ONE capsule with five doors in triage order: Triage, Loose Ends, Waiting, Unscheduled, Whenever", () => {
   const html = fs.readFileSync(require.resolve("./index.html"), "utf8");
   const header = html.slice(html.indexOf('id="date-nav"'), html.indexOf('id="date-picker-drop"'));
   const capsule = header.slice(header.indexOf('id="queue-pill"'));
   const doors = [...capsule.matchAll(/<button class="queue-seg[^"]*" id="([^"]+)"/g)].map(m => m[1]);
-  assert.deepEqual(doors, ["triage-pill-nav", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav"]);
-  assert.equal((header.match(/class="waiting-pill-nav/g) || []).length, 0, "Waiting is a door in the capsule, not a pill of its own");
-  assert.match(header, /loose-ends-pill[\s\S]*id="queue-pill"/, "Loose Ends stays its own pill, ahead of the capsule");
+  assert.deepEqual(doors, ["triage-pill-nav", "loose-ends-pill", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav"]);
+  assert.equal((header.match(/class="(waiting-pill-nav|loose-ends-pill)/g) || []).length, 0, "no door is a pill of its own anymore");
+  // Loose Ends keeps its blue and its count gate (catch-up.js unhides it); Waiting reads
+  // the app-wide Waiting family, so its door matches every other Waiting surface.
+  assert.match(header, /class="queue-seg queue-theme--blue" id="loose-ends-pill"[^>]*aria-controls="catchup-overlay"[^>]*hidden>/);
+  assert.match(header, /class="queue-seg queue-theme--waiting" id="waiting-pill-nav"/);
+  const css = fs.readFileSync(require.resolve("./public/css/dashboard.css"), "utf8");
+  assert.match(css, /\.queue-seg\[hidden\]\{display:none!important\}/, "a hidden door must not leave a gap in the capsule");
+  assert.match(css, /\.queue-theme--waiting\{--queue-accent:var\(--waiting\);/);
   assert.match(header, /id="triage-pill-nav"[^>]*aria-controls="tm-whenever-section"/);
   assert.match(header, /id="waiting-pill-nav"[^>]*aria-controls="tm-delegated-blocked-section"/);
   assert.match(header, /id="unscheduled-pill-nav"[^>]*aria-controls="tm-whenever-section"[^>]*data-placement="unplanned"/,

@@ -127,17 +127,18 @@
       <button class="dn-arrow" id="dn-next" onclick="navDate(1)" title="Next day">&rsaquo;</button>
       <button class="dn-quick" id="dn-today-btn" onclick="switchToDate(__todayDate)" style="display:none">Today</button>
       <button class="dn-quick dn-tomorrow" id="dn-tomorrow-btn" onclick="switchToDate(__tomorrowDate)" style="display:none">Tomorrow</button>
-      <button class="loose-ends-pill" id="loose-ends-pill" type="button" aria-controls="catchup-overlay" aria-haspopup="dialog" aria-label="Open Loose Ends" hidden>
-        <span>Loose Ends</span><span class="loose-ends-pill-count" id="loose-ends-pill-count" aria-live="polite">0</span>
-      </button>
-      <!-- The task queues, one capsule with four doors, in triage order. whenever.js
+      <!-- The task queues, one capsule with five doors, in triage order. whenever.js
            hosts Triage, Unscheduled and Whenever (all work with no time on it);
+           catch-up.js owns Loose Ends (hidden while it has nothing to show) and
            delegated.js owns Waiting. -->
       <div class="queue-pill" id="queue-pill" role="group" aria-label="Task queues">
-        <button class="queue-seg queue-theme--violet" id="triage-pill-nav" type="button" aria-label="Open Triage tasks" aria-controls="tm-whenever-section" title="Triage: new from your inboxes and due repeats. Decide what each one needs.">
+        <button class="queue-seg queue-theme--crimson" id="triage-pill-nav" type="button" aria-label="Open Triage tasks" aria-controls="tm-whenever-section" title="Triage: new from your inboxes and due repeats. Decide what each one needs.">
           <span data-triage-label>Triage</span><span class="queue-seg-count" id="triage-pill-nav-count" aria-live="polite">0</span>
         </button>
-        <button class="queue-seg queue-theme--plum" id="waiting-pill-nav" type="button" aria-label="Open Waiting tasks" aria-controls="tm-delegated-blocked-section" title="Waiting: handed off to someone else. The count is check-ins that are overdue.">
+        <button class="queue-seg queue-theme--blue" id="loose-ends-pill" type="button" aria-controls="catchup-overlay" aria-haspopup="dialog" aria-label="Open Loose Ends" title="Loose Ends: unfinished work from past days, and your journal." hidden>
+          <span>Loose Ends</span><span class="queue-seg-count" id="loose-ends-pill-count" aria-live="polite">0</span>
+        </button>
+        <button class="queue-seg queue-theme--waiting" id="waiting-pill-nav" type="button" aria-label="Open Waiting tasks" aria-controls="tm-delegated-blocked-section" title="Waiting: handed off to someone else. The count is check-ins that are overdue.">
           <span>Waiting</span><span class="queue-seg-count" id="waiting-pill-nav-count" aria-live="polite">0</span>
         </button>
         <button class="queue-seg queue-theme--amber" id="unscheduled-pill-nav" type="button" aria-label="Open Unscheduled tasks" aria-controls="tm-whenever-section" data-placement="unplanned" title="Unscheduled: has to happen, but is not on your schedule yet. Drop a task here to take its time off.">
@@ -416,7 +417,7 @@
             <span class="badge" id="untimed-count" style="display:none">0</span>
           </summary>
           <div class="tm-section-body" id="tm-whenever">
-            <section class="untimed-sub queue-theme--violet" id="triage-sub" aria-labelledby="triage-sub-title">
+            <section class="untimed-sub queue-theme--crimson" id="triage-sub" aria-labelledby="triage-sub-title">
               <div class="untimed-sub-head">
                 <h4 class="untimed-sub-title" id="triage-sub-title"><span data-triage-label>Triage</span><span class="untimed-sub-count" id="triage-queue-count">0</span></h4>
                 <span class="untimed-tip-wrap">

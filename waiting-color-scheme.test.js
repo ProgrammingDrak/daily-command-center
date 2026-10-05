@@ -316,14 +316,15 @@ test("deleting a check-in row says the delegated task is still open", () => {
 });
 
 test("one token defines the family, and the pill is styled once", () => {
-  assert.match(CSS_SRC, /--waiting:#a31c43;/);
-  assert.match(CSS_SRC, /--waiting-bg:rgba\(163,28,67,0\.42\)/);
+  // Violet since 2026-10-05: the header's Triage door took the old maroon.
+  assert.match(CSS_SRC, /--waiting:#7c3aed;/);
+  assert.match(CSS_SRC, /--waiting-bg:rgba\(124,58,237,0\.38\)/);
   assert.match(CSS_SRC, /^\.waiting-pill\{/m);
   assert.match(CSS_SRC, /\.waiting-pill\.checkin\{border-style:dashed\}/);
   // "Open task" is part of the family, not a generic blue link.
   assert.match(CSS_SRC, /\.tri-open-waiting,\.schedule-triage-open-waiting\{border:0;background:transparent;color:var\(--waiting-ink\)/);
   // Text takes the readable member of the family; bars and borders take the deep one.
-  assert.match(CSS_SRC, /--waiting-ink:#f0a3b6;/);
+  assert.match(CSS_SRC, /--waiting-ink:#c4b5fd;/);
   assert.match(CSS_SRC, /^\.waiting-pill\{[^}]*color:var\(--waiting-ink\)/m);
 });
 

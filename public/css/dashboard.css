@@ -6,13 +6,13 @@
     --cyan:#22d3ee; --cyan-bg:rgba(34,211,238,0.10); --orange:#f97316; --orange-bg:rgba(249,115,22,0.12);
     /* Waiting / delegated family. ONE hue for everything parked on someone else:
      * the Waiting item, the original task it blocks, and the check-in reminders it
-     * spawns. Maroon: deep enough that nothing else in the palette moved, and far
-     * enough from --red that an urgent row still reads urgent. --waiting-ink is the
-     * READABLE member of the family -- a 9px pill label or a link in #a31c43 on a
-     * dark card is unreadable, so text takes the pale tint and the bars/borders take
-     * the deep one. */
-    --waiting:#a31c43; --waiting-bg:rgba(163,28,67,0.42); --waiting-border:rgba(163,28,67,0.66);
-    --waiting-ink:#f0a3b6;
+     * spawns. Violet since 2026-10-05, when the header's Triage door took the old
+     * maroon: deep enough to sit apart from --purple's lavender, and far from --red,
+     * so an urgent row still reads urgent. --waiting-ink is the READABLE member of the
+     * family -- a 9px pill label or a link in #7c3aed on a dark card is unreadable, so
+     * text takes the pale tint and the bars/borders take the deep one. */
+    --waiting:#7c3aed; --waiting-bg:rgba(124,58,237,0.38); --waiting-border:rgba(139,92,246,0.66);
+    --waiting-ink:#c4b5fd;
     /* One step up from --bg: the "elevated surface" role — inputs, hovered/active
      * rows, code blocks, chips, cards-on-cards. vault.css consumes this 35 times
      * (it shipped through B1-B6 referencing it with no definition anywhere, so
@@ -149,25 +149,25 @@
   .dn-quick{background:none;border:1px solid var(--border);border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;transition:all 0.12s;margin-left:4px}
   .dn-quick:hover{border-color:var(--accent);color:var(--accent)}
   .dn-tomorrow{border-color:var(--accent);color:var(--accent)}
-  .loose-ends-pill{display:inline-flex;align-items:center;gap:7px;min-height:28px;margin-left:6px;padding:4px 7px 4px 11px;border:1px solid rgba(0,117,235,0.58);border-radius:999px;background:rgba(0,117,235,0.16);color:#7db9f5;font:inherit;font-size:11px;font-weight:800;cursor:pointer;transition:background 120ms ease,border-color 120ms ease,color 120ms ease}
-  .loose-ends-pill:hover{background:rgba(0,117,235,0.26);border-color:#0075eb;color:#b9dcff}
-  .loose-ends-pill:focus-visible{outline:2px solid #0075eb;outline-offset:2px}
-  .loose-ends-pill[hidden]{display:none!important}
-  .loose-ends-pill-count{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:#0075eb;color:#fff;font-size:10px;font-weight:800;border:2px solid var(--bg);box-shadow:0 0 0 1px rgba(0,117,235,0.32)}
-  /* The queue capsule (index.html #queue-pill): Triage, Waiting, Unscheduled and
-     Whenever as one pill with a divider between each door. Each theme class sets the
-     five vars every rule below reads, so a pill segment and its drawer half swap
-     together. The knobs live in whenever.js (TRIAGE_STYLE, UNSCHEDULED_STYLE,
-     PILL_STYLE); plum is Waiting's own color, read from the --waiting palette. */
+  /* The queue capsule (index.html #queue-pill): Triage, Loose Ends, Waiting,
+     Unscheduled and Whenever as one pill with a divider between each door. Each theme
+     class sets the five vars every rule below reads, so a pill segment and its drawer
+     half swap together. The knobs live in whenever.js (TRIAGE_STYLE,
+     UNSCHEDULED_STYLE, PILL_STYLE). Blue is Loose Ends' own color; "waiting" reads
+     the --waiting family, so the door matches every other Waiting surface. */
   .queue-theme--sage{--queue-accent:#00b373;--queue-soft:rgba(0,179,115,0.16);--queue-line:rgba(0,179,115,0.58);--queue-ink:#7ee0b8;--queue-on-accent:#04130d}
   .queue-theme--teal{--queue-accent:#14b8a6;--queue-soft:rgba(20,184,166,0.16);--queue-line:rgba(20,184,166,0.58);--queue-ink:#82e6d9;--queue-on-accent:#03201d}
   .queue-theme--amber{--queue-accent:#f59e0b;--queue-soft:rgba(245,158,11,0.15);--queue-line:rgba(245,158,11,0.56);--queue-ink:#fcd38a;--queue-on-accent:#241500}
   .queue-theme--violet{--queue-accent:#8b5cf6;--queue-soft:rgba(139,92,246,0.18);--queue-line:rgba(139,92,246,0.6);--queue-ink:#cbb8ff;--queue-on-accent:#ffffff}
   .queue-theme--indigo{--queue-accent:#6366f1;--queue-soft:rgba(99,102,241,0.18);--queue-line:rgba(99,102,241,0.6);--queue-ink:#b8bbff;--queue-on-accent:#ffffff}
   .queue-theme--slate{--queue-accent:#94a3b8;--queue-soft:rgba(148,163,184,0.14);--queue-line:rgba(148,163,184,0.5);--queue-ink:#d5dde8;--queue-on-accent:#0b1220}
-  .queue-theme--plum{--queue-accent:var(--waiting);--queue-soft:rgba(163,28,67,0.26);--queue-line:var(--waiting-border);--queue-ink:var(--waiting-ink);--queue-on-accent:#ffffff}
+  .queue-theme--crimson{--queue-accent:#a31c43;--queue-soft:rgba(163,28,67,0.26);--queue-line:rgba(163,28,67,0.66);--queue-ink:#f0a3b6;--queue-on-accent:#ffffff}
+  .queue-theme--red{--queue-accent:#ef4444;--queue-soft:rgba(239,68,68,0.15);--queue-line:rgba(239,68,68,0.56);--queue-ink:#fca5a5;--queue-on-accent:#ffffff}
+  .queue-theme--blue{--queue-accent:#0075eb;--queue-soft:rgba(0,117,235,0.16);--queue-line:rgba(0,117,235,0.58);--queue-ink:#7db9f5;--queue-on-accent:#ffffff}
+  .queue-theme--waiting{--queue-accent:var(--waiting);--queue-soft:rgba(124,58,237,0.22);--queue-line:var(--waiting-border);--queue-ink:var(--waiting-ink);--queue-on-accent:#ffffff}
   .queue-pill{display:inline-flex;align-items:stretch;flex-shrink:0}
   .queue-seg{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:28px;padding:4px 9px;border:1px solid var(--queue-line);background:var(--queue-soft);color:var(--queue-ink);font:inherit;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap;transition:filter 120ms ease,box-shadow 120ms ease}
+  .queue-seg[hidden]{display:none!important}
   .queue-seg+.queue-seg{border-left-width:0}
   .queue-seg:first-child{border-radius:999px 0 0 999px;padding-left:11px}
   .queue-seg:last-child{border-radius:0 999px 999px 0;padding-right:7px}
@@ -1835,7 +1835,6 @@
   .cu-journal-wrap .gb-section{margin-top:0}
   @media(max-width:480px){
     .carryover-overlay{padding:12px}
-    .header .loose-ends-pill{min-height:44px;margin-left:0;padding-left:10px}
   }
 
   /* ======== TASK MANAGER MODAL + SHORTCUT RAIL ======== */
@@ -4367,18 +4366,12 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
     grid-column:auto;grid-row:auto;
     display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:4px;
   }
-  /* Loose Ends shares the date toolbar on desktop. Give it a dedicated row on
-     phones so the arrows, date, and Tomorrow shortcut cannot push it off-screen. */
-  .header .date-nav .loose-ends-pill{
-    flex:1 0 100%;order:2;justify-content:center;
-    min-height:44px;margin-left:0;padding:6px 10px;
-  }
-  /* The queue capsule takes the one touch row below Loose Ends, so the phone header
-     stays as tall as it was. Four equal doors, each with its label over its count:
-     side by side, "Unscheduled" alone would not fit a quarter of a 375px row. Labels
-     ellipsize only on the narrowest phones. */
-  .header .date-nav .queue-pill{flex:1 0 100%;order:3;min-width:0}
-  .header .date-nav .queue-seg{flex:1 1 0;flex-direction:column;gap:3px;min-width:0;min-height:48px;padding:5px 4px}
+  /* The queue capsule takes one touch row of its own, so the phone header stays as
+     tall as it was. Each door shows its label over its count and grows from its
+     label's width: five equal fifths of a 375px row would cut "Unscheduled" short.
+     Labels ellipsize only on the narrowest phones. */
+  .header .date-nav .queue-pill{flex:1 0 100%;order:2;min-width:0}
+  .header .date-nav .queue-seg{flex:1 1 auto;flex-direction:column;gap:3px;min-width:0;min-height:48px;padding:5px 4px}
   .header .date-nav .queue-seg:first-child{padding-left:6px}
   .header .date-nav .queue-seg:last-child{padding-right:6px}
   .header .date-nav .queue-seg>span:first-child{max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis}

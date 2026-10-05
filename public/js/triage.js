@@ -1083,7 +1083,7 @@ function buildTriageCard(item) {
     ageParts.push(hrs > 0 ? hrs + "h ago" : "just now");
   }
   const triTypeColors = {unanswered_dm:"#a78bfa",email_needs_response:"#f87171",slack_mention:"#22d3ee"};
-  const barColor = isDismissed ? "var(--green)" : (isWaitingCheckIn(item) ? "var(--waiting,#a31c43)" : (triTypeColors[item.type] || "#a78bfa"));
+  const barColor = isDismissed ? "var(--green)" : (isWaitingCheckIn(item) ? "var(--waiting,#7c3aed)" : (triTypeColors[item.type] || "#a78bfa"));
   const priCls = item.priority === "high" ? "pri-hi" : item.priority === "medium" ? "pri-med" : "pri-lo";
   const t = TRI_ICONS[item.type] || {emoji:"\u{2753}"};
   const linkLabel = DCC.esc(item.link_label || item.action_label || "Open");
