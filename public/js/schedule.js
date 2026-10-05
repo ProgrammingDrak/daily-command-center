@@ -1524,33 +1524,30 @@ function hydrateBacklogFromBlocks(){
   return added;
 }
 
-function addNewTask(titleArg, durMinArg){
+// The ONE creator for a dateless Task Library row. opts.stage files it (Whenever,
+// Priority, ...). The id is collision-proof: it used to be "custom-"+(nextId++), but
+// nextId restarts at 200 on every load, so two sessions minted the same local_id and
+// hydrateBacklogFromBlocks (which dedupes by it) hid one of the two tasks.
+function addNewTask(titleArg, durMinArg, opts){
+  opts=opts||{};
   const title=titleArg||(function(){const inp=document.getElementById("new-title");const v=inp?inp.value.trim():"";if(inp)inp.value="";return v})();
-  if(!title)return;
+  if(!title||!String(title).trim())return null;
   const durMin=durMinArg||30;
-  const item={id:"custom-"+(nextId++),title,type:"task",durMin,meta:"Custom task \u00b7 "+ms(durMin),detail:"",source:"manual",notionUrl:""};
+  const item={id:(opts.idPrefix||"custom")+"-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),
+    title:String(title).trim(),type:"task",durMin,meta:(opts.metaLabel||"Custom task")+" \u00b7 "+ms(durMin),
+    detail:"",source:"manual",notionUrl:"",priority:opts.priority||"",stage:opts.stage||"",createdAt:new Date().toISOString()};
   backlog.push(item);
   persistBacklogItem(item);
-  log("created","custom","New backlog: "+title);render()
+  log("created","custom","New "+(opts.stage||"backlog")+": "+item.title);render();
+  return item;
 }
-// Whenever (whenever.js): a dateless Task Library row on the Whenever stage, for work
-// with no set time (laundry, the mail). Same row shape as addNewTask, one difference:
-// the id. nextId restarts at 200 on every load, so "custom-<n>" collides across
-// sessions (the prod restore's `carry-200` twins). A pool you add to all week needs an
-// id that cannot meet itself.
+// Whenever (whenever.js): the same creator, filed on the Whenever stage, for work
+// with no set time (laundry, the mail).
 function addWheneverTask(title,durMin){
   title=String(title||"").trim();
   if(!title)return null;
-  durMin=durMin||15;
   const W=window.DCC&&window.DCC.Whenever;
-  const stage=(W&&W.STAGE)||"Whenever";
-  const item={id:"wh-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),title,type:"task",durMin,
-    meta:((W&&W.LABEL)||"Whenever")+" \u00b7 "+ms(durMin),detail:"",source:"manual",notionUrl:"",priority:"Low",stage,
-    createdAt:new Date().toISOString()};
-  backlog.push(item);
-  persistBacklogItem(item);
-  log("created","custom","New "+stage+": "+title);render();
-  return item;
+  return addNewTask(title,durMin||15,{idPrefix:"wh",stage:(W&&W.STAGE)||"Whenever",priority:"Low",metaLabel:(W&&W.LABEL)||"Whenever"});
 }
 // ======== UNIVERSAL TASK ADD BAR ========
 function addTaskUniversal(barEl){

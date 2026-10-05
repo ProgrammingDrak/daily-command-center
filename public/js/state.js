@@ -1383,7 +1383,7 @@ async function moveTaskToUnplanned(id){
   if(!supported){
     try{const response=await fetch("/api/health",{cache:"no-store"});const health=await response.json();supported=response.ok&&health.placementCapabilities?.includes("unplanned");}
     catch(_error){}
-    if(!supported){showToast("Connect once to enable moving tasks to Unscheduled","info");return false;}
+    if(!supported){showToast("Connect once to enable moving tasks to "+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled"),"info");return false;}
     try{sessionStorage.setItem("dcc-unplanned-placement","1");}catch(_error){}
   }
   const durations={};
@@ -1560,6 +1560,13 @@ function moveTaskToPriority(id){_moveTaskToBacklogStage(id,"Priority","Moved to 
 // (TaskModel.isWheneverPoolRow keeps it out of the fold), so without the refold it
 // would linger there until the next reload and then vanish.
 async function moveTaskToWhenever(id){
+  // A Whenever pool row leaves the day entirely (the fold skips it), so a parent moved
+  // there would strand its subtasks on today as standalone tasks, and Done in the pool
+  // would close only the parent. Pool chores are single tasks: refuse instead.
+  if(typeof childrenOf==="function"&&childrenOf(id,scheduled).length){
+    if(typeof showToast==="function")showToast("Finish or move its subtasks first","info");
+    return false;
+  }
   const W=window.DCC&&window.DCC.Whenever;
   const stage=(W&&W.STAGE)||"Whenever";
   await _moveTaskToBacklogStage(id,stage,"Moved to "+((W&&W.LABEL)||"Whenever"));

@@ -1673,7 +1673,9 @@ const SURFACES = {
 };
 
 // Named scopes let a hot call site mark only the surfaces it can actually change.
-const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView"] };
+// "whenever" rides along because the header pill's drawer renders the same itinerary rows
+// (the Unscheduled half), whose chevron and work-session buttons call render("schedule").
+const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView","whenever"] };
 
 const _dirty = {};
 function _markDirty(scope){

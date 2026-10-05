@@ -224,7 +224,8 @@ function buildTaskChangeItems(ev,trig){
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
     {icon:"💡", label:"Solo",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}},
     // No set time after all: off the day and into the header pill's pool (whenever.js).
-    {icon:"🧺", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever", onPick:()=>{if(typeof moveTaskToWhenever==="function")moveTaskToWhenever(ev.id);}},
+    // Single tasks only; moveTaskToWhenever refuses a parent, so don't offer it.
+    ...(childrenOf(ev.id,scheduled).length?[]:[{icon:"🧺", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever", onPick:()=>{if(typeof moveTaskToWhenever==="function")moveTaskToWhenever(ev.id);}}]),
     // Delete lives on the radial so it's reachable on phones, where the row's
     // trash button is hidden by the mobile layout (dashboard.css).
     {icon:"🗑", label:"Delete",    onPick:()=>{if(typeof openDeleteConfirm==="function")openDeleteConfirm(ev.id);}}
@@ -351,12 +352,15 @@ function _orderUnscheduled(rows){
     return String(created(b)).localeCompare(String(created(a)));
   });
 }
-// Current row ids of the Unscheduled drag group in DOM (display) order. The group
-// is two headers now — "Unscheduled" (untimed today) and "Unfinished" (carryovers) —
-// so walk every section tagged .uns-group and keep ONE persisted order across both.
+// Current row ids of the Unscheduled drag group in DOM (display) order, as ONE
+// persisted order. The Unscheduled rows render in the header pill's drawer now
+// (renderUnscheduledInto -> #unscheduled-list), so read them there: scanning only
+// #list-view after the move saved [triage..., moved] and wiped every other row's
+// manual position on the first drag in the drawer. Triage still sits in the list.
 function _unscheduledRowIds(){
   const ids=[];
-  document.querySelectorAll('#list-view .time-block-divider.uns-group, #list-view .time-block-divider[data-block-id="triage"]').forEach(sec=>{
+  document.querySelectorAll('#unscheduled-list .it-list-item[data-id]').forEach(n=>ids.push(n.dataset.id));
+  document.querySelectorAll('#list-view .time-block-divider[data-block-id="triage"]').forEach(sec=>{
     let n=sec.nextElementSibling;
     while(n&&!n.classList.contains("time-block-divider")&&(!n.classList.contains("it-list-section")||n.dataset.section==="unscheduled")){
       if(n.classList.contains("it-list-item")&&n.dataset.id)ids.push(n.dataset.id);
@@ -753,7 +757,7 @@ function createTaskListRowRenderer(context){
     };
     const metaHtml=inProgressChip+nowChip+
       '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+chipSlot+streakChip+
-      (subTimeless?'':(ev.untimed?(ev.triageBlock?'<span class="it-list-duration" title="Estimated completion time">'+ms(dur(ev))+'</span>':'<span class="it-list-untimed">Unscheduled</span>'):(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+      (subTimeless?'':(ev.untimed?(ev.triageBlock?'<span class="it-list-duration" title="Estimated completion time">'+ms(dur(ev))+'</span>':'<span class="it-list-untimed">'+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled")+'</span>'):(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
       (isUnfRow?'<span class="it-list-unfinished">Unfinished from '+escHtml(_unfSlashDate(r.sourceDate))+'</span>':'')+
       (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
       (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" style="cursor:pointer" title="View prep briefing">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" style="cursor:pointer" title="Prep pending — open to view or generate">&#9675; Prep</span>':'')+
@@ -1000,7 +1004,6 @@ function buildListView(){
   groups.forEach(({block,nodes})=>{
     const current=block.timed&&block.start&&isTodayView&&nowMin>=DCC.TimeBlocks.minutes(block.start,false)&&nowMin<DCC.TimeBlocks.minutes(block.end,true);
     const header=timeBlockDividerEl(block,current);
-    if(block.sortable){header.dataset.section="unscheduled";header.classList.add("uns-group");}
     wrap.appendChild(header);
     if(block.dropTarget)wrap.appendChild(timeBlockDropZoneEl(block));
     if(isCollapsed(timeBlockCollapseKey(block)))return;
@@ -1008,10 +1011,8 @@ function buildListView(){
       const state=typeof triageTaskLoadState==="function"?triageTaskLoadState():{};
       if(state.loading||state.error){const status=document.createElement(state.error?"button":"div");status.className="it-list-empty";status.textContent=state.error?"Triage could not load. Retry":"Loading Triage tasks…";if(state.error)status.addEventListener("click",()=>buildScheduleTriage());wrap.appendChild(status);}
     }
-    if(block.sortable){
-      section("",0,"unscheduled");
-      nodes=_orderUnscheduledNodes(nodes);
-    }
+    // The sortable Unscheduled group (and its Manual / A-Z / New header) renders in the
+    // header pill's drawer now: renderUnscheduledInto. No group left here is sortable.
     let prevEnd=null;
     nodes.forEach(node=>{
       if(block.timed&&!node.depth&&_rowIsTimed(node.ev)){const gap=_gapMarkerMins(prevEnd,pt(node.ev.start));if(gap!=null)wrap.appendChild(gapEl(gap));prevEnd=pt(node.ev.end);}

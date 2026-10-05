@@ -368,6 +368,14 @@
     setTheme(document.getElementById("unscheduled-sub"), UNSCHEDULED_STYLE);
     const section = document.getElementById("tm-whenever-section");
     if (section) section.dataset.sidecarLabel = both;
+    // Label-bearing aria text and tooltips follow the knobs too, so a swap never
+    // leaves the old word behind for screen readers or on hover.
+    const attr = (sel, name, value) => document.querySelectorAll(sel).forEach(el => el.setAttribute(name, value));
+    attr("#unscheduled-sub .untimed-tip", "aria-label", "What goes in " + UNSCHEDULED_LABEL + "?");
+    attr("#whenever-sub .untimed-tip", "aria-label", "What goes in " + LABEL + "?");
+    attr("#unscheduled-sort", "aria-label", "Sort " + UNSCHEDULED_LABEL);
+    attr("#unscheduled-pill-nav", "title", UNSCHEDULED_LABEL + ": has to happen, but is not on your schedule yet. Drop a task here to take its time off.");
+    attr("#whenever-pill-nav", "title", LABEL + ": no set time. Knock one out when you have a free minute.");
   }
 
   // The "i" tooltips. Hover and keyboard focus show them through CSS; a tap toggles

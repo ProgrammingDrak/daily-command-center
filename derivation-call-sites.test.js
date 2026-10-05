@@ -87,8 +87,7 @@ test("★ the Unscheduled section renders a TREE, not a flat list of roots", () 
   assert.equal(rx.test('rootOrder.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));'), false);
   assert.equal(rx.test('DCC.TaskModel.selectTree(rootOrder.concat(day.unscheduled.filter(ev=>!rootIds.has(ev.id)&&!triageIds.has(ev.id))),{pool:visible}).forEach(node=>{wrap.appendChild(emitNode(node,_isSubRow(node)?0:uRank++,"open"));});'), false,
     "the hardcoded mode must be rejected");
-  // And the badge counts ROOTS, so it matches what you can point at.
-  assert.match(schedTabCode, /section\("",0,"unscheduled"\)/);
+  // The badge counts ROOTS; that count lives on the pill now (whenever.test.js pins it).
   // The Unscheduled group renders in the header pill's drawer now (renderUnscheduledInto),
   // and it must keep both halves of this contract there: the tree, and the real mode.
   const start = schedTabCode.indexOf("function renderUnscheduledInto(");

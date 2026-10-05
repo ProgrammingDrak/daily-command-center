@@ -250,8 +250,11 @@ test("a row's modal replaces the Tasks drawer instead of opening underneath it",
     matches: s => s.split(",").some(one => one === "." + cls),
     closest: s => (opts && opts.inDrawer && s === "#tasks-drawer") ? {} : null,
   });
+  const classes = sel.map(s => s.slice(1));
   for (const cls of ["sched-picker-overlay", "add-modal-overlay", "done-modal-overlay", "del-confirm-overlay"]) {
-    assert.ok(sel.includes("." + cls), cls + " opens from a row and sits under the drawer");
+    assert.ok(classes.includes(cls), cls + " opens from a row and sits under the drawer");
+  }
+  for (const cls of classes) {
     assert.equal(ctx.f([{ target: el(cls, { open: true }) }]), true, cls);
     assert.equal(ctx.f([{ target: el(cls, { open: false }) }]), false, cls + " closing must not close the drawer");
   }
@@ -266,6 +269,110 @@ test("a row's modal replaces the Tasks drawer instead of opening underneath it",
   const z = cls => Number((css.match(new RegExp("\\." + cls + "\\{[^}]*z-index:(\\d+)")) || [])[1]);
   const drawerZ = z("side-drawer-body");
   assert.ok(drawerZ > 0, "drawer z-index moved");
-  ["sched-picker-overlay", "add-modal-overlay", "done-modal-overlay", "del-confirm-overlay"].forEach(cls =>
+  classes.forEach(cls =>
     assert.ok(z(cls) < drawerZ, cls + " is now above the drawer; revisit whether it should still replace it"));
+  // And the rule is actually wired: an open modal closes the drawer without stealing focus.
+  assert.match(src, /modalReplacesDrawer\(records\)\) closeTasks\(\{ keepFocus: true \}\)/);
+});
+
+test("a drag inside the drawer reorders against the drawer's rows and keeps everyone's position", () => {
+  const tab = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
+  const a = tab.indexOf("function _unscheduledRowIds(");
+  const b = tab.indexOf("function _reorderUnscheduled(");
+  assert.ok(a > 0 && b > 0, "reorder helpers moved");
+  const src = tab.slice(a, tab.indexOf("\n}\n", a) + 3) + tab.slice(b, tab.indexOf("\n}\n", b) + 3);
+  const row = id => ({ dataset: { id }, classList: { contains: c => c === "it-list-item" } });
+  const saved = [];
+  const ctx = {
+    document: { querySelectorAll: sel => (sel.includes("#unscheduled-list") ? ["a", "b", "c"].map(row) : []) },
+    saveUnscheduledOrder: ids => saved.push(ids.slice()),
+  };
+  vm.createContext(ctx);
+  vm.runInContext(src, ctx);
+  ctx._reorderUnscheduled("c", "a", false, false);
+  assert.deepEqual(Array.from(saved[0]), ["c", "a", "b"], "every row keeps its place; only the dragged one moves");
+});
+
+test("the pill's Unscheduled count is open ROOTS: not sub-steps, not done rows", () => {
+  const tab = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
+  const s = tab.indexOf("function renderUnscheduledInto(");
+  assert.ok(s > 0, "renderUnscheduledInto moved");
+  const src = tab.slice(s, tab.indexOf("\nwindow.renderUnscheduledInto", s));
+  const nodes = [
+    { ev: { id: "a" }, depth: 0 }, { ev: { id: "a1" }, depth: 1 },
+    { ev: { id: "b", done: true }, depth: 0 }, { ev: { id: "c" }, depth: 0 },
+  ];
+  const DCC = { TaskModel: {}, TimeBlocks: {} };
+  const rendered = [];
+  const ctx = {
+    window: { DCC }, DCC, isDone: ev => !!ev.done, _isSubRow: n => n.depth > 0,
+    _itineraryListModel: () => ({ unscheduledGroup: { nodes }, unfPool: [], isTodayView: true }),
+    _orderUnscheduledNodes: n => n,
+    createTaskListRowRenderer: () => (ev, idx, mode) => ({ ev, idx, mode }),
+    document: { createDocumentFragment: () => ({ appendChild: x => rendered.push(x) }) },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(src + "\nthis.r = renderUnscheduledInto;", ctx);
+  const counts = ctx.r({ innerHTML: "", appendChild() {} });
+  assert.deepEqual({ ...counts }, { open: 2, total: 4 });
+  assert.deepEqual(rendered.map(r => r.mode), ["open", "open", "done", "open"], "done rows render as done, not as unchecked");
+});
+
+test("addWheneverTask files a collision-proof dateless row on the Whenever stage", () => {
+  const src = fs.readFileSync(require.resolve("./public/js/schedule.js"), "utf8");
+  const s0 = src.indexOf("function addNewTask(");
+  const body = src.slice(s0, src.indexOf("// ======== UNIVERSAL TASK ADD BAR", s0));
+  const persisted = [];
+  const ctx = {
+    window: { DCC: { Whenever: { STAGE: "Whenever", LABEL: "Whenever" } } }, backlog: [],
+    persistBacklogItem: i => persisted.push(i), ms: m => m + "m", log() {}, render() {}, Date, Math, String,
+  };
+  vm.createContext(ctx);
+  vm.runInContext(body, ctx);
+  assert.equal(ctx.addWheneverTask("   "), null);
+  assert.equal(persisted.length, 0, "a blank title files nothing");
+  const a = ctx.addWheneverTask("Laundry"), b = ctx.addWheneverTask("Laundry");
+  assert.notEqual(a.id, b.id, "two adds in one session must not share a local_id");
+  assert.match(a.id, /^wh-\d+-[a-z0-9]+$/);
+  assert.deepEqual(persisted.map(i => i.stage), ["Whenever", "Whenever"]);
+  assert.equal(W.selectWhenever(ctx.backlog).length, 2, "both land in the pool");
+  assert.equal(a.durMin, 15, "chores default to 15 minutes");
+  // The plain Task Library add shares the creator, and with it the collision-proof id.
+  const c = ctx.addNewTask("Solo task", 30);
+  assert.match(c.id, /^custom-\d+-[a-z0-9]+$/);
+  assert.equal(c.stage, "");
+});
+
+test("moveTaskToWhenever files the row on the Whenever stage, then refolds after the write", async () => {
+  const src = fs.readFileSync(require.resolve("./public/js/state.js"), "utf8");
+  const s0 = src.indexOf("async function moveTaskToWhenever(");
+  const body = src.slice(s0, src.indexOf("\n}\n", s0) + 3);
+  const log = [];
+  let release;
+  const ctx = {
+    window: { DCC: { Whenever: { STAGE: "Whenever", LABEL: "Whenever" } } },
+    // Only t1's write is held open (to prove the refold waits for it); any other id
+    // resolves at once, so a missing refusal fails the test instead of hanging it.
+    _moveTaskToBacklogStage: (id, stage, msg) => {
+      log.push(["move", id, stage, msg]);
+      return id === "t1" ? new Promise(r => { release = r; }) : Promise.resolve();
+    },
+    refoldTaskStateFromBlockCache: () => log.push(["refold"]),
+    render: () => log.push(["render"]),
+    scheduled: [{ id: "t1" }, { id: "p1" }, { id: "c1", subtaskOf: "p1" }],
+    childrenOf: (id, pool) => pool.filter(e => e.subtaskOf === id),
+    showToast: msg => log.push(["toast", msg]),
+  };
+  vm.createContext(ctx);
+  vm.runInContext(body, ctx);
+  // A parent would strand its subtasks on today: refused, nothing written.
+  assert.equal(await ctx.moveTaskToWhenever("p1"), false);
+  assert.deepEqual(log, [["toast", "Finish or move its subtasks first"]]);
+  log.length = 0;
+  const done = ctx.moveTaskToWhenever("t1");
+  await Promise.resolve();
+  assert.deepEqual(log.map(e => e[0]), ["move"], "no refold before the unschedule write lands");
+  assert.deepEqual(log[0], ["move", "t1", "Whenever", "Moved to Whenever"]);
+  release(); await done;
+  assert.deepEqual(log.map(e => e[0]), ["move", "refold", "render"]);
 });
