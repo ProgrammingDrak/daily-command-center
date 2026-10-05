@@ -1,5 +1,11 @@
-// whenever.js — the header pill for work with no time on it, in two kinds:
+// whenever.js — the header pill's doors for work with no time on it, in three kinds.
+// They sit in one capsule with Waiting (delegated.js owns that door), in triage order:
+// Triage, Waiting, Unscheduled, Whenever.
 //
+//   Triage       just came in: tasks triage.js made from your inboxes and due
+//                repeat responsibilities. This is the itinerary's old "Triage"
+//                group, moved here; like Unscheduled, the itinerary still owns the
+//                rows (schedule-tab.js renderTriageInto) and this file hosts them.
 //   Unscheduled  has to happen, just is not on the schedule yet. This is the
 //                itinerary's old "Unplanned" group, moved here. The rows, their
 //                derivation and their controls all still belong to the itinerary
@@ -56,13 +62,22 @@
   // UNSCHEDULED_LABEL names the other half the same way.
   //   "Unscheduled" | "Needs a time" | "To schedule" | "Unplanned"
   const UNSCHEDULED_LABEL = "Unscheduled";
+  // TRIAGE_LABEL names the Triage door and drawer half.
+  //   "Triage" | "Inbox" | "Incoming" | "To sort"
+  // "Triage" kept: it is the word the rest of the app (and the old group) uses.
+  const TRIAGE_LABEL = "Triage";
   // Color themes, one per half. Each half (its pill segment and its drawer half)
-  // wears `whenever-theme--<style>`; dashboard.css defines one var set per value.
+  // wears `queue-theme--<style>`; dashboard.css defines one var set per value.
   //   "sage" | "teal" | "amber" | "violet"
   // Sage for Whenever: calm, and green reads "free". Amber for Unscheduled: it is
   // the half that wants action. Both stay clear of Loose Ends blue and Waiting plum.
   const PILL_STYLE = "sage";
   const UNSCHEDULED_STYLE = "amber";
+  // Triage's theme. Its neighbors are Loose Ends blue and Waiting plum.
+  //   "violet" | "indigo" | "slate" | "teal"
+  // Violet: reads "new, look at me" without the alarm of red, and stays clear of
+  // both neighbors. Slate was the calm runner-up.
+  const TRIAGE_STYLE = "violet";
 
   // ── pure half (node-testable) ──
 
@@ -139,13 +154,18 @@
     if (el) el.textContent = String(value);
   }
 
-  function syncCounts(unscheduled, whenever) {
+  function syncCounts(triage, unscheduled, whenever) {
+    setText("triage-pill-nav-count", triage);
+    setText("triage-queue-count", triage);
     setText("unscheduled-pill-nav-count", unscheduled);
     setText("unscheduled-count", unscheduled);
     setText("whenever-pill-nav-count", whenever);
     setText("whenever-count", whenever);
+    const sum = triage + unscheduled + whenever;
     const total = document.getElementById("untimed-count");
-    if (total) { total.textContent = String(unscheduled + whenever); total.style.display = unscheduled + whenever ? "" : "none"; }
+    if (total) { total.textContent = String(sum); total.style.display = sum ? "" : "none"; }
+    const t = document.getElementById("triage-pill-nav");
+    if (t) t.setAttribute("aria-label", "Open " + TRIAGE_LABEL + " tasks, " + triage + " to decide");
     const u = document.getElementById("unscheduled-pill-nav");
     if (u) u.setAttribute("aria-label", "Open " + UNSCHEDULED_LABEL + " tasks, " + unscheduled + " need a time");
     const w = document.getElementById("whenever-pill-nav");
@@ -185,6 +205,17 @@
     return counts.open;
   }
 
+  // The Triage half, the same way: the itinerary renders its own rows, plus the
+  // loader's status (Loading, or Retry after a failure) above them.
+  function buildTriageQueue() {
+    const list = document.getElementById("triage-queue-list");
+    if (!list || typeof window.renderTriageInto !== "function") return 0;
+    let counts = { open: 0, total: 0, status: false };
+    keepFocus(list, () => { counts = window.renderTriageInto(list) || counts; });
+    if (!counts.total && !counts.status) list.innerHTML = '<div class="delegated-empty">Nothing to triage.</div>';
+    return counts.open;
+  }
+
   const CHECK_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>';
 
   function rowHtml(t) {
@@ -207,9 +238,10 @@
 
   function build() {
     if (typeof document === "undefined") return;
+    const triage = buildTriageQueue();
     const unscheduled = buildUnscheduled();
     const items = selectWhenever(pool());
-    syncCounts(unscheduled, items.length);
+    syncCounts(triage, unscheduled, items.length);
     const list = document.getElementById("whenever-list");
     if (!list) return;
     keepFocus(list, () => {
@@ -331,12 +363,16 @@
     if (now) now.focus({ preventScroll: true });
   }
 
-  // Both segments open the same drawer section; each lands on its own half.
+  // All three doors open the same drawer section; each lands on its own half.
   function open(half) {
-    half = half === "unscheduled" ? "unscheduled" : "whenever";
+    half = half === "unscheduled" || half === "triage" ? half : "whenever";
     if (typeof window.openTasksToSection === "function") {
       window.openTasksToSection("tm-whenever-section", { solo: true });
     }
+    // Pull in anything new before showing the list. It only runs for today, does
+    // nothing while a load is in flight, and skips sources it already turned into
+    // tasks, so a second click costs nothing.
+    if (half === "triage" && typeof buildScheduleTriage === "function") buildScheduleTriage();
     build();
     // After openTasksToSection's own scroll-to-section (240ms), so ours wins.
     setTimeout(() => {
@@ -352,30 +388,35 @@
 
   function setTheme(el, style) {
     if (!el) return;
-    Array.from(el.classList).filter(c => c.indexOf("whenever-theme--") === 0).forEach(c => el.classList.remove(c));
-    el.classList.add("whenever-theme--" + style);
+    Array.from(el.classList).filter(c => c.indexOf("queue-theme--") === 0).forEach(c => el.classList.remove(c));
+    el.classList.add("queue-theme--" + style);
   }
 
   function applyDesign() {
     document.querySelectorAll("[data-whenever-label]").forEach(el => { el.textContent = LABEL; });
     document.querySelectorAll("[data-unscheduled-label]").forEach(el => { el.textContent = UNSCHEDULED_LABEL; });
-    const both = UNSCHEDULED_LABEL + " \u00b7 " + LABEL;
+    document.querySelectorAll("[data-triage-label]").forEach(el => { el.textContent = TRIAGE_LABEL; });
+    const both = [TRIAGE_LABEL, UNSCHEDULED_LABEL, LABEL].join(" \u00b7 ");
     document.querySelectorAll("[data-untimed-label]").forEach(el => { el.textContent = both; });
     // Each half's pill segment and drawer half wear one theme, so they swap together.
     setTheme(document.getElementById("whenever-pill-nav"), PILL_STYLE);
     setTheme(document.getElementById("whenever-sub"), PILL_STYLE);
     setTheme(document.getElementById("unscheduled-pill-nav"), UNSCHEDULED_STYLE);
     setTheme(document.getElementById("unscheduled-sub"), UNSCHEDULED_STYLE);
+    setTheme(document.getElementById("triage-pill-nav"), TRIAGE_STYLE);
+    setTheme(document.getElementById("triage-sub"), TRIAGE_STYLE);
     const section = document.getElementById("tm-whenever-section");
     if (section) section.dataset.sidecarLabel = both;
     // Label-bearing aria text and tooltips follow the knobs too, so a swap never
     // leaves the old word behind for screen readers or on hover.
     const attr = (sel, name, value) => document.querySelectorAll(sel).forEach(el => el.setAttribute(name, value));
+    attr("#triage-sub .untimed-tip", "aria-label", "What goes in " + TRIAGE_LABEL + "?");
     attr("#unscheduled-sub .untimed-tip", "aria-label", "What goes in " + UNSCHEDULED_LABEL + "?");
     attr("#whenever-sub .untimed-tip", "aria-label", "What goes in " + LABEL + "?");
     attr("#unscheduled-sort", "aria-label", "Sort " + UNSCHEDULED_LABEL);
     attr("#unscheduled-pill-nav", "title", UNSCHEDULED_LABEL + ": has to happen, but is not on your schedule yet. Drop a task here to take its time off.");
     attr("#whenever-pill-nav", "title", LABEL + ": no set time. Knock one out when you have a free minute.");
+    attr("#triage-pill-nav", "title", TRIAGE_LABEL + ": new from your inboxes and due repeats. Decide what each one needs.");
   }
 
   // The "i" tooltips. Hover and keyboard focus show them through CSS; a tap toggles
@@ -413,6 +454,8 @@
     if (wheneverSeg) wheneverSeg.addEventListener("click", () => open("whenever"));
     const unscheduledSeg = document.getElementById("unscheduled-pill-nav");
     if (unscheduledSeg) unscheduledSeg.addEventListener("click", () => open("unscheduled"));
+    const triageSeg = document.getElementById("triage-pill-nav");
+    if (triageSeg) triageSeg.addEventListener("click", () => open("triage"));
     wireDrop(unscheduledSeg);
     wireTips();
 
@@ -459,7 +502,7 @@
   }
 
   return {
-    STAGE, LABEL, PILL_STYLE, UNSCHEDULED_LABEL, UNSCHEDULED_STYLE,
+    STAGE, LABEL, PILL_STYLE, UNSCHEDULED_LABEL, UNSCHEDULED_STYLE, TRIAGE_LABEL, TRIAGE_STYLE,
     isWhenever, durationOf, selectWhenever, pickIndex,
     build, add, doNow, markDone, release, open
   };

@@ -130,16 +130,21 @@
       <button class="loose-ends-pill" id="loose-ends-pill" type="button" aria-controls="catchup-overlay" aria-haspopup="dialog" aria-label="Open Loose Ends" hidden>
         <span>Loose Ends</span><span class="loose-ends-pill-count" id="loose-ends-pill-count" aria-live="polite">0</span>
       </button>
-      <button class="waiting-pill-nav waiting-pill-nav--plum" id="waiting-pill-nav" type="button" aria-label="Open Waiting tasks" aria-controls="tm-delegated-blocked-section">
-        <span>Waiting</span><span class="waiting-pill-nav-count" id="waiting-pill-nav-count" aria-live="polite">0</span>
-      </button>
-      <!-- Work with no time on it, in two kinds (whenever.js). One capsule, two doors. -->
-      <div class="untimed-pill" id="untimed-pill" role="group" aria-label="Tasks without a time">
-        <button class="untimed-seg whenever-theme--amber" id="unscheduled-pill-nav" type="button" aria-label="Open Unscheduled tasks" aria-controls="tm-whenever-section" data-placement="unplanned" title="Unscheduled: has to happen, but is not on your schedule yet. Drop a task here to take its time off.">
-          <span data-unscheduled-label>Unscheduled</span><span class="untimed-seg-count" id="unscheduled-pill-nav-count" aria-live="polite">0</span>
+      <!-- The task queues, one capsule with four doors, in triage order. whenever.js
+           hosts Triage, Unscheduled and Whenever (all work with no time on it);
+           delegated.js owns Waiting. -->
+      <div class="queue-pill" id="queue-pill" role="group" aria-label="Task queues">
+        <button class="queue-seg queue-theme--violet" id="triage-pill-nav" type="button" aria-label="Open Triage tasks" aria-controls="tm-whenever-section" title="Triage: new from your inboxes and due repeats. Decide what each one needs.">
+          <span data-triage-label>Triage</span><span class="queue-seg-count" id="triage-pill-nav-count" aria-live="polite">0</span>
         </button>
-        <button class="untimed-seg whenever-theme--sage" id="whenever-pill-nav" type="button" aria-label="Open Whenever tasks" aria-controls="tm-whenever-section" title="Whenever: no set time. Knock one out when you have a free minute.">
-          <span data-whenever-label>Whenever</span><span class="untimed-seg-count" id="whenever-pill-nav-count" aria-live="polite">0</span>
+        <button class="queue-seg queue-theme--plum" id="waiting-pill-nav" type="button" aria-label="Open Waiting tasks" aria-controls="tm-delegated-blocked-section" title="Waiting: handed off to someone else. The count is check-ins that are overdue.">
+          <span>Waiting</span><span class="queue-seg-count" id="waiting-pill-nav-count" aria-live="polite">0</span>
+        </button>
+        <button class="queue-seg queue-theme--amber" id="unscheduled-pill-nav" type="button" aria-label="Open Unscheduled tasks" aria-controls="tm-whenever-section" data-placement="unplanned" title="Unscheduled: has to happen, but is not on your schedule yet. Drop a task here to take its time off.">
+          <span data-unscheduled-label>Unscheduled</span><span class="queue-seg-count" id="unscheduled-pill-nav-count" aria-live="polite">0</span>
+        </button>
+        <button class="queue-seg queue-theme--sage" id="whenever-pill-nav" type="button" aria-label="Open Whenever tasks" aria-controls="tm-whenever-section" title="Whenever: no set time. Knock one out when you have a free minute.">
+          <span data-whenever-label>Whenever</span><span class="queue-seg-count" id="whenever-pill-nav-count" aria-live="polite">0</span>
         </button>
       </div>
     </div>
@@ -401,16 +406,29 @@
           </div>
         </details>
 
-        <!-- The header pill's drawer (whenever.js): Unscheduled (needs a time) and
-             Whenever (any time). Unscheduled is the itinerary's old Unplanned group. -->
-        <details class="tm-section untimed-section" id="tm-whenever-section" data-sidecar-label="Unscheduled · Whenever">
+        <!-- The header pill's drawer for work with no time on it (whenever.js): Triage
+             (just came in), Unscheduled (needs a time) and Whenever (any time). Triage
+             and Unscheduled are the itinerary's old Triage and Unplanned groups. -->
+        <details class="tm-section untimed-section" id="tm-whenever-section" data-sidecar-label="Triage · Unscheduled · Whenever">
           <summary class="tm-section-header">
             <span class="tm-chevron"></span>
-            <span data-untimed-label>Unscheduled · Whenever</span>
+            <span data-untimed-label>Triage · Unscheduled · Whenever</span>
             <span class="badge" id="untimed-count" style="display:none">0</span>
           </summary>
           <div class="tm-section-body" id="tm-whenever">
-            <section class="untimed-sub whenever-theme--amber" id="unscheduled-sub" aria-labelledby="unscheduled-sub-title">
+            <section class="untimed-sub queue-theme--violet" id="triage-sub" aria-labelledby="triage-sub-title">
+              <div class="untimed-sub-head">
+                <h4 class="untimed-sub-title" id="triage-sub-title"><span data-triage-label>Triage</span><span class="untimed-sub-count" id="triage-queue-count">0</span></h4>
+                <span class="untimed-tip-wrap">
+                  <button type="button" class="untimed-tip" aria-label="What goes in Triage?" aria-describedby="triage-queue-tip" aria-expanded="false">i</button>
+                  <span class="untimed-tip-text" role="tooltip" id="triage-queue-tip">Just came in from your inboxes and repeat responsibilities. Decide what each one needs: do it, give it a time, or clear it.</span>
+                </span>
+              </div>
+              <div class="it-list-view untimed-list" id="triage-queue-list">
+                <div class="delegated-empty">Nothing to triage.</div>
+              </div>
+            </section>
+            <section class="untimed-sub queue-theme--amber" id="unscheduled-sub" aria-labelledby="unscheduled-sub-title">
               <div class="untimed-sub-head">
                 <h4 class="untimed-sub-title" id="unscheduled-sub-title"><span data-unscheduled-label>Unscheduled</span><span class="untimed-sub-count" id="unscheduled-count">0</span></h4>
                 <span class="untimed-tip-wrap">
@@ -427,7 +445,7 @@
                 <div class="delegated-empty">Nothing waiting for a time slot.</div>
               </div>
             </section>
-            <section class="untimed-sub whenever-theme--sage" id="whenever-sub" aria-labelledby="whenever-sub-title">
+            <section class="untimed-sub queue-theme--sage" id="whenever-sub" aria-labelledby="whenever-sub-title">
               <div class="untimed-sub-head">
                 <h4 class="untimed-sub-title" id="whenever-sub-title"><span data-whenever-label>Whenever</span><span class="untimed-sub-count" id="whenever-count">0</span></h4>
                 <span class="untimed-tip-wrap">
@@ -2078,7 +2096,7 @@
 <script src="/public/js/slack-titles.js?v=slack-rules-v1"></script>
 <script src="/public/js/task-model.js?v=task-model-1"></script>
 <!-- Before schedule.js: its add-bar destinations read DCC.Whenever.LABEL at load. -->
-<script src="/public/js/whenever.js?v=whenever-1"></script>
+<script src="/public/js/whenever.js?v=whenever-2"></script>
 <!-- day-context.js: the one day-context + free-slot engine (window.DCC.getDayContext/findSlot); must load before state.js/schedule.js consume it -->
 <script src="/public/js/day-context.js?v=day-context-2"></script>
 <script src="/public/js/core-ui.js?v=core-ui-1"></script>

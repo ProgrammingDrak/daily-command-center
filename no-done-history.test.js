@@ -3,13 +3,14 @@
 // Pills are queues of OPEN work. Drake, 2026-10-05: "None of these pills (waiting,
 // loose ends, unscheduled, whenever) should have historical done sections. That is
 // tracked ON THE DAY THAT IT WAS COMPLETED." And the Waiting badge is a notification:
-// it counts only items overdue for a check-in.
+// it counts only items overdue for a check-in. Triage joined the capsule the same day,
+// under the same rule.
 //
 // What these pin:
 //   1. Waiting has no Done filter, and All lists open items only
 //   2. the Waiting badge and the Overdue tab share ONE rule, and the badge hides at zero
-//   3. a done untimed task leaves the drawer's Unscheduled half and lands on its day,
-//      in the time block (and order) of its completion time
+//   3. a done untimed task leaves the drawer's Triage or Unscheduled half and lands
+//      on its day, in the time block (and order) of its completion time
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -102,7 +103,7 @@ test("the Waiting badge disappears when nothing is overdue", () => {
 
 const FILE = [
   slice(TAB, /function _completionMinute\(ev\)\{[\s\S]*?\n\}/, "_completionMinute"),
-  slice(TAB, /function _fileDoneUntimedOnTheDay\(groups,unscheduledGroup,timeBlocks\)\{[\s\S]*?\n\}/, "_fileDoneUntimedOnTheDay"),
+  slice(TAB, /function _fileDoneUntimedOnTheDay\(groups,sourceGroup,timeBlocks\)\{[\s\S]*?\n\}/, "_fileDoneUntimedOnTheDay"),
 ].join("\n");
 
 function filing(doneAt) {
@@ -142,4 +143,37 @@ test("a done untimed task leaves Unscheduled and lands in the block, and order, 
   assert.ok(outside, "an unknown completion time still lands on the day");
   assert.deepEqual(ids(outside), ["lost"]);
   assert.ok(groups.indexOf(outside) < groups.indexOf(unscheduled), "Outside sits before the pill's group");
+});
+
+test("a done Triage task lands on its day too, and Outside still sits after the timed blocks", () => {
+  const blocks = [{ id: "am", name: "Morning", start: "08:00", end: "12:00" }];
+  const groups = TimeBlocks.groupItineraryTree([
+    { ev: { id: "t9", start: "09:00", end: "09:30" }, depth: 0 },
+    { ev: { id: "gmail", untimed: true, triageBlock: true }, depth: 0 },
+    { ev: { id: "slack", untimed: true, triageBlock: true, done: true }, depth: 0 },
+    { ev: { id: "repeat", untimed: true, triageBlock: true, done: true }, depth: 0 },
+    { ev: { id: "chore", untimed: true }, depth: 0 },
+  ], blocks);
+  const triage = groups.find(g => g.block.id === TimeBlocks.TRIAGE_BLOCK.id);
+  const unscheduled = groups.find(g => g.block.id === TimeBlocks.UNPLANNED_BLOCK.id);
+  const ctx = filing({ slack: localIso(9, 40) });
+  ctx._fileDoneUntimedOnTheDay(groups, triage, blocks);
+  const ids = g => Array.from(g.nodes, n => n.ev.id);
+  assert.deepEqual(ids(triage), ["gmail"], "only open work stays behind the Triage door");
+  assert.deepEqual(ids(groups.find(g => g.block.id === "am")), ["t9", "slack"]);
+  const outside = groups.find(g => g.block === TimeBlocks.OUTSIDE_BLOCK);
+  assert.deepEqual(ids(outside), ["repeat"]);
+  // Triage is the FIRST group, so placing Outside relative to the source group would
+  // put it above every time block.
+  const order = groups.map(g => g.block.id);
+  assert.ok(order.indexOf(null) > order.indexOf("am") && order.indexOf(null) < order.indexOf("unplanned"),
+    "Outside goes after the timed blocks and before Unplanned: " + JSON.stringify(order));
+  assert.deepEqual(ids(unscheduled), ["chore"]);
+});
+
+test("the list model files done work out of BOTH drawer halves", () => {
+  const model = slice(TAB, /function _itineraryListModel\(\)\{[\s\S]*?\n\}/, "_itineraryListModel");
+  assert.match(model, /_fileDoneUntimedOnTheDay\(groups,triageGroup,timeBlocks\);/);
+  assert.match(model, /_fileDoneUntimedOnTheDay\(groups,unscheduledGroup,timeBlocks\);/);
+  assert.match(model, /return \{[^}]*unscheduledGroup,triageGroup\}/);
 });

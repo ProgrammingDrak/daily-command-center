@@ -14,11 +14,11 @@ test("Loose Ends gets a dedicated full-width row in the mobile date toolbar", ()
   );
 });
 
-test("Waiting and the Unscheduled · Whenever capsule share one touch-sized row below Loose Ends on mobile", () => {
+test("the queue capsule takes one touch-sized row below Loose Ends on mobile, four equal doors", () => {
   const mobileShell = css.slice(css.indexOf("@media (max-width:760px)"));
-  // 30% + 70% minus the 6px gap is exactly one row, so neither can ride up onto the date
-  // row, and a third header control does not add a third full-width row on a phone.
-  assert.match(mobileShell, /\.header \.date-nav \.waiting-pill-nav\{[^}]*flex:1 0 calc\(30% - 4px\);[^}]*order:3;[^}]*min-height:44px/);
-  assert.match(mobileShell, /\.header \.date-nav \.untimed-pill\{[^}]*flex:1 0 calc\(70% - 2px\);[^}]*order:4/);
-  assert.match(mobileShell, /\.header \.date-nav \.untimed-seg\{[^}]*min-height:44px/);
+  // One row for all four doors, so the phone header is no taller than with two pills.
+  assert.match(mobileShell, /\.header \.date-nav \.queue-pill\{[^}]*flex:1 0 100%;[^}]*order:3/);
+  // Label over count: side by side, "Unscheduled" alone overflows a quarter of 375px.
+  assert.match(mobileShell, /\.header \.date-nav \.queue-seg\{[^}]*flex:1 1 0;[^}]*flex-direction:column;[^}]*min-height:48px/);
+  assert.doesNotMatch(mobileShell, /\.waiting-pill-nav\{/, "Waiting is a door in the capsule now, not its own pill");
 });

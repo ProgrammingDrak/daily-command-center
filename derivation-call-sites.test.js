@@ -90,11 +90,15 @@ test("★ the Unscheduled section renders a TREE, not a flat list of roots", () 
   // The badge counts ROOTS; that count lives on the pill now (whenever.test.js pins it).
   // The Unscheduled group renders in the header pill's drawer now (renderUnscheduledInto),
   // and it must keep both halves of this contract there: the tree, and the real mode.
-  const start = schedTabCode.indexOf("function renderUnscheduledInto(");
-  assert.ok(start > 0, "renderUnscheduledInto must exist");
-  const pill = schedTabCode.slice(start, schedTabCode.indexOf("\nfunction ", start + 1));
-  assert.match(pill, /_orderUnscheduledNodes\(model\.unscheduledGroup\.nodes\)/,
+  // Triage moved there too; both halves share one renderer (_renderQueueInto).
+  const start = schedTabCode.indexOf("function _renderQueueInto(");
+  const end = schedTabCode.indexOf("\nwindow.renderTriageInto", start);
+  assert.ok(start > 0 && end > start, "_renderQueueInto, renderUnscheduledInto and renderTriageInto must exist");
+  const pill = schedTabCode.slice(start, end);
+  assert.match(pill, /_renderQueueInto\(listEl,_orderUnscheduledNodes\(model\.unscheduledGroup\.nodes\),model\)/,
     "the pill must render the grouped TREE's nodes, not a flat list of roots");
+  assert.match(pill, /_renderQueueInto\(listEl,model\.triageGroup\.nodes,model,status\)/,
+    "Triage renders the grouped tree too");
   assert.match(pill, /row\(node\.ev,_isSubRow\(node\)\?0:rank\+\+,isDone\(node\.ev\)\?"done":"open",node\)/,
     "and with the real done/open mode, or a done step renders as an unchecked row");
 });

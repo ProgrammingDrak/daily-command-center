@@ -119,18 +119,18 @@ for (const tab of TABS) {
 await page.evaluate(() => { document.querySelector('[data-tab="schedule"]')?.click?.(); });
 const looseEndsMobile = await page.evaluate(() => {
   const pill = document.getElementById("loose-ends-pill");
-  const waiting = document.getElementById("waiting-pill-nav");
-  const whenever = document.getElementById("untimed-pill");
+  const capsule = document.getElementById("queue-pill");
   const nav = document.getElementById("date-nav");
-  if (!pill || !waiting || !whenever || !nav) return null;
+  if (!pill || !capsule || !nav) return null;
   const wasHidden = pill.hidden;
   pill.hidden = false;
   const box = pill.getBoundingClientRect();
-  const waitingBox = waiting.getBoundingClientRect();
-  const wheneverBox = whenever.getBoundingClientRect();
+  const capsuleBox = capsule.getBoundingClientRect();
   const navBox = nav.getBoundingClientRect();
+  const doors = [...capsule.querySelectorAll(".queue-seg")];
+  const doorBoxes = doors.map((door) => door.getBoundingClientRect());
   const otherBottoms = [...nav.children]
-    .filter((child) => child !== pill && child !== waiting && child !== whenever && getComputedStyle(child).display !== "none")
+    .filter((child) => child !== pill && child !== capsule && getComputedStyle(child).display !== "none")
     .map((child) => child.getBoundingClientRect().bottom);
   const result = {
     visible: getComputedStyle(pill).display !== "none" && box.width > 0 && box.height > 0,
@@ -138,15 +138,15 @@ const looseEndsMobile = await page.evaluate(() => {
     dedicatedRow: box.top >= Math.max(...otherBottoms),
     fullWidth: box.width >= navBox.width - 1,
     touchHeight: box.height >= 44,
-    waitingBelow: waitingBox.top >= box.bottom,
-    // Waiting and the Unscheduled · Whenever capsule split one row, so the phone header
-    // stays as tall as it was, and both capsule labels show in full at 375px.
-    waitingSharesRowWithCapsule: Math.abs(waitingBox.top - wheneverBox.top) < 1 && wheneverBox.left >= waitingBox.right,
-    pillRowFillsNav: wheneverBox.right - waitingBox.left >= navBox.width - 1,
-    capsuleInsideViewport: wheneverBox.left >= 0 && wheneverBox.right <= window.innerWidth,
-    capsuleLabelsUnclipped: [...whenever.querySelectorAll(".untimed-seg > span:first-child")].every((label) => label.scrollWidth <= label.clientWidth),
-    waitingTouchHeight: waitingBox.height >= 44,
-    capsuleTouchHeight: wheneverBox.height >= 44
+    // Triage, Waiting, Unscheduled and Whenever are ONE capsule on ONE row below Loose
+    // Ends, so the phone header stays as tall as it was, and every label shows in full.
+    capsuleBelow: capsuleBox.top >= box.bottom,
+    fourDoorsInOrder: doors.map((door) => door.id).join() === "triage-pill-nav,waiting-pill-nav,unscheduled-pill-nav,whenever-pill-nav",
+    doorsShareOneRow: doorBoxes.every((door) => Math.abs(door.top - doorBoxes[0].top) < 1),
+    capsuleFillsNav: capsuleBox.width >= navBox.width - 1,
+    capsuleInsideViewport: capsuleBox.left >= 0 && capsuleBox.right <= window.innerWidth,
+    capsuleLabelsUnclipped: doors.every((door) => { const label = door.querySelector("span:first-child"); return label.scrollWidth <= label.clientWidth; }),
+    doorsTouchHeight: doorBoxes.every((door) => door.height >= 44)
   };
   pill.hidden = wasHidden;
   return result;
