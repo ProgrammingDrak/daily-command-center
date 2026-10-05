@@ -120,15 +120,17 @@ await page.evaluate(() => { document.querySelector('[data-tab="schedule"]')?.cli
 const looseEndsMobile = await page.evaluate(() => {
   const pill = document.getElementById("loose-ends-pill");
   const waiting = document.getElementById("waiting-pill-nav");
+  const whenever = document.getElementById("untimed-pill");
   const nav = document.getElementById("date-nav");
-  if (!pill || !waiting || !nav) return null;
+  if (!pill || !waiting || !whenever || !nav) return null;
   const wasHidden = pill.hidden;
   pill.hidden = false;
   const box = pill.getBoundingClientRect();
   const waitingBox = waiting.getBoundingClientRect();
+  const wheneverBox = whenever.getBoundingClientRect();
   const navBox = nav.getBoundingClientRect();
   const otherBottoms = [...nav.children]
-    .filter((child) => child !== pill && child !== waiting && getComputedStyle(child).display !== "none")
+    .filter((child) => child !== pill && child !== waiting && child !== whenever && getComputedStyle(child).display !== "none")
     .map((child) => child.getBoundingClientRect().bottom);
   const result = {
     visible: getComputedStyle(pill).display !== "none" && box.width > 0 && box.height > 0,
@@ -137,8 +139,14 @@ const looseEndsMobile = await page.evaluate(() => {
     fullWidth: box.width >= navBox.width - 1,
     touchHeight: box.height >= 44,
     waitingBelow: waitingBox.top >= box.bottom,
-    waitingFullWidth: waitingBox.width >= navBox.width - 1,
-    waitingTouchHeight: waitingBox.height >= 44
+    // Waiting and the Unscheduled · Whenever capsule split one row, so the phone header
+    // stays as tall as it was, and both capsule labels show in full at 375px.
+    waitingSharesRowWithCapsule: Math.abs(waitingBox.top - wheneverBox.top) < 1 && wheneverBox.left >= waitingBox.right,
+    pillRowFillsNav: wheneverBox.right - waitingBox.left >= navBox.width - 1,
+    capsuleInsideViewport: wheneverBox.left >= 0 && wheneverBox.right <= window.innerWidth,
+    capsuleLabelsUnclipped: [...whenever.querySelectorAll(".untimed-seg > span:first-child")].every((label) => label.scrollWidth <= label.clientWidth),
+    waitingTouchHeight: waitingBox.height >= 44,
+    capsuleTouchHeight: wheneverBox.height >= 44
   };
   pill.hidden = wasHidden;
   return result;

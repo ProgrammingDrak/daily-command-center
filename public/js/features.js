@@ -1658,6 +1658,8 @@ const SURFACES = {
   trivial:         {build:()=>{if(typeof buildTrivialTasks==="function")buildTrivialTasks();},  isVisible:()=>true},
   // Body-level dock stays visible across tabs and must never show stale counts.
   anytime:         {build:()=>{if(typeof buildAnytime==="function")buildAnytime();},             isVisible:()=>true},
+  // Writes the always-visible header pill count, so it builds every render like delegated.
+  whenever:        {build:()=>{if(typeof buildWhenever==="function")buildWhenever();},           isVisible:()=>true},
   scheduled:       {build:()=>{if(typeof buildScheduled==="function")buildScheduled();},        isVisible:()=>true},
   scheduleSoon:    {build:()=>{if(typeof buildScheduleSoon==="function")buildScheduleSoon();},  isVisible:()=>true},
   glymphaticBrief: {build:()=>{if(typeof buildGlymphaticBrief==="function")buildGlymphaticBrief();},isVisible:()=>true},
@@ -1671,7 +1673,9 @@ const SURFACES = {
 };
 
 // Named scopes let a hot call site mark only the surfaces it can actually change.
-const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView"] };
+// "whenever" rides along because the header pill's drawer renders the same itinerary rows
+// (the Unscheduled half), whose chevron and work-session buttons call render("schedule").
+const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView","whenever"] };
 
 const _dirty = {};
 function _markDirty(scope){

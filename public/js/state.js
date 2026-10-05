@@ -1383,7 +1383,7 @@ async function moveTaskToUnplanned(id){
   if(!supported){
     try{const response=await fetch("/api/health",{cache:"no-store"});const health=await response.json();supported=response.ok&&health.placementCapabilities?.includes("unplanned");}
     catch(_error){}
-    if(!supported){showToast("Connect once to enable Unplanned movement","info");return false;}
+    if(!supported){showToast("Connect once to enable moving tasks to "+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled"),"info");return false;}
     try{sessionStorage.setItem("dcc-unplanned-placement","1");}catch(_error){}
   }
   const durations={};
@@ -1396,7 +1396,7 @@ async function moveTaskToUnplanned(id){
   const key=DCC.TimeBlocks.collapseKey(targetDate,DCC.TimeBlocks.UNPLANNED_BLOCK);
   if(isCollapsed(key))toggleCollapsed(key);
   if(viewDate===targetDate){refoldTaskStateFromBlockCache();render();}
-  showToast("Moved to Unplanned","success");return true;
+  showToast("Moved to "+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled"),"success");return true;
 }
 
 function moveTaskViaPlacement(id,dateStr,opts){
@@ -1552,6 +1552,26 @@ async function _moveTaskToBacklogStage(id,stage,toastMsg){
 
 function moveTaskToBacklog(id){_moveTaskToBacklogStage(id,"Backlog","Moved to backlog");}
 function moveTaskToPriority(id){_moveTaskToBacklogStage(id,"Priority","Moved to priority");}
+// No set time after all (laundry, the mail): the same in-place unschedule, landing on
+// the Whenever stage so the header pill's pool picks it up. See whenever.js.
+//
+// The refold is the one difference from its siblings. They leave the ev on screen
+// because a backlog row still renders in Unplanned; a Whenever pool row does not
+// (TaskModel.isWheneverPoolRow keeps it out of the fold), so without the refold it
+// would linger there until the next reload and then vanish.
+async function moveTaskToWhenever(id){
+  // A Whenever pool row leaves the day entirely (the fold skips it), so a parent moved
+  // there would strand its subtasks on today as standalone tasks, and Done in the pool
+  // would close only the parent. Pool chores are single tasks: refuse instead.
+  if(typeof childrenOf==="function"&&childrenOf(id,scheduled).length){
+    if(typeof showToast==="function")showToast("Finish or move its subtasks first","info");
+    return false;
+  }
+  const W=window.DCC&&window.DCC.Whenever;
+  const stage=(W&&W.STAGE)||"Whenever";
+  await _moveTaskToBacklogStage(id,stage,"Moved to "+((W&&W.LABEL)||"Whenever"));
+  if(typeof refoldTaskStateFromBlockCache==="function"){refoldTaskStateFromBlockCache();render();}
+}
 
 // Convert an existing scheduled task into a Delegated / Blocked item: open the
 // delegated modal prefilled with this task as "what you're working on". The

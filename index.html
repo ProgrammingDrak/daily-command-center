@@ -130,6 +130,15 @@
       <button class="waiting-pill-nav waiting-pill-nav--plum" id="waiting-pill-nav" type="button" aria-label="Open Waiting tasks" aria-controls="tm-delegated-blocked-section">
         <span>Waiting</span><span class="waiting-pill-nav-count" id="waiting-pill-nav-count" aria-live="polite">0</span>
       </button>
+      <!-- Work with no time on it, in two kinds (whenever.js). One capsule, two doors. -->
+      <div class="untimed-pill" id="untimed-pill" role="group" aria-label="Tasks without a time">
+        <button class="untimed-seg whenever-theme--amber" id="unscheduled-pill-nav" type="button" aria-label="Open Unscheduled tasks" aria-controls="tm-whenever-section" data-placement="unplanned" title="Unscheduled: has to happen, but is not on your schedule yet. Drop a task here to take its time off.">
+          <span data-unscheduled-label>Unscheduled</span><span class="untimed-seg-count" id="unscheduled-pill-nav-count" aria-live="polite">0</span>
+        </button>
+        <button class="untimed-seg whenever-theme--sage" id="whenever-pill-nav" type="button" aria-label="Open Whenever tasks" aria-controls="tm-whenever-section" title="Whenever: no set time. Knock one out when you have a free minute.">
+          <span data-whenever-label>Whenever</span><span class="untimed-seg-count" id="whenever-pill-nav-count" aria-live="polite">0</span>
+        </button>
+      </div>
     </div>
     <div class="date-picker-drop" id="date-picker-drop" style="display:none"></div>
   </div>
@@ -386,6 +395,59 @@
             <div class="delegated-sidebar-list" id="delegated-blocked-list">
               <div class="delegated-empty">Nothing waiting yet.</div>
             </div>
+          </div>
+        </details>
+
+        <!-- The header pill's drawer (whenever.js): Unscheduled (needs a time) and
+             Whenever (any time). Unscheduled is the itinerary's old Unplanned group. -->
+        <details class="tm-section untimed-section" id="tm-whenever-section" data-sidecar-label="Unscheduled · Whenever">
+          <summary class="tm-section-header">
+            <span class="tm-chevron"></span>
+            <span data-untimed-label>Unscheduled · Whenever</span>
+            <span class="badge" id="untimed-count" style="display:none">0</span>
+          </summary>
+          <div class="tm-section-body" id="tm-whenever">
+            <section class="untimed-sub whenever-theme--amber" id="unscheduled-sub" aria-labelledby="unscheduled-sub-title">
+              <div class="untimed-sub-head">
+                <h4 class="untimed-sub-title" id="unscheduled-sub-title"><span data-unscheduled-label>Unscheduled</span><span class="untimed-sub-count" id="unscheduled-count">0</span></h4>
+                <span class="untimed-tip-wrap">
+                  <button type="button" class="untimed-tip" aria-label="What goes in Unscheduled?" aria-describedby="unscheduled-tip" aria-expanded="false">i</button>
+                  <span class="untimed-tip-text" role="tooltip" id="unscheduled-tip">Has to happen, just not on your schedule yet. Give each one a time slot.</span>
+                </span>
+                <span class="untimed-sort" id="unscheduled-sort" role="group" aria-label="Sort Unscheduled">
+                  <button type="button" data-unscheduled-sort="manual" title="Manual order">Manual</button>
+                  <button type="button" data-unscheduled-sort="alpha" title="Sort A to Z">A–Z</button>
+                  <button type="button" data-unscheduled-sort="created" title="Newest first">New</button>
+                </span>
+              </div>
+              <div class="it-list-view untimed-list" id="unscheduled-list">
+                <div class="delegated-empty">Nothing waiting for a time slot.</div>
+              </div>
+            </section>
+            <section class="untimed-sub whenever-theme--sage" id="whenever-sub" aria-labelledby="whenever-sub-title">
+              <div class="untimed-sub-head">
+                <h4 class="untimed-sub-title" id="whenever-sub-title"><span data-whenever-label>Whenever</span><span class="untimed-sub-count" id="whenever-count">0</span></h4>
+                <span class="untimed-tip-wrap">
+                  <button type="button" class="untimed-tip" aria-label="What goes in Whenever?" aria-describedby="whenever-tip" aria-expanded="false">i</button>
+                  <span class="untimed-tip-text" role="tooltip" id="whenever-tip">No set time. Do one any time you have a free minute, like laundry or the mail.</span>
+                </span>
+                <button type="button" class="whenever-pick" id="whenever-pick" disabled>Surprise me</button>
+              </div>
+              <form class="whenever-add" id="whenever-add" autocomplete="off">
+                <input type="text" id="whenever-add-title" placeholder="Laundry, grab the mail..." aria-label="New task with no set time" maxlength="200">
+                <select id="whenever-add-dur" aria-label="How long it takes">
+                  <option value="5">5m</option>
+                  <option value="15" selected>15m</option>
+                  <option value="30">30m</option>
+                  <option value="45">45m</option>
+                  <option value="60">1h</option>
+                </select>
+                <button type="submit">Add</button>
+              </form>
+              <div class="whenever-list" id="whenever-list">
+                <div class="delegated-empty whenever-empty">Nothing here. Add the chores with no set time, like laundry or the mail.</div>
+              </div>
+            </section>
           </div>
         </details>
 
@@ -2012,6 +2074,8 @@
 <script src="/public/js/measured-task-window.js?v=measured-task-window-1"></script>
 <script src="/public/js/slack-titles.js?v=slack-rules-v1"></script>
 <script src="/public/js/task-model.js?v=task-model-1"></script>
+<!-- Before schedule.js: its add-bar destinations read DCC.Whenever.LABEL at load. -->
+<script src="/public/js/whenever.js?v=whenever-1"></script>
 <!-- day-context.js: the one day-context + free-slot engine (window.DCC.getDayContext/findSlot); must load before state.js/schedule.js consume it -->
 <script src="/public/js/day-context.js?v=day-context-2"></script>
 <script src="/public/js/core-ui.js?v=core-ui-1"></script>

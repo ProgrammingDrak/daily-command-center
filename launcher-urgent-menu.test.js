@@ -107,7 +107,7 @@ test("launcher shows all task types and submits the visible selection directly",
   const {launcherBar, submissions, radialCalls} = loaded;
   assert.deepEqual(
     launcherBar.parts.destination.options.map(option => option.value),
-    ["urgent", "done", "schedule", "backlog", "anytime", "habit", "meeting"]
+    ["urgent", "done", "schedule", "backlog", "whenever", "anytime", "habit", "meeting"]
   );
   assert.equal(launcherBar.parts.destination.style.display, "");
 
@@ -118,7 +118,7 @@ test("launcher shows all task types and submits the visible selection directly",
   }
 
   assert.deepEqual(submissions.map(item => item.destination),
-    ["urgent", "done", "schedule", "backlog", "anytime", "habit", "meeting"]);
+    ["urgent", "done", "schedule", "backlog", "whenever", "anytime", "habit", "meeting"]);
   assert.equal(radialCalls.length, 0, "launcher Add must not reopen the full destination radial");
 });
 
@@ -156,7 +156,7 @@ test("regular add bars retain the full modal destination radial", () => {
   regularBar.parts.title.value = "Regular task";
   regularBar.parts.add.emit("click", {stopPropagation(){}});
   assert.equal(radialCalls.length, 1);
-  assert.equal(radialCalls[0].items.length, 7);
+  assert.equal(radialCalls[0].items.length, 8);
   assert.notEqual(radialCalls[0].options.backdrop, false);
 });
 
@@ -339,4 +339,43 @@ test("generic radial supports non-blocking mode without changing its modal defau
   appended.length = 0;
   context.openRadialMenu(anchor, [{icon: "⚡", label: "Urgent"}], {});
   assert.equal(appended.some(element => element.className === "dest-radial-backdrop"), true);
+});
+
+test("Whenever destination drops the task into the no-set-time pool", () => {
+  const source = fs.readFileSync(require.resolve("./public/js/schedule.js"), "utf8");
+  const start = source.indexOf("function addTaskUniversal(barEl){");
+  const end = source.indexOf("// ======== SCHEDULE-AT PICKER", start);
+  assert.notEqual(start, -1, "addTaskUniversal start moved");
+  assert.notEqual(end, -1, "addTaskUniversal end moved");
+  const fnSource = source.slice(start, end);
+  const run = (src) => {
+    const added = [], toasts = [];
+    const title = new FakeElement(); title.value = "Grab the mail";
+    const duration = new FakeElement(); duration.value = "15";
+    const destination = new FakeElement(); destination.value = "whenever";
+    const bar = {
+      querySelector: selector => ({
+        ".tab-title": title, ".tab-dur": duration,
+        ".tab-dest": destination, ".tab-add": new FakeElement()
+      })[selector] || null
+    };
+    const DCC = {Whenever: {LABEL: "Whenever"}};
+    const context = {
+      window: {DCC}, DCC, parseInt,
+      addWheneverTask: (t, d) => { added.push([t, d]); return {id: "wh-1"}; },
+      showToast: msg => toasts.push(msg)
+    };
+    vm.createContext(context);
+    vm.runInContext(src, context);
+    context.addTaskUniversal(bar);
+    return {added, toasts, title, destination};
+  };
+  const ok = run(fnSource);
+  assert.deepEqual(ok.added, [["Grab the mail", 15]]);
+  assert.deepEqual(ok.toasts, ["Added to Whenever"]);
+  assert.equal(ok.title.value, "", "the title clears like every non-schedule destination");
+  assert.equal(ok.destination.value, "urgent", "the type snaps back to Urgent");
+
+  const broken = run(fnSource.replace('case"whenever"', 'case"removed-whenever"'));
+  assert.deepEqual(broken.added, [], "mutation must prove the destination guard can fail");
 });
