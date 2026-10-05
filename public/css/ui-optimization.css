@@ -69,7 +69,7 @@ body.dcc-schedule-full #tab-schedule { width: 100%; max-width: none; }
 .dn-quick,
 .loose-ends-pill,
 .waiting-pill-nav,
-.whenever-pill-nav { min-height: var(--target-min); }
+.untimed-seg { min-height: var(--target-min); }
 .tabs {
   position: sticky;
   top: var(--dcc-header-height, 130px);

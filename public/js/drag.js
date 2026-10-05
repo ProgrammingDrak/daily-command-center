@@ -141,7 +141,7 @@ function timeBlockDropZoneEl(block){
   el.dataset.blockId=block.id;
   el.dataset.blockStart=block.start||"";
   el.dataset.placement=block.dropTarget||"timed";
-  el.setAttribute("aria-label",block.dropTarget==="unplanned"?"Move to Unplanned":"Schedule at "+block.start+" in "+block.name);
+  el.setAttribute("aria-label",block.dropTarget==="unplanned"?"Move to Unscheduled":"Schedule at "+block.start+" in "+block.name);
   el.addEventListener("dragover",dBlockOver);
   el.addEventListener("dragleave",()=>el.classList.remove("drag-over-block"));
   el.addEventListener("drop",dBlockDrop);

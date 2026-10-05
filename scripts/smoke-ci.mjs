@@ -120,7 +120,7 @@ await page.evaluate(() => { document.querySelector('[data-tab="schedule"]')?.cli
 const looseEndsMobile = await page.evaluate(() => {
   const pill = document.getElementById("loose-ends-pill");
   const waiting = document.getElementById("waiting-pill-nav");
-  const whenever = document.getElementById("whenever-pill-nav");
+  const whenever = document.getElementById("untimed-pill");
   const nav = document.getElementById("date-nav");
   if (!pill || !waiting || !whenever || !nav) return null;
   const wasHidden = pill.hidden;
@@ -139,12 +139,14 @@ const looseEndsMobile = await page.evaluate(() => {
     fullWidth: box.width >= navBox.width - 1,
     touchHeight: box.height >= 44,
     waitingBelow: waitingBox.top >= box.bottom,
-    // Waiting and Whenever split one row, so the phone header stays as tall as it was.
-    waitingSharesRowWithWhenever: Math.abs(waitingBox.top - wheneverBox.top) < 1 && wheneverBox.left >= waitingBox.right,
+    // Waiting and the Unscheduled · Whenever capsule split one row, so the phone header
+    // stays as tall as it was, and both capsule labels show in full at 375px.
+    waitingSharesRowWithCapsule: Math.abs(waitingBox.top - wheneverBox.top) < 1 && wheneverBox.left >= waitingBox.right,
     pillRowFillsNav: wheneverBox.right - waitingBox.left >= navBox.width - 1,
-    wheneverInsideViewport: wheneverBox.left >= 0 && wheneverBox.right <= window.innerWidth,
+    capsuleInsideViewport: wheneverBox.left >= 0 && wheneverBox.right <= window.innerWidth,
+    capsuleLabelsUnclipped: [...whenever.querySelectorAll(".untimed-seg > span:first-child")].every((label) => label.scrollWidth <= label.clientWidth),
     waitingTouchHeight: waitingBox.height >= 44,
-    wheneverTouchHeight: wheneverBox.height >= 44
+    capsuleTouchHeight: wheneverBox.height >= 44
   };
   pill.hidden = wasHidden;
   return result;

@@ -1383,7 +1383,7 @@ async function moveTaskToUnplanned(id){
   if(!supported){
     try{const response=await fetch("/api/health",{cache:"no-store"});const health=await response.json();supported=response.ok&&health.placementCapabilities?.includes("unplanned");}
     catch(_error){}
-    if(!supported){showToast("Connect once to enable Unplanned movement","info");return false;}
+    if(!supported){showToast("Connect once to enable moving tasks to Unscheduled","info");return false;}
     try{sessionStorage.setItem("dcc-unplanned-placement","1");}catch(_error){}
   }
   const durations={};
@@ -1396,7 +1396,7 @@ async function moveTaskToUnplanned(id){
   const key=DCC.TimeBlocks.collapseKey(targetDate,DCC.TimeBlocks.UNPLANNED_BLOCK);
   if(isCollapsed(key))toggleCollapsed(key);
   if(viewDate===targetDate){refoldTaskStateFromBlockCache();render();}
-  showToast("Moved to Unplanned","success");return true;
+  showToast("Moved to "+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled"),"success");return true;
 }
 
 function moveTaskViaPlacement(id,dateStr,opts){

@@ -635,7 +635,7 @@
     for (const entry of entries) {
       if (entry.op === "reschedule" && entry.timestamp && (Date.now() - Date.parse(entry.timestamp)) > RESCHEDULE_REPLAY_MAX_AGE_MS) {
         walMoveToDeadLetter(entry, "stale reschedule (>15min old)");
-        if(entry.data?.placement?.kind==="unplanned"&&typeof showToast==="function")showToast("Queued Unplanned move expired. Move the task again.","error");
+        if(entry.data?.placement?.kind==="unplanned"&&typeof showToast==="function")showToast("Queued move to Unscheduled expired. Move the task again.","error");
         dropped++;
         continue;
       }
@@ -735,7 +735,7 @@
             else cacheDelete(entry.id);
             setError("Completion rejected" + (e.requestId ? " (request " + e.requestId + ")" : ""));
           }
-          if(entry.op==="reschedule"&&entry.data?.placement?.kind==="unplanned"&&typeof showToast==="function")showToast("Unplanned move rejected: "+e.message,"error");
+          if(entry.op==="reschedule"&&entry.data?.placement?.kind==="unplanned"&&typeof showToast==="function")showToast("Move to Unscheduled rejected: "+e.message,"error");
           dropped++;
           console.warn("[BlockStore] WAL replay moved stale entry to dead-letter:", entry.op, entry.id || "", e.message);
           continue;

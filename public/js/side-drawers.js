@@ -112,6 +112,17 @@
     updateRailActiveState();
   }
 
+  // The legacy modals a task row can open. See the observer in init for why opening one
+  // replaces this drawer. Waiting's .delegated-modal-overlay is deliberately absent.
+  const REPLACES_DRAWER = ".add-modal-overlay,.done-modal-overlay,.del-confirm-overlay,.sched-picker-overlay,.cdc-overlay,.notes-drawer-overlay,.sn-overlay";
+  function modalReplacesDrawer(records){
+    return (records || []).some(r => {
+      const el = r && r.target;
+      return !!el && typeof el.matches === "function" && el.matches(REPLACES_DRAWER) &&
+        el.classList.contains("open") && !el.closest("#tasks-drawer");
+    });
+  }
+
   function openTasks(opts){
     const d = drawer();
     const wasOpen = d?.classList.contains("open");
@@ -130,7 +141,9 @@
     if(!(opts && opts.keepSolo)) setSoloSection(null);
     syncBodyClasses(); syncBackdrop();
     updateRailActiveState();
-    if(modalTrigger && typeof modalTrigger.focus === "function") modalTrigger.focus();
+    // A modal that REPLACES the drawer owns focus now; handing it back to the pill
+    // that opened the drawer would pull it out of that modal.
+    if(!(opts && opts.keepFocus) && modalTrigger && typeof modalTrigger.focus === "function") modalTrigger.focus();
     modalTrigger = null;
   }
 
@@ -391,6 +404,19 @@
     });
 
     window.addEventListener("resize", () => { syncBackdrop(); syncBodyClasses(); });
+
+    // One blocking layer at a time (the overlay-controller rule: close or replace the
+    // current blocking overlay before another opens). The Unscheduled half of the
+    // header pill renders full itinerary rows in here, and those rows open the legacy
+    // modals: details, done notes, delete confirm, time placement. That ladder sits at
+    // 300-475, UNDER this drawer (1041), so a modal opened from a row would land behind
+    // it. Opening one replaces the drawer instead, which is what the pointerdown rule
+    // above already does for any tap outside it. The Waiting modal is the deliberate
+    // exception: it is styled above the drawer (1050) and edits drawer content in place.
+    new MutationObserver(records => {
+      const d = drawer();
+      if(d?.classList.contains("open") && modalReplacesDrawer(records)) closeTasks({ keepFocus: true });
+    }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ["class"] });
 
   }
 

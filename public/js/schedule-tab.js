@@ -213,6 +213,11 @@ function buildTaskChangeItems(ev,trig){
   // Same action as dragging it out to the timeline — here for discoverability + touch.
   if(typeof isNested==="function"&&isNested(ev))
     items.push({icon:"⬆", label:"Promote", onPick:()=>{if(typeof promoteToTopLevel==="function")promoteToTopLevel(ev.id);}});
+  // Take the time off but keep the day: the header pill's Unscheduled list. This is the
+  // mover the old Unplanned drop zone called; the zone went with the section, so the
+  // radial (touch) and the pill itself (desktop drop) are its two doors now.
+  if(!ev.untimed)
+    items.push({icon:"🗂", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled", onPick:()=>{if(typeof moveTaskToUnplanned==="function")moveTaskToUnplanned(ev.id);}});
   items.push(
     {icon:"🔄", label:"Convert…",  onPick:()=>openConvertToRadial(ev,trig)},
     {icon:"🔒", label:"Blocked by task", onPick:()=>{if(typeof window.openTaskDependencyModal==="function")window.openTaskDependencyModal(ev._blockId||ev.blockId||ev.id);}},
@@ -748,7 +753,7 @@ function createTaskListRowRenderer(context){
     };
     const metaHtml=inProgressChip+nowChip+
       '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+chipSlot+streakChip+
-      (subTimeless?'':(ev.untimed?(ev.triageBlock?'<span class="it-list-duration" title="Estimated completion time">'+ms(dur(ev))+'</span>':'<span class="it-list-untimed">Unplanned</span>'):(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+      (subTimeless?'':(ev.untimed?(ev.triageBlock?'<span class="it-list-duration" title="Estimated completion time">'+ms(dur(ev))+'</span>':'<span class="it-list-untimed">Unscheduled</span>'):(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
       (isUnfRow?'<span class="it-list-unfinished">Unfinished from '+escHtml(_unfSlashDate(r.sourceDate))+'</span>':'')+
       (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
       (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" style="cursor:pointer" title="View prep briefing">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" style="cursor:pointer" title="Prep pending — open to view or generate">&#9675; Prep</span>':'')+
@@ -829,10 +834,16 @@ function createTaskListRowRenderer(context){
 }
 window.createTaskListRowRenderer=createTaskListRowRenderer;
 
-function buildListView(){
-  const wrap=document.getElementById("list-view");
-  if(!wrap)return;
-  wrap.innerHTML="";
+// The itinerary's grouped tree, derived ONCE for two surfaces: the work list below
+// and the header pill's Unscheduled panel (renderUnscheduledInto). The pill took over
+// the old "Unplanned" group, so both must agree exactly on which rows that group is;
+// one function is how they cannot drift.
+//
+// C6a: `day.visible` is the universe (not deleted, not side-project-flagged),
+// `day.unscheduled` is the Unscheduled SUBTREE, `day.timed` is the work list with done
+// rows inline, `day.folded` are the done rows that render inside a still-visible
+// parent, and `day.carryover` is yesterday's leftovers — empty unless this IS today.
+function _itineraryListModel(){
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   // isActive() is time-of-day only (no date), so the "Now" chip must be gated to
   // today or it would light up on a past/future day whose times overlap the clock.
@@ -841,13 +852,46 @@ function buildListView(){
   // Loose Ends owns past-day unfinished work now. Keep carryovers out of the task
   // list derivation entirely, including the old hidden fetch and second render.
   const unfPool=[];
-
-  // C6a: ONE derivation for the whole view. `day.visible` is the universe (not
-  // deleted, not side-project-flagged), `day.unscheduled` is the Unscheduled SUBTREE,
-  // `day.timed` is the work list with done rows inline, `day.folded` are the done
-  // rows that render inside a still-visible parent, and `day.carryover` is
-  // yesterday's leftovers — empty unless this IS today.
   const day=DCC.TaskModel.selectDay(scheduled,viewDate,{today:actualToday,carryoverPool:unfPool});
+  const visible=day.visible;
+  const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
+  const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible}),timeBlocks);
+  const unscheduledGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.UNPLANNED_BLOCK.id)||{nodes:[]};
+  return {viewDate,isTodayView,unfPool,day,timeBlocks,groups,unscheduledGroup};
+}
+// Apply the Unscheduled sort mode (Manual / A–Z / New) to a group's nodes, keeping
+// each root's subtree attached to it.
+function _orderUnscheduledNodes(nodes){
+  const chunks=[];(nodes||[]).forEach(node=>{if(!node.depth||!chunks.length)chunks.push([]);chunks[chunks.length-1].push(node);});
+  const roots=chunks.map(chunk=>chunk[0].ev),mode=_sectionSort("unscheduled");
+  const ordered=_sectionSortIsManual(mode)?_orderUnscheduled(roots):_applySectionSort(roots,mode,ev=>ev.title,_unsCreated);
+  const byId=new Map(chunks.map(chunk=>[chunk[0].ev.id,chunk]));
+  return ordered.flatMap(ev=>byId.get(ev.id));
+}
+// The header pill's Unscheduled panel (whenever.js calls this on every render). Same
+// derivation and the same row renderer as the work list, so every row keeps its full
+// controls: check off, Schedule, task actions, delete. Returns the open root count the
+// pill shows.
+function renderUnscheduledInto(listEl){
+  if(!listEl||!window.DCC||!DCC.TaskModel||!DCC.TimeBlocks)return {open:0,total:0};
+  const model=_itineraryListModel();
+  const nodes=_orderUnscheduledNodes(model.unscheduledGroup.nodes);
+  const row=createTaskListRowRenderer({pool:model.unfPool,isTodayView:model.isTodayView});
+  const frag=document.createDocumentFragment();
+  let rank=0;
+  nodes.forEach(node=>frag.appendChild(row(node.ev,_isSubRow(node)?0:rank++,isDone(node.ev)?"done":"open",node)));
+  listEl.innerHTML="";
+  listEl.appendChild(frag);
+  return {open:nodes.filter(node=>!node.depth&&!isDone(node.ev)).length,total:nodes.length};
+}
+window.renderUnscheduledInto=renderUnscheduledInto;
+
+function buildListView(){
+  const wrap=document.getElementById("list-view");
+  if(!wrap)return;
+  wrap.innerHTML="";
+  const model=_itineraryListModel();
+  const {viewDate,isTodayView,unfPool,day}=model;
   const visible=day.visible;
   // The old `doneItems` here was DEAD -- computed and never read; buildListView
   // renders done rows inline in the work list, it has no Done section. Deleted
@@ -902,8 +946,10 @@ function buildListView(){
       onToggle:()=>{toggleCollapsed(key);buildListView();Array.from(wrap.querySelectorAll("[data-time-block-toggle]")).find(button=>button.dataset.timeBlockToggle===key)?.focus({preventScroll:true});},
       onEdit:()=>openBlockEditor(block.id)});
   }
-  const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
-  const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible}),timeBlocks);
+  // The Unscheduled group lives in the header pill's drawer now (whenever.js), so the
+  // work list skips it: no header, no drop zone, no rows, and no share of the badge.
+  const unscheduledIds=new Set(model.unscheduledGroup.nodes.map(node=>node.ev.id));
+  const groups=model.groups.filter(g=>g!==model.unscheduledGroup);
 
   // Task-container collapse state is independent from time-block collapse state.
   // Collapse-all / expand-all intentionally operates only on nested task trees;
@@ -948,7 +994,7 @@ function buildListView(){
   // fold widened from `subtaskOf` to either parent edge (so a done RIDE-ALONG folds
   // too) and gated on the subtree being finished (so a done step with open steps under
   // it stays visible with its children nested, instead of hiding live work).
-  section("Work list",activeIds.size);
+  section("Work list",[...activeIds].filter(id=>!unscheduledIds.has(id)).length);
   let rank=0;
   const now=new Date(),nowMin=now.getHours()*60+now.getMinutes();
   groups.forEach(({block,nodes})=>{
@@ -964,10 +1010,7 @@ function buildListView(){
     }
     if(block.sortable){
       section("",0,"unscheduled");
-      const chunks=[];nodes.forEach(node=>{if(!node.depth||!chunks.length)chunks.push([]);chunks[chunks.length-1].push(node);});
-      const roots=chunks.map(chunk=>chunk[0].ev),mode=_sectionSort("unscheduled");
-      const ordered=_sectionSortIsManual(mode)?_orderUnscheduled(roots):_applySectionSort(roots,mode,ev=>ev.title,_unsCreated);
-      const byId=new Map(chunks.map(chunk=>[chunk[0].ev.id,chunk]));nodes=ordered.flatMap(ev=>byId.get(ev.id));
+      nodes=_orderUnscheduledNodes(nodes);
     }
     let prevEnd=null;
     nodes.forEach(node=>{

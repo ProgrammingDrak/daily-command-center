@@ -14,10 +14,11 @@ test("Loose Ends gets a dedicated full-width row in the mobile date toolbar", ()
   );
 });
 
-test("Waiting and Whenever share one touch-sized row below Loose Ends on mobile", () => {
+test("Waiting and the Unscheduled · Whenever capsule share one touch-sized row below Loose Ends on mobile", () => {
   const mobileShell = css.slice(css.indexOf("@media (max-width:760px)"));
-  // Half a row each (minus half the 6px gap), so neither can ride up onto the date row
-  // and a third pill does not add a third full-width row to the phone header.
-  assert.match(mobileShell, /\.header \.date-nav \.waiting-pill-nav\{[^}]*flex:1 0 calc\(50% - 3px\);[^}]*order:3;[^}]*min-height:44px/);
-  assert.match(mobileShell, /\.header \.date-nav \.whenever-pill-nav\{[^}]*flex:1 0 calc\(50% - 3px\);[^}]*order:4;[^}]*min-height:44px/);
+  // 30% + 70% minus the 6px gap is exactly one row, so neither can ride up onto the date
+  // row, and a third header control does not add a third full-width row on a phone.
+  assert.match(mobileShell, /\.header \.date-nav \.waiting-pill-nav\{[^}]*flex:1 0 calc\(30% - 4px\);[^}]*order:3;[^}]*min-height:44px/);
+  assert.match(mobileShell, /\.header \.date-nav \.untimed-pill\{[^}]*flex:1 0 calc\(70% - 2px\);[^}]*order:4/);
+  assert.match(mobileShell, /\.header \.date-nav \.untimed-seg\{[^}]*min-height:44px/);
 });

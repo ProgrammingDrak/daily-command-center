@@ -192,18 +192,37 @@ test("a pool item with no resolvable row refuses instead of pretending to save",
 
 // ── wiring contracts ──
 
-test("the header carries the Whenever pill after Waiting, opening its own section", () => {
+test("the header carries one capsule after Waiting: Unscheduled, then Whenever, both opening the drawer", () => {
   const html = fs.readFileSync(require.resolve("./index.html"), "utf8");
   const header = html.slice(html.indexOf('id="date-nav"'), html.indexOf('id="date-picker-drop"'));
-  assert.match(header, /waiting-pill-nav[\s\S]*id="whenever-pill-nav"[^>]*aria-controls="tm-whenever-section"/);
-  assert.match(html, /<details class="tm-section whenever-theme--[a-z]+" id="tm-whenever-section"/);
-  for (const id of ["whenever-pill-nav-count", "whenever-count", "whenever-list", "whenever-add", "whenever-pick"]) {
+  assert.match(header, /waiting-pill-nav[\s\S]*id="untimed-pill"[\s\S]*id="unscheduled-pill-nav"[\s\S]*id="whenever-pill-nav"/);
+  assert.match(header, /id="unscheduled-pill-nav"[^>]*aria-controls="tm-whenever-section"[^>]*data-placement="unplanned"/,
+    "the Unscheduled segment is the drop target the itinerary's Unplanned zone used to be");
+  assert.match(header, /id="whenever-pill-nav"[^>]*aria-controls="tm-whenever-section"/);
+  for (const id of ["unscheduled-pill-nav-count", "whenever-pill-nav-count", "untimed-count", "unscheduled-count",
+    "whenever-count", "unscheduled-list", "whenever-list", "whenever-add", "whenever-pick", "unscheduled-tip", "whenever-tip"]) {
     assert.ok(html.includes('id="' + id + '"'), "missing #" + id);
   }
+  // Unscheduled first: it is the half that wants action. Each half explains itself.
+  const drawer = html.slice(html.indexOf('id="tm-whenever-section"'));
+  assert.ok(drawer.indexOf('id="unscheduled-sub"') < drawer.indexOf('id="whenever-sub"'));
+  assert.match(drawer, /aria-describedby="unscheduled-tip"[\s\S]*role="tooltip" id="unscheduled-tip">[^<]*schedule/i);
+  assert.match(drawer, /aria-describedby="whenever-tip"[\s\S]*role="tooltip" id="whenever-tip">[^<]*free minute/i);
   // Loaded after task-model.js (it reads the stage there) and before schedule.js
   // (the add-bar destination reads the label at load).
   const at = name => html.indexOf('src="/public/js/' + name);
   assert.ok(at("task-model.js") < at("whenever.js") && at("whenever.js") < at("schedule.js"));
+});
+
+test("the work list no longer renders the Unscheduled group or counts it", () => {
+  const tab = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
+  const start = tab.indexOf("function buildListView(){");
+  const list = tab.slice(start, tab.indexOf("\nfunction ", start + 1));
+  assert.match(list, /const groups=model\.groups\.filter\(g=>g!==model\.unscheduledGroup\);/);
+  assert.match(list, /section\("Work list",\[\.\.\.activeIds\]\.filter\(id=>!unscheduledIds\.has\(id\)\)\.length\);/);
+  // Removing the zone must not strand its mover: the radial and the pill both reach it.
+  const change = tab.slice(tab.indexOf("function buildTaskChangeItems"), tab.indexOf("// Sub-fan: convert this task"));
+  assert.match(change, /if\(!ev\.untimed\)\s*items\.push\(\{icon:"🗂"[\s\S]*moveTaskToUnplanned\(ev\.id\)/);
 });
 
 test("the pill count rebuilds every render, and the change-task radial offers Whenever", () => {
@@ -215,4 +234,38 @@ test("the pill count rebuilds every render, and the change-task radial offers Wh
   assert.ok(start !== -1 && end > start, "buildTaskChangeItems moved");
   const change = tab.slice(start, end);
   assert.match(change, /moveTaskToWhenever\(ev\.id\)/);
+});
+
+test("a row's modal replaces the Tasks drawer instead of opening underneath it", () => {
+  const src = fs.readFileSync(require.resolve("./public/js/side-drawers.js"), "utf8");
+  const start = src.indexOf("const REPLACES_DRAWER");
+  const end = src.indexOf("function openTasks(", start);
+  assert.ok(start > 0 && end > start, "modalReplacesDrawer moved");
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(src.slice(start, end) + "\nthis.f = modalReplacesDrawer; this.SEL = REPLACES_DRAWER;", ctx);
+  const sel = ctx.SEL.split(",");
+  const el = (cls, opts) => ({
+    classList: { contains: c => c === "open" ? !!(opts && opts.open) : false },
+    matches: s => s.split(",").some(one => one === "." + cls),
+    closest: s => (opts && opts.inDrawer && s === "#tasks-drawer") ? {} : null,
+  });
+  for (const cls of ["sched-picker-overlay", "add-modal-overlay", "done-modal-overlay", "del-confirm-overlay"]) {
+    assert.ok(sel.includes("." + cls), cls + " opens from a row and sits under the drawer");
+    assert.equal(ctx.f([{ target: el(cls, { open: true }) }]), true, cls);
+    assert.equal(ctx.f([{ target: el(cls, { open: false }) }]), false, cls + " closing must not close the drawer");
+  }
+  // Waiting's modal is styled ABOVE the drawer (1050) and edits it in place, and the
+  // repeat manager's "open" panel lives INSIDE the drawer. Neither may close it.
+  assert.equal(sel.includes(".delegated-modal-overlay"), false);
+  assert.equal(ctx.f([{ target: el("add-modal-overlay", { open: true, inDrawer: true }) }]), false);
+  assert.equal(ctx.f([{ target: { nodeType: 3 } }, null]), false, "text nodes and holes are ignored");
+
+  // The reason the rule exists: every one of these is stacked under the drawer.
+  const css = fs.readFileSync(require.resolve("./public/css/dashboard.css"), "utf8");
+  const z = cls => Number((css.match(new RegExp("\\." + cls + "\\{[^}]*z-index:(\\d+)")) || [])[1]);
+  const drawerZ = z("side-drawer-body");
+  assert.ok(drawerZ > 0, "drawer z-index moved");
+  ["sched-picker-overlay", "add-modal-overlay", "done-modal-overlay", "del-confirm-overlay"].forEach(cls =>
+    assert.ok(z(cls) < drawerZ, cls + " is now above the drawer; revisit whether it should still replace it"));
 });

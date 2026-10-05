@@ -1,5 +1,12 @@
-// whenever.js — the Whenever lane: tasks with no set time. Laundry, grabbing the
-// mail, anything you knock out whenever a free minute shows up.
+// whenever.js — the header pill for work with no time on it, in two kinds:
+//
+//   Unscheduled  has to happen, just is not on the schedule yet. This is the
+//                itinerary's old "Unplanned" group, moved here. The rows, their
+//                derivation and their controls all still belong to the itinerary
+//                (schedule-tab.js renderUnscheduledInto); this file only hosts them.
+//   Whenever     no set time at all. Laundry, grabbing the mail, anything you knock
+//                out whenever a free minute shows up. Everything below is about this
+//                half unless it says otherwise.
 //
 // NOT Anytime (anytime-store.js). Anytime is a target COUNT inside a repeating
 // window ("water, 3 times today"). A Whenever task is one-off work with no window
@@ -19,7 +26,7 @@
 //   Done       Do it now, then toggleDone, so points, streaks and the completion
 //              row all flow through the normal check-off
 //   Not this   persistRowProp(stage:"Backlog") (state.js), back to the Library
-//   in         moveTaskToWhenever (state.js), from the itinerary Move menu
+//   in         moveTaskToWhenever (state.js), from Change task... on any row
 //
 // Browser: loaded right after task-model.js (schedule.js reads LABEL at load for the
 // add-bar destination). Node: require()d by whenever.test.js for the pure half.
@@ -40,16 +47,22 @@
   const STAGE = (TaskModel && TaskModel.WHENEVER_STAGE) || "Whenever";
 
   // ── the design knobs ── display only, safe to swap without touching data.
-  // LABEL names the pill, the drawer section, the add-bar type and the Move item.
+  // LABEL names the Whenever half everywhere: pill segment, drawer half, add-bar
+  // type and the Change task item.
   //   "Whenever" | "Free Time" | "Background" | "Odd Jobs" | "Side Quests"
   // "Whenever" won: it is the word you use for these ("whenever I have a minute"),
   // and it cannot be confused with the Anytime dock's "anytime".
   const LABEL = "Whenever";
-  // PILL_STYLE picks the color theme. The pill and its drawer section both wear
-  // `whenever-theme--<style>`, and dashboard.css defines one var set per value.
+  // UNSCHEDULED_LABEL names the other half the same way.
+  //   "Unscheduled" | "Needs a time" | "To schedule" | "Unplanned"
+  const UNSCHEDULED_LABEL = "Unscheduled";
+  // Color themes, one per half. Each half (its pill segment and its drawer half)
+  // wears `whenever-theme--<style>`; dashboard.css defines one var set per value.
   //   "sage" | "teal" | "amber" | "violet"
-  // Sage won: calm next to Loose Ends blue and Waiting plum, and green reads "free".
+  // Sage for Whenever: calm, and green reads "free". Amber for Unscheduled: it is
+  // the half that wants action. Both stay clear of Loose Ends blue and Waiting plum.
   const PILL_STYLE = "sage";
+  const UNSCHEDULED_STYLE = "amber";
 
   // ── pure half (node-testable) ──
 
@@ -121,15 +134,55 @@
     return row || null;
   }
 
-  function syncCounts(n) {
-    const badge = document.getElementById("whenever-count");
-    if (badge) { badge.textContent = String(n); badge.style.display = n ? "" : "none"; }
-    const count = document.getElementById("whenever-pill-nav-count");
-    if (count) count.textContent = String(n);
-    const pill = document.getElementById("whenever-pill-nav");
-    if (pill) pill.setAttribute("aria-label", "Open " + LABEL + " tasks, " + n + " open");
+  function setText(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = String(value);
+  }
+
+  function syncCounts(unscheduled, whenever) {
+    setText("unscheduled-pill-nav-count", unscheduled);
+    setText("unscheduled-count", unscheduled);
+    setText("whenever-pill-nav-count", whenever);
+    setText("whenever-count", whenever);
+    const total = document.getElementById("untimed-count");
+    if (total) { total.textContent = String(unscheduled + whenever); total.style.display = unscheduled + whenever ? "" : "none"; }
+    const u = document.getElementById("unscheduled-pill-nav");
+    if (u) u.setAttribute("aria-label", "Open " + UNSCHEDULED_LABEL + " tasks, " + unscheduled + " need a time");
+    const w = document.getElementById("whenever-pill-nav");
+    if (w) w.setAttribute("aria-label", "Open " + LABEL + " tasks, " + whenever + " open");
     const pick = document.getElementById("whenever-pick");
-    if (pick) pick.disabled = n < 1;
+    if (pick) pick.disabled = whenever < 1;
+  }
+
+  // Rebuilding a list under the cursor would drop keyboard focus mid-tab. Remember
+  // the focused control by its row id and first class, and land back on its twin.
+  function keepFocus(list, rebuild) {
+    const active = document.activeElement;
+    const inside = active && list.contains(active);
+    const rowEl = inside ? active.closest("[data-id],[data-whenever-id]") : null;
+    const rowId = rowEl ? (rowEl.dataset.id || rowEl.dataset.wheneverId) : null;
+    const cls = inside && active.classList.length ? active.classList[0] : null;
+    rebuild();
+    if (!rowId || !cls) return;
+    const sel = '[data-id="' + CSS.escape(rowId) + '"] .' + CSS.escape(cls) + ', [data-whenever-id="' + CSS.escape(rowId) + '"].' + CSS.escape(cls);
+    const again = list.querySelector(sel);
+    if (again) again.focus({ preventScroll: true });
+  }
+
+  // The Unscheduled half: the itinerary renders its own rows into our list.
+  function buildUnscheduled() {
+    const list = document.getElementById("unscheduled-list");
+    if (!list || typeof window.renderUnscheduledInto !== "function") return 0;
+    let counts = { open: 0, total: 0 };
+    keepFocus(list, () => { counts = window.renderUnscheduledInto(list) || counts; });
+    if (!counts.total) list.innerHTML = '<div class="delegated-empty">Nothing waiting for a time slot.</div>';
+    const mode = typeof _sectionSort === "function" ? _sectionSort("unscheduled") : "manual";
+    document.querySelectorAll("[data-unscheduled-sort]").forEach(b => {
+      const on = b.dataset.unscheduledSort === (mode === "alpha" || mode === "created" ? mode : "manual");
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    return counts.open;
   }
 
   const CHECK_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>';
@@ -154,23 +207,16 @@
 
   function build() {
     if (typeof document === "undefined") return;
+    const unscheduled = buildUnscheduled();
     const items = selectWhenever(pool());
-    syncCounts(items.length);
+    syncCounts(unscheduled, items.length);
     const list = document.getElementById("whenever-list");
     if (!list) return;
-    // Rebuilding under the cursor would steal focus from a row button mid-tab.
-    const focusedId = list.contains(document.activeElement) && document.activeElement.dataset
-      ? document.activeElement.dataset.wheneverId + "|" + document.activeElement.dataset.wheneverAction : null;
-    if (!items.length) {
-      list.innerHTML = '<div class="delegated-empty whenever-empty">Nothing here. Add the chores with no set time, like laundry or the mail.</div>';
-      return;
-    }
-    list.innerHTML = items.map(rowHtml).join("");
-    if (focusedId) {
-      const [id, action] = focusedId.split("|");
-      const again = list.querySelector('[data-whenever-id="' + CSS.escape(id) + '"][data-whenever-action="' + action + '"]');
-      if (again) again.focus();
-    }
+    keepFocus(list, () => {
+      list.innerHTML = items.length
+        ? items.map(rowHtml).join("")
+        : '<div class="delegated-empty whenever-empty">Nothing here. Add the chores with no set time, like laundry or the mail.</div>';
+    });
   }
 
   function refresh() {
@@ -251,8 +297,8 @@
       return false;
     }
     item.stage = stage;
-    // Refold once the write lands. Leaving the pool puts the row back in today's
-    // Unplanned list and returning takes it out (TaskModel.isWheneverPoolRow); the
+    // Refold once the write lands. Leaving the pool puts the row in the Unscheduled
+    // half and returning takes it out (TaskModel.isWheneverPoolRow); the
     // fold reads the block cache, so refolding before the queued write would not see it.
     Promise.resolve(persistRowProp(item.id, "stage", stage, null, { row })).then(() => {
       if (typeof refoldTaskStateFromBlockCache === "function") refoldTaskStateFromBlockCache();
@@ -285,35 +331,88 @@
     if (now) now.focus({ preventScroll: true });
   }
 
-  function open() {
+  // Both segments open the same drawer section; each lands on its own half.
+  function open(half) {
+    half = half === "unscheduled" ? "unscheduled" : "whenever";
     if (typeof window.openTasksToSection === "function") {
       window.openTasksToSection("tm-whenever-section", { solo: true });
     }
     build();
+    // After openTasksToSection's own scroll-to-section (240ms), so ours wins.
     setTimeout(() => {
+      const sub = document.getElementById(half + "-sub");
+      if (sub) sub.scrollIntoView({ block: "start", behavior: "smooth" });
       const input = document.getElementById("whenever-add-title");
       // Phones get the list first; a focused input would pop the keyboard over it.
-      if (input && !(window.matchMedia && window.matchMedia("(max-width:760px)").matches)) input.focus();
-    }, 60);
+      if (half === "whenever" && input && !(window.matchMedia && window.matchMedia("(max-width:760px)").matches)) {
+        input.focus({ preventScroll: true });
+      }
+    }, 280);
+  }
+
+  function setTheme(el, style) {
+    if (!el) return;
+    Array.from(el.classList).filter(c => c.indexOf("whenever-theme--") === 0).forEach(c => el.classList.remove(c));
+    el.classList.add("whenever-theme--" + style);
   }
 
   function applyDesign() {
     document.querySelectorAll("[data-whenever-label]").forEach(el => { el.textContent = LABEL; });
-    // The pill and its section wear the same theme class, so they always swap together.
-    ["whenever-pill-nav", "tm-whenever-section"].forEach(id => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      Array.from(el.classList).filter(c => c.indexOf("whenever-theme--") === 0).forEach(c => el.classList.remove(c));
-      el.classList.add("whenever-theme--" + PILL_STYLE);
-    });
+    document.querySelectorAll("[data-unscheduled-label]").forEach(el => { el.textContent = UNSCHEDULED_LABEL; });
+    const both = UNSCHEDULED_LABEL + " \u00b7 " + LABEL;
+    document.querySelectorAll("[data-untimed-label]").forEach(el => { el.textContent = both; });
+    // Each half's pill segment and drawer half wear one theme, so they swap together.
+    setTheme(document.getElementById("whenever-pill-nav"), PILL_STYLE);
+    setTheme(document.getElementById("whenever-sub"), PILL_STYLE);
+    setTheme(document.getElementById("unscheduled-pill-nav"), UNSCHEDULED_STYLE);
+    setTheme(document.getElementById("unscheduled-sub"), UNSCHEDULED_STYLE);
     const section = document.getElementById("tm-whenever-section");
-    if (section) section.dataset.sidecarLabel = LABEL;
+    if (section) section.dataset.sidecarLabel = both;
+  }
+
+  // The "i" tooltips. Hover and keyboard focus show them through CSS; a tap toggles
+  // aria-expanded, because a phone has neither.
+  function closeTips(except) {
+    document.querySelectorAll(".untimed-tip[aria-expanded='true']").forEach(b => {
+      if (b !== except) b.setAttribute("aria-expanded", "false");
+    });
+  }
+  function wireTips() {
+    document.querySelectorAll(".untimed-tip").forEach(btn => btn.addEventListener("click", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const next = btn.getAttribute("aria-expanded") !== "true";
+      closeTips(btn);
+      btn.setAttribute("aria-expanded", next ? "true" : "false");
+    }));
+    document.addEventListener("click", e => { if (!e.target.closest(".untimed-tip-wrap")) closeTips(null); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape") closeTips(null); });
+  }
+
+  // The Unscheduled segment is the drop target the itinerary's Unplanned zone used to
+  // be: drop a timed task on it and moveTaskToUnplanned takes its time off. The zone's
+  // own handlers (drag.js) do the work, reading data-placement="unplanned" off the pill.
+  function wireDrop(seg) {
+    if (!seg || typeof dBlockOver !== "function" || typeof dBlockDrop !== "function") return;
+    seg.addEventListener("dragover", dBlockOver);
+    seg.addEventListener("dragleave", () => seg.classList.remove("drag-over-block"));
+    seg.addEventListener("drop", e => { seg.classList.remove("drag-over-block"); return dBlockDrop(e); });
   }
 
   function init() {
     applyDesign();
-    const pill = document.getElementById("whenever-pill-nav");
-    if (pill) pill.addEventListener("click", open);
+    const wheneverSeg = document.getElementById("whenever-pill-nav");
+    if (wheneverSeg) wheneverSeg.addEventListener("click", () => open("whenever"));
+    const unscheduledSeg = document.getElementById("unscheduled-pill-nav");
+    if (unscheduledSeg) unscheduledSeg.addEventListener("click", () => open("unscheduled"));
+    wireDrop(unscheduledSeg);
+    wireTips();
+
+    // Same three orders the old Unplanned header offered, same persisted setting.
+    document.querySelectorAll("[data-unscheduled-sort]").forEach(btn => btn.addEventListener("click", () => {
+      if (typeof _setSectionSort === "function") _setSectionSort("unscheduled", btn.dataset.unscheduledSort);
+      build();
+    }));
 
     const form = document.getElementById("whenever-add");
     if (form) form.addEventListener("submit", e => {
@@ -344,14 +443,15 @@
   }
 
   if (typeof document !== "undefined" && typeof window !== "undefined") {
-    // features.js SURFACES calls this every render: it owns the always-visible pill count.
+    // features.js SURFACES calls this every render: it owns the always-visible pill
+    // counts, and the Unscheduled half re-renders the itinerary's rows with it.
     window.buildWhenever = build;
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
     else init();
   }
 
   return {
-    STAGE, LABEL, PILL_STYLE,
+    STAGE, LABEL, PILL_STYLE, UNSCHEDULED_LABEL, UNSCHEDULED_STYLE,
     isWhenever, durationOf, selectWhenever, pickIndex,
     build, add, doNow, markDone, release, open
   };
