@@ -68,13 +68,13 @@
   const TRIAGE_LABEL = "Triage";
   // Color themes, one per half. Each half (its pill segment and its drawer half)
   // wears `queue-theme--<style>`; dashboard.css defines one var set per value.
-  //   "sage" | "teal" | "amber" | "violet"
+  //   "sage" | "teal" | "amber"
   // Sage for Whenever: calm, and green reads "free". Amber for Unscheduled: it is
   // the half that wants action. Both stay clear of Loose Ends blue and Waiting violet.
   const PILL_STYLE = "sage";
   const UNSCHEDULED_STYLE = "amber";
   // Triage's theme. It sits first, beside Loose Ends blue.
-  //   "crimson" | "red" | "slate" | "violet"
+  //   "crimson" | "red" | "slate"
   // Crimson, Drake's call (2026-10-05): Triage is the red door, and it took the
   // maroon Waiting wore before Waiting went violet. "red" is the louder option.
   const TRIAGE_STYLE = "crimson";
@@ -190,11 +190,11 @@
   }
 
   // The Unscheduled half: the itinerary renders its own rows into our list.
-  function buildUnscheduled() {
+  function buildUnscheduled(model) {
     const list = document.getElementById("unscheduled-list");
     if (!list || typeof window.renderUnscheduledInto !== "function") return 0;
     let counts = { open: 0, total: 0 };
-    keepFocus(list, () => { counts = window.renderUnscheduledInto(list) || counts; });
+    keepFocus(list, () => { counts = window.renderUnscheduledInto(list, model) || counts; });
     if (!counts.total) list.innerHTML = '<div class="delegated-empty">Nothing waiting for a time slot.</div>';
     const mode = typeof _sectionSort === "function" ? _sectionSort("unscheduled") : "manual";
     document.querySelectorAll("[data-unscheduled-sort]").forEach(b => {
@@ -207,11 +207,11 @@
 
   // The Triage half, the same way: the itinerary renders its own rows, plus the
   // loader's status (Loading, or Retry after a failure) above them.
-  function buildTriageQueue() {
+  function buildTriageQueue(model) {
     const list = document.getElementById("triage-queue-list");
     if (!list || typeof window.renderTriageInto !== "function") return 0;
     let counts = { open: 0, total: 0, status: false };
-    keepFocus(list, () => { counts = window.renderTriageInto(list) || counts; });
+    keepFocus(list, () => { counts = window.renderTriageInto(list, model) || counts; });
     if (!counts.total && !counts.status) list.innerHTML = '<div class="delegated-empty">Nothing to triage.</div>';
     return counts.open;
   }
@@ -238,8 +238,13 @@
 
   function build() {
     if (typeof document === "undefined") return;
-    const triage = buildTriageQueue();
-    const unscheduled = buildUnscheduled();
+    // One itinerary derivation per build, shared by both halves: this runs on every
+    // render, on every tab.
+    const D = window.DCC;
+    const model = typeof window.itineraryListModel === "function" && D && D.TaskModel && D.TimeBlocks
+      ? window.itineraryListModel() : undefined;
+    const triage = buildTriageQueue(model);
+    const unscheduled = buildUnscheduled(model);
     const items = selectWhenever(pool());
     syncCounts(triage, unscheduled, items.length);
     const list = document.getElementById("whenever-list");
@@ -369,10 +374,6 @@
     if (typeof window.openTasksToSection === "function") {
       window.openTasksToSection("tm-whenever-section", { solo: true });
     }
-    // Pull in anything new before showing the list. It only runs for today, does
-    // nothing while a load is in flight, and skips sources it already turned into
-    // tasks, so a second click costs nothing.
-    if (half === "triage" && typeof buildScheduleTriage === "function") buildScheduleTriage();
     build();
     // After openTasksToSection's own scroll-to-section (240ms), so ours wins.
     setTimeout(() => {

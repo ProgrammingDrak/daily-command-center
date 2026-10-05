@@ -864,11 +864,18 @@ function _itineraryListModel(){
 // Triage and Unscheduled halves list OPEN work only. A done untimed root (with its
 // subtree) moves into the work list's time block that contains its completion time,
 // or into Outside Time Blocks when that time falls between blocks or is unknown.
+// Null unless the task was finished ON the viewed day: Loose Ends checks off a past-day
+// task on its own day but stamps it with today's clock, and that time means nothing
+// in the old day's blocks. Those rows land in Outside Time Blocks as a plain "Done".
 function _completionMinute(ev){
   const raw=(typeof doneAt!=="undefined"&&doneAt&&doneAt[ev.id])||ev.completedAt||null;
   if(!raw)return null;
   const d=raw instanceof Date?raw:new Date(raw);
-  return isNaN(d.getTime())?null:d.getHours()*60+d.getMinutes();
+  if(isNaN(d.getTime()))return null;
+  const day=typeof __state!=="undefined"&&__state&&__state.date;
+  const pad=n=>String(n).padStart(2,"0");
+  if(day&&d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())!==day)return null;
+  return d.getHours()*60+d.getMinutes();
 }
 function _fileDoneUntimedOnTheDay(groups,sourceGroup,timeBlocks){
   const chunks=[];
@@ -889,10 +896,12 @@ function _fileDoneUntimedOnTheDay(groups,sourceGroup,timeBlocks){
         groups.splice(at<0?groups.length:at,0,target);
       }
     }
-    // In time order among the block's timed roots, so it reads where it happened.
+    // In time order among the block's roots, timed ones by start and rows already
+    // filed here by their own completion, so it reads where it happened.
     let at=target.nodes.length;
     if(minute!=null){
-      const i=target.nodes.findIndex(n=>!n.depth&&_rowIsTimed(n.ev)&&pt(n.ev.start)>minute);
+      const when=n=>_rowIsTimed(n.ev)?pt(n.ev.start):(isDone(n.ev)?_completionMinute(n.ev):null);
+      const i=target.nodes.findIndex(n=>{if(n.depth)return false;const m=when(n);return m!=null&&m>minute;});
       if(i>=0)at=i;
     }
     target.nodes.splice(at,0,...chunk);
@@ -922,17 +931,20 @@ function _renderQueueInto(listEl,nodes,model,lead){
   listEl.appendChild(frag);
   return {open:nodes.filter(node=>!node.depth&&!isDone(node.ev)).length,total:nodes.length};
 }
-function renderUnscheduledInto(listEl){
+// Each takes the caller's model when it has one: whenever.js derives once per build
+// and hands the same model to both halves.
+function renderUnscheduledInto(listEl,model){
   if(!listEl||!window.DCC||!DCC.TaskModel||!DCC.TimeBlocks)return {open:0,total:0};
-  const model=_itineraryListModel();
+  model=model||_itineraryListModel();
   return _renderQueueInto(listEl,_orderUnscheduledNodes(model.unscheduledGroup.nodes),model);
 }
 window.renderUnscheduledInto=renderUnscheduledInto;
+window.itineraryListModel=_itineraryListModel;
 // Triage rows are created by triage.js (buildScheduleTriage) from inbox and repeat
 // sources, so the panel also carries that loader's status, with Retry on a failure.
-function renderTriageInto(listEl){
+function renderTriageInto(listEl,model){
   if(!listEl||!window.DCC||!DCC.TaskModel||!DCC.TimeBlocks)return {open:0,total:0,status:false};
-  const model=_itineraryListModel();
+  model=model||_itineraryListModel();
   const state=typeof triageTaskLoadState==="function"?triageTaskLoadState():{};
   let status=null;
   if(state.loading||state.error){

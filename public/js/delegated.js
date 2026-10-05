@@ -492,16 +492,24 @@
     return !isDoneDelegated(item);
   }
 
-  // Overdue for a check-in: the ONE rule behind both the Waiting badge and the
-  // Overdue filter, so the count always matches what that tab lists. A snoozed item,
-  // a task dependency (no check-in, it waits on another task), a finished follow-up,
-  // and a cycle whose check-in task is already scheduled are not asking for one.
-  function isOverdue(item) {
+  // Is this item asking for a check-in at all? Shared by the Waiting badge and Loose
+  // Ends (attentionItems), so the two cannot disagree on who is out of the running. A
+  // snoozed item, a task dependency (no check-in, it waits on another task), a
+  // finished follow-up, and a cycle whose check-in task is already scheduled are not.
+  function wantsCheckIn(item) {
     if (!isOpenDelegated(item) || isSnoozed(item) || isTaskDependency(item)) return false;
     const p = item.properties || {};
     if (p.checkInRepeat === false && !p.checkInDate) return false;
+    // Once a real check-in task owns this cycle, it needs no second decision row. The
+    // triage draft remains available for review/send.
     if (p.checkInTaskId && p.checkInScheduledFor && p.checkInScheduledFor >= todayStr()) return false;
-    return itemUrgency(item).timing.remaining < 0;
+    return true;
+  }
+
+  // Overdue for a check-in: the ONE rule behind both the Waiting badge and the
+  // Overdue filter, so the count always matches what that tab lists.
+  function isOverdue(item) {
+    return wantsCheckIn(item) && itemUrgency(item).timing.remaining < 0;
   }
 
   function collectVisibleContextIds() {
@@ -541,12 +549,7 @@
   // Waiting enters Loose Ends as soon as its urgency reaches 70 percent.
   function attentionItems(items) {
     return items.filter(item => {
-      if (!isOpenDelegated(item) || isSnoozed(item) || isTaskDependency(item)) return false;
-      const p = item.properties || {};
-      if (p.checkInRepeat === false && !p.checkInDate) return false;
-      // Once a real check-in task owns this cycle, Loose Ends no longer needs a
-      // second decision row. The triage draft remains available for review/send.
-      if (p.checkInTaskId && p.checkInScheduledFor && p.checkInScheduledFor >= todayStr()) return false;
+      if (!wantsCheckIn(item)) return false;
       const u = itemUrgency(item);
       return u.score >= 70 || u.timing.remaining < 0;
     });
@@ -1148,6 +1151,11 @@
     const item = getDelegatedItemById(id);
     if (!item) {
       toast("That Waiting item is no longer available.", "info");
+      return false;
+    }
+    // The drawer lists open work only, so a closed item has no card to land on.
+    if (!isOpenDelegated(item)) {
+      toast("That Waiting item is already closed.", "info");
       return false;
     }
     _currentFilter = "all";

@@ -390,16 +390,39 @@ test("the Triage door counts its open roots and carries the loader's status, wit
   assert.equal(made[2][0].kind, "row", "no status row once the loader is idle");
 });
 
-test("the Triage door opens the drawer on its half and pulls in anything new first", () => {
+test("the Triage door opens its half, and its loader runs on every render, not only in the list view", () => {
   const src = fs.readFileSync(require.resolve("./public/js/whenever.js"), "utf8");
   const open = src.slice(src.indexOf("function open(half)"), src.indexOf("function setTheme("));
   assert.match(open, /half === "unscheduled" \|\| half === "triage" \? half : "whenever"/);
-  assert.match(open, /if \(half === "triage" && typeof buildScheduleTriage === "function"\) buildScheduleTriage\(\);/);
   assert.match(src, /getElementById\("triage-pill-nav"\);\s*if \(triageSeg\) triageSeg\.addEventListener\("click", \(\) => open\("triage"\)\);/);
-  // The loader refreshes the drawer, not only the work list, so Loading and Retry show.
-  const triage = fs.readFileSync(require.resolve("./public/js/triage.js"), "utf8");
-  const loader = triage.slice(triage.indexOf("function buildScheduleTriage(){"), triage.indexOf("function triageTaskLoadState(){"));
-  assert.equal((loader.match(/buildWhenever\(\)/g) || []).length, 2, "once when loading starts, once when it settles");
+  // The door is on every tab, so the source-to-task loader must be too, or its count
+  // under-reports off the itinerary list view. The loader's own order (Loading, then
+  // settled) is pinned behaviorally in triage-shared-row.test.js.
+  const features = fs.readFileSync(require.resolve("./public/js/features.js"), "utf8");
+  assert.match(features, /scheduleTriage:\s*\{build:\(\)=>\{if\(typeof buildScheduleTriage==="function"\)buildScheduleTriage\(\);\},isVisible:\(\)=>true\}/);
+});
+
+test("the drawer derives the itinerary model ONCE per build and shares it with both halves", () => {
+  const src = fs.readFileSync(require.resolve("./public/js/whenever.js"), "utf8");
+  const build = src.slice(src.indexOf("  function build() {"), src.indexOf("  function refresh() {"));
+  assert.equal((build.match(/window\.itineraryListModel\(\)/g) || []).length, 1);
+  assert.match(build, /buildTriageQueue\(model\);[\s\S]*buildUnscheduled\(model\);/);
+  // A passed model is used as-is: the renderers must not derive a second one.
+  const renderers = queueRenderers();
+  const DCC = { TaskModel: {}, TimeBlocks: {} };
+  const ctx = {
+    window: { DCC }, DCC, isDone: () => false, _isSubRow: () => false,
+    _itineraryListModel: () => { throw new Error("derived a second model"); },
+    _orderUnscheduledNodes: n => n, triageTaskLoadState: () => ({}),
+    createTaskListRowRenderer: () => ev => ({ ev }),
+    document: { createDocumentFragment: () => ({ appendChild() {} }) },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(renderers + "\nthis.u = renderUnscheduledInto; this.t = renderTriageInto;", ctx);
+  const model = { triageGroup: { nodes: [{ ev: { id: "t" }, depth: 0 }] }, unscheduledGroup: { nodes: [] }, unfPool: [], isTodayView: true };
+  const list = { innerHTML: "", appendChild() {} };
+  assert.equal(ctx.t(list, model).open, 1);
+  assert.equal(ctx.u(list, model).open, 0);
 });
 
 test("addWheneverTask files a collision-proof dateless row on the Whenever stage", () => {

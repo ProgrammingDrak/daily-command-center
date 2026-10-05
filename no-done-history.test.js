@@ -33,6 +33,7 @@ const plain = (ctx, expr) => JSON.parse(vm.runInContext("JSON.stringify(" + expr
 const WAITING = [
   slice(DELEGATED, / {2}function isDoneDelegated\(item\) \{[\s\S]*?\n {2}\}/, "isDoneDelegated"),
   slice(DELEGATED, / {2}function isOpenDelegated\(item\) \{[\s\S]*?\n {2}\}/, "isOpenDelegated"),
+  slice(DELEGATED, / {2}function wantsCheckIn\(item\) \{[\s\S]*?\n {2}\}/, "wantsCheckIn"),
   slice(DELEGATED, / {2}function isOverdue\(item\) \{[\s\S]*?\n {2}\}/, "isOverdue"),
   slice(DELEGATED, / {2}function filterItems\(items, filter\) \{[\s\S]*?\n {2}\}/, "filterItems"),
   slice(DELEGATED, / {2}function updateBadge\(overdueCount\) \{[\s\S]*?\n {2}\}/, "updateBadge"),
@@ -47,6 +48,12 @@ const ITEMS = [
   item("dependency", { remaining: -2, dependency: true }),
   item("followed-up", { remaining: -5, checkInRepeat: false }),
   item("check-in-booked", { remaining: -1, checkInTaskId: "t", checkInScheduledFor: "2026-10-06" }),
+  // The date guards at their edges (today is 2026-10-05): a check-in booked for today
+  // is handled; one booked for a past day and still open is not, and neither is a
+  // one-off follow-up whose own date has passed.
+  item("check-in-today", { remaining: -1, checkInTaskId: "t2", checkInScheduledFor: "2026-10-05" }),
+  item("check-in-stale", { remaining: -1, checkInTaskId: "t3", checkInScheduledFor: "2026-10-04" }),
+  item("dated-follow-up", { remaining: -1, checkInRepeat: false, checkInDate: "2026-10-04" }),
 ];
 
 function waiting() {
@@ -69,7 +76,8 @@ function waiting() {
 test("Waiting has no Done filter, and All lists open items only", () => {
   const { ctx } = waiting();
   assert.deepEqual(plain(ctx, 'filterItems(ITEMS, "all").map(i => i.id)'),
-    ["overdue", "upcoming", "snoozed", "dependency", "followed-up", "check-in-booked"]);
+    ["overdue", "upcoming", "snoozed", "dependency", "followed-up", "check-in-booked",
+      "check-in-today", "check-in-stale", "dated-follow-up"]);
   assert.deepEqual(plain(ctx, 'filterItems(ITEMS, "done").map(i => i.id)'),
     plain(ctx, 'filterItems(ITEMS, "all").map(i => i.id)'), "a stale 'done' filter falls back to open work");
   const filters = slice(DELEGATED, / {2}function renderFilters\(\) \{[\s\S]*?\n {2}\}/, "renderFilters");
@@ -78,15 +86,15 @@ test("Waiting has no Done filter, and All lists open items only", () => {
 
 test("the badge and the Overdue tab count only items overdue for a check-in", () => {
   const { ctx, els } = waiting();
-  assert.deepEqual(plain(ctx, 'filterItems(ITEMS, "overdue").map(i => i.id)'), ["overdue"]);
+  assert.deepEqual(plain(ctx, 'filterItems(ITEMS, "overdue").map(i => i.id)'), ["overdue", "check-in-stale", "dated-follow-up"]);
   assert.deepEqual(plain(ctx, 'filterItems(ITEMS, "upcoming").map(i => i.id)'),
-    ["upcoming", "snoozed", "dependency", "followed-up", "check-in-booked"]);
+    ["upcoming", "snoozed", "dependency", "followed-up", "check-in-booked", "check-in-today"]);
   const counted = vm.runInContext('ITEMS.filter(isOverdue).length', ctx);
-  assert.equal(counted, 1);
+  assert.equal(counted, 3);
   ctx.updateBadge(counted);
-  assert.equal(els["waiting-pill-nav-count"].textContent, "1");
+  assert.equal(els["waiting-pill-nav-count"].textContent, "3");
   assert.equal(els["waiting-pill-nav-count"].style.display, "");
-  assert.match(els["waiting-pill-nav"].attrs["aria-label"], /1 overdue for a check-in/);
+  assert.match(els["waiting-pill-nav"].attrs["aria-label"], /3 overdue for a check-in/);
   // The sidebar feeds the badge from this same rule.
   assert.match(DELEGATED, /updateBadge\(all\.filter\(isOverdue\)\.length\)/);
 });
@@ -176,4 +184,42 @@ test("the list model files done work out of BOTH drawer halves", () => {
   assert.match(model, /_fileDoneUntimedOnTheDay\(groups,triageGroup,timeBlocks\);/);
   assert.match(model, /_fileDoneUntimedOnTheDay\(groups,unscheduledGroup,timeBlocks\);/);
   assert.match(model, /return \{[^}]*unscheduledGroup,triageGroup\}/);
+});
+
+test("rows filed into one gap keep completion order, whichever half they came from", () => {
+  const blocks = [{ id: "am", name: "Morning", start: "08:00", end: "12:00" }];
+  const groups = TimeBlocks.groupItineraryTree([
+    { ev: { id: "t9", start: "09:00", end: "09:30" }, depth: 0 },
+    { ev: { id: "t11", start: "11:00", end: "11:30" }, depth: 0 },
+    { ev: { id: "late", untimed: true, triageBlock: true, done: true }, depth: 0 },
+    { ev: { id: "early", untimed: true, done: true }, depth: 0 },
+  ], blocks);
+  const ctx = filing({ late: localIso(10, 30), early: localIso(10, 5) });
+  // Triage files first, then Unscheduled, the way _itineraryListModel runs them.
+  ctx._fileDoneUntimedOnTheDay(groups, groups.find(g => g.block.id === TimeBlocks.TRIAGE_BLOCK.id), blocks);
+  ctx._fileDoneUntimedOnTheDay(groups, groups.find(g => g.block.id === TimeBlocks.UNPLANNED_BLOCK.id), blocks);
+  assert.deepEqual(Array.from(groups.find(g => g.block.id === "am").nodes, n => n.ev.id), ["t9", "early", "late", "t11"]);
+});
+
+test("a task finished on ANOTHER day files under Outside as a plain Done, not at that clock time", () => {
+  // Loose Ends checks off a past-day task on its own day, stamped with today's clock.
+  const blocks = [{ id: "am", name: "Morning", start: "08:00", end: "12:00" }];
+  const groups = TimeBlocks.groupItineraryTree([
+    { ev: { id: "t9", start: "09:00", end: "09:30" }, depth: 0 },
+    { ev: { id: "carried", untimed: true, done: true }, depth: 0 },
+    { ev: { id: "same-day", untimed: true, done: true }, depth: 0 },
+  ], blocks);
+  const ctx = filing({ carried: new Date(2026, 9, 6, 10, 15).toISOString(), "same-day": localIso(10, 15) });
+  ctx.__state = { date: "2026-10-05" };
+  assert.equal(vm.runInContext('_completionMinute({ id: "carried" })', ctx), null);
+  assert.equal(vm.runInContext('_completionMinute({ id: "same-day" })', ctx), 10 * 60 + 15);
+  ctx._fileDoneUntimedOnTheDay(groups, groups.find(g => g.block.id === TimeBlocks.UNPLANNED_BLOCK.id), blocks);
+  assert.deepEqual(Array.from(groups.find(g => g.block.id === "am").nodes, n => n.ev.id), ["t9", "same-day"]);
+  assert.deepEqual(Array.from(groups.find(g => g.block === TimeBlocks.OUTSIDE_BLOCK).nodes, n => n.ev.id), ["carried"]);
+});
+
+test("Loose Ends and the Waiting badge share one check-in gate", () => {
+  const attention = slice(DELEGATED, / {2}function attentionItems\(items\) \{[\s\S]*?\n {2}\}/, "attentionItems");
+  assert.match(attention, /if \(!wantsCheckIn\(item\)\) return false;/);
+  assert.match(WAITING, /return wantsCheckIn\(item\) && itemUrgency\(item\)\.timing\.remaining < 0;/);
 });
