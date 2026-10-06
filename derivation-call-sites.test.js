@@ -179,7 +179,7 @@ test("★ the timeline pools its tree on the section it renders, NOT on the visi
   assert.equal(rx.test("selectTree(activeItems,{pool:vis})"), false, "pooling on vis loses an open child of a done parent");
   assert.equal(rx.test("selectTree(activeItems,{pool:visible})"), false);
   // And buildSchedule derives through the layer, not by hand.
-  assert.match(schedTabCode, /const day=DCC\.TaskModel\.selectDay\(scheduled,viewDate,\{\}\)/);
+  assert.match(schedTabCode, /const day=DCC\.TaskModel\.selectDay\(scheduled,viewDate,\{waitingRows:window\.blockStore \? window\.blockStore\.getByType\("block"\) : \[\]\}\)/);
 });
 
 test("★ the list view derives ONCE — one selectDay call feeding every section", () => {
@@ -209,7 +209,7 @@ test("★ the list view derives ONCE — one selectDay call feeding every sectio
   const model = schedTabCode.slice(mStart, schedTabCode.indexOf("\nfunction ", mStart + 1));
   const calls = (model.match(/TaskModel\.selectDay\(/g) || []).length;
   assert.equal(calls, 1, "the shared model must call selectDay exactly once, got " + calls);
-  assert.match(model, /const day=DCC\.TaskModel\.selectDay\(scheduled,viewDate,\{today:actualToday,carryoverPool:unfPool\}\)/);
+  assert.match(model, /const day=DCC\.TaskModel\.selectDay\(scheduled,viewDate,\{today:actualToday,carryoverPool:unfPool,waitingRows:window\.blockStore \? window\.blockStore\.getByType\("block"\) : \[\]\}\)/);
   assert.match(model, /const unfPool=\[\];/,
     "the list derivation must keep its carryover pool empty because Loose Ends owns those rows");
   const pStart = schedTabCode.indexOf("function renderUnscheduledInto(");

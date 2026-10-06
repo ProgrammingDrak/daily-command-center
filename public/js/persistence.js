@@ -375,7 +375,9 @@ function reloadPersistedEdits() {
       // C4: the kind + addressability halves are TaskModel.foldsIntoItinerary, shared
       // with syncAddedTaskTimes (which had drifted — it lacked the shell branch). What
       // stays here is what is genuinely per-view: the status tests and the day scoping.
+      const waitingParkedIds=typeof TM.waitingParkedIds==="function" ? TM.waitingParkedIds(window.blockStore.getByType("block")) : new Set();
       const isFoldableTask=b=>{
+        if(typeof waitingParkedIds!=="undefined"&&waitingParkedIds.has(String(b.id)))return false;
         const p=b.properties||{};
         if(!TM.foldsIntoItinerary(b))return false;
         // A Whenever pool row lives in the header pill, not in today's Unplanned list.
