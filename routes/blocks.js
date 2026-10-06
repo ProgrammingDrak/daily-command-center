@@ -28,6 +28,7 @@ const createTaskTiming = require("../lib/task-timing");
 const { planAllocations } = createTaskTiming;
 const MAX_REALLOCATABLE_SEC = 36 * 3600;
 const TaskModel = require("../public/js/task-model");
+const reviewTomorrow = require("../lib/review-tomorrow");
 const scheduleSettingsStore = require("../schedule-settings-store");
 const createMaterializeGuard = require("../lib/materialize-guard");
 const { dedupeStatus } = createMaterializeGuard;
@@ -236,6 +237,7 @@ module.exports = function mount(app, ctx) {
       }
     },
     appTimeZone: ctx.APP_TIME_ZONE });
+  ctx.prepareScheduledDay = require("../lib/prepare-scheduled-day")({ blockDB, respStore, getTodayStr, APP_TIME_ZONE: ctx.APP_TIME_ZONE });
 
   // The shared no-resurrection contract (lib/materialize-guard.js). Used here by the
   // task-group schedule route; routes/dcc.js and meeting-materializer.js hold the
@@ -1520,20 +1522,7 @@ module.exports = function mount(app, ctx) {
   app.get("/api/blocks", route(async (req, res) => {
     if (req.query.date) {
       if (!isValidDate(req.query.date)) { res.status(400).json({ error: "Invalid date" }); return; }
-      await blockDB.ensureDayRoot(req.query.date, req.session.userId, req.workspaceId);
-      await respStore.catchUpScheduledRepeats({
-        userId: req.session.userId, workspaceId: req.workspaceId,
-        throughDate: getTodayStr(), targetTimeZone: ctx.APP_TIME_ZONE,
-      });
-      // Catch-up above creates only dates that were genuinely missed after a
-      // schedule existed. The requested day is then materialized directly when
-      // it is today or future, while unrelated historical days stay untouched.
-      await respStore.materializeScheduledRepeatsForDate({
-        date: req.query.date,
-        userId: req.session.userId,
-        workspaceId: req.workspaceId,
-        targetTimeZone: ctx.APP_TIME_ZONE,
-      });
+      await ctx.prepareScheduledDay(req.query.date, req.session.userId, req.workspaceId);
       return withReconciledTiming(filterLegacyGcalBlocks(await blockDB.getBlocksByDate(req.query.date, req.workspaceId)), req);
     } else if (req.query.type) {
       const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t));
@@ -1658,6 +1647,22 @@ module.exports = function mount(app, ctx) {
     return { ok: true, reordered: items.length };
   }));
 
+  // A preview prepares repeats exactly as an ordinary day read does; it never moves tasks.
+  const previewTomorrow = route(async (req, res) => {
+    const body = req.method === "POST" ? req.body || {} : req.query || {};
+    let selected = body.selectedIds == null ? null : body.selectedIds;
+    if (typeof selected === "string") {
+      try { selected = JSON.parse(selected); } catch (_) { return res.status(400).json({ error: "Invalid selected task ids" }); }
+    }
+    if (selected !== null && (!Array.isArray(selected) || selected.length > 2000 || selected.some(id => typeof id !== "string"))) return res.status(400).json({ error: "Invalid selected task ids" });
+    const days = body.days === "all" ? null : body.days == null ? 14 : Number(body.days);
+    if (days !== null && (!Number.isInteger(days) || days < 1 || days > 3650)) return res.status(400).json({ error: "Invalid lookback" });
+    await ctx.prepareScheduledDay(reviewTomorrow.addDay(getTodayStr()), req.session.userId, req.workspaceId);
+    return reviewTomorrow.loadPlan(ctx, req, selected, days);
+  });
+  app.get("/api/review-tomorrow", previewTomorrow);
+  app.post("/api/review-tomorrow/preview", previewTomorrow);
+
   // ── Reschedule: move a task (and its whole subtask subtree) to another date ──
   // A TRUE MOVE: the parent block and every descendant keep their ids and just
   // change `date`, all in one transaction, with a single broadcast. Replaces the
@@ -1735,6 +1740,7 @@ module.exports = function mount(app, ctx) {
       const subtreeIds = collectSubtreeBlockIds(dayBlocks, parent);
       const byId = new Map(dayBlocks.map(b => [b.id, b]));
       byId.set(parent.id, parent); // parent may lack local_id and be absent from dayBlocks
+      const completedMembers = req.body.reviewGuard ? await reviewTomorrow.validateMove(ctx, req, parent, subtreeIds.map(id => byId.get(id)), place, req.body.reviewGuard) : [];
       const now = new Date().toISOString();
       const toMin = v => v && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? Number(v.slice(0, 2)) * 60 + Number(v.slice(3)) : null;
       const toHHMM = n => `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
@@ -1761,8 +1767,11 @@ module.exports = function mount(app, ctx) {
       const moves = subtreeIds.map(bid => {
         const b = byId.get(bid);
         const properties = { ...((b && b.properties) || {}) };
+        // Legacy completion can live only on the source day root. Carry it with
+        // the child without inventing a completion timestamp or changing its ID.
+        if (completedMembers.includes(bid)) { properties.done = true; properties.status = "done"; }
         if(place&&place.kind==="unplanned")return {
-          id:bid,date:targetDate,properties:unplannedProperties(b,parent.id,place.durations),
+          id:bid,date:targetDate,properties:unplannedProperties({ ...b, properties },parent.id,place.durations),
           ...(bid===parent.id?{parentId:null}:{}),expectedDate:b.date,expectedUpdatedAt:b.updated_at
         };
         if (bid === parent.id) {
@@ -1784,7 +1793,7 @@ module.exports = function mount(app, ctx) {
             const startMin = toMin(properties.start), endMin = toMin(properties.end);
             if (startMin != null && endMin != null) {
               const shiftedStart = startMin + timeDelta, shiftedEnd = endMin + timeDelta;
-              if (shiftedStart < 0 || shiftedEnd > 1439 || shiftedEnd <= shiftedStart) {
+              if (shiftedStart < 0 || shiftedEnd > 1439 || shiftedEnd < shiftedStart) {
                 const err = new Error("Placement would move nested work outside the day"); err.statusCode = 400; throw err;
               }
               properties.start = toHHMM(shiftedStart); properties.end = toHHMM(shiftedEnd);
@@ -1840,7 +1849,21 @@ module.exports = function mount(app, ctx) {
         });
       }
 
-      const result = await blockDB.rescheduleBlocks(moves, creates);
+      const reviewOptions = req.body.reviewGuard ? {
+        lockKey: "dcc-review:" + req.workspaceId + ":" + targetDate,
+        beforeApply: async client => {
+          const freshParent = await blockDB.getBlock(parent.id, client);
+          const freshPool = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId, { client });
+          const freshById = new Map(freshPool.map(row => [row.id, row]));
+          freshById.set(parent.id, freshParent);
+          const members = freshParent && collectSubtreeBlockIds(freshPool, freshParent).map(id => freshById.get(id));
+          if (!freshParent || freshParent.deleted_at) {
+            const error = new Error("Task changed. Refresh the preview."); error.statusCode = 409; error.code = "REVIEW_PLAN_CHANGED"; throw error;
+          }
+          await reviewTomorrow.validateMove(ctx, req, freshParent, members, place, req.body.reviewGuard, client);
+        },
+      } : undefined;
+      const result = await blockDB.rescheduleBlocks(moves, creates, reviewOptions);
       const movedIds = moves.map(m => m.id);
       const created = result.blocks.slice(moves.length); // tombstone(s) appended after moves
       broadcast("blocks-changed", { action: "reschedule", blockIds: result.blocks.map(b => b.id), clientId: _clientId }, req.workspaceId);

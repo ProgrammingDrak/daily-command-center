@@ -592,18 +592,21 @@ function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: 
 // `dcc_state` row on prod — but ws-3 exists in `blocks`, and a workspace with no row for a
 // date reads whatever the last workspace left in that file. The fix is a file layout change,
 // which is not this phase's to make.
-async function buildDayResponse(dateStr, userId, workspaceId) {
+async function buildDayResponse(dateStr, userId, workspaceId, { client, scheduleOnly = false } = {}) {
   const ws = workspaceId || (userId ? `ws-${userId}` : "ws-1");
   let enrichment = null;
   let dbFailed = false;
   try {
     // Today and future dates are the hot path. Read only browser-visible JSON
     // fields so historical Sweep ledgers never cross the Supabase pooler.
-    const dccRow = typeof blockDB.getDccStateCompact === "function" && dateStr >= getTodayStr()
-      ? await blockDB.getDccStateCompact(dateStr, ws)
-      : await blockDB.getDccState(dateStr, ws);
+    const dccRow = scheduleOnly
+      ? await blockDB.getDccStateForScheduling(dateStr, ws, client)
+      : typeof blockDB.getDccStateCompact === "function" && dateStr >= getTodayStr()
+        ? await blockDB.getDccStateCompact(dateStr, ws)
+        : await blockDB.getDccState(dateStr, ws);
     if (dccRow && dccRow.state_json) enrichment = dccRow.state_json;
   } catch (e) {
+    if (client) throw e;
     dbFailed = true;
     console.error(`[day-response] Postgres read failed for ${dateStr} (${ws}):`, e.message);
   }
@@ -625,6 +628,13 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   result.schedule.timeline = (result.schedule.timeline || []).filter(
     (item) => !(item && (item.type === "meeting" || item.type === "oneone"))
   );
+  // Review guards need only placement state. Keep every read on their transaction
+  // connection, and do not borrow pool connections for unrelated enrichment.
+  if (scheduleOnly) {
+    const settings = await scheduleSettingsStore.getScheduleSettings(ws, { blockDB, client });
+    result.schedule.day_start = settings.dayStart;
+    return result;
+  }
   // Concurrent, not sequential: none reads another result, and this is the
   // hottest read path in the app (both state endpoints, plus the anonymous share poll
   // through buildPublicTodoShare). All swallow their own errors and resolve to [],

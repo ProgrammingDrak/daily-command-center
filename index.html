@@ -12,6 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="DCC">
 <link rel="stylesheet" href="/public/css/tokens.css?v=tokens-1">
 <link rel="stylesheet" href="/public/css/core-ui.css?v=core-ui-1">
+<link rel="stylesheet" href="/public/css/review-tomorrow.css?v=review-tomorrow-1">
 <link rel="stylesheet" href="/public/css/dashboard.css">
 <link rel="stylesheet" href="/public/css/meeting-reviews.css">
 <link rel="stylesheet" href="/public/css/task-library.css?v=task-library-1">
@@ -149,6 +150,7 @@
     <div class="dcc-settings-wrap" id="dcc-settings-wrap">
       <button class="admin-link dcc-settings-button" id="dcc-settings-button" type="button" aria-haspopup="true" aria-expanded="false" title="Open utilities">Utilities</button>
       <div class="dcc-settings-menu" id="dcc-settings-menu" role="menu" aria-hidden="true">
+        <button type="button" id="dcc-review-tomorrow" role="menuitem">Review tomorrow</button>
         <button type="button" id="dcc-day-start" role="menuitem">Scheduling floor</button>
         <button type="button" id="dcc-schedule-defaults" role="menuitem">Schedule default times</button>
         <button type="button" id="dcc-setup-integrations" role="menuitem">Setup &amp; integrations</button>
@@ -2155,6 +2157,7 @@
 <script src="/public/js/punishments.js"></script>
 <script src="/public/js/rewards-queue.js"></script>
 <script src="/public/js/unfinished-tasks.js"></script>
+<script src="/public/js/review-tomorrow.js?v=review-tomorrow-1"></script>
 <!-- Store must precede the dock. Pet nudges use both at tick time. -->
 <script src="/public/js/anytime-store.js"></script>
 <script src="/public/js/anytime-dock.js"></script>

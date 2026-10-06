@@ -33,7 +33,7 @@ function slice(src, re, what) {
   return m[0];
 }
 
-const BUILD_DAY_SRC = slice(SERVER_SRC, /async function buildDayResponse\(dateStr, userId, workspaceId\) \{[\s\S]*?\n\}/, "buildDayResponse");
+const BUILD_DAY_SRC = slice(SERVER_SRC, /async function buildDayResponse\(dateStr, userId, workspaceId, \{ client, scheduleOnly = false \} = \{\}\) \{[\s\S]*?\n\}/, "buildDayResponse");
 // Loose parameter list so the slice survives the next argument; the `slice` guard still fails
 // loudly if the function moves or is renamed. It gained an `owner` param so a caller that
 // resolved the owner STRICTLY can hand it in rather than having it re-derived leniently.
@@ -646,4 +646,18 @@ test("the anonymous share path does NOT read the setting and stamps no floor", a
   const out = await call();
   assert.deepEqual(settingsAsked, []);
   assert.equal("day_start" in out.schedule, false);
+});
+
+test("Review Tomorrow schedule reads stay on the transaction and skip enrichment", async () => {
+  const client = { tx: true }, calls = [];
+  const ctx = {
+    blockDB: { getDccStateForScheduling: async (date, ws, received) => { assert.equal(received, client); calls.push([date, ws]); return { state_json: { schedule: { working_hours: { start: "09:00", end: "17:00" }, timeline: [{ type: "break", start: "12:00", end: "12:30" }] } } }; } },
+    scheduleSettingsStore: { getScheduleSettings: async (ws, deps) => { assert.equal(ws, "ws-1"); assert.equal(deps.client, client); return { dayStart: "08:30" }; } },
+    getScheduleBlocks: () => { throw new Error("enrichment must not acquire a pool connection"); },
+    readTriageSuppressionsForWorkspace: () => { throw new Error("unrelated triage read"); },
+    getTodayStr: () => DATE, client,
+  };
+  vm.createContext(ctx); vm.runInContext(BUILD_DAY_SRC, ctx);
+  const result = await vm.runInContext(`buildDayResponse("${DATE}", 1, "ws-1", { client, scheduleOnly: true })`, ctx);
+  assert.equal(result.schedule.day_start, "08:30"); assert.equal(result.schedule.timeline.length, 1); assert.equal(calls.length, 1);
 });

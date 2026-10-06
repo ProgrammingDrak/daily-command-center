@@ -1485,15 +1485,15 @@ async function getCarryoverPool(workspaceId, beforeDate, opts = {}) {
         -- meeting evidence, including rows whose terminal state is "dismissed"; they
         -- must never become carryover work even during that version-skew window.
         AND COALESCE(b.properties->>'kind', '') <> 'proposed_action_item'
-        AND COALESCE(b.properties->>'type', '') <> ALL($5::text[])
-        AND (COALESCE(b.properties->>'start', '') <> ''
+        AND ($7::boolean OR COALESCE(b.properties->>'type', '') <> ALL($5::text[]))
+        AND ($7::boolean OR COALESCE(b.properties->>'start', '') <> ''
              OR b.properties->>'subtaskOf' IS NOT NULL
              OR b.properties->>'wrapId' IS NOT NULL)
         AND b.date IS NOT NULL AND b.date < $2
         AND ($3::int IS NULL OR b.date >= ($2::date - ($3::int * INTERVAL '1 day')))
       ORDER BY b.date DESC, b.sort_order ASC, b.created_at ASC
       LIMIT $6`,
-    [ws, beforeDate, days, CARRYOVER_ROW_TYPES, carryoverSkipTypes(), limit]
+    [ws, beforeDate, days, CARRYOVER_ROW_TYPES, carryoverSkipTypes(), limit, opts.includeUntimed === true]
   );
   const pool_ = rows.map(parseBlock);
 
@@ -1572,18 +1572,20 @@ async function getSubtree(rootIds, workspaceId, client) {
 
 // ── Query ──
 
-async function getBlocksByDate(date, workspaceId) {
+async function getBlocksByDate(date, workspaceId, client) {
+  const q = client || pool;
+  const lock = client ? " FOR SHARE" : "";
   const { rows } = workspaceId
-    ? await pool.query(`SELECT * FROM blocks WHERE workspace_id = $2 AND deleted_at IS NULL
+    ? await q.query(`SELECT * FROM blocks WHERE workspace_id = $2 AND deleted_at IS NULL
         AND (date = $1 OR (properties->>'all_day' = 'true'
           AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $1
           AND CASE WHEN properties->>'all_day_end' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_end')::date END > $1))
-        ORDER BY date ASC, sort_order ASC, created_at ASC`, [date, workspaceId])
-    : await pool.query(`SELECT * FROM blocks WHERE deleted_at IS NULL
+        ORDER BY date ASC, sort_order ASC, created_at ASC${lock}`, [date, workspaceId])
+    : await q.query(`SELECT * FROM blocks WHERE deleted_at IS NULL
         AND (date = $1 OR (properties->>'all_day' = 'true'
           AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $1
           AND CASE WHEN properties->>'all_day_end' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_end')::date END > $1))
-        ORDER BY date ASC, sort_order ASC, created_at ASC`, [date]);
+        ORDER BY date ASC, sort_order ASC, created_at ASC${lock}`, [date]);
   return rows.map(parseBlock);
 }
 
@@ -1653,10 +1655,10 @@ async function getCalendarMeetingContextBySourceIds(sourceIds, workspaceId) {
 //
 // One query, not two: this replaces a getBlocksByDate + getUndatedTaskBlocks pair the
 // route used to concatenate (getUndatedTaskBlocks is deleted — this was its only caller).
-async function getRescheduleSubtreePool(fromDate, workspaceId, { includeTriageRoots = false } = {}) {
+async function getRescheduleSubtreePool(fromDate, workspaceId, { includeTriageRoots = false, client } = {}) {
   const isTask = `(b.properties->>'local_id' IS NOT NULL OR b.properties->>'kind' = 'task')`;
   const linked = `(b.properties->>'subtaskOf' IS NOT NULL OR b.properties->>'wrapId' IS NOT NULL)`;
-  const { rows } = await pool.query(
+  const { rows } = await (client || pool).query(
     `WITH RECURSIVE task_pool AS (
        SELECT b.* FROM blocks b
         WHERE b.workspace_id IS NOT DISTINCT FROM $2
@@ -1790,12 +1792,16 @@ async function batchOp(operations, transactionClient) {
 // on each move and a distinct moves/creates contract + return shape that
 // batchOp doesn't model. (batchOp itself is now genuinely transactional: its
 // update/delete/reorder branches run on the tx client, not the pool.)
-async function rescheduleBlocks(moves, creates) {
+async function rescheduleBlocks(moves, creates, options = {}) {
   const now = new Date().toISOString();
   const client = await pool.connect();
   const results = [];
   try {
     await client.query("BEGIN");
+    if (options.beforeApply) {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [options.lockKey]);
+      await options.beforeApply(client);
+    }
     for (const m of moves) {
       const { rows } = await client.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [m.id]);
       const existing = rows[0];
@@ -2233,6 +2239,16 @@ async function getDccState(date, workspaceId) {
   return { ...row, state_json: typeof row.state_json === "string" ? JSON.parse(row.state_json) : row.state_json };
 }
 
+// Minimal placement state for Review Tomorrow. Existing day-response fallback and
+// floor semantics remain shared; unrelated sweep ledgers never enter the guard.
+async function getDccStateForScheduling(date, workspaceId, client) {
+  const { rows } = await (client || pool).query(
+    "SELECT state_json->'schedule' AS schedule FROM dcc_state WHERE date = $1 AND workspace_id = $2" + (client ? " FOR SHARE" : ""),
+    [date, workspaceId]
+  );
+  return rows[0] ? { state_json: { schedule: rows[0].schedule } } : null;
+}
+
 // Hot-path projection. Historical Sweep ledgers stay stored, but never cross the
 // Supabase pooler during routine dashboard reads.
 async function getDccStateCompact(date, workspaceId, client) {
@@ -2489,10 +2505,12 @@ async function mergeDccProposalPacket(date, packet, userId, workspaceId, emptySt
   finally { client.release(); }
 }
 
-async function getBlocksByKind(kind, workspaceId) {
+async function getBlocksByKind(kind, workspaceId, client) {
+  const q = client || pool;
+  const lock = client ? " FOR SHARE" : "";
   const { rows } = workspaceId
-    ? await pool.query(`SELECT * FROM blocks WHERE type='block' AND properties->>'kind'=$1 AND workspace_id=$2 AND deleted_at IS NULL ORDER BY created_at ASC`, [kind, workspaceId])
-    : await pool.query(`SELECT * FROM blocks WHERE type='block' AND properties->>'kind'=$1 AND deleted_at IS NULL ORDER BY created_at ASC`, [kind]);
+    ? await q.query(`SELECT * FROM blocks WHERE type='block' AND properties->>'kind'=$1 AND workspace_id=$2 AND deleted_at IS NULL ORDER BY created_at ASC${lock}`, [kind, workspaceId])
+    : await q.query(`SELECT * FROM blocks WHERE type='block' AND properties->>'kind'=$1 AND deleted_at IS NULL ORDER BY created_at ASC${lock}`, [kind]);
   return rows.map(parseBlock);
 }
 
@@ -2613,7 +2631,7 @@ module.exports = {
   findTaskByTriageSource, getBlocksByDate, getBlocksByDateIncludingDeleted, getCalendarMeetingContextBySourceIds, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
-  ensureDccStateTable, backfillLegacyTriageSuppressions, saveDccState, saveDccBriefDecision, getDccState, getDccStateCompact, purgeSoftDeleted, getOperations,
+  ensureDccStateTable, backfillLegacyTriageSuppressions, saveDccState, saveDccBriefDecision, getDccState, getDccStateCompact, getDccStateForScheduling, purgeSoftDeleted, getOperations,
   parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers,
   getTaskTimeEntries,
   getResponsibilityBlocks, findResponsibilityBySlug, getBlocksByKind, getBlocksByIds,

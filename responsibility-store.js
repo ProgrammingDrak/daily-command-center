@@ -938,7 +938,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     });
   }
 
-  async function materializeScheduledRepeatsForDate({ date, userId, workspaceId, targetTimeZone = appTimeZone }) {
+  async function materializeScheduledRepeatsForDate({ date, userId, workspaceId, targetTimeZone = appTimeZone, strict = false }) {
     if (!isValidDate(date)) return [];
     const definitions = (await blockDB.getResponsibilityBlocks(workspaceId)).filter(activeScheduledDefinition);
     const created = [];
@@ -946,6 +946,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
       try {
         created.push(...await materializeDefinitionForDate(definition.id, { date, userId, workspaceId, targetTimeZone }));
       } catch (error) {
+        if (strict) throw error;
         console.warn("[scheduled-repeat] materialization failed", definition.id, error.message);
       }
     }
@@ -965,6 +966,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
         if (!sameWorkspace(responsibility, workspaceId) || !activeScheduledDefinition(responsibility)) return;
         const props = responsibility.properties || {};
         const rule = scheduledRecurrence.normalizeScheduleRule(props.scheduleRule, { defaultTimeZone: appTimeZone, today: getTodayStr() });
+        if (props.materializedThrough && props.materializedThrough >= throughDate) return;
         let cursor = props.materializedThrough || scheduledRecurrence.addDays(throughDate, -1);
         if (cursor < scheduledRecurrence.addDays(rule.startDate || throughDate, -1)) cursor = scheduledRecurrence.addDays(rule.startDate, -1);
         for (let guard = 0; cursor < throughDate && guard < 730; guard++) {
