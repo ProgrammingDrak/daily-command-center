@@ -4364,14 +4364,14 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
     grid-column:auto;grid-row:auto;
     display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:4px;
   }
-  /* Keep all five queues together with full labels above their counts. Let a
-     multiword label wrap at its space on narrow phones, but never shrink a door
-     below its longest word or count. Ellipsis hid the queue names at 375px. */
+  /* Keep all five queues together with full labels above their counts. Wrap at
+     spaces first, with balanced word wrapping as a fallback for narrow phones
+     or wider font metrics. Keep every door touch-sized instead of ellipsizing. */
   .header .date-nav .queue-pill{flex:1 0 100%;order:2;min-width:0}
-  .header .date-nav .queue-seg{flex:1 1 auto;flex-direction:column;gap:3px;min-width:min-content;min-height:48px;padding:5px 3px}
+  .header .date-nav .queue-seg{flex:1 1 auto;flex-direction:column;gap:3px;width:min-content;min-width:44px;min-height:48px;padding:5px 3px}
   .header .date-nav .queue-seg:first-child{padding-left:5px}
   .header .date-nav .queue-seg:last-child{padding-right:5px}
-  .header .date-nav .queue-seg>span:first-child{max-width:100%;white-space:normal}
+  .header .date-nav .queue-seg>span:first-child{max-width:100%;white-space:normal;overflow-wrap:break-word;text-wrap:balance}
   .header>div:last-child{display:none!important}  /* owner buttons + clock → More sheet */
 
   /* ── Progress: tighter ── */
