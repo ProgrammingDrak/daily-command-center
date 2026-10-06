@@ -816,7 +816,7 @@ function _itineraryListModel(){
   // Loose Ends owns past-day unfinished work now. Keep carryovers out of the task
   // list derivation entirely, including the old hidden fetch and second render.
   const unfPool=[];
-  const day=DCC.TaskModel.selectDay(scheduled,viewDate,{today:actualToday,carryoverPool:unfPool});
+  const day=DCC.TaskModel.selectDay(scheduled,viewDate,{today:actualToday,carryoverPool:unfPool,waitingRows:window.blockStore ? window.blockStore.getByType("block") : []});
   const visible=day.visible;
   const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
   const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible}),timeBlocks);
@@ -1118,7 +1118,7 @@ function buildSchedule(){
   // section with the fold widened to either parent edge, so a done RIDE-ALONG now
   // folds under its parent instead of listing as its own one-liner. Orphaned done
   // rows (parent deleted or side-project-flagged) stay listed so they aren't lost.
-  const day=DCC.TaskModel.selectDay(scheduled,viewDate,{});
+  const day=DCC.TaskModel.selectDay(scheduled,viewDate,{waitingRows:window.blockStore ? window.blockStore.getByType("block") : []});
   const vis=day.visible;                 // Hide side-project-marked items from the schedule
   // day.done PLUS day.nestedDone. Unlike the list view, this surface renders two flat
   // populations (compact Done one-liners + open cards) and never nests anything, so a done row

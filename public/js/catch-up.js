@@ -207,9 +207,8 @@
     const onToday = typeof viewMode === "undefined" || !viewMode || viewMode === "today";
     count.textContent = String(_lastCount);
     pill.hidden = !onToday || _lastCount < 1;
-    pill.setAttribute("aria-label", _lastCount > 0
-      ? "Open " + _lastCount + " Loose End" + (_lastCount === 1 ? "" : "s")
-      : "Open Loose Ends");
+    pill.setAttribute("aria-label",
+      "Open " + _lastCount + " Loose End" + (_lastCount === 1 ? "" : "s"));
   }
 
   function setIndicatorCount(count) {

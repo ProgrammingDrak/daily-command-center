@@ -186,6 +186,9 @@
       triageSourceRef: p.triageSourceRef || "",
       triageReceivedAt: p.triageReceivedAt || "",
       triageConversationId: p.triageConversationId || "",
+      ...(p.stage ? {stage:p.stage} : {}),
+      ...(p.dependencyWaitingItemId ? {dependencyWaitingItemId:p.dependencyWaitingItemId} : {}),
+      ...(Array.isArray(p.dependencyWaitingItemIds) ? {dependencyWaitingItemIds:p.dependencyWaitingItemIds.slice()} : {}),
       delegatedItemId: p.delegatedItemId || null,
       linkedBlockId: p.linkedBlockId || null,
       linkedTagId: p.linkedTagId || null,
@@ -391,10 +394,55 @@
   // edge, and an API-minted backlog row has neither). Every write path in C4 strips
   // the date, so each one heals the first time it is touched; the remaining rows want
   // a migration, which is Track A's file. Flagged in the Coordination log with ids.
+  // One eligibility rule for stored rows and projected cards. Missing Waiting
+  // records keep explicit parking markers conservative during partial reloads;
+  // a known released record never parks work, even if an old marker survived.
+  function waitingParkedIds(items, waitingRows) {
+    const rows = (Array.isArray(items) ? items : []).filter(Boolean);
+    const relations = new Map(), linked = new Set(), aliases = new Map(), kids = new Map();
+    const props = row => row.properties || row;
+    const ids = row => [row.id, row._blockId, row.blockId, props(row).local_id,
+      row.type === "block" && "blk-" + row.id].filter(Boolean).map(String);
+    const checkIn = row => [row.id, props(row).local_id].some(id => /^waiting-checkin-task:/.test(String(id || ""))) ||
+      String(props(row).source || "").replace(/_/g, "-") === "waiting-checkin";
+    for (const row of (Array.isArray(waitingRows) ? waitingRows : rows)) {
+      if (!row) continue;
+      const p = props(row);
+      if (p.kind !== "delegated_item") continue;
+      const open = !row.deleted_at && !p.completedAt && !["done", "unblocked"].includes(p.status);
+      relations.set(String(row.id), open);
+      if (open && p.linkedBlockId) linked.add(String(p.linkedBlockId));
+    }
+    for (const row of rows) for (const id of ids(row)) aliases.set(id, row);
+    const blocked = new Set(), pending = [];
+    for (const row of rows) {
+      if (checkIn(row)) continue;
+      const p = props(row);
+      for (const parent of new Set([p.wrapId, p.subtaskOf, row.parent_id].filter(Boolean))) {
+        if (!aliases.has(String(parent))) continue;
+        const root = aliases.get(String(parent));
+        if (!kids.has(root)) kids.set(root, []);
+        kids.get(root).push(row);
+      }
+      const markers = [p.dependencyWaitingItemId].concat(Array.isArray(p.dependencyWaitingItemIds) ? p.dependencyWaitingItemIds : []).filter(Boolean);
+      if (ids(row).some(id => linked.has(id)) || markers.some(id => relations.get(String(id)) !== false)) pending.push(row);
+    }
+    while (pending.length) {
+      const row = pending.pop();
+      if (blocked.has(row)) continue;
+      blocked.add(row);
+      for (const child of kids.get(row) || []) pending.push(child);
+    }
+    const result = new Set();
+    for (const row of blocked) for (const id of ids(row)) result.add(id);
+    return result;
+  }
+
   function selectUnscheduled(blocks, opts) {
     opts = opts || {};
     const out = [];
     const rows = Array.isArray(blocks) ? blocks : [];
+    const parked = waitingParkedIds(rows, opts.waitingRows);
     for (let i = 0; i < rows.length; i++) {
       const b = rows[i];
       if (!b || b.deleted_at || b.type !== "block") continue;
@@ -415,8 +463,7 @@
       if (p.done === true) continue;
       // Dependency-parked tasks live in Waiting until their prerequisite is
       // released. They remain dateless but must not duplicate into Backlog.
-      if (p.dependencyWaitingItemId ||
-          (Array.isArray(p.dependencyWaitingItemIds) && p.dependencyWaitingItemIds.length) ||
+      if (parked.has(String(b.id)) ||
           (p.triageBlock && p.kind !== "backlog")) continue;
       // A titleless row cannot render on either surface; both consumers dropped it.
       if (!p.title) continue;
@@ -697,7 +744,8 @@
   // parented inside `visible`, so folding the top folds all of it.
   function selectDay(pool, dateStr, opts) {
     opts = opts || {};
-    const visible = selectVisible(pool, opts);
+    const parked = waitingParkedIds(_arr(pool).concat(_arr(opts.waitingRows)), opts.waitingRows);
+    const visible = selectVisible(pool, opts).filter(ev => !parked.has(String(ev.id)));
     const done = _doneFn(opts);
     const byId = new Map();
     for (let i = 0; i < visible.length; i++) byId.set(visible[i].id, visible[i]);
@@ -925,6 +973,7 @@
     isTaskRow: isTaskRow,
     foldsIntoItinerary: foldsIntoItinerary,
     backlogKey: backlogKey,
+    waitingParkedIds: waitingParkedIds,
     selectUnscheduled: selectUnscheduled,
     WHENEVER_STAGE: WHENEVER_STAGE,
     isWheneverPoolRow: isWheneverPoolRow,

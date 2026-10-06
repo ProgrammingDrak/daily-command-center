@@ -777,7 +777,7 @@
   }
 
   // The badge is a notification, not an inventory: it counts only items overdue for
-  // a check-in, and disappears at zero.
+  // a check-in. The header keeps an explicit zero placeholder.
   function updateBadge(overdueCount) {
     const countBadge = document.getElementById("delegated-blocked-count");
     if (countBadge) {
@@ -788,11 +788,10 @@
     const navPill = document.getElementById("waiting-pill-nav");
     if (navCount) {
       navCount.textContent = String(overdueCount);
-      navCount.style.display = overdueCount > 0 ? "" : "none";
+      navCount.style.display = "";
     }
-    if (navPill) navPill.setAttribute("aria-label", overdueCount > 0
-      ? "Open Waiting tasks, " + overdueCount + " overdue for a check-in"
-      : "Open Waiting tasks, none overdue for a check-in");
+    if (navPill) navPill.setAttribute("aria-label",
+      "Open Waiting tasks, " + overdueCount + " overdue for a check-in");
   }
 
   // Plain-text nudge used when scheduling a follow-up (copied to clipboard as a fallback).
