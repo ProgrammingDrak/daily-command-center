@@ -21,6 +21,7 @@
 <link rel="stylesheet" href="/public/css/calendar-week.css?v=calendar-week-1">
 <link rel="stylesheet" href="/public/css/vault.css?v=vault-b6-1">
 <link rel="stylesheet" href="/public/css/ui-optimization.css?v=dcc-ui-1">
+<link rel="stylesheet" href="/public/css/activity.css?v=activity-1">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -237,6 +238,7 @@
   <button class="tab" data-tab="budget" id="budget-tab-btn">Budget</button>
   <button class="tab" data-tab="social" id="social-tab-btn">Social <span class="badge" id="social-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="vault" id="vault-tab-btn">Mycelium</button>
+  <button class="tab" data-tab="activity" id="activity-tab-btn">Workouts &amp; meals</button>
 </div>
 
 <div class="tab-content active" id="tab-schedule">
@@ -753,6 +755,7 @@
     <div class="add-modal-body">
       <!-- Read-only details (description lives in Notes below) -->
       <div class="am-det-meta" id="am-details-section" data-am-panel="overview" style="display:none"></div>
+      <div class="am-section" id="am-activity-entry" data-am-panel="overview"></div>
       <!-- Tags section -->
       <div class="am-section" id="am-tag-section" data-am-panel="overview">
         <div class="am-section-label">Tags</div>
@@ -1414,6 +1417,7 @@
   </div>
 </div>
 
+<div class="tab-content" id="tab-activity"></div>
 <div class="tab-content" id="tab-budget">
   <nav class="budget-section-tabs" aria-label="Budget sections">
     <button class="budget-section-tab active" id="budget-tank-section-btn" type="button" aria-pressed="true">Budget Tank</button>
@@ -2185,6 +2189,8 @@
 <script src="/public/js/budget.js"></script>
 <script src="/public/js/reimbursements.js"></script>
 <script src="/public/js/mobile-shell.js"></script>
+<script src="/public/js/activity-model.js?v=activity-1"></script>
+<script src="/public/js/activity.js?v=activity-1"></script>
 <script>
 // Feature flags — controls which features use the new BlockStore vs old localStorage.
 // Phase 5: All flags ON — BlockStore is now the primary data store.

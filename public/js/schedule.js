@@ -42,6 +42,7 @@ function persistAddedTask(item,targetDate){
       idempotency_key:item.idempotency_key||item.idempotencyKey||null,
       responsibilityId:item.responsibilityId||null,
       responsibilityTitle:item.responsibilityTitle||null,
+      ...(item.activityPlanSourceId?{activityPlanSourceId:item.activityPlanSourceId}:{}),
       capacityBucket:item.capacityBucket||null,
       responsibilityScore:item.responsibilityScore||null,
       alertKey:item.alertKey||null,
@@ -1590,6 +1591,9 @@ function addTaskUniversal(barEl){
     // ride along. insertTaskNow flags it isWrap from birth (dragMovesSubtree).
     // Habit: recurring earn; the row grows a streak chip from prior completions.
     case"habit":insertTaskNow(title,durMin,{type:"habit"});break;
+    case"workout":case"meal":
+      if(window.DCC&&DCC.Activity)DCC.Activity.create(dest,null,title);
+      break;
     // Manually-added meeting: no source_id, so the calendar materializer never
     // touches it. Fixed-time (reflow-exempt) but user-movable, like a synced one.
     case"meeting":insertTaskNow(title,durMin,{type:"meeting"});break;
@@ -2200,6 +2204,7 @@ const TASK_DESTINATIONS=[
   {value:"habit",   icon:"🔁", label:"Habit"},
   {value:"meeting", icon:"👥", label:"Meeting"}
 ];
+TASK_DESTINATIONS.push({value:"workout",icon:"W",label:"Workout"},{value:"meal",icon:"M",label:"Meal"});
 function _destMeta(value){return TASK_DESTINATIONS.find(d=>d.value===value)||TASK_DESTINATIONS[0]}
 // Blank title isn't a silent dead end: flash the input AND offer, via a toast
 // action, to proceed as an untitled task. onProceed resumes whatever the user

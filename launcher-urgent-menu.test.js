@@ -107,7 +107,7 @@ test("launcher shows all task types and submits the visible selection directly",
   const {launcherBar, submissions, radialCalls} = loaded;
   assert.deepEqual(
     launcherBar.parts.destination.options.map(option => option.value),
-    ["urgent", "done", "schedule", "backlog", "whenever", "anytime", "habit", "meeting"]
+    ["urgent", "done", "schedule", "backlog", "whenever", "anytime", "habit", "meeting", "workout", "meal"]
   );
   assert.equal(launcherBar.parts.destination.style.display, "");
 
@@ -118,7 +118,7 @@ test("launcher shows all task types and submits the visible selection directly",
   }
 
   assert.deepEqual(submissions.map(item => item.destination),
-    ["urgent", "done", "schedule", "backlog", "whenever", "anytime", "habit", "meeting"]);
+    ["urgent", "done", "schedule", "backlog", "whenever", "anytime", "habit", "meeting", "workout", "meal"]);
   assert.equal(radialCalls.length, 0, "launcher Add must not reopen the full destination radial");
 });
 
@@ -156,7 +156,7 @@ test("regular add bars retain the full modal destination radial", () => {
   regularBar.parts.title.value = "Regular task";
   regularBar.parts.add.emit("click", {stopPropagation(){}});
   assert.equal(radialCalls.length, 1);
-  assert.equal(radialCalls[0].items.length, 8);
+  assert.equal(radialCalls[0].items.length, 10);
   assert.notEqual(radialCalls[0].options.backdrop, false);
 });
 

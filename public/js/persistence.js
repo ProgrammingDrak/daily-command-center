@@ -613,7 +613,7 @@ async function switchToDate(dateStr) {
     }
   }
 
-  viewDate = dateStr;
+    viewDate = dateStr;
   __state = newState;
   __data = transformState(__state);
   INIT_SCHED = __data.sched;
@@ -685,6 +685,7 @@ async function switchToDate(dateStr) {
   else if (schedView === "calendar" && typeof buildItineraryCalendar === "function") buildItineraryCalendar();
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();
+  window.dispatchEvent(new CustomEvent("dcc:view-date-changed", { detail: { date: viewDate } }));
 }
 
 setTimeout(checkServerHealthForSaveStatus, 1000);
