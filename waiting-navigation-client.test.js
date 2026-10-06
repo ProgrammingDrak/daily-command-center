@@ -27,7 +27,7 @@ test("Waiting check-in reminders expose a link to their canonical item", () => {
 
 test("opening a reminder targets the full Waiting card and its lifecycle actions", () => {
   const openSource = mustSlice(WAITING_SRC, /^ {2}function openWaitingItem\(id\) \{[\s\S]*?^ {2}\}/m, "openWaitingItem");
-  assert.match(openSource, /openTasksToSection\("tm-delegated-blocked-section", \{ solo: true \}\)/);
+  assert.match(openSource, /openTaskQueue\("waiting"\)/);
   assert.match(openSource, /node\.dataset\.id === String\(id\)/);
   assert.match(WAITING_SRC, /data-delegated-action="unblock"[\s\S]*?>Schedule task<\/button>/);
   assert.match(WAITING_SRC, /data-delegated-action="complete"[\s\S]*?>Complete task<\/button>/);
@@ -43,7 +43,7 @@ test("opening a CLOSED Waiting item says so instead of opening a drawer with no 
     isOpenDelegated: item => item.properties.status !== "done",
     toast: (msg, kind) => toasts.push([msg, kind]),
     renderDelegatedSidebar() {}, setTimeout() {},
-    window: { openTasksToSection: () => { opened++; } },
+    window: { openTaskQueue: () => { opened++; } },
     document: { querySelectorAll: () => [] },
     _currentFilter: "overdue",
   };

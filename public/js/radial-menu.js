@@ -49,7 +49,9 @@ function _radialFitRadius(baseR,n,a0,a1,minChord,maxFrac){
 
 function closeRadialMenu(){
   document.querySelectorAll(".dest-radial-backdrop,.dest-radial-item,.dest-radial-label").forEach(el=>el.remove());
-  if(_radialTrigger){_radialTrigger.classList.remove("open");_radialTrigger=null;}
+  const trigger=_radialTrigger;
+  if(trigger){trigger.classList.remove("open");trigger.setAttribute("aria-expanded","false");_radialTrigger=null;}
+  if(trigger&&trigger.isConnected&&typeof trigger.focus==="function")trigger.focus({preventScroll:true});
   if(_radialEscHandler){document.removeEventListener("keydown",_radialEscHandler);_radialEscHandler=null;}
   if(_radialOnClose){const cb=_radialOnClose;_radialOnClose=null;try{cb()}catch(e){}}
 }
@@ -61,6 +63,7 @@ function openRadialMenu(anchorEl,items,opts){
   _radialTrigger=anchorEl;
   _radialOnClose=typeof opts.onClose==="function"?opts.onClose:null;
   anchorEl.classList.add("open");
+  anchorEl.setAttribute("aria-expanded","true");
   if(opts.backdrop!==false){
     const backdrop=document.createElement("div");
     backdrop.className="dest-radial-backdrop";
@@ -83,6 +86,7 @@ function openRadialMenu(anchorEl,items,opts){
   // stagger their radii so neighbouring pills don't collide.
   const stagger=opts.labelStagger||n>6;
   if(opts.clampY)cy=Math.max(R+56,Math.min(cy,window.innerHeight-R-56));
+  const buttons=[];
   items.forEach((d,i)=>{
     const ang=(a0+(a1-a0)*(n===1?0.5:i/(n-1)))*Math.PI/180;
     let x=cx+R*Math.cos(ang);let y=cy+R*Math.sin(ang);
@@ -90,6 +94,7 @@ function openRadialMenu(anchorEl,items,opts){
     y=Math.max(30,Math.min(y,window.innerHeight-30));
     const item=document.createElement("button");
     item.type="button";item.className="dest-radial-item";
+    buttons.push(item);
     if(d.title)item.title=d.title;
     if(d.label)item.setAttribute("aria-label",d.label);
     item.innerHTML='<span class="dri-icon">'+d.icon+'</span>';
@@ -115,7 +120,21 @@ function openRadialMenu(anchorEl,items,opts){
       if(typeof d.onPick==="function")d.onPick(d,anchorEl);
     });
   });
-  _radialEscHandler=function(e){if(e.key==="Escape")closeRadialMenu()};
+  if(buttons[0])buttons[0].focus({preventScroll:true});
+  _radialEscHandler=function(e){
+    if(e.key==="Escape"){e.preventDefault();e.stopPropagation();closeRadialMenu();return;}
+    const index=buttons.indexOf(document.activeElement);
+    const cycle=e.key==="Tab"&&opts.backdrop!==false;
+    if(!cycle&&index<0)return;
+    let next;
+    if(cycle)next=index+(e.shiftKey?-1:1);
+    else if(e.key==="ArrowDown"||e.key==="ArrowRight")next=index+1;
+    else if(e.key==="ArrowUp"||e.key==="ArrowLeft")next=index-1;
+    else if(e.key==="Home")next=0;
+    else if(e.key==="End")next=buttons.length-1;
+    else return;
+    if(buttons.length){e.preventDefault();buttons[(next+buttons.length)%buttons.length].focus({preventScroll:true});}
+  };
   document.addEventListener("keydown",_radialEscHandler);
 }
 

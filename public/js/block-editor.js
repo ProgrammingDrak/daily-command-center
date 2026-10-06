@@ -243,6 +243,14 @@ window.createBlockEditor=function(containerEl, initialBlocks, options){
       blocks.push(block);
     }
     const el=createBlockEl(block, placeholder);
+    if (options.accessibleLabel) {
+      const content = el.querySelector('.nb-content');
+      if (content) {
+        content.setAttribute('role', 'textbox');
+        content.setAttribute('aria-multiline', 'true');
+        content.setAttribute('aria-label', options.accessibleLabel);
+      }
+    }
     if(block.type==='image'){
       attachmentRail.appendChild(el);
       updateAttachmentRail();

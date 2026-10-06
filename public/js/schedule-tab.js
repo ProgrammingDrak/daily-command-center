@@ -34,12 +34,9 @@ function buildActualView(dateStr){
 // sibling reorder via drag (drag.js _dropAtTargetLevel + saveSubtaskOrder).
 
 // ── Task-row radial: every task-level action fans out from the row's arrow ──
-// The row itself keeps only quick-complete / notes / delete visible; everything else
-// (schedule, duration, work sessions, lock, add, subtask, delegate, repeat,
-// backlog, bounty) is a spoke here. Items are built fresh per open so dynamic
-// state — the lock flag, bounty availability — is read at fan time.
-// Duration presets: popover on desktop, bottom sheet on touch/narrow. Shared
-// by the radial's "Duration…" spoke and the meeting card's duration badge.
+// The task bar owns completion, details, delete, duration, add and work actions.
+// Contextual changes remain in the radial, built fresh when it opens.
+// Duration presets use a popover on desktop and a bottom sheet on touch/narrow.
 function openDurPopover(ev,anchorEl){
   if(isCoarseOrNarrowViewport()){ openDurationSheet(ev,anchorEl); return; }
   document.querySelectorAll(".dur-popover").forEach(p=>p.remove());
@@ -161,45 +158,17 @@ function bindQuickCompleteControl(button,onQuick,onWithNotes){
   });
   button.addEventListener("contextmenu",event=>event.preventDefault());
 }
-// Meeting rows get a focused radial: the Prep/Recap spoke (contextual by whether
-// the meeting has started) plus duration and add-task. The task-only spokes
-// (delegate/backlog/repeat/lock) don't apply to a calendar block, so they're left
-// off. Convert-to lives on the TASK branch only (buildTaskChangeItems) — converting
-// a calendar block's type is out of scope.
+// Task-bar controls own duration, add, details, delete and work-session actions.
+// The radial contains only contextual changes; calendar blocks keep Prep/Recap.
 function buildMeetingRadialItems(ev,trig){
   const started=(typeof now==="function"&&typeof pt==="function")?now()>=pt(ev.start):false;
-  return [
-    {icon:started?"📝":"📋", label:started?"Recap":"Prep", onPick:()=>openMeetingPanel(ev,{defaultTab:started?"recap":"prep"})},
-    {icon:"⏱", label:"Duration…", onPick:()=>openDurPopover(ev,trig)},
-    {icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}},
-    {icon:"📝", label:"Notes & actions", onPick:()=>openTaskNotes(ev)},
-    {icon:"🗑", label:"Delete task", onPick:()=>{if(typeof openDeleteConfirm==="function")openDeleteConfirm(ev.id);}},
-  ];
+  return [{icon:started?"📝":"📋",label:started?"Recap":"Prep",onPick:()=>openMeetingPanel(ev,{defaultTab:started?"recap":"prep"})}];
 }
 function buildTaskRadialItems(ev,trig){
   if(typeof isMeeting==="function"&&isMeeting(ev))return buildMeetingRadialItems(ev,trig);
-  const tt=(typeof window!=="undefined"&&window.TaskTypes)?window.TaskTypes.get(ev):null;
-  const items=[
-    // Move/convert actions live one level down: this spoke chains into the
-    // "Change task" sub-fan (openRadialMenu closes the current fan first).
-    {icon:"🔀", label:"Change task…", onPick:()=>openTaskChangeRadial(ev,trig)},
-    {icon:"⏳", label:"Delegate / block", onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
-    {icon:"⏱", label:"Duration…", onPick:()=>openDurPopover(ev,trig)},
-  ];
-  if(typeof window!=="undefined"&&window.DCCWorkSessions&&window.DCCWorkSessions.policy(ev)==="work_sessions"){
-    items.unshift({icon:ev.startedAt?"⏸":"▶",label:ev.startedAt?"Pause work":"Start work",onPick:()=>window.DCCWorkSessions.act(ev,ev.startedAt?"pause":"start")});
-  }
-  if(ev.repeatMode==="scheduled")items.push({icon:"↻", label:"Repeat options…", onPick:()=>{if(typeof window.openScheduledOccurrenceActions==="function")window.openScheduledOccurrenceActions(ev);}});
-  // Meetings are auto-locked (calendar time holds during reflow); a manual lock
-  // toggle is meaningless for them (toggleLock no-ops on meetings), so omit it.
-  if(!isMeeting(ev))items.push({icon:ev._locked?"🔓":"🔒", label:ev._locked?"Unlock":"Lock", onPick:()=>{if(typeof toggleLock==="function")toggleLock(ev.id);}});
-  items.push(
-    {icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}},
-    // These stay on the top fan because compact cards hide secondary inline
-    // controls. The radial must remain a complete action surface at any width.
-    {icon:"📝", label:"Notes & actions", onPick:()=>openTaskNotes(ev)},
-    {icon:"🗑", label:"Delete task", onPick:()=>{if(typeof openDeleteConfirm==="function")openDeleteConfirm(ev.id);}}
-  );
+  const items=[{icon:"🔀",label:"Change task…",onPick:()=>openTaskChangeRadial(ev,trig)}];
+  if(ev.repeatMode==="scheduled")items.push({icon:"↻",label:"Repeat options…",onPick:()=>{if(typeof window.openScheduledOccurrenceActions==="function")window.openScheduledOccurrenceActions(ev);}});
+  items.push({icon:ev._locked?"🔓":"🔒",label:ev._locked?"Unlock":"Lock",onPick:()=>{if(typeof toggleLock==="function")toggleLock(ev.id);}});
   return items;
 }
 // Sub-fan: everything that moves or converts the task, grouped so the top
@@ -220,15 +189,14 @@ function buildTaskChangeItems(ev,trig){
     items.push({icon:"🗂", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled", onPick:()=>{if(typeof moveTaskToUnplanned==="function")moveTaskToUnplanned(ev.id);}});
   items.push(
     {icon:"🔄", label:"Convert…",  onPick:()=>openConvertToRadial(ev,trig)},
+    {icon:"↗", label:"Delegate / block", onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
     {icon:"🔒", label:"Blocked by task", onPick:()=>{if(typeof window.openTaskDependencyModal==="function")window.openTaskDependencyModal(ev._blockId||ev.blockId||ev.id);}},
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
     {icon:"💡", label:"Solo",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}},
     // No set time after all: off the day and into the header pill's pool (whenever.js).
     // Single tasks only; moveTaskToWhenever refuses a parent, so don't offer it.
     ...(childrenOf(ev.id,scheduled).length?[]:[{icon:"🧺", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever", onPick:()=>{if(typeof moveTaskToWhenever==="function")moveTaskToWhenever(ev.id);}}]),
-    // Delete lives on the radial so it's reachable on phones, where the row's
-    // trash button is hidden by the mobile layout (dashboard.css).
-    {icon:"🗑", label:"Delete",    onPick:()=>{if(typeof openDeleteConfirm==="function")openDeleteConfirm(ev.id);}}
+
   );
   return items;
 }
@@ -283,23 +251,13 @@ function convertTaskType(id,newType){
     showToast(msg,"success",2400);
   }
 }
-// Carryover rows get their own fan, the same way meetings do. Every spoke on the
-// task fan resolves its id against today's scheduled[] (lock, convert, delegate,
-// promote, subtask-add), which a past-day row isn't in — so instead of a fan of
-// no-ops it gets the four actions that ARE real for it, all routed through the
-// shared DCC.Carryover set. `acts` supplies the row-bound handlers.
+// Carryovers retain origin-aware Move and Solo handlers. Other actions stay on
+// their row; never resolve a past-day task against today's scheduled pool.
 function buildCarryoverRadialItems(ev,trig,acts){
-  const items=[
-    {icon:"📅", label:"Move…",   onPick:()=>acts.move(trig)},
-    {icon:"💡", label:"Solo", onPick:()=>acts.backlog()},
+  return [
+    {icon:"📅",label:"Move…",onPick:()=>acts.move(trig)},
+    {icon:"📦",label:"Solo",onPick:()=>acts.backlog()},
   ];
-  if(window.DCCWorkSessions&&window.DCCWorkSessions.policy(ev)==="work_sessions"){
-    items.unshift({icon:ev.startedAt?"⏸":"▶",label:ev.startedAt?"Pause work":"Start work",onPick:()=>window.DCCWorkSessions.act(ev,ev.startedAt?"pause":"start")});
-  }
-  if(acts.details)items.push({icon:"📝",label:"Notes & actions",onPick:()=>acts.details()});
-  items.push({icon:"➕",label:"Add task…",onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}});
-  items.push({icon:"🗑", label:"Drop", onPick:()=>acts.drop()});
-  return items;
 }
 const _TASK_RADIAL_OPTS={a0:90,a1:270,r:140,labelStagger:true,clampY:true};
 function openTaskRadial(ev,trig,opts){
@@ -777,6 +735,8 @@ function createTaskListRowRenderer(context){
       onComplete:completeNow,
       onCompleteWithNotes:chkBlocked?completeNow:()=>openDoneModal(ev.id,ev.title,completeNow,ev),
       onSchedule:(!subTimeless&&!isDoneRow&&!isMeeting(ev))?(sb)=>{if(isUnfRow){_unfSchedulePopover(ev,el,sb);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});}:null,
+      durationLabel:ms(dur(ev)),
+      onDuration:!isDoneRow&&!isUnfRow?(button)=>openDurPopover(ev,button):null,
       onRadial:!isDoneRow?(pb)=>openTaskRadial(ev,pb,isUnfRow?{carryover:{move:(trig)=>_unfSchedulePopover(ev,el,trig),backlog:()=>_unfToBacklog(ev,el),drop:()=>_unfDrop(ev,el),details:()=>context.onOpen?context.onOpen(ev):openTaskNotes(ev)}}:undefined):null,
       onDelete:!isDoneRow?()=>{if(isUnfRow){_unfDrop(ev,el);return;}openDeleteConfirm(ev.id);}:null,
       onAdd:!isDoneRow?(am)=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}:null,
@@ -1336,13 +1296,12 @@ function buildSchedule(){
     if(tagToggle)tagToggle.addEventListener("click",e=>{e.stopPropagation();toggleTagsExpanded(ev.id);if(typeof render==='function')render();});
     el.querySelectorAll(".dbtn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();adjustDur(b.dataset.id,parseInt(b.dataset.d))}));
     const stSpan=el.querySelector(".start-time");if(stSpan){stSpan.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:stSpan,view:"time"});});}
-    // Duration presets: only the meeting card keeps the interactive badge —
-    // task cards show a read-only badge and adjust duration via the radial.
+    // All task-bar duration badges use the existing presets.
     const dbadge=el.querySelector(".dbadge");
-    if(dbadge&&isMeeting(ev))dbadge.addEventListener("click",e=>{e.stopPropagation();openDurPopover(ev,dbadge);});
+    if(dbadge)dbadge.addEventListener("click",e=>{e.stopPropagation();openDurPopover(ev,dbadge);});
     const sb=el.querySelector(".btn-schedule");if(sb)sb.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});});
     const pb=el.querySelector(".btn-task-radial");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb)});
-    // Row-level quick add: same universal popover the radial's ➕ spoke opens.
+    // Row-level quick add opens the existing universal placement popover.
     const am=el.querySelector(".row-add-menu");
     if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
     const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId)});

@@ -95,6 +95,10 @@
   function setSoloSection(sectionId){
     const d = drawer();
     if(!d) return;
+    d.classList.remove("queue-focused");
+    delete d.dataset.queue;
+    document.body.classList.remove("task-queue-open");
+    d.querySelectorAll(".queue-hidden").forEach(el => el.classList.remove("queue-hidden"));
     const solo = !!sectionId;
     d.classList.toggle("solo", solo);
     d.dataset.soloSection = sectionId || "";
@@ -166,6 +170,22 @@
 
   function openTasksToSideProjects(){ openTasksToSection("tm-task-library-section", { solo: true }); }
   function openTasksToRepeatResponsibilities(){ openTasksToSection("tm-repeat-responsibilities-section", { solo: true }); }
+
+  // Pill entry points use the existing live rows and modal lifecycle, but expose
+  // only the selected queue. The Task Manager remains available from its own door.
+  function openTaskQueue(kind){
+    const labels = { triage: "Triage", unscheduled: "Unscheduled", whenever: "Whenever", waiting: "Waiting" };
+    if(!labels[kind]) return;
+    openTasks({ solo: true });
+    setSoloSection(kind === "waiting" ? "tm-delegated-blocked-section" : "tm-whenever-section");
+    const d = drawer();
+    d.classList.add("queue-focused");
+    d.dataset.queue = kind;
+    document.body.classList.add("task-queue-open");
+    document.getElementById("tasks-drawer-title").textContent = labels[kind];
+    d.querySelectorAll(".untimed-sub").forEach(el => el.classList.toggle("queue-hidden", el.id !== kind + "-sub"));
+    setTimeout(() => document.getElementById("tasks-drawer-close")?.focus(), 20);
+  }
 
   function pinSection(sectionId, opts){
     const sec = sectionById(sectionId);
@@ -429,6 +449,7 @@
   window.openTasksDrawer = openTasks;
   window.closeTasksDrawer = closeTasks;
   window.openTasksToSection = openTasksToSection;
+  window.openTaskQueue = openTaskQueue;
   window.openTasksToRepeatResponsibilities = openTasksToRepeatResponsibilities;
   window.refreshSidecarTabs = function(){
     bindSectionDragging();

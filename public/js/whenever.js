@@ -2,8 +2,8 @@
 // They share one capsule with Loose Ends (catch-up.js) and Waiting (delegated.js), in
 // triage order: Triage, Loose Ends, Waiting, Unscheduled, Whenever.
 //
-//   Triage       just came in: tasks triage.js made from your inboxes and due
-//                repeat responsibilities. This is the itinerary's old "Triage"
+//   Triage       tasks discovered while reviewing incoming messages and meetings.
+//                Source identities stay attached. This is the itinerary's "Triage"
 //                group, moved here; like Unscheduled, the itinerary still owns the
 //                rows (schedule-tab.js renderTriageInto) and this file hosts them.
 //   Unscheduled  has to happen, just is not on the schedule yet. This is the
@@ -368,23 +368,11 @@
     if (now) now.focus({ preventScroll: true });
   }
 
-  // All three doors open the same drawer section; each lands on its own half.
+  // Each pill opens only its own queue, preserving the existing row handlers.
   function open(half) {
     half = half === "unscheduled" || half === "triage" ? half : "whenever";
-    if (typeof window.openTasksToSection === "function") {
-      window.openTasksToSection("tm-whenever-section", { solo: true });
-    }
     build();
-    // After openTasksToSection's own scroll-to-section (240ms), so ours wins.
-    setTimeout(() => {
-      const sub = document.getElementById(half + "-sub");
-      if (sub) sub.scrollIntoView({ block: "start", behavior: "smooth" });
-      const input = document.getElementById("whenever-add-title");
-      // Phones get the list first; a focused input would pop the keyboard over it.
-      if (half === "whenever" && input && !(window.matchMedia && window.matchMedia("(max-width:760px)").matches)) {
-        input.focus({ preventScroll: true });
-      }
-    }, 280);
+    if (typeof window.openTaskQueue === "function") window.openTaskQueue(half);
   }
 
   function setTheme(el, style) {
@@ -417,7 +405,7 @@
     attr("#unscheduled-sort", "aria-label", "Sort " + UNSCHEDULED_LABEL);
     attr("#unscheduled-pill-nav", "title", UNSCHEDULED_LABEL + ": has to happen, but is not on your schedule yet. Drop a task here to take its time off.");
     attr("#whenever-pill-nav", "title", LABEL + ": no set time. Knock one out when you have a free minute.");
-    attr("#triage-pill-nav", "title", TRIAGE_LABEL + ": new from your inboxes and due repeats. Decide what each one needs.");
+    attr("#triage-pill-nav", "title", TRIAGE_LABEL + ": tasks discovered while reviewing incoming messages and meetings.");
   }
 
   // The "i" tooltips. Hover and keyboard focus show them through CSS; a tap toggles

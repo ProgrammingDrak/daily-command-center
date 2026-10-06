@@ -20,7 +20,7 @@ let DISMISS_KEY = "pa-dismissed-" + (__state ? __state.date : "unknown");
 
 function loadNotes() {
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.notes && window.blockStore) {
-    const noteBlocks = [...window.blockStore.getByType("note"),...window.blockStore.getByType("block").filter(b=>(b.properties||{}).html&&(b.properties||{}).text&&b.parent_id)];
+    const noteBlocks = [...window.blockStore.getByType("note"),...window.blockStore.getByType("block").filter(b=>b.parent_id&&typeof (b.properties||{}).html==="string"&&typeof (b.properties||{}).text==="string")];
     const result = {};
     noteBlocks.forEach(b => {
       const taskId = b.properties._sourceTaskId || b.parent_id;
@@ -30,10 +30,13 @@ function loadNotes() {
   }
   try { return JSON.parse(localStorage.getItem(NOTES_KEY) || "{}"); } catch(e) { return {}; }
 }
-function saveNotes(data) {
+function saveNotes(data, options) {
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.notes && window.blockStore) {
+    // A detail editor owns one task's note. Preserve its block identity, and
+    // persist an explicit clear rather than letting old text reappear on reopen.
+    const taskId = options && options.taskId;
     // Save each changed note as a block
-    for (const [taskId, val] of Object.entries(data)) {
+    for (const [taskId, val] of Object.entries(options && options.taskId ? { [options.taskId]: data[options.taskId] } : data)) {
       if (!val) continue;
       const html = typeof val === "string" ? val : (val.html || "");
       const text = typeof val === "string" ? val : (val.text || "");
@@ -74,6 +77,8 @@ function noteBlocksForTask(taskId, noteVal, ev) {
   } else if(typeof noteVal==="string" && noteVal){
     return migrateHtmlToBlocks(noteVal);
   }
+  // An existing empty override records an intentional clear of imported notes.
+  if (noteVal != null) return null;
   const seed = seedNoteForTask(taskId, ev);
   return seed ? migrateHtmlToBlocks(seed) : null;
 }

@@ -31,7 +31,6 @@
   let _allHandler = null;
   let _lastSnapshot = null;
   let _lastCount = 0;
-  let _journalPending = false;
   let _returnFocus = null;
   let _openHasLoadFailure = false;
   let _retryTimer = null;
@@ -207,10 +206,10 @@
     if (!pill || !count) return;
     const onToday = typeof viewMode === "undefined" || !viewMode || viewMode === "today";
     count.textContent = String(_lastCount);
-    pill.hidden = !onToday || (_lastCount < 1 && !_journalPending);
+    pill.hidden = !onToday || _lastCount < 1;
     pill.setAttribute("aria-label", _lastCount > 0
       ? "Open " + _lastCount + " Loose End" + (_lastCount === 1 ? "" : "s")
-      : "Open Journal");
+      : "Open Loose Ends");
   }
 
   function setIndicatorCount(count) {
@@ -285,10 +284,6 @@
     const gmail = triage.filter(item => triageLane(item) === "gmail");
     const otherTriage = triage.filter(item => triageLane(item) === "other");
     const olderTriage = cfg.olderTriage || [];
-    const journalApi = window.DCC && window.DCC.Journal;
-    // Empty until journal.js has resolved the owner scope (see its render() note), so
-    // this doubles as "is there a Journal section this pass".
-    const journalHtml = journalApi && typeof journalApi.render === "function" ? journalApi.render() : "";
     const hintEl = overlay.querySelector("#catchup-hint");
     const listEl = overlay.querySelector("#catchup-list");
     const allBtn = overlay.querySelector("#catchup-all");
@@ -328,10 +323,7 @@
     const updateCount = () => setIndicatorCount(pendingDomCount());
     const closeIfDrained = () => {
       updateCount();
-      // The Journal section has nothing to "answer", so it never holds the modal open
-      // against a drained list -- but while it is showing, draining the last row should
-      // leave it reachable rather than yanking the modal shut mid-entry.
-      if (!pendingDomCount() && !journalHtml) close();
+      if (!pendingDomCount()) close();
     };
     const focusAfterRemoval = (orderedRows, removedIndex) => {
       const next = orderedRows.slice(removedIndex + 1).find(row => activeReviewRows.has(row));
@@ -647,18 +639,6 @@
     appendRows("Gmail", gmailRows);
     appendRows("Other", otherRows);
     if (cfg._olderButton) listEl.appendChild(cfg._olderButton);
-    // Journal + mood tagging (public/js/journal.js). Packet-free: it renders whenever
-    // the module is loaded, so the daily entry is reachable even on a morning with no
-    // loose ends at all. Handing journal.js the host node lets a mood edit repaint just
-    // this section instead of rebuilding the whole modal.
-    if (journalHtml) {
-      label("Journal");
-      const journalWrap = document.createElement("div");
-      journalWrap.className = "cu-journal-wrap";
-      journalWrap.innerHTML = journalHtml;
-      listEl.appendChild(journalWrap);
-      if (typeof journalApi.setHost === "function") journalApi.setHost(journalWrap);
-    }
     updateCount();
     const schedulableCount = rowEls.size + triEls.size;
     allBtn.style.display = schedulableCount ? "" : "none";
@@ -718,8 +698,7 @@
       }
       allBtn.textContent = original;
       allBtn.disabled = false;
-      if (journalHtml) await refreshReminder({ open: true });
-      else close();
+      close();
       const parts = [];
       if (moved) parts.push(moved + " unfinished task" + (moved === 1 ? "" : "s"));
       if (placed) parts.push(placed + " triage item" + (placed === 1 ? "" : "s"));
@@ -736,8 +715,7 @@
   }
 
   // ── entry points ──
-  // Deliberately excludes the Journal: an unwritten entry is not a "loose end" and must
-  // never inflate the pill count. It only decides whether the prompt opens (below).
+  // Only actionable work contributes to this queue.
   function snapshotCount(snapshot) {
     if (!snapshot) return 0;
     return rootsOf(snapshot.res.rows).length + snapshot.waiting.length + snapshot.triage.length;
@@ -746,15 +724,7 @@
   async function collectSnapshot() {
     const CO = window.DCC && window.DCC.Carryover;
     if (!CO) return null;
-    const journalApi = window.DCC && window.DCC.Journal;
-    const results = await Promise.allSettled([
-      CO.collect(),
-      // Resolving the owner scope is what makes the journal's storage key correct. A
-      // REJECTION here must keep `failed` true: initCatchUp refuses to mark the day
-      // reviewed on a partial load, and silently treating a scope failure as "no
-      // journal" would bank the day against an entry that was never offered.
-      journalApi && typeof journalApi.ensureScope === "function" ? journalApi.ensureScope() : Promise.resolve(null)
-    ]);
+    const results = await Promise.allSettled([CO.collect()]);
     const failed = results.some(result => result.status === "rejected");
     const waiting = typeof window.getAttentionWaitingItems === "function" ? window.getAttentionWaitingItems() : [];
     const waitingIds = new Set(waiting.map(item => String(item.id)));
@@ -762,16 +732,12 @@
     const waitingTriage = allTriage.filter(item => waitingIds.has(String(item.waiting_item_id || "")));
     const snapshot = {
       res: results[0].status === "fulfilled" ? results[0].value : (_lastSnapshot ? _lastSnapshot.res : { rows: [], total: 0 }),
-      journalPending: results[1].status === "fulfilled" && journalApi && typeof journalApi.isPending === "function"
-        ? journalApi.isPending()
-        : (_lastSnapshot ? !!_lastSnapshot.journalPending : false),
       waiting,
       waitingTriage,
       triage: allTriage.filter(item => !waitingIds.has(String(item.waiting_item_id || ""))),
       failed: failed
     };
     _lastSnapshot = snapshot;
-    _journalPending = snapshot.journalPending;
     setIndicatorCount(snapshotCount(snapshot));
     return snapshot;
   }
@@ -781,7 +747,7 @@
     const wasOpen = !!document.getElementById("catchup-overlay") && document.getElementById("catchup-overlay").classList.contains("open");
     const snapshot = await collectSnapshot();
     if (!snapshot) return null;
-    if ((opts.open || wasOpen) && (snapshotCount(snapshot) || snapshot.journalPending)) {
+    if ((opts.open || wasOpen) && snapshotCount(snapshot)) {
       openPrompt(snapshot.res.rows, snapshot.res.total, {
         triage: snapshot.triage,
         waiting: snapshot.waiting,
@@ -789,8 +755,8 @@
         loadFailed: snapshot.failed,
         focus: opts.focus
       });
-    } else if (wasOpen && !snapshotCount(snapshot) && snapshot.journalPending) {
-      openPrompt([], 0, { focus: opts.focus });
+    } else if (wasOpen && !snapshotCount(snapshot) && !snapshot.failed) {
+      close();
     }
     return snapshot;
   }
@@ -822,7 +788,7 @@
     if (courier && typeof courier.markSeen === "function") courier.markSeen(triage.concat(snapshot.waitingTriage).map(i => i.id));
     // Gate on OPEN rows, not raw rows: a pool made up entirely of done children is
     // nothing to catch up on, and prompting on it opened an empty-feeling modal.
-    if (!snapshotCount(snapshot) && !snapshot.journalPending) {
+    if (!snapshotCount(snapshot)) {
       if (!snapshot.failed) markReviewed();
       return;
     }
@@ -849,16 +815,7 @@
     let res = { rows: [], total: 0 };
     let loadFailed = false;
     try { res = await CO.collect(); } catch (e) { loadFailed = true; }
-    // This entry point builds its own snapshot instead of going through
-    // collectSnapshot, so it has to resolve the journal's owner scope itself -- the
-    // storage key embeds it, and rendering before it lands would file the entry under
-    // "unidentified". A failure is a partial load, exactly like the two above.
-    const arrivalsJournal = window.DCC && window.DCC.Journal;
-    try { if (arrivalsJournal && arrivalsJournal.ensureScope) await arrivalsJournal.ensureScope(); }
-    catch (e) { loadFailed = true; }
-    const journalPending = !!(arrivalsJournal && typeof arrivalsJournal.isPending === "function" && arrivalsJournal.isPending());
-    _lastSnapshot = { res, triage: all, waiting, waitingTriage, journalPending, failed: loadFailed };
-    _journalPending = journalPending;
+    _lastSnapshot = { res, triage: all, waiting, waitingTriage, failed: loadFailed };
     setIndicatorCount(snapshotCount(_lastSnapshot));
     if (typeof showToast === "function") showToast(fresh.length + " new Loose End" + (fresh.length === 1 ? "" : "s"), "info");
     return true;

@@ -299,10 +299,9 @@
           bountyControl+
           (guest?'':'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule" aria-label="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>')+
           (guest||subTimeless?'':'<div class="dur">'+
-            // Task cards: read-only badge (adjust via the radial's Duration…);
-            // meetings keep the ±15 stepper and the tappable badge.
+            // Duration stays directly editable on the task bar.
             (isMeeting(ev)?'<button type="button" class="dbtn" data-id="'+ev.id+'" data-d="-15" aria-label="Decrease duration">&minus;</button>':'')+
-            '<div><div class="dbadge'+(isMeeting(ev)?'':' dbadge-readonly')+'">'+ms(d)+'</div>'+(changed?'<div class="est-act">was '+ms(od)+' <span class="'+(delta>0?"dover":"dunder")+'">'+( delta>0?"+":"")+delta+'m</span></div>':'')+'</div>'+
+            '<div><button type="button" class="dbadge" aria-label="Adjust duration">'+ms(d)+'</button>'+(changed?'<div class="est-act">was '+ms(od)+' <span class="'+(delta>0?"dover":"dunder")+'">'+( delta>0?"+":"")+delta+'m</span></div>':'')+'</div>'+
             (isMeeting(ev)?'<button type="button" class="dbtn" data-id="'+ev.id+'" data-d="15" aria-label="Increase duration">+</button>':'')+
           '</div>')+
           (hasDetail?chevron:'')+
@@ -354,6 +353,8 @@
       ? '<button class="btn-task-radial" data-radial-id="'+escHtml(ev.id||"")+'" data-tooltip="'+escHtml(opts.radialTitle||"Task actions…")+'" aria-label="'+escHtml(opts.radialLabel||"Task actions")+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>' : '';
     var deleteButton=typeof opts.onDelete==="function"
       ? '<button class="btn-del-task" data-del-id="'+escHtml(ev.id||"")+'" data-tooltip="'+escHtml(opts.deleteTitle||"Remove from schedule")+'" aria-label="'+escHtml(opts.deleteLabel||"Remove from schedule")+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>' : '';
+    var durationButton=typeof opts.onDuration==="function"
+      ? '<button type="button" class="btn-duration" aria-label="Adjust duration">'+escHtml(opts.durationLabel||"Duration")+'</button>' : '';
     var addButton=typeof opts.onAdd==="function"
       ? '<button class="btn-add-menu row-add-menu" data-add-id="'+escHtml(ev.id||"")+'" title="Add a task before / after / inside">+</button>' : '';
     el.innerHTML=
@@ -365,7 +366,7 @@
       '<div class="bar" style="background:'+(opts.barColor||"")+'"></div>'+
       '<div class="it-list-main">'+
         '<div class="it-list-title-row">'+(opts.collapseHtml||"")+'<span class="ttl" title="'+escHtml(ev.title||"")+'">'+escHtml(ev.title||"")+'</span>'+(opts.titleExtrasHtml||"")+addButton+'</div>'+
-        '<div class="it-list-meta">'+(opts.metaHtml||"")+(ev.sourceContext?'<span class="task-source-context">'+escHtml(ev.sourceContext)+'</span>':'')+scheduleButton+'</div>'+
+        '<div class="it-list-meta">'+(opts.metaHtml||"")+(ev.sourceContext?'<span class="task-source-context">'+escHtml(ev.sourceContext)+'</span>':'')+scheduleButton+durationButton+'</div>'+
       '</div>'+
       '<div class="it-list-actions">'+(opts.actionsBeforeHtml||"")+radialButton+deleteButton+'</div>';
 
@@ -376,6 +377,17 @@
         W("bindQuickCompleteControl")(completionButton,function(){opts.onComplete(null,ev);},
           typeof opts.onCompleteWithNotes==="function"?function(){opts.onCompleteWithNotes(ev);}:function(){opts.onComplete(null,ev);});
       }else completionButton.addEventListener("click",function(e){e.stopPropagation();opts.onComplete(e,ev);});
+    }
+    var duration=el.querySelector(".btn-duration");
+    if(duration)duration.addEventListener("click",function(e){e.stopPropagation();opts.onDuration(duration,e,ev);});
+    var title=el.querySelector(".ttl");
+    if(title&&typeof opts.onOpen==="function"){
+      title.tabIndex=0;
+      title.setAttribute("role","button");
+      title.setAttribute("aria-label","Open task details: "+(ev.title||"Task"));
+      title.addEventListener("keydown",function(e){
+        if(e.key==="Enter"||e.key===" "){e.preventDefault();e.stopPropagation();opts.onOpen(e,ev);}
+      });
     }
     var schedule=el.querySelector(".btn-schedule");
     if(schedule)schedule.addEventListener("click",function(e){e.stopPropagation();opts.onSchedule(schedule,e,ev);});
