@@ -16,6 +16,7 @@ module.exports = function mountSyncRoutes(app, ctx) {
       const date = req.query.date || getTodayStr();
       if (!isValidDate(date)) return res.status(400).json({ error: "Invalid date" });
       const { userId, workspaceId } = await resolveOwnerStrict(req);
+      await ctx.prepareScheduledDay(date, userId, workspaceId);
       const snapshot = await syncStore.bootstrap({ workspaceId, date });
       snapshot.dayState = await buildDayResponse(date, userId, workspaceId);
       res.json(snapshot);
@@ -27,6 +28,7 @@ module.exports = function mountSyncRoutes(app, ctx) {
       const date = req.query.date || getTodayStr();
       if (!isValidDate(date)) return res.status(400).json({ error: "Invalid date" });
       const { userId, workspaceId } = await resolveOwnerStrict(req);
+      await ctx.prepareScheduledDay(date, userId, workspaceId);
       const delta = await syncStore.pull({
         workspaceId,
         date,
