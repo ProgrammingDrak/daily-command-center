@@ -4364,15 +4364,14 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
     grid-column:auto;grid-row:auto;
     display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:4px;
   }
-  /* The queue capsule takes one touch row of its own, so the phone header stays as
-     tall as it was. Each door shows its label over its count and grows from its
-     label's width: five equal fifths of a 375px row would cut "Unscheduled" short.
-     Labels ellipsize only on the narrowest phones. */
+  /* Keep all five queues together with full labels above their counts. Let a
+     multiword label wrap at its space on narrow phones, but never shrink a door
+     below its longest word or count. Ellipsis hid the queue names at 375px. */
   .header .date-nav .queue-pill{flex:1 0 100%;order:2;min-width:0}
-  .header .date-nav .queue-seg{flex:1 1 auto;flex-direction:column;gap:3px;min-width:0;min-height:48px;padding:5px 4px}
-  .header .date-nav .queue-seg:first-child{padding-left:6px}
-  .header .date-nav .queue-seg:last-child{padding-right:6px}
-  .header .date-nav .queue-seg>span:first-child{max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .header .date-nav .queue-seg{flex:1 1 auto;flex-direction:column;gap:3px;min-width:min-content;min-height:48px;padding:5px 3px}
+  .header .date-nav .queue-seg:first-child{padding-left:5px}
+  .header .date-nav .queue-seg:last-child{padding-right:5px}
+  .header .date-nav .queue-seg>span:first-child{max-width:100%;white-space:normal}
   .header>div:last-child{display:none!important}  /* owner buttons + clock → More sheet */
 
   /* ── Progress: tighter ── */
