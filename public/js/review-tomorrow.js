@@ -88,7 +88,10 @@
     document.getElementById("dcc-settings-button")?.setAttribute("aria-expanded", "false");
     document.getElementById("dcc-settings-menu")?.setAttribute("aria-hidden", "true");
     // Let a mobile More sheet finish closing before the shared modal opens.
-    const anchor = event.currentTarget;
+    // The menu item is hidden once its menu closes. Restore keyboard focus to
+    // the visible launcher when the review modal is dismissed.
+    const more = document.querySelector('#mobile-tabbar [data-nav-key="__more"]');
+    const anchor = more && more.getClientRects().length ? more : document.getElementById("dcc-settings-button") || event.currentTarget;
     window.setTimeout(() => open(anchor).catch(e => DCC.toast?.(e.message)), 0);
   });
 })();
