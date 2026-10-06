@@ -5439,10 +5439,10 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
   border-bottom:1px solid var(--border);border-radius:8px;pointer-events:none}
 
 /* Calendar */
-/* 320px = seven 44px tap targets plus gaps. The global button min-width
-   (--target-min) used to push day cells past the weekday columns. */
-.tw-cal{width:320px;max-width:100%}
-.tw-pop.sheet .tw-cal{width:auto}
+/* 350px = seven 44px day cells + 6 gaps + the card's padding and border.
+   The global button min-width (--target-min) used to push day cells past
+   the weekday columns. The sheet's own width:auto still wins on phones. */
+.tw-cal{width:350px;max-width:100%}
 .tw-cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
 .tw-cal-title{font-size:15px;font-weight:700;color:var(--text)}
 .tw-cal-nav{width:32px;height:32px;border-radius:8px;border:1px solid var(--border);
