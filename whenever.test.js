@@ -467,6 +467,8 @@ test("moveTaskToWhenever files the row on the Whenever stage, then refolds after
     refoldTaskStateFromBlockCache: () => log.push(["refold"]),
     render: () => log.push(["render"]),
     scheduled: [{ id: "t1" }, { id: "p1" }, { id: "c1", subtaskOf: "p1" }],
+    _viewedDateStr:()=>TODAY,
+    _findTaskBlockForDate:()=>null,
     childrenOf: (id, pool) => pool.filter(e => e.subtaskOf === id),
     showToast: msg => log.push(["toast", msg]),
   };
@@ -474,7 +476,7 @@ test("moveTaskToWhenever files the row on the Whenever stage, then refolds after
   vm.runInContext(body, ctx);
   // A parent would strand its subtasks on today: refused, nothing written.
   assert.equal(await ctx.moveTaskToWhenever("p1"), false);
-  assert.deepEqual(log, [["toast", "Finish or move its subtasks first"]]);
+  assert.deepEqual(log, [["toast", "Save this task before moving its tree"]]);
   log.length = 0;
   const done = ctx.moveTaskToWhenever("t1");
   await Promise.resolve();

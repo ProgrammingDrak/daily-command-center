@@ -97,7 +97,7 @@
   // small one. Equal lengths go oldest first, so nothing sinks to the bottom forever.
   function selectWhenever(items) {
     return (Array.isArray(items) ? items : [])
-      .filter(isWhenever)
+      .filter(item=>isWhenever(item)&&item.status!=="done"&&item.done!==true)
       .slice()
       .sort((a, b) => durationOf(a) - durationOf(b) ||
         createdMs(a) - createdMs(b) ||
@@ -130,6 +130,11 @@
   }
   function fmtDur(mins) { return typeof ms === "function" ? ms(mins) : mins + "m"; }
   function pool() { return typeof backlog !== "undefined" && Array.isArray(backlog) ? backlog : []; }
+  function treeItems(){
+    return TaskModel?TaskModel.selectNotDeleted(pool(),{isDeleted:ev=>typeof deletedSet!=='undefined'&&deletedSet.has(ev.id)}):pool();
+  }
+  function rootItem(id){return TaskModel?TaskModel.hierarchyRoot(id,treeItems()):findItem(id);}
+  const collapsed=new Set();
   function findItem(id) { return pool().find(t => t.id === id && isWhenever(t)) || null; }
 
   // The row behind a pool item. A row added this session has no _blockId until the
@@ -218,22 +223,69 @@
 
   const CHECK_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>';
 
-  function rowHtml(t) {
+  function rowHtml(t,node) {
+    node=node||{depth:0,hasKids:false};
     const title = esc(t.title || "Untitled task");
     const id = esc(t.id);
     const pending = busy.has(t.id);
-    return '<div class="whenever-row' + (pending ? " is-busy" : "") + '" data-whenever-id="' + id + '">' +
+    return '<div class="whenever-row' + (pending ? " is-busy" : "") + '" data-whenever-id="' + id + '" style="margin-left:' + Math.min(node.depth,6)*14 + 'px">' +
       '<button type="button" class="whenever-check" data-whenever-action="done" data-whenever-id="' + id + '"' +
         ' aria-label="Mark ' + title + ' done" title="Done, log it on today"' + (pending ? " disabled" : "") + '>' + CHECK_SVG + '</button>' +
+      (node.hasKids?'<button type="button" class="whenever-collapse" data-whenever-action="collapse" data-whenever-id="'+id+'" aria-label="'+(node.collapsed?'Expand':'Collapse')+' '+title+'" aria-expanded="'+(!node.collapsed)+'">'+(node.collapsed?'▸':'▾')+'</button>':'')+
       '<div class="whenever-main">' +
-        '<span class="whenever-title">' + title + '</span>' +
-        '<span class="whenever-dur">' + esc(fmtDur(durationOf(t))) + '</span>' +
+        '<button type="button" class="whenever-title" data-whenever-action="details" data-whenever-id="'+id+'" aria-label="Edit '+title+'">' + title + '</button>' +
+        '<span class="whenever-dur">' + esc(t.subtaskOf?'Subtask':fmtDur(durationOf(t))) + '</span>' +
       '</div>' +
+      '<button type="button" class="whenever-add-child" data-whenever-action="add-child" data-whenever-id="'+id+'" aria-label="Add subtask or nested task to '+title+'">+</button>' +
+      '<button type="button" class="whenever-delete" data-whenever-action="delete" data-whenever-id="'+id+'" aria-label="Delete '+title+'">Delete</button>' +
       '<button type="button" class="whenever-now" data-whenever-action="now" data-whenever-id="' + id + '"' +
         ' title="Put it on today at your next free slot"' + (pending ? " disabled" : "") + '>Do it now</button>' +
       '<button type="button" class="whenever-release" data-whenever-action="release" data-whenever-id="' + id + '"' +
         ' aria-label="Move ' + title + ' back to the Task Library" title="Not a ' + esc(LABEL) + ' task">&times;</button>' +
     '</div>';
+  }
+
+  // Production uses the same task-row component as normal tasks and subtasks.
+  function sharedRow(t,node){
+    const id=t.id,title=esc(t.title||'Task'),pending=busy.has((rootItem(id)||t).id);
+    const source=window.DCC&&window.DCC.taskSourceUrl?window.DCC.taskSourceUrl(t):'';
+    const safeSource=window.DCC&&window.DCC.TaskSources?window.DCC.TaskSources.safeUrl(source):'';
+    const meta='<span>'+(node.rel==='subtask'?'Subtask':node.depth?'Nested task':'Whenever')+'</span>'+
+      (typeof taskTagsChipHtml==='function'?taskTagsChipHtml(t):'')+
+      (safeSource?'<a class="detail-action-link" href="'+esc(safeSource)+'" target="_blank" rel="noopener noreferrer">Open source ↗</a>':'');
+    const el=window.renderItineraryListRow(t,{
+      extraClass:'whenever-row'+(pending?' is-busy':''),dataset:{wheneverId:id,wheneverDepth:node.depth},depth:Math.min(node.depth,6),
+      barColor:'var(--queue-accent)',metaHtml:meta,
+      completionTitle:'Complete this task; its tree moves to today',
+      collapseHtml:node.hasKids?'<button class="wrap-collapse" aria-label="'+(node.collapsed?'Expand':'Collapse')+' '+title+'" aria-expanded="'+(!node.collapsed)+'">'+(node.collapsed?'▸':'▾')+'</button>':'',
+      actionsBeforeHtml:'<button type="button" class="whenever-now" data-whenever-action="now" data-whenever-id="'+esc(id)+'"'+(pending?' disabled':'')+'>Do it now</button>',
+      durationLabel:fmtDur(durationOf(t)),onDuration:!t.subtaskOf&&typeof openDurPopover==='function'?button=>openDurPopover(t,button):null,
+      onComplete:()=>markDone(id),onCompleteWithNotes:()=>typeof openAddModal==='function'&&openAddModal(id,t.title),
+      onSchedule:button=>schedulePicker(id,button),onAdd:button=>typeof openTaskAdd==='function'&&openTaskAdd(id,button),
+      onOpen:()=>typeof openAddModal==='function'&&openAddModal(id,t.title),
+      onDelete:()=>typeof openDeleteConfirm==='function'&&openDeleteConfirm(id),deleteLabel:'Delete task',deleteTitle:'Delete task and its subtasks',
+      onCollapse:()=>{if(collapsed.has(id))collapsed.delete(id);else collapsed.add(id);build();},
+      onRadial:button=>{if(typeof openRadialMenu==='function')openRadialMenu(button,[
+        {icon:'✎',label:'Task details',onPick:()=>openAddModal(id,t.title)},
+        {icon:'+',label:'Add inside',onPick:()=>openTaskAdd(id,button)},
+        {icon:'↳',label:'Nest under…',onPick:()=>typeof openMakeSubtaskOf==='function'&&openMakeSubtaskOf(id,button)},
+        {icon:'📅',label:'Schedule…',onPick:()=>schedulePicker(id,button)},
+        {icon:'📦',label:'Task Library',onPick:()=>release(id)}
+      ],{a0:90,a1:270,r:140,labelStagger:true,clampY:true});},
+      draggable:!pending,gripTitle:'Drag onto another Whenever task to nest it; Shift makes a subtask',
+      onDragStart:e=>{e.dataTransfer.setData('text/dcc-whenever',id);e.dataTransfer.effectAllowed='move';},
+      onDragOver:e=>{if(Array.from(e.dataTransfer.types||[]).includes('text/dcc-whenever'))e.preventDefault();},
+      onDrop:e=>{const child=e.dataTransfer.getData('text/dcc-whenever');if(child&&child!==id){e.preventDefault();e.stopPropagation();if(typeof reparentAsSubtask==='function')reparentAsSubtask(child,id,{nested:!e.shiftKey});}}
+    });
+    if(pending)el.querySelectorAll('button').forEach(button=>button.disabled=true);
+    const plus=el.querySelector('.btn-add-menu');if(plus)plus.setAttribute('aria-label','Add subtask or nested task to '+(t.title||'task'));
+    return el;
+  }
+  function schedulePicker(id,button){
+    if(typeof openSchedulePopover!=='function')return doNow(id);
+    openSchedulePopover({mode:'pick',anchorEl:button,header:'Schedule task and its subtasks',allowTime:true,onPick:async(date,time)=>{
+      try{await scheduleTree(id,{targetDate:date,start:time});refresh();}catch(error){toast(error.message,'error');}
+    }});
   }
 
   function build() {
@@ -245,13 +297,18 @@
       ? window.itineraryListModel() : undefined;
     const triage = buildTriageQueue(model);
     const unscheduled = buildUnscheduled(model);
-    const items = selectWhenever(pool());
-    syncCounts(triage, unscheduled, items.length);
+    const items = selectWhenever(treeItems());
+    const nodes=TaskModel?TaskModel.selectTree(items,{isCollapsed:id=>collapsed.has(id)}):items.map(ev=>({ev,depth:0}));
+    const rootCount=nodes.filter(node=>node.depth===0).length;
+    syncCounts(triage, unscheduled, rootCount);
     const list = document.getElementById("whenever-list");
     if (!list) return;
     keepFocus(list, () => {
+      if(items.length&&typeof window.renderItineraryListRow==='function'){
+        list.replaceChildren(...nodes.map(node=>sharedRow(node.ev,node)));return;
+      }
       list.innerHTML = items.length
-        ? items.map(rowHtml).join("")
+        ? nodes.map(node=>rowHtml(node.ev,node)).join("")
         : '<div class="delegated-empty whenever-empty">Nothing here. Add the chores with no set time, like laundry or the mail.</div>';
     });
   }
@@ -276,6 +333,9 @@
   // Pull a Whenever task onto TODAY at the next free slot. Returns today's ev, or null.
   async function doNow(id, opts) {
     opts = opts || {};
+    const requestedId=id;
+    const root=rootItem(id);
+    if(root)id=root.id;
     if (busy.has(id)) return null;
     busy.add(id);
     build();
@@ -297,18 +357,40 @@
       // first and the pin is refused, the end-of-day slot persists, and the task
       // jumps back there on reload. Same-row writes queue in order after this.
       await Promise.resolve(addToSchedule(item.id));
-      await rescheduleTaskToDate(item.id, today, { silent: true });
-      const ev = typeof scheduled !== "undefined" ? scheduled.find(e => e.id === item.id) : null;
+      // The atomic pool mover already selects the canonical free slot.
+      // Legacy embeds still need the original in-day placement step.
+      if(!window.blockStore||typeof window.blockStore.rescheduleBlock!=='function')await rescheduleTaskToDate(item.id, today, { silent: true });
+      const ev = typeof scheduled !== "undefined" ? scheduled.find(e => e.id === requestedId) : null;
       if (!ev) return null;
       if (!opts.silent) {
         const at = typeof f12 === "function" && ev.start ? " at " + f12(ev.start) : "";
         toast("Up next: " + (ev.title || item.title) + at, "success");
       }
       return ev;
+    } catch(error){
+      toast(error.message,'error');return null;
     } finally {
       busy.delete(id);
       refresh();
     }
+  }
+
+  // Called by the canonical addToSchedule path. One transaction moves the entire tree.
+  async function scheduleTree(id,options){
+    options=options||{};
+    const item=rootItem(id),row=rowFor(item);
+    if(!item||!row||!window.blockStore||typeof window.blockStore.rescheduleBlock!=='function')throw new Error('Task storage is unavailable');
+    const today=options.targetDate||(typeof _resolvedTodayDate==='function'?_resolvedTodayDate():null);
+    const duration=durationOf(item);
+    const f=n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
+    const placementTask=Object.assign({},item,{duration,start:'00:00',end:f(duration)});
+    const minute=options.start&&/^([01]\d|2[0-3]):[0-5]\d$/.test(options.start)?Number(options.start.slice(0,2))*60+Number(options.start.slice(3)):null;
+    const slot=minute!==null?{start:options.start,end:f(Math.min(1439,minute+duration))}:(typeof _computeRescheduleSlot==='function'?await _computeRescheduleSlot(placementTask,today):null);
+    if(!slot)throw new Error('No free slot is available. Choose a time in the schedule.');
+    const result=await window.blockStore.rescheduleBlock(row.id,today,{placement:{kind:'pool_schedule'},parentStart:slot.start,parentEnd:slot.end});
+    if(typeof refoldTaskStateFromBlockCache==='function')refoldTaskStateFromBlockCache();
+    if(typeof recalcTimes==='function')recalcTimes();
+    return result;
   }
 
   // Did it already. Land it on today first so the check-off is the normal one:
@@ -333,6 +415,11 @@
       toast("Could not update that task. Try again in a moment.", "error");
       return false;
     }
+    if(typeof window.blockStore.rescheduleBlock==='function'){
+      return Promise.resolve(window.blockStore.rescheduleBlock(row.id,null,{placement:{kind:'whenever',stage}})).then(()=>{
+        if(typeof refoldTaskStateFromBlockCache==='function')refoldTaskStateFromBlockCache();refresh();return true;
+      }).catch(error=>{toast(error.message,'error');return false;});
+    }
     item.stage = stage;
     // Refold once the write lands. Leaving the pool puts the row in the Unscheduled
     // half and returning takes it out (TaskModel.isWheneverPoolRow); the
@@ -346,17 +433,22 @@
 
   function release(id) {
     const item = findItem(id);
-    if (!item || !setStage(id, "Backlog")) return;
-    build();
-    toast("Moved to the Task Library", "success", 5000, {
-      label: "Undo",
-      onClick: () => { if (setStage(id, STAGE)) build(); }
-    });
+    if (!item) return;
+    const result=setStage(id, "Backlog");
+    function notify(ok){
+      if(!ok)return;
+      build();
+      toast("Moved to the Task Library", "success", 5000, {
+        label: "Undo",
+        onClick: () => { if (setStage(id, STAGE)) build(); }
+      });
+    }
+    if(result&&typeof result.then==='function')result.then(notify);else notify(result);
   }
 
   function surprise() {
     const list = document.getElementById("whenever-list");
-    const rows = list ? Array.from(list.querySelectorAll(".whenever-row")) : [];
+    const rows = list ? Array.from(list.querySelectorAll(".whenever-row")).filter(row=>!row.dataset.wheneverDepth||row.dataset.wheneverDepth==="0") : [];
     const i = pickIndex(rows.length, lastPicked);
     if (i < 0) return;
     lastPicked = i;
@@ -477,6 +569,10 @@
       if (action === "now") doNow(id);
       else if (action === "done") markDone(id);
       else if (action === "release") release(id);
+      else if (action === "details" && typeof openAddModal==='function')openAddModal(id,(findItem(id)||{}).title);
+      else if (action === "add-child" && typeof openTaskAdd==='function')openTaskAdd(id,btn);
+      else if (action === "delete" && typeof openDeleteConfirm==='function')openDeleteConfirm(id);
+      else if (action === "collapse"){if(collapsed.has(id))collapsed.delete(id);else collapsed.add(id);build();}
     });
 
     build();
@@ -493,6 +589,6 @@
   return {
     STAGE, LABEL, PILL_STYLE, UNSCHEDULED_LABEL, UNSCHEDULED_STYLE, TRIAGE_LABEL, TRIAGE_STYLE,
     isWhenever, durationOf, selectWhenever, pickIndex,
-    build, add, doNow, markDone, release, open
+    build, add, doNow, scheduleTree, markDone, release, open
   };
 });

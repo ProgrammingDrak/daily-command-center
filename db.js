@@ -1684,7 +1684,7 @@ async function getCalendarMeetingContextBySourceIds(sourceIds, workspaceId) {
 //
 // One query, not two: this replaces a getBlocksByDate + getUndatedTaskBlocks pair the
 // route used to concatenate (getUndatedTaskBlocks is deleted — this was its only caller).
-async function getRescheduleSubtreePool(fromDate, workspaceId, { includeTriageRoots = false, client } = {}) {
+async function getRescheduleSubtreePool(fromDate, workspaceId, { includeTriageRoots = false, includeDatelessRoots = false, client } = {}) {
   const isTask = `(b.properties->>'local_id' IS NOT NULL OR b.properties->>'kind' = 'task')`;
   const linked = `(b.properties->>'subtaskOf' IS NOT NULL OR b.properties->>'wrapId' IS NOT NULL)`;
   const { rows } = await (client || pool).query(
@@ -1694,7 +1694,7 @@ async function getRescheduleSubtreePool(fromDate, workspaceId, { includeTriageRo
           AND b.deleted_at IS NULL
           AND b.type = 'block'
           AND ${isTask}
-          AND (b.date = $1 OR (b.date IS NULL AND ${includeTriageRoots ? "(" + linked + " OR b.properties->>'triageBlock' = 'true')" : linked}))
+          AND (b.date = $1 OR (b.date IS NULL AND ${includeDatelessRoots ? "true" : includeTriageRoots ? "(" + linked + " OR b.properties->>'triageBlock' = 'true')" : linked}))
        UNION
        SELECT c.* FROM blocks c
          JOIN task_pool p ON (

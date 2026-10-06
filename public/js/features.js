@@ -764,7 +764,9 @@ function renderModalItems(taskId) {
   var items = [];
 
   // Subtasks (real tasks in the unified tree: subtaskOf === taskId)
-  var subs = (typeof scheduled !== 'undefined' ? DCC.TaskModel.subtasksOf(taskId, scheduled) : [])
+  var itemAnchor=typeof taskAnchorById==='function'?taskAnchorById(taskId):null;
+  var itemPool=itemAnchor&&itemAnchor.whenever?(typeof backlog!=='undefined'?backlog:[]):(typeof scheduled!=='undefined'?scheduled:[]);
+  var subs = DCC.TaskModel.subtasksOf(taskId,itemPool)
     .map(function(t){return { id:t.id, text:t.title, done:(typeof isDone==='function'&&isDone(t)), created:'2000-01-01' };});
   subs.forEach(function(st) {
     items.push({ type: 'subtask', id: st.id, text: st.text, done: !!st.done, created: st.created || '2000-01-01' });

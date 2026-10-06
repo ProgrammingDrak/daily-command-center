@@ -435,6 +435,21 @@
   // backlog verb (addToSchedule, edit, delete) resolves rows there. Once dated it is
   // ordinary work again (that is how Do it now brings one into the day), so the date
   // test comes first. The stage is the stored value; whenever.js reads it from here.
+  function fromBacklogBlock(block){
+    const p=block.properties||{},task=fromBlock(block);
+    const duration=p.durMin??p.duration??30;
+    return Object.assign(task,{id:backlogKey(block),stage:p.stage||'',durMin:duration,duration,
+      sortOrder:block.sort_order,updatedAt:block.updated_at||p.updated_at||''});
+  }
+  function selectWheneverPoolBlocks(blocks){
+    return _arr(blocks).filter(block=>block&&!block.deleted_at&&isWheneverPoolRow(block)&&
+      !['deleted','archived'].includes((block.properties||{}).status));
+  }
+  // Day-state timeline seeds must not resurrect a row moved into the pool.
+  function suppressWheneverSeeds(items,blocks){
+    const rows=selectWheneverPoolBlocks(blocks),rowIds=new Set(rows.map(row=>row.id)),localIds=new Set(rows.map(backlogKey));
+    return _arr(items).filter(item=>item._blockId?!rowIds.has(item._blockId):!localIds.has(item.id)&&!rowIds.has(item.id));
+  }
   const WHENEVER_STAGE = "Whenever";
   function isWheneverPoolRow(block) {
     block = block || {};
@@ -508,6 +523,16 @@
   // `state.js` documents why this deliberately diverges from `lib/reschedule.js`'s
   // row-space order; do not "fix" that. Mirrored (not moved) from state.js, which
   // keeps the bare globals every existing call site reads.
+  function hierarchyRoot(id,items){
+    const byId=new Map(_arr(items).map(ev=>[ev.id,ev])),seen=new Set();
+    const original=byId.get(id);let current=original;
+    while(current){
+      if(seen.has(current.id))return original;
+      seen.add(current.id);const parent=byId.get(parentIdOf(current));
+      if(!parent)return current;current=parent;
+    }
+    return null;
+  }
   function parentIdOf(ev) { return (ev && (ev.wrapId || ev.subtaskOf)) || null; }
   function relOf(ev) { return ev ? (ev.wrapId ? "ride-along" : (ev.subtaskOf ? "subtask" : null)) : null; }
   function isSubtask(ev) { return !!(ev && ev.subtaskOf); }
@@ -887,8 +912,10 @@
     selectUnscheduled: selectUnscheduled,
     WHENEVER_STAGE: WHENEVER_STAGE,
     isWheneverPoolRow: isWheneverPoolRow,
+    fromBacklogBlock, selectWheneverPoolBlocks, suppressWheneverSeeds,
     // C6a — shape
     parentIdOf: parentIdOf,
+    hierarchyRoot,
     relOf: relOf,
     isSubtask: isSubtask,
     isRideAlong: isRideAlong,

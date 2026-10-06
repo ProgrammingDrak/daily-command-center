@@ -194,8 +194,8 @@ function buildTaskChangeItems(ev,trig){
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
     {icon:"💡", label:"Solo",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}},
     // No set time after all: off the day and into the header pill's pool (whenever.js).
-    // Single tasks only; moveTaskToWhenever refuses a parent, so don't offer it.
-    ...(childrenOf(ev.id,scheduled).length?[]:[{icon:"🧺", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever", onPick:()=>{if(typeof moveTaskToWhenever==="function")moveTaskToWhenever(ev.id);}}]),
+    // The canonical placement moves the parent and its descendants together.
+    {icon:"🧺", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever", onPick:()=>{if(typeof moveTaskToWhenever==="function")moveTaskToWhenever(ev.id);}},
 
   );
   return items;
@@ -358,6 +358,12 @@ function taskAnchorById(id){
   if(ev){
     const day=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
     return {ev:ev,date:day,blockId:ev._blockId||null,carryover:false};
+  }
+  const poolEv=(typeof backlog!=="undefined"&&Array.isArray(backlog))?backlog.find(task=>task.id===id&&task.stage==="Whenever"):null;
+  if(poolEv){
+    const row=typeof _findTaskBlockForDate==='function'?_findTaskBlockForDate(id,null,poolEv):null;
+    if(row)poolEv._blockId=row.id;
+    return {ev:poolEv,date:null,blockId:poolEv._blockId||null,carryover:false,whenever:true};
   }
   const unf=_unfRecById(id);
   if(unf){

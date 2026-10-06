@@ -394,7 +394,7 @@ function addSubtask(taskId, text, options){
   // instead of creating an orphaned child row on whichever day is currently open.
   const viewedDate=(typeof viewDate!=="undefined"&&viewDate)
     ?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
-  const date=options.date||(anchor&&anchor.date)||viewedDate;
+  const date=anchor&&anchor.whenever?null:(options.date||(anchor&&anchor.date)||viewedDate);
   const startStr=options.parentStart||(parent&&parent.start)||"00:00";
   // A subtask is a FULL task, shaped by the same serializer as every other task
   // (detail/notionUrl/commute/delegated/tags all defaulted for free), so future
@@ -410,15 +410,21 @@ function addSubtask(taskId, text, options){
   // origin day, so pushing it into scheduled[] would render it as a standalone task on
   // today (its parent is not in this array, so the nesting walk cannot find it) while the
   // block sits on another date. The carryover lane re-collects instead, below.
-  const onViewedDay=(!date||!viewedDate||date===viewedDate)&&(!anchor||!anchor.carryover);
+  const onViewedDay=(!date||!viewedDate||date===viewedDate)&&(!anchor||(!anchor.carryover&&!anchor.whenever));
   if(onViewedDay&&typeof scheduled!=="undefined")scheduled.push(task);
   let created=null;
   if(window.blockStore&&window.blockStore.createBlock){
     const blockProps=(window.DCC&&window.DCC.taskBlockProps)
       ? window.DCC.taskBlockProps({},Object.assign({},overrides,{local_id:id,duration:0,start:startStr,end:startStr}))
       : {local_id:id,title:text,source:"manual",start:startStr,end:startStr,duration:0,priority:"Medium",tags:[]};
-    blockProps.type="task";blockProps.subtaskOf=taskId;blockProps.publicVisibility="public";blockProps.added_at=new Date().toISOString();
+    if(anchor&&anchor.whenever)Object.assign(blockProps,{kind:'backlog',stage:'Whenever',durMin:0,start:null,end:null,publicVisibility:parent.publicVisibility||'private'});
+    blockProps.type="task";blockProps.subtaskOf=taskId;blockProps.publicVisibility=anchor&&anchor.whenever?(parent.publicVisibility||"private"):"public";blockProps.added_at=new Date().toISOString();
     created=window.blockStore.createBlock("block",blockProps,{date:date});
+  }
+  if(anchor&&anchor.whenever){
+    Object.assign(task,{kind:'backlog',stage:'Whenever',durMin:0,duration:0,untimed:true,_dateless:true,publicVisibility:parent.publicVisibility||'private'});
+    if(typeof backlog!=='undefined')backlog.push(task);
+    Promise.resolve(created).then(row=>{if(row)task._blockId=row.id;render();});
   }
   // Keep the public return value as the task object, but expose its write
   // acknowledgement non-enumerably so compound actions can wait without this
@@ -480,7 +486,7 @@ function addStackedTask(taskId, text, durMinArg, opts){
   const id="sk-"+Date.now();
   const anchor=(typeof taskAnchorById==="function")?taskAnchorById(taskId):null;
   const parent=anchor?anchor.ev:((typeof scheduled!=="undefined")?scheduled.find(e=>e.id===taskId):null);
-  const onViewedDay=!anchor||!anchor.carryover;
+  const onViewedDay=!anchor||(!anchor.carryover&&!anchor.whenever);
   let startStr=(parent&&parent.start)||"00:00";
   const durMin=durMinArg||30;
   const type=opts.type||"task";
@@ -523,12 +529,17 @@ function addStackedTask(taskId, text, durMinArg, opts){
     const blockProps=(window.DCC&&window.DCC.taskBlockProps)
       ? window.DCC.taskBlockProps({},Object.assign({},overrides,{local_id:id,duration:durMin,start:startStr,end:endStr}))
       : {local_id:id,title:text,source:opts.source||"manual",start:startStr,end:endStr,duration:durMin,priority:priority,tags:opts.tags||[],detail:opts.detail||""};
-    blockProps.type=type;blockProps.wrapId=taskId;blockProps.publicVisibility="public";blockProps.added_at=new Date().toISOString();
+    if(anchor&&anchor.whenever)Object.assign(blockProps,{kind:'backlog',stage:'Whenever',durMin:durMin,start:null,end:null});
+    blockProps.type=type;blockProps.wrapId=taskId;blockProps.publicVisibility=anchor&&anchor.whenever?(parent.publicVisibility||"private"):"public";blockProps.added_at=new Date().toISOString();
     created=window.blockStore.createBlock("block",blockProps,{date:date});
   }
   if(onViewedDay){
     if(typeof recalcTimes==="function")recalcTimes();
     render();
+  }else if(anchor&&anchor.whenever){
+    Object.assign(task,{kind:'backlog',stage:'Whenever',durMin:durMin,duration:durMin,untimed:true,_dateless:true,publicVisibility:parent.publicVisibility||'private'});
+    if(typeof backlog!=='undefined')backlog.push(task);
+    Promise.resolve(created).then(row=>{if(row)task._blockId=row.id;render();});
   }else _recollectCarryover(anchor.date,created);
   return task;
 }
@@ -539,7 +550,19 @@ function addStackedTask(taskId, text, durMinArg, opts){
 // the new parent and can be pulled back out later (drag to an edge clears the edge).
 // Mirrors the drag "Case B" re-parent in drag.js but targets subtaskOf, and is
 // shared by the "Make subtask of…" menu and the Shift-drag-to-nest drop zone.
-function reparentAsSubtask(childId, parentId){
+function reparentAsSubtask(childId, parentId,options){
+  const childAnchor=typeof taskAnchorById==='function'?taskAnchorById(childId):null;
+  const parentAnchor=typeof taskAnchorById==='function'?taskAnchorById(parentId):null;
+  if(childAnchor&&parentAnchor&&childAnchor.whenever&&parentAnchor.whenever){
+    if(childId===parentId||(typeof _isAncestor==='function'&&_isAncestor(childId,parentId,backlog)))return false;
+    const child=childAnchor.ev,parent=parentAnchor.ev;
+    const nested=!!(options&&options.nested)||!!(window.TaskTypes&&window.TaskTypes.rule(parent,'childEdge')==='wrap');
+    const patch={subtaskOf:nested?null:parentId,wrapId:nested?parentId:null,start:null,end:null,...(!nested?{duration:0,durMin:0}:Number(child.duration||child.durMin)>0?{}:{duration:30,durMin:30})};
+    Object.assign(child,patch);
+    if(childAnchor.blockId&&typeof enqueueRowPropsWrite==='function')enqueueRowPropsWrite(childAnchor.blockId,props=>Object.assign({},props,patch),{parent_id:parentAnchor.blockId});
+    render();return true;
+  }
+
   if(!childId||!parentId||childId===parentId)return false;
   if(typeof scheduled==="undefined")return false;
   const child=scheduled.find(e=>e.id===childId);
@@ -593,14 +616,16 @@ function openMakeSubtaskOf(childId, anchorEl){
   const done=(typeof isDone==="function")?isDone:(()=>false);
   // C6a: the reusable half (open rows) comes from the derivation layer; the rest is
   // this popover's own cycle/self/duplicate-parent guard and stays here.
-  const candidates=DCC.TaskModel.selectOpen(scheduled).filter(e=>
+  const childAnchor=typeof taskAnchorById==='function'?taskAnchorById(childId):null;
+  const parentPool=childAnchor&&childAnchor.whenever?backlog:scheduled;
+  const candidates=DCC.TaskModel.selectOpen(parentPool,{isDone:done}).filter(e=>
     e&&e.id!==childId&&
     // Meetings are fixed-time but still valid parents. They can own either a
     // timeless subtask or a full nested task performed during the meeting.
     ((typeof pointEligible==="function")?(pointEligible(e)||meeting(e)):(meeting(e)||e.type!=="break"&&e.type!=="ooo"))&&
     e.subtaskOf!==childId&&
-    !(typeof _isAncestor==="function"&&_isAncestor(childId,e.id))&&
-    !(typeof parentIdOf==="function"&&parentIdOf(scheduled.find(x=>x.id===childId)||{})===e.id)
+    !(typeof _isAncestor==="function"&&_isAncestor(childId,e.id,parentPool))&&
+    !(typeof parentIdOf==="function"&&parentIdOf(parentPool.find(x=>x.id===childId)||{})===e.id)
   );
   const pop=document.createElement("div");
   pop.className="dur-popover make-subtask-pop";
@@ -628,6 +653,8 @@ function openMakeSubtaskOf(childId, anchorEl){
   setTimeout(()=>{document.addEventListener("click",onOut,true);document.addEventListener("keydown",onKey,true);},0);
 }
 function toggleSubtask(taskId, stId){
+  const anchor=typeof taskAnchorById==='function'?taskAnchorById(stId):null;
+  if(anchor&&anchor.whenever&&window.DCC.Whenever)return window.DCC.Whenever.markDone(stId);
   if(typeof manualDone==="undefined")return;
   const nowDone=!manualDone.has(stId);
   const at=new Date();
@@ -657,9 +684,10 @@ function getIncompleteSubtasks(taskId){
 // Add Items modal.
 function openTaskAdd(parentId, anchorEl){
   document.querySelectorAll(".subtask-add-pop,.resched-popover,.dur-popover").forEach(p=>p.remove());
-  const target=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===parentId):null;
+  const addAnchor=typeof taskAnchorById==='function'?taskAnchorById(parentId):null;
+  const target=addAnchor?addAnchor.ev:((typeof scheduled!=="undefined")?scheduled.find(e=>e.id===parentId):null);
   const wrapOnly=!!(target&&window.TaskTypes&&window.TaskTypes.rule(target,"childEdge")==="wrap");
-  const places=wrapOnly
+  const places=addAnchor&&addAnchor.whenever?(wrapOnly?[["nested","Nested"]]:[["subtask","Subtask"],["nested","Nested"]]):wrapOnly
     ?[["nested","Nested"],["after","After"],["before","Before"]]
     :[["after","After"],["before","Before"],["subtask","Subtask"],["nested","Nested"]];
   const holders={subtask:"Add subtask…",nested:"Add task inside…",after:"Add task after…",before:"Add task before…"};

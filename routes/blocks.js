@@ -1689,6 +1689,20 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks/:id/reschedule", async (req, res) => {
     try {
       const { targetDate, parentStart, parentEnd, placement, userSetStart, _clientId } = req.body || {};
+      if (placement && ["whenever", "whenever_schedule", "pool_schedule"].includes(placement.kind)) {
+        if (req.body.reviewGuard) return res.status(400).json({error:"Review placements cannot move to Whenever"});
+        if (placement.kind !== "whenever" && !isValidDate(targetDate)) return res.status(400).json({error:"Invalid targetDate"});
+        const parent = await blockDB.getBlockIncludingDeleted(req.params.id);
+        if (!parent) return res.status(404).json({error:"Block not found"});
+        assertBlockOwnership(parent, req.workspaceId);
+        const pool = await blockDB.getRescheduleSubtreePool(parent.date, req.workspaceId, {includeDatelessRoots:!parent.date});
+        const planned = require("../lib/whenever-placement").plan(parent,pool,{targetDate,placement,parentStart,parentEnd});
+        const byId = new Map(pool.map(row => [row.id,row]));byId.set(parent.id,parent);
+        planned.ids.forEach(id => assertBlockOwnership(byId.get(id),req.workspaceId));
+        const result = await blockDB.rescheduleBlocks(planned.moves,[]);
+        broadcast("blocks-changed",{action:"reschedule",blockIds:planned.ids,clientId:_clientId},req.workspaceId);
+        return res.json({moved:planned.ids,blocks:result.blocks,created:[],parentId:parent.id,fromDate:parent.date,targetDate,count:planned.ids.length});
+      }
       // Did a HUMAN name the landing time? A timed placement cannot answer that on its
       // own: the client sends parentStart for an auto-slotted move too. Only an explicit
       // true marks the start as user-chosen, which is what stops the client's drag

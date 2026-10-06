@@ -547,13 +547,14 @@ function promoteToTopLevel(id){
 }
 // True if ancestorId is somewhere above nodeId in the parent chain (guards against
 // nesting a task into one of its own descendants).
-function _isAncestor(ancestorId,nodeId){
-  let cur=scheduled.find(e=>e.id===nodeId),guard=0;
+function _isAncestor(ancestorId,nodeId,pool){
+  pool=pool||scheduled;
+  let cur=pool.find(e=>e.id===nodeId),guard=0;
   while(cur&&guard++<50){
     const pid=parentIdOf(cur);
     if(!pid)return false;
     if(pid===ancestorId)return true;
-    cur=scheduled.find(e=>e.id===pid);
+    cur=pool.find(e=>e.id===pid);
   }
   return false;
 }
