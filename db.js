@@ -80,6 +80,10 @@ const VALID_TYPES = new Set(["block", "day_root",
 
 function validateBlock(type, properties) {
   if (!VALID_TYPES.has(type)) throw new Error(`Unknown block type: ${type}`);
+  if (properties && Object.prototype.hasOwnProperty.call(properties, "sourceReferences")) {
+    try { require("./public/js/task-sources").validate(properties.sourceReferences); }
+    catch (error) { error.statusCode = 400; throw error; }
+  }
   const size = JSON.stringify(properties).length;
   if (size > 100000) throw new Error(`Block properties exceed 100KB limit (${size} bytes)`);
   if (type === "schedule_block") {

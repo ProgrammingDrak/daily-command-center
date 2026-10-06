@@ -475,12 +475,53 @@ function openAddModal(taskId, taskTitle) {
     commuteHint.textContent = 'No leave window';
   }
 
+  // One provenance rail for desktop and mobile Notes, with stable linked attachments.
+  var sourceRail=document.getElementById('am-source-references');
+  var sourceForm=document.getElementById('am-source-form');
+  if(sourceRail&&window.DCC.TaskSources){
+    var sourceTask=taskEntry||{};
+    var legacySource=window.DCC.taskSourceUrl(sourceTask)||
+      (typeof window.waitingCheckInSourceUrl==='function'?window.waitingCheckInSourceUrl(sourceTask):'');
+    window.DCC.TaskSources.render(sourceRail,sourceTask,legacySource,removeSource);
+    async function removeSource(ref){
+      var id=_addModalBlockId,taskId=_addModalTaskId,next;
+      try{
+        var removed=await enqueueRowPropsWrite(id,function(props){next=(props.sourceReferences||[]).filter(r=>ref.unavailable?r.url!==ref.storedUrl:window.DCC.TaskSources.safeUrl(r.url)!==ref.url);return Object.assign({},props,{sourceReferences:next});},{_reportSaveStatus:true},{rejectOnError:true});
+        sourceTask.sourceReferences=next;
+        if(_addModalTaskId===taskId){window.DCC.TaskSources.render(sourceRail,sourceTask,legacySource,removeSource);document.getElementById('am-source-status').textContent=removed&&removed._savePending?'Removal saved locally; waiting to sync':'Source reference removed. Original file retained.';}
+      }catch(error){if(_addModalTaskId===taskId)document.getElementById('am-source-status').textContent=error.message;}
+    }
+    sourceForm.reset();
+    sourceForm.onsubmit=async function(e){
+      e.preventDefault();
+      var status=document.getElementById('am-source-status');
+      var button=sourceForm.querySelector('button');
+      var blockId=_addModalBlockId;
+      var activeTaskId=_addModalTaskId;
+      button.disabled=true;
+      try{
+        if(!blockId||typeof enqueueRowPropsWrite!=='function')throw new Error('Save this task before attaching sources');
+        var ref={url:sourceForm.elements.url.value,name:sourceForm.elements.name.value,kind:sourceForm.elements.kind.value};
+        if(window.DCC.TaskSources.safeUrl(ref.url)===window.DCC.TaskSources.safeUrl(legacySource)&&window.DCC.TaskSources.safeUrl(legacySource))throw new Error('This original source is already attached');
+        var next;
+        var saved=await enqueueRowPropsWrite(blockId,function(props){
+          next=window.DCC.TaskSources.validate((props.sourceReferences||[]).concat([ref]));
+          return Object.assign({},props,{sourceReferences:next});
+        },{_reportSaveStatus:true},{rejectOnError:true});
+        sourceTask.sourceReferences=next;
+        if(_addModalTaskId===activeTaskId){window.DCC.TaskSources.render(sourceRail,sourceTask,legacySource,removeSource);sourceForm.reset();status.textContent=saved&&saved._savePending?'Source saved locally; waiting to sync':'Source attached';}
+      }catch(error){if(_addModalTaskId===activeTaskId)status.textContent=error.message;}
+      finally{button.disabled=false;}
+    };
+    document.getElementById('am-source-status').textContent='Attach stable links to originals. Private files open at their provider. File uploads are not configured.';
+  }
+
   // Load notes into block editor
   var notes = loadNotes();
   var noteVal = notes[taskId];
   var initialBlocks=typeof noteBlocksForTask === 'function' ? noteBlocksForTask(taskId, noteVal, taskEntry) : null;
   if(window._amBlockEditor) window._amBlockEditor.destroy();
-  window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks, { accessibleLabel: 'Task notes' });
+  window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks, { accessibleLabel: 'Task notes', stableImagesOnly: true, onAttachmentError: function(message){ document.getElementById('am-source-status').textContent=message; } });
   _addModalNotesSnapshot = _addModalNotesFingerprint();
 
   // Render combined items list

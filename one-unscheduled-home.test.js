@@ -1183,7 +1183,7 @@ test("_amWriteRowProps addresses the ROW, carries the rest, and refuses on a mis
   // queue rather than a local one. The chain assertion moved with it: it lives in state.js
   // and is shared with the commute writer, which is the whole point of the round-3 fix.
   const src = mustSlice(featuresSource, /^function _amWriteRowProps\(patch\) \{[\s\S]*?\n\}/m, "_amWriteRowProps");
-  assert.ok(/_rowPropsChain=_rowPropsChain\n?\s*\.then\(/.test(stateSource),
+  assert.ok(/const write=_rowPropsChain\n?\s*\.then\(/.test(stateSource),
     "row-properties writes must be serialized, or a rename and a tag edit from the same click drop one of the two");
   assert.equal(/_amWriteChain/.test(featuresSource), false,
     "and there must be no second, per-file chain — four writers with the queue in one of them is the bug");

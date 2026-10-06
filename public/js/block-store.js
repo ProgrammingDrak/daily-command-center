@@ -867,6 +867,8 @@
       // an Unscheduled row, while `completionIntent` makes a deliberate done/open
       // transition survive stale full-properties writers and WAL replay.
       extra = { ...(extra || {}) };
+      const reportSaveStatus = !!extra._reportSaveStatus;
+      delete extra._reportSaveStatus;
       // The shared row queue may have fetched an uncached row immediately before
       // calling us. Use that authoritative snapshot for CAS/delta derivation without
       // leaking the client-only row into the HTTP body.
@@ -971,7 +973,7 @@
         } catch (e) {
           setError("Save failed — buffered for retry");
           // A newer same-row update may already have superseded this WAL entry.
-          return optimistic || existing;
+          return reportSaveStatus ? { ...(optimistic || existing || {}), _savePending: true } : (optimistic || existing);
         }
       });
       return write;

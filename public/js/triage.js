@@ -299,7 +299,7 @@ function openDoneModal(id, title, onConfirm, ev){
   const dmNotesContainer=document.getElementById("dm-notes-editor");
   let dmNoteBlocks=typeof noteBlocksForTask === "function" ? noteBlocksForTask(id, noteVal, ev) : null;
   if(window._dmBlockEditor) window._dmBlockEditor.destroy();
-  window._dmBlockEditor=createBlockEditor(dmNotesContainer, dmNoteBlocks);
+  window._dmBlockEditor=createBlockEditor(dmNotesContainer, dmNoteBlocks,window.DCC.TaskSources.editorOptions(dmNotesContainer,ev||{}));
   // Pre-populate action items
   document.getElementById("dm-action-input").style.display="none";
   renderDmActions(id);

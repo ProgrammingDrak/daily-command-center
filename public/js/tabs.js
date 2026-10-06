@@ -171,7 +171,8 @@ function openUpcomingNotesDrawer(id, title) {
   }
 
   if(window._notesBlockEditor) window._notesBlockEditor.destroy();
-  window._notesBlockEditor=createBlockEditor(container, initialBlocks);
+  const sourceAnchor=typeof taskAnchorById==='function'?taskAnchorById(id):null;
+  window._notesBlockEditor=createBlockEditor(container, initialBlocks,window.DCC.TaskSources.editorOptions(container,sourceAnchor?sourceAnchor.ev:{}));
 
   // Render action items from upcoming store
   const actions = loadUpActions();

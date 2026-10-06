@@ -1222,13 +1222,13 @@ async function _rowForDateWrite(blockId){
 // properties. It may be a function of the freshly-read block when a column decision
 // (such as promoting a dateless completion) must not be made from a stale cache.
 let _rowPropsChain=Promise.resolve();
-function enqueueRowPropsWrite(blockId,merge,extra){
+function enqueueRowPropsWrite(blockId,merge,extra,options){
   if(!window.blockStore||!blockId||typeof merge!=="function")return null;
-  _rowPropsChain=_rowPropsChain
+  const write=_rowPropsChain
     .then(()=>_rowForDateWrite(blockId))
     .then(b=>{
       // Refuse on an unresolvable row: spreading nothing over `properties` is a wipe.
-      if(!b||!b.properties)return;
+      if(!b||!b.properties){if(options&&options.rejectOnError)throw new Error("Task is unavailable");return;}
       const next=merge(b.properties,b);
       const resolvedExtra=typeof extra==="function"?extra(b,next):extra;
       if(next){
@@ -1241,9 +1241,10 @@ function enqueueRowPropsWrite(blockId,merge,extra){
         return window.blockStore.updateBlock(b.id,next,writeExtra);
       }
     })
-    // Per-link, so one failure cannot wedge the queue for the rest of the session.
-    .catch(e=>{console.warn("[row] properties write failed for "+blockId+":",e);});
-  return _rowPropsChain;
+  ;
+  // Keep the shared queue recoverable, while forms can observe the actual failure.
+  _rowPropsChain=write.catch(e=>{console.warn("[row] properties write failed for "+blockId+":",e);});
+  return options&&options.rejectOnError?write:_rowPropsChain;
 }
 
 // ── C6b: the ONE writer for a per-row order-axis property (pin, lock) ──

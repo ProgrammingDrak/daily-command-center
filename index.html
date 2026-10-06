@@ -23,6 +23,7 @@
 <link rel="stylesheet" href="/public/css/vault.css?v=vault-b6-1">
 <link rel="stylesheet" href="/public/css/ui-optimization.css?v=dcc-ui-1">
 <link rel="stylesheet" href="/public/css/activity.css?v=activity-1">
+<link rel="stylesheet" href="/public/css/task-sources.css">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -777,6 +778,8 @@
       <!-- Notes section -->
       <div class="am-section" data-am-panel="notes">
         <div class="am-section-label">Notes</div>
+        <div id="am-source-references" class="task-source-rail" aria-label="Task sources"></div>
+        <form id="am-source-form"><label>Original link <input name="url" type="url" required placeholder="https://…"></label><label>Name <input name="name" required maxlength="255" placeholder="Original filename or source name"></label><label>Type <select name="kind"><option value="link">Link</option><option value="email">Email</option><option value="slack">Slack</option><option value="image">Image</option><option value="file">File</option></select></label><button type="submit">Attach link</button><p role="status" id="am-source-status"></p></form>
         <div id="am-notes-block-editor" class="dm-notes-editor"></div>
       </div>
 
@@ -2100,6 +2103,7 @@
 <!-- task-types.js next: the per-type rules registry; points.js and the renderers read it at parse time -->
 <script src="/public/js/task-types.js?v=task-types-1"></script>
 <!-- task-serialize.js: the one task-property serializer (window.DCC.taskBlockProps/taskCommonProps); must load before state.js/schedule.js/unfinished-tasks.js consume it -->
+<script src="/public/js/task-sources.js"></script>
 <script src="/public/js/task-serialize.js?v=task-serialize-1"></script>
 <!-- task-model.js: the one block -> ev projection (window.DCC.TaskModel.fromBlock); must load before data.js/persistence.js/state.js and the carryover lane consume it -->
 <script src="/public/js/app-config.js?v=app-config-1"></script>
