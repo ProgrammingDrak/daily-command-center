@@ -216,7 +216,8 @@ function openNotesDrawer(taskId, taskTitle) {
 
   // Create or re-initialize block editor
   if(window._notesBlockEditor) window._notesBlockEditor.destroy();
-  window._notesBlockEditor=createBlockEditor(container, initialBlocks);
+  const sourceAnchor=typeof taskAnchorById==='function'?taskAnchorById(taskId):null;
+  window._notesBlockEditor=createBlockEditor(container, initialBlocks,window.DCC.TaskSources.editorOptions(container,sourceAnchor?sourceAnchor.ev:{}));
 
   renderActionItems(taskId);
   document.getElementById("notes-action-input").style.display = "none";

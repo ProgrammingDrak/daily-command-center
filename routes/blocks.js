@@ -19,6 +19,13 @@
 // that behavior. reschedule keeps its own handler intact as the atomic-delegation
 // reference pattern.
 
+const TaskSources = require("../public/js/task-sources");
+function validateSourceProps(props) {
+  if (props && Object.prototype.hasOwnProperty.call(props, "sourceReferences")) {
+    try { TaskSources.validate(props.sourceReferences); }
+    catch (error) { error.statusCode = 400; throw error; }
+  }
+}
 const validate = require("../middleware/validate");
 const schemas = require("../middleware/schemas");
 const { collectSubtreeBlockIds, unplannedProperties } = require("../lib/reschedule");
@@ -666,6 +673,7 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks", validate(schemas.blockCreate), route(async (req, res) => {
     const body = req.body;
     const items = Array.isArray(body) ? body : [body];
+    for (const item of items) validateSourceProps(typeof item.properties === "string" ? safeParseProps(item.properties) : item.properties);
     if (items.some(item => waitingItems.isTaskDependency(
       typeof (item && item.properties) === "string" ? safeParseProps(item.properties) : ((item && item.properties) || {})
     ))) {
@@ -1063,6 +1071,7 @@ module.exports = function mount(app, ctx) {
     assertBlockOwnership(existing, req.workspaceId);
     const requestedProps = typeof (req.body && req.body.properties) === "string"
       ? safeParseProps(req.body.properties) : ((req.body && req.body.properties) || {});
+    validateSourceProps(requestedProps);
     if (waitingItems.isTaskDependency(existing)
         || waitingItems.isTaskDependency(requestedProps)) {
       res.status(409).json({ error: "Update task dependencies through the Waiting API" });
@@ -1285,6 +1294,7 @@ module.exports = function mount(app, ctx) {
     for (const op of operations) {
       if (!op || typeof op !== "object") continue;
       const opProps = typeof op.properties === "string" ? safeParseProps(op.properties) : (op.properties || {});
+      if (op.op === "create" || op.op === "update") validateSourceProps(opProps);
       if ((op.op === "create" || op.op === "update") && waitingItems.isTaskDependency(opProps)) {
         res.status(409).json({ error: "Mutate task dependencies through the Waiting API" });
         return;
