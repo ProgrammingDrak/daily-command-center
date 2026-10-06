@@ -62,3 +62,17 @@ test('cleared imported notes stay empty after saving and reopening through the b
  context._writeAddModalNotes();await Promise.resolve();assert.equal(blocks.length,2,'repeated clear retains the note and action blocks');
  assert.equal(blocks[1].properties.text,'Call supplier');
 });
+
+
+test('pool Notes and explicit clears follow the original task row through day switches and scheduling',async()=>{
+ const TM=require('./public/js/task-model'),S=require('./public/js/task-serialize');
+ const row={id:'api-task',type:'block',date:null,properties:{title:'Private task',kind:'backlog',stage:'Whenever',publicVisibility:'private',sourceReferences:[{kind:'link',url:'https://example.com/original',name:'Original'}]}},rows=[row];let creates=0,whenever=true;
+ const ctx=vm.createContext({window:{DCC:{TaskModel:TM},USE_BLOCKSTORE:{notes:true},blockStore:{get:id=>rows.find(r=>r.id===id),getByType:type=>rows.filter(r=>r.type===type),createBlock(){creates++;},getCurrentDate:()=> '2026-10-06'}},taskAnchorById:()=>({blockId:row.id,ev:TM.fromBacklogBlock(row),whenever}),enqueueRowPropsWrite:async(id,merge)=>{assert.equal(id,row.id);row.properties=merge(row.properties);return row;}});
+ vm.runInContext(source.slice(source.indexOf('function loadNotes('),source.indexOf('function seedNoteForTask')),ctx);
+ ctx.saveNotes({'blk-api-task':{html:'<p>Saved note</p>',text:'Saved note',blocks:[{type:'text',content:'Saved note'}]}},{taskId:'blk-api-task'});await Promise.resolve();
+ assert.equal(creates,0);assert.equal(row.date,null);assert.equal(ctx.loadNotes()['blk-api-task'].text,'Saved note');
+ // The real task-owned row is global in the cache; no day-root note row is needed.
+ row.date='2026-10-07';whenever=false;assert.equal(ctx.loadNotes()['api-task'].text,'Saved note');
+ const projected=TM.fromBlock(row);assert.equal(S.taskBlockProps(projected)._taskNotes.text,'Saved note');
+ ctx.saveNotes({'api-task':{html:'',text:'',blocks:[]}},{taskId:'api-task'});await Promise.resolve();assert.equal(ctx.loadNotes()['api-task'].text,'');assert.equal(row.properties.publicVisibility,'private');assert.equal(row.properties.sourceReferences[0].name,'Original');
+});

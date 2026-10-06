@@ -2714,7 +2714,7 @@ span.waiting-pill{cursor:default}
 .whenever-add button{min-height:36px;padding:0 14px;border:0;border-radius:8px;background:var(--queue-accent);color:var(--queue-on-accent);font:inherit;font-size:12px;font-weight:800;cursor:pointer}
 .whenever-add button:hover{filter:brightness(1.1)}
 .whenever-list{display:flex;flex-direction:column;gap:6px}
-.whenever-row{display:flex;align-items:center;gap:10px;padding:8px 8px 8px 10px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--queue-accent);border-radius:8px;transition:border-color .2s,box-shadow .2s,opacity .2s}
+.whenever-row:not(.it-list-item){display:flex;align-items:center;gap:10px;padding:8px 8px 8px 10px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--queue-accent);border-radius:8px;transition:border-color .2s,box-shadow .2s,opacity .2s}
 .whenever-row.is-picked{border-color:var(--queue-accent);box-shadow:0 0 0 2px var(--queue-soft)}
 .whenever-row.is-busy{opacity:.55}
 .whenever-check{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:1.5px solid var(--border);border-radius:50%;background:transparent;color:transparent;cursor:pointer;transition:border-color .12s,color .12s}
@@ -5844,3 +5844,25 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .slot-exchange-result.error{color:#fca5a5}
 .slot-exchange-dialog.celebrate{animation:slotExchangePop .5s ease}
 @keyframes slotExchangePop{0%{transform:scale(1)}35%{transform:scale(1.025)}100%{transform:scale(1)}}
+
+/* Whenever tasks use the normal editor and nesting controls, with touch-safe targets. */
+.whenever-title{background:none;border:0;padding:0;text-align:left;cursor:pointer;font:inherit}
+.whenever-add-child,.whenever-collapse,.whenever-delete{border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text-muted);min-width:32px;min-height:32px;cursor:pointer}
+.whenever-title:focus-visible,.whenever-row button:focus-visible{outline:2px solid var(--queue-accent);outline-offset:3px}
+@media(max-width:760px){.whenever-row:not(.it-list-item){flex-wrap:wrap}.whenever-main{flex-basis:calc(100% - 120px)}.whenever-row button{min-height:44px}.whenever-add-child,.whenever-collapse,.whenever-delete,.whenever-check,.whenever-release{min-width:44px}}
+
+/* Share the itinerary grid; the legacy compact Whenever flex row must not override it. */
+.whenever-row.it-list-item{display:grid;border-left:3px solid var(--queue-accent)}
+.whenever-row.it-list-item .it-list-actions{opacity:1;visibility:visible}
+@media(max-width:760px){
+  .whenever-row.it-list-item{grid-template-columns:44px minmax(0,1fr) !important}
+  .whenever-row.it-list-item .it-list-actions{grid-column:2 !important;display:flex !important;flex-direction:row !important;flex-wrap:wrap;justify-content:flex-start !important;grid-template-columns:none !important;grid-auto-rows:auto !important}
+  .whenever-row.it-list-item .it-list-actions .btn-task-radial,.whenever-row.it-list-item .it-list-actions .btn-del-task{width:44px;height:44px}
+  .whenever-row.it-list-item .it-list-meta{display:flex !important;flex-wrap:wrap}
+  .whenever-row.it-list-item .ttl{white-space:normal}
+  .whenever-row.it-list-item .btn-add-menu,.whenever-row.it-list-item .wrap-collapse{min-width:44px;min-height:44px}
+}
+
+@media(max-width:760px){
+  .whenever-row.it-list-item .it-list-meta > span,.whenever-row.it-list-item .it-list-meta > .btn-schedule,.whenever-row.it-list-item .it-list-meta > .detail-action-link{display:inline-flex}
+}

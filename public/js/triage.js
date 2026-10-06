@@ -299,7 +299,7 @@ function openDoneModal(id, title, onConfirm, ev){
   const dmNotesContainer=document.getElementById("dm-notes-editor");
   let dmNoteBlocks=typeof noteBlocksForTask === "function" ? noteBlocksForTask(id, noteVal, ev) : null;
   if(window._dmBlockEditor) window._dmBlockEditor.destroy();
-  window._dmBlockEditor=createBlockEditor(dmNotesContainer, dmNoteBlocks);
+  window._dmBlockEditor=createBlockEditor(dmNotesContainer, dmNoteBlocks,window.DCC.TaskSources.editorOptions(dmNotesContainer,ev||{}));
   // Pre-populate action items
   document.getElementById("dm-action-input").style.display="none";
   renderDmActions(id);
@@ -405,9 +405,9 @@ function confirmDoneModal(){
   const notes=loadNotes();
   if(window._dmBlockEditor && !window._dmBlockEditor.isEmpty()){
     const blocks=window._dmBlockEditor.getBlocks();
-    notes[_dmId]={blocks:blocks, html:window._dmBlockEditor.toHtml(), text:window._dmBlockEditor.toMarkdown()};
-  } else { delete notes[_dmId]; }
-  saveNotes(notes);
+    notes[_dmId]=Object.assign({},notes[_dmId],{blocks:blocks, html:window._dmBlockEditor.toHtml(), text:window._dmBlockEditor.toMarkdown()});
+  } else { notes[_dmId]=Object.assign({},notes[_dmId],{blocks:[],html:"",text:""}); }
+  saveNotes(notes,{taskId:_dmId});
   const text=notes[_dmId]?notes[_dmId].text:"";
   // Save time sessions
   if(_dmSessions.length){

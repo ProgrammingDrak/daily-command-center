@@ -1035,6 +1035,13 @@ function adjustDur(id,delta){
   recalcTimes();saveDurChanges();render()
 }
 function setDurAbsolute(id,newMin){
+  const anchor=typeof taskAnchorById==='function'?taskAnchorById(id):null;
+  if(anchor&&anchor.whenever){
+    const n=Math.max(1,Math.round(newMin));if(!Number.isFinite(n)||anchor.ev.subtaskOf)return;
+    Object.assign(anchor.ev,{durMin:n,duration:n,start:'00:00',end:fmt(n)});
+    if(anchor.blockId&&typeof enqueueRowPropsWrite==='function')enqueueRowPropsWrite(anchor.blockId,props=>Object.assign({},props,{duration:n,durMin:n}));
+    render();return;
+  }
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
   const n=Math.max(1,Math.round(newMin));
   const c=dur(ev);if(n===c)return;
@@ -1389,6 +1396,8 @@ function hydrateLockedTasks(){
 // and have no row to re-date. Only the backlog branch had one all along.
 function addToSchedule(blId,opts){
   opts=opts||{};
+  const poolTask=backlog.find(task=>task.id===blId);
+  if(poolTask&&window.DCC&&DCC.Whenever&&(DCC.Whenever.isWhenever(poolTask)||DCC.TaskModel.isNested(poolTask)||DCC.TaskModel.childrenOf(blId,backlog).length)&&window.blockStore&&typeof window.blockStore.rescheduleBlock==='function')return DCC.Whenever.scheduleTree(blId);
   let idx=consider.findIndex(b=>b.id===blId),task,fromBacklog=false;
   if(idx!==-1){task=consider.splice(idx,1)[0]}else{idx=backlog.findIndex(b=>b.id===blId);if(idx===-1)return;task=backlog.splice(idx,1)[0];fromBacklog=true}
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
@@ -1492,7 +1501,10 @@ function hydrateBacklogFromBlocks(){
     return 0;
   }
   let added=0;
-  TM.selectUnscheduled(window.blockStore.getByType("block"),{includeLegacyDatedBacklog:true}).forEach(b=>{
+  const rows=window.blockStore.getByType("block");
+  const parentKeys=TM.backlogParentKeys(rows);
+  const candidates=[...TM.selectUnscheduled(rows,{includeLegacyDatedBacklog:true}),...TM.selectWheneverPoolBlocks(rows)];
+  candidates.forEach(b=>{
     const p=b.properties||{};
     const localId=TM.backlogKey(b);
     // Dedupe by ev id, matching the fold (persistence.js keys on local_id||row id).
@@ -1501,25 +1513,7 @@ function hydrateBacklogFromBlocks(){
     // pre-existing behavior, kept deliberately rather than "fixed" by rendering a
     // twin nobody asked for; the pair is flagged to Track A for the migration.
     if(backlog.find(x=>x.id===localId))return;
-    backlog.push({
-      id:localId,
-      title:p.title,
-      type:p.type||"task",
-      durMin:p.durMin||30,
-      meta:p.meta||("Custom task \u00b7 "+ms(p.durMin||30)),
-      detail:p.detail||"",
-      source:p.source||"manual",
-      notionUrl:p.notionUrl||"",
-      priority:p.priority||"",
-      stage:p.stage||"",
-      commuteMinutes:p.commuteMinutes||null,
-      commuteToMinutes:p.commuteToMinutes||p.commuteMinutes||null,
-      commuteBackMinutes:p.commuteBackMinutes||p.commuteReturnMinutes||null,
-      createdAt:b.created_at||p.added_at||"",
-      updatedAt:b.updated_at||p.updated_at||"",
-      _blockId:b.id,
-      sortOrder:b.sort_order
-    });
+    backlog.push(TM.fromBacklogBlock(b,parentKeys));
     added++;
   });
   return added;

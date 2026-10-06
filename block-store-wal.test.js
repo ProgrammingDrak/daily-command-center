@@ -1058,3 +1058,21 @@ for (const mode of ["network", "503", "stale"]) {
     assert.equal(h.fetchCalls.length, 1);
   });
 }
+
+test("source form observes pending sync without persisting its client status flags", async () => {
+ const initial={id:"b1",type:"block",properties:{title:"Keep",source_id:"https://clever.slack.com/archives/C1/p1"}};
+ const opts={fetchBody:initial};
+ const {store,storage,fetchCalls}=makeStore(opts);
+ await store.handleBlocksChanged({blockIds:["b1"]});
+ opts.fetchReject=true;fetchCalls.length=0;
+ const props={...initial.properties,sourceReferences:[{kind:"file",url:"https://example.com/private.pdf",name:"Private.pdf"}]};
+ const out=await store.updateBlock("b1",props,{_reportSaveStatus:true});
+ assert.equal(out._savePending,true);assert.equal(wal(storage).length,1);
+ assert.equal(JSON.stringify(wal(storage)).includes('_reportSaveStatus'),false);
+ assert.equal(JSON.stringify(wal(storage)).includes('_savePending'),false);
+ assert.equal(fetchCalls[0].init.body.includes('_reportSaveStatus'),false);
+ assert.equal(store.get("b1").properties.source_id,initial.properties.source_id);
+ opts.fetchReject=false;opts.fetchBody={...initial,properties:props};await store.replayWAL();
+ assert.equal(wal(storage).length,0);
+ assert.equal(store.get("b1").properties.sourceReferences[0].name,'Private.pdf');
+});

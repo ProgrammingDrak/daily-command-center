@@ -833,18 +833,9 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .it-list-item .it-list-title-row > :is(.pet-privacy-toggle, .card-tags-toggle, .btn-add-menu, .wrap-collapse) {
   min-height: 0;
   min-width: 0;
-  /* The tap target stays 44px; the negative block margin is what stops it from
-     DRIVING the row. A flex item's contribution to the line's cross size is its
-     margin box, so 44px of button with -13px above and below contributes 18px of
-     height while the button itself -- the thing a thumb hits -- is untouched.
-     This is the pattern the row already uses for the completion control (44px
-     button, 28px visible plate) and the one scripts/verify-ui-optimization.mjs
-     pins for this very chip: "List privacy uses a compact visual pill"
-     (pill <= 24px) AND "List privacy keeps a 44 pixel touch target"
-     (button >= 44px). Setting `height: 18px` here satisfied the first and broke
-     the second. */
-  height: var(--target-min);
-  margin-block: calc((18px - var(--target-min)) / 2);
+  /* Desktop inline controls follow the text line; touch layouts expand below. */
+  height: 18px;
+  margin-block: 0;
   padding-block: 0;
   display: inline-flex;
   align-items: center;
@@ -1016,12 +1007,21 @@ body.task-queue-open .dcc-launcher { display: none; }
 
 /* Actions removed from the radial remain visible on the task bar at every width. */
 .btn-duration { min-height: 44px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; font: inherit; }
-.it-list-item .it-list-meta > .btn-duration { display: inline-flex; align-items: center; min-height: 44px; margin: 0; padding: 4px 8px; }
-.it-list-item .ttl[role="button"] { cursor: pointer; }
+.it-list-item .it-list-meta > .btn-duration { display: inline-flex; align-items: center; min-height: 0; height: 18px; margin: 0; padding: 0 6px; font-size: 10px; border-radius: 5px; }
+.it-list-item .ttl[role="button"] { cursor: pointer; min-height: 0; }
 .it-list-item .ttl[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
 .card .row-add-menu { display: inline-flex; }
 button.dbadge { font-family: inherit; border: 0; min-height: 44px; }
 @media (max-width: 760px) {
   /* The tablet row's width basis must not become a height in the phone column. */
   .header > div:first-child { flex: 0 1 auto; width: 100%; }
+}
+
+/* Keep inline desktop chips compact; reserve larger targets for touch layouts. */
+@media (max-width: 760px) {
+  .it-list-item .it-list-title-row > :is(.pet-privacy-toggle, .card-tags-toggle, .btn-add-menu, .wrap-collapse),
+  .it-list-item .it-list-meta > .btn-duration {
+    height: var(--target-min);
+    margin-block: calc((26px - var(--target-min)) / 2);
+  }
 }

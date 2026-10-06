@@ -19,6 +19,13 @@
 // that behavior. reschedule keeps its own handler intact as the atomic-delegation
 // reference pattern.
 
+const TaskSources = require("../public/js/task-sources");
+function validateSourceProps(props) {
+  if (props && Object.prototype.hasOwnProperty.call(props, "sourceReferences")) {
+    try { TaskSources.validate(props.sourceReferences); }
+    catch (error) { error.statusCode = 400; throw error; }
+  }
+}
 const validate = require("../middleware/validate");
 const schemas = require("../middleware/schemas");
 const { collectSubtreeBlockIds, unplannedProperties } = require("../lib/reschedule");
@@ -666,6 +673,7 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks", validate(schemas.blockCreate), route(async (req, res) => {
     const body = req.body;
     const items = Array.isArray(body) ? body : [body];
+    for (const item of items) validateSourceProps(typeof item.properties === "string" ? safeParseProps(item.properties) : item.properties);
     if (items.some(item => waitingItems.isTaskDependency(
       typeof (item && item.properties) === "string" ? safeParseProps(item.properties) : ((item && item.properties) || {})
     ))) {
@@ -1063,6 +1071,7 @@ module.exports = function mount(app, ctx) {
     assertBlockOwnership(existing, req.workspaceId);
     const requestedProps = typeof (req.body && req.body.properties) === "string"
       ? safeParseProps(req.body.properties) : ((req.body && req.body.properties) || {});
+    validateSourceProps(requestedProps);
     if (waitingItems.isTaskDependency(existing)
         || waitingItems.isTaskDependency(requestedProps)) {
       res.status(409).json({ error: "Update task dependencies through the Waiting API" });
@@ -1285,6 +1294,7 @@ module.exports = function mount(app, ctx) {
     for (const op of operations) {
       if (!op || typeof op !== "object") continue;
       const opProps = typeof op.properties === "string" ? safeParseProps(op.properties) : (op.properties || {});
+      if (op.op === "create" || op.op === "update") validateSourceProps(opProps);
       if ((op.op === "create" || op.op === "update") && waitingItems.isTaskDependency(opProps)) {
         res.status(409).json({ error: "Mutate task dependencies through the Waiting API" });
         return;
@@ -1679,6 +1689,30 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks/:id/reschedule", async (req, res) => {
     try {
       const { targetDate, parentStart, parentEnd, placement, userSetStart, _clientId } = req.body || {};
+      if (placement && ["whenever", "whenever_schedule", "pool_schedule"].includes(placement.kind)) {
+        if (req.body.reviewGuard) return res.status(400).json({error:"Review placements cannot move to Whenever"});
+        if (placement.kind !== "whenever" && !isValidDate(targetDate)) return res.status(400).json({error:"Invalid targetDate"});
+        const parent = await blockDB.getBlockIncludingDeleted(req.params.id);
+        if (!parent) return res.status(404).json({error:"Block not found"});
+        assertBlockOwnership(parent, req.workspaceId);
+        const pool = await blockDB.getRescheduleSubtreePool(parent.date, req.workspaceId, {includeDatelessRoots:!parent.date});
+        const planned = require("../lib/whenever-placement").plan(parent,pool,{targetDate,placement,parentStart,parentEnd});
+        const byId = new Map(pool.map(row => [row.id,row]));byId.set(parent.id,parent);
+        planned.ids.forEach(id => assertBlockOwnership(byId.get(id),req.workspaceId));
+        // Keep archive timeline seeds suppressed after the task leaves the pool.
+        // Reuse the standard origin marker and commit it with the entire move.
+        const creates=[],moves=[...planned.moves];
+        if(placement.kind==='whenever'&&parent.date){
+          const existing=await blockDB.getRescheduleTombstone(parent.date,parent.id,req.workspaceId);
+          const hiddenLocalIds=[...new Set(planned.ids.flatMap(id=>{const row=byId.get(id);return [row.id,(row.properties||{}).local_id].filter(Boolean);} ))];
+          const properties={...(existing&&existing.properties),local_id:'resched-tomb-'+parent.id,kind:'reschedule_tombstone',title:(parent.properties||{}).title||'Task',movedBlockId:parent.id,sourceLocalId:(parent.properties||{}).local_id||parent.id,rescheduledFrom:{date:parent.date},rescheduledTo:null,poolOrigin:true,publicVisibility:'private',hiddenLocalIds,at:new Date().toISOString()};
+          if(existing){assertBlockOwnership(existing,req.workspaceId);moves.push({id:existing.id,date:existing.date,properties,expectedDate:existing.date,expectedUpdatedAt:existing.updated_at});}
+          else creates.push({type:'block',date:parent.date,user_id:parent.user_id||req.session.userId||null,workspace_id:parent.workspace_id||req.workspaceId||null,properties});
+        }
+        const result = await blockDB.rescheduleBlocks(moves,creates);
+        broadcast("blocks-changed",{action:"reschedule",blockIds:result.blocks.map(row=>row.id),clientId:_clientId},req.workspaceId);
+        return res.json({moved:planned.ids,blocks:result.blocks.slice(0,planned.moves.length),created:result.blocks.slice(planned.moves.length),parentId:parent.id,fromDate:parent.date,targetDate,count:planned.ids.length});
+      }
       // Did a HUMAN name the landing time? A timed placement cannot answer that on its
       // own: the client sends parentStart for an auto-slotted move too. Only an explicit
       // true marks the start as user-chosen, which is what stops the client's drag
@@ -1829,6 +1863,11 @@ module.exports = function mount(app, ctx) {
       // restart the pile-up.
       const creates = [];
       const existingTomb = dateChanged ? await blockDB.getRescheduleTombstone(fromDate, parent.id, req.workspaceId) : null;
+      if(dateChanged&&existingTomb&&(existingTomb.properties||{}).poolOrigin){
+        assertBlockOwnership(existingTomb,req.workspaceId);
+        const properties={...existingTomb.properties,rescheduledTo:targetDate,at:now};delete properties.poolOrigin;
+        moves.push({id:existingTomb.id,date:existingTomb.date,properties,expectedDate:existingTomb.date,expectedUpdatedAt:existingTomb.updated_at});
+      }
       if (dateChanged && !existingTomb) {
         creates.push({
           type: "block",
@@ -1864,7 +1903,7 @@ module.exports = function mount(app, ctx) {
         },
       } : undefined;
       const result = await blockDB.rescheduleBlocks(moves, creates, reviewOptions);
-      const movedIds = moves.map(m => m.id);
+      const movedIds = subtreeIds;
       const created = result.blocks.slice(moves.length); // tombstone(s) appended after moves
       broadcast("blocks-changed", { action: "reschedule", blockIds: result.blocks.map(b => b.id), clientId: _clientId }, req.workspaceId);
       res.json({ moved: movedIds, blocks: result.blocks.slice(0, moves.length), created, parentId: parent.id, fromDate, targetDate, count: movedIds.length });

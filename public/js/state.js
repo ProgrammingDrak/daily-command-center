@@ -1222,13 +1222,13 @@ async function _rowForDateWrite(blockId){
 // properties. It may be a function of the freshly-read block when a column decision
 // (such as promoting a dateless completion) must not be made from a stale cache.
 let _rowPropsChain=Promise.resolve();
-function enqueueRowPropsWrite(blockId,merge,extra){
+function enqueueRowPropsWrite(blockId,merge,extra,options){
   if(!window.blockStore||!blockId||typeof merge!=="function")return null;
-  _rowPropsChain=_rowPropsChain
+  const write=_rowPropsChain
     .then(()=>_rowForDateWrite(blockId))
     .then(b=>{
       // Refuse on an unresolvable row: spreading nothing over `properties` is a wipe.
-      if(!b||!b.properties)return;
+      if(!b||!b.properties){if(options&&options.rejectOnError)throw new Error("Task is unavailable");return;}
       const next=merge(b.properties,b);
       const resolvedExtra=typeof extra==="function"?extra(b,next):extra;
       if(next){
@@ -1241,9 +1241,10 @@ function enqueueRowPropsWrite(blockId,merge,extra){
         return window.blockStore.updateBlock(b.id,next,writeExtra);
       }
     })
-    // Per-link, so one failure cannot wedge the queue for the rest of the session.
-    .catch(e=>{console.warn("[row] properties write failed for "+blockId+":",e);});
-  return _rowPropsChain;
+  ;
+  // Keep the shared queue recoverable, while forms can observe the actual failure.
+  _rowPropsChain=write.catch(e=>{console.warn("[row] properties write failed for "+blockId+":",e);});
+  return options&&options.rejectOnError?write:_rowPropsChain;
 }
 
 // ── C6b: the ONE writer for a per-row order-axis property (pin, lock) ──
@@ -1560,17 +1561,26 @@ function moveTaskToPriority(id){_moveTaskToBacklogStage(id,"Priority","Moved to 
 // (TaskModel.isWheneverPoolRow keeps it out of the fold), so without the refold it
 // would linger there until the next reload and then vanish.
 async function moveTaskToWhenever(id){
-  // A Whenever pool row leaves the day entirely (the fold skips it), so a parent moved
-  // there would strand its subtasks on today as standalone tasks, and Done in the pool
-  // would close only the parent. Pool chores are single tasks: refuse instead.
-  if(typeof childrenOf==="function"&&childrenOf(id,scheduled).length){
-    if(typeof showToast==="function")showToast("Finish or move its subtasks first","info");
-    return false;
+  const anchor=typeof taskAnchorById==='function'?taskAnchorById(id):null;
+  const ev=(anchor&&anchor.ev)||scheduled.find(task=>task.id===id);
+  if(!ev)return false;
+  const row=(anchor&&anchor.blockId)?await _rowForDateWrite(anchor.blockId):_findTaskBlockForDate(id,_viewedDateStr(),ev);
+  if(row&&window.blockStore&&typeof window.blockStore.rescheduleBlock==='function'){
+    const durations={};
+    for(const sid of _subtreeIdsOf(id)){
+      const member=scheduled.find(task=>task.id===sid);
+      const memberRow=member&&_findTaskBlockForDate(sid,_viewedDateStr(),member);
+      const minutes=member&&typeof dur==='function'?dur(member):null;
+      if(memberRow&&Number.isFinite(minutes)&&minutes>=0)durations[memberRow.id]=minutes;
+    }
+    try{await window.blockStore.rescheduleBlock(row.id,null,{placement:{kind:'whenever',durations}});}
+    catch(error){if(typeof showToast==='function')showToast(error.message,'error');return false;}
+  }else{
+    if(typeof childrenOf==='function'&&childrenOf(id,scheduled).length){if(typeof showToast==='function')showToast('Save this task before moving its tree','info');return false;}
+    await _moveTaskToBacklogStage(id,'Whenever','Moved to Whenever');
   }
-  const W=window.DCC&&window.DCC.Whenever;
-  const stage=(W&&W.STAGE)||"Whenever";
-  await _moveTaskToBacklogStage(id,stage,"Moved to "+((W&&W.LABEL)||"Whenever"));
-  if(typeof refoldTaskStateFromBlockCache==="function"){refoldTaskStateFromBlockCache();render();}
+  if(typeof refoldTaskStateFromBlockCache==='function'){refoldTaskStateFromBlockCache();render();}
+  return true;
 }
 
 // Convert an existing scheduled task into a Delegated / Blocked item: open the
@@ -1618,12 +1628,13 @@ async function _computeRescheduleSlot(ev,targetDate){
 // graph over block ROWS (returning block ids) for POST /api/blocks/:id/reschedule.
 // Keep the two in step. They already differ on which edge wins when a row carries
 // both: `parentIdOf` here is wrapId-first, that one is subtaskOf-first.
-function _subtreeIdsOf(rootId){
+function _subtreeIdsOf(rootId,pool){
+  pool=pool||scheduled;
   const ids=new Set([rootId]);
   let changed=true;
   while(changed){
     changed=false;
-    for(const e of scheduled){
+    for(const e of pool){
       const pid=parentIdOf(e);
       if(pid&&ids.has(pid)&&!ids.has(e.id)){ids.add(e.id);changed=true;}
     }
@@ -1924,14 +1935,16 @@ function openDeleteConfirm(id){
 // rows keep their deleted_at for 30 days server-side (purgeSoftDeleted, server.js)
 // and Undo revives those exact rows through /undelete.
 async function deleteTaskWithUndo(id){
-  const ev=scheduled.find(e=>e.id===id);
+  const anchor=typeof taskAnchorById==='function'?taskAnchorById(id):null;
+  const pool=anchor&&anchor.whenever?backlog:scheduled;
+  const ev=pool.find(e=>e.id===id);
   if(!ev||deletedSet.has(id))return;
   const dateStr=_viewedDateStr();
   // The whole visible subtree goes with the parent. A subtask left behind is what
   // resurfaces later as a standalone unfinished task. Anything already deleted
   // separately is left out so Undo can't resurrect it.
-  const ids=[..._subtreeIdsOf(id)].filter(sid=>sid===id||!deletedSet.has(sid));
-  const evById=new Map(scheduled.map(e=>[e.id,e]));
+  const ids=[..._subtreeIdsOf(id,pool)].filter(sid=>sid===id||!deletedSet.has(sid));
+  const evById=new Map(pool.map(e=>[e.id,e]));
   // Hide first. Row resolution below scans the whole block cache once per subtree
   // node, and none of it changes what the user sees -- doing it before the render
   // would just delay the optimistic hide this rewrite exists to make instant.

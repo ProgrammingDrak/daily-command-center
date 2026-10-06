@@ -113,6 +113,8 @@
       end: end,
       meta: p.meta || ("Custom task · " + _ms(d)),
       detail: p.detail || "", source: p.source || "manual",
+      ...(p._taskNotes ? {_taskNotes:JSON.parse(JSON.stringify(p._taskNotes))} : {}),
+      ...(Array.isArray(p.sourceReferences) ? {sourceReferences: p.sourceReferences.map(ref => Object.assign({}, ref))} : {}),
       source_id: p.source_id || "", notes: p.notes || "", untimed: untimed,
       status: p.status || "open",
       allDay: allDay,
@@ -245,6 +247,7 @@
       priority: priority,
       source: "triage",
       source_id: item.link || item.source_url || "",
+      ...(Array.isArray(item.sourceReferences) ? {sourceReferences:item.sourceReferences.map(ref => Object.assign({},ref))} : {}),
       meta: "Triage item",
       detail: [item.summary, item.notes].filter(Boolean).join("\n\n"),
       tags: ["triage"],
@@ -433,6 +436,36 @@
   // backlog verb (addToSchedule, edit, delete) resolves rows there. Once dated it is
   // ordinary work again (that is how Do it now brings one into the day), so the date
   // test comes first. The stage is the stored value; whenever.js reads it from here.
+  function backlogParentKeys(blocks){
+    const keys=new Map();
+    _arr(blocks).filter(row=>!row.date&&(row.properties||{}).kind==='backlog').forEach(row=>{keys.set(row.id,backlogKey(row));if(row.properties.local_id)keys.set(row.properties.local_id,backlogKey(row));});
+    return keys;
+  }
+  function fromBacklogBlock(block,parentKeys){
+    const p=block.properties||{},task=fromBlock(block);
+    if(parentKeys instanceof Map){
+      if(task.subtaskOf)task.subtaskOf=parentKeys.get(task.subtaskOf)||task.subtaskOf;
+      if(task.wrapId)task.wrapId=parentKeys.get(task.wrapId)||task.wrapId;
+    }
+    const duration=p.durMin??p.duration??30;
+    return Object.assign(task,{id:backlogKey(block),stage:p.stage||'',durMin:duration,duration,
+      sortOrder:block.sort_order,updatedAt:block.updated_at||p.updated_at||''});
+  }
+  function selectWheneverPoolBlocks(blocks){
+    return _arr(blocks).filter(block=>block&&!block.deleted_at&&isWheneverPoolRow(block)&&
+      !['deleted','archived'].includes((block.properties||{}).status));
+  }
+  // Day-state timeline seeds must not resurrect a row moved into the pool.
+  function suppressWheneverSeeds(items,blocks,date){
+    const rows=selectWheneverPoolBlocks(blocks),rowIds=new Set(rows.map(row=>row.id)),localIds=new Set(rows.map(backlogKey));
+    _arr(blocks).forEach(row=>{
+      const p=row.properties||{};
+      if(!row.deleted_at&&row.date===date&&p.kind==='reschedule_tombstone'&&p.poolOrigin===true){
+        (p.hiddenLocalIds||[]).forEach(id=>{localIds.add(id);rowIds.add(id);});rowIds.add(p.movedBlockId);
+      }
+    });
+    return _arr(items).filter(item=>item._blockId?!rowIds.has(item._blockId):!localIds.has(item.id)&&!rowIds.has(item.id));
+  }
   const WHENEVER_STAGE = "Whenever";
   function isWheneverPoolRow(block) {
     block = block || {};
@@ -506,6 +539,16 @@
   // `state.js` documents why this deliberately diverges from `lib/reschedule.js`'s
   // row-space order; do not "fix" that. Mirrored (not moved) from state.js, which
   // keeps the bare globals every existing call site reads.
+  function hierarchyRoot(id,items,index){
+    const byId=index||new Map(_arr(items).map(ev=>[ev.id,ev])),seen=new Set();
+    const original=byId.get(id);let current=original;
+    while(current){
+      if(seen.has(current.id))return original;
+      seen.add(current.id);const parent=byId.get(parentIdOf(current));
+      if(!parent)return current;current=parent;
+    }
+    return null;
+  }
   function parentIdOf(ev) { return (ev && (ev.wrapId || ev.subtaskOf)) || null; }
   function relOf(ev) { return ev ? (ev.wrapId ? "ride-along" : (ev.subtaskOf ? "subtask" : null)) : null; }
   function isSubtask(ev) { return !!(ev && ev.subtaskOf); }
@@ -885,8 +928,10 @@
     selectUnscheduled: selectUnscheduled,
     WHENEVER_STAGE: WHENEVER_STAGE,
     isWheneverPoolRow: isWheneverPoolRow,
+    fromBacklogBlock, backlogParentKeys, selectWheneverPoolBlocks, suppressWheneverSeeds,
     // C6a — shape
     parentIdOf: parentIdOf,
+    hierarchyRoot,
     relOf: relOf,
     isSubtask: isSubtask,
     isRideAlong: isRideAlong,

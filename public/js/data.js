@@ -217,6 +217,7 @@ function transformState(state) {
               (item.estimated_minutes ? " \u00b7 " + item.estimated_minutes + " min" : ""),
         detail: item.detail || item.description || item.notes || "", source: item.source || "manual",
         source_id: item.source_id || "",
+        ...(Array.isArray(item.sourceReferences)?{sourceReferences:item.sourceReferences.map(ref=>Object.assign({},ref))}:{}),
         notes: item.notes || item.description || item.detail || "",
         hangout_link: item.hangout_link || "",
         location: item.location || "",
