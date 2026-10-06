@@ -1065,7 +1065,7 @@ function buildListView(){
   // Rescheduled away (amber) — parity with the timeline view's bottom section.
   const rescheduledAwayItems=(window.blockStore&&typeof window.blockStore.getByType==="function")
     ? window.blockStore.getByType("block")
-        .filter(b=>b&&!b.deleted_at&&(b.properties||{}).kind==="reschedule_tombstone"&&(b.date===viewDate||!b.date))
+        .filter(b=>b&&!b.deleted_at&&(b.properties||{}).kind==="reschedule_tombstone"&&!(b.properties||{}).poolOrigin&&(b.date===viewDate||!b.date))
         .sort((a,b)=>String((a.properties||{}).title||"").localeCompare(String((b.properties||{}).title||"")))
     : [];
   if(rescheduledAwayItems.length){
@@ -1136,7 +1136,7 @@ function buildSchedule(){
   // destination; we render it amber at the bottom.
   const rescheduledAwayItems=(window.blockStore&&typeof window.blockStore.getByType==="function")
     ? window.blockStore.getByType("block")
-        .filter(b=>b&&!b.deleted_at&&(b.properties||{}).kind==="reschedule_tombstone"&&(b.date===viewDate||!b.date))
+        .filter(b=>b&&!b.deleted_at&&(b.properties||{}).kind==="reschedule_tombstone"&&!(b.properties||{}).poolOrigin&&(b.date===viewDate||!b.date))
         .sort((a,b)=>String((a.properties||{}).title||"").localeCompare(String((b.properties||{}).title||"")))
     : [];
 

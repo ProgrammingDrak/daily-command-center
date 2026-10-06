@@ -5849,7 +5849,7 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .whenever-title{background:none;border:0;padding:0;text-align:left;cursor:pointer;font:inherit}
 .whenever-add-child,.whenever-collapse,.whenever-delete{border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text-muted);min-width:32px;min-height:32px;cursor:pointer}
 .whenever-title:focus-visible,.whenever-row button:focus-visible{outline:2px solid var(--queue-accent);outline-offset:3px}
-@media(max-width:600px){.whenever-row:not(.it-list-item){flex-wrap:wrap}.whenever-main{flex-basis:calc(100% - 120px)}.whenever-row button{min-height:44px}.whenever-add-child,.whenever-collapse,.whenever-delete,.whenever-check,.whenever-release{min-width:44px}}
+@media(max-width:760px){.whenever-row:not(.it-list-item){flex-wrap:wrap}.whenever-main{flex-basis:calc(100% - 120px)}.whenever-row button{min-height:44px}.whenever-add-child,.whenever-collapse,.whenever-delete,.whenever-check,.whenever-release{min-width:44px}}
 
 /* Share the itinerary grid; the legacy compact Whenever flex row must not override it. */
 .whenever-row.it-list-item{display:grid;border-left:3px solid var(--queue-accent)}

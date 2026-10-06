@@ -26,6 +26,12 @@ function loadNotes() {
       const taskId = b.properties._sourceTaskId || b.parent_id;
       result[taskId] = { html: b.properties.html, text: b.properties.text, _blockId: b.id };
     });
+    // Task-owned pool Notes travel with their canonical row across day partitions.
+    window.blockStore.getByType("block").forEach(row=>{
+      const note=(row.properties||{})._taskNotes;if(!note)return;
+      const ids=[row.id,(row.properties||{}).local_id,window.DCC?.TaskModel?.backlogKey(row)].filter(Boolean);
+      ids.forEach(id=>{result[id]={...note,_taskOwned:true};});
+    });
     return result;
   }
   try { return JSON.parse(localStorage.getItem(NOTES_KEY) || "{}"); } catch(e) { return {}; }
@@ -40,6 +46,14 @@ function saveNotes(data, options) {
       if (!val) continue;
       const html = typeof val === "string" ? val : (val.html || "");
       const text = typeof val === "string" ? val : (val.text || "");
+      const anchor=typeof taskAnchorById==='function'?taskAnchorById(taskId):null;
+      const row=anchor&&anchor.blockId&&window.blockStore.get(anchor.blockId);
+      if(row&&(anchor.whenever||(row.properties||{})._taskNotes)){
+        const note={html,text,blocks:Array.isArray(val.blocks)?val.blocks:[]};
+        if(typeof enqueueRowPropsWrite==='function')enqueueRowPropsWrite(row.id,props=>({...props,_taskNotes:note})).catch(()=>{if(typeof showToast==='function')showToast('Could not save task notes','error');});
+        else window.blockStore.updateBlockDebounced(row.id,{...row.properties,_taskNotes:note});
+        continue;
+      }
       if (val._blockId) {
         window.blockStore.updateBlockDebounced(val._blockId, { html, text, _sourceTaskId: taskId });
       } else {
@@ -234,12 +248,12 @@ function closeNotesDrawer() {
   if (currentNotesTaskId && window._notesBlockEditor) {
     const notes = loadNotes();
     const blocks=window._notesBlockEditor.getBlocks();
-    notes[currentNotesTaskId] = {
+    notes[currentNotesTaskId] = Object.assign({},notes[currentNotesTaskId],{
       blocks: blocks,
       html: window._notesBlockEditor.toHtml(),
       text: window._notesBlockEditor.toMarkdown()
-    };
-    saveNotes(notes);
+    });
+    saveNotes(notes,{taskId:currentNotesTaskId});
   }
   document.getElementById("notes-drawer-overlay").classList.remove("open");
   currentNotesTaskId = null;

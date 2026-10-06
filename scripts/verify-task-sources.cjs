@@ -1,3 +1,5 @@
+// Globals below are supplied by Node or by the synthetic browser fixture.
+/* global ClipboardEvent, DataTransfer, File, __dirname, console, createBlockEditor, document, failSave: writable, innerWidth, process, stored: writable, taskEntry, window */
 const fs=require('fs');const assert=require('assert/strict');
 const {chromium}=require('playwright-core');
 const root=require('path').resolve(__dirname,'..');

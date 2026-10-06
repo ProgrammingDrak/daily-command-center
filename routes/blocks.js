@@ -1699,9 +1699,19 @@ module.exports = function mount(app, ctx) {
         const planned = require("../lib/whenever-placement").plan(parent,pool,{targetDate,placement,parentStart,parentEnd});
         const byId = new Map(pool.map(row => [row.id,row]));byId.set(parent.id,parent);
         planned.ids.forEach(id => assertBlockOwnership(byId.get(id),req.workspaceId));
-        const result = await blockDB.rescheduleBlocks(planned.moves,[]);
-        broadcast("blocks-changed",{action:"reschedule",blockIds:planned.ids,clientId:_clientId},req.workspaceId);
-        return res.json({moved:planned.ids,blocks:result.blocks,created:[],parentId:parent.id,fromDate:parent.date,targetDate,count:planned.ids.length});
+        // Keep archive timeline seeds suppressed after the task leaves the pool.
+        // Reuse the standard origin marker and commit it with the entire move.
+        const creates=[],moves=[...planned.moves];
+        if(placement.kind==='whenever'&&parent.date){
+          const existing=await blockDB.getRescheduleTombstone(parent.date,parent.id,req.workspaceId);
+          const hiddenLocalIds=[...new Set(planned.ids.flatMap(id=>{const row=byId.get(id);return [row.id,(row.properties||{}).local_id].filter(Boolean);} ))];
+          const properties={...(existing&&existing.properties),local_id:'resched-tomb-'+parent.id,kind:'reschedule_tombstone',title:(parent.properties||{}).title||'Task',movedBlockId:parent.id,sourceLocalId:(parent.properties||{}).local_id||parent.id,rescheduledFrom:{date:parent.date},rescheduledTo:null,poolOrigin:true,publicVisibility:'private',hiddenLocalIds,at:new Date().toISOString()};
+          if(existing){assertBlockOwnership(existing,req.workspaceId);moves.push({id:existing.id,date:existing.date,properties,expectedDate:existing.date,expectedUpdatedAt:existing.updated_at});}
+          else creates.push({type:'block',date:parent.date,user_id:parent.user_id||req.session.userId||null,workspace_id:parent.workspace_id||req.workspaceId||null,properties});
+        }
+        const result = await blockDB.rescheduleBlocks(moves,creates);
+        broadcast("blocks-changed",{action:"reschedule",blockIds:result.blocks.map(row=>row.id),clientId:_clientId},req.workspaceId);
+        return res.json({moved:planned.ids,blocks:result.blocks.slice(0,planned.moves.length),created:result.blocks.slice(planned.moves.length),parentId:parent.id,fromDate:parent.date,targetDate,count:planned.ids.length});
       }
       // Did a HUMAN name the landing time? A timed placement cannot answer that on its
       // own: the client sends parentStart for an auto-slotted move too. Only an explicit
@@ -1853,6 +1863,11 @@ module.exports = function mount(app, ctx) {
       // restart the pile-up.
       const creates = [];
       const existingTomb = dateChanged ? await blockDB.getRescheduleTombstone(fromDate, parent.id, req.workspaceId) : null;
+      if(dateChanged&&existingTomb&&(existingTomb.properties||{}).poolOrigin){
+        assertBlockOwnership(existingTomb,req.workspaceId);
+        const properties={...existingTomb.properties,rescheduledTo:targetDate,at:now};delete properties.poolOrigin;
+        moves.push({id:existingTomb.id,date:existingTomb.date,properties,expectedDate:existingTomb.date,expectedUpdatedAt:existingTomb.updated_at});
+      }
       if (dateChanged && !existingTomb) {
         creates.push({
           type: "block",
@@ -1888,7 +1903,7 @@ module.exports = function mount(app, ctx) {
         },
       } : undefined;
       const result = await blockDB.rescheduleBlocks(moves, creates, reviewOptions);
-      const movedIds = moves.map(m => m.id);
+      const movedIds = subtreeIds;
       const created = result.blocks.slice(moves.length); // tombstone(s) appended after moves
       broadcast("blocks-changed", { action: "reschedule", blockIds: result.blocks.map(b => b.id), clientId: _clientId }, req.workspaceId);
       res.json({ moved: movedIds, blocks: result.blocks.slice(0, moves.length), created, parentId: parent.id, fromDate, targetDate, count: movedIds.length });

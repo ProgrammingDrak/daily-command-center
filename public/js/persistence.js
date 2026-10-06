@@ -410,7 +410,7 @@ function reloadPersistedEdits() {
         if(b.date)return b.date===currentDate;
         return !(p.local_id&&datedLocalIds.has(p.local_id));
       };
-      if(_tmReady&&typeof TM.suppressWheneverSeeds==='function')scheduled=TM.suppressWheneverSeeds(scheduled,window.blockStore.getByType("block"));
+      if(_tmReady&&typeof TM.suppressWheneverSeeds==='function')scheduled=TM.suppressWheneverSeeds(scheduled,window.blockStore.getByType("block"),currentDate);
       const addedBlocks=_tmReady?[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(isFoldableTask)]:[];
       if(_tmReady)addedBlocks.forEach(block=>{
         const p=block.properties||{};

@@ -45,13 +45,13 @@ test('pool deletion uses the same subtree resolver for child and grandchild ids'
  assert.deepEqual([...ctx._subtreeIdsOf('parent',items)],['parent','sub','nested','deep']);
 });
 function mount(rows){
- const handlers={},writes=[];const ctx={isValidDate:d=>/^\d{4}-\d{2}-\d{2}$/.test(d||''),broadcast(){},blockDB:{getBlockIncludingDeleted:async id=>rows.find(r=>r.id===id),getRescheduleSubtreePool:async()=>rows,rescheduleBlocks:async(moves)=>{writes.push(moves);return {blocks:moves};}}};
+ const handlers={},writes=[],poolCalls=[],createsLog=[];const ctx={isValidDate:d=>/^\d{4}-\d{2}-\d{2}$/.test(d||''),broadcast(){},blockDB:{getBlockIncludingDeleted:async id=>rows.find(r=>r.id===id),getRescheduleSubtreePool:async(...args)=>{poolCalls.push(args);return rows;},getRescheduleTombstone:async()=>null,rescheduleBlocks:async(moves,creates)=>{writes.push(moves);createsLog.push(creates);return {blocks:[...moves,...creates]};}}};
  const app={get(){},post(path,handler){handlers[path]=handler;},patch(){},delete(){},put(){}};require('./routes/blocks')(app,ctx);
- return {writes,call:async(body)=>{let status=200,result;await handlers['/api/blocks/:id/reschedule']({params:{id:rows[0].id},body,workspaceId:'mine',session:{userId:1}},{status(code){status=code;return this;},json(value){result=value;return this;}});return {status,result};}};
+ return {writes,poolCalls,createsLog,call:async(body)=>{let status=200,result;await handlers['/api/blocks/:id/reschedule']({params:{id:rows[0].id},body,workspaceId:'mine',session:{userId:1}},{status(code){status=code;return this;},json(value){result=value;return this;}});return {status,result};}};
 }
 test('HTTP mover delegates the whole tree once and refuses a foreign descendant before any write',async()=>{
  const rows=tree(),f=mount(rows);const result=await f.call({targetDate:null,placement:{kind:'whenever'}});
- assert.equal(result.status,200);assert.equal(result.result.count,4);assert.equal(f.writes.length,1);
+ assert.equal(result.status,200);assert.equal(result.result.count,4);assert.equal(f.writes.length,1);assert.deepEqual(f.poolCalls[0],[null,'mine',{includeDatelessRoots:true}]);
  rows[3].workspace_id='someone-else';const denied=mount(rows);const bad=await denied.call({targetDate:null,placement:{kind:'whenever'}});
  assert.ok(bad.status>=400);assert.equal(denied.writes.length,0);
 });
@@ -66,8 +66,8 @@ test('pool reparenting uses the two normal edges, persists parent_id and rejects
  const ctx=vm.createContext({window:{},parentIdOf:TM.parentIdOf,backlog:items,scheduled:[],render(){},taskAnchorById:id=>({ev:items.find(item=>item.id===id),whenever:true,blockId:'row-'+id}),enqueueRowPropsWrite:(id,merge,extra)=>calls.push({id,properties:merge({}),extra})});
  vm.runInContext(slice('./public/js/drag','function _isAncestor(','// First free slot'),ctx);
  vm.runInContext(slice('./public/js/tabs','function reparentAsSubtask(','// Popover anchored'),ctx);
- assert.equal(ctx.reparentAsSubtask('parent','deep',{nested:true}),false);assert.equal(calls.length,0);
- assert.equal(ctx.reparentAsSubtask('sub','nested',{nested:true}),true);assert.equal(items[1].wrapId,'nested');assert.equal(items[1].subtaskOf,null);assert.equal(calls[0].extra.parent_id,'row-nested');
+ assert.equal(ctx.reparentAsSubtask('parent','deep',{childEdge:'wrap'}),false);assert.equal(calls.length,0);
+ assert.equal(ctx.reparentAsSubtask('sub','nested',{childEdge:'wrap'}),true);assert.equal(items[1].wrapId,'nested');assert.equal(items[1].subtaskOf,null);assert.equal(calls[0].extra.parent_id,'row-nested');
  assert.equal(ctx.reparentAsSubtask('sub','parent'),true);assert.equal(items[1].subtaskOf,'parent');assert.equal(items[1].wrapId,null);assert.equal(items[1].duration,0);
 });
 
@@ -95,5 +95,34 @@ test('Whenever canonical rows suppress original timeline seeds without day delet
  assert.deepEqual(TM.suppressWheneverSeeds([...items,keep],rows),[keep]);
  assert.deepEqual(TM.suppressWheneverSeeds(items,rows.map(row=>({...row,date:'2026-10-06'}))),items);
  const otherRow={...items[0],_blockId:'unrelated-row'};assert.deepEqual(TM.suppressWheneverSeeds([otherRow],rows),[otherRow]);
- assert.ok(fs.readFileSync(require.resolve('./public/js/persistence'),'utf8').includes('scheduled=TM.suppressWheneverSeeds(scheduled,window.blockStore.getByType("block"))'));
+ assert.ok(fs.readFileSync(require.resolve('./public/js/persistence'),'utf8').includes('scheduled=TM.suppressWheneverSeeds(scheduled,window.blockStore.getByType("block"),currentDate)'));
+});
+
+
+test('API-created tasks without local_id remain foldable when leaving Whenever',()=>{
+ const api={...row('api',{kind:'task'}),date:'2026-10-05'};delete api.properties.local_id;
+ const enter=placement.plan(api,[api],{targetDate:null,placement:{kind:'whenever'}}).moves[0];
+ const pooled={...api,date:null,properties:enter.properties};assert.equal(TM.fromBacklogBlock(pooled).id,'blk-'+api.id);
+ const exit=placement.plan(pooled,[pooled],{targetDate:'2026-10-06',placement:{kind:'pool_schedule'},parentStart:'10:00',parentEnd:'10:30'}).moves[0];
+ assert.equal(TM.foldsIntoItinerary({...api,...exit}),true);assert.equal(exit.properties.kind,'task');
+});
+
+test('dated-to-pool HTTP move writes origin suppression atomically and keeps it after leaving pool',async()=>{
+ const rows=tree().map(r=>({...r,date:'2026-10-05'})),f=mount(rows);
+ const result=await f.call({targetDate:null,placement:{kind:'whenever'}});assert.equal(result.status,200);assert.equal(f.writes.length,1);
+ assert.equal(f.createsLog[0].length,1);const marker=f.createsLog[0][0];assert.equal(marker.date,'2026-10-05');assert.equal(marker.properties.poolOrigin,true);assert.equal(marker.properties.publicVisibility,'private');
+ const dated=rows.map(r=>({...r,date:'2026-10-06'}));
+ const seeds=rows.map(TM.fromBlock);assert.deepEqual(TM.suppressWheneverSeeds(seeds,[...dated,marker],'2026-10-05'),[]);
+ assert.deepEqual(TM.suppressWheneverSeeds(seeds,[...dated,marker],'2026-10-06'),seeds);
+});
+
+
+test('no-local_id parents use canonical durable child edges and pool aliases only for rendering',async()=>{
+ const parent=row('api');delete parent.properties.local_id;const rows=[parent],backlog=[TM.fromBacklogBlock(parent)],calls=[];
+ const ctx=vm.createContext({window:{DCC:{taskCommonProps:S.taskCommonProps,taskBlockProps:S.taskBlockProps},blockStore:{get:id=>rows.find(r=>r.id===id),createBlock:async(type,properties,extra)=>{const r={id:'created-'+calls.length,type,properties,date:extra.date,parent_id:extra.parentId};calls.push(r);rows.push(r);return r;}}},backlog,scheduled:[],render(){},taskAnchorById:id=>{const ev=backlog.find(t=>t.id===id);return {ev,date:null,whenever:true,blockId:ev._blockId};},fmt:m=>String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0'),pt:()=>0});
+ vm.runInContext(slice('./public/js/tabs','function addSubtask(','// Re-read the carryover'),ctx);vm.runInContext(slice('./public/js/tabs','function addStackedTask(','// Re-parent an EXISTING'),ctx);
+ const sub=ctx.addSubtask(backlog[0].id,'API child');await sub._persisted;ctx.addStackedTask(backlog[0].id,'API nested',15);await Promise.resolve();
+ assert.equal(calls[0].properties.subtaskOf,parent.id);assert.equal(calls[1].properties.wrapId,parent.id);assert.ok(calls.every(r=>r.parent_id===parent.id));
+ const reloaded=rows.map(r=>TM.fromBacklogBlock(r,TM.backlogParentKeys(rows)));assert.deepEqual(TM.selectTree(reloaded,{isCollapsed:()=>false}).map(n=>n.depth),[0,1,1]);
+ const moved=placement.plan(parent,rows,{targetDate:'2026-10-06',placement:{kind:'pool_schedule'},parentStart:'10:00',parentEnd:'10:30'});assert.equal(moved.ids.length,3);assert.equal(moved.moves[1].properties.subtaskOf,parent.id);
 });

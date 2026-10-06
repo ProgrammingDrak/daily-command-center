@@ -418,8 +418,8 @@ function addSubtask(taskId, text, options){
       ? window.DCC.taskBlockProps({},Object.assign({},overrides,{local_id:id,duration:0,start:startStr,end:startStr}))
       : {local_id:id,title:text,source:"manual",start:startStr,end:startStr,duration:0,priority:"Medium",tags:[]};
     if(anchor&&anchor.whenever)Object.assign(blockProps,{kind:'backlog',stage:'Whenever',durMin:0,start:null,end:null,publicVisibility:parent.publicVisibility||'private'});
-    blockProps.type="task";blockProps.subtaskOf=taskId;blockProps.publicVisibility=anchor&&anchor.whenever?(parent.publicVisibility||"private"):"public";blockProps.added_at=new Date().toISOString();
-    created=window.blockStore.createBlock("block",blockProps,{date:date});
+    blockProps.type="task";blockProps.subtaskOf=anchor&&anchor.whenever&&anchor.blockId?((window.blockStore.get&&window.blockStore.get(anchor.blockId)?.properties?.local_id)||anchor.blockId):taskId;blockProps.publicVisibility=anchor&&anchor.whenever?(parent.publicVisibility||"private"):"public";blockProps.added_at=new Date().toISOString();
+    created=window.blockStore.createBlock("block",blockProps,{date:date,...(anchor&&anchor.whenever?{parentId:anchor.blockId||null}:{})});
   }
   if(anchor&&anchor.whenever){
     Object.assign(task,{kind:'backlog',stage:'Whenever',durMin:0,duration:0,untimed:true,_dateless:true,publicVisibility:parent.publicVisibility||'private'});
@@ -530,8 +530,8 @@ function addStackedTask(taskId, text, durMinArg, opts){
       ? window.DCC.taskBlockProps({},Object.assign({},overrides,{local_id:id,duration:durMin,start:startStr,end:endStr}))
       : {local_id:id,title:text,source:opts.source||"manual",start:startStr,end:endStr,duration:durMin,priority:priority,tags:opts.tags||[],detail:opts.detail||""};
     if(anchor&&anchor.whenever)Object.assign(blockProps,{kind:'backlog',stage:'Whenever',durMin:durMin,start:null,end:null});
-    blockProps.type=type;blockProps.wrapId=taskId;blockProps.publicVisibility=anchor&&anchor.whenever?(parent.publicVisibility||"private"):"public";blockProps.added_at=new Date().toISOString();
-    created=window.blockStore.createBlock("block",blockProps,{date:date});
+    blockProps.type=type;blockProps.wrapId=anchor&&anchor.whenever&&anchor.blockId?((window.blockStore.get&&window.blockStore.get(anchor.blockId)?.properties?.local_id)||anchor.blockId):taskId;blockProps.publicVisibility=anchor&&anchor.whenever?(parent.publicVisibility||"private"):"public";blockProps.added_at=new Date().toISOString();
+    created=window.blockStore.createBlock("block",blockProps,{date:date,...(anchor&&anchor.whenever?{parentId:anchor.blockId||null}:{})});
   }
   if(onViewedDay){
     if(typeof recalcTimes==="function")recalcTimes();
@@ -556,10 +556,10 @@ function reparentAsSubtask(childId, parentId,options){
   if(childAnchor&&parentAnchor&&childAnchor.whenever&&parentAnchor.whenever){
     if(childId===parentId||(typeof _isAncestor==='function'&&_isAncestor(childId,parentId,backlog)))return false;
     const child=childAnchor.ev,parent=parentAnchor.ev;
-    const nested=!!(options&&options.nested)||!!(window.TaskTypes&&window.TaskTypes.rule(parent,'childEdge')==='wrap');
+    const nested=!!(options&&options.childEdge==='wrap')||!!(window.TaskTypes&&window.TaskTypes.rule(parent,'childEdge')==='wrap');
     const patch={subtaskOf:nested?null:parentId,wrapId:nested?parentId:null,start:null,end:null,...(!nested?{duration:0,durMin:0}:Number(child.duration||child.durMin)>0?{}:{duration:30,durMin:30})};
     Object.assign(child,patch);
-    if(childAnchor.blockId&&typeof enqueueRowPropsWrite==='function')enqueueRowPropsWrite(childAnchor.blockId,props=>Object.assign({},props,patch),{parent_id:parentAnchor.blockId});
+    if(childAnchor.blockId&&typeof enqueueRowPropsWrite==='function')enqueueRowPropsWrite(childAnchor.blockId,props=>{const ref=(window.blockStore&&window.blockStore.get&&window.blockStore.get(parentAnchor.blockId)?.properties?.local_id)||parentAnchor.blockId||parentId;return Object.assign({},props,patch,{subtaskOf:nested?null:ref,wrapId:nested?ref:null});},{parent_id:parentAnchor.blockId});
     render();return true;
   }
 

@@ -1,3 +1,5 @@
+// Globals below are supplied by Node or by the synthetic browser fixture.
+/* global DCC, __completed: writable, __dirname, __fail: writable, __opened, __plan, __toast, __writes: writable, backlog: writable, buildWhenever, console, document, innerWidth, manualDone, process, refoldTaskStateFromBlockCache, rows: writable, scheduled: writable, setDurAbsolute, viewDate, window */
 const fs=require('fs'),path=require('path'),assert=require('assert/strict');
 const root=path.resolve(__dirname,'..');
 const {chromium}=require('playwright-core');
@@ -12,7 +14,7 @@ for(const width of [1280,390]){
  await page.addScriptTag({path:root+'/public/js/task-model.js'});await page.addScriptTag({path:root+'/public/js/task-serialize.js'});await page.addScriptTag({path:root+'/public/js/task-sources.js'});await page.addScriptTag({path:root+'/public/js/itinerary-card.js'});
  await page.evaluate(()=>{
   window.rows=[{id:'row-parent',type:'block',date:null,workspace_id:'mine',properties:{local_id:'parent',kind:'backlog',stage:'Whenever',title:'Grab things from my house',type:'task',duration:30,durMin:30,publicVisibility:'private',source:'slack',source_id:'https://clever.slack.com/archives/C1/p1'}}];
-  window.scheduled=[];window.backlog=rows.map(DCC.TaskModel.fromBacklogBlock);window.consider=[];window.viewDate='2026-10-06';window.deletedSet=new Set();window.manualDone=new Set();window.__completed=[];window.__writes=[];window.__fail=false;
+  window.scheduled=[];window.backlog=rows.map(row=>DCC.TaskModel.fromBacklogBlock(row,DCC.TaskModel.backlogParentKeys(rows)));window.consider=[];window.viewDate='2026-10-06';window.deletedSet=new Set();window.manualDone=new Set();window.__completed=[];window.__writes=[];window.__fail=false;
   window.isDone=ev=>manualDone.has(ev.id)||ev.status==='done';window.escHtml=s=>String(s).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));window.showToast=(message,type)=>{window.__toast={message,type};};window.render=()=>{if(window.buildWhenever)buildWhenever();};window._resolvedTodayDate=()=>viewDate;
   window.fmt=n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');window.pt=s=>Number(s.slice(0,2))*60+Number(s.slice(3));window.ms=n=>n+'m';window.dur=ev=>ev.duration??ev.durMin??30;
   window.taskAnchorById=id=>{const ev=backlog.find(t=>t.id===id);return ev?{ev,date:null,blockId:ev._blockId,whenever:true}:null;};
@@ -21,7 +23,7 @@ for(const width of [1280,390]){
    result.moves.forEach(move=>{const row=rows.find(r=>r.id===move.id);Object.assign(row,{date:move.date,properties:move.properties});});return {moved:result.ids,blocks:rows.filter(r=>result.ids.includes(r.id))};
   }};
   window.enqueueRowPropsWrite=async(id,merge,extra)=>{const row=rows.find(r=>r.id===id);row.properties=merge(row.properties);if(extra&&extra.parent_id!==undefined)row.parent_id=extra.parent_id;return row;};
-  window.refoldTaskStateFromBlockCache=()=>{backlog=DCC.TaskModel.selectWheneverPoolBlocks(rows).map(DCC.TaskModel.fromBacklogBlock);scheduled=rows.filter(r=>r.date===viewDate).map(DCC.TaskModel.fromBlock);};window.recalcTimes=()=>{};window._computeRescheduleSlot=async()=>({start:'10:00',end:'10:30'});
+  window.refoldTaskStateFromBlockCache=()=>{backlog=DCC.TaskModel.selectWheneverPoolBlocks(rows).map(row=>DCC.TaskModel.fromBacklogBlock(row,DCC.TaskModel.backlogParentKeys(rows)));scheduled=rows.filter(r=>r.date===viewDate).map(DCC.TaskModel.fromBlock);};window.recalcTimes=()=>{};window._computeRescheduleSlot=async()=>({start:'10:00',end:'10:30'});
   window.rescheduleTaskToDate=async()=>{};window.toggleDone=id=>{__completed.push(id);manualDone.add(id);};window.persistRowProp=()=>Promise.resolve();window.openAddModal=(id,title)=>{window.__opened={id,title};};window.openDeleteConfirm=id=>{window.__deleted=id;};window.openDurPopover=ev=>setDurAbsolute(ev.id,45);
  });
  await page.addScriptTag({content:slice('public/js/tabs.js','function addSubtask(','// Re-read the carryover')});await page.addScriptTag({content:slice('public/js/tabs.js','function addStackedTask(','// Re-parent an EXISTING')});await page.addScriptTag({content:slice('public/js/tabs.js','function openTaskAdd(','// Legacy name;')});await page.addScriptTag({content:slice('public/js/schedule.js','function addToSchedule(','function addFollowupToSchedule(')});await page.addScriptTag({content:slice('public/js/schedule.js','function setDurAbsolute(','// ======== START TIME ADJUSTMENT')});
@@ -42,6 +44,8 @@ for(const width of [1280,390]){
  await page.evaluate(()=>{rows.forEach(row=>{row.date=null;row.properties.kind='backlog';row.properties.stage='Whenever';});__writes=[];refoldTaskStateFromBlockCache();buildWhenever();});
  await page.evaluate(()=>DCC.Whenever.markDone(backlog.find(t=>t.title==='Collect the cables').id));
  assert.equal(await page.evaluate(()=>__writes.length),1);assert.equal(await page.evaluate(()=>scheduled.length),4);assert.deepEqual(await page.evaluate(()=>__completed),[await page.evaluate(()=>scheduled.find(t=>t.title==='Collect the cables').id)]);
+ await page.evaluate(()=>{rows=[{id:'api-row',type:'block',date:null,workspace_id:'mine',properties:{kind:'backlog',stage:'Whenever',title:'API task without a local ID',type:'task',duration:30}}];__completed=[];__writes=[];refoldTaskStateFromBlockCache();buildWhenever();});
+ await page.evaluate(()=>DCC.Whenever.markDone(backlog[0].id));assert.deepEqual(await page.evaluate(()=>__completed),['api-row']);
  console.log('PASS Whenever '+width+'px: shared row, normal add picker, subtask, nested task, grandchild, collapse, keyboard editor, duration, reload, failed move, atomic schedule, no overflow');await page.close();
 }
 }finally{await browser.close();}})().catch(error=>{console.error(error);process.exit(1)});

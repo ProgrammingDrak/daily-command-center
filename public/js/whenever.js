@@ -246,8 +246,8 @@
   }
 
   // Production uses the same task-row component as normal tasks and subtasks.
-  function sharedRow(t,node){
-    const id=t.id,title=esc(t.title||'Task'),pending=busy.has((rootItem(id)||t).id);
+  function sharedRow(t,node,index){
+    const id=t.id,title=esc(t.title||'Task'),pending=busy.has((TaskModel.hierarchyRoot(id,null,index)||t).id);
     const source=window.DCC&&window.DCC.taskSourceUrl?window.DCC.taskSourceUrl(t):'';
     const safeSource=window.DCC&&window.DCC.TaskSources?window.DCC.TaskSources.safeUrl(source):'';
     const meta='<span>'+(node.rel==='subtask'?'Subtask':node.depth?'Nested task':'Whenever')+'</span>'+
@@ -275,7 +275,7 @@
       draggable:!pending,gripTitle:'Drag onto another Whenever task to nest it; Shift makes a subtask',
       onDragStart:e=>{e.dataTransfer.setData('text/dcc-whenever',id);e.dataTransfer.effectAllowed='move';},
       onDragOver:e=>{if(Array.from(e.dataTransfer.types||[]).includes('text/dcc-whenever'))e.preventDefault();},
-      onDrop:e=>{const child=e.dataTransfer.getData('text/dcc-whenever');if(child&&child!==id){e.preventDefault();e.stopPropagation();if(typeof reparentAsSubtask==='function')reparentAsSubtask(child,id,{nested:!e.shiftKey});}}
+      onDrop:e=>{const child=e.dataTransfer.getData('text/dcc-whenever');if(child&&child!==id){e.preventDefault();e.stopPropagation();if(typeof reparentAsSubtask==='function')reparentAsSubtask(child,id,{childEdge:e.shiftKey?'subtask':'wrap'});}}
     });
     if(pending)el.querySelectorAll('button').forEach(button=>button.disabled=true);
     const plus=el.querySelector('.btn-add-menu');if(plus)plus.setAttribute('aria-label','Add subtask or nested task to '+(t.title||'task'));
@@ -305,7 +305,8 @@
     if (!list) return;
     keepFocus(list, () => {
       if(items.length&&typeof window.renderItineraryListRow==='function'){
-        list.replaceChildren(...nodes.map(node=>sharedRow(node.ev,node)));return;
+        const index=new Map(items.map(item=>[item.id,item]));
+        list.replaceChildren(...nodes.map(node=>sharedRow(node.ev,node,index)));return;
       }
       list.innerHTML = items.length
         ? nodes.map(node=>rowHtml(node.ev,node)).join("")
@@ -351,6 +352,8 @@
       }
       const item = findItem(id);
       if (!item) { toast("That task already left " + LABEL, "info"); return null; }
+      const selected=pool().find(task=>task.id===requestedId);
+      const selectedRow=rowFor(selected);
       rowFor(item);
       // AWAIT the date write before placing. The placement pins the start through
       // savePinnedStarts, which only writes rows already on the viewed day; run it
@@ -360,7 +363,7 @@
       // The atomic pool mover already selects the canonical free slot.
       // Legacy embeds still need the original in-day placement step.
       if(!window.blockStore||typeof window.blockStore.rescheduleBlock!=='function')await rescheduleTaskToDate(item.id, today, { silent: true });
-      const ev = typeof scheduled !== "undefined" ? scheduled.find(e => e.id === requestedId) : null;
+      const ev = typeof scheduled !== "undefined" ? scheduled.find(e => e.id===requestedId||!!(selectedRow&&(e._blockId===selectedRow.id||e.id===selectedRow.id))) : null;
       if (!ev) return null;
       if (!opts.silent) {
         const at = typeof f12 === "function" && ev.start ? " at " + f12(ev.start) : "";

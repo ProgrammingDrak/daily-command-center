@@ -129,6 +129,7 @@
       // non-URL identifier here; the renderer separately decides whether the
       // value is a safe jump link.
       source_id: src.source_id || "",
+      ...(src._taskNotes ? {_taskNotes:JSON.parse(JSON.stringify(src._taskNotes))} : {}),
       ...(Array.isArray(src.sourceReferences) ? {sourceReferences: src.sourceReferences.map(ref => Object.assign({}, ref))} : {}),
       // Only a reference travels through ordinary task persistence; the server
       // copies the owner's saved plan and never accepts actuals here.

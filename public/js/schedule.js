@@ -1502,6 +1502,7 @@ function hydrateBacklogFromBlocks(){
   }
   let added=0;
   const rows=window.blockStore.getByType("block");
+  const parentKeys=TM.backlogParentKeys(rows);
   const candidates=[...TM.selectUnscheduled(rows,{includeLegacyDatedBacklog:true}),...TM.selectWheneverPoolBlocks(rows)];
   candidates.forEach(b=>{
     const p=b.properties||{};
@@ -1512,7 +1513,7 @@ function hydrateBacklogFromBlocks(){
     // pre-existing behavior, kept deliberately rather than "fixed" by rendering a
     // twin nobody asked for; the pair is flagged to Track A for the migration.
     if(backlog.find(x=>x.id===localId))return;
-    backlog.push(TM.fromBacklogBlock(b));
+    backlog.push(TM.fromBacklogBlock(b,parentKeys));
     added++;
   });
   return added;
