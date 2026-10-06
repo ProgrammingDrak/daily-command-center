@@ -45,6 +45,14 @@ The application remains online-first. There is no nutrition lookup, automatic es
 - Lint: **0 errors**, 67 existing warnings. This Express/vanilla-JS repository has no build script.
 - Chromium desktop and 375px mobile: multiple actual sets saved against one plan; unit conversion and pace; partial meals; no horizontal page/dialog overflow; shared date picker and empty range; persisted undo; archive/restore; CSV download; plan reuse; Make repeat; unauthenticated/viewer/cross-owner denial. No browser JavaScript errors.
 
+### PR393 compatibility
+
+The feature code is committed locally as `e4f02ae`. A separate `compatibility/workout-meal-pr393` worktree combines it with PR393 head `619fd2a` at local merge commit `90396e4`; the merge needed no conflict resolution. This does not merge PR393 into the feature branch or modify the other task's worktree/release lane.
+
+The combined checkout passed **2,831 tests, 0 failures, 4 integration skips**, plus one additional real-PostgreSQL regression against Review Tomorrow's preview and confirmed-move routes. That test verifies preserved task IDs, private types, unchanged workout/meal logs and original results dates after a move; all-day tasks and scheduled repeats remain held. The complete desktop/mobile activity walkthrough passed again with zero browser errors. Combined lint has 0 errors and 68 warnings.
+
+ROGula review evidence lives under the task workspace's `evidence/activity/`: `full-test.log`, `lint.log`, `results.json`, `pr393-full-test.log`, `pr393-activity-moves.log`, `pr393-lint.log`, and `pr393/results.json`. Screenshots include `desktop-dashboard.png`, `mobile-multiple-sets.png`, `mobile-partial-meal.png`, and `mobile-empty-date.png` in the `pr393` directory. Both branches are local and unpublished.
+
 ### Reproduce without production access
 
 Install `@electric-sql/pglite` outside the repository (or use a dedicated localhost PostgreSQL database). Set `DCC_PGLITE_MODULE` to its absolute module directory and run `node --test --test-concurrency=4`. Alternatively set `DCC_TEST_DATABASE_URL`; the helper rejects non-local hosts and creates/removes an isolated test schema.
