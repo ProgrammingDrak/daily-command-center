@@ -5439,15 +5439,18 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
   border-bottom:1px solid var(--border);border-radius:8px;pointer-events:none}
 
 /* Calendar */
-.tw-cal{width:286px}
+/* 350px = seven 44px day cells + 6 gaps + the card's padding and border.
+   The global button min-width (--target-min) used to push day cells past
+   the weekday columns. The sheet's own width:auto still wins on phones. */
+.tw-cal{width:350px;max-width:100%}
 .tw-cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
 .tw-cal-title{font-size:15px;font-weight:700;color:var(--text)}
 .tw-cal-nav{width:32px;height:32px;border-radius:8px;border:1px solid var(--border);
   background:var(--bg);color:var(--text);font-size:18px;line-height:1;cursor:pointer}
 .tw-cal-nav:hover{background:var(--card-hover);border-color:var(--accent)}
-.tw-cal-dow,.tw-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.tw-cal-dow,.tw-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px}
 .tw-cal-dow span{text-align:center;font-size:11px;font-weight:600;color:var(--text-muted);padding:4px 0}
-.tw-cal-day{height:36px;border:none;background:transparent;color:var(--text);
+.tw-cal-day{height:36px;min-width:0;width:100%;padding:0;border:none;background:transparent;color:var(--text);
   border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;font-variant-numeric:tabular-nums}
 .tw-cal-day:hover{background:var(--card-hover)}
 .tw-cal-day.today{box-shadow:inset 0 0 0 1px var(--accent)}
