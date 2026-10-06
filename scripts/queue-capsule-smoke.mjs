@@ -13,7 +13,7 @@ export function measureQueueCapsule(count = null) {
     pill.hidden = false;
     if (count !== null) badges.forEach(badge => {
       badge.textContent = String(count);
-      badge.style.display = badge.id === "waiting-pill-nav-count" && count === 0 ? "none" : "";
+      badge.style.display = "";
     });
     const capsuleBox = capsule.getBoundingClientRect();
     const navBox = nav.getBoundingClientRect();

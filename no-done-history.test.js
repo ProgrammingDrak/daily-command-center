@@ -8,7 +8,7 @@
 //
 // What these pin:
 //   1. Waiting has no Done filter, and All lists open items only
-//   2. the Waiting badge and the Overdue tab share ONE rule, and the badge hides at zero
+//   2. the Waiting badge and the Overdue tab share ONE rule, and the header badge keeps a zero placeholder
 //   3. a done untimed task leaves the drawer's Triage or Unscheduled half and lands
 //      on its day, in the time block (and order) of its completion time
 
@@ -99,12 +99,13 @@ test("the badge and the Overdue tab count only items overdue for a check-in", ()
   assert.match(DELEGATED, /updateBadge\(all\.filter\(isOverdue\)\.length\)/);
 });
 
-test("the Waiting badge disappears when nothing is overdue", () => {
+test("the Waiting header keeps zero when nothing is overdue", () => {
   const { ctx, els } = waiting();
   ctx.updateBadge(0);
-  assert.equal(els["waiting-pill-nav-count"].style.display, "none");
+  assert.equal(els["waiting-pill-nav-count"].textContent, "0");
+  assert.equal(els["waiting-pill-nav-count"].style.display, "");
   assert.equal(els["delegated-blocked-count"].style.display, "none");
-  assert.match(els["waiting-pill-nav"].attrs["aria-label"], /none overdue/);
+  assert.match(els["waiting-pill-nav"].attrs["aria-label"], /0 overdue/);
 });
 
 // ── Unscheduled: done work goes to its day ──

@@ -706,7 +706,7 @@ test("an unwritten Journal does NOT inflate the Loose Ends pill", async () => {
   await ctx.window.initCatchUp();
   assert.equal(count.textContent, "0");
   assert.equal(pill.hidden, true, "a journal draft does not expose an empty task queue");
-  assert.equal(pill.getAttribute("aria-label"), "Open Loose Ends");
+  assert.equal(pill.getAttribute("aria-label"), "Open 0 Loose Ends");
 });
 
 test("an unwritten Journal does not open an empty Loose Ends dialog", async () => {
