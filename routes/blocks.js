@@ -130,7 +130,7 @@ module.exports = function mount(app, ctx) {
         pointsAwarded: Number(props.points) || 0,
         estimatedMinutes: Number(props.duration) || null,
         actualMinutes: Number(props.actualMinutes) || null,
-        isPrivate: props.publicVisibility === "private",
+        isPrivate: props.publicVisibility === "private" || ["workout", "meal"].includes(props.type),
         isWorkSourced: isWorkSourcedTask(props),
         titleSnapshot: title,
         itemType: String(props.kind || task.type || "task")

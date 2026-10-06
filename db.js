@@ -248,6 +248,18 @@ async function nextSortOrderForDay(q, { date, workspace_id }) {
 }
 
 async function createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id }, client) {
+  // Recurring/reused activity plans are snapshotted with the task atomically.
+  const sourceProps = typeof properties === "string" ? JSON.parse(properties) : (properties || {});
+  if (sourceProps.activityPlanSourceId && !client) {
+    const c = await pool.connect();
+    try {
+      await c.query("BEGIN");
+      const row = await createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id }, c);
+      await c.query("COMMIT");
+      return row;
+    } catch (e) { await c.query("ROLLBACK"); throw e; }
+    finally { c.release(); }
+  }
   const blockId = id || crypto.randomUUID();
   const now = new Date().toISOString();
   // Copy rather than alias: this function now WRITES into props, and callers reuse a
@@ -255,6 +267,14 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
   // pushes the same `c.block.properties` reference once per future date into one
   // batchOp, so mutating in place would give N rows one row's stamped values.
   const props = typeof properties === "string" ? JSON.parse(properties) : { ...(properties || {}) };
+  const activityStore = require("./activity-store");
+  const activityPlan = props.activityPlanSourceId
+    ? await activityStore.readPlanSource(client, props.activityPlanSourceId, workspace_id, user_id) : null;
+  if (activityPlan) {
+    props.type = activityPlan.taskType;
+    props.activityTaskType = activityPlan.taskType;
+  }
+  if (["workout", "meal"].includes(props.type)) props.publicVisibility = "private";
   const requestedTaskType = String(props.type || "").trim().toLowerCase();
   if (requestedTaskType === "shell" || requestedTaskType === "wrap") {
     props.type = "task";
@@ -377,6 +397,7 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
     return { ...parseBlock(found[0]), _resolvedExisting: true };
   }
   await q.query(`INSERT INTO operations (block_id, op_type, after_data, timestamp) VALUES ($1, 'create', $2, $3)`, [blockId, props, now]);
+  if (activityPlan) await activityStore.insertPlan(q, { id: blockId, workspace_id, user_id }, activityPlan);
   // Built from the row the INSERT just returned, NOT hand-listed. This exit used
   // to enumerate its columns by hand and had fallen a column behind twice over:
   // `user_id` and `workspace_id` were missing, so a freshly created block came
@@ -968,6 +989,10 @@ async function updateBlock(id, fields, client) {
         isTaskRow({ type: existing.type, properties: existing.properties }), completionMutationId);
     }
     const existingProps = existing.properties || {};
+    // Generic/stale block writes cannot silently detach an activity log or expose
+    // a workout/meal in sharing. Detailed records never pass through this path.
+    if (["workout", "meal"].includes(existingProps.type)) newProps.type = existingProps.type;
+    if (["workout", "meal"].includes(newProps.type)) newProps.publicVisibility = "private";
     if (isCompletedTaskProps(existingProps) && newProps && newProps.startedAt && !existingProps.startedAt) {
       const conflict = new Error("Completed work must be reopened before it can be started");
       conflict.statusCode = 409;
@@ -1831,6 +1856,10 @@ async function rescheduleBlocks(moves, creates, options = {}) {
         validateBlock(existing.type, parsed);
         newProps = parsed;
       }
+      // Moves use a separate writer from updateBlock; retain the same private
+      // activity identity even when a stale client sends generic task props.
+      if (["workout", "meal"].includes(existing.properties?.type)) newProps.type = existing.properties.type;
+      if (["workout", "meal"].includes(newProps?.type)) newProps.publicVisibility = "private";
       const newDate = m.date !== undefined ? m.date : existing.date;
       // C6c: a row that CHANGES DAY joins the target day's space at the end. It used to keep the
       // originating day's `sort_order`, so an arriving task landed wherever it happened to sit on
@@ -2292,7 +2321,12 @@ async function getDccStateCompact(date, workspaceId, client) {
 
 async function purgeSoftDeleted(olderThanDays = 30) {
   const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - olderThanDays);
-  const result = await pool.query("DELETE FROM blocks WHERE deleted_at IS NOT NULL AND deleted_at < $1", [cutoff.toISOString()]);
+  // Activity history and its parent chain survive normal tombstone cleanup.
+  const result = await pool.query(`WITH RECURSIVE retained AS (
+    SELECT b.id,b.parent_id FROM blocks b JOIN task_activity_records r ON r.task_id=b.id
+    UNION SELECT b.id,b.parent_id FROM blocks b JOIN retained child ON child.parent_id=b.id
+  ) DELETE FROM blocks WHERE deleted_at IS NOT NULL AND deleted_at < $1
+    AND id NOT IN (SELECT id FROM retained)`, [cutoff.toISOString()]);
   return result.rowCount;
 }
 

@@ -7,6 +7,7 @@
     ["schedule", "dashboard"],
     ["pet-home", "dashboard"],
     ["budget", "full-width"],
+    ["activity", "full-width"],
     ["social", "full-width"],
     ["vault", "full-width"],
     ["tasks", "sidebar"]

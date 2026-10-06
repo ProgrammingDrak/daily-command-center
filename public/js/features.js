@@ -416,6 +416,7 @@ function openAddModal(taskId, taskTitle) {
   // local_id, and a carryover row is in _rangeCache only — so the search misses and the
   // update never happens. _addModalBlockId short-circuits it.
   _addModalBlockId = (anchor && anchor.blockId) || null;
+  if (window.DCC && DCC.Activity) DCC.Activity.taskButton(_addModalBlockId || (taskEntry && taskEntry._blockId) || taskId, taskEntry);
   _addModalDraftTitle = (taskEntry && taskEntry.title) || taskTitle || '';
   _addModalDraftTags = taskEntry && Array.isArray(taskEntry.tags) ? taskEntry.tags.slice() : [];
   _addModalTagsDirty = false;

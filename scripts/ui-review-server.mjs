@@ -13,6 +13,10 @@ const root = path.resolve(here, "..");
 const port = Number(process.env.PORT || 8099);
 const app = express();
 app.use(express.json());
+if (process.env.DCC_ACTIVITY_REVIEW === "1") {
+  const { default: mountActivityReview } = await import("./activity-review-backend.js");
+  await mountActivityReview(app);
+}
 const reviewBlocks = new Map();
 const meetingReviewFixture = [
   { id: "review-investor", title: "Investor Network Weekly", date: "2026-09-25", status: "ready",
