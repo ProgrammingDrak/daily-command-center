@@ -94,7 +94,7 @@
   }
   function summarize(records, from, to, units = { weight: "lb", distance: "mi" }) {
     choice(units.weight, ["lb", "kg"], "weight unit"); choice(units.distance, ["km", "mi"], "distance unit");
-    const days = dateRange(from, to).map(date => ({ date, workoutTasks: 0, completedWorkouts: 0, loggedWorkouts: 0, mealTasks: 0, loggedMeals: 0, plannedFoods: [], actualFoods: [], plannedRuns: [], actualRuns: [], exercises: {} }));
+    const days = dateRange(from, to).map(date => ({ date, workoutTasks: 0, completedWorkouts: 0, loggedWorkouts: 0, mealTasks: 0, loggedMeals: 0, plannedFoods: [], actualFoods: [], plannedRuns: [], actualRuns: [], exercises: Object.create(null) }));
     const byDate = Object.fromEntries(days.map(d => [d.date, d]));
     for (const row of records) {
       const v = row.record, plannedDay = row.removed ? null : byDate[row.date], actualDay = byDate[v.occurredOn];
@@ -110,10 +110,7 @@
             const sets = v.actual.sets.filter(s => s.exerciseId === e.id);
             if (!sets.length) continue;
             const key = e.name.trim().toLowerCase().replace(/\s+/g, " ");
-            if (!Object.prototype.hasOwnProperty.call(actualDay.exercises, key)) Object.defineProperty(actualDay.exercises, key, {
-              value: { name: e.name, sets: 0, reps: null, maxLoad: null, volume: null, volumeSets: 0 }, enumerable: true
-            });
-            const agg = actualDay.exercises[key];
+            const agg = actualDay.exercises[key] ||= { name: e.name, sets: 0, reps: null, maxLoad: null, volume: null, volumeSets: 0 };
             for (const s of sets) {
               agg.sets++;
               const w = weight(s.weight, s.unit, units.weight);

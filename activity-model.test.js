@@ -26,8 +26,9 @@ test("multiple actual sets retain their relation to one plan and do not rewrite 
 test("freeform exercise names cannot collide with object prototype keys", () => {
   for (const name of ["__proto__", "constructor", "toString"]) {
     const r = workout(); r.plan.exercises[0].name = name;
-    const [d] = M.summarize([row(r)], "2026-10-06", "2026-10-06");
+    const [d, emptyDay] = M.summarize([row(r)], "2026-10-06", "2026-10-07");
     assert.equal(d.exercises[name.toLowerCase()].volume, 1500);
+    assert.equal(emptyDay.exercises[name.toLowerCase()], undefined, "empty dates have no inherited exercise rows");
   }
   assert.equal({}.volume, undefined);
 });
@@ -55,7 +56,7 @@ test("moving a task preserves the results day; removed tasks retain logged histo
   assert.equal(removed.workoutTasks, 0); assert.equal(removed.loggedWorkouts, 1);
 });
 test("empty date and empty nutrition do not become zeros", () => {
-  const [d] = M.summarize([], "2026-10-06", "2026-10-06"); assert.equal(d.actualNutrition.calories.value, null); assert.equal(d.actualRuns.pace, null); assert.deepEqual(d.exercises, {});
+  const [d] = M.summarize([], "2026-10-06", "2026-10-06"); assert.equal(d.actualNutrition.calories.value, null); assert.equal(d.actualRuns.pace, null); assert.deepEqual(Object.keys(d.exercises), []);
 });
 test("reused plans reset all actuals and results dates without aliasing input", () => {
   for (const r of [workout(), meal()]) { const p = M.planOnly(r); assert.equal(M.hasActual(p), false); assert.equal(p.occurredOn, null); assert.deepEqual(p.plan, r.plan); assert.notEqual(p.plan, r.plan); }
