@@ -353,20 +353,14 @@ function _orderUnscheduled(rows){
   });
 }
 // Current row ids of the Unscheduled drag group in DOM (display) order, as ONE
-// persisted order. The Unscheduled rows render in the header pill's drawer now
-// (renderUnscheduledInto -> #unscheduled-list), so read them there: scanning only
-// #list-view after the move saved [triage..., moved] and wiped every other row's
-// manual position on the first drag in the drawer. Triage still sits in the list.
+// persisted order. Triage and Unscheduled rows share that order (both are
+// day.unscheduled) and both render in the header pill's drawer now
+// (renderTriageInto / renderUnscheduledInto), so read them there: scanning
+// #list-view for them would save only the moved row and wipe every other row's
+// manual position on the first drag in the drawer.
 function _unscheduledRowIds(){
   const ids=[];
-  document.querySelectorAll('#unscheduled-list .it-list-item[data-id]').forEach(n=>ids.push(n.dataset.id));
-  document.querySelectorAll('#list-view .time-block-divider[data-block-id="triage"]').forEach(sec=>{
-    let n=sec.nextElementSibling;
-    while(n&&!n.classList.contains("time-block-divider")&&(!n.classList.contains("it-list-section")||n.dataset.section==="unscheduled")){
-      if(n.classList.contains("it-list-item")&&n.dataset.id)ids.push(n.dataset.id);
-      n=n.nextElementSibling;
-    }
-  });
+  document.querySelectorAll('#unscheduled-list .it-list-item[data-id], #triage-queue-list .it-list-item[data-id]').forEach(n=>ids.push(n.dataset.id));
   return ids;
 }
 // Creation order for the Unscheduled section. Carryovers now carry a real
@@ -757,7 +751,7 @@ function createTaskListRowRenderer(context){
     };
     const metaHtml=inProgressChip+nowChip+
       '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+chipSlot+streakChip+
-      (subTimeless?'':(ev.untimed?(ev.triageBlock?'<span class="it-list-duration" title="Estimated completion time">'+ms(dur(ev))+'</span>':'<span class="it-list-untimed">'+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled")+'</span>'):(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+      (subTimeless?'':(ev.untimed?(isDoneRow?'<span class="it-list-untimed">'+(_completionMinute(ev)!=null?'Done at '+f12(fmt(_completionMinute(ev))):'Done')+'</span>':ev.triageBlock?'<span class="it-list-duration" title="Estimated completion time">'+ms(dur(ev))+'</span>':'<span class="it-list-untimed">'+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled")+'</span>'):(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
       (isUnfRow?'<span class="it-list-unfinished">Unfinished from '+escHtml(_unfSlashDate(r.sourceDate))+'</span>':'')+
       (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
       (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" style="cursor:pointer" title="View prep briefing">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" style="cursor:pointer" title="Prep pending — open to view or generate">&#9675; Prep</span>':'')+
@@ -778,7 +772,7 @@ function createTaskListRowRenderer(context){
       collapseHtml:chev,
       titleExtrasHtml:dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip,
       metaHtml:metaHtml,
-      barColor:isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#a31c43)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)),
+      barColor:isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#7c3aed)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)),
       actionsBeforeHtml:(!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+workButton,
       onComplete:completeNow,
       onCompleteWithNotes:chkBlocked?completeNow:()=>openDoneModal(ev.id,ev.title,completeNow,ev),
@@ -861,7 +855,58 @@ function _itineraryListModel(){
   const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
   const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible}),timeBlocks);
   const unscheduledGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.UNPLANNED_BLOCK.id)||{nodes:[]};
-  return {viewDate,isTodayView,unfPool,day,timeBlocks,groups,unscheduledGroup};
+  const triageGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.TRIAGE_BLOCK.id)||{nodes:[]};
+  _fileDoneUntimedOnTheDay(groups,triageGroup,timeBlocks);
+  _fileDoneUntimedOnTheDay(groups,unscheduledGroup,timeBlocks);
+  return {viewDate,isTodayView,unfPool,day,timeBlocks,groups,unscheduledGroup,triageGroup};
+}
+// Finished work is recorded on the day it was finished, never in a pill: the drawer's
+// Triage and Unscheduled halves list OPEN work only. A done untimed root (with its
+// subtree) moves into the work list's time block that contains its completion time,
+// or into Outside Time Blocks when that time falls between blocks or is unknown.
+// Null unless the task was finished ON the viewed day: Loose Ends checks off a past-day
+// task on its own day but stamps it with today's clock, and that time means nothing
+// in the old day's blocks. Those rows land in Outside Time Blocks as a plain "Done".
+function _completionMinute(ev){
+  const raw=(typeof doneAt!=="undefined"&&doneAt&&doneAt[ev.id])||ev.completedAt||null;
+  if(!raw)return null;
+  const d=raw instanceof Date?raw:new Date(raw);
+  if(isNaN(d.getTime()))return null;
+  const day=typeof __state!=="undefined"&&__state&&__state.date;
+  const pad=n=>String(n).padStart(2,"0");
+  if(day&&d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())!==day)return null;
+  return d.getHours()*60+d.getMinutes();
+}
+function _fileDoneUntimedOnTheDay(groups,sourceGroup,timeBlocks){
+  const chunks=[];
+  (sourceGroup.nodes||[]).forEach(node=>{if(!node.depth||!chunks.length)chunks.push([]);chunks[chunks.length-1].push(node);});
+  const open=[];
+  chunks.forEach(chunk=>{
+    const root=chunk[0].ev;
+    if(!isDone(root)){open.push(...chunk);return;}
+    const minute=_completionMinute(root);
+    const block=minute==null?null:DCC.TimeBlocks.blockForTask({start:fmt(minute)},timeBlocks);
+    let target=block?groups.find(g=>g.block.id===block.id):null;
+    if(!target){
+      target=groups.find(g=>g.block===DCC.TimeBlocks.OUTSIDE_BLOCK);
+      // Created where groupItineraryTree puts it: after the timed blocks, before Unplanned.
+      if(!target){
+        const at=groups.findIndex(g=>g.block.id===DCC.TimeBlocks.UNPLANNED_BLOCK.id);
+        target={block:DCC.TimeBlocks.OUTSIDE_BLOCK,nodes:[]};
+        groups.splice(at<0?groups.length:at,0,target);
+      }
+    }
+    // In time order among the block's roots, timed ones by start and rows already
+    // filed here by their own completion, so it reads where it happened.
+    let at=target.nodes.length;
+    if(minute!=null){
+      const when=n=>_rowIsTimed(n.ev)?pt(n.ev.start):(isDone(n.ev)?_completionMinute(n.ev):null);
+      const i=target.nodes.findIndex(n=>{if(n.depth)return false;const m=when(n);return m!=null&&m>minute;});
+      if(i>=0)at=i;
+    }
+    target.nodes.splice(at,0,...chunk);
+  });
+  sourceGroup.nodes=open;
 }
 // Apply the Unscheduled sort mode (Manual / A–Z / New) to a group's nodes, keeping
 // each root's subtree attached to it.
@@ -872,23 +917,45 @@ function _orderUnscheduledNodes(nodes){
   const byId=new Map(chunks.map(chunk=>[chunk[0].ev.id,chunk]));
   return ordered.flatMap(ev=>byId.get(ev.id));
 }
-// The header pill's Unscheduled panel (whenever.js calls this on every render). Same
-// derivation and the same row renderer as the work list, so every row keeps its full
-// controls: check off, Schedule, task actions, delete. Returns the open root count the
-// pill shows.
-function renderUnscheduledInto(listEl){
-  if(!listEl||!window.DCC||!DCC.TaskModel||!DCC.TimeBlocks)return {open:0,total:0};
-  const model=_itineraryListModel();
-  const nodes=_orderUnscheduledNodes(model.unscheduledGroup.nodes);
+// The header pill's Triage and Unscheduled panels (whenever.js calls these on every
+// render). Same derivation and the same row renderer as the work list, so every row
+// keeps its full controls: check off, Schedule, task actions, delete. Each returns the
+// open root count its pill segment shows.
+function _renderQueueInto(listEl,nodes,model,lead){
   const row=createTaskListRowRenderer({pool:model.unfPool,isTodayView:model.isTodayView});
   const frag=document.createDocumentFragment();
+  if(lead)frag.appendChild(lead);
   let rank=0;
   nodes.forEach(node=>frag.appendChild(row(node.ev,_isSubRow(node)?0:rank++,isDone(node.ev)?"done":"open",node)));
   listEl.innerHTML="";
   listEl.appendChild(frag);
   return {open:nodes.filter(node=>!node.depth&&!isDone(node.ev)).length,total:nodes.length};
 }
+// Each takes the caller's model when it has one: whenever.js derives once per build
+// and hands the same model to both halves.
+function renderUnscheduledInto(listEl,model){
+  if(!listEl||!window.DCC||!DCC.TaskModel||!DCC.TimeBlocks)return {open:0,total:0};
+  model=model||_itineraryListModel();
+  return _renderQueueInto(listEl,_orderUnscheduledNodes(model.unscheduledGroup.nodes),model);
+}
 window.renderUnscheduledInto=renderUnscheduledInto;
+window.itineraryListModel=_itineraryListModel;
+// Triage rows are created by triage.js (buildScheduleTriage) from inbox and repeat
+// sources, so the panel also carries that loader's status, with Retry on a failure.
+function renderTriageInto(listEl,model){
+  if(!listEl||!window.DCC||!DCC.TaskModel||!DCC.TimeBlocks)return {open:0,total:0,status:false};
+  model=model||_itineraryListModel();
+  const state=typeof triageTaskLoadState==="function"?triageTaskLoadState():{};
+  let status=null;
+  if(state.loading||state.error){
+    status=document.createElement(state.error?"button":"div");
+    status.className="it-list-empty";
+    status.textContent=state.error?"Triage could not load. Retry":"Loading Triage tasks…";
+    if(state.error){status.type="button";status.addEventListener("click",()=>buildScheduleTriage());}
+  }
+  return Object.assign(_renderQueueInto(listEl,model.triageGroup.nodes,model,status),{status:!!status});
+}
+window.renderTriageInto=renderTriageInto;
 
 function buildListView(){
   const wrap=document.getElementById("list-view");
@@ -950,10 +1017,14 @@ function buildListView(){
       onToggle:()=>{toggleCollapsed(key);buildListView();Array.from(wrap.querySelectorAll("[data-time-block-toggle]")).find(button=>button.dataset.timeBlockToggle===key)?.focus({preventScroll:true});},
       onEdit:()=>openBlockEditor(block.id)});
   }
-  // The Unscheduled group lives in the header pill's drawer now (whenever.js), so the
-  // work list skips it: no header, no drop zone, no rows, and no share of the badge.
-  const unscheduledIds=new Set(model.unscheduledGroup.nodes.map(node=>node.ev.id));
-  const groups=model.groups.filter(g=>g!==model.unscheduledGroup);
+  // The Triage and Unscheduled groups live in the header pill's drawer now
+  // (whenever.js), so the work list skips them: no header, no drop zone, no rows,
+  // and no share of the badge. The badge excludes day.unscheduled, the open untimed
+  // roots WITH every descendant: the groups' nodes omit a collapsed parent's
+  // subtasks, which would otherwise count here while rendering in the drawer.
+  const queued=[model.triageGroup,model.unscheduledGroup];
+  const queuedIds=new Set(day.unscheduled.map(ev=>ev.id));
+  const groups=model.groups.filter(g=>!queued.includes(g));
 
   // Task-container collapse state is independent from time-block collapse state.
   // Collapse-all / expand-all intentionally operates only on nested task trees;
@@ -998,7 +1069,7 @@ function buildListView(){
   // fold widened from `subtaskOf` to either parent edge (so a done RIDE-ALONG folds
   // too) and gated on the subtree being finished (so a done step with open steps under
   // it stays visible with its children nested, instead of hiding live work).
-  section("Work list",[...activeIds].filter(id=>!unscheduledIds.has(id)).length);
+  section("Work list",[...activeIds].filter(id=>!queuedIds.has(id)).length);
   let rank=0;
   const now=new Date(),nowMin=now.getHours()*60+now.getMinutes();
   groups.forEach(({block,nodes})=>{
@@ -1007,10 +1078,8 @@ function buildListView(){
     wrap.appendChild(header);
     if(block.dropTarget)wrap.appendChild(timeBlockDropZoneEl(block));
     if(isCollapsed(timeBlockCollapseKey(block)))return;
-    if(block.id==="triage"){
-      const state=typeof triageTaskLoadState==="function"?triageTaskLoadState():{};
-      if(state.loading||state.error){const status=document.createElement(state.error?"button":"div");status.className="it-list-empty";status.textContent=state.error?"Triage could not load. Retry":"Loading Triage tasks…";if(state.error)status.addEventListener("click",()=>buildScheduleTriage());wrap.appendChild(status);}
-    }
+    // Triage (and its loading / Retry status) renders in the header pill's drawer
+    // now: renderTriageInto.
     // The sortable Unscheduled group (and its Manual / A-Z / New header) renders in the
     // header pill's drawer now: renderUnscheduledInto. No group left here is sortable.
     let prevEnd=null;

@@ -1642,7 +1642,10 @@ function _tabActive(name){const el=document.getElementById("tab-"+name);return !
 
 const SURFACES = {
   scheduleTimeline:{build:()=>{if(typeof buildSchedule==="function")buildSchedule();},        isVisible:()=>_tabActive("schedule")&&schedView==="plan"},
-  scheduleTriage:  {build:()=>{if(typeof buildScheduleTriage==="function")buildScheduleTriage();},isVisible:()=>_tabActive("schedule")&&schedView==="list"},
+  // Turns new inbox items and due repeats into tasks. It feeds the always-visible
+  // Triage door, so it runs on every render; it returns early off today, while a load
+  // is in flight, and when nothing is new.
+  scheduleTriage:  {build:()=>{if(typeof buildScheduleTriage==="function")buildScheduleTriage();},isVisible:()=>true},
   // buildScheduleDelegated (renderDelegatedSidebar) + refreshMeetingAutomationPanels
   // were side effects of buildSchedule (schedule-tab.js:602,962). Since buildSchedule
   // is now gated off, they must be their own surfaces or they'd go stale on render.
@@ -1674,7 +1677,8 @@ const SURFACES = {
 
 // Named scopes let a hot call site mark only the surfaces it can actually change.
 // "whenever" rides along because the header pill's drawer renders the same itinerary rows
-// (the Unscheduled half), whose chevron and work-session buttons call render("schedule").
+// (the Triage and Unscheduled halves), whose chevron and work-session buttons call
+// render("schedule").
 const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView","whenever"] };
 
 const _dirty = {};

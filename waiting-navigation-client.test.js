@@ -34,6 +34,28 @@ test("opening a reminder targets the full Waiting card and its lifecycle actions
   assert.match(WAITING_SRC, /postWaitingAction\(id, "complete"/);
 });
 
+test("opening a CLOSED Waiting item says so instead of opening a drawer with no card", () => {
+  const openSource = mustSlice(WAITING_SRC, /^ {2}function openWaitingItem\(id\) \{[\s\S]*?^ {2}\}/m, "openWaitingItem");
+  const toasts = [];
+  let opened = 0;
+  const ctx = {
+    getDelegatedItemById: id => ({ id, properties: { status: id === "closed" ? "done" : "open" } }),
+    isOpenDelegated: item => item.properties.status !== "done",
+    toast: (msg, kind) => toasts.push([msg, kind]),
+    renderDelegatedSidebar() {}, setTimeout() {},
+    window: { openTasksToSection: () => { opened++; } },
+    document: { querySelectorAll: () => [] },
+    _currentFilter: "overdue",
+  };
+  vm.createContext(ctx);
+  vm.runInContext(openSource, ctx);
+  assert.equal(ctx.openWaitingItem("closed"), false);
+  assert.deepEqual(toasts, [["That Waiting item is already closed.", "info"]]);
+  assert.equal(opened, 0, "no drawer for a card that is not listed");
+  assert.equal(ctx.openWaitingItem("live"), true);
+  assert.equal(opened, 1);
+});
+
 test("task dependency UI uses atomic creation and reconciles task projections", () => {
   assert.match(WAITING_SRC, /body: JSON\.stringify\(\{ properties, \.\.\.\(newBlocker \? \{ newBlocker \} : \{\}\) \}\)/);
   assert.doesNotMatch(WAITING_SRC, /window\.blockStore\.createBlock\("block", \{\s*kind: "backlog"/);

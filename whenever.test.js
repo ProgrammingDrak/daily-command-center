@@ -30,9 +30,11 @@ const TODAY = "2026-10-05";
 test("the stored stage comes from task-model.js, where the fold rule lives", () => {
   assert.equal(W.STAGE, TaskModel.WHENEVER_STAGE);
   assert.equal(W.STAGE, "Whenever");
-  assert.ok(["sage", "teal", "amber", "violet"].includes(W.PILL_STYLE), "PILL_STYLE must be a value dashboard.css defines");
+  // Every theme knob must name a value dashboard.css defines, or the door renders bare.
   const css = fs.readFileSync(require.resolve("./public/css/dashboard.css"), "utf8");
-  assert.match(css, new RegExp("\\.whenever-theme--" + W.PILL_STYLE + "\\{"));
+  for (const style of [W.PILL_STYLE, W.UNSCHEDULED_STYLE, W.TRIAGE_STYLE]) {
+    assert.match(css, new RegExp("\\.queue-theme--" + style + "\\{"), style + " has no theme in dashboard.css");
+  }
 });
 
 test("the pool is the Whenever stage only, quick wins first, then oldest first", () => {
@@ -192,20 +194,36 @@ test("a pool item with no resolvable row refuses instead of pretending to save",
 
 // ── wiring contracts ──
 
-test("the header carries one capsule after Waiting: Unscheduled, then Whenever, both opening the drawer", () => {
+test("the header is ONE capsule with five doors in triage order: Triage, Loose Ends, Waiting, Unscheduled, Whenever", () => {
   const html = fs.readFileSync(require.resolve("./index.html"), "utf8");
   const header = html.slice(html.indexOf('id="date-nav"'), html.indexOf('id="date-picker-drop"'));
-  assert.match(header, /waiting-pill-nav[\s\S]*id="untimed-pill"[\s\S]*id="unscheduled-pill-nav"[\s\S]*id="whenever-pill-nav"/);
+  const capsule = header.slice(header.indexOf('id="queue-pill"'));
+  const doors = [...capsule.matchAll(/<button class="queue-seg[^"]*" id="([^"]+)"/g)].map(m => m[1]);
+  assert.deepEqual(doors, ["triage-pill-nav", "loose-ends-pill", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav"]);
+  assert.equal((header.match(/class="(waiting-pill-nav|loose-ends-pill)/g) || []).length, 0, "no door is a pill of its own anymore");
+  // Loose Ends keeps its blue and its count gate (catch-up.js unhides it); Waiting reads
+  // the app-wide Waiting family, so its door matches every other Waiting surface.
+  assert.match(header, /class="queue-seg queue-theme--blue" id="loose-ends-pill"[^>]*aria-controls="catchup-overlay"[^>]*hidden>/);
+  assert.match(header, /class="queue-seg queue-theme--waiting" id="waiting-pill-nav"/);
+  const css = fs.readFileSync(require.resolve("./public/css/dashboard.css"), "utf8");
+  assert.match(css, /\.queue-seg\[hidden\]\{display:none!important\}/, "a hidden door must not leave a gap in the capsule");
+  assert.match(css, /\.queue-theme--waiting\{--queue-accent:var\(--waiting\);/);
+  assert.match(header, /id="triage-pill-nav"[^>]*aria-controls="tm-whenever-section"/);
+  assert.match(header, /id="waiting-pill-nav"[^>]*aria-controls="tm-delegated-blocked-section"/);
   assert.match(header, /id="unscheduled-pill-nav"[^>]*aria-controls="tm-whenever-section"[^>]*data-placement="unplanned"/,
     "the Unscheduled segment is the drop target the itinerary's Unplanned zone used to be");
   assert.match(header, /id="whenever-pill-nav"[^>]*aria-controls="tm-whenever-section"/);
-  for (const id of ["unscheduled-pill-nav-count", "whenever-pill-nav-count", "untimed-count", "unscheduled-count",
-    "whenever-count", "unscheduled-list", "whenever-list", "whenever-add", "whenever-pick", "unscheduled-tip", "whenever-tip"]) {
+  for (const id of ["triage-pill-nav-count", "waiting-pill-nav-count", "unscheduled-pill-nav-count", "whenever-pill-nav-count",
+    "untimed-count", "triage-queue-count", "unscheduled-count", "whenever-count", "triage-queue-list", "unscheduled-list",
+    "whenever-list", "whenever-add", "whenever-pick", "triage-queue-tip", "unscheduled-tip", "whenever-tip"]) {
     assert.ok(html.includes('id="' + id + '"'), "missing #" + id);
   }
-  // Unscheduled first: it is the half that wants action. Each half explains itself.
+  // The drawer follows the capsule: Triage, then Unscheduled, then Whenever. Each half
+  // explains itself.
   const drawer = html.slice(html.indexOf('id="tm-whenever-section"'));
+  assert.ok(drawer.indexOf('id="triage-sub"') < drawer.indexOf('id="unscheduled-sub"'));
   assert.ok(drawer.indexOf('id="unscheduled-sub"') < drawer.indexOf('id="whenever-sub"'));
+  assert.match(drawer, /aria-describedby="triage-queue-tip"[\s\S]*role="tooltip" id="triage-queue-tip">[^<]*inboxes/i);
   assert.match(drawer, /aria-describedby="unscheduled-tip"[\s\S]*role="tooltip" id="unscheduled-tip">[^<]*schedule/i);
   assert.match(drawer, /aria-describedby="whenever-tip"[\s\S]*role="tooltip" id="whenever-tip">[^<]*free minute/i);
   // Loaded after task-model.js (it reads the stage there) and before schedule.js
@@ -214,12 +232,17 @@ test("the header carries one capsule after Waiting: Unscheduled, then Whenever, 
   assert.ok(at("task-model.js") < at("whenever.js") && at("whenever.js") < at("schedule.js"));
 });
 
-test("the work list no longer renders the Unscheduled group or counts it", () => {
+test("the work list no longer renders the Triage or Unscheduled groups, or counts them", () => {
   const tab = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
   const start = tab.indexOf("function buildListView(){");
   const list = tab.slice(start, tab.indexOf("\nfunction ", start + 1));
-  assert.match(list, /const groups=model\.groups\.filter\(g=>g!==model\.unscheduledGroup\);/);
-  assert.match(list, /section\("Work list",\[\.\.\.activeIds\]\.filter\(id=>!unscheduledIds\.has\(id\)\)\.length\);/);
+  assert.match(list, /const queued=\[model\.triageGroup,model\.unscheduledGroup\];/);
+  assert.match(list, /const groups=model\.groups\.filter\(g=>!queued\.includes\(g\)\);/);
+  // The whole subtree, not the groups' nodes: a collapsed parent's subtasks are not
+  // nodes, and counting them showed a Work list badge over a list with no open rows.
+  assert.match(list, /const queuedIds=new Set\(day\.unscheduled\.map\(ev=>ev\.id\)\);/);
+  assert.match(list, /section\("Work list",\[\.\.\.activeIds\]\.filter\(id=>!queuedIds\.has\(id\)\)\.length\);/);
+  assert.doesNotMatch(list, /triageTaskLoadState|block\.id==="triage"/, "the Triage status moved with its rows");
   // Removing the zone must not strand its mover: the radial and the pill both reach it.
   const change = tab.slice(tab.indexOf("function buildTaskChangeItems"), tab.indexOf("// Sub-fan: convert this task"));
   assert.match(change, /if\(!ev\.untimed\)\s*items\.push\(\{icon:"🗂"[\s\S]*moveTaskToUnplanned\(ev\.id\)/);
@@ -283,21 +306,30 @@ test("a drag inside the drawer reorders against the drawer's rows and keeps ever
   const src = tab.slice(a, tab.indexOf("\n}\n", a) + 3) + tab.slice(b, tab.indexOf("\n}\n", b) + 3);
   const row = id => ({ dataset: { id }, classList: { contains: c => c === "it-list-item" } });
   const saved = [];
+  // Triage rows share the one persisted order and sit above Unscheduled in the drawer,
+  // so a selector list returns them first, the way the real DOM does.
+  const lists = { "#triage-queue-list": ["t1"], "#unscheduled-list": ["a", "b", "c"] };
   const ctx = {
-    document: { querySelectorAll: sel => (sel.includes("#unscheduled-list") ? ["a", "b", "c"].map(row) : []) },
+    document: { querySelectorAll: sel => Object.keys(lists).filter(k => sel.includes(k)).flatMap(k => lists[k].map(row)) },
     saveUnscheduledOrder: ids => saved.push(ids.slice()),
   };
   vm.createContext(ctx);
   vm.runInContext(src, ctx);
   ctx._reorderUnscheduled("c", "a", false, false);
-  assert.deepEqual(Array.from(saved[0]), ["c", "a", "b"], "every row keeps its place; only the dragged one moves");
+  assert.deepEqual(Array.from(saved[0]), ["t1", "c", "a", "b"], "every row keeps its place, Triage's too; only the dragged one moves");
 });
 
-test("the pill's Unscheduled count is open ROOTS: not sub-steps, not done rows", () => {
+// The drawer renderers, from the shared one through renderTriageInto.
+function queueRenderers() {
   const tab = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
-  const s = tab.indexOf("function renderUnscheduledInto(");
-  assert.ok(s > 0, "renderUnscheduledInto moved");
-  const src = tab.slice(s, tab.indexOf("\nwindow.renderUnscheduledInto", s));
+  const s = tab.indexOf("function _renderQueueInto(");
+  const e = tab.indexOf("\nwindow.renderTriageInto", s);
+  assert.ok(s > 0 && e > s, "the drawer renderers moved");
+  return tab.slice(s, e);
+}
+
+test("the pill's Unscheduled count is open ROOTS: not sub-steps, not done rows", () => {
+  const src = queueRenderers();
   const nodes = [
     { ev: { id: "a" }, depth: 0 }, { ev: { id: "a1" }, depth: 1 },
     { ev: { id: "b", done: true }, depth: 0 }, { ev: { id: "c" }, depth: 0 },
@@ -316,6 +348,81 @@ test("the pill's Unscheduled count is open ROOTS: not sub-steps, not done rows",
   const counts = ctx.r({ innerHTML: "", appendChild() {} });
   assert.deepEqual({ ...counts }, { open: 2, total: 4 });
   assert.deepEqual(rendered.map(r => r.mode), ["open", "open", "done", "open"], "done rows render as done, not as unchecked");
+});
+
+test("the Triage door counts its open roots and carries the loader's status, with Retry", () => {
+  const src = queueRenderers();
+  const nodes = [{ ev: { id: "gmail" }, depth: 0 }, { ev: { id: "gmail-step" }, depth: 1 }, { ev: { id: "slack" }, depth: 0 }];
+  let state = { loading: true, error: "" };
+  let retried = 0;
+  const made = [];
+  const DCC = { TaskModel: {}, TimeBlocks: {} };
+  const ctx = {
+    window: { DCC }, DCC, isDone: () => false, _isSubRow: n => n.depth > 0,
+    _itineraryListModel: () => ({ triageGroup: { nodes }, unscheduledGroup: { nodes: [] }, unfPool: [], isTodayView: true }),
+    _orderUnscheduledNodes: n => n,
+    triageTaskLoadState: () => state,
+    buildScheduleTriage: () => { retried++; },
+    createTaskListRowRenderer: () => (ev, idx, mode) => ({ kind: "row", id: ev.id, mode }),
+    document: {
+      createDocumentFragment: () => { const kids = []; made.push(kids); return { appendChild: x => kids.push(x) }; },
+      createElement: tag => ({ kind: tag, listeners: {}, addEventListener(t, fn) { this.listeners[t] = fn; } }),
+    },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(src + "\nthis.t = renderTriageInto;", ctx);
+  const list = { innerHTML: "", appendChild() {} };
+  const loading = ctx.t(list);
+  assert.deepEqual({ ...loading }, { open: 2, total: 3, status: true }, "sub-steps never count");
+  assert.equal(made[0][0].kind, "div");
+  assert.match(made[0][0].textContent, /Loading Triage/);
+  assert.deepEqual(made[0].slice(1).map(r => r.id), ["gmail", "gmail-step", "slack"], "the status leads, the rows follow");
+  state = { loading: false, error: "Triage tasks could not be loaded" };
+  ctx.t(list);
+  const retry = made[1][0];
+  assert.equal(retry.kind, "button");
+  assert.equal(retry.type, "button");
+  retry.listeners.click();
+  assert.equal(retried, 1, "Retry reruns the loader");
+  state = { loading: false, error: "" };
+  const idle = ctx.t(list);
+  assert.equal(idle.status, false);
+  assert.equal(made[2][0].kind, "row", "no status row once the loader is idle");
+});
+
+test("the Triage door opens its half, and its loader runs on every render, not only in the list view", () => {
+  const src = fs.readFileSync(require.resolve("./public/js/whenever.js"), "utf8");
+  const open = src.slice(src.indexOf("function open(half)"), src.indexOf("function setTheme("));
+  assert.match(open, /half === "unscheduled" \|\| half === "triage" \? half : "whenever"/);
+  assert.match(src, /getElementById\("triage-pill-nav"\);\s*if \(triageSeg\) triageSeg\.addEventListener\("click", \(\) => open\("triage"\)\);/);
+  // The door is on every tab, so the source-to-task loader must be too, or its count
+  // under-reports off the itinerary list view. The loader's own order (Loading, then
+  // settled) is pinned behaviorally in triage-shared-row.test.js.
+  const features = fs.readFileSync(require.resolve("./public/js/features.js"), "utf8");
+  assert.match(features, /scheduleTriage:\s*\{build:\(\)=>\{if\(typeof buildScheduleTriage==="function"\)buildScheduleTriage\(\);\},isVisible:\(\)=>true\}/);
+});
+
+test("the drawer derives the itinerary model ONCE per build and shares it with both halves", () => {
+  const src = fs.readFileSync(require.resolve("./public/js/whenever.js"), "utf8");
+  const build = src.slice(src.indexOf("  function build() {"), src.indexOf("  function refresh() {"));
+  assert.equal((build.match(/window\.itineraryListModel\(\)/g) || []).length, 1);
+  assert.match(build, /buildTriageQueue\(model\);[\s\S]*buildUnscheduled\(model\);/);
+  // A passed model is used as-is: the renderers must not derive a second one.
+  const renderers = queueRenderers();
+  const DCC = { TaskModel: {}, TimeBlocks: {} };
+  const ctx = {
+    window: { DCC }, DCC, isDone: () => false, _isSubRow: () => false,
+    _itineraryListModel: () => { throw new Error("derived a second model"); },
+    _orderUnscheduledNodes: n => n, triageTaskLoadState: () => ({}),
+    createTaskListRowRenderer: () => ev => ({ ev }),
+    document: { createDocumentFragment: () => ({ appendChild() {} }) },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(renderers + "\nthis.u = renderUnscheduledInto; this.t = renderTriageInto;", ctx);
+  const model = { triageGroup: { nodes: [{ ev: { id: "t" }, depth: 0 }] }, unscheduledGroup: { nodes: [] }, unfPool: [], isTodayView: true };
+  const list = { innerHTML: "", appendChild() {} };
+  assert.equal(ctx.t(list, model).open, 1);
+  assert.equal(ctx.u(list, model).open, 0);
 });
 
 test("addWheneverTask files a collision-proof dateless row on the Whenever stage", () => {

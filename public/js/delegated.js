@@ -492,8 +492,24 @@
     return !isDoneDelegated(item);
   }
 
+  // Is this item asking for a check-in at all? Shared by the Waiting badge and Loose
+  // Ends (attentionItems), so the two cannot disagree on who is out of the running. A
+  // snoozed item, a task dependency (no check-in, it waits on another task), a
+  // finished follow-up, and a cycle whose check-in task is already scheduled are not.
+  function wantsCheckIn(item) {
+    if (!isOpenDelegated(item) || isSnoozed(item) || isTaskDependency(item)) return false;
+    const p = item.properties || {};
+    if (p.checkInRepeat === false && !p.checkInDate) return false;
+    // Once a real check-in task owns this cycle, it needs no second decision row. The
+    // triage draft remains available for review/send.
+    if (p.checkInTaskId && p.checkInScheduledFor && p.checkInScheduledFor >= todayStr()) return false;
+    return true;
+  }
+
+  // Overdue for a check-in: the ONE rule behind both the Waiting badge and the
+  // Overdue filter, so the count always matches what that tab lists.
   function isOverdue(item) {
-    return isOpenDelegated(item) && itemUrgency(item).timing.remaining < 0;
+    return wantsCheckIn(item) && itemUrgency(item).timing.remaining < 0;
   }
 
   function collectVisibleContextIds() {
@@ -533,12 +549,7 @@
   // Waiting enters Loose Ends as soon as its urgency reaches 70 percent.
   function attentionItems(items) {
     return items.filter(item => {
-      if (!isOpenDelegated(item) || isSnoozed(item) || isTaskDependency(item)) return false;
-      const p = item.properties || {};
-      if (p.checkInRepeat === false && !p.checkInDate) return false;
-      // Once a real check-in task owns this cycle, Loose Ends no longer needs a
-      // second decision row. The triage draft remains available for review/send.
-      if (p.checkInTaskId && p.checkInScheduledFor && p.checkInScheduledFor >= todayStr()) return false;
+      if (!wantsCheckIn(item)) return false;
       const u = itemUrgency(item);
       return u.score >= 70 || u.timing.remaining < 0;
     });
@@ -565,16 +576,17 @@
     return "waiting:" + item.id + ":" + due;
   }
 
+  // Open work only. A finished Waiting item is recorded on the day it closed; the
+  // pill is not a history view, so there is no Done filter and All means all OPEN.
   function filterItems(items, filter) {
+    const open = items.filter(isOpenDelegated);
     switch (filter) {
       case "upcoming":
-        return items.filter(i => isOpenDelegated(i) && (isTaskDependency(i) || itemUrgency(i).timing.remaining >= 0));
+        return open.filter(i => !isOverdue(i));
       case "overdue":
-        return items.filter(isOverdue);
-      case "done":
-        return items.filter(isDoneDelegated);
+        return open.filter(isOverdue);
       default:
-        return items;
+        return open;
     }
   }
 
@@ -600,11 +612,10 @@
     if (!mount) return;
 
     const all = getAllDelegatedItems();
-    const open = all.filter(isOpenDelegated);
-    updateBadge(open.length);
+    updateBadge(all.filter(isOverdue).length);
 
     const list = filterItems(all, _currentFilter);
-    const rows = list.length ? list.map(renderCard).join("") : renderEmpty(true, all.length);
+    const rows = list.length ? list.map(renderCard).join("") : renderEmpty(true, all.filter(isOpenDelegated).length);
     mount.innerHTML =
       '<div class="delegated-sidebar-tools">' +
         '<button type="button" class="delegated-mini-btn" data-delegated-action="new">+ New</button>' +
@@ -619,8 +630,7 @@
     const filters = [
       ["all", "All"],
       ["upcoming", "Upcoming"],
-      ["overdue", "Overdue"],
-      ["done", "Done"]
+      ["overdue", "Overdue"]
     ];
     return '<div class="delegated-filter-bar">' + filters.map(([id, label]) =>
       '<button type="button" class="delegated-filter-btn' + (_currentFilter === id ? ' active' : '') + '" data-filter="' + id + '">' + label + '</button>'
@@ -767,20 +777,23 @@
     });
   }
 
-  function updateBadge(openCount) {
+  // The badge is a notification, not an inventory: it counts only items overdue for
+  // a check-in, and disappears at zero.
+  function updateBadge(overdueCount) {
     const countBadge = document.getElementById("delegated-blocked-count");
     if (countBadge) {
-      if (openCount > 0) {
-        countBadge.textContent = openCount;
-        countBadge.style.display = "";
-      } else {
-        countBadge.style.display = "none";
-      }
+      countBadge.textContent = overdueCount;
+      countBadge.style.display = overdueCount > 0 ? "" : "none";
     }
     const navCount = document.getElementById("waiting-pill-nav-count");
     const navPill = document.getElementById("waiting-pill-nav");
-    if (navCount) navCount.textContent = String(openCount);
-    if (navPill) navPill.setAttribute("aria-label", "Open Waiting tasks, " + openCount + " open");
+    if (navCount) {
+      navCount.textContent = String(overdueCount);
+      navCount.style.display = overdueCount > 0 ? "" : "none";
+    }
+    if (navPill) navPill.setAttribute("aria-label", overdueCount > 0
+      ? "Open Waiting tasks, " + overdueCount + " overdue for a check-in"
+      : "Open Waiting tasks, none overdue for a check-in");
   }
 
   // Plain-text nudge used when scheduling a follow-up (copied to clipboard as a fallback).
@@ -1138,6 +1151,11 @@
     const item = getDelegatedItemById(id);
     if (!item) {
       toast("That Waiting item is no longer available.", "info");
+      return false;
+    }
+    // The drawer lists open work only, so a closed item has no card to land on.
+    if (!isOpenDelegated(item)) {
+      toast("That Waiting item is already closed.", "info");
       return false;
     }
     _currentFilter = "all";

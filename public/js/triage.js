@@ -1083,7 +1083,7 @@ function buildTriageCard(item) {
     ageParts.push(hrs > 0 ? hrs + "h ago" : "just now");
   }
   const triTypeColors = {unanswered_dm:"#a78bfa",email_needs_response:"#f87171",slack_mention:"#22d3ee"};
-  const barColor = isDismissed ? "var(--green)" : (isWaitingCheckIn(item) ? "var(--waiting,#a31c43)" : (triTypeColors[item.type] || "#a78bfa"));
+  const barColor = isDismissed ? "var(--green)" : (isWaitingCheckIn(item) ? "var(--waiting,#7c3aed)" : (triTypeColors[item.type] || "#a78bfa"));
   const priCls = item.priority === "high" ? "pri-hi" : item.priority === "medium" ? "pri-med" : "pri-lo";
   const t = TRI_ICONS[item.type] || {emoji:"\u{2753}"};
   const linkLabel = DCC.esc(item.link_label || item.action_label || "Open");
@@ -1440,7 +1440,8 @@ function wireTriageTaskSourceActions(rowEl){
   rowEl.querySelectorAll(".schedule-triage-open-waiting").forEach(btn=>btn.addEventListener("click",e=>{e.stopPropagation();if(typeof window.openWaitingItem==="function")window.openWaitingItem(btn.dataset.waitingItem);}));
 }
 
-// Source ingestion creates real tasks; buildListView owns all task rendering.
+// Source ingestion creates real tasks; schedule-tab.js owns all task rendering. The
+// rows (and this loader's status) show in the header pill's Triage drawer (whenever.js).
 const _triageMaterializedSources=new Set();
 let _triageMaterializing=false;
 let _triageMaterializeError="";
@@ -1454,6 +1455,7 @@ function buildScheduleTriage(){
   if(!items.length&&!recurring.length)return;
   _triageMaterializing=true;
   _triageMaterializeError="";
+  if(typeof buildWhenever==="function")buildWhenever();
   const sources=items.slice(0,200);
   const repeats=recurring.slice(0,50);
   const body={
@@ -1483,6 +1485,7 @@ function buildScheduleTriage(){
     .finally(()=>{
       _triageMaterializing=false;
       if(typeof buildListView==="function")buildListView();
+      if(typeof buildWhenever==="function")buildWhenever();
       if(!_triageMaterializeError)buildScheduleTriage();
     });
 }
