@@ -157,9 +157,9 @@ test("a done Triage task lands on its day too, and Outside still sits after the 
   const blocks = [{ id: "am", name: "Morning", start: "08:00", end: "12:00" }];
   const groups = TimeBlocks.groupItineraryTree([
     { ev: { id: "t9", start: "09:00", end: "09:30" }, depth: 0 },
-    { ev: { id: "gmail", untimed: true, triageBlock: true }, depth: 0 },
-    { ev: { id: "slack", untimed: true, triageBlock: true, done: true }, depth: 0 },
-    { ev: { id: "repeat", untimed: true, triageBlock: true, done: true }, depth: 0 },
+    { ev: { id: "gmail", untimed: true, triageBlock: true, triageId: "gmail:1" }, depth: 0 },
+    { ev: { id: "slack", untimed: true, triageBlock: true, triageId: "slack:1", done: true }, depth: 0 },
+    { ev: { id: "repeat", untimed: true, triageBlock: true, triageId: "review:1", done: true }, depth: 0 },
     { ev: { id: "chore", untimed: true }, depth: 0 },
   ], blocks);
   const triage = groups.find(g => g.block.id === TimeBlocks.TRIAGE_BLOCK.id);

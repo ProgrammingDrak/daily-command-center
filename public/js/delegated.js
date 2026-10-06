@@ -681,13 +681,14 @@
     const waiting = (p.title || "").trim();
     const myTask = (p.myTask || "").trim();
     const headline = myTask || waiting || "(untitled)";
-    const note = truncate(p.aiSummary || p.notes || "", 120);
+    const note = String(p.aiSummary || p.notes || "").trim();
 
     // Subline: legacy items may still carry a separate what/who; surface them
     // under the headline. The due label always shows.
     const subParts = [];
-    if (myTask && waiting) subParts.push('Waiting on ' + esc(waiting));
-    if (who) subParts.push((myTask && waiting ? ' from ' : 'Waiting on ') + esc(who));
+    if (myTask && waiting) subParts.push(esc(waiting));
+    if (who) subParts.push(esc(who));
+    if (!subParts.length) subParts.push('Not specified');
     const sub = subParts.map(s => '<span>' + s + '</span>').join("");
 
     const cardCls = [
@@ -698,9 +699,8 @@
     ].filter(Boolean).join(" ");
 
     const followUpComplete = p.checkInRepeat === false && !p.checkInDate;
-    const badge = done || followUpComplete
-      ? '<div class="delegated-card-score done">&#10003;</div>'
-      : '<div class="delegated-card-score ' + cls + '">' + u.score + '</div>';
+    const badge = '<div class="waiting-state ' + cls + '">' +
+      (done ? 'Complete' : followUpComplete ? 'Follow-up complete' : esc(dueLabel(item))) + '</div>';
 
     const linkChip = p.linkedBlockId ? '<span class="delegated-card-link">linked task</span>' : '';
     const sourceRef = waitingSourceRef(p);
@@ -709,24 +709,23 @@
       : '';
 
     const actionButtons = done ?
+      '<details class="waiting-more"><summary>More actions</summary><div>' +
       '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
-      '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button>' :
+      '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button></div></details>' :
       (followUpComplete ? '' : '<button type="button" data-delegated-action="check-in" data-id="' + esc(item.id) + '">Checked in</button>' +
       '<button type="button" data-delegated-action="schedule" data-id="' + esc(item.id) + '">Schedule check-in</button>') +
+      '<details class="waiting-more"><summary>More actions</summary><div>' +
       '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
       '<button type="button" data-delegated-action="unblock" data-id="' + esc(item.id) + '" title="The blocker is gone. Put the actual task on your schedule.">Schedule task</button>' +
       '<button type="button" data-delegated-action="complete" data-id="' + esc(item.id) + '" title="The actual task is already finished.">Complete task</button>' +
-      '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button>';
+      '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button></div></details>';
 
     return '<div class="' + cardCls + '" data-id="' + esc(item.id) + '">' +
-      badge +
       '<div class="delegated-card-body">' +
+        badge +
         '<div class="delegated-card-title">' + esc(headline) + linkChip + sourceLink + '</div>' +
-        '<div class="delegated-card-meta">' +
-          sub +
-          '<span class="delegated-card-when">' + esc(dueLabel(item)) + '</span>' +
-        '</div>' +
-        (done || followUpComplete ? '' : '<div class="delegated-card-meter"><span class="' + u.cls + '" style="width:' + u.timing.progress + '%"></span></div>') +
+        '<dl class="waiting-facts"><div><dt>Waiting for</dt><dd>' + sub + '</dd></div>' +
+          '<div><dt>Follow-up</dt><dd>' + esc(p.checkInDate || (followUpComplete ? 'Complete' : 'From repeat cadence')) + '</dd></div></dl>' +
         (note ? '<div class="delegated-card-note">' + esc(note) + '</div>' : '') +
       '</div>' +
       '<div class="delegated-card-actions">' + actionButtons + '</div>' +
@@ -1160,8 +1159,8 @@
     }
     _currentFilter = "all";
     renderDelegatedSidebar();
-    if (typeof window.openTasksToSection === "function") {
-      window.openTasksToSection("tm-delegated-blocked-section", { solo: true });
+    if (typeof window.openTaskQueue === "function") {
+      window.openTaskQueue("waiting");
     }
     setTimeout(() => {
       const card = Array.from(document.querySelectorAll("#delegated-blocked-list .delegated-card"))
@@ -1633,8 +1632,10 @@
 
     const waitingPill = document.getElementById("waiting-pill-nav");
     if (waitingPill) waitingPill.addEventListener("click", () => {
-      if (typeof window.openTasksToSection === "function") {
-        window.openTasksToSection("tm-delegated-blocked-section", { solo: true });
+      if (typeof window.openTaskQueue === "function") {
+        _currentFilter = "all";
+        renderDelegatedSidebar();
+        window.openTaskQueue("waiting");
       }
     });
   }

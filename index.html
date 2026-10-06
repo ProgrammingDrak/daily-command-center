@@ -134,19 +134,19 @@
            catch-up.js owns Loose Ends (hidden while it has nothing to show) and
            delegated.js owns Waiting. -->
       <div class="queue-pill" id="queue-pill" role="group" aria-label="Task queues">
-        <button class="queue-seg queue-theme--crimson" id="triage-pill-nav" type="button" aria-label="Open Triage tasks" aria-controls="tm-whenever-section" title="Triage: new from your inboxes and due repeats. Decide what each one needs.">
+        <button class="queue-seg queue-theme--crimson" id="triage-pill-nav" type="button" aria-label="Open Triage tasks" aria-controls="tasks-drawer" aria-haspopup="dialog" title="Triage: tasks discovered while reviewing incoming messages and meetings.">
           <span data-triage-label>Triage</span><span class="queue-seg-count" id="triage-pill-nav-count" aria-live="polite">0</span>
         </button>
-        <button class="queue-seg queue-theme--blue" id="loose-ends-pill" type="button" aria-controls="catchup-overlay" aria-haspopup="dialog" aria-label="Open Loose Ends" title="Loose Ends: unfinished work from past days, and your journal." hidden>
+        <button class="queue-seg queue-theme--blue" id="loose-ends-pill" type="button" aria-controls="catchup-overlay" aria-haspopup="dialog" aria-label="Open Loose Ends" title="Loose Ends: unfinished work and follow-ups that need attention." hidden>
           <span>Loose Ends</span><span class="queue-seg-count" id="loose-ends-pill-count" aria-live="polite">0</span>
         </button>
-        <button class="queue-seg queue-theme--waiting" id="waiting-pill-nav" type="button" aria-label="Open Waiting tasks" aria-controls="tm-delegated-blocked-section" title="Waiting: handed off to someone else. The count is check-ins that are overdue.">
+        <button class="queue-seg queue-theme--waiting" id="waiting-pill-nav" type="button" aria-label="Open Waiting tasks" aria-controls="tasks-drawer" aria-haspopup="dialog" title="Waiting: handed off to someone else. The count is check-ins that are overdue.">
           <span>Waiting</span><span class="queue-seg-count" id="waiting-pill-nav-count" aria-live="polite">0</span>
         </button>
-        <button class="queue-seg queue-theme--amber" id="unscheduled-pill-nav" type="button" aria-label="Open Unscheduled tasks" aria-controls="tm-whenever-section" data-placement="unplanned" title="Unscheduled: has to happen, but is not on your schedule yet. Drop a task here to take its time off.">
+        <button class="queue-seg queue-theme--amber" id="unscheduled-pill-nav" type="button" aria-label="Open Unscheduled tasks" aria-controls="tasks-drawer" aria-haspopup="dialog" data-placement="unplanned" title="Unscheduled: has to happen, but is not on your schedule yet. Drop a task here to take its time off.">
           <span data-unscheduled-label>Unscheduled</span><span class="queue-seg-count" id="unscheduled-pill-nav-count" aria-live="polite">0</span>
         </button>
-        <button class="queue-seg queue-theme--sage" id="whenever-pill-nav" type="button" aria-label="Open Whenever tasks" aria-controls="tm-whenever-section" title="Whenever: no set time. Knock one out when you have a free minute.">
+        <button class="queue-seg queue-theme--sage" id="whenever-pill-nav" type="button" aria-label="Open Whenever tasks" aria-controls="tasks-drawer" aria-haspopup="dialog" title="Whenever: no set time. Knock one out when you have a free minute.">
           <span data-whenever-label>Whenever</span><span class="queue-seg-count" id="whenever-pill-nav-count" aria-live="polite">0</span>
         </button>
       </div>
@@ -426,7 +426,7 @@
                 <h4 class="untimed-sub-title" id="triage-sub-title"><span data-triage-label>Triage</span><span class="untimed-sub-count" id="triage-queue-count">0</span></h4>
                 <span class="untimed-tip-wrap">
                   <button type="button" class="untimed-tip" aria-label="What goes in Triage?" aria-describedby="triage-queue-tip" aria-expanded="false">i</button>
-                  <span class="untimed-tip-text" role="tooltip" id="triage-queue-tip">Just came in from your inboxes and repeat responsibilities. Decide what each one needs: do it, give it a time, or clear it.</span>
+                  <span class="untimed-tip-text" role="tooltip" id="triage-queue-tip">Tasks discovered while reviewing incoming messages and meetings. Inspect the source, do the work, give it a time, or clear it.</span>
                 </span>
               </div>
               <div class="it-list-view untimed-list" id="triage-queue-list">
@@ -747,17 +747,40 @@
       <h3 id="add-modal-title">Task Details</h3>
       <button class="pvb-close" id="add-modal-close" type="button" aria-label="Close task details">&times;</button>
     </div>
-    <div class="dcc-task-detail-tabs" role="tablist" aria-label="Task details sections">
-      <button class="dcc-task-detail-tab active" type="button" role="tab" aria-selected="true" data-am-tab="overview">Overview</button>
-      <button class="dcc-task-detail-tab" type="button" role="tab" aria-selected="false" data-am-tab="notes">Notes</button>
-      <button class="dcc-task-detail-tab" type="button" role="tab" aria-selected="false" data-am-tab="subtasks">Subtasks</button>
-      <button class="dcc-task-detail-tab" type="button" role="tab" aria-selected="false" data-am-tab="history">History</button>
-      <button class="dcc-task-detail-tab" type="button" role="tab" aria-selected="false" data-am-tab="automation">Automation</button>
-    </div>
-    <div class="add-modal-body">
+    <div class="add-modal-body dcc-task-detail-flow">
+      <p id="am-task-status" class="am-task-status" aria-live="polite"></p>
       <!-- Read-only details (description lives in Notes below) -->
       <div class="am-det-meta" id="am-details-section" data-am-panel="overview" style="display:none"></div>
       <div class="am-section" id="am-activity-entry" data-am-panel="overview"></div>
+      <div class="am-next"><span>Next step</span><p id="am-next-step" aria-live="polite">Start work on this task.</p></div>
+      <div id="am-work-actions" class="am-work-actions" aria-label="Task execution"></div>
+      <div id="am-time-summary" aria-label="Planned and actual time"></div>
+      <!-- Combined items list -->
+      <div class="am-section" data-am-panel="subtasks">
+        <div class="am-section-label">Items <span id="am-items-count" style="opacity:0.5;font-weight:400">(0)</span></div>
+        <div id="am-items-list"></div>
+      </div>
+
+      <!-- Add new item -->
+      <div class="am-add-section" data-am-panel="subtasks">
+        <div class="am-add-row">
+          <input id="am-item-input" type="text" placeholder="Add item..." aria-label="New subtask or action item">
+          <select id="am-item-type" aria-label="Item type" class="am-type-select">
+            <option value="subtask">Subtask — shares points</option>
+            <option value="stacked">Stacked — own points</option>
+            <option value="action">Action Item</option>
+          </select>
+          <button id="am-item-add" class="am-add-btn">+ Add</button>
+        </div>
+        <div id="am-trivial-picker" style="display:none"></div>
+      </div>
+      <!-- Notes section -->
+      <div class="am-section" data-am-panel="notes">
+        <div class="am-section-label">Notes</div>
+        <div id="am-notes-block-editor" class="dm-notes-editor"></div>
+      </div>
+
+      <details class="am-disclosure"><summary>Task settings</summary>
       <!-- Tags section -->
       <div class="am-section" id="am-tag-section" data-am-panel="overview">
         <div class="am-section-label">Tags</div>
@@ -772,38 +795,16 @@
           <span class="am-commute-hint" id="am-commute-hint">No leave window</span>
         </div>
       </div>
-      <!-- Notes section -->
-      <div class="am-section" data-am-panel="notes" hidden>
-        <div class="am-section-label">Notes</div>
-        <div id="am-notes-block-editor" class="dm-notes-editor"></div>
-      </div>
-
-      <div class="am-section" id="am-work-history-section" data-am-panel="history" hidden>
+      </details>
+      <details class="am-disclosure"><summary>Time and history</summary>
+      <div class="am-section" id="am-work-history-section" data-am-panel="history">
         <div class="am-section-label">Work history</div>
-        <div id="am-work-actions" class="am-work-actions"></div>
         <div id="am-work-history" class="am-work-history"></div>
       </div>
 
-      <!-- Combined items list -->
-      <div class="am-section" data-am-panel="subtasks" hidden>
-        <div class="am-section-label">Items <span id="am-items-count" style="opacity:0.5;font-weight:400">(0)</span></div>
-        <div id="am-items-list"></div>
-      </div>
-
-      <!-- Add new item -->
-      <div class="am-add-section" data-am-panel="subtasks" hidden>
-        <div class="am-add-row">
-          <input id="am-item-input" type="text" placeholder="Add item...">
-          <select id="am-item-type" class="am-type-select">
-            <option value="subtask">Subtask — shares points</option>
-            <option value="stacked">Stacked — own points</option>
-            <option value="action">Action Item</option>
-          </select>
-          <button id="am-item-add" class="am-add-btn">+ Add</button>
-        </div>
-        <div id="am-trivial-picker" style="display:none"></div>
-      </div>
-      <div class="am-section dcc-task-automation" data-am-panel="automation" hidden>
+      </details>
+      <details class="am-disclosure"><summary>Repeat and waiting</summary>
+      <div class="am-section dcc-task-automation" data-am-panel="automation">
         <div class="am-section-label">Automation</div>
         <p>Convert this task into repeat work or a waiting responsibility.</p>
         <div class="dcc-task-automation-actions">
@@ -811,12 +812,15 @@
           <button class="dm-btn-cancel am-repeat-btn" id="add-modal-delegated" type="button">Mark waiting</button>
         </div>
       </div>
+      </details>
     </div>
     <div class="add-modal-footer">
       <button class="dm-btn-cancel" id="add-modal-done" type="button">Close</button>
       <button class="dm-btn-cancel" id="add-modal-cancel-edit" type="button" hidden>Cancel</button>
       <button class="dm-btn-complete" id="add-modal-edit" type="button">Edit</button>
       <button class="dm-btn-complete" id="add-modal-save" type="button" hidden>Save</button>
+      <p class="am-save-contract">Save title and settings. Notes save on close; checklist changes save immediately.</p>
+      <p id="am-save-status" class="am-save-contract" role="status" aria-live="polite"></p>
     </div>
   </div>
 </div>

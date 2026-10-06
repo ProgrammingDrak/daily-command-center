@@ -268,7 +268,7 @@ function _handleAddModalKeydown(event) {
   }
   if (event.key !== 'Tab') return;
   var modal = overlay.querySelector('.add-modal');
-  var focusable = Array.from(modal.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+  var focusable = Array.from(modal.querySelectorAll('summary, a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
     .filter(function(node) { return !node.hidden && node.getClientRects().length; });
   if (!focusable.length) { event.preventDefault(); modal.focus(); return; }
   var first = focusable[0], last = focusable[focusable.length - 1];
@@ -368,7 +368,7 @@ function _amBuildDetails(ev){
   if(ev.priority) meta.push('<span class="pri-'+(ev.priority==="High"?"hi":ev.priority==="Medium"?"med":"lo")+'">'+esc(ev.priority)+' priority</span>');
   if(typeof dur==='function') meta.push('<span>'+(typeof ms==='function'?ms(dur(ev)):dur(ev)+'m')+'</span>');
   if(ev.start&&ev.end&&typeof f12==='function') meta.push('<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>');
-  if(ev.source&&typeof srcTag==='function') meta.push('<span class="am-det-src">Source:</span>'+srcTag(ev.source));
+  if(ev.source&&typeof srcTag==='function'&&srcTag(ev.source)) meta.push('<span class="am-det-src">Source:</span>'+srcTag(ev.source));
   if(ev.notionUrl){
     try{
       var notionUrl=new URL(String(ev.notionUrl),window.location.origin);
@@ -409,6 +409,8 @@ function openAddModal(taskId, taskTitle) {
       : null;
   }
   _addModalTaskId = taskId;
+  var saveStatus = document.getElementById('am-save-status');
+  if (saveStatus) saveStatus.textContent = '';
   var anchor = (typeof taskAnchorById === 'function') ? taskAnchorById(taskId) : null;
   var taskEntry = anchor ? anchor.ev
     : ((typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null);
@@ -478,7 +480,7 @@ function openAddModal(taskId, taskTitle) {
   var noteVal = notes[taskId];
   var initialBlocks=typeof noteBlocksForTask === 'function' ? noteBlocksForTask(taskId, noteVal, taskEntry) : null;
   if(window._amBlockEditor) window._amBlockEditor.destroy();
-  window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks);
+  window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks, { accessibleLabel: 'Task notes' });
   _addModalNotesSnapshot = _addModalNotesFingerprint();
 
   // Render combined items list
@@ -491,6 +493,7 @@ function openAddModal(taskId, taskTitle) {
   taskOverlay.classList.add('open');
   taskOverlay.setAttribute('aria-hidden', 'false');
   _setAddModalPageInert(taskOverlay, true);
+  taskOverlay.querySelectorAll('.am-disclosure').forEach(function(section) { section.open = false; });
   selectAddModalTab('overview');
   if(window.DCCWorkSessions&&typeof window.DCCWorkSessions.renderHistory==='function')window.DCCWorkSessions.renderHistory(_addModalBlockId);
   // Clicking a task IS the edit gesture: the modal opens ready to type, so nobody
@@ -502,7 +505,12 @@ function openAddModal(taskId, taskTitle) {
   // ungated click away on an archive day, and its row handler opens this modal.
   var archived = typeof viewMode !== 'undefined' && viewMode === 'archive';
   setAddModalMode(!archived);
-  setTimeout(function() { document.getElementById('add-modal-close')?.focus(); }, 80);
+  setTimeout(function() {
+    if (_addModalTaskId !== taskId || !taskOverlay.classList.contains('open')) return;
+    // Do not steal focus from a field the user has already reached while the
+    // opening animation runs (or from a different task opened in the meantime).
+    if (!taskOverlay.contains(document.activeElement)) document.getElementById('add-modal-close')?.focus();
+  }, 80);
 }
 
 function selectAddModalTab(tabId) {
@@ -515,11 +523,19 @@ function selectAddModalTab(tabId) {
     btn.tabIndex = active ? 0 : -1;
   });
   modal.querySelectorAll('[data-am-panel]').forEach(function(panel) {
-    panel.hidden = panel.dataset.amPanel !== tabId;
+    // Keep the existing section-routing API for integrations (including activity
+    // records), while presenting one readable flow instead of hiding useful work.
+    panel.hidden = false;
+    if (tabId !== 'overview' && panel.dataset.amPanel === tabId) {
+      var disclosure = panel.closest('details');
+      if (disclosure) disclosure.open = true;
+    }
   });
 }
 
 function setAddModalMode(editing) {
+  var archived = typeof viewMode !== 'undefined' && viewMode === 'archive';
+  editing = editing && !archived;
   _addModalEditing = !!editing;
   var modal = document.querySelector('#add-modal-overlay .add-modal');
   if (!modal) return;
@@ -535,7 +551,7 @@ function setAddModalMode(editing) {
   var save = document.getElementById('add-modal-save');
   var cancel = document.getElementById('add-modal-cancel-edit');
   var close = document.getElementById('add-modal-done');
-  if (edit) edit.hidden = _addModalEditing;
+  if (edit) edit.hidden = _addModalEditing || archived;
   if (save) save.hidden = !_addModalEditing;
   if (cancel) cancel.hidden = !_addModalEditing;
   if (close) close.hidden = _addModalEditing;
@@ -562,7 +578,8 @@ function saveAddModalEdits() {
   }
   persistAddModalEdits();
   setAddModalMode(false);
-  if (typeof showToast === 'function') showToast('Task details saved', 'success');
+  // BlockStore may buffer a write for retry. Submission is not acknowledgment.
+  if (typeof showToast === 'function') showToast('Changes submitted', 'info');
   if (typeof render === 'function') render();
 }
 
@@ -597,6 +614,15 @@ function refreshOpenAddModalDetails(opts) {
   var detHtml = _amBuildDetails(taskEntry);
   detEl.innerHTML = detHtml;
   detEl.style.display = detHtml ? '' : 'none';
+  _amRenderExecutionContext(taskEntry);
+}
+
+function _amRenderExecutionContext(taskEntry) {
+  var status = document.getElementById('am-task-status');
+  if (!status) return;
+  var archived = typeof viewMode !== 'undefined' && viewMode === 'archive';
+  var done = taskEntry && ((typeof isDone === 'function' && isDone(taskEntry)) || taskEntry.status === 'done');
+  status.textContent = archived ? 'Archived · read only' : done ? 'Complete' : taskEntry && taskEntry.startedAt ? 'In progress' : 'Ready';
 }
 
 // Modal header title — click to rename (Enter/blur saves, Escape cancels), meetings stay read-only.
@@ -620,6 +646,8 @@ function _amSetupTitle(taskId, taskEntry, fallbackTitle) {
     var inp = document.createElement('input');
     inp.type = 'text';
     inp.className = 'am-title-edit';
+    inp.id = 'add-modal-title';
+    inp.setAttribute('aria-label', 'Task title');
     inp.value = currentTitle;
     h3.replaceWith(inp);
     inp.focus(); inp.select();
@@ -635,8 +663,8 @@ function _amSetupTitle(taskId, taskEntry, fallbackTitle) {
       inp.replaceWith(h3);
     }
     inp.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') { e.preventDefault(); save(); }
-      if (e.key === 'Escape') { saved = true; inp.replaceWith(h3); }
+      if (e.key === 'Enter') { e.preventDefault(); save(); h3.focus(); }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); saved = true; inp.replaceWith(h3); h3.focus(); }
     });
     inp.addEventListener('blur', save);
   }
@@ -650,6 +678,7 @@ function _amSetupTitle(taskId, taskEntry, fallbackTitle) {
 
 function closeAddModal() {
   var overlay = document.getElementById('add-modal-overlay');
+  if (window.DCCWorkSessions && typeof window.DCCWorkSessions.cancelHistory === 'function') window.DCCWorkSessions.cancelHistory();
   // The modal now opens in edit mode, so the X, Escape, and the backdrop are ordinary exits
   // from a LIVE edit session rather than from a read view. Flush typed notes before the
   // editor is torn down. Commute deliberately stays on the Save path only: persisting it on
@@ -672,6 +701,7 @@ function closeAddModal() {
   _flushDeferredRender();
   if (typeof render === 'function') render();
   requestAnimationFrame(function() {
+    if (overlay.classList.contains('open')) return;
     if (returnFocus && returnFocus !== document.body && returnFocus !== document.documentElement && returnFocus.isConnected && typeof returnFocus.focus === 'function') {
       returnFocus.focus({ preventScroll: true });
       return;
@@ -714,6 +744,13 @@ function renderModalItems(taskId) {
 
   // Update count
   document.getElementById('am-items-count').textContent = '(' + items.length + ')';
+  var next = document.getElementById('am-next-step');
+  if (next) {
+    var first = items.find(function(item) { return !item.done; });
+    next.textContent = first ? first.text : items.length ? 'Review your work, then complete the task.' : 'Review the task and start when ready.';
+  }
+  var anchor = typeof taskAnchorById === 'function' ? taskAnchorById(taskId) : null;
+  _amRenderExecutionContext(anchor && anchor.ev);
 
   if (!items.length) {
     list.innerHTML = '<div class="am-empty">No items yet. Add subtasks or action items below.</div>';
@@ -735,28 +772,28 @@ function renderModalItems(taskId) {
       ? '<span class="am-pie-ok">balanced</span>'
       : '<span class="am-pie-warn">' + Math.abs(plan.discrepancy) + ' pts ' + dWord + '</span>';
     pieHtml =
-      '<div class="am-pie">' +
+      '<details class="am-points"><summary>Point allocation</summary><div class="am-pie">' +
         '<div class="am-pie-row">' +
           '<label>Pool <input type="number" min="1" class="am-pie-pool" value="' + plan.pool + '"></label>' +
           '<label title="Awarded only when you check the whole task done">Completion bonus <input type="number" min="0" class="am-pie-bonus" value="' + plan.bonus + '"></label>' +
           dHtml +
         '</div>' +
-      '</div>';
+      '</div></details>';
   }
 
-  list.innerHTML = pieHtml + items.map(function(item) {
+  list.innerHTML = pieHtml + items.map(function(item, index) {
     var shareHtml = '';
     if (item.type === 'subtask' && plan && plan.shares[item.id]) {
       var locked = plan.shares[item.id].locked;
       shareHtml = '<input type="number" min="0" class="am-share' + (locked ? ' locked' : '') + '" data-id="' + item.id + '" value="' + plan.shares[item.id].pts + '" title="' + (locked ? 'Manually set — others rebalance around it' : 'Auto-split; edit to lock') + '"><span class="am-share-unit">pts</span>';
     }
     return '<div class="am-item" data-type="' + item.type + '" data-id="' + item.id + '">' +
-      '<div class="am-check' + (item.done ? ' done' : '') + '">' + (item.done ? '✓' : '') + '</div>' +
-      '<span class="am-text' + (item.done ? ' done' : '') + '">' + item.text + '</span>' +
+      '<button type="button" role="checkbox" aria-checked="' + !!item.done + '" aria-labelledby="am-item-label-' + index + '" class="am-check' + (item.done ? ' done' : '') + '">' + (item.done ? '&#10003;' : '') + '</button>' +
+      '<span id="am-item-label-' + index + '" class="am-text' + (item.done ? ' done' : '') + '">' + DCC.esc(item.text) + '</span>' +
       shareHtml +
       '<span class="am-tag" style="color:' + tagColors[item.type] + '">' + tagLabels[item.type] + '</span>' +
       (item.priority ? '<span class="am-pri" style="color:' + (item.priority === 'High' ? 'var(--red)' : item.priority === 'Medium' ? 'var(--amber)' : 'var(--text-muted)') + '">' + item.priority + '</span>' : '') +
-      '<button class="am-del">✕</button>' +
+      '<button type="button" class="am-del" aria-label="Delete item">&times;</button>' +
     '</div>';
   }).join('');
 
@@ -817,6 +854,11 @@ function renderModalItems(taskId) {
 // Wire up modal events after DOM loads
 document.addEventListener('DOMContentLoaded', function() {
   document.addEventListener('keydown', _handleAddModalKeydown, true);
+  document.addEventListener('dcc:save-status', function(event) {
+    var target = document.getElementById('am-save-status');
+    var detail = event.detail || {};
+    if (target) target.textContent = [detail.local, detail.remote, detail.message].filter(Boolean).join(' · ');
+  });
   // Close
   document.getElementById('add-modal-close').addEventListener('click', closeAddModal);
   document.getElementById('add-modal-done').addEventListener('click', closeAddModal);
@@ -1385,11 +1427,14 @@ function _addModalNotesFingerprint() {
 function _writeAddModalNotes() {
   if (!_addModalTaskId || !window._amBlockEditor) return;
   var notes = loadNotes();
+  var previous = notes[_addModalTaskId];
   if (!window._amBlockEditor.isEmpty()) {
     var blocks = window._amBlockEditor.getBlocks();
-    notes[_addModalTaskId] = { blocks: blocks, html: window._amBlockEditor.toHtml(), text: window._amBlockEditor.toMarkdown() };
-  } else { delete notes[_addModalTaskId]; }
-  saveNotes(notes);
+    notes[_addModalTaskId] = Object.assign({}, previous, { blocks: blocks, html: window._amBlockEditor.toHtml(), text: window._amBlockEditor.toMarkdown() });
+  } else {
+    notes[_addModalTaskId] = Object.assign({}, previous, { blocks: [], html: "", text: "" });
+  }
+  saveNotes(notes, { taskId: _addModalTaskId, previous: previous });
   _addModalNotesSnapshot = _addModalNotesFingerprint();
 }
 

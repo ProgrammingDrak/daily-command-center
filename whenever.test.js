@@ -208,11 +208,11 @@ test("the header is ONE capsule with five doors in triage order: Triage, Loose E
   const css = fs.readFileSync(require.resolve("./public/css/dashboard.css"), "utf8");
   assert.match(css, /\.queue-seg\[hidden\]\{display:none!important\}/, "a hidden door must not leave a gap in the capsule");
   assert.match(css, /\.queue-theme--waiting\{--queue-accent:var\(--waiting\);/);
-  assert.match(header, /id="triage-pill-nav"[^>]*aria-controls="tm-whenever-section"/);
-  assert.match(header, /id="waiting-pill-nav"[^>]*aria-controls="tm-delegated-blocked-section"/);
-  assert.match(header, /id="unscheduled-pill-nav"[^>]*aria-controls="tm-whenever-section"[^>]*data-placement="unplanned"/,
+  assert.match(header, /id="triage-pill-nav"[^>]*aria-controls="tasks-drawer"/);
+  assert.match(header, /id="waiting-pill-nav"[^>]*aria-controls="tasks-drawer"/);
+  assert.match(header, /id="unscheduled-pill-nav"[^>]*aria-controls="tasks-drawer"[^>]*data-placement="unplanned"/,
     "the Unscheduled segment is the drop target the itinerary's Unplanned zone used to be");
-  assert.match(header, /id="whenever-pill-nav"[^>]*aria-controls="tm-whenever-section"/);
+  assert.match(header, /id="whenever-pill-nav"[^>]*aria-controls="tasks-drawer"/);
   for (const id of ["triage-pill-nav-count", "waiting-pill-nav-count", "unscheduled-pill-nav-count", "whenever-pill-nav-count",
     "untimed-count", "triage-queue-count", "unscheduled-count", "whenever-count", "triage-queue-list", "unscheduled-list",
     "whenever-list", "whenever-add", "whenever-pick", "triage-queue-tip", "unscheduled-tip", "whenever-tip"]) {
@@ -223,7 +223,7 @@ test("the header is ONE capsule with five doors in triage order: Triage, Loose E
   const drawer = html.slice(html.indexOf('id="tm-whenever-section"'));
   assert.ok(drawer.indexOf('id="triage-sub"') < drawer.indexOf('id="unscheduled-sub"'));
   assert.ok(drawer.indexOf('id="unscheduled-sub"') < drawer.indexOf('id="whenever-sub"'));
-  assert.match(drawer, /aria-describedby="triage-queue-tip"[\s\S]*role="tooltip" id="triage-queue-tip">[^<]*inboxes/i);
+  assert.match(drawer, /aria-describedby="triage-queue-tip"[\s\S]*role="tooltip" id="triage-queue-tip">[^<]*messages and meetings/i);
   assert.match(drawer, /aria-describedby="unscheduled-tip"[\s\S]*role="tooltip" id="unscheduled-tip">[^<]*schedule/i);
   assert.match(drawer, /aria-describedby="whenever-tip"[\s\S]*role="tooltip" id="whenever-tip">[^<]*free minute/i);
   // Loaded after task-model.js (it reads the stage there) and before schedule.js
