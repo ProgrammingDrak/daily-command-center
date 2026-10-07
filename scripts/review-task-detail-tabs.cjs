@@ -79,7 +79,8 @@ fs.mkdirSync(out,{recursive:true});
  await page.locator('#add-modal-edit').click();
  await page.locator('#am-work-actions [data-work-action="start"]').click();await page.locator('#am-work-actions [data-work-action="pause"]').waitFor();
  await page.locator('#am-work-actions [data-work-action="pause"]').click();await page.locator('#am-work-actions [data-work-action="start"]').waitFor();
- await tab('history').click();assert((await page.locator('#am-work-history').innerText()).trim().length>0);
+ await tab('history').click();await page.locator('#am-work-history .work-history-row').first().waitFor();
+ assert.equal(await page.locator('#am-work-history .work-history-empty').count(),0);
  checks.push('Start/Pause retained; populated history renders');
  for(let i=0;i<3;i++){await tab('automation').click();await page.locator('#add-modal-close').click();await open('tabs-empty');assert.equal(await tab('subtasks').getAttribute('aria-selected'),'true');}
  await page.locator('#add-modal-title').focus();await page.keyboard.press('Shift+Tab');assert.equal(await page.evaluate(()=>document.activeElement.id),'add-modal-save');
