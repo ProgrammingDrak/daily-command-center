@@ -1340,7 +1340,24 @@
 
   function setVal(id, value) {
     const el = document.getElementById(id);
-    if (el) el.value = value == null ? "" : value;
+    if (el) {
+      el.value = value == null ? "" : value;
+      if (typeof el.__twRender === "function") el.__twRender();
+      if (id === "dm-check-in-date") syncCheckInDateShortcuts();
+    }
+  }
+
+  function syncCheckInDateShortcuts() {
+    const input = document.getElementById("dm-check-in-date");
+    const now = new Date();
+    const today = toDateInputValue(now);
+    now.setDate(now.getDate() + 1);
+    const tomorrow = toDateInputValue(now);
+    document.querySelectorAll("[data-dm-date]").forEach(button => {
+      const selected = !!input && input.value === (button.dataset.dmDate === "today" ? today : tomorrow);
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
   }
 
   function getLinkableTasks() {
@@ -1702,6 +1719,12 @@
         setVal("dm-check-in-date", toDateInputValue(date));
       });
     });
+
+    const checkInDate = document.getElementById("dm-check-in-date");
+    if (checkInDate) {
+      checkInDate.addEventListener("input", syncCheckInDateShortcuts);
+      checkInDate.addEventListener("change", syncCheckInDateShortcuts);
+    }
 
     const waitingPill = document.getElementById("waiting-pill-nav");
     if (waitingPill) waitingPill.addEventListener("click", () => {

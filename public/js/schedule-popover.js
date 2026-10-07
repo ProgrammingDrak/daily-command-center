@@ -73,7 +73,6 @@ function openSchedulePopover(cfg){
   document.querySelectorAll(".has-dur-popover").forEach(x=>x.classList.remove("has-dur-popover"));
   document.body.classList.remove("dur-open");
 
-  const today=(typeof _actualTodayStr==="function")?_actualTodayStr():null;
   const options=cfg.options||{};
   // Create mode stages duration + time; commits read them.
   let stagedDur=cfg.durMin||30;
@@ -106,8 +105,8 @@ function openSchedulePopover(cfg){
     '</div>'):'')+
     (showDate?(
     '<div class="resched-quick">'+
-      '<button class="resched-btn" data-target="today">Today</button>'+
-      '<button class="resched-btn" data-target="tomorrow">Tomorrow</button>'+
+      '<button class="resched-btn" aria-pressed="false" data-target="today">Today</button>'+
+      '<button class="resched-btn" aria-pressed="false" data-target="tomorrow">Tomorrow</button>'+
     '</div>'+
     // time-picker.js auto-enhances this input into the 📅 chip (the input
     // itself goes type="hidden" and keeps the value). Picking a day COMMITS --
@@ -163,6 +162,13 @@ function openSchedulePopover(cfg){
   // Resolve a picked day per mode. Reschedule advances to the shared placement
   // step; create commits the new task; pick hands the date to the caller.
   async function pickDay(dateStr){
+    const input=pop.querySelector(".resched-date-input");
+    if(input){input.value=dateStr;if(typeof input.__twRender==="function")input.__twRender()}
+    pop.querySelectorAll(".resched-btn").forEach(btn=>{
+      const selected=dateStr===_actualDateStr(btn.dataset.target==="tomorrow"?1:0);
+      btn.classList.toggle("active",selected);
+      btn.setAttribute("aria-pressed",String(selected));
+    });
     if(mode==="reschedule"){
       closePop();
       moveTaskViaPlacement(cfg.id,dateStr,{task:ev,onMove:cfg.onMove});
@@ -205,9 +211,7 @@ function openSchedulePopover(cfg){
     btn.addEventListener("click",e=>{
       e.stopPropagation();
       const target=btn.dataset.target;
-      const dateStr=target==="today"
-        ?(mode==="reschedule"?today:(typeof _resolvedTodayDate==="function"?_resolvedTodayDate():today))
-        :(typeof _resolvedTomorrowDate==="function"?_resolvedTomorrowDate():__tomorrowDate);
+      const dateStr=_actualDateStr(target==="tomorrow"?1:0);
       if(!dateStr){if(typeof showToast==="function")showToast("No date available","error");return}
       if(mode==="pick")btn.textContent="Scheduling...";
       pickDay(dateStr);

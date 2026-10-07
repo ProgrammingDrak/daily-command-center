@@ -342,6 +342,9 @@
         input.dispatchEvent(new Event("change", { bubbles: true }));
       });
     };
+    // Native/manual change events must refresh the same chip as calendar picks.
+    input.addEventListener("input", input.__twRender);
+    input.addEventListener("change", input.__twRender);
     input.__twRender();
   }
   function scan(root) {
