@@ -17,15 +17,14 @@ const base=process.env.DCC_REVIEW_URL||'http://127.0.0.1:8303';
   const results=[];
   for(const width of [320,390,768,1440]){
    await page.setViewportSize({width,height:844});
-   await row.evaluate(n=>n.scrollIntoView({block:'center'}));await page.waitForTimeout(300);
+   await row.scrollIntoViewIfNeeded();await page.waitForTimeout(300);
    for(const selector of ['.row-add-menu','.btn-duration','.btn-del-task','[data-work-action]','.ttl[role="button"]'])assert(await row.locator(selector).first().isVisible(),selector+' visible at '+width);
    await row.locator('.btn-task-radial').click();
-   assert.deepEqual(await page.locator('button.dest-radial-item').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('aria-label'))),['Change task…','Lock']);
-   assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')),'Change task…');
-   await page.keyboard.press('Enter');
+   assert.deepEqual(await page.locator('button.dest-radial-item').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('aria-label'))),['Subtask…','Unscheduled','Convert…','Delegate / block','Blocked by task','Repeat','Solo','Whenever','Lock']);
+   assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')),'Subtask…');
    await page.getByRole('button',{name:'Delegate / block',exact:true}).waitFor();
    await page.keyboard.press('End');await page.keyboard.press('Tab');
-   assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')),'Back');
+   assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')),'Subtask…');
    await page.waitForTimeout(500);
    const bounds=await page.locator('button.dest-radial-item').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {label:n.getAttribute('aria-label'),x:r.x,y:r.y,right:r.right,bottom:r.bottom};}));
    for(const r of bounds)assert(r.x>=0&&r.y>=0&&r.right<=width&&r.bottom<=844,JSON.stringify(r));
@@ -33,8 +32,7 @@ const base=process.env.DCC_REVIEW_URL||'http://127.0.0.1:8303';
    await page.getByRole('button',{name:/^Convert/}).click();
    assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')),'Back');
    await page.getByRole('button',{name:'Back',exact:true}).click();
-   await page.getByRole('button',{name:'Back',exact:true}).click();
-   assert.equal(await page.locator('button.dest-radial-item').count(),2);
+   assert.equal(await page.locator('button.dest-radial-item').count(),9);
    await page.keyboard.press('Escape');
    assert.equal(await page.locator('button.dest-radial-item').count(),0);
    assert(await row.locator('.btn-task-radial').evaluate(n=>n===document.activeElement));
@@ -58,9 +56,9 @@ const base=process.env.DCC_REVIEW_URL||'http://127.0.0.1:8303';
    meeting:buildMeetingRadialItems({start:'23:59'},{}).map(i=>i.label),
    carryover:buildCarryoverRadialItems({}, {}, {}).map(i=>i.label)
   }));
-  assert.deepEqual(variants.recurring,['Change task…','Repeat options…','Lock']);
+  assert.deepEqual(variants.recurring,['Subtask…','Unscheduled','Convert…','Delegate / block','Blocked by task','Repeat','Solo','Whenever','Repeat options…','Lock']);
   assert.deepEqual(variants.carryover,['Move…','Solo']);
   fs.writeFileSync(path.join(__dirname,'../design/task-details/radial-checks.json'),JSON.stringify({results,variants,syntheticOnly:true},null,2));
-  console.log('PASS: four widths, visible bar actions, keyboard nested Change/Convert/Back, Escape focus return, duration/add/details dialogs and delete handler, recurring/meeting/carryover menus. No destructive action submitted.');
+  console.log('PASS: four widths, visible bar actions, keyboard combined actions/Convert/Back, Escape focus return, duration/add/details dialogs and delete handler, recurring/meeting/carryover menus. No destructive action submitted.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -58,3 +58,23 @@ test("a zero-width arc collapses to the finite cap, not Infinity", () => {
   assert.ok(Number.isFinite(R), "must stay finite when a0===a1");
   assert.equal(R, 0.42 * Math.min(1280, 800));
 });
+
+test("full task circle keeps touch targets separate in portrait and short landscape", () => {
+  for(const [width,height] of [[320,568],[390,844],[844,280],[844,200],[1440,844]]){
+    const context={window:{innerWidth:width,innerHeight:height}};
+    vm.createContext(context);vm.runInContext(source,context);
+    for(const n of [8,9,10,11])for(const [cx,cy] of [[0,0],[width,height]]){
+      const layout=context._radialCircleLayout(cx,cy,140,n);
+      assert.ok(layout.size>=44);
+      const points=Array.from({length:n+(layout.grid?1:0)},(_,i)=>context._radialCirclePoint(layout,i,n,-90));
+      for(const point of points){
+        assert.ok(point.x-layout.size/2>=8&&point.x+layout.size/2<=width-8);
+        assert.ok(point.y-layout.size/2>=8&&point.y+layout.size/2<=height-8);
+      }
+      for(let i=0;i<points.length;i++)for(let j=i+1;j<points.length;j++){
+        assert.ok(Math.hypot(points[i].x-points[j].x,points[i].y-points[j].y)>=layout.size+3.9,`${width}x${height}, ${n} actions overlap`);
+      }
+      assert.equal(layout.grid,height===200);
+    }
+  }
+});

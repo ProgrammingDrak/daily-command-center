@@ -166,16 +166,14 @@ function buildMeetingRadialItems(ev,trig){
 }
 function buildTaskRadialItems(ev,trig){
   if(typeof isMeeting==="function"&&isMeeting(ev))return buildMeetingRadialItems(ev,trig);
-  const items=[{icon:"🔀",label:"Change task…",onPick:()=>openTaskChangeRadial(ev,trig)}];
+  const items=buildTaskChangeItems(ev,trig);
   if(ev.repeatMode==="scheduled")items.push({icon:"↻",label:"Repeat options…",onPick:()=>{if(typeof window.openScheduledOccurrenceActions==="function")window.openScheduledOccurrenceActions(ev);}});
   items.push({icon:ev._locked?"🔓":"🔒",label:ev._locked?"Unlock":"Lock",onPick:()=>{if(typeof toggleLock==="function")toggleLock(ev.id);}});
   return items;
 }
-// Sub-fan: everything that moves or converts the task, grouped so the top
-// fan stays scannable. Back returns to the top fan on the same trigger.
+// Direct task changes share one circle with Lock/Unlock.
 function buildTaskChangeItems(ev,trig){
   const items=[
-    {icon:"←", label:"Back",       onPick:()=>openTaskRadial(ev,trig)},
     {icon:"🪜", label:"Subtask…",  onPick:()=>{if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(ev.id,trig);}}
   ];
   // Promote: pull a nested subtask/ride-along out to a standalone top-level task.
@@ -259,19 +257,17 @@ function buildCarryoverRadialItems(ev,trig,acts){
     {icon:"📦",label:"Solo",onPick:()=>acts.backlog()},
   ];
 }
-const _TASK_RADIAL_OPTS={a0:90,a1:270,r:140,labelStagger:true,clampY:true};
+const _TASK_RADIAL_OPTS={fullCircle:true,a0:-90,r:140};
 function openTaskRadial(ev,trig,opts){
   if(opts&&opts.carryover){
     openRadialMenu(trig,buildCarryoverRadialItems(ev,trig,opts.carryover),_TASK_RADIAL_OPTS);
     return;
   }
-  // 180° left-opening fan: the trigger lives at the row's right edge, so the
-  // spokes sweep bottom → left → top. Staggered label radii keep the pills
-  // from colliding near the vertical apexes; clampY keeps edge rows on-screen.
+  // Clamp the circle as a whole inward from the row and viewport edges.
   openRadialMenu(trig,buildTaskRadialItems(ev,trig),_TASK_RADIAL_OPTS);
 }
 function openTaskChangeRadial(ev,trig){
-  openRadialMenu(trig,buildTaskChangeItems(ev,trig),_TASK_RADIAL_OPTS);
+  openTaskRadial(ev,trig);
 }
 
 // ── Section sorting (Unscheduled): Manual (drag), A→Z, or time-of-creation ──
