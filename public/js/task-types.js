@@ -52,6 +52,8 @@
     // days a same-titled habit was completed (display-only, computed from range
     // state — no schema change).
     habit: { label: "Habit", tagCls: "tag-habit", color: "#34d399" },
+    workout: { label: "Workout", tagCls: "tag-workout", color: "#38bdf8", recordType: "workout" },
+    meal: { label: "Meal", tagCls: "tag-meal", color: "#fbbf24", recordType: "meal" },
 
     // Calendar-backed blocks. fixedTime keeps them out of the reflow cascade
     // (they hold their slot when tasks around them move); movable:true lets the

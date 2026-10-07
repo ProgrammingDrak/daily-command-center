@@ -27,11 +27,33 @@ test("Waiting check-in reminders expose a link to their canonical item", () => {
 
 test("opening a reminder targets the full Waiting card and its lifecycle actions", () => {
   const openSource = mustSlice(WAITING_SRC, /^ {2}function openWaitingItem\(id\) \{[\s\S]*?^ {2}\}/m, "openWaitingItem");
-  assert.match(openSource, /openTasksToSection\("tm-delegated-blocked-section", \{ solo: true \}\)/);
+  assert.match(openSource, /openTaskQueue\("waiting"\)/);
   assert.match(openSource, /node\.dataset\.id === String\(id\)/);
   assert.match(WAITING_SRC, /data-delegated-action="unblock"[\s\S]*?>Schedule task<\/button>/);
   assert.match(WAITING_SRC, /data-delegated-action="complete"[\s\S]*?>Complete task<\/button>/);
   assert.match(WAITING_SRC, /postWaitingAction\(id, "complete"/);
+});
+
+test("opening a CLOSED Waiting item says so instead of opening a drawer with no card", () => {
+  const openSource = mustSlice(WAITING_SRC, /^ {2}function openWaitingItem\(id\) \{[\s\S]*?^ {2}\}/m, "openWaitingItem");
+  const toasts = [];
+  let opened = 0;
+  const ctx = {
+    getDelegatedItemById: id => ({ id, properties: { status: id === "closed" ? "done" : "open" } }),
+    isOpenDelegated: item => item.properties.status !== "done",
+    toast: (msg, kind) => toasts.push([msg, kind]),
+    renderDelegatedSidebar() {}, setTimeout() {},
+    window: { openTaskQueue: () => { opened++; } },
+    document: { querySelectorAll: () => [] },
+    _currentFilter: "overdue",
+  };
+  vm.createContext(ctx);
+  vm.runInContext(openSource, ctx);
+  assert.equal(ctx.openWaitingItem("closed"), false);
+  assert.deepEqual(toasts, [["That Waiting item is already closed.", "info"]]);
+  assert.equal(opened, 0, "no drawer for a card that is not listed");
+  assert.equal(ctx.openWaitingItem("live"), true);
+  assert.equal(opened, 1);
 });
 
 test("task dependency UI uses atomic creation and reconciles task projections", () => {

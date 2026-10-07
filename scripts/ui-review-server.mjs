@@ -7,12 +7,21 @@ import { randomUUID } from "node:crypto";
 import express from "express";
 import reschedule from "../lib/reschedule.js";
 import createTaskTiming from "../lib/task-timing.js";
+import seedTaskDetailReview from "./task-detail-review-fixtures.cjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 const port = Number(process.env.PORT || 8099);
 const app = express();
 app.use(express.json());
+if (process.env.DCC_ACTIVITY_REVIEW === "1") {
+  const { default: mountActivityReview } = await import("./activity-review-backend.js");
+  await mountActivityReview(app);
+}
+if (process.env.DCC_REVIEW_TASK_DETAILS === '1') app.use((_req,res,next) => {
+  res.setHeader('Content-Security-Policy', "connect-src 'self'; form-action 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'");
+  next();
+});
 const reviewBlocks = new Map();
 const meetingReviewFixture = [
   { id: "review-investor", title: "Investor Network Weekly", date: "2026-09-25", status: "ready",
@@ -50,6 +59,7 @@ function localDateKey(date = new Date()) {
 function liveReviewBlocks() {
   return [...reviewBlocks.values()].filter((block) => !block.deleted_at);
 }
+if (process.env.DCC_REVIEW_TASK_DETAILS === '1') seedTaskDetailReview(reviewBlocks, localDateKey(new Date()));
 
 const emptyState = {
   ok: true,
@@ -230,6 +240,22 @@ app.get("/api/blocks/:id/work", async (req, res) => {
   const block = reviewBlocks.get(req.params.id);
   if (!block) return res.status(404).json({ error: "Block not found" });
   res.json({ block, sessions: await reviewTiming.getSessions(block) });
+});
+// Synthetic completion adapter for preview only; production ownership/CAS and
+// persistence are covered by the canonical completion route/domain tests.
+app.post('/api/tasks/:id/completion', async (req,res) => {
+  const block=liveReviewBlocks().find(row=>row.id===req.params.id||row.properties.local_id===req.params.id);
+  if(!block)return res.status(404).json({error:'Synthetic task not found'});
+  try {
+    const operation=req.body.completed?reviewTiming.completeWork:reviewTiming.reopenWork;
+    await operation({block,actionId:req.body.mutationId,actor:'review'});
+    res.json({ok:true,task:reviewBlocks.get(block.id),affectedTasks:[],persistenceTarget:'task_row',revision:'review',duplicate:false});
+  }catch(error){res.status(400).json({error:error.message});}
+});
+app.get('/api/blocks/:id', (req,res) => {
+  const block=reviewBlocks.get(req.params.id);
+  if(!block||block.deleted_at)return res.status(404).json({error:'Synthetic block not found'});
+  res.json(block);
 });
 app.patch("/api/blocks/:id", (req, res) => {
   const block = reviewBlocks.get(req.params.id);

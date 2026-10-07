@@ -7,6 +7,7 @@
   // scalar DOM fields, so a nested template can't ride a form input — it's stashed
   // here between openResponsibilityModal and formProps/saveResponsibility.
   let _pendingTemplateTree = null;
+  let _pendingActivitySourceId = null;
   let _seriesEditContext = null;
   let _sidebarQuery = "";
   let _sidebarFilter = "active";
@@ -315,7 +316,8 @@
       if(typeof insertTaskNow!=="function"){if(typeof showToast==="function")showToast("Cannot add task","error");return;}
       const curDate=(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||"";
       insertTaskNow(title,dur,{
-        type:"task",responsibilityId:id,responsibilityTitle:title,priority:"High",
+        type:p.activityTaskType||"task",responsibilityId:id,responsibilityTitle:title,priority:"High",
+        ...(p.activityTaskType?{activityPlanSourceId:id,publicVisibility:"private"}:{}),
         source:"responsibility",tags:tags,detail:p.description||"",
         idempotencyKey:"resp:"+id+":"+curDate,
         onScheduled:async function(info){
@@ -632,6 +634,7 @@
     }
     const defaults=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
     const scheduleOpts={
+      ...(p.activityTaskType?{type:p.activityTaskType,activityPlanSourceId:id,publicVisibility:"private"}:{}),
       responsibilityId:id,
       responsibilityTitle:title,
       capacityBucket:p.capacityBucket||null,
@@ -789,6 +792,11 @@
       createdFrom:"task",
       templateTree:templateTree||undefined
     };
+    if (task && ["workout", "meal"].includes(task.type)) {
+      result.activityPlanSourceId = task._blockId || task.id;
+      result.domain = "personal";
+    }
+    return result;
   }
 
   function getDefaultSubtasksSource(){
@@ -966,6 +974,7 @@
     // Carry any saved shell structure through the modal (editing keeps the
     // existing tree; a shell-sourced create stashes the freshly captured one).
     _pendingTemplateTree=(p.templateTree&&p.templateTree.root)?p.templateTree:null;
+    _pendingActivitySourceId=id?null:(p.activityPlanSourceId||null);
     const today=new Date();
     const todayIso=today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0")+"-"+String(today.getDate()).padStart(2,"0");
     document.getElementById("resp-id").value=id||"";
@@ -1185,6 +1194,7 @@
     const preferredCadence=document.getElementById("resp-preferred-cadence")?.value||"none";
     const result={
       templateTree:(_pendingTemplateTree&&_pendingTemplateTree.root)?_pendingTemplateTree:undefined,
+      ...(_pendingActivitySourceId?{activityPlanSourceId:_pendingActivitySourceId}:{}),
       title:document.getElementById("resp-title").value.trim(),
       domain:document.getElementById("resp-domain").value,
       area:document.getElementById("resp-area").value.trim()||"general",
@@ -1358,6 +1368,7 @@
       if(typeof showToast==="function")showToast("Task title is required","error");
       return;
     }
+    if(typeof window.openTasksToSection==="function")window.openTasksToSection("tm-repeat-responsibilities-section",{solo:true});
     openResponsibilityModal(null,defaults);
   };
 })();

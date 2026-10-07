@@ -6,13 +6,13 @@
     --cyan:#22d3ee; --cyan-bg:rgba(34,211,238,0.10); --orange:#f97316; --orange-bg:rgba(249,115,22,0.12);
     /* Waiting / delegated family. ONE hue for everything parked on someone else:
      * the Waiting item, the original task it blocks, and the check-in reminders it
-     * spawns. Maroon: deep enough that nothing else in the palette moved, and far
-     * enough from --red that an urgent row still reads urgent. --waiting-ink is the
-     * READABLE member of the family -- a 9px pill label or a link in #a31c43 on a
-     * dark card is unreadable, so text takes the pale tint and the bars/borders take
-     * the deep one. */
-    --waiting:#a31c43; --waiting-bg:rgba(163,28,67,0.42); --waiting-border:rgba(163,28,67,0.66);
-    --waiting-ink:#f0a3b6;
+     * spawns. Violet since 2026-10-05, when the header's Triage door took the old
+     * maroon: deep enough to sit apart from --purple's lavender, and far from --red,
+     * so an urgent row still reads urgent. --waiting-ink is the READABLE member of the
+     * family -- a 9px pill label or a link in #7c3aed on a dark card is unreadable, so
+     * text takes the pale tint and the bars/borders take the deep one. */
+    --waiting:#7c3aed; --waiting-bg:rgba(124,58,237,0.38); --waiting-border:rgba(139,92,246,0.66);
+    --waiting-ink:#c4b5fd;
     /* One step up from --bg: the "elevated surface" role — inputs, hovered/active
      * rows, code blocks, chips, cards-on-cards. vault.css consumes this 35 times
      * (it shipped through B1-B6 referencing it with no definition anywhere, so
@@ -136,7 +136,9 @@
   .dcc-tour-skip{color:var(--text-muted)!important}
 
   /* ── Date Navigation ── */
-  .date-nav{display:flex;align-items:center;gap:4px;margin-top:4px}
+  /* Wraps only when it runs out of room: one row on a desktop, two on a narrow window,
+     instead of the pills overlapping each other. */
+  .date-nav{display:flex;align-items:center;flex-wrap:wrap;gap:4px;row-gap:6px;margin-top:4px}
   .dn-arrow{background:none;border:1px solid var(--border);border-radius:6px;width:26px;height:26px;cursor:pointer;font-size:16px;color:var(--text-muted);display:flex;align-items:center;justify-content:center;transition:all 0.12s}
   .dn-arrow:hover{border-color:var(--accent);color:var(--accent)}
   .dn-date{background:none;border:none;cursor:pointer;padding:2px 8px;border-radius:6px;font-size:13px;color:var(--text-muted);transition:background 0.12s}
@@ -147,18 +149,30 @@
   .dn-quick{background:none;border:1px solid var(--border);border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;transition:all 0.12s;margin-left:4px}
   .dn-quick:hover{border-color:var(--accent);color:var(--accent)}
   .dn-tomorrow{border-color:var(--accent);color:var(--accent)}
-  .loose-ends-pill{display:inline-flex;align-items:center;gap:7px;min-height:28px;margin-left:6px;padding:4px 7px 4px 11px;border:1px solid rgba(0,117,235,0.58);border-radius:999px;background:rgba(0,117,235,0.16);color:#7db9f5;font:inherit;font-size:11px;font-weight:800;cursor:pointer;transition:background 120ms ease,border-color 120ms ease,color 120ms ease}
-  .loose-ends-pill:hover{background:rgba(0,117,235,0.26);border-color:#0075eb;color:#b9dcff}
-  .loose-ends-pill:focus-visible{outline:2px solid #0075eb;outline-offset:2px}
-  .loose-ends-pill[hidden]{display:none!important}
-  .loose-ends-pill-count{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:#0075eb;color:#fff;font-size:10px;font-weight:800;border:2px solid var(--bg);box-shadow:0 0 0 1px rgba(0,117,235,0.32)}
-  .waiting-pill-nav{display:inline-flex;align-items:center;gap:7px;min-height:28px;padding:4px 7px 4px 11px;border:1px solid var(--waiting-nav-border);border-radius:999px;background:var(--waiting-nav-bg);color:var(--waiting-nav-ink);font:inherit;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap;transition:filter 120ms ease}
-  .waiting-pill-nav--plum{--waiting-nav-border:var(--waiting-border);--waiting-nav-bg:var(--waiting-bg);--waiting-nav-ink:var(--waiting-ink)}
-  .waiting-pill-nav--outline{--waiting-nav-border:var(--waiting-border);--waiting-nav-bg:transparent;--waiting-nav-ink:var(--waiting-ink)}
-  .waiting-pill-nav--neutral{--waiting-nav-border:var(--border);--waiting-nav-bg:var(--card);--waiting-nav-ink:var(--text)}
-  .waiting-pill-nav:hover{filter:brightness(1.25)}
-  .waiting-pill-nav:focus-visible{outline:2px solid var(--waiting-nav-ink);outline-offset:2px}
-  .waiting-pill-nav-count{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--waiting);color:#fff;font-size:10px;font-weight:800;border:2px solid var(--bg)}
+  /* The queue capsule (index.html #queue-pill): Triage, Loose Ends, Waiting,
+     Unscheduled and Whenever as one pill with a divider between each door. Each theme
+     class sets the five vars every rule below reads, so a pill segment and its drawer
+     half swap together. The knobs live in whenever.js (TRIAGE_STYLE,
+     UNSCHEDULED_STYLE, PILL_STYLE). Blue is Loose Ends' own color; "waiting" reads
+     the --waiting family, so the door matches every other Waiting surface. */
+  .queue-theme--sage{--queue-accent:#00b373;--queue-soft:rgba(0,179,115,0.16);--queue-line:rgba(0,179,115,0.58);--queue-ink:#7ee0b8;--queue-on-accent:#04130d}
+  .queue-theme--teal{--queue-accent:#14b8a6;--queue-soft:rgba(20,184,166,0.16);--queue-line:rgba(20,184,166,0.58);--queue-ink:#82e6d9;--queue-on-accent:#03201d}
+  .queue-theme--amber{--queue-accent:#f59e0b;--queue-soft:rgba(245,158,11,0.15);--queue-line:rgba(245,158,11,0.56);--queue-ink:#fcd38a;--queue-on-accent:#241500}
+  .queue-theme--slate{--queue-accent:#94a3b8;--queue-soft:rgba(148,163,184,0.14);--queue-line:rgba(148,163,184,0.5);--queue-ink:#d5dde8;--queue-on-accent:#0b1220}
+  .queue-theme--crimson{--queue-accent:#a31c43;--queue-soft:rgba(163,28,67,0.26);--queue-line:rgba(163,28,67,0.66);--queue-ink:#f0a3b6;--queue-on-accent:#ffffff}
+  .queue-theme--red{--queue-accent:#ef4444;--queue-soft:rgba(239,68,68,0.15);--queue-line:rgba(239,68,68,0.56);--queue-ink:#fca5a5;--queue-on-accent:#ffffff}
+  .queue-theme--blue{--queue-accent:#0075eb;--queue-soft:rgba(0,117,235,0.16);--queue-line:rgba(0,117,235,0.58);--queue-ink:#7db9f5;--queue-on-accent:#ffffff}
+  .queue-theme--waiting{--queue-accent:var(--waiting);--queue-soft:color-mix(in srgb,var(--waiting) 22%,transparent);--queue-line:var(--waiting-border);--queue-ink:var(--waiting-ink);--queue-on-accent:#ffffff}
+  .queue-pill{display:inline-flex;align-items:stretch;flex-shrink:0}
+  .queue-seg{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:28px;padding:4px 9px;border:1px solid var(--queue-line);background:var(--queue-soft);color:var(--queue-ink);font:inherit;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap;transition:filter 120ms ease,box-shadow 120ms ease}
+  .queue-seg[hidden]{display:none!important}
+  .queue-seg+.queue-seg{border-left-width:0}
+  .queue-seg:first-child{border-radius:999px 0 0 999px;padding-left:11px}
+  .queue-seg:last-child{border-radius:0 999px 999px 0;padding-right:7px}
+  .queue-seg:hover{filter:brightness(1.25)}
+  .queue-seg:focus-visible{outline:2px solid var(--queue-ink);outline-offset:2px;position:relative;z-index:1}
+  .queue-seg.drag-over-block{box-shadow:inset 0 0 0 2px var(--queue-accent);filter:brightness(1.35)}
+  .queue-seg-count{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--queue-accent);color:var(--queue-on-accent);font-size:10px;font-weight:800;border:2px solid var(--bg)}
 
   /* ── Date Picker Dropdown ── */
   .date-picker-drop{position:absolute;z-index:200;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px;box-shadow:0 8px 24px rgba(0,0,0,0.3);min-width:260px;margin-top:6px}
@@ -1819,7 +1833,6 @@
   .cu-journal-wrap .gb-section{margin-top:0}
   @media(max-width:480px){
     .carryover-overlay{padding:12px}
-    .header .loose-ends-pill{min-height:44px;margin-left:0;padding-left:10px}
   }
 
   /* ======== TASK MANAGER MODAL + SHORTCUT RAIL ======== */
@@ -2354,8 +2367,7 @@
   .dcc-scrim{position:fixed;inset:0;z-index:1400;background:transparent;display:none}
   .dcc-scrim.open{display:block}
 
-  /* ============================================================
-     MOBILE — 480px and below
+  /* =====================================================     MOBILE — 480px and below
      Designed mobile-first. Every rule is intentional.
      ============================================================ */
   @media(max-width:480px){
@@ -2666,6 +2678,61 @@ span.waiting-pill{cursor:default}
 .delegated-sidebar-tools .delegated-mini-btn{align-self:flex-start;font-size:11px;padding:5px 12px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer;white-space:nowrap}
 .delegated-sidebar-tools .delegated-mini-btn:hover{background:var(--accent-light)}
 .delegated-sidebar-list .delegated-card-actions button{font-size:10px;padding:3px 7px}
+
+/* ======== TRIAGE + UNSCHEDULED + WHENEVER DRAWER (whenever.js) ======== */
+/* A door scrolls its half to the top of the drawer, where the Task Manager's sticky
+   toolbar (8px in the solo drawer) would sit over the half's heading. */
+.untimed-sub{scroll-margin-top:16px}
+.untimed-sub+.untimed-sub{margin-top:18px;padding-top:16px;border-top:1px solid var(--border)}
+/* The tooltip anchors to this row, not to its "i", so it always fits the drawer's
+   width: anchored to an "i" near the right edge it ran off the side on a phone. */
+.untimed-sub-head{position:relative;display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.untimed-sub-title{display:inline-flex;align-items:center;gap:8px;margin:0;font-size:13px;font-weight:800;letter-spacing:.2px;color:var(--queue-ink)}
+.untimed-sub-count{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--queue-accent);color:var(--queue-on-accent);font-size:10px;font-weight:800}
+.untimed-tip-wrap{display:inline-flex}
+/* The app-wide 44px touch target stays (ui-optimization.css); the visible "i" is a
+   20px ring drawn inside it, and negative margins keep the header row compact. */
+.untimed-tip{position:relative;display:inline-flex;align-items:center;justify-content:center;margin:-12px -8px;padding:0;border:0;background:transparent;color:var(--text-muted);font:italic 700 11px/1 Georgia,serif;cursor:help}
+.untimed-tip::before{content:"";position:absolute;left:50%;top:50%;width:20px;height:20px;box-sizing:border-box;border:1px solid var(--border);border-radius:50%;transform:translate(-50%,-50%);transition:border-color .12s}
+.untimed-tip:hover,.untimed-tip:focus-visible,.untimed-tip[aria-expanded="true"]{color:var(--queue-ink)}
+.untimed-tip:hover::before,.untimed-tip:focus-visible::before,.untimed-tip[aria-expanded="true"]::before{border-color:var(--queue-accent)}
+.untimed-tip-text{position:absolute;left:0;top:calc(100% + 2px);z-index:30;width:max-content;max-width:min(320px,100%);padding:8px 10px;border:1px solid var(--queue-line);border-radius:8px;background:var(--card);color:var(--text);font-size:12px;font-weight:500;line-height:1.45;box-shadow:0 10px 28px rgba(0,0,0,.45);opacity:0;visibility:hidden;transform:translateY(-3px);transition:opacity .12s,transform .12s,visibility .12s;pointer-events:none}
+.untimed-tip:hover+.untimed-tip-text,.untimed-tip:focus-visible+.untimed-tip-text,.untimed-tip[aria-expanded="true"]+.untimed-tip-text{opacity:1;visibility:visible;transform:none}
+.untimed-sort{display:inline-flex;margin-left:auto;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.untimed-sort button{min-height:28px;padding:0 9px;border:0;background:transparent;color:var(--text-muted);font:inherit;font-size:11px;font-weight:700;cursor:pointer}
+.untimed-sort button+button{border-left:1px solid var(--border)}
+.untimed-sort button.on{background:var(--queue-soft);color:var(--queue-ink)}
+.untimed-list{padding:0}
+.whenever-pick{margin-left:auto;flex-shrink:0;min-height:32px;padding:5px 12px;border:1px solid var(--queue-line);border-radius:999px;background:var(--queue-soft);color:var(--queue-ink);font:inherit;font-size:11px;font-weight:700;cursor:pointer}
+.whenever-pick:hover:not(:disabled){filter:brightness(1.2)}
+.whenever-pick:disabled{opacity:.4;cursor:default}
+.whenever-add{display:flex;gap:6px;margin-bottom:12px}
+.whenever-add input{flex:1;min-width:0;min-height:36px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;font-size:13px}
+.whenever-add input:focus{outline:none;border-color:var(--queue-accent);box-shadow:0 0 0 2px var(--queue-soft)}
+.whenever-add select{min-height:36px;padding:0 6px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;font-size:12px}
+.whenever-add button{min-height:36px;padding:0 14px;border:0;border-radius:8px;background:var(--queue-accent);color:var(--queue-on-accent);font:inherit;font-size:12px;font-weight:800;cursor:pointer}
+.whenever-add button:hover{filter:brightness(1.1)}
+.whenever-list{display:flex;flex-direction:column;gap:6px}
+.whenever-row:not(.it-list-item){display:flex;align-items:center;gap:10px;padding:8px 8px 8px 10px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--queue-accent);border-radius:8px;transition:border-color .2s,box-shadow .2s,opacity .2s}
+.whenever-row.is-picked{border-color:var(--queue-accent);box-shadow:0 0 0 2px var(--queue-soft)}
+.whenever-row.is-busy{opacity:.55}
+.whenever-check{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:1.5px solid var(--border);border-radius:50%;background:transparent;color:transparent;cursor:pointer;transition:border-color .12s,color .12s}
+.whenever-check:hover,.whenever-check:focus-visible{border-color:var(--queue-accent);color:var(--queue-accent)}
+.whenever-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.whenever-title{font-size:13px;font-weight:600;color:var(--text);overflow-wrap:anywhere}
+.whenever-dur{font-size:11px;color:var(--text-muted)}
+.whenever-now{flex-shrink:0;min-height:30px;padding:4px 10px;border:1px solid var(--queue-line);border-radius:6px;background:var(--queue-soft);color:var(--queue-ink);font:inherit;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}
+.whenever-now:hover:not(:disabled){filter:brightness(1.2)}
+.whenever-release{flex-shrink:0;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--text-muted);font-size:17px;line-height:1;cursor:pointer}
+.whenever-release:hover{background:rgba(255,255,255,0.06);color:var(--text)}
+.whenever-row button:disabled{cursor:progress}
+@media (max-width:760px){
+  .untimed-sort button{min-height:36px;padding:0 12px}
+  .whenever-pick{min-height:40px}
+  .whenever-add input,.whenever-add select,.whenever-add button{min-height:44px}
+  .whenever-check,.whenever-release{width:40px;height:40px}
+  .whenever-now{min-height:40px;padding:4px 12px}
+}
 /* Convert-to-Delegated affordance inside the reschedule popover. */
 .resched-popover .resched-adjust{margin-top:8px;padding-top:8px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px}
 .resched-popover .resched-dur{display:flex;align-items:center;gap:6px}
@@ -3400,8 +3467,7 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
   .pet-courier,.pet-courier-dust,.pet-courier-drop,.pet-courier-chip,.pet-courier-envelope{animation:none}
   .pet-courier{transition:none}
 }
-+/* == ANYTIME (anytime-dock.js, pet-nudge.js) ==================================
-   Work with no time inside it: a target count in a repeating window. Two pieces
++/* == ANYTIME (anytime-dock.js, pet-nudge.js) ===========================   Work with no time inside it: a target count in a repeating window. Two pieces
    of chrome, both bottom-right, both NON-MODAL.
 
    z-index 430 is deliberate: it sits beside .feedback-panel (421), the app's
@@ -4296,13 +4362,14 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
     grid-column:auto;grid-row:auto;
     display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:4px;
   }
-  /* Loose Ends shares the date toolbar on desktop. Give it a dedicated row on
-     phones so the arrows, date, and Tomorrow shortcut cannot push it off-screen. */
-  .header .date-nav .loose-ends-pill{
-    flex:1 0 100%;order:2;justify-content:center;
-    min-height:44px;margin-left:0;padding:6px 10px;
-  }
-  .header .date-nav .waiting-pill-nav{flex:1 0 100%;order:3;justify-content:center;min-height:44px;padding:6px 10px}
+  /* Keep all five queues together with full labels above their counts. Wrap at
+     spaces first, with balanced word wrapping as a fallback for narrow phones
+     or wider font metrics. Keep every door touch-sized instead of ellipsizing. */
+  .header .date-nav .queue-pill{flex:1 0 100%;order:2;min-width:0}
+  .header .date-nav .queue-seg{flex:1 1 auto;flex-direction:column;gap:3px;width:min-content;min-width:44px;min-height:48px;padding:5px 3px}
+  .header .date-nav .queue-seg:first-child{padding-left:5px}
+  .header .date-nav .queue-seg:last-child{padding-right:5px}
+  .header .date-nav .queue-seg>span:first-child{max-width:100%;white-space:normal;overflow-wrap:break-word;text-wrap:balance}
   .header>div:last-child{display:none!important}  /* owner buttons + clock → More sheet */
 
   /* ── Progress: tighter ── */
@@ -4569,8 +4636,7 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .make-subtask-pop .make-subtask-opt:hover{background:rgba(20,184,166,0.14);color:var(--teal,#14b8a6)}
 .make-subtask-pop .make-subtask-empty{font-size:11px;color:var(--text-muted);padding:6px 7px}
 
-/* ======== MOBILE-FRIENDLY TOUCH TARGETS (<=760px) ========
-   Best practice: Apple HIG 44px, Material 48px, WCAG 2.5.5 (AAA) 44px; >=8px
+/* ======== MOBILE-FRIENDLY TOUCH TARGETS (<=760px) =   Best practice: Apple HIG 44px, Material 48px, WCAG 2.5.5 (AAA) 44px; >=8px
    spacing; never make an action hover-only (no hover on touch). Priority targets:
    complete, lightning quick-complete, add-subtask, plus titles + task creation. */
 @media (max-width:760px){
@@ -5334,8 +5400,7 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
   .rv-drawer{animation:none}
 }
 
-/* ======== SHARED TIME / DATE PICKER (time-picker.js) ========
-   One iOS-style wheel for time, one month grid for date. Used everywhere via
+/* ======== SHARED TIME / DATE PICKER (time-picker.js) =   One iOS-style wheel for time, one month grid for date. Used everywhere via
    openTimeWheel()/openDateCal() and auto-enhanced native time/date inputs. */
 .tw-overlay{display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.45)}
 .tw-overlay.open{display:block}
@@ -5370,15 +5435,18 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
   border-bottom:1px solid var(--border);border-radius:8px;pointer-events:none}
 
 /* Calendar */
-.tw-cal{width:286px}
+/* 350px = seven 44px day cells + 6 gaps + the card's padding and border.
+   The global button min-width (--target-min) used to push day cells past
+   the weekday columns. The sheet's own width:auto still wins on phones. */
+.tw-cal{width:350px;max-width:100%}
 .tw-cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
 .tw-cal-title{font-size:15px;font-weight:700;color:var(--text)}
 .tw-cal-nav{width:32px;height:32px;border-radius:8px;border:1px solid var(--border);
   background:var(--bg);color:var(--text);font-size:18px;line-height:1;cursor:pointer}
 .tw-cal-nav:hover{background:var(--card-hover);border-color:var(--accent)}
-.tw-cal-dow,.tw-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.tw-cal-dow,.tw-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px}
 .tw-cal-dow span{text-align:center;font-size:11px;font-weight:600;color:var(--text-muted);padding:4px 0}
-.tw-cal-day{height:36px;border:none;background:transparent;color:var(--text);
+.tw-cal-day{height:36px;min-width:0;width:100%;padding:0;border:none;background:transparent;color:var(--text);
   border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;font-variant-numeric:tabular-nums}
 .tw-cal-day:hover{background:var(--card-hover)}
 .tw-cal-day.today{box-shadow:inset 0 0 0 1px var(--accent)}
@@ -5780,3 +5848,24 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .waiting-checkin-error:empty{display:none}
 .waiting-checkin-note{white-space:pre-wrap;overflow-wrap:anywhere}
 .waiting-checkin-history{margin-top:12px;overflow-wrap:anywhere}
+/* Whenever tasks use the normal editor and nesting controls, with touch-safe targets. */
+.whenever-title{background:none;border:0;padding:0;text-align:left;cursor:pointer;font:inherit}
+.whenever-add-child,.whenever-collapse,.whenever-delete{border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text-muted);min-width:32px;min-height:32px;cursor:pointer}
+.whenever-title:focus-visible,.whenever-row button:focus-visible{outline:2px solid var(--queue-accent);outline-offset:3px}
+@media(max-width:760px){.whenever-row:not(.it-list-item){flex-wrap:wrap}.whenever-main{flex-basis:calc(100% - 120px)}.whenever-row button{min-height:44px}.whenever-add-child,.whenever-collapse,.whenever-delete,.whenever-check,.whenever-release{min-width:44px}}
+
+/* Share the itinerary grid; the legacy compact Whenever flex row must not override it. */
+.whenever-row.it-list-item{display:grid;border-left:3px solid var(--queue-accent)}
+.whenever-row.it-list-item .it-list-actions{opacity:1;visibility:visible}
+@media(max-width:760px){
+  .whenever-row.it-list-item{grid-template-columns:44px minmax(0,1fr) !important}
+  .whenever-row.it-list-item .it-list-actions{grid-column:2 !important;display:flex !important;flex-direction:row !important;flex-wrap:wrap;justify-content:flex-start !important;grid-template-columns:none !important;grid-auto-rows:auto !important}
+  .whenever-row.it-list-item .it-list-actions .btn-task-radial,.whenever-row.it-list-item .it-list-actions .btn-del-task{width:44px;height:44px}
+  .whenever-row.it-list-item .it-list-meta{display:flex !important;flex-wrap:wrap}
+  .whenever-row.it-list-item .ttl{white-space:normal}
+  .whenever-row.it-list-item .btn-add-menu,.whenever-row.it-list-item .wrap-collapse{min-width:44px;min-height:44px}
+}
+
+@media(max-width:760px){
+  .whenever-row.it-list-item .it-list-meta > span,.whenever-row.it-list-item .it-list-meta > .btn-schedule,.whenever-row.it-list-item .it-list-meta > .detail-action-link{display:inline-flex}
+}

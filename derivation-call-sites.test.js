@@ -87,8 +87,20 @@ test("★ the Unscheduled section renders a TREE, not a flat list of roots", () 
   assert.equal(rx.test('rootOrder.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));'), false);
   assert.equal(rx.test('DCC.TaskModel.selectTree(rootOrder.concat(day.unscheduled.filter(ev=>!rootIds.has(ev.id)&&!triageIds.has(ev.id))),{pool:visible}).forEach(node=>{wrap.appendChild(emitNode(node,_isSubRow(node)?0:uRank++,"open"));});'), false,
     "the hardcoded mode must be rejected");
-  // And the badge counts ROOTS, so it matches what you can point at.
-  assert.match(schedTabCode, /section\("",0,"unscheduled"\)/);
+  // The badge counts ROOTS; that count lives on the pill now (whenever.test.js pins it).
+  // The Unscheduled group renders in the header pill's drawer now (renderUnscheduledInto),
+  // and it must keep both halves of this contract there: the tree, and the real mode.
+  // Triage moved there too; both halves share one renderer (_renderQueueInto).
+  const start = schedTabCode.indexOf("function _renderQueueInto(");
+  const end = schedTabCode.indexOf("\nwindow.renderTriageInto", start);
+  assert.ok(start > 0 && end > start, "_renderQueueInto, renderUnscheduledInto and renderTriageInto must exist");
+  const pill = schedTabCode.slice(start, end);
+  assert.match(pill, /_renderQueueInto\(listEl,_orderUnscheduledNodes\(model\.unscheduledGroup\.nodes\),model\)/,
+    "the pill must render the grouped TREE's nodes, not a flat list of roots");
+  assert.match(pill, /_renderQueueInto\(listEl,model\.triageGroup\.nodes,model,status\)/,
+    "Triage renders the grouped tree too");
+  assert.match(pill, /row\(node\.ev,_isSubRow\(node\)\?0:rank\+\+,isDone\(node\.ev\)\?"done":"open",node\)/,
+    "and with the real done/open mode, or a done step renders as an unchecked row");
 });
 
 test("★ buildSchedule's compact Done section lists done + nestedDone, and excludes only the fold", () => {
@@ -167,7 +179,7 @@ test("★ the timeline pools its tree on the section it renders, NOT on the visi
   assert.equal(rx.test("selectTree(activeItems,{pool:vis})"), false, "pooling on vis loses an open child of a done parent");
   assert.equal(rx.test("selectTree(activeItems,{pool:visible})"), false);
   // And buildSchedule derives through the layer, not by hand.
-  assert.match(schedTabCode, /const day=DCC\.TaskModel\.selectDay\(scheduled,viewDate,\{\}\)/);
+  assert.match(schedTabCode, /const day=DCC\.TaskModel\.selectDay\(scheduled,viewDate,\{waitingRows:window\.blockStore \? window\.blockStore\.getByType\("block"\) : \[\]\}\)/);
 });
 
 test("★ the list view derives ONCE — one selectDay call feeding every section", () => {
@@ -185,11 +197,25 @@ test("★ the list view derives ONCE — one selectDay call feeding every sectio
   assert.equal(listView.includes('section("Unfinished"'), false,
     "past-day unfinished work must stay in Loose Ends instead of rendering below the task list");
   assert.equal(listView.includes("function buildSchedule("), false, "the slice must not run into buildSchedule");
-  const calls = (listView.match(/TaskModel\.selectDay\(/g) || []).length;
-  assert.equal(calls, 1, "buildListView must call selectDay exactly once, got " + calls);
-  assert.match(listView, /const day=DCC\.TaskModel\.selectDay\(scheduled,viewDate,\{today:actualToday,carryoverPool:unfPool\}\)/);
-  assert.match(listView, /const unfPool=\[\];/,
+  // The derivation lives in _itineraryListModel now, shared with the header pill's
+  // Unscheduled panel so the two surfaces cannot disagree about which rows that group is.
+  // buildListView must take it exactly once and never re-derive on its own.
+  assert.equal((listView.match(/TaskModel\.selectDay\(/g) || []).length, 0,
+    "buildListView must not call selectDay itself; it reads the shared model");
+  assert.equal((listView.match(/_itineraryListModel\(\)/g) || []).length, 1,
+    "buildListView must take the shared model exactly once");
+  const mStart = schedTabCode.indexOf("function _itineraryListModel(){");
+  assert.ok(mStart > 0, "_itineraryListModel must exist");
+  const model = schedTabCode.slice(mStart, schedTabCode.indexOf("\nfunction ", mStart + 1));
+  const calls = (model.match(/TaskModel\.selectDay\(/g) || []).length;
+  assert.equal(calls, 1, "the shared model must call selectDay exactly once, got " + calls);
+  assert.match(model, /const day=DCC\.TaskModel\.selectDay\(scheduled,viewDate,\{today:actualToday,carryoverPool:unfPool,waitingRows:window\.blockStore \? window\.blockStore\.getByType\("block"\) : \[\]\}\)/);
+  assert.match(model, /const unfPool=\[\];/,
     "the list derivation must keep its carryover pool empty because Loose Ends owns those rows");
+  const pStart = schedTabCode.indexOf("function renderUnscheduledInto(");
+  const pill = schedTabCode.slice(pStart, schedTabCode.indexOf("\nfunction ", pStart + 1));
+  assert.equal((pill.match(/TaskModel\.selectDay\(/g) || []).length, 0, "the pill must not re-derive either");
+  assert.equal((pill.match(/_itineraryListModel\(\)/g) || []).length, 1);
   assert.equal(listView.includes("_ensureUnfinished(actualToday)"), false,
     "the retired list queue must not trigger a hidden carryover fetch and second render");
 });

@@ -34,12 +34,9 @@ function buildActualView(dateStr){
 // sibling reorder via drag (drag.js _dropAtTargetLevel + saveSubtaskOrder).
 
 // ── Task-row radial: every task-level action fans out from the row's arrow ──
-// The row itself keeps only quick-complete / notes / delete visible; everything else
-// (schedule, duration, work sessions, lock, add, subtask, delegate, repeat,
-// backlog, bounty) is a spoke here. Items are built fresh per open so dynamic
-// state — the lock flag, bounty availability — is read at fan time.
-// Duration presets: popover on desktop, bottom sheet on touch/narrow. Shared
-// by the radial's "Duration…" spoke and the meeting card's duration badge.
+// The task bar owns completion, details, delete, duration, add and work actions.
+// Contextual changes remain in the radial, built fresh when it opens.
+// Duration presets use a popover on desktop and a bottom sheet on touch/narrow.
 function openDurPopover(ev,anchorEl){
   if(isCoarseOrNarrowViewport()){ openDurationSheet(ev,anchorEl); return; }
   document.querySelectorAll(".dur-popover").forEach(p=>p.remove());
@@ -161,45 +158,17 @@ function bindQuickCompleteControl(button,onQuick,onWithNotes){
   });
   button.addEventListener("contextmenu",event=>event.preventDefault());
 }
-// Meeting rows get a focused radial: the Prep/Recap spoke (contextual by whether
-// the meeting has started) plus duration and add-task. The task-only spokes
-// (delegate/backlog/repeat/lock) don't apply to a calendar block, so they're left
-// off. Convert-to lives on the TASK branch only (buildTaskChangeItems) — converting
-// a calendar block's type is out of scope.
+// Task-bar controls own duration, add, details, delete and work-session actions.
+// The radial contains only contextual changes; calendar blocks keep Prep/Recap.
 function buildMeetingRadialItems(ev,trig){
   const started=(typeof now==="function"&&typeof pt==="function")?now()>=pt(ev.start):false;
-  return [
-    {icon:started?"📝":"📋", label:started?"Recap":"Prep", onPick:()=>openMeetingPanel(ev,{defaultTab:started?"recap":"prep"})},
-    {icon:"⏱", label:"Duration…", onPick:()=>openDurPopover(ev,trig)},
-    {icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}},
-    {icon:"📝", label:"Notes & actions", onPick:()=>openTaskNotes(ev)},
-    {icon:"🗑", label:"Delete task", onPick:()=>{if(typeof openDeleteConfirm==="function")openDeleteConfirm(ev.id);}},
-  ];
+  return [{icon:started?"📝":"📋",label:started?"Recap":"Prep",onPick:()=>openMeetingPanel(ev,{defaultTab:started?"recap":"prep"})}];
 }
 function buildTaskRadialItems(ev,trig){
   if(typeof isMeeting==="function"&&isMeeting(ev))return buildMeetingRadialItems(ev,trig);
-  const tt=(typeof window!=="undefined"&&window.TaskTypes)?window.TaskTypes.get(ev):null;
-  const items=[
-    // Move/convert actions live one level down: this spoke chains into the
-    // "Change task" sub-fan (openRadialMenu closes the current fan first).
-    {icon:"🔀", label:"Change task…", onPick:()=>openTaskChangeRadial(ev,trig)},
-    {icon:"⏳", label:"Delegate / block", onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
-    {icon:"⏱", label:"Duration…", onPick:()=>openDurPopover(ev,trig)},
-  ];
-  if(typeof window!=="undefined"&&window.DCCWorkSessions&&window.DCCWorkSessions.policy(ev)==="work_sessions"){
-    items.unshift({icon:ev.startedAt?"⏸":"▶",label:ev.startedAt?"Pause work":"Start work",onPick:()=>window.DCCWorkSessions.act(ev,ev.startedAt?"pause":"start")});
-  }
-  if(ev.repeatMode==="scheduled")items.push({icon:"↻", label:"Repeat options…", onPick:()=>{if(typeof window.openScheduledOccurrenceActions==="function")window.openScheduledOccurrenceActions(ev);}});
-  // Meetings are auto-locked (calendar time holds during reflow); a manual lock
-  // toggle is meaningless for them (toggleLock no-ops on meetings), so omit it.
-  if(!isMeeting(ev))items.push({icon:ev._locked?"🔓":"🔒", label:ev._locked?"Unlock":"Lock", onPick:()=>{if(typeof toggleLock==="function")toggleLock(ev.id);}});
-  items.push(
-    {icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}},
-    // These stay on the top fan because compact cards hide secondary inline
-    // controls. The radial must remain a complete action surface at any width.
-    {icon:"📝", label:"Notes & actions", onPick:()=>openTaskNotes(ev)},
-    {icon:"🗑", label:"Delete task", onPick:()=>{if(typeof openDeleteConfirm==="function")openDeleteConfirm(ev.id);}}
-  );
+  const items=[{icon:"🔀",label:"Change task…",onPick:()=>openTaskChangeRadial(ev,trig)}];
+  if(ev.repeatMode==="scheduled")items.push({icon:"↻",label:"Repeat options…",onPick:()=>{if(typeof window.openScheduledOccurrenceActions==="function")window.openScheduledOccurrenceActions(ev);}});
+  items.push({icon:ev._locked?"🔓":"🔒",label:ev._locked?"Unlock":"Lock",onPick:()=>{if(typeof toggleLock==="function")toggleLock(ev.id);}});
   return items;
 }
 // Sub-fan: everything that moves or converts the task, grouped so the top
@@ -213,14 +182,21 @@ function buildTaskChangeItems(ev,trig){
   // Same action as dragging it out to the timeline — here for discoverability + touch.
   if(typeof isNested==="function"&&isNested(ev))
     items.push({icon:"⬆", label:"Promote", onPick:()=>{if(typeof promoteToTopLevel==="function")promoteToTopLevel(ev.id);}});
+  // Take the time off but keep the day: the header pill's Unscheduled list. This is the
+  // mover the old Unplanned drop zone called; the zone went with the section, so the
+  // radial (touch) and the pill itself (desktop drop) are its two doors now.
+  if(!ev.untimed)
+    items.push({icon:"🗂", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled", onPick:()=>{if(typeof moveTaskToUnplanned==="function")moveTaskToUnplanned(ev.id);}});
   items.push(
     {icon:"🔄", label:"Convert…",  onPick:()=>openConvertToRadial(ev,trig)},
+    {icon:"↗", label:"Delegate / block", onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
     {icon:"🔒", label:"Blocked by task", onPick:()=>{if(typeof window.openTaskDependencyModal==="function")window.openTaskDependencyModal(ev._blockId||ev.blockId||ev.id);}},
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
     {icon:"💡", label:"Solo",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}},
-    // Delete lives on the radial so it's reachable on phones, where the row's
-    // trash button is hidden by the mobile layout (dashboard.css).
-    {icon:"🗑", label:"Delete",    onPick:()=>{if(typeof openDeleteConfirm==="function")openDeleteConfirm(ev.id);}}
+    // No set time after all: off the day and into the header pill's pool (whenever.js).
+    // The canonical placement moves the parent and its descendants together.
+    {icon:"🧺", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever", onPick:()=>{if(typeof moveTaskToWhenever==="function")moveTaskToWhenever(ev.id);}},
+
   );
   return items;
 }
@@ -275,23 +251,13 @@ function convertTaskType(id,newType){
     showToast(msg,"success",2400);
   }
 }
-// Carryover rows get their own fan, the same way meetings do. Every spoke on the
-// task fan resolves its id against today's scheduled[] (lock, convert, delegate,
-// promote, subtask-add), which a past-day row isn't in — so instead of a fan of
-// no-ops it gets the four actions that ARE real for it, all routed through the
-// shared DCC.Carryover set. `acts` supplies the row-bound handlers.
+// Carryovers retain origin-aware Move and Solo handlers. Other actions stay on
+// their row; never resolve a past-day task against today's scheduled pool.
 function buildCarryoverRadialItems(ev,trig,acts){
-  const items=[
-    {icon:"📅", label:"Move…",   onPick:()=>acts.move(trig)},
-    {icon:"💡", label:"Solo", onPick:()=>acts.backlog()},
+  return [
+    {icon:"📅",label:"Move…",onPick:()=>acts.move(trig)},
+    {icon:"📦",label:"Solo",onPick:()=>acts.backlog()},
   ];
-  if(window.DCCWorkSessions&&window.DCCWorkSessions.policy(ev)==="work_sessions"){
-    items.unshift({icon:ev.startedAt?"⏸":"▶",label:ev.startedAt?"Pause work":"Start work",onPick:()=>window.DCCWorkSessions.act(ev,ev.startedAt?"pause":"start")});
-  }
-  if(acts.details)items.push({icon:"📝",label:"Notes & actions",onPick:()=>acts.details()});
-  items.push({icon:"➕",label:"Add task…",onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}});
-  items.push({icon:"🗑", label:"Drop", onPick:()=>acts.drop()});
-  return items;
 }
 const _TASK_RADIAL_OPTS={a0:90,a1:270,r:140,labelStagger:true,clampY:true};
 function openTaskRadial(ev,trig,opts){
@@ -344,18 +310,15 @@ function _orderUnscheduled(rows){
     return String(created(b)).localeCompare(String(created(a)));
   });
 }
-// Current row ids of the Unscheduled drag group in DOM (display) order. The group
-// is two headers now — "Unscheduled" (untimed today) and "Unfinished" (carryovers) —
-// so walk every section tagged .uns-group and keep ONE persisted order across both.
+// Current row ids of the Unscheduled drag group in DOM (display) order, as ONE
+// persisted order. Triage and Unscheduled rows share that order (both are
+// day.unscheduled) and both render in the header pill's drawer now
+// (renderTriageInto / renderUnscheduledInto), so read them there: scanning
+// #list-view for them would save only the moved row and wipe every other row's
+// manual position on the first drag in the drawer.
 function _unscheduledRowIds(){
   const ids=[];
-  document.querySelectorAll('#list-view .time-block-divider.uns-group, #list-view .time-block-divider[data-block-id="triage"]').forEach(sec=>{
-    let n=sec.nextElementSibling;
-    while(n&&!n.classList.contains("time-block-divider")&&(!n.classList.contains("it-list-section")||n.dataset.section==="unscheduled")){
-      if(n.classList.contains("it-list-item")&&n.dataset.id)ids.push(n.dataset.id);
-      n=n.nextElementSibling;
-    }
-  });
+  document.querySelectorAll('#unscheduled-list .it-list-item[data-id], #triage-queue-list .it-list-item[data-id]').forEach(n=>ids.push(n.dataset.id));
   return ids;
 }
 // Creation order for the Unscheduled section. Carryovers now carry a real
@@ -395,6 +358,12 @@ function taskAnchorById(id){
   if(ev){
     const day=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
     return {ev:ev,date:day,blockId:ev._blockId||null,carryover:false};
+  }
+  const poolEv=(typeof backlog!=="undefined"&&Array.isArray(backlog))?backlog.find(task=>task.id===id&&task.stage==="Whenever"):null;
+  if(poolEv){
+    const row=typeof _findTaskBlockForDate==='function'?_findTaskBlockForDate(id,null,poolEv):null;
+    if(row)poolEv._blockId=row.id;
+    return {ev:poolEv,date:null,blockId:poolEv._blockId||null,carryover:false,whenever:true};
   }
   const unf=_unfRecById(id);
   if(unf){
@@ -746,7 +715,7 @@ function createTaskListRowRenderer(context){
     };
     const metaHtml=inProgressChip+nowChip+
       '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+chipSlot+streakChip+
-      (subTimeless?'':(ev.untimed?(ev.triageBlock?'<span class="it-list-duration" title="Estimated completion time">'+ms(dur(ev))+'</span>':'<span class="it-list-untimed">Unplanned</span>'):(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+      (subTimeless?'':(ev.untimed?(isDoneRow?'<span class="it-list-untimed">'+(_completionMinute(ev)!=null?'Done at '+f12(fmt(_completionMinute(ev))):'Done')+'</span>':ev.triageBlock?'<span class="it-list-duration" title="Estimated completion time">'+ms(dur(ev))+'</span>':'<span class="it-list-untimed">'+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled")+'</span>'):(!isDoneRow?'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
       (isUnfRow?'<span class="it-list-unfinished">Unfinished from '+escHtml(_unfSlashDate(r.sourceDate))+'</span>':'')+
       (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
       (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" style="cursor:pointer" title="View prep briefing">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" style="cursor:pointer" title="Prep pending — open to view or generate">&#9675; Prep</span>':'')+
@@ -767,11 +736,13 @@ function createTaskListRowRenderer(context){
       collapseHtml:chev,
       titleExtrasHtml:dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip,
       metaHtml:metaHtml,
-      barColor:isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#a31c43)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)),
+      barColor:isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#7c3aed)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)),
       actionsBeforeHtml:(!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+workButton,
       onComplete:completeNow,
       onCompleteWithNotes:chkBlocked?completeNow:()=>openDoneModal(ev.id,ev.title,completeNow,ev),
       onSchedule:(!subTimeless&&!isDoneRow&&!isMeeting(ev))?(sb)=>{if(isUnfRow){_unfSchedulePopover(ev,el,sb);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});}:null,
+      durationLabel:ms(dur(ev)),
+      onDuration:!isDoneRow&&!isUnfRow?(button)=>openDurPopover(ev,button):null,
       onRadial:!isDoneRow?(pb)=>openTaskRadial(ev,pb,isUnfRow?{carryover:{move:(trig)=>_unfSchedulePopover(ev,el,trig),backlog:()=>_unfToBacklog(ev,el),drop:()=>_unfDrop(ev,el),details:()=>context.onOpen?context.onOpen(ev):openTaskNotes(ev)}}:undefined):null,
       onDelete:!isDoneRow?()=>{if(isUnfRow){_unfDrop(ev,el);return;}openDeleteConfirm(ev.id);}:null,
       onAdd:!isDoneRow?(am)=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}:null,
@@ -827,10 +798,16 @@ function createTaskListRowRenderer(context){
 }
 window.createTaskListRowRenderer=createTaskListRowRenderer;
 
-function buildListView(){
-  const wrap=document.getElementById("list-view");
-  if(!wrap)return;
-  wrap.innerHTML="";
+// The itinerary's grouped tree, derived ONCE for two surfaces: the work list below
+// and the header pill's Unscheduled panel (renderUnscheduledInto). The pill took over
+// the old "Unplanned" group, so both must agree exactly on which rows that group is;
+// one function is how they cannot drift.
+//
+// C6a: `day.visible` is the universe (not deleted, not side-project-flagged),
+// `day.unscheduled` is the Unscheduled SUBTREE, `day.timed` is the work list with done
+// rows inline, `day.folded` are the done rows that render inside a still-visible
+// parent, and `day.carryover` is yesterday's leftovers — empty unless this IS today.
+function _itineraryListModel(){
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   // isActive() is time-of-day only (no date), so the "Now" chip must be gated to
   // today or it would light up on a past/future day whose times overlap the clock.
@@ -839,13 +816,119 @@ function buildListView(){
   // Loose Ends owns past-day unfinished work now. Keep carryovers out of the task
   // list derivation entirely, including the old hidden fetch and second render.
   const unfPool=[];
+  const day=DCC.TaskModel.selectDay(scheduled,viewDate,{today:actualToday,carryoverPool:unfPool,waitingRows:window.blockStore ? window.blockStore.getByType("block") : []});
+  const visible=day.visible;
+  const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
+  const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible}),timeBlocks);
+  const unscheduledGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.UNPLANNED_BLOCK.id)||{nodes:[]};
+  const triageGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.TRIAGE_BLOCK.id)||{nodes:[]};
+  _fileDoneUntimedOnTheDay(groups,triageGroup,timeBlocks);
+  _fileDoneUntimedOnTheDay(groups,unscheduledGroup,timeBlocks);
+  return {viewDate,isTodayView,unfPool,day,timeBlocks,groups,unscheduledGroup,triageGroup};
+}
+// Finished work is recorded on the day it was finished, never in a pill: the drawer's
+// Triage and Unscheduled halves list OPEN work only. A done untimed root (with its
+// subtree) moves into the work list's time block that contains its completion time,
+// or into Outside Time Blocks when that time falls between blocks or is unknown.
+// Null unless the task was finished ON the viewed day: Loose Ends checks off a past-day
+// task on its own day but stamps it with today's clock, and that time means nothing
+// in the old day's blocks. Those rows land in Outside Time Blocks as a plain "Done".
+function _completionMinute(ev){
+  const raw=(typeof doneAt!=="undefined"&&doneAt&&doneAt[ev.id])||ev.completedAt||null;
+  if(!raw)return null;
+  const d=raw instanceof Date?raw:new Date(raw);
+  if(isNaN(d.getTime()))return null;
+  const day=typeof __state!=="undefined"&&__state&&__state.date;
+  const pad=n=>String(n).padStart(2,"0");
+  if(day&&d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())!==day)return null;
+  return d.getHours()*60+d.getMinutes();
+}
+function _fileDoneUntimedOnTheDay(groups,sourceGroup,timeBlocks){
+  const chunks=[];
+  (sourceGroup.nodes||[]).forEach(node=>{if(!node.depth||!chunks.length)chunks.push([]);chunks[chunks.length-1].push(node);});
+  const open=[];
+  chunks.forEach(chunk=>{
+    const root=chunk[0].ev;
+    if(!isDone(root)){open.push(...chunk);return;}
+    const minute=_completionMinute(root);
+    const block=minute==null?null:DCC.TimeBlocks.blockForTask({start:fmt(minute)},timeBlocks);
+    let target=block?groups.find(g=>g.block.id===block.id):null;
+    if(!target){
+      target=groups.find(g=>g.block===DCC.TimeBlocks.OUTSIDE_BLOCK);
+      // Created where groupItineraryTree puts it: after the timed blocks, before Unplanned.
+      if(!target){
+        const at=groups.findIndex(g=>g.block.id===DCC.TimeBlocks.UNPLANNED_BLOCK.id);
+        target={block:DCC.TimeBlocks.OUTSIDE_BLOCK,nodes:[]};
+        groups.splice(at<0?groups.length:at,0,target);
+      }
+    }
+    // In time order among the block's roots, timed ones by start and rows already
+    // filed here by their own completion, so it reads where it happened.
+    let at=target.nodes.length;
+    if(minute!=null){
+      const when=n=>_rowIsTimed(n.ev)?pt(n.ev.start):(isDone(n.ev)?_completionMinute(n.ev):null);
+      const i=target.nodes.findIndex(n=>{if(n.depth)return false;const m=when(n);return m!=null&&m>minute;});
+      if(i>=0)at=i;
+    }
+    target.nodes.splice(at,0,...chunk);
+  });
+  sourceGroup.nodes=open;
+}
+// Apply the Unscheduled sort mode (Manual / A–Z / New) to a group's nodes, keeping
+// each root's subtree attached to it.
+function _orderUnscheduledNodes(nodes){
+  const chunks=[];(nodes||[]).forEach(node=>{if(!node.depth||!chunks.length)chunks.push([]);chunks[chunks.length-1].push(node);});
+  const roots=chunks.map(chunk=>chunk[0].ev),mode=_sectionSort("unscheduled");
+  const ordered=_sectionSortIsManual(mode)?_orderUnscheduled(roots):_applySectionSort(roots,mode,ev=>ev.title,_unsCreated);
+  const byId=new Map(chunks.map(chunk=>[chunk[0].ev.id,chunk]));
+  return ordered.flatMap(ev=>byId.get(ev.id));
+}
+// The header pill's Triage and Unscheduled panels (whenever.js calls these on every
+// render). Same derivation and the same row renderer as the work list, so every row
+// keeps its full controls: check off, Schedule, task actions, delete. Each returns the
+// open root count its pill segment shows.
+function _renderQueueInto(listEl,nodes,model,lead){
+  const row=createTaskListRowRenderer({pool:model.unfPool,isTodayView:model.isTodayView});
+  const frag=document.createDocumentFragment();
+  if(lead)frag.appendChild(lead);
+  let rank=0;
+  nodes.forEach(node=>frag.appendChild(row(node.ev,_isSubRow(node)?0:rank++,isDone(node.ev)?"done":"open",node)));
+  listEl.innerHTML="";
+  listEl.appendChild(frag);
+  return {open:nodes.filter(node=>!node.depth&&!isDone(node.ev)).length,total:nodes.length};
+}
+// Each takes the caller's model when it has one: whenever.js derives once per build
+// and hands the same model to both halves.
+function renderUnscheduledInto(listEl,model){
+  if(!listEl||!window.DCC||!DCC.TaskModel||!DCC.TimeBlocks)return {open:0,total:0};
+  model=model||_itineraryListModel();
+  return _renderQueueInto(listEl,_orderUnscheduledNodes(model.unscheduledGroup.nodes),model);
+}
+window.renderUnscheduledInto=renderUnscheduledInto;
+window.itineraryListModel=_itineraryListModel;
+// Triage rows are created by triage.js (buildScheduleTriage) from inbox and repeat
+// sources, so the panel also carries that loader's status, with Retry on a failure.
+function renderTriageInto(listEl,model){
+  if(!listEl||!window.DCC||!DCC.TaskModel||!DCC.TimeBlocks)return {open:0,total:0,status:false};
+  model=model||_itineraryListModel();
+  const state=typeof triageTaskLoadState==="function"?triageTaskLoadState():{};
+  let status=null;
+  if(state.loading||state.error){
+    status=document.createElement(state.error?"button":"div");
+    status.className="it-list-empty";
+    status.textContent=state.error?"Triage could not load. Retry":"Loading Triage tasks…";
+    if(state.error){status.type="button";status.addEventListener("click",()=>buildScheduleTriage());}
+  }
+  return Object.assign(_renderQueueInto(listEl,model.triageGroup.nodes,model,status),{status:!!status});
+}
+window.renderTriageInto=renderTriageInto;
 
-  // C6a: ONE derivation for the whole view. `day.visible` is the universe (not
-  // deleted, not side-project-flagged), `day.unscheduled` is the Unscheduled SUBTREE,
-  // `day.timed` is the work list with done rows inline, `day.folded` are the done
-  // rows that render inside a still-visible parent, and `day.carryover` is
-  // yesterday's leftovers — empty unless this IS today.
-  const day=DCC.TaskModel.selectDay(scheduled,viewDate,{today:actualToday,carryoverPool:unfPool});
+function buildListView(){
+  const wrap=document.getElementById("list-view");
+  if(!wrap)return;
+  wrap.innerHTML="";
+  const model=_itineraryListModel();
+  const {viewDate,isTodayView,unfPool,day}=model;
   const visible=day.visible;
   // The old `doneItems` here was DEAD -- computed and never read; buildListView
   // renders done rows inline in the work list, it has no Done section. Deleted
@@ -900,8 +983,14 @@ function buildListView(){
       onToggle:()=>{toggleCollapsed(key);buildListView();Array.from(wrap.querySelectorAll("[data-time-block-toggle]")).find(button=>button.dataset.timeBlockToggle===key)?.focus({preventScroll:true});},
       onEdit:()=>openBlockEditor(block.id)});
   }
-  const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
-  const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible}),timeBlocks);
+  // The Triage and Unscheduled groups live in the header pill's drawer now
+  // (whenever.js), so the work list skips them: no header, no drop zone, no rows,
+  // and no share of the badge. The badge excludes day.unscheduled, the open untimed
+  // roots WITH every descendant: the groups' nodes omit a collapsed parent's
+  // subtasks, which would otherwise count here while rendering in the drawer.
+  const queued=[model.triageGroup,model.unscheduledGroup];
+  const queuedIds=new Set(day.unscheduled.map(ev=>ev.id));
+  const groups=model.groups.filter(g=>!queued.includes(g));
 
   // Task-container collapse state is independent from time-block collapse state.
   // Collapse-all / expand-all intentionally operates only on nested task trees;
@@ -946,27 +1035,19 @@ function buildListView(){
   // fold widened from `subtaskOf` to either parent edge (so a done RIDE-ALONG folds
   // too) and gated on the subtree being finished (so a done step with open steps under
   // it stays visible with its children nested, instead of hiding live work).
-  section("Work list",activeIds.size);
+  section("Work list",[...activeIds].filter(id=>!queuedIds.has(id)).length);
   let rank=0;
   const now=new Date(),nowMin=now.getHours()*60+now.getMinutes();
   groups.forEach(({block,nodes})=>{
     const current=block.timed&&block.start&&isTodayView&&nowMin>=DCC.TimeBlocks.minutes(block.start,false)&&nowMin<DCC.TimeBlocks.minutes(block.end,true);
     const header=timeBlockDividerEl(block,current);
-    if(block.sortable){header.dataset.section="unscheduled";header.classList.add("uns-group");}
     wrap.appendChild(header);
     if(block.dropTarget)wrap.appendChild(timeBlockDropZoneEl(block));
     if(isCollapsed(timeBlockCollapseKey(block)))return;
-    if(block.id==="triage"){
-      const state=typeof triageTaskLoadState==="function"?triageTaskLoadState():{};
-      if(state.loading||state.error){const status=document.createElement(state.error?"button":"div");status.className="it-list-empty";status.textContent=state.error?"Triage could not load. Retry":"Loading Triage tasks…";if(state.error)status.addEventListener("click",()=>buildScheduleTriage());wrap.appendChild(status);}
-    }
-    if(block.sortable){
-      section("",0,"unscheduled");
-      const chunks=[];nodes.forEach(node=>{if(!node.depth||!chunks.length)chunks.push([]);chunks[chunks.length-1].push(node);});
-      const roots=chunks.map(chunk=>chunk[0].ev),mode=_sectionSort("unscheduled");
-      const ordered=_sectionSortIsManual(mode)?_orderUnscheduled(roots):_applySectionSort(roots,mode,ev=>ev.title,_unsCreated);
-      const byId=new Map(chunks.map(chunk=>[chunk[0].ev.id,chunk]));nodes=ordered.flatMap(ev=>byId.get(ev.id));
-    }
+    // Triage (and its loading / Retry status) renders in the header pill's drawer
+    // now: renderTriageInto.
+    // The sortable Unscheduled group (and its Manual / A-Z / New header) renders in the
+    // header pill's drawer now: renderUnscheduledInto. No group left here is sortable.
     let prevEnd=null;
     nodes.forEach(node=>{
       if(block.timed&&!node.depth&&_rowIsTimed(node.ev)){const gap=_gapMarkerMins(prevEnd,pt(node.ev.start));if(gap!=null)wrap.appendChild(gapEl(gap));prevEnd=pt(node.ev.end);}
@@ -984,7 +1065,7 @@ function buildListView(){
   // Rescheduled away (amber) — parity with the timeline view's bottom section.
   const rescheduledAwayItems=(window.blockStore&&typeof window.blockStore.getByType==="function")
     ? window.blockStore.getByType("block")
-        .filter(b=>b&&!b.deleted_at&&(b.properties||{}).kind==="reschedule_tombstone"&&(b.date===viewDate||!b.date))
+        .filter(b=>b&&!b.deleted_at&&(b.properties||{}).kind==="reschedule_tombstone"&&!(b.properties||{}).poolOrigin&&(b.date===viewDate||!b.date))
         .sort((a,b)=>String((a.properties||{}).title||"").localeCompare(String((b.properties||{}).title||"")))
     : [];
   if(rescheduledAwayItems.length){
@@ -1037,7 +1118,7 @@ function buildSchedule(){
   // section with the fold widened to either parent edge, so a done RIDE-ALONG now
   // folds under its parent instead of listing as its own one-liner. Orphaned done
   // rows (parent deleted or side-project-flagged) stay listed so they aren't lost.
-  const day=DCC.TaskModel.selectDay(scheduled,viewDate,{});
+  const day=DCC.TaskModel.selectDay(scheduled,viewDate,{waitingRows:window.blockStore ? window.blockStore.getByType("block") : []});
   const vis=day.visible;                 // Hide side-project-marked items from the schedule
   // day.done PLUS day.nestedDone. Unlike the list view, this surface renders two flat
   // populations (compact Done one-liners + open cards) and never nests anything, so a done row
@@ -1055,7 +1136,7 @@ function buildSchedule(){
   // destination; we render it amber at the bottom.
   const rescheduledAwayItems=(window.blockStore&&typeof window.blockStore.getByType==="function")
     ? window.blockStore.getByType("block")
-        .filter(b=>b&&!b.deleted_at&&(b.properties||{}).kind==="reschedule_tombstone"&&(b.date===viewDate||!b.date))
+        .filter(b=>b&&!b.deleted_at&&(b.properties||{}).kind==="reschedule_tombstone"&&!(b.properties||{}).poolOrigin&&(b.date===viewDate||!b.date))
         .sort((a,b)=>String((a.properties||{}).title||"").localeCompare(String((b.properties||{}).title||"")))
     : [];
 
@@ -1221,13 +1302,12 @@ function buildSchedule(){
     if(tagToggle)tagToggle.addEventListener("click",e=>{e.stopPropagation();toggleTagsExpanded(ev.id);if(typeof render==='function')render();});
     el.querySelectorAll(".dbtn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();adjustDur(b.dataset.id,parseInt(b.dataset.d))}));
     const stSpan=el.querySelector(".start-time");if(stSpan){stSpan.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:stSpan,view:"time"});});}
-    // Duration presets: only the meeting card keeps the interactive badge —
-    // task cards show a read-only badge and adjust duration via the radial.
+    // All task-bar duration badges use the existing presets.
     const dbadge=el.querySelector(".dbadge");
-    if(dbadge&&isMeeting(ev))dbadge.addEventListener("click",e=>{e.stopPropagation();openDurPopover(ev,dbadge);});
+    if(dbadge)dbadge.addEventListener("click",e=>{e.stopPropagation();openDurPopover(ev,dbadge);});
     const sb=el.querySelector(".btn-schedule");if(sb)sb.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});});
     const pb=el.querySelector(".btn-task-radial");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb)});
-    // Row-level quick add: same universal popover the radial's ➕ spoke opens.
+    // Row-level quick add opens the existing universal placement popover.
     const am=el.querySelector(".row-add-menu");
     if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
     const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId)});

@@ -92,6 +92,7 @@
     }
     refresh();
     if (typeof render === "function") render("schedule");
+    if (typeof _addModalBlockId !== "undefined" && String(_addModalBlockId) === String(block.id)) renderHistory(block.id);
     if (typeof window.dispatchEvent === "function" && typeof window.CustomEvent === "function") {
       window.dispatchEvent(new window.CustomEvent("dcc:work-session-changed", { detail: { id: task.id } }));
     }
@@ -325,6 +326,7 @@
   // The rows the open history section is currently showing, so the reallocate
   // click has the full time_entry to hand over without a second fetch.
   var _historyRows = [];
+  var _historyRequest = 0;
 
   function fmtWhen(iso) {
     var date = new Date(iso);
@@ -332,9 +334,12 @@
   }
 
   async function renderHistory(blockId) {
+    var request = ++_historyRequest;
     var section = document.getElementById("am-work-history-section");
     var target = document.getElementById("am-work-history");
     var actions = document.getElementById("am-work-actions");
+    var timeSummary = document.getElementById('am-time-summary');
+    if (timeSummary) timeSummary.innerHTML = '';
     if (!section || !target) return;
     section.style.display = "none";
     target.innerHTML = "";
@@ -344,16 +349,19 @@
       var response = await fetch("/api/blocks/" + encodeURIComponent(blockId) + "/work");
       if (!response.ok) throw new Error("Unable to load work history");
       var data = await response.json();
+      if (request !== _historyRequest) return;
       if (typeof _addModalBlockId !== "undefined" && _addModalBlockId && String(_addModalBlockId) !== String(blockId)) return;
       var sessions = data.sessions || [];
       var detailTask = window.DCC && window.DCC.TaskModel ? window.DCC.TaskModel.fromBlock(data.block, { deriveEnd: true }) : (data.block.properties || {});
       var detailDone = detailTask.status === "done" || !!detailTask.completedAt;
       if (actions) actions.innerHTML = actionButtonHtml(detailTask, detailDone) + (!detailDone ? '<button class="work-action-btn complete" data-work-task="' + esc(detailTask.id) + '" data-work-complete="true">Complete</button>' : "");
+      if (typeof _amRenderExecutionContext === 'function') _amRenderExecutionContext(detailTask);
       var rawProps = (data.block && data.block.properties) || {};
       var planned = Number(rawProps.estimatedMinutes || rawProps.durationMinutes || rawProps.duration) || 0;
       var sessionSeconds = sessions.reduce(function (sum, row) { return sum + (Number((row.properties || {}).durSec) || 0); }, 0);
       var actual = Number(detailTask.actualMinutes) || (sessionSeconds ? Math.max(1, Math.round(sessionSeconds / 60)) : 0);
       var summary = '<div class="work-history-summary"><span>Planned <strong>' + (planned ? planned + "m" : "not set") + '</strong></span><span>Actual <strong>' + (actual ? actual + "m" : "not recorded") + '</strong></span>' + (detailTask.startedAt ? '<span class="work-live">Active ' + elapsedLabel(detailTask.startedAt) + '</span>' : "") + '</div>';
+      if (timeSummary) { timeSummary.innerHTML = summary; summary = ''; }
       var checkIns = window.DCC && window.DCC.Waiting && window.DCC.Waiting.checkInHistoryForTask
         ? window.DCC.Waiting.checkInHistoryForTask(data.block) : "";
       summary += checkIns;
@@ -390,12 +398,20 @@
         return '<div class="work-history-row"><div><strong>' + fmtWhen(first.startedAt) + '</strong><span> to ' + fmtWhen(last.endedAt) + '</span></div><div>' + minutes + "m " + badge + '</div><small>' + esc(from === to ? from : from + " to " + to) + "</small>" + moveButtons + "</div>";
       }).join("");
     } catch (error) {
+      if (request !== _historyRequest) return;
       section.style.display = "";
       target.innerHTML = '<div class="work-history-empty">Work history is temporarily unavailable.</div>';
+      if (actions) actions.innerHTML = '<button type="button" class="work-action-btn" data-work-history-retry="' + esc(blockId) + '">Retry work controls</button>';
+    } finally {
+      if (request === _historyRequest && typeof _setAddModalControlsEditable === 'function' && typeof _addModalEditing !== 'undefined') {
+        _setAddModalControlsEditable(document.querySelector('#add-modal-overlay .add-modal'), _addModalEditing);
+      }
     }
   }
 
   document.addEventListener("click", function (event) {
+    var retry = event.target.closest && event.target.closest('[data-work-history-retry]');
+    if (retry) { renderHistory(retry.dataset.workHistoryRetry); return; }
     var move = event.target.closest && event.target.closest(".work-realloc[data-time-entry]");
     if (move) {
       event.preventDefault();
@@ -415,7 +431,7 @@
       return;
     }
     var button = event.target.closest && event.target.closest("[data-work-task]");
-    if (!button) return;
+    if (!button || button.disabled) return;
     event.preventDefault();
     event.stopPropagation();
     var task = findTask(button.dataset.workTask);
@@ -425,16 +441,27 @@
       return;
     }
     if (button.dataset.workComplete === "true") {
+      var completion;
       if (task.__unf && window.DCC && window.DCC.Carryover) {
-        Promise.resolve(window.DCC.Carryover.complete(task, window.DCC.Carryover.rows())).finally(refresh);
+        completion = window.DCC.Carryover.complete(task, window.DCC.Carryover.rows());
       } else if (typeof toggleDone === "function") {
-        var completion = toggleDone(task.id);
-        refresh();
-        Promise.resolve(completion).finally(refresh);
+        completion = toggleDone(task.id);
       }
+      refresh();
+      Promise.resolve(completion).then(function() {
+        refresh();
+        var block = blockFor(task);
+        if (block && typeof _addModalBlockId !== 'undefined' && String(_addModalBlockId) === String(block.id)) renderHistory(block.id);
+      }, function(error) { if (typeof showToast === 'function') showToast(error.message || 'Completion failed', 'error'); });
       return;
     }
-    act(task, button.dataset.workAction || (task.startedAt ? "pause" : "start"));
+    button.disabled = true;
+    act(task, button.dataset.workAction || (task.startedAt ? "pause" : "start"))
+      .catch(function(error) {
+        if (typeof showToast === 'function') showToast(error.message || 'Work action failed. Try again.', 'error');
+      }).finally(function() {
+        if (button.isConnected) button.disabled = !!(button.closest('#add-modal-overlay') && typeof _addModalEditing !== 'undefined' && !_addModalEditing);
+      });
   });
 
   setInterval(refresh, 10000);
@@ -448,6 +475,7 @@
     act: act,
     refresh: refresh,
     renderHistory: renderHistory,
+    cancelHistory: function() { ++_historyRequest; _historyRows = []; },
     policy: policy,
     openPicker: openPicker,
     checkInState: checkInState,

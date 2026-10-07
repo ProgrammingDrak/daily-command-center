@@ -1034,3 +1034,45 @@ test('Unplanned placement stays in WAL offline and replays the same identity and
   assert.equal(JSON.parse(writes[1].init.body).targetDate,'2026-09-09');
   assert.equal(JSON.parse(writes[1].init.body).placement.kind,'unplanned');
 });
+
+for (const mode of ["network", "503", "stale"]) {
+  test("confirmed review move never buffers or retries after " + mode, async () => {
+    const opts = mode === "network" ? { fetchReject: true } : { fetchStatus: mode === "503" ? 503 : 409, errorBody: { error: "changed", code: "RESCHEDULE_STALE" } };
+    let release, started;
+    const pending = new Promise(resolve => { release = resolve; });
+    const requestStarted = new Promise(resolve => { started = resolve; });
+    const h = makeStore({ fetchImpl: async () => {
+      started(); await pending;
+      if (mode === "network") throw new TypeError("network down");
+      return { ok: false, status: opts.fetchStatus, json: async () => opts.errorBody };
+    } }), guard = { sourceDate: "2026-07-08", expectedDate: "2026-07-08" };
+    const request = h.store.rescheduleBlock("b1", "2026-07-09", { reviewGuard: guard });
+    await requestStarted;
+    assert.equal(wal(h.storage).length, 0, "no buffered move while a page could close or reload");
+    release();
+    await assert.rejects(request, e => e.permanent);
+    assert.equal(wal(h.storage).length, 0);
+    assert.equal(h.fetchCalls.length, 1);
+    assert.deepEqual(JSON.parse(h.fetchCalls[0].init.body).reviewGuard, guard);
+    await h.store.replayWAL();
+    assert.equal(h.fetchCalls.length, 1);
+  });
+}
+
+test("source form observes pending sync without persisting its client status flags", async () => {
+ const initial={id:"b1",type:"block",properties:{title:"Keep",source_id:"https://clever.slack.com/archives/C1/p1"}};
+ const opts={fetchBody:initial};
+ const {store,storage,fetchCalls}=makeStore(opts);
+ await store.handleBlocksChanged({blockIds:["b1"]});
+ opts.fetchReject=true;fetchCalls.length=0;
+ const props={...initial.properties,sourceReferences:[{kind:"file",url:"https://example.com/private.pdf",name:"Private.pdf"}]};
+ const out=await store.updateBlock("b1",props,{_reportSaveStatus:true});
+ assert.equal(out._savePending,true);assert.equal(wal(storage).length,1);
+ assert.equal(JSON.stringify(wal(storage)).includes('_reportSaveStatus'),false);
+ assert.equal(JSON.stringify(wal(storage)).includes('_savePending'),false);
+ assert.equal(fetchCalls[0].init.body.includes('_reportSaveStatus'),false);
+ assert.equal(store.get("b1").properties.source_id,initial.properties.source_id);
+ opts.fetchReject=false;opts.fetchBody={...initial,properties:props};await store.replayWAL();
+ assert.equal(wal(storage).length,0);
+ assert.equal(store.get("b1").properties.sourceReferences[0].name,'Private.pdf');
+});

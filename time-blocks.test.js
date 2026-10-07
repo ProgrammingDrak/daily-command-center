@@ -123,7 +123,7 @@ test("permanent blocks survive empty weekdays, weekends, and filtered views",()=
 
 test("each root owns its descendants regardless of completion, timing, or Triage flags",()=>{
   const nodes=[
-    {depth:0,ev:{id:'triage',untimed:true,triageBlock:true,status:'done'}},
+    {depth:0,ev:{id:'triage',untimed:true,triageBlock:true,triageId:'slack:review-1',status:'done'}},
     {depth:1,ev:{id:'triage-child',start:'09:00'}},
     {depth:0,ev:{id:'timed',start:'09:00',triageBlock:true}},
     {depth:1,ev:{id:'untimed-child',untimed:true}},

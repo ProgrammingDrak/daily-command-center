@@ -42,6 +42,7 @@ function persistAddedTask(item,targetDate){
       idempotency_key:item.idempotency_key||item.idempotencyKey||null,
       responsibilityId:item.responsibilityId||null,
       responsibilityTitle:item.responsibilityTitle||null,
+      ...(item.activityPlanSourceId?{activityPlanSourceId:item.activityPlanSourceId}:{}),
       capacityBucket:item.capacityBucket||null,
       responsibilityScore:item.responsibilityScore||null,
       alertKey:item.alertKey||null,
@@ -1034,6 +1035,13 @@ function adjustDur(id,delta){
   recalcTimes();saveDurChanges();render()
 }
 function setDurAbsolute(id,newMin){
+  const anchor=typeof taskAnchorById==='function'?taskAnchorById(id):null;
+  if(anchor&&anchor.whenever){
+    const n=Math.max(1,Math.round(newMin));if(!Number.isFinite(n)||anchor.ev.subtaskOf)return;
+    Object.assign(anchor.ev,{durMin:n,duration:n,start:'00:00',end:fmt(n)});
+    if(anchor.blockId&&typeof enqueueRowPropsWrite==='function')enqueueRowPropsWrite(anchor.blockId,props=>Object.assign({},props,{duration:n,durMin:n}));
+    render();return;
+  }
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
   const n=Math.max(1,Math.round(newMin));
   const c=dur(ev);if(n===c)return;
@@ -1388,6 +1396,8 @@ function hydrateLockedTasks(){
 // and have no row to re-date. Only the backlog branch had one all along.
 function addToSchedule(blId,opts){
   opts=opts||{};
+  const poolTask=backlog.find(task=>task.id===blId);
+  if(poolTask&&window.DCC&&DCC.Whenever&&(DCC.Whenever.isWhenever(poolTask)||DCC.TaskModel.isNested(poolTask)||DCC.TaskModel.childrenOf(blId,backlog).length)&&window.blockStore&&typeof window.blockStore.rescheduleBlock==='function')return DCC.Whenever.scheduleTree(blId);
   let idx=consider.findIndex(b=>b.id===blId),task,fromBacklog=false;
   if(idx!==-1){task=consider.splice(idx,1)[0]}else{idx=backlog.findIndex(b=>b.id===blId);if(idx===-1)return;task=backlog.splice(idx,1)[0];fromBacklog=true}
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
@@ -1403,22 +1413,27 @@ function addToSchedule(blId,opts){
   // opts.orderWins), so writing first would store times the very next line changes
   // and leave the row's stored slot one reflow behind until syncAddedTaskTimes ran.
   recalcTimes(opts.orderWins?{orderWins:true}:undefined);
+  // The write is RETURNED, not awaited. Every existing caller still fires and forgets;
+  // whenever.js awaits it, because its next step pins a start and the pin only writes
+  // rows that are already on the viewed day.
+  let write=null;
   if(fromBacklog){
     if(newItem._blockId&&typeof scheduleRowOnDay==="function"){
       const day=window.blockStore?window.blockStore.getCurrentDate():null;
       // Fire-and-forget on purpose: the in-memory plan and the render above are already
       // correct, and blockStore buffers the write into its WAL on a transient failure.
       // Any real rejection surfaces through the store's own pending-edits banner.
-      if(day)scheduleRowOnDay(newItem._blockId,day,{start:newItem.start,end:newItem.end});
+      if(day)write=scheduleRowOnDay(newItem._blockId,day,{start:newItem.start,end:newItem.end});
     }else if(typeof persistAddedTask==="function"){
       // No row id: a backlog item that was added in this session and never round-tripped
       // through hydrateBacklogFromBlocks. Creating one is correct here — there is
       // nothing to re-date — and persistBacklogItem's row, if any, is dateless and gets
       // suppressed by the fold's dated-sibling rule rather than rendering twice.
-      persistAddedTask(newItem);
+      write=persistAddedTask(newItem);
     }
-  }else if(typeof persistAddedTask==="function")persistAddedTask(newItem);
-  log("scheduled",task.id,"Added: "+task.title);render()
+  }else if(typeof persistAddedTask==="function")write=persistAddedTask(newItem);
+  log("scheduled",task.id,"Added: "+task.title);render();
+  return write;
 }
 function addFollowupToSchedule(fu,parentId){
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
@@ -1486,7 +1501,10 @@ function hydrateBacklogFromBlocks(){
     return 0;
   }
   let added=0;
-  TM.selectUnscheduled(window.blockStore.getByType("block"),{includeLegacyDatedBacklog:true}).forEach(b=>{
+  const rows=window.blockStore.getByType("block");
+  const parentKeys=TM.backlogParentKeys(rows);
+  const candidates=[...TM.selectUnscheduled(rows,{includeLegacyDatedBacklog:true}),...TM.selectWheneverPoolBlocks(rows)];
+  candidates.forEach(b=>{
     const p=b.properties||{};
     const localId=TM.backlogKey(b);
     // Dedupe by ev id, matching the fold (persistence.js keys on local_id||row id).
@@ -1495,38 +1513,36 @@ function hydrateBacklogFromBlocks(){
     // pre-existing behavior, kept deliberately rather than "fixed" by rendering a
     // twin nobody asked for; the pair is flagged to Track A for the migration.
     if(backlog.find(x=>x.id===localId))return;
-    backlog.push({
-      id:localId,
-      title:p.title,
-      type:p.type||"task",
-      durMin:p.durMin||30,
-      meta:p.meta||("Custom task \u00b7 "+ms(p.durMin||30)),
-      detail:p.detail||"",
-      source:p.source||"manual",
-      notionUrl:p.notionUrl||"",
-      priority:p.priority||"",
-      stage:p.stage||"",
-      commuteMinutes:p.commuteMinutes||null,
-      commuteToMinutes:p.commuteToMinutes||p.commuteMinutes||null,
-      commuteBackMinutes:p.commuteBackMinutes||p.commuteReturnMinutes||null,
-      createdAt:b.created_at||p.added_at||"",
-      updatedAt:b.updated_at||p.updated_at||"",
-      _blockId:b.id,
-      sortOrder:b.sort_order
-    });
+    backlog.push(TM.fromBacklogBlock(b,parentKeys));
     added++;
   });
   return added;
 }
 
-function addNewTask(titleArg, durMinArg){
+// The ONE creator for a dateless Task Library row. opts.stage files it (Whenever,
+// Priority, ...). The id is collision-proof: it used to be "custom-"+(nextId++), but
+// nextId restarts at 200 on every load, so two sessions minted the same local_id and
+// hydrateBacklogFromBlocks (which dedupes by it) hid one of the two tasks.
+function addNewTask(titleArg, durMinArg, opts){
+  opts=opts||{};
   const title=titleArg||(function(){const inp=document.getElementById("new-title");const v=inp?inp.value.trim():"";if(inp)inp.value="";return v})();
-  if(!title)return;
+  if(!title||!String(title).trim())return null;
   const durMin=durMinArg||30;
-  const item={id:"custom-"+(nextId++),title,type:"task",durMin,meta:"Custom task \u00b7 "+ms(durMin),detail:"",source:"manual",notionUrl:""};
+  const item={id:(opts.idPrefix||"custom")+"-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),
+    title:String(title).trim(),type:"task",durMin,meta:(opts.metaLabel||"Custom task")+" \u00b7 "+ms(durMin),
+    detail:"",source:"manual",notionUrl:"",priority:opts.priority||"",stage:opts.stage||"",createdAt:new Date().toISOString()};
   backlog.push(item);
   persistBacklogItem(item);
-  log("created","custom","New backlog: "+title);render()
+  log("created","custom","New "+(opts.stage||"backlog")+": "+item.title);render();
+  return item;
+}
+// Whenever (whenever.js): the same creator, filed on the Whenever stage, for work
+// with no set time (laundry, the mail).
+function addWheneverTask(title,durMin){
+  title=String(title||"").trim();
+  if(!title)return null;
+  const W=window.DCC&&window.DCC.Whenever;
+  return addNewTask(title,durMin||15,{idPrefix:"wh",stage:(W&&W.STAGE)||"Whenever",priority:"Low",metaLabel:(W&&W.LABEL)||"Whenever"});
 }
 // ======== UNIVERSAL TASK ADD BAR ========
 function addTaskUniversal(barEl){
@@ -1550,6 +1566,12 @@ function addTaskUniversal(barEl){
         onCommitted:()=>{const i=barEl.querySelector(".tab-title");if(i&&i.value.trim()===title)i.value="";}});
       break;
     case"backlog":addNewTask(title,durMin);break;
+    case"whenever":{
+      if(typeof addWheneverTask==="function"&&addWheneverTask(title,durMin)&&typeof showToast==="function"){
+        showToast("Added to "+((window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever"),"success");
+      }
+      break;
+    }
     case"urgent":insertTaskNow(title,durMin);break;
     case"anytime":{
       if(window.DCC&&DCC.AnytimeDock&&typeof DCC.AnytimeDock.openCreate==="function")DCC.AnytimeDock.openCreate(title);
@@ -1563,6 +1585,9 @@ function addTaskUniversal(barEl){
     // ride along. insertTaskNow flags it isWrap from birth (dragMovesSubtree).
     // Habit: recurring earn; the row grows a streak chip from prior completions.
     case"habit":insertTaskNow(title,durMin,{type:"habit"});break;
+    case"workout":case"meal":
+      if(window.DCC&&DCC.Activity)DCC.Activity.create(dest,null,title);
+      break;
     // Manually-added meeting: no source_id, so the calendar materializer never
     // touches it. Fixed-time (reflow-exempt) but user-movable, like a synced one.
     case"meeting":insertTaskNow(title,durMin,{type:"meeting"});break;
@@ -2168,10 +2193,12 @@ const TASK_DESTINATIONS=[
   {value:"done",    icon:"✅", label:"Completed"},
   {value:"schedule",icon:"📅", label:"Schedule…"},
   {value:"backlog", icon:"💡", label:"Task Library (Solo)"},
+  {value:"whenever",icon:"🧺", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever"},
   {value:"anytime", icon:"💧", label:"Anytime"},
   {value:"habit",   icon:"🔁", label:"Habit"},
   {value:"meeting", icon:"👥", label:"Meeting"}
 ];
+TASK_DESTINATIONS.push({value:"workout",icon:"W",label:"Workout"},{value:"meal",icon:"M",label:"Meal"});
 function _destMeta(value){return TASK_DESTINATIONS.find(d=>d.value===value)||TASK_DESTINATIONS[0]}
 // Blank title isn't a silent dead end: flash the input AND offer, via a toast
 // action, to proceed as an untitled task. onProceed resumes whatever the user

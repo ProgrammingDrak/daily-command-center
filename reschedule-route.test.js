@@ -373,3 +373,11 @@ test("Unplanned rejects foreign duration overrides and derives stored time spans
   assert.equal((await post(app,'B1',{targetDate:FROM,placement:{kind:'unplanned'}})).status,200);
   assert.equal(calls.reschedule[0].moves[0].properties.duration,55);
 });
+
+
+test('ordinary reschedule converts a previous pool origin marker back to a visible restore marker',async()=>{
+ const parent=blk('B1','t1'),tomb={id:'pool-tomb',type:'block',date:FROM,workspace_id:MINE,properties:{kind:'reschedule_tombstone',movedBlockId:'B1',poolOrigin:true,hiddenLocalIds:['t1']}};
+ const {app,calls}=mountApp({parent,pool:[parent],existingTomb:tomb});const result=await post(app,parent.id,{targetDate:TO});assert.equal(result.status,200);
+ assert.equal(calls.reschedule[0].creates.length,0);const updated=calls.reschedule[0].moves.find(move=>move.id===tomb.id);
+ assert.equal(updated.properties.poolOrigin,undefined);assert.equal(updated.properties.rescheduledTo,TO);assert.equal(result.body.count,1);
+});

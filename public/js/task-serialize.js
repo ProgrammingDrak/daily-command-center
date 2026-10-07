@@ -129,7 +129,15 @@
       // non-URL identifier here; the renderer separately decides whether the
       // value is a safe jump link.
       source_id: src.source_id || "",
+      ...(src._taskNotes ? {_taskNotes:JSON.parse(JSON.stringify(src._taskNotes))} : {}),
+      ...(Array.isArray(src.sourceReferences) ? {sourceReferences: src.sourceReferences.map(ref => Object.assign({}, ref))} : {}),
+      // Only a reference travels through ordinary task persistence; the server
+      // copies the owner's saved plan and never accepts actuals here.
+      ...(src.activityPlanSourceId ? { activityPlanSourceId: src.activityPlanSourceId, type: src.type, publicVisibility: "private" } : {}),
       tags: Array.isArray(src.tags) ? src.tags : [],
+      ...(src.stage ? {stage:src.stage} : {}),
+      ...(src.dependencyWaitingItemId ? {dependencyWaitingItemId:src.dependencyWaitingItemId} : {}),
+      ...(Array.isArray(src.dependencyWaitingItemIds) ? {dependencyWaitingItemIds:src.dependencyWaitingItemIds.slice()} : {}),
       delegatedItemId: src.delegatedItemId || null,
       // The triage item this task came from. Its absence here was a silent link
       // break: every picker-based create path serializes through this function, so

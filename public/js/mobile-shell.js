@@ -72,6 +72,7 @@
 
   // Overflow content tabs (not surfaced directly in the bottom bar).
   const MORE_TABS = [
+    { label:"Workouts & meals", tab:"activity" },
     { label:"Delegated", tab:"delegated", badge:"delegated-count" },
     { label:"Pet Home",  tab:"pet-home", badge:"pet-home-badge" }
   ];
@@ -84,6 +85,7 @@
     { label:"Refresh reactions",icon:"🔄", find(){ return byId("todo-reactions-toggle"); } },
     { label:"Sticky Notes",     icon:"📌", find(){ return byId("sn-open-btn"); } },
     { label:"Anytime",          icon:"💧", find(){ return byId("anytime-dock"); } },
+    { label:"Review tomorrow", icon:"🌙", find(){ return byId("dcc-review-tomorrow"); } },
     { label:"Start of day",     icon:"🌅", find(){ return byId("dcc-day-start"); } },
     { label:"Replay tutorial",  icon:"🎓", find(){ return byId("dcc-replay-tutorial"); } },
     { label:"Sign out",         icon:"⏻", find(){ return byId("dcc-sign-out"); } }
@@ -159,7 +161,7 @@
   function syncActiveNav(){
     const active = document.querySelector(".tab.active");
     const key = active ? active.dataset.tab : null;
-    const overflow = ["delegated", "pet-home"];
+    const overflow = ["delegated", "pet-home", "activity"];
     document.querySelectorAll("#mobile-tabbar .mtab").forEach(b => {
       const navKey = b.dataset.navKey;
       let on = false;

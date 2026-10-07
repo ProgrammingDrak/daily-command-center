@@ -199,6 +199,7 @@ function validateScheduledTaskBounds(props, rule) {
 function defaultSubtasksForResponsibility(props, alertProps = {}) {
   const configured = Array.isArray(props.defaultSubtasks) ? props.defaultSubtasks.filter(Boolean) : [];
   if (configured.length) return configured;
+  if (props.activityTaskType) return [];
   if (alertProps.alertType === "offers_amp_zero_expected_matches") {
     return [
       "Open AMP deal link",
@@ -287,6 +288,7 @@ function buildResponsibilityTaskProps(responsibility, { duration, slot, localId,
     source: sourceProps.source || "responsibility",
     tags: ["responsibility", props.domain, props.area, props.capacityBucket].filter(Boolean),
     responsibilityId: responsibility.id,
+    ...(props.activityTaskType ? { type: props.activityTaskType, activityPlanSourceId: responsibility.id, publicVisibility: "private" } : {}),
     responsibilityTitle: props.title,
     capacityBucket: props.capacityBucket || null,
     responsibilityScore: score,
@@ -605,6 +607,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
       if (t) props.templateTree = t; else delete props.templateTree;
     }
     if (existing) {
+      if (properties.activityPlanSourceId) throw Object.assign(new Error("A repeat with this title already exists. Choose a unique title for this activity plan"), { statusCode: 409 });
       // writableProps: `existing` came back from normalizeResponsibility, so merging
       // it raw would persist the derived importanceScore/suppressed/preferredDue.
       return normalizeResponsibility(await blockDB.updateBlock(existing.id, { properties: { ...writableProps(existing.properties), ...props, createdAt: existing.properties.createdAt || props.createdAt } }), new Date(), appTimeZone);
@@ -761,7 +764,8 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
           idempotency_key: key,
           title: props.nextTaskTitle || props.title,
           detail: props.description || "",
-          type: "task",
+          type: props.activityTaskType || "task",
+          ...(props.activityTaskType ? { activityPlanSourceId: responsibility.id, publicVisibility: "private" } : {}),
           duration,
           start: occurrence.start,
           end: minutesToHHMM(startMin + duration),
@@ -938,7 +942,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     });
   }
 
-  async function materializeScheduledRepeatsForDate({ date, userId, workspaceId, targetTimeZone = appTimeZone }) {
+  async function materializeScheduledRepeatsForDate({ date, userId, workspaceId, targetTimeZone = appTimeZone, strict = false }) {
     if (!isValidDate(date)) return [];
     const definitions = (await blockDB.getResponsibilityBlocks(workspaceId)).filter(activeScheduledDefinition);
     const created = [];
@@ -946,6 +950,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
       try {
         created.push(...await materializeDefinitionForDate(definition.id, { date, userId, workspaceId, targetTimeZone }));
       } catch (error) {
+        if (strict) throw error;
         console.warn("[scheduled-repeat] materialization failed", definition.id, error.message);
       }
     }
@@ -965,6 +970,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
         if (!sameWorkspace(responsibility, workspaceId) || !activeScheduledDefinition(responsibility)) return;
         const props = responsibility.properties || {};
         const rule = scheduledRecurrence.normalizeScheduleRule(props.scheduleRule, { defaultTimeZone: appTimeZone, today: getTodayStr() });
+        if (props.materializedThrough && props.materializedThrough >= throughDate) return;
         let cursor = props.materializedThrough || scheduledRecurrence.addDays(throughDate, -1);
         if (cursor < scheduledRecurrence.addDays(rule.startDate || throughDate, -1)) cursor = scheduledRecurrence.addDays(rule.startDate, -1);
         for (let guard = 0; cursor < throughDate && guard < 730; guard++) {
@@ -1092,6 +1098,9 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
       if (action === "update") {
         newDefinitionId = crypto.randomUUID();
         const nextProps = definitionChanges(oldProps, changes);
+        // Split from the series snapshot, independent of the original task's
+        // later edits, archival or deletion.
+        if (oldProps.activityTaskType) nextProps.activityPlanSourceId = id;
         validateScheduledTaskBounds(nextProps, nextProps.scheduleRule);
         nextProps.repeatIdentityId = oldProps.repeatIdentityId || id;
         nextProps.slug = `${oldProps.slug || "scheduled-repeat"}-from-${occurrenceKey.replace(/[^0-9]/g, "")}`;

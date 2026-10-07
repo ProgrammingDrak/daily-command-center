@@ -214,7 +214,7 @@
     var timeHtml;
     var unscheduled=!ev.start||ev.untimed;
     if(subTimeless||unscheduled){
-      timeHtml='<div class="tl-time'+(hasPrep?' has-prep':'')+'">'+(subTimeless?'':'<span class="it-list-untimed">Unplanned</span>')+'</div>';
+      timeHtml='<div class="tl-time'+(hasPrep?' has-prep':'')+'">'+(subTimeless?'':'<span class="it-list-untimed">'+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled")+'</span>')+'</div>';
     }else{
       timeHtml='<div class="tl-time'+(hasPrep?' has-prep':'')+'">'+f12(ev.start).replace(" ","<br>")+'<span class="et">'+f12(ev.end)+'</span>';
       if(hasPrep){timeHtml+='<span class="prep-line"></span>';}
@@ -260,7 +260,7 @@
 
     // Inline clock (lock indicator + start/end). Empty for a timeless subtask.
     var tinlineHtml=(subTimeless||unscheduled)
-      ? '<span class="tinline">'+(unscheduled?'<span class="it-list-untimed">Unplanned</span>':'')+'</span>'
+      ? '<span class="tinline">'+(unscheduled?'<span class="it-list-untimed">'+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled")+'</span>':'')+'</span>'
       : '<span class="tinline">'+(ev._locked||isMeeting(ev)?'<span class="lock-ind" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+'<span class="start-time'+(ev._userSetStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' · Now':'')+'</span>';
     // Chip slot: shell rollup, else own pie bar, else (subtask) its pie slice, else the points chip.
     var chipSlotHtml=shellChip?shellChip:(pplan?pieBarHtml:(sub?subSliceHtml:pointsChip(ev)));
@@ -275,7 +275,7 @@
           reactionHtml+
           (guest?'':'<div class="grip" title="Drag to reorder">'+gripSvg+'</div>')+
           (guest?'':'<button class="chk-quick quick-complete-control'+(chkBlocked?' chk-blocked':'')+'" title="Click to quick complete. Hold for completion notes. Shift+Enter also opens notes." aria-label="Click to quick complete. Hold for completion notes. Shift+Enter also opens notes."><span aria-hidden="true">'+_boltSvg+'</span></button>')+
-          '<div class="bar" style="background:'+(waitChip?'var(--waiting,#a31c43)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
+          '<div class="bar" style="background:'+(waitChip?'var(--waiting,#7c3aed)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
           '<div class="body">'+
             '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+waitChip+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+tinlineHtml+(guest||isMeeting(ev)||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>')+(isMeeting(ev)?'<button class="btn-mtg-tags" title="Tags — mark this meeting for Recording Review" style="border:none;background:none;cursor:pointer;font-size:13px;line-height:1;padding:2px 6px;opacity:.65" onclick="event.stopPropagation();openAddModal(\''+ev.id.replace(/'/g,"\\'")+'\',\''+ev.title.replace(/'/g,"\\'")+'\')">🏷</button>':'')+(guest||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
             '<div class="meta">'+inProgressChip+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+(sub?'Subtask':c.tag)+'</span>'+stackedBadge+chipSlotHtml+habitStreakChip(ev)+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
@@ -299,10 +299,9 @@
           bountyControl+
           (guest?'':'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule" aria-label="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>')+
           (guest||subTimeless?'':'<div class="dur">'+
-            // Task cards: read-only badge (adjust via the radial's Duration…);
-            // meetings keep the ±15 stepper and the tappable badge.
+            // Duration stays directly editable on the task bar.
             (isMeeting(ev)?'<button type="button" class="dbtn" data-id="'+ev.id+'" data-d="-15" aria-label="Decrease duration">&minus;</button>':'')+
-            '<div><div class="dbadge'+(isMeeting(ev)?'':' dbadge-readonly')+'">'+ms(d)+'</div>'+(changed?'<div class="est-act">was '+ms(od)+' <span class="'+(delta>0?"dover":"dunder")+'">'+( delta>0?"+":"")+delta+'m</span></div>':'')+'</div>'+
+            '<div><button type="button" class="dbadge" aria-label="Adjust duration">'+ms(d)+'</button>'+(changed?'<div class="est-act">was '+ms(od)+' <span class="'+(delta>0?"dover":"dunder")+'">'+( delta>0?"+":"")+delta+'m</span></div>':'')+'</div>'+
             (isMeeting(ev)?'<button type="button" class="dbtn" data-id="'+ev.id+'" data-d="15" aria-label="Increase duration">+</button>':'')+
           '</div>')+
           (hasDetail?chevron:'')+
@@ -354,6 +353,8 @@
       ? '<button class="btn-task-radial" data-radial-id="'+escHtml(ev.id||"")+'" data-tooltip="'+escHtml(opts.radialTitle||"Task actions…")+'" aria-label="'+escHtml(opts.radialLabel||"Task actions")+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>' : '';
     var deleteButton=typeof opts.onDelete==="function"
       ? '<button class="btn-del-task" data-del-id="'+escHtml(ev.id||"")+'" data-tooltip="'+escHtml(opts.deleteTitle||"Remove from schedule")+'" aria-label="'+escHtml(opts.deleteLabel||"Remove from schedule")+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>' : '';
+    var durationButton=typeof opts.onDuration==="function"
+      ? '<button type="button" class="btn-duration" aria-label="Adjust duration">'+escHtml(opts.durationLabel||"Duration")+'</button>' : '';
     var addButton=typeof opts.onAdd==="function"
       ? '<button class="btn-add-menu row-add-menu" data-add-id="'+escHtml(ev.id||"")+'" title="Add a task before / after / inside">+</button>' : '';
     el.innerHTML=
@@ -365,7 +366,7 @@
       '<div class="bar" style="background:'+(opts.barColor||"")+'"></div>'+
       '<div class="it-list-main">'+
         '<div class="it-list-title-row">'+(opts.collapseHtml||"")+'<span class="ttl" title="'+escHtml(ev.title||"")+'">'+escHtml(ev.title||"")+'</span>'+(opts.titleExtrasHtml||"")+addButton+'</div>'+
-        '<div class="it-list-meta">'+(opts.metaHtml||"")+(ev.sourceContext?'<span class="task-source-context">'+escHtml(ev.sourceContext)+'</span>':'')+scheduleButton+'</div>'+
+        '<div class="it-list-meta">'+(opts.metaHtml||"")+(ev.sourceContext?'<span class="task-source-context">'+escHtml(ev.sourceContext)+'</span>':'')+scheduleButton+durationButton+'</div>'+
       '</div>'+
       '<div class="it-list-actions">'+(opts.actionsBeforeHtml||"")+radialButton+deleteButton+'</div>';
 
@@ -376,6 +377,17 @@
         W("bindQuickCompleteControl")(completionButton,function(){opts.onComplete(null,ev);},
           typeof opts.onCompleteWithNotes==="function"?function(){opts.onCompleteWithNotes(ev);}:function(){opts.onComplete(null,ev);});
       }else completionButton.addEventListener("click",function(e){e.stopPropagation();opts.onComplete(e,ev);});
+    }
+    var duration=el.querySelector(".btn-duration");
+    if(duration)duration.addEventListener("click",function(e){e.stopPropagation();opts.onDuration(duration,e,ev);});
+    var title=el.querySelector(".ttl");
+    if(title&&typeof opts.onOpen==="function"){
+      title.tabIndex=0;
+      title.setAttribute("role","button");
+      title.setAttribute("aria-label","Open task details: "+(ev.title||"Task"));
+      title.addEventListener("keydown",function(e){
+        if(e.key==="Enter"||e.key===" "){e.preventDefault();e.stopPropagation();opts.onOpen(e,ev);}
+      });
     }
     var schedule=el.querySelector(".btn-schedule");
     if(schedule)schedule.addEventListener("click",function(e){e.stopPropagation();opts.onSchedule(schedule,e,ev);});

@@ -243,6 +243,14 @@ window.createBlockEditor=function(containerEl, initialBlocks, options){
       blocks.push(block);
     }
     const el=createBlockEl(block, placeholder);
+    if (options.accessibleLabel) {
+      const content = el.querySelector('.nb-content');
+      if (content) {
+        content.setAttribute('role', 'textbox');
+        content.setAttribute('aria-multiline', 'true');
+        content.setAttribute('aria-label', options.accessibleLabel);
+      }
+    }
     if(block.type==='image'){
       attachmentRail.appendChild(el);
       updateAttachmentRail();
@@ -519,12 +527,20 @@ window.createBlockEditor=function(containerEl, initialBlocks, options){
 
   function addImageBlock(src, alt){
     if(!src) return null;
+    if(options.stableImagesOnly&&(!window.DCC.TaskSources||!window.DCC.TaskSources.safeUrl(src))){
+      if(options.onAttachmentError)options.onAttachmentError('Attach a stable original image link. Durable file uploads are not configured.');
+      return null;
+    }
     const existing=blocks.find(b=>b.type==='image' && b.src===src);
     if(existing) return existing;
     return addBlock({type:'image', src:src, alt:alt||'', content:''});
   }
 
   function readImageFile(file, done){
+    if(options.stableImagesOnly){
+      if(options.onAttachmentError)options.onAttachmentError('Durable file uploads are not configured. Attach a link to the original file instead.');
+      return;
+    }
     const reader=new FileReader();
     reader.onload=function(){ done(reader.result); };
     reader.readAsDataURL(file);

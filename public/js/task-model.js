@@ -113,6 +113,8 @@
       end: end,
       meta: p.meta || ("Custom task · " + _ms(d)),
       detail: p.detail || "", source: p.source || "manual",
+      ...(p._taskNotes ? {_taskNotes:JSON.parse(JSON.stringify(p._taskNotes))} : {}),
+      ...(Array.isArray(p.sourceReferences) ? {sourceReferences: p.sourceReferences.map(ref => Object.assign({}, ref))} : {}),
       source_id: p.source_id || "", notes: p.notes || "", untimed: untimed,
       status: p.status || "open",
       allDay: allDay,
@@ -184,6 +186,9 @@
       triageSourceRef: p.triageSourceRef || "",
       triageReceivedAt: p.triageReceivedAt || "",
       triageConversationId: p.triageConversationId || "",
+      ...(p.stage ? {stage:p.stage} : {}),
+      ...(p.dependencyWaitingItemId ? {dependencyWaitingItemId:p.dependencyWaitingItemId} : {}),
+      ...(Array.isArray(p.dependencyWaitingItemIds) ? {dependencyWaitingItemIds:p.dependencyWaitingItemIds.slice()} : {}),
       delegatedItemId: p.delegatedItemId || null,
       linkedBlockId: p.linkedBlockId || null,
       linkedTagId: p.linkedTagId || null,
@@ -245,6 +250,7 @@
       priority: priority,
       source: "triage",
       source_id: item.link || item.source_url || "",
+      ...(Array.isArray(item.sourceReferences) ? {sourceReferences:item.sourceReferences.map(ref => Object.assign({},ref))} : {}),
       meta: "Triage item",
       detail: [item.summary, item.notes].filter(Boolean).join("\n\n"),
       tags: ["triage"],
@@ -388,10 +394,55 @@
   // edge, and an API-minted backlog row has neither). Every write path in C4 strips
   // the date, so each one heals the first time it is touched; the remaining rows want
   // a migration, which is Track A's file. Flagged in the Coordination log with ids.
+  // One eligibility rule for stored rows and projected cards. Missing Waiting
+  // records keep explicit parking markers conservative during partial reloads;
+  // a known released record never parks work, even if an old marker survived.
+  function waitingParkedIds(items, waitingRows) {
+    const rows = (Array.isArray(items) ? items : []).filter(Boolean);
+    const relations = new Map(), linked = new Set(), aliases = new Map(), kids = new Map();
+    const props = row => row.properties || row;
+    const ids = row => [row.id, row._blockId, row.blockId, props(row).local_id,
+      row.type === "block" && "blk-" + row.id].filter(Boolean).map(String);
+    const checkIn = row => [row.id, props(row).local_id].some(id => /^waiting-checkin-task:/.test(String(id || ""))) ||
+      String(props(row).source || "").replace(/_/g, "-") === "waiting-checkin";
+    for (const row of (Array.isArray(waitingRows) ? waitingRows : rows)) {
+      if (!row) continue;
+      const p = props(row);
+      if (p.kind !== "delegated_item") continue;
+      const open = !row.deleted_at && !p.completedAt && !["done", "unblocked"].includes(p.status);
+      relations.set(String(row.id), open);
+      if (open && p.linkedBlockId) linked.add(String(p.linkedBlockId));
+    }
+    for (const row of rows) for (const id of ids(row)) aliases.set(id, row);
+    const blocked = new Set(), pending = [];
+    for (const row of rows) {
+      if (checkIn(row)) continue;
+      const p = props(row);
+      for (const parent of new Set([p.wrapId, p.subtaskOf, row.parent_id].filter(Boolean))) {
+        if (!aliases.has(String(parent))) continue;
+        const root = aliases.get(String(parent));
+        if (!kids.has(root)) kids.set(root, []);
+        kids.get(root).push(row);
+      }
+      const markers = [p.dependencyWaitingItemId].concat(Array.isArray(p.dependencyWaitingItemIds) ? p.dependencyWaitingItemIds : []).filter(Boolean);
+      if (ids(row).some(id => linked.has(id)) || markers.some(id => relations.get(String(id)) !== false)) pending.push(row);
+    }
+    while (pending.length) {
+      const row = pending.pop();
+      if (blocked.has(row)) continue;
+      blocked.add(row);
+      for (const child of kids.get(row) || []) pending.push(child);
+    }
+    const result = new Set();
+    for (const row of blocked) for (const id of ids(row)) result.add(id);
+    return result;
+  }
+
   function selectUnscheduled(blocks, opts) {
     opts = opts || {};
     const out = [];
     const rows = Array.isArray(blocks) ? blocks : [];
+    const parked = waitingParkedIds(rows, opts.waitingRows);
     for (let i = 0; i < rows.length; i++) {
       const b = rows[i];
       if (!b || b.deleted_at || b.type !== "block") continue;
@@ -412,8 +463,7 @@
       if (p.done === true) continue;
       // Dependency-parked tasks live in Waiting until their prerequisite is
       // released. They remain dateless but must not duplicate into Backlog.
-      if (p.dependencyWaitingItemId ||
-          (Array.isArray(p.dependencyWaitingItemIds) && p.dependencyWaitingItemIds.length) ||
+      if (parked.has(String(b.id)) ||
           (p.triageBlock && p.kind !== "backlog")) continue;
       // A titleless row cannot render on either surface; both consumers dropped it.
       if (!p.title) continue;
@@ -421,6 +471,53 @@
       if (opts.includeLegacyDatedBacklog && p.kind === "backlog") out.push(b);
     }
     return out;
+  }
+
+  // ── Whenever: chores with no set time (whenever.js owns the surface) ──
+  //
+  // A dateless backlog row on the Whenever stage. Its ONE home is the header pill's
+  // pool, so the itinerary fold (persistence.js isFoldableTask) skips it. Folded, it
+  // would sit in every day's Unplanned list, which is the opposite of background
+  // work, and it would render twice: in Unplanned and in the pool. It stays in
+  // selectUnscheduled on purpose, because `backlog[]` IS the pool's source and every
+  // backlog verb (addToSchedule, edit, delete) resolves rows there. Once dated it is
+  // ordinary work again (that is how Do it now brings one into the day), so the date
+  // test comes first. The stage is the stored value; whenever.js reads it from here.
+  function backlogParentKeys(blocks){
+    const keys=new Map();
+    _arr(blocks).filter(row=>!row.date&&(row.properties||{}).kind==='backlog').forEach(row=>{keys.set(row.id,backlogKey(row));if(row.properties.local_id)keys.set(row.properties.local_id,backlogKey(row));});
+    return keys;
+  }
+  function fromBacklogBlock(block,parentKeys){
+    const p=block.properties||{},task=fromBlock(block);
+    if(parentKeys instanceof Map){
+      if(task.subtaskOf)task.subtaskOf=parentKeys.get(task.subtaskOf)||task.subtaskOf;
+      if(task.wrapId)task.wrapId=parentKeys.get(task.wrapId)||task.wrapId;
+    }
+    const duration=p.durMin??p.duration??30;
+    return Object.assign(task,{id:backlogKey(block),stage:p.stage||'',durMin:duration,duration,
+      sortOrder:block.sort_order,updatedAt:block.updated_at||p.updated_at||''});
+  }
+  function selectWheneverPoolBlocks(blocks){
+    return _arr(blocks).filter(block=>block&&!block.deleted_at&&isWheneverPoolRow(block)&&
+      !['deleted','archived'].includes((block.properties||{}).status));
+  }
+  // Day-state timeline seeds must not resurrect a row moved into the pool.
+  function suppressWheneverSeeds(items,blocks,date){
+    const rows=selectWheneverPoolBlocks(blocks),rowIds=new Set(rows.map(row=>row.id)),localIds=new Set(rows.map(backlogKey));
+    _arr(blocks).forEach(row=>{
+      const p=row.properties||{};
+      if(!row.deleted_at&&row.date===date&&p.kind==='reschedule_tombstone'&&p.poolOrigin===true){
+        (p.hiddenLocalIds||[]).forEach(id=>{localIds.add(id);rowIds.add(id);});rowIds.add(p.movedBlockId);
+      }
+    });
+    return _arr(items).filter(item=>item._blockId?!rowIds.has(item._blockId):!localIds.has(item.id)&&!rowIds.has(item.id));
+  }
+  const WHENEVER_STAGE = "Whenever";
+  function isWheneverPoolRow(block) {
+    block = block || {};
+    const p = block.properties || {};
+    return !block.date && p.kind === "backlog" && p.stage === WHENEVER_STAGE;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -489,6 +586,16 @@
   // `state.js` documents why this deliberately diverges from `lib/reschedule.js`'s
   // row-space order; do not "fix" that. Mirrored (not moved) from state.js, which
   // keeps the bare globals every existing call site reads.
+  function hierarchyRoot(id,items,index){
+    const byId=index||new Map(_arr(items).map(ev=>[ev.id,ev])),seen=new Set();
+    const original=byId.get(id);let current=original;
+    while(current){
+      if(seen.has(current.id))return original;
+      seen.add(current.id);const parent=byId.get(parentIdOf(current));
+      if(!parent)return current;current=parent;
+    }
+    return null;
+  }
   function parentIdOf(ev) { return (ev && (ev.wrapId || ev.subtaskOf)) || null; }
   function relOf(ev) { return ev ? (ev.wrapId ? "ride-along" : (ev.subtaskOf ? "subtask" : null)) : null; }
   function isSubtask(ev) { return !!(ev && ev.subtaskOf); }
@@ -637,7 +744,8 @@
   // parented inside `visible`, so folding the top folds all of it.
   function selectDay(pool, dateStr, opts) {
     opts = opts || {};
-    const visible = selectVisible(pool, opts);
+    const parked = waitingParkedIds(_arr(pool).concat(_arr(opts.waitingRows)), opts.waitingRows);
+    const visible = selectVisible(pool, opts).filter(ev => !parked.has(String(ev.id)));
     const done = _doneFn(opts);
     const byId = new Map();
     for (let i = 0; i < visible.length; i++) byId.set(visible[i].id, visible[i]);
@@ -865,9 +973,14 @@
     isTaskRow: isTaskRow,
     foldsIntoItinerary: foldsIntoItinerary,
     backlogKey: backlogKey,
+    waitingParkedIds: waitingParkedIds,
     selectUnscheduled: selectUnscheduled,
+    WHENEVER_STAGE: WHENEVER_STAGE,
+    isWheneverPoolRow: isWheneverPoolRow,
+    fromBacklogBlock, backlogParentKeys, selectWheneverPoolBlocks, suppressWheneverSeeds,
     // C6a — shape
     parentIdOf: parentIdOf,
+    hierarchyRoot,
     relOf: relOf,
     isSubtask: isSubtask,
     isRideAlong: isRideAlong,
