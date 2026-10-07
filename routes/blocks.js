@@ -2753,8 +2753,8 @@ module.exports = function mount(app, ctx) {
       if (typeof date !== "string" || !isValidDate(date) ||
           Number.isNaN(Date.parse(date + "T12:00:00Z")) ||
           new Date(date + "T12:00:00Z").toISOString().slice(0, 10) !== date ||
-          date <= waitingItems.dateFromIso(completedAt, APP_TIME_ZONE)) {
-        res.status(400).json({ error: "Choose a next check-in date after today" }); return;
+          date < waitingItems.dateFromIso(completedAt, APP_TIME_ZONE)) {
+        res.status(400).json({ error: "Choose today or a later next check-in date" }); return;
       }
       options.nextCheckInDate = date;
     }

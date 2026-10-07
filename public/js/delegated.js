@@ -941,9 +941,7 @@
     const key = cycleKey(item);
     if (!key) return false;
     const expectedCheckInCount = Array.isArray((item.properties || {}).checkInHistory) ? item.properties.checkInHistory.length : 0;
-    const tomorrow = parseLocalDate(todayStr());
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const minDate = toDateInputValue(tomorrow);
+    const minDate = todayStr();
     const suggested = parseLocalDate(todayStr());
     suggested.setDate(suggested.getDate() + checkInDaysFor(item.properties || {}));
     const form = document.createElement('form');

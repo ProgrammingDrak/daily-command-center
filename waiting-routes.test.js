@@ -862,7 +862,7 @@ test("saving a check-in atomically logs history and one completed current-day ta
 });
 
 test("invalid check-in drafts cannot write history or create completed tasks", async () => {
-  for (const patch of [{ nextCheckInDate: TODAY }, { nextCheckInDate: "2026-02-30" }, { nextCheckInDate: null }, { note: "x".repeat(1001) }, { note: {} }]) {
+  for (const patch of [{ nextCheckInDate: "2026-08-13" }, { nextCheckInDate: "2026-02-30" }, { nextCheckInDate: null }, { note: "x".repeat(1001) }, { note: {} }]) {
     const { app, rows, updates } = mountApp();
     const result = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", {
       cycleKey: "waiting:waiting-1:" + TODAY, completedAt: "2026-08-14T12:00:00Z", nextCheckInDate: "2026-08-20", ...patch,
@@ -926,4 +926,30 @@ test("failed Waiting write rolls back the already-created completion log", async
   assert.equal(rows.size, originalIds.size);
   assert.equal(waiting.properties.checkInHistory, undefined);
   assert.equal(broadcasts.length, 0);
+});
+
+
+test("today is a valid next check-in with local-day semantics and safe repeated same-day follow-ups", async () => {
+  const { app, waiting, rows } = mountApp();
+  const body = {
+    cycleKey: "waiting:waiting-1:" + TODAY, completedAt: "2026-08-15T02:00:00Z",
+    nextCheckInDate: TODAY, expectedCheckInCount: 0, note: "Check back later today",
+  };
+  const saved = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", body);
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.status, "completed");
+  assert.equal(saved.body.task.date, TODAY, "02:00 UTC is still today in the app timezone");
+  assert.equal(waiting.properties.status, "open");
+  assert.equal(waiting.properties.checkInDate, TODAY);
+  assert.equal(waiting.properties.checkInHistory[0].nextCheckInDate, TODAY);
+  const replay = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", body);
+  assert.equal(replay.body.status, "skipped_stale");
+  assert.equal([...rows.values()].filter(row => row.properties.source === "waiting-checkin-log").length, 1);
+  const second = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", {
+    ...body, expectedCheckInCount: 1, completedAt: "2026-08-15T03:00:00Z", note: "Heard back; still Waiting",
+  });
+  assert.equal(second.body.status, "completed", "a new reviewed same-day check-in does not freeze");
+  assert.equal(waiting.properties.checkInHistory.length, 2);
+  assert.equal(waiting.properties.checkInDate, TODAY);
+  assert.equal(waiting.properties.status, "open");
 });

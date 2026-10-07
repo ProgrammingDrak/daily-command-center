@@ -77,7 +77,7 @@ for (const width of [1280, 390, 320]) {
   await page.locator('.dcc-overlay').waitFor({state:'detached'});
   assert.equal(await page.evaluate(()=>window.calls.length),0);
   await page.click('#opener');
-  await page.fill('#wci-date','2026-10-07');
+  await page.fill('#wci-date','2026-10-06');
   await page.click('button[type="submit"]');
   assert.equal(await page.evaluate(()=>window.calls.length),0,'invalid date does not write');
   await page.fill('#wci-date','2026-10-20');
@@ -108,6 +108,13 @@ for (const width of [1280, 390, 320]) {
   assert.ok(state.history.includes('&lt;script&gt;bad()&lt;/script&gt;'));
   await page.evaluate(()=>document.getElementById('history').innerHTML=historyForTask({id:'original',properties:{}}));
   assert.equal(await page.locator('#history script').count(),0);
+  await page.click('#opener');
+  await page.fill('#wci-date','2026-10-07');
+  assert.equal(await page.locator('#wci-date').evaluate(el=>el.checkValidity()),true,'today is valid');
+  await page.click('button[type="submit"]');
+  await page.locator('.dcc-overlay').waitFor({state:'detached'});
+  assert.equal(await page.evaluate(()=>window.calls[2].body.nextCheckInDate),'2026-10-07');
+  assert.equal(await page.evaluate(()=>window.outcome),true);
   console.log(`PASS ${width}px: Cancel, Escape, focus trap, validation, failed-save recovery, keyboard Save, duplicate guard, history escaping`);
   await page.close();
 }
