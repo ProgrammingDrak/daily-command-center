@@ -1,4 +1,4 @@
-/* global window, document, navigator, DCCAlarmStore, innerWidth */
+/* global window, document, navigator, DCCAlarmStore, DCCAlarmModel, __nativeMessages, __audioCalls, __alarmNow:writable, innerWidth */
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -138,6 +138,44 @@ try {
   const deniedPage = await denied.newPage(); await open(deniedPage);
   check('storage denial reports failure and disables scheduler',await deniedPage.getByRole('button',{name:'Start visible session',exact:true}).isDisabled());
   await denied.close();
+  const phone = await browser.newContext({viewport:{width:390,height:844},timezoneId:'UTC'});
+  await setup(phone);
+  await phone.addInitScript(() => {
+    window.__nativeMessages = [];
+    window.DCCNativeAlarms = { postMessage(data) {
+      const request = JSON.parse(data); window.__nativeMessages.push(request);
+      if (request.action === 'status') setTimeout(() => this.onmessage?.({data:JSON.stringify({version:1,deviceLocal:true,status:'Not armed: synthetic permission denial'})}), 0);
+    } };
+  });
+  const nativePage = await phone.newPage(); await nativePage.goto(base);
+  await nativePage.getByRole('button',{name:/Phone alarms/}).waitFor();
+  check('shell load requests status only and creates no sound',await nativePage.evaluate(()=>__nativeMessages.length===1 && __nativeMessages[0].action==='status' && __audioCalls===0));
+  await nativePage.locator('#dcc-alarms-open').click();
+  await nativePage.getByRole('heading',{name:'Phone challenge alarms'}).waitFor();
+  check('native mode omits browser session controls',await nativePage.getByRole('button',{name:'Start visible session',exact:true}).count()===0);
+  await nativePage.getByRole('button',{name:'Manage phone alarms',exact:true}).focus(); await nativePage.keyboard.press('Enter');
+  check('keyboard native navigation sends only open action',await nativePage.evaluate(()=>__nativeMessages.at(-1).action==='open'));
+  await nativePage.getByRole('button',{name:/Review this WebView/}).click();
+  await nativePage.getByText(/No definitions in this WebView/).waitFor();
+  check('empty WebView storage has explicit create-native fallback',true);
+  await nativePage.evaluate(async()=>{ const a={id:'synthetic-native',label:'Synthetic phone',time:'12:01',date:'2026-10-07',mode:'once',days:[],challenge:'math',difficulty:'easy',count:3,snoozes:0,tone:'chime',volume:0.15,enabled:true,createdAt:Date.now()}; await DCCAlarmStore.transact(s=>DCCAlarmModel.saveAlarm(s,a,Date.now())); });
+  const before=await read(nativePage);
+  await nativePage.getByRole('button',{name:/Review this WebView/}).click();
+  await nativePage.getByText(/Review on the native screen/).waitFor();
+  check('native definition transfer is explicit and preserves browser state',await nativePage.evaluate(()=>__nativeMessages.at(-1).action==='review' && __nativeMessages.at(-1).alarms.length===1) && JSON.stringify(before)===JSON.stringify(await read(nativePage)));
+  await nativePage.evaluate(()=>{__alarmNow+=60000;}); await nativePage.waitForTimeout(1500);
+  check('shell prevents duplicate browser delivery even when definitions become due',(await read(nativePage)).runs.length===0 && await nativePage.evaluate(()=>__audioCalls)===0);
+  await nativePage.screenshot({path:shots+'/mobile-native-bridge-mock.png'});
+  await nativePage.keyboard.press('Escape'); await nativePage.waitForTimeout(350);
+  check('native bridge panel restores keyboard focus on close',await nativePage.locator('#dcc-alarms-open').evaluate(el=>document.activeElement===el));
+  await nativePage.reload(); await nativePage.getByRole('button',{name:/Phone alarms/}).waitFor();
+  check('reload does not replay transfers or start browser alarm',await nativePage.evaluate(()=>__nativeMessages.length===1 && __nativeMessages[0].action==='status' && __audioCalls===0) && (await read(nativePage)).alarms.length===1);
+  await phone.close();
+  const oldWebView = await browser.newContext({userAgent:'Synthetic DCCAndroid/0.2',viewport:{width:390,height:844}});
+  await setup(oldWebView); const oldPage = await oldWebView.newPage(); await oldPage.goto(base);
+  await oldPage.locator('#dcc-alarms-open').click(); await oldPage.getByText(/Bridge unavailable; use Device alarms/).waitFor();
+  check('unsupported WebView bridge disables browser scheduling and points to native toolbar', await oldPage.getByRole('button',{name:'Manage phone alarms',exact:true}).isDisabled() && await oldPage.getByRole('button',{name:'Start visible session',exact:true}).count()===0 && await oldPage.evaluate(()=>__audioCalls)===0);
+  await oldWebView.close();
   fs.writeFileSync(shots+'/checks.json',JSON.stringify({checks,silentAudioMock:true},null,2));
   console.log(`${checks.length} browser checks passed; screenshots in ${shots}`);
 } finally { await browser.close(); }

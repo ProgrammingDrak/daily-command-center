@@ -33,6 +33,15 @@ public final class AlarmActivity extends Activity {
     setShowWhenLocked(true);
     setTurnScreenOn(true);
     render(true);
+    String proposed = getIntent().getStringExtra("reviewDefinitions");
+    getIntent().removeExtra("reviewDefinitions");
+    if (proposed != null && proposed.length() <= 65536) {
+      try {
+        confirmDefinitions(new JSONArray(proposed));
+      } catch (Exception e) {
+        feedback.setText("Invalid definitions");
+      }
+    }
   }
 
   protected void onResume() {
@@ -104,8 +113,19 @@ public final class AlarmActivity extends Activity {
       body.setOrientation(LinearLayout.VERTICAL);
       body.setPadding(dp(24), dp(48), dp(24), dp(32));
       scroll.addView(body);
+      scroll.setOnApplyWindowInsetsListener(
+          (view, insets) -> {
+            android.graphics.Insets safe =
+                insets.getInsets(
+                    WindowInsets.Type.systemBars()
+                        | WindowInsets.Type.displayCutout()
+                        | WindowInsets.Type.ime());
+            view.setPadding(safe.left, safe.top, safe.right, safe.bottom);
+            return WindowInsets.CONSUMED;
+          });
       setContentView(scroll);
-      text("DCC native alarm", 26);
+      scroll.requestApplyInsets();
+      text("DCC · device alarms", 26);
       feedback = text(db.status(), 16);
       feedback.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
       if (r != null) {
@@ -113,10 +133,13 @@ public final class AlarmActivity extends Activity {
         return;
       }
       text(
-          "Local Android companion. Import DCC definitions explicitly. Scheduling requires exact,"
+          "Part of this DCC Android app. Alarms belong to this phone, shared across DCC accounts;"
+              + " logging out does not disable them. Scheduling requires exact,"
               + " notification and lock-screen access. Force-stop or power-off prevents delivery."
               + " No cloud account or sync.",
           16);
+      button("Add phone alarm", () -> editAlarm(null));
+      button("Back to DCC dashboard", this::finish);
       for (JSONObject a : db.definitions()) {
         String id = a.getString("id");
         text(
@@ -132,6 +155,8 @@ public final class AlarmActivity extends Activity {
                         .toString()
                     : "not scheduled"),
             17);
+        button("Edit " + a.getString("label"), () -> editAlarm(a));
+        button("Remove " + a.getString("label"), () -> removeAlarm(id));
         button(
             a.getBoolean("enabled")
                 ? "Disable " + a.getString("label")
@@ -197,7 +222,7 @@ public final class AlarmActivity extends Activity {
           });
       button("Stop preview sound", this::stopPreview);
       text(
-          "Native snooze is disabled in this first companion build. Chime/pulse browser tones use"
+          "Native snooze is disabled in this first build. Chime/pulse browser tones use"
               + " the Android system alarm ringtone here. Check system alarm volume and DND. Before"
               + " relying on delivery, validate your phone's locked/Doze/reboot behavior.",
           16);
@@ -241,7 +266,10 @@ public final class AlarmActivity extends Activity {
         };
     answer.setOnEditorActionListener(
         (v, action, event) -> {
-          if (action == EditorInfo.IME_ACTION_DONE) {
+          if (action == EditorInfo.IME_ACTION_DONE
+              || (event != null
+                  && event.getKeyCode() == KeyEvent.KEYCODE_ENTER
+                  && event.getAction() == KeyEvent.ACTION_DOWN)) {
             submit.run();
             return true;
           }
@@ -257,6 +285,234 @@ public final class AlarmActivity extends Activity {
         "Back/Home may leave the sound running. Emergency stop and the notification stop action are"
             + " always available. Sound is limited to five minutes.",
         16);
+  }
+
+  private void confirmDefinitions(JSONArray definitions) {
+    if (definitions.length() > 20) {
+      feedback.setText("Maximum 20 phone alarms");
+      return;
+    }
+    new AlertDialog.Builder(this)
+        .setTitle("Save this phone's alarm definitions?")
+        .setMessage(
+            "Replaces this phone's definitions with "
+                + definitions.length()
+                + " entries. Enabled alarms are scheduled only if you have approved capabilities."
+                + " Existing browser definitions are not changed. No permissions are granted."
+                + " Pending quizzes prevent replacement.")
+        .setNegativeButton("Cancel", null)
+        .setPositiveButton(
+            "Save and schedule",
+            (dialog, which) -> {
+              try (AlarmDb db = new AlarmDb(this)) {
+                java.util.List<JSONObject> old = db.definitions();
+                db.importDefinitions(definitions);
+                for (JSONObject a : old) AlarmScheduler.cancel(this, a.getString("id"));
+                AlarmScheduler.reconcile(this);
+                render(true);
+              } catch (Exception e) {
+                feedback.setText("Save failed: " + e.getMessage());
+              }
+            })
+        .show();
+  }
+
+  private void removeAlarm(String id) {
+    try (AlarmDb db = new AlarmDb(this)) {
+      JSONArray entries = new JSONArray();
+      for (JSONObject a : db.definitions()) if (!id.equals(a.getString("id"))) entries.put(a);
+      confirmDefinitions(entries);
+    } catch (Exception e) {
+      feedback.setText(e.getMessage());
+    }
+  }
+
+  private Spinner select(LinearLayout form, String label, String[] options, String current) {
+    TextView title = new TextView(this);
+    title.setText(label);
+    form.addView(title);
+    Spinner spinner = new Spinner(this);
+    spinner.setContentDescription(label);
+    spinner.setAdapter(
+        new ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, options));
+    spinner.setMinimumHeight(dp(48));
+    form.addView(spinner);
+    for (int i = 0; i < options.length; i++)
+      if (options[i].equals(current)) spinner.setSelection(i);
+    return spinner;
+  }
+
+  private void editAlarm(JSONObject existing) {
+    try {
+      JSONObject a =
+          existing == null
+              ? new JSONObject()
+                  .put("id", java.util.UUID.randomUUID().toString())
+                  .put("label", "Morning alarm")
+                  .put("time", "07:00")
+                  .put("date", java.time.LocalDate.now().toString())
+                  .put("mode", "repeat")
+                  .put("days", new JSONArray("[1,2,3,4,5]"))
+                  .put("challenge", "math")
+                  .put("difficulty", "easy")
+                  .put("count", 3)
+                  .put("enabled", false)
+                  .put("volume", 0.15)
+                  .put("snoozes", 0)
+                  .put("tone", "system")
+              : new JSONObject(existing.toString());
+      LinearLayout form = new LinearLayout(this);
+      form.setOrientation(LinearLayout.VERTICAL);
+      form.setPadding(dp(16), dp(8), dp(16), dp(8));
+      EditText name = new EditText(this);
+      name.setHint("Alarm name");
+      name.setContentDescription("Alarm name");
+      name.setSingleLine(true);
+      name.setText(a.getString("label"));
+      name.setFilters(
+          new android.text.InputFilter[] {new android.text.InputFilter.LengthFilter(80)});
+      form.addView(name);
+      Button time = new Button(this);
+      time.setText("Time: " + a.getString("time"));
+      form.addView(time);
+      time.setOnClickListener(
+          v -> {
+            String[] parts = a.optString("time").split(":");
+            new TimePickerDialog(
+                    this,
+                    (view, h, m) -> {
+                      try {
+                        a.put("time", String.format(java.util.Locale.ROOT, "%02d:%02d", h, m));
+                        time.setText("Time: " + a.optString("time"));
+                      } catch (Exception ignored) {
+                      }
+                    },
+                    Integer.parseInt(parts[0]),
+                    Integer.parseInt(parts[1]),
+                    android.text.format.DateFormat.is24HourFormat(this))
+                .show();
+          });
+      Spinner mode = select(form, "Schedule", new String[] {"repeat", "once"}, a.optString("mode"));
+      Button date = new Button(this);
+      date.setText("One-off date: " + a.optString("date"));
+      form.addView(date);
+      date.setOnClickListener(
+          v -> {
+            java.time.LocalDate d = java.time.LocalDate.parse(a.optString("date"));
+            new DatePickerDialog(
+                    this,
+                    (view, y, m, day) -> {
+                      try {
+                        a.put("date", java.time.LocalDate.of(y, m + 1, day).toString());
+                        date.setText("One-off date: " + a.optString("date"));
+                      } catch (Exception ignored) {
+                      }
+                    },
+                    d.getYear(),
+                    d.getMonthValue() - 1,
+                    d.getDayOfMonth())
+                .show();
+          });
+      TextView dayLabel = new TextView(this);
+      dayLabel.setText("Repeat days (used for repeat schedule)");
+      form.addView(dayLabel);
+      CheckBox[] days = new CheckBox[7];
+      String[] names = {
+        "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+      };
+      java.util.Set<Integer> selected = new java.util.HashSet<>();
+      JSONArray oldDays = a.getJSONArray("days");
+      for (int i = 0; i < oldDays.length(); i++) selected.add(oldDays.getInt(i));
+      for (int i = 0; i < 7; i++) {
+        days[i] = new CheckBox(this);
+        days[i].setText(names[i]);
+        days[i].setChecked(selected.contains(i));
+        days[i].setMinHeight(dp(48));
+        form.addView(days[i]);
+      }
+      Spinner type =
+          select(form, "Challenge", new String[] {"math", "quiz"}, a.optString("challenge"));
+      Spinner difficulty =
+          select(
+              form,
+              "Difficulty",
+              new String[] {"easy", "medium", "hard"},
+              a.optString("difficulty"));
+      Spinner count =
+          select(
+              form,
+              "Correct answers required",
+              new String[] {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"},
+              String.valueOf(a.optInt("count")));
+      TextView volumeLabel = new TextView(this);
+      volumeLabel.setText("Alarm volume: 0 to 50% of system alarm level");
+      form.addView(volumeLabel);
+      SeekBar volume = new SeekBar(this);
+      volume.setMax(50);
+      volume.setProgress((int) (100 * a.optDouble("volume", 0.15)));
+      volume.setContentDescription("Alarm volume percentage, maximum 50");
+      form.addView(volume);
+      CheckBox enabled = new CheckBox(this);
+      enabled.setText("Enable this phone alarm");
+      enabled.setChecked(a.optBoolean("enabled"));
+      enabled.setMinHeight(dp(48));
+      form.addView(enabled);
+      ScrollView scroll = new ScrollView(this);
+      scroll.addView(form);
+      AlertDialog dialog =
+          new AlertDialog.Builder(this)
+              .setTitle(existing == null ? "Add phone alarm" : "Edit phone alarm")
+              .setView(scroll)
+              .setNegativeButton("Cancel", null)
+              .setPositiveButton("Review save", null)
+              .create();
+      dialog.setOnShowListener(
+          d ->
+              dialog
+                  .getButton(AlertDialog.BUTTON_POSITIVE)
+                  .setOnClickListener(
+                      v -> {
+                        try {
+                          a.put("label", name.getText().toString().trim())
+                              .put("mode", mode.getSelectedItem())
+                              .put("challenge", type.getSelectedItem())
+                              .put("difficulty", difficulty.getSelectedItem())
+                              .put("count", Integer.parseInt(count.getSelectedItem().toString()))
+                              .put("enabled", enabled.isChecked())
+                              .put("volume", volume.getProgress() / 100.0)
+                              .put("snoozes", 0);
+                          JSONArray newDays = new JSONArray();
+                          for (int i = 0; i < 7; i++) if (days[i].isChecked()) newDays.put(i);
+                          a.put("days", newDays);
+                          AlarmDb.validate(a);
+                          if ("once".equals(a.getString("mode"))
+                              && ClockRules.next(
+                                      a.getString("id"),
+                                      a.getString("date"),
+                                      a.getString("time"),
+                                      false,
+                                      java.util.Set.of(),
+                                      System.currentTimeMillis(),
+                                      java.time.ZoneId.systemDefault(),
+                                      java.util.Set.of())
+                                  == null)
+                            throw new IllegalArgumentException("Choose a future date and time");
+                          JSONArray all = new JSONArray();
+                          try (AlarmDb db = new AlarmDb(this)) {
+                            for (JSONObject old : db.definitions())
+                              if (!old.getString("id").equals(a.getString("id"))) all.put(old);
+                          }
+                          all.put(a);
+                          dialog.dismiss();
+                          confirmDefinitions(all);
+                        } catch (Exception e) {
+                          name.setError(e.getMessage());
+                        }
+                      }));
+      dialog.show();
+    } catch (Exception e) {
+      feedback.setText("Editor unavailable: " + e.getMessage());
+    }
   }
 
   protected void onActivityResult(int request, int result, Intent data) {
@@ -275,30 +531,7 @@ public final class AlarmActivity extends Activity {
       if (imported.getInt("version") != 1)
         throw new IllegalArgumentException("Unsupported import version");
       JSONArray definitions = imported.getJSONArray("alarms");
-      new AlertDialog.Builder(this)
-          .setTitle("Replace this phone's alarm definitions?")
-          .setMessage(
-              "Imports "
-                  + definitions.length()
-                  + " definitions. Enabled definitions schedule exact phone alarms only when"
-                  + " capabilities are approved. Consumed occurrence history is preserved. No"
-                  + " permissions are granted by importing.")
-          .setNegativeButton("Cancel", null)
-          .setPositiveButton(
-              "Import and schedule",
-              (dialog, which) -> {
-                try (AlarmDb db = new AlarmDb(this)) {
-                  java.util.List<JSONObject> oldDefinitions = db.definitions();
-                  db.importDefinitions(definitions);
-                  for (JSONObject old : oldDefinitions)
-                    AlarmScheduler.cancel(this, old.getString("id"));
-                  AlarmScheduler.reconcile(this);
-                  render(true);
-                } catch (Exception e) {
-                  feedback.setText("Import failed; nothing new was armed: " + e.getMessage());
-                }
-              })
-          .show();
+      confirmDefinitions(definitions);
     } catch (Exception e) {
       feedback.setText("Import failed: " + e.getMessage());
     }

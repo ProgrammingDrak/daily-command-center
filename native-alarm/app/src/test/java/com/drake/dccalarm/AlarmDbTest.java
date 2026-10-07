@@ -126,4 +126,31 @@ public class AlarmDbTest {
       assertTrue(db.status().startsWith("Not armed:"));
     }
   }
+
+  @Test
+  public void revokedAccessAndBootTimeRecoveryClearSchedulesWithoutAudioOrLedgerLoss()
+      throws Exception {
+    try (AlarmDb db = new AlarmDb(c)) {
+      db.importDefinitions(new JSONArray().put(a));
+      db.scheduled("a", System.currentTimeMillis() + 600000, "a/2026-10-07");
+      db.mark("a/2026-10-06", "consumed");
+    }
+    org.robolectric.Shadows.shadowOf(c.getSystemService(android.app.AlarmManager.class))
+        .setCanScheduleExactAlarms(false);
+    AlarmReceiver receiver = new AlarmReceiver();
+    for (String action :
+        new String[] {
+          android.content.Intent.ACTION_LOCKED_BOOT_COMPLETED,
+          android.content.Intent.ACTION_TIMEZONE_CHANGED,
+          android.content.Intent.ACTION_TIME_CHANGED
+        }) receiver.onReceive(c, new android.content.Intent(action));
+    try (AlarmDb db = new AlarmDb(c)) {
+      assertEquals(0, db.definitions().get(0).optLong("nextAt"));
+      assertTrue(db.consumed().contains("a/2026-10-06"));
+      assertNull(db.active());
+      assertTrue(db.status().startsWith("Not armed:"));
+    }
+    assertNull(
+        org.robolectric.Shadows.shadowOf((android.app.Application) c).getNextStartedService());
+  }
 }

@@ -4,6 +4,47 @@
   const M = window.DCCAlarmModel, store = window.DCCAlarmStore;
   const button = document.getElementById('dcc-alarms-open');
   if (!button || !M || !store) return;
+  // Android owns delivery. Never start a parallel browser scheduler inside the shell.
+  const native = window.DCCNativeAlarms;
+  const nativeAvailable = native && typeof native.postMessage === 'function';
+  if (nativeAvailable || /DCCAndroid\//.test(navigator.userAgent)) {
+    let nativeStatus = nativeAvailable ? 'Open device alarms to check scheduling' : 'Bridge unavailable; use Device alarms in the app toolbar';
+    if (nativeAvailable) native.onmessage = event => {
+      try {
+        const reply = JSON.parse(event.data);
+        if (reply.version === 1 && reply.deviceLocal === true) {
+          nativeStatus = String(reply.status || 'Check device alarms');
+          button.textContent = 'Phone alarms · ' + nativeStatus;
+        }
+      } catch (_) { /* Native toolbar remains available if the bridge is unsupported. */ }
+    };
+    button.textContent = 'Phone alarms';
+    button.onclick = () => {
+      const body = document.createElement('div'); body.className = 'alarm-manager';
+      const description = document.createElement('p');
+      description.textContent = nativeStatus + '. Alarms are local to this phone, shared across DCC accounts, and continue after logout. Native scheduling works independently of this page. Browser alarms do not run inside this app.';
+      body.append(description);
+      const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Manage phone alarms';
+      open.disabled = !nativeAvailable;
+      open.onclick = () => native.postMessage(JSON.stringify({ action: 'open' }));
+      const review = document.createElement('button'); review.type = 'button'; review.textContent = 'Review this WebView’s saved definitions on phone';
+      review.disabled = !nativeAvailable;
+      const feedback = document.createElement('p'); feedback.setAttribute('role', 'status');
+      review.onclick = async () => {
+        try {
+          const saved = await store.transact();
+          if (!saved.alarms.length) { feedback.textContent = 'No definitions in this WebView. Create an alarm in Manage phone alarms. Your other browser’s storage is separate.'; return; }
+          native.postMessage(JSON.stringify({ action: 'review', alarms: saved.alarms }));
+          feedback.textContent = 'Review on the native screen. Nothing is transferred or armed until you save there.';
+        } catch (_) { feedback.textContent = 'Browser definitions unavailable. Manage phone alarms remains available.'; }
+      };
+      const actions = document.createElement('div'); actions.className = 'alarm-actions'; actions.append(open, review);
+      body.append(actions, feedback);
+      window.DCC.overlay.open({ title: 'Phone challenge alarms', body, anchor: button });
+    };
+    if (nativeAvailable) native.postMessage(JSON.stringify({ action: 'status' }));
+    return;
+  }
   let state = M.empty(Date.now()), panel = null, challenge = null, practice = null;
   let session = false, release = null, busy = false, saving = false, fatal = '', context = null;
   let audioGeneration = 0, lastSummary = '';
@@ -145,7 +186,7 @@
         const url = URL.createObjectURL(blob), link = document.createElement('a');
         link.href = url; link.download = 'dcc-alarm-definitions.json'; link.click();
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-        feedback.textContent = 'Definitions exported. Import and approve scheduling on the Android companion; this does not arm your phone.';
+        feedback.textContent = 'Definitions exported. Import and approve scheduling in the DCC Android app; this does not arm your phone.';
         return;
       }
       if (action === 'stop-sound') return stopAudio();
