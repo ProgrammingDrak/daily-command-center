@@ -5772,3 +5772,11 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .slot-exchange-result.error{color:#fca5a5}
 .slot-exchange-dialog.celebrate{animation:slotExchangePop .5s ease}
 @keyframes slotExchangePop{0%{transform:scale(1)}35%{transform:scale(1.025)}100%{transform:scale(1)}}
+
+/* Waiting check-in drafts use the shared modal/sheet lifecycle. */
+.waiting-checkin-form .delegated-modal-input{min-height:44px;font-size:16px}
+.waiting-checkin-form .delegated-modal-actions button{min-height:44px}
+.waiting-checkin-error{color:var(--red);font-size:13px}
+.waiting-checkin-error:empty{display:none}
+.waiting-checkin-note{white-space:pre-wrap;overflow-wrap:anywhere}
+.waiting-checkin-history{margin-top:12px;overflow-wrap:anywhere}

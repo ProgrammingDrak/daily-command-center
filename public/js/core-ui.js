@@ -81,7 +81,10 @@
     const opts = options || {};
     const kind = ["popover", "modal", "drawer", "sheet"].includes(opts.kind) ? opts.kind : "modal";
     const blocking = BLOCKING.has(kind);
-    if (blocking && activeBlocking) activeBlocking.close("replaced");
+    if (blocking && activeBlocking) {
+      activeBlocking.close("replaced");
+      if (activeBlocking) return activeBlocking;
+    }
 
     const opener = opts.anchor || document.activeElement;
     const overlay = document.createElement("div");
@@ -169,6 +172,7 @@
 
     function close(reason) {
       if (closed) return;
+      if (typeof opts.canClose === "function" && !opts.canClose(reason)) return;
       closed = true;
       overlay.classList.remove("open");
       document.removeEventListener("keydown", onKey, true);
