@@ -1689,7 +1689,7 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks/:id/reschedule", async (req, res) => {
     try {
       const { targetDate, parentStart, parentEnd, placement, userSetStart, _clientId } = req.body || {};
-      if (placement && ["whenever", "whenever_schedule", "pool_schedule"].includes(placement.kind)) {
+      if (placement && ["whenever", "whenever_schedule", "pool_schedule", "pool_date"].includes(placement.kind)) {
         if (req.body.reviewGuard) return res.status(400).json({error:"Review placements cannot move to Whenever"});
         if (placement.kind !== "whenever" && !isValidDate(targetDate)) return res.status(400).json({error:"Invalid targetDate"});
         const parent = await blockDB.getBlockIncludingDeleted(req.params.id);
