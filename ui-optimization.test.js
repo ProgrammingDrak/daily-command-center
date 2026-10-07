@@ -69,11 +69,11 @@ test("closing Loose Ends hides its workspace without a page refresh", () => {
 test("task details provide explicit read and edit controls", () => {
   const index = read("index.html");
   const details = read("public/js/features.js");
-  for (const label of ["overview", "notes", "subtasks", "history", "automation"]) {
+  for (const label of ["settings", "notes", "subtasks", "history", "automation"]) {
     assert.match(index, new RegExp(`data-am-panel="${label}"`));
   }
-  assert.doesNotMatch(index, /role="tablist" aria-label="Task details sections"/);
-  assert.match(index, /<summary>Task settings<\/summary>/);
+  assert.match(index, /role="tablist" aria-label="Task detail sections"/);
+  assert.doesNotMatch(index, /id="am-activity-entry"|class="am-disclosure"/);
   for (const id of ["add-modal-edit", "add-modal-save", "add-modal-cancel-edit", "add-modal-close"]) {
     assert.match(index, new RegExp(`id="${id}"`));
   }
