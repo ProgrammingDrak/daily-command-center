@@ -141,6 +141,7 @@ function openRadialMenu(anchorEl,items,opts){
     item.innerHTML='<span class="dri-icon">'+d.icon+'</span>';
     if(opts.fullCircle){
       item.classList.add("dest-radial-circle-item");
+      if(size<56)item.classList.add("dest-radial-compact-item");
       item.style.width=size+"px";item.style.height=size+"px";
       const caption=document.createElement("span");
       caption.className="dri-caption";caption.textContent=d.label;item.appendChild(caption);
