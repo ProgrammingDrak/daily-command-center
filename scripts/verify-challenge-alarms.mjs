@@ -62,6 +62,12 @@ try {
   check('opening alarm UI creates no audio', await page.evaluate(() => window.__audioCalls) === 0);
   await save(page,'Morning math'); await save(page,'Morning quiz','quiz');
   check('one-off definitions persist atomically', (await read(page)).alarms.length === 2);
+  const exported = page.waitForEvent('download');
+  await page.getByRole('button',{name:'Export definitions for Android',exact:true}).click();
+  const download = await exported; await download.saveAs(path.join(shots,'synthetic-android-definitions.json'));
+  const imported = JSON.parse(fs.readFileSync(path.join(shots,'synthetic-android-definitions.json'),'utf8'));
+  check('explicit native export contains definitions only and does not arm anything', imported.version === 1 && imported.alarms.length === 2 && !('runs' in imported) && (await read(page)).runs.length === 0);
+
   await page.locator('.dcc-overlay-body').evaluate(el=>el.scrollTop=0); await page.screenshot({path:shots+'/desktop-alarms.png'});
   await page.getByRole('button',{name:'Start visible session',exact:true}).click();
   await page.getByRole('button',{name:'Stop visible session',exact:true}).waitFor();
@@ -91,7 +97,7 @@ try {
   check('Escape restores focus to alarm opener', await page.locator('#dcc-alarms-open').evaluate(el=>el===document.activeElement));
   await page.locator('#dcc-alarms-open').click();
   const close = page.getByRole('button',{name:'Pause challenge and stop sound',exact:true});
-  await close.focus(); await page.keyboard.press('Shift+Tab');
+  await page.locator('.dcc-overlay.open').waitFor(); await close.focus(); await page.keyboard.press('Shift+Tab');
   check('Shift+Tab wraps inside challenge', await page.getByRole('button',{name:'Emergency stop · skip quiz',exact:true}).evaluate(el=>el===document.activeElement));
   await page.keyboard.press('Tab');
   check('Tab wraps inside challenge', await close.evaluate(el=>el===document.activeElement));

@@ -2,7 +2,7 @@
 
 Branch `feat/challenge-alarm`, based on `f845ad6`. Worktree: `.worktrees/feat-challenge-alarm`.
 
-This is a **browser prototype**, not a reliable wake-up alarm. No Android code, APK, background delivery, push service, production database write, deployment, or device permission grant is included. Sleep tracking and health analytics are outside this phase.
+The DCC web feature remains a **browser prototype**. An isolated native Android companion is now included in `native-alarm/`, with a verified unsigned APK build and simulated state tests. It has not been installed or tested on a phone. No production database write, deployment, push service, signing key, or device permission grant is included. Sleep tracking and health analytics are outside this phase.
 
 ## Existing platform and decision
 
@@ -10,7 +10,7 @@ DCC is Express with modular browser JavaScript, a standalone PWA manifest, and a
 
 Chrome throttles chained timers in hidden pages, in some cases to checks once per minute. There is no dependable wake-up contract for this browser implementation when locked, backgrounded, suspended, closed, or rebooted. We do not use web timers or network push as an Android wake-up mechanism. [Chrome timer documentation](https://developer.chrome.com/blog/timer-throttling-in-chrome-88).
 
-The recommended minimum mobile path is a small native Android companion with its own alarm/challenge screen and scheduler. DCC can continue to provide dashboard configuration, but the phone must persist and acknowledge each definition locally before DCC labels it scheduled on that phone. The alarm must work offline without a web session or server. This is an architecture recommendation; the native components have not been implemented or tested on a device.
+The recommended minimum mobile path is a small native Android companion with its own alarm/challenge screen and scheduler. DCC can continue to provide dashboard configuration, but the phone must persist and acknowledge each definition locally before DCC labels it scheduled on that phone. The alarm must work offline without a web session or server. The companion is implemented and builds as an unsigned APK; native OS/device delivery has not been tested. See [native companion](../native-alarm/README.md) for implemented behavior and remaining device checks.
 
 ## Prototype behavior
 
@@ -18,7 +18,7 @@ The recommended minimum mobile path is a small native Android companion with its
 - Up to 20 definitions: one-off local date/time, or selected weekdays; enable/disable, edit, and remove.
 - Math or number quizzes, three difficulty levels, 1–10 correct answers. The current question, progress, and definition snapshot persist together.
 - IndexedDB stores definitions, pending challenges, the occurrence ledger, and checkpoint in one transaction. A failed save stops scheduling and reports failure. Invalid stored data is preserved and fails closed.
-- A visible-page session starts only on an explicit button press. The Web Locks lease permits one scheduler per browser profile/origin. Unsupported or denied coordination disables scheduling. Closing/reloading stops the session. Definitions alone do not arm background alarms.
+- A visible-page session starts only on an explicit button press. The Web Locks lease permits one scheduler per browser profile/origin. Unsupported or denied coordination disables scheduling. Closing/reloading stops the session. Definitions alone do not arm browser background alarms. An explicit JSON export/import is available for the separate native companion; DCC never labels an export as phone scheduling acknowledgement.
 - One occurrence key per definition and local calendar date prevents duplicate ticks, repeat-hour duplicates, and clock-back replay. Different alarms due together queue; one challenge is displayed at a time. A correct answer count completes one occurrence, not future repeats. Emergency stop is recorded separately from completion.
 - Optional one five-minute snooze preserves quiz progress. Disabling/removing a definition cancels its pending/snoozed challenges. Editing a pending definition requires stopping it first.
 - Esc, Close, or backdrop pauses a saved challenge and stops sound. Reopen to resume. Emergency stop skips the quiz and consumes the occurrence. The quiz never traps the user into audio.
@@ -46,8 +46,8 @@ Before describing native delivery as supported, test real target phones: locked/
 
 Model tests: `node --test alarm-model.test.js` — 14 tests cover scheduling, enabled state, repeat weekdays, bad dates/counts, late/hidden/closed delivery, reload, duplicate ticks, backward/forward clocks, simultaneous definitions, invalid answers, completion, snooze bounds, emergency stop, DST gap/fold, timezone changes, and corrupt state.
 
-Final result: 21 browser checks passed, plus 42 model/relevant UI regression tests passed. Syntax, changed-file lint, and whitespace checks pass. The available shell runtime is Node 24.13.1; the package declares Node 20–22, so supported-runtime CI remains a shipping check.
+Final web result: 22 browser checks and 42 model/relevant UI regression tests pass on portable Node 22.20.0. Native result: unsigned API-35 APK builds, six Robolectric state/denial tests and nine pure-Java synthetic clock checks pass, and Android lint completes. No device alarms or audio ran. Syntax, changed-file lint, and whitespace checks pass.
 
 Browser QA uses the existing **database-free** `scripts/ui-review-server.mjs` on loopback port 8199, disposable headless Chrome profiles, a synthetic clock, and fully mocked audio. Screenshots and check results live outside the checkout in the task's `alarm-evidence/` folder. The QA script is included as `scripts/verify-challenge-alarms.mjs`; it rejects non-loopback review URLs, mocks all sound before page load, and never logs in or grants device permissions. Keyboard and ARIA semantics are verified; this does not substitute for a human screen-reader/TalkBack session.
 
-Nothing is deployed, merged, or written to the DCC production database. The feature needs product review and a native implementation/device-validation phase before it can be used as a wake-up alarm.
+Nothing is deployed, merged, or written to the DCC production database. The native companion needs signing/install approval and real-device validation before it can be relied on as a wake-up alarm. Native snooze is currently disabled; the optional bounded browser snooze remains prototype-only. Browser chime/pulse tones use the system alarm ringtone on the companion.

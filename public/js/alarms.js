@@ -122,7 +122,7 @@
     const body = document.createElement('div'); body.className = 'alarm-manager';
     body.innerHTML = `<p class="alarm-warning"><strong>Browser prototype · not a dependable wake-up alarm.</strong><br>Keep this page visible and your device awake. Locked, backgrounded, closed, rebooted, or suspended devices may miss alarms. Use your phone’s native alarm for waking up.</p>
       <div class="alarm-next"><span>Next alarm on this device</span><strong id="alarm-next"></strong><small>Local definitions only · no cloud sync · this browser profile shares alarms across DCC accounts.</small></div>
-      <p id="alarm-session-status" role="status"></p><div class="alarm-actions">${actionButton(session ? 'Stop visible session' : 'Start visible session', session ? 'stop-session' : 'start-session', fatal ? 'disabled' : '')}${actionButton('Resume saved challenge','resume', state.runs.some(r => r.status === 'ringing') ? '' : 'hidden')}</div>
+      <p id="alarm-session-status" role="status"></p><div class="alarm-actions">${actionButton('Export definitions for Android','export')} ${actionButton(session ? 'Stop visible session' : 'Start visible session', session ? 'stop-session' : 'start-session', fatal ? 'disabled' : '')}${actionButton('Resume saved challenge','resume', state.runs.some(r => r.status === 'ringing') ? '' : 'hidden')}</div>
       <p id="alarm-feedback" role="status" aria-live="polite"></p>
       <ul class="alarm-list">${state.alarms.map(a => `<li><div><strong>${esc(a.time)} · ${esc(a.label || 'Alarm')}</strong><small>${a.mode === 'once' ? esc(a.date) : a.days.map(d => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d]).join(', ')} · ${esc(a.challenge)} / ${esc(a.difficulty)} · ${a.count} answers${state.runs.some(r=>r.alarm.id===a.id) ? ' · challenge pending' : ''}</small></div><div class="alarm-actions">${actionButton(a.enabled ? 'Disable' : 'Enable','toggle',`data-id="${esc(a.id)}" aria-label="${a.enabled ? 'Disable' : 'Enable'} ${esc(a.label)}"`)}${actionButton('Edit','edit',`data-id="${esc(a.id)}"`)}${actionButton('Remove','remove',`data-id="${esc(a.id)}"`)}</div></li>`).join('') || '<li>No alarms yet. Add one below.</li>'}</ul>${formHTML(edit)}`;
     panel.update({ title: 'Clock & challenge alarms', body }); updateSummary();
@@ -140,6 +140,14 @@
       const target = event.target.closest('[data-action]'); if (!target) return;
       const action = target.dataset.action, id = target.dataset.id;
       const feedback = body.querySelector('#alarm-feedback');
+      if (action === 'export') {
+        const blob = new Blob([JSON.stringify({ version: 1, alarms: state.alarms }, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob), link = document.createElement('a');
+        link.href = url; link.download = 'dcc-alarm-definitions.json'; link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        feedback.textContent = 'Definitions exported. Import and approve scheduling on the Android companion; this does not arm your phone.';
+        return;
+      }
       if (action === 'stop-sound') return stopAudio();
       if (action === 'start-session') return startSession();
       if (action === 'stop-session') { endSession(); renderManager(); return; }
