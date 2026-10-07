@@ -751,19 +751,26 @@
     <div class="add-modal-body dcc-task-detail-flow">
       <p id="am-task-status" class="am-task-status" aria-live="polite"></p>
       <!-- Read-only details (description lives in Notes below) -->
-      <div class="am-det-meta" id="am-details-section" data-am-panel="overview" style="display:none"></div>
-      <div class="am-section" id="am-activity-entry" data-am-panel="overview"></div>
+      <div class="am-det-meta" id="am-details-section" style="display:none"></div>
       <div class="am-next"><span>Next step</span><p id="am-next-step" aria-live="polite">Start work on this task.</p></div>
       <div id="am-work-actions" class="am-work-actions" aria-label="Task execution"></div>
       <div id="am-time-summary" aria-label="Planned and actual time"></div>
+      <div class="am-detail-tabs" role="tablist" aria-label="Task detail sections">
+        <button type="button" id="am-tab-subtasks" role="tab" data-am-tab="subtasks" aria-controls="am-panel-subtasks" aria-selected="false" tabindex="-1">Items</button>
+        <button type="button" id="am-tab-notes" role="tab" data-am-tab="notes" aria-controls="am-panel-notes" aria-selected="false" tabindex="-1">Notes & sources</button>
+        <button type="button" id="am-tab-settings" role="tab" data-am-tab="settings" aria-controls="am-panel-settings" aria-selected="false" tabindex="-1">Task settings</button>
+        <button type="button" id="am-tab-history" role="tab" data-am-tab="history" aria-controls="am-panel-history" aria-selected="false" tabindex="-1">Time and history</button>
+        <button type="button" id="am-tab-automation" role="tab" data-am-tab="automation" aria-controls="am-panel-automation" aria-selected="false" tabindex="-1">Repeat and waiting</button>
+      </div>
+      <div id="am-panel-subtasks" class="am-detail-panel" role="tabpanel" aria-labelledby="am-tab-subtasks" data-am-panel="subtasks" tabindex="0" hidden>
       <!-- Combined items list -->
-      <div class="am-section" data-am-panel="subtasks">
+      <div class="am-section">
         <div class="am-section-label">Items <span id="am-items-count" style="opacity:0.5;font-weight:400">(0)</span></div>
         <div id="am-items-list"></div>
       </div>
 
       <!-- Add new item -->
-      <div class="am-add-section" data-am-panel="subtasks">
+      <div class="am-add-section">
         <div class="am-add-row">
           <input id="am-item-input" type="text" placeholder="Add item..." aria-label="New subtask or action item">
           <select id="am-item-type" aria-label="Item type" class="am-type-select">
@@ -775,22 +782,25 @@
         </div>
         <div id="am-trivial-picker" style="display:none"></div>
       </div>
+      </div>
+      <div id="am-panel-notes" class="am-detail-panel" role="tabpanel" aria-labelledby="am-tab-notes" data-am-panel="notes" tabindex="0" hidden>
       <!-- Notes section -->
-      <div class="am-section" data-am-panel="notes">
+      <div class="am-section">
         <div class="am-section-label">Notes</div>
         <div id="am-source-references" class="task-source-rail" aria-label="Task sources"></div>
         <form id="am-source-form"><label>Original link <input name="url" type="url" required placeholder="https://…"></label><label>Name <input name="name" required maxlength="255" placeholder="Original filename or source name"></label><label>Type <select name="kind"><option value="link">Link</option><option value="email">Email</option><option value="slack">Slack</option><option value="image">Image</option><option value="file">File</option></select></label><button type="submit">Attach link</button><p role="status" id="am-source-status"></p></form>
         <div id="am-notes-block-editor" class="dm-notes-editor"></div>
       </div>
 
-      <details class="am-disclosure"><summary>Task settings</summary>
+      </div>
+      <div id="am-panel-settings" class="am-detail-panel" role="tabpanel" aria-labelledby="am-tab-settings" data-am-panel="settings" tabindex="0" hidden>
       <!-- Tags section -->
-      <div class="am-section" id="am-tag-section" data-am-panel="overview">
+      <div class="am-section" id="am-tag-section">
         <div class="am-section-label">Tags</div>
         <div id="am-tag-picker" class="am-tag-picker-wrap"></div>
         <div id="am-recording-review" style="margin-top:10px;display:none"></div>
       </div>
-      <div class="am-section" data-am-panel="overview">
+      <div class="am-section">
         <div class="am-section-label">Commute time</div>
         <div class="am-commute-row">
           <label class="am-commute-field"><span>There</span><input id="am-commute-to-input" type="number" min="0" step="5" inputmode="numeric" placeholder="Min"></label>
@@ -798,16 +808,16 @@
           <span class="am-commute-hint" id="am-commute-hint">No leave window</span>
         </div>
       </div>
-      </details>
-      <details class="am-disclosure"><summary>Time and history</summary>
-      <div class="am-section" id="am-work-history-section" data-am-panel="history">
+      </div>
+      <div id="am-panel-history" class="am-detail-panel" role="tabpanel" aria-labelledby="am-tab-history" data-am-panel="history" tabindex="0" hidden>
+      <div class="am-section" id="am-work-history-section">
         <div class="am-section-label">Work history</div>
         <div id="am-work-history" class="am-work-history"></div>
       </div>
 
-      </details>
-      <details class="am-disclosure"><summary>Repeat and waiting</summary>
-      <div class="am-section dcc-task-automation" data-am-panel="automation">
+      </div>
+      <div id="am-panel-automation" class="am-detail-panel" role="tabpanel" aria-labelledby="am-tab-automation" data-am-panel="automation" tabindex="0" hidden>
+      <div class="am-section dcc-task-automation">
         <div class="am-section-label">Automation</div>
         <p>Convert this task into repeat work or a waiting responsibility.</p>
         <div class="dcc-task-automation-actions">
@@ -815,7 +825,7 @@
           <button class="dm-btn-cancel am-repeat-btn" id="add-modal-delegated" type="button">Mark waiting</button>
         </div>
       </div>
-      </details>
+      </div>
     </div>
     <div class="add-modal-footer">
       <button class="dm-btn-cancel" id="add-modal-done" type="button">Close</button>

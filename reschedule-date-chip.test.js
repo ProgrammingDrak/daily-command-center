@@ -66,7 +66,8 @@ function makeEl(tag) {
     classList: {
       add(c) { el.className = (el.className + " " + c).trim(); },
       remove(c) { el.className = el.className.split(/\s+/).filter(x => x && x !== c).join(" "); },
-      contains(c) { return el.className.split(/\s+/).includes(c); }
+      contains(c) { return el.className.split(/\s+/).includes(c); },
+      toggle(c, on) { if(on) this.add(c); else this.remove(c); }
     },
     set innerHTML(v) { el._html = String(v); el._stubs.clear(); },
     get innerHTML() { return el._html; },
@@ -148,6 +149,7 @@ function makeContext(overrides) {
     escHtml: (s) => String(s),
     scheduled: [{ id: "t1", title: "Throw together the pool table", start: "09:15", end: "10:15" }],
     _actualTodayStr: () => "2026-09-02",
+    _actualDateStr: offset => offset ? "2026-09-03" : "2026-09-02",
     __tomorrowDate: "2026-09-03",
     _resolvedTodayDate: () => "2026-09-02",
     _resolvedTomorrowDate: () => "2026-09-03",
@@ -606,4 +608,18 @@ test("the slots winnings menu keeps its own guard", () => {
 
   fire({ target: { inMenu: true, closest: () => null } });
   assert.equal(ctx.window.__closes, 1, "a click on the menu itself is not outside either");
+});
+
+
+test("preset picks populate the calendar value before invoking the pick writer", async () => {
+  let picked;
+  const ctx = makeContext();
+  const { pop } = await openPopover(ctx, { mode: "pick", onPick: date => {
+    picked = date;
+    assert.equal(pop.querySelector(".resched-date-input").value, date);
+  } });
+  const tomorrow = pop.querySelectorAll(".resched-btn").find(button => button.dataset.target === "tomorrow");
+  tomorrow.dispatchEvent({ type: "click", stopPropagation() {} });
+  assert.equal(picked, "2026-09-03");
+  assert.equal(tomorrow.getAttribute("aria-pressed"), "true");
 });

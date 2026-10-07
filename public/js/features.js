@@ -228,6 +228,7 @@ function _setAddModalControlsEditable(modal, editing) {
   var body = modal && modal.querySelector('.add-modal-body');
   if (!body) return;
   body.querySelectorAll('input, textarea, select, button, [contenteditable]').forEach(function(control) {
+    if (control.matches('[data-am-tab]')) return;
     var saved = _addModalControlState.get(control);
     if (!saved) {
       saved = {
@@ -534,8 +535,7 @@ function openAddModal(taskId, taskTitle) {
   taskOverlay.classList.add('open');
   taskOverlay.setAttribute('aria-hidden', 'false');
   _setAddModalPageInert(taskOverlay, true);
-  taskOverlay.querySelectorAll('.am-disclosure').forEach(function(section) { section.open = false; });
-  selectAddModalTab('overview');
+  selectAddModalTab('subtasks');
   if(window.DCCWorkSessions&&typeof window.DCCWorkSessions.renderHistory==='function')window.DCCWorkSessions.renderHistory(_addModalBlockId);
   // Clicking a task IS the edit gesture: the modal opens ready to type, so nobody
   // has to find an "Edit" button first. Read mode still exists -- Save and Cancel
@@ -557,6 +557,7 @@ function openAddModal(taskId, taskTitle) {
 function selectAddModalTab(tabId) {
   var modal = document.querySelector('#add-modal-overlay .add-modal');
   if (!modal) return;
+  if (tabId === 'overview') tabId = 'subtasks';
   modal.querySelectorAll('[data-am-tab]').forEach(function(btn) {
     var active = btn.dataset.amTab === tabId;
     btn.classList.toggle('active', active);
@@ -564,13 +565,7 @@ function selectAddModalTab(tabId) {
     btn.tabIndex = active ? 0 : -1;
   });
   modal.querySelectorAll('[data-am-panel]').forEach(function(panel) {
-    // Keep the existing section-routing API for integrations (including activity
-    // records), while presenting one readable flow instead of hiding useful work.
-    panel.hidden = false;
-    if (tabId !== 'overview' && panel.dataset.amPanel === tabId) {
-      var disclosure = panel.closest('details');
-      if (disclosure) disclosure.open = true;
-    }
+    panel.hidden = panel.dataset.amPanel !== tabId;
   });
 }
 
@@ -911,10 +906,10 @@ document.addEventListener('DOMContentLoaded', function() {
   document.querySelectorAll('[data-am-tab]').forEach(function(btn) {
     btn.addEventListener('click', function() { selectAddModalTab(btn.dataset.amTab); });
     btn.addEventListener('keydown', function(e) {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
       var tabs = Array.from(document.querySelectorAll('[data-am-tab]'));
       var current = tabs.indexOf(btn);
-      var next = e.key === 'ArrowRight' ? (current + 1) % tabs.length : (current - 1 + tabs.length) % tabs.length;
+      var next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : e.key === 'ArrowRight' ? (current + 1) % tabs.length : (current - 1 + tabs.length) % tabs.length;
       e.preventDefault();
       selectAddModalTab(tabs[next].dataset.amTab);
       tabs[next].focus();
