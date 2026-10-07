@@ -824,10 +824,24 @@ test("saving a check-in atomically logs history and one completed current-day ta
   waiting.properties.linkedBlockId = task.id;
   waiting.properties.notes = "Keep this context";
   const calls = [];
+  let transactionClient;
+  const connect = ctx.pool.connect;
+  ctx.pool.connect = async () => { transactionClient = await connect(); return transactionClient; };
   const read = ctx.blockDB.getBlockIncludingDeleted;
-  ctx.blockDB.getBlockIncludingDeleted = async (id, client, locked) => { calls.push({ client, locked }); return read(id); };
+  ctx.blockDB.getBlockIncludingDeleted = async (id, client, locked) => {
+    assert.equal(client, transactionClient);
+    calls.push({ client, locked });
+    return read(id);
+  };
+  const ensureRoot = ctx.blockDB.ensureDayRoot;
+  ctx.blockDB.ensureDayRoot = async (date, userId, workspaceId, client) => {
+    assert.equal(client, transactionClient);
+    return ensureRoot(date, userId, workspaceId);
+  };
   const create = ctx.blockDB.createBlock;
-  ctx.blockDB.createBlock = async (input, client) => { assert.ok(client); return create(input); };
+  ctx.blockDB.createBlock = async (input, client) => { assert.equal(client, transactionClient); return create(input); };
+  const update = ctx.blockDB.updateBlock;
+  ctx.blockDB.updateBlock = async (id, patch, client) => { assert.equal(client, transactionClient); return update(id, patch); };
   const body = { cycleKey: "waiting:waiting-1:" + TODAY, completedAt: "2026-08-15T02:00:00Z", nextCheckInDate: "2026-08-20", expectedCheckInCount: 0, note: "Sent Slack ping; no reply" };
   const result = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", body);
   assert.equal(result.status, 200);

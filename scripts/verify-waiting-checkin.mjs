@@ -1,3 +1,4 @@
+/* global window, document, Event, historyForTask */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +47,17 @@ for (const width of [1280, 390, 320]) {
     window.historyForTask=checkInHistoryForTask;
     document.getElementById('opener').onclick=()=>{window.outcome='pending';openCheckIn('wait-1').then(result=>window.outcome=result)};
   ` });
+  const replacement = await page.evaluate(()=>{
+    const first=window.DCC.overlay.open({title:'Optional setup'});
+    first.close('setup-chosen');
+    const second=window.DCC.overlay.open({title:'Chosen setup'});
+    const different=second!==first;
+    const title=second.el.querySelector('.dcc-overlay-title').textContent;
+    second.close('fixture-done');
+    return {different,title};
+  });
+  assert.deepEqual(replacement,{different:true,title:'Chosen setup'},'opening during close animation creates the requested overlay');
+  await page.locator('.dcc-overlay').waitFor({state:'detached'});
   await page.click('#opener');
   assert.equal(await page.locator('.dcc-overlay').getAttribute('data-overlay-kind'), width <= 600 ? 'sheet' : 'modal');
   assert.equal(await page.locator('#wci-date').inputValue(), '2026-10-14');
