@@ -12,6 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="DCC">
 <link rel="stylesheet" href="/public/css/tokens.css?v=tokens-1">
 <link rel="stylesheet" href="/public/css/core-ui.css?v=core-ui-1">
+<link rel="stylesheet" href="/public/css/alarms.css?v=alarms-1">
 <link rel="stylesheet" href="/public/css/dashboard.css">
 <link rel="stylesheet" href="/public/css/meeting-reviews.css">
 <link rel="stylesheet" href="/public/css/task-library.css?v=task-library-1">
@@ -132,6 +133,7 @@
       </button>
     </div>
     <div class="date-picker-drop" id="date-picker-drop" style="display:none"></div>
+    <button class="admin-link alarm-clock-button" id="dcc-alarms-open" type="button" aria-haspopup="dialog">Clock &amp; alarms</button>
   </div>
   <div style="display:flex;align-items:center;gap:10px">
     <a class="admin-link" href="/admin" title="Open admin activity">Admin</a>
@@ -2015,6 +2017,9 @@
 <!-- day-context.js: the one day-context + free-slot engine (window.DCC.getDayContext/findSlot); must load before state.js/schedule.js consume it -->
 <script src="/public/js/day-context.js?v=day-context-2"></script>
 <script src="/public/js/core-ui.js?v=core-ui-1"></script>
+<script src="/public/js/alarm-model.js?v=alarms-1"></script>
+<script src="/public/js/alarm-store.js?v=alarms-1"></script>
+<script src="/public/js/alarms.js?v=alarms-1"></script>
 <script src="/public/js/collection.js?v=dcc-ui-1"></script>
 <script src="/public/js/block-editor.js"></script>
 <script src="/public/js/data.js"></script>

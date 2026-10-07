@@ -1,0 +1,26 @@
+.alarm-manager, .alarm-challenge { font-family: var(--font-sans); font-size: var(--fs-md); line-height: var(--leading-body); }
+.alarm-warning { padding: var(--sp-3); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--r-md); background: var(--surface-raised); }
+.alarm-next { display: grid; gap: var(--sp-1); padding: var(--sp-4); background: var(--surface-raised); border-radius: var(--r-lg); }
+.alarm-next strong { font-size: var(--fs-lg); }
+.alarm-next small, .alarm-list small, .alarm-hint { color: var(--text-muted); font-size: var(--fs-xs); }
+.alarm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+.alarm-form { display: grid; gap: var(--sp-3); }
+.alarm-manager label, .alarm-challenge label { display: grid; gap: var(--sp-1); }
+.alarm-manager input:not([type=checkbox]), .alarm-manager select, .alarm-challenge input { width: 100%; box-sizing: border-box; min-height: 44px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-raised); color: var(--ink); padding: var(--sp-2); font: inherit; }
+.alarm-manager button, .alarm-challenge button { min-height: 44px; border: 1px solid var(--line); border-radius: var(--r-md); color: var(--ink); background: var(--surface-raised); padding: var(--sp-2) var(--sp-3); font: inherit; cursor: pointer; }
+.alarm-manager button:disabled, .alarm-challenge button:disabled { opacity: .5; cursor: default; }
+.alarm-manager :focus-visible, .alarm-challenge :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.alarm-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.alarm-days { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.alarm-days label, .alarm-manager .alarm-check { display: flex; align-items: center; gap: var(--sp-2); min-height: 44px; }
+.alarm-days input, .alarm-check input { width: 20px; height: 20px; }
+.alarm-form fieldset { border: 1px solid var(--line); border-radius: var(--r-md); }
+.alarm-list { list-style: none; padding: 0; display: grid; gap: var(--sp-2); }
+.alarm-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-3) 0; border-bottom: 1px solid var(--line); }
+.alarm-list small { display: block; }
+.alarm-question { font-size: var(--fs-2xl); font-weight: 600; margin: var(--sp-6) 0; }
+.alarm-challenge form { display: grid; gap: var(--sp-3); }
+.alarm-challenge [data-action=emergency] { border-color: var(--danger, #ef4444); }
+.alarm-clock-button { max-width: 320px; min-height: 44px; margin-top: var(--sp-2); white-space: normal; text-align: left; }
+.alarm-manager [hidden] { display: none !important; }
+@media (max-width: 480px) { .alarm-grid { grid-template-columns: 1fr; } .alarm-clock-button { width: 100%; max-width: none; } }
