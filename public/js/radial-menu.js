@@ -22,12 +22,16 @@
 //                    near the screen edge still shows the whole fan
 //     backdrop,       false keeps the fan non-modal so a nearby form remains
 //                    interactive. Defaults to true.
+//     fullCircle,   distribute items around 360 degrees with captions inside
+//                   touch targets and clamp the whole ring 16px from edges.
+//                   Scroll or viewport resize dismisses the anchored menu.
 //     onClose
 //   }
 
 let _radialTrigger=null;
 let _radialOnClose=null;
 let _radialEscHandler=null;
+let _radialViewportHandler=null;
 
 // Grow the circle so neighbouring icons stay legible. n items spread across
 // (a1−a0)° sit 2R·sin(Δθ/2) apart, so when that chord drops below an icon's
@@ -48,11 +52,16 @@ function _radialFitRadius(baseR,n,a0,a1,minChord,maxFrac){
 }
 
 function closeRadialMenu(){
-  document.querySelectorAll(".dest-radial-backdrop,.dest-radial-item,.dest-radial-label").forEach(el=>el.remove());
+  document.querySelectorAll(".dest-radial-backdrop,.dest-radial-item,.dest-radial-label,.dest-radial-cancel").forEach(el=>el.remove());
   const trigger=_radialTrigger;
   if(trigger){trigger.classList.remove("open");trigger.setAttribute("aria-expanded","false");_radialTrigger=null;}
   if(trigger&&trigger.isConnected&&typeof trigger.focus==="function")trigger.focus({preventScroll:true});
   if(_radialEscHandler){document.removeEventListener("keydown",_radialEscHandler);_radialEscHandler=null;}
+  if(_radialViewportHandler){
+    window.removeEventListener("resize",_radialViewportHandler);
+    document.removeEventListener("scroll",_radialViewportHandler,true);
+    _radialViewportHandler=null;
+  }
   if(_radialOnClose){const cb=_radialOnClose;_radialOnClose=null;try{cb()}catch(e){}}
 }
 
@@ -71,7 +80,7 @@ function openRadialMenu(anchorEl,items,opts){
     document.body.appendChild(backdrop);
   }
   const rect=anchorEl.getBoundingClientRect();
-  const cx=rect.left+rect.width/2;
+  let cx=rect.left+rect.width/2;
   let cy=rect.top+rect.height/2;
   const baseR=opts.r||104,labelGap=opts.labelGap==null?46:opts.labelGap,n=items.length;
   // Fan upward unless the trigger sits too close to the top of the viewport.
@@ -81,14 +90,23 @@ function openRadialMenu(anchorEl,items,opts){
   // Size the circle to the crowd: a tight arc with many items fans out wider so
   // the 44px icons don't overlap (clampY below uses the grown R so an edge
   // trigger still shows the whole fan).
-  const R=_radialFitRadius(baseR,n,a0,a1,58);
+  const size=opts.fullCircle?(window.innerWidth<=480?60:64):44;
+  const R=opts.fullCircle?Math.min(baseR,Math.max(0,(Math.min(window.innerWidth,window.innerHeight)-32-size)/2)):_radialFitRadius(baseR,n,a0,a1,58);
+  if(opts.fullCircle){
+    const inset=R+size/2+16;
+    cx=Math.max(inset,Math.min(cx,window.innerWidth-inset));
+    cy=Math.max(inset,Math.min(cy,window.innerHeight-inset));
+    _radialViewportHandler=closeRadialMenu;
+    window.addEventListener("resize",_radialViewportHandler);
+    document.addEventListener("scroll",_radialViewportHandler,true);
+  }
   // Above ~6 items even a roomy fan crowds the labels near the arc's apexes;
   // stagger their radii so neighbouring pills don't collide.
   const stagger=opts.labelStagger||n>6;
-  if(opts.clampY)cy=Math.max(R+56,Math.min(cy,window.innerHeight-R-56));
+  if(opts.clampY&&!opts.fullCircle)cy=Math.max(R+56,Math.min(cy,window.innerHeight-R-56));
   const buttons=[];
   items.forEach((d,i)=>{
-    const ang=(a0+(a1-a0)*(n===1?0.5:i/(n-1)))*Math.PI/180;
+    const ang=(opts.fullCircle?a0+360*i/n:a0+(a1-a0)*(n===1?0.5:i/(n-1)))*Math.PI/180;
     let x=cx+R*Math.cos(ang);let y=cy+R*Math.sin(ang);
     x=Math.max(30,Math.min(x,window.innerWidth-30));
     y=Math.max(30,Math.min(y,window.innerHeight-30));
@@ -98,7 +116,13 @@ function openRadialMenu(anchorEl,items,opts){
     if(d.title)item.title=d.title;
     if(d.label)item.setAttribute("aria-label",d.label);
     item.innerHTML='<span class="dri-icon">'+d.icon+'</span>';
-    item.style.left=(cx-22)+"px";item.style.top=(cy-22)+"px";
+    if(opts.fullCircle){
+      item.classList.add("dest-radial-circle-item");
+      item.style.width=size+"px";item.style.height=size+"px";
+      const caption=document.createElement("span");
+      caption.className="dri-caption";caption.textContent=d.label;item.appendChild(caption);
+    }
+    item.style.left=(cx-size/2)+"px";item.style.top=(cy-size/2)+"px";
     // Label rides just past its item along the same spoke, so labels fan with
     // the items instead of colliding at the arc's apex.
     const lr=R+labelGap+((stagger&&i%2)?22:0);
@@ -107,12 +131,12 @@ function openRadialMenu(anchorEl,items,opts){
     const lbl=document.createElement("span");
     lbl.className="dest-radial-label";lbl.textContent=d.label;
     lbl.style.left=lx+"px";lbl.style.top=ly+"px";
-    document.body.appendChild(item);document.body.appendChild(lbl);
+    document.body.appendChild(item);if(!opts.fullCircle)document.body.appendChild(lbl);
     requestAnimationFrame(()=>{
       item.style.transitionDelay=(i*28)+"ms";
       lbl.style.transitionDelay=(60+i*28)+"ms";
       item.classList.add("out");lbl.classList.add("out");
-      item.style.left=(x-22)+"px";item.style.top=(y-22)+"px";
+      item.style.left=(x-size/2)+"px";item.style.top=(y-size/2)+"px";
     });
     item.addEventListener("click",e=>{
       e.stopPropagation();
@@ -120,6 +144,12 @@ function openRadialMenu(anchorEl,items,opts){
       if(typeof d.onPick==="function")d.onPick(d,anchorEl);
     });
   });
+  if(opts.fullCircle){
+    const cancel=document.createElement("button");
+    cancel.type="button";cancel.className="dest-radial-cancel";
+    cancel.textContent="Cancel";cancel.style.left=cx+"px";cancel.style.top=cy+"px";
+    cancel.addEventListener("click",closeRadialMenu);document.body.appendChild(cancel);buttons.push(cancel);
+  }
   if(buttons[0])buttons[0].focus({preventScroll:true});
   _radialEscHandler=function(e){
     if(e.key==="Escape"){e.preventDefault();e.stopPropagation();closeRadialMenu();return;}

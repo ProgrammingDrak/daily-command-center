@@ -5869,3 +5869,10 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 @media(max-width:760px){
   .whenever-row.it-list-item .it-list-meta > span,.whenever-row.it-list-item .it-list-meta > .btn-schedule,.whenever-row.it-list-item .it-list-meta > .detail-action-link{display:inline-flex}
 }
+
+/* Task actions form a complete ring; captions stay inside each touch target. */
+.dest-radial-circle-item{flex-direction:column;gap:2px;padding:5px;font-size:16px;line-height:1}
+.dest-radial-circle-item .dri-caption{font-family:inherit;font-size:9px;font-weight:600;line-height:1.15;text-align:center;overflow-wrap:normal}
+.dest-radial-circle-item:focus-visible,.dest-radial-cancel:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.dest-radial-cancel{position:fixed;z-index:20001;transform:translate(-50%,-50%);min-width:60px;min-height:44px;border-radius:22px;border:1px solid var(--border);background:var(--card);color:var(--text);font:inherit;font-size:11px;cursor:pointer}
+@media(prefers-reduced-motion:reduce){.dest-radial-item,.dest-radial-label{transition:none!important}}

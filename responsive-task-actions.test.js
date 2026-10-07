@@ -11,6 +11,7 @@ function radialLabels(meeting) {
   const start = scheduleSource.indexOf("function openTaskNotes");
   const end = scheduleSource.indexOf("// Sub-fan:", start);
   const context = {
+    window: {},
     isMeeting: () => meeting,
     now: () => 0,
     pt: () => 1,
@@ -26,7 +27,8 @@ function radialLabels(meeting) {
 test("compact task radial contains contextual actions only", () => {
   const labels = radialLabels(false);
   assert.ok(!labels.includes("Complete without notes"));
-  assert.deepEqual(labels, ["Change task…", "Lock"]);
+  assert.deepEqual(labels, ["Subtask…", "Unscheduled", "Convert…", "Delegate / block", "Blocked by task", "Repeat", "Solo", "Whenever", "Lock"]);
+  assert.ok(!labels.includes("Back"));
 });
 
 test("compact meeting radial keeps Prep without duplicate task-bar actions", () => {
