@@ -39,7 +39,7 @@ public final class AlarmActivity extends Activity {
       try {
         confirmDefinitions(new JSONArray(proposed));
       } catch (Exception e) {
-        feedback.setText("Invalid definitions");
+        feedback.setText(getString(R.string.ui_invalid_definitions_2d98b));
       }
     }
   }
@@ -228,7 +228,8 @@ public final class AlarmActivity extends Activity {
           16);
     } catch (Exception e) {
       shown = "";
-      if (feedback != null) feedback.setText("Local state failed: " + e.getMessage());
+      if (feedback != null)
+        feedback.setText(getString(R.string.local_state_failed, e.getMessage()));
     }
   }
 
@@ -242,7 +243,7 @@ public final class AlarmActivity extends Activity {
     TextView question = text(questions.getJSONObject(index).getString("prompt"), 26);
     EditText answer = new EditText(this);
     answer.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-    answer.setHint("Whole-number answer");
+    answer.setHint(getString(R.string.ui_whole_number_answer_38003));
     answer.setContentDescription("Answer to " + question.getText());
     answer.setImeOptions(EditorInfo.IME_ACTION_DONE);
     body.addView(answer);
@@ -261,7 +262,7 @@ public final class AlarmActivity extends Activity {
               answer.selectAll();
             }
           } catch (Exception e) {
-            feedback.setText("Answer was not saved: " + e.getMessage());
+            feedback.setText(getString(R.string.answer_not_saved, e.getMessage()));
           }
         };
     answer.setOnEditorActionListener(
@@ -289,11 +290,11 @@ public final class AlarmActivity extends Activity {
 
   private void confirmDefinitions(JSONArray definitions) {
     if (definitions.length() > 20) {
-      feedback.setText("Maximum 20 phone alarms");
+      feedback.setText(getString(R.string.ui_maximum_20_phone_alarms_4c6d7));
       return;
     }
     new AlertDialog.Builder(this)
-        .setTitle("Save this phone's alarm definitions?")
+        .setTitle(getString(R.string.ui_save_this_phone_s_alarm_definitions_b3e9c))
         .setMessage(
             "Replaces this phone's definitions with "
                 + definitions.length()
@@ -311,7 +312,7 @@ public final class AlarmActivity extends Activity {
                 AlarmScheduler.reconcile(this);
                 render(true);
               } catch (Exception e) {
-                feedback.setText("Save failed: " + e.getMessage());
+                feedback.setText(getString(R.string.save_failed, e.getMessage()));
               }
             })
         .show();
@@ -365,15 +366,15 @@ public final class AlarmActivity extends Activity {
       form.setOrientation(LinearLayout.VERTICAL);
       form.setPadding(dp(16), dp(8), dp(16), dp(8));
       EditText name = new EditText(this);
-      name.setHint("Alarm name");
-      name.setContentDescription("Alarm name");
+      name.setHint(getString(R.string.ui_alarm_name_c337b));
+      name.setContentDescription(getString(R.string.ui_alarm_name_c337b));
       name.setSingleLine(true);
       name.setText(a.getString("label"));
       name.setFilters(
           new android.text.InputFilter[] {new android.text.InputFilter.LengthFilter(80)});
       form.addView(name);
       Button time = new Button(this);
-      time.setText("Time: " + a.getString("time"));
+      time.setText(getString(R.string.time_label, a.getString("time")));
       form.addView(time);
       time.setOnClickListener(
           v -> {
@@ -383,7 +384,7 @@ public final class AlarmActivity extends Activity {
                     (view, h, m) -> {
                       try {
                         a.put("time", String.format(java.util.Locale.ROOT, "%02d:%02d", h, m));
-                        time.setText("Time: " + a.optString("time"));
+                        time.setText(getString(R.string.time_label, a.optString("time")));
                       } catch (Exception ignored) {
                       }
                     },
@@ -394,7 +395,7 @@ public final class AlarmActivity extends Activity {
           });
       Spinner mode = select(form, "Schedule", new String[] {"repeat", "once"}, a.optString("mode"));
       Button date = new Button(this);
-      date.setText("One-off date: " + a.optString("date"));
+      date.setText(getString(R.string.date_label, a.optString("date")));
       form.addView(date);
       date.setOnClickListener(
           v -> {
@@ -404,7 +405,7 @@ public final class AlarmActivity extends Activity {
                     (view, y, m, day) -> {
                       try {
                         a.put("date", java.time.LocalDate.of(y, m + 1, day).toString());
-                        date.setText("One-off date: " + a.optString("date"));
+                        date.setText(getString(R.string.date_label, a.optString("date")));
                       } catch (Exception ignored) {
                       }
                     },
@@ -414,7 +415,7 @@ public final class AlarmActivity extends Activity {
                 .show();
           });
       TextView dayLabel = new TextView(this);
-      dayLabel.setText("Repeat days (used for repeat schedule)");
+      dayLabel.setText(getString(R.string.ui_repeat_days_used_for_repeat_schedule_504c3));
       form.addView(dayLabel);
       CheckBox[] days = new CheckBox[7];
       String[] names = {
@@ -445,15 +446,15 @@ public final class AlarmActivity extends Activity {
               new String[] {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"},
               String.valueOf(a.optInt("count")));
       TextView volumeLabel = new TextView(this);
-      volumeLabel.setText("Alarm volume: 0 to 50% of system alarm level");
+      volumeLabel.setText(getString(R.string.ui_alarm_volume_0_to_50_of_system_alarm_level_fbdd2));
       form.addView(volumeLabel);
       SeekBar volume = new SeekBar(this);
       volume.setMax(50);
       volume.setProgress((int) (100 * a.optDouble("volume", 0.15)));
-      volume.setContentDescription("Alarm volume percentage, maximum 50");
+      volume.setContentDescription(getString(R.string.ui_alarm_volume_percentage_maximum_50_61d5b));
       form.addView(volume);
       CheckBox enabled = new CheckBox(this);
-      enabled.setText("Enable this phone alarm");
+      enabled.setText(getString(R.string.ui_enable_this_phone_alarm_d4925));
       enabled.setChecked(a.optBoolean("enabled"));
       enabled.setMinHeight(dp(48));
       form.addView(enabled);
@@ -507,11 +508,12 @@ public final class AlarmActivity extends Activity {
                           confirmDefinitions(all);
                         } catch (Exception e) {
                           name.setError(e.getMessage());
+                          name.requestFocus();
                         }
                       }));
       dialog.show();
     } catch (Exception e) {
-      feedback.setText("Editor unavailable: " + e.getMessage());
+      feedback.setText(getString(R.string.editor_unavailable, e.getMessage()));
     }
   }
 
@@ -533,7 +535,7 @@ public final class AlarmActivity extends Activity {
       JSONArray definitions = imported.getJSONArray("alarms");
       confirmDefinitions(definitions);
     } catch (Exception e) {
-      feedback.setText("Import failed: " + e.getMessage());
+      feedback.setText(getString(R.string.import_failed, e.getMessage()));
     }
   }
 }

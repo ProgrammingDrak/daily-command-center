@@ -1,6 +1,6 @@
 # Daily Command Center Android app — challenge alarms, phase one
 
-One Android application contains DCC's existing remotely loaded dashboard and a native, offline alarm scheduler/challenge screen. `native-alarm/` is the project directory, not a separate companion product. Version 0.2, package `com.drake.dccalarm`, Android 12+ (API 31), compile/target API 35. No paid service or new credentials.
+One Android application contains DCC's existing remotely loaded dashboard and a native, offline alarm scheduler/challenge screen. `native-alarm/` is the project directory, not a separate companion product. Version 0.3, package `com.drake.dccalarm`, Android 12+ (API 31), compile API 36 / target API 35. No paid service or new credentials.
 
 ## Shared UI, native authority
 
@@ -13,10 +13,10 @@ The branch web feature detects the native bridge or shell user-agent marker, dis
 ## Bridge and navigation boundary
 
 - AndroidX WebKit `addWebMessageListener` uses one exact HTTPS origin, never `*`, plus callback-origin, main-frame and current-page checks. No `addJavascriptInterface`, arbitrary native object, eval operation, account token, server secret, cookie or task access is exposed.
-- Only `status`, `open` and `review` actions exist. Review messages are bounded to 64 KiB/20 definitions and use the same native validation/confirmation as file import. Binary/unknown/malformed messages cannot arm alarms. Status reports only phone alarm capability text.
+- Only `status`, `open`, `review` and pending-auth cancellation actions exist. Sign-in starts only from the native button; no credentials or verifier pass through the bridge. Review messages are bounded to 64 KiB/20 definitions and use the same native validation/confirmation as file import. Binary/unknown/malformed messages cannot arm alarms. Status reports only phone alarm capability text.
 - Main-frame navigation stays on the fixed DCC origin. Cross-origin HTTPS links require a visible external-browser decision. Credential URLs, cleartext, `file:`, `content:`, `javascript:` and `intent:` navigation are rejected. Caller-controlled Intent URLs are ignored. No untrusted popup inherits a bridge.
 - TLS errors fail closed; mixed content, file/content browsing and third-party cookies are disabled. Media playback requires a gesture. Web camera/microphone/geolocation requests are denied. DCC file inputs use an explicit system document picker with transient user-selected `content:` URIs, not persisted access or camera permissions.
-- Login reuses the existing DCC page and `drake-auth` session. Username/email login is the available in-shell path. Google OAuth/new-window/provider behavior needs real-device validation; external browser cookies are not imported and an OAuth return handoff is **not implemented**. Popups show honest guidance to use DCC's username/email login. Native alarms work while logged out. File downloads/external-browser sessions and all existing task workflows need device QA; this is not yet a validated replacement for the installed PWA.
+- Login reuses the existing DCC page and `drake-auth` session. Existing external accounts can lack a password hash; the username/email form is **not** a guaranteed fallback. A browser Auth Tab + verified HTTPS return + S256 PKCE session handoff is prepared and tested locally. It uses existing Clerk/Google browser configuration and the same DCC identity. **It is not enabled, signed or verified on a real device.** The app refuses sign-in when verified App Links/server capability are missing. See [auth release decision](../docs/ANDROID-AUTH-RELEASE.md). No provider keys, redirects, scopes or production settings were changed. Current provider availability still needs actual browser/device verification. File downloads and existing task workflows also need device QA; this is not yet a validated replacement for the installed PWA.
 
 [Android bridge security](https://developer.android.com/privacy-and-security/risks/insecure-webview-native-bridges), [WebViewCompat origin-scoped listener](https://developer.android.com/reference/androidx/webkit/WebViewCompat#addWebMessageListener(android.webkit.WebView,java.lang.String,java.util.Set,androidx.webkit.WebViewCompat.WebMessageListener)).
 
@@ -38,7 +38,7 @@ These are implemented platform mechanisms, **not a universal wake-up guarantee**
 | Dashboard/task UI and backend | Existing web deployment; the shell remotely loads the same UI. No second task implementation. Changing the trusted deployment host or native bridge contract can require an APK update. |
 | Alarm scheduler, native editor/quiz, bridge, Android permissions | New APK; native Java code, AndroidX/SDK dependencies and OS behavior need upkeep. |
 | Alarm models | Browser prototype and native engine both exist. Scheduling/validation changes need contract checks in both until the prototype is retired or shared further. |
-| Login and external navigation | Existing account backend; WebView/provider compatibility and any future OAuth handoff need maintenance and phone QA. |
+| Login and external navigation | Existing account backend; WebView/provider compatibility and the browser handoff need maintenance and phone QA. |
 | Distribution | Signing key ownership, updates and install channel are unresolved. No keys generated or used here. |
 | Reliability | Real-device regression checks after native/OS/SDK changes; OEM battery behavior cannot be proved by web tests. |
 
@@ -46,7 +46,7 @@ This avoids maintaining two complete task apps but still adds a substantive nati
 
 ## Build and local evidence
 
-JDK 17, Android SDK platform/build tools 35, Gradle 8.11.1 wrapper, AGP 8.9.2, AndroidX WebKit 1.12.1. Set `ANDROID_HOME` or a local SDK path.
+JDK 17, Android SDK platform 36/build tools 35, Gradle 8.11.1 wrapper, AGP 8.10.1, AndroidX WebKit 1.17.1, Browser 1.10.0, Activity 1.13.0. Set `ANDROID_HOME` or a local SDK path.
 
 ```sh
 ./gradlew testDebugUnitTest assembleDebug lintDebug
@@ -54,13 +54,15 @@ JDK 17, Android SDK platform/build tools 35, Gradle 8.11.1 wrapper, AGP 8.9.2, A
 
 Debug signing is disabled. `app-debug-unsigned.apk` cannot be installed until a later explicit signing/install decision. No device/emulator install, production signing/deploy or real audio has occurred.
 
-Local validation: 14 JUnit/Robolectric tests cover native SQLite reload/queue/progress/duplicate/late delivery, rollback, pending import refusal, exact denial, exact-origin/frame/navigation policy, fixed dashboard origin, permission non-enrollment, native editor cancellation/review-before-save/offline independence, revoked-permission boot/time recovery and logout-cookie isolation. Nine pure Java synthetic clock checks cover DST/weekdays/timezone/late delivery. Browser QA uses a database-free loopback fixture, mocked clocks/audio, and an explicit native bridge mock. Screenshots of that mock are **browser previews, not screenshots of Android running**. No actual phone screenshot or TalkBack session is available yet. Android lint completes with zero errors and 37 warnings; localization and the deprecated Back API remain warnings.
+Local validation: 19 JUnit/Robolectric tests cover native SQLite reload/queue/progress/duplicate/late delivery, rollback, pending import refusal, exact denial, exact-origin/frame/navigation policy, fixed dashboard origin, permission non-enrollment, native editor cancellation/review-before-save/offline independence, revoked-permission boot/time recovery and logout-cookie isolation, strict verified callback/state/deadline/PKCE rules, secure cookie boundaries and unverified Google sign-in refusal. Six synthetic server security tests validate the session handoff; 52 focused Node regression/auth tests and 32 browser checks pass. Nine pure Java synthetic clock checks cover DST/weekdays/timezone/late delivery. Browser QA uses a database-free loopback fixture, mocked clocks/audio, and an explicit native bridge mock. Screenshots of that mock are **browser previews, not screenshots of Android running**. No actual phone screenshot or TalkBack session is available yet. Android lint completes with zero errors and three unsuppressed warnings: target API age, newer Gradle availability and required JavaScript security review. See [source/evidence lint review](../docs/ANDROID-LINT-REVIEW.md).
 
 ## Required physical-device QA before reliance
 
+Signing/server-release approval and the [auth release prerequisites](../docs/ANDROID-AUTH-RELEASE.md) are required first. The unsigned candidate is not install-ready and cannot currently promise access to Drake’s Google account.
+
 Use a temporary test alarm while awake, with explicit signing/install and action-time permission approval. Keep a known working system alarm as backup during evaluation.
 
-1. Launch dashboard, sign in via the existing credentials, navigate task/detail/overlay/back, upload a selected image, reload, logout, switch accounts; ensure no native credentials exposed and no task regressions. Test Google/provider navigation separately, expecting the documented handoff limitation. Test external hostile URL, subframe and popup behavior.
+1. Launch dashboard, sign in through the approved browser Google flow, navigate task/detail/overlay/back, upload a selected image, reload, logout, switch accounts; ensure no native credentials exposed and no task regressions. Test Google/provider navigation separately, checking verified Auth Tab/App Link success, cancellation, account isolation and fallback. Test external hostile URL, subframe and popup behavior.
 2. Create disabled one-off/repeat alarms, edit/count/difficulty/date/time/days, confirm/cancel replacements, enable, inspect obvious next occurrence, preview/stop sample, complete and emergency-stop quizzes using keyboard and TalkBack. Wrong/invalid answers must retain progress. Test two simultaneous alarms and reopen saved progress.
 3. Deny then approve/revoke exact/notification/full-screen access and channel importance. Confirm **Not armed** and no phantom armed state, no silent access requests. Test zero system alarm volume, DND, no ringtone, interrupted audio focus, explicit silence, emergency notification stop and five-minute limit.
 4. Locked/offline/background/closed dashboard; swipe away, kill process/service, force-stop separately; Doze/battery saver/OEM restrictions. Test reboot before first unlock and after unlock. The native alarm must not require WebView or login.

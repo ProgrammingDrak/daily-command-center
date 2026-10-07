@@ -113,4 +113,43 @@ public class ShellLifecycleTest {
     }
     assertNull(Shadows.shadowOf(activity).getLastRequestedPermission());
   }
+
+  @Test
+  public void unverifiedGoogleSignInDoesNotTransferSessionOrTouchAlarms() throws Exception {
+    android.app.Activity activity =
+        Robolectric.buildActivity(android.app.Activity.class).setup().get();
+    final String[] message = {""};
+    final boolean[] signedIn = {false};
+    NativeAuth auth =
+        new NativeAuth(
+            activity,
+            null,
+            new NativeAuth.Result() {
+              public void message(String text) {
+                message[0] = text;
+              }
+
+              public void signedIn() {
+                signedIn[0] = true;
+              }
+            });
+    auth.begin();
+    assertTrue(message[0].contains("verified DCC App Links"));
+    assertFalse(signedIn[0]);
+    assertFalse(auth.hasPendingAttempt());
+    assertFalse(auth.handle(new Intent()));
+    auth.handle(
+        new Intent()
+            .setData(
+                android.net.Uri.parse(
+                    OriginPolicy.ORIGIN
+                        + "/auth/android/callback?code="
+                        + NativeAuthRules.token()
+                        + "&state="
+                        + NativeAuthRules.token())));
+    assertFalse(signedIn[0]);
+    try (AlarmDb db = new AlarmDb(activity)) {
+      assertEquals(0, db.definitions().size());
+    }
+  }
 }

@@ -154,7 +154,7 @@ if (!LOCAL_AUTH_ENABLED) {
 app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
-const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
+const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events", "/api/auth/android/config", "/api/auth/android/exchange", "/auth/android/authorize", "/auth/android/approve", "/auth/android/callback", "/.well-known/assetlinks.json"]);
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/ingest/day-state/v2", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts", "/api/dcc/meeting-signals", "/api/dcc/slack-reconcile"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/sponsor/") || req.path.startsWith("/reimburse/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
@@ -388,6 +388,13 @@ const clerkAuth = createClerkAuth({
   },
 });
 app.use(clerkAuth.router);
+// Android handoff reuses browser/Clerk authentication. Off until a signing identity
+// and verified App Links release are explicitly approved. No new provider keys.
+app.use(require("./lib/android-auth")({
+  enabled: process.env.DCC_ANDROID_AUTH_ENABLED === "true",
+  certificateFingerprint: process.env.DCC_ANDROID_SIGNING_SHA256 || "",
+  onSession: async (req, identity) => { await recordLoginEvent(req, identity); },
+}));
 
 // The login page loads the shared sign-in module while unauthenticated, so
 // this path is in AUTH_PUBLIC.

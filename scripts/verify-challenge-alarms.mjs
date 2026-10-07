@@ -170,6 +170,15 @@ try {
   check('native bridge panel restores keyboard focus on close',await nativePage.locator('#dcc-alarms-open').evaluate(el=>document.activeElement===el));
   await nativePage.reload(); await nativePage.getByRole('button',{name:/Phone alarms/}).waitFor();
   check('reload does not replay transfers or start browser alarm',await nativePage.evaluate(()=>__nativeMessages.length===1 && __nativeMessages[0].action==='status' && __audioCalls===0) && (await read(nativePage)).alarms.length===1);
+  let canceledBeforeLogout=false;
+  await nativePage.route('**/api/auth/logout',async route=>{
+    canceledBeforeLogout=await nativePage.evaluate(()=>__nativeMessages.some(m=>m.action==='cancelAuth'));
+    await route.fulfill({status:200,contentType:'application/json',body:'{"ok":true}'});
+  });
+  await nativePage.setViewportSize({width:1440,height:1000});
+  await nativePage.locator('#dcc-settings-button').click(); await nativePage.locator('#dcc-sign-out').click();
+  await nativePage.waitForURL('**/login');
+  check('dashboard logout cancels pending native auth before changing browser session',canceledBeforeLogout);
   await phone.close();
   const oldWebView = await browser.newContext({userAgent:'Synthetic DCCAndroid/0.2',viewport:{width:390,height:844}});
   await setup(oldWebView); const oldPage = await oldWebView.newPage(); await oldPage.goto(base);

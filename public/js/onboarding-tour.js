@@ -328,6 +328,8 @@
     if (replay) replay.addEventListener("click", function(){ startTour({ replay: true }); });
     if (signOut) signOut.addEventListener("click", async function(){
       closeSettingsMenu();
+      // Cancel any pending native browser sign-in before logout; alarms remain device-local.
+      try { window.DCCNativeAlarms?.postMessage(JSON.stringify({ action: "cancelAuth" })); } catch (_) {}
       // DCC and Clerk own separate sessions. Clear both before the login page
       // loads, or Clerk immediately recreates the DCC session.
       var dccLogout = fetch("/api/auth/logout", { method: "POST" });

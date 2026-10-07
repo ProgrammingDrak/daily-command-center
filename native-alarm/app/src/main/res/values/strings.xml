@@ -1,0 +1,46 @@
+<resources>
+ <string name="answer_not_saved">Answer was not saved: %1$s</string>
+ <string name="date_label">One-off date: %1$s</string>
+ <string name="editor_unavailable">Editor unavailable: %1$s</string>
+ <string name="import_failed">Import failed: %1$s</string>
+ <string name="local_state_failed">Local state failed: %1$s</string>
+ <string name="next_alarm"> · Next %1$s</string>
+ <string name="phone_status">Phone alarms · %1$s%2$s · shared across DCC accounts</string>
+ <string name="save_failed">Save failed: %1$s</string>
+ <string name="time_label">Time: %1$s</string>
+ <string name="ui_alarm_name_c337b" formatted="false">Alarm name</string>
+ <string name="ui_alarm_volume_0_to_50_of_system_alarm_level_fbdd2" formatted="false">Alarm volume: 0 to 50% of system alarm level</string>
+ <string name="ui_alarm_volume_percentage_maximum_50_61d5b" formatted="false">Alarm volume percentage, maximum 50</string>
+ <string name="ui_android_sign_in_return_was_refused_or_expired__e1ddc" formatted="false">Android sign-in return was refused or expired. Start again in this app.</string>
+ <string name="ui_cancel_sign_in_9effa" formatted="false">Cancel sign-in</string>
+ <string name="ui_checking_browser_sign_in_availability_40c1d" formatted="false">Checking browser sign-in availability…</string>
+ <string name="ui_complete_google_sign_in_in_the_browser_and_con_c1f8a" formatted="false">Complete Google authentication in the browser and confirm the DCC account. Cancel below to stop this attempt.</string>
+ <string name="ui_completing_dcc_sign_in_1a552" formatted="false">Completing DCC sign-in…</string>
+ <string name="ui_dashboard_unavailable_device_alarms_work_offli_4e97f" formatted="false">Dashboard unavailable. Device alarms work offline. Tap Reload to retry.</string>
+ <string name="ui_dcc_13fe8" formatted="false">DCC</string>
+ <string name="ui_dcc_could_not_save_its_session_cookie_start_si_b96a9" formatted="false">DCC could not save its session cookie. Start sign-in again.</string>
+ <string name="ui_dcc_sign_in_failed_safely_start_again_device_a_4809e" formatted="false">DCC sign-in failed safely. Start again; device alarms are unchanged.</string>
+ <string name="ui_dcc_signed_in_device_alarms_are_unchanged_12175" formatted="false">DCC signed in. Device alarms are unchanged.</string>
+ <string name="ui_device_alarms_8fb8a" formatted="false">Device alarms</string>
+ <string name="ui_enable_this_phone_alarm_d4925" formatted="false">Enable this phone alarm</string>
+ <string name="ui_google_sign_in_browser_1646a" formatted="false">Google sign-in (browser)</string>
+ <string name="ui_google_sign_in_is_not_ready_this_signed_app_mu_1baef" formatted="false">Google sign-in is not ready: this signed app must have verified DCC App Links. No session was transferred.</string>
+ <string name="ui_google_sign_in_is_not_released_on_the_dcc_serv_81c5c" formatted="false">Google sign-in is not released on the DCC server. No session was transferred.</string>
+ <string name="ui_invalid_definitions_2d98b" formatted="false">Invalid definitions</string>
+ <string name="ui_maximum_20_phone_alarms_4c6d7" formatted="false">Maximum 20 phone alarms</string>
+ <string name="ui_no_browser_available_356e6" formatted="false">No browser available</string>
+ <string name="ui_no_browser_available_no_session_was_transferre_943c5" formatted="false">No browser available. No session was transferred.</string>
+ <string name="ui_no_document_picker_available_5b0e3" formatted="false">No document picker available</string>
+ <string name="ui_open_external_browser_304ec" formatted="false">Open external browser?</string>
+ <string name="ui_phone_alarm_state_unavailable_open_device_alar_8ffae" formatted="false">Phone alarm state unavailable. Open Device alarms.</string>
+ <string name="ui_reload_bdc09" formatted="false">Reload</string>
+ <string name="ui_repeat_days_used_for_repeat_schedule_504c3" formatted="false">Repeat days (used for repeat schedule)</string>
+ <string name="ui_save_this_phone_s_alarm_definitions_b3e9c" formatted="false">Save this phone\'s alarm definitions?</string>
+ <string name="ui_sign_in_canceled_device_alarms_are_unchanged_94485" formatted="false">Sign-in canceled. Device alarms are unchanged.</string>
+ <string name="ui_update_android_webview_before_signing_in_devic_77796" formatted="false">Update Android WebView before signing in. Device alarms work offline.</string>
+ <string name="ui_use_google_sign_in_browser_below_the_dashboard_3c968" formatted="false">Use Google sign-in (browser) below the dashboard. Signing and verified DCC App Links are required before this app can sign in.</string>
+ <string name="ui_whole_number_answer_38003" formatted="false">Whole-number answer</string>
+ <color name="dcc_launcher_background">#172033</color>
+ <string name="browser_auth_canceled">Browser sign-in canceled or verification failed. Start again; alarms are unchanged.</string>
+ <string name="renderer_stopped">Dashboard renderer stopped. Reopen DCC to reload. Device alarms remain available.</string>
+</resources>

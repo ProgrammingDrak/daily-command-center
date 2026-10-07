@@ -8,19 +8,49 @@ import android.os.*;
 import android.view.*;
 import android.webkit.*;
 import android.widget.*;
+import androidx.activity.ComponentActivity;
+import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.browser.auth.AuthTabIntent;
 import androidx.webkit.*;
 import org.json.*;
 
 /** Shared DCC dashboard with offline native alarms. No JavaScript interface. */
-public final class MainActivity extends Activity {
+public final class MainActivity extends ComponentActivity {
   private WebView web;
   private TextView status;
   private FrameLayout page;
   private TextView offline;
   private ValueCallback<Uri[]> fileCallback;
+  private NativeAuth auth;
+  private TextView authFeedback;
+  private final ActivityResultLauncher<Intent> authLauncher =
+      AuthTabIntent.registerActivityResultLauncher(
+          this,
+          response -> {
+            if (auth == null) return;
+            if (response.resultCode == AuthTabIntent.RESULT_OK && response.resultUri != null)
+              auth.handle(new Intent().setData(response.resultUri));
+            else if (auth.hasPendingAttempt()) {
+              auth.cancel();
+              authFeedback.setText(getString(R.string.browser_auth_canceled));
+            }
+          });
 
   public void onCreate(Bundle state) {
     super.onCreate(state);
+    getOnBackPressedDispatcher()
+        .addCallback(
+            this,
+            new OnBackPressedCallback(true) {
+              public void handleOnBackPressed() {
+                if (web != null && web.canGoBack()) web.goBack();
+                else {
+                  setEnabled(false);
+                  getOnBackPressedDispatcher().onBackPressed();
+                }
+              }
+            });
     LinearLayout root = new LinearLayout(this);
     root.setOrientation(LinearLayout.VERTICAL);
     root.setOnApplyWindowInsetsListener(
@@ -35,19 +65,27 @@ public final class MainActivity extends Activity {
         });
     LinearLayout bar = new LinearLayout(this);
     Button home = new Button(this);
-    home.setText("DCC");
+    home.setText(getString(R.string.ui_dcc_13fe8));
     home.setMinHeight(dp(48));
-    home.setOnClickListener(v -> web.loadUrl(OriginPolicy.ORIGIN));
+    home.setOnClickListener(
+        v -> {
+          if (web != null) web.loadUrl(OriginPolicy.ORIGIN);
+          else recreate();
+        });
     bar.addView(home);
     Button alarms = new Button(this);
-    alarms.setText("Device alarms");
+    alarms.setText(getString(R.string.ui_device_alarms_8fb8a));
     alarms.setMinHeight(dp(48));
     alarms.setOnClickListener(v -> startActivity(new Intent(this, AlarmActivity.class)));
     bar.addView(alarms);
     Button reload = new Button(this);
-    reload.setText("Reload");
+    reload.setText(getString(R.string.ui_reload_bdc09));
     reload.setMinHeight(dp(48));
-    reload.setOnClickListener(v -> web.reload());
+    reload.setOnClickListener(
+        v -> {
+          if (web != null) web.reload();
+          else recreate();
+        });
     bar.addView(reload);
     root.addView(bar);
     status = new TextView(this);
@@ -59,17 +97,59 @@ public final class MainActivity extends Activity {
     web = new WebView(this);
     page.addView(web, new FrameLayout.LayoutParams(-1, -1));
     offline = new TextView(this);
-    offline.setText("Dashboard unavailable. Device alarms work offline. Tap Reload to retry.");
+    offline.setText(getString(R.string.ui_dashboard_unavailable_device_alarms_work_offli_4e97f));
     offline.setPadding(dp(24), dp(32), dp(24), dp(24));
     offline.setBackgroundColor(0xff151924);
     offline.setVisibility(View.GONE);
     page.addView(offline, new FrameLayout.LayoutParams(-1, -1));
+    LinearLayout authRow = new LinearLayout(this);
+    Button signIn = new Button(this);
+    signIn.setText(getString(R.string.ui_google_sign_in_browser_1646a));
+    signIn.setMinHeight(dp(48));
+    signIn.setOnClickListener(
+        v -> {
+          if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            authFeedback.setText(
+                getString(R.string.ui_update_android_webview_before_signing_in_devic_77796));
+            return;
+          }
+          auth.begin();
+        });
+    authRow.addView(signIn, new LinearLayout.LayoutParams(0, -2, 1));
+    Button cancelAuth = new Button(this);
+    cancelAuth.setText(getString(R.string.ui_cancel_sign_in_9effa));
+    cancelAuth.setMinHeight(dp(48));
+    cancelAuth.setOnClickListener(
+        v -> {
+          auth.cancel();
+          authFeedback.setText(
+              getString(R.string.ui_sign_in_canceled_device_alarms_are_unchanged_94485));
+        });
+    authRow.addView(cancelAuth);
+    root.addView(authRow);
+    authFeedback = new TextView(this);
+    authFeedback.setPadding(dp(12), dp(4), dp(12), dp(4));
+    authFeedback.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+    root.addView(authFeedback);
+    auth =
+        new NativeAuth(
+            this,
+            authLauncher,
+            new NativeAuth.Result() {
+              public void message(String text) {
+                authFeedback.setText(text);
+              }
+
+              public void signedIn() {
+                web.loadUrl(OriginPolicy.ORIGIN);
+              }
+            });
     setContentView(root);
     root.requestApplyInsets();
     WebSettings settings = web.getSettings();
     settings.setJavaScriptEnabled(true);
     settings.setDomStorageEnabled(true);
-    settings.setUserAgentString(settings.getUserAgentString() + " DCCAndroid/0.2");
+    settings.setUserAgentString(settings.getUserAgentString() + " DCCAndroid/0.3");
     settings.setAllowFileAccess(false);
     settings.setAllowContentAccess(false);
     settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
@@ -91,6 +171,7 @@ public final class MainActivity extends Activity {
 
           public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
             offline.setVisibility(View.GONE);
+            if ("/login".equals(Uri.parse(url).getPath())) auth.cancel();
             if (!OriginPolicy.trusted(url)) {
               view.stopLoading();
               offline.setVisibility(View.VISIBLE);
@@ -103,6 +184,16 @@ public final class MainActivity extends Activity {
 
           public void onReceivedHttpError(WebView v, WebResourceRequest r, WebResourceResponse e) {
             if (r.isForMainFrame() && e.getStatusCode() >= 500) offline.setVisibility(View.VISIBLE);
+          }
+
+          public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+            auth.cancel();
+            page.removeView(view);
+            view.destroy();
+            offline.setText(getString(R.string.renderer_stopped));
+            offline.setVisibility(View.VISIBLE);
+            web = null;
+            return true;
           }
 
           public void onReceivedSslError(WebView v, SslErrorHandler h, SslError e) {
@@ -129,7 +220,7 @@ public final class MainActivity extends Activity {
             } catch (ActivityNotFoundException e) {
               fileCallback.onReceiveValue(null);
               fileCallback = null;
-              status.setText("No document picker available");
+              status.setText(getString(R.string.ui_no_document_picker_available_5b0e3));
             }
             return true;
           }
@@ -149,8 +240,7 @@ public final class MainActivity extends Activity {
             // instead.
             new AlertDialog.Builder(MainActivity.this)
                 .setMessage(
-                    "This sign-in opens a new window. Use the username/email login in DCC; browser"
-                        + " OAuth handoff is not configured yet.")
+                    getString(R.string.ui_use_google_sign_in_browser_below_the_dashboard_3c968))
                 .setPositiveButton("OK", null)
                 .show();
             return false;
@@ -178,8 +268,8 @@ public final class MainActivity extends Activity {
                           .put("deviceLocal", true)
                           .toString());
                 }
-              } else if ("open".equals(action))
-                startActivity(new Intent(this, AlarmActivity.class));
+              } else if ("cancelAuth".equals(action)) auth.cancel();
+              else if ("open".equals(action)) startActivity(new Intent(this, AlarmActivity.class));
               else if ("review".equals(action)) {
                 JSONArray definitions = request.getJSONArray("alarms");
                 if (definitions.length() > 20)
@@ -195,6 +285,7 @@ public final class MainActivity extends Activity {
     }
     // Never restore a caller URL or browser history from an Intent/Bundle.
     web.loadUrl(OriginPolicy.ORIGIN);
+    if (getIntent().getData() != null) auth.handle(getIntent());
   }
 
   private int dp(int value) {
@@ -204,7 +295,7 @@ public final class MainActivity extends Activity {
   private void offerExternal(String url) {
     if (!OriginPolicy.external(url)) return;
     new AlertDialog.Builder(this)
-        .setTitle("Open external browser?")
+        .setTitle(getString(R.string.ui_open_external_browser_304ec))
         .setMessage(
             "Leaving DCC for "
                 + Uri.parse(url).getHost()
@@ -219,7 +310,7 @@ public final class MainActivity extends Activity {
                     new Intent(Intent.ACTION_VIEW, Uri.parse(url))
                         .addCategory(Intent.CATEGORY_BROWSABLE));
               } catch (ActivityNotFoundException e) {
-                status.setText("No browser available");
+                status.setText(getString(R.string.ui_no_browser_available_356e6));
               }
             })
         .show();
@@ -234,17 +325,17 @@ public final class MainActivity extends Activity {
         long at = a.optLong("nextAt");
         if (at > 0 && (next == 0 || at < next)) next = at;
       }
-      status.setText(
-          "Phone alarms · "
-              + db.status()
-              + (next > 0
-                  ? " · Next "
-                      + java.time.Instant.ofEpochMilli(next)
-                          .atZone(java.time.ZoneId.systemDefault())
-                  : "")
-              + " · shared across DCC accounts");
+      String nextText =
+          next > 0
+              ? getString(
+                  R.string.next_alarm,
+                  java.time.Instant.ofEpochMilli(next)
+                      .atZone(java.time.ZoneId.systemDefault())
+                      .toString())
+              : "";
+      status.setText(getString(R.string.phone_status, db.status(), nextText));
     } catch (Exception e) {
-      status.setText("Phone alarm state unavailable. Open Device alarms.");
+      status.setText(getString(R.string.ui_phone_alarm_state_unavailable_open_device_alar_8ffae));
     }
   }
 
@@ -252,7 +343,7 @@ public final class MainActivity extends Activity {
     super.onActivityResult(request, result, data);
     if (request != 90 || fileCallback == null) return;
     java.util.ArrayList<Uri> chosen = new java.util.ArrayList<>();
-    if (result == RESULT_OK && data != null && OriginPolicy.trusted(web.getUrl())) {
+    if (result == RESULT_OK && data != null && web != null && OriginPolicy.trusted(web.getUrl())) {
       if (data.getClipData() != null) {
         for (int i = 0; i < Math.min(10, data.getClipData().getItemCount()); i++) {
           Uri uri = data.getClipData().getItemAt(i).getUri();
@@ -265,14 +356,16 @@ public final class MainActivity extends Activity {
     fileCallback = null;
   }
 
-  public void onBackPressed() {
-    if (web.canGoBack()) web.goBack();
-    else super.onBackPressed();
+  protected void onNewIntent(Intent intent) {
+    super.onNewIntent(intent);
+    setIntent(intent);
+    auth.handle(intent);
   }
 
   protected void onDestroy() {
+    auth.cancel();
     if (fileCallback != null) fileCallback.onReceiveValue(null);
-    web.destroy();
+    if (web != null) web.destroy();
     super.onDestroy();
   }
 }
