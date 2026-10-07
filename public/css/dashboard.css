@@ -5879,3 +5879,6 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 
 .dest-radial-compact-item{padding:2px;gap:1px;font-size:14px}
 .dest-radial-compact-item .dri-caption{width:100%;font-size:8px;line-height:1.05;overflow-wrap:anywhere}
+
+/* Date shortcut selection follows the field, including custom edits. */
+.dm-date-quick-actions button.active,.sched-chip.active,.resched-btn.active{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}

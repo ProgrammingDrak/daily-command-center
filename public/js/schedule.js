@@ -1684,6 +1684,7 @@ function openSchedulePicker(title,durMin,options){
   _schedShowStep("day");
   const dateInput=document.getElementById("sched-date-input");
   if(dateInput){dateInput.style.display="none";dateInput.value="";}
+  _schedSyncDateSelection("");
   overlay.classList.add("open");
 }
 // Placement mode: the SAME 2-step day → "After…" UI, generalized so any mover
@@ -1708,6 +1709,7 @@ function openPlacementPicker(cfg){
   if(titleEl)titleEl.value=_schedPickerTitle;
   const dateInput=document.getElementById("sched-date-input");
   if(dateInput){dateInput.style.display="none";dateInput.value="";}
+  _schedSyncDateSelection("");
   if(cfg.day)_schedPickDay(cfg.day);
   else _schedShowStep("day");
   overlay.classList.add("open");
@@ -1730,11 +1732,26 @@ function _schedShowStep(step){
   if(dayEl)dayEl.style.display=step==="day"?"flex":"none";
   if(afterEl)afterEl.style.display=step==="after"?"flex":"none";
 }
+// Keep the external calendar trigger, its hidden value and presets in agreement.
+// Programmatic synchronization must not dispatch change: selection only advances
+// to the placement step, and saving still belongs to the chosen time/slot.
+function _schedSyncDateSelection(dateStr){
+  const input=document.getElementById("sched-date-input");
+  if(input){input.value=dateStr;if(typeof input.__twRender==="function")input.__twRender()}
+  const picker=document.getElementById("sched-pick-date-btn");
+  if(picker)picker.textContent=dateStr?"📅 "+new Date(dateStr+"T12:00:00").toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"}):"📅 Pick a date";
+  document.querySelectorAll("[data-sched-day]").forEach(btn=>{
+    const selected=!!dateStr&&dateStr===_actualDateStr(btn.getAttribute("data-sched-day")==="tomorrow"?1:0);
+    btn.classList.toggle("active",selected);
+    btn.setAttribute("aria-pressed",String(selected));
+  });
+}
 // Lock in a day and advance to the "After…" step.
 function _schedPickDay(dateStr){
   if(!dateStr)return;
   _schedSession++;              // a new day is a new session: see closeSchedulePicker
   _schedPickerDate=dateStr;
+  _schedSyncDateSelection(dateStr);
   _schedShowStep("after");
   _renderSchedAfterStep(dateStr);
 }
@@ -2011,7 +2028,7 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options,placement){
   overlay.querySelectorAll("[data-sched-day]").forEach(btn=>{
     btn.addEventListener("click",()=>{
       const tok=btn.getAttribute("data-sched-day");
-      const d=tok==="today"?_resolvedTodayDate():tok==="tomorrow"?_resolvedTomorrowDate():null;
+      const d=tok==="today"?_actualDateStr(0):tok==="tomorrow"?_actualDateStr(1):null;
       if(d)_schedPickDay(d);
     });
   });
