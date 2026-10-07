@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import express from "express";
 import reschedule from "../lib/reschedule.js";
+import poolPlacement from "../lib/whenever-placement.js";
 import createTaskTiming from "../lib/task-timing.js";
 import seedTaskDetailReview from "./task-detail-review-fixtures.cjs";
 
@@ -203,6 +204,12 @@ app.post("/api/blocks/:id/reschedule",(req,res)=>{
   try{
     const parent=reviewBlocks.get(req.params.id);
     if(!parent)return res.status(404).json({error:"Block not found"});
+    if(req.body.placement?.kind==="pool_date"){
+      const planned=poolPlacement.plan(parent,liveReviewBlocks(),req.body);
+      const blocks=planned.moves.map(move=>({...reviewBlocks.get(move.id),date:move.date,parent_id:move.parentId===undefined?reviewBlocks.get(move.id).parent_id:move.parentId,properties:move.properties}));
+      blocks.forEach(row=>reviewBlocks.set(row.id,row));
+      return res.json({moved:planned.ids,blocks,created:[],targetDate:req.body.targetDate});
+    }
     if(req.body.placement?.kind!=="unplanned")return res.status(400).json({error:"Unsupported review placement"});
     const ids=reschedule.collectSubtreeBlockIds(liveReviewBlocks(),parent);
     const blocks=ids.map(id=>{const row=reviewBlocks.get(id);return {...row,date:req.body.targetDate,parent_id:id===parent.id?null:row.parent_id,properties:reschedule.unplannedProperties(row,parent.id,req.body.placement.durations)};});
@@ -517,6 +524,10 @@ app.get("/api/vault/index", (_req, res) => res.json({ nodes: [], edges: [], summ
 app.get("/api/vault/nodes", (_req, res) => res.json([]));
 app.get("/api/vault/timeline", (_req, res) => res.json({ nodes: [], threads: [], lockedCount: 0 }));
 app.get("/api/vault/graph", (_req, res) => res.json({ nodes: [], edges: [] }));
+app.get("/api/task-library", (_req,res)=>res.json({
+  tasks:liveReviewBlocks().filter(row=>row.type==='block'&&((row.properties||{}).local_id||['task','backlog'].includes((row.properties||{}).kind))),
+  projects:[],facets:[],views:[],readiness:{}
+}));
 app.get("/api/*", (req, res) => {
   if (req.path.includes("social/feed/publishable") || req.path.includes("social/friends") || req.path.includes("social/rewards/queue") || req.path.includes("access/grants") || req.path.includes("access/granted-to-me")) return res.json([]);
   if (req.path.includes("responsibilities")) return res.json([]);
