@@ -81,7 +81,10 @@
     const opts = options || {};
     const kind = ["popover", "modal", "drawer", "sheet"].includes(opts.kind) ? opts.kind : "modal";
     const blocking = BLOCKING.has(kind);
-    if (blocking && activeBlocking) activeBlocking.close("replaced");
+    if (blocking && activeBlocking) {
+      activeBlocking.close("replaced");
+      if (activeBlocking) return activeBlocking;
+    }
 
     const opener = opts.anchor || document.activeElement;
     const overlay = document.createElement("div");
@@ -114,6 +117,7 @@
     const back = panel.querySelector(".dcc-overlay-back");
     const stack = [];
     let closed = false;
+    let finishPendingClose = null;
 
     function render(view) {
       const state = view || opts;
@@ -168,13 +172,19 @@
     }
 
     function close(reason) {
-      if (closed) return;
+      if (closed) {
+        if (reason === "replaced" && finishPendingClose) finishPendingClose();
+        return;
+      }
+      if (typeof opts.canClose === "function" && !opts.canClose(reason)) return;
       closed = true;
       overlay.classList.remove("open");
       document.removeEventListener("keydown", onKey, true);
       document.removeEventListener("pointerdown", onOutside, true);
       let finished = false;
-      const done = () => { if (!finished) { finished = true; finishClose(reason); } };
+      let closeReason = reason;
+      const done = () => { if (!finished) { finished = true; finishClose(closeReason); } };
+      finishPendingClose = () => { closeReason = "replaced"; done(); };
       if (reason === "replaced") done();
       else {
         overlay.addEventListener("transitionend", done, { once: true });

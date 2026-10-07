@@ -817,3 +817,153 @@ test("an unreadable suppression store offers everything rather than failing the 
   assert.equal(res.body.draft_items.length, 1, "degrades to offering the draft");
   assert.equal(res.body.suppressed_draft_count, 0);
 });
+
+
+test("saving a check-in atomically logs history and one completed current-day task", async () => {
+  const { app, ctx, waiting, rows, task, broadcasts, transactionQueries } = mountApp();
+  waiting.properties.linkedBlockId = task.id;
+  waiting.properties.notes = "Keep this context";
+  const calls = [];
+  let transactionClient;
+  const connect = ctx.pool.connect;
+  ctx.pool.connect = async () => { transactionClient = await connect(); return transactionClient; };
+  const read = ctx.blockDB.getBlockIncludingDeleted;
+  ctx.blockDB.getBlockIncludingDeleted = async (id, client, locked) => {
+    assert.equal(client, transactionClient);
+    calls.push({ client, locked });
+    return read(id);
+  };
+  const ensureRoot = ctx.blockDB.ensureDayRoot;
+  ctx.blockDB.ensureDayRoot = async (date, userId, workspaceId, client) => {
+    assert.equal(client, transactionClient);
+    return ensureRoot(date, userId, workspaceId);
+  };
+  const create = ctx.blockDB.createBlock;
+  ctx.blockDB.createBlock = async (input, client) => { assert.equal(client, transactionClient); return create(input); };
+  const update = ctx.blockDB.updateBlock;
+  ctx.blockDB.updateBlock = async (id, patch, client) => { assert.equal(client, transactionClient); return update(id, patch); };
+  const body = { cycleKey: "waiting:waiting-1:" + TODAY, completedAt: "2026-08-15T02:00:00Z", nextCheckInDate: "2026-08-20", expectedCheckInCount: 0, note: "Sent Slack ping; no reply" };
+  const result = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", body);
+  assert.equal(result.status, 200);
+  assert.equal(result.body.status, "completed");
+  assert.ok(calls[0].client);
+  assert.equal(calls[0].locked, true);
+  assert.deepEqual(transactionQueries, ["BEGIN", "COMMIT"]);
+  assert.equal(waiting.properties.status, "open");
+  assert.equal(waiting.properties.checkInDate, "2026-08-20");
+  assert.equal(waiting.properties.notes, "Keep this context");
+  assert.equal(task.properties.status, undefined, "original task is not completed");
+  const logged = rows.get(result.body.task.id);
+  assert.ok(logged);
+  assert.equal(logged.date, TODAY, "current day uses app timezone rather than UTC date");
+  assert.equal(logged.properties.title, "Check in on Launch plan");
+  assert.equal(logged.properties.status, "done");
+  assert.equal(logged.properties.completedAt, body.completedAt);
+  assert.equal(logged.properties.linkedBlockId, task.id);
+  assert.equal(logged.properties.notes, body.note);
+  assert.equal(logged.properties.actualMinutes, 0, "no invented tracked work time");
+  assert.equal(logged.properties.duration, 0);
+  assert.equal(logged.properties.publicVisibility, "private");
+  const projected = require("./public/js/task-model").fromBlock(logged);
+  assert.equal(projected.status, "done");
+  assert.equal(projected.end, "00:00");
+  assert.equal(waiting.properties.checkInHistory[0].taskBlockId, logged.id);
+  assert.deepEqual(broadcasts[0].payload.blockIds, [waiting.id, logged.id]);
+  const duplicate = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", body);
+  assert.equal(duplicate.body.status, "skipped_stale");
+  assert.equal(waiting.properties.checkInHistory.length, 1);
+  assert.equal([...rows.values()].filter(row => row.properties.source === "waiting-checkin-log").length, 1);
+});
+
+test("invalid check-in drafts cannot write history or create completed tasks", async () => {
+  for (const patch of [{ nextCheckInDate: "2026-08-13" }, { nextCheckInDate: "2026-02-30" }, { nextCheckInDate: null }, { note: "x".repeat(1001) }, { note: {} }]) {
+    const { app, rows, updates } = mountApp();
+    const result = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", {
+      cycleKey: "waiting:waiting-1:" + TODAY, completedAt: "2026-08-14T12:00:00Z", nextCheckInDate: "2026-08-20", ...patch,
+    });
+    assert.equal(result.status, 400);
+    assert.equal(updates.length, 0);
+    assert.equal(rows.size, 3);
+  }
+});
+
+test("failed completed-task creation rolls back without updating Waiting", async () => {
+  const { app, ctx, updates, waiting, broadcasts, transactionQueries } = mountApp();
+  ctx.blockDB.createBlock = async () => { throw new Error("fixture create failed"); };
+  const result = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", {
+    cycleKey: "waiting:waiting-1:" + TODAY, completedAt: "2026-08-14T12:00:00Z", nextCheckInDate: "2026-08-20",
+  });
+  assert.equal(result.status, 500);
+  assert.deepEqual(transactionQueries, ["BEGIN", "ROLLBACK"]);
+  assert.equal(updates.length, 0);
+  assert.equal(waiting.properties.checkInDate, TODAY);
+  assert.equal(broadcasts.length, 0);
+});
+
+
+test("early check-in may keep a future date without allowing replay or freezing the next cycle", async () => {
+  const { app, waiting, rows } = mountApp();
+  waiting.properties.checkInDate = "2026-08-20";
+  const body = { cycleKey: "waiting:waiting-1:2026-08-20", completedAt: "2026-08-14T12:00:00Z", nextCheckInDate: "2026-08-20", expectedCheckInCount: 0 };
+  assert.equal((await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", body)).body.status, "completed");
+  assert.equal((await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", body)).body.status, "skipped_stale");
+  assert.equal([...rows.values()].filter(row => row.properties.source === "waiting-checkin-log").length, 1);
+  const next = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", { ...body, completedAt: "2026-08-20T12:00:00Z", nextCheckInDate: "2026-08-27", expectedCheckInCount: 1 });
+  assert.equal(next.body.status, "completed");
+  assert.equal(waiting.properties.checkInHistory.length, 2);
+});
+
+
+test("failed Waiting write rolls back the already-created completion log", async () => {
+  const { app, ctx, rows, waiting, broadcasts, transactionQueries } = mountApp();
+  const originalIds = new Set(rows.keys());
+  const connect = ctx.pool.connect;
+  ctx.pool.connect = async () => {
+    const client = await connect();
+    const query = client.query;
+    client.query = async sql => {
+      if (sql === "ROLLBACK") for (const id of rows.keys()) if (!originalIds.has(id)) rows.delete(id);
+      return query(sql);
+    };
+    return client;
+  };
+  let created = false;
+  const create = ctx.blockDB.createBlock;
+  ctx.blockDB.createBlock = async (input, client) => { created = true; assert.ok(client); return create(input); };
+  ctx.blockDB.updateBlock = async () => { throw new Error("fixture Waiting write failed"); };
+  const result = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", {
+    cycleKey: "waiting:waiting-1:" + TODAY, completedAt: "2026-08-14T12:00:00Z", nextCheckInDate: "2026-08-20", expectedCheckInCount: 0,
+  });
+  assert.equal(result.status, 500);
+  assert.equal(created, true, "exercise the failure after the completed log was created");
+  assert.deepEqual(transactionQueries, ["BEGIN", "ROLLBACK"]);
+  assert.equal(rows.size, originalIds.size);
+  assert.equal(waiting.properties.checkInHistory, undefined);
+  assert.equal(broadcasts.length, 0);
+});
+
+
+test("today is a valid next check-in with local-day semantics and safe repeated same-day follow-ups", async () => {
+  const { app, waiting, rows } = mountApp();
+  const body = {
+    cycleKey: "waiting:waiting-1:" + TODAY, completedAt: "2026-08-15T02:00:00Z",
+    nextCheckInDate: TODAY, expectedCheckInCount: 0, note: "Check back later today",
+  };
+  const saved = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", body);
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.status, "completed");
+  assert.equal(saved.body.task.date, TODAY, "02:00 UTC is still today in the app timezone");
+  assert.equal(waiting.properties.status, "open");
+  assert.equal(waiting.properties.checkInDate, TODAY);
+  assert.equal(waiting.properties.checkInHistory[0].nextCheckInDate, TODAY);
+  const replay = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", body);
+  assert.equal(replay.body.status, "skipped_stale");
+  assert.equal([...rows.values()].filter(row => row.properties.source === "waiting-checkin-log").length, 1);
+  const second = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", {
+    ...body, expectedCheckInCount: 1, completedAt: "2026-08-15T03:00:00Z", note: "Heard back; still Waiting",
+  });
+  assert.equal(second.body.status, "completed", "a new reviewed same-day check-in does not freeze");
+  assert.equal(waiting.properties.checkInHistory.length, 2);
+  assert.equal(waiting.properties.checkInDate, TODAY);
+  assert.equal(waiting.properties.status, "open");
+});

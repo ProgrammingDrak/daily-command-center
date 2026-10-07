@@ -880,9 +880,9 @@
   function cycleDueOf(key) {
     return String(key || "").split(":").pop();
   }
-  async function completeCheckInCycle(id, key, completedAt) {
-    let result = await postWaitingAction(id, "check-ins/complete", { cycleKey: key, completedAt });
-    if (result && result.status === "skipped_stale") {
+  async function completeCheckInCycle(id, key, completedAt, options) {
+    let result = await postWaitingAction(id, "check-ins/complete", Object.assign({ cycleKey: key, completedAt }, options || {}));
+    if (!options && result && result.status === "skipped_stale") {
       const expected = result.expectedCycleKey || "";
       // No expected key means there is no due cycle left to close at all.
       if (!expected) return result;
@@ -896,6 +896,8 @@
 
   async function afterWaitingAction() {
     await refreshDelegatedItems();
+    if (window.blockStore && typeof window.blockStore.loadDay === "function" &&
+        typeof viewDate !== "undefined" && viewDate) await window.blockStore.loadDay(viewDate);
     if (typeof refoldTaskStateFromBlockCache === "function") refoldTaskStateFromBlockCache();
     if (typeof render === "function") render();
     if (window.DCC && window.DCC.CatchUp && typeof window.DCC.CatchUp.refresh === "function") {
@@ -925,27 +927,97 @@
     return releaseTaskDependencyToBacklog(id, { removed: true });
   }
 
-  // Completing a check-in advances the recurring cadence exactly once.
-  async function markDelegatedItemCheckedById(id) {
+  let _checkInPrompt = null;
+  const _savingCheckIns = new Set();
+
+  function checkInHistoryHtml(items) {
+    const entries = items.flatMap(item => (Array.isArray((item.properties || {}).checkInHistory)
+      ? item.properties.checkInHistory : []));
+    return entries.sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt))).map(entry =>
+      '<div class="work-history-row waiting-checkin-history"><strong>Checked in · ' + esc(new Date(entry.completedAt).toLocaleString()) + '</strong>' +
+      (entry.note ? '<div class="waiting-checkin-note">' + esc(entry.note) + '</div>' : '') +
+      '<small>' + (entry.nextCheckInDate ? 'Next check-in: ' + esc(entry.nextCheckInDate) : 'No next check-in scheduled') + '</small></div>'
+    ).join('');
+  }
+
+  function checkInHistoryForTask(block) {
+    const ids = new Set([String(block.id), String((block.properties || {}).local_id || '')]);
+    return checkInHistoryHtml(getAllDelegatedItems().filter(item => ids.has(String((item.properties || {}).linkedBlockId || '__none__'))));
+  }
+
+  // Opening is read-only. Only Save sends the captured cycle and draft fields.
+  function markDelegatedItemCheckedById(id) {
     const item = getDelegatedItemById(id);
-    if (!item) return;
-    try {
-      const completedAt = new Date().toISOString();
-      const result = await completeCheckInCycle(id, cycleKey(item), completedAt);
-      if (result && result.status === "skipped_stale") {
-        closeDelegatedModal();
-        await afterWaitingAction();
-        toast("This check-in was already completed elsewhere.", "info");
-        return true;
+    if (!item || !isOpenDelegated(item) || _checkInPrompt || _savingCheckIns.has(id)) return false;
+    const key = cycleKey(item);
+    if (!key) return false;
+    const expectedCheckInCount = Array.isArray((item.properties || {}).checkInHistory) ? item.properties.checkInHistory.length : 0;
+    const minDate = todayStr();
+    const suggested = parseLocalDate(todayStr());
+    suggested.setDate(suggested.getDate() + checkInDaysFor(item.properties || {}));
+    const form = document.createElement('form');
+    form.className = 'waiting-checkin-form';
+    // Keep native date validity and keyboard editing: the shared picker upgrades
+    // date inputs to hidden fields, which do not enforce required/min constraints.
+    form.innerHTML = '<p>When should you check in next? This task will stay Waiting.</p>' +
+      '<label class="delegated-modal-label" for="wci-date">Next check-in</label>' +
+      '<input class="delegated-modal-input" type="date" data-tw-skip id="wci-date" required min="' + minDate + '" value="' + toDateInputValue(suggested) + '">' +
+      '<label class="delegated-modal-label" for="wci-note">Note (optional)</label>' +
+      '<textarea class="delegated-modal-input" id="wci-note" rows="3" maxlength="1000" placeholder="What did you do? Did you hear back?"></textarea>' +
+      '<p class="waiting-checkin-error" role="alert"></p>' +
+      '<div class="delegated-modal-actions"><button type="button" data-wci-cancel class="secondary">Cancel</button>' +
+      '<button type="submit" class="primary">Save check-in</button></div>';
+    let saving = false;
+    let saved = false;
+    let settle;
+    const outcome = new Promise(resolve => { settle = resolve; });
+    const opener = document.activeElement;
+    const editOverlay = document.getElementById('delegated-modal-overlay');
+    const returnToEdit = editOverlay && editOverlay.classList.contains('open');
+    closeDelegatedModal();
+    const handle = window.DCC.overlay.open({
+      kind: window.innerWidth <= 600 ? 'sheet' : 'modal', title: 'Checked in', body: form, anchor: opener,
+      canClose: () => !saving,
+      onClose: reason => {
+        _checkInPrompt = null;
+        if (returnToEdit && reason !== 'saved') editOverlay.classList.add('open');
+        settle(reason === 'saved' && saved);
       }
-      closeDelegatedModal();
-      await afterWaitingAction();
-      toast((item.properties || {}).checkInRepeat === false ? "Follow-up complete." : "Checked in. The next reminder is scheduled.", "success");
-      return true;
-    } catch (e) {
-      toast("Could not complete check-in: " + (e.message || e), "error");
-      return false;
-    }
+    });
+    _checkInPrompt = handle;
+    form.querySelector('[data-wci-cancel]').addEventListener('click', () => handle.close('cancel'));
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (saving || _savingCheckIns.has(id) || !form.reportValidity()) return;
+      saving = true;
+      _savingCheckIns.add(id);
+      const errorEl = form.querySelector('[role="alert"]');
+      errorEl.textContent = '';
+      const submit = form.querySelector('[type="submit"]');
+      submit.textContent = 'Saving…';
+      const controls = Array.from(handle.el.querySelectorAll('button, input, textarea'));
+      controls.forEach(control => { control.disabled = true; });
+      try {
+        const result = await completeCheckInCycle(id, key, new Date().toISOString(), {
+          expectedCheckInCount,
+          nextCheckInDate: form.querySelector('#wci-date').value,
+          note: form.querySelector('#wci-note').value.trim()
+        });
+        saved = result.status === 'completed';
+        saving = false;
+        handle.close('saved');
+        await afterWaitingAction().catch(error => console.warn('[waiting] saved check-in refresh failed:', error.message || error));
+        toast(result.status === 'completed' ? 'Checked in. Next check-in saved.' : 'This Waiting item changed elsewhere. Review its current schedule.', result.status === 'completed' ? 'success' : 'info');
+      } catch (error) {
+        errorEl.textContent = 'Could not save check-in: ' + (error.message || error);
+      } finally {
+        saving = false;
+        _savingCheckIns.delete(id);
+        controls.forEach(control => { control.disabled = false; });
+        submit.textContent = 'Save check-in';
+      }
+    });
+    return outcome;
   }
 
   async function snoozeWaitingItem(id, until) {
@@ -1229,6 +1301,8 @@
     const checkBtn = document.getElementById("dm-mark-checked");
     if (checkBtn) checkBtn.style.display = (idOrNull && item && isOpenDelegated(item) && !(p.checkInRepeat === false && !p.checkInDate)) ? "" : "none";
 
+    const history = document.getElementById("dm-check-in-history");
+    if (history) history.innerHTML = item ? checkInHistoryHtml([item]) : "";
     overlay.classList.add("open");
     setTimeout(() => { const t = document.getElementById("dm-task-link"); if (t) t.focus(); }, 20);
   }
@@ -1686,6 +1760,7 @@
     open: openWaitingItem,
     completeCheckIn: markDelegatedItemCheckedById,
     completeCheckInCycle,
+    checkInHistoryForTask,
     isCheckInTask,
     checkInIsLive,
     checkInSourceUrl,

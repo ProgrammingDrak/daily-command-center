@@ -2805,17 +2805,78 @@ module.exports = function mount(app, ctx) {
   }));
 
   app.post("/api/waiting-items/:id/check-ins/complete", route(async (req, res) => {
-    const cycleKey = String(req.body && req.body.cycleKey || "").trim();
-    const completedAt = String(req.body && req.body.completedAt || new Date().toISOString());
+    const body = req.body || {};
+    const cycleKey = String(body.cycleKey || "").trim();
+    const completedAt = String(body.completedAt || new Date().toISOString());
     if (Number.isNaN(new Date(completedAt).getTime())) { res.status(400).json({ error: "completedAt must be a valid timestamp" }); return; }
-    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
-    if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Waiting item not found" }); return; }
-    assertBlockOwnership(existing, req.workspaceId);
-    const completion = waitingItems.completeCycleProperties(existing, cycleKey, completedAt, APP_TIME_ZONE);
-    if (completion.status !== "completed") return { ok: true, status: completion.status, expectedCycleKey: completion.expectedCycleKey };
-    const updated = await blockDB.updateBlock(existing.id, { properties: completion.properties });
-    broadcast("blocks-changed", { action: "waiting-check-in-complete", blockIds: [existing.id] }, req.workspaceId);
-    return { ok: true, status: "completed", item: updated };
+    const options = {};
+    if (Object.prototype.hasOwnProperty.call(body, "nextCheckInDate")) {
+      const date = body.nextCheckInDate;
+      if (typeof date !== "string" || !isValidDate(date) ||
+          Number.isNaN(Date.parse(date + "T12:00:00Z")) ||
+          new Date(date + "T12:00:00Z").toISOString().slice(0, 10) !== date ||
+          date < waitingItems.dateFromIso(completedAt, APP_TIME_ZONE)) {
+        res.status(400).json({ error: "Choose today or a later next check-in date" }); return;
+      }
+      options.nextCheckInDate = date;
+    }
+    if (body.note !== undefined && (typeof body.note !== "string" || body.note.length > 1000)) {
+      res.status(400).json({ error: "Check-in note must be text of at most 1000 characters" }); return;
+    }
+    options.note = String(body.note || "").trim();
+    if (body.expectedCheckInCount !== undefined && (!Number.isSafeInteger(body.expectedCheckInCount) || body.expectedCheckInCount < 0)) {
+      res.status(400).json({ error: "Invalid check-in history revision" }); return;
+    }
+    // Lock before reading the cycle: concurrent requests must not append two history
+    // entries or replace a newer Waiting edit with properties from a stale snapshot.
+    const client = await pool.connect();
+    let result;
+    try {
+      await client.query("BEGIN");
+      const existing = await blockDB.getBlockIncludingDeleted(req.params.id, client, true);
+      if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") throw clientError("Waiting item not found", 404);
+      assertBlockOwnership(existing, req.workspaceId);
+      const history = Array.isArray(existing.properties.checkInHistory) ? existing.properties.checkInHistory : [];
+      if (body.expectedCheckInCount !== undefined && body.expectedCheckInCount !== history.length) {
+        await client.query("COMMIT");
+        return { ok: true, status: "skipped_stale", expectedCycleKey: cycleKey };
+      }
+      // An early check-in can keep its previously scheduled future date. Its
+      // history revision distinguishes this saved check-in from a replay.
+      if (options.nextCheckInDate === waitingItems.dueDate(existing, APP_TIME_ZONE) &&
+          cycleKey === `waiting:${existing.id}:${options.nextCheckInDate}` && body.expectedCheckInCount === undefined) {
+        throw clientError("Refresh this Waiting item before saving its check-in", 409);
+      }
+      const completion = waitingItems.completeCycleProperties(existing, cycleKey, completedAt, APP_TIME_ZONE, options);
+      if (completion.status !== "completed") {
+        result = { ok: true, status: completion.status, expectedCycleKey: completion.expectedCycleKey };
+      } else {
+        const date = waitingItems.dateFromIso(completedAt, APP_TIME_ZONE);
+        const parentId = await blockDB.ensureDayRoot(date, existing.user_id, existing.workspace_id, client);
+        const task = await blockDB.createBlock({
+          type: "block", parent_id: parentId, date,
+          user_id: existing.user_id, workspace_id: existing.workspace_id,
+          properties: {
+            kind: "task", type: "task", title: "Check in on " + (existing.properties.myTask || existing.properties.title || "Waiting task"),
+            source: "waiting-checkin-log", waitingItemId: existing.id, publicVisibility: "private",
+            linkedBlockId: existing.properties.linkedBlockId || null,
+            waitingCycleKey: cycleKey, placement: "unplanned", untimed: true,
+            status: "done", done: true, completedAt, completedBy: String(req.session && req.session.userId || existing.user_id || "dcc"),
+            duration: 0, durationMinutes: 0, estimatedMinutes: 0, actualMinutes: 0, start: null, end: null,
+            notes: options.note, detail: options.note,
+          },
+        }, client);
+        completion.properties.checkInHistory[completion.properties.checkInHistory.length - 1].taskBlockId = task.id;
+        const updated = await blockDB.updateBlock(existing.id, { properties: completion.properties }, client);
+        result = { ok: true, status: "completed", item: updated, task };
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+    if (result.status === "completed") broadcast("blocks-changed", { action: "waiting-check-in-complete", blockIds: [req.params.id, result.task.id], date: result.task.date }, req.workspaceId);
+    return result;
   }));
 
   // One server path closes a Waiting item and its linked task. The HTTP route and

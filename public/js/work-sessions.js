@@ -362,6 +362,9 @@
       var actual = Number(detailTask.actualMinutes) || (sessionSeconds ? Math.max(1, Math.round(sessionSeconds / 60)) : 0);
       var summary = '<div class="work-history-summary"><span>Planned <strong>' + (planned ? planned + "m" : "not set") + '</strong></span><span>Actual <strong>' + (actual ? actual + "m" : "not recorded") + '</strong></span>' + (detailTask.startedAt ? '<span class="work-live">Active ' + elapsedLabel(detailTask.startedAt) + '</span>' : "") + '</div>';
       if (timeSummary) { timeSummary.innerHTML = summary; summary = ''; }
+      var checkIns = window.DCC && window.DCC.Waiting && window.DCC.Waiting.checkInHistoryForTask
+        ? window.DCC.Waiting.checkInHistoryForTask(data.block) : "";
+      summary += checkIns;
       section.style.display = "";
       if (!sessions.length) {
         var missingWindow = detailDone && policy(detailTask) === "planned_window";

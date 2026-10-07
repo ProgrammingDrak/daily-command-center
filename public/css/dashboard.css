@@ -2367,8 +2367,7 @@
   .dcc-scrim{position:fixed;inset:0;z-index:1400;background:transparent;display:none}
   .dcc-scrim.open{display:block}
 
-  /* ============================================================
-     MOBILE — 480px and below
+  /* =====================================================     MOBILE — 480px and below
      Designed mobile-first. Every rule is intentional.
      ============================================================ */
   @media(max-width:480px){
@@ -3468,8 +3467,7 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
   .pet-courier,.pet-courier-dust,.pet-courier-drop,.pet-courier-chip,.pet-courier-envelope{animation:none}
   .pet-courier{transition:none}
 }
-+/* == ANYTIME (anytime-dock.js, pet-nudge.js) ==================================
-   Work with no time inside it: a target count in a repeating window. Two pieces
++/* == ANYTIME (anytime-dock.js, pet-nudge.js) ===========================   Work with no time inside it: a target count in a repeating window. Two pieces
    of chrome, both bottom-right, both NON-MODAL.
 
    z-index 430 is deliberate: it sits beside .feedback-panel (421), the app's
@@ -4638,8 +4636,7 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .make-subtask-pop .make-subtask-opt:hover{background:rgba(20,184,166,0.14);color:var(--teal,#14b8a6)}
 .make-subtask-pop .make-subtask-empty{font-size:11px;color:var(--text-muted);padding:6px 7px}
 
-/* ======== MOBILE-FRIENDLY TOUCH TARGETS (<=760px) ========
-   Best practice: Apple HIG 44px, Material 48px, WCAG 2.5.5 (AAA) 44px; >=8px
+/* ======== MOBILE-FRIENDLY TOUCH TARGETS (<=760px) =   Best practice: Apple HIG 44px, Material 48px, WCAG 2.5.5 (AAA) 44px; >=8px
    spacing; never make an action hover-only (no hover on touch). Priority targets:
    complete, lightning quick-complete, add-subtask, plus titles + task creation. */
 @media (max-width:760px){
@@ -5403,8 +5400,7 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
   .rv-drawer{animation:none}
 }
 
-/* ======== SHARED TIME / DATE PICKER (time-picker.js) ========
-   One iOS-style wheel for time, one month grid for date. Used everywhere via
+/* ======== SHARED TIME / DATE PICKER (time-picker.js) =   One iOS-style wheel for time, one month grid for date. Used everywhere via
    openTimeWheel()/openDateCal() and auto-enhanced native time/date inputs. */
 .tw-overlay{display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.45)}
 .tw-overlay.open{display:block}
@@ -5845,6 +5841,13 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .slot-exchange-dialog.celebrate{animation:slotExchangePop .5s ease}
 @keyframes slotExchangePop{0%{transform:scale(1)}35%{transform:scale(1.025)}100%{transform:scale(1)}}
 
+/* Waiting check-in drafts use the shared modal/sheet lifecycle. */
+.waiting-checkin-form .delegated-modal-input{min-height:44px;font-size:16px}
+.waiting-checkin-form .delegated-modal-actions button{min-height:44px}
+.waiting-checkin-error{color:var(--red);font-size:13px}
+.waiting-checkin-error:empty{display:none}
+.waiting-checkin-note{white-space:pre-wrap;overflow-wrap:anywhere}
+.waiting-checkin-history{margin-top:12px;overflow-wrap:anywhere}
 /* Whenever tasks use the normal editor and nesting controls, with touch-safe targets. */
 .whenever-title{background:none;border:0;padding:0;text-align:left;cursor:pointer;font:inherit}
 .whenever-add-child,.whenever-collapse,.whenever-delete{border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text-muted);min-width:32px;min-height:32px;cursor:pointer}
