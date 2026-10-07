@@ -51,6 +51,29 @@ function _radialFitRadius(baseR,n,a0,a1,minChord,maxFrac){
   return Math.min(R,cap);
 }
 
+// Size targets and their orbit together so the largest task menu also fits
+// landscape phones. Exceptionally short windows use a compact grid of 44px
+// targets instead of overlapping or reducing targets below touch size.
+function _radialCircleLayout(cx,cy,baseR,n){
+  const side=Math.min(window.innerWidth,window.innerHeight);
+  const sine=n>1?Math.sin(Math.PI/n):1;
+  const fitSize=Math.floor(((side-32)*sine-4)/(1+sine));
+  const grid=fitSize<44;
+  const size=grid?44:Math.min(side<=480?60:64,fitSize);
+  const R=grid?0:Math.min(baseR,(side-32-size)/2);
+  const maxRows=Math.max(1,Math.floor((window.innerHeight-12)/48));
+  const columns=Math.max(1,Math.min(Math.max(3,Math.ceil((n+1)/maxRows)),Math.floor((window.innerWidth-12)/48)));
+  const rows=Math.ceil((n+1)/columns);
+  const insetX=grid?(columns-1)*24+size/2+8:R+size/2+16;
+  const insetY=grid?(rows-1)*24+size/2+8:R+size/2+16;
+  return {size,R,grid,columns,rows,cx:Math.max(insetX,Math.min(cx,window.innerWidth-insetX)),cy:Math.max(insetY,Math.min(cy,window.innerHeight-insetY))};
+}
+function _radialCirclePoint(layout,i,n,a0){
+  if(layout.grid)return {x:layout.cx+(i%layout.columns-(layout.columns-1)/2)*48,y:layout.cy+(Math.floor(i/layout.columns)-(layout.rows-1)/2)*48};
+  const angle=(a0+360*i/n)*Math.PI/180;
+  return {x:layout.cx+layout.R*Math.cos(angle),y:layout.cy+layout.R*Math.sin(angle)};
+}
+
 function closeRadialMenu(){
   document.querySelectorAll(".dest-radial-backdrop,.dest-radial-item,.dest-radial-label,.dest-radial-cancel").forEach(el=>el.remove());
   const trigger=_radialTrigger;
@@ -90,12 +113,11 @@ function openRadialMenu(anchorEl,items,opts){
   // Size the circle to the crowd: a tight arc with many items fans out wider so
   // the 44px icons don't overlap (clampY below uses the grown R so an edge
   // trigger still shows the whole fan).
-  const size=opts.fullCircle?(window.innerWidth<=480?60:64):44;
-  const R=opts.fullCircle?Math.min(baseR,Math.max(0,(Math.min(window.innerWidth,window.innerHeight)-32-size)/2)):_radialFitRadius(baseR,n,a0,a1,58);
-  if(opts.fullCircle){
-    const inset=R+size/2+16;
-    cx=Math.max(inset,Math.min(cx,window.innerWidth-inset));
-    cy=Math.max(inset,Math.min(cy,window.innerHeight-inset));
+  const circle=opts.fullCircle?_radialCircleLayout(cx,cy,baseR,n):null;
+  const size=circle?circle.size:44;
+  const R=circle?circle.R:_radialFitRadius(baseR,n,a0,a1,58);
+  if(circle){
+    cx=circle.cx;cy=circle.cy;
     _radialViewportHandler=closeRadialMenu;
     window.addEventListener("resize",_radialViewportHandler);
     document.addEventListener("scroll",_radialViewportHandler,true);
@@ -107,7 +129,8 @@ function openRadialMenu(anchorEl,items,opts){
   const buttons=[];
   items.forEach((d,i)=>{
     const ang=(opts.fullCircle?a0+360*i/n:a0+(a1-a0)*(n===1?0.5:i/(n-1)))*Math.PI/180;
-    let x=cx+R*Math.cos(ang);let y=cy+R*Math.sin(ang);
+    const point=circle?_radialCirclePoint(circle,i,n,a0):{x:cx+R*Math.cos(ang),y:cy+R*Math.sin(ang)};
+    let x=point.x;let y=point.y;
     x=Math.max(30,Math.min(x,window.innerWidth-30));
     y=Math.max(30,Math.min(y,window.innerHeight-30));
     const item=document.createElement("button");
@@ -147,7 +170,9 @@ function openRadialMenu(anchorEl,items,opts){
   if(opts.fullCircle){
     const cancel=document.createElement("button");
     cancel.type="button";cancel.className="dest-radial-cancel";
-    cancel.textContent="Cancel";cancel.style.left=cx+"px";cancel.style.top=cy+"px";
+    const center=circle.grid?_radialCirclePoint(circle,n,n,a0):{x:cx,y:cy};
+    cancel.textContent="Cancel";cancel.style.left=center.x+"px";cancel.style.top=center.y+"px";
+    if(circle.grid){cancel.style.minWidth="44px";cancel.style.width="44px";cancel.style.height="44px";}
     cancel.addEventListener("click",closeRadialMenu);document.body.appendChild(cancel);buttons.push(cancel);
   }
   if(buttons[0])buttons[0].focus({preventScroll:true});

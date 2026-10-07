@@ -179,6 +179,16 @@
       ],
       "items": 11,
       "inset": 16
+    },
+    {
+      "width": 844,
+      "height": 280,
+      "landscape": true
+    },
+    {
+      "width": 844,
+      "height": 200,
+      "landscape": true
     }
   ],
   "calls": [

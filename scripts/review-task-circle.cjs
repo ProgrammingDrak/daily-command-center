@@ -35,7 +35,6 @@ fs.mkdirSync(dir,{recursive:true});
  results.push({width,pos,items:boxes.length,inset:16});
  }
  }
- await page.evaluate(()=>document.getElementById('qa-trigger').remove());
  await row.locator('.btn-task-radial').click();await page.mouse.click(4,4);assert.equal(await page.locator('button.dest-radial-item').count(),0);
  for(let i=0;i<3;i++){await row.locator('.btn-task-radial').tap();await page.keyboard.press('Escape');}
  await row.locator('.btn-task-radial').tap();await page.getByRole('button',{name:'Lock',exact:true}).tap();
@@ -44,6 +43,19 @@ fs.mkdirSync(dir,{recursive:true});
  assert(!await page.evaluate(()=>scheduled.find(t=>t.id==='review-detail-task')._locked));
  await row.locator('.btn-task-radial').click();await page.evaluate(()=>document.dispatchEvent(new Event('scroll')));assert.equal(await page.locator('button.dest-radial-item').count(),0);
  await row.locator('.btn-task-radial').click();await page.setViewportSize({width:500,height:700});assert.equal(await page.locator('button.dest-radial-item').count(),0);
+ for(const height of [280,200]){
+ await page.setViewportSize({width:844,height});await page.waitForTimeout(150);
+ await page.evaluate(()=>openTaskRadial({...scheduled.find(t=>t.id==='review-detail-task'),untimed:false,repeatMode:'scheduled',subtaskOf:'qa-parent'},document.getElementById('qa-trigger')));
+ await page.waitForTimeout(650);
+ const boxes=await page.locator('.dest-radial-circle-item,.dest-radial-cancel').evaluateAll(ns=>ns.map(n=>{const r=n.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,cx:r.x+r.width/2,cy:r.y+r.height/2};}));
+ for(const b of boxes)assert(b.x>=8&&b.y>=8&&b.right<=836&&b.bottom<=height-8&&b.width>=44);
+ for(let i=0;i<boxes.length;i++)for(let j=i+1;j<boxes.length;j++)assert(Math.hypot(boxes[i].cx-boxes[j].cx,boxes[i].cy-boxes[j].cy)>=Math.min(boxes[i].width,boxes[j].width)+3.9);
+ await page.screenshot({path:dir+'/landscape-'+height+'.png'});
+ await page.getByRole('button',{name:'Cancel',exact:true}).click();
+ results.push({width:844,height,landscape:true});
+ }
+ await page.setViewportSize({width:390,height:844});
+ await page.evaluate(()=>document.getElementById('qa-trigger').remove());
  const calls=await page.evaluate(()=>{
  const saved={},names=['openMakeSubtaskOf','promoteToTopLevel','moveTaskToUnplanned','openConvertToRadial','convertTaskToDelegated','openTaskDependencyModal','openRepeatResponsibilityFromTask','moveTaskToBacklog','moveTaskToWhenever','openScheduledOccurrenceActions','toggleLock'];
  const calls=[];for(const name of names){saved[name]=window[name];window[name]=(...args)=>calls.push({name,id:typeof args[0]==='object'?args[0].id:args[0]});}
@@ -51,6 +63,6 @@ fs.mkdirSync(dir,{recursive:true});
  });
  assert.equal(calls.length,11);assert(calls.some(c=>c.name==='openTaskDependencyModal'&&c.id==='qa-block'));assert(calls.every(c=>c.id==='qa-task'||c.id==='qa-block'));
  fs.writeFileSync(dir+'/radial-qa.json',JSON.stringify({results,calls,lockUnlock:true,keyboard:true,touch:true,dismissal:true},null,2));
- console.log('PASS: all 11 action callbacks; real lock/unlock; 20 edge placements at four widths; nonoverlapping circle targets; Convert/Back; keyboard focus/Tab/Escape; touch/repeated opens; Cancel/outside/scroll/resize dismissal.');
+ console.log('PASS: all 11 action callbacks; real lock/unlock; 20 edge placements and two short landscape heights at four widths; nonoverlapping circle targets; Convert/Back; keyboard focus/Tab/Escape; touch/repeated opens; Cancel/outside/scroll/resize dismissal.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
