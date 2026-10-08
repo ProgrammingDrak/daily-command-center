@@ -8,3 +8,12 @@
 #am-source-form button,.task-source-remove{cursor:pointer}
 #am-source-status{flex-basis:100%;font-size:12px;color:var(--text-muted)}
 .task-source-remove{min-width:44px}
+
+.task-file-panel { margin: 10px 0; padding: 10px; border: 1px solid var(--border, #555); border-radius: 8px; overflow-wrap: anywhere; }
+.task-file-panel p { font-size: 12px; margin: 6px 0; }
+.task-file-panel input { max-width: 100%; }
+.task-file-panel button { box-sizing: border-box; min-height: 44px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--text); font: inherit; cursor: pointer; }
+.task-file-panel button:disabled { opacity: .55; cursor: default; }
+.task-file-panel :focus-visible { outline: 2px solid var(--accent,var(--text)); outline-offset: 3px; }
+.task-file-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+.task-file-panel progress { width: 100%; }

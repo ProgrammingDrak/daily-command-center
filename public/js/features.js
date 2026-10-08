@@ -514,7 +514,7 @@ function openAddModal(taskId, taskTitle) {
       }catch(error){if(_addModalTaskId===activeTaskId)status.textContent=error.message;}
       finally{button.disabled=false;}
     };
-    document.getElementById('am-source-status').textContent='Attach stable links to originals. Private files open at their provider. File uploads are not configured.';
+    document.getElementById('am-source-status').textContent='Attach stable links to originals. Private links open at their provider. Use private file controls for uploads.';
   }
 
   // Load notes into block editor
@@ -522,7 +522,8 @@ function openAddModal(taskId, taskTitle) {
   var noteVal = notes[taskId];
   var initialBlocks=typeof noteBlocksForTask === 'function' ? noteBlocksForTask(taskId, noteVal, taskEntry) : null;
   if(window._amBlockEditor) window._amBlockEditor.destroy();
-  window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks, { accessibleLabel: 'Task notes', stableImagesOnly: true, onAttachmentError: function(message){ document.getElementById('am-source-status').textContent=message; } });
+  var taskFileControls=window.DCC.TaskAttachments.mount(document.getElementById('am-notes-block-editor'),_addModalBlockId);
+  window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks, { onAttachmentFile: function(file){taskFileControls.add(file);}, accessibleLabel: 'Task notes', stableImagesOnly: true, onAttachmentError: function(message){ document.getElementById('am-source-status').textContent=message; } });
   _addModalNotesSnapshot = _addModalNotesFingerprint();
 
   // Render combined items list

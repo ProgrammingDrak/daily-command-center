@@ -197,6 +197,7 @@ function createSlashMenu(){
 // ======== Main editor factory ========
 
 window.createBlockEditor=function(containerEl, initialBlocks, options){
+  const attachmentControls=containerEl._taskAttachments;
   const editor={};
   options=options||{};
   const placeholder=options.placeholder||containerEl.dataset.placeholder||"Type '/' for commands...";
@@ -538,6 +539,7 @@ window.createBlockEditor=function(containerEl, initialBlocks, options){
 
   function readImageFile(file, done){
     if(options.stableImagesOnly){
+      if(options.onAttachmentFile){options.onAttachmentFile(file);return;}
       if(options.onAttachmentError)options.onAttachmentError('Durable file uploads are not configured. Attach a link to the original file instead.');
       return;
     }
@@ -747,6 +749,7 @@ window.createBlockEditor=function(containerEl, initialBlocks, options){
   };
 
   editor.destroy=function(){
+    if(attachmentControls)attachmentControls.destroy();
     container.innerHTML='';
     blocks=[];
   };
