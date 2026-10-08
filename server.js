@@ -164,9 +164,9 @@ app.use(session(sessionOptions));
 require("./routes/conversation")(app, { pool, blockDB, APP_TIME_ZONE, getTodayStr, filterLegacyGcalBlocks, broadcast, broadcastQueueChange });
 
 // ── Auth Middleware ──
-const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/auth/device/start", "/api/auth/device/status", "/api/auth/device/cancel", "/api/auth/device/inspect", "/api/auth/device/approve", "/api/auth/device/redeem", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
+const AUTH_PUBLIC = new Set(["/register", "/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/auth/device/start", "/api/auth/device/status", "/api/auth/device/cancel", "/api/auth/device/inspect", "/api/auth/device/approve", "/api/auth/device/redeem", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/ingest/day-state/v2", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts", "/api/dcc/meeting-signals", "/api/dcc/slack-reconcile"]);
-function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/shared-itinerary/") || req.path.startsWith("/sponsor/") || req.path.startsWith("/reimburse/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
+function isPublicRoute(req) { return req.path.startsWith("/friend-invite/") || req.path.startsWith("/pet/") || req.path.startsWith("/shared-itinerary/") || req.path.startsWith("/sponsor/") || req.path.startsWith("/reimburse/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 // On Render the app runs behind a same-host reverse proxy, so EVERY request's
 // socket peer is 127.0.0.1 — trusting localhost there would open the DCC service
@@ -1025,8 +1025,9 @@ const ctx = {
   get syncMgr() { return syncMgr; },
 };
 require("./routes/access")(app, ctx);
+ctx.commitmentBounty = require("./routes/social-todo")(app, ctx);
 require("./routes/commitments")(app, ctx);
-require("./routes/social-todo")(app, ctx);
+require("./routes/friend-invites")(app, { ...ctx, PROJECT_DIR });
 require("./routes/pet-home")(app, ctx);
 require("./routes/blocks")(app, ctx);
 require("./routes/task-attachments")(app, ctx);
