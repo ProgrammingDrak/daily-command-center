@@ -5884,4 +5884,4 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .dm-date-quick-actions button.active,.sched-chip.active,.resched-btn.active{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
 
 /* Deep hierarchies keep room for task titles and controls on phones. */
-@media(max-width:540px){.it-list-item,.tl-item{--task-indent-max:44px}}
+@media(max-width:480px){.it-list-item,.tl-item{--task-indent-max:44px}}

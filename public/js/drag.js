@@ -257,12 +257,13 @@ function taskMatchesBlock(task, block){
 
 // Tag-aware cascade: tasks are placed into the earliest matching schedule block.
 // Falls back to sequential placement when no block matches or block is full.
-function _reflowTaskTime(ev,start,duration){
+function _reflowTaskTime(ev,start,duration,hierarchy){
   const oldStart=pt(ev.start);
   ev.start=fmt(start);ev.end=fmt(start+duration);
-  _shiftWrapChildren(ev,oldStart);
+  _shiftWrapChildren(ev,oldStart,hierarchy);
 }
 function recalcTimesTagAware(schedBlocks){
+  const hierarchy=DCC.TaskModel.hierarchyIndex(scheduled);
   const active = DCC.TaskModel.selectActive(scheduled);
   if(!active.length) return;
 
@@ -288,7 +289,7 @@ function recalcTimesTagAware(schedBlocks){
     if(_holdsTime(ev)){
       const ps = pt(ev._pinnedStart || ev.start);
       const d = _isSeqShell(ev) ? _shellSpan(ev) : dur(ev);
-      if(_isSeqShell(ev)){ev.start=fmt(ps);_layoutShellChildren(ev);}else _reflowTaskTime(ev,ps,d);
+      if(_isSeqShell(ev)){ev.start=fmt(ps);_layoutShellChildren(ev);}else _reflowTaskTime(ev,ps,d,hierarchy);
       blockers.push({s: ps, e: ps + d});
     }
   });
@@ -331,13 +332,13 @@ function recalcTimesTagAware(schedBlocks){
     }
 
     if(bestBlock){
-      if(_isSeqShell(ev)){ev.start=fmt(bestStart);_layoutShellChildren(ev);}else _reflowTaskTime(ev,bestStart,d);
+      if(_isSeqShell(ev)){ev.start=fmt(bestStart);_layoutShellChildren(ev);}else _reflowTaskTime(ev,bestStart,d,hierarchy);
       nextFree[bestBlock.id] = bestStart + d;
       fallbackCursor = Math.max(fallbackCursor, bestStart + d);
     } else {
       // No block matched or had room — use fallback sequential cascade
       const s = _freeStart(fallbackCursor, d, blockers);
-      if(_isSeqShell(ev)){ev.start=fmt(s);_layoutShellChildren(ev);}else _reflowTaskTime(ev,s,d);
+      if(_isSeqShell(ev)){ev.start=fmt(s);_layoutShellChildren(ev);}else _reflowTaskTime(ev,s,d,hierarchy);
       fallbackCursor = s + d;
     }
   });
@@ -359,6 +360,7 @@ function recalcTimesTagAware(schedBlocks){
 // very top lands BEFORE a meeting or a hand-set start instead of after it.
 // When any schedule block has acceptedTags, delegates to recalcTimesTagAware.
 function recalcTimes(opts){
+  const hierarchy=DCC.TaskModel.hierarchyIndex(scheduled);
   opts=opts||{};
 
   // Untimed tasks (no start; e.g. Slack-bookmark inserts) are excluded from the
@@ -381,7 +383,7 @@ function recalcTimes(opts){
       // A pinned/locked shell derives its span from its children, laid out from
       // the pinned start; a normal task uses its own duration.
       const d=_isSeqShell(ev)?_layoutShellChildren(ev):dur(ev);
-      if(!_isSeqShell(ev)){ev.end=fmt(ps+d);_shiftWrapChildren(ev,oldStart);}
+      if(!_isSeqShell(ev)){ev.end=fmt(ps+d);_shiftWrapChildren(ev,oldStart,hierarchy);}
       blockers.push({s:ps,e:ps+d});
     }
   });
@@ -462,7 +464,7 @@ function recalcTimes(opts){
     // task uses its own duration.
     const d=_isSeqShell(ev)?_shellSpan(ev):dur(ev);
     const s=_freeStart(cursor,d,blockers);
-    if(_isSeqShell(ev)){ev.start=fmt(s);_layoutShellChildren(ev);}else _reflowTaskTime(ev,s,d);
+    if(_isSeqShell(ev)){ev.start=fmt(s);_layoutShellChildren(ev);}else _reflowTaskTime(ev,s,d,hierarchy);
     if(opts.orderWins&&ev._pinnedStart&&ev._pinnedStart!==ev.start){
       ev._pinnedStart=ev.start;
       repinned.push(ev);
@@ -560,6 +562,7 @@ function _placeInWrapWindow(moved,wrapEv){
 // (child N+1 starts when child N ends). Window full: remaining children stack
 // from the start again (over-capacity; the bandwidth chip shows it).
 function _chainWrapChildren(wrapEv){
+  const index=DCC.TaskModel.hierarchyIndex(scheduled);
   const ws=pt(wrapEv.start),we=pt(wrapEv.end);
   let cursor=ws;
   DCC.TaskModel.selectActive(DCC.TaskModel.ridersOf(wrapEv.id,scheduled)).forEach(c=>{
@@ -568,7 +571,7 @@ function _chainWrapChildren(wrapEv){
     c.start=fmt(cursor);c.end=fmt(cursor+d);
     cursor+=d;
     _persistEvWrap(c);
-    _shiftWrapChildren(c,oldStart);
+    _shiftWrapChildren(c,oldStart,index);
   });
 }
 // ── SEQUENTIAL SHELL LAYOUT ──
@@ -616,7 +619,7 @@ function _layoutShellChildren(shellEv,seen){
       if(visited.has(c.id))continue;
       const oldStart=pt(c.start),d=_isSeqShell(c)?(spans.get(c.id)||0):(dur(c)>0?dur(c):15);
       c.start=fmt(cursor);c.end=fmt(cursor+d);cursor+=d;
-      if(_isSeqShell(c))shells.push(c);else _shiftWrapChildren(c,oldStart);
+      if(_isSeqShell(c))shells.push(c);else _shiftWrapChildren(c,oldStart,index);
       _persistEvWrap(c);
     }
     ev.end=fmt(pt(ev.start||"00:00")+(spans.get(ev.id)||0));_persistEvWrap(ev);
@@ -627,11 +630,11 @@ function _layoutShellChildren(shellEv,seen){
 // Shift a wrap's ride-alongs by the wrap's own movement during a reflow, so
 // their intra-window layout survives the wrap changing start time (Case A's
 // delta idiom, shared by every path that reflows after touching a nest).
-function _shiftWrapChildren(wrapEv,oldStart){
+function _shiftWrapChildren(wrapEv,oldStart,hierarchy){
   const delta=pt(wrapEv.start)-oldStart;
   if(!delta)return;
   const seen=new Set([wrapEv.id]);
-  const index=DCC.TaskModel.hierarchyIndex(scheduled);
+  const index=hierarchy||DCC.TaskModel.hierarchyIndex(scheduled);
   const kids=(id)=>index.children.get(id)||[];
   const stack=kids(wrapEv.id).slice();
   for(let i=0;i<stack.length;i++){

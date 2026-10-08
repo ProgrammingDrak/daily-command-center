@@ -22,11 +22,14 @@ Branch: `fix/hierarchy-date-audit`. Base: upstream `b126acc` (PR402).
 
 ## Validation
 
-- Node 20 full suite: 2,904 passed, 8 skipped, 0 failures (2,912 tests). Repository lint: 0 errors, 70 existing warnings. Final scoped lint: clean.
+- Node 20 full suite: 2,923 passed, 8 skipped, 0 failures (2,931 tests). Repository lint: 0 errors, 70 existing warnings. Final scoped lint: clean.
 - Focused hierarchy/date/drag/delete suite: 69 passed. Deep regressions cover 20,000-node rendering, 12,000-node completion/rollback, 2,000-node templates and 1,500-node delete/Undo.
-- Disposable PostgreSQL 16 on `/tmp/dcc-hierarchy-date-audit/socket`, port 55447: 10 passes, 0 skips/failures. Checks cover 600-level SQL traversal/completion, row/local-ID aliases, cycles, concurrent reparenting, date placement and stale retry, repeated deletion/restoration with original IDs and notes.
+- Disposable PostgreSQL 16 on `/tmp/dcc-hierarchy-date-audit/socket`, port 55447: 13 passes, 0 skips/failures. Checks cover 600-level SQL traversal/completion, row/local-ID aliases, cycles, concurrent reparenting, date placement and stale retry, repeated deletion/restoration with original IDs and notes.
 - Database-free browser fixture on 127.0.0.1:8147: trusted native HTML5 dragstart/drop; 80 descendant levels; repeated promote/nest; real touch long-press/sideways nesting; reload persistence; ordinary swipe scrolling; readable geometry at 320, 390 and 768 px.
 - Date browser fixture: Today, Tomorrow and custom dates at 1280 and 375 px; keyboard Tomorrow; Los Angeles local-day/UTC boundary; same IDs/subtree/notes, no time or source-date invention; reload persistence.
+- Atomic Undo failure injection: real PostgreSQL middle-row rollback, later-row unique conflict, fresh-connection visibility, lost acknowledgement retry, stale deletion replay and overlapping generations. Client WAL retains complete membership, waits for forward deletion and hide writes, rejects incomplete acknowledgements, and reloads account/date/generation-scoped Retry state. Production route checks cover Triage/meeting provenance and restored overlays/broadcasts.
+- Desktop and 390 px browser Undo: 82 original mixed descendants, 409 rejection followed by reload/Retry, 503 followed by reload/WAL replay through the real event listener, repeat operations and another reload. No false restoration success.
+- FULL pre-review completed all five lanes; confirmed date/Retry and response-boundary findings fixed, with follow-up correctness/performance/test review clear. Additive partial `idx_operations_delete_receipt` supports guarded deletion replay; schema bootstrap applies it. Reflows reuse hierarchy indexes.
 - Screenshots are under `test-results/hierarchy/` and `test-results/undated-scheduling/`. Verification logs are retained in `/Users/drakeshadwell/Documents/Codex/2026-10-08/task-17/`.
 
 ## Reproduce browser QA
@@ -35,13 +38,14 @@ Branch: `fix/hierarchy-date-audit`. Base: upstream `b126acc` (PR402).
 PORT=8147 DCC_REVIEW_HIERARCHY=1 node scripts/ui-review-server.mjs
 node scripts/verify-hierarchy-browser.mjs http://127.0.0.1:8147
 node scripts/verify-undated-scheduling.mjs http://127.0.0.1:8147
+node scripts/verify-subtree-undo.mjs http://127.0.0.1:8147
 ```
 
 The fixture imports no production routes or database. The hierarchy verifier resets only its synthetic fixture store. Browser launch defaults to the installed Mac Chrome; `CHROME_PATH` overrides it.
 
 ## Remaining limitations and authority
 
-- No push, PR creation, merge, deployment or production writes were performed.
-- Existing subtree Undo still restores rows through sequential single-row undeletes; a permanent rejection halfway through can leave a partial server restore. The existing code documents this accepted limitation and rolls the UI back. Atomic batch undelete is a separate remaining persistence item; this branch fixes overlapping operation ordering.
+- Shipping is authorized through `/ship-it`; review registration `eba31d4d-c137-4d6e-b92b-497fd0a293b5` owns this branch. Queue acquisition, exact-candidate checks and production SHA verification remain required.
+- Atomic restore replaces the previously disclosed sequential Undo limitation. A missing row, newer deletion, uniqueness conflict or middle-row SQL failure rolls back all restored rows and the dated hide overlay. Pending/rejected attempts retain full membership and a persistent Retry across reload; success requires all original rows to be acknowledged.
 - Physical iOS/Safari hardware was not tested; mobile verification uses real Chromium touch input at phone/tablet sizes.
 - Large SQL hierarchy traversal has nontrivial cost (the 600-node test takes several seconds); this is correctness verification, not a performance claim.

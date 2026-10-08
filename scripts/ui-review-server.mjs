@@ -184,6 +184,31 @@ app.get("/api/blocks", (req, res) => {
   }
   res.json(blocks);
 });
+// Synthetic transaction boundary for the subtree Undo browser verifier only.
+if(process.env.DCC_REVIEW_HIERARCHY==='1'){
+ let failureStatus=0;
+ const deleteReceipts=new Set();
+ app.post('/api/review/hierarchy/restore-failure',(req,res)=>{failureStatus=Number(req.body.status)||0;res.json({ok:true});});
+ app.post('/api/blocks/batch',(req,res)=>{
+  const ops=req.body.operations||[],next=new Map([...reviewBlocks].map(([id,row])=>[id,structuredClone(row)])),blocks=[],restoredDayRoots=[];
+  for(const op of ops){
+   const row=next.get(op.id);if(!row)return res.status(404).json({error:'Synthetic block not found'});
+   if(op.op==='delete'){
+    if(!deleteReceipts.has(op.id+':'+op.deleteMutationId)){row.deleted_at=new Date().toISOString();row.properties._deleteUndoToken=op.deleteMutationId;}
+    blocks.push(structuredClone(row));
+   }else if(op.op==='undelete'){
+    if(failureStatus)return res.status(failureStatus).json({error:'Injected synthetic atomic restore failure'});
+    if(row.deleted_at&&row.properties._deleteUndoToken!==op.expectedDeleteMutationId)return res.status(409).json({error:'Newer deletion superseded restore'});
+    row.deleted_at=null;blocks.push(structuredClone(row));
+   }else return res.status(400).json({error:'Unsupported synthetic batch operation'});
+  }
+  const ids=new Set(blocks.filter((_,i)=>ops[i].op==='undelete').flatMap(b=>[b.id,b.properties.local_id]));
+  for(const root of next.values())if(root.type==='day_root'&&root.properties._deleted?.some(id=>ids.has(id))){root.properties._deleted=root.properties._deleted.filter(id=>!ids.has(id));restoredDayRoots.push(root);}
+  for(const op of ops)if(op.op==='delete')deleteReceipts.add(op.id+':'+op.deleteMutationId);
+  reviewBlocks.clear();for(const [id,row]of next)reviewBlocks.set(id,row);
+  res.json({blocks,restoredDayRoots});
+ });
+}
 app.post("/api/blocks", (req, res) => {
   const body = req.body || {};
   const now = new Date().toISOString();
@@ -541,6 +566,7 @@ app.get("/api/task-library", (_req,res)=>res.json({
 app.get("/api/*", (req, res) => {
   if (req.path.includes("social/feed/publishable") || req.path.includes("social/friends") || req.path.includes("social/rewards/queue") || req.path.includes("access/grants") || req.path.includes("access/granted-to-me")) return res.json([]);
   if (req.path.includes("responsibilities")) return res.json([]);
+  if (req.path === "/api/commitments") return res.json([]);
   if (req.path.includes("tasks/open")) return res.json({ items: [] });
   if (req.path.includes("blocks")) return res.json([]);
   if (req.path.includes("admin")) return res.json({ activity: [], feedback: [], items: [] });

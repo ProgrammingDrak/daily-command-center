@@ -153,6 +153,7 @@
     el.appendChild(closeBtn);
     container.appendChild(el);
     if (duration > 0) setTimeout(() => el.remove(), duration);
+    return el;
   };
 
   // ── dates ──────────────────────────────────────────────────────────────

@@ -29,6 +29,7 @@ test("real PostgreSQL hierarchy persistence and deep subtree operations", { skip
   await pool.query(`CREATE TABLE blocks(id TEXT PRIMARY KEY,type TEXT NOT NULL,parent_id TEXT,date DATE,properties JSONB DEFAULT '{}',sort_order DOUBLE PRECISION DEFAULT 0,created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL,deleted_at TIMESTAMPTZ,user_id INTEGER,workspace_id TEXT);
     CREATE INDEX ON blocks(parent_id);
     CREATE TABLE operations(id SERIAL PRIMARY KEY,block_id TEXT,op_type TEXT,before_data JSONB,after_data JSONB,timestamp TIMESTAMPTZ,batch_id TEXT);
+    CREATE INDEX idx_operations_delete_receipt ON operations (block_id,(after_data->>'deleteMutationId')) WHERE op_type='delete';
     CREATE FUNCTION dcc_is_task_row(TEXT,JSONB) RETURNS BOOLEAN LANGUAGE SQL AS $$ SELECT $1 NOT IN ('day_root','time_entry') $$;
     CREATE FUNCTION dcc_resolve_local_id(TEXT,DATE,TEXT) RETURNS TEXT LANGUAGE SQL AS $$
       SELECT CASE WHEN COUNT(*)=1 THEN MIN(id) END FROM blocks WHERE workspace_id IS NOT DISTINCT FROM $1 AND date IS NOT DISTINCT FROM $2 AND deleted_at IS NULL AND (id=$3 OR properties->>'local_id'=$3) $$;`);
@@ -219,6 +220,52 @@ test("real PostgreSQL hierarchy persistence and deep subtree operations", { skip
       for(const r of current){assert.equal(r.date,"2026-10-09");assert.equal(r.properties.notes,"Keep pool "+r.id.slice(5));}
     }
     const total=await pool.query("SELECT COUNT(*)::int AS total FROM blocks WHERE id LIKE 'pool-%'");assert.equal(total.rows[0].total,90);
+  });
+  await t.test("atomic subtree restore rolls back a middle-row SQL failure and clears the overlay only on retry", async()=>{
+    await pool.query("CREATE TABLE restore_failpoint(id TEXT PRIMARY KEY); CREATE FUNCTION reject_restore() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL AND EXISTS(SELECT 1 FROM restore_failpoint WHERE id=NEW.id) THEN RAISE EXCEPTION 'Injected middle restore failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_restore BEFORE UPDATE OF deleted_at ON blocks FOR EACH ROW EXECUTE FUNCTION reject_restore();");
+    for(const [id,props] of [["atomic-root",{notes:"Keep root notes"}],["atomic-child",{subtaskOf:"local-atomic-root",notes:"Keep child notes"}],["atomic-leaf",{subtaskOf:"local-atomic-child",duration:0,notes:"Keep leaf notes"}]])await create(id,props,"2026-10-12");
+    const ids=["atomic-root","atomic-child","atomic-leaf"],token="atomic-delete-1";
+    const dayId=await db.ensureDayRoot("2026-10-12",1,"ws-1");
+    await db.updateBlock(dayId,{properties:{_deleted:[...ids.map(id=>"local-"+id),"unrelated-hidden"],notes:"Keep unrelated day settings"}});
+    const before=await Promise.all(ids.map(id=>db.getBlock(id)));
+    await db.batchOp(ids.map(id=>({op:"delete",id,deleteMutationId:token})));
+    const ops=ids.map(id=>({op:"undelete",id,expectedDeleteMutationId:token}));
+    await pool.query("INSERT INTO restore_failpoint VALUES('atomic-child')");
+    await assert.rejects(db.batchOp(ops),/Injected middle restore failure/);
+    const fresh=await pool.connect();
+    try{const result=await fresh.query("SELECT id,deleted_at,properties FROM blocks WHERE id=ANY($1)",[ids]);assert.equal(result.rows.length,3);assert.ok(result.rows.every(row=>row.deleted_at));}finally{fresh.release();}
+    assert.deepEqual((await db.getBlock(dayId)).properties._deleted,[...ids.map(id=>"local-"+id),"unrelated-hidden"]);
+    await pool.query("DELETE FROM restore_failpoint");
+    const restored=await db.batchOp(ops);
+    assert.equal(restored.blocks.length,3);assert.equal(restored.restoredDayRoots.length,1);
+    for(let i=0;i<ids.length;i++){const row=await db.getBlock(ids[i]);assert.equal(row.id,before[i].id);assert.equal(row.parent_id,before[i].parent_id);assert.equal(row.properties.notes,before[i].properties.notes);assert.equal(row.deleted_at,null);}
+    assert.deepEqual((await db.getBlock(dayId)).properties._deleted,["unrelated-hidden"]);
+    await db.batchOp(ops); // retry a lost success acknowledgement
+    assert.equal((await db.getSubtree(ids[0],"ws-1")).length,3);
+  });
+  await t.test("a later-row idempotency conflict rejects the entire restore and a resolved conflict can retry",async()=>{
+    await pool.query("CREATE UNIQUE INDEX idx_blocks_idem_unique ON blocks(workspace_id,(properties->>'idempotency_key')) WHERE deleted_at IS NULL AND properties->>'idempotency_key' IS NOT NULL");
+    const ids=["conflict-root","conflict-child"],token="conflict-delete";
+    await create(ids[0],{notes:"Root stays whole"},"2026-10-13");await create(ids[1],{subtaskOf:"local-"+ids[0],idempotency_key:"restore-key",notes:"Child stays whole"},"2026-10-13");
+    await db.batchOp(ids.map(id=>({op:"delete",id,deleteMutationId:token})));
+    await create("live-twin",{idempotency_key:"restore-key"},"2026-10-13");
+    const ops=ids.map(id=>({op:"undelete",id,expectedDeleteMutationId:token}));
+    await assert.rejects(db.batchOp(ops),{statusCode:409,code:"RESTORE_CONFLICT"});
+    assert.ok((await db.getBlockIncludingDeleted(ids[0])).deleted_at);assert.ok((await db.getBlockIncludingDeleted(ids[1])).deleted_at);
+    await db.deleteBlock("live-twin");await db.batchOp(ops);
+    assert.equal((await db.getSubtree(ids[0],"ws-1")).length,2);
+  });
+  await t.test("old delete delivery and old restore cannot supersede a newer subtree deletion",async()=>{
+    const ids=["atomic-root","atomic-child","atomic-leaf"],old="atomic-delete-1",next="atomic-delete-2";
+    await db.batchOp(ids.map(id=>({op:"delete",id,deleteMutationId:next})));
+    await db.batchOp(ids.map(id=>({op:"delete",id,deleteMutationId:old}))); // original lost ack replays late
+    for(const id of ids)assert.equal((await db.getBlockIncludingDeleted(id)).properties._deleteUndoToken,next);
+    await assert.rejects(db.batchOp(ids.map(id=>({op:"undelete",id,expectedDeleteMutationId:old}))),{code:"RESTORE_SUPERSEDED"});
+    const restore=ids.map(id=>({op:"undelete",id,expectedDeleteMutationId:next}));await db.batchOp(restore);
+    const newest="atomic-delete-3";
+    const settled=await Promise.allSettled([db.batchOp(restore),db.batchOp(ids.map(id=>({op:"delete",id,deleteMutationId:newest})))]);
+    assert.equal(settled[1].status,"fulfilled");
+    for(const id of ids){const row=await db.getBlockIncludingDeleted(id);assert.ok(row.deleted_at);assert.equal(row.properties._deleteUndoToken,newest);}
   });
 
 });

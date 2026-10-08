@@ -1284,14 +1284,25 @@ async function propagateResponsibilityDone({ id, before, after, at, date, client
   }
 }
 
-async function deleteBlock(id, client) {
+async function deleteBlock(id, client, deleteMutationId) {
   const q = client || pool;
   const now = new Date().toISOString();
-  const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1", [id]);
+  const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1" + (client ? " FOR UPDATE" : ""), [id]);
   const existing = rows[0];
   if (!existing) throw new Error(`Block not found: ${id}`);
+  if (deleteMutationId) {
+    const receipt = await q.query("SELECT 1 FROM operations WHERE block_id = $1 AND op_type = 'delete' AND after_data->>'deleteMutationId' = $2 LIMIT 1", [id, deleteMutationId]);
+    if (receipt.rows.length) return existing.deleted_at ? {id,deleted_at:existing.deleted_at} : parseBlock(existing);
+  }
+  if (deleteMutationId || existing.properties?._deleteUndoToken) {
+    const properties = { ...existing.properties };
+    if (deleteMutationId) properties._deleteUndoToken = deleteMutationId;
+    else delete properties._deleteUndoToken;
+    await q.query("UPDATE blocks SET properties = $1 WHERE id = $2", [properties, id]);
+  }
   await q.query("UPDATE blocks SET deleted_at = $1, updated_at = $2 WHERE id = $3", [now, now, id]);
-  await q.query(`INSERT INTO operations (block_id, op_type, before_data, timestamp) VALUES ($1, 'delete', $2, $3)`, [id, existing.properties, now]);
+  if(deleteMutationId)await q.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'delete', $2, $3, $4)`,[id,existing.properties,{deleteMutationId},now]);
+  else await q.query(`INSERT INTO operations (block_id, op_type, before_data, timestamp) VALUES ($1, 'delete', $2, $3)`, [id, existing.properties, now]);
   return { id, deleted_at: now };
 }
 
@@ -1305,12 +1316,16 @@ async function deleteBlock(id, client) {
 // not a client-side 8-second timer, an undo survives a reload and a device switch —
 // which is exactly what makes immediate deletion SAFER than the timer it replaces.
 // Idempotent: undeleting a live row is a no-op that returns the row.
-async function undeleteBlock(id, client) {
+async function undeleteBlock(id, client, expectedDeleteMutationId) {
   const q = client || pool;
   const now = new Date().toISOString();
-  const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1", [id]);
+  const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1" + (client ? " FOR UPDATE" : ""), [id]);
   const existing = rows[0];
   if (!existing) throw new Error(`Block not found: ${id}`);
+  if (existing.deleted_at && expectedDeleteMutationId && existing.properties?._deleteUndoToken !== expectedDeleteMutationId) {
+    const error = new Error("A newer deletion superseded this restore");
+    error.statusCode = 409; error.code = "RESTORE_SUPERSEDED"; throw error;
+  }
   if (!existing.deleted_at) return parseBlock(existing);
   // Clearing deleted_at moves the row INTO idx_blocks_idem_unique's partial predicate
   // (`... AND deleted_at IS NULL`), so if a live row already holds this key the UPDATE
@@ -1326,8 +1341,8 @@ async function undeleteBlock(id, client) {
   } catch (err) {
     // Same rule as createBlock: inside a caller's transaction the 23505 has already
     // aborted it, so recovery belongs to whoever owns the tx and the raw error must
-    // survive. No caller passes a client today; this keeps the two functions from
-    // diverging the moment one does.
+    // survive. Atomic subtree restore owns that rollback and maps the conflict
+    // after the transaction has rolled back.
     if (client || !isIdempotencyConflict(err)) throw err;
     const conflict = new Error("Another live block already holds this idempotency key");
     conflict.statusCode = 409;
@@ -1836,28 +1851,56 @@ async function getBlock(id, client) {
 
 async function batchOp(operations, transactionClient) {
   const batchId = crypto.randomUUID();
-  const results = [];
+  const results = [], restoredDayRoots = [];
   const ownsTransaction = !transactionClient;
   const client = transactionClient || await pool.connect();
   try {
     if (ownsTransaction) await client.query("BEGIN");
+    if (operations.some(op => op.op === "undelete" || op.deleteMutationId)) {
+      // A common lock order keeps overlapping subtree mutations serialized.
+      const ids = [...new Set(operations.map(op => op.id).filter(Boolean))].sort();
+      await client.query("SELECT id FROM blocks WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE", [ids]);
+    }
     for (const op of operations) {
       switch (op.op) {
         case "create": results.push(await createBlock(op, client)); break;
         case "update": results.push(await updateBlock(op.id, op, client)); break;
-        case "delete": results.push(await deleteBlock(op.id, client)); break;
+        case "delete": results.push(await deleteBlock(op.id, client, op.deleteMutationId)); break;
+        case "undelete": results.push(await undeleteBlock(op.id, client, op.expectedDeleteMutationId)); break;
         case "reorder": await reorderBlocks(op.items, client); results.push({ reordered: op.items.length }); break;
         default: throw new Error(`Unknown batch operation: ${op.op}`);
+      }
+    }
+    // Restored rows and the dated hide overlay become visible in one commit.
+    const partitions = new Map();
+    operations.forEach((op, i) => {
+      if (op.op !== "undelete") return;
+      const row = results[i]; if (!row.date) return;
+      const key = JSON.stringify([row.workspace_id || null, row.date]);
+      if (!partitions.has(key)) partitions.set(key, { row, ids: new Set() });
+      const ids = partitions.get(key).ids; ids.add(row.id);
+      if (row.properties?.local_id) ids.add(row.properties.local_id);
+    });
+    for (const { row, ids } of partitions.values()) {
+      const { rows } = await client.query("SELECT * FROM blocks WHERE type = 'day_root' AND workspace_id IS NOT DISTINCT FROM $1 AND date = $2::date AND deleted_at IS NULL FOR UPDATE", [row.workspace_id || null, row.date]);
+      for (const root of rows) {
+        const properties = typeof root.properties === "string" ? JSON.parse(root.properties) : root.properties;
+        if (!Array.isArray(properties._deleted) || !properties._deleted.some(id => ids.has(id))) continue;
+        restoredDayRoots.push(await updateBlock(root.id, { properties: { ...properties, _deleted: properties._deleted.filter(id => !ids.has(id)) } }, client));
       }
     }
     if (ownsTransaction) await client.query("COMMIT");
   } catch (err) {
     if (ownsTransaction) await client.query("ROLLBACK");
+    if (operations.some(op => op.op === "undelete") && isIdempotencyConflict(err)) {
+      const error = new Error("Another live block already holds a restored task's idempotency key");
+      error.statusCode = 409; error.code = "RESTORE_CONFLICT"; throw error;
+    }
     throw err;
   } finally {
     if (ownsTransaction) client.release();
   }
-  return { batchId, blocks: results };
+  return { batchId, blocks: results, restoredDayRoots };
 }
 
 // ── Reschedule (atomic subtree move) ──

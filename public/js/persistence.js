@@ -325,6 +325,8 @@ function reloadPersistedEdits() {
     try { dailyBounty = JSON.parse(localStorage.getItem(BOUNTY_KEY) || "null"); } catch(e) { dailyBounty = null; }
     try { commuteTimes = JSON.parse(localStorage.getItem(COMMUTE_KEY) || "{}"); } catch(e) { commuteTimes = {}; }
   }
+  // Failed/pending tree restores stay explicit across reloads and date switches.
+  if(typeof restoreDeleteUndoState==="function")restoreDeleteUndoState();
   // Restore user-added tasks (quick-add, drawer-add)
   try {
     if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){

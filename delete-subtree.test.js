@@ -36,7 +36,7 @@ function mustMatch(src, re, what) {
 
 // Top-level `const`/`let` in the sliced source are lexical bindings, not properties of
 // the vm context object, so they have to be read by evaluating their name.
-const snapshotsOf = (ctx) => vm.runInContext("_deleteUndoSnapshots", ctx);
+const snapshotsOf = ctx => {const m=vm.runInContext("_deleteUndoSnapshots",ctx);return {get:id=>m.get(DAY+":"+id)||m.get("pool:"+id),delete:id=>m.delete(DAY+":"+id),has:id=>m.has(DAY+":"+id),keys:()=>[...m.values()].map(s=>s.rootId).values(),get size(){return m.size;}};};
 
 const DAY = "2026-07-29";
 
@@ -73,8 +73,8 @@ function ev(id, extra = {}) {
 // `bufferUndelete` is the OTHER half of undeleteBlock's {ok, permanent} split: not-yet
 // rather than never. `cancelFails` makes cancelBufferedWrite report that the queued delete
 // already replayed, which is what happens when reconnecting fires replayWAL before the click.
-function makeDay({ scheduled, rows = {}, alreadyDeleted = [], deferDelete = false, failDelete = false, rejectUndelete = false, bufferUndelete = false, cancelFails = false }) {
-  const batches = [];
+function makeDay({ scheduled, rows = {}, alreadyDeleted = [], deferDelete = false, failDelete = false, rejectUndelete = false, bufferUndelete = false, cancelFails = false, storage = new Map() }) {
+  const batches = [], restoreBatches = [], deleteTokens = [];
   const undeletes = [];
   const cancelled = [];
   const toasts = [];
@@ -82,6 +82,7 @@ function makeDay({ scheduled, rows = {}, alreadyDeleted = [], deferDelete = fals
   const deletedSet = new Set(alreadyDeleted);
   const context = {
     console,
+    localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},
     _TM: () => require("./public/js/task-model"),
     scheduled,
     deletedSet,
@@ -109,9 +110,11 @@ function makeDay({ scheduled, rows = {}, alreadyDeleted = [], deferDelete = fals
     },
     showToast: (msg, kind, ms, action) => toasts.push({ msg, kind, ms, action }),
     window: {
+      DCC_ACCOUNT_CONTEXT:{userId:1,workspaceId:"ws-1"},
       blockStore: {
         batchOp: async (operations) => {
-          batches.push(operations);
+          batches.push(operations.map(op=>{const copy={...op};delete copy.deleteMutationId;return copy;}));
+          deleteTokens.push(operations.map(op=>op.deleteMutationId));
           if (deferDelete) await new Promise((r) => { _releaseDelete = r; });
           // What the real batchOp returns when it swallows a failure and leaves the entry
           // in the WAL. Undo must notice this rather than treating it as landed.
@@ -128,12 +131,11 @@ function makeDay({ scheduled, rows = {}, alreadyDeleted = [], deferDelete = fals
             buffered: false
           };
         },
-        undeleteBlock: async (id) => {
-          undeletes.push(id);
+        restoreBlocks: async (ids,meta) => {
+          restoreBatches.push({ids:[...ids],meta});undeletes.push(...ids);
           if (rejectUndelete) return { ok: false, permanent: true };
-          // Not-yet, not never: the WAL still holds it and will replay.
-          if (bufferUndelete) return { ok: false, permanent: false };
-          return { ok: true, block: { id, deleted_at: null } };
+          if (bufferUndelete) return { ok: false, permanent: false,buffered:true };
+          return { ok: true, blocks: ids.map(id=>({id,type:"block",properties:{_deleteUndoToken:meta.deleteMutationId},deleted_at:null})) };
         },
         // Mirrors the real signature: TRUE only when a still-pending entry was cancelled.
         cancelBufferedWrite: (walId, ids) => { cancelled.push({ walId, ids }); return !cancelFails; }
@@ -143,7 +145,7 @@ function makeDay({ scheduled, rows = {}, alreadyDeleted = [], deferDelete = fals
   vm.createContext(context);
   vm.runInContext([VIEWED_DATE_SRC, SUBTREE_SRC, DELETE_SRC].join("\n"), context);
   return {
-    context, batches, undeletes, cancelled, toasts, deletedSet,
+    context, batches, restoreBatches,deleteTokens,storage,undeletes, cancelled, toasts, deletedSet,
     releaseDelete: () => { if (_releaseDelete) _releaseDelete(); },
   };
 }
@@ -314,10 +316,10 @@ test("undo revives the ORIGINAL rows through /undelete and re-creates nothing", 
   await day.context.deleteTaskWithUndo("t1");
   await day.context.undoDeleteTask("t1");
 
-  assert.strictEqual(day.batches.length, 1, "only the delete batch -- undo posts no batch of its own");
+  assert.strictEqual(day.batches.length, 1, "one delete batch and one separately recorded atomic restore batch");
   const everyOp = plain(day.batches).flat();
   assert.ok(everyOp.every((o) => o.op === "delete"), "no create op is ever issued");
-  assert.deepStrictEqual(day.undeletes, ["B1", "B2", "B3"], "each original row id is revived, root first");
+  assert.deepStrictEqual(day.undeletes, ["B1", "B2", "B3"], "one restore batch revives every original row ID");
   assert.strictEqual(day.deletedSet.size, 0, "the whole subtree is un-hidden");
 });
 
@@ -352,7 +354,7 @@ test("undo CANCELS a delete that never landed, instead of reviving a row that wa
   await day.context.deleteTaskWithUndo("t1");
   await day.context.undoDeleteTask("t1");
 
-  assert.deepStrictEqual(day.undeletes, [], "nothing to revive -- the delete never reached the server");
+  assert.deepStrictEqual(day.undeletes, ["B1"], "a cancelled or lost delete ack still needs authoritative restore confirmation");
   // plain(): `ids` is an array built inside the vm realm, so deepStrictEqual would reject
   // it on prototype identity alone.
   assert.deepStrictEqual(plain(day.cancelled), [{ walId: "wal-del", ids: ["B1"] }], "the queued delete is abandoned, not left to replay");
@@ -376,16 +378,16 @@ test("if the buffered delete already replayed, undo stops trusting the flag and 
   assert.strictEqual(day.deletedSet.size, 0);
 });
 
-test("a BUFFERED undelete keeps the restore, because the WAL will replay it", async () => {
+test("a buffered atomic restore retains retry metadata and never reports success", async () => {
   // Only a PERMANENT rejection may re-hide. Treating a retryable failure the same way would
   // persist a hide through saveDeletedState while the WAL goes on to succeed, leaving the row
   // live server-side and invisible locally across reloads -- this phase's bug, inverted.
   const day = makeDay({ scheduled: [ev("t1")], rows: { t1: row("B1", "t1") }, bufferUndelete: true });
   await day.context.deleteTaskWithUndo("t1");
   await day.context.undoDeleteTask("t1");
-  assert.strictEqual(day.deletedSet.size, 0, "a retryable failure must NOT re-hide");
+  assert.strictEqual(day.deletedSet.size, 1, "the whole tree stays hidden until confirmed");
   const last = day.toasts[day.toasts.length - 1];
-  assert.match(last.msg, /Task restored/, "only a permanent rejection is allowed to say otherwise");
+  assert.match(last.msg, /pending/);assert.equal(last.action.label,"Retry");assert.equal(snapshotsOf(day.context).get("t1").state,"pending");
 });
 
 test("a permanently rejected undelete re-hides the task instead of claiming it came back", async () => {
@@ -471,12 +473,12 @@ test("re-deleting an id refreshes its place in the snapshot map", async () => {
   assert.deepStrictEqual([...snapshotsOf(day.context).keys()], ["x1", "keep"], "keep moved to the back");
 });
 
-test("undo still works when its snapshot was evicted", async () => {
+test("missing Undo history fails closed rather than reviving an unknown subtree", async () => {
   const day = makeDay({ scheduled: [ev("t1")], rows: { t1: row("B1", "t1") } });
   await day.context.deleteTaskWithUndo("t1");
   snapshotsOf(day.context).delete("t1"); // simulate eviction
   await day.context.undoDeleteTask("t1");
-  assert.strictEqual(day.deletedSet.has("t1"), false, "the row is un-hidden rather than stuck deleted");
+  assert.strictEqual(day.deletedSet.has("t1"), true, "unknown tree membership cannot be presented as restored");
 });
 
 test("undo on a task that isn't deleted does nothing", async () => {
@@ -534,11 +536,62 @@ test("a repeated delete waits for an in-flight Undo touching the same descendant
   const persisted=new Set(),store=day.context.window.blockStore;
   store.batchOp=async operations=>{day.batches.push(operations);operations.forEach(op=>persisted.add(op.id));return {blocks:[],buffered:false};};
   let release,started;const inverseStarted=new Promise(resolve=>started=resolve);
-  store.undeleteBlock=async id=>{day.undeletes.push(id);if(id==="B1"){started();await new Promise(resolve=>release=resolve);}persisted.delete(id);return {ok:true};};
+  store.restoreBlocks=async ids=>{day.undeletes.push(...ids);started();await new Promise(resolve=>release=resolve);ids.forEach(id=>persisted.delete(id));return {ok:true};};
   await day.context.deleteTaskWithUndo("t1");
   const undo=day.context.undoDeleteTask("t1");await inverseStarted;
   const again=day.context.deleteTaskWithUndo("t2");
   release();await Promise.all([undo,again]);
   assert.deepEqual([...persisted],["B2"],"newer deletion must land after the older restore of its row");
   assert.equal(day.deletedSet.has("t2"),true);
+});
+
+
+test("failed atomic restore survives reload and Retry restores exactly the original tree",async()=>{
+  const storage=new Map(),tasks=[ev("t1"),ev("t2",{subtaskOf:"t1"})],rows={t1:row("B1","t1"),t2:row("B2","t2")};
+  const first=makeDay({scheduled:tasks,rows,storage,rejectUndelete:true});
+  await first.context.deleteTaskWithUndo("t1");await first.context.undoDeleteTask("t1");
+  assert.equal(first.deletedSet.size,2);assert.equal(snapshotsOf(first.context).get("t1").state,"failed");
+  assert(!first.toasts.some(t=>t.msg==="Task restored"));
+  const reload=makeDay({scheduled:tasks,rows,storage,alreadyDeleted:["t1","t2"]});
+  await reload.context.undoDeleteTask("t1");
+  assert.deepEqual(reload.undeletes,["B1","B2"]);assert.equal(reload.deletedSet.size,0);
+  assert.equal(reload.restoreBatches[0].meta.deleteMutationId,first.deleteTokens[0][0]);
+  assert.equal(reload.toasts.filter(t=>t.msg==="Task restored").length,1);
+});
+
+test("an older replay acknowledgement cannot unhide a newer child deletion",async()=>{
+  const tasks=[ev("t1"),ev("t2",{subtaskOf:"t1"})],rows={t1:row("B1","t1"),t2:row("B2","t2")};
+  const day=makeDay({scheduled:tasks,rows,bufferUndelete:true});
+  await day.context.deleteTaskWithUndo("t1");await day.context.undoDeleteTask("t1");
+  const old=day.restoreBatches[0].meta;
+  day.context.deletedSet.delete("t2");await day.context.deleteTaskWithUndo("t2");
+  day.context._applyTaskRestoreOutcome(old,{ok:true});
+  assert.equal(day.deletedSet.has("t1"),false);assert.equal(day.deletedSet.has("t2"),true);
+});
+
+test("a failed tree restore rehydrates a persistent Retry notice without reporting success",async()=>{
+ const storage=new Map(),nodes=[ev("root"),ev("child",{subtaskOf:"root"})],rows={root:row("b-root","root"),child:row("b-child","child",{subtaskOf:"root"})};
+ const first=makeDay({scheduled:nodes,rows,rejectUndelete:true,storage});await first.context.deleteTaskWithUndo("root");await first.context.undoDeleteTask("root");
+ const reload=makeDay({scheduled:nodes,rows,storage});vm.runInContext("restoreDeleteUndoState()",reload.context);
+ assert.deepEqual([...reload.deletedSet].sort(),["child","root"]);assert.equal(reload.toasts.length,1);assert.equal(reload.toasts[0].ms,0);assert.equal(reload.toasts[0].action.label,"Retry");
+ await reload.toasts[0].action.onClick();assert.equal(reload.restoreBatches.length,1);assert.equal(reload.deletedSet.size,0);
+});
+
+test("Retry remains bound to the original dated occurrence and cannot unhide another day's occurrence",async()=>{
+ const rows={same:row("today-row","same")},day=makeDay({scheduled:[ev("same")],rows,rejectUndelete:true});
+ await day.context.deleteTaskWithUndo("same");await day.context.undoDeleteTask("same");
+ const oldRetry=day.toasts.at(-1).action.onClick,oldToken=day.restoreBatches[0].meta.deleteMutationId;
+ day.context.viewDate="2026-07-30";rows.same={...row("tomorrow-row","same"),date:"2026-07-30"};day.deletedSet.clear();
+ await day.context.deleteTaskWithUndo("same");
+ await oldRetry();assert.equal(day.deletedSet.has("same"),true,"off-date rejection leaves current date hidden");
+ assert.deepEqual(day.restoreBatches.at(-1).ids,["today-row"]);assert.equal(day.restoreBatches.at(-1).meta.deleteMutationId,oldToken);
+ day.context.viewDate=DAY;await oldRetry();assert.deepEqual(day.restoreBatches.at(-1).ids,["today-row"]);
+ assert.equal(day.deletedSet.has("same"),true);assert.equal(vm.runInContext("_deleteUndoSnapshots.size",day.context),2);
+});
+
+test("a stale Retry cannot choose a newer deletion of the same dated tree",async()=>{
+ const day=makeDay({scheduled:[ev("same")],rows:{same:row("same-row","same")},rejectUndelete:true});
+ await day.context.deleteTaskWithUndo("same");await day.context.undoDeleteTask("same");const retry=day.toasts.at(-1).action.onClick;
+ day.deletedSet.delete("same");await day.context.deleteTaskWithUndo("same");const count=day.restoreBatches.length;
+ await retry();assert.equal(day.restoreBatches.length,count);assert.equal(day.deletedSet.has("same"),true);
 });

@@ -279,3 +279,7 @@ test("linked attachments can be set and explicitly cleared through batch", async
   const out=await postBatch(app,[{op:"update",id:"mine-1",properties:{sourceReferences:refs}},{op:"update",id:"mine-2",properties:{sourceReferences:[]}}]);
   assert.equal(out.status,200);assert.deepEqual(batched[0][0].properties.sourceReferences,refs);assert.deepEqual(batched[0][1].properties.sourceReferences,[]);
 });
+
+for(const ids of [["theirs-1"],["mine-1","theirs-1"]])test("atomic restore retains per-row authorization: "+ids.join(","),async()=>{const h=mountApp();const result=await postBatch(h.app,ids.map(id=>({op:"undelete",id,expectedDeleteMutationId:"original-delete"})));assert.equal(result.status,404);assert.equal(h.batched.length,0);});
+test("atomic restore refuses missing members before calling the transaction",async()=>{const h=mountApp();const result=await postBatch(h.app,[{op:"undelete",id:"missing",expectedDeleteMutationId:"original-delete"}]);assert.equal(result.status,404);assert.equal(h.batched.length,0);});
+test("atomic restore refuses requests without their deletion token",async()=>{const h=mountApp();const result=await postBatch(h.app,[{op:"undelete",id:"mine-1"}]);assert.equal(result.status,400);assert.equal(h.batched.length,0);});

@@ -835,3 +835,12 @@ test("a TRANSIENT failure still commits, because the WAL will land the move", as
   assert.equal(calls.commit.length, 1, "a queued move still completes the task");
   assert.equal(calls.credit.length, 1);
 });
+
+test("completing a deep subtask chain promotes its open ride-along and preserves the rider's descendants",async()=>{
+ const scheduled=[{id:"t1",title:"Root",type:"task",start:"09:00",end:"09:30"},{id:"sub1",subtaskOf:"t1",type:"task",start:"09:00",end:"09:00"},{id:"sub2",subtaskOf:"sub1",type:"task",start:"09:00",end:"09:00"},{id:"rider",wrapId:"sub2",type:"task",start:"09:00",end:"09:15"},{id:"rider-child",subtaskOf:"rider",type:"task",start:"09:00",end:"09:00"},{id:"other",type:"task",start:"10:00",end:"10:30"},{id:"unrelated",wrapId:"other",type:"task",start:"10:00",end:"10:15"}];
+ const {context}=makeChainCtx({viewing:TODAY,scheduled});context.promotions=[];
+ vm.runInContext('isDeleted=()=>false;recalcTimes=()=>{};_clearPin=()=>{};_persistEvWrap=ev=>promotions.push(ev.id);\n'+ON_PARENT_SRC,context);
+ vm.runInContext('_onParentCompleted("t1")',context);await flush();
+ assert.equal(context.scheduled.find(ev=>ev.id==="rider").wrapId,null);assert.deepEqual(context.promotions,["rider"]);
+ assert.equal(context.scheduled.find(ev=>ev.id==="rider-child").subtaskOf,"rider");assert.equal(context.scheduled.find(ev=>ev.id==="unrelated").wrapId,"other");
+});
