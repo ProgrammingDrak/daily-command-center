@@ -7,16 +7,18 @@ const out=process.argv[2]||path.join(root,'test-results','event-links');fs.mkdir
 const check=(name,value)=>{assert.ok(value,name);checks.push(name);console.log('PASS '+name);};
 const context=await browser.newContext({viewport:{width:390,height:844},timezoneId:'America/Los_Angeles'});
 await context.addInitScript(()=>{const RealDate=Date;window.Date=class extends RealDate{constructor(...args){super(...(args.length?args:[RealDate.parse('2026-10-08T12:00:00Z')]));}static now(){return RealDate.parse('2026-10-08T12:00:00Z');}};window.DCC_APP_TIME_ZONE='America/New_York';window.__messages=[];window.__audio=0;window.AudioContext=class{constructor(){window.__audio++;throw Error('No real audio');}};window.DCCNativeAlarms={postMessage(raw){const m=JSON.parse(raw);window.__messages.push(m);if(m.action==='status')setTimeout(()=>this.onmessage?.({data:JSON.stringify({version:1,deviceLocal:true,status:'Synthetic phone',alarms:window.__defs||[]})}),0);}};});
+let bindingMismatch=0,bindingRequests=0;
 const now=Date.parse('2026-10-08T12:00:00Z'),start=new Date(now+3600000).toISOString();let event={id:'stable-event',workspace_id:'ws-review',date:'2026-10-08',updated_at:'v1',properties:{title:'Synthetic meeting',start}};let mode='ready';
-await context.route('**/api/alarm-context',r=>r.fulfill({json:{workspaceId:'ws-review'}}));
+await context.route('**/api/alarm-context',r=>{const h=r.request().headers();bindingRequests++;if(h['x-dcc-user']!=='1'||h['x-dcc-workspace']!=='ws-review')bindingMismatch++;return r.fulfill({json:{workspaceId:'ws-review'}});});
 await context.route('**/api/blocks/stable-event/alarm-state',r=>mode==='offline'?r.abort():mode==='unknown'?r.fulfill({status:404,json:{error:'unknown'}}):mode==='deleted'?r.fulfill({json:{...event,deleted_at:'2026-10-08T12:00:00Z'}}):r.fulfill({json:event}));
 await context.route('**/api/blocks/stable-event',r=>r.fulfill({json:event}));
-await context.route('**/public/js/app-config.js',r=>r.fulfill({contentType:'text/javascript',body:'window.DCC_APP_TIME_ZONE="America/New_York";'}));
+await context.route('**/public/js/app-config.js*',r=>r.fulfill({contentType:'text/javascript',body:'window.DCC_APP_TIME_ZONE="America/New_York";window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:"ws-review"};'}));
 const page=await context.newPage();
 try{
  await page.goto('http://127.0.0.1:8199/public/alarms.html?event=stable-event');
  await page.getByText('Linked event: Synthetic meeting · stable ID stable-event',{exact:true}).waitFor();
  check('full page exposes saved event identity and freshness limits',await page.getByRole('heading',{name:'Alarms',exact:true}).isVisible() && await page.getByText(/After 24 hours, a stale warning appears/).isVisible());
+ await page.evaluate(()=>{window.DCC_ACCOUNT_CONTEXT={userId:2,workspaceId:'ws-other'};});
  await page.locator('[name=offset]').fill('15');await page.locator('[name=challenge]').selectOption('quiz');await page.locator('[name=difficulty]').selectOption('hard');await page.locator('[name=count]').fill('5');await page.getByRole('button',{name:'Review disabled alarm on phone'}).click();
  await page.getByText(/Review on the native Alarms page/).waitFor();
  const proposal=await page.evaluate(()=>window.__messages.find(m=>m.action==='reviewEvent').alarm);
@@ -61,5 +63,6 @@ try{
  check('event editor uses stable block link and displays phone delivery status',await dashboard.getByRole('button',{name:'Create / review linked phone alarm'}).isEnabled() && await dashboard.locator('#am-event-alarm').textContent().then(t=>t.includes(created.id)));
  await dashboard.screenshot({path:out+'/mobile-event-editor.png',fullPage:true});
  await dashboard.getByRole('button',{name:'Create / review linked phone alarm'}).click();await dashboard.waitForURL('**/public/alarms.html?event=*');check('editor opens full Alarms page with stable event reference',new URL(dashboard.url()).searchParams.get('event')===created.id);
+ check('standalone Alarms API reads keep the original account binding across global account changes',bindingRequests>0 && bindingMismatch===0);
  fs.writeFileSync(out+'/checks.json',JSON.stringify({checks,syntheticClock:true,syntheticEventTime:true,nativeBridgeMock:true,audioMock:true,physicalAndroidTest:false},null,2));
 }finally{await browser.close();}

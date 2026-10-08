@@ -4,9 +4,15 @@
   const native = window.DCCNativeAlarms, model = window.DCCEventAlarms;
   let definitions = [], running = false, generation = 0, initialRefresh = false;
   const page = document.getElementById('alarms-page');
+  // Main's account binding pins each tab to the principal that served app-config.
+  // The standalone Alarms page does not load the dashboard's shared fetch wrapper.
+  const configuredAccount = window.DCC_ACCOUNT_CONTEXT;
+  const account = configuredAccount && Number.isSafeInteger(configuredAccount.userId) && configuredAccount.workspaceId
+    ? { userId: configuredAccount.userId, workspaceId: configuredAccount.workspaceId } : null;
+  const accountHeaders = () => account ? { 'X-DCC-User': String(account.userId), 'X-DCC-Workspace': account.workspaceId } : {};
   const send = payload => { if (!native?.postMessage) throw Error('Use the DCC Android app to save an event alarm on this phone.'); native.postMessage(JSON.stringify(payload)); };
   const status = text => { const el = document.getElementById('event-alarm-status'); if (el) el.textContent = text; };
-  const get = async url => { let r; try { r = await fetch(url, {cache:'no-store', credentials:'same-origin'}); } catch (_) { throw Error('Event refresh failed (offline). Enabled alarms keep the last confirmed time; offline changes cannot be known.'); } if (!r.ok) { const e = Error('Event refresh failed ('+r.status+'). Enabled alarms keep the last confirmed time; offline changes cannot be known.'); e.status = r.status; throw e; } return r.json(); };
+  const get = async url => { let r; try { r = await fetch(url, {cache:'no-store', credentials:'same-origin', headers:accountHeaders()}); } catch (_) { throw Error('Event refresh failed (offline). Enabled alarms keep the last confirmed time; offline changes cannot be known.'); } if (!r.ok) { const e = Error('Event refresh failed ('+r.status+'). Enabled alarms keep the last confirmed time; offline changes cannot be known.'); e.status = r.status; throw e; } return r.json(); };
   function receive(reply) { if(reply.error){status("Phone rejected the alarm request. Open native Alarms to review its state.");return;} if (!Array.isArray(reply.alarms)) return; definitions = reply.alarms; render(); if(!initialRefresh){initialRefresh=true;refresh();} }
   window.addEventListener('dcc:native-alarm-status', e => receive(e.detail));
   if (page && native) native.onmessage = e => { try { receive(JSON.parse(e.data)); } catch (_) { status('Phone state unavailable. Use Device alarms.'); } };
