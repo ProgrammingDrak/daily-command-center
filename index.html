@@ -24,6 +24,7 @@
 <link rel="stylesheet" href="/public/css/ui-optimization.css?v=dcc-ui-1">
 <link rel="stylesheet" href="/public/css/activity.css?v=activity-1">
 <link rel="stylesheet" href="/public/css/task-sources.css">
+<link rel="stylesheet" href="/public/css/commitments.css">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -1871,8 +1872,8 @@
   <div class="social-shell">
     <div class="social-topline">
       <div>
-        <h2 class="social-title">Social</h2>
-        <div class="social-subtitle">Friends see what you choose to publish. Nothing is shared automatically.</div>
+        <h2 class="social-title">Commitments &amp; people</h2>
+        <div class="social-subtitle">Share selected outcomes, ask for help, and review what happened.</div>
         <!-- Adding a friend needs a handle, and nothing in the app used to say
              what YOURS is -- a Google sign-in never picked one. Hidden until
              /api/me answers, so it never flashes an empty chip. -->
@@ -1895,14 +1896,22 @@
     </div>
     <div id="social-lookup-status" class="social-status"></div>
     <nav class="social-workspace-tabs" aria-label="Social sections">
-      <button type="button" data-social-tab="publish" class="active">Publish</button>
+      <button type="button" data-social-tab="commitments" class="active">Commitments</button>
+      <button type="button" data-social-tab="publish">Publish</button>
       <button type="button" data-social-tab="inbox">Inbox</button>
       <button type="button" data-social-tab="friends">Friends</button>
       <button type="button" data-social-tab="feed">Feed</button>
       <button type="button" data-social-tab="access">Access</button>
     </nav>
 
-    <div class="social-grid" data-social-active="publish">
+    <div class="social-grid" data-social-active="commitments">
+      <section class="social-panel" data-social-section="commitments" id="commitment-workspace">
+        <div class="commitment-toolbar"><div><h3>Daily commitments</h3><p>One accountable person. Helpers, coaches, and managers see only what is shared here.</p></div><label>Day<input type="date" id="commitment-date"></label><button type="button" class="social-btn" id="commitment-refresh">Sync now</button><button type="button" class="social-btn" id="commitment-export">Export pending</button></div>
+        <p id="commitment-message" role="status" aria-live="polite"></p>
+        <details class="commitment-create"><summary>Commit to an outcome</summary><form id="commitment-create-form"><label>Outcome<input name="title" required maxlength="220" placeholder="A concrete result worth committing to"></label><label>Done means<textarea name="definitionDone" required maxlength="2000" rows="3" placeholder="What would show that this outcome was met?"></textarea></label><label>Committed date<input name="committedDate" type="date" required></label><p>Starts private to you. Invite people after saving. Private task details are never copied automatically.</p><button class="social-btn primary" type="submit">Save commitment</button></form></details>
+        <div class="commitment-columns"><div id="commitment-list" aria-label="Daily commitments"></div><div id="commitment-detail"></div></div>
+        <div id="commitment-pending"></div>
+      </section>
       <section class="social-panel" data-social-section="publish">
         <div class="social-panel-head">
           <h3>Ready to share</h3>
@@ -2118,6 +2127,7 @@
 <script src="/public/js/task-serialize.js?v=task-serialize-1"></script>
 <!-- task-model.js: the one block -> ev projection (window.DCC.TaskModel.fromBlock); must load before data.js/persistence.js/state.js and the carryover lane consume it -->
 <script src="/public/js/app-config.js?v=app-config-1"></script>
+<script src="/public/js/account-context.js"></script>
 <script src="/public/js/measured-task-window.js?v=measured-task-window-1"></script>
 <script src="/public/js/slack-titles.js?v=slack-rules-v1"></script>
 <script src="/public/js/task-model.js?v=task-model-1"></script>
@@ -2198,6 +2208,8 @@
 <script src="/public/js/pet-courier.js"></script>
 <script src="/public/js/todo-share.js"></script>
 <script src="/public/js/social.js"></script>
+<script src="/public/js/commitment-sync.js"></script>
+<script src="/public/js/commitments.js"></script>
 <script src="/public/js/slots.js"></script>
 <script src="/public/js/punishments.js"></script>
 <script src="/public/js/rewards-queue.js"></script>

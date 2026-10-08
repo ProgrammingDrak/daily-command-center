@@ -63,18 +63,9 @@ const CAPABILITY_MIN_TIER = {
 const CAPABILITY_MIN_ROLE = {
   // Read the owner's real itinerary, not just the single shared day.
   view_itinerary: "viewer",
-  // Comment as an identified collaborator rather than a guest.
-  comment: "commenter",
-  // Change what a task is worth. Attributed, and ledgered.
+  // Only shipped delegated routes are advertised. Scoped commitment roles have
+  // their own capability contract; a broad itinerary grant cannot assign work.
   adjust_points: "coach",
-  // Approve or reject a sponsorship offer on the owner's behalf.
-  approve_sponsorship: "coach",
-  // Put a task straight on the itinerary instead of into triage for approval.
-  assign_task: "coach",
-  // Edit or reschedule the owner's existing tasks.
-  edit_task: "manager",
-  // Delete them.
-  delete_task: "manager",
 };
 
 function resolveTier(req) {

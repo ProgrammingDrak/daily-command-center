@@ -59,9 +59,9 @@
 
   const ROLE_BLURB = {
     viewer: "can see your day",
-    commenter: "can see your day and comment",
-    coach: "can adjust points and assign tasks",
-    manager: "can edit and delete your tasks"
+    commenter: "can see your full itinerary",
+    coach: "can see your full itinerary and adjust points",
+    manager: "can see your full itinerary and adjust points"
   };
 
   function reconcileSelectedPosts() {
@@ -404,7 +404,7 @@
     // and a mistyped username should not hand that to a stranger silently.
     if ((role === "coach" || role === "manager") &&
         !confirm("Give " + username + " " + role + " access? They will be able to " +
-                 (role === "manager" ? "edit and delete your tasks." : "adjust your points and assign you tasks."))) {
+                 "see your full itinerary and adjust your points.")) {
       return;
     }
     try {
@@ -434,7 +434,7 @@
   async function changeRole(granteeUserId, role) {
     const entry = state.grants.find(g => String(g.grantee_user_id) === String(granteeUserId));
     const who = entry ? (entry.name || entry.username) : "this person";
-    if ((role === "coach" || role === "manager") && !confirm("Give " + who + " " + role + " access? " + (role === "manager" ? "They can edit and delete tasks." : "They can adjust points and assign tasks."))) return load();
+    if ((role === "coach" || role === "manager") && !confirm("Give " + who + " " + role + " access? " + "They can see your full itinerary and adjust points.")) return load();
     try {
       // The note is preserved server-side when omitted (see access-store's
       // COALESCE); sending "" here would have erased the owner's own annotation

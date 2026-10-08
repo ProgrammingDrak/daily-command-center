@@ -88,6 +88,7 @@
       '<div class="dcc-save-row"><span>Waiting changes</span><strong>' + saveDetail.pending + '</strong></div>' +
       '<p>' + DCC.esc(saveDetail.message || "") + '</p>' +
       '<time>' + DCC.esc(exact) + '</time>' +
+      '<div class="dcc-save-actions"><button type="button" data-sync-now>Sync now</button><button type="button" data-export-pending>Export pending changes</button></div>' +
       '<div class="dcc-save-brief">' +
         '<div><strong>Daily Brief</strong><span>Review today’s generated packet.</span></div>' +
         '<button type="button" data-open-brief>Open Brief</button>' +
@@ -110,6 +111,23 @@
         onClose: () => button.setAttribute("aria-expanded", "false")
       });
       button.setAttribute("aria-expanded", "true");
+      details.querySelector("[data-sync-now]").addEventListener("click", async e => {
+        e.target.disabled = true;
+        try {
+          await window.blockStore?.replayWAL();
+          await window.DCCCommitmentSync?.flush();
+          await window.DCCCommitmentSync?.refresh();
+          statusOverlay.close("sync-now");
+        } catch (err) { DCC.toast(err.message, "error"); }
+        finally { e.target.disabled = false; }
+      });
+      details.querySelector("[data-export-pending]").addEventListener("click", async () => {
+        const payload = { account: window.DCC_ACCOUNT_CONTEXT, tasks: window.blockStore?.exportPending(),
+          commitments: await window.DCCCommitmentSync?.pending() || [] };
+        const href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+        const a = document.createElement("a"); a.href = href; a.download = "dcc-pending-changes.json"; a.click();
+        setTimeout(() => URL.revokeObjectURL(href), 1000);
+      });
       const openBrief = details.querySelector("[data-open-brief]");
       if (openBrief) openBrief.addEventListener("click", () => {
         statusOverlay.close("open-brief");
@@ -222,7 +240,7 @@
 
   function init() {
     loadScrollPositions();
-    try { saveDetail = normalizeSaveDetail(JSON.parse(localStorage.getItem("dcc:save-status") || "{}")); }
+    try { saveDetail = normalizeSaveDetail(JSON.parse(localStorage.getItem("dcc:save-status:" + (window.DCC_ACCOUNT_CONTEXT?.userId || "unverified")) || "{}")); }
     catch (_) {}
     moveUtilities();
     wireSaveStatus();

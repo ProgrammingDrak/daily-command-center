@@ -18,23 +18,21 @@ async function project(rows,poolRows,triage=[]){
   return JSON.parse(JSON.stringify(await context.result));
 }
 const row=(id,date,properties,parent_id=null)=>({id,date,type:'block',workspace_id:'ws',properties:{kind:'task',local_id:id,...properties},parent_id});
-test('guest grouping includes global Triage trees and redacts private content',async()=>{
+test('guest grouping completely omits private Triage trees',async()=>{
   const root=row('t',null,{title:'Secret title',notes:'Secret note',triageBlock:true,publicVisibility:'private'});
   const child=row('c',null,{title:'Private child',triageBlock:true,publicVisibility:'private'},'t');
   const backlog=row('b',null,{title:'Backlog',kind:'backlog',triageBlock:true});
   const loose=row('l','2026-09-08',{title:'Loose end'});
   const tasks=await project([],[root,child,backlog,loose]);
-  assert.deepEqual(tasks.map(t=>t.id),['t','c']);
-  assert.equal(tasks[0].title,'Private task');assert.equal(tasks[0].detail,'');
-  assert.equal(tasks[1].subtaskOf,'t');assert.ok(tasks.every(t=>t.triageBlock&&t.untimed));
+  assert.deepEqual(tasks,[]);
   assert.ok(!JSON.stringify(tasks).includes('Secret'));
 });
 test('canonical Unplanned placement defeats stale intake and keeps done tasks in their block',async()=>{
-  const moved=row('m','2026-09-09',{title:'Moved task',triageId:'source',duration:25,publicVisibility:'private',status:'done'});
+  const moved=row('m','2026-09-09',{title:'Moved task',triageId:'source',duration:25,publicVisibility:'public',status:'done'});
   const tasks=await project([moved],[],[{id:'source',title:'Stale title',publicVisibility:'public'}]);
   assert.equal(tasks.length,1);assert.equal(tasks[0].id,'m');
   assert.equal(tasks[0].triageBlock,false);assert.equal(tasks[0].untimed,true);
-  assert.equal(tasks[0].status,'done');assert.equal(tasks[0].title,'Private task');
+  assert.equal(tasks[0].status,'done');assert.equal(tasks[0].title,'Moved task');
   assert.ok(!tasks[0].identityIds.includes('source'),'intake deduplication does not widen the guest identity projection');
 });
 

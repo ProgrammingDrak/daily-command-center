@@ -34,6 +34,7 @@ function makeDeltaStore(fetchImpl) {
     fetch: fetchImpl,
     DCC_DELTA_SYNC_ENABLED: true,
   };
+  context.DCC_ACCOUNT_CONTEXT = { userId: 1, workspaceId: "ws-1" };
   context.window = context;
   context.globalThis = context;
   vm.createContext(context);

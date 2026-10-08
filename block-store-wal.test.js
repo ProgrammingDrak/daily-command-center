@@ -68,6 +68,7 @@ function makeStore(opts = {}) {
       return { ok: true, status: 200, json: async () => body };
     },
   };
+  context.DCC_ACCOUNT_CONTEXT = opts.account || { userId: 1, workspaceId: "ws-1" };
   context.window = context;
   context.globalThis = context;
   vm.createContext(context);
@@ -87,14 +88,14 @@ function makeSharedLocks() {
   };
 }
 
-const WAL_KEY = "blockstore-wal";
-const DEAD_KEY = "blockstore-wal-dead-letter";
+const WAL_KEY = "blockstore-wal:1:ws-1";
+const DEAD_KEY = "blockstore-wal-dead-letter:1:ws-1";
 const wal = (storage) => JSON.parse(storage.get(WAL_KEY) || "[]");
 const dead = (storage) => JSON.parse(storage.get(DEAD_KEY) || "[]");
 const minsAgo = (m) => new Date(FIXED_NOW - m * 60 * 1000).toISOString();
 
 function seedWal(storage, entries) {
-  storage.set(WAL_KEY, JSON.stringify(entries));
+  storage.set(WAL_KEY, JSON.stringify(entries.map(e => ({ accountScope: "1:ws-1", ...e }))));
 }
 
 test("setTaskCompletion clears its WAL only after authoritative acknowledgement", async () => {
@@ -1075,4 +1076,36 @@ test("source form observes pending sync without persisting its client status fla
  opts.fetchReject=false;opts.fetchBody={...initial,properties:props};await store.replayWAL();
  assert.equal(wal(storage).length,0);
  assert.equal(store.get("b1").properties.sourceReferences[0].name,'Private.pdf');
+});
+
+
+test("account B never replays account A's pending writes or unbound legacy logs", async () => {
+  const storage = new Map();
+  const a = makeStore({ storage, fetchReject: true });
+  await a.store.createBlock({ type: "task", date: "2026-10-08", properties: { title: "Account A private task" } });
+  storage.set("blockstore-wal", JSON.stringify([{ op: "create", data: { title: "Legacy private task" } }]));
+  const b = makeStore({ storage, account: { userId: 2, workspaceId: "ws-2" } });
+  await b.store.replayWAL();
+  assert.equal(b.fetchCalls.length, 0);
+  assert.equal(b.store.debug().walEntries, 0);
+  assert.equal(a.store.debug().walEntries, 1);
+  assert.equal(b.store.debug().unboundLegacyEntries, 1);
+  assert.equal(b.store.exportPending().unboundLegacy.local.length, 1);
+});
+
+test("failed durable local storage refuses networking and reports local save failure", async () => {
+  const { store, context, fetchCalls } = makeStore();
+  context.localStorage.setItem = () => { throw new Error("Quota exceeded"); };
+  await assert.rejects(store.createBlock({ type: "task", date: "2026-10-08", properties: { title: "Not durable" } }), /Local save failed/);
+  assert.equal(fetchCalls.length, 0);
+  assert.ok(store.debug().localSaveError);
+});
+
+
+test("an unverified entry inside a scoped log is retained for export and never sent", async () => {
+  const { store, storage, fetchCalls } = makeStore();
+  storage.set("blockstore-wal:1:ws-1", JSON.stringify([{ _walId: "foreign", op: "create", accountScope: "2:ws-2", data: { title: "Foreign intent" } }]));
+  await store.replayWAL();
+  assert.equal(fetchCalls.length, 0);
+  assert.equal(store.exportPending().pending.length, 1);
 });

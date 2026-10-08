@@ -150,7 +150,7 @@
     if (anyTaskBountied()) {
       return '<button class="todo-bounty-btn locked" type="button" disabled title="One points-bounty per day - clear the current one first">💎 2× points</button>';
     }
-    return '<button class="todo-bounty-btn" type="button" data-bounty-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '" title="Put 2x points on this task">💎 2× points</button>';
+    return '<button class="todo-bounty-btn" type="button" data-bounty-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '" title="Offer 2x points, subject to owner approval">💎 2× points</button>';
   }
 
   function rewardButtonHtml(task){
@@ -600,6 +600,7 @@
         })
       });
       await load();
+      alert("Offer sent. It activates after the owner approves it.");
     } catch (e) {
       button.disabled = false;
       alert(e.message);

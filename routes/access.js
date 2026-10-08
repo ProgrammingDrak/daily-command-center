@@ -111,7 +111,7 @@ module.exports = function mount(app, ctx) {
   app.get("/api/coach/:ownerUserId/capabilities", requireGrant("view_itinerary"), route(async (req) => ({
     ownerUserId: req.grant.ownerUserId,
     role: req.grant.role,
-    capabilities: capabilities.capabilityMapFor({ tier: "user", role: req.grant.role })
+    capabilities: Object.fromEntries(Object.keys(capabilities.CAPABILITY_MIN_ROLE).map(name => [name, capabilities.canForOwner(name, req.grant.role)]))
   })));
 
   // ── Read: the owner's real day ─────────────────────────────────────────────

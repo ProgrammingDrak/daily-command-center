@@ -188,6 +188,7 @@ function makeBlockStore(fetchImpl, initialStorage, timeoutImpl) {
     clearInterval() {},
     fetch: fetchImpl,
   };
+  context.DCC_ACCOUNT_CONTEXT = { userId: 1, workspaceId: "ws-1" };
   context.window = context;
   context.globalThis = context;
   vm.createContext(context);
@@ -201,7 +202,7 @@ test("initial hydration is allowed with a persisted WAL so boot does not render 
     status: 200,
     json: async () => [{ id: "boot-task", type: "block", date: "2026-08-07", properties: { status: "open" } }],
   }), {
-    "blockstore-wal": JSON.stringify([{ op: "update", id: "boot-task", data: { properties: { status: "done" } }, _walId: "w1" }]),
+    "blockstore-wal:1:ws-1": JSON.stringify([{ accountScope: "1:ws-1", op: "update", id: "boot-task", data: { properties: { status: "done" } }, _walId: "w1" }]),
   });
   const loaded = await store.loadDay("2026-08-07");
   assert.ok(Array.isArray(loaded));
@@ -224,7 +225,7 @@ test("WAL replay starts a fresh hydration when the initial boot GET is still in 
       json: async () => [{ id: "boot-task", type: "block", date: "2026-08-07", properties: { status: dayGets === 1 ? "open" : "done" } }],
     };
   }, {
-    "blockstore-wal": JSON.stringify([{ op: "update", id: "boot-task", data: { properties: { status: "done" } }, _walId: "w1" }]),
+    "blockstore-wal:1:ws-1": JSON.stringify([{ accountScope: "1:ws-1", op: "update", id: "boot-task", data: { properties: { status: "done" } }, _walId: "w1" }]),
   });
 
   const initialLoad = store.loadDay("2026-08-07");
@@ -252,7 +253,7 @@ test("post-replay global hydration evicts a dateless row deleted by the WAL", as
     }
     return { ok: true, status: 200, json: async () => [] };
   }, {
-    "blockstore-wal": JSON.stringify([{ op: "delete", id: "global-task", _walId: "w1" }]),
+    "blockstore-wal:1:ws-1": JSON.stringify([{ accountScope: "1:ws-1", op: "delete", id: "global-task", _walId: "w1" }]),
   });
 
   await store.loadDay("2026-08-07");
@@ -288,7 +289,7 @@ test("post-replay hydration retries both partitions after one generation race", 
     return 1;
   };
   store = makeBlockStore(fetchImpl, {
-    "blockstore-wal": JSON.stringify([{ op: "delete", id: "global-task", _walId: "w1" }]),
+    "blockstore-wal:1:ws-1": JSON.stringify([{ accountScope: "1:ws-1", op: "delete", id: "global-task", _walId: "w1" }]),
   }, timeoutImpl);
 
   await store.loadDay("2026-08-07");

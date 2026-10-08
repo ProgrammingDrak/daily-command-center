@@ -61,6 +61,7 @@ function makeStore({ routes = {}, method } = {}) {
       };
     },
   };
+  context.DCC_ACCOUNT_CONTEXT = { userId: 1, workspaceId: "ws-1" };
   context.window = context;
   context.globalThis = context;
   vm.createContext(context);
