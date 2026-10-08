@@ -1,0 +1,34 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<title>Run metrics — synthetic local review</title><style>
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:#111827;color:#e5e7eb;font:16px system-ui;line-height:1.5}main{max-width:780px;margin:32px auto;padding:24px}h1{font-size:28px}section{padding:20px;margin:18px 0;background:#1f2937;border:1px solid #475569;border-radius:12px}label{display:block;margin:12px 0}select,button{font:inherit;min-height:44px;max-width:100%;padding:8px;color:inherit;background:#111827;border:1px solid #64748b;border-radius:6px}dl{display:grid;grid-template-columns:1fr 1fr;gap:12px}dt{color:#94a3b8}dd{margin:0;overflow-wrap:anywhere}.muted{color:#aab6c7}pre{white-space:pre-wrap;overflow-wrap:anywhere}input{width:20px;height:20px;vertical-align:middle}button{cursor:pointer}button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid #38bdf8}#status{min-height:30px}
+</style></head><body><main hidden><p class="muted">Synthetic preview · memory only · no provider connection</p><h1>Attach run metrics to a private task</h1><p>Review the source, run date and metrics before adding a result. Your task plan and completion stay separate.</p>
+<label>Review scenario <select id="scenario"></select></label><button id="reset">Reset preview</button>
+<section><h2>Example run task</h2><p>Planned: 5 km in 30 minutes. Open task, not completed.</p><dl id="metrics"></dl><p id="warning" role="status"></p></section>
+<section><label><input id="consent" type="checkbox"> I approve attaching the shown metrics to this synthetic private task.</label><label id="duplicate-label" hidden><input id="duplicate-consent" type="checkbox"> I reviewed the possible duplicate and want a separate result.</label><button id="accept">Attach in preview memory</button><p id="status" role="status" aria-live="polite"></p><pre id="result"></pre></section>
+<p class="muted">Refresh or Reset discards the preview. This page cannot read files, connect to providers or upload data.</p>
+</main><script src="model.js"></script><script src="fixtures.js"></script><script>
+function startPreview(){
+document.querySelector('main').hidden=false;
+const scenarios=RunImportFixtures, select=document.getElementById('scenario');
+for(const s of scenarios){const option=document.createElement('option');option.value=s.id;option.textContent=s.label;select.append(option);}
+let existing=[],current;
+function draw(reset=true){
+ current=scenarios.find(s=>s.id===select.value)||scenarios[0];select.value=current.id;
+ if(reset){existing=JSON.parse(JSON.stringify(current.existing));document.getElementById('consent').checked=false;document.getElementById('duplicate-consent').checked=false;document.getElementById('result').textContent='';document.getElementById('status').textContent='';}
+ const r=RunImportPreview.review(current.candidate,existing),c=r.candidate;
+ const values=[['Source',c.source.provider+' · '+c.source.origin],['Source record',c.source.recordId+' · revision '+c.source.revision],['Started',c.source.startedAt],['Results date',c.occurredOn],['Distance',c.metrics.distanceMeters==null?'Unknown':c.metrics.distanceMeters/1000+' km'],['Elapsed',c.metrics.elapsedSeconds==null?'Unknown':c.metrics.elapsedSeconds+' seconds'],['Moving',c.metrics.movingSeconds==null?'Unknown':c.metrics.movingSeconds+' seconds'],['Elapsed pace',r.paceSecondsPerKm==null?'Unknown':r.paceSecondsPerKm+' seconds / km']];
+ const host=document.getElementById('metrics');host.replaceChildren();for(const [name,value] of values){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=name;dd.textContent=value;host.append(dt,dd);}
+ document.getElementById('warning').textContent='Review state: '+r.status+(current.readConsent?'':' · source consent revoked');
+ document.getElementById('duplicate-label').hidden=r.status!=='possible-duplicate';
+ history.replaceState(null,'','#'+current.id);
+}
+select.value=location.hash.slice(1);draw();select.onchange=()=>draw();window.addEventListener('hashchange',()=>{select.value=location.hash.slice(1);draw();});document.getElementById('reset').onclick=()=>draw();
+document.getElementById('accept').onclick=()=>{try{
+ const envelope=RunImportPreview.accept(current.candidate,{existing,taskId:'synthetic-task-1',readConsent:current.readConsent,attachConsent:document.getElementById('consent').checked,allowPossibleDuplicate:document.getElementById('duplicate-consent').checked});
+ existing.push(current.candidate);draw(false);document.getElementById('result').textContent=JSON.stringify(envelope,null,2);document.getElementById('status').textContent='Attached in memory. The task remains open; plan unchanged.';
+}catch(error){document.getElementById('status').textContent=error.message;}};
+}
+if(location.protocol==='file:'||['localhost','127.0.0.1','[::1]'].includes(location.hostname))startPreview();
+else{const main=document.querySelector('main');main.textContent='This synthetic preview is available only as a local file or on localhost.';main.hidden=false;}
+</script></body></html>
