@@ -11,7 +11,7 @@ The local merge resolved exactly two textual conflicts by retaining both additio
 - `index.html`, stylesheet insertion around lines 18–22: retain the alarm and Review Tomorrow stylesheets.
 - `public/js/features.js`, immediately after `_addModalBlockId` assignment, around lines 421–434 in the virtual merge: retain the alarm link/status UI and main's `DCC.Activity.taskButton(...)` call. The latter targets its separate activity entry; removing it would regress workout/meal workflows.
 
-`server.js`, `routes/blocks.js` and `public/js/schedule.js` merged automatically. Integrated validation preserves current task/date tabs, Review Tomorrow, activity workflows and private commitments. A conflict-cleanup error was caught in browser QA and corrected before the passing checks; separator comments and executable declarations are preserved.
+`server.js`, `routes/blocks.js` and `public/js/schedule.js` merged automatically. Integrated validation preserves current task/date tabs, Review Tomorrow, activity workflows and private commitments. The new coexistence browser check caught a missing `am-activity-entry` host in main’s compact task markup; it is restored beside the task metadata so the retained activity hook can render its plan/log controls. A conflict-cleanup error was caught in browser QA and corrected before the passing checks; separator comments and executable declarations are preserved.
 
 ## Prepared compatibility fix
 
