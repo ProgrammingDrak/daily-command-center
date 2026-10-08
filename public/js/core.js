@@ -115,7 +115,7 @@
     }
     const res = await fetch(path, fetchOpts);
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || errorLabel || "Request failed");
+    if (!res.ok) throw Object.assign(new Error(data.error || errorLabel || "Request failed"), { status: res.status, code: data.code });
     return data;
   };
 
@@ -161,7 +161,10 @@
     // App-local "today" key: prefers the boot-derived __todayDate (server
     // timezone) over the browser clock, same as the day-review copy.
     todayKey() {
-      return (typeof window.__todayDate === "string" && window.__todayDate)
+      // Boot stores __todayDate as a lexical let, not a window property.
+      return (typeof __todayDate === "string" && __todayDate)
+        || (typeof window.__todayDate === "string" && window.__todayDate)
+        || (window.__DCC_STATE__ && window.__DCC_STATE__.date)
         || new Date().toISOString().slice(0, 10);
     },
     // "HH:MM" (24h) -> "h:MM am/pm"; passes through anything unparseable.

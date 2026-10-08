@@ -12,6 +12,13 @@
   const UNPLANNED_BLOCK=Object.freeze({id:"unplanned",name:"Unplanned",permanent:true,collapsible:true,editable:false,timed:false,sortable:true,dropTarget:"unplanned"});
   const OUTSIDE_BLOCK=Object.freeze({id:null,name:"Outside Time Blocks",collapsible:true,editable:false,timed:true,sortable:false,dropTarget:null});
   function collapseKey(date,block){return "time-block:"+JSON.stringify([date,block.id||null]);}
+  // Triage is source-reviewed work, not a synonym for an untimed task. Keep
+  // legacy repeat/waiting rows visible in Unscheduled without rewriting them.
+  function isSourceReviewTask(task){
+    const context=task.triageContext||{};
+    return !!(task.triageBlock && (task.triageId||task.triageKey||context.id) &&
+      !task.responsibilityId && !task.delegatedItemId && !context.waiting_item_id);
+  }
   function groupItineraryTree(nodes,blocks){
     const triage={block:TRIAGE_BLOCK,nodes:[]},unplanned={block:UNPLANNED_BLOCK,nodes:[]},outside={block:OUTSIDE_BLOCK,nodes:[]};
     const groups=(blocks||[]).map(block=>({block:Object.assign({},block,{collapsible:true,editable:true,timed:true,sortable:false,dropTarget:"timed"}),nodes:[]}));
@@ -21,7 +28,7 @@
       if(!node.depth||!bucket){
         const task=node.ev;
         const untimed=task.untimed===true||(task.untimed!==false&&minutes(task.start,false)===null);
-        bucket=untimed?(task.triageBlock?triage:unplanned):(byId.get((blockForTask(task,blocks)||{}).id)||outside);
+        bucket=untimed?(isSourceReviewTask(task)?triage:unplanned):(byId.get((blockForTask(task,blocks)||{}).id)||outside);
       }
       bucket.nodes.push(node);
     });
@@ -80,5 +87,5 @@
   }
   function rangeLabel(block){return formatTime(block.start)+" - "+formatTime(block.end);}
 
-  return {TRIAGE_BLOCK,UNPLANNED_BLOCK,OUTSIDE_BLOCK,collapseKey,groupItineraryTree,WEEKDAYS,DAYS,DAY_NAMES,DEFAULTS,DIVIDER_VARIANT,dayKey,isWeekday,activeDays,minutes,valid,normalize,forDate,groupByDay,blockForTask,formatTime,rangeLabel};
+  return {TRIAGE_BLOCK,UNPLANNED_BLOCK,OUTSIDE_BLOCK,collapseKey,isSourceReviewTask,groupItineraryTree,WEEKDAYS,DAYS,DAY_NAMES,DEFAULTS,DIVIDER_VARIANT,dayKey,isWeekday,activeDays,minutes,valid,normalize,forDate,groupByDay,blockForTask,formatTime,rangeLabel};
 });

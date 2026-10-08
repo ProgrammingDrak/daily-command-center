@@ -30,7 +30,7 @@ function mustSlice(src, re, what) {
 }
 
 const DUE_OF = mustSlice(SRC, / {2}function cycleDueOf\(key\) \{[\s\S]*?\n {2}\}/, "cycleDueOf");
-const COMPLETE = mustSlice(SRC, / {2}async function completeCheckInCycle\(id, key, completedAt\) \{[\s\S]*?\n {2}\}/, "completeCheckInCycle");
+const COMPLETE = mustSlice(SRC, / {2}async function completeCheckInCycle\(id, key, completedAt, options\) \{[\s\S]*?\n {2}\}/, "completeCheckInCycle");
 
 // Build a sandbox with a scripted sequence of route responses.
 function harness(responses) {
@@ -132,4 +132,12 @@ test("dismissTriage advances the cadence BEFORE it writes the suppression", () =
   const suppress = fn.indexOf("persistTriageSuppression");
   assert.ok(advance > -1 && suppress > -1, "both steps still present");
   assert.ok(advance < suppress, "suppressing first would leave the card hidden but still overdue");
+});
+
+
+test("a prompted check-in never retries into a changed cycle", async () => {
+  const h = harness([{ ok: true, status: "skipped_stale", expectedCycleKey: `waiting:${W}:2026-08-04` }]);
+  const result = await h.run(W, KEY_OLD, AT, { nextCheckInDate: "2026-08-25", note: "Pinged" });
+  assert.equal(result.status, "skipped_stale");
+  assert.equal(h.calls.length, 1);
 });

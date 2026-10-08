@@ -12,6 +12,7 @@
 // Exits non-zero on the first failed assertion.
 
 import { chromium } from "playwright-core";
+import { measureQueueCapsule } from "./queue-capsule-smoke.mjs";
 
 /* Browser-context globals referenced inside page.evaluate() callbacks (they run
    in Chromium, not Node). smoke.mjs escapes this by passing browser code as
@@ -113,37 +114,19 @@ for (const tab of TABS) {
   check(`tab ${tab} no h-overflow @375`, overflow === false, String(overflow));
 }
 
-// Loose Ends is count-gated, so expose it just for layout measurement. The
-// catch-up unit tests own the count/hidden behavior; this browser smoke owns the
-// real mobile header cascade and viewport geometry.
+// Measure the full five-door state with real and representative badge counts.
+// Wait for the shipped font so a fallback font cannot hide a width regression.
 await page.evaluate(() => { document.querySelector('[data-tab="schedule"]')?.click?.(); });
-const looseEndsMobile = await page.evaluate(() => {
-  const pill = document.getElementById("loose-ends-pill");
-  const waiting = document.getElementById("waiting-pill-nav");
-  const nav = document.getElementById("date-nav");
-  if (!pill || !waiting || !nav) return null;
-  const wasHidden = pill.hidden;
-  pill.hidden = false;
-  const box = pill.getBoundingClientRect();
-  const waitingBox = waiting.getBoundingClientRect();
-  const navBox = nav.getBoundingClientRect();
-  const otherBottoms = [...nav.children]
-    .filter((child) => child !== pill && child !== waiting && getComputedStyle(child).display !== "none")
-    .map((child) => child.getBoundingClientRect().bottom);
-  const result = {
-    visible: getComputedStyle(pill).display !== "none" && box.width > 0 && box.height > 0,
-    insideViewport: box.left >= 0 && box.right <= window.innerWidth,
-    dedicatedRow: box.top >= Math.max(...otherBottoms),
-    fullWidth: box.width >= navBox.width - 1,
-    touchHeight: box.height >= 44,
-    waitingBelow: waitingBox.top >= box.bottom,
-    waitingFullWidth: waitingBox.width >= navBox.width - 1,
-    waitingTouchHeight: waitingBox.height >= 44
-  };
-  pill.hidden = wasHidden;
-  return result;
-});
-check("Loose Ends mobile pill is visible in its own full-width row", !!looseEndsMobile && Object.values(looseEndsMobile).every(Boolean), JSON.stringify(looseEndsMobile));
+await page.evaluate(() => document.fonts.ready);
+for (const width of [320, 375, 390, 760, 1280, 1600]) {
+  await page.setViewportSize({ width, height: 900 });
+  for (const count of [null, 0, 7, 999]) {
+    const capsule = await page.evaluate(measureQueueCapsule, count);
+    check(`queue capsule labels, counts and touch targets @${width}, count=${count ?? "actual"}`,
+      !!capsule && Object.values(capsule).every(Boolean), JSON.stringify(capsule));
+  }
+}
+await page.setViewportSize({ width: 375, height: 812 });
 
 // The reorder drop indicator must actually PAINT. It is a pseudo-element pushed
 // fully outside the row box, so `overflow:hidden` on the row erases it while

@@ -593,10 +593,13 @@ test("addToSchedule promotes a backlog row IN PLACE — no delete, no create", (
     persistAddedTask: () => { throw new Error("persistAddedTask must NOT run for a block-backed backlog item"); },
     _reorderActive: () => {},
   });
-  ctx.addToSchedule("bl-1");
+  const write = ctx.addToSchedule("bl-1");
   assert.equal(ctx.backlog.length, 0, "it leaves the backlog");
   assert.equal(ctx.scheduled.length, 1, "and joins the day's plan");
   assert.equal(ctx.scheduled[0].id, "bl-1", "under its own id");
+  // whenever.js awaits this before pinning the start, which only writes rows already on
+  // the viewed day. Every other caller still fires and forgets.
+  assert.equal(typeof (write && write.then), "function", "addToSchedule returns the date write");
   return new Promise((r2) => setTimeout(r2, 0)).then(() => {
     assert.equal(calls.del.length, 0, "the tombstone is gone: this used to deleteBacklogBlock");
     assert.equal(calls.create.length, 0, "and this used to persistAddedTask a row with a NEW id");
@@ -1180,7 +1183,7 @@ test("_amWriteRowProps addresses the ROW, carries the rest, and refuses on a mis
   // queue rather than a local one. The chain assertion moved with it: it lives in state.js
   // and is shared with the commute writer, which is the whole point of the round-3 fix.
   const src = mustSlice(featuresSource, /^function _amWriteRowProps\(patch\) \{[\s\S]*?\n\}/m, "_amWriteRowProps");
-  assert.ok(/_rowPropsChain=_rowPropsChain\n?\s*\.then\(/.test(stateSource),
+  assert.ok(/const write=_rowPropsChain\n?\s*\.then\(/.test(stateSource),
     "row-properties writes must be serialized, or a rename and a tag edit from the same click drop one of the two");
   assert.equal(/_amWriteChain/.test(featuresSource), false,
     "and there must be no second, per-file chain — four writers with the queue in one of them is the bug");

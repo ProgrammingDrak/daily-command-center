@@ -135,28 +135,19 @@ test("row chips carry a line box, not the 44px touch floor", () => {
   const control = cssRule("\\.it-list-item:not\\(\\.done\\) \\.it-list-check");
   assert.match(control, /(?<!min-)height: var\(--target-min\);/);
   assert.match(control, /(?<!min-)width: var\(--target-min\);/);
-  // The chips keep a 44px target too and shed only their claim on row height,
-  // via a negative block margin. scripts/verify-ui-optimization.mjs pins BOTH
-  // halves of that contract for the privacy chip: "List privacy uses a compact
-  // visual pill" (pill <= 24px) and "List privacy keeps a 44 pixel touch
-  // target" (button >= 44px). A plain `height: 18px` here satisfies the first
-  // and silently reverses the second.
+  // Desktop chips follow the compact text line. The phone override and browser
+  // harness separately guard 44px touch targets without stretching either line.
   const chips = cssRule("\\.it-list-item \\.it-list-title-row > :is\\(\\.pet-privacy-toggle, \\.card-tags-toggle, \\.btn-add-menu, \\.wrap-collapse\\)");
-  assert.match(chips, /height: var\(--target-min\)/);
-  assert.match(chips, /margin-block: calc\(\(18px - var\(--target-min\)\) \/ 2\)/);
-  assert.doesNotMatch(chips, /height: 18px/);
-  // The row "+" is hidden below 480px; the flex centering above is more
-  // specific than that rule, so the hide has to be restated. Slice the block
-  // rather than spanning to it: the unbounded form anchored on the FIRST 480px
-  // query in the file and still passed with this rule hoisted out of every
-  // media query, which would hide the "+" at all widths.
-  const narrow = optimizationCss.slice(optimizationCss.lastIndexOf("@media (max-width: 480px) {"));
-  const narrowBlock = narrow.slice(0, narrow.indexOf("\n}"));
-  assert.match(narrowBlock, /\.it-list-item \.it-list-title-row > \.btn-add-menu \{ display: none; \}/);
-  assert.doesNotMatch(
-    optimizationCss.slice(0, optimizationCss.indexOf("@media")),
-    /\.it-list-item \.it-list-title-row > \.btn-add-menu \{ display: none; \}/,
-  );
+  assert.match(chips, /height: 18px/);
+  assert.match(chips, /margin-block: 0/);
+  const touch = optimizationCss.slice(optimizationCss.indexOf("/* Keep inline desktop chips compact"));
+  assert.match(touch, /@media \(max-width: 760px\)/);
+  assert.match(touch, /height: var\(--target-min\)/);
+  assert.match(touch, /margin-block: calc\(\(26px - var\(--target-min\)\) \/ 2\)/);
+  // The redesign keeps Add reachable on mobile with a full touch target.
+  const mobile = optimizationCss.slice(optimizationCss.indexOf("@media (max-width: 760px)"));
+  assert.match(mobile, /\.it-list-item \.it-list-title-row > \.btn-add-menu \{ width: var\(--target-min\); min-width: var\(--target-min\); \}/);
+  assert.doesNotMatch(optimizationCss, /\.it-list-item \.it-list-title-row > \.btn-add-menu \{ display: none; \}/);
 });
 
 test("a long title ellipsizes instead of wrapping the chips to a second line", () => {

@@ -266,3 +266,16 @@ test("a null entry in operations does not crash the handler", async () => {
   const { status } = await postBatch(app, [null]);
   assert.notEqual(status, 500, "must not TypeError on op.op");
 });
+
+// Source validation runs before batchOp, so an invalid later op cannot partially apply.
+test("unsafe sources poison the whole batch before storage", async () => {
+  const { app, batched } = mountApp();
+  const out = await postBatch(app, [{op:"create",type:"block",properties:{title:"Valid"}}, {op:"update",id:"mine-1",properties:{sourceReferences:[{kind:"image",url:"data:image/png;base64,x",name:"x.png"}]}}]);
+  assert.equal(out.status,400); assert.equal(batched.length,0);
+});
+test("linked attachments can be set and explicitly cleared through batch", async () => {
+  const { app, batched } = mountApp();
+  const refs=[{kind:"file",url:"https://drive.google.com/file/d/private/view",name:"Private.pdf"}];
+  const out=await postBatch(app,[{op:"update",id:"mine-1",properties:{sourceReferences:refs}},{op:"update",id:"mine-2",properties:{sourceReferences:[]}}]);
+  assert.equal(out.status,200);assert.deepEqual(batched[0][0].properties.sourceReferences,refs);assert.deepEqual(batched[0][1].properties.sourceReferences,[]);
+});

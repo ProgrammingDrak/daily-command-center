@@ -241,7 +241,8 @@
       }
     }
     const slot = _freeStart(cursor, d, blockers);
-    if (slot + d > ctx.dayEnd + 60) return null;
+    const slack = opts.endSlackMinutes == null ? 60 : opts.endSlackMinutes;
+    if (slot + d > ctx.dayEnd + slack) return null;
     return { start: _fmt(slot), end: _fmt(slot + d), duration: d };
   }
 

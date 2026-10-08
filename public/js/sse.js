@@ -350,6 +350,9 @@
         console.log('[SSE] Event:', msg.type, msg.source || msg.file || '');
 
         switch(msg.type) {
+          case "commitments-changed":
+            window.DCCCommitmentSync?.refresh().catch(() => {});
+            break;
           // DCC-owned state changed (scheduled task ran, file watcher triggered)
           case 'file-changed':
           case 'ingest':

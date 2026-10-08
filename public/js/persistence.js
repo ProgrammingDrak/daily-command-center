@@ -1,11 +1,22 @@
 // ======== SAVE STATUS + TOAST ========
 function updateSaveStatus(state, text) {
   const el = document.getElementById("save-status");
-  const pending = window.blockStore && typeof window.blockStore.debug === "function"
+  const commitmentStatus = window.DCCCommitmentSync?.summary;
+  const blockStatus = window.blockStore?.debug?.();
+  const pending = (commitmentStatus?.pending || 0) + (window.blockStore && typeof window.blockStore.debug === "function"
     ? Number(window.blockStore.debug().walEntries || 0)
-    : 0;
-  const message = text || "";
+    : 0);
+  let message = text || "";
   let local = "Saved locally";
+  if (blockStatus?.localSaveError || commitmentStatus?.localError) {
+    state = "local-error"; message = commitmentStatus?.localError || "Local storage could not save the task change.";
+  } else if (blockStatus?.unboundLegacyEntries) {
+    state = "error"; message = "Older pending task changes have no account binding. Export them for manual recovery.";
+  } else if (commitmentStatus?.attention) {
+    state = "error"; message = "A commitment change needs review. Open Commitments to recover or retry it.";
+  } else if (commitmentStatus?.remoteError) {
+    state = "error"; message = "Commitments offline; local work is safe.";
+  }
   let remote = "Waiting to sync";
   if (state === "ok") remote = pending ? "Waiting to sync" : "Synced";
   else if (state === "saving") remote = pending ? "Waiting to sync" : "Syncing";
@@ -20,7 +31,7 @@ function updateSaveStatus(state, text) {
       ? "Local work is safe. Reconnection restarts syncing automatically."
       : message
   };
-  try { localStorage.setItem("dcc:save-status", JSON.stringify(detail)); } catch (_) {}
+  try { localStorage.setItem("dcc:save-status:" + (window.DCC_ACCOUNT_CONTEXT?.userId || "unverified"), JSON.stringify(detail)); } catch (_) {}
   if (el) {
     el.className = "save-status save-status--" + state;
     el.title = local + " · " + remote;
@@ -375,9 +386,15 @@ function reloadPersistedEdits() {
       // C4: the kind + addressability halves are TaskModel.foldsIntoItinerary, shared
       // with syncAddedTaskTimes (which had drifted — it lacked the shell branch). What
       // stays here is what is genuinely per-view: the status tests and the day scoping.
+      const waitingParkedIds=typeof TM.waitingParkedIds==="function" ? TM.waitingParkedIds(window.blockStore.getByType("block")) : new Set();
       const isFoldableTask=b=>{
+        if(typeof waitingParkedIds!=="undefined"&&waitingParkedIds.has(String(b.id)))return false;
         const p=b.properties||{};
         if(!TM.foldsIntoItinerary(b))return false;
+        // A Whenever pool row lives in the header pill, not in today's Unplanned list.
+        // typeof-guarded like the rest of this fold: a stale cached task-model.js must
+        // degrade to "shows in Unplanned", never to an empty itinerary.
+        if(typeof TM.isWheneverPoolRow==="function"&&TM.isWheneverPoolRow(b))return false;
         // C5b was told to DROP these two branches and deliberately did not, on the strength
         // of the measurement plus what the rest of the codebase still believes.
         //
@@ -406,6 +423,7 @@ function reloadPersistedEdits() {
         if(b.date)return b.date===currentDate;
         return !(p.local_id&&datedLocalIds.has(p.local_id));
       };
+      if(_tmReady&&typeof TM.suppressWheneverSeeds==='function')scheduled=TM.suppressWheneverSeeds(scheduled,window.blockStore.getByType("block"),currentDate);
       const addedBlocks=_tmReady?[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(isFoldableTask)]:[];
       if(_tmReady)addedBlocks.forEach(block=>{
         const p=block.properties||{};
@@ -609,7 +627,7 @@ async function switchToDate(dateStr) {
     }
   }
 
-  viewDate = dateStr;
+    viewDate = dateStr;
   __state = newState;
   __data = transformState(__state);
   INIT_SCHED = __data.sched;
@@ -681,6 +699,7 @@ async function switchToDate(dateStr) {
   else if (schedView === "calendar" && typeof buildItineraryCalendar === "function") buildItineraryCalendar();
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();
+  window.dispatchEvent(new CustomEvent("dcc:view-date-changed", { detail: { date: viewDate } }));
 }
 
 setTimeout(checkServerHealthForSaveStatus, 1000);

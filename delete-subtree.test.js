@@ -17,7 +17,7 @@ const vm = require("node:vm");
 const STATE_SRC = fs.readFileSync(require.resolve("./public/js/state.js"), "utf8");
 const TASK_BANK_SRC = fs.readFileSync(require.resolve("./public/js/task-bank.js"), "utf8");
 
-const SUBTREE_SRC = mustMatch(STATE_SRC, /function _subtreeIdsOf\(rootId\)\{[\s\S]*?\n\}/, "_subtreeIdsOf");
+const SUBTREE_SRC = mustMatch(STATE_SRC, /function _subtreeIdsOf\(rootId,pool\)\{[\s\S]*?\n\}/, "_subtreeIdsOf");
 const VIEWED_DATE_SRC = mustMatch(STATE_SRC, /function _viewedDateStr\(\)\{[\s\S]*?\n\}/, "_viewedDateStr");
 // _deleteUndoSnapshots through the end of undoDeleteTask: the snapshot map and its
 // stash helper, openDeleteConfirm, deleteTaskWithUndo and undoDeleteTask -- the whole
@@ -499,4 +499,17 @@ test("the backlog_deleted tombstone representation is gone", () => {
   assert.strictEqual(TASK_BANK_SRC.includes("backlog_deleted"), false);
   assert.strictEqual(TASK_BANK_SRC.includes("getBacklogDeleteBlock"), false);
   assert.strictEqual(TASK_BANK_SRC.includes("isTaskBankBacklogDeleted"), false);
+});
+
+
+test("Whenever delete and undo use the normal transactional subtree path and original rows",async()=>{
+  const items=[ev("parent"),ev("sub",{subtaskOf:"parent"}),ev("nested",{wrapId:"parent"}),ev("deep",{subtaskOf:"nested"})];
+  const rows=Object.fromEntries(items.map(item=>[item.id,{...row("row-"+item.id,item.id),date:null}]));
+  const h=makeDay({scheduled:[],rows});h.context.backlog=items;
+  h.context.taskAnchorById=id=>({ev:items.find(item=>item.id===id),whenever:true,date:null});
+  await h.context.deleteTaskWithUndo("parent");
+  assert.deepEqual(plain(h.batches),[items.map(item=>({op:"delete",id:"row-"+item.id}))]);
+  assert.deepEqual([...h.deletedSet].sort(),items.map(item=>item.id).sort());
+  await h.context.undoDeleteTask("parent");
+  assert.deepEqual(h.undeletes,items.map(item=>"row-"+item.id));assert.equal(h.deletedSet.size,0);
 });

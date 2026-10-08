@@ -68,6 +68,7 @@ function makeStore(opts = {}) {
       return { ok: true, status: 200, json: async () => body };
     },
   };
+  context.DCC_ACCOUNT_CONTEXT = opts.account || { userId: 1, workspaceId: "ws-1" };
   context.window = context;
   context.globalThis = context;
   vm.createContext(context);
@@ -87,14 +88,14 @@ function makeSharedLocks() {
   };
 }
 
-const WAL_KEY = "blockstore-wal";
-const DEAD_KEY = "blockstore-wal-dead-letter";
+const WAL_KEY = "blockstore-wal:1:ws-1";
+const DEAD_KEY = "blockstore-wal-dead-letter:1:ws-1";
 const wal = (storage) => JSON.parse(storage.get(WAL_KEY) || "[]");
 const dead = (storage) => JSON.parse(storage.get(DEAD_KEY) || "[]");
 const minsAgo = (m) => new Date(FIXED_NOW - m * 60 * 1000).toISOString();
 
 function seedWal(storage, entries) {
-  storage.set(WAL_KEY, JSON.stringify(entries));
+  storage.set(WAL_KEY, JSON.stringify(entries.map(e => ({ accountScope: "1:ws-1", ...e }))));
 }
 
 test("setTaskCompletion clears its WAL only after authoritative acknowledgement", async () => {
@@ -1033,4 +1034,78 @@ test('Unplanned placement stays in WAL offline and replays the same identity and
   assert.equal(writes.length,2);
   assert.equal(JSON.parse(writes[1].init.body).targetDate,'2026-09-09');
   assert.equal(JSON.parse(writes[1].init.body).placement.kind,'unplanned');
+});
+
+for (const mode of ["network", "503", "stale"]) {
+  test("confirmed review move never buffers or retries after " + mode, async () => {
+    const opts = mode === "network" ? { fetchReject: true } : { fetchStatus: mode === "503" ? 503 : 409, errorBody: { error: "changed", code: "RESCHEDULE_STALE" } };
+    let release, started;
+    const pending = new Promise(resolve => { release = resolve; });
+    const requestStarted = new Promise(resolve => { started = resolve; });
+    const h = makeStore({ fetchImpl: async () => {
+      started(); await pending;
+      if (mode === "network") throw new TypeError("network down");
+      return { ok: false, status: opts.fetchStatus, json: async () => opts.errorBody };
+    } }), guard = { sourceDate: "2026-07-08", expectedDate: "2026-07-08" };
+    const request = h.store.rescheduleBlock("b1", "2026-07-09", { reviewGuard: guard });
+    await requestStarted;
+    assert.equal(wal(h.storage).length, 0, "no buffered move while a page could close or reload");
+    release();
+    await assert.rejects(request, e => e.permanent);
+    assert.equal(wal(h.storage).length, 0);
+    assert.equal(h.fetchCalls.length, 1);
+    assert.deepEqual(JSON.parse(h.fetchCalls[0].init.body).reviewGuard, guard);
+    await h.store.replayWAL();
+    assert.equal(h.fetchCalls.length, 1);
+  });
+}
+
+test("source form observes pending sync without persisting its client status flags", async () => {
+ const initial={id:"b1",type:"block",properties:{title:"Keep",source_id:"https://clever.slack.com/archives/C1/p1"}};
+ const opts={fetchBody:initial};
+ const {store,storage,fetchCalls}=makeStore(opts);
+ await store.handleBlocksChanged({blockIds:["b1"]});
+ opts.fetchReject=true;fetchCalls.length=0;
+ const props={...initial.properties,sourceReferences:[{kind:"file",url:"https://example.com/private.pdf",name:"Private.pdf"}]};
+ const out=await store.updateBlock("b1",props,{_reportSaveStatus:true});
+ assert.equal(out._savePending,true);assert.equal(wal(storage).length,1);
+ assert.equal(JSON.stringify(wal(storage)).includes('_reportSaveStatus'),false);
+ assert.equal(JSON.stringify(wal(storage)).includes('_savePending'),false);
+ assert.equal(fetchCalls[0].init.body.includes('_reportSaveStatus'),false);
+ assert.equal(store.get("b1").properties.source_id,initial.properties.source_id);
+ opts.fetchReject=false;opts.fetchBody={...initial,properties:props};await store.replayWAL();
+ assert.equal(wal(storage).length,0);
+ assert.equal(store.get("b1").properties.sourceReferences[0].name,'Private.pdf');
+});
+
+
+test("account B never replays account A's pending writes or unbound legacy logs", async () => {
+  const storage = new Map();
+  const a = makeStore({ storage, fetchReject: true });
+  await a.store.createBlock({ type: "task", date: "2026-10-08", properties: { title: "Account A private task" } });
+  storage.set("blockstore-wal", JSON.stringify([{ op: "create", data: { title: "Legacy private task" } }]));
+  const b = makeStore({ storage, account: { userId: 2, workspaceId: "ws-2" } });
+  await b.store.replayWAL();
+  assert.equal(b.fetchCalls.length, 0);
+  assert.equal(b.store.debug().walEntries, 0);
+  assert.equal(a.store.debug().walEntries, 1);
+  assert.equal(b.store.debug().unboundLegacyEntries, 1);
+  assert.equal(b.store.exportPending().unboundLegacy.local.length, 1);
+});
+
+test("failed durable local storage refuses networking and reports local save failure", async () => {
+  const { store, context, fetchCalls } = makeStore();
+  context.localStorage.setItem = () => { throw new Error("Quota exceeded"); };
+  await assert.rejects(store.createBlock({ type: "task", date: "2026-10-08", properties: { title: "Not durable" } }), /Local save failed/);
+  assert.equal(fetchCalls.length, 0);
+  assert.ok(store.debug().localSaveError);
+});
+
+
+test("an unverified entry inside a scoped log is retained for export and never sent", async () => {
+  const { store, storage, fetchCalls } = makeStore();
+  storage.set("blockstore-wal:1:ws-1", JSON.stringify([{ _walId: "foreign", op: "create", accountScope: "2:ws-2", data: { title: "Foreign intent" } }]));
+  await store.replayWAL();
+  assert.equal(fetchCalls.length, 0);
+  assert.equal(store.exportPending().pending.length, 1);
 });

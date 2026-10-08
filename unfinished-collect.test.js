@@ -399,8 +399,8 @@ test("the Unscheduled badge no longer sums two different things", () => {
     "the guard must fire on the pre-C6a summed badge");
   assert.ok(sumRx.test('section("Unscheduled",_CO_.rootsOf(unfPool).length+day.unscheduledRoots.length,"unscheduled","uns-group");'),
     "...and on a summed badge whose first term is a call, which [^)]* could not reach");
-  // C6a: the section renders a SUBTREE now, so the badge counts ROOTS explicitly.
-  assert.ok(/section\("",0,"unscheduled"\)/.test(schedTabSource));
+  // C6a: the section renders a SUBTREE, so its badge counts ROOTS. The section lives in
+  // the header pill's drawer now; whenever.test.js pins its open-root count.
   assert.equal(/section\("Unfinished"/.test(schedTabSource), false,
     "unfinished rows belong exclusively to the Loose Ends pill");
 });

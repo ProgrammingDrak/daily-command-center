@@ -1,18 +1,21 @@
 /**
  * block-store.js — Client-side BlockStore
  *
- * Write-through cache that talks to the SQLite block API.
- * Every mutation hits the server immediately (~1-5ms localhost).
+ * Write-through cache for the canonical block API.
  * Partitioned cache: dayCache (date-scoped) + globalCache (persistent).
- * sessionStorage write-ahead buffer for server-down resilience.
+ * Account-bound localStorage write-ahead buffer for offline resilience.
  */
 
 (function() {
   "use strict";
 
   const CLIENT_ID = crypto.randomUUID();
-  const WAL_KEY = "blockstore-wal"; // durable write-ahead log in localStorage
-  const WAL_DEAD_LETTER_KEY = "blockstore-wal-dead-letter";
+  const ACCOUNT = window.DCC_ACCOUNT_CONTEXT;
+  const ACCOUNT_SCOPE = ACCOUNT && ACCOUNT.userId && ACCOUNT.workspaceId
+    ? String(ACCOUNT.userId) + ":" + ACCOUNT.workspaceId : "unverified";
+  const WAL_KEY = "blockstore-wal:" + ACCOUNT_SCOPE;
+  const WAL_DEAD_LETTER_KEY = "blockstore-wal-dead-letter:" + ACCOUNT_SCOPE;
+  let _localSaveError = null;
   const WAL_LEGACY_SESSION_KEY = "blockstore-wal"; // same name, older sessionStorage home
   const _completionMetrics = { acknowledged: 0, queued: 0, replayed: 0, rejected: 0 };
 
@@ -149,11 +152,12 @@
     if (typeof updateSaveStatus === "function") updateSaveStatus("saving", "Saving...");
   }
   function setSaved() {
+    if (_localSaveError) return setError(_localSaveError);
     if (typeof updateSaveStatus === "function") updateSaveStatus("ok", "All changes saved");
   }
   function setError(msg) {
     const display = window.__DCC_HEALTH_ERROR || msg || "Save failed";
-    if (typeof updateSaveStatus === "function") updateSaveStatus("error", display);
+    if (typeof updateSaveStatus === "function") updateSaveStatus(_localSaveError ? "local-error" : "error", display);
     if (typeof showToast === "function") showToast(msg || display || "Save failed - will retry", "error");
   }
   function setPending(msg) {
@@ -182,9 +186,13 @@
       if (entry && (entry.op === "update" || entry.op === "completion" || entry.op === "realloc") && entry.id) {
         wal = wal.filter(e => !(e && e.op === entry.op && e.id === entry.id));
       }
-      wal.push({ ...entry, _walId: entryId, timestamp: new Date().toISOString() });
+      wal.push({ ...entry, accountScope: ACCOUNT_SCOPE, _walId: entryId, timestamp: new Date().toISOString() });
       localStorage.setItem(WAL_KEY, JSON.stringify(wal));
-    } catch {}
+    } catch (e) {
+      _localSaveError = "Local save failed. This change has not been queued.";
+      setError(_localSaveError);
+      throw Object.assign(new Error(_localSaveError), { cause: e });
+    }
     return entryId;
   }
 
@@ -345,24 +353,18 @@
       const dead = JSON.parse(localStorage.getItem(WAL_DEAD_LETTER_KEY) || "[]");
       dead.push({ ...entry, deadLetteredAt: new Date().toISOString(), reason: reason || "permanent failure" });
       localStorage.setItem(WAL_DEAD_LETTER_KEY, JSON.stringify(dead.slice(-50)));
-    } catch {}
+    } catch (e) {
+      _localSaveError = "Could not preserve a rejected change. It remains queued for manual recovery.";
+      setError(_localSaveError);
+      return;
+    }
     walRemove(entry._walId);
   }
 
-  // Migrate any entries left over from the sessionStorage era. Older clients
-  // that still have a session open will already have populated the sessionStorage
-  // WAL; move that content so it gets replayed alongside new localStorage entries.
+  // Legacy logs cannot be safely attributed to an account. Preserve them for
+  // manual export instead of silently assigning them to the current session.
   function walMigrateFromSession() {
-    try {
-      const legacy = sessionStorage.getItem(WAL_LEGACY_SESSION_KEY);
-      if (!legacy) return;
-      const legacyEntries = JSON.parse(legacy);
-      if (!Array.isArray(legacyEntries) || !legacyEntries.length) { sessionStorage.removeItem(WAL_LEGACY_SESSION_KEY); return; }
-      const current = JSON.parse(localStorage.getItem(WAL_KEY) || "[]");
-      const merged = [...current, ...legacyEntries.map(e => ({ ...e, _walId: e._walId || ((crypto && crypto.randomUUID) ? crypto.randomUUID() : ("w-" + Date.now() + "-" + Math.random().toString(36).slice(2))) }))];
-      localStorage.setItem(WAL_KEY, JSON.stringify(merged));
-      sessionStorage.removeItem(WAL_LEGACY_SESSION_KEY);
-    } catch {}
+    // Unbound local/session logs remain untouched for manual recovery.
   }
   walMigrateFromSession();
 
@@ -392,6 +394,7 @@
           _walId: entry._walId,
           timestamp: entry.timestamp,
           migratedFrom: "full_properties_completion",
+          accountScope: entry.accountScope,
         };
       });
       if (changed) localStorage.setItem(WAL_KEY, JSON.stringify(migrated));
@@ -610,6 +613,7 @@
   }
 
   async function replayWAL() {
+    if (ACCOUNT_SCOPE === "unverified") return;
     if (_replaying) return; // avoid overlapping replays (SSE reconnect + boot)
     const entries = walGet();
     if (!entries.length) return;
@@ -633,9 +637,14 @@
     // since-revoked session is immortal.
     const CREATE_REPLAY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     for (const entry of entries) {
+      if (entry.accountScope !== ACCOUNT_SCOPE) {
+        setError("Unverified originating account; export this change for manual recovery");
+        failed++;
+        continue;
+      }
       if (entry.op === "reschedule" && entry.timestamp && (Date.now() - Date.parse(entry.timestamp)) > RESCHEDULE_REPLAY_MAX_AGE_MS) {
         walMoveToDeadLetter(entry, "stale reschedule (>15min old)");
-        if(entry.data?.placement?.kind==="unplanned"&&typeof showToast==="function")showToast("Queued Unplanned move expired. Move the task again.","error");
+        if(entry.data?.placement?.kind==="unplanned"&&typeof showToast==="function")showToast("Queued move to "+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled")+" expired. Move the task again.","error");
         dropped++;
         continue;
       }
@@ -735,7 +744,7 @@
             else cacheDelete(entry.id);
             setError("Completion rejected" + (e.requestId ? " (request " + e.requestId + ")" : ""));
           }
-          if(entry.op==="reschedule"&&entry.data?.placement?.kind==="unplanned"&&typeof showToast==="function")showToast("Unplanned move rejected: "+e.message,"error");
+          if(entry.op==="reschedule"&&entry.data?.placement?.kind==="unplanned"&&typeof showToast==="function")showToast("Move to "+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled")+" rejected: "+e.message,"error");
           dropped++;
           console.warn("[BlockStore] WAL replay moved stale entry to dead-letter:", entry.op, entry.id || "", e.message);
           continue;
@@ -867,6 +876,8 @@
       // an Unscheduled row, while `completionIntent` makes a deliberate done/open
       // transition survive stale full-properties writers and WAL replay.
       extra = { ...(extra || {}) };
+      const reportSaveStatus = !!extra._reportSaveStatus;
+      delete extra._reportSaveStatus;
       // The shared row queue may have fetched an uncached row immediately before
       // calling us. Use that authoritative snapshot for CAS/delta derivation without
       // leaking the client-only row into the HTTP body.
@@ -971,7 +982,7 @@
         } catch (e) {
           setError("Save failed — buffered for retry");
           // A newer same-row update may already have superseded this WAL entry.
-          return optimistic || existing;
+          return reportSaveStatus ? { ...(optimistic || existing || {}), _savePending: true } : (optimistic || existing);
         }
       });
       return write;
@@ -1311,7 +1322,7 @@
     // of subtree size, one broadcast the origin client ignores (own clientId) — so
     // no snap-back, no duplication, no stranded children. The moved blocks now live
     // on targetDate, so evict them from the current-day cache.
-    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate, placement, userSetStart } = {}) {
+    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate, placement, userSetStart, reviewGuard } = {}) {
       const previous = _rescheduleChains.get(blockId) || Promise.resolve();
       const run = previous.catch(() => {}).then(async () => {
       setSaving();
@@ -1320,8 +1331,9 @@
       // userSetStart: TRUE only when a human named the landing time. A timed placement
       // alone cannot say that — an auto-slotted cross-day move sends parentStart too —
       // and the flag is what makes the client cascade leave the start alone.
-      const body = { targetDate, parentStart, parentEnd, fromDate, placement, userSetStart };
-      const walId = walPush({ op: "reschedule", id: blockId, data: body });
+      const body = { targetDate, parentStart, parentEnd, fromDate, placement, userSetStart, ...(reviewGuard ? { reviewGuard } : {}) };
+      // Confirmed review moves must never replay after leaving the preview.
+      const walId = reviewGuard ? null : walPush({ op: "reschedule", id: blockId, data: body });
       try {
         let result;
         try {
@@ -1331,7 +1343,7 @@
           // before its transaction acquired the lock. The server rejects that stale
           // subtree plan so no children can be stranded. Repeating once rebuilds the
           // plan from the row's current day and preserves the user's intent.
-          if (!(e && e.status === 409 && e.code === "RESCHEDULE_STALE")) throw e;
+          if (reviewGuard || !(e && e.status === 409 && e.code === "RESCHEDULE_STALE")) throw e;
           result = await apiPost("/api/blocks/" + blockId + "/reschedule", body);
         }
         (result.moved || []).forEach(id => cacheDelete(id));
@@ -1349,7 +1361,9 @@
         // Same permanence rule as isPermanentReplayFailure: 400/404 are final,
         // 401/403 (auth blips) and 5xx/network stay buffered for replay. The
         // verdict is stamped on the error so callers don't re-derive it.
-        if (e) e.permanent = e.status === 400 || e.status === 404 || e.status === 409;
+        // Review moves require a fresh explicit confirmation after any failure.
+        // Never replay them later from the WAL after the user has left the preview.
+        if (e) e.permanent = !!reviewGuard || e.status === 400 || e.status === 404 || e.status === 409;
         if (e && e.permanent) {
           // Permanent rejection: the server refused for a reason a retry cannot change
           // ("Already on that date", "Block is deleted", "Block not found", a bad
@@ -1678,6 +1692,12 @@
     },
 
     // ── WAL ──
+    exportPending() {
+      const read = (storage, key) => { try { return JSON.parse(storage.getItem(key) || "[]"); } catch { return []; } };
+      return { accountScope: ACCOUNT_SCOPE, pending: walGet(),
+        deadLetters: read(localStorage, WAL_DEAD_LETTER_KEY),
+        unboundLegacy: { local: read(localStorage, WAL_LEGACY_SESSION_KEY), session: read(sessionStorage, WAL_LEGACY_SESSION_KEY) } };
+    },
     replayWAL,
     hydrateSyncSnapshot,
     pullSyncChanges,
@@ -1696,6 +1716,9 @@
     debug() {
       return {
         clientId: CLIENT_ID,
+        accountScope: ACCOUNT_SCOPE,
+        localSaveError: _localSaveError,
+        unboundLegacyEntries: (() => { try { return JSON.parse(localStorage.getItem("blockstore-wal") || "[]").length + JSON.parse(sessionStorage.getItem("blockstore-wal") || "[]").length; } catch { return 0; } })(),
         currentDate: _currentDate,
         dayCacheSize: _dayCache.size,
         globalCacheSize: _globalCache.size,

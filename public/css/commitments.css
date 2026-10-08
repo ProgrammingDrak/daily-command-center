@@ -1,0 +1,31 @@
+.social-grid[data-social-active="commitments"] [data-social-section="commitments"] { display:block; grid-column:1 / -1; }
+#commitment-workspace { overflow-wrap:anywhere; }
+.commitment-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:var(--sp-3); }
+.commitment-toolbar > div { flex:1 1 20rem; }
+.commitment-toolbar h3 { margin:0; }
+.commitment-toolbar p,.commitment-meta { color:var(--ink-muted); font-size:var(--fs-sm); }
+#commitment-workspace label { display:grid; gap:var(--sp-1); font-size:var(--fs-sm); min-width:0; }
+#commitment-workspace input,#commitment-workspace textarea,#commitment-workspace select { width:100%; min-width:0; box-sizing:border-box; padding:var(--sp-2) var(--sp-3); color:var(--ink); background:var(--surface-canvas); border:1px solid var(--border); border-radius:var(--r-md); font:inherit; min-height:var(--target-min); }
+#commitment-workspace form { display:grid; gap:var(--sp-3); margin-block:var(--sp-4); }
+#commitment-workspace fieldset { display:grid; min-width:0; gap:var(--sp-3); border:1px solid var(--border); border-radius:var(--r-md); padding:var(--sp-3); }
+#commitment-workspace fieldset:disabled { opacity:.65; }
+#commitment-workspace button { min-height:var(--target-min); }
+#commitment-workspace p { margin-block:var(--sp-2); }
+.commitment-create { padding:var(--sp-3); margin-block:var(--sp-4); background:var(--surface-raised); border-radius:var(--r-lg); }
+.commitment-create summary,#commitment-detail summary { cursor:pointer; min-height:var(--target-min); display:flex; align-items:center; }
+.commitment-columns { display:grid; grid-template-columns:minmax(15rem,1fr) minmax(0,2fr); gap:var(--sp-4); align-items:start; }
+#commitment-list { display:grid; gap:var(--sp-2); }
+.commitment-card { display:grid; gap:var(--sp-2); text-align:left; padding:var(--sp-3); border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface-raised); color:var(--ink); font:inherit; cursor:pointer; }
+.commitment-card[aria-pressed="true"] { border-color:var(--brand); background:var(--brand-soft); }
+.commitment-card span,.commitment-card small { color:var(--ink-muted); font-size:var(--fs-sm); }
+.commitment-text { white-space:pre-wrap; }
+.commitment-members,.commitment-history { padding-left:var(--sp-5); }
+.commitment-members li,.commitment-history li { margin-block:var(--sp-3); }
+.commitment-history time { display:block; color:var(--ink-muted); font-size:var(--fs-xs); }
+.commitment-actions { display:flex; flex-wrap:wrap; gap:var(--sp-2); margin-top:var(--sp-2); }
+.commitment-pending-item { border-left:var(--sp-1) solid var(--warning); padding:var(--sp-3); background:var(--surface-raised); margin-block:var(--sp-2); }
+#commitment-message.error { color:var(--danger); }
+@media(max-width:760px) { .commitment-columns { grid-template-columns:minmax(0,1fr); } .commitment-toolbar label { width:100%; } }
+@media(max-width:480px) { .commitment-toolbar > button { flex:1 1 40%; } }
+.social-workspace-tabs > button { flex-shrink:0; }
+.dcc-save-actions { display:flex; flex-wrap:wrap; gap:var(--sp-2); margin-block:var(--sp-3); }

@@ -253,25 +253,31 @@ function mergeTriage(triage, waitingRows, asOfDate, opts = {}) {
   return { ...base, open_items: open };
 }
 
-function completeCycleProperties(item, cycleKey, completedAt, timeZone = "America/New_York") {
+function completeCycleProperties(item, cycleKey, completedAt, timeZone = "America/New_York", options = {}) {
   const props = normalizeProperties((item && item.properties) || {});
+  if (!isOpen(item)) return { status: "skipped_closed", properties: props };
   const currentDue = dueDate({ ...item, properties: props }, timeZone);
   const expected = currentDue ? `waiting:${item.id}:${currentDue}` : null;
   if (!expected || cycleKey !== expected) return { status: "skipped_stale", properties: props, expectedCycleKey: expected };
   if (props.lastCompletedCycleKey === cycleKey) return { status: "skipped_duplicate", properties: props, expectedCycleKey: expected };
   const completedDate = dateFromIso(completedAt, timeZone);
+  const nextCheckInDate = options.nextCheckInDate !== undefined ? options.nextCheckInDate
+    : (props.checkInRepeat === false ? null : addDays(completedDate, props.checkInDays));
   return {
     status: "completed",
     expectedCycleKey: expected,
     properties: {
       ...props,
       lastCheckedAt: completedAt,
-      lastCompletedCycleKey: cycleKey,
-      checkInDate: props.checkInRepeat === false ? null : addDays(completedDate, props.checkInDays),
+      lastCompletedCycleKey: nextCheckInDate === currentDue ? null : cycleKey,
+      checkInDate: nextCheckInDate,
+      checkInHistory: [...(Array.isArray(props.checkInHistory) ? props.checkInHistory : []), {
+        cycleKey, completedAt, nextCheckInDate, note: String(options.note || "").trim(),
+      }],
       snoozedUntil: null,
       checkInScheduledFor: null,
       checkInTaskId: null,
-      status: "open",
+      status: props.status,
     },
   };
 }

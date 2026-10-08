@@ -439,3 +439,14 @@ test("following edit preserves separate itinerary dates for same-day occurrences
   assert.equal(live.find((row) => row.properties.repeatOccurrenceKey === "2026-07-10T09:00").date, "2026-07-11");
   assert.equal(live.find((row) => row.properties.repeatOccurrenceKey === "2026-07-10T17:00").date, "2026-07-12");
 });
+
+test("strict day preparation propagates a real recurrence materialization failure", async () => {
+  const db = fakeDb({ createError: new Error("database unavailable") });
+  await assert.rejects(store(db).materializeScheduledRepeatsForDate({ date: "2026-07-11", userId: 1, workspaceId: "ws-1", strict: true }), /database unavailable/);
+});
+test("already caught-up repeat definitions produce no additional writes", async () => {
+  const db = fakeDb({ definitions: [definition({ properties: { materializedThrough: "2026-07-11" } })] });
+  let writes = 0; const original = db.updateBlock; db.updateBlock = async (...args) => { writes++; return original(...args); };
+  await store(db).catchUpScheduledRepeats({ userId: 1, workspaceId: "ws-1", throughDate: "2026-07-11" });
+  assert.equal(writes, 0); assert.equal(db.calls.createTrees.length, 0);
+});

@@ -210,3 +210,27 @@ test("completing the cycle clears the gate fields, so the next cycle is unaffect
   assert.equal(done.properties.checkInTaskId, null);
   assert.equal(done.properties.checkInScheduledFor, null);
 });
+
+
+test("explicit check-in reschedules a dated follow-up, logs note, and preserves Waiting context", () => {
+  const current = item({ checkInRepeat: false, notes: "Original context", status: "open" });
+  const result = Waiting.completeCycleProperties(current, "waiting:w-1:2026-08-11", "2026-08-11T15:00:00Z", "America/New_York", {
+    nextCheckInDate: "2026-08-14", note: "  Sent a follow-up. No reply yet.  ",
+  });
+  assert.equal(result.status, "completed");
+  assert.equal(result.properties.status, "open");
+  assert.equal(result.properties.notes, "Original context");
+  assert.equal(result.properties.checkInRepeat, false);
+  assert.equal(result.properties.checkInDate, "2026-08-14");
+  assert.deepEqual(result.properties.checkInHistory, [{ cycleKey: "waiting:w-1:2026-08-11", completedAt: "2026-08-11T15:00:00Z", nextCheckInDate: "2026-08-14", note: "Sent a follow-up. No reply yet." }]);
+  assert.equal(current.properties.checkInHistory, undefined);
+  const duplicate = Waiting.completeCycleProperties({ ...current, properties: result.properties }, "waiting:w-1:2026-08-11", "2026-08-11T15:00:00Z");
+  assert.equal(duplicate.status, "skipped_stale");
+  assert.equal(duplicate.properties.checkInHistory.length, 1);
+});
+
+test("check-ins cannot reopen a closed Waiting item", () => {
+  for (const status of ["done", "unblocked"]) {
+    assert.equal(Waiting.completeCycleProperties(item({ status }), "waiting:w-1:2026-08-11", "2026-08-11T15:00:00Z").status, "skipped_closed");
+  }
+});

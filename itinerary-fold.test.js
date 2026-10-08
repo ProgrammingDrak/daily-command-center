@@ -130,3 +130,37 @@ test("responsibility scaffolding and kindless rows without local_id stay exclude
   assert.equal(fold(block(TODAY, { local_id: "r-1", kind: "responsibility_item" })), false);
   assert.equal(fold(block(TODAY, { title: "no identity" })), false);
 });
+
+// Whenever (whenever.js): a dateless backlog row on the Whenever stage lives in the
+// header pill's pool. Folded, it would sit in every day's Unplanned list as well,
+// which is two homes for one chore and the opposite of "background work".
+test("a dateless Whenever pool row stays out of the fold; the pill owns it", () => {
+  const fold = makeFold(TODAY);
+  assert.equal(fold(block(null, { local_id: "wh-1", kind: "backlog", stage: "Whenever", title: "Laundry" })), false);
+});
+
+test("Whenever leaves the rest of the backlog alone and stops applying once dated", () => {
+  const fold = makeFold(TODAY);
+  // Every other dateless backlog row still folds into Unplanned, exactly as before.
+  assert.equal(fold(block(null, { local_id: "bl-1", kind: "backlog", stage: "Backlog", title: "Solo" })), true);
+  assert.equal(fold(block(null, { local_id: "bl-2", kind: "backlog", stage: "Priority", title: "Hot" })), true);
+  // Do it now dates the row (and strips kind:"backlog") but keeps the stage: it is
+  // today's work now and must render on today.
+  assert.equal(fold(block(TODAY, { local_id: "wh-2", stage: "Whenever", title: "Mail", start: "13:15" })), true);
+  // Dated rows that still carry kind:"backlog" are real (the dcc-task-ops API stamps the
+  // request date; see task-model.js includeLegacyDatedBacklog). A date beats the stage.
+  const stamped = block(TODAY, { local_id: "wh-3", kind: "backlog", stage: "Whenever", title: "Stamped" });
+  assert.equal(TaskModel.isWheneverPoolRow(stamped), false);
+  assert.equal(fold(stamped), true);
+  // A stage name on a non-backlog row is not a pool row.
+  assert.equal(TaskModel.isWheneverPoolRow(block(null, { local_id: "x", kind: "task", stage: "Whenever" })), false);
+});
+
+test("a stale cached task-model.js without the Whenever rule degrades to Unplanned, never to empty", () => {
+  const { isWheneverPoolRow, ...stale } = TaskModel;
+  const fold = vm.runInNewContext(`(() => { ${foldSource[0]} return isFoldableTask; })()`, {
+    currentDate: TODAY, datedLocalIds: new Set(), TM: stale,
+  });
+  assert.equal(typeof isWheneverPoolRow, "function");
+  assert.equal(fold(block(null, { local_id: "wh-1", kind: "backlog", stage: "Whenever", title: "Laundry" })), true);
+});

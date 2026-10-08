@@ -81,10 +81,10 @@ test("only visible blocking overlays defer itinerary rendering", () => {
   assert.equal(vm.runInContext("_anyModalOpen()", modalContext([overlay])), false);
 });
 
-test("render('schedule') marks exactly the three schedule sub-view surfaces dirty", () => {
+test("render('schedule') marks the three schedule sub-views plus the pill drawer that renders itinerary rows", () => {
   const c = ctx();
   vm.runInContext("_markDirty('schedule')", c);
-  assert.deepEqual(dirtyKeys(c), ["actualView", "listView", "scheduleTimeline"]);
+  assert.deepEqual(dirtyKeys(c), ["actualView", "listView", "scheduleTimeline", "whenever"]);
 });
 
 test("no-scope render() marks every registered surface dirty", () => {
@@ -118,7 +118,7 @@ test("the badge-coupled + always-visible surfaces stay registered (regression gu
   const keys = JSON.parse(vm.runInContext("JSON.stringify(Object.keys(SURFACES))", c));
   // delegated + meetingAutoPanels were buildSchedule side effects that must remain
   // their own surfaces now that buildSchedule is gated off.
-  for (const k of ["delegated", "meetingAutoPanels", "scheduleTriage", "listView", "taskMenusBadge", "anytime"]) {
+  for (const k of ["delegated", "meetingAutoPanels", "scheduleTriage", "listView", "taskMenusBadge", "anytime", "whenever"]) {
     assert.ok(keys.includes(k), "missing surface: " + k);
   }
 });

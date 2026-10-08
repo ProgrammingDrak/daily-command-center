@@ -11,6 +11,7 @@ function radialLabels(meeting) {
   const start = scheduleSource.indexOf("function openTaskNotes");
   const end = scheduleSource.indexOf("// Sub-fan:", start);
   const context = {
+    window: {},
     isMeeting: () => meeting,
     now: () => 0,
     pt: () => 1,
@@ -23,18 +24,29 @@ function radialLabels(meeting) {
   return Array.from(context.buildTaskRadialItems({ id: "task-1", title: "Task" }, {}), item => item.label);
 }
 
-test("compact task radial omits duplicate completion", () => {
+test("compact task radial contains contextual actions only", () => {
   const labels = radialLabels(false);
   assert.ok(!labels.includes("Complete without notes"));
-  assert.ok(labels.includes("Notes & actions"));
-  assert.ok(labels.includes("Delete task"));
+  assert.deepEqual(labels, ["Subtask…", "Unscheduled", "Convert…", "Delegate / block", "Blocked by task", "Repeat", "Solo", "Whenever", "Lock"]);
+  assert.ok(!labels.includes("Back"));
 });
 
-test("compact meeting radial omits duplicate completion", () => {
+test("compact meeting radial keeps Prep without duplicate task-bar actions", () => {
   const labels = radialLabels(true);
   assert.ok(!labels.includes("Complete without notes"));
-  assert.ok(labels.includes("Notes & actions"));
-  assert.ok(labels.includes("Delete task"));
+  assert.deepEqual(labels, ["Prep"]);
+});
+
+test("Change task retains delegation and dependencies with the correct identities", () => {
+  const calls=[];
+  const context={window:{openTaskDependencyModal:id=>calls.push(["dependency",id])},scheduled:[],childrenOf:()=>[],convertTaskToDelegated:id=>calls.push(["delegate",id])};
+  vm.createContext(context);
+  vm.runInContext(scheduleSource.slice(scheduleSource.indexOf("function buildTaskChangeItems"),scheduleSource.indexOf("// Sub-fan: convert")),context);
+  const items=context.buildTaskChangeItems({id:"local-task",_blockId:"stored-block",untimed:true},{});
+  items.find(item=>item.label==="Delegate / block").onPick();
+  items.find(item=>item.label==="Blocked by task").onPick();
+  assert.deepEqual(calls,[["delegate","local-task"],["dependency","stored-block"]]);
+  assert.ok(!items.some(item=>/Delete|Notes|Duration|Start work|Add task/.test(item.label)));
 });
 
 test("timeline meetings render the same radial action trigger as tasks", () => {

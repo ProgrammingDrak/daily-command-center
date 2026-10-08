@@ -20,23 +20,40 @@ let DISMISS_KEY = "pa-dismissed-" + (__state ? __state.date : "unknown");
 
 function loadNotes() {
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.notes && window.blockStore) {
-    const noteBlocks = [...window.blockStore.getByType("note"),...window.blockStore.getByType("block").filter(b=>(b.properties||{}).html&&(b.properties||{}).text&&b.parent_id)];
+    const noteBlocks = [...window.blockStore.getByType("note"),...window.blockStore.getByType("block").filter(b=>b.parent_id&&typeof (b.properties||{}).html==="string"&&typeof (b.properties||{}).text==="string")];
     const result = {};
     noteBlocks.forEach(b => {
       const taskId = b.properties._sourceTaskId || b.parent_id;
       result[taskId] = { html: b.properties.html, text: b.properties.text, _blockId: b.id };
     });
+    // Task-owned pool Notes travel with their canonical row across day partitions.
+    window.blockStore.getByType("block").forEach(row=>{
+      const note=(row.properties||{})._taskNotes;if(!note)return;
+      const ids=[row.id,(row.properties||{}).local_id,window.DCC?.TaskModel?.backlogKey(row)].filter(Boolean);
+      ids.forEach(id=>{result[id]={...note,_taskOwned:true};});
+    });
     return result;
   }
   try { return JSON.parse(localStorage.getItem(NOTES_KEY) || "{}"); } catch(e) { return {}; }
 }
-function saveNotes(data) {
+function saveNotes(data, options) {
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.notes && window.blockStore) {
+    // A detail editor owns one task's note. Preserve its block identity, and
+    // persist an explicit clear rather than letting old text reappear on reopen.
+    const taskId = options && options.taskId;
     // Save each changed note as a block
-    for (const [taskId, val] of Object.entries(data)) {
+    for (const [taskId, val] of Object.entries(options && options.taskId ? { [options.taskId]: data[options.taskId] } : data)) {
       if (!val) continue;
       const html = typeof val === "string" ? val : (val.html || "");
       const text = typeof val === "string" ? val : (val.text || "");
+      const anchor=typeof taskAnchorById==='function'?taskAnchorById(taskId):null;
+      const row=anchor&&anchor.blockId&&window.blockStore.get(anchor.blockId);
+      if(row&&(anchor.whenever||(row.properties||{})._taskNotes)){
+        const note={html,text,blocks:Array.isArray(val.blocks)?val.blocks:[]};
+        if(typeof enqueueRowPropsWrite==='function')enqueueRowPropsWrite(row.id,props=>({...props,_taskNotes:note})).catch(()=>{if(typeof showToast==='function')showToast('Could not save task notes','error');});
+        else window.blockStore.updateBlockDebounced(row.id,{...row.properties,_taskNotes:note});
+        continue;
+      }
       if (val._blockId) {
         window.blockStore.updateBlockDebounced(val._blockId, { html, text, _sourceTaskId: taskId });
       } else {
@@ -74,6 +91,8 @@ function noteBlocksForTask(taskId, noteVal, ev) {
   } else if(typeof noteVal==="string" && noteVal){
     return migrateHtmlToBlocks(noteVal);
   }
+  // An existing empty override records an intentional clear of imported notes.
+  if (noteVal != null) return null;
   const seed = seedNoteForTask(taskId, ev);
   return seed ? migrateHtmlToBlocks(seed) : null;
 }
@@ -211,7 +230,8 @@ function openNotesDrawer(taskId, taskTitle) {
 
   // Create or re-initialize block editor
   if(window._notesBlockEditor) window._notesBlockEditor.destroy();
-  window._notesBlockEditor=createBlockEditor(container, initialBlocks);
+  const sourceAnchor=typeof taskAnchorById==='function'?taskAnchorById(taskId):null;
+  window._notesBlockEditor=createBlockEditor(container, initialBlocks,window.DCC.TaskSources.editorOptions(container,sourceAnchor?sourceAnchor.ev:{}));
 
   renderActionItems(taskId);
   document.getElementById("notes-action-input").style.display = "none";
@@ -228,12 +248,12 @@ function closeNotesDrawer() {
   if (currentNotesTaskId && window._notesBlockEditor) {
     const notes = loadNotes();
     const blocks=window._notesBlockEditor.getBlocks();
-    notes[currentNotesTaskId] = {
+    notes[currentNotesTaskId] = Object.assign({},notes[currentNotesTaskId],{
       blocks: blocks,
       html: window._notesBlockEditor.toHtml(),
       text: window._notesBlockEditor.toMarkdown()
-    };
-    saveNotes(notes);
+    });
+    saveNotes(notes,{taskId:currentNotesTaskId});
   }
   document.getElementById("notes-drawer-overlay").classList.remove("open");
   currentNotesTaskId = null;

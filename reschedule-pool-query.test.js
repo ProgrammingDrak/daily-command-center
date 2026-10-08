@@ -120,3 +120,13 @@ test('shared grouping explicitly opts into global Triage roots without dropping 
   assert.match(sql,/b\.deleted_at IS NULL/);
   assert.deepEqual(params,['2026-09-09','ws-1']);
 });
+
+
+test('pool scheduling opts into dateless root seeds while retaining all tenant and task boundaries',async()=>{
+ const pool=recorder(),db=loadDbWithMock(pool);await db.getRescheduleSubtreePool(null,'ws-1',{includeDatelessRoots:true});
+ const {sql,params}=pool.log[0];assert.deepEqual(params,[null,'ws-1']);
+ assert.match(sql,/b\.date = \$1 OR \(b\.date IS NULL AND true\)/);
+ assert.match(sql,/b\.workspace_id IS NOT DISTINCT FROM \$2/);assert.match(sql,/c\.workspace_id IS NOT DISTINCT FROM \$2/);
+ assert.match(sql,/b\.deleted_at IS NULL/);assert.match(sql,/b\.type = 'block'/);assert.match(sql,/b\.properties->>'local_id' IS NOT NULL OR b\.properties->>'kind' = 'task'/);
+ assert.match(sql,/c\.parent_id = p\.id/);
+});

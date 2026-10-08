@@ -218,7 +218,7 @@ test('recurring Triage honors paused, skipped, scheduled, and not-yet-due defini
 });
 
 test('Triage grouping keeps whole subtrees together and releases the same task when scheduled', () => {
-  const task={id:'root', triageBlock:true, untimed:true};
+  const task={id:'root', triageBlock:true, triageId:'inbound-1', untimed:true};
   const nodes=[{ev:{id:'normal'},depth:0},{ev:task,depth:0},{ev:{id:'child'},depth:1},{ev:{id:'unscheduled',untimed:true},depth:0}];
   assert.deepEqual(TB.groupItineraryTree(nodes,[])[0].nodes.map(n=>n.ev.id), ['root','child']);
   task.untimed=false; task.start='09:00';

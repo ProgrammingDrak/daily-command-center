@@ -3,7 +3,7 @@
 
 // Cache only the application shell. API responses and handwritten content stay
 // outside Cache Storage. IndexedDB remains the only local notebook data store.
-const CACHE = "mycelium-ink-shell-v4";
+const CACHE = "mycelium-ink-shell-v5";
 const SHELL = [
   "/ink",
   "/public/ink-manifest.webmanifest",
@@ -16,6 +16,9 @@ const SHELL = [
   "/public/js/ink/canvas.js",
   "/public/js/ink/sync.js",
   "/public/js/ink/app.js",
+  "/public/icons/favicon.ico",
+  "/public/icons/favicon-16x16.png",
+  "/public/icons/favicon-32x32.png",
   "/public/icons/apple-touch-icon.png",
   "/public/icons/icon-192.png",
   "/public/icons/icon-512.png",

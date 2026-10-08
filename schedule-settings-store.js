@@ -42,7 +42,7 @@ async function findSettingsBlock(workspaceId, deps) {
   if (!workspaceId) return null;
   const db = (deps && deps.blockDB) || blockDB;
   if (!db || typeof db.getBlocksByKind !== "function") return null;
-  const rows = await db.getBlocksByKind(KIND, workspaceId);
+  const rows = await db.getBlocksByKind(KIND, workspaceId, deps && deps.client);
   return rows && rows[0] ? rows[0] : null;
 }
 

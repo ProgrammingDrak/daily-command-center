@@ -21,6 +21,12 @@ function makeStore(seed) {
   return {
     store,
     async getBlock(id) { return store.find((b) => b.id === id && !b.deleted_at) || null; },
+    async getMeetingProposalAnchors(parentId, ws) {
+      return store.filter(b => b.parent_id === parentId && b.workspace_id === ws && b.properties.kind === "proposed_action_item");
+    },
+    async getProposalSourceMatches(ws, ids) {
+      return store.filter(b => b.workspace_id === ws && [b.properties.source_item_id, b.properties.source_id, b.properties.triageId].some(id => ids.includes(id)));
+    },
     async getChildren(parentId, ws) {
       return store.filter((b) => b.parent_id === parentId && !b.deleted_at && (!ws || b.workspace_id === ws));
     },
@@ -37,6 +43,8 @@ function makeStore(seed) {
       return store.filter((b) => ids.includes(b.id) && !b.deleted_at && b.workspace_id === ws);
     },
     async createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id }) {
+      const winner=id && store.find(b=>b.id===id && b.workspace_id===workspace_id);
+      if(winner)return {...winner,_resolvedExisting:true};
       const b = { id: id || "blk-" + (++seq), type, parent_id: parent_id || null, date, properties, sort_order, user_id, workspace_id, deleted_at: null };
       store.push(b);
       return b;
@@ -1042,4 +1050,41 @@ test("updateArtifactContent merges over existing props (kind/sources/title survi
   assert.equal(s.kind, "meeting_summary", "kind discriminator preserved");
   assert.equal(s.title, "Summary: mmerge", "title preserved");
   assert.deepEqual(s.sources, [{ type: "gmail", url: "https://mail.example/x" }], "sources preserved (not clobbered)");
+});
+
+test("native meeting source preserves edited wording and dismissed state", async () => {
+ seedMeeting("m-source-edits");
+ await automation.applyArtifacts("m-source-edits",{workspaceId:"ws-1",userId:1,proposedActions:[{id:"native-action-1",text:"Original action"}]});
+ const action=childrenOf("m-source-edits","proposed_action_item")[0];
+ action.properties.title="Human title";action.properties.text="Human text";action.properties.status="dismissed";
+ await automation.applyArtifacts("m-source-edits",{workspaceId:"ws-1",userId:1,proposedActions:[{id:"native-action-1",text:"Changed extraction"}]});
+ assert.equal(childrenOf("m-source-edits","proposed_action_item").length,1);
+ assert.equal(action.properties.title,"Human title");assert.equal(action.properties.text,"Human text");assert.equal(action.properties.status,"dismissed");
+});
+test("deleted meeting proposal anchors suppress native-ID and legacy-text retries", async () => {
+ seedMeeting("m-source-gone");
+ await automation.applyArtifacts("m-source-gone",{workspaceId:"ws-1",userId:1,proposedActions:[{id:"native-action-gone",text:"Original action"}]});
+ const action=childrenOf("m-source-gone","proposed_action_item")[0];await mem.deleteBlock(action.id);
+ await automation.applyArtifacts("m-source-gone",{workspaceId:"ws-1",userId:1,proposedActions:[{id:"native-action-gone",text:"Changed extraction"},{text:"Original action"}]});
+ assert.equal(childrenOf("m-source-gone","proposed_action_item").length,1);assert.ok(action.deleted_at);
+});
+test("a completed task on another day suppresses a new meeting proposal with its native source", async () => {
+ seedMeeting("m-source-task");
+ mem.store.push({id:"handled-task",date:"2026-06-01",workspace_id:"ws-1",properties:{source_item_id:"native-handled",status:"done"}});
+ await automation.applyArtifacts("m-source-task",{workspaceId:"ws-1",userId:1,proposedActions:[{id:"native-handled",text:"Do this again"}]});
+ assert.equal(childrenOf("m-source-task","proposed_action_item").length,0);
+});
+
+test("meeting proposal create resolves a concurrent tombstone without resurrecting or counting it",async()=>{
+ seedMeeting("m-concurrent-delete");
+ const original=mem.createBlock;
+ mem.createBlock=async args=>{
+  if(args.properties.source_item_id==="meeting:native:race")mem.store.push({...args,deleted_at:"2026-09-30T19:00:00Z"});
+  return original(args);
+ };
+ try{
+  const result=await automation.applyArtifacts("m-concurrent-delete",{workspaceId:"ws-1",userId:1,proposedActions:[{source_item_id:"meeting:native:race",text:"Reviewed followup"}]});
+  assert.equal(result.applied.proposedActions,0);
+  const rows=mem.store.filter(b=>b.properties.source_item_id==="meeting:native:race");assert.equal(rows.length,1);assert.ok(rows[0].deleted_at);
+ }finally{mem.createBlock=original;}
 });

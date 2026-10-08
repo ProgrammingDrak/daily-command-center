@@ -141,7 +141,7 @@ function timeBlockDropZoneEl(block){
   el.dataset.blockId=block.id;
   el.dataset.blockStart=block.start||"";
   el.dataset.placement=block.dropTarget||"timed";
-  el.setAttribute("aria-label",block.dropTarget==="unplanned"?"Move to Unplanned":"Schedule at "+block.start+" in "+block.name);
+  el.setAttribute("aria-label",block.dropTarget==="unplanned"?"Move to "+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled"):"Schedule at "+block.start+" in "+block.name);
   el.addEventListener("dragover",dBlockOver);
   el.addEventListener("dragleave",()=>el.classList.remove("drag-over-block"));
   el.addEventListener("drop",dBlockDrop);
@@ -547,13 +547,14 @@ function promoteToTopLevel(id){
 }
 // True if ancestorId is somewhere above nodeId in the parent chain (guards against
 // nesting a task into one of its own descendants).
-function _isAncestor(ancestorId,nodeId){
-  let cur=scheduled.find(e=>e.id===nodeId),guard=0;
+function _isAncestor(ancestorId,nodeId,pool){
+  pool=pool||scheduled;
+  let cur=pool.find(e=>e.id===nodeId),guard=0;
   while(cur&&guard++<50){
     const pid=parentIdOf(cur);
     if(!pid)return false;
     if(pid===ancestorId)return true;
-    cur=scheduled.find(e=>e.id===pid);
+    cur=pool.find(e=>e.id===pid);
   }
   return false;
 }

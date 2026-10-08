@@ -102,6 +102,7 @@ test("materialized tasks reconcile through delta sync and remain retryable until
   const vm = require("node:vm");
   for (const hydrated of [true, false]) {
     let syncCalls = 0;
+    const drawer = [];
     let resolveRender;
     const rendered = new Promise(resolve => { resolveRender = resolve; });
     const context = {
@@ -119,6 +120,9 @@ test("materialized tasks reconcile through delta sync and remain retryable until
         get: () => hydrated ? { id: "task" } : null
       } },
       buildListView: () => resolveRender(),
+      // The header drawer hosts these rows now: it must repaint as the load starts
+      // (Loading) and again once it settles (rows, or Retry).
+      buildWhenever: () => drawer.push(Object.assign({}, context.triageTaskLoadState())),
       reloadPersistedEdits: () => {}
     };
     vm.createContext(context);
@@ -128,5 +132,7 @@ test("materialized tasks reconcile through delta sync and remain retryable until
     assert.equal(syncCalls, 1);
     assert.equal(vm.runInContext('_triageMaterializedSources.has("item:source")', context), hydrated);
     assert.equal(Boolean(vm.runInContext("triageTaskLoadState().error", context)), !hydrated);
+    assert.deepEqual(drawer.map(state => state.loading), [true, false], "the drawer sees Loading, then the settled state");
+    assert.equal(Boolean(drawer[1].error), !hydrated, "the settled repaint carries Retry when the rows never reached the cache");
   }
 });

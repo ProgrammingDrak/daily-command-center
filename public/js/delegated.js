@@ -492,8 +492,24 @@
     return !isDoneDelegated(item);
   }
 
+  // Is this item asking for a check-in at all? Shared by the Waiting badge and Loose
+  // Ends (attentionItems), so the two cannot disagree on who is out of the running. A
+  // snoozed item, a task dependency (no check-in, it waits on another task), a
+  // finished follow-up, and a cycle whose check-in task is already scheduled are not.
+  function wantsCheckIn(item) {
+    if (!isOpenDelegated(item) || isSnoozed(item) || isTaskDependency(item)) return false;
+    const p = item.properties || {};
+    if (p.checkInRepeat === false && !p.checkInDate) return false;
+    // Once a real check-in task owns this cycle, it needs no second decision row. The
+    // triage draft remains available for review/send.
+    if (p.checkInTaskId && p.checkInScheduledFor && p.checkInScheduledFor >= todayStr()) return false;
+    return true;
+  }
+
+  // Overdue for a check-in: the ONE rule behind both the Waiting badge and the
+  // Overdue filter, so the count always matches what that tab lists.
   function isOverdue(item) {
-    return isOpenDelegated(item) && itemUrgency(item).timing.remaining < 0;
+    return wantsCheckIn(item) && itemUrgency(item).timing.remaining < 0;
   }
 
   function collectVisibleContextIds() {
@@ -533,12 +549,7 @@
   // Waiting enters Loose Ends as soon as its urgency reaches 70 percent.
   function attentionItems(items) {
     return items.filter(item => {
-      if (!isOpenDelegated(item) || isSnoozed(item) || isTaskDependency(item)) return false;
-      const p = item.properties || {};
-      if (p.checkInRepeat === false && !p.checkInDate) return false;
-      // Once a real check-in task owns this cycle, Loose Ends no longer needs a
-      // second decision row. The triage draft remains available for review/send.
-      if (p.checkInTaskId && p.checkInScheduledFor && p.checkInScheduledFor >= todayStr()) return false;
+      if (!wantsCheckIn(item)) return false;
       const u = itemUrgency(item);
       return u.score >= 70 || u.timing.remaining < 0;
     });
@@ -565,16 +576,17 @@
     return "waiting:" + item.id + ":" + due;
   }
 
+  // Open work only. A finished Waiting item is recorded on the day it closed; the
+  // pill is not a history view, so there is no Done filter and All means all OPEN.
   function filterItems(items, filter) {
+    const open = items.filter(isOpenDelegated);
     switch (filter) {
       case "upcoming":
-        return items.filter(i => isOpenDelegated(i) && (isTaskDependency(i) || itemUrgency(i).timing.remaining >= 0));
+        return open.filter(i => !isOverdue(i));
       case "overdue":
-        return items.filter(isOverdue);
-      case "done":
-        return items.filter(isDoneDelegated);
+        return open.filter(isOverdue);
       default:
-        return items;
+        return open;
     }
   }
 
@@ -600,11 +612,10 @@
     if (!mount) return;
 
     const all = getAllDelegatedItems();
-    const open = all.filter(isOpenDelegated);
-    updateBadge(open.length);
+    updateBadge(all.filter(isOverdue).length);
 
     const list = filterItems(all, _currentFilter);
-    const rows = list.length ? list.map(renderCard).join("") : renderEmpty(true, all.length);
+    const rows = list.length ? list.map(renderCard).join("") : renderEmpty(true, all.filter(isOpenDelegated).length);
     mount.innerHTML =
       '<div class="delegated-sidebar-tools">' +
         '<button type="button" class="delegated-mini-btn" data-delegated-action="new">+ New</button>' +
@@ -619,8 +630,7 @@
     const filters = [
       ["all", "All"],
       ["upcoming", "Upcoming"],
-      ["overdue", "Overdue"],
-      ["done", "Done"]
+      ["overdue", "Overdue"]
     ];
     return '<div class="delegated-filter-bar">' + filters.map(([id, label]) =>
       '<button type="button" class="delegated-filter-btn' + (_currentFilter === id ? ' active' : '') + '" data-filter="' + id + '">' + label + '</button>'
@@ -671,13 +681,14 @@
     const waiting = (p.title || "").trim();
     const myTask = (p.myTask || "").trim();
     const headline = myTask || waiting || "(untitled)";
-    const note = truncate(p.aiSummary || p.notes || "", 120);
+    const note = String(p.aiSummary || p.notes || "").trim();
 
     // Subline: legacy items may still carry a separate what/who; surface them
     // under the headline. The due label always shows.
     const subParts = [];
-    if (myTask && waiting) subParts.push('Waiting on ' + esc(waiting));
-    if (who) subParts.push((myTask && waiting ? ' from ' : 'Waiting on ') + esc(who));
+    if (myTask && waiting) subParts.push(esc(waiting));
+    if (who) subParts.push(esc(who));
+    if (!subParts.length) subParts.push('Not specified');
     const sub = subParts.map(s => '<span>' + s + '</span>').join("");
 
     const cardCls = [
@@ -688,9 +699,8 @@
     ].filter(Boolean).join(" ");
 
     const followUpComplete = p.checkInRepeat === false && !p.checkInDate;
-    const badge = done || followUpComplete
-      ? '<div class="delegated-card-score done">&#10003;</div>'
-      : '<div class="delegated-card-score ' + cls + '">' + u.score + '</div>';
+    const badge = '<div class="waiting-state ' + cls + '">' +
+      (done ? 'Complete' : followUpComplete ? 'Follow-up complete' : esc(dueLabel(item))) + '</div>';
 
     const linkChip = p.linkedBlockId ? '<span class="delegated-card-link">linked task</span>' : '';
     const sourceRef = waitingSourceRef(p);
@@ -699,24 +709,23 @@
       : '';
 
     const actionButtons = done ?
+      '<details class="waiting-more"><summary>More actions</summary><div>' +
       '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
-      '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button>' :
+      '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button></div></details>' :
       (followUpComplete ? '' : '<button type="button" data-delegated-action="check-in" data-id="' + esc(item.id) + '">Checked in</button>' +
       '<button type="button" data-delegated-action="schedule" data-id="' + esc(item.id) + '">Schedule check-in</button>') +
+      '<details class="waiting-more"><summary>More actions</summary><div>' +
       '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
       '<button type="button" data-delegated-action="unblock" data-id="' + esc(item.id) + '" title="The blocker is gone. Put the actual task on your schedule.">Schedule task</button>' +
       '<button type="button" data-delegated-action="complete" data-id="' + esc(item.id) + '" title="The actual task is already finished.">Complete task</button>' +
-      '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button>';
+      '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button></div></details>';
 
     return '<div class="' + cardCls + '" data-id="' + esc(item.id) + '">' +
-      badge +
       '<div class="delegated-card-body">' +
+        badge +
         '<div class="delegated-card-title">' + esc(headline) + linkChip + sourceLink + '</div>' +
-        '<div class="delegated-card-meta">' +
-          sub +
-          '<span class="delegated-card-when">' + esc(dueLabel(item)) + '</span>' +
-        '</div>' +
-        (done || followUpComplete ? '' : '<div class="delegated-card-meter"><span class="' + u.cls + '" style="width:' + u.timing.progress + '%"></span></div>') +
+        '<dl class="waiting-facts"><div><dt>Waiting for</dt><dd>' + sub + '</dd></div>' +
+          '<div><dt>Follow-up</dt><dd>' + esc(p.checkInDate || (followUpComplete ? 'Complete' : 'From repeat cadence')) + '</dd></div></dl>' +
         (note ? '<div class="delegated-card-note">' + esc(note) + '</div>' : '') +
       '</div>' +
       '<div class="delegated-card-actions">' + actionButtons + '</div>' +
@@ -767,20 +776,22 @@
     });
   }
 
-  function updateBadge(openCount) {
+  // The badge is a notification, not an inventory: it counts only items overdue for
+  // a check-in. The header keeps an explicit zero placeholder.
+  function updateBadge(overdueCount) {
     const countBadge = document.getElementById("delegated-blocked-count");
     if (countBadge) {
-      if (openCount > 0) {
-        countBadge.textContent = openCount;
-        countBadge.style.display = "";
-      } else {
-        countBadge.style.display = "none";
-      }
+      countBadge.textContent = overdueCount;
+      countBadge.style.display = overdueCount > 0 ? "" : "none";
     }
     const navCount = document.getElementById("waiting-pill-nav-count");
     const navPill = document.getElementById("waiting-pill-nav");
-    if (navCount) navCount.textContent = String(openCount);
-    if (navPill) navPill.setAttribute("aria-label", "Open Waiting tasks, " + openCount + " open");
+    if (navCount) {
+      navCount.textContent = String(overdueCount);
+      navCount.style.display = "";
+    }
+    if (navPill) navPill.setAttribute("aria-label",
+      "Open Waiting tasks, " + overdueCount + " overdue for a check-in");
   }
 
   // Plain-text nudge used when scheduling a follow-up (copied to clipboard as a fallback).
@@ -869,9 +880,9 @@
   function cycleDueOf(key) {
     return String(key || "").split(":").pop();
   }
-  async function completeCheckInCycle(id, key, completedAt) {
-    let result = await postWaitingAction(id, "check-ins/complete", { cycleKey: key, completedAt });
-    if (result && result.status === "skipped_stale") {
+  async function completeCheckInCycle(id, key, completedAt, options) {
+    let result = await postWaitingAction(id, "check-ins/complete", Object.assign({ cycleKey: key, completedAt }, options || {}));
+    if (!options && result && result.status === "skipped_stale") {
       const expected = result.expectedCycleKey || "";
       // No expected key means there is no due cycle left to close at all.
       if (!expected) return result;
@@ -885,6 +896,8 @@
 
   async function afterWaitingAction() {
     await refreshDelegatedItems();
+    if (window.blockStore && typeof window.blockStore.loadDay === "function" &&
+        typeof viewDate !== "undefined" && viewDate) await window.blockStore.loadDay(viewDate);
     if (typeof refoldTaskStateFromBlockCache === "function") refoldTaskStateFromBlockCache();
     if (typeof render === "function") render();
     if (window.DCC && window.DCC.CatchUp && typeof window.DCC.CatchUp.refresh === "function") {
@@ -914,27 +927,97 @@
     return releaseTaskDependencyToBacklog(id, { removed: true });
   }
 
-  // Completing a check-in advances the recurring cadence exactly once.
-  async function markDelegatedItemCheckedById(id) {
+  let _checkInPrompt = null;
+  const _savingCheckIns = new Set();
+
+  function checkInHistoryHtml(items) {
+    const entries = items.flatMap(item => (Array.isArray((item.properties || {}).checkInHistory)
+      ? item.properties.checkInHistory : []));
+    return entries.sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt))).map(entry =>
+      '<div class="work-history-row waiting-checkin-history"><strong>Checked in · ' + esc(new Date(entry.completedAt).toLocaleString()) + '</strong>' +
+      (entry.note ? '<div class="waiting-checkin-note">' + esc(entry.note) + '</div>' : '') +
+      '<small>' + (entry.nextCheckInDate ? 'Next check-in: ' + esc(entry.nextCheckInDate) : 'No next check-in scheduled') + '</small></div>'
+    ).join('');
+  }
+
+  function checkInHistoryForTask(block) {
+    const ids = new Set([String(block.id), String((block.properties || {}).local_id || '')]);
+    return checkInHistoryHtml(getAllDelegatedItems().filter(item => ids.has(String((item.properties || {}).linkedBlockId || '__none__'))));
+  }
+
+  // Opening is read-only. Only Save sends the captured cycle and draft fields.
+  function markDelegatedItemCheckedById(id) {
     const item = getDelegatedItemById(id);
-    if (!item) return;
-    try {
-      const completedAt = new Date().toISOString();
-      const result = await completeCheckInCycle(id, cycleKey(item), completedAt);
-      if (result && result.status === "skipped_stale") {
-        closeDelegatedModal();
-        await afterWaitingAction();
-        toast("This check-in was already completed elsewhere.", "info");
-        return true;
+    if (!item || !isOpenDelegated(item) || _checkInPrompt || _savingCheckIns.has(id)) return false;
+    const key = cycleKey(item);
+    if (!key) return false;
+    const expectedCheckInCount = Array.isArray((item.properties || {}).checkInHistory) ? item.properties.checkInHistory.length : 0;
+    const minDate = todayStr();
+    const suggested = parseLocalDate(todayStr());
+    suggested.setDate(suggested.getDate() + checkInDaysFor(item.properties || {}));
+    const form = document.createElement('form');
+    form.className = 'waiting-checkin-form';
+    // Keep native date validity and keyboard editing: the shared picker upgrades
+    // date inputs to hidden fields, which do not enforce required/min constraints.
+    form.innerHTML = '<p>When should you check in next? This task will stay Waiting.</p>' +
+      '<label class="delegated-modal-label" for="wci-date">Next check-in</label>' +
+      '<input class="delegated-modal-input" type="date" data-tw-skip id="wci-date" required min="' + minDate + '" value="' + toDateInputValue(suggested) + '">' +
+      '<label class="delegated-modal-label" for="wci-note">Note (optional)</label>' +
+      '<textarea class="delegated-modal-input" id="wci-note" rows="3" maxlength="1000" placeholder="What did you do? Did you hear back?"></textarea>' +
+      '<p class="waiting-checkin-error" role="alert"></p>' +
+      '<div class="delegated-modal-actions"><button type="button" data-wci-cancel class="secondary">Cancel</button>' +
+      '<button type="submit" class="primary">Save check-in</button></div>';
+    let saving = false;
+    let saved = false;
+    let settle;
+    const outcome = new Promise(resolve => { settle = resolve; });
+    const opener = document.activeElement;
+    const editOverlay = document.getElementById('delegated-modal-overlay');
+    const returnToEdit = editOverlay && editOverlay.classList.contains('open');
+    closeDelegatedModal();
+    const handle = window.DCC.overlay.open({
+      kind: window.innerWidth <= 600 ? 'sheet' : 'modal', title: 'Checked in', body: form, anchor: opener,
+      canClose: () => !saving,
+      onClose: reason => {
+        _checkInPrompt = null;
+        if (returnToEdit && reason !== 'saved') editOverlay.classList.add('open');
+        settle(reason === 'saved' && saved);
       }
-      closeDelegatedModal();
-      await afterWaitingAction();
-      toast((item.properties || {}).checkInRepeat === false ? "Follow-up complete." : "Checked in. The next reminder is scheduled.", "success");
-      return true;
-    } catch (e) {
-      toast("Could not complete check-in: " + (e.message || e), "error");
-      return false;
-    }
+    });
+    _checkInPrompt = handle;
+    form.querySelector('[data-wci-cancel]').addEventListener('click', () => handle.close('cancel'));
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (saving || _savingCheckIns.has(id) || !form.reportValidity()) return;
+      saving = true;
+      _savingCheckIns.add(id);
+      const errorEl = form.querySelector('[role="alert"]');
+      errorEl.textContent = '';
+      const submit = form.querySelector('[type="submit"]');
+      submit.textContent = 'Saving…';
+      const controls = Array.from(handle.el.querySelectorAll('button, input, textarea'));
+      controls.forEach(control => { control.disabled = true; });
+      try {
+        const result = await completeCheckInCycle(id, key, new Date().toISOString(), {
+          expectedCheckInCount,
+          nextCheckInDate: form.querySelector('#wci-date').value,
+          note: form.querySelector('#wci-note').value.trim()
+        });
+        saved = result.status === 'completed';
+        saving = false;
+        handle.close('saved');
+        await afterWaitingAction().catch(error => console.warn('[waiting] saved check-in refresh failed:', error.message || error));
+        toast(result.status === 'completed' ? 'Checked in. Next check-in saved.' : 'This Waiting item changed elsewhere. Review its current schedule.', result.status === 'completed' ? 'success' : 'info');
+      } catch (error) {
+        errorEl.textContent = 'Could not save check-in: ' + (error.message || error);
+      } finally {
+        saving = false;
+        _savingCheckIns.delete(id);
+        controls.forEach(control => { control.disabled = false; });
+        submit.textContent = 'Save check-in';
+      }
+    });
+    return outcome;
   }
 
   async function snoozeWaitingItem(id, until) {
@@ -1140,10 +1223,15 @@
       toast("That Waiting item is no longer available.", "info");
       return false;
     }
+    // The drawer lists open work only, so a closed item has no card to land on.
+    if (!isOpenDelegated(item)) {
+      toast("That Waiting item is already closed.", "info");
+      return false;
+    }
     _currentFilter = "all";
     renderDelegatedSidebar();
-    if (typeof window.openTasksToSection === "function") {
-      window.openTasksToSection("tm-delegated-blocked-section", { solo: true });
+    if (typeof window.openTaskQueue === "function") {
+      window.openTaskQueue("waiting");
     }
     setTimeout(() => {
       const card = Array.from(document.querySelectorAll("#delegated-blocked-list .delegated-card"))
@@ -1213,6 +1301,8 @@
     const checkBtn = document.getElementById("dm-mark-checked");
     if (checkBtn) checkBtn.style.display = (idOrNull && item && isOpenDelegated(item) && !(p.checkInRepeat === false && !p.checkInDate)) ? "" : "none";
 
+    const history = document.getElementById("dm-check-in-history");
+    if (history) history.innerHTML = item ? checkInHistoryHtml([item]) : "";
     overlay.classList.add("open");
     setTimeout(() => { const t = document.getElementById("dm-task-link"); if (t) t.focus(); }, 20);
   }
@@ -1250,7 +1340,24 @@
 
   function setVal(id, value) {
     const el = document.getElementById(id);
-    if (el) el.value = value == null ? "" : value;
+    if (el) {
+      el.value = value == null ? "" : value;
+      if (typeof el.__twRender === "function") el.__twRender();
+      if (id === "dm-check-in-date") syncCheckInDateShortcuts();
+    }
+  }
+
+  function syncCheckInDateShortcuts() {
+    const input = document.getElementById("dm-check-in-date");
+    const now = new Date();
+    const today = toDateInputValue(now);
+    now.setDate(now.getDate() + 1);
+    const tomorrow = toDateInputValue(now);
+    document.querySelectorAll("[data-dm-date]").forEach(button => {
+      const selected = !!input && input.value === (button.dataset.dmDate === "today" ? today : tomorrow);
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
   }
 
   function getLinkableTasks() {
@@ -1613,10 +1720,18 @@
       });
     });
 
+    const checkInDate = document.getElementById("dm-check-in-date");
+    if (checkInDate) {
+      checkInDate.addEventListener("input", syncCheckInDateShortcuts);
+      checkInDate.addEventListener("change", syncCheckInDateShortcuts);
+    }
+
     const waitingPill = document.getElementById("waiting-pill-nav");
     if (waitingPill) waitingPill.addEventListener("click", () => {
-      if (typeof window.openTasksToSection === "function") {
-        window.openTasksToSection("tm-delegated-blocked-section", { solo: true });
+      if (typeof window.openTaskQueue === "function") {
+        _currentFilter = "all";
+        renderDelegatedSidebar();
+        window.openTaskQueue("waiting");
       }
     });
   }
@@ -1668,6 +1783,7 @@
     open: openWaitingItem,
     completeCheckIn: markDelegatedItemCheckedById,
     completeCheckInCycle,
+    checkInHistoryForTask,
     isCheckInTask,
     checkInIsLive,
     checkInSourceUrl,

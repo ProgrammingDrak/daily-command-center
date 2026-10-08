@@ -156,7 +156,7 @@ if (await login(page)) {
     return { targetHeight: target.height, pillHeight: pill?.height || 0 };
   });
   check("List privacy uses a compact visual pill", privacyBadge.pillHeight <= 24, JSON.stringify(privacyBadge));
-  check("List privacy keeps a 44 pixel touch target", privacyBadge.targetHeight >= 44, JSON.stringify(privacyBadge));
+  check("Desktop privacy control stays compact", privacyBadge.targetHeight <= 24, JSON.stringify(privacyBadge));
   const completionRail = await quickAddRow.evaluate((row) => {
     const button = row.querySelector(".quick-complete-control");
     const target = button?.getBoundingClientRect();

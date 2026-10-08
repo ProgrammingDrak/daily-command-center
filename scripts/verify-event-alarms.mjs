@@ -62,6 +62,8 @@ try{
  await dashboard.getByRole('button',{name:'Create / review linked phone alarm'}).waitFor();
  check('event editor uses stable block link and displays phone delivery status',await dashboard.getByRole('button',{name:'Create / review linked phone alarm'}).isEnabled() && await dashboard.locator('#am-event-alarm').textContent().then(t=>t.includes(created.id)));
  await dashboard.screenshot({path:out+'/mobile-event-editor.png',fullPage:true});
+ await dashboard.evaluate(b=>{const entry=scheduled.find(e=>e._blockId===b.id);entry.type='workout';openAddModal(entry.id,entry.title);},created);
+ check('integrated task editor preserves activity plan controls beside alarm link',await dashboard.getByRole('button',{name:'Open workout plan & log',exact:true}).isVisible() && await dashboard.getByRole('button',{name:'Create / review linked phone alarm'}).isEnabled());
  await dashboard.getByRole('button',{name:'Create / review linked phone alarm'}).click();await dashboard.waitForURL('**/public/alarms.html?event=*');check('editor opens full Alarms page with stable event reference',new URL(dashboard.url()).searchParams.get('event')===created.id);
  check('standalone Alarms API reads keep the original account binding across global account changes',bindingRequests>0 && bindingMismatch===0);
  fs.writeFileSync(out+'/checks.json',JSON.stringify({checks,syntheticClock:true,syntheticEventTime:true,nativeBridgeMock:true,audioMock:true,physicalAndroidTest:false},null,2));

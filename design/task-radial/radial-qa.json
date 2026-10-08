@@ -1,0 +1,244 @@
+{
+  "results": [
+    {
+      "width": 320,
+      "pos": [
+        0,
+        0
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 320,
+      "pos": [
+        296,
+        0
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 320,
+      "pos": [
+        0,
+        820
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 320,
+      "pos": [
+        296,
+        820
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 320,
+      "pos": [
+        296,
+        420
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 390,
+      "pos": [
+        0,
+        0
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 390,
+      "pos": [
+        366,
+        0
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 390,
+      "pos": [
+        0,
+        820
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 390,
+      "pos": [
+        366,
+        820
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 390,
+      "pos": [
+        366,
+        420
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 768,
+      "pos": [
+        0,
+        0
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 768,
+      "pos": [
+        744,
+        0
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 768,
+      "pos": [
+        0,
+        820
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 768,
+      "pos": [
+        744,
+        820
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 768,
+      "pos": [
+        744,
+        420
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 1440,
+      "pos": [
+        0,
+        0
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 1440,
+      "pos": [
+        1416,
+        0
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 1440,
+      "pos": [
+        0,
+        820
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 1440,
+      "pos": [
+        1416,
+        820
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 1440,
+      "pos": [
+        1416,
+        420
+      ],
+      "items": 11,
+      "inset": 16
+    },
+    {
+      "width": 844,
+      "height": 280,
+      "landscape": true
+    },
+    {
+      "width": 844,
+      "height": 200,
+      "landscape": true
+    }
+  ],
+  "calls": [
+    {
+      "name": "openMakeSubtaskOf",
+      "id": "qa-task"
+    },
+    {
+      "name": "promoteToTopLevel",
+      "id": "qa-task"
+    },
+    {
+      "name": "moveTaskToUnplanned",
+      "id": "qa-task"
+    },
+    {
+      "name": "openConvertToRadial",
+      "id": "qa-task"
+    },
+    {
+      "name": "convertTaskToDelegated",
+      "id": "qa-task"
+    },
+    {
+      "name": "openTaskDependencyModal",
+      "id": "qa-block"
+    },
+    {
+      "name": "openRepeatResponsibilityFromTask",
+      "id": "qa-task"
+    },
+    {
+      "name": "moveTaskToBacklog",
+      "id": "qa-task"
+    },
+    {
+      "name": "moveTaskToWhenever",
+      "id": "qa-task"
+    },
+    {
+      "name": "openScheduledOccurrenceActions",
+      "id": "qa-task"
+    },
+    {
+      "name": "toggleLock",
+      "id": "qa-task"
+    }
+  ],
+  "lockUnlock": true,
+  "keyboard": true,
+  "touch": true,
+  "dismissal": true
+}

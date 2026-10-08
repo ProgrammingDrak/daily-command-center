@@ -38,7 +38,7 @@ function mustMatch(src, re, what) {
 // The mover region: _subtreeIdsOf / _removeSubtreeFromScheduled / the tombstone writer /
 // rescheduleTaskToDate / restoreRescheduledAway / pushTask.
 const MOVER_SRC = [
-  mustMatch(STATE_SRC, /function _subtreeIdsOf\(rootId\)\{[\s\S]*?\n\}/, "_subtreeIdsOf"),
+  mustMatch(STATE_SRC, /function _subtreeIdsOf\(rootId,pool\)\{[\s\S]*?\n\}/, "_subtreeIdsOf"),
   mustMatch(STATE_SRC, /function _removeSubtreeFromScheduled\(rootId\)\{[\s\S]*?\n\}/, "_removeSubtreeFromScheduled"),
   mustMatch(STATE_SRC, /async function _materializeTaskOnDate\([\s\S]*?\n\}/, "_materializeTaskOnDate"),
   mustMatch(STATE_SRC, /async function _moveOriginDayChildrenTo\([\s\S]*?\n\}/, "_moveOriginDayChildrenTo"),

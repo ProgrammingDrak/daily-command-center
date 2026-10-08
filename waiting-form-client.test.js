@@ -45,7 +45,7 @@ function harness(values, existing = null) {
 test("Waiting access is prominent and contact fields are collapsed below the blocker", () => {
   const header = html.slice(html.indexOf('id="date-nav"'), html.indexOf('id="date-picker-drop"'));
   assert.match(header, /loose-ends-pill[\s\S]*waiting-pill-nav/);
-  assert.match(taskActions, /function buildTaskRadialItems[\s\S]*label:"Delegate \/ block"/);
+  assert.match(taskActions, /function buildTaskChangeItems[\s\S]*label:"Delegate \/ block"/);
   const form = html.slice(html.indexOf('id="delegated-modal-form"'), html.indexOf('id="dm-save"'));
   assert.ok(form.indexOf('id="dm-blocker-name"') < form.indexOf('id="dm-contact-details"'));
   assert.ok(form.indexOf('id="dm-contact-details"') < form.indexOf('id="dm-contact-channel"'));
@@ -213,4 +213,42 @@ test("a completed dated follow-up can save notes without setting another date", 
   const props = JSON.parse(ui.requests[0].options.body).properties;
   assert.equal(props.checkInDate, null);
   assert.equal(props.notes, "Still waiting");
+});
+
+
+test("Waiting date assignments refresh the visible picker without firing save events", () => {
+  const begin = source.indexOf("  function setVal(id, value) {");
+  const end = source.indexOf("\n  function getLinkableTasks()", begin);
+  let renders = 0;
+  const field = { value: "", __twRender() { renders++; this.label = this.value; } };
+  const buttons = ["today", "tomorrow"].map(token => ({
+    dataset: { dmDate: token },
+    classList: { toggle(_name, on) { this.active = on; } },
+    setAttribute(name, value) { this[name] = value; },
+  }));
+  class FixedDate extends Date {
+    constructor(...args) { super(...(args.length ? args : ["2026-10-07T12:00:00"])); }
+  }
+  const ctx = {
+    Date: FixedDate,
+    document: { getElementById: () => field, querySelectorAll: () => buttons },
+    toDateInputValue: date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-"),
+  };
+  vm.createContext(ctx);
+  vm.runInContext(source.slice(begin, end), ctx);
+  for (const [value, selected] of [["2026-10-07", "today"], ["2026-10-08", "tomorrow"], ["2026-12-19", null], ["", null]]) {
+    ctx.setVal("dm-check-in-date", value);
+    assert.equal(field.value, value);
+    assert.equal(field.label, value);
+    for (const button of buttons) {
+      assert.equal(button["aria-pressed"], String(button.dataset.dmDate === selected));
+      assert.equal(button.classList.active, button.dataset.dmDate === selected);
+    }
+  }
+  assert.equal(renders, 4);
+  // A manual field edit uses the same highlight rule.
+  field.value = "2026-10-08";
+  ctx.syncCheckInDateShortcuts();
+  assert.equal(buttons[1]["aria-pressed"], "true");
+  assert.equal(buttons[0]["aria-pressed"], "false");
 });

@@ -74,7 +74,7 @@
     modal.innerHTML =
       '<div class="todo-share-card">' +
         '<div class="todo-share-head">' +
-          '<div><h2>Share Live To-Do List</h2><p>Guests can view an active list from the link and offer bounties or rewards.</p></div>' +
+          '<div><h2>Share Live To-Do List</h2><p>Anyone with the link can view eligible tasks and propose rewards for your approval.</p></div>' +
           '<button id="todo-share-close" class="todo-share-x" type="button" aria-label="Close">&times;</button>' +
         '</div>' +
         '<div class="todo-share-linkbox">' +
@@ -82,6 +82,7 @@
           '<button id="todo-share-enable" type="button">Enable</button>' +
           '<button id="todo-share-copy" type="button">Copy</button>' +
           '<button id="todo-share-rotate" type="button">Rotate</button>' +
+          '<button id="todo-share-disable" type="button">Disable</button>' +
         '</div>' +
         '<div class="todo-share-note">The link grants guest access to this shared view only. Private tasks stay hidden when their public visibility is set to private.</div>' +
         '<div class="todo-share-section">' +
@@ -105,6 +106,7 @@
     modal.querySelector("#todo-share-enable").addEventListener("click", enableShare);
     modal.querySelector("#todo-share-copy").addEventListener("click", copyShare);
     modal.querySelector("#todo-share-rotate").addEventListener("click", rotateShare);
+    modal.querySelector("#todo-share-disable").addEventListener("click", disableShare);
     modal.querySelector("#todo-share-activity-seen").addEventListener("click", markActivitySeen);
     modal.addEventListener("click", e => {
       const btn = e.target.closest("[data-todo-sponsor-status]");
@@ -124,6 +126,7 @@
     if (enable) enable.textContent = share ? "Enabled" : "Enable";
     if (copy) copy.disabled = !share;
     if (rotate) rotate.disabled = !share;
+    modal.querySelector("#todo-share-disable").disabled = !share;
 
     const pending = sponsorships.filter(s => s.status === "pending").length;
     const pendingEl = modal.querySelector("#todo-share-pending");
@@ -474,6 +477,14 @@
       share = result.share;
       await load();
       toast("Live share link enabled");
+    } catch (e) { toast(e.message, "error"); }
+  }
+
+  async function disableShare(){
+    if (!share || !confirm("Disable this public link? Anyone using it will lose access.")) return;
+    try {
+      await api("/api/todo-share", { method: "DELETE" });
+      share = null; render(); toast("Public link disabled");
     } catch (e) { toast(e.message, "error"); }
   }
 

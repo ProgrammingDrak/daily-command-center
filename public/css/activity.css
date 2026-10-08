@@ -1,0 +1,54 @@
+.activity-page { max-width: 1440px; margin: auto; padding: var(--sp-6); color: var(--ink); }
+.act-heading,.act-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); }
+.act-heading { justify-content: space-between; margin-bottom: var(--sp-4); }
+.activity-page h2 { margin: 0; font-size: var(--fs-2xl); color: var(--ink-strong); }
+.act-private { color: var(--accent, #38bdf8); font-size: var(--fs-xs); letter-spacing: .04em; }
+.act-muted, .act-records small, .activity-page small { color: var(--ink-muted); font-size: var(--fs-sm); }
+.act-toolbar,.act-card,.act-metrics article { border: 1px solid var(--line-subtle); border-radius: var(--r-xl); background: var(--surface-base); padding: var(--sp-5); margin-bottom: var(--sp-4); }
+.act-toolbar { display: grid; gap: var(--sp-4); }
+.act-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: var(--sp-4); }
+.act-metrics article { display: grid; gap: var(--sp-2); }
+.act-metrics strong { font-size: var(--fs-2xl); color: var(--ink-strong); }
+.activity-page button,.act-editor button { min-height: var(--target-min); padding: var(--sp-2) var(--sp-3); background: var(--surface-raised); color: var(--ink-strong); border: 1px solid var(--line); border-radius: var(--r-md); cursor: pointer; font: inherit; font-size: var(--fs-sm); }
+.activity-page button:hover,.act-editor button:hover { background: var(--surface-hover); border-color: var(--brand); }
+.activity-page input,.activity-page select,.act-editor input,.act-editor select { box-sizing: border-box; min-height: var(--target-min); min-width: 0; width: 100%; padding: var(--sp-2); border-radius: var(--r-md); border: 1px solid var(--line); color: var(--ink-strong); background: var(--surface-canvas); font: inherit; }
+.act-field { display: grid; gap: var(--sp-1); min-width: 0; font-size: var(--fs-sm); }
+.act-toolbar .act-field { max-width: 12rem; }
+.act-check { display: flex; align-items: center; gap: var(--sp-2); }
+.act-check input { width: auto; }
+.act-table-wrap { overflow: auto; }
+.activity-page table { border-collapse: collapse; width: 100%; font-size: var(--fs-sm); text-align: left; }
+.activity-page th,.activity-page td { padding: var(--sp-3); border-bottom: 1px solid var(--line-subtle); vertical-align: top; min-width: 6rem; }
+.activity-page small { display: block; font-weight: normal; }
+.act-bar { background: linear-gradient(90deg,var(--brand-soft) var(--bar),transparent var(--bar)); padding: var(--sp-1); }
+.act-empty { padding: var(--sp-5); color: var(--ink-muted); border: 1px dashed var(--line); border-radius: var(--r-lg); }
+.act-error { color: var(--danger, #fb7185); white-space: pre-wrap; }
+.act-error:empty { display: none; }
+.act-records article { display: flex; gap: var(--sp-4); justify-content: space-between; align-items: center; padding: var(--sp-3) 0; border-top: 1px solid var(--line-subtle); }
+.act-records strong { display: block; overflow-wrap: anywhere; }
+.act-type { font-size: var(--fs-xs); color: var(--ink-muted); text-transform: capitalize; }
+.act-dialog.dcc-modal { width: min(960px,calc(100vw - var(--sp-8))); max-width: 960px; }
+.act-editor { display: grid; gap: var(--sp-3); }
+.act-fields { padding: 0; border: 0; margin: 0; min-width: 0; }
+.act-exercise { padding: var(--sp-4); border: 1px solid var(--line); border-radius: var(--r-lg); margin: var(--sp-3) 0; }
+.act-exercise h3,.act-exercise h4 { margin: var(--sp-4) 0 var(--sp-2); }
+.act-set { display: grid; grid-template-columns: 5rem repeat(2,minmax(0,1fr)) 5rem auto; align-items: end; gap: var(--sp-2); padding: var(--sp-3); margin-bottom: var(--sp-2); background: var(--surface-base); border-radius: var(--r-md); }
+.act-set [data-act="actual-set"] { grid-column: 2 / -1; }
+.act-actual { border-left: 3px solid var(--brand); }
+.act-run,.act-food { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); align-items: end; gap: var(--sp-3); padding: var(--sp-3); margin-bottom: var(--sp-3); background: var(--surface-base); border-radius: var(--r-md); }
+.act-food .act-field:first-child,.act-food .act-field:last-of-type { grid-column: 1 / -1; }
+.act-record-tools { display: flex; flex-wrap: wrap; gap: var(--sp-2); padding-top: var(--sp-4); border-top: 1px solid var(--line); }
+.act-notice { padding: var(--sp-3); background: var(--brand-soft); border-radius: var(--r-md); }
+.tag-workout { color: #38bdf8; }.tag-meal { color: #fbbf24; }
+@media (max-width:760px) {
+  .activity-page { padding: var(--sp-3); padding-bottom: var(--sp-12); }
+  .act-metrics { grid-template-columns: 1fr; gap: 0; }
+  .act-dialog.dcc-modal { width: calc(100vw - var(--sp-4)); }
+  .act-toolbar,.act-card { padding: var(--sp-3); }
+  .act-set { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .act-set strong { grid-column: 1 / -1; }
+  .act-set [data-act="actual-set"] { grid-column: 2 / -1; }
+  .act-run,.act-food { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .act-exercise { padding: var(--sp-2); }
+  .act-records article { align-items: stretch; flex-direction: column; }
+}

@@ -431,7 +431,7 @@ test("details expansion uses a native button and explains an empty task", async 
   const toggle = r.querySelector(".ttl");
   ctx.window.DCC.Carryover.loadDetails = async () => ({ title: "Slipped", details: [], notes: [] });
   r.querySelector(".btn-task-radial").fire("click");
-  assert.ok(r.querySelector(".btn-task-radial")._actions.some(action => action.label === "Notes & actions"));
+  assert.deepEqual(Array.from(r.querySelector(".btn-task-radial")._actions, action => action.label), ["Move…", "Solo"]);
   toggle.fire("click");
   await settled();
   assert.equal(r.querySelector(".cu-details").hidden, false);
@@ -649,10 +649,10 @@ test("the unified modal follows the requested section order", async () => {
   await openLooseEnds(ctx);
   assert.deepEqual(
     [...allRowsOf(ctx)].filter(r => r.className === "cu-section-label").map(r => r.textContent),
-    ["Slipped tasks", "Slack", "Gmail", "Journal"]
+    ["Slipped tasks", "Slack", "Gmail"]
   );
   const journal = [...allRowsOf(ctx)].find(r => r.className === "cu-journal-wrap");
-  assert.match(journal.innerHTML, /Journal/);
+  assert.equal(journal, undefined, "Journal is not part of Loose Ends");
 });
 
 test("every Loose Ends source uses the live itinerary renderer", async () => {
@@ -705,11 +705,11 @@ test("an unwritten Journal does NOT inflate the Loose Ends pill", async () => {
   installJournal(ctx, { pending: true });
   await ctx.window.initCatchUp();
   assert.equal(count.textContent, "0");
-  assert.equal(pill.hidden, false, "the Journal remains reachable without inflating the count");
-  assert.equal(pill.getAttribute("aria-label"), "Open Journal");
+  assert.equal(pill.hidden, true, "a journal draft does not expose an empty task queue");
+  assert.equal(pill.getAttribute("aria-label"), "Open 0 Loose Ends");
 });
 
-test("an unwritten Journal remains reachable from the zero-count reminder", async () => {
+test("an unwritten Journal does not open an empty Loose Ends dialog", async () => {
   // The reason the Journal is its own packet-free section: on a day with zero loose
   // ends it is the ONLY thing to show, and it must still be offered exactly once.
   const d = ymd(1);
@@ -717,16 +717,16 @@ test("an unwritten Journal remains reachable from the zero-count reminder", asyn
   installJournal(ctx, { pending: true });
   await openLooseEnds(ctx);
   const overlay = ctx.document.getElementById("catchup-overlay");
-  assert.equal(overlay.classList.contains("open"), true);
-  assert.ok([...allRowsOf(ctx)].some(row => row.className === "cu-journal-wrap"));
-  assert.equal(saved._catchUpReviewed, undefined);
+  assert.equal(overlay, null);
+  assert.ok(saved._catchUpReviewed, "an empty work queue can be marked reviewed independently of journal drafts");
 });
 
-test("a Journal scope failure never marks the morning reviewed", async () => {
+test("Loose Ends does not load Journal scope or render mood prompts", async () => {
   const d = ymd(1);
   const { ctx, saved } = load({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d]);
+  let journalReads = 0;
   ctx.window.DCC.Journal = {
-    ensureScope: async () => { throw new Error("temporarily unavailable"); },
+    ensureScope: async () => { journalReads++; throw new Error("temporarily unavailable"); },
     render: () => "",
     isPending: () => false,
     setHost: () => {}
@@ -734,7 +734,8 @@ test("a Journal scope failure never marks the morning reviewed", async () => {
   await openLooseEnds(ctx);
   assert.equal(saved._catchUpReviewed, undefined);
   assert.ok(ctx.document.getElementById("catchup-overlay"),
-    "manual review stays available and reports the partial load");
+    "manual task review stays available");
+  assert.equal(journalReads, 0);
 });
 
 test("fresh sweep arrivals update Loose Ends without opening it", async () => {
@@ -753,7 +754,7 @@ test("fresh sweep arrivals update Loose Ends without opening it", async () => {
   assert.equal(overlay.querySelector("#catchup-title").textContent, "Loose Ends");
   assert.deepEqual([...rowsOf(ctx)].map(titleOf).filter(Boolean), ["Reply to s1"]);
   overlay.querySelector("#catchup-close").fire("click");
-  assert.equal(saved._catchUpReviewed, undefined, "closing a partial fresh modal never marks the morning reviewed");
+  assert.ok(saved._catchUpReviewed, "unrelated Journal failure no longer blocks work review");
 });
 
 test("fresh arrivals stay unreviewed when slipped tasks fail to load", async () => {
