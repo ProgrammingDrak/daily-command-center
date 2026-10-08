@@ -30,7 +30,7 @@ After approval, the release needs:
 - `DCC_ANDROID_SIGNING_SHA256=<approved certificate SHA-256 in AA:BB:… form>`
 - Deployment of this branch's server routes and logout hook on the existing fixed HTTPS DCC host.
 - Public, nonredirecting `/.well-known/assetlinks.json` naming `com.drake.dccalarm` and that certificate; the prepared route serves it only when both settings are valid. The current default is disabled with no association.
-- Confirmation of one Node process/replica, or an approved shared grant store implementation before enabling multi-replica operation.
+- Confirmation of one Node process/replica, or an approved shared grant store implementation before enabling multi-replica operation. Read-only Railway inspection on 2026-10-08 22:06 UTC verified one active successful deployment, one effective `us-west2` replica and the single-Node `start:render` command. Recheck before enablement; restarts/rolling deploys invalidate pending process-local handoffs safely and require restarting sign-in. No settings were changed.
 - Android automatic App Link verification and Auth Tab HTTPS verification on the signed test device. User-selected URL handling alone is refused. No new Google/Clerk provider credentials or provider redirect changes are required by this design.
 
 Do not enable the feature merely because the local unit tests pass. Current production has no deployed native-handoff routes, approved signing identity or verified app association from this task.
