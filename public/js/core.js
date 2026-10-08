@@ -115,7 +115,7 @@
     }
     const res = await fetch(path, fetchOpts);
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || errorLabel || "Request failed");
+    if (!res.ok) throw Object.assign(new Error(data.error || errorLabel || "Request failed"), { status: res.status, code: data.code });
     return data;
   };
 

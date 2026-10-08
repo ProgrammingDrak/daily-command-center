@@ -1,11 +1,22 @@
 // ======== SAVE STATUS + TOAST ========
 function updateSaveStatus(state, text) {
   const el = document.getElementById("save-status");
-  const pending = window.blockStore && typeof window.blockStore.debug === "function"
+  const commitmentStatus = window.DCCCommitmentSync?.summary;
+  const blockStatus = window.blockStore?.debug?.();
+  const pending = (commitmentStatus?.pending || 0) + (window.blockStore && typeof window.blockStore.debug === "function"
     ? Number(window.blockStore.debug().walEntries || 0)
-    : 0;
-  const message = text || "";
+    : 0);
+  let message = text || "";
   let local = "Saved locally";
+  if (blockStatus?.localSaveError || commitmentStatus?.localError) {
+    state = "local-error"; message = commitmentStatus?.localError || "Local storage could not save the task change.";
+  } else if (blockStatus?.unboundLegacyEntries) {
+    state = "error"; message = "Older pending task changes have no account binding. Export them for manual recovery.";
+  } else if (commitmentStatus?.attention) {
+    state = "error"; message = "A commitment change needs review. Open Commitments to recover or retry it.";
+  } else if (commitmentStatus?.remoteError) {
+    state = "error"; message = "Commitments offline; local work is safe.";
+  }
   let remote = "Waiting to sync";
   if (state === "ok") remote = pending ? "Waiting to sync" : "Synced";
   else if (state === "saving") remote = pending ? "Waiting to sync" : "Syncing";
@@ -20,7 +31,7 @@ function updateSaveStatus(state, text) {
       ? "Local work is safe. Reconnection restarts syncing automatically."
       : message
   };
-  try { localStorage.setItem("dcc:save-status", JSON.stringify(detail)); } catch (_) {}
+  try { localStorage.setItem("dcc:save-status:" + (window.DCC_ACCOUNT_CONTEXT?.userId || "unverified"), JSON.stringify(detail)); } catch (_) {}
   if (el) {
     el.className = "save-status save-status--" + state;
     el.title = local + " · " + remote;

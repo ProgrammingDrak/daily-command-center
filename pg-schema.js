@@ -369,6 +369,8 @@ CREATE TABLE IF NOT EXISTS todo_sponsorships (
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE todo_sponsorships ADD COLUMN IF NOT EXISTS offer_settings JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 CREATE INDEX IF NOT EXISTS idx_todo_sponsorships_workspace_status
   ON todo_sponsorships(workspace_id, status, created_at DESC);
 
@@ -1371,6 +1373,7 @@ async function createSchema() {
   console.log("[pg-schema] Creating tables...");
   await pool.query(SCHEMA_SQL);
   await pool.query(require("./activity-store").SCHEMA_SQL);
+  await pool.query(require("./commitment-store").SCHEMA_SQL);
   await applyPostSchema();
   console.log("[pg-schema] All tables and indexes created.");
 }

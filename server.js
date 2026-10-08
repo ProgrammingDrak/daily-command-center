@@ -263,6 +263,7 @@ app.use(async (req, res, next) => {
 });
 
 // ── Auth Routes ──
+app.use(require("./lib/account-binding"));
 function sendAuthPage(req, res) {
   if (req.session.userId) return res.redirect("/");
   res.sendFile(path.join(PROJECT_DIR, "login.html"));
@@ -443,6 +444,10 @@ function registerPublicSse(workspaceId, req, res) {
   });
 }
 
+function closePublicSse(workspaceId) {
+  for (const client of publicSseClients.get(workspaceId) || []) client.end();
+}
+
 // ── File Watching ──
 [DAY_STATE_FILE, TOMORROW_STATE_FILE].forEach((filePath) => {
   const watchDebounce = {};
@@ -610,10 +615,11 @@ async function buildDayResponse(dateStr, userId, workspaceId, { client, schedule
     dbFailed = true;
     console.error(`[day-response] Postgres read failed for ${dateStr} (${ws}):`, e.message);
   }
-  if (!enrichment) enrichment = readJSON(getDayFilePath(dateStr), null);
+  // Legacy mirrors have no trustworthy tenant binding. Never enrich a scoped
+  // request from them, including anonymous share reads and missing DB rows.
   // The outage branch, kept separate from the empty-day branch on purpose (blocker 4). A
   // skeleton served here would be indistinguishable from a real empty day to every caller.
-  if (!enrichment && dbFailed) throw new Error(`Day state unavailable for ${dateStr}: Postgres read failed and no file mirror exists`);
+  if (!enrichment && dbFailed) throw new Error(`Day state unavailable for ${dateStr}: Postgres read failed; unscoped file mirrors are not usable`);
   // A genuinely absent day. Built, served, and NOT written (blocker 2).
   if (!enrichment) enrichment = buildSkeletonState(dateStr);
   const result = { ...enrichment, date: dateStr };
@@ -761,35 +767,12 @@ function ensureSkeletonDays() {
 }
 
 // ── State Endpoints ──
-// The degraded answer for a day whose state could not be read, and it answers for the day
-// that was ASKED FOR. Found by curl, not by the suite (C5b): `buildDayResponse` now THROWS
-// when Postgres is down and no file mirror exists, instead of minting and persisting a
-// skeleton — and these two catches used to fall through to `DAY_STATE_FILE` /
-// `TOMORROW_STATE_FILE`, which hold whatever day was last published. So asking for
-// 2027-03-09 during an outage answered with 2026-06-03's state, stamped with 2026-06-03. A
-// client cannot defend against that: `data.js transformState` reads `state.date`, sees a past
-// date, treats the timeline as archive and renders that unrelated day's items under the
-// heading you were looking at.
-//
-// So the per-date file is still tried, and after that it is an EMPTY day for the right date,
-// carrying `_unavailable` so a surface can say "couldn't load" rather than "nothing planned".
-// Never written: an unpersisted skeleton cannot become the base state a later full-replace
-// promotes over the real day, which is the whole reason blocker 4 existed.
-// The file-mirror ladder, in ONE place. `routes/dcc.js readDccDayState` needs exactly this
-// and had a hand-copy of it, which had already drifted in a way that mattered: this version
-// stamps the requested date onto the per-date file result and that one returned the file's
-// own `date`, so a mirror with a stale `date` field fed a full-replace `saveDccState` under
-// the wrong day there and was normalized here. Shared through ctx like the other day-state
-// primitives (`getDayFilePath`, `readJSON`, `buildSkeletonState`).
-//
-// Returns null when nothing on disk is about this date. `legacyFile` is a "last published
-// day" file (`DAY_STATE_FILE` / `TOMORROW_STATE_FILE`) with no workspace segment and no date
-// guarantee, so its own `date` is the only thing that makes it relevant.
+// Legacy day files have no trustworthy workspace identity. Keep this compatibility
+// hook fail-closed until mirrors have a tenant-scoped storage contract. Reads and
+// mutation bases must never borrow a file from another account during an outage.
 function readDayStateMirror(dateStr, legacyFile) {
-  const own = readJSON(getDayFilePath(dateStr), null);
-  if (own) return { ...own, date: dateStr };
-  const legacy = readJSON(legacyFile, null);
-  return (legacy && legacy.date === dateStr) ? legacy : null;
+  void dateStr; void legacyFile;
+  return null;
 }
 
 function dayStateUnavailable(dateStr, legacyFile, err) {
@@ -995,7 +978,7 @@ app.get("/api/health", async (req, res) => {
 app.get("/public/js/app-config.js", (req, res) => {
   res.type("application/javascript");
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-  res.send(`window.DCC_APP_TIME_ZONE=${JSON.stringify(APP_TIME_ZONE)};window.DCC_DELTA_SYNC_ENABLED=${process.env.DCC_DELTA_SYNC_ENABLED === "0" ? "false" : "true"};`);
+  res.send(`window.DCC_APP_TIME_ZONE=${JSON.stringify(APP_TIME_ZONE)};window.DCC_DELTA_SYNC_ENABLED=${process.env.DCC_DELTA_SYNC_ENABLED === "0" ? "false" : "true"};window.DCC_ACCOUNT_CONTEXT=${JSON.stringify(req.session.userId && req.workspaceId ? { userId: Number(req.session.userId), workspaceId: req.workspaceId } : null)};`);
 });
 app.use("/public", express.static(path.join(PROJECT_DIR, "public"), { etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 
@@ -1011,12 +994,13 @@ const meetingMaterializer = require("./meeting-materializer")({
 const ctx = {
   APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, gcalAuth, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAdminSession, isAllowedSweepBlockItem, meetingAutomation, meetingSignals, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, reimbursementStore, rewardVaultStore, readDayStateMirror, readJSON, readTriageSuppressionsForWorkspace, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, waitingItems, writeJSON,
   dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR, accessStore,
-  meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN, registerPublicSse,
+  meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN, registerPublicSse, closePublicSse,
   ...routeHelpers,
   get vault() { return vault; },
   get syncMgr() { return syncMgr; },
 };
 require("./routes/access")(app, ctx);
+require("./routes/commitments")(app, ctx);
 require("./routes/social-todo")(app, ctx);
 require("./routes/pet-home")(app, ctx);
 require("./routes/blocks")(app, ctx);

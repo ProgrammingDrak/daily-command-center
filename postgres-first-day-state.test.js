@@ -115,10 +115,10 @@ test("the Postgres row WINS over a file carrying a non-empty timeline", async ()
   assert.equal(out.schedule.timeline[0].label, "from Postgres");
 });
 
-test("no row, but a file: the file is served (it is the mirror, not a liar)", async () => {
+test("no row never borrows an unscoped file from another workspace", async () => {
   const { call } = runBuildDay({ dbRow: null, file: dayWithTimeline("mirror") });
   const out = await call();
-  assert.equal(out.schedule.timeline[0].label, "mirror");
+  assert.deepEqual(out.schedule.timeline, []);
 });
 
 test("no row and no file is an EMPTY DAY, and it is never written", async () => {
@@ -138,10 +138,9 @@ test("a FAILED read with no file THROWS rather than serving a skeleton (blocker 
   assert.deepEqual(writes, [], "and it certainly must not persist one");
 });
 
-test("a FAILED read WITH a file serves the file — degraded, not broken", async () => {
+test("a FAILED read WITH an unscoped file still fails closed", async () => {
   const { call } = runBuildDay({ dbThrows: true, file: dayWithTimeline("mirror") });
-  const out = await call();
-  assert.equal(out.schedule.timeline[0].label, "mirror");
+  await assert.rejects(call(), /Day state unavailable/);
 });
 
 test("NO branch writes anything (blocker 2, checked across all four)", async () => {
@@ -152,7 +151,8 @@ test("NO branch writes anything (blocker 2, checked across all four)", async () 
     { dbThrows: true, file: dayWithTimeline("file") },
   ]) {
     const { call, writes } = runBuildDay(fixture);
-    await call();
+    if (fixture.dbThrows) await assert.rejects(call(), /Day state unavailable/);
+    else await call();
     assert.deepEqual(writes, [], "wrote on " + JSON.stringify(Object.keys(fixture)));
   }
 });
@@ -290,15 +290,15 @@ test("the degraded answer NEVER carries another day's state", () => {
   assert.equal(out._unavailable, true);
 });
 
-test("the legacy file IS used when it happens to be about this date", () => {
+test("even a same-date legacy file has no trusted tenant identity", () => {
   const out = runUnavailable({ legacy: { date: DATE, schedule: { timeline: [{ id: "same-day" }] } } });
-  assert.equal(out.schedule.timeline[0].id, "same-day");
-  assert.ok(!out._unavailable, "real state for the right day is not a degraded answer");
+  assert.deepEqual(out.schedule.timeline, []);
+  assert.equal(out._unavailable, true);
 });
 
-test("the per-date mirror wins over both, and is stamped with the requested date", () => {
+test("per-date filenames also do not prove tenant ownership", () => {
   const out = runUnavailable({ own: { schedule: { timeline: [{ id: "mine" }] } }, legacy: { date: DATE } });
-  assert.equal(out.schedule.timeline[0].id, "mine");
+  assert.deepEqual(out.schedule.timeline, []);
   assert.equal(out.date, DATE);
 });
 
@@ -360,9 +360,9 @@ test("a SUCCESSFUL no-row read never uses the workspace-less mirror", async () =
   assert.equal(JSON.stringify(await runReadDcc({})()), empty, "no row means no day for THIS workspace");
 });
 
-test("the mirror IS used when the read failed — better than overwriting a day we could not read", async () => {
-  assert.equal((await runReadDcc({ dbThrows: true, file: dayWithTimeline("day file") })()).schedule.timeline[0].label, "day file");
-  assert.equal((await runReadDcc({ dbThrows: true, dayStateFile: dayWithTimeline("day-state") })()).schedule.timeline[0].label, "day-state");
+test("a failed mutation-base read never borrows unscoped mirrors", async () => {
+  await assert.rejects(runReadDcc({ dbThrows: true, file: dayWithTimeline("day file") })(), /Day state unavailable/);
+  await assert.rejects(runReadDcc({ dbThrows: true, dayStateFile: dayWithTimeline("day-state") })(), /Day state unavailable/);
 });
 
 test("a failed read with NO mirror throws rather than handing back a base to full-replace with", async () => {

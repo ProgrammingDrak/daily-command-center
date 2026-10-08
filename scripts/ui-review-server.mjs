@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Static review server. It never imports production routes or touches a database.
+// Static review server. Optional review backends use explicitly enabled synthetic databases only.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -14,6 +14,10 @@ const root = path.resolve(here, "..");
 const port = Number(process.env.PORT || 8099);
 const app = express();
 app.use(express.json());
+if (process.env.DCC_REVIEW_COMMITMENTS === "1") {
+  const { default: mountCommitmentReview } = await import("./commitment-review-backend.js");
+  await mountCommitmentReview(app);
+}
 if (process.env.DCC_ACTIVITY_REVIEW === "1") {
   const { default: mountActivityReview } = await import("./activity-review-backend.js");
   await mountActivityReview(app);
