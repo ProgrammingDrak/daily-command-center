@@ -989,6 +989,11 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
+app.get("/api/alarm-context", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ workspaceId: req.workspaceId || null });
+});
+
 app.get("/public/js/app-config.js", (req, res) => {
   res.type("application/javascript");
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");

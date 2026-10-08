@@ -416,6 +416,15 @@ function openAddModal(taskId, taskTitle) {
   // local_id, and a carryover row is in _rangeCache only — so the search misses and the
   // update never happens. _addModalBlockId short-circuits it.
   _addModalBlockId = (anchor && anchor.blockId) || null;
+  var alarmArea = document.getElementById("am-event-alarm");
+  if (!alarmArea) { alarmArea = document.createElement("div"); alarmArea.id = "am-event-alarm"; document.querySelector("#add-modal-overlay .add-modal-body").prepend(alarmArea); }
+  alarmArea.replaceChildren();
+  var alarmBlock = _addModalBlockId || (taskEntry && taskEntry._blockId) || window.blockStore?.getByType("block").find(function(b){return b.id === taskId || b.properties?.local_id === taskId;})?.id;
+  var alarmLink = document.createElement("button"); alarmLink.type = "button"; alarmLink.textContent = "Create / review linked phone alarm"; alarmLink.disabled = !alarmBlock;
+  alarmLink.onclick = function(){ window.DCCEventAlarmUI?.open(alarmBlock); };
+  var alarmHint = document.createElement("p"); alarmHint.textContent = "Local Android delivery · link uses saved event ID · timing refreshes online. Enable and check next delivery in Alarms.";
+  if(alarmBlock){alarmHint.dataset.eventAlarmBlock=alarmBlock;alarmHint.textContent=window.DCCEventAlarmUI?.description(alarmBlock)||alarmHint.textContent;}
+  alarmArea.append(alarmLink, alarmHint);
   _addModalDraftTitle = (taskEntry && taskEntry.title) || taskTitle || '';
   _addModalDraftTags = taskEntry && Array.isArray(taskEntry.tags) ? taskEntry.tags.slice() : [];
   _addModalTagsDirty = false;

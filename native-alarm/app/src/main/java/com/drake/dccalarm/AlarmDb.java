@@ -77,9 +77,15 @@ public final class AlarmDb extends SQLiteOpenHelper {
   public void importDefinitions(JSONArray rows) throws JSONException {
     if (rows.length() > 20) throw new IllegalArgumentException("Maximum 20 alarms");
     Set<String> ids = new HashSet<>();
+    Set<String> links = new HashSet<>();
     for (int i = 0; i < rows.length(); i++) {
       JSONObject a = rows.getJSONObject(i);
       validate(a);
+      if (a.has("eventLink")) {
+        JSONObject l = a.getJSONObject("eventLink");
+        String key = l.getString("workspaceId") + "/" + l.getString("blockId");
+        if (!links.add(key)) throw new IllegalArgumentException("Duplicate event links");
+      }
       if (!ids.add(a.getString("id"))) throw new IllegalArgumentException("Duplicate IDs");
     }
     SQLiteDatabase db = getWritableDatabase();
@@ -125,6 +131,11 @@ public final class AlarmDb extends SQLiteOpenHelper {
     int snoozes = a.getInt("snoozes");
     if (a.getDouble("snoozes") != snoozes || snoozes < 0 || snoozes > 1)
       throw new IllegalArgumentException("Invalid snooze");
+    if (a.has("eventLink")) {
+      EventAlarmRules.validate(a.getJSONObject("eventLink"));
+      if (!"once".equals(a.getString("mode")))
+        throw new IllegalArgumentException("Event alarms use one occurrence");
+    }
     a.getBoolean("enabled");
     JSONArray days = a.getJSONArray("days");
     if (a.getString("mode").equals("repeat") && days.length() == 0)
@@ -132,6 +143,41 @@ public final class AlarmDb extends SQLiteOpenHelper {
     for (int i = 0; i < days.length(); i++)
       if (days.getDouble(i) != days.getInt(i) || days.getInt(i) < 0 || days.getInt(i) > 6)
         throw new IllegalArgumentException("Invalid day");
+  }
+
+  public boolean syncEvent(JSONObject link, long now) throws JSONException {
+    EventAlarmRules.validate(link);
+    if (link.getLong("checkedAt") > now + 60000 || link.getLong("checkedAt") < now - 60000)
+      throw new IllegalArgumentException("Refresh timestamp invalid");
+    SQLiteDatabase db = getWritableDatabase();
+    boolean stopped = false;
+    db.beginTransaction();
+    try {
+      for (JSONObject a : definitions()) {
+        JSONObject old = a.optJSONObject("eventLink");
+        if (old == null
+            || !EventAlarmRules.same(old, link)
+            || old.getLong("checkedAt") > link.getLong("checkedAt")) continue;
+        a.put("eventLink", link);
+        if (!"ready".equals(link.getString("state"))) {
+          a.put("enabled", false);
+          try (Cursor c =
+              db.rawQuery("SELECT occ FROM runs WHERE id=?", new String[] {a.getString("id")})) {
+            while (c.moveToNext()) {
+              stop(c.getString(0), "event unavailable");
+              stopped = true;
+            }
+          }
+        }
+        ContentValues v = new ContentValues();
+        v.put("payload", a.toString());
+        db.update("defs", v, "id=?", new String[] {a.getString("id")});
+      }
+      db.setTransactionSuccessful();
+      return stopped;
+    } finally {
+      db.endTransaction();
+    }
   }
 
   public void toggle(String id) throws JSONException {
@@ -180,6 +226,8 @@ public final class AlarmDb extends SQLiteOpenHelper {
           || !a.getBoolean("enabled")
           || !key.equals(a.optString("occ"))
           || consumed().contains(key)) return false;
+      if (a.has("eventLink") && !EventAlarmRules.usable(a.getJSONObject("eventLink"), now))
+        return false;
       if (now < a.getLong("nextAt")) return false;
       if (!ClockRules.onTime(a.getLong("nextAt"), now)) {
         mark(key, "missed");

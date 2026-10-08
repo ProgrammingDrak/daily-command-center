@@ -1645,6 +1645,8 @@ function openSchedulePicker(title,durMin,options){
   _schedPickerTitle=title;
   _schedPickerDur=durMin||30;
   _schedPickerOptions=options||{};
+  const alarmCheck=document.getElementById("sched-create-alarm");
+  if(alarmCheck){alarmCheck.checked=false;alarmCheck.disabled=!window.DCCNativeAlarms?.postMessage;}
   _schedPickerDate="";
   _schedPickerOnPlace=null;_schedPickerVerb="";
   const overlay=document.getElementById("sched-picker-overlay");
@@ -1837,7 +1839,12 @@ async function _schedCommit(dateStr,timeStr){
   const session=_schedSession;
   // The title is editable in the modal; whatever it says at commit time wins.
   const title=(_schedPickerTitle||"").trim()||"Untitled task";
-  const durMin=_schedPickerDur,options=_schedPickerOptions;
+  const durMin=_schedPickerDur,options={..._schedPickerOptions};
+  if(!_schedPickerOnPlace && document.getElementById("sched-create-alarm")?.checked){
+    const offset=Number(document.getElementById("sched-alarm-offset").value);
+    if(!Number.isInteger(offset)||offset<0||offset>1440){showToast("Use 0–1440 minutes before start","error");return;}
+    options.alarmBefore=offset;
+  }
   const onPlace=_schedPickerOnPlace;
   const bar=options&&options.sourceBar;
   let autoPlaced=false;
@@ -1932,6 +1939,7 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options,placement){
     // Single record: persistAddedTask's dated block. (A savePendingTasks push
     // here used to mint an orphaned dateless pending_task twin.)
     const persistence=persistAddedTask(newItem);
+    if(options.alarmBefore!=null)window.DCCEventAlarmUI?.afterCreate(Promise.resolve(persistence),options.alarmBefore);
     log("scheduled",id,"Scheduled at "+timeStr+(autoPlaced?" (earliest free)":"")+": "+title);
     render();
     checkBlockWarnings(newItem);
@@ -1952,6 +1960,7 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options,placement){
         {_pinnedStart:timeStr,userSetStart:autoPlaced?undefined:true,added_at:new Date().toISOString()}
       );
       persistence=window.blockStore.createBlock("block",bprops,{date:dateStr});
+      if(options.alarmBefore!=null)window.DCCEventAlarmUI?.afterCreate(Promise.resolve(persistence),options.alarmBefore);
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
       render();
     } else {

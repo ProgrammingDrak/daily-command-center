@@ -33,6 +33,25 @@ public final class AlarmActivity extends Activity {
     setShowWhenLocked(true);
     setTurnScreenOn(true);
     render(true);
+    String event = getIntent().getStringExtra("reviewEvent");
+    getIntent().removeExtra("reviewEvent");
+    if (event != null && event.length() <= 65536) {
+      try (AlarmDb db = new AlarmDb(this)) {
+        JSONObject a = new JSONObject(event);
+        AlarmDb.validate(a);
+        JSONArray entries = new JSONArray();
+        for (JSONObject old : db.definitions()) {
+          if (old.has("eventLink")
+              && EventAlarmRules.same(old.getJSONObject("eventLink"), a.getJSONObject("eventLink")))
+            a.put("id", old.getString("id"));
+          else entries.put(old);
+        }
+        entries.put(a);
+        confirmDefinitions(entries);
+      } catch (Exception e) {
+        feedback.setText(getString(R.string.event_alarm_not_saved, e.getMessage()));
+      }
+    }
     String proposed = getIntent().getStringExtra("reviewDefinitions");
     getIntent().removeExtra("reviewDefinitions");
     if (proposed != null && proposed.length() <= 65536) {
@@ -125,7 +144,7 @@ public final class AlarmActivity extends Activity {
           });
       setContentView(scroll);
       scroll.requestApplyInsets();
-      text("DCC · device alarms", 26);
+      text("Alarms · this Android phone", 26);
       feedback = text(db.status(), 16);
       feedback.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
       if (r != null) {
@@ -145,7 +164,7 @@ public final class AlarmActivity extends Activity {
         text(
             a.getString("label")
                 + " · "
-                + a.getString("time")
+                + (a.has("eventLink") ? "event timing" : a.getString("time"))
                 + " · "
                 + (a.getBoolean("enabled") ? "enabled" : "disabled")
                 + "\nNext: "
@@ -155,6 +174,30 @@ public final class AlarmActivity extends Activity {
                         .toString()
                     : "not scheduled"),
             17);
+        if (a.has("eventLink")) {
+          JSONObject link = a.getJSONObject("eventLink");
+          text(
+              "Linked event: "
+                  + link.getString("title")
+                  + " · ID "
+                  + link.getString("blockId")
+                  + " · workspace "
+                  + link.getString("workspaceId")
+                  + "\n"
+                  + link.getInt("offsetMinutes")
+                  + " min before · event start "
+                  + java.time.Instant.ofEpochMilli(link.getLong("startAt"))
+                  + " · source zone "
+                  + link.getString("sourceZone")
+                  + "\nLast refresh: "
+                  + java.time.Instant.ofEpochMilli(link.getLong("checkedAt"))
+                  + " · "
+                  + (EventAlarmRules.usable(link, System.currentTimeMillis())
+                      ? "saved snapshot; remote/offline changes may not be known"
+                      : "stale/unavailable: not armed")
+                  + ". Refresh in DCC online; snapshots expire after 24 hours.",
+              16);
+        }
         button("Edit " + a.getString("label"), () -> editAlarm(a));
         button("Remove " + a.getString("label"), () -> removeAlarm(id));
         button(
@@ -431,6 +474,14 @@ public final class AlarmActivity extends Activity {
         days[i].setMinHeight(dp(48));
         form.addView(days[i]);
       }
+      if (a.has("eventLink")) {
+        time.setText(R.string.event_time_managed);
+        date.setText(R.string.event_date_managed);
+        time.setEnabled(false);
+        date.setEnabled(false);
+        mode.setEnabled(false);
+        for (CheckBox day : days) day.setEnabled(false);
+      }
       Spinner type =
           select(form, "Challenge", new String[] {"math", "quiz"}, a.optString("challenge"));
       Spinner difficulty =
@@ -486,7 +537,8 @@ public final class AlarmActivity extends Activity {
                           for (int i = 0; i < 7; i++) if (days[i].isChecked()) newDays.put(i);
                           a.put("days", newDays);
                           AlarmDb.validate(a);
-                          if ("once".equals(a.getString("mode"))
+                          if (!a.has("eventLink")
+                              && "once".equals(a.getString("mode"))
                               && ClockRules.next(
                                       a.getString("id"),
                                       a.getString("date"),

@@ -1,0 +1,11 @@
+const test=require('node:test');const assert=require('node:assert/strict');
+const M=require('./public/js/event-alarm-model');
+globalThis.DCC_APP_TIME_ZONE='America/New_York';
+const now=Date.parse('2026-10-08T12:00:00Z');
+const block={id:'stable-1',workspace_id:'ws-1',date:'2026-10-09',properties:{title:'Same label',start:'09:00'},updated_at:'v1'};
+test('stable link, disabled proposal and offsets cross midnight',()=>{const s=M.snapshot(block,'ws-1',600,now);assert.equal(s.blockId,'stable-1');assert.equal(s.workspaceId,'ws-1');assert.equal(s.startAt,Date.parse('2026-10-09T13:00Z'));const a=M.proposal(s,now);assert.equal(a.enabled,false);assert.equal(a.eventLink.blockId,'stable-1');assert.equal(a.mode,'once');});
+test('rescheduling updates instant without replacing event identity',()=>{const first=M.snapshot(block,'ws-1',5,now),next=M.snapshot({...block,properties:{...block.properties,start:'11:00'}},'ws-1',5,now+1000);assert.equal(next.blockId,first.blockId);assert.equal(next.startAt-first.startAt,7200000);});
+test('timezone change preserves explicit offset timestamp',()=>{const b={...block,properties:{start:'2026-11-01T01:30:00-05:00'}};assert.equal(M.snapshot(b,'ws-1',0,now).startAt,Date.parse(b.properties.start));});
+test('DST gaps move forward and folds use earlier occurrence',()=>{assert.equal(M.zonedStart('2026-03-08','02:30','America/New_York'),Date.parse('2026-03-08T07:30Z'));assert.equal(M.zonedStart('2026-11-01','01:30','America/New_York'),Date.parse('2026-11-01T05:30Z'));});
+test('stale and backward clock cannot pass freshness',()=>{const s=M.snapshot(block,'ws-1',0,now);assert.ok(M.usable(s,now));assert.equal(M.usable(s,now+M.MAX_AGE+1),false);assert.equal(M.usable(s,now-60001),false);assert.ok(M.usable(M.snapshot(block,'ws-1',0,now+M.MAX_AGE+1),now+M.MAX_AGE+1));});
+test('cancelled event pauses and malformed, wrong workspace, series/all-day reject',()=>{assert.equal(M.snapshot({...block,properties:{...block.properties,status:'cancelled'}},'ws-1',0,now).state,'unavailable');for(const f of [()=>M.snapshot(block,'ws-2',0,now),()=>M.snapshot(block,'ws-1',-1,now),()=>M.snapshot(block,'ws-1',1.5,now),()=>M.snapshot({...block,properties:{start:'09:00',recurrence:['RRULE']}},'ws-1',0,now),()=>M.snapshot({...block,properties:{start:'all day'}},'ws-1',0,now),()=>M.zonedStart('2026-02-30','09:00','UTC')])assert.throws(f);});

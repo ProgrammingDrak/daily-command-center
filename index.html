@@ -537,6 +537,8 @@
     </div>
     <div class="sched-picker-body">
       <input type="text" class="sched-picker-title" id="sched-picker-title" placeholder="Task title" />
+      <label><input id="sched-create-alarm" type="checkbox">Create a disabled alarm on this Android phone after the event saves</label>
+      <label>Minutes before start <input id="sched-alarm-offset" type="number" min="0" max="1440" value="0"></label>
 
       <!-- Step 1: which day -->
       <div class="sched-picker-step" id="sched-step-day">
@@ -2019,6 +2021,8 @@
 <script src="/public/js/core-ui.js?v=core-ui-1"></script>
 <script src="/public/js/alarm-model.js?v=alarms-1"></script>
 <script src="/public/js/alarm-store.js?v=alarms-1"></script>
+<script src="/public/js/event-alarm-model.js"></script>
+<script src="/public/js/event-alarms.js"></script>
 <script src="/public/js/alarms.js?v=alarms-1"></script>
 <script src="/public/js/collection.js?v=dcc-ui-1"></script>
 <script src="/public/js/block-editor.js"></script>

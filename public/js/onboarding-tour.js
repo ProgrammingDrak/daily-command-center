@@ -329,6 +329,7 @@
     if (signOut) signOut.addEventListener("click", async function(){
       closeSettingsMenu();
       // Cancel any pending native browser sign-in before logout; alarms remain device-local.
+      window.dispatchEvent(new Event("dcc:native-auth-cancel"));
       try { window.DCCNativeAlarms?.postMessage(JSON.stringify({ action: "cancelAuth" })); } catch (_) {}
       // DCC and Clerk own separate sessions. Clear both before the login page
       // loads, or Clerk immediately recreates the DCC session.

@@ -82,15 +82,17 @@ public final class AlarmScheduler {
         Set<Integer> days = new HashSet<>();
         for (int i = 0; i < rows.length(); i++) days.add(rows.getInt(i));
         ClockRules.Occurrence next =
-            ClockRules.next(
-                id,
-                a.getString("date"),
-                a.getString("time"),
-                a.getString("mode").equals("repeat"),
-                days,
-                now,
-                ZoneId.systemDefault(),
-                consumed);
+            a.has("eventLink")
+                ? EventAlarmRules.next(a, now, consumed)
+                : ClockRules.next(
+                    id,
+                    a.getString("date"),
+                    a.getString("time"),
+                    a.getString("mode").equals("repeat"),
+                    days,
+                    now,
+                    ZoneId.systemDefault(),
+                    consumed);
         if (next == null) {
           db.scheduled(id, 0, "");
           continue;

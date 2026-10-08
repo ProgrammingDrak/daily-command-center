@@ -43,4 +43,7 @@
  <color name="dcc_launcher_background">#172033</color>
  <string name="browser_auth_canceled">Browser sign-in canceled or verification failed. Start again; alarms are unchanged.</string>
  <string name="renderer_stopped">Dashboard renderer stopped. Reopen DCC to reload. Device alarms remain available.</string>
+  <string name="event_alarm_not_saved">Event alarm not saved: %1$s</string>
+  <string name="event_time_managed">Event start / offset managed on DCC Alarms page</string>
+  <string name="event_date_managed">Linked occurrence; date tracks event refresh</string>
 </resources>

@@ -13,6 +13,7 @@
       try {
         const reply = JSON.parse(event.data);
         if (reply.version === 1 && reply.deviceLocal === true) {
+          window.dispatchEvent(new CustomEvent('dcc:native-alarm-status',{detail:reply}));
           nativeStatus = String(reply.status || 'Check device alarms');
           button.textContent = 'Phone alarms · ' + nativeStatus;
         }
@@ -24,6 +25,7 @@
       const description = document.createElement('p');
       description.textContent = nativeStatus + '. Alarms are local to this phone, shared across DCC accounts, and continue after logout. Native scheduling works independently of this page. Browser alarms do not run inside this app.';
       body.append(description);
+      const fullPage=document.createElement('a');fullPage.href='/public/alarms.html';fullPage.textContent='Open full Alarms page';
       const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Manage phone alarms';
       open.disabled = !nativeAvailable;
       open.onclick = () => native.postMessage(JSON.stringify({ action: 'open' }));
@@ -39,7 +41,7 @@
         } catch (_) { feedback.textContent = 'Browser definitions unavailable. Manage phone alarms remains available.'; }
       };
       const actions = document.createElement('div'); actions.className = 'alarm-actions'; actions.append(open, review);
-      body.append(actions, feedback);
+      body.append(actions, fullPage, feedback);
       window.DCC.overlay.open({ title: 'Phone challenge alarms', body, anchor: button });
     };
     if (nativeAvailable) native.postMessage(JSON.stringify({ action: 'status' }));

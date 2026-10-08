@@ -18,6 +18,7 @@
     return new Date(y, m - 1, d, h, min).getTime();
   }
   function validate(a) {
+    if (a?.eventLink) throw Error('Event-linked alarms are managed on the Android Alarms page.');
     if (!a || typeof a.id !== 'string' || !a.id || typeof a.label !== 'string' || a.label.length > 80) throw Error('Invalid alarm name.');
     if (!['once', 'repeat'].includes(a.mode) || typeof a.enabled !== 'boolean') throw Error('Invalid schedule.');
     localDate(a.date, a.time);

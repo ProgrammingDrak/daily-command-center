@@ -149,7 +149,7 @@ public final class MainActivity extends ComponentActivity {
     WebSettings settings = web.getSettings();
     settings.setJavaScriptEnabled(true);
     settings.setDomStorageEnabled(true);
-    settings.setUserAgentString(settings.getUserAgentString() + " DCCAndroid/0.3");
+    settings.setUserAgentString(settings.getUserAgentString() + " DCCAndroid/0.4");
     settings.setAllowFileAccess(false);
     settings.setAllowContentAccess(false);
     settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
@@ -266,8 +266,27 @@ public final class MainActivity extends ComponentActivity {
                           .put("version", 1)
                           .put("status", db.status())
                           .put("deviceLocal", true)
+                          .put("alarms", new JSONArray(db.definitions()))
                           .toString());
                 }
+              } else if ("syncEvent".equals(action)) {
+                boolean stopped;
+                try (AlarmDb db = new AlarmDb(this)) {
+                  stopped =
+                      db.syncEvent(request.getJSONObject("eventLink"), System.currentTimeMillis());
+                }
+                if (stopped) stopService(new Intent(this, AlarmService.class));
+                AlarmScheduler.reconcile(this);
+              } else if ("reviewEvent".equals(action)) {
+                JSONObject a = request.getJSONObject("alarm");
+                AlarmDb.validate(a);
+                if (!a.has("eventLink")
+                    || !EventAlarmRules.usable(
+                        a.getJSONObject("eventLink"), System.currentTimeMillis())
+                    || a.getBoolean("enabled"))
+                  throw new IllegalArgumentException("Event proposal must be disabled");
+                startActivity(
+                    new Intent(this, AlarmActivity.class).putExtra("reviewEvent", a.toString()));
               } else if ("cancelAuth".equals(action)) auth.cancel();
               else if ("open".equals(action)) startActivity(new Intent(this, AlarmActivity.class));
               else if ("review".equals(action)) {

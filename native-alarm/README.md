@@ -72,3 +72,7 @@ Use a temporary test alarm while awake, with explicit signing/install and action
 Record Android version, phone/OEM, permission/channel/battery/DND settings, timestamps and observed results. Only then choose a supported device claim. No sleep tracking or health analytics is included.
 
 Official platform references: [alarms](https://developer.android.com/develop/background-work/services/alarms), [exact access](https://developer.android.com/about/versions/14/changes/schedule-exact-alarms), [full-screen access](https://developer.android.com/about/versions/14/behavior-changes-14#secure-fsi), [foreground services](https://developer.android.com/develop/background-work/services/fgs/service-types), [Doze](https://developer.android.com/training/monitoring-device-state/doze-standby), [force-stop](https://developer.android.com/about/versions/15/behavior-changes-all#stopped-state).
+
+## Event-linked candidate 0.4
+
+The full Alarms page and create/edit event links are documented in `../docs/EVENT-LINKED-ALARMS.md`. This remains unsigned and unreleased. Event snapshots are read-only, workspace/block linked, explicitly reviewed, initially disabled and bounded to 24 hours of freshness. Google realtime calendar sync remains disabled; no new provider scopes or event writes are added.
