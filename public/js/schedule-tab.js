@@ -247,12 +247,16 @@ async function convertTaskType(id,newType){
     return false;
   }
   const kids=(typeof childrenOf==="function")?childrenOf(id,scheduled):[];
-  const wasRollup=R.isRollup(currentType);
-  const props=Object.assign({},block.properties,{type:newType,isWrap:!!R.rule(newType,"dragMovesSubtree")});
-  if(R.rule(newType,"recordType"))props.publicVisibility="private";
+  let wasRollup=R.isRollup(currentType);
   ev._typeConversionPending=true;
   try{
-    const saved=await store.updateBlock(block.id,props,{_reportSaveStatus:true});
+    const saved=await enqueueRowPropsWrite(block.id,current=>{
+      const persistedType=current.type||ev.type;
+      if(R.rule(persistedType,"recordType"))throw new Error("This private "+R.get(persistedType).label.toLowerCase()+" keeps its activity type. Create a separate Task to keep the log.");
+      wasRollup=R.isRollup(persistedType);
+      return Object.assign({},current,{type:newType,isWrap:!!R.rule(newType,"dragMovesSubtree")},
+        R.rule(newType,"recordType")?{publicVisibility:"private"}:{});
+    },{_reportSaveStatus:true},{rejectOnError:true});
     if(!saved||!saved.properties)throw new Error("Could not save the task type");
     const actualType=saved.properties.type||"task";
     ev.type=actualType;ev.isWrap=saved.properties.isWrap||undefined;

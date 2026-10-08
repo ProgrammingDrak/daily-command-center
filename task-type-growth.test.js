@@ -81,10 +81,13 @@ function convertCtx(tasks, save) {
         return save ? save(id,props) : {id,properties:props};
       }
     } },
+    console:{warn:()=>{}}, _rowForDateWrite:id=>context.window.blockStore.get(id),
     scheduled: tasks, childrenOf: () => [], recalcTimes: () => {}, render: () => {},
     showToast: (message,kind) => toasts.push({message,kind}),
   };
   vm.createContext(context);
+  const stateSrc=fs.readFileSync(require.resolve("./public/js/state.js"),"utf8");
+  vm.runInContext("let _rowPropsChain=Promise.resolve();\n"+slice(stateSrc,"enqueueRowPropsWrite"),context);
   vm.runInContext("async " + slice(stSrc, "convertTaskType") + "\nthis.convertTaskType=convertTaskType;", context);
   return { context, persists, toasts };
 }
@@ -154,4 +157,25 @@ test("conversion into workout/meal saves privacy and rejects absent persistence"
   context.window.blockStore=null;
   assert.equal(await context.convertTaskType("unsaved","task"),false);
   assert.equal(ev.type,"focus"); assert.equal(toasts.at(-1).kind,"error");
+});
+
+
+test("conversion composes after pending row writes without overwriting their properties", async () => {
+  const ev={id:"queued",type:"focus",duration:60};
+  const {context,persists}=convertCtx([ev]);
+  let release;
+  context._rowForDateWrite=async id=>{await new Promise(resolve=>{release=resolve;});return {id,properties:{type:"focus",duration:90,sourceReferences:[{url:"https://example.com"}]}};};
+  const pending=context.convertTaskType("queued","task");
+  await Promise.resolve();await Promise.resolve();release();
+  assert.equal(await pending,true);
+  assert.equal(persists[0].patch.duration,90);
+  assert.equal(persists[0].patch.sourceReferences[0].url,"https://example.com");
+});
+
+test("conversion checks protected types again after the shared queue reads the row", async () => {
+  const ev={id:"changed",type:"focus"};
+  const {context,persists,toasts}=convertCtx([ev]);
+  context._rowForDateWrite=id=>({id,properties:{type:"workout",publicVisibility:"private"}});
+  assert.equal(await context.convertTaskType("changed","task"),false);
+  assert.equal(persists.length,0);assert.equal(toasts.at(-1).kind,"error");
 });

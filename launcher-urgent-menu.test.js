@@ -422,3 +422,17 @@ test("launcher handoff releases modal state without taking focus back", () => {
   loaded.button.focused=false; loaded.bar.dispatchEvent({type:"dcc:launcher-handoff"});
   assert.equal(loaded.compose.classList.contains("open"),false); assert.equal(loaded.button.focused,false);
 });
+
+
+test("late activity acknowledgement leaves a newer composer draft intact", () => {
+  for(const field of ["title","duration","destination"]){
+    const {bar,opened,context}=loadActivityAdd("workout");
+    context.addTaskUniversal(bar);
+    bar.parts[field].value={title:"Run B",duration:"60",destination:"meal"}[field];
+    const before=Object.fromEntries(["title","duration","destination"].map(key=>[key,bar.parts[key].value]));
+    opened[0][3].onCreated();
+    for(const key of Object.keys(before))assert.equal(bar.parts[key].value,before[key]);
+  }
+  const blank=loadActivityAdd("meal","");blank.context.addTaskUniversal(blank.bar);blank.opened[0][3].onCreated();
+  assert.equal(blank.bar.parts.destination.value,"urgent");
+});

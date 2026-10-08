@@ -1554,10 +1554,11 @@ function addTaskUniversal(barEl){
       return false;
     }
     if(typeof Event==="function"&&typeof barEl.dispatchEvent==="function")barEl.dispatchEvent(new Event("dcc:launcher-handoff"));
+    const draftTitle=inp.value, duration=barEl.querySelector(".tab-dur"), draftDuration=duration.value;
     activity.create(dest,null,title,{durationMinutes:durMin,onCreated:()=>{
-      if(inp.value.trim()===title)inp.value="";
       const select=barEl.querySelector(".tab-dest");
-      if(select&&select.value===dest)select.value="urgent";
+      if(!select||inp.value!==draftTitle||select.value!==dest||duration.value!==draftDuration)return;
+      inp.value="";select.value="urgent";
     }});
     return false;
   }
