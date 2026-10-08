@@ -1679,6 +1679,8 @@ function openPlacementPicker(cfg){
   _schedPickerOptions={};
   _schedPickerDate="";
   _schedPickerOnPlace=onPlace;
+  const alarmCheck=document.getElementById("sched-create-alarm");
+  if(alarmCheck){alarmCheck.checked=false;alarmCheck.disabled=true;}
   _schedPickerVerb=cfg.verb||"Move";
   _schedSetHeader(_schedPickerVerb);
   const titleEl=document.getElementById("sched-picker-title");

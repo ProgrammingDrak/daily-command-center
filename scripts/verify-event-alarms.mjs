@@ -1,4 +1,4 @@
-/* global window, document, innerWidth, openSchedulePicker, _schedPickDay, scheduled, openAddModal */
+/* global window, document, innerWidth, openSchedulePicker, _schedPickDay, scheduled, openAddModal, openPlacementPicker, closeSchedulePicker */
 import {createRequire} from 'node:module';import path from 'node:path';import {fileURLToPath} from 'node:url';import fs from 'node:fs';import assert from 'node:assert/strict';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');const require=createRequire(root+'/package.json');const {chromium}=require('playwright-core');
 const fixture=await fetch('http://127.0.0.1:8199/api/auth/me').then(r=>r.json());if(fixture.user?.username!=='review'||fixture.user?.name!=='Review User')throw Error('Use the database-free review fixture only.');
@@ -41,6 +41,9 @@ try{
  await dashboard.route('**/api/blocks',async route=>{if(route.request().method()!=='POST')return route.continue();const payload=route.request().postDataJSON();created={...payload,id:payload.id||'created-event',workspace_id:'ws-review',updated_at:'v1'};await route.fulfill({json:created});});
  await dashboard.route('**/api/blocks/*',route=>created&&route.request().url().endsWith('/'+created.id)?route.fulfill({json:created}):route.continue());
  await dashboard.goto('http://127.0.0.1:8199');await dashboard.waitForFunction(()=>typeof openSchedulePicker==='function');
+ await dashboard.evaluate(()=>openPlacementPicker({title:'Existing event',onPlace(){}}));
+ check('move-only picker cannot falsely offer event-alarm creation',await dashboard.locator('#sched-create-alarm').isDisabled() && !(await dashboard.locator('#sched-create-alarm').isChecked()));
+ await dashboard.evaluate(()=>closeSchedulePicker());
  await dashboard.evaluate(()=>openSchedulePicker('New event with alarm',30,{type:'meeting'}));
  await dashboard.locator('#sched-create-alarm').check();await dashboard.locator('#sched-alarm-offset').fill('10');
  const tomorrow=new Date(Date.now()+86400000).toISOString().slice(0,10);await dashboard.evaluate(date=>_schedPickDay(date),tomorrow);
