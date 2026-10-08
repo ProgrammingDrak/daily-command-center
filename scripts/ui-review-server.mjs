@@ -9,6 +9,8 @@ import reschedule from "../lib/reschedule.js";
 import poolPlacement from "../lib/whenever-placement.js";
 import createTaskTiming from "../lib/task-timing.js";
 import seedTaskDetailReview from "./task-detail-review-fixtures.cjs";
+import seedHierarchyReview from "./hierarchy-review-fixtures.cjs";
+import hierarchy from "../lib/task-hierarchy.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -23,7 +25,7 @@ if (process.env.DCC_ACTIVITY_REVIEW === "1") {
   const { default: mountActivityReview } = await import("./activity-review-backend.js");
   await mountActivityReview(app);
 }
-if (process.env.DCC_REVIEW_TASK_DETAILS === '1') app.use((_req,res,next) => {
+if (process.env.DCC_REVIEW_TASK_DETAILS === '1' || process.env.DCC_REVIEW_HIERARCHY === '1') app.use((_req,res,next) => {
   res.setHeader('Content-Security-Policy', "connect-src 'self'; form-action 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'");
   next();
 });
@@ -65,6 +67,8 @@ function liveReviewBlocks() {
   return [...reviewBlocks.values()].filter((block) => !block.deleted_at);
 }
 if (process.env.DCC_REVIEW_TASK_DETAILS === '1') seedTaskDetailReview(reviewBlocks, localDateKey(new Date()));
+if (process.env.DCC_REVIEW_HIERARCHY === '1') seedHierarchyReview(reviewBlocks, localDateKey(new Date()));
+if (process.env.DCC_REVIEW_HIERARCHY === '1') app.post('/api/review/hierarchy/reset',(_req,res)=>{reviewBlocks.clear();seedHierarchyReview(reviewBlocks,localDateKey(new Date()));res.json({ok:true});});
 
 const emptyState = {
   ok: true,
@@ -279,6 +283,12 @@ app.patch("/api/blocks/:id", (req, res) => {
     properties: req.body?.properties || block.properties,
     updated_at: new Date().toISOString(),
   };
+  if (process.env.DCC_REVIEW_HIERARCHY === '1') {
+    try {
+      const plan=hierarchy.planParentChange(block,next.properties,req.body.parent_id,liveReviewBlocks(),next.date);
+      next.properties=plan.properties;next.parent_id=plan.parentId;
+    } catch(error) { return res.status(error.statusCode||400).json({error:error.message}); }
+  }
   reviewBlocks.set(next.id, next);
   res.json(next);
 });

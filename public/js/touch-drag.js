@@ -120,6 +120,13 @@
     return DCC_DRAG.modeForPoint(x, y);
   }
 
+  // touch-action is chosen when the finger goes down; changing it at lift
+  // cannot stop that gesture's native pan. Cancel touchmove only after the
+  // hold has lifted the row, so ordinary pre-lift swipes still scroll.
+  function onTouchMove(e) {
+    if (state && state.lifted && e.cancelable) e.preventDefault();
+  }
+
   function onMove(e) {
     if (!state || e.pointerId !== state.pointerId) return;
     state.lastX = e.clientX;
@@ -218,6 +225,7 @@
     // Delegated: buildListView() only replaces innerHTML, so #list-view (and these
     // listeners) survive every re-render.
     listView.addEventListener("pointerdown", onDown, true);
+    listView.addEventListener("touchmove", onTouchMove, { passive: false });
     listView.addEventListener("click", onClickCapture, true);
     listView.addEventListener("contextmenu", onContextMenu, true);
   }

@@ -252,9 +252,14 @@
     const nodes=[];
     const seen=new Set();
     function walk(task,depth){
-      if(seen.has(task.id))return;seen.add(task.id);
-      nodes.push({ev:task,depth});
-      (children.get(String(task.id))||[]).forEach(child=>walk(child,depth+1));
+      const stack=[{task,depth}];
+      while(stack.length){
+        const current=stack.pop(),key=String(current.task.id);
+        if(seen.has(key))continue;seen.add(key);
+        nodes.push({ev:current.task,depth:current.depth});
+        const kids=children.get(key)||[];
+        for(let i=kids.length-1;i>=0;i--)stack.push({task:kids[i],depth:current.depth+1});
+      }
     }
     tasks.filter(task=>!byId.has(String(task.wrapId||task.subtaskOf||""))).forEach(task=>walk(task,0));
     tasks.forEach(task=>walk(task,0));
@@ -400,7 +405,7 @@
         const end=window.DCC.TimeBlocks.minutes(task.end,true);
         if(!node.depth&&end!==null)prevEnd=end;
         const el=task.status==="done"?compactRowEl(task):renderGuestCard(task);
-        if(node.depth)el.style.marginLeft=(node.depth*22)+"px";
+        if(node.depth)el.style.marginLeft=(Math.min(node.depth,6)*22)+"px";
         frag.appendChild(el);
       });
     }

@@ -155,14 +155,10 @@ function childrenOf(id,pool){return _TM().childrenOf(id,pool);}
 // because state.js was not Track C's file until C3.
 function subtaskProgress(id,pool,doneFn,_seen){
   const isRowDone=doneFn||(s=>isDone(s));
-  _seen=_seen||new Set();
-  if(_seen.has(id))return null;
-  _seen.add(id);
-  const subs=_TM().subtasksOf(id,pool||scheduled);
+  if(_seen&&_seen.has(id))return null;
+  const subs=_TM().descendantsOf(id,pool||scheduled,{edge:"subtask"});
   if(!subs.length)return null;
-  let done=0,total=0;
-  subs.forEach(s=>{total++;if(isRowDone(s))done++;const sub=subtaskProgress(s.id,pool,doneFn,_seen);if(sub){total+=sub.total;done+=sub.done;}});
-  return {done,total};
+  return {done:subs.filter(isRowDone).length,total:subs.length};
 }
 
 // Rollup summary for a container type (shell): estimated points of the whole
@@ -174,24 +170,15 @@ function subtaskProgress(id,pool,doneFn,_seen){
 function shellRollup(id,pool){
   pool=pool||((typeof scheduled!=="undefined")?scheduled:[]);
   let points=0;
-  const seen=new Set();
-  (function walk(pid){
-    if(seen.has(pid))return;
-    seen.add(pid);
-    childrenOf(pid,pool).forEach(c=>{
-      if(relOf(c)==="subtask")return; // pie slices are covered by their parent's pool
-      if(!(window.TaskTypes&&window.TaskTypes.isRollup(c))&&window.PointPlan){
-        const hasPie=childrenOf(c.id,pool).some(k=>relOf(k)==="subtask");
-        if(hasPie&&typeof window.PointPlan.compute==="function"){
-          const plan=window.PointPlan.compute(c.id);
-          points+=(plan&&plan.pool)||0;
-        } else if(typeof window.PointPlan.estimatePool==="function"){
-          points+=window.PointPlan.estimatePool(c.id)||0;
-        }
-      }
-      walk(c.id);
-    });
-  })(id);
+  const index=_TM().hierarchyIndex(pool);
+  for(const c of _TM().descendantsOf(id,pool,{edge:"ride-along",index})){
+    if(!(window.TaskTypes&&window.TaskTypes.isRollup(c))&&window.PointPlan){
+      const hasPie=(index.children.get(c.id)||[]).some(k=>relOf(k)==="subtask");
+      if(hasPie&&typeof window.PointPlan.compute==="function"){
+        const plan=window.PointPlan.compute(c.id);points+=(plan&&plan.pool)||0;
+      }else if(typeof window.PointPlan.estimatePool==="function")points+=window.PointPlan.estimatePool(c.id)||0;
+    }
+  }
   const kids=childrenOf(id,pool);
   return {points:Math.round(points),done:_TM().selectDone(kids).length,total:kids.length};
 }
@@ -200,25 +187,23 @@ function shellRollup(id,pool){
 // structure a repeat responsibility drops back onto a day. Recurses via
 // childrenOf/relOf; each node carries its own duration/priority/type/edge so
 // materializeShellTemplate (schedule.js) can rebuild it exactly. Cycle- and
-// depth-guarded. The root carries NO duration — a shell derives its length from
+// cycle-safe without a depth cutoff. The root carries NO duration — a shell derives its length from
 // its children (see _layoutShellChildren in drag.js).
 function captureShellTemplate(shellId,pool){
   pool=pool||((typeof scheduled!=="undefined")?scheduled:[]);
-  const root=pool.find(e=>e.id===shellId);
+  const index=_TM().hierarchyIndex(pool),root=index.byId.get(shellId);
   if(!root)return null;
-  const seen=new Set();
-  function node(ev,depth,isRoot){
-    seen.add(ev.id);
-    const out={title:ev.title||"",type:ev.type||"task",priority:ev.priority||"Medium",detail:ev.detail||""};
-    if(!isRoot){
-      out.edge=(relOf(ev)==="subtask")?"subtask":"wrap";
-      out.durationMin=Math.max(1,dur(ev)||0)||30;
-    }
-    const kids=(depth<20)?_TM().selectNotDeleted(childrenOf(ev.id,pool)).filter(c=>!seen.has(c.id)):[];
-    out.children=kids.map(k=>node(k,depth+1,false));
-    return out;
+  const seen=new Set(),rootNode={};
+  const stack=[{ev:root,out:rootNode,isRoot:true}];
+  while(stack.length){
+    const {ev,out,isRoot}=stack.pop();if(seen.has(ev.id))continue;seen.add(ev.id);
+    Object.assign(out,{title:ev.title||"",type:ev.type||"task",priority:ev.priority||"Medium",detail:ev.detail||"",children:[]});
+    if(!isRoot){out.edge=relOf(ev)==="subtask"?"subtask":"wrap";out.durationMin=Math.max(1,dur(ev)||0)||30;}
+    const kids=_TM().selectNotDeleted(index.children.get(ev.id)||[]).filter(k=>!seen.has(k.id));
+    const entries=kids.map(ev=>({ev,out:{},isRoot:false}));out.children=entries.map(e=>e.out);
+    for(let i=entries.length-1;i>=0;i--)stack.push(entries[i]);
   }
-  return {version:1,root:node(root,0,true)};
+  return {version:1,root:rootNode};
 }
 
 // Completion bonus for a rollup container: bonusPct × the subtree's estimated
@@ -1629,17 +1614,7 @@ async function _computeRescheduleSlot(ev,targetDate){
 // Keep the two in step. They already differ on which edge wins when a row carries
 // both: `parentIdOf` here is wrapId-first, that one is subtaskOf-first.
 function _subtreeIdsOf(rootId,pool){
-  pool=pool||scheduled;
-  const ids=new Set([rootId]);
-  let changed=true;
-  while(changed){
-    changed=false;
-    for(const e of pool){
-      const pid=parentIdOf(e);
-      if(pid&&ids.has(pid)&&!ids.has(e.id)){ids.add(e.id);changed=true;}
-    }
-  }
-  return ids;
+  return new Set([rootId].concat(_TM().descendantsOf(rootId,pool||scheduled).map(e=>e.id)));
 }
 
 // Optimistically drop a task and its whole nested subtree (subtaskOf/wrapId) from
@@ -1912,6 +1887,8 @@ let _delPendingId=null;
 // prefixed id and get evicted out of turn. Re-stashing deletes first so a re-deleted id
 // moves to the back instead of keeping its old position.
 const _deleteUndoSnapshots=new Map();
+// A newer delete must follow any older Undo restoring the same durable row.
+const _deleteUndoRestores=new Map();
 const _UNDO_SNAPSHOT_CAP=10;
 function _stashUndoSnapshot(id,snap){
   _deleteUndoSnapshots.delete(id);
@@ -1979,7 +1956,9 @@ async function deleteTaskWithUndo(id){
     // Resolve to a buffered-shaped result rather than undefined if this ever rejects:
     // batchOp does not reject today, but undoDeleteTask decides what to do from this
     // value, and "undefined" would read as "landed fine".
-    deletePromise=window.blockStore.batchOp(blockIds.map(bid=>({op:"delete",id:bid})))
+    const restoring=[...new Set(blockIds.map(bid=>_deleteUndoRestores.get(bid)).filter(Boolean))];
+    const write=()=>window.blockStore.batchOp(blockIds.map(bid=>({op:"delete",id:bid})));
+    deletePromise=(restoring.length?Promise.all(restoring).then(write):write())
       .catch(()=>({blocks:[],buffered:true}));
   }
   _stashUndoSnapshot(id,{ids,blockIds,deletePromise});
@@ -2020,6 +1999,10 @@ async function undoDeleteTask(id){
   // gone server-side while the UI shows it restored, until the next reload proves the UI
   // wrong. B1 did not have this race because a create and a delete of two different rows
   // commute; reviving the SAME row does not.
+  let finishRestore;
+  const restoring=new Promise(resolve=>{finishRestore=resolve;});
+  for(const bid of snap.blockIds||[])_deleteUndoRestores.set(bid,restoring);
+  try {
   let deleteResult=null;
   if(snap.deletePromise){try{deleteResult=await snap.deletePromise;}catch(e){}}
   // AND awaiting is not enough on its own, because batchOp swallows its own failure: it
@@ -2073,6 +2056,10 @@ async function undoDeleteTask(id){
     }
   }
   if(typeof showToast==="function")showToast("Task restored","success",2200);
+  } finally {
+    for(const bid of snap.blockIds||[])if(_deleteUndoRestores.get(bid)===restoring)_deleteUndoRestores.delete(bid);
+    finishRestore();
+  }
 }
 function openDeleteConfirmLegacy(id){
   const ev=scheduled.find(e=>e.id===id);

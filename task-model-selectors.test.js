@@ -235,7 +235,7 @@ test("selectTree reads the page's global isCollapsed when opts does not name one
   assert.equal(installTaskModel(bare).selectTree(pool).length, 2, "no global -> nothing is collapsed");
 });
 
-test("selectTree survives a parent cycle and a runaway depth", () => {
+test("selectTree survives a parent cycle without truncating a deep tree", () => {
   const cyc = [T("a", { subtaskOf: "b" }), T("b", { subtaskOf: "a" })];
   const out = TaskModel.selectTree(cyc, { pool: cyc });
   // A ring has no root, so the plain root test never fires for it -- which used to mean the
@@ -248,7 +248,7 @@ test("selectTree survives a parent cycle and a runaway depth", () => {
   const chain = [];
   for (let i = 0; i < 40; i++) chain.push(T("n" + i, i ? { subtaskOf: "n" + (i - 1) } : {}));
   const deep = TaskModel.selectTree(chain, { pool: chain });
-  assert.equal(Math.max(...deep.map((n) => n.depth)), 20, "depth is clamped at 20");
+  assert.equal(Math.max(...deep.map((n) => n.depth)), 39, "every level remains visible");
 });
 
 // ═══════════════════════════════════ selectDay ═════════════════════════════════════
