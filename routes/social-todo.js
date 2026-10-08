@@ -2033,4 +2033,5 @@ app.post("/api/public/todo-share/:token/comments", async (req, res) => {
   }
 });
 
+return { activate: activateTodoShareBounty, revoke: revokeTodoShareBounty };
 };

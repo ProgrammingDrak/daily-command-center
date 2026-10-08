@@ -1374,6 +1374,9 @@ async function createSchema() {
   await pool.query(SCHEMA_SQL);
   await pool.query(require("./activity-store").SCHEMA_SQL);
   await pool.query(require("./commitment-store").SCHEMA_SQL);
+  await pool.query(require("./friend-invite-store").SCHEMA_SQL);
+  await pool.query("ALTER TABLE todo_sponsorships ADD COLUMN IF NOT EXISTS accountability_commitment_id TEXT REFERENCES accountability_commitments(id)");
+  await pool.query("CREATE INDEX IF NOT EXISTS todo_sponsorships_commitment ON todo_sponsorships(accountability_commitment_id,id DESC) WHERE accountability_commitment_id IS NOT NULL");
   await applyPostSchema();
   console.log("[pg-schema] All tables and indexes created.");
 }

@@ -45,6 +45,10 @@ document.querySelectorAll(".tab").forEach(tab=>{
     document.querySelectorAll(".tab-content").forEach(c=>c.classList.remove("active"));
     tab.classList.add("active");document.getElementById("tab-"+tab.dataset.tab).classList.add("active");
     DCC.tabs.run(tab.dataset.tab);
+    history.replaceState(null,"",location.pathname+location.search+"#"+({vault:"personal-vault",social:"people-sharing",schedule:"itinerary"}[tab.dataset.tab] || tab.dataset.tab));
+    document.getElementById("dcc-settings-wrap")?.classList.remove("open");
+    document.getElementById("dcc-settings-button")?.setAttribute("aria-expanded","false");
+    document.getElementById("dcc-settings-menu")?.setAttribute("aria-hidden","true");
   });
 });
 
@@ -866,3 +870,10 @@ function executeSubtaskResolution(taskId, resolution, subIds, moveTargetId){
   }
   saveSubtasks(all);
 }
+
+// Keep old vault/social hashes and utility destinations refreshable.
+document.addEventListener("DOMContentLoaded",()=>{
+ const targets={"personal-vault":"vault","vault":"vault","mycelium":"vault","people-sharing":"social","social":"social","itinerary":"schedule"};
+ const activateHash=()=>{const name=targets[location.hash.slice(1)] || location.hash.slice(1);if(name)document.querySelector('.tab[data-tab="'+name+'"]')?.click();};
+ activateHash();window.addEventListener("hashchange",activateHash);
+});

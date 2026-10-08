@@ -13,7 +13,7 @@
 #commitment-workspace p { margin-block:var(--sp-2); }
 .commitment-create { padding:var(--sp-3); margin-block:var(--sp-4); background:var(--surface-raised); border-radius:var(--r-lg); }
 .commitment-create summary,#commitment-detail summary { cursor:pointer; min-height:var(--target-min); display:flex; align-items:center; }
-.commitment-columns { display:grid; grid-template-columns:minmax(15rem,1fr) minmax(0,2fr); gap:var(--sp-4); align-items:start; }
+.commitment-columns { display:block; }
 #commitment-list { display:grid; gap:var(--sp-2); }
 .commitment-card { display:grid; gap:var(--sp-2); text-align:left; padding:var(--sp-3); border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface-raised); color:var(--ink); font:inherit; cursor:pointer; }
 .commitment-card[aria-pressed="true"] { border-color:var(--brand); background:var(--brand-soft); }
@@ -29,3 +29,21 @@
 @media(max-width:480px) { .commitment-toolbar > button { flex:1 1 40%; } }
 .social-workspace-tabs > button { flex-shrink:0; }
 .dcc-save-actions { display:flex; flex-wrap:wrap; gap:var(--sp-2); margin-block:var(--sp-3); }
+.itinerary-collaboration { margin-block:var(--sp-2); }
+.itinerary-collaboration > summary { cursor:pointer; padding:var(--sp-2); color:var(--ink-muted); min-height:var(--target-min); }
+.task-collaboration-chip { background:var(--surface-raised); border:1px solid var(--border); color:var(--ink-muted); border-radius:var(--r-md); padding:var(--sp-1) var(--sp-2); font:inherit; font-size:var(--fs-xs); cursor:pointer; min-height:var(--target-min); white-space:nowrap; }
+.commitment-inline { width:100%; box-sizing:border-box; margin-block:var(--sp-2); padding:var(--sp-3); border:1px solid var(--brand); border-radius:var(--r-lg); background:var(--surface-canvas); }
+.commitment-inline .commitment-toolbar,.commitment-inline #commitment-list { display:none; }
+.commitment-inline .commitment-columns { grid-template-columns:minmax(0,1fr); }
+.commitment-inline-tools { display:none; }
+.commitment-inline .commitment-inline-tools { display:flex; flex-wrap:wrap; gap:var(--sp-2); align-items:center; }
+.commitment-reactions { display:flex; flex-wrap:wrap; gap:var(--sp-2); }
+.commitment-reactions [aria-pressed="true"] { border-color:var(--brand); background:var(--brand-soft); }
+.commitment-audience { padding:var(--sp-2); border-left:var(--sp-1) solid var(--brand); }
+.friend-invite-page { color:var(--ink); background:var(--surface-canvas); font:var(--fs-md) system-ui; padding:var(--sp-4); }
+.friend-invite-card { max-width:38rem; margin:10vh auto; padding:var(--sp-5); border:1px solid var(--border); border-radius:var(--r-lg); background:var(--surface-raised); }
+#invite-actions { display:flex; flex-wrap:wrap; gap:var(--sp-3); }
+#friend-invite-links input { width:100%; min-width:0; padding:var(--sp-2); box-sizing:border-box; }
+@media(max-width:760px) { .commitment-inline { padding:var(--sp-2); } .task-collaboration-chip { font-size:var(--fs-xs); } }
+
+#commitment-list > #commitment-detail { padding:var(--sp-3); border:1px solid var(--brand); border-radius:var(--r-md); background:var(--surface-canvas); }

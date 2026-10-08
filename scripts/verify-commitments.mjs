@@ -16,8 +16,7 @@ async function account(id,width=1440){
   await context.route('**/*', r => new URL(r.request().url()).origin===origin ? r.continue():r.abort());
   if (!reset) { const result=await context.request.post(origin+'/review/commitments/reset');assert.equal(result.status(),200);reset=true; }
   const page=await context.newPage();page.setDefaultTimeout(10000);console.log('Opening fictional account',id);page.on('pageerror',e=>errors.push(e.message));
-  await page.goto(origin,{waitUntil:'domcontentloaded'});await page.locator('#social-tab-btn').click();
-  await page.locator('[data-social-tab="commitments"]').click();
+  await page.goto(origin,{waitUntil:'domcontentloaded'});await page.locator('#itinerary-collaboration > summary').click();
   await page.waitForFunction(()=>!!window.DCCCommitmentSync);
   return {context,page};
 }
@@ -38,7 +37,7 @@ try{
   await owner.locator('.commitment-card').filter({hasText:outcome}).click();
   const id=await owner.locator('.commitment-card').filter({hasText:outcome}).getAttribute('data-commitment');
   for(const [person,role] of [['blair','coach'],['casey','manager']]){
-    await owner.locator('#commitment-detail details summary').click();
+    await owner.locator('#commitment-detail details:not(.commitment-history-details) summary').click();
     await owner.locator('#commitment-invite-form [name="person"]').fill(person);
     await owner.locator('#commitment-invite-form [name="role"]').selectOption(role);
     await owner.locator('#commitment-invite-form button[type="submit"]').click();await sync(owner);
@@ -61,7 +60,7 @@ try{
   await manager.locator('[data-invite-answer="accept"]').click();await sync(manager);
   await sync(owner);await action(owner,'complete','Reviewed conclusion and fictional evidence supplied.');
   await sync(manager);await action(manager,'review','The conclusion and supporting evidence meet the agreed definition.');
-  await sync(owner);assert.match(await owner.locator('#commitment-detail').innerText(),/casey · review/);
+  await sync(owner);await owner.locator('.commitment-history-details summary').click();assert.match(await owner.locator('#commitment-detail').innerText(),/casey · review/);
   await owner.screenshot({path:'test-results/accountability/owner-desktop.png',fullPage:true});
   // Offline intent survives reload, then uses the same stable operation on reconnect.
   await ownerCtx.setOffline(true);
@@ -90,7 +89,7 @@ try{
   // A pending coach comment remains recoverable after revocation; cached content is removed.
   await coachCtx.setOffline(true);await actionOffline(coach);
   await ownerCtx.addCookies([{name:'dcc_review_user',value:'1',url:origin}]);await owner.reload();
-  await owner.locator('#social-tab-btn').click();await owner.locator('.commitment-card').filter({hasText:outcome}).click();
+  await owner.locator('#itinerary-collaboration > summary').click();await owner.locator('.commitment-card').filter({hasText:outcome}).click();
   await owner.locator('[data-member-revoke="2"]').click();await sync(owner);
   await coachCtx.setOffline(false);await coach.locator('#commitment-refresh').click();
   await coach.waitForFunction(()=>window.DCCCommitmentSync.summary.attention && !document.getElementById("commitment-refresh").disabled);
@@ -124,11 +123,11 @@ try{
   const tabA=await raceCtx.newPage(),tabB=await raceCtx.newPage();
   let heldRoute,hold=false,snapshot=[];
   let resolveHeld;const held=new Promise(resolve=>{resolveHeld=resolve;});
-  await tabA.route('**/api/commitments',r=>{
+  await tabA.route('**/api/commitments?summary=1',r=>{
     if(hold){hold=false;heldRoute=r;resolveHeld();return;}
     return r.fulfill({status:200,json:snapshot});
   });
-  await tabB.route('**/api/commitments',r=>r.fulfill({status:200,json:snapshot}));
+  await tabB.route('**/api/commitments?summary=1',r=>r.fulfill({status:200,json:snapshot}));
   for(const page of [tabA,tabB]){
     await page.goto(origin,{waitUntil:'domcontentloaded'});
     await page.waitForFunction(()=>!!window.DCCCommitmentSync?.summary.lastSyncedAt);

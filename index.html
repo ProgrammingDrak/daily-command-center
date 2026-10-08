@@ -162,6 +162,8 @@
     <div class="dcc-settings-wrap" id="dcc-settings-wrap">
       <button class="admin-link dcc-settings-button" id="dcc-settings-button" type="button" aria-haspopup="true" aria-expanded="false" title="Open utilities">Utilities</button>
       <div class="dcc-settings-menu" id="dcc-settings-menu" role="menu" aria-hidden="true">
+        <button class="tab" data-tab="vault" id="vault-tab-btn" type="button" role="menuitem">Personal vault</button>
+        <button class="tab" data-tab="social" id="social-tab-btn" type="button" role="menuitem">People &amp; sharing <span class="badge" id="social-badge" style="display:none">0</span></button>
         <button type="button" id="dcc-review-tomorrow" role="menuitem">Review tomorrow</button>
         <button type="button" id="dcc-day-start" role="menuitem">Scheduling floor</button>
         <button type="button" id="dcc-schedule-defaults" role="menuitem">Schedule default times</button>
@@ -240,8 +242,8 @@
   <button class="tab" data-tab="meeting-reviews">Meeting Reviews <span class="badge" id="meeting-reviews-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="pet-home" id="pet-home-tab-btn">Pet Home <span class="badge" id="pet-home-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="budget" id="budget-tab-btn">Budget</button>
-  <button class="tab" data-tab="social" id="social-tab-btn">Social <span class="badge" id="social-badge" style="display:none">0</span></button>
-  <button class="tab" data-tab="vault" id="vault-tab-btn">Mycelium</button>
+
+
   <button class="tab" data-tab="activity" id="activity-tab-btn">Workouts &amp; meals</button>
 </div>
 
@@ -258,6 +260,14 @@
       <span class="sched-drag-hint sched-drag-hint-touch" style="margin-left:10px">Press &amp; hold to reorder &middot; left to nest &middot; right for subtask &middot; tap a row for details</span>
     </span>
   </div>
+<details id="itinerary-collaboration" class="itinerary-collaboration"><summary>Shared work <span id="commitment-attention"></span></summary><div id="commitment-home">      <section class="social-panel" id="commitment-workspace">
+        <div class="commitment-toolbar"><div><h3>Daily commitments</h3><p>One accountable person. Helpers, coaches, and managers see only what is shared here.</p></div><label>View<select id="commitment-view"><option value="day">Selected day</option><option value="open">All open</option><option value="invites">Invitations</option><option value="attention">Needs attention</option><option value="review">Completed / review</option></select></label><label>Day<input type="date" id="commitment-date"></label><button type="button" class="social-btn" id="commitment-refresh">Sync now</button><button type="button" class="social-btn" id="commitment-export">Export pending</button></div>
+        <div class="commitment-inline-tools"><button type="button" class="social-btn" id="commitment-close">Close task collaboration</button><button type="button" class="social-btn" id="commitment-inline-sync">Sync now</button></div><p id="commitment-message" role="status" aria-live="polite"></p>
+        <details class="commitment-create"><summary>Commit to an outcome</summary><form id="commitment-create-form"><input type="hidden" name="sourceBlockId"><p id="commitment-source-label">Independent outcome. Starts private.</p><label>Outcome<input name="title" required maxlength="220" placeholder="A concrete result worth committing to"></label><label>Done means<textarea name="definitionDone" required maxlength="2000" rows="3" placeholder="What would show that this outcome was met?"></textarea></label><label>Committed date<input name="committedDate" type="date" required></label><label>Timezone<input name="timeZone" required maxlength="100"></label><p>Starts private to you. Invite people after saving. Private task details are never copied automatically.</p><button class="social-btn primary" type="submit">Save commitment</button></form></details>
+        <div class="commitment-columns"><div id="commitment-list" aria-label="Daily commitments"></div><div id="commitment-detail"></div></div>
+        <div id="commitment-pending"></div>
+      </section>
+</div></details>
   <!-- The Itinerary add-task bar lives in the bottom-right "+" launcher. -->
   <div class="tl" id="timeline" style="display:none"></div>
   <div id="list-view" class="it-list-view"></div>
@@ -1872,46 +1882,34 @@
   <div class="social-shell">
     <div class="social-topline">
       <div>
-        <h2 class="social-title">Commitments &amp; people</h2>
-        <div class="social-subtitle">Share selected outcomes, ask for help, and review what happened.</div>
-        <!-- Adding a friend needs a handle, and nothing in the app used to say
-             what YOURS is -- a Google sign-in never picked one. Hidden until
-             /api/me answers, so it never flashes an empty chip. -->
+        <h2 class="social-title">People &amp; sharing</h2>
+        <div class="social-subtitle">Manage friends, publication, access, and reward settings. Routine collaboration lives on itinerary tasks.</div>
         <div class="social-you" id="social-you" hidden>
-          <span class="social-you-label">Your username</span>
-          <button class="social-you-chip" id="social-you-copy" type="button" title="Copy your username">
-            <span id="social-you-name">&hellip;</span>
-            <span class="social-you-hint">Copy</span>
-          </button>
-          <span class="social-you-note">Send this to a friend so they can add you.</span>
+          <span class="social-you-label">Signed in as</span>
+          <span id="social-you-name">&hellip;</span>
         </div>
+        <button id="friend-invite-create" class="social-btn primary" type="button" title="Create a friendship Invite Link">Invite Link</button>
+        <span class="social-you-note">New people set up an account; existing users add you.</span>
       </div>
       <div class="social-add">
         <!-- The label carries "add a friend" so the input can carry the SHORT
              truth. At this width a longer placeholder was truncated mid-word. -->
-        <span class="social-add-label">Add a friend</span>
+        <span class="social-add-label">Existing user</span>
         <input id="social-lookup-input" type="text" maxlength="120" placeholder="Username or email" autocomplete="off">
-        <button id="social-lookup-send" class="social-btn primary" type="button">Send request</button>
+        <button id="social-lookup-send" class="social-btn primary" type="button">Add</button>
       </div>
     </div>
-    <div id="social-lookup-status" class="social-status"></div>
+    <div id="social-lookup-status" class="social-status"></div><div id="friend-invite-links" class="social-status"></div>
     <nav class="social-workspace-tabs" aria-label="Social sections">
-      <button type="button" data-social-tab="commitments" class="active">Commitments</button>
-      <button type="button" data-social-tab="publish">Publish</button>
+
+      <button type="button" data-social-tab="publish" class="active">Publish</button>
       <button type="button" data-social-tab="inbox">Inbox</button>
       <button type="button" data-social-tab="friends">Friends</button>
       <button type="button" data-social-tab="feed">Feed</button>
       <button type="button" data-social-tab="access">Access</button>
     </nav>
 
-    <div class="social-grid" data-social-active="commitments">
-      <section class="social-panel" data-social-section="commitments" id="commitment-workspace">
-        <div class="commitment-toolbar"><div><h3>Daily commitments</h3><p>One accountable person. Helpers, coaches, and managers see only what is shared here.</p></div><label>Day<input type="date" id="commitment-date"></label><button type="button" class="social-btn" id="commitment-refresh">Sync now</button><button type="button" class="social-btn" id="commitment-export">Export pending</button></div>
-        <p id="commitment-message" role="status" aria-live="polite"></p>
-        <details class="commitment-create"><summary>Commit to an outcome</summary><form id="commitment-create-form"><label>Outcome<input name="title" required maxlength="220" placeholder="A concrete result worth committing to"></label><label>Done means<textarea name="definitionDone" required maxlength="2000" rows="3" placeholder="What would show that this outcome was met?"></textarea></label><label>Committed date<input name="committedDate" type="date" required></label><p>Starts private to you. Invite people after saving. Private task details are never copied automatically.</p><button class="social-btn primary" type="submit">Save commitment</button></form></details>
-        <div class="commitment-columns"><div id="commitment-list" aria-label="Daily commitments"></div><div id="commitment-detail"></div></div>
-        <div id="commitment-pending"></div>
-      </section>
+    <div class="social-grid" data-social-active="publish">
       <section class="social-panel" data-social-section="publish">
         <div class="social-panel-head">
           <h3>Ready to share</h3>
@@ -2210,6 +2208,8 @@
 <script src="/public/js/social.js"></script>
 <script src="/public/js/commitment-sync.js"></script>
 <script src="/public/js/commitments.js"></script>
+<script src="/public/js/itinerary-collaboration.js"></script>
+<script src="/public/js/friend-invite-links.js"></script>
 <script src="/public/js/slots.js"></script>
 <script src="/public/js/punishments.js"></script>
 <script src="/public/js/rewards-queue.js"></script>
