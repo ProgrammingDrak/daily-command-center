@@ -31,7 +31,7 @@ function createStore({ pool, storage }) {
       const { rows } = await client.query(`SELECT b.* FROM blocks b JOIN workspaces w ON w.id=b.workspace_id
         WHERE b.id=$1 AND b.workspace_id=$2 AND w.owner_id=$3 AND (b.user_id IS NULL OR b.user_id=$3)
         AND b.deleted_at IS NULL FOR UPDATE OF b,w`, [blockId, actor.workspaceId, actor.userId]);
-      if (!rows[0] || !isTaskRow(rows[0])) throw fail("Task unavailable", 404);
+      if (!rows[0] || !isTaskRow(rows[0])) throw fail("Task or note unavailable", 404);
       const result = await run(client);
       await client.query("COMMIT"); return result;
     } catch (error) { await client.query("ROLLBACK"); throw error; }
@@ -45,7 +45,7 @@ function createStore({ pool, storage }) {
   async function capacity(client, actor, blockId, size) {
     const { rows } = await client.query(`SELECT COUNT(*) FILTER (WHERE block_id=$2 AND deleted_at IS NULL) AS count,
       COUNT(*) AS total, COALESCE(SUM(size),0) AS bytes FROM task_attachments WHERE user_id=$1`, [actor.userId, blockId]);
-    if (Number(rows[0].count) >= MAX_FILES) throw fail("A task can hold at most 20 files", 409);
+    if (Number(rows[0].count) >= MAX_FILES) throw fail("A task or note can hold at most 20 files", 409);
     if (size && Number(rows[0].total) >= MAX_OWNER_FILES) throw fail("Private file record limit reached (200, including removed files)", 409);
     if (Number(rows[0].bytes) + size > MAX_OWNER_BYTES) throw fail("Private file storage limit reached (200 MB, including removed files)", 409);
   }

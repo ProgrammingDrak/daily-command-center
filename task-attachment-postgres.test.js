@@ -67,6 +67,18 @@ test("private attachments: real transactions, protected routes, failure recovery
     objects.delete(key); await assert.rejects(store.download(actor,"task",id),e=>e.statusCode===404);
     objects.set(key,Buffer.from("corrupt")); await assert.rejects(store.download(actor,"task",id),e=>e.statusCode===502); objects.set(key,bytes);
   });
+  await t.test("independent quick and legacy notes have the same owner-scoped binary lifecycle", async () => {
+    for (const parent of ["quick-note","legacy-note"]) {
+      const noteId=crypto.randomUUID(); await store.upload(actor,parent,noteId,meta,bytes);
+      assert.deepEqual((await store.download(actor,parent,noteId)).bytes,bytes);
+      await assert.rejects(store.download({userId:2,workspaceId:"ws-1"},parent,noteId),e=>e.statusCode===404);
+      await store.remove(actor,parent,noteId);await assert.rejects(store.download(actor,parent,noteId),e=>e.statusCode===404);
+      await store.restore(actor,parent,noteId);assert.deepEqual((await store.download(actor,parent,noteId)).bytes,bytes);
+      await pool.query("UPDATE blocks SET deleted_at=NOW() WHERE id=$1",[parent]);
+      await assert.rejects(store.download(actor,parent,noteId),e=>e.statusCode===404);
+      await pool.query("UPDATE blocks SET deleted_at=NULL WHERE id=$1",[parent]);
+    }
+  });
   await t.test("limits are serialized for concurrent files and quota includes retained originals", async () => {
     for(let n=2;n<MAX_FILES-1;n++) await store.upload(actor,"task",crypto.randomUUID(),meta,bytes);
     const results = await Promise.allSettled([store.upload(actor,"task",crypto.randomUUID(),meta,bytes),store.upload(actor,"task",crypto.randomUUID(),meta,bytes)]);
@@ -101,6 +113,9 @@ test("private attachments: real transactions, protected routes, failure recovery
     assert.equal((await fetch(base+'/'+file.id+'/download',{headers})).status,404);
     assert.equal((await fetch(base+'/'+file.id+'/restore',{method:'POST',headers})).status,200);
     assert.equal((await fetch(base+'/not-a-uuid/download',{headers})).status,400);
+    const noteBase=base.replace('/api/tasks/second/','/api/notes/quick-note/');
+    const noteUpload=await fetch(noteBase,{method:'POST',headers:{...headers,'X-Upload-Id':crypto.randomUUID()},body:form()});assert.equal(noteUpload.status,201);
+    const noteFile=await noteUpload.json();assert.equal((await fetch(noteBase+'/'+noteFile.id+'/download',{headers})).status,200);
     const unconfigured = createStore({pool,storage:{configured:false}});
     await assert.rejects(unconfigured.upload(actor,"second",crypto.randomUUID(),meta,bytes),e=>e.statusCode===503);
   });

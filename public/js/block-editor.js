@@ -754,6 +754,8 @@ window.createBlockEditor=function(containerEl, initialBlocks, options){
     blocks=[];
   };
 
+  editor.hasAttachments=function(){return !!(attachmentControls && attachmentControls.hasAttachments());};
+
   editor.isEmpty=function(){
     return blocks.length===0||blocks.every(function(b){
       if(b.type==='image') return !(b.src||'').trim();

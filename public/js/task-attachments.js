@@ -3,16 +3,17 @@
 (function () {
   'use strict';
   var DCC = window.DCC = window.DCC || {};
-  function mount(host, blockId) {
+  function mount(host, blockId, options) {
+    var parentKind = options && options.kind === "note" ? "note" : "task";
     var old = host._taskAttachments;
     if (old) old.destroy();
     var panel = document.createElement('section');
     panel.className = 'task-file-panel';
-    panel.setAttribute('aria-label', 'Private task files');
+    panel.setAttribute('aria-label', 'Private ' + parentKind + ' files');
     host.before(panel);
     var account = JSON.stringify(window.DCC_ACCOUNT_CONTEXT || null);
-    var base = '/api/tasks/' + encodeURIComponent(blockId || '') + '/attachments';
-    var live = true, busy = false, pending = [], files = [], currentXHR;
+    var base = '/api/' + (parentKind === 'note' ? 'notes' : 'tasks') + '/' + encodeURIComponent(blockId || '') + '/attachments';
+    var live = true, busy = false, pending = [], files = [], currentXHR, listed = !blockId;
     var initialized = Promise.resolve();
     var label = document.createElement('label');
     label.textContent = 'Attach private files ';
@@ -21,7 +22,7 @@
     picker.accept = '.pdf,.png,.jpg,.jpeg,.webp,.txt,.csv,.md';
     label.appendChild(picker); panel.appendChild(label);
     var hint = document.createElement('p');
-    hint.textContent = 'PDF, images, text, Markdown or CSV · 10 MB each · 20 files per task. Uploads and downloads require a connection.';
+    hint.textContent = 'PDF, images, text, Markdown or CSV · 10 MB each · 20 files per ' + parentKind + '. Uploads and downloads require a connection.';
     panel.appendChild(hint);
     var list = document.createElement('div'); panel.appendChild(list);
     var status = document.createElement('p'); status.setAttribute('role', 'status'); panel.appendChild(status);
@@ -72,7 +73,7 @@
         action.setAttribute('aria-label', action.textContent + ': ' + file.filename);
         action.onclick = async function () {
           if (busy) return;
-          if (!file.removed && !window.confirm('Remove “' + file.filename + '” from this task? It will stop downloading. Undo removal restores it; the private original is retained.')) return;
+          if (!file.removed && !window.confirm('Remove “' + file.filename + '” from this ' + parentKind + '? It will stop downloading. Undo removal restores it; the private original is retained.')) return;
           var wasRemoved = file.removed;
           busy = true; picker.disabled = true; draw();
           try { await request('/' + file.id + (file.removed ? '/restore' : ''), file.removed ? 'POST' : 'DELETE'); await refresh(); status.textContent = wasRemoved ? 'File restored' : 'File removed. The private original is retained; Undo removal restores it.'; }
@@ -88,8 +89,8 @@
     }
     async function refresh() {
       var result = await request('');
-      files = result.files; draw();
-      if (!result.configured) status.textContent = 'Private task file storage is not configured. Your selection remains available for Retry while Notes is open.';
+      files = result.files; listed = true; draw();
+      if (!result.configured) status.textContent = 'Private ' + parentKind + ' file storage is not configured. Your selection remains available for Retry while Notes is open.';
       return result;
     }
     function send(entry) {
@@ -130,11 +131,11 @@
       draw();
     }
     function add(selected) {
-      if (!blockId) { status.textContent = 'Save this task before attaching files.'; return; }
+      if (!blockId) { status.textContent = 'Save this ' + parentKind + ' before attaching files.'; return; }
       if (busy) { status.textContent = 'Wait for the current upload before adding files.'; return; }
       for (var file of Array.from(selected)) {
         var incomplete = files.find(function (f) { return f.pending && !f.removed && f.filename === file.name && f.size === file.size; });
-        if (!incomplete && pending.length + files.filter(function (f) { return !f.removed; }).length >= 20) { status.textContent = 'A task can hold at most 20 files.'; break; }
+        if (!incomplete && pending.length + files.filter(function (f) { return !f.removed; }).length >= 20) { status.textContent = 'A ' + parentKind + ' can hold at most 20 files.'; break; }
         pending.push({ id: incomplete ? incomplete.id : window.crypto.randomUUID(), file: file });
       }
       run();
@@ -143,9 +144,9 @@
     panel.ondragover = function (event) { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); };
     panel.ondrop = function (event) { if (event.dataTransfer.files.length) { event.preventDefault(); add(event.dataTransfer.files); } };
     retry.onclick = run;
-    var api = { add: function (file) { add([file]); }, destroy: function () { live = false; if (currentXHR && currentXHR.readyState !== 4) currentXHR.abort(); panel.remove(); } };
+    var api = { hasAttachments: function () { return !listed || busy || pending.length > 0 || files.length > 0; }, add: function (file) { add([file]); }, destroy: function () { live = false; if (currentXHR && currentXHR.readyState !== 4) currentXHR.abort(); panel.remove(); } };
     host._taskAttachments = api;
-    if (!blockId) { picker.disabled = true; status.textContent = 'Save this task before attaching files.'; }
+    if (!blockId) { picker.disabled = true; status.textContent = 'Save this ' + parentKind + ' before attaching files.'; }
     else initialized = refresh().catch(function (error) { if (live) status.textContent = error.message; });
     return api;
   }

@@ -15,7 +15,8 @@ async function createFixtureDb() {
     CREATE TABLE blocks(id TEXT PRIMARY KEY,workspace_id TEXT REFERENCES workspaces(id),user_id INTEGER REFERENCES users(id),type TEXT,properties JSONB DEFAULT '{}',date DATE,deleted_at TIMESTAMPTZ);
     INSERT INTO users VALUES(1),(2),(3);
     INSERT INTO workspaces VALUES('ws-1',1),('ws-2',2);
-    INSERT INTO blocks(id,workspace_id,user_id,type) VALUES('task','ws-1',1,'added_task'),('other','ws-2',2,'added_task'),('root','ws-1',1,'day_root'),('second','ws-1',1,'added_task');`);
+    INSERT INTO blocks(id,workspace_id,user_id,type) VALUES('task','ws-1',1,'added_task'),('other','ws-2',2,'added_task'),('root','ws-1',1,'day_root'),('second','ws-1',1,'added_task'),('quick-note','ws-1',1,'block'),('legacy-note','ws-1',1,'sticky_note');
+    UPDATE blocks SET properties='{"tags":["pinned"],"html":"","text":""}' WHERE id='quick-note';`);
   await pool.query(require("../task-attachment-store").SCHEMA_SQL);
   return { pool, async cleanup() { await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); } };
 }

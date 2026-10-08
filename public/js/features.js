@@ -1170,6 +1170,8 @@ function _snInitialBlocks(n){
 
 function _snEditorIsEmpty(editor){
   if(!editor) return true;
+  // Preserve attachment-only notes, including retained removals and unknown loading state.
+  if(editor.hasAttachments && editor.hasAttachments())return false;
   if(editor.isEmpty()) return true;
   return !editor.toMarkdown().trim();
 }
@@ -1261,7 +1263,8 @@ function renderStickyNotesList(){
     // Mount the shared block editor inside the card body so each card behaves
     // exactly like the notes editor in the done modal / notes drawer / add modal.
     const mount=card.querySelector('[data-sn-mount]');
-    const editor=createBlockEditor(mount, _snInitialBlocks(n));
+    const files=window.DCC.TaskAttachments.mount(mount,n._blockId,{kind:'note'});
+    const editor=createBlockEditor(mount, _snInitialBlocks(n),{accessibleLabel:'Quick note',stableImagesOnly:true,onAttachmentFile:file=>files.add(file)});
     _snEditors.set(n.id, editor);
     _snLastSig.set(n.id, editor.toHtml());
 

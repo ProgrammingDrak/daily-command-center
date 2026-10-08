@@ -14,7 +14,7 @@ module.exports = function mount(app, ctx) {
     try { return await run(); }
     finally { active--; const remaining = byUser.get(actor.userId) - 1; if (remaining) byUser.set(actor.userId, remaining); else byUser.delete(actor.userId); }
   }
-  const base = "/api/tasks/:blockId/attachments";
+  const bases = ["/api/tasks/:blockId/attachments", "/api/notes/:blockId/attachments"];
   function route(run, mutation = false) {
     return async (req, res) => {
       res.set("Cache-Control", "private, no-store");
@@ -37,22 +37,24 @@ module.exports = function mount(app, ctx) {
       }
     };
   }
-  app.get(base, route(async (req, res, actor) => res.json({ configured: store.configured, files: await store.list(actor, req.params.blockId) })));
-  app.post(base, route(async (req, res, actor) => {
-    const id = req.headers["x-upload-id"];
-    if (typeof id !== "string" || !UUID.test(id)) throw fail("Upload identity required");
-    if (!store.configured) throw fail("Private task file storage is not configured", 503);
-    await bounded(actor, async () => {
-      await new Promise((resolve, reject) => upload(req, res, error => error ? reject(error) : resolve()));
-      const meta = validateFile(req.file);
-      res.status(201).json(await store.upload(actor, req.params.blockId, id.toLowerCase(), meta, req.file.buffer));
-    });
-  }, true));
-  app.get(base + "/:id/download", route(async (req, res, actor) => {
-    const file = await bounded(actor, () => store.download(actor, req.params.blockId, req.params.id.toLowerCase()));
-    res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": disposition(file.filename), "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox; default-src 'none'" });
-    res.send(file.bytes);
-  }));
-  app.delete(base + "/:id", route(async (req, res, actor) => { await store.remove(actor, req.params.blockId, req.params.id.toLowerCase()); res.json({ removed: true }); }, true));
-  app.post(base + "/:id/restore", route(async (req, res, actor) => { await store.restore(actor, req.params.blockId, req.params.id.toLowerCase()); res.json({ restored: true }); }, true));
+  for (const base of bases) {
+    app.get(base, route(async (req, res, actor) => res.json({ configured: store.configured, files: await store.list(actor, req.params.blockId) })));
+    app.post(base, route(async (req, res, actor) => {
+      const id = req.headers["x-upload-id"];
+      if (typeof id !== "string" || !UUID.test(id)) throw fail("Upload identity required");
+      if (!store.configured) throw fail("Private task file storage is not configured", 503);
+      await bounded(actor, async () => {
+        await new Promise((resolve, reject) => upload(req, res, error => error ? reject(error) : resolve()));
+        const meta = validateFile(req.file);
+        res.status(201).json(await store.upload(actor, req.params.blockId, id.toLowerCase(), meta, req.file.buffer));
+      });
+    }, true));
+    app.get(base + "/:id/download", route(async (req, res, actor) => {
+      const file = await bounded(actor, () => store.download(actor, req.params.blockId, req.params.id.toLowerCase()));
+      res.set({ "Content-Type": "application/octet-stream", "Content-Disposition": disposition(file.filename), "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox; default-src 'none'" });
+      res.send(file.bytes);
+    }));
+    app.delete(base + "/:id", route(async (req, res, actor) => { await store.remove(actor, req.params.blockId, req.params.id.toLowerCase()); res.json({ removed: true }); }, true));
+    app.post(base + "/:id/restore", route(async (req, res, actor) => { await store.restore(actor, req.params.blockId, req.params.id.toLowerCase()); res.json({ restored: true }); }, true));
+  }
 };

@@ -1,4 +1,4 @@
-/* global window, document, ClipboardEvent, DataTransfer, File, __dirname, Buffer, console, innerWidth */
+/* global window, document, ClipboardEvent, DataTransfer, File, __dirname, Buffer, console, innerWidth, _snEditors, _snEditorIsEmpty, _snPruneEmpty, renderStickyNotesList */
 const process = require("node:process");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -62,9 +62,30 @@ const root = path.resolve(__dirname, "..");
       await page.evaluate(()=>{window.DCC_ACCOUNT_CONTEXT={userId:2,workspaceId:'ws-2'};});
       await page.getByRole('link',{name:'Download private file: success.txt'}).click();
       assert.match(await page.locator('.task-file-panel [role=status]').textContent(),/Account changed/);
+      await page.evaluate(()=>{window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:'ws-1'};document.body.insertAdjacentHTML('beforeend','<div id="sn-list"></div><div id="sn-task-list"></div><div id="sn-overlay"></div>');
+        const row={id:'quick-note',type:'block',properties:{tags:['pinned'],html:'',text:'',blocks:[]},created_at:'2026-10-08T00:00:00Z',updated_at:'2026-10-08T00:00:00Z'};
+        window.USE_BLOCKSTORE={stickyNotes:true};window.deletedNoteIds=[];window.loadNotes=()=>({});window.updateSnBadge=()=>{};
+        window.blockStore={getByType:type=>type==='block'?[row]:[],get:id=>id===row.id?row:null,updateBlockDebounced:(_id,props)=>{row.properties=props;},deleteBlock:async id=>{window.deletedNoteIds.push(id);}};
+      });
+      const features=fs.readFileSync(path.join(root,'public/js/features.js'),'utf8');
+      await page.addScriptTag({content:features.slice(features.indexOf('// ======== STICKY NOTES ========'),features.indexOf('function newStickyNote()'))});
+      await page.evaluate(()=>renderStickyNotesList());
+      const note=page.locator('#sn-list');
+      await note.locator('input[type=file]').setInputFiles({name:'note-only.txt',mimeType:'text/plain',buffer:Buffer.from('Fictional independent note original')});
+      await note.getByRole('link',{name:'Download private file: note-only.txt'}).waitFor();
+      assert.equal(await page.evaluate(()=>_snEditors.get('quick-note').isEmpty()),true);
+      assert.equal(await page.evaluate(()=>_snEditorIsEmpty(_snEditors.get('quick-note'))),false);
+      await page.evaluate(()=>_snPruneEmpty());assert.deepEqual(await page.evaluate(()=>window.deletedNoteIds),[]);
+      await page.evaluate(()=>renderStickyNotesList());await note.getByRole('link',{name:'Download private file: note-only.txt'}).waitFor();
+      await note.getByRole('button',{name:'Remove: note-only.txt',exact:true}).click();await note.getByRole('button',{name:'Undo removal: note-only.txt',exact:true}).waitFor();
+      await page.evaluate(()=>_snPruneEmpty());assert.deepEqual(await page.evaluate(()=>window.deletedNoteIds),[]);
+      await note.getByRole('button',{name:'Undo removal: note-only.txt',exact:true}).click();await note.getByRole('link',{name:'Download private file: note-only.txt'}).waitFor();
+      const noteDownloadPromise=page.waitForEvent('download');await note.getByRole('link',{name:'Download private file: note-only.txt'}).click();const noteDownload=await noteDownloadPromise;
+      assert.equal(fs.readFileSync(await noteDownload.path(),'utf8'),'Fictional independent note original');
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
       assert.deepEqual(errors,[]);
       await page.screenshot({path:'/tmp/dcc-attachments-'+width+'.png'}); await page.close();
-      console.log('PASS '+width+'px: private upload, partial failure/retry, reload, removal/undo, image paste, byte-exact download, offline retry, account guard, keyboard and no overflow');
+      console.log('PASS '+width+'px: private upload, partial failure/retry, reload, removal/undo, image paste, byte-exact download, offline retry, account guard, keyboard, independent Quick Note files and safe empty-note pruning');
     }
   } finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); await fixture.cleanup(); }
 })().catch(error=>{console.error(error);process.exitCode=1;});
