@@ -33,6 +33,7 @@ function makeMockPool(initialRows = [], resolveMap = {}) {
     async function query(sql, params = []) {
       const text = String(sql).trim();
       log.push({ text, params });
+      if (/^(SAVEPOINT|RELEASE SAVEPOINT|ROLLBACK TO SAVEPOINT)/.test(text)) return { rows: [] };
       if (text === "BEGIN" || text === "ROLLBACK") { if (staged) staged.clear(); return { rows: [] }; }
       if (text === "COMMIT") {
         for (const [k, v] of staged) { if (v === null) committed.delete(k); else committed.set(k, v); }
@@ -60,6 +61,8 @@ function makeMockPool(initialRows = [], resolveMap = {}) {
         }, 0);
         return { rows: [{ mx }] };
       }
+      if (/pg_advisory_xact_lock|^WITH RECURSIVE ancestors/.test(text)) return { rows: [] };
+      if (/^SELECT \* FROM blocks WHERE workspace_id/.test(text)) return { rows: [...committed.values()].filter(r => r.workspace_id === params[0] && !r.deleted_at) };
       if (/dcc_resolve_local_id/.test(text)) {
         const ref = params[2];
         return { rows: [{ pid: Object.prototype.hasOwnProperty.call(resolveMap, ref) ? resolveMap[ref] : null }] };
@@ -381,7 +384,7 @@ test("an unresolvable or ambiguous ref leaves the row a root rather than guessin
   assert.equal(kid.properties.rel, "subtask", "rel records the intent even when the edge fails");
 });
 
-test("the task-tree edge replaces a day_root container but never an explicit parent", async () => {
+test("the task-tree edge replaces a day container but rejects conflicting explicit parents", async () => {
   const pool = makeMockPool([row("parent-row", {})], { "ref-1": "parent-row" });
   const db = loadDbWithMock(pool);
 
@@ -391,11 +394,10 @@ test("the task-tree edge replaces a day_root container but never an explicit par
   });
   assert.equal(overRoot.parent_id, "parent-row", "a day_root parent is just the container");
 
-  const explicit = await db.createBlock({
+  await assert.rejects(db.createBlock({
     type: "block", parent_id: "chosen-parent", date: "2026-07-29", workspace_id: "ws-1",
     properties: { title: "b", subtaskOf: "ref-1" },
-  });
-  assert.equal(explicit.parent_id, "chosen-parent", "a deliberate parent wins");
+  }), /Parent task references disagree/);
 });
 
 test("createBlock survives a database with no dcc_resolve_local_id function", async () => {
@@ -458,11 +460,10 @@ test("a ref resolving to the row itself is refused, not self-parented", async ()
   // a self edge would 500 the create. POST /api/blocks spreads a client-supplied item
   // straight into createBlock, so the id and the ref can both be attacker-chosen.
   const db = loadDbWithMock(makeMockPool([], { "row-1": "row-1" }));
-  const b = await db.createBlock({
+  await assert.rejects(db.createBlock({
     id: "row-1", type: "block", date: "2026-07-29", workspace_id: "ws-1",
     properties: { title: "x", subtaskOf: "row-1" },
-  });
-  assert.equal(b.parent_id, null);
+  }), /cannot be its own parent/);
 });
 
 test("createBlock never overwrites a caller's rel", async () => {
@@ -539,7 +540,7 @@ test("getSubtree walks parent_id, stops at day_roots, and excludes tombstones", 
   assert.match(sql, /c\.parent_id = t\.id/, "walks the parent_id edge");
   assert.match(sql, /type <> 'day_root'/, "a container is not part of a task subtree");
   assert.match(sql, /deleted_at IS NULL/);
-  assert.match(sql, /t\.depth < 32/, "depth cap so a stray cycle cannot spin forever");
+  assert.match(sql, /NOT c\.id = ANY\(t\.path\)/, "visited IDs prevent cycles without truncating deep trees");
   assert.match(sql, /DISTINCT ON \(id\)/, "a diamond must yield each row once");
   assert.deepEqual(pool._log[0].params[0], ["root-1"], "a bare id is accepted as well as an array");
 });

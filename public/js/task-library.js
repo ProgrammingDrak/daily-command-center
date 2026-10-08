@@ -442,7 +442,15 @@
 
   function scheduleTask(task,anchor){
     if(!task||!window.blockStore)return;
-    if(typeof openSchedulePopover==='function')openSchedulePopover({mode:'pick',anchorEl:anchor,header:'Add “'+task.title+'” to itinerary',actionLabel:'Add',onPick:async date=>{await window.blockStore.rescheduleBlock(task.id,date,{fromDate:task.raw.date||null});notify('Added to itinerary');setTimeout(refresh,100);}});
+    if(typeof openSchedulePopover==='function')openSchedulePopover({mode:'pick',anchorEl:anchor,header:'Add “'+task.title+'” to itinerary',actionLabel:'Add',onPick:async date=>{
+      try{
+        // A task without a date needs an assignment, not a move from another day.
+        // The pool placement preserves its whole tree without requiring a time.
+        const options=task.raw.date?{fromDate:task.raw.date}:{placement:{kind:'pool_date'}};
+        await window.blockStore.rescheduleBlock(task.id,date,options);
+        notify('Added to itinerary');setTimeout(refresh,100);
+      }catch(error){notify(error.message||'Could not schedule task','error');}
+    }});
   }
   function continueProject(anchor){
     const projectId=stateProjectId();const next=(payload.tasks||[]).map(flattenTask).filter(item=>item.project===projectId&&item.status!=='done'&&item.readiness==='ready'&&!item.date).sort((a,b)=>a.projectOrder-b.projectOrder)[0];

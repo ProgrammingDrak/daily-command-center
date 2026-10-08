@@ -539,9 +539,7 @@ test("wrap moves during the reflow: joined nest shifts with it (post-reflow delt
   ];
   const { context } = makeDay(sched);
   const joined = context._dropAtTargetLevel(find(sched, "x"), find(sched, "k"), false);
-  const jWs = context.pt(joined.start);
   context.recalcTimes({ orderWins: true });
-  context._shiftWrapChildren(joined, jWs);
   assert.equal(find(sched, "wrapB").start, "09:30"); // wrap pulled up behind x
   assert.equal(find(sched, "x").start, "09:30"); // nest followed the wrap
   assert.equal(find(sched, "x").end, "10:00");

@@ -134,7 +134,7 @@
     var el=document.createElement("div");
     el.className="tl-item"+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(sub?" tl-sub-card":"")+(inProgress?" task-in-progress":"");
     el.dataset.id=ev.id;
-    if(node.depth)el.style.marginLeft=(node.depth*22)+"px";
+    if(node.depth)el.style.marginLeft="min("+(node.depth*22)+"px,var(--task-indent-max,132px))";
     if(isBounty)el.classList.add("bounty");
     if(ev._locked)el.classList.add("locked");
 
@@ -333,7 +333,7 @@
     el.className=classes;
     el.dataset.id=ev.id||"";
     if(opts.dataset){for(var key in opts.dataset){if(opts.dataset[key]!=null)el.dataset[key]=opts.dataset[key];}}
-    if(opts.depth)el.style.marginLeft=(opts.depth*22)+"px";
+    if(opts.depth)el.style.marginLeft="min("+(opts.depth*22)+"px,var(--task-indent-max,132px))";
     if(movable){
       el.draggable=true;
       if(typeof opts.onDragStart==="function")el.addEventListener("dragstart",function(e){opts.onDragStart(e,ev);});

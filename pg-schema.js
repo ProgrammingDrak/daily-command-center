@@ -111,6 +111,10 @@ CREATE TABLE IF NOT EXISTS operations (
   batch_id    TEXT
 );
 
+CREATE INDEX IF NOT EXISTS idx_operations_delete_receipt
+  ON operations (block_id, (after_data->>'deleteMutationId'))
+  WHERE op_type = 'delete';
+
 -- ── Feedback Messages ──
 CREATE TABLE IF NOT EXISTS feedback_messages (
   id           SERIAL PRIMARY KEY,

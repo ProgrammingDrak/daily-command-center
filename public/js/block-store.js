@@ -601,12 +601,45 @@
     // as B2's to wire up, and prod has 32 duplicate key groups of exactly this shape.
     // A reschedule gets 409 only when the row is an imported meeting whose
     // source calendar owns placement. That authority will not change on retry.
-    if ((entry.op === "undelete" || entry.op === "reschedule") && err.status === 409) return true;
+    if ((entry.op === "undelete" || entry.op === "reschedule" || (entry.op === "batch" && entry.data?.operations?.some(op => op.op === "undelete"))) && err.status === 409) return true;
     if ((entry.op === "update" || entry.op === "completion") && err.status === 409) return true;
     if ((entry.op === "work" || entry.op === "realloc") && err.status === 409) return true;
     return false;
   }
 
+  function restoreMetadata(entry) { return entry && entry.meta && entry.meta.restore; }
+  function restoreWaitsForDelete(entry){
+    const token=restoreMetadata(entry)?.deleteMutationId;
+    return token&&walGet().some(other=>other._walId!==entry._walId&&((other.op==="batch"&&other.data?.operations?.some(op=>op.op==="delete"&&op.deleteMutationId===token))||(other.op==="update"&&other.id===restoreMetadata(entry).overlayBlockId)));
+  }
+
+  function sendBatchRequest(entry) {
+    const send=()=>apiPost("/api/blocks/batch",entry.data);
+    const overlayId=restoreMetadata(entry)?.overlayBlockId;
+    return overlayId?queueUpdateRequest(overlayId,send):send();
+  }
+
+  function notifyRestore(entry, outcome) {
+    const meta = restoreMetadata(entry);
+    if (meta && typeof CustomEvent === "function" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(new CustomEvent("task-restore-result", { detail: { ...outcome, meta } }));
+    }
+  }
+  function applyBatchAcknowledgement(result, entry) {
+    const restores = (entry.data.operations || []).filter(op => op.op === "undelete");
+    if (restores.length) {
+      const rows = new Map((result.blocks || []).map(row => [row.id, row]));
+      if (restores.some(op => !rows.get(op.id)?.type || rows.get(op.id).deleted_at)) {
+        throw new Error("Restore acknowledgement did not confirm every original row");
+      }
+    }
+    for (const block of [...(result.blocks || []), ...(result.restoredDayRoots || [])]) {
+      if (!block?.id) continue;
+      if (block.deleted_at) cacheDelete(block.id);
+      else { _tombstones.delete(block.id); cacheSet(block); }
+    }
+    notifyRestore(entry, { ok: true, result });
+  }
   let _replaying = false;
   function hasPendingWritesNow() {
     return _replaying || _activeWriteRequests > 0 || Object.keys(_contentTimers).length > 0 || walGet().length > 0;
@@ -690,9 +723,12 @@
           case "delete":
             await apiDelete("/api/blocks/" + entry.id);
             break;
-          case "batch":
-            await apiPost("/api/blocks/batch", entry.data);
+          case "batch": {
+            if(restoreWaitsForDelete(entry)){failed++;continue;}
+            const result = await sendBatchRequest(entry);
+            applyBatchAcknowledgement(result, entry);
             break;
+          }
           case "undelete":
             await apiPost("/api/blocks/" + entry.id + "/undelete", {});
             break;
@@ -732,6 +768,11 @@
           // transiently (so undoDeleteTask keeps the optimistic restore), then the replay
           // gets a 409 because a live row holds the key. Put the row back where the server
           // has it, and say so, rather than letting the task silently vanish on next load.
+          if (restoreMetadata(entry)) {
+            for (const op of entry.data.operations || []) { _tombstones.add(op.id); cacheDelete(op.id); }
+            notifyRestore(entry, { ok: false, permanent: true, error: e.message });
+            setError("Task tree restore rejected — no partial restore was applied");
+          }
           if (entry.op === "undelete" && entry.id) {
             _tombstones.add(entry.id);
             cacheDelete(entry.id);
@@ -1225,6 +1266,7 @@
     // real undo and leave the server disagreeing with the UI, silently. False means
     // "already gone, do it for real."
     cancelBufferedWrite(walId, ids) {
+      if (_replaying) return false;
       const pending = !!walId && walGet().some(e => e && e._walId === walId);
       if (!pending) return false;
       walRemove(walId);
@@ -1278,15 +1320,28 @@
     },
 
     // Atomic multi-block operation
-    async batchOp(operations) {
+    async restoreBlocks(ids, meta) {
+      const overlayWrite=meta.overlayBlockId&&_updateChains.get(meta.overlayBlockId);
+      if(overlayWrite)await overlayWrite.catch(()=>{});
+      return this.batchOp(ids.map(id => ({ op: "undelete", id, expectedDeleteMutationId: meta.deleteMutationId })), { restore: meta });
+    },
+
+    async batchOp(operations, meta) {
       setSaving();
       for (const op of operations) {
         if (op && op.op === "delete" && op.id) _tombstones.add(op.id);
       }
-      const walId = walPush({ op: "batch", data: { operations } });
+      const entry = { op: "batch", data: { operations }, ...(meta ? { meta } : {}) };
+      const walId = walPush(entry);
+      entry._walId=walId;
+      if(restoreWaitsForDelete(entry)){
+        setError("Task tree restore pending — waiting for deletion to settle");
+        return {blocks:[],ok:false,buffered:true,walId};
+      }
       try {
-        const result = await apiPost("/api/blocks/batch", { operations });
-        if (result.blocks) {
+        const result = await (restoreMetadata(entry)?sendBatchRequest(entry):apiPost("/api/blocks/batch", { operations }));
+        if (restoreMetadata(entry)) applyBatchAcknowledgement(result, entry);
+        else if (result.blocks) {
           for (const block of result.blocks) {
             if (!block || !block.id) continue;
             // A delete op's result is a bare { id, deleted_at } stub (db.deleteBlock),
@@ -1300,7 +1355,14 @@
         setSaved();
         return { ...result, ok: true, walId, buffered: false };
       } catch (e) {
-        setError("Batch save failed — buffered for retry");
+        if (restoreMetadata(entry) && isPermanentReplayFailure(entry, e)) {
+          walMoveToDeadLetter({ ...entry, _walId: walId }, `${e.status || "error"} ${e.message || ""}`.trim());
+          for (const op of operations) { _tombstones.add(op.id); cacheDelete(op.id); }
+          notifyRestore(entry, { ok: false, permanent: true, error: e.message });
+          setError("Task tree restore rejected — no partial restore was applied");
+          return { blocks: [], ok: false, permanent: true, buffered: false, walId, error: { message: e.message, status: e.status } };
+        }
+        setError(restoreMetadata(entry) ? "Task tree restore pending — will retry" : "Batch save failed — buffered for retry");
         // `buffered: true` says the write did NOT land and is still in the WAL. Callers
         // could not tell before: this returned the same empty-blocks shape either way,
         // so a caller that needed to know whether its write reached the server had to

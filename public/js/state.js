@@ -155,14 +155,10 @@ function childrenOf(id,pool){return _TM().childrenOf(id,pool);}
 // because state.js was not Track C's file until C3.
 function subtaskProgress(id,pool,doneFn,_seen){
   const isRowDone=doneFn||(s=>isDone(s));
-  _seen=_seen||new Set();
-  if(_seen.has(id))return null;
-  _seen.add(id);
-  const subs=_TM().subtasksOf(id,pool||scheduled);
+  if(_seen&&_seen.has(id))return null;
+  const subs=_TM().descendantsOf(id,pool||scheduled,{edge:"subtask"});
   if(!subs.length)return null;
-  let done=0,total=0;
-  subs.forEach(s=>{total++;if(isRowDone(s))done++;const sub=subtaskProgress(s.id,pool,doneFn,_seen);if(sub){total+=sub.total;done+=sub.done;}});
-  return {done,total};
+  return {done:subs.filter(isRowDone).length,total:subs.length};
 }
 
 // Rollup summary for a container type (shell): estimated points of the whole
@@ -174,24 +170,15 @@ function subtaskProgress(id,pool,doneFn,_seen){
 function shellRollup(id,pool){
   pool=pool||((typeof scheduled!=="undefined")?scheduled:[]);
   let points=0;
-  const seen=new Set();
-  (function walk(pid){
-    if(seen.has(pid))return;
-    seen.add(pid);
-    childrenOf(pid,pool).forEach(c=>{
-      if(relOf(c)==="subtask")return; // pie slices are covered by their parent's pool
-      if(!(window.TaskTypes&&window.TaskTypes.isRollup(c))&&window.PointPlan){
-        const hasPie=childrenOf(c.id,pool).some(k=>relOf(k)==="subtask");
-        if(hasPie&&typeof window.PointPlan.compute==="function"){
-          const plan=window.PointPlan.compute(c.id);
-          points+=(plan&&plan.pool)||0;
-        } else if(typeof window.PointPlan.estimatePool==="function"){
-          points+=window.PointPlan.estimatePool(c.id)||0;
-        }
-      }
-      walk(c.id);
-    });
-  })(id);
+  const index=_TM().hierarchyIndex(pool);
+  for(const c of _TM().descendantsOf(id,pool,{edge:"ride-along",index})){
+    if(!(window.TaskTypes&&window.TaskTypes.isRollup(c))&&window.PointPlan){
+      const hasPie=(index.children.get(c.id)||[]).some(k=>relOf(k)==="subtask");
+      if(hasPie&&typeof window.PointPlan.compute==="function"){
+        const plan=window.PointPlan.compute(c.id);points+=(plan&&plan.pool)||0;
+      }else if(typeof window.PointPlan.estimatePool==="function")points+=window.PointPlan.estimatePool(c.id)||0;
+    }
+  }
   const kids=childrenOf(id,pool);
   return {points:Math.round(points),done:_TM().selectDone(kids).length,total:kids.length};
 }
@@ -200,25 +187,23 @@ function shellRollup(id,pool){
 // structure a repeat responsibility drops back onto a day. Recurses via
 // childrenOf/relOf; each node carries its own duration/priority/type/edge so
 // materializeShellTemplate (schedule.js) can rebuild it exactly. Cycle- and
-// depth-guarded. The root carries NO duration — a shell derives its length from
+// cycle-safe without a depth cutoff. The root carries NO duration — a shell derives its length from
 // its children (see _layoutShellChildren in drag.js).
 function captureShellTemplate(shellId,pool){
   pool=pool||((typeof scheduled!=="undefined")?scheduled:[]);
-  const root=pool.find(e=>e.id===shellId);
+  const index=_TM().hierarchyIndex(pool),root=index.byId.get(shellId);
   if(!root)return null;
-  const seen=new Set();
-  function node(ev,depth,isRoot){
-    seen.add(ev.id);
-    const out={title:ev.title||"",type:ev.type||"task",priority:ev.priority||"Medium",detail:ev.detail||""};
-    if(!isRoot){
-      out.edge=(relOf(ev)==="subtask")?"subtask":"wrap";
-      out.durationMin=Math.max(1,dur(ev)||0)||30;
-    }
-    const kids=(depth<20)?_TM().selectNotDeleted(childrenOf(ev.id,pool)).filter(c=>!seen.has(c.id)):[];
-    out.children=kids.map(k=>node(k,depth+1,false));
-    return out;
+  const seen=new Set(),rootNode={};
+  const stack=[{ev:root,out:rootNode,isRoot:true}];
+  while(stack.length){
+    const {ev,out,isRoot}=stack.pop();if(seen.has(ev.id))continue;seen.add(ev.id);
+    Object.assign(out,{title:ev.title||"",type:ev.type||"task",priority:ev.priority||"Medium",detail:ev.detail||"",children:[]});
+    if(!isRoot){out.edge=relOf(ev)==="subtask"?"subtask":"wrap";out.durationMin=Math.max(1,dur(ev)||0)||30;}
+    const kids=_TM().selectNotDeleted(index.children.get(ev.id)||[]).filter(k=>!seen.has(k.id));
+    const entries=kids.map(ev=>({ev,out:{},isRoot:false}));out.children=entries.map(e=>e.out);
+    for(let i=entries.length-1;i>=0;i--)stack.push(entries[i]);
   }
-  return {version:1,root:node(root,0,true)};
+  return {version:1,root:rootNode};
 }
 
 // Completion bonus for a rollup container: bonusPct × the subtree's estimated
@@ -1629,17 +1614,7 @@ async function _computeRescheduleSlot(ev,targetDate){
 // Keep the two in step. They already differ on which edge wins when a row carries
 // both: `parentIdOf` here is wrapId-first, that one is subtaskOf-first.
 function _subtreeIdsOf(rootId,pool){
-  pool=pool||scheduled;
-  const ids=new Set([rootId]);
-  let changed=true;
-  while(changed){
-    changed=false;
-    for(const e of pool){
-      const pid=parentIdOf(e);
-      if(pid&&ids.has(pid)&&!ids.has(e.id)){ids.add(e.id);changed=true;}
-    }
-  }
-  return ids;
+  return new Set([rootId].concat(_TM().descendantsOf(rootId,pool||scheduled).map(e=>e.id)));
 }
 
 // Optimistically drop a task and its whole nested subtree (subtaskOf/wrapId) from
@@ -1912,13 +1887,88 @@ let _delPendingId=null;
 // prefixed id and get evicted out of turn. Re-stashing deletes first so a re-deleted id
 // moves to the back instead of keeping its old position.
 const _deleteUndoSnapshots=new Map();
+// A newer delete must follow any older Undo restoring the same durable row.
+const _deleteUndoRestores=new Map();
+const _deleteUndoIntents=new Map();
+const _deleteUndoNotices=new Map();
+function _deleteUndoStorageKey(){
+  const account=window.DCC_ACCOUNT_CONTEXT||{};
+  return "dcc-delete-undo:"+(account.userId&&account.workspaceId?account.userId+":"+account.workspaceId:"unverified");
+}
+function _persistDeleteUndo(){
+  try{localStorage.setItem(_deleteUndoStorageKey(),JSON.stringify({
+    snapshots:[..._deleteUndoSnapshots].map(([id,snap])=>[id,{rootId:snap.rootId,ids:snap.ids,blockIds:snap.blockIds,members:snap.members,date:snap.date,overlayBlockId:snap.overlayBlockId,deleteMutationId:snap.deleteMutationId,state:snap.state}]),
+    intents:[..._deleteUndoIntents]
+  }));}catch(e){}
+}
+(function loadDeleteUndo(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(_deleteUndoStorageKey())||"{}");
+    for(const [key,snap] of saved.snapshots||[])if(Array.isArray(snap.ids)&&Array.isArray(snap.blockIds)&&snap.deleteMutationId){
+      snap.rootId=snap.rootId||key;_deleteUndoSnapshots.set(_deleteUndoIntentKey(snap.date,snap.rootId),snap);
+    }
+    for(const [id,token] of saved.intents||[])_deleteUndoIntents.set(id,token);
+  }catch(e){}
+})();
+function _deleteUndoIntentKey(date,id){return (date||"pool")+":"+id;}
+function _showDeleteUndoNotice(id,snap){
+  const previous=_deleteUndoNotices.get(snap.deleteMutationId);
+  if(previous&&previous.state===snap.state&&previous.element?.isConnected!==false)return;
+  previous?.element?.remove?.();
+  if(typeof showToast!=="function")return;
+  const notice=showToast(snap.state==="failed"?"Could not restore the task tree":"Task tree restore pending — will retry",snap.state==="failed"?"error":"info",0,{label:"Retry",onClick:()=>undoDeleteTask(id,snap.date,snap.deleteMutationId)});
+  _deleteUndoNotices.set(snap.deleteMutationId,{element:notice,state:snap.state});
+}
+function restoreDeleteUndoState(){
+  for(const snap of _deleteUndoSnapshots.values()){
+    const id=snap.rootId;
+    if(!["pending","failed","restoring"].includes(snap.state)||(snap.date!==null&&snap.date!==_viewedDateStr()))continue;
+    if(_deleteUndoIntents.get(_deleteUndoIntentKey(snap.date,id))!==snap.deleteMutationId)continue;
+    snap.ids.filter(sid=>_deleteUndoIntents.get(_deleteUndoIntentKey(snap.date,sid))===snap.deleteMutationId).forEach(sid=>deletedSet.add(sid));
+    _showDeleteUndoNotice(id,snap);
+  }
+}
+function _applyTaskRestoreOutcome(meta,result){
+  const key=_deleteUndoIntentKey(meta.date,meta.rootId);
+  const snap=_deleteUndoSnapshots.get(key);
+  const sameSnapshot=snap&&snap.deleteMutationId===meta.deleteMutationId;
+  const currentRoot=_deleteUndoIntents.get(_deleteUndoIntentKey(meta.date,meta.rootId))===meta.deleteMutationId;
+  const applies=meta.date===null||meta.date===_viewedDateStr();
+  const ids=(meta.ids||[]).filter(id=>_deleteUndoIntents.get(_deleteUndoIntentKey(meta.date,id))===meta.deleteMutationId);
+  if(sameSnapshot){
+    if(result.ok){
+      _deleteUndoSnapshots.delete(key);
+      _deleteUndoNotices.get(meta.deleteMutationId)?.element?.remove?.();_deleteUndoNotices.delete(meta.deleteMutationId);
+    }
+    else snap.state=result.permanent?"failed":"pending";
+    _persistDeleteUndo();
+  }
+  if(applies){
+    if(result.ok&&typeof refoldTaskStateFromBlockCache==="function")refoldTaskStateFromBlockCache();
+    ids.forEach(id=>result.ok?deletedSet.delete(id):deletedSet.add(id));
+    saveDeletedState();recalcTimes();render();
+  }
+  if(!currentRoot||!applies)return;
+  if(result.ok){
+    if(sameSnapshot){log("delete-undone",meta.rootId,"Restored task tree");if(typeof showToast==="function")showToast("Task restored","success",2200);}
+  }else if(typeof showToast==="function"){
+    if(sameSnapshot)_showDeleteUndoNotice(meta.rootId,snap);
+  }
+}
+
 const _UNDO_SNAPSHOT_CAP=10;
 function _stashUndoSnapshot(id,snap){
-  _deleteUndoSnapshots.delete(id);
-  _deleteUndoSnapshots.set(id,snap);
+  const key=_deleteUndoIntentKey(snap.date,id),previous=_deleteUndoSnapshots.get(key);
+  if(previous){_deleteUndoNotices.get(previous.deleteMutationId)?.element?.remove?.();_deleteUndoNotices.delete(previous.deleteMutationId);}
+  snap.rootId=id;
+  _deleteUndoSnapshots.delete(key);
+  _deleteUndoSnapshots.set(key,snap);
   while(_deleteUndoSnapshots.size>_UNDO_SNAPSHOT_CAP){
-    _deleteUndoSnapshots.delete(_deleteUndoSnapshots.keys().next().value);
+    const disposable=[..._deleteUndoSnapshots].find(([,entry])=>!entry.state||entry.state==="deleted");
+    if(!disposable)break;
+    _deleteUndoSnapshots.delete(disposable[0]);
   }
+  _persistDeleteUndo();
 }
 function openDeleteConfirm(id){
   const ev=scheduled.find(e=>e.id===id);
@@ -1933,7 +1983,7 @@ function openDeleteConfirm(id){
 // bug: navigate away or reload inside that window and only the per-day overlay
 // survived, so the task came back on the next fold. Going immediate loses nothing --
 // rows keep their deleted_at for 30 days server-side (purgeSoftDeleted, server.js)
-// and Undo revives those exact rows through /undelete.
+// and Undo revives those exact rows in one guarded transaction.
 async function deleteTaskWithUndo(id){
   const anchor=typeof taskAnchorById==='function'?taskAnchorById(id):null;
   const pool=anchor&&anchor.whenever?backlog:scheduled;
@@ -1944,6 +1994,9 @@ async function deleteTaskWithUndo(id){
   // resurfaces later as a standalone unfinished task. Anything already deleted
   // separately is left out so Undo can't resurrect it.
   const ids=[..._subtreeIdsOf(id,pool)].filter(sid=>sid===id||!deletedSet.has(sid));
+  const deleteMutationId=typeof crypto!=="undefined"&&crypto.randomUUID?crypto.randomUUID():"delete-"+Date.now()+"-"+Math.random();
+  const undoDate=anchor&&anchor.whenever?null:dateStr;
+  ids.forEach(sid=>_deleteUndoIntents.set(_deleteUndoIntentKey(undoDate,sid),deleteMutationId));
   const evById=new Map(pool.map(e=>[e.id,e]));
   // Hide first. Row resolution below scans the whole block cache once per subtree
   // node, and none of it changes what the user sees -- doing it before the render
@@ -1962,10 +2015,10 @@ async function deleteTaskWithUndo(id){
   // are never the client's to remember. That also retires a whole bug class: a snapshot's
   // hand-maintained field list silently drifting from the schema, which is exactly why
   // B1 rejected persistAddedTask's ~35-field allowlist in the first place.
-  const blockIds=[];
+  const blockIds=[],members=[];
   for(const sid of ids){
     const block=_findTaskBlockForDate(sid,dateStr,evById.get(sid));
-    if(block)blockIds.push(block.id);
+    if(block){blockIds.push(block.id);members.push({id:block.id,overlayId:sid});}
   }
   // One transactional batch, so the subtree is deleted all-or-nothing instead of
   // half-deleted with stranded children. Deletes are idempotent server-side
@@ -1979,10 +2032,12 @@ async function deleteTaskWithUndo(id){
     // Resolve to a buffered-shaped result rather than undefined if this ever rejects:
     // batchOp does not reject today, but undoDeleteTask decides what to do from this
     // value, and "undefined" would read as "landed fine".
-    deletePromise=window.blockStore.batchOp(blockIds.map(bid=>({op:"delete",id:bid})))
+    const restoring=[...new Set(blockIds.map(bid=>_deleteUndoRestores.get(bid)).filter(Boolean))];
+    const write=()=>window.blockStore.batchOp(blockIds.map(bid=>({op:"delete",id:bid,deleteMutationId})));
+    deletePromise=(restoring.length?Promise.all(restoring).then(write):write())
       .catch(()=>({blocks:[],buffered:true}));
   }
-  _stashUndoSnapshot(id,{ids,blockIds,deletePromise});
+  _stashUndoSnapshot(id,{ids,blockIds,members,date:undoDate,overlayBlockId:window.blockStore?.getDayRootId?.(),deleteMutationId,state:"deleted",deletePromise});
   // Offer Undo without waiting for the round-trip, so the affordance is as instant as
   // the hide.
   if(typeof showToast==="function"){
@@ -1994,86 +2049,67 @@ async function deleteTaskWithUndo(id){
     const liveCheckIn=isCheckIn&&(typeof window.waitingCheckInIsLive==="function")&&window.waitingCheckInIsLive(ev);
     showToast(isCheckIn?(liveCheckIn?"Check-in deleted. The delegated task is still open in Waiting":"Check-in deleted. Its Waiting item was already closed"):"Task deleted","success",8000,{
       label:"Undo",
-      onClick:()=>undoDeleteTask(id)
+      onClick:()=>undoDeleteTask(id,undoDate,deleteMutationId)
     });
   }
   await deletePromise;
 }
-// Revive the ORIGINAL rows through A2's POST /:id/undelete, so notes, tags, source
+// Revive the ORIGINAL rows through one guarded transactional batch, so notes, tags, source
 // links, prep state, privacy and the subtask/ride-along edges all come back because they
 // never went anywhere -- the row is the same row. B1 re-created verbatim copies under NEW
 // ids, which meant Undo could not survive a reload (the snapshot was in memory), left the
 // old rows tombstoned, and broke every id anything else still held.
-async function undoDeleteTask(id){
-  if(!deletedSet.has(id))return;
-  const snap=_deleteUndoSnapshots.get(id)||{ids:[id],blockIds:[]};
-  _deleteUndoSnapshots.delete(id);
-  snap.ids.forEach(sid=>deletedSet.delete(sid));
-  saveDeletedState();
-  log("delete-undone",id,"Restored to schedule");
-  recalcTimes();
-  render();
-  // WAIT FOR THE DELETE TO LAND FIRST. This is the one thing /undelete does not inherit
-  // for free from B1's design: the two operations are not commutative. Undo can be
-  // clicked while the delete batch is still in flight, and if the undelete wins the race
-  // it clears a deleted_at that is not set yet -- then the delete lands, and the task is
-  // gone server-side while the UI shows it restored, until the next reload proves the UI
-  // wrong. B1 did not have this race because a create and a delete of two different rows
-  // commute; reviving the SAME row does not.
-  let deleteResult=null;
-  if(snap.deletePromise){try{deleteResult=await snap.deletePromise;}catch(e){}}
-  // AND awaiting is not enough on its own, because batchOp swallows its own failure: it
-  // resolves either way, so a delete that never reached the server looks identical to one
-  // that did. If it is still buffered there is nothing to undelete, and the queued batch
-  // MUST be cancelled -- otherwise the next replay (boot, `online`, visibilitychange, SSE
-  // reconnect) deletes the row the user just restored, silently. Reachable inside the 8s
-  // toast: delete while offline, reconnect, click Undo.
-  // ...and `buffered` is only a SNAPSHOT of the moment the batch failed. replayWAL fires
-  // on the `online` event with no delay, so in the up-to-8s gap before the user clicks Undo
-  // the queued delete can land after all. So trust the cancel's return value, not the flag:
-  // true means it really was still pending and is now dropped (nothing was ever deleted, so
-  // there is nothing to revive), false means it already replayed and we must undo for real.
-  if(deleteResult&&deleteResult.buffered){
-    const cancelled=!!(window.blockStore&&window.blockStore.cancelBufferedWrite
-      &&window.blockStore.cancelBufferedWrite(deleteResult.walId,snap.blockIds||[]));
-    if(cancelled){
-      if(typeof showToast==="function")showToast("Task restored","success",2200);
-      return;
+async function undoDeleteTask(id,date,expectedToken){
+  const key=date!==undefined?_deleteUndoIntentKey(date,id):(_deleteUndoSnapshots.has(_deleteUndoIntentKey(_viewedDateStr(),id))?_deleteUndoIntentKey(_viewedDateStr(),id):_deleteUndoIntentKey(null,id));
+  const snap=_deleteUndoSnapshots.get(key);
+  if(!snap){if(typeof showToast==="function")showToast("Undo history is unavailable for that task","error",3200);return;}
+  if(expectedToken&&expectedToken!==snap.deleteMutationId)return;
+  if(snap.restorePromise)return snap.restorePromise;
+  const ids=snap.ids.filter(sid=>_deleteUndoIntents.get(_deleteUndoIntentKey(snap.date,sid))===snap.deleteMutationId);
+  if(!ids.includes(id))return;
+  const members=(snap.members||[]).filter(member=>ids.includes(member.overlayId));
+  const blockIds=members.map(member=>member.id);
+  const meta={rootId:id,ids,blockIds,members,date:snap.date,overlayBlockId:snap.overlayBlockId,deleteMutationId:snap.deleteMutationId};
+  // Keep the intended tree visible immediately, but never claim durability yet.
+  if(snap.date===null||snap.date===_viewedDateStr()){ids.forEach(sid=>deletedSet.delete(sid));recalcTimes();render();}
+  let finishRestore;
+  const restoring=new Promise(resolve=>{finishRestore=resolve;});
+  for(const bid of blockIds)_deleteUndoRestores.set(bid,restoring);
+  snap.state="restoring";_persistDeleteUndo();
+  const run=(async()=>{
+    try{
+      let deleteResult=snap.deletePromise?await snap.deletePromise:null;
+      // After reload the durable delete WAL, rather than a lost in-memory promise,
+      // identifies the forward operation. A cancelled/lost ack still gets a guarded
+      // atomic restore: cancellation alone cannot prove the server never deleted.
+      if(!deleteResult&&window.blockStore?.exportPending){
+        const pending=window.blockStore.exportPending().pending.find(entry=>entry.op==="batch"&&entry.data?.operations?.some(op=>op.op==="delete"&&op.deleteMutationId===snap.deleteMutationId));
+        if(pending)deleteResult={buffered:true,walId:pending._walId};
+      }
+      if(deleteResult?.buffered&&window.blockStore?.cancelBufferedWrite)window.blockStore.cancelBufferedWrite(deleteResult.walId,snap.blockIds);
+      let result={ok:true};
+      if(blockIds.length){
+        if(!window.blockStore?.restoreBlocks)result={ok:false,permanent:true};
+        else result=await window.blockStore.restoreBlocks(blockIds,meta);
+      }
+      _applyTaskRestoreOutcome(meta,result||{ok:false});
+      return result;
+    }catch(error){
+      const result={ok:false,permanent:[400,404,409].includes(error.status),error:error.message};
+      _applyTaskRestoreOutcome(meta,result);return result;
+    }finally{
+      if(_deleteUndoSnapshots.get(key)===snap)delete snap.restorePromise;
+      for(const bid of blockIds)if(_deleteUndoRestores.get(bid)===restoring)_deleteUndoRestores.delete(bid);
+      finishRestore();
     }
-    // Fall through to the real undelete. Safe on a row that was never deleted:
-    // db.undeleteBlock just clears a deleted_at that is already NULL.
-  }
-  if(snap.blockIds&&snap.blockIds.length&&window.blockStore&&window.blockStore.undeleteBlock){
-    // Per row, because /undelete is single-id. Sequential rather than Promise.all: these
-    // are parent-and-children in one subtree, and a burst of concurrent writes to the
-    // same tree is how sort_order rebalances start fighting each other.
-    //
-    // ACCEPTED LIMITATION, called out because the delete side promises the opposite: this
-    // is N requests, not one transaction, so a permanent rejection partway through leaves
-    // the subtree half-revived server-side. The all-or-nothing version needs an
-    // `undelete` case in db.batchOp, which is Track A's file and out of this phase's
-    // scope; it is handed off in the Coordination log. Until then the overlay below is
-    // restored wholesale so at least the UI does not claim a partial success.
-    let rejected=false;
-    for(const bid of snap.blockIds){
-      const r=await window.blockStore.undeleteBlock(bid);
-      if(r&&r.ok===false&&r.permanent)rejected=true;
-    }
-    render();
-    if(rejected){
-      // The server refused: a live row already holds this tombstone's idempotency key, or
-      // the row is past the 30-day purge. Put the hide back rather than leaving the
-      // itinerary showing a task the server still considers deleted.
-      snap.ids.forEach(sid=>deletedSet.add(sid));
-      saveDeletedState();
-      recalcTimes();
-      render();
-      if(typeof showToast==="function")showToast("Could not restore that task","error",3200);
-      return;
-    }
-  }
-  if(typeof showToast==="function")showToast("Task restored","success",2200);
+  })();
+  snap.restorePromise=run;
+  return run;
 }
+if(typeof window.addEventListener==="function")window.addEventListener("task-restore-result",event=>{
+  if(event.detail?.meta)_applyTaskRestoreOutcome(event.detail.meta,event.detail);
+});
+
 function openDeleteConfirmLegacy(id){
   const ev=scheduled.find(e=>e.id===id);
   if(!ev)return;

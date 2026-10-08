@@ -21,6 +21,7 @@ const recurrence = require("./lib/recurrence");
 // cannot drift apart on which types are never carried over.
 const TaskTypes = require("./public/js/task-types");
 const TimeBlocks = require("./public/js/time-blocks");
+const {edgeOf,planParentChange} = require("./lib/task-hierarchy");
 const { plannedWindowOf } = require("./lib/task-timing");
 
 // ── Workspace Bootstrap ──
@@ -254,7 +255,8 @@ async function nextSortOrderForDay(q, { date, workspace_id }) {
 async function createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id }, client) {
   // Recurring/reused activity plans are snapshotted with the task atomically.
   const sourceProps = typeof properties === "string" ? JSON.parse(properties) : (properties || {});
-  if (sourceProps.activityPlanSourceId && !client) {
+  const createsHierarchy=sourceProps.subtaskOf||sourceProps.wrapId||(parent_id&&!isDayRootId(parent_id));
+  if ((sourceProps.activityPlanSourceId||createsHierarchy) && !client && typeof pool.connect === "function") {
     const c = await pool.connect();
     try {
       await c.query("BEGIN");
@@ -286,6 +288,10 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
   }
   validateBlock(type, props);
   const q = client || pool;
+  if(isTaskRow({type,properties:props}) &&
+      (parent_id===blockId || [props.subtaskOf,props.wrapId].filter(Boolean).some(ref=>ref===blockId||ref===props.local_id))){
+    const error=new Error("A task cannot be its own parent");error.statusCode=409;throw error;
+  }
 
   // C6c: no explicit order -> the END of this row's day, in the one 1000-spaced space. The old
   // default was `sort_order || 0`, which put every create at the head of the day and produced 289
@@ -302,6 +308,7 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
   }
 
   let parentId = parent_id || null;
+  if(createsHierarchy&&client)await q.query("SELECT pg_advisory_xact_lock(hashtext('dcc-task-hierarchy'), hashtext($1))",[String(workspace_id||'')]);
   if (isTaskRow({ type, properties: props })) {
     if (props.status == null) props.status = "open";
     const ref = props.subtaskOf != null ? props.subtaskOf : props.wrapId;
@@ -319,11 +326,45 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
       // producers (schedule.js saveTaskOrder, persistence.js saveSubtaskOrder) send
       // (i+1)*1000, but it IS a second reader: do not repeat the claim that there is
       // only one.
-      if (parentId === null || isDayRootId(parentId)) {
-        parentId = await resolveParentRef(
-          q, { ref, workspaceId: workspace_id, date, selfId: blockId }, !!client
-        ) || parentId;
+      const resolved = await resolveParentRef(
+        q, { ref, workspaceId: workspace_id, date, selfId: blockId }, !!client
+      );
+      if (parentId === null || isDayRootId(parentId)) parentId = resolved || parentId;
+      else if (!resolved || parentId !== resolved) {
+        const error=new Error("Parent task references disagree");error.statusCode=409;throw error;
       }
+    }
+    if (createsHierarchy && parentId && !isDayRootId(parentId)) {
+      const {rows:parents}=await q.query("SELECT * FROM blocks WHERE id = $1 AND deleted_at IS NULL",[parentId]);
+      const parent=parents[0]&&parseBlock(parents[0]);
+      if(parent && (parent.workspace_id||null)!==(workspace_id||null)) {
+        const error=new Error("Parent task is unavailable");error.statusCode=409;throw error;
+      }
+      if(parent && (parent.date||null)!==(normalizeDate(date)||null)) {
+        const error=new Error("Parent and child must belong to the same task pool or day");error.statusCode=409;throw error;
+      }
+      if(parent && !isTaskRow(parent)) {
+        const error=new Error("A task parent must be a task");error.statusCode=409;throw error;
+      }
+      if(parent && !ref) {props.subtaskOf=parent.properties.local_id||parent.id;props.rel="subtask";}
+    }
+    // A new row can close a cycle through a previously dangling local-ID edge.
+    // Walk both alias spaces with visited IDs, not a maximum depth.
+    if(createsHierarchy){
+      if(props.wrapId&&props.subtaskOf){const error=new Error("A task must have one parent relationship");error.statusCode=409;throw error;}
+      const ref=props.wrapId||props.subtaskOf;
+      const {rows:cycles}=await q.query(`WITH RECURSIVE ancestors AS (
+        SELECT b.*, ARRAY[b.id]::text[] AS path, false AS cycle FROM blocks b WHERE b.workspace_id IS NOT DISTINCT FROM $1 AND b.deleted_at IS NULL
+          AND (b.id=$2 OR (b.properties->>'local_id'=$3 AND b.date IS NOT DISTINCT FROM $4::date))
+        UNION ALL
+        SELECT p.*, c.path || p.id, p.id = ANY(c.path) AS cycle FROM blocks p JOIN ancestors c ON
+          (p.id=COALESCE(c.properties->>'wrapId',c.properties->>'subtaskOf',c.parent_id)
+           OR (p.properties->>'local_id'=COALESCE(c.properties->>'wrapId',c.properties->>'subtaskOf') AND p.date IS NOT DISTINCT FROM c.date))
+        WHERE p.workspace_id IS NOT DISTINCT FROM $1 AND p.deleted_at IS NULL AND p.type<>'day_root' AND NOT c.cycle
+      ) SELECT id FROM ancestors WHERE cycle OR id=$5 OR properties->>'local_id'=$6
+        OR COALESCE(properties->>'wrapId',properties->>'subtaskOf')=ANY($7::text[])`,
+      [workspace_id||null,parentId,ref||null,date||null,blockId,props.local_id||null,[blockId,props.local_id].filter(Boolean)]);
+      if(cycles.length){const error=new Error("That parent would create a task cycle");error.statusCode=409;throw error;}
     }
     validateBlock(type, props);
   }
@@ -545,24 +586,18 @@ function completionWalkableRow(block) {
 }
 
 function collectCompletionSubtreeIds(rows, parent) {
-  const parentLocalId = parent && parent.properties && parent.properties.local_id;
-  const localIds = new Set(parentLocalId ? [String(parentLocalId)] : []);
-  const rowIds = new Set(parent && parent.id ? [String(parent.id)] : []);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const row of rows) {
-      if (!row || rowIds.has(String(row.id))) continue;
-      const props = row.properties || {};
-      // Ride-alongs use wrapId and remain independent work. The UI promotes them
-      // out of a completed parent instead of completing them.
-      if (props.wrapId && !props.subtaskOf) continue;
-      const joined = (props.subtaskOf && localIds.has(String(props.subtaskOf)))
-        || (row.parent_id && rowIds.has(String(row.parent_id)));
-      if (!joined) continue;
-      rowIds.add(String(row.id));
-      if (props.local_id) localIds.add(String(props.local_id));
-      changed = true;
+  const links = new Map(), rowIds = new Set([String(parent.id)]), queue = [parent];
+  const add = (ref, row) => { if (!ref) return; if (!links.has(String(ref))) links.set(String(ref), []); links.get(String(ref)).push(row); };
+  for (const row of rows) {
+    const props = row.properties || {};
+    if (props.wrapId) continue; // Independent work does not cascade completion.
+    add(props.subtaskOf || row.parent_id, row);
+  }
+  for (let i=0; i<queue.length; i++) {
+    const row=queue[i], refs=[row.id, row.properties?.local_id].filter(Boolean);
+    for (const ref of refs) for (const child of links.get(String(ref)) || []) {
+      if (rowIds.has(String(child.id))) continue;
+      rowIds.add(String(child.id)); queue.push(child);
     }
   }
   return rowIds;
@@ -1010,8 +1045,20 @@ async function updateBlock(id, fields, client) {
   // earliest cascade slot and re-times everything after it. Re-slot into the target day, same rule
   // as rescheduleBlocks.
     let newSortOrder = sort_order !== undefined ? sort_order : existing.sort_order;
-    const newParentId = parent_id !== undefined ? parent_id : existing.parent_id;
+    let newParentId = parent_id !== undefined ? parent_id : existing.parent_id;
     const newDate = date !== undefined ? date : existing.date;
+    const hierarchyChanged = isTaskRow(existing) &&
+      (edgeOf({properties:newProps}) !== edgeOf(existing) ||
+       (!!newProps.wrapId !== !!existingProps.wrapId) ||
+       (parent_id !== undefined && parent_id !== existing.parent_id));
+    if(hierarchyChanged){
+      // Serialize graph changes within a workspace so two concurrent moves cannot
+      // each validate against the other's old parent and then form a cycle.
+      if(ownsTransaction||client)await q.query("SELECT pg_advisory_xact_lock(hashtext('dcc-task-hierarchy'), hashtext($1))",[String(existing.workspace_id||'')]);
+      const {rows:hierarchyRows}=await q.query("SELECT * FROM blocks WHERE workspace_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL AND type IN ('block','added_task','day_root')",[existing.workspace_id||null]);
+      const plan=planParentChange(existing,newProps,parent_id,hierarchyRows.map(parseBlock).filter(r=>r.type==='day_root'||isTaskRow(r)),normalizeDate(newDate));
+      newProps=plan.properties;newParentId=plan.parentId;
+    }
     if (sort_order === undefined
         && normalizeDate(newDate) !== normalizeDate(existing.date)
         && isTaskRow({ type: existing.type, properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps })) {
@@ -1237,14 +1284,25 @@ async function propagateResponsibilityDone({ id, before, after, at, date, client
   }
 }
 
-async function deleteBlock(id, client) {
+async function deleteBlock(id, client, deleteMutationId) {
   const q = client || pool;
   const now = new Date().toISOString();
-  const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1", [id]);
+  const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1" + (client ? " FOR UPDATE" : ""), [id]);
   const existing = rows[0];
   if (!existing) throw new Error(`Block not found: ${id}`);
+  if (deleteMutationId) {
+    const receipt = await q.query("SELECT 1 FROM operations WHERE block_id = $1 AND op_type = 'delete' AND after_data->>'deleteMutationId' = $2 LIMIT 1", [id, deleteMutationId]);
+    if (receipt.rows.length) return existing.deleted_at ? {id,deleted_at:existing.deleted_at} : parseBlock(existing);
+  }
+  if (deleteMutationId || existing.properties?._deleteUndoToken) {
+    const properties = { ...existing.properties };
+    if (deleteMutationId) properties._deleteUndoToken = deleteMutationId;
+    else delete properties._deleteUndoToken;
+    await q.query("UPDATE blocks SET properties = $1 WHERE id = $2", [properties, id]);
+  }
   await q.query("UPDATE blocks SET deleted_at = $1, updated_at = $2 WHERE id = $3", [now, now, id]);
-  await q.query(`INSERT INTO operations (block_id, op_type, before_data, timestamp) VALUES ($1, 'delete', $2, $3)`, [id, existing.properties, now]);
+  if(deleteMutationId)await q.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'delete', $2, $3, $4)`,[id,existing.properties,{deleteMutationId},now]);
+  else await q.query(`INSERT INTO operations (block_id, op_type, before_data, timestamp) VALUES ($1, 'delete', $2, $3)`, [id, existing.properties, now]);
   return { id, deleted_at: now };
 }
 
@@ -1258,12 +1316,16 @@ async function deleteBlock(id, client) {
 // not a client-side 8-second timer, an undo survives a reload and a device switch —
 // which is exactly what makes immediate deletion SAFER than the timer it replaces.
 // Idempotent: undeleting a live row is a no-op that returns the row.
-async function undeleteBlock(id, client) {
+async function undeleteBlock(id, client, expectedDeleteMutationId) {
   const q = client || pool;
   const now = new Date().toISOString();
-  const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1", [id]);
+  const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1" + (client ? " FOR UPDATE" : ""), [id]);
   const existing = rows[0];
   if (!existing) throw new Error(`Block not found: ${id}`);
+  if (existing.deleted_at && expectedDeleteMutationId && existing.properties?._deleteUndoToken !== expectedDeleteMutationId) {
+    const error = new Error("A newer deletion superseded this restore");
+    error.statusCode = 409; error.code = "RESTORE_SUPERSEDED"; throw error;
+  }
   if (!existing.deleted_at) return parseBlock(existing);
   // Clearing deleted_at moves the row INTO idx_blocks_idem_unique's partial predicate
   // (`... AND deleted_at IS NULL`), so if a live row already holds this key the UPDATE
@@ -1279,8 +1341,8 @@ async function undeleteBlock(id, client) {
   } catch (err) {
     // Same rule as createBlock: inside a caller's transaction the 23505 has already
     // aborted it, so recovery belongs to whoever owns the tx and the raw error must
-    // survive. No caller passes a client today; this keeps the two functions from
-    // diverging the moment one does.
+    // survive. Atomic subtree restore owns that rollback and maps the conflict
+    // after the transaction has rolled back.
     if (client || !isIdempotencyConflict(err)) throw err;
     const conflict = new Error("Another live block already holds this idempotency key");
     conflict.statusCode = 409;
@@ -1493,9 +1555,9 @@ function carryoverSkipTypes() {
 // cleared by any action.
 //
 // `days` bounds the lookback and may be null for the unbounded sweep behind the
-// modal's "Show older". `limit` is a blast-radius guard applied BEFORE the caller's
-// done filter, not the lane's MAX_ROWS -- the caller still caps the filtered pool
-// exactly as it did when it scanned days itself.
+// modal's "Show older". `limit` bounds the server pool before the caller's done
+// filter. The client keeps every returned descendant and reports truncation
+// rather than cutting the hierarchy a second time.
 async function getCarryoverPool(workspaceId, beforeDate, opts = {}) {
   const days = opts.days === null ? null : (opts.days || 14);
   const limit = opts.limit || 500;
@@ -1570,28 +1632,33 @@ async function getCarryoverPool(workspaceId, beforeDate, opts = {}) {
   return { rows: pool_, overlays, dayRoots, scanned: dates.length };
 }
 
-// Every descendant of `rootIds` through parent_id, roots included, live rows only.
+// Every live descendant through the canonical property edge or parent_id fallback.
 // Stops at day_roots in both directions: a day_root is a container, not a task, so
 // walking through one would drag in every unrelated task on that date.
-// depth-capped because a cycle that slipped in after the migration's scrub must not
-// spin this forever.
+// Visited IDs terminate cycles without silently truncating legitimate descendants.
 async function getSubtree(rootIds, workspaceId, client) {
   const ids = (Array.isArray(rootIds) ? rootIds : [rootIds]).filter(Boolean);
   if (ids.length === 0) return [];
   const { rows } = await (client || pool).query(
     `WITH RECURSIVE tree AS (
-       SELECT b.*, 0 AS depth FROM blocks b
+       SELECT b.*, 0 AS depth, ARRAY[b.id]::text[] AS path FROM blocks b
         WHERE b.id = ANY($1::text[])
           AND b.workspace_id IS NOT DISTINCT FROM $2
           AND b.deleted_at IS NULL
           AND b.type <> 'day_root'
        UNION ALL
-       SELECT c.*, t.depth + 1 FROM blocks c
-         JOIN tree t ON c.parent_id = t.id
+       SELECT c.*, t.depth + 1, t.path || c.id FROM blocks c
+         JOIN tree t ON (
+           CASE WHEN COALESCE(c.properties->>'wrapId',c.properties->>'subtaskOf') IS NOT NULL
+             THEN COALESCE(c.properties->>'wrapId',c.properties->>'subtaskOf') = t.id
+               OR (COALESCE(c.properties->>'wrapId',c.properties->>'subtaskOf') = t.properties->>'local_id'
+                   AND c.date IS NOT DISTINCT FROM t.date)
+             ELSE c.parent_id = t.id END
+         )
         WHERE c.workspace_id IS NOT DISTINCT FROM $2
           AND c.deleted_at IS NULL
           AND c.type <> 'day_root'
-          AND t.depth < 32
+          AND NOT c.id = ANY(t.path)
      )
      SELECT DISTINCT ON (id) * FROM tree ORDER BY id, depth ASC`,
     [ids, workspaceId || null]
@@ -1784,28 +1851,56 @@ async function getBlock(id, client) {
 
 async function batchOp(operations, transactionClient) {
   const batchId = crypto.randomUUID();
-  const results = [];
+  const results = [], restoredDayRoots = [];
   const ownsTransaction = !transactionClient;
   const client = transactionClient || await pool.connect();
   try {
     if (ownsTransaction) await client.query("BEGIN");
+    if (operations.some(op => op.op === "undelete" || op.deleteMutationId)) {
+      // A common lock order keeps overlapping subtree mutations serialized.
+      const ids = [...new Set(operations.map(op => op.id).filter(Boolean))].sort();
+      await client.query("SELECT id FROM blocks WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE", [ids]);
+    }
     for (const op of operations) {
       switch (op.op) {
         case "create": results.push(await createBlock(op, client)); break;
         case "update": results.push(await updateBlock(op.id, op, client)); break;
-        case "delete": results.push(await deleteBlock(op.id, client)); break;
+        case "delete": results.push(await deleteBlock(op.id, client, op.deleteMutationId)); break;
+        case "undelete": results.push(await undeleteBlock(op.id, client, op.expectedDeleteMutationId)); break;
         case "reorder": await reorderBlocks(op.items, client); results.push({ reordered: op.items.length }); break;
         default: throw new Error(`Unknown batch operation: ${op.op}`);
+      }
+    }
+    // Restored rows and the dated hide overlay become visible in one commit.
+    const partitions = new Map();
+    operations.forEach((op, i) => {
+      if (op.op !== "undelete") return;
+      const row = results[i]; if (!row.date) return;
+      const key = JSON.stringify([row.workspace_id || null, row.date]);
+      if (!partitions.has(key)) partitions.set(key, { row, ids: new Set() });
+      const ids = partitions.get(key).ids; ids.add(row.id);
+      if (row.properties?.local_id) ids.add(row.properties.local_id);
+    });
+    for (const { row, ids } of partitions.values()) {
+      const { rows } = await client.query("SELECT * FROM blocks WHERE type = 'day_root' AND workspace_id IS NOT DISTINCT FROM $1 AND date = $2::date AND deleted_at IS NULL FOR UPDATE", [row.workspace_id || null, row.date]);
+      for (const root of rows) {
+        const properties = typeof root.properties === "string" ? JSON.parse(root.properties) : root.properties;
+        if (!Array.isArray(properties._deleted) || !properties._deleted.some(id => ids.has(id))) continue;
+        restoredDayRoots.push(await updateBlock(root.id, { properties: { ...properties, _deleted: properties._deleted.filter(id => !ids.has(id)) } }, client));
       }
     }
     if (ownsTransaction) await client.query("COMMIT");
   } catch (err) {
     if (ownsTransaction) await client.query("ROLLBACK");
+    if (operations.some(op => op.op === "undelete") && isIdempotencyConflict(err)) {
+      const error = new Error("Another live block already holds a restored task's idempotency key");
+      error.statusCode = 409; error.code = "RESTORE_CONFLICT"; throw error;
+    }
     throw err;
   } finally {
     if (ownsTransaction) client.release();
   }
-  return { batchId, blocks: results };
+  return { batchId, blocks: results, restoredDayRoots };
 }
 
 // ── Reschedule (atomic subtree move) ──

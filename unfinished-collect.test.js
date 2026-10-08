@@ -486,7 +486,7 @@ test("the carryover progress chip counts done children, nested descendants, and 
   assert.deepEqual(plain(laneProgress("k3", pool)), { done: 1, total: 1 });
   assert.equal(laneProgress("leaf", pool), null, "a childless row gets no chip");
   // a self-referential edge must terminate rather than recurse forever
-  assert.deepEqual(plain(laneProgress("c", [{ id: "c", subtaskOf: "c", __unf: { done: false } }])), { done: 0, total: 1 });
+  assert.equal(laneProgress("c", [{ id: "c", subtaskOf: "c", __unf: { done: false } }]), null, "a cycle must not count the parent as its own child");
 });
 
 // The Catch up MODAL and prompt have to list the same thing. It used to hand
@@ -523,4 +523,13 @@ test("cross-group drops are not accepted as reorders (the position is unrenderab
   // the carryover-onto-timed-row gesture must survive as the meaningful cross case
   assert.ok(/_unfScheduleIntoToday\(movedUnf,targetEv,after\)/.test(slice[0]),
     "a carryover dropped at the work list still schedules into today");
+});
+
+
+test("carryover collection retains a complete 400-level tree beyond the old 100-row slice", async () => {
+  const d=ymd(1),blocks=Array.from({length:400},(_,i)=>blk("deep-"+i,d,i?{subtaskOf:"deep-"+(i-1),duration:0,end:"09:00"}:{}));
+  const {CO}=load({[d]:blocks},[d]);
+  const result=await CO.collect();
+  assert.equal(result.rows.length,400);assert.equal(CO.descendants(result.rows[0],result.rows).length,399);
+  assert.equal(CO.get("deep-399").id,"deep-399");assert.equal(result.truncated,false);
 });
