@@ -138,9 +138,9 @@
       } catch (err) { body.querySelector(".act-error").textContent = err.message; }
     });
   }
-  function create(type, source = null, initialTitle = "") {
+  function create(type, source = null, initialTitle = "", options = {}) {
     const body = document.createElement("div"); body.className = "act-editor";
-    body.innerHTML = '<p class="act-muted">' + (source ? 'Copy the saved plan into a new task. Actuals start empty.' : 'Start a ' + esc(type) + ' task, then enter a plan or log results.') + '</p>' + field("Task title", "title", source?.title || initialTitle, "text", 'maxlength="160"') + field("Task date", "date", selectedDate(), "date") + field("Scheduled duration (minutes)", "duration", 30, "number") + '<p class="act-muted">Creates an all-day task. Use the task’s date/time controls to schedule a time.</p><div class="act-error" role="alert"></div>';
+    body.innerHTML = '<p class="act-muted">' + (source ? 'Copy the saved plan into a new task. Actuals start empty.' : 'Start a ' + esc(type) + ' task, then enter a plan or log results.') + '</p>' + field("Task title", "title", source?.title || initialTitle, "text", 'maxlength="160"') + field("Task date", "date", selectedDate(), "date") + field("Scheduled duration (minutes)", "duration", options.durationMinutes ?? 30, "number") + '<p class="act-muted">Creates an all-day task. Use the task’s date/time controls to schedule a time.</p><div class="act-error" role="alert"></div>';
     let busy = false;
     const overlay = D.modal({ title: source ? "Reuse plan" : "New " + type, body, actions: [{ label: "Cancel" }, { label: "Create task", kind: "primary", keepOpen: true, onClick: async () => {
       if (busy) return false;
@@ -148,6 +148,7 @@
       try {
         const get = key => body.querySelector('[data-path="' + key + '"]').value;
         const row = await D.api("/api/activity/tasks", { method: "POST", body: { title: get("title"), date: get("date"), duration: Number(get("duration")), ...(source ? { sourceId: source.taskId } : { record: M.empty(type) }) } });
+        if (typeof options.onCreated === "function") options.onCreated(row);
         overlay.close("replaced"); edit(row); refresh();
       } catch (e) { body.querySelector(".act-error").textContent = e.message; }
       finally { busy = false; }

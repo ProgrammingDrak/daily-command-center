@@ -226,28 +226,56 @@ function openConvertToRadial(ev,trig){
 // rollup container (shell) loses its rollup, we flag that its bonus no longer
 // applies. The shell bonus idempotency key (<date>:<shellId>) is untouched — the
 // task id never changes.
-function convertTaskType(id,newType){
+async function convertTaskType(id,newType){
   const ev=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null;
-  if(!ev||!newType||ev.type===newType)return;
   const R=window.TaskTypes;
-  if(!R||R.isFixed(newType))return;          // never convert into a fixed/calendar type here
-  const kids=(typeof childrenOf==="function")?childrenOf(id,scheduled):[];
-  const wasRollup=R.isRollup(ev.type);
-  ev.type=newType;
-  ev.isWrap=(R.rule(newType,"dragMovesSubtree"))?true:undefined;
-  if(typeof _persistEvProps==="function")_persistEvProps(ev,{type:ev.type,isWrap:!!ev.isWrap});
-  // A shell's rollup pie is meaningless once it's a plain/earning type; leaving
-  // the child slices in place is harmless (ignored unless rollupMode), but tell
-  // the user the completion bonus is gone.
-  const nowRollup=R.isRollup(newType);
-  if(nowRollup&&window.PointPlan&&typeof window.PointPlan.ensure==="function")window.PointPlan.ensure(id);
-  if(typeof recalcTimes==="function")recalcTimes();
-  if(typeof render==="function")render();
-  if(typeof showToast==="function"){
-    let msg="Converted to "+R.get(newType).label;
-    if(wasRollup&&!nowRollup&&kids.length)msg+=" — "+kids.length+" item"+(kids.length>1?"s":"")+" kept, rollup bonus off";
-    showToast(msg,"success",2400);
+  if(!ev||!newType||ev.type===newType||ev._typeConversionPending)return false;
+  if(!R||!R.TYPES[newType]||R.isFixed(newType)||R.isFixed(ev.type))return false;
+  const store=window.blockStore;
+  const block=store&&((ev._blockId&&store.get(ev._blockId))||store.getByType("block").find(b=>b.id===id||(b.properties||{}).local_id===id));
+  if(!block){
+    if(typeof showToast==="function")showToast("Save this task before changing its type","error");
+    return false;
   }
+  const currentType=(block.properties||{}).type||ev.type;
+  // The server retains private activity types even before the first log. A
+  // generic conversion cannot detach that history or claim it became public.
+  if(R.rule(currentType,"recordType")){
+    ev.type=currentType;ev.publicVisibility="private";
+    if(typeof render==="function")render();
+    if(typeof showToast==="function")showToast("This private "+R.get(currentType).label.toLowerCase()+" keeps its activity type. Create a separate Task to keep the log.","info");
+    return false;
+  }
+  const kids=(typeof childrenOf==="function")?childrenOf(id,scheduled):[];
+  const wasRollup=R.isRollup(currentType);
+  const props=Object.assign({},block.properties,{type:newType,isWrap:!!R.rule(newType,"dragMovesSubtree")});
+  if(R.rule(newType,"recordType"))props.publicVisibility="private";
+  ev._typeConversionPending=true;
+  try{
+    const saved=await store.updateBlock(block.id,props,{_reportSaveStatus:true});
+    if(!saved||!saved.properties)throw new Error("Could not save the task type");
+    const actualType=saved.properties.type||"task";
+    ev.type=actualType;ev.isWrap=saved.properties.isWrap||undefined;
+    ev.publicVisibility=saved.properties.publicVisibility||ev.publicVisibility;
+    if(typeof recalcTimes==="function")recalcTimes();
+    if(typeof render==="function")render();
+    if(saved._savePending){
+      if(typeof showToast==="function")showToast("Type change saved locally; waiting to sync","info");
+      return false;
+    }
+    if(actualType!==newType)throw new Error("Task type was kept as "+R.get(actualType).label);
+    const nowRollup=R.isRollup(actualType);
+    if(nowRollup&&window.PointPlan&&typeof window.PointPlan.ensure==="function")window.PointPlan.ensure(id);
+    if(typeof showToast==="function"){
+      let msg="Converted to "+R.get(actualType).label;
+      if(wasRollup&&!nowRollup&&kids.length)msg+=" — "+kids.length+" item"+(kids.length>1?"s":"")+" kept, rollup bonus off";
+      showToast(msg,"success",2400);
+    }
+    return true;
+  }catch(error){
+    if(typeof showToast==="function")showToast(error.message||"Could not save the task type","error");
+    return false;
+  }finally{delete ev._typeConversionPending;}
 }
 // Carryovers retain origin-aware Move and Solo handlers. Other actions stay on
 // their row; never resolve a past-day task against today's scheduled pool.

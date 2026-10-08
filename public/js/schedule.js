@@ -1540,10 +1540,27 @@ function addWheneverTask(title,durMin){
 // ======== UNIVERSAL TASK ADD BAR ========
 function addTaskUniversal(barEl){
   const inp=barEl.querySelector(".tab-title");
-  const title=inp.value.trim();
-  if(!title){_flashBlankTitle(barEl,()=>addTaskUniversal(barEl));return}
-  const durMin=parseInt(barEl.querySelector(".tab-dur").value)||30;
   const dest=barEl.querySelector(".tab-dest").value;
+  const activityType=dest==="workout"||dest==="meal";
+  const title=inp.value.trim()||(activityType?(dest==="workout"?"Workout":"Meal"):"");
+  if(!title){_flashBlankTitle(barEl,()=>addTaskUniversal(barEl));return false}
+  const durMin=parseInt(barEl.querySelector(".tab-dur").value)||30;
+  // Activity creation is a deferred save. Keep the composer draft until the
+  // owner commits; close it before opening the private dialog to release inert.
+  if(activityType){
+    const activity=window.DCC&&window.DCC.Activity;
+    if(!activity||typeof activity.create!=="function"){
+      if(typeof showToast==="function")showToast("Workout and meal logging is still loading. Try again in a moment.","info");
+      return false;
+    }
+    if(typeof Event==="function"&&typeof barEl.dispatchEvent==="function")barEl.dispatchEvent(new Event("dcc:launcher-handoff"));
+    activity.create(dest,null,title,{durationMinutes:durMin,onCreated:()=>{
+      if(inp.value.trim()===title)inp.value="";
+      const select=barEl.querySelector(".tab-dest");
+      if(select&&select.value===dest)select.value="urgent";
+    }});
+    return false;
+  }
   // "Schedule…" defers the clear to commit time so dismissing the popover
   // doesn't eat the typed title; every other destination commits right here.
   if(dest!=="schedule")inp.value="";
@@ -1578,9 +1595,6 @@ function addTaskUniversal(barEl){
     // ride along. insertTaskNow flags it isWrap from birth (dragMovesSubtree).
     // Habit: recurring earn; the row grows a streak chip from prior completions.
     case"habit":insertTaskNow(title,durMin,{type:"habit"});break;
-    case"workout":case"meal":
-      if(window.DCC&&DCC.Activity)DCC.Activity.create(dest,null,title);
-      break;
     // Manually-added meeting: no source_id, so the calendar materializer never
     // touches it. Fixed-time (reflow-exempt) but user-movable, like a synced one.
     case"meeting":insertTaskNow(title,durMin,{type:"meeting"});break;
@@ -2260,8 +2274,8 @@ function initDestRadial(bar){
       _hideDestPreview();
       closeRadialMenu();
       const title=inp?inp.value.trim():"";
-      if(!title){_flashBlankTitle(bar,submitLauncher);return}
-      addTaskUniversal(bar);
+      if(!title&&!['workout','meal'].includes(sel.value)){_flashBlankTitle(bar,submitLauncher);return}
+      if(addTaskUniversal(bar)===false)return;
       if(typeof Event==="function"&&typeof bar.dispatchEvent==="function"){
         bar.dispatchEvent(new Event("dcc:launcher-submit-success"));
       }

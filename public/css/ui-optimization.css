@@ -1052,3 +1052,8 @@ button.dbadge { font-family: inherit; border: 0; min-height: 44px; }
   #add-modal-overlay .am-detail-tabs button { flex: 1 1 auto; padding-inline: 8px; }
   #add-modal-overlay .add-modal-hdr, #add-modal-overlay .add-modal-footer { padding: 10px; }
 }
+
+/* Activity shortcuts use the same deferred creator as the type dropdown. */
+.dcc-activity-shortcuts { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; align-items:center; }
+.dcc-activity-shortcuts button { min-height:44px; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--text); }
+.dcc-activity-shortcuts span { flex-basis:100%; font-size:12px; color:var(--text-muted); }

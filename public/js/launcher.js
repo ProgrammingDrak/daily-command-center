@@ -74,4 +74,11 @@
     }
   });
   bar.addEventListener("dcc:launcher-submit-success", () => setOpen(false, true));
+  bar.addEventListener("dcc:launcher-handoff", () => setOpen(false, false));
+  launcher.querySelectorAll("[data-launcher-activity]").forEach(control => {
+    control.addEventListener("click", () => {
+      bar.querySelector(".tab-dest").value = control.dataset.launcherActivity;
+      if (typeof addTaskUniversal === "function") addTaskUniversal(bar);
+    });
+  });
 })();

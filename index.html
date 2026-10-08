@@ -563,7 +563,7 @@
   <div class="dcc-compose" id="dcc-compose" role="dialog" aria-modal="true" aria-label="Quick add" aria-hidden="true" tabindex="-1">
     <div class="task-add-bar" id="task-add-launcher">
       <input class="tab-title" type="text" placeholder="+ Add a task..." />
-      <select class="tab-dur">
+      <select class="tab-dur" aria-label="Task duration">
         <option value="15">15m</option>
         <option value="30" selected>30m</option>
         <option value="45">45m</option>
@@ -571,12 +571,17 @@
         <option value="90">1.5h</option>
         <option value="120">2h</option>
       </select>
-      <select class="tab-dest" aria-label="Task type">
+      <select class="tab-dest" aria-label="Task type or destination">
         <option value="urgent" selected>Urgent</option>
         <option value="schedule">Schedule</option>
         <option value="backlog">Task Library (Solo)</option>
       </select>
       <button class="tab-add">+ Add</button>
+    </div>
+    <div class="dcc-activity-shortcuts" aria-label="Private activity logging">
+      <button type="button" data-launcher-activity="workout">Log workout</button>
+      <button type="button" data-launcher-activity="meal">Log meal</button>
+      <span>Private plan &amp; results. Complete the task separately.</span>
     </div>
   </div>
   <button class="dcc-launcher-btn" id="dcc-launcher-btn" type="button" title="Quick add" aria-label="Open quick add">
