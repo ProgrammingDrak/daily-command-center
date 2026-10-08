@@ -35,6 +35,6 @@ public final class AlarmReceiver extends BroadcastReceiver {
       }
     }
     // Boot/time changes only rebuild future scheduling; never start audio from boot.
-    AlarmScheduler.reconcile(c);
+    AlarmScheduler.reconcile(c, !"FIRE".equals(action));
   }
 }

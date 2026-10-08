@@ -3,7 +3,7 @@ package com.drake.dccalarm;
 import java.util.Set;
 import org.json.*;
 
-/** A bounded, explicit snapshot of one workspace-owned event occurrence. */
+/** An explicit last-confirmed snapshot of one workspace-owned event occurrence. */
 public final class EventAlarmRules {
   static final long MAX_AGE = 86400000L;
 
@@ -34,7 +34,7 @@ public final class EventAlarmRules {
         && a.optString("blockId").equals(b.optString("blockId"));
   }
 
-  static boolean usable(JSONObject link, long now) {
+  static boolean fresh(JSONObject link, long now) {
     return "ready".equals(link.optString("state"))
         && now >= link.optLong("checkedAt") - 60000
         && now <= link.optLong("validUntil");
@@ -43,12 +43,11 @@ public final class EventAlarmRules {
   static ClockRules.Occurrence next(JSONObject a, long now, Set<String> consumed)
       throws JSONException {
     JSONObject link = a.getJSONObject("eventLink");
-    if (!usable(link, now)) return null;
+    if (!"ready".equals(link.optString("state"))) return null;
     long at = link.getLong("startAt") - link.getLong("offsetMinutes") * 60000;
     // Event identity survives rescheduling. A consumed occurrence never rings again.
     String key = a.getString("id") + "/event";
-    return at > now && at <= link.getLong("validUntil") && !consumed.contains(key)
-        ? new ClockRules.Occurrence(at, key)
-        : null;
+    // validUntil is retained for old snapshot compatibility: warning threshold only.
+    return at > now && !consumed.contains(key) ? new ClockRules.Occurrence(at, key) : null;
   }
 }

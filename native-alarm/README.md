@@ -73,6 +73,6 @@ Record Android version, phone/OEM, permission/channel/battery/DND settings, time
 
 Official platform references: [alarms](https://developer.android.com/develop/background-work/services/alarms), [exact access](https://developer.android.com/about/versions/14/changes/schedule-exact-alarms), [full-screen access](https://developer.android.com/about/versions/14/behavior-changes-14#secure-fsi), [foreground services](https://developer.android.com/develop/background-work/services/fgs/service-types), [Doze](https://developer.android.com/training/monitoring-device-state/doze-standby), [force-stop](https://developer.android.com/about/versions/15/behavior-changes-all#stopped-state).
 
-## Event-linked candidate 0.4
+## Event-linked candidate 0.5
 
-The full Alarms page and create/edit event links are documented in `../docs/EVENT-LINKED-ALARMS.md`. This remains unsigned and unreleased. Event snapshots are read-only, workspace/block linked, explicitly reviewed, initially disabled and bounded to 24 hours of freshness. Google realtime calendar sync remains disabled; no new provider scopes or event writes are added.
+The full Alarms page and create/edit event links are documented in `../docs/EVENT-LINKED-ALARMS.md`. This remains unsigned and unreleased. Event snapshots are read-only, workspace/block linked, explicitly reviewed, initially disabled and retained at the last confirmed time across lost sync, with a 24-hour stale-warning threshold (never a delivery cutoff). Google realtime calendar sync remains disabled; no new provider scopes or event writes are added.

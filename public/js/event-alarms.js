@@ -6,7 +6,7 @@
   const page = document.getElementById('alarms-page');
   const send = payload => { if (!native?.postMessage) throw Error('Use the DCC Android app to save an event alarm on this phone.'); native.postMessage(JSON.stringify(payload)); };
   const status = text => { const el = document.getElementById('event-alarm-status'); if (el) el.textContent = text; };
-  const get = async url => { let r; try { r = await fetch(url, {cache:'no-store', credentials:'same-origin'}); } catch (_) { throw Error('Event refresh failed (offline). Last saved timing remains until freshness expires.'); } if (!r.ok) { const e = Error('Event refresh failed ('+r.status+'). Last saved timing remains until freshness expires.'); e.status = r.status; throw e; } return r.json(); };
+  const get = async url => { let r; try { r = await fetch(url, {cache:'no-store', credentials:'same-origin'}); } catch (_) { throw Error('Event refresh failed (offline). Enabled alarms keep the last confirmed time; offline changes cannot be known.'); } if (!r.ok) { const e = Error('Event refresh failed ('+r.status+'). Enabled alarms keep the last confirmed time; offline changes cannot be known.'); e.status = r.status; throw e; } return r.json(); };
   function receive(reply) { if(reply.error){status("Phone rejected the alarm request. Open native Alarms to review its state.");return;} if (!Array.isArray(reply.alarms)) return; definitions = reply.alarms; render(); if(!initialRefresh){initialRefresh=true;refresh();} }
   window.addEventListener('dcc:native-alarm-status', e => receive(e.detail));
   if (page && native) native.onmessage = e => { try { receive(JSON.parse(e.data)); } catch (_) { status('Phone state unavailable. Use Device alarms.'); } };
@@ -14,7 +14,7 @@
     const a=definitions.find(a=>a.eventLink?.blockId===blockId);
     if(!a)return 'Saved event '+blockId+' · no linked alarm reported. Open Alarms to check this phone.';
     const l=a.eventLink;
-    return 'Linked event '+blockId+' · '+l.offsetMinutes+' min before · '+(a.enabled?'enabled definition':'disabled')+' · next local delivery '+(a.nextAt?new Date(a.nextAt).toLocaleString():'not scheduled')+' · last DCC refresh '+new Date(l.checkedAt).toLocaleString()+'. Remote/calendar provider changes may lag.';
+    return 'Linked event '+blockId+' · '+l.offsetMinutes+' min before · '+(a.enabled?'enabled definition':'disabled')+' · '+model.deliveryState(a,Date.now())+' · next local delivery '+(a.nextAt?new Date(a.nextAt).toLocaleString():'not scheduled')+' · last DCC refresh '+new Date(l.checkedAt).toLocaleString()+'. Remote/calendar provider changes may lag.';
   }
   function render() {
     document.querySelectorAll('[data-event-alarm-block]').forEach(el=>{el.textContent=description(el.dataset.eventAlarmBlock);});
@@ -24,8 +24,8 @@
       const row = document.createElement('li'), title = document.createElement('strong'), detail = document.createElement('p');
       title.textContent = a.label + ' · ' + (a.enabled ? 'Enabled' : 'Disabled');
       const link = a.eventLink;
-      detail.textContent = link ? 'Event '+link.blockId+' · '+link.offsetMinutes+' min before · '+new Date(link.startAt-link.offsetMinutes*60000).toLocaleString()+' · source zone '+link.sourceZone+' · last DCC refresh '+new Date(link.checkedAt).toLocaleString()+' · '+(model.usable(link, Date.now()) ? 'snapshot current (may change remotely)' : 'stale/unavailable: not armed') : 'Independent alarm · '+a.time+' · '+(a.mode==='once'?a.date:'repeat days '+a.days.join(', '));
-      const next = document.createElement('p'); next.textContent = 'Local phone delivery · Next: '+(a.nextAt ? new Date(a.nextAt).toLocaleString() : 'not scheduled');
+      detail.textContent = link ? 'Event '+link.blockId+' · '+link.offsetMinutes+' min before · '+new Date(link.startAt-link.offsetMinutes*60000).toLocaleString()+' · source zone '+link.sourceZone+' · last DCC refresh '+new Date(link.checkedAt).toLocaleString()+' · '+(link.state!=='ready' ? 'event cancellation/deletion confirmed' : model.fresh(link, Date.now()) ? 'recent DCC snapshot (may change remotely)' : 'STALE: using last confirmed event time; remote changes may be unknown') : 'Independent alarm · '+a.time+' · '+(a.mode==='once'?a.date:'repeat days '+a.days.join(', '));
+      const next = document.createElement('p'); next.textContent = 'Local phone delivery · '+model.deliveryState(a,Date.now())+' · Next: '+(a.nextAt ? new Date(a.nextAt).toLocaleString() : 'not scheduled');
       row.append(title,detail,next);
       if (link) { const edit = document.createElement('a'); edit.href = '/public/alarms.html?event='+encodeURIComponent(link.blockId); edit.textContent = 'Review linked event / timing'; row.append(edit); }
       list.append(row);
@@ -40,23 +40,23 @@
       for (const a of definitions.filter(a=>a.eventLink && a.eventLink.workspaceId === context.workspaceId)) {
         const old = a.eventLink;
         try {
-          const block = await get('/api/blocks/'+encodeURIComponent(old.blockId));
-          const link = model.snapshot(block, context.workspaceId, old.offsetMinutes);
+          const block = await get('/api/blocks/'+encodeURIComponent(old.blockId)+'/alarm-state');
+          if(block.id!==old.blockId || block.workspace_id!==context.workspaceId)throw Error('Event ownership unconfirmed; keep last confirmed alarm.');
+          const canceled=block.deleted_at || ['cancelled','canceled'].includes(block.properties?.status) || block.properties?.cancelled===true;
+          const link=canceled?{...old,state:'unavailable',checkedAt:Date.now(),validUntil:Date.now()+model.MAX_AGE}:model.snapshot(block, context.workspaceId, old.offsetMinutes);
           const scope=await get('/api/alarm-context');
           if (current === generation && scope.workspaceId===context.workspaceId) send({action:'syncEvent', eventLink:link});
         } catch (e) {
-          failed=true; const scope=await get('/api/alarm-context');
-          if (current === generation && scope.workspaceId===context.workspaceId && e.status === 404) send({action:'syncEvent',eventLink:{...old,state:'unavailable',checkedAt:Date.now(),validUntil:Date.now()+model.MAX_AGE}});
-          else status(e.message);
+          failed=true; status(e.message);
         }
       }
-      if (current === generation) {send({action:'status'});if(!failed)status('Refreshed saved DCC event links. Check next local delivery below; provider changes may still lag.');}
+      if (current === generation) {if(!failed)status('Refreshed saved DCC event links. Check next local delivery below; provider changes may still lag.');}
     } catch (e) { status(e.message); }
-    finally { running = false; if(refreshButton)refreshButton.disabled=false; }
+    finally { running = false; if(refreshButton)refreshButton.disabled=false; if(current===generation)send({action:'status'}); }
   }
   async function reviewEvent(blockId, offset = 0, choices = {}) {
     const context = await get('/api/alarm-context');
-    const block = await get('/api/blocks/'+encodeURIComponent(blockId));
+    const block = await get('/api/blocks/'+encodeURIComponent(blockId)+'/alarm-state');
     const link = model.snapshot(block,context.workspaceId,offset);
     if (link.state !== 'ready' || link.startAt-offset*60000 <= Date.now()) throw Error('Choose an available future event occurrence.');
     const scope=await get('/api/alarm-context');
@@ -72,8 +72,8 @@
   };
   window.addEventListener('dcc:native-auth-cancel',()=>{generation++;definitions=[];render();});
   window.addEventListener('online',refresh);
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
-  window.setInterval(refresh,60000);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden){render();refresh();}});
+  window.setInterval(()=>{render();refresh();},60000);
   if (native && page) send({action:'status'});
   if (!page) return;
   document.getElementById('manage-phone-alarms').onclick = () => {try{send({action:'open'});}catch(e){status(e.message);}};

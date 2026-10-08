@@ -149,7 +149,7 @@ public final class MainActivity extends ComponentActivity {
     WebSettings settings = web.getSettings();
     settings.setJavaScriptEnabled(true);
     settings.setDomStorageEnabled(true);
-    settings.setUserAgentString(settings.getUserAgentString() + " DCCAndroid/0.4");
+    settings.setUserAgentString(settings.getUserAgentString() + " DCCAndroid/0.5");
     settings.setAllowFileAccess(false);
     settings.setAllowContentAccess(false);
     settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
@@ -260,6 +260,7 @@ public final class MainActivity extends ComponentActivity {
               JSONObject request = new JSONObject(data);
               String action = request.optString("action");
               if ("status".equals(action)) {
+                AlarmScheduler.reconcile(this);
                 try (AlarmDb db = new AlarmDb(this)) {
                   reply.postMessage(
                       new JSONObject()
@@ -281,7 +282,7 @@ public final class MainActivity extends ComponentActivity {
                 JSONObject a = request.getJSONObject("alarm");
                 AlarmDb.validate(a);
                 if (!a.has("eventLink")
-                    || !EventAlarmRules.usable(
+                    || !EventAlarmRules.fresh(
                         a.getJSONObject("eventLink"), System.currentTimeMillis())
                     || a.getBoolean("enabled"))
                   throw new IllegalArgumentException("Event proposal must be disabled");

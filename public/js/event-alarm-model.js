@@ -41,6 +41,13 @@
     const when = new Date(link.startAt - link.offsetMinutes * 60000);
     return { id: globalThis.crypto.randomUUID(), label: link.title, date: windowOrModel().dayKey(when), time: String(when.getHours()).padStart(2,'0') + ':' + String(when.getMinutes()).padStart(2,'0'), mode:'once', days:[], challenge:'math', difficulty:'easy', count:3, enabled:false, volume:0.15, snoozes:0, tone:'chime', createdAt:now, eventLink:link };
   }
-  function usable(link, now) { return link.state === 'ready' && now >= link.checkedAt - 60000 && now <= link.validUntil && link.validUntil - link.checkedAt === MAX_AGE; }
-  return { snapshot, proposal, usable, zonedStart, MAX_AGE };
+  function fresh(link, now) { return link.state === 'ready' && now >= link.checkedAt - 60000 && now <= link.validUntil && link.validUntil - link.checkedAt === MAX_AGE; }
+  function deliveryState(a, now) {
+    if(!a.enabled)return 'Disabled';
+    if(a.eventLink?.state!=='ready' && a.eventLink)return 'Not armed: event cancellation/deletion confirmed';
+    if(a.nextAt>now)return a.deliveryState||'Phone delivery state not reported';
+    if(a.nextAt>0 && now-a.nextAt<=60000)return 'Delivery pending';
+    return a.nextAt>0?'Not armed: trigger passed; check native Alarms for delivery result':(a.deliveryState||'Not armed: check device readiness');
+  }
+  return { snapshot, proposal, fresh, deliveryState, zonedStart, MAX_AGE };
 });

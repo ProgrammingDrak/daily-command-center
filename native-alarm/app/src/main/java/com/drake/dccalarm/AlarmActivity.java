@@ -123,8 +123,23 @@ public final class AlarmActivity extends Activity {
   private void render(boolean force) {
     try (AlarmDb db = new AlarmDb(this)) {
       JSONObject r = db.active();
+      java.util.List<JSONObject> definitions = db.definitions();
+      String freshness = "";
+      for (JSONObject a : definitions)
+        if (a.has("eventLink"))
+          freshness +=
+              EventAlarmRules.fresh(a.getJSONObject("eventLink"), System.currentTimeMillis()) + "/";
       String signature =
-          r == null ? "home/" + db.status() : r.optString("key") + "/" + r.optInt("index");
+          r == null
+              ? "home/"
+                  + db.status()
+                  + "/"
+                  + definitions
+                  + "/"
+                  + freshness
+                  + "/"
+                  + java.time.ZoneId.systemDefault()
+              : r.optString("key") + "/" + r.optInt("index");
       if (!force && signature.equals(shown)) return;
       shown = signature;
       ScrollView scroll = new ScrollView(this);
@@ -167,6 +182,8 @@ public final class AlarmActivity extends Activity {
                 + (a.has("eventLink") ? "event timing" : a.getString("time"))
                 + " · "
                 + (a.getBoolean("enabled") ? "enabled" : "disabled")
+                + "\nDelivery: "
+                + db.deliveryState(a, System.currentTimeMillis())
                 + "\nNext: "
                 + (a.optLong("nextAt") > 0
                     ? java.time.Instant.ofEpochMilli(a.optLong("nextAt"))
@@ -192,10 +209,13 @@ public final class AlarmActivity extends Activity {
                   + "\nLast refresh: "
                   + java.time.Instant.ofEpochMilli(link.getLong("checkedAt"))
                   + " · "
-                  + (EventAlarmRules.usable(link, System.currentTimeMillis())
-                      ? "saved snapshot; remote/offline changes may not be known"
-                      : "stale/unavailable: not armed")
-                  + ". Refresh in DCC online; snapshots expire after 24 hours.",
+                  + (!"ready".equals(link.optString("state"))
+                      ? "event cancellation/deletion confirmed"
+                      : EventAlarmRules.fresh(link, System.currentTimeMillis())
+                          ? "saved snapshot; remote/offline changes may not be known"
+                          : "stale or clock changed: using last confirmed event time")
+                  + ". Refresh in DCC online. Lost sync does not disable this alarm; offline"
+                  + " changes cannot be known.",
               16);
         }
         button("Edit " + a.getString("label"), () -> editAlarm(a));

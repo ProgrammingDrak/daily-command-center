@@ -43,6 +43,7 @@ public final class AlarmDb extends SQLiteOpenHelper {
         try {
           a.put("nextAt", c.getLong(1));
           a.put("occ", c.getString(2));
+          a.put("deliveryState", deliveryState(a, System.currentTimeMillis()));
         } catch (JSONException e) {
           throw new IllegalStateException(e);
         }
@@ -50,6 +51,20 @@ public final class AlarmDb extends SQLiteOpenHelper {
       }
     }
     return out;
+  }
+
+  public String deliveryState(JSONObject a, long now) throws JSONException {
+    if (!a.getBoolean("enabled")) return "Disabled";
+    JSONObject link = a.optJSONObject("eventLink");
+    if (link != null && !"ready".equals(link.optString("state")))
+      return "Not armed: event cancellation/deletion confirmed";
+    if (a.optLong("nextAt") > now) return "Armed on this phone";
+    if (a.optLong("nextAt") > 0
+        && ClockRules.onTime(a.optLong("nextAt"), now)
+        && !consumed().contains(a.optString("occ"))) return "Delivery pending";
+    if (link != null && consumed().contains(a.getString("id") + "/event"))
+      return "Not armed: occurrence already handled or missed";
+    return "Not armed: check device readiness or choose a future occurrence";
   }
 
   public Set<String> consumed() {
@@ -226,7 +241,7 @@ public final class AlarmDb extends SQLiteOpenHelper {
           || !a.getBoolean("enabled")
           || !key.equals(a.optString("occ"))
           || consumed().contains(key)) return false;
-      if (a.has("eventLink") && !EventAlarmRules.usable(a.getJSONObject("eventLink"), now))
+      if (a.has("eventLink") && !"ready".equals(a.getJSONObject("eventLink").optString("state")))
         return false;
       if (now < a.getLong("nextAt")) return false;
       if (!ClockRules.onTime(a.getLong("nextAt"), now)) {

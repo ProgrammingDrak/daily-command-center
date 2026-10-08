@@ -60,6 +60,10 @@ public final class AlarmScheduler {
   }
 
   public static synchronized void reconcile(Context c) {
+    reconcile(c, false);
+  }
+
+  public static synchronized void reconcile(Context c, boolean recovery) {
     channel(c);
     try (AlarmDb db = new AlarmDb(c)) {
       String unavailable = unavailable(c);
@@ -68,9 +72,31 @@ public final class AlarmScheduler {
       int total = 0;
       for (JSONObject a : db.definitions()) {
         String id = a.getString("id");
-        cancel(c, id);
         long old = a.optLong("nextAt");
-        if (old > 0 && old <= now) {
+        // A normal foreground refresh must not cancel a legitimately in-flight event delivery.
+        // Recovery after boot/time changes never starts overdue audio or replays a backlog.
+        if (!recovery
+            && old > 0
+            && ClockRules.onTime(old, now)
+            && a.getBoolean("enabled")
+            && unavailable.isEmpty()
+            && !consumed.contains(a.optString("occ"))
+            && a.has("eventLink")
+            && "ready".equals(a.getJSONObject("eventLink").optString("state"))
+            && old
+                == a.getJSONObject("eventLink").getLong("startAt")
+                    - a.getJSONObject("eventLink").getLong("offsetMinutes") * 60000) {
+          total++;
+          continue;
+        }
+        cancel(c, id);
+        boolean confirmedFutureReschedule =
+            a.has("eventLink")
+                && "ready".equals(a.getJSONObject("eventLink").optString("state"))
+                && a.getJSONObject("eventLink").getLong("startAt")
+                        - a.getJSONObject("eventLink").getLong("offsetMinutes") * 60000
+                    > now;
+        if (old > 0 && old <= now && !confirmedFutureReschedule) {
           db.mark(a.optString("occ"), "missed during recovery");
           consumed.add(a.optString("occ"));
         }

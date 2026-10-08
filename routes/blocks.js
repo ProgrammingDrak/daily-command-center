@@ -1630,6 +1630,13 @@ module.exports = function mount(app, ctx) {
   // not in db.getBlock — the mutation routes above still need to see the dead row.
   // 404 rather than 410 so a deleted id is indistinguishable from an absent one, which
   // is also what the ownership failure below returns.
+  app.get("/api/blocks/:id/alarm-state", route(async (req, res) => {
+    const result = await require("../lib/event-alarm-state")(blockDB, assertBlockOwnership, req.params.id, req.workspaceId);
+    res.setHeader("Cache-Control", "no-store");
+    if (!result) { res.status(404).json({ error: "Event state unavailable; keep last confirmed alarm" }); return; }
+    return result;
+  }));
+
   app.get("/api/blocks/:id", route(async (req, res) => {
     const block = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!block || block.deleted_at) { res.status(404).json({ error: "Block not found" }); return; }

@@ -9,13 +9,14 @@ const context=await browser.newContext({viewport:{width:390,height:844},timezone
 await context.addInitScript(()=>{const RealDate=Date;window.Date=class extends RealDate{constructor(...args){super(...(args.length?args:[RealDate.parse('2026-10-08T12:00:00Z')]));}static now(){return RealDate.parse('2026-10-08T12:00:00Z');}};window.DCC_APP_TIME_ZONE='America/New_York';window.__messages=[];window.__audio=0;window.AudioContext=class{constructor(){window.__audio++;throw Error('No real audio');}};window.DCCNativeAlarms={postMessage(raw){const m=JSON.parse(raw);window.__messages.push(m);if(m.action==='status')setTimeout(()=>this.onmessage?.({data:JSON.stringify({version:1,deviceLocal:true,status:'Synthetic phone',alarms:window.__defs||[]})}),0);}};});
 const now=Date.parse('2026-10-08T12:00:00Z'),start=new Date(now+3600000).toISOString();let event={id:'stable-event',workspace_id:'ws-review',date:'2026-10-08',updated_at:'v1',properties:{title:'Synthetic meeting',start}};let mode='ready';
 await context.route('**/api/alarm-context',r=>r.fulfill({json:{workspaceId:'ws-review'}}));
-await context.route('**/api/blocks/stable-event',r=>mode==='offline'?r.abort():mode==='deleted'?r.fulfill({status:404,json:{error:'missing'}}):r.fulfill({json:event}));
+await context.route('**/api/blocks/stable-event/alarm-state',r=>mode==='offline'?r.abort():mode==='unknown'?r.fulfill({status:404,json:{error:'unknown'}}):mode==='deleted'?r.fulfill({json:{...event,deleted_at:'2026-10-08T12:00:00Z'}}):r.fulfill({json:event}));
+await context.route('**/api/blocks/stable-event',r=>r.fulfill({json:event}));
 await context.route('**/public/js/app-config.js',r=>r.fulfill({contentType:'text/javascript',body:'window.DCC_APP_TIME_ZONE="America/New_York";'}));
 const page=await context.newPage();
 try{
  await page.goto('http://127.0.0.1:8199/public/alarms.html?event=stable-event');
  await page.getByText('Linked event: Synthetic meeting · stable ID stable-event',{exact:true}).waitFor();
- check('full page exposes saved event identity and freshness limits',await page.getByRole('heading',{name:'Alarms',exact:true}).isVisible() && await page.getByText(/Links expire after 24 hours/).isVisible());
+ check('full page exposes saved event identity and freshness limits',await page.getByRole('heading',{name:'Alarms',exact:true}).isVisible() && await page.getByText(/After 24 hours, a stale warning appears/).isVisible());
  await page.locator('[name=offset]').fill('15');await page.locator('[name=challenge]').selectOption('quiz');await page.locator('[name=difficulty]').selectOption('hard');await page.locator('[name=count]').fill('5');await page.getByRole('button',{name:'Review disabled alarm on phone'}).click();
  await page.getByText(/Review on the native Alarms page/).waitFor();
  const proposal=await page.evaluate(()=>window.__messages.find(m=>m.action==='reviewEvent').alarm);
@@ -28,6 +29,7 @@ try{
  check('online reschedule refreshes exact instant and stable link',await page.evaluate(t=>window.__messages.some(m=>m.action==='syncEvent'&&m.eventLink.startAt===t&&m.eventLink.blockId==='stable-event'),Date.parse(event.properties.start)));
  mode='offline';const count=await page.evaluate(()=>window.__messages.filter(m=>m.action==='syncEvent').length);await page.getByRole('button',{name:'Refresh linked events'}).click();await page.getByText(/Event refresh failed/).waitFor();
  check('offline failure keeps snapshot without false cancellation',await page.evaluate(()=>window.__messages.filter(m=>m.action==='syncEvent').length)===count);
+ mode='unknown';await page.getByRole('button',{name:'Refresh linked events'}).click();await page.getByText(/Event refresh failed \(404\)/).waitFor();check('unknown or inaccessible event cannot silently disable last confirmed alarm',await page.evaluate(()=>window.__messages.filter(m=>m.action==='syncEvent').length)===count);
  mode='deleted';await page.getByRole('button',{name:'Refresh linked events'}).click();await page.waitForFunction(()=>window.__messages.some(m=>m.action==='syncEvent'&&m.eventLink.state==='unavailable'));
  check('acknowledged missing event pauses linked definition',true);
  mode='ready';await page.getByRole('button',{name:'Refresh linked events'}).click();await page.waitForFunction(()=>window.__messages.at(-2)?.eventLink?.state==='ready');
@@ -37,9 +39,12 @@ try{
  check('status is screen-reader announced; page fits phone; no real sound',await page.locator('#event-alarm-status').getAttribute('role')==='status' && await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth && window.__audio===0));
  await page.screenshot({path:out+'/mobile-alarms-event.png',fullPage:true});await page.setViewportSize({width:1440,height:1000});await page.screenshot({path:out+'/desktop-alarms-event.png',fullPage:true});
  const fallback=await browser.newContext();const plain=await fallback.newPage();await plain.goto('http://127.0.0.1:8199/public/alarms.html');await plain.getByRole('button',{name:'Open native Alarms / edit or enable'}).click();await plain.getByText(/Use the DCC Android app to save/).waitFor();check('ordinary browser cannot imply native alarm saved or armed',true);await fallback.close();
+ await page.evaluate(a=>{const checked=Date.now()-3*86400000;window.__defs=[{...a,enabled:true,nextAt:Date.now()+3600000,deliveryState:'Armed on this phone',eventLink:{...a.eventLink,checkedAt:checked,validUntil:checked+86400000}}];window.DCCNativeAlarms.postMessage(JSON.stringify({action:'status'}));},proposal);
+ await page.getByText(/STALE: using last confirmed event time/).waitFor();check('stale warning leaves enabled alarm visibly armed on phone',await page.getByText(/Armed on this phone/).isVisible());
+ await page.screenshot({path:out+'/mobile-stale-armed.png',fullPage:true});
  const dashboard=await context.newPage();let created=null;
  await dashboard.route('**/api/blocks',async route=>{if(route.request().method()!=='POST')return route.continue();const payload=route.request().postDataJSON();created={...payload,id:payload.id||'created-event',workspace_id:'ws-review',updated_at:'v1'};await route.fulfill({json:created});});
- await dashboard.route('**/api/blocks/*',route=>created&&route.request().url().endsWith('/'+created.id)?route.fulfill({json:created}):route.continue());
+ await dashboard.route('**/api/blocks/**',route=>created&&route.request().url().includes('/'+created.id)?route.fulfill({json:created}):route.continue());
  await dashboard.goto('http://127.0.0.1:8199');await dashboard.waitForFunction(()=>typeof openSchedulePicker==='function');
  await dashboard.evaluate(()=>openPlacementPicker({title:'Existing event',onPlace(){}}));
  check('move-only picker cannot falsely offer event-alarm creation',await dashboard.locator('#sched-create-alarm').isDisabled() && !(await dashboard.locator('#sched-create-alarm').isChecked()));
