@@ -8,6 +8,7 @@
   // here between openResponsibilityModal and formProps/saveResponsibility.
   let _pendingTemplateTree = null;
   let _pendingActivitySourceId = null;
+  let _sharingExplicit = false;
   let _seriesEditContext = null;
   let _sidebarQuery = "";
   let _sidebarFilter = "active";
@@ -986,6 +987,7 @@
     document.getElementById("resp-id").value=id||"";
     document.getElementById("resp-title").value=p.title||"";
     document.getElementById("resp-domain").value=p.domain||"professional";
+    _sharingExplicit=!!(id||p.publicVisibility||p.activityTaskType||_pendingActivitySourceId);
     const visibility=document.getElementById("resp-public-visibility");
     if(visibility){visibility.value=p.activityTaskType||_pendingActivitySourceId?"private":p.publicVisibility||(id?"public":["personal","health"].includes(p.domain)?"private":"public");visibility.disabled=!!(p.activityTaskType||_pendingActivitySourceId);}
     document.getElementById("resp-area").value=p.area||"general";
@@ -1319,6 +1321,9 @@
     const manageOverlay=document.getElementById("responsibility-manage-overlay");
     if(manageOverlay)manageOverlay.addEventListener("click",e=>{if(e.target===manageOverlay)closeResponsibilityManager();});
     document.addEventListener("keydown",trapResponsibilityManagerFocus);
+    const domainEl=document.getElementById("resp-domain"),visibilityEl=document.getElementById("resp-public-visibility");
+    if(domainEl)domainEl.addEventListener("change",()=>{if(visibilityEl&&!visibilityEl.disabled&&!_sharingExplicit)visibilityEl.value=["personal","health"].includes(domainEl.value)?"private":"public";});
+    if(visibilityEl)visibilityEl.addEventListener("change",()=>{_sharingExplicit=true;});
     const cadencePresetEl=document.getElementById("resp-cadence-preset");
     if(cadencePresetEl)cadencePresetEl.addEventListener("change",syncCadencePreset);
     const repeatTypeEl=document.getElementById("resp-repeat-type");

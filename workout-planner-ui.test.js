@@ -75,7 +75,7 @@ function record() {
 }
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
 async function harness(initialRecord = record()) {
-  const state = { row: { taskId: 'task-1', title: 'Synthetic workout', date: '2026-10-13', revision: 1, archived: false, removed: false, canUndo: false, record: clone(initialRecord) }, failNext: null, uncertainNext: false, putGate: null };
+  const state = { row: { taskId: 'task-1', title: 'Synthetic workout', date: '2026-10-13', revision: 1, archived: false, removed: false, canUndo: false, record: clone(initialRecord) }, templates: [], failNext: null, uncertainNext: false, putGate: null };
   const requests = [], mutations = new Map(), modals = [];
   const D = {
     esc: value => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'),
@@ -86,7 +86,8 @@ async function harness(initialRecord = record()) {
       requests.push({ url, method, body });
       if (url === '/api/activity/tasks/task-1' && method === 'GET') return clone(state.row);
       if (url === '/api/activity/exercises') return { exercises: clone(W.CATALOG) };
-      if (url === '/api/activity/templates') return { templates: [] };
+      if (url === '/api/activity/tasks/task-2' && method==='GET') return {...clone(state.row),taskId:'task-2'};
+      if (url === '/api/activity/templates') {if(method==='POST'){const template={...body,id:'new-template'};state.templates.push(template);return {template};}return {templates:clone(state.templates)};}
       if (url.startsWith('/api/activity?')) return { records: [] };
       if (url === '/api/activity/tasks/task-1' && method === 'PUT') {
         if (state.putGate) await state.putGate.promise;
@@ -121,6 +122,7 @@ async function harness(initialRecord = record()) {
   return {
     state, requests, modals, host, controller,
     getController: () => D.Workout.controller('task-1'),
+    controllerApi: id => D.Workout.controller(id),
     puts: () => requests.filter(r => r.method === 'PUT'),
     actualRepsPath: index => host.nodes.filter(n => n.dataset.wPath?.startsWith('drafts.') && n.dataset.wPath.endsWith('.reps'))[index].dataset.wPath,
     async click(action, extra = {}) {
@@ -300,4 +302,11 @@ test('extra set in an earlier group does not borrow an unrelated active group ro
   const actual = h.state.row.record.actual.sets[0];
   assert.equal(actual.exerciseId, 'bench-entry'); assert.equal(actual.round, 1);
   assert.equal(actual.planSetId, null); assert.equal(actual.reps, 8);
+});
+
+test('new template is selectable in every existing workout controller without reload', async () => {
+ const h=await harness(),second=await h.controllerApi('task-2');
+ assert.equal(second.library.length,0);await h.click('template-save');
+ assert.equal(h.controller.library.length,1);assert.equal(second.library.length,1);
+ assert.equal((await h.controllerApi('task-2')).library[0].id,'new-template');
 });

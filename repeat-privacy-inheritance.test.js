@@ -264,6 +264,7 @@ async function browserFixture(items = []) {
       classList: { add() {}, remove() {} }, focus() {}, querySelectorAll() { return []; },
       addEventListener(type, callback) { handlers.set(type, callback); },
       async click() { return handlers.get("click")?.({ target: this }); },
+      async change(value) { this.value=value;return handlers.get("change")?.({target:this}); },
     };
   }
   for (const match of html.matchAll(/id="((?:resp-|repeat-occurrence-|responsibility-modal-overlay)[^"]*)"/g)) {
@@ -346,4 +347,17 @@ test("workout source sharing is private and cannot be changed to public in the r
   assert.ok(save, b.notices.join("\n"));
   assert.equal(save.body.properties.publicVisibility, "private");
   assert.equal(save.body.properties.activityPlanSourceId, "workout-server-id");
+});
+
+for (const domain of ["personal","health"]) test(`new repeat domain ${domain} defaults private until sharing is explicitly selected`, async () => {
+  const b=await browserFixture();b.window.openResponsibilityModalWithMenus([]);
+  b.elements.get("resp-title").value="Private repeat";
+  await b.elements.get("resp-domain").change(domain);
+  assert.equal(b.elements.get("resp-public-visibility").value,"private");
+  await b.elements.get("resp-save").click();
+  assert.equal(b.requests.find(r=>r.method==="POST").body.properties.publicVisibility,"private");
+  b.window.openResponsibilityModalWithMenus([]);
+  await b.elements.get("resp-public-visibility").change("public");
+  await b.elements.get("resp-domain").change(domain);
+  assert.equal(b.elements.get("resp-public-visibility").value,"public");
 });

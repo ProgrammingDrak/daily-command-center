@@ -12,7 +12,8 @@
   function name(x,max=160){if(typeof x!=='string'||!x.trim()||x.length>max)fail('A name is required');return x.trim();}
   function opt(x,choices){if(!choices.includes(x))fail('Invalid workout convention');return x;}
   function num(x,max=100000,integer=false){if(x==null||x==='')return null;if(typeof x!=='number'||!Number.isFinite(x)||x<0||x>max||(integer&&!Number.isInteger(x)))fail('Invalid workout measurement');return x;}
-  function rows(x,fn){if(!Array.isArray(x)||x.length>200)fail('Workout lists allow at most 200 rows');const a=x.map(fn);if(new Set(a.map(v=>v.id)).size!==a.length)fail('Duplicate workout row IDs');return a;}
+  const MAX_EVENTS=1000;
+  function rows(x,fn,max=200){if(!Array.isArray(x)||x.length>max)fail('Workout lists allow at most '+max+' rows');const a=x.map(fn);if(new Set(a.map(v=>v.id)).size!==a.length)fail('Duplicate workout row IDs');return a;}
   function round(x){const n=num(x,200,true);if(!n)fail("Round must be positive");return n;}
   function timestamp(x){if(x==null)return null;if(typeof x!=='string'||!/^\d{4}-\d\d-\d\dT/.test(x)||!Number.isFinite(Date.parse(x)))fail('Invalid workout timestamp');return new Date(x).toISOString();}
   function measurement(x){return {reps:num(x.reps,100000,true),weight:num(x.weight),unit:opt(x.unit||'lb',['lb','kg']),seconds:num(x.seconds,31536000),loadMode:opt(x.loadMode||'total',['total','per-dumbbell','bodyweight','added','assistance']),repsMode:opt(x.repsMode||'total',['total','per-side'])};}
@@ -41,14 +42,16 @@
       return {id:ident(s.id),exerciseId:e.id,planSetId:s.planSetId==null?null:ident(s.planSetId),round:round(s.round),status,loggedAt:timestamp(s.loggedAt),...m};
     });
     out.actual.runs=rows(v.actual.runs||[],r=>{if(r.planRunId!=null&&!out.plan.runs.some(p=>p.id===r.planRunId))fail('Missing planned run');return {id:ident(r.id),planRunId:r.planRunId==null?null:ident(r.planRunId),name:name(r.name),distance:num(r.distance,1000000),unit:opt(r.unit,['mi','km','m']),seconds:num(r.seconds,31536000)};});
-    out.session.events=rows(v.session?.events||[],e=>({id:ident(e.id),type:opt(e.type,['start','start-round','finish-round','pause','resume','stop','skip']),at:timestamp(e.at)||fail('Timestamp required'),groupId:e.groupId==null?null:ident(e.groupId),round:e.round==null?null:num(e.round,200,true),outcome:e.outcome==null?null:opt(e.outcome,['completed','partial']),clockUncertain:!!e.clockUncertain}));
+    out.session.events=rows(v.session?.events||[],e=>({id:ident(e.id),type:opt(e.type,['start','start-round','finish-round','pause','resume','stop','skip']),at:timestamp(e.at)||fail('Timestamp required'),groupId:e.groupId==null?null:ident(e.groupId),round:e.round==null?null:num(e.round,200,true),outcome:e.outcome==null?null:opt(e.outcome,['completed','partial']),clockUncertain:!!e.clockUncertain}),MAX_EVENTS);
     for(const e of out.session.events){if(e.groupId!=null&&!out.plan.groups.some(g=>g.id===e.groupId&&e.round>=1&&e.round<=g.rounds))fail('Timing references a missing round');}
-    replay(out);
+    const state=replay(out);
+    const active=["running","paused"].includes(state.status);
+    if(active&&out.session.events.length>=MAX_EVENTS)fail("Timing history is full. Stop the workout before another timing action.");
     out.baseline=v.baseline==null?null:normalizePlan(v.baseline);
     if(out.session.events.length&&!out.baseline)fail('Started workouts require a plan baseline');
     if(v.provenance!=null){const p=v.provenance;out.provenance={templateId:ident(p.templateId),templateRevision:num(p.templateRevision,1000000,true),templateName:name(p.templateName),collection:p.collection==null?'':String(p.collection).slice(0,160),variant:p.variant==null?'':String(p.variant).slice(0,160)};}
     if(v.occurredOn!=null&&(!/^\d{4}-\d\d-\d\d$/.test(v.occurredOn)||!Number.isFinite(Date.parse(v.occurredOn+'T12:00:00Z'))||new Date(v.occurredOn+'T12:00:00Z').toISOString().slice(0,10)!==v.occurredOn))fail('Invalid results date');out.occurredOn=v.occurredOn||null;
-    if(hasActual(out)&&!out.occurredOn)fail('Results date required');if(JSON.stringify(out).length>200000)fail('Workout record too large');return out;
+    if(hasActual(out)&&!out.occurredOn)fail('Results date required');const size=JSON.stringify(out).length;if(size>200000)fail('Workout record too large');if(active&&size>199500)fail('Timing history is full. Stop the workout before another edit.');return out;
   }
   function hasActual(v){return v.actual.sets.some(s=>s.status==='logged'&&meaningful(s))||v.actual.runs.some(r=>r.distance!=null||r.seconds!=null);}
   function upgrade(v){
@@ -77,5 +80,5 @@
   function action(v,event){const out=clone(v),old=out.session.events.find(e=>e.id===event.id);if(old){const canonical={id:ident(event.id),type:event.type,at:timestamp(event.at),groupId:event.groupId??null,round:event.round??null,outcome:event.outcome??null,clockUncertain:!!event.clockUncertain};if(JSON.stringify(old)!==JSON.stringify(canonical))fail('Timing action ID was reused');return out;}if(!out.baseline)out.baseline=clone(out.plan);out.session.events.push(event);return validate(out);}
   function planOnly(v){const out=empty();out.plan=clone(validate(v).plan);out.provenance=v.provenance?clone(v.provenance):null;return out;}
   function previous(records,entry,excludeId){if(!entry.catalogExerciseId)return [];for(const row of records.filter(r=>r.taskId!==excludeId&&!r.archived).sort((a,b)=>(b.record.occurredOn||'').localeCompare(a.record.occurredOn||''))){const v=row.record;if(v.schemaVersion!==2)continue;const ids=v.plan.exercises.filter(e=>e.catalogExerciseId===entry.catalogExerciseId).map(e=>e.id);const sets=v.actual.sets.filter(s=>ids.includes(s.exerciseId)&&s.status==='logged'&&meaningful(s)&&s.loadMode===(entry.sets[0]?.loadMode||'total')&&s.repsMode===(entry.sets[0]?.repsMode||'total'));if(sets.length)return sets.map(s=>({...s,occurredOn:v.occurredOn}));}return [];}
-  return {CATALOG,empty,validate,upgrade,normalizePlan,measurement,meaningful,hasActual,replay,action,planOnly,previous};
+  return {CATALOG,MAX_EVENTS,empty,validate,upgrade,normalizePlan,measurement,meaningful,hasActual,replay,action,planOnly,previous};
 });

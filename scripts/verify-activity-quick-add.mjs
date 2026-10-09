@@ -33,12 +33,12 @@ try{
   assert.equal(await launcher.locator('.tab-dur').inputValue(),'90');assert.equal(await launcher.locator('.tab-dest').inputValue(),'workout');
   await launcher.locator('.tab-add').click();await page.locator('.act-editor [data-path="duration"]').waitFor();
   await page.getByRole('button',{name:'Create task',exact:true}).click();
-  await page.getByRole('button',{name:'Save record',exact:true}).waitFor();
+  await page.locator('.wp-dialog .wp-status').waitFor();
   const records=await (await fetch(base+'/api/activity?from='+info.date+'&to='+info.date)).json();
   const row=records.records.find(r=>r.title==='DEMO · Quick run '+width);assert.ok(row);assert.equal(row.completed,false);
   const saved=await (await fetch(base+'/api/blocks/'+row.taskId)).json();
   assert.equal(saved.properties.duration,90);assert.equal(saved.properties.type,'workout');assert.equal(saved.properties.publicVisibility,'private');
-  await page.getByRole('button',{name:'Cancel',exact:true}).click();await page.locator('.dcc-modal').waitFor({state:'detached'});
+  await page.getByRole('button',{name:'Close',exact:true}).click();await page.locator('.dcc-modal').waitFor({state:'detached'});
   const result=await page.evaluate(async({taskId})=>{
    await window.blockStore.handleBlocksChanged({blockIds:[taskId]});
    const block=window.blockStore.get(taskId);

@@ -226,3 +226,14 @@ test('v1 entry-scoped target IDs and maximum 200 sets upgrade without identity l
   const detached=A.planOnly(upgraded);assert.equal(detached.plan.exercises[0].sets.length,200);assert.deepEqual(detached.actual.sets,[]);
   assert.doesNotThrow(()=>W.validate(detached));
 });
+
+test('all 200 planned rounds can finish and stop without exhausting timing rows',()=>{
+ let v=workout();v.plan.exercises=[v.plan.exercises[0]];v.plan.groups=[{id:'long-group',kind:'single',rounds:200,exerciseIds:['entry-bench-a']}];v=start(v);
+ for(let round=1;round<=200;round++){v=W.action(v,event('begin-'+round,'start-round',round*2,{groupId:'long-group',round}));v=W.action(v,event('finish-'+round,'finish-round',round*2+1,{groupId:'long-group',round}));}
+ v=W.action(v,event('terminal','stop',500,{outcome:'completed'}));assert.equal(W.replay(v).status,'completed');assert.equal(W.replay(v).rounds.length,200);
+});
+test('timer capacity reserves the final slot for Stop and keeps rejected actions unchanged',()=>{
+ let v=start();for(let i=1;i<W.MAX_EVENTS-1;i++)v.session.events.push(event('cycle-'+i,i%2?'pause':'resume',i));v=W.validate(v);const before=copy(v);
+ assert.throws(()=>W.action(v,event('overflow','pause',1001)),/Stop the workout/);assert.deepEqual(v,before);
+ v=W.action(v,event('terminal','stop',1002,{outcome:'partial'}));assert.equal(v.session.events.length,W.MAX_EVENTS);assert.equal(W.replay(v).status,'partial');assert.doesNotThrow(()=>W.validate(v));
+});
