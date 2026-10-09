@@ -401,11 +401,12 @@ function addSubtask(taskId, text, options){
   // fields reach subtasks automatically. The only subtask-specific bits: the
   // subtaskOf edge and start===end / duration:0 (timeless until promoted). Every
   // other field is editable through the same details modal + radial as any task.
-  const overrides={title:text,source:"manual",priority:"Medium"};
+  const inheritedVisibility=options.publicVisibility||((parent&&parent.publicVisibility)==="private"?"private":"public");
+  const overrides={title:text,source:"manual",priority:"Medium",publicVisibility:inheritedVisibility};
   const common=(window.DCC&&window.DCC.taskCommonProps)?window.DCC.taskCommonProps({},overrides)
     :{title:text,source:"manual",priority:"Medium",meta:"",detail:"",tags:[]};
   const task=Object.assign({id:id,type:"task",subtaskOf:taskId,start:startStr,end:startStr,
-    publicVisibility:"public",added_at:new Date().toISOString()},common);
+    publicVisibility:inheritedVisibility,added_at:new Date().toISOString()},common);
   // Only today's plan gets the in-memory row. A subtask of a CARRYOVER belongs to the
   // origin day, so pushing it into scheduled[] would render it as a standalone task on
   // today (its parent is not in this array, so the nesting walk cannot find it) while the
@@ -418,7 +419,7 @@ function addSubtask(taskId, text, options){
       ? window.DCC.taskBlockProps({},Object.assign({},overrides,{local_id:id,duration:0,start:startStr,end:startStr}))
       : {local_id:id,title:text,source:"manual",start:startStr,end:startStr,duration:0,priority:"Medium",tags:[]};
     if(anchor&&anchor.whenever)Object.assign(blockProps,{kind:'backlog',stage:'Whenever',durMin:0,start:null,end:null,publicVisibility:parent.publicVisibility||'private'});
-    blockProps.type="task";blockProps.subtaskOf=anchor&&anchor.whenever&&anchor.blockId?((window.blockStore.get&&window.blockStore.get(anchor.blockId)?.properties?.local_id)||anchor.blockId):taskId;blockProps.publicVisibility=anchor&&anchor.whenever?(parent.publicVisibility||"private"):"public";blockProps.added_at=new Date().toISOString();
+    blockProps.type="task";blockProps.subtaskOf=anchor&&anchor.whenever&&anchor.blockId?((window.blockStore.get&&window.blockStore.get(anchor.blockId)?.properties?.local_id)||anchor.blockId):taskId;blockProps.publicVisibility=anchor&&anchor.whenever?(parent.publicVisibility||"private"):inheritedVisibility;blockProps.added_at=new Date().toISOString();
     created=window.blockStore.createBlock("block",blockProps,{date:date,...(anchor&&anchor.whenever?{parentId:anchor.blockId||null}:{})});
   }
   if(anchor&&anchor.whenever){
@@ -501,14 +502,15 @@ function addStackedTask(taskId, text, durMinArg, opts){
   // specifics: the wrapId edge, its own duration/type, and the "Stacked" meta.
   // Per-child type/priority/detail/tags come from opts (used by the shell
   // template materializer, which rebuilds a saved shell child by child).
-  const overrides={title:text,source:opts.source||"manual",priority:priority,
+  const inheritedVisibility=opts.publicVisibility||((parent&&parent.publicVisibility)==="private"?"private":"public");
+  const overrides={publicVisibility:inheritedVisibility,title:text,source:opts.source||"manual",priority:priority,
     meta:(typeof ms==="function"?("Stacked · "+ms(durMin)):"Stacked")};
   if(opts.detail)overrides.detail=opts.detail;
   if(opts.tags)overrides.tags=opts.tags;
   const common=(window.DCC&&window.DCC.taskCommonProps)?window.DCC.taskCommonProps({},overrides)
     :{title:text,source:opts.source||"manual",priority:priority,meta:overrides.meta,detail:opts.detail||"",tags:opts.tags||[]};
   const task=Object.assign({id:id,type:type,wrapId:taskId,start:startStr,end:endStr,
-    publicVisibility:"public",added_at:new Date().toISOString()},common);
+    publicVisibility:inheritedVisibility,added_at:new Date().toISOString()},common);
   // Sequential shells lay their children out in the reflow (back-to-back from the
   // shell's anchor via _layoutShellChildren), so we DON'T pre-place here. A
   // free-layout rollup (wrap) still lands the child in the next open slot of the
@@ -530,7 +532,7 @@ function addStackedTask(taskId, text, durMinArg, opts){
       ? window.DCC.taskBlockProps({},Object.assign({},overrides,{local_id:id,duration:durMin,start:startStr,end:endStr}))
       : {local_id:id,title:text,source:opts.source||"manual",start:startStr,end:endStr,duration:durMin,priority:priority,tags:opts.tags||[],detail:opts.detail||""};
     if(anchor&&anchor.whenever)Object.assign(blockProps,{kind:'backlog',stage:'Whenever',durMin:durMin,start:null,end:null});
-    blockProps.type=type;blockProps.wrapId=anchor&&anchor.whenever&&anchor.blockId?((window.blockStore.get&&window.blockStore.get(anchor.blockId)?.properties?.local_id)||anchor.blockId):taskId;blockProps.publicVisibility=anchor&&anchor.whenever?(parent.publicVisibility||"private"):"public";blockProps.added_at=new Date().toISOString();
+    blockProps.type=type;blockProps.wrapId=anchor&&anchor.whenever&&anchor.blockId?((window.blockStore.get&&window.blockStore.get(anchor.blockId)?.properties?.local_id)||anchor.blockId):taskId;blockProps.publicVisibility=anchor&&anchor.whenever?(parent.publicVisibility||"private"):inheritedVisibility;blockProps.added_at=new Date().toISOString();
     created=window.blockStore.createBlock("block",blockProps,{date:date,...(anchor&&anchor.whenever?{parentId:anchor.blockId||null}:{})});
   }
   if(onViewedDay){

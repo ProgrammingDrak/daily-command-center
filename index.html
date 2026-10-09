@@ -22,7 +22,7 @@
 <link rel="stylesheet" href="/public/css/calendar-week.css?v=calendar-week-1">
 <link rel="stylesheet" href="/public/css/vault.css?v=vault-b6-1">
 <link rel="stylesheet" href="/public/css/ui-optimization.css?v=dcc-ui-1">
-<link rel="stylesheet" href="/public/css/activity.css?v=activity-1">
+<link rel="stylesheet" href="/public/css/activity.css?v=workout-2">
 <link rel="stylesheet" href="/public/css/task-sources.css">
 <link rel="stylesheet" href="/public/css/commitments.css">
 </head>
@@ -1069,6 +1069,9 @@
         <option value="relationship">Relationship</option>
         <option value="other">Other</option>
       </select>
+      <label class="delegated-modal-label" for="resp-public-visibility">Pet Home sharing</label>
+      <select id="resp-public-visibility" class="delegated-modal-input"><option value="private">Private · generated tasks and children</option><option value="public">Public · Pet Home</option></select>
+      <p class="dm-hint">Private repeats create private tasks. Editing keeps the repeat's paused state.</p>
       <label class="delegated-modal-label">Area</label>
       <input type="text" id="resp-area" class="delegated-modal-input" maxlength="80" placeholder="bug_management" />
       <label class="delegated-modal-label">Repeat type</label>
@@ -2228,8 +2231,10 @@
 <script src="/public/js/budget.js"></script>
 <script src="/public/js/reimbursements.js"></script>
 <script src="/public/js/mobile-shell.js"></script>
-<script src="/public/js/activity-model.js?v=activity-1"></script>
-<script src="/public/js/activity.js?v=activity-1"></script>
+<script src="/public/js/workout-model.js?v=workout-2"></script>
+<script src="/public/js/activity-model.js?v=workout-2"></script>
+<script src="/public/js/workout-planner.js?v=workout-2"></script>
+<script src="/public/js/activity.js?v=workout-2"></script>
 <script>
 // Feature flags — controls which features use the new BlockStore vs old localStorage.
 // Phase 5: All flags ON — BlockStore is now the primary data store.

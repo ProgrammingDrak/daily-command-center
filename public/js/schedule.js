@@ -254,7 +254,7 @@ function insertTaskFromDrawer(title, durMin, opts){
 // and its kind is never "responsibility_task" (which the itinerary fold in
 // persistence.js rejects). Recurses into nested children. The shell root is
 // created by materializeShellTemplate, which then calls this in its onScheduled.
-function attachTemplateChildren(parentLocalId,children,promoteDirect){
+function attachTemplateChildren(parentLocalId,children,promoteDirect,publicVisibility){
   if(!parentLocalId||!Array.isArray(children))return;
   const seen=new Set(),stack=children.slice().reverse().map(node=>({parentLocalId,node,promoteDirect}));
   while(stack.length){
@@ -262,10 +262,10 @@ function attachTemplateChildren(parentLocalId,children,promoteDirect){
     if(!node||!node.title||seen.has(node))continue;seen.add(node);
     let created=null;
     if(entry.promoteDirect){
-      if(typeof insertTaskNow==="function")created=insertTaskNow(node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:"task",detail:node.detail||""});
+      if(typeof insertTaskNow==="function")created=insertTaskNow(node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:"task",detail:node.detail||"",publicVisibility:publicVisibility||"public"});
     }else if(node.edge==="subtask"){
-      if(typeof addSubtask==="function")created=addSubtask(entry.parentLocalId,node.title);
-    }else if(typeof addStackedTask==="function")created=addStackedTask(entry.parentLocalId,node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:node.type||"task",detail:node.detail||""});
+      if(typeof addSubtask==="function")created=addSubtask(entry.parentLocalId,node.title,{publicVisibility:publicVisibility||"public"});
+    }else if(typeof addStackedTask==="function")created=addStackedTask(entry.parentLocalId,node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:node.type||"task",detail:node.detail||"",publicVisibility:publicVisibility||"public"});
     if(created&&created.id&&Array.isArray(node.children)){
       for(let i=node.children.length-1;i>=0;i--)stack.push({parentLocalId:created.id,node:node.children[i],promoteDirect:false});
     }
@@ -297,6 +297,7 @@ function materializeShellTemplate(templateTree,opts){
   insertTaskNow(root.title,0,{
     type:"task",
     retiredContainerHidden:true,
+    publicVisibility:opts.publicVisibility||"public",
     occurrenceAnchor:true,
     point_multiplier:0,
     responsibilityId:opts.responsibilityId||null,
@@ -311,7 +312,7 @@ function materializeShellTemplate(templateTree,opts){
     idempotencyKey:opts.responsibilityId?("resp-shell:"+opts.responsibilityId+":"+curDate):null,
     onScheduled:function(info){
       rootId=info&&info.localId;
-      if(rootId)attachTemplateChildren(rootId,root.children||[],true);
+      if(rootId)attachTemplateChildren(rootId,root.children||[],true,opts.publicVisibility);
       if(typeof opts.onScheduled==="function"){try{opts.onScheduled(info);}catch(e){}}
     }
   });

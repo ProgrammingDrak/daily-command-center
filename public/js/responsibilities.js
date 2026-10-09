@@ -27,6 +27,8 @@
     return raw==="as_needed"||raw==="as-needed"||raw==="as needed"||props&&props.asNeeded;
   }
 
+  function repeatVisibility(p){return p&&p.activityTaskType?"private":p&&p.publicVisibility||"public";}
+
   function repeatType(props){ return props&&props.repeatType==="scheduled"?"scheduled":"readiness"; }
   function isScheduled(props){ return repeatType(props)==="scheduled"; }
 
@@ -306,7 +308,7 @@
       // complete its subtree so the rollup banks its bonus and shows done.
       if(tree&&typeof window.materializeShellTemplate==="function"){
         window.materializeShellTemplate(tree,{
-          responsibilityId:id,responsibilityTitle:title,source:"responsibility",tags:tags,
+          publicVisibility:repeatVisibility(p),responsibilityId:id,responsibilityTitle:title,source:"responsibility",tags:tags,
           onScheduled:function(info){if(info&&info.localId)_completeResponsibilitySubtree(info.localId);finish();}
         });
         return;
@@ -316,7 +318,7 @@
       if(typeof insertTaskNow!=="function"){if(typeof showToast==="function")showToast("Cannot add task","error");return;}
       const curDate=(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||"";
       insertTaskNow(title,dur,{
-        type:p.activityTaskType||"task",responsibilityId:id,responsibilityTitle:title,priority:"High",
+        publicVisibility:repeatVisibility(p),type:p.activityTaskType||"task",responsibilityId:id,responsibilityTitle:title,priority:"High",
         ...(p.activityTaskType?{activityPlanSourceId:id,publicVisibility:"private"}:{}),
         source:"responsibility",tags:tags,detail:p.description||"",
         idempotencyKey:"resp:"+id+":"+curDate,
@@ -324,7 +326,7 @@
           try{
             if(info&&info.persisted)await info.persisted;
             if(typeof addSubtask==="function"&&info&&info.localId){
-              const children=defaults.map(function(t){return t?addSubtask(info.localId,t,{date:info.dateStr,parentStart:info.start}):null;});
+              const children=defaults.map(function(t){return t?addSubtask(info.localId,t,{date:info.dateStr,parentStart:info.start,publicVisibility:repeatVisibility(p)}):null;});
               await Promise.all(children.map(function(child){return child&&child._persisted;}).filter(Boolean));
             }
           }catch(e){console.warn("[responsibilities] parent or subtask persistence failed",e);return;}
@@ -623,6 +625,7 @@
       window.materializeShellTemplate(tree,{
         responsibilityId:id,
         responsibilityTitle:title,
+        publicVisibility:repeatVisibility(p),
         source:"responsibility",
         tags:tags,
         targetId:opts.targetId||null,
@@ -634,6 +637,7 @@
     }
     const defaults=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
     const scheduleOpts={
+      publicVisibility:repeatVisibility(p),
       ...(p.activityTaskType?{type:p.activityTaskType,activityPlanSourceId:id,publicVisibility:"private"}:{}),
       responsibilityId:id,
       responsibilityTitle:title,
@@ -650,7 +654,7 @@
           // the canonical parent_id edge.
           if(info&&info.persisted)await info.persisted;
           if(typeof addSubtask==="function"&&info&&info.localId){
-            const children=defaults.map(function(t){return t?addSubtask(info.localId,t,{date:info.dateStr,parentStart:info.start}):null;});
+            const children=defaults.map(function(t){return t?addSubtask(info.localId,t,{date:info.dateStr,parentStart:info.start,publicVisibility:repeatVisibility(p)}):null;});
             await Promise.all(children.map(function(child){return child&&child._persisted;}).filter(Boolean));
           }
         }catch(e){console.warn("[responsibilities] parent or subtask persistence failed",e);return;}
@@ -780,6 +784,7 @@
       ?captureShellTemplate(task.id,scheduled):null;
     const result={
       title,
+      publicVisibility:task&&task.publicVisibility||"public",
       domain:"professional",
       area:taskArea(task),
       cadence:"weekly",
@@ -795,6 +800,7 @@
     if (task && ["workout", "meal"].includes(task.type)) {
       result.activityPlanSourceId = task._blockId || task.id;
       result.domain = "personal";
+      result.publicVisibility = "private";
     }
     return result;
   }
@@ -980,6 +986,8 @@
     document.getElementById("resp-id").value=id||"";
     document.getElementById("resp-title").value=p.title||"";
     document.getElementById("resp-domain").value=p.domain||"professional";
+    const visibility=document.getElementById("resp-public-visibility");
+    if(visibility){visibility.value=p.activityTaskType||_pendingActivitySourceId?"private":p.publicVisibility||(id?"public":["personal","health"].includes(p.domain)?"private":"public");visibility.disabled=!!(p.activityTaskType||_pendingActivitySourceId);}
     document.getElementById("resp-area").value=p.area||"general";
     document.getElementById("resp-repeat-type").value=repeatType(p);
     const preset=document.getElementById("resp-cadence-preset");
@@ -1196,6 +1204,7 @@
       templateTree:(_pendingTemplateTree&&_pendingTemplateTree.root)?_pendingTemplateTree:undefined,
       ...(_pendingActivitySourceId?{activityPlanSourceId:_pendingActivitySourceId}:{}),
       title:document.getElementById("resp-title").value.trim(),
+      publicVisibility:document.getElementById("resp-public-visibility")?.value||repeatVisibility(editing&&editing.properties),
       domain:document.getElementById("resp-domain").value,
       area:document.getElementById("resp-area").value.trim()||"general",
       cadence,

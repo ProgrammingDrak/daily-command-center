@@ -270,6 +270,12 @@ function normalizeTemplateTree(tree, opts = {}) {
 // Build the `responsibility_task` properties for a given slot. Shared by the
 // schedule endpoint and the placeholder-resolve endpoint so both produce an
 // identical task shape (DRY — see also attachDefaultSubtasks).
+function repeatVisibility(props = {}) {
+  if(props.activityTaskType) return "private";
+  if(props.publicVisibility != null && !["private","public"].includes(props.publicVisibility)) throw Object.assign(new Error("Invalid repeat visibility"),{statusCode:400});
+  return props.publicVisibility || "public"; // Preserve legacy defaults until explicitly edited.
+}
+
 function buildResponsibilityTaskProps(responsibility, { duration, slot, localId, sourceProps = {} }) {
   const props = responsibility.properties || {};
   const title = sourceProps.title || props.nextTaskTitle || props.title;
@@ -277,6 +283,7 @@ function buildResponsibilityTaskProps(responsibility, { duration, slot, localId,
   const priority = sourceProps.priority || (sourceProps.urgent ? "High" : null) || (score >= 90 ? "High" : score >= 60 ? "Medium" : "Low");
   return {
     kind: "responsibility_task",
+    publicVisibility: repeatVisibility(props),
     local_id: localId,
     title,
     duration,
@@ -579,6 +586,8 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
       updatedAt: nowIso,
       ...properties
     };
+    if(!existing && properties.publicVisibility==null && ["personal","health"].includes(props.domain)) props.publicVisibility="private";
+    if(properties.publicVisibility != null || props.activityTaskType) props.publicVisibility=repeatVisibility(props);
     props.repeatType = properties.repeatType === "scheduled" ? "scheduled" : "readiness";
     if (props.repeatType === "scheduled") {
       props.scheduleRule = scheduledRecurrence.normalizeScheduleRule(properties.scheduleRule, {
@@ -709,7 +718,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     const root = await blockDB.getBlock(rootId);
     const rootProps = root.properties || {};
     const allSubtasks = { ...(rootProps._subtasks || {}) };
-    allSubtasks[localId] = subtasks.map((text, i) => ({ id: "st-" + Date.now() + "-" + i, text, done: false, created: new Date().toISOString() }));
+    allSubtasks[localId] = subtasks.map((text, i) => ({ id: "st-" + Date.now() + "-" + i, text, publicVisibility:repeatVisibility(props), done: false, created: new Date().toISOString() }));
     await blockDB.updateBlock(rootId, { properties: { ...rootProps, _subtasks: allSubtasks } });
   }
 
@@ -725,6 +734,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
   function scheduledBaseProps(responsibility, occurrence, rootId) {
     const props = responsibility.properties || {};
     return {
+      publicVisibility: repeatVisibility(props),
       responsibilityId: responsibility.id,
       responsibilityTitle: props.title,
       repeatMode: "scheduled",
@@ -907,7 +917,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     return block && (block.workspace_id || null) === (workspaceId || null);
   }
 
-  async function materializeDefinitionForDate(id, { date, userId, workspaceId, targetTimeZone, allowPast = false, outputDate = null, occurrenceKey = null }) {
+  async function materializeDefinitionForDate(id, { date, userId, workspaceId, targetTimeZone, allowPast = false, outputDate = null, occurrenceKey = null, publicVisibility = null }) {
     return withSeriesLock(id, workspaceId, async (client) => {
       // Re-read after taking the shared series lock. This makes an update or
       // deletion authoritative over a day load that began a moment earlier.
@@ -932,6 +942,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
       const missing = occurrences.filter((occurrence) => !reserved.has(scheduledIdentity(identityId, occurrence.occurrenceKey)));
       if (!missing.length) return [];
       const rows = missing.flatMap((occurrence) => scheduledRowsForOccurrence(responsibility, occurrence));
+      if(publicVisibility === "private") rows.forEach(row=>{row.properties.publicVisibility="private";});
       if (outputDate && isValidDate(outputDate)) rows.forEach((row) => { row.date = outputDate; });
       try {
         return await blockDB.createItineraryTasks(rows, { userId, workspaceId }, client);
@@ -999,6 +1010,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     const raw = changes && changes.properties && typeof changes.properties === "object" ? changes.properties : (changes || {});
     const next = { ...writableProps(existingProps), ...raw, kind: "responsibility_item", repeatType: "scheduled", updatedAt: new Date().toISOString() };
     delete next.id;
+    if(raw.publicVisibility != null || next.activityTaskType) next.publicVisibility=repeatVisibility(next);
     next.scheduleRule = scheduledRecurrence.normalizeScheduleRule(raw.scheduleRule || next.scheduleRule, {
       defaultTimeZone: appTimeZone,
       today: getTodayStr(),
@@ -1091,7 +1103,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
           }
           if (action === "update") {
             const root = group.find((row) => (row.properties || {}).repeatOccurrenceRootId === row.id) || group[0];
-            replacementTargets.push({ sourceKey: key, outputDate: root.date });
+            replacementTargets.push({ sourceKey: key, outputDate: root.date, publicVisibility:group.some(row=>(row.properties||{}).publicVisibility==="private")?"private":null });
           }
         }
       }
@@ -1170,11 +1182,16 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
             for (const row of group) operations.push({ op: "delete", id: row.id });
             continue;
           }
-          if ((root.properties || {}).recurrenceOverride) continue;
+          if ((root.properties || {}).recurrenceOverride) {
+            if(repeatVisibility(nextProps)==="private") for(const row of group) operations.push({op:"update",id:row.id,properties:{...(row.properties||{}),publicVisibility:"private"}});
+            continue;
+          }
           const oldStart = (root.properties || {}).start;
           const delta = hhmmToMinutes(occurrence.start) - hhmmToMinutes(oldStart);
           for (const row of group) {
             const props = { ...(row.properties || {}) };
+            if(repeatVisibility(nextProps)==="private") props.publicVisibility="private";
+            else if(props.publicVisibility!=="private" && nextProps.publicVisibility!=null) props.publicVisibility="public";
             if (row.id === root.id) {
               props.title = nextProps.nextTaskTitle || nextProps.title;
               props.detail = nextProps.description || props.detail || "";
@@ -1224,6 +1241,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
         await materializeDefinitionForDate(result.definition.id, {
           date: target.date,
           outputDate: target.outputDate,
+          publicVisibility:target.publicVisibility,
           occurrenceKey: target.occurrenceKey,
           allowPast: true,
           userId: args.userId,
@@ -1418,6 +1436,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     findInstanceBlock,
     // pure helpers, exposed on the instance for route convenience
     buildResponsibilityTaskProps,
+  repeatVisibility,
     taskDuration,
     responsibilityScore,
     normalizeResponsibility,
@@ -1442,6 +1461,7 @@ Object.assign(module.exports, {
   minutesToHHMM,
   firstFreeSlot,
   buildResponsibilityTaskProps,
+  repeatVisibility,
   normalizeTemplateTree,
   parseOffersAmpAlert,
   writableProps,

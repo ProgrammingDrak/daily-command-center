@@ -779,6 +779,7 @@ function createTaskListRowRenderer(context){
       onDragStart:(e)=>dStart(e,ev.id),onDragEnd:dEnd,
       onDragOver:!isDoneRow?(e)=>dOver(e,ev.id):null,onDragLeave:!isDoneRow?dLeave:null,onDrop:!isDoneRow?(e)=>dDrop(e,ev.id):null,
       afterRender:(rowEl)=>{
+        if(window.DCC&&window.DCC.Workout)window.DCC.Workout.attach(rowEl,ev);
         if(typeof wireTriageTaskSourceActions==="function")wireTriageTaskSourceActions(rowEl);
         const stSpan=rowEl.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfSchedulePopover(ev,rowEl,stSpan);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:stSpan,view:"time"});});
         const pf=rowEl.querySelector(".prep-flag");if(pf)pf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev,{defaultTab:"prep"});});
