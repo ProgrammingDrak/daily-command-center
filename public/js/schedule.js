@@ -1935,6 +1935,7 @@ function schedulePickerFields(durMin,options){
   const common=window.DCC.taskCommonProps(options,{meta:options.meta||("Custom task · "+ms(durMin))});
   delete common.title;
   return Object.assign(common,{
+    publicVisibility:options.activityPlanSourceId?"private":options.publicVisibility||"public",
     responsibilityId:options.responsibilityId||null,
     responsibilityTitle:options.responsibilityTitle||null,
     capacityBucket:options.capacityBucket||null,
