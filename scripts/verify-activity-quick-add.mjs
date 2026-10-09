@@ -38,7 +38,7 @@ try{
   const row=records.records.find(r=>r.title==='DEMO · Quick run '+width);assert.ok(row);assert.equal(row.completed,false);
   const saved=await (await fetch(base+'/api/blocks/'+row.taskId)).json();
   assert.equal(saved.properties.duration,90);assert.equal(saved.properties.type,'workout');assert.equal(saved.properties.publicVisibility,'private');
-  await page.getByRole('button',{name:'Close',exact:true}).click();await page.locator('.dcc-modal').waitFor({state:'detached'});
+  await page.getByRole('button',{name:'Close',exact:true}).last().click();await page.locator('.dcc-modal').waitFor({state:'detached'});
   const result=await page.evaluate(async({taskId})=>{
    await window.blockStore.handleBlocksChanged({blockIds:[taskId]});
    const block=window.blockStore.get(taskId);
