@@ -27,7 +27,7 @@
   // open-space click exclusion (schedule-tab.js row()) MINUS .grip: the grip is
   // labeled "Drag to reorder" and IS the drag handle, so a long-press on it must
   // lift (a quick tap on it still no-ops — onUp resets before the hold fires).
-  var LIFT_EXCLUDE = "button,a,input,textarea,.chk,.chk-quick,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag";
+  var LIFT_EXCLUDE = "button,a,input,textarea,select,.workout-planner,.chk,.chk-quick,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag";
 
   var listView = null;
   var state = null;           // active gesture, or null

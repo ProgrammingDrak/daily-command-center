@@ -254,7 +254,7 @@ function insertTaskFromDrawer(title, durMin, opts){
 // and its kind is never "responsibility_task" (which the itinerary fold in
 // persistence.js rejects). Recurses into nested children. The shell root is
 // created by materializeShellTemplate, which then calls this in its onScheduled.
-function attachTemplateChildren(parentLocalId,children,promoteDirect){
+function attachTemplateChildren(parentLocalId,children,promoteDirect,publicVisibility){
   if(!parentLocalId||!Array.isArray(children))return;
   const seen=new Set(),stack=children.slice().reverse().map(node=>({parentLocalId,node,promoteDirect}));
   while(stack.length){
@@ -262,10 +262,10 @@ function attachTemplateChildren(parentLocalId,children,promoteDirect){
     if(!node||!node.title||seen.has(node))continue;seen.add(node);
     let created=null;
     if(entry.promoteDirect){
-      if(typeof insertTaskNow==="function")created=insertTaskNow(node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:"task",detail:node.detail||""});
+      if(typeof insertTaskNow==="function")created=insertTaskNow(node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:"task",detail:node.detail||"",publicVisibility:publicVisibility||"public"});
     }else if(node.edge==="subtask"){
-      if(typeof addSubtask==="function")created=addSubtask(entry.parentLocalId,node.title);
-    }else if(typeof addStackedTask==="function")created=addStackedTask(entry.parentLocalId,node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:node.type||"task",detail:node.detail||""});
+      if(typeof addSubtask==="function")created=addSubtask(entry.parentLocalId,node.title,{publicVisibility:publicVisibility||"public"});
+    }else if(typeof addStackedTask==="function")created=addStackedTask(entry.parentLocalId,node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:node.type||"task",detail:node.detail||"",publicVisibility:publicVisibility||"public"});
     if(created&&created.id&&Array.isArray(node.children)){
       for(let i=node.children.length-1;i>=0;i--)stack.push({parentLocalId:created.id,node:node.children[i],promoteDirect:false});
     }
@@ -297,6 +297,7 @@ function materializeShellTemplate(templateTree,opts){
   insertTaskNow(root.title,0,{
     type:"task",
     retiredContainerHidden:true,
+    publicVisibility:opts.publicVisibility||"public",
     occurrenceAnchor:true,
     point_multiplier:0,
     responsibilityId:opts.responsibilityId||null,
@@ -311,7 +312,7 @@ function materializeShellTemplate(templateTree,opts){
     idempotencyKey:opts.responsibilityId?("resp-shell:"+opts.responsibilityId+":"+curDate):null,
     onScheduled:function(info){
       rootId=info&&info.localId;
-      if(rootId)attachTemplateChildren(rootId,root.children||[],true);
+      if(rootId)attachTemplateChildren(rootId,root.children||[],true,opts.publicVisibility);
       if(typeof opts.onScheduled==="function"){try{opts.onScheduled(info);}catch(e){}}
     }
   });
@@ -1540,10 +1541,28 @@ function addWheneverTask(title,durMin){
 // ======== UNIVERSAL TASK ADD BAR ========
 function addTaskUniversal(barEl){
   const inp=barEl.querySelector(".tab-title");
-  const title=inp.value.trim();
-  if(!title){_flashBlankTitle(barEl,()=>addTaskUniversal(barEl));return}
-  const durMin=parseInt(barEl.querySelector(".tab-dur").value)||30;
   const dest=barEl.querySelector(".tab-dest").value;
+  const activityType=dest==="workout"||dest==="meal";
+  const title=inp.value.trim()||(activityType?(dest==="workout"?"Workout":"Meal"):"");
+  if(!title){_flashBlankTitle(barEl,()=>addTaskUniversal(barEl));return false}
+  const durMin=parseInt(barEl.querySelector(".tab-dur").value)||30;
+  // Activity creation is a deferred save. Keep the composer draft until the
+  // owner commits; close it before opening the private dialog to release inert.
+  if(activityType){
+    const activity=window.DCC&&window.DCC.Activity;
+    if(!activity||typeof activity.create!=="function"){
+      if(typeof showToast==="function")showToast("Workout and meal logging is still loading. Try again in a moment.","info");
+      return false;
+    }
+    if(typeof Event==="function"&&typeof barEl.dispatchEvent==="function")barEl.dispatchEvent(new Event("dcc:launcher-handoff"));
+    const draftTitle=inp.value, duration=barEl.querySelector(".tab-dur"), draftDuration=duration.value;
+    activity.create(dest,null,title,{durationMinutes:durMin,onCreated:()=>{
+      const select=barEl.querySelector(".tab-dest");
+      if(!select||inp.value!==draftTitle||select.value!==dest||duration.value!==draftDuration)return;
+      inp.value="";select.value="urgent";
+    }});
+    return false;
+  }
   // "Schedule…" defers the clear to commit time so dismissing the popover
   // doesn't eat the typed title; every other destination commits right here.
   if(dest!=="schedule")inp.value="";
@@ -1578,9 +1597,6 @@ function addTaskUniversal(barEl){
     // ride along. insertTaskNow flags it isWrap from birth (dragMovesSubtree).
     // Habit: recurring earn; the row grows a streak chip from prior completions.
     case"habit":insertTaskNow(title,durMin,{type:"habit"});break;
-    case"workout":case"meal":
-      if(window.DCC&&DCC.Activity)DCC.Activity.create(dest,null,title);
-      break;
     // Manually-added meeting: no source_id, so the calendar materializer never
     // touches it. Fixed-time (reflow-exempt) but user-movable, like a synced one.
     case"meeting":insertTaskNow(title,durMin,{type:"meeting"});break;
@@ -1919,6 +1935,7 @@ function schedulePickerFields(durMin,options){
   const common=window.DCC.taskCommonProps(options,{meta:options.meta||("Custom task · "+ms(durMin))});
   delete common.title;
   return Object.assign(common,{
+    publicVisibility:options.activityPlanSourceId?"private":options.publicVisibility||"public",
     responsibilityId:options.responsibilityId||null,
     responsibilityTitle:options.responsibilityTitle||null,
     capacityBucket:options.capacityBucket||null,
@@ -2260,8 +2277,8 @@ function initDestRadial(bar){
       _hideDestPreview();
       closeRadialMenu();
       const title=inp?inp.value.trim():"";
-      if(!title){_flashBlankTitle(bar,submitLauncher);return}
-      addTaskUniversal(bar);
+      if(!title&&!['workout','meal'].includes(sel.value)){_flashBlankTitle(bar,submitLauncher);return}
+      if(addTaskUniversal(bar)===false)return;
       if(typeof Event==="function"&&typeof bar.dispatchEvent==="function"){
         bar.dispatchEvent(new Event("dcc:launcher-submit-success"));
       }

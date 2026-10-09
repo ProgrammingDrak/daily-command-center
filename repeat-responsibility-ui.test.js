@@ -118,9 +118,9 @@ test("manager separates cadence-based and as-needed responsibilities", async () 
 
 test("future responsibility scheduling forwards the selected date and parent start to every default subtask", () => {
   assert.match(clientSource,
-    /addSubtask\(info\.localId,t,\{date:info\.dateStr,parentStart:info\.start\}\)/,
+    /addSubtask\(info\.localId,t,\{date:info\.dateStr,parentStart:info\.start,publicVisibility:repeatVisibility\(p\)\}\)/,
     "the picker callback must keep each child on the same day as its parent");
-  assert.equal((clientSource.match(/addSubtask\(info\.localId,t,\{date:info\.dateStr,parentStart:info\.start\}\)/g)||[]).length, 2,
+  assert.equal((clientSource.match(/addSubtask\(info\.localId,t,\{date:info\.dateStr,parentStart:info\.start,publicVisibility:repeatVisibility\(p\)\}\)/g)||[]).length, 2,
     "both scheduling and schedule-then-complete paths must preserve the parent placement");
 });
 

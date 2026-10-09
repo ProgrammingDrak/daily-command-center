@@ -1,4 +1,6 @@
 const Model = require("./public/js/activity-model");
+const Library = require("./workout-library-store");
+const equal = require("node:util").isDeepStrictEqual;
 
 // Kept outside block JSON, operations, day-state, vault sync, and public exports.
 const SCHEMA_SQL = `
@@ -16,13 +18,13 @@ CREATE TABLE IF NOT EXISTS task_activity_records (
 );
 CREATE INDEX IF NOT EXISTS idx_activity_owner_date
   ON task_activity_records(workspace_id, owner_user_id, occurred_on);
-`;
+` + Library.SCHEMA_SQL;
 function error(message, statusCode = 400) { return Object.assign(new Error(message), { statusCode }); }
 function revision(v) { if (!Number.isInteger(v) || v < 0) throw error("Expected revision is required"); return v; }
 function shape(block, record) {
   const p = block.properties || {};
   return { taskId: block.id, title: p.title || "Untitled task", date: block.date ? String(block.date).slice(0, 10) : null,
-    completed: p.status === "done" || !!p.completedAt, removed: !!block.deleted_at,
+    duration: p.duration ?? 30, completed: p.status === "done" || !!p.completedAt, removed: !!block.deleted_at,
     archived: !!record?.archived_at, revision: record?.revision || 0,
     canUndo: !!record?.previous, updatedAt: record?.updated_at || null,
     record: record?.record || Model.empty(p.type) };
@@ -68,14 +70,33 @@ function createActivityStore({ pool, blockDB, crypto = require("node:crypto") })
   }
   async function save(id, body, owner) {
     const value = Model.validate(body.record), expected = revision(body.expectedRevision);
+    const mutationId=body.mutationId||null;
+    if(mutationId && !/^[-\w]{1,80}$/.test(mutationId)) throw error("Invalid save identifier");
+    const hash=crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
     return tx(async q => {
       const b = await block(q, id, owner, true), old = await record(q, id, owner);
       if (b.deleted_at) throw error("Restore the removed task before editing its record", 409);
+      if(mutationId && old?.last_mutation_id === mutationId) { if(old.last_payload_hash !== hash) throw error("Save identifier reused with different data",409); return shape(b,old); }
       if ((old?.revision || 0) !== expected) throw error("This record changed elsewhere. Reload it before saving", 409);
       if (old?.archived_at) throw error("Restore the archived record before editing", 409);
       if (old && old.task_type !== value.taskType) throw error("A recorded task cannot change activity type", 409);
       if (Model.TYPES.includes(b.properties.type) && b.properties.type !== value.taskType) throw error("Activity type must match the task", 409);
       if (!old && !["task", "focus", "habit", ...Model.TYPES].includes(b.properties.type || "task")) throw error("This task type cannot hold an activity record");
+      if(old?.record?.schemaVersion===2 && value.schemaVersion!==2) throw error("A v2 workout cannot be downgraded",409);
+      if(value.schemaVersion === 2) {
+        await Library.checkCatalog(q,value.plan,owner);
+        const prior=old?.record;
+        if(prior?.schemaVersion === 2 && prior.baseline) {
+          if(!equal(value.baseline,prior.baseline)) throw error("Started workout baseline cannot be changed",409);
+          if(!equal(value.plan,prior.plan)) throw error("Started workout plan is frozen; log extra sets without editing its baseline",409);
+          if(!equal(value.provenance,prior.provenance)) throw error("Workout template provenance cannot change",409);
+          if(!equal(value.session.events.slice(0,prior.session.events.length),prior.session.events)) throw error("Saved timing cannot be rewritten",409);
+        }
+        if(value.provenance && !prior?.provenance) {
+          const template=await Library.readTemplate(q,value.provenance.templateId,owner);
+          if(template.revision!==value.provenance.templateRevision) throw error("Template revision changed",409);
+        }
+      }
       const previous = old ? { record: old.record, archivedAt: old.archived_at } : null;
       const { rows } = await q.query(`INSERT INTO task_activity_records
         (task_id,workspace_id,owner_user_id,task_type,record,occurred_on,revision,previous)
@@ -85,6 +106,7 @@ function createActivityStore({ pool, blockDB, crypto = require("node:crypto") })
         WHERE task_activity_records.workspace_id=EXCLUDED.workspace_id AND task_activity_records.owner_user_id=EXCLUDED.owner_user_id
         RETURNING *`, [id, owner.workspaceId, owner.userId, value.taskType, value, value.occurredOn, previous]);
       if (!rows.length) throw error("Record not found", 404);
+      if(mutationId) await q.query("UPDATE task_activity_records SET last_mutation_id=$2,last_payload_hash=$3 WHERE task_id=$1",[id,mutationId,hash]);
       // Normal task state stays authoritative; logging never completes a task.
       const updated = await blockDB.updateBlock(id, { properties: { ...b.properties, type: value.taskType, publicVisibility: "private" } }, q);
       return shape(updated, rows[0]);
@@ -107,6 +129,7 @@ function createActivityStore({ pool, blockDB, crypto = require("node:crypto") })
         previous=$7,revision=revision+1,updated_at=NOW()
         WHERE task_id=$1 AND workspace_id=$2 AND owner_user_id=$3 RETURNING *`,
       [id, owner.workspaceId, owner.userId, value, value.occurredOn, archivedAt, { record: old.record, archivedAt: old.archived_at }]);
+      await q.query("UPDATE task_activity_records SET last_mutation_id=NULL,last_payload_hash=NULL WHERE task_id=$1",[id]);
       return shape(b, rows[0]);
     });
   }
@@ -133,9 +156,10 @@ function createActivityStore({ pool, blockDB, crypto = require("node:crypto") })
     if (!Model.validDate(body.date)) throw error("A valid task date is required");
     const minutes = body.duration == null ? 30 : body.duration;
     if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) throw error("Duration must be 1–1440 minutes");
-    const value = body.sourceId ? null : Model.validate(body.record);
+    const value = body.sourceId || body.templateId ? null : Model.validate(body.record);
     return tx(async q => {
-      const plan = body.sourceId ? await readPlanSource(q, body.sourceId, owner.workspaceId, owner.userId) : value;
+      const plan = body.templateId ? Library.sessionFromTemplate(await Library.readTemplate(q,body.templateId,owner)) : body.sourceId ? await readPlanSource(q, body.sourceId, owner.workspaceId, owner.userId) : value;
+      if(plan.schemaVersion===2) await Library.checkCatalog(q,plan.plan,owner);
       const id = crypto.randomUUID();
       const parent = await blockDB.ensureDayRoot(body.date, owner.userId, owner.workspaceId, q);
       const b = await blockDB.createItineraryTask({ id, date: body.date, parent_id: parent, userId: owner.userId,

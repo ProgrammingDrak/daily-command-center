@@ -70,49 +70,112 @@ test("_prevDate: steps exactly one calendar day across a month boundary (UTC-sta
 });
 
 // ── convertTaskType (schedule-tab.js) ───────────────────────────────────────
-function convertCtx(tasks) {
-  const persists = [];
+function convertCtx(tasks, save) {
+  const persists = [], toasts = [];
+  const rows = tasks.map(ev => ({id: ev._blockId || ev.id, properties: {...ev, local_id:ev.id}}));
   const context = {
-    window: { TaskTypes },
-    scheduled: tasks,
-    childrenOf: () => [],
-    _persistEvProps: (ev, patch) => persists.push({ id: ev.id, patch }),
-    recalcTimes: () => {},
-    render: () => {},
-    showToast: () => {},
+    window: { TaskTypes, blockStore: {
+      get: id => rows.find(row=>row.id===id), getByType: ()=>rows,
+      updateBlock: async (id, props, extra) => {
+        persists.push({id, patch:props, extra});
+        return save ? save(id,props) : {id,properties:props};
+      }
+    } },
+    console:{warn:()=>{}}, _rowForDateWrite:id=>context.window.blockStore.get(id),
+    scheduled: tasks, childrenOf: () => [], recalcTimes: () => {}, render: () => {},
+    showToast: (message,kind) => toasts.push({message,kind}),
   };
   vm.createContext(context);
-  vm.runInContext(slice(stSrc, "convertTaskType") + "\nthis.convertTaskType=convertTaskType;", context);
-  return { context, persists };
+  const stateSrc=fs.readFileSync(require.resolve("./public/js/state.js"),"utf8");
+  vm.runInContext("let _rowPropsChain=Promise.resolve();\n"+slice(stateSrc,"enqueueRowPropsWrite"),context);
+  vm.runInContext("async " + slice(stSrc, "convertTaskType") + "\nthis.convertTaskType=convertTaskType;", context);
+  return { context, persists, toasts };
 }
 
-test("convertTaskType: task -> shell sets type + isWrap and persists both", () => {
-  const ev = { id: "t1", type: "task" };
-  const { context, persists } = convertCtx([ev]);
-  context.convertTaskType("t1", "shell");
-  assert.equal(ev.type, "shell");
-  assert.equal(ev.isWrap, true); // shell has dragMovesSubtree
-  assert.equal(persists.length, 1);
-  assert.equal(persists[0].id, "t1");
-  assert.equal(persists[0].patch.type, "shell");
-  assert.equal(persists[0].patch.isWrap, true);
+test("conversion waits for acknowledgement and retains identity, duration and children", async () => {
+  const ev={id:"t1",_blockId:"row-1",type:"focus",duration:90,subtaskOf:"parent"};
+  let resolve;
+  const {context,persists,toasts}=convertCtx([ev],()=>new Promise(r=>{resolve=r;}));
+  const pending=context.convertTaskType("t1","task");
+  assert.equal(ev.type,"focus"); assert.equal(toasts.length,0);
+  assert.equal(await context.convertTaskType("t1","habit"),false,"duplicate conversion blocked");
+  resolve({id:"row-1",properties:persists[0].patch});
+  assert.equal(await pending,true); assert.equal(ev.type,"task");
+  assert.equal(persists[0].id,"row-1"); assert.equal(persists[0].patch.duration,90);
+  assert.equal(persists[0].patch.subtaskOf,"parent");
+  assert.equal(persists[0].extra._reportSaveStatus,true);
+  assert.equal(toasts.at(-1).kind,"success");
 });
 
-test("convertTaskType: shell -> task clears the wrap flag", () => {
-  const ev = { id: "t2", type: "shell", isWrap: true };
-  const { context, persists } = convertCtx([ev]);
-  context.convertTaskType("t2", "task");
-  assert.equal(ev.type, "task");
-  assert.ok(!ev.isWrap);
-  assert.equal(persists[0].patch.isWrap, false);
+test("legacy shell -> task clears wrap without orphaning children", async () => {
+  const ev={id:"t2",type:"shell",isWrap:true};
+  const {context,persists}=convertCtx([ev]);
+  assert.equal(await context.convertTaskType("t2","task"),true);
+  assert.equal(ev.type,"task"); assert.ok(!ev.isWrap); assert.equal(persists[0].patch.isWrap,false);
 });
 
-test("convertTaskType: refuses a fixed/calendar target and is a no-op on same type", () => {
-  const ev = { id: "t3", type: "task" };
-  const { context, persists } = convertCtx([ev]);
-  context.convertTaskType("t3", "meeting"); // fixed target rejected
-  assert.equal(ev.type, "task");
-  context.convertTaskType("t3", "task"); // same type no-op
-  assert.equal(ev.type, "task");
-  assert.equal(persists.length, 0);
+test("conversion rejects fixed, unknown, legacy targets and same type", async () => {
+  const ev={id:"t3",type:"task"};
+  const {context,persists}=convertCtx([ev]);
+  for(const type of ["meeting","unknown","shell","task"]) assert.equal(await context.convertTaskType("t3",type),false);
+  assert.equal(ev.type,"task"); assert.equal(persists.length,0);
+});
+
+test("private workout and meal types cannot report a false Task conversion", async () => {
+  for(const type of ["workout","meal"]){
+    const ev={id:type,type,publicVisibility:"private"};
+    const {context,persists,toasts}=convertCtx([ev]);
+    assert.equal(await context.convertTaskType(type,"task"),false);
+    assert.equal(ev.type,type); assert.equal(ev.publicVisibility,"private");
+    assert.equal(persists.length,0); assert.equal(toasts.at(-1).kind,"info");
+    assert.match(toasts.at(-1).message,/keeps its activity type/);
+  }
+});
+
+test("normalized, failed and buffered writes never announce successful conversion", async () => {
+  for(const outcome of ["normalized","failed","pending"]){
+    const ev={id:"t4",type:"focus"};
+    const {context,toasts}=convertCtx([ev],(_id,props)=>{
+      if(outcome==="failed")throw Error("Save rejected");
+      return {properties:{...props,type:outcome==="normalized"?"focus":"task"}, ...(outcome==="pending"?{_savePending:true}:{})};
+    });
+    assert.equal(await context.convertTaskType("t4","task"),false);
+    assert.equal(toasts.some(t=>t.kind==="success"),false);
+    assert.equal(ev.type,outcome==="pending"?"task":"focus");
+    assert.equal(ev._typeConversionPending,undefined);
+  }
+});
+
+test("conversion into workout/meal saves privacy and rejects absent persistence", async () => {
+  for(const type of ["workout","meal"]){
+    const ev={id:"t5",type:"task",publicVisibility:"public"};
+    const {context,persists}=convertCtx([ev]);
+    assert.equal(await context.convertTaskType("t5",type),true);
+    assert.equal(ev.publicVisibility,"private"); assert.equal(persists[0].patch.publicVisibility,"private");
+  }
+  const ev={id:"unsaved",type:"focus"}, {context,toasts}=convertCtx([ev]);
+  context.window.blockStore=null;
+  assert.equal(await context.convertTaskType("unsaved","task"),false);
+  assert.equal(ev.type,"focus"); assert.equal(toasts.at(-1).kind,"error");
+});
+
+
+test("conversion composes after pending row writes without overwriting their properties", async () => {
+  const ev={id:"queued",type:"focus",duration:60};
+  const {context,persists}=convertCtx([ev]);
+  let release;
+  context._rowForDateWrite=async id=>{await new Promise(resolve=>{release=resolve;});return {id,properties:{type:"focus",duration:90,sourceReferences:[{url:"https://example.com"}]}};};
+  const pending=context.convertTaskType("queued","task");
+  await Promise.resolve();await Promise.resolve();release();
+  assert.equal(await pending,true);
+  assert.equal(persists[0].patch.duration,90);
+  assert.equal(persists[0].patch.sourceReferences[0].url,"https://example.com");
+});
+
+test("conversion checks protected types again after the shared queue reads the row", async () => {
+  const ev={id:"changed",type:"focus"};
+  const {context,persists,toasts}=convertCtx([ev]);
+  context._rowForDateWrite=id=>({id,properties:{type:"workout",publicVisibility:"private"}});
+  assert.equal(await context.convertTaskType("changed","task"),false);
+  assert.equal(persists.length,0);assert.equal(toasts.at(-1).kind,"error");
 });

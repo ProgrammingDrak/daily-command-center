@@ -1,10 +1,10 @@
 # Workout and meal records
 
-Implemented on `feature/workout-meal-records`, based on `5c8629a` (#392). This feature has not been published or deployed. All development records and screenshots use disposable synthetic fixtures; no production health records were written.
+Implemented on `feature/workout-meal-records` and merged in PR #394. The historical implementation and QA notes below describe that original candidate. The current local follow-up audit, Quick Add fixes and separate connector proposal are in [fitness-integration-plan.md](fitness-integration-plan.md). All follow-up testing uses synthetic fixtures; no production health records were written.
 
 ## Using it
 
-- Open **Workouts & meals** (under **More** on mobile), or choose Workout/Meal in Quick add. Existing task details can also start a private activity record.
+- Open **Workouts & meals** (under **More** on mobile), or choose **Log workout / Log meal** or Workout/Meal in Quick add. Quick Add carries the chosen duration into the private task creator and retains its draft on cancel or failed save. Existing task details can also start a private activity record.
 - Plan exercises and sets, then log any number of actual sets against each planned set. For example, 10 reps at 50 lb planned can have separate actual rows for 5 at 50 lb and 50 at 25 lb. Unplanned actual sets and runs are supported.
 - Runs store distance with m/km/mi and elapsed seconds. Strength entries store reps and lb/kg. Dashboard units can change without rewriting the entered units.
 - Meals have separate planned and consumed foods, portions, calories, protein, carbs and fat. Nutrients refer to the whole entered portion. Enter a source and mark known/estimated; leave missing nutrients blank. No nutrients or actual results are inferred from a plan.

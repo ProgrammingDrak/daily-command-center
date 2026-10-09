@@ -4,6 +4,7 @@ const Model = require("../public/js/activity-model");
 
 module.exports = function mountActivity(app, ctx) {
   const store = createActivityStore(ctx);
+  const library = require("../workout-library-store").createWorkoutLibrary(ctx);
   // Session AND workspace ownership, never bearer/header-selected identity or grants.
   async function owner(req, res, next) {
     res.setHeader("Cache-Control", "private, no-store");
@@ -17,6 +18,12 @@ module.exports = function mountActivity(app, ctx) {
   }
   app.use("/api/activity", owner);
   function range(req) { return { from: req.query.from, to: req.query.to, includeArchived: req.query.includeArchived === "true" }; }
+  app.get("/api/activity/exercises", route(async req => ({exercises:await library.catalog(req.activityOwner)})));
+  app.post("/api/activity/exercises", route(req => library.createExercise(req.body||{},req.activityOwner)));
+  app.get("/api/activity/templates", route(async req => ({templates:await library.list(req.activityOwner)})));
+  app.post("/api/activity/templates", route(req => library.save(req.body||{},req.activityOwner)));
+  app.get("/api/activity/templates/:id", route(req => library.get(req.params.id,req.activityOwner)));
+  app.put("/api/activity/templates/:id", route(req => library.save(req.body||{},req.activityOwner,req.params.id)));
   app.get("/api/activity", route(async req => ({ records: await store.list(range(req), req.activityOwner) })));
   app.post("/api/activity/tasks", route(async req => {
     const result = await store.create(req.body || {}, req.activityOwner);
@@ -30,7 +37,7 @@ module.exports = function mountActivity(app, ctx) {
       return res.type("text/csv").send(Model.csv(records));
     }
     res.setHeader("Content-Disposition", 'attachment; filename="dcc-activity.json"');
-    return res.json({ schemaVersion: 1, exportedAt: new Date().toISOString(), records });
+    return res.json({ schemaVersion: 2, exportedAt: new Date().toISOString(), records });
   }));
   app.get("/api/activity/tasks/:id", route(req => store.get(req.params.id, req.activityOwner)));
   app.put("/api/activity/tasks/:id", route(async req => {
