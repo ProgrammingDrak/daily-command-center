@@ -754,6 +754,7 @@ function createTaskListRowRenderer(context){
       (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
       (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'');
     const el=renderItineraryListRow(ev,{
+      collaboration:!!(context.collaboration && (ev._blockId||ev.blockId)),
       done:isDoneRow,
       draggable:movable,
       inProgress:inProgress,
@@ -995,7 +996,7 @@ function buildListView(){
     wrap.appendChild(el);
   }
 
-  const row=createTaskListRowRenderer({pool:unfPool,isTodayView});
+  const row=createTaskListRowRenderer({pool:unfPool,isTodayView,collaboration:true});
   function emitNode(node,idx,mode){return row(node.ev,_isSubRow(node)?0:idx,mode,node);}
   // Idle-gap marker between two spaced-out timed rows (fixed tiny height; see
   // .it-list-gap CSS). Label via ms() -> "45m" / "1h 30m".
@@ -1302,6 +1303,7 @@ function buildSchedule(){
     const pinnedStyle = isPinnedActive && typeof getPinnedOverdueStyle === "function" ? getPinnedOverdueStyle(ev) : null;
     const active=!!isFocusActive;
     const el=renderItineraryCard(ev,{
+      collaboration:!!(ev._blockId||ev.blockId),
       node:node,active:active,isPinnedActive:isPinnedActive,pinnedStyle:pinnedStyle,isToday:isToday,
       variant:isSubNode?"sub":undefined,
       canEditBounty:(typeof viewMode==="undefined"||viewMode!=="archive"),

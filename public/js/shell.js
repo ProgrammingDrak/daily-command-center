@@ -173,7 +173,7 @@
   function wireTabs() {
     const bar = document.getElementById("tab-bar");
     if (!bar) return;
-    bar.addEventListener("click", (event) => {
+    document.addEventListener("click", (event) => {
       const tab = event.target.closest(".tab[data-tab]");
       if (!tab) return;
       scrollPositions.set(activeSurface, window.scrollY);
