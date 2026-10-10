@@ -40,12 +40,15 @@ try {
   await page.waitForFunction(() => window.testInk && window.testInk.state.scale > 0);
   const canvas = await page.locator("#base").boundingBox();
   // Browser-injected mouse events exercise real hit testing and pointer capture.
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 99; i++) {
     await page.mouse.move(canvas.x + 20, canvas.y + 20 + i * 2);
     await page.mouse.down();
     await page.mouse.move(canvas.x + 90, canvas.y + 20 + i * 2, { steps: 2 });
     await page.mouse.up();
   }
+  // Browser-injected touch verifies the non-passive guard still permits the
+  // pointer stream and a no-motion tap creates exactly one dot.
+  await page.touchscreen.tap(canvas.x + 120, canvas.y + 40);
   await page.waitForFunction(() => document.querySelector("#syncStatus").textContent.includes("Saved locally"));
   assert.equal(await page.evaluate(() => window.testInk.getPage().strokes.length), 100);
   await page.locator("#syncStatus").dblclick();
