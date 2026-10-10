@@ -4,6 +4,9 @@
 
 `/ink` is an admin-only, local-first handwritten notebook.
 
+The existing canvas is also a reusable [drawable-layer building block](docs/ink-drawable-layer.md).
+Its integration contract preserves the iPad/Pencil behavior validated in `ink-v7`.
+
 - IndexedDB stores strokes before any network request.
 - Each account workspace uses a separate local database.
 - The service worker caches shell files only. It never caches APIs or ink.
