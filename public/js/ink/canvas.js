@@ -57,6 +57,7 @@
       scale: 1,
       penSeen: false,
       activePointer: null,
+      activePointerType: null,
       current: null,
       undo: [],
       redo: [],
@@ -202,20 +203,32 @@
     }
 
     function onDown(ev) {
+      // Even rejected palm contacts must not start a native selection gesture.
+      ev.preventDefault();
       if (ev.pointerType === "pen") state.penSeen = true;
+      // A resting palm can arrive before the first Pencil event. Let the pen
+      // take over that provisional touch rather than waiting for the palm up.
+      if (ev.pointerType === "pen" && state.activePointerType === "touch") {
+        onCancel({ pointerId: state.activePointer });
+      }
       if (!pointerDraws(ev)) return;
       if (state.activePointer !== null) return;
       // A pen's barrel button and an inverted stylus both mean erase.
       const erasing = state.tool === "eraser" || ev.button === 5 || ev.buttons === 32;
 
       state.activePointer = ev.pointerId;
-      base.setPointerCapture(ev.pointerId);
-      ev.preventDefault();
+      state.activePointerType = ev.pointerType;
+      try { base.setPointerCapture(ev.pointerId); }
+      catch {
+        state.activePointer = null;
+        state.activePointerType = null;
+        return;
+      }
 
       const p = toPage(ev);
       if (erasing) {
         state.current = null;
-        state.erasing = { removed: [] };
+        state.erasing = { removed: [], original: state.page.strokes.slice() };
         eraseAt(p.x, p.y);
       } else {
         state.erasing = null;
@@ -252,6 +265,7 @@
     function onUp(ev) {
       if (ev.pointerId !== state.activePointer) return;
       state.activePointer = null;
+      state.activePointerType = null;
       try { base.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
 
       if (state.erasing) {
@@ -301,7 +315,15 @@
       // A cancelled pointer (a system gesture, a call coming in) must not leave
       // half a stroke behind.
       state.activePointer = null;
+      state.activePointerType = null;
+      try { base.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
       state.current = null;
+      // Erasing updates the base immediately. Roll those provisional removals
+      // back if a palm is preempted or the browser cancels the gesture.
+      if (state.erasing && state.erasing.removed.length) {
+        state.page.strokes = state.erasing.original;
+        redraw();
+      }
       state.erasing = null;
       clearLive();
     }
@@ -317,6 +339,13 @@
     });
     base.addEventListener("lostpointercapture", onUp);
     base.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    // Safari's native touch/selection recognizers are separate from pointer
+    // drawing. Cancel their defaults on the paper only, including ignored palms;
+    // do not draw from touch events (that would duplicate Pencil strokes).
+    const preventTouch = (ev) => { if (ev.cancelable) ev.preventDefault(); };
+    wrap.addEventListener("touchstart", preventTouch, { passive: false });
+    wrap.addEventListener("touchmove", preventTouch, { passive: false });
 
     let resizeTimer = null;
     const onResize = () => {
@@ -339,7 +368,9 @@
       setTool(tool) { state.tool = tool; },
       setColor(color) { state.color = color; },
       setSize(size) { state.size = Number(size) || 2.6; },
-      getPage: () => state.page,
+      // A pending save from the previous stroke may fire during erasing. Only
+      // expose committed ink, so a cancelled palm cannot persist deletions.
+      getPage: () => state.erasing ? { ...state.page, strokes: state.erasing.original } : state.page,
       // True while a stroke is actually under the pen. Sync asks this before
       // taking the main thread for a full-page render, so a background upload
       // can never stall the stroke someone is in the middle of drawing.
@@ -367,6 +398,8 @@
         return c;
       },
       destroy() {
+        wrap.removeEventListener("touchstart", preventTouch);
+        wrap.removeEventListener("touchmove", preventTouch);
         window.removeEventListener("resize", onResize);
         window.removeEventListener("orientationchange", onResize);
       },

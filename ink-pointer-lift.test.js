@@ -35,14 +35,16 @@ function surface() {
   vm.runInNewContext(fs.readFileSync(process.env.INK_CANVAS_SOURCE || require.resolve("./public/js/ink/canvas.js"), "utf8"), scope);
   let changes = 0;
   const ink = scope.InkCanvas.create({ base, live,
-    wrap: { getBoundingClientRect: () => ({ width: 638, height: 825 }) },
+    wrap: { getBoundingClientRect: () => ({ width: 638, height: 825 }),
+      addEventListener: (type, handler, options) => { events[type] = handler; events[type + "Options"] = options; },
+      removeEventListener() {} },
     onChange: () => { changes++; } });
   ink.layout();
   function send(type, id = 1, x = 20, extra = {}) {
     events[type]({ pointerId: id, pointerType: "pen", clientX: x, clientY: 20,
       pressure: 0.5, button: 0, buttons: 1, preventDefault() {}, ...extra });
   }
-  return { ink, send, operations, live, captured, changes: () => changes };
+  return { ink, send, operations, live, base, events, captured, changes: () => changes };
 }
 
 test("Pencil lift copies existing ink without replaying any pressure segments", () => {
@@ -126,4 +128,62 @@ test("highlighter retains per-segment multiply rendering", () => {
   h.send("pointerup");
   assert.ok(h.operations.some((o) => o.name === "base" && o.method === "stroke"));
   assert.equal(h.operations.filter((o) => o.method === "drawImage").length, 0);
+});
+
+test("Pencil preempts a palm that arrived first and ignores its late up/cancel", () => {
+  const h = surface();
+  h.send("pointerdown", 10, 10, { pointerType: "touch" });
+  h.send("pointermove", 10, 30, { pointerType: "touch" });
+  h.send("pointerdown", 11, 40);
+  assert.equal(h.ink.state.activePointer, 11);
+  assert.equal(h.captured.has(10), false);
+  h.send("pointerup", 10);
+  h.send("pointercancel", 10);
+  h.send("pointermove", 11, 60);
+  h.send("pointerup", 11);
+  assert.equal(h.ink.getPage().strokes.length, 1);
+  assert.equal(h.ink.getPage().strokes[0].pts.length, 6);
+  assert.equal(h.changes(), 1);
+});
+
+test("ignored palms and touch recognizers have their defaults cancelled", () => {
+  const h = surface();
+  h.send("pointerdown"); h.send("pointerup");
+  let prevented = 0;
+  h.send("pointerdown", 2, 20, { pointerType: "touch", preventDefault() { prevented++; } });
+  for (const type of ["touchstart", "touchmove"]) {
+    assert.equal(h.events[type + "Options"].passive, false);
+    h.events[type]({ cancelable: true, preventDefault() { prevented++; } });
+    h.events[type]({ cancelable: false, preventDefault() { throw new Error("not cancelable"); } });
+  }
+  assert.equal(prevented, 3);
+  assert.equal(h.ink.getPage().strokes.length, 1);
+});
+
+test("capture failure cannot strand the next Pencil stroke", () => {
+  const h = surface();
+  h.base.setPointerCapture = () => { throw new Error("inactive pointer"); };
+  h.send("pointerdown");
+  assert.equal(h.ink.isPenDown(), false);
+  h.base.setPointerCapture = (id) => h.captured.add(id);
+  h.send("pointerdown", 2); h.send("pointerup", 2);
+  assert.equal(h.ink.getPage().strokes.length, 1);
+});
+
+test("cancelled provisional erasing restores exact stroke order", () => {
+  const h = surface();
+  for (let id = 1; id <= 3; id++) {
+    h.send("pointerdown", id, id * 10); h.send("pointerup", id);
+  }
+  const before = h.ink.getPage().strokes.slice();
+  h.ink.setTool("eraser");
+  h.send("pointerdown", 4, 20);
+  h.send("pointermove", 4, 30);
+  assert.ok(h.ink.state.page.strokes.length < 3);
+  // The previous stroke's pending debounce can save while the eraser is down.
+  const saved = S.serialize(h.ink.getPage());
+  h.ink.clearDirty();
+  h.send("pointercancel", 4);
+  assert.deepEqual(h.ink.getPage().strokes, before);
+  assert.equal(S.serialize(h.ink.getPage()), saved);
 });
