@@ -37,9 +37,16 @@
     const onChange = opts.onChange || function () {};
 
     // `desynchronized` is a hint, not a guarantee, and Safari ignores it on some
-    // versions. Requesting it costs nothing where it is unsupported.
+    // versions. Keep the live layer synchronized: it is a drawImage source, and
+    // desynchronized buffers can expose stale pixels during rapid copy/clear.
     const baseCtx = base.getContext("2d", { desynchronized: true });
-    const liveCtx = live.getContext("2d", { desynchronized: true });
+    const liveCtx = live.getContext("2d");
+    // Finalized segments of the current pen stroke. Only its last segment can
+    // still change shape; keeping that tail separate avoids painting over stale
+    // endpoints and makes the live pixels match the durable vector rendering.
+    const prefix = document.createElement("canvas");
+    const prefixCtx = prefix.getContext("2d");
+    let finalized = 0;
 
     const state = {
       page: S.emptyPage(),
@@ -68,7 +75,7 @@
       const dpr = Math.min(window.devicePixelRatio || 1, 3);
       const cssW = state.page.w * scale;
       const cssH = state.page.h * scale;
-      for (const c of [base, live]) {
+      for (const c of [base, live, prefix]) {
         c.style.width = `${cssW}px`;
         c.style.height = `${cssH}px`;
         c.width = Math.round(cssW * dpr);
@@ -79,7 +86,10 @@
       const k = scale * dpr;
       baseCtx.setTransform(k, 0, 0, k, 0, 0);
       liveCtx.setTransform(k, 0, 0, k, 0, 0);
+      prefixCtx.setTransform(k, 0, 0, k, 0, 0);
+      finalized = 0;
       redraw();
+      redrawLive();
     }
 
     function toPage(ev) {
@@ -106,37 +116,32 @@
       for (const s of state.page.strokes) S.drawStroke(baseCtx, s, { scale: 1 });
     }
 
-    // Points of `state.current` already painted onto the live layer.
-    let liveDrawn = 0;
-
-    // The live layer holds exactly one stroke, and it only ever grows, so on a
-    // pointermove it appends the new segments instead of clearing and redrawing
-    // the stroke from point zero. Redrawing from zero is O(n^2) over a stroke
-    // and gets worse the longer you write without lifting the pen.
-    //
-    // Appending is exact only for an opaque tool. The highlighter multiplies at
-    // 0.32 alpha, so re-touching its last segment would darken that one segment;
-    // it keeps the full redraw, which is affordable because a highlight is
-    // short. Everything else composites source-over at full alpha, where
-    // redrawing the joining segment over itself is invisible.
-
-    // Clearing the live layer and forgetting what is painted on it must happen
-    // together, or a later append draws onto a canvas that no longer holds the
-    // segments it is joining to.
+    // A new stroke or layout invalidates both live pixels and the stable prefix.
     function clearLive() {
       clear(liveCtx, live);
-      liveDrawn = 0;
+      clear(prefixCtx, prefix);
+      finalized = 0;
     }
 
     function redrawLive(append) {
       const spec = state.current ? S.toolSpec(state.current.tool) : null;
-      const canAppend = !!(append && state.current && liveDrawn >= 2 && spec && spec.alpha >= 1);
-      if (!canAppend) clearLive();
+      if (!append) clearLive();
+      else clear(liveCtx, live);
       if (!state.current) return;
-      // Resume one segment back: the previous last segment ends at the midpoint
-      // toward the new point, so it has to be redrawn to meet the new ink.
-      S.drawStroke(liveCtx, state.current, { scale: 1, from: canAppend ? liveDrawn - 1 : 1 });
-      liveDrawn = S.pointCount(state.current);
+      const n = S.pointCount(state.current);
+      if (spec.alpha >= 1 && n >= 3) {
+        if (finalized < n - 2) {
+          S.drawStroke(prefixCtx, state.current, { scale: 1, from: finalized + 1, to: n - 1 });
+          finalized = n - 2;
+        }
+        liveCtx.save();
+        liveCtx.setTransform(1, 0, 0, 1, 0, 0);
+        liveCtx.drawImage(prefix, 0, 0);
+        liveCtx.restore();
+        S.drawStroke(liveCtx, state.current, { scale: 1, from: n - 1 });
+      } else {
+        S.drawStroke(liveCtx, state.current, { scale: 1 });
+      }
     }
 
     // ── history ──────────────────────────────────────────────────────────────
@@ -260,14 +265,26 @@
       if (!state.current) return;
       const stroke = state.current;
       state.current = null;
-      clearLive();
-      if (S.pointCount(stroke) === 0) return;
+      if (S.pointCount(stroke) === 0) { clearLive(); return; }
 
       state.page.strokes.push(stroke);
       pushUndo({ type: "add", stroke });
-      // Only the new stroke is painted onto the base layer. A full redraw here
-      // would stall for a moment on a dense page, right as you lift the pen.
-      S.drawStroke(baseCtx, stroke, { scale: 1 });
+      // The opaque ink is already rasterized. Replaying every pressure segment
+      // here blocks the next pointerdown, especially after a long Pencil stroke.
+      // Copy in device pixels, without applying the page transform a second time.
+      // Highlighter segments multiply individually, so keep their vector replay:
+      // flattening them first would change overlaps on existing colored ink.
+      if (S.toolSpec(stroke.tool).alpha >= 1) {
+        baseCtx.save();
+        baseCtx.setTransform(1, 0, 0, 1, 0, 0);
+        baseCtx.globalAlpha = 1;
+        baseCtx.globalCompositeOperation = "source-over";
+        baseCtx.drawImage(live, 0, 0);
+        baseCtx.restore();
+      } else {
+        S.drawStroke(baseCtx, stroke, { scale: 1 });
+      }
+      clearLive();
       changed();
     }
 
@@ -293,7 +310,12 @@
     base.addEventListener("pointermove", onMove);
     base.addEventListener("pointerup", onUp);
     base.addEventListener("pointercancel", onCancel);
-    base.addEventListener("pointerleave", onUp);
+    // Leaving the canvas while captured is still the same stroke. An unexpected
+    // capture loss must finish it, however, or activePointer blocks the next one.
+    base.addEventListener("pointerleave", (ev) => {
+      if (!base.hasPointerCapture(ev.pointerId)) onUp(ev);
+    });
+    base.addEventListener("lostpointercapture", onUp);
     base.addEventListener("contextmenu", (e) => e.preventDefault());
 
     let resizeTimer = null;
