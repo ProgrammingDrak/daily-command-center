@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import {chromium} from 'playwright-core';
 const origin='http://127.0.0.1:8107';
-const browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
+const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
 const contexts=[];
 async function account(user,url='/'){
  const context=await browser.newContext({viewport:{width:390,height:900},permissions:['clipboard-read','clipboard-write']});contexts.push(context);
