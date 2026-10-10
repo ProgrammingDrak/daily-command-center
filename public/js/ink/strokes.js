@@ -118,12 +118,15 @@
   // stroke on every pointer sample is O(n^2) over the stroke -- a 900-point
   // stroke costs 101,700 segment draws -- and it gets slower the longer the
   // stroke gets, which is exactly backwards.
+  // opts.to is an exclusive segment boundary for a finalized prefix; omitting
+  // it draws through the provisional endpoint, as before.
   function drawStroke(ctx, stroke, opts) {
     const n = pointCount(stroke);
     if (!n) return;
     const spec = toolSpec(stroke.tool);
     const scale = (opts && opts.scale) || 1;
     const from = Math.max(1, Math.min((opts && opts.from) || 1, Math.max(1, n - 1)));
+    const to = Math.min(n, opts && opts.to != null ? opts.to : n);
 
     ctx.save();
     ctx.globalAlpha = spec.alpha;
@@ -161,7 +164,7 @@
     // what is already on the canvas.
     let prev = pointAt(stroke, from - 1);
     let mid = midpoint(prev, pointAt(stroke, from));
-    for (let i = from; i < n; i++) {
+    for (let i = from; i < to; i++) {
       const cur = pointAt(stroke, i);
       const nextMid = i + 1 < n ? midpoint(cur, pointAt(stroke, i + 1)) : cur;
       ctx.lineWidth = widthAt(stroke, cur.p) * scale;
