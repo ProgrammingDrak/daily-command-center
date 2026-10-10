@@ -126,6 +126,7 @@
     el.shelfSub.textContent = [
       books.length ? `${books.length} notebook${books.length === 1 ? "" : "s"}` : "",
       // This is the server build. Cached app assets may be older.
+      "ink-v7",
       serverBuildLabel,
     ].filter(Boolean).join(" · ");
     el.shelfStatus.textContent = st.unsynced ? `${st.unsynced} page${st.unsynced === 1 ? "" : "s"} to sync` : "";

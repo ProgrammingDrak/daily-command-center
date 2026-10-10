@@ -109,6 +109,15 @@
   /* ── writing view ────────────────────────────────────────────────────── */
   #writer { height: 100%; display: none; flex-direction: column; }
   #writer.on { display: flex; }
+  /* touch-action only controls pan/zoom, not iOS text-selection gestures.
+     Keep the writing surface AND its status/toolbar out of native selection.
+     Dialogs live outside #writer, so notebook names remain editable. */
+  #writer, #writer * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  #stage { touch-action: none; }
   .bar {
     display: flex; align-items: center; gap: 8px; padding: 8px 12px;
     background: var(--chrome-2); border-bottom: 1px solid var(--edge); flex-wrap: wrap;

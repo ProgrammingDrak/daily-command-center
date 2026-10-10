@@ -1,11 +1,12 @@
 // Isolated synthetic browser QA; never opens production or user storage.
 /* global document, window, PointerEvent, performance */
-import { chromium } from "playwright-core";
+import { chromium, webkit } from "playwright-core";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { writeFile } from "node:fs/promises";
 
-const browser = await chromium.launch({ channel: process.env.INK_BROWSER_CHANNEL || "msedge", headless: true });
+const browser = await (process.env.INK_ENGINE === "webkit" ? webkit.launch({ headless: true }) :
+  chromium.launch({ channel: process.env.INK_BROWSER_CHANNEL || "msedge", headless: true }));
 try {
   const page = await browser.newPage({ viewport: { width: 800, height: 1000 }, deviceScaleFactor: 2 });
   await page.setContent('<div id="wrap" style="width:638px;height:825px"><canvas id="base"></canvas><canvas id="live"></canvas></div>');
