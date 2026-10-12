@@ -946,7 +946,8 @@
   }
 
   // Opening is read-only. Only Save sends the captured cycle and draft fields.
-  function markDelegatedItemCheckedById(id) {
+  function markDelegatedItemCheckedById(id, options) {
+    options = options || {};
     const item = getDelegatedItemById(id);
     if (!item || !isOpenDelegated(item) || _checkInPrompt || _savingCheckIns.has(id)) return false;
     const key = cycleKey(item);
@@ -1000,6 +1001,7 @@
       try {
         const result = await completeCheckInCycle(id, key, new Date().toISOString(), {
           expectedCheckInCount,
+          checkInTaskId: options.checkInTaskId || undefined,
           nextCheckInDate: form.querySelector('#wci-date').value,
           note: form.querySelector('#wci-note').value.trim()
         });
@@ -1018,6 +1020,16 @@
       }
     });
     return outcome;
+  }
+
+  function completeCheckInTask(ev) {
+    const id = checkInItemId(ev);
+    if (id === null) return null;
+    if (!id || !getDelegatedItemById(id)) {
+      toast("This check-in's Waiting item is unavailable. Refresh and try again.", "error");
+      return Promise.resolve(false);
+    }
+    return Promise.resolve(markDelegatedItemCheckedById(id, { checkInTaskId: ev._blockId || ev.id }));
   }
 
   async function snoozeWaitingItem(id, until) {
@@ -1063,7 +1075,7 @@
     const what = p.title || p.myTask || "blocked item";
     const who = (p.delegatee && p.delegatee.name) || "";
     const ev = {
-      id: "waiting-checkin-task:" + id,
+      id: "waiting-checkin-task:" + id + ":" + (Array.isArray(p.checkInHistory) ? p.checkInHistory.length : 0),
       title: "Check in: " + what,
       type: "task",
       start: "00:00",
@@ -1782,6 +1794,7 @@
     complete: completeWaitingItem,
     open: openWaitingItem,
     completeCheckIn: markDelegatedItemCheckedById,
+    completeCheckInTask,
     completeCheckInCycle,
     checkInHistoryForTask,
     isCheckInTask,

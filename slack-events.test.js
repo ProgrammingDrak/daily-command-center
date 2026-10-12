@@ -77,6 +77,7 @@ function makeHarness(opts = {}) {
     },
     blockDB: {
       getBlock: async (id) => (id === dayRootRow.id ? dayRootRow : blocks.find(b => b.id === id) || null),
+      getDelegatedItems: async () => blocks.filter(b => !b.deleted_at && (b.properties || {}).kind === "delegated_item"),
       getBlockIncludingDeleted: async (id) => (id === dayRootRow.id ? dayRootRow : blocks.find(b => b.id === id) || null),
       findUniqueLiveBlockByReference: async (ref) => blocks.find(b => !b.deleted_at
         && (String(b.id) === String(ref) || String((b.properties || {}).local_id || "") === String(ref))) || null,
@@ -143,6 +144,9 @@ function makeHarness(opts = {}) {
     },
     pool: {
       query: async (sql, params) => {
+        if (sql.includes("slack_linked_targets")) {
+          return { rows: blocks.filter(b => b.workspace_id === params[0] && b.properties.kind === "delegated_item" && (params[1] || !b.deleted_at)).map(b => ({ ...b, slack_linked_targets: blocks.filter(t => !t.deleted_at && t.workspace_id === b.workspace_id && (t.id === b.properties.linkedBlockId || t.properties.local_id === b.properties.linkedBlockId)).map(t => t.properties) })) };
+        }
         if (sql.includes("idempotency_key")) {
           // Tombstones are INCLUDED, live rows first — the route's own ORDER BY.
           // The route decides what a tombstoned hit means; the mock must not
@@ -891,8 +895,8 @@ test("completion mirroring selects only rows with valid Slack coordinates", () =
   assert.ok(start >= 0 && end > start, "mirrorDccCompletions source slice exists");
   const mirror = source.slice(start, end);
   assert.match(mirror, /properties->>'source' IN \('slack-bookmark', 'slack-delegate', 'slack-delegate-completion'\)/);
-  assert.match(mirror, /NULLIF\(properties->>'slack_channel', ''\) IS NOT NULL/);
-  assert.match(mirror, /NULLIF\(properties->>'slack_ts', ''\) IS NOT NULL/);
+  assert.match(mirror, /properties->>'kind' = 'delegated_item'/);
+  assert.match(mirror, /waitingTarget\(block\)/);
   assert.match(mirror, /ORDER BY updated_at ASC, id ASC/);
   assert.match(mirror, /LIMIT \$4/);
   assert.match(source, /mirrorCursor/);
@@ -910,21 +914,21 @@ test("Slack projection refuses blocks from another workspace", async () => {
 
 test("completing and reopening Waiting mirrors ✅ onto its Slack message", async () => {
   const { handler, blocks, ctx, calls } = makeHarness();
-  await post(handler, reaction("busts_in_silhouette", "mirror-wait.1", "222.9"));
+  await post(handler, reaction("busts_in_silhouette", "1791471296.535379", "222.9"));
   const item = blocks.find(b => (b.properties || {}).kind === "delegated_item");
 
   item.properties.status = "done";
   item.properties.completedAt = "2026-07-28T16:00:00.000Z";
   assert.equal(await ctx.syncSlackTaskReactions(item), true);
   assert.deepEqual(calls.reactionsAdd.at(-1).body, {
-    channel: "C1", timestamp: "mirror-wait.1", name: "white_check_mark",
+    channel: "C1", timestamp: "1791471296.535379", name: "white_check_mark",
   });
 
   item.properties.status = "open";
   delete item.properties.completedAt;
   assert.equal(await ctx.syncSlackTaskReactions(item), true);
   assert.deepEqual(calls.reactionsRemove.at(-1).body, {
-    channel: "C1", timestamp: "mirror-wait.1", name: "white_check_mark",
+    channel: "C1", timestamp: "1791471296.535379", name: "white_check_mark",
   });
 });
 
@@ -1295,4 +1299,118 @@ test("⌛ and ✅ ignore a cancelled (tombstoned) task", async () => {
   assert.equal(blocks[0].properties.startedAt, undefined);
   assert.equal(blocks[0].properties.done, undefined);
   assert.equal(calls.credit.length, 0);
+});
+
+test("manual linked Waiting projects the existing human 👥 without creating a captured duplicate on echo", async () => {
+  const { blocks, calls, ctx, handler } = makeHarness();
+  const item = { id: "manual-wait", workspace_id: "ws-1", properties: {
+    kind: "delegated_item", status: "open", contact: { sourceRef: "https://cleverrealestate.slack.com/archives/C1/p1791471296535379" },
+  } };
+  blocks.push(item);
+  assert.equal(await ctx.syncSlackTaskReactions(item), true);
+  assert.equal(calls.reactionsAdd.at(-1).body.name, "busts_in_silhouette");
+  assert.equal(calls.reactionsAdd.at(-1).headers.Authorization, "Bearer xoxp-test");
+  await post(handler, reaction("busts_in_silhouette", "1791471296.535379", "222.9"));
+  assert.equal(blocks.length, 1);
+  item.properties.status = "unblocked";
+  item.properties.completedAt = new Date().toISOString();
+  await ctx.syncSlackTaskReactions(item);
+  assert.equal(calls.reactionsRemove.at(-1).body.name, "busts_in_silhouette");
+  const removal = reaction("busts_in_silhouette", "1791471296.535379", "223.9");
+  removal.event.type = "reaction_removed";
+  await post(handler, removal);
+  assert.equal(item.deleted_at, undefined);
+  assert.equal(calls.reactionsAdd.filter(call => call.body.name === "white_check_mark").length, 0);
+});
+
+test("queued Waiting projection rereads the row after a concurrent release and preserves other people's reactions", async () => {
+  const { blocks, calls, ctx, setFetch } = makeHarness();
+  const item = { id: "race-wait", workspace_id: "ws-1", properties: {
+    kind: "delegated_item", status: "open", slack_channel: "C1", slack_ts: "1791471296.535379",
+  } };
+  blocks.push(item);
+  let release;
+  let started;
+  const atWrite = new Promise(resolve => { started = resolve; });
+  setFetch(async () => { started(); await new Promise(resolve => { release = resolve; }); return { ok: true, json: async () => ({ ok: true }) }; });
+  const first = ctx.syncSlackTaskReactions(item);
+  await atWrite;
+  const stale = structuredClone(item);
+  item.properties.status = "unblocked";
+  const second = ctx.syncSlackTaskReactions(stale);
+  setFetch(async () => ({ ok: true, json: async () => ({ ok: true }) }));
+  release();
+  await Promise.all([first, second]);
+  assert.equal(calls.reactionsRemove.at(-1).body.name, "busts_in_silhouette");
+  for (const call of calls.reactionsRemove) assert.equal(call.body.user, undefined, "remove only token owner's reaction");
+});
+
+test("Waiting failures report retry, duplicate reaction writes settle, and malformed/non-Slack rows do nothing", async () => {
+  const { blocks, ctx, setFetch, calls } = makeHarness();
+  const item = { id: "wait-fail", workspace_id: "ws-1", properties: {
+    kind: "delegated_item", status: "open", slack_channel: "C1", slack_ts: "1791471296.535379",
+  } };
+  blocks.push(item);
+  setFetch(async () => ({ ok: true, json: async () => ({ ok: false, error: "missing_scope" }) }));
+  assert.equal(await ctx.syncSlackTaskReactions(item), false);
+  setFetch(async () => ({ ok: true, json: async () => ({ ok: false, error: "already_reacted" }) }));
+  assert.equal(await ctx.syncSlackTaskReactions(item), true);
+  const n = calls.fetch.length;
+  for (const props of [{ kind: "delegated_item", contact: { sourceRef: "https://mail.google.com/thread/1" } },
+    { kind: "delegated_item", slack_channel: "C1", slack_ts: "not-a-ts" },
+    { kind: "task", source: "waiting-checkin", slack_channel: "C1", slack_ts: "1791471296.535379" }]) {
+    assert.equal(await ctx.syncSlackTaskReactions({ ...item, properties: props }), false);
+  }
+  assert.equal(calls.fetch.length, n);
+});
+
+test("captured delegates retain their completed 👥 lifecycle and completion reaction", async () => {
+  const { handler, blocks, ctx, calls } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "1791471296.535379", "222.9"));
+  const item = blocks.find(b => b.properties.kind === "delegated_item");
+  item.properties.status = "done";
+  item.properties.completedAt = "2026-10-12T12:00:00Z";
+  await ctx.syncSlackTaskReactions(item);
+  assert.ok(calls.reactionsAdd.some(call => call.body.name === "white_check_mark"));
+  assert.equal(calls.reactionsRemove.filter(call => call.body.name === "busts_in_silhouette").length, 0);
+  item.properties.status = "unblocked";
+  await ctx.syncSlackTaskReactions(item);
+  const removal = reaction("busts_in_silhouette", "1791471296.535379", "223.9");
+  removal.event.type = "reaction_removed";
+  await post(handler, removal);
+  assert.equal(item.deleted_at, null, "release echo must not delete completed work");
+});
+
+test("mirror retries failed Waiting writes without advancing its cursor and skips dead/non-Slack targets", async () => {
+  const { api, blocks, ctx, setFetch, calls } = makeHarness();
+  for (const [id, props] of [
+    ['a', { kind: 'delegated_item', status: 'open', slack_channel: 'C1', slack_ts: '1791471296.535379' }],
+    ['b', { kind: 'delegated_item', status: 'open', contact: { sourceRef: 'https://mail.google.com/thread/1' } }],
+    ['c', { kind: 'delegated_item', status: 'open', slack_channel: 'C1', slack_ts: '1791471296.535380' }],
+  ]) blocks.push({ id, properties: props, workspace_id: 'ws-1', updated_at: '2026-10-12T12:00:00Z' });
+  const queries = [];
+  const original = ctx.pool.query;
+  ctx.pool.query = async (sql, params) => {
+    if (sql.includes('ORDER BY updated_at ASC, id ASC')) {
+      queries.push(params);
+      return { rows: blocks.filter(row => !params[1] || row.id > params[2]).slice(0, params[3]) };
+    }
+    return original(sql, params);
+  };
+  let fail = true;
+  setFetch(async (url, init) => {
+    if (String(url).includes('search.messages')) return { ok: true, json: async () => ({ ok: true, messages: { matches: [], paging: { pages: 1 } } }) };
+    const body = new URLSearchParams(init && init.body);
+    const dead = body.get('timestamp') === '1791471296.535380';
+    return { ok: true, json: async () => ({ ok: !fail && !dead, error: dead ? 'message_not_found' : 'missing_scope' }) };
+  });
+  await api.runReconciliation();
+  fail = false;
+  await api.runReconciliation();
+  assert.equal(queries[0][1], undefined);
+  assert.equal(queries[1][1], undefined, 'failed page remains pending');
+  await api.runReconciliation();
+  assert.equal(queries[2][2], 'c', 'successful writes and terminal missing messages advance the page');
+  assert.ok(calls.reactionsAdd.some(call => call.body.timestamp === '1791471296.535379'));
+  assert.equal(calls.reactionsAdd.some(call => call.body.timestamp === undefined), false);
 });

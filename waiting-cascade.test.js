@@ -67,7 +67,7 @@ test("the trigger and anything already done are excluded, so a retry is a no-op"
   // pass sees the rows the first pass closed and has nothing left to do.
   const it = item("w1", { status: "done" });
   const plan = cascade.cascadeTargets({
-    trigger: reminder("blk-r1", "w1"),
+    trigger: unblockRow("blk-work", "w1"),
     item: it,
     tasks: [
       reminder("blk-r1", "w1"),
@@ -76,7 +76,7 @@ test("the trigger and anything already done are excluded, so a retry is a no-op"
     ],
   });
   assert.equal(plan.item, null, "the item was already closed");
-  assert.deepEqual(plan.tasks.map(r => r.id), ["blk-r2"]);
+  assert.deepEqual(plan.tasks.map(r => r.id), ["blk-r1", "blk-r2"]);
 
   const empty = cascade.cascadeTargets({ trigger: reminder("blk-r2", "w1"), item: null, tasks: [] });
   assert.deepEqual(empty, { item: null, tasks: [] });
@@ -158,4 +158,10 @@ test("every completion entry point runs the cascade, and only on complete", () =
 
   // Swallowed on purpose: the caller's own completion already committed.
   assert.match(ROUTES_SRC, /catch \(error\) \{\n\s+console\.error\("\[waiting-cascade\] failed:"/);
+});
+
+test("check-in completion never closes Waiting, underlying work, or other occurrences", () => {
+  const work = unblockRow("real-work", "w1");
+  const checkin = reminder("check-in", "w1");
+  assert.deepEqual(cascade.cascadeTargets({ trigger: checkin, item: item("w1", {}), tasks: [work, checkin, reminder("next", "w1")] }), { item: null, tasks: [] });
 });

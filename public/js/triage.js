@@ -632,7 +632,9 @@ async function dismissTriage(triageId, note, trivial) {
     // BEFORE suppressing the card, or the suppression is the only thing holding the
     // item back and the next read re-offers the same overdue cycle forever.
     if (item.waiting_item_id && item.waiting_cycle_key) {
-      await completeWaitingCycle(item.waiting_item_id, item.waiting_cycle_key, completedAt);
+      const waiting = window.DCC && window.DCC.Waiting;
+      if (!waiting || typeof waiting.completeCheckIn !== "function") throw new Error("Waiting module unavailable. Reload and try again.");
+      if (!await waiting.completeCheckIn(item.waiting_item_id)) return false;
       cadenceAdvanced = true;
     }
     const saved = await persistTriageSuppression(triageId, item, "done", note || (trivial ? "Dismissed" : ""), trivial);

@@ -345,7 +345,8 @@
       const date = tu.sourceDate || u.sourceDate;
       try {
         if (typeof commitDoneOnDate !== "function") throw new Error("Completion writer unavailable");
-        await commitDoneOnDate(writeId(t) || t.id, date, { cascade: false });
+        const result = await commitDoneOnDate(writeId(t) || t.id, date, { cascade: false, ev: t });
+        if (result === false) return null;
       } catch (e) {
         if (typeof showToast === "function") showToast("Could not mark complete: " + ev.title, "error");
         return null;
