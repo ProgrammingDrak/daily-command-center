@@ -515,6 +515,11 @@ async function commitDoneOnDate(id,dateStr,opts){
   opts=opts||{};
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   const ev=((typeof scheduled!=="undefined"&&scheduled.find(e=>e.id===id))||opts.ev||null);
+  const waiting=window.DCC&&window.DCC.Waiting;
+  if(waiting&&typeof waiting.completeCheckInTask==="function"){
+    const checkIn=waiting.completeCheckInTask(ev);
+    if(checkIn!==null)return await checkIn;
+  }
   const completedAt=new Date();
   const completedIso=completedAt.toISOString();
   const award=opts.awardPoints!==undefined?opts.awardPoints:_pointAwardOverride(id);
@@ -947,6 +952,12 @@ function toggleDone(id,opts){
       if(typeof showToast==="function")showToast(error.message||"Reopen was not saved","error",4200);
     });
     return;
+  }
+
+  const waitingCompletion=window.DCC&&window.DCC.Waiting;
+  if(waitingCompletion&&typeof waitingCompletion.completeCheckInTask==="function"){
+    const checkIn=waitingCompletion.completeCheckInTask(scheduled.find(e=>e.id===id)||opts.ev||null);
+    if(checkIn!==null)return checkIn;
   }
 
   // A rollup container (shell) can't be checked while children are open — its

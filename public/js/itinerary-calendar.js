@@ -210,7 +210,8 @@
   async function toggleComplete(ev,checked){
     try{
       if(checked&&typeof root.commitDoneOnDate==="function"){
-        await root.commitDoneOnDate(ev.id,ev._block.date,{ev});
+        const result=await root.commitDoneOnDate(ev.id,ev._block.date,{ev});
+        if(result===false){await build({keepScroll:true});return;}
       }else if(!checked&&typeof root._persistDone==="function"){
         await Promise.resolve(root._persistDone(ev.id,false,{ev,dateStr:ev._block.date}));
       }else{

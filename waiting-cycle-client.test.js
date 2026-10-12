@@ -128,7 +128,7 @@ test("dismissTriage advances the cadence BEFORE it writes the suppression", () =
     /^async function dismissTriage\(triageId, note, trivial\) \{[\s\S]*?\n\}/m,
     "dismissTriage"
   );
-  const advance = fn.indexOf("completeWaitingCycle");
+  const advance = fn.indexOf("waiting.completeCheckIn");
   const suppress = fn.indexOf("persistTriageSuppression");
   assert.ok(advance > -1 && suppress > -1, "both steps still present");
   assert.ok(advance < suppress, "suppressing first would leave the card hidden but still overdue");

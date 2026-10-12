@@ -967,3 +967,89 @@ test("today is a valid next check-in with local-day semantics and safe repeated 
   assert.equal(waiting.properties.checkInDate, TODAY);
   assert.equal(waiting.properties.status, "open");
 });
+
+test("saving the next check-in retires only the occurrence, keeps Waiting and real task open, and handles duplicate saves", async () => {
+  const { app, ctx, waiting, task, rows, slackSync } = mountApp();
+  waiting.properties.linkedBlockId = task.id;
+  const reminder = { id: "check-in", type: "block", date: TODAY, workspace_id: MINE, user_id: 1,
+    properties: { source: "waiting-checkin", delegatedItemId: waiting.id, local_id: "waiting-checkin-task:" + waiting.id } };
+  rows.set(reminder.id, reminder);
+  const update = ctx.blockDB.updateBlock;
+  ctx.blockDB.updateBlock = async (id, patch, client) => {
+    if (id === reminder.id) {
+      assert.equal(patch.completionIntent, "complete", "real database rejects completion fields without explicit intent");
+      assert.ok(patch.completionMutationId);
+      assert.ok(client, "retirement shares the history transaction");
+    }
+    return update(id, patch, client);
+  };
+  const body = { cycleKey: "waiting:waiting-1:" + TODAY, completedAt: "2026-08-15T02:00:00Z", nextCheckInDate: "2026-08-20", expectedCheckInCount: 0, checkInTaskId: reminder.id };
+  const saved = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", body);
+  assert.equal(saved.body.status, "completed", JSON.stringify(saved));
+  assert.equal(reminder.properties.status, "done");
+  assert.equal(waiting.properties.status, "open");
+  assert.equal(task.properties.status, undefined);
+  assert.equal(waiting.properties.checkInHistory.length, 1);
+  assert.equal(slackSync.length, 0, "a reminder does not own completion Slack reactions");
+  const replay = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", body);
+  assert.equal(replay.body.status, "skipped_stale");
+  assert.equal(waiting.properties.checkInHistory.length, 1);
+  assert.equal(ctx.blockDB.isTaskRow(reminder), true);
+});
+
+test("next-check-in rejects real, unrelated, deleted, and foreign task references", async () => {
+  for (const mode of ["real", "unrelated", "deleted", "foreign"]) {
+    const { app, task, waiting } = mountApp();
+    task.properties = { source: mode === "real" ? "waiting-unblock" : "waiting-checkin", delegatedItemId: mode === "unrelated" ? "other" : waiting.id };
+    if (mode === "deleted") task.deleted_at = new Date().toISOString();
+    if (mode === "foreign") task.workspace_id = "another-workspace";
+    const result = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", { cycleKey: "waiting:waiting-1:" + TODAY, nextCheckInDate: "2026-08-20", completedAt: "2026-08-14T12:00:00Z", checkInTaskId: task.id });
+    assert.ok(result.status >= 400, mode);
+    assert.equal(waiting.properties.checkInHistory, undefined);
+    assert.equal(task.properties.done, undefined);
+  }
+});
+
+test("Checked in recovers a dangling scheduled reminder instead of trapping Waiting", async () => {
+  const { app, waiting } = mountApp();
+  waiting.properties.checkInTaskId = "deleted-reminder";
+  const result = await request(app, "/api/waiting-items/waiting-1/check-ins/complete", "POST", { cycleKey: "waiting:waiting-1:" + TODAY, completedAt: "2026-08-14T12:00:00Z", nextCheckInDate: "2026-08-20" });
+  assert.equal(result.body.status, "completed", JSON.stringify(result));
+  assert.equal(waiting.properties.checkInTaskId, null);
+});
+
+test("all Waiting transition endpoints dispatch the shared Slack projector after persisting linked source", async () => {
+  for (const dependency of [false, true]) {
+    const { app, task, prerequisite, slackSync, rows } = mountApp();
+    task.properties.source = "slack-bookmark";
+    task.properties.source_id = "https://cleverrealestate.slack.com/archives/C097MM612UD/p1791471296535379";
+    const created = await request(app, "/api/waiting-items", "POST", {
+      ...(dependency ? {} : { convertTaskId: task.id }),
+      properties: { myTask: task.properties.title, linkedBlockId: task.id, ...(dependency ? { blockerType: "task", blockerBlockId: prerequisite.id } : {}) },
+    });
+    assert.equal(created.status, 200, JSON.stringify(created));
+    assert.equal(created.body.properties.slack_channel, "C097MM612UD");
+    assert.equal(created.body.properties.slack_ts, "1791471296.535379");
+    assert.equal(task.properties.slackWaitingManaged, true);
+    const refs = () => slackSync.map(r => typeof r === 'string' ? r : r.id);
+    assert.ok(refs().includes(created.body.id));
+    assert.ok(refs().includes(task.id));
+    slackSync.length = 0;
+    await request(app, `/api/waiting-items/${created.body.id}`, "PATCH", { properties: { notes: "Edited Waiting" } });
+    assert.ok(refs().includes(created.body.id), 'Waiting edit/reopen syncs');
+    rows.get(created.body.id).properties.status = 'ready';
+    slackSync.length = 0;
+    const released = await request(app, `/api/waiting-items/${created.body.id}/unblock`, "POST", { destination: "backlog", taskBlockId: task.id });
+    assert.equal(released.status, 200, JSON.stringify(released));
+    assert.ok(refs().includes(created.body.id));
+    assert.ok(refs().includes(task.id));
+    slackSync.length = 0;
+    const removed = await request(app, `/api/waiting-items/${created.body.id}`, "DELETE");
+    assert.equal(removed.status, 200, JSON.stringify(removed));
+    assert.ok(refs().includes(created.body.id));
+    assert.ok(refs().includes(task.id));
+  }
+  const { app, slackSync } = mountApp();
+  const created = await request(app, '/api/delegated-items', 'POST', { properties: { myTask: 'Non-Slack waiting', contact: { channel: 'gmail' } } });
+  assert.ok(slackSync.some(r => r.id === created.body.id), 'legacy alias uses the same safe projector, including mixed sources');
+});
