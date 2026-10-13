@@ -79,7 +79,8 @@
     let status=document.getElementById(railId+'-status');
     if(!status){status=document.createElement('p');status.id=railId+'-status';status.setAttribute('role','status');rail.after(status);}
     status.textContent='';
-    return {accessibleLabel:'Task notes',stableImagesOnly:true,onAttachmentError:message=>{status.textContent=message;}};
+    const files=dcc.TaskAttachments?dcc.TaskAttachments.mount(container,task&&task._blockId):null;
+    return {accessibleLabel:'Task notes',stableImagesOnly:true,onAttachmentFile:files?file=>files.add(file):undefined,onAttachmentError:message=>{status.textContent=message;}};
   }
   return {safeUrl,validate,collect,render,kindFor,editorOptions};
 });

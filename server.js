@@ -1004,6 +1004,7 @@ require("./routes/commitments")(app, ctx);
 require("./routes/social-todo")(app, ctx);
 require("./routes/pet-home")(app, ctx);
 require("./routes/blocks")(app, ctx);
+require("./routes/task-attachments")(app, ctx);
 require("./routes/sync")(app, ctx);
 require("./routes/projects")(app, ctx);
 require("./routes/activity")(app, ctx);

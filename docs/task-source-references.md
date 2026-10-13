@@ -28,7 +28,9 @@ Synthetic Node tests cover multi-source serialization/projection, Slack identity
 
 Real private provider authentication and revoked/missing remote files are intentionally not fetched or exercised against user accounts; opening the source delegates those states to the provider. Invalid stored links are locally tested as unavailable. No production task writes or external upload tests were performed.
 
-## Remaining decision: durable task uploads
+## Original deferred scope: durable task uploads
+
+The follow-up implementation is documented in [task-binary-attachments.md](task-binary-attachments.md). It adds owner-only binary upload/read/removal routes and a dedicated private storage adapter; live bucket configuration and release remain approval-gated. The following paragraph records the scope deferred by PR397.
 
 Durable uploaded originals need a task-owner/workspace-scoped private object namespace and authenticated reader authorized through the parent task. Choose storage and provision grants before enabling uploads. Reusing Vault's content hashes and media access directly would incorrectly couple task permissions to Vault permissions. A task upload implementation must validate MIME against bytes, sanitize filenames, limit size/count, retain partial successes, prevent cross-owner/traversal references, enforce task reader access and define retention separately from removing a reference. This branch adds no upload endpoint, storage credentials or buckets. Upload size/type limits and reader-auth tests remain pending that decision; uploads are not represented as implemented.
 
