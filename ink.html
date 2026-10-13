@@ -185,6 +185,7 @@
   <div class="shelf-head">
     <h1>Mycelium Ink</h1>
     <span class="sub" id="shelfSub"></span>
+    <a class="sub" href="/source" style="color:var(--muted)">Source and license</a>
     <span class="grow" style="flex:1"></span>
     <span class="status" id="shelfStatus"></span>
     <span class="shelf-acts">
@@ -293,6 +294,5 @@
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/ink-sw.js").catch(() => {});
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 </script>
-<footer style="padding: 0.75rem; text-align: center"><a href="/source">Source and license</a></footer>
 </body>
 </html>
