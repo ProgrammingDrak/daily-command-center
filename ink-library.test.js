@@ -36,6 +36,38 @@ test("implements have distinct pressure, directional nib and graphite behavior",
   assert.ok(!ink.ops.some(o => o.name === "arc"));
   assert.ok(new Set(graphite.ops.filter(o => o.name === "fill").map(o => o.alpha)).size > 1);
 });
+test("full renders composite each modern stroke once, within the stroke's box", () => {
+  const made = [];
+  const prior = globalThis.OffscreenCanvas;
+  globalThis.OffscreenCanvas = class { constructor(w, h) { this.width = w; this.height = h; const c = context(); c.ctx.setTransform = () => {}; c.ctx.clearRect = (...args) => c.ops.push({ name: "clearRect", args }); this.ops = c.ops; this.getContext = () => c.ctx; made.push(this); } };
+  try {
+    const outer = context();
+    outer.ctx.canvas = { width: 2550, height: 3300 };
+    outer.ctx.getTransform = () => ({ a: 2, b: 0, c: 0, d: 2, e: 0, f: 0 });
+    outer.ctx.setTransform = () => {};
+    outer.ctx.globalCompositeOperation = "source-over";
+    outer.ctx.drawImage = (...args) => outer.ops.push({ name: "drawImage", args, alpha: outer.ctx.globalAlpha, op: outer.ctx.globalCompositeOperation });
+    const page = S.emptyPage();
+    page.strokes.push(sample("highlighter"), sample("pencil"), sample("ballpoint"));
+    S.drawPage(outer.ctx, page, { background: false });
+    const copies = outer.ops.filter(o => o.name === "drawImage");
+    assert.equal(copies.length, 3);
+    assert.deepEqual([copies[0].alpha, copies[0].op], [S.TOOLS.highlighter.alpha, "multiply"]);
+    assert.deepEqual([copies[1].alpha, copies[1].op], [0.7, "source-over"]);
+    assert.deepEqual([copies[2].alpha, copies[2].op], [1, "source-over"]);
+    for (const copy of copies) {
+      const [, x, y, w, h] = copy.args;
+      assert.equal(copy.args.length, 9);
+      assert.ok(x >= 0 && y >= 0 && w > 0 && h > 0 && w < 600 && h < 400, `bounded copy ${copy.args}`);
+    }
+    // Every segment lands on the scratch layer, never straight on the page.
+    assert.ok(!outer.ops.some(o => o.name === "stroke"));
+    S.drawPage(outer.ctx, page, { background: false });
+    assert.equal(made.length, 1);
+  } finally {
+    globalThis.OffscreenCanvas = prior;
+  }
+});
 test("graphite grain is deterministic after serialization", () => {
   const page = S.emptyPage(); page.strokes.push(sample("pencil"));
   const a = context(), b = context();

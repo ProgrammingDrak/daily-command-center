@@ -57,7 +57,9 @@ tail. At lift, the raster is composited once; opacity is applied once for graphi
 and modern highlighter. New highlighter coverage therefore has no dark dots from
 overlapping pressure samples. Separate highlights still darken where they overlap.
 Old highlights retain the existing replay path. The scratch canvas is reused per
-destination context and is not allocated per input event.
+destination context and is not allocated per input event. Each full render
+clears and composites only the stroke's device-pixel bounds, so a redraw costs
+about the stroke's area rather than the whole page per stroke.
 
 The vault's strict upload validator now uses the same tool registry, accepts
 normalized paper and v2 nib settings, and still rejects unknown tools, invalid

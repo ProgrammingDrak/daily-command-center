@@ -419,13 +419,15 @@
       setTool(tool) { if (state.activePointer === null) state.tool = tool; },
       setStyle(style) { state.style = style ? { ...style } : null; },
       setFingerDraw(value) { state.fingerDraw = value === "on" ? "on" : value === "auto" ? "auto" : "off"; },
-      setPaper(paper) {
+      // opts.history === false applies paper without an undo entry, for a
+      // page's initial state.
+      setPaper(paper, opts) {
         if (state.activePointer !== null) return false;
         const before = state.page.paper;
         const after = S.normalizePaper(paper);
         if (JSON.stringify(before) === JSON.stringify(after)) return false;
         state.page.paper = after;
-        pushUndo({ type: "paper", before, after });
+        if (!(opts && opts.history === false)) pushUndo({ type: "paper", before, after });
         redraw(); changed();
         return true;
       },

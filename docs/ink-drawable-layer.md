@@ -164,10 +164,10 @@ replace real data with the example's empty page during adoption or testing.
 | `isPenDown()` | Gate expensive host work and page switching. It reports active drawing input, not exclusively physical pen input. |
 | `undo()`, `redo()`, `canUndo()`, `canRedo()` | Operate on the current page; history is bounded to 60 entries. Call at an idle input boundary. |
 | `setTool()`, `setColor()`, `setSize()`, `setStyle()` | The shared registry includes writing implements; `pen` preserves old records. Eraser still removes whole strokes. Style settings are captured on creation. Select tools between strokes. |
-| `setPaper()` | Changes normalized paper beneath ink and creates an undo entry; never clears strokes. Call at idle. |
+| `setPaper(paper, opts)` | Changes normalized paper beneath ink and creates an undo entry, unless `opts.history === false` (used for a new page's inherited paper); never clears strokes. Call at idle. |
 | `setFingerDraw()` | `auto` retains legacy behavior; `off` is Pencil-first; `on` explicitly enables finger drawing. |
-| `renderToCanvas(scale)` | Synchronous full-page white-background render. Schedule outside input; it renders internal state, so do not use it as a persistence snapshot during provisional erasing. |
-| `destroy()` | Removes wrap touch and window resize/orientation listeners. It is not a complete reusable-node teardown: base pointer listeners and a pending resize timer are not removed. Use one long-lived instance per DOM canvas pair; do not destroy/recreate repeatedly on the same nodes. |
+| `renderToCanvas(scale)` | Synchronous full-page render including paper metadata (tint and pattern). Schedule outside input; it renders internal state, so do not use it as a persistence snapshot during provisional erasing. |
+| `destroy()` | Removes wrap touch, window resize/orientation and ResizeObserver listeners, and clears a pending resize timer. It is not a complete reusable-node teardown: base pointer listeners are not removed. Use one long-lived instance per DOM canvas pair; do not destroy/recreate repeatedly on the same nodes. |
 
 The portable format remains v1: `{v, w, h, strokes}`; each stroke contains
 `tool`, `color`, `size`, optional `style`, and flat `[x, y, pressure, ...]` points in page units.

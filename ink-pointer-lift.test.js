@@ -31,6 +31,8 @@ function surface(options = {}) {
   const live = canvas("live");
   const scope = { InkStrokes: S, document: { createElement: () => canvas("prefix") }, window: { devicePixelRatio: 2,
     addEventListener() {}, removeEventListener() {} }, setTimeout, clearTimeout };
+  // options.clock = { now } lets a test move time without waiting.
+  if (options.clock) scope.Date = class extends Date { static now() { return options.clock.now; } };
   scope.self = scope;
   vm.runInNewContext(fs.readFileSync(process.env.INK_CANVAS_SOURCE || require.resolve("./public/js/ink/canvas.js"), "utf8"), scope);
   let changes = 0;
@@ -231,6 +233,31 @@ test("a palm cannot navigate during Pencil contact or immediately after lift", (
   h.send("pointerup", 3, 20, { pointerType: "touch" });
   assert.deepEqual(turns, []);
   assert.equal(h.ink.getPage().strokes.length, 1);
+});
+
+test("palm guards hold through a long Pencil stroke and expire 800 ms after lift", () => {
+  const turns = [];
+  const clock = { now: 1000 };
+  const h = surface({ fingerDraw: "off", clock, onNavigate: delta => turns.push(delta) });
+  h.send("pointerdown", 1);
+  clock.now += 2000; // past the post-lift window: only the contact guard can block
+  h.send("pointerdown", 2, 140, { pointerType: "touch" });
+  h.send("pointermove", 2, 20, { pointerType: "touch" });
+  h.send("pointerup", 2, 20, { pointerType: "touch" });
+  assert.deepEqual(turns, []);
+  h.send("pointerup", 1);
+  clock.now += 900;
+  h.send("pointerdown", 3, 140, { pointerType: "touch" });
+  h.send("pointermove", 3, 20, { pointerType: "touch" });
+  h.send("pointerup", 3, 20, { pointerType: "touch" });
+  assert.deepEqual(turns, [1]);
+});
+
+test("inherited paper on a new page is not an undo entry", () => {
+  const h = surface();
+  h.ink.setPaper({ type: "grid", tint: "cream" }, { history: false });
+  assert.equal(h.ink.getPage().paper.type, "grid");
+  assert.equal(h.ink.canUndo(), false);
 });
 
 test("paper changes retain strokes and share undo history without resetting ink", () => {

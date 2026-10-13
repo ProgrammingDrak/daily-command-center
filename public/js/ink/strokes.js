@@ -33,6 +33,11 @@
   const PAGE_W = 1275;
   const PAGE_H = 1650;
 
+  // Shared limits. The vault validator and the toolbar read these, so a range
+  // widened here cannot produce pages the server then rejects.
+  const PAPER_SPACING = { min: 4, max: 12 };
+  const NIB_ANGLE = { min: 0, max: 170, default: 45 };
+
   const TOOLS = {
     ballpoint: { label: "Ballpoint", sizes: [1.8, 3, 5], minRatio: 0.8, alpha: 1, cap: "round", composite: "source-over" },
     fineliner: { label: "Fineliner", sizes: [1, 2, 3.5], minRatio: 1, alpha: 1, cap: "round", composite: "source-over" },
@@ -93,7 +98,7 @@
     const stroke = { tool: tool || "pen", color: color || "#1b1b2f", size: Number(size) || 2.5, pts: [] };
     // Optional appearance settings are captured once, never borrowed from UI state.
     // Legacy strokes without this field keep their original rendering.
-    if (style) stroke.style = { v: 2, angle: Number.isFinite(Number(style.angle)) ? Math.max(0, Math.min(170, Number(style.angle))) : 45 };
+    if (style) stroke.style = { v: 2, angle: Number.isFinite(Number(style.angle)) ? Math.max(NIB_ANGLE.min, Math.min(NIB_ANGLE.max, Number(style.angle))) : NIB_ANGLE.default };
     return stroke;
   }
 
@@ -135,6 +140,33 @@
   const masks = new WeakMap();
   function modernStroke(stroke) { return !!(stroke.style && stroke.style.v === 2); }
   function modernHighlight(stroke) { return stroke.tool === "highlighter" && stroke.style && stroke.style.v === 2; }
+  // Device-pixel box the stroke can touch, so the scratch layer is cleared and
+  // composited only there instead of across the whole canvas. Every modern
+  // stroke keeps the layer, even opaque ones: it matches the raster copied at
+  // lift, so a later redraw cannot shift antialiased edges.
+  function strokeBounds(stroke, scale, m, width, height) {
+    const n = pointCount(stroke);
+    if (!n) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const x = stroke.pts[i * 3], y = stroke.pts[i * 3 + 1];
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+    // Widths never exceed the stroke size; graphite grain stays within 0.6x.
+    const pad = (Number(stroke.size) || 2.5) + 2;
+    x0 = (x0 - pad) * scale; y0 = (y0 - pad) * scale; x1 = (x1 + pad) * scale; y1 = (y1 + pad) * scale;
+    let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+    for (const [x, y] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]]) {
+      const dx = m.a * x + m.c * y + m.e, dy = m.b * x + m.d * y + m.f;
+      if (dx < bx0) bx0 = dx; if (dx > bx1) bx1 = dx;
+      if (dy < by0) by0 = dy; if (dy > by1) by1 = dy;
+    }
+    bx0 = Math.max(0, Math.floor(bx0)); by0 = Math.max(0, Math.floor(by0));
+    bx1 = Math.min(width, Math.ceil(bx1)); by1 = Math.min(height, Math.ceil(by1));
+    if (bx1 <= bx0 || by1 <= by0) return null;
+    return { x: bx0, y: by0, w: bx1 - bx0, h: by1 - by0 };
+  }
   function drawStroke(ctx, stroke, opts) {
     // New styles share the transparent-layer rendering used during input.
     // Highlighter gets one translucent multiply composite per coverage mask,
@@ -151,11 +183,14 @@
       if (c.width !== ctx.canvas.width || c.height !== ctx.canvas.height) {
         c.width = ctx.canvas.width; c.height = ctx.canvas.height;
       }
+      const m = ctx.getTransform();
+      const box = strokeBounds(stroke, (opts && opts.scale) || 1, m, c.width, c.height);
+      if (!box) return;
       mask.ctx.setTransform(1, 0, 0, 1, 0, 0);
-      mask.ctx.clearRect(0, 0, c.width, c.height);
-      mask.ctx.setTransform(ctx.getTransform());
+      mask.ctx.clearRect(box.x, box.y, box.w, box.h);
+      mask.ctx.setTransform(m);
       drawStroke(mask.ctx, stroke, { ...opts, mask: true });
-      compositeStroke(ctx, c, stroke);
+      compositeStroke(ctx, c, stroke, box);
       return;
     }
     const n = pointCount(stroke);
@@ -243,12 +278,14 @@
     return width * (minimum + (1 - minimum) * Math.abs(Math.sin(direction - angle)));
   }
 
-  function compositeStroke(ctx, canvas, stroke) {
+  // `box` limits the copy to a device-pixel region; omit it to copy everything.
+  function compositeStroke(ctx, canvas, stroke, box) {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = modernHighlight(stroke) ? toolSpec(stroke.tool).alpha : toolSpec(stroke.tool).graphite ? 0.7 : 1;
     ctx.globalCompositeOperation = modernHighlight(stroke) ? "multiply" : "source-over";
-    ctx.drawImage(canvas, 0, 0);
+    if (box) ctx.drawImage(canvas, box.x, box.y, box.w, box.h, box.x, box.y, box.w, box.h);
+    else ctx.drawImage(canvas, 0, 0);
     ctx.restore();
   }
 
@@ -270,27 +307,27 @@
 
   const PAPERS = [
     { id: "blank", label: "Blank", spacing: 7 },
-    { id: "ruled-narrow", label: "Narrow ruled", spacing: 6 },
-    { id: "ruled", label: "College ruled", spacing: 7 },
-    { id: "ruled-wide", label: "Wide ruled", spacing: 9 },
-    { id: "dots", label: "Dot grid", spacing: 5 },
-    { id: "grid", label: "Square grid", spacing: 5 },
-    { id: "engineering", label: "Engineering grid", spacing: 5 },
-    { id: "cornell", label: "Cornell notes", spacing: 7 },
-    { id: "music", label: "Music staff", spacing: 7 },
-    { id: "checklist", label: "Checklist", spacing: 9 },
+    { id: "ruled-narrow", label: "Narrow ruled", spacing: 6, usesSpacing: true },
+    { id: "ruled", label: "College ruled", spacing: 7, usesSpacing: true },
+    { id: "ruled-wide", label: "Wide ruled", spacing: 9, usesSpacing: true },
+    { id: "dots", label: "Dot grid", spacing: 5, usesSpacing: true },
+    { id: "grid", label: "Square grid", spacing: 5, usesSpacing: true },
+    { id: "engineering", label: "Engineering grid", spacing: 5, usesSpacing: true },
+    { id: "cornell", label: "Cornell notes", spacing: 7, usesSpacing: true },
+    { id: "music", label: "Music staff", spacing: 7, usesSpacing: true },
+    { id: "checklist", label: "Checklist", spacing: 9, usesSpacing: true },
     { id: "daily", label: "Daily planner", spacing: 7 },
     { id: "weekly", label: "Weekly planner", spacing: 7 },
     { id: "monthly", label: "Monthly planner", spacing: 7 },
-    { id: "handwriting", label: "Handwriting practice", spacing: 9 },
-    { id: "isometric", label: "Isometric grid", spacing: 5 },
+    { id: "handwriting", label: "Handwriting practice", spacing: 9, usesSpacing: true },
+    { id: "isometric", label: "Isometric grid", spacing: 5, usesSpacing: true },
   ];
   const TINTS = { white: "#ffffff", cream: "#fff9eb", gray: "#f0f2f4" };
   function normalizePaper(raw) {
     const r = raw || {};
     const preset = PAPERS.find(p => p.id === r.type) || PAPERS[0];
     return { type: preset.id, tint: Object.prototype.hasOwnProperty.call(TINTS, r.tint) ? r.tint : "white",
-      spacing: Math.min(12, Math.max(4, Number(r.spacing) || preset.spacing)), margin: r.margin !== false };
+      spacing: Math.min(PAPER_SPACING.max, Math.max(PAPER_SPACING.min, Number(r.spacing) || preset.spacing)), margin: r.margin !== false };
   }
 
   // One procedural renderer for actual paper, picker thumbnails and vault images.
@@ -484,7 +521,7 @@
   }
 
   return {
-    FORMAT_VERSION, PAGE_W, PAGE_H, TOOLS, PAPERS, TINTS, normalizePaper, drawPaper, modernStroke, modernHighlight, compositeStroke,
+    FORMAT_VERSION, PAGE_W, PAGE_H, PAPER_SPACING, NIB_ANGLE, TOOLS, PAPERS, TINTS, normalizePaper, drawPaper, modernStroke, modernHighlight, compositeStroke,
     emptyPage, newStroke, addPoint, pointCount, pointAt,
     normalizePressure, widthAt, toolSpec,
     drawStroke, drawPage,

@@ -339,7 +339,7 @@ function validateNotebookInk(buffer) {
   if (page.paper != null && (!page.paper || typeof page.paper !== "object"
       || !InkStrokes.PAPERS.some(p => p.id === page.paper.type)
       || !Object.prototype.hasOwnProperty.call(InkStrokes.TINTS, page.paper.tint)
-      || !Number.isFinite(page.paper.spacing) || page.paper.spacing < 4 || page.paper.spacing > 12
+      || !Number.isFinite(page.paper.spacing) || page.paper.spacing < InkStrokes.PAPER_SPACING.min || page.paper.spacing > InkStrokes.PAPER_SPACING.max
       || typeof page.paper.margin !== "boolean")) {
     throw new Error("ink contains invalid paper settings");
   }
@@ -352,7 +352,7 @@ function validateNotebookInk(buffer) {
       throw new Error("ink contains an invalid stroke");
     }
     if (stroke.style != null && (!stroke.style || stroke.style.v !== 2
-        || !Number.isFinite(stroke.style.angle) || stroke.style.angle < 0 || stroke.style.angle > 170)) {
+        || !Number.isFinite(stroke.style.angle) || stroke.style.angle < InkStrokes.NIB_ANGLE.min || stroke.style.angle > InkStrokes.NIB_ANGLE.max)) {
       throw new Error("ink contains invalid nib settings");
     }
     points += stroke.pts.length / 3;

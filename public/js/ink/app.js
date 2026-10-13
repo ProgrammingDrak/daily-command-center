@@ -35,7 +35,7 @@
     const prior = preferences[name] || {}, spec = S.toolSpec(name);
     return { color: /^#[0-9a-f]{6}$/i.test(prior.color) ? prior.color : name === "highlighter" ? HIGHLIGHTS[0] : COLORS[0],
       size: Math.max(0.6, Math.min(48, Number(prior.size) || spec.sizes[1])),
-      angle: Math.max(0, Math.min(170, Number.isFinite(prior.angle) ? prior.angle : 45)) };
+      angle: Math.max(S.NIB_ANGLE.min, Math.min(S.NIB_ANGLE.max, Number.isFinite(prior.angle) ? prior.angle : S.NIB_ANGLE.default)) };
   }
   const COVERS = ["slate", "moss", "clay", "plum", "ink", "sand"];
   const BOOK_ACTION_ICON = "⋮";
@@ -360,7 +360,8 @@
     const page = await Store.addPage(current.notebook.id, current.pages.length);
     current.pages.push(page);
     await loadPage(current.pages.length - 1);
-    if (paper) ink.setPaper(paper);
+    // Inherited paper is the new page's starting state, not an undoable edit.
+    if (paper) ink.setPaper(paper, { history: false });
   });
 
   el.delPageBtn.addEventListener("click", async () => {
@@ -626,8 +627,7 @@
   function renderPaperChoices() {
     const paper = S.normalizePaper(ink.getPage().paper);
     el.paperTint.value = paper.tint; el.paperSpacing.value = paper.spacing; el.paperMargin.checked = paper.margin;
-    const spacingUsed = ["ruled-narrow", "ruled", "ruled-wide", "dots", "grid", "engineering", "cornell", "music", "checklist", "handwriting", "isometric"].includes(paper.type);
-    el.paperSpacing.disabled = !spacingUsed;
+    el.paperSpacing.disabled = !(S.PAPERS.find(p => p.id === paper.type) || {}).usesSpacing;
     el.paperMargin.disabled = !paper.type.startsWith("ruled");
     el.paperChoices.innerHTML = "";
     for (const preset of S.PAPERS) {
