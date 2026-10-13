@@ -11,7 +11,11 @@ Read-only audit on 2026-10-08. No secret values or credentials were read; no gra
 
 There is **no verified reusable private bucket plus authorized credential pair**. An existing external configuration could change that finding only after a safe name-only production check and confirmation of its intended scope. Do not reuse another app's credentials by inference.
 
-## Proposed choice
+## Decision (2026-10-13)
+
+Drake chose a private bucket in DCC's existing **Supabase Storage** project over the Railway and R2 proposals below, and approved the additive migration plus a dark release. Supabase S3 keys are project-wide rather than bucket-scoped; keep them server-only. Pro plan includes 100 GB storage, then usage pricing; egress counts against plan bandwidth. Activation (bucket creation and Railway variables) is Drake's step; no bucket or credential was created by the release.
+
+## Original proposal (superseded)
 
 Use a dedicated private Railway bucket in the existing project, proposed display name **dcc-private-attachments**. This avoids a new third-party account but still requires approval for a new billable resource and its credentials. Use separate development/test resources; current tests continue using synthetic local storage.
 

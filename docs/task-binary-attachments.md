@@ -24,20 +24,22 @@ Task Notes modal, drawer and completion editor share file controls. Quick/Sticky
 
 Removal is a tombstone, not physical object erasure. It disables reads, is idempotent, survives old upload retries and offers persistent Undo removal. Originals and failed reservations remain counted. No purge job, object delete permission or automatic retention clock has been introduced.
 
-## Infrastructure decisions still requiring Drake
+## Storage decision and activation
 
-Approve/select the dedicated **private** bucket/provider, billing and limited server credentials before activation. Required environment names:
+**Decided 2026-10-13 (Drake):** bytes live in a private **Supabase Storage** bucket (`dcc-private-attachments`) in DCC's existing Supabase project, reached through Supabase's S3-compatible endpoint. The code, additive migration and release ship dark: until the bucket and variables exist, uploads answer 503. Supabase S3 access keys are project-wide (all buckets, RLS bypassed), so they must live only in DCC's server environment; DCC's per-owner checks remain the access boundary. Required environment names:
 
 - `DCC_ATTACHMENT_ENDPOINT`
 - `DCC_ATTACHMENT_BUCKET`
 - `DCC_ATTACHMENT_ACCESS_KEY_ID`
 - `DCC_ATTACHMENT_SECRET_ACCESS_KEY`
 - Optional `DCC_ATTACHMENT_REGION` (default `auto`)
-- Optional `DCC_ATTACHMENT_FORCE_PATH_STYLE` (default path style; set `0` for new Railway buckets using virtual-hosted addressing)
+- Optional `DCC_ATTACHMENT_FORCE_PATH_STYLE` (default path style, which Supabase requires; set `0` only for virtual-hosted providers)
+
+Supabase values: endpoint `https://<project-ref>.storage.supabase.co/storage/v1/s3`, bucket `dcc-private-attachments`, keys from Storage > S3 Connection, region = the project region. The S3 client sends checksums only when required, for S3-compatible endpoints.
 
 The application calls PutObject/GetObject only under `task-attachments/`; it does not need ACL, public-read, bucket provisioning or DeleteObject. Provider-issued bucket credentials may grant a broader set of object operations: Railway per-bucket credentials and ordinary R2 Object Read & Write tokens must not be described as enforcing this exact action/prefix policy. Review the provider grant before activation. Configure provider-side public-access blocking and avoid independent expiry/overwrite of active originals. No browser CORS setup is needed because all transfers use DCC's authenticated server. These are configuration requirements; no such grants or credentials were created or changed. Vault and other apps' credentials are never reused. See [read-only storage audit and provider proposal](task-attachment-storage-audit.md) for verified reuse findings, cost/backup expectations and the exact approval scope. Until configured, uploads answer 503 with an explicit message.
 
-Approve the additive schema migration and release separately. `pg-schema.js` includes the table idempotently on the normal startup path; **do not deploy this branch before migration/release approval**. Metadata foreign keys intentionally avoid cascading deletion. Define backup/retention/purge policy and operational alerting for failed reservations before increasing quotas or adding permanent erasure. No active attachments should be expired solely because a task is old. Current local behavior retains all originals until an explicit future purge implementation/policy is approved.
+The additive schema migration and dark release were approved 2026-10-13. `pg-schema.js` creates the table idempotently on the normal startup path. Metadata foreign keys intentionally avoid cascading deletion. Define backup/retention/purge policy and operational alerting for failed reservations before increasing quotas or adding permanent erasure. No active attachments should be expired solely because a task is old. Current local behavior retains all originals until an explicit future purge implementation/policy is approved.
 
 ## Local verification
 
