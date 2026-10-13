@@ -1,0 +1,97 @@
+{
+  "engine": "chromium",
+  "brushPixels": [
+    {
+      "tool": "ballpoint",
+      "materialPixels": 432,
+      "maxDifference": 57
+    },
+    {
+      "tool": "fineliner",
+      "materialPixels": 315,
+      "maxDifference": 57
+    },
+    {
+      "tool": "fountain",
+      "materialPixels": 353,
+      "maxDifference": 57
+    },
+    {
+      "tool": "pencil",
+      "materialPixels": 464,
+      "maxDifference": 40
+    },
+    {
+      "tool": "mechanical",
+      "materialPixels": 315,
+      "maxDifference": 40
+    },
+    {
+      "tool": "marker",
+      "materialPixels": 2036,
+      "maxDifference": 86
+    },
+    {
+      "tool": "highlighter",
+      "materialPixels": 421,
+      "maxDifference": 12
+    },
+    {
+      "tool": "brush",
+      "materialPixels": 581,
+      "maxDifference": 57
+    },
+    {
+      "tool": "calligraphy",
+      "materialPixels": 549,
+      "maxDifference": 57
+    },
+    {
+      "longHighlightLiftMs": 0.6999999955296516,
+      "points": 10000
+    }
+  ],
+  "layouts": [
+    {
+      "width": 1440,
+      "overflow": false,
+      "paperHeight": 746,
+      "controls": true
+    },
+    {
+      "width": 768,
+      "overflow": false,
+      "paperHeight": 820,
+      "controls": true
+    },
+    {
+      "width": 375,
+      "overflow": false,
+      "paperHeight": 400,
+      "controls": true
+    },
+    {
+      "width": 812,
+      "overflow": false,
+      "paperHeight": 171,
+      "controls": true
+    }
+  ],
+  "errors": [],
+  "saveAcknowledgementRace": true,
+  "worker": {
+    "supported": true,
+    "type": "image/jpeg",
+    "bytes": 12990,
+    "corner": [
+      255,
+      249,
+      235,
+      255
+    ]
+  },
+  "savedReloadedExportedStrokes": 9,
+  "paperUndoRedo": true,
+  "fingerNavigation": true,
+  "toolMemory": true
+}
