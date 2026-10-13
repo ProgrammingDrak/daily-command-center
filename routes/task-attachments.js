@@ -29,7 +29,6 @@ module.exports = function mount(app, ctx) {
         }
         if (!req.params.blockId || req.params.blockId.length > 255 || (req.params.id && !UUID.test(req.params.id))) throw fail("Invalid attachment identity");
         const actor = { userId, workspaceId: req.workspaceId };
-        await store.authorize(actor, req.params.blockId); // authorize before buffering multipart bytes
         await run(req, res, actor);
       } catch (error) {
         const code = error.statusCode || (error.code === "LIMIT_FILE_SIZE" ? 413 : error instanceof multer.MulterError ? 400 : 503);
@@ -43,6 +42,7 @@ module.exports = function mount(app, ctx) {
       const id = req.headers["x-upload-id"];
       if (typeof id !== "string" || !UUID.test(id)) throw fail("Upload identity required");
       if (!store.configured) throw fail("Private task file storage is not configured", 503);
+      await store.authorize(actor, req.params.blockId); // authorize before buffering multipart bytes
       await bounded(actor, async () => {
         await new Promise((resolve, reject) => upload(req, res, error => error ? reject(error) : resolve()));
         const meta = validateFile(req.file);

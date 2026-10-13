@@ -19,3 +19,22 @@ test("transfer concurrency is bounded before buffering and service identity does
   finally {releases.forEach(resolve=>resolve());await Promise.all([first,second]);}
   const third=post();const deadline=Date.now()+5000;while(entered<3){if(Date.now()>deadline)throw new Error('Slots did not release');await new Promise(resolve=>setTimeout(resolve,5));}releases.at(-1)();assert.equal((await third).status,201);
 });
+test("mutation guards reject missing headers, cross-site requests, foreign origins and extra multipart parts", async t => {
+  let authorized = 0;
+  const store = {configured:true,authorize:async()=>{authorized++;return true;},list:async()=>[],upload:async()=>({id:crypto.randomUUID()}),remove:async()=>{}};
+  const app=express(); app.use((req,_res,next)=>{req.session={userId:1};req.workspaceId='ws-1';next();});
+  require('./routes/task-attachments')(app,{taskAttachmentStore:store});
+  const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const base=`http://127.0.0.1:${server.address().port}/api/tasks/task/attachments`;
+  const remove=headers=>fetch(`${base}/${crypto.randomUUID()}`,{method:'DELETE',headers});
+  assert.equal((await remove({})).status,403);
+  assert.equal((await remove({'X-DCC-Attachment':'1','Sec-Fetch-Site':'cross-site'})).status,403);
+  assert.equal((await remove({'X-DCC-Attachment':'1',Origin:'https://evil.example'})).status,403);
+  assert.equal((await remove({'X-DCC-Attachment':'1'})).status,200);
+  assert.equal((await fetch(`${base}/not-a-uuid/download`)).status,400);
+  assert.equal(authorized,0,'only uploads pre-authorize; other routes authorize inside the store');
+  const data=new FormData();data.append('file',new Blob(['a'],{type:'text/plain'}),'a.txt');data.append('file',new Blob(['b'],{type:'text/plain'}),'b.txt');
+  const extra=await fetch(base,{method:'POST',headers:{'X-DCC-Attachment':'1','X-Upload-Id':crypto.randomUUID()},body:data});
+  assert.equal(extra.status,400); assert.match((await extra.json()).error,/one file per request/);
+  assert.equal(authorized,1);
+});

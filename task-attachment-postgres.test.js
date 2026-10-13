@@ -10,7 +10,7 @@ const { validateFile, keyFor, MAX_FILES } = require("./lib/task-attachment-polic
 const actor = { userId: 1, workspaceId: "ws-1" };
 const bytes = Buffer.from("Fictional confidential attachment\n");
 const meta = validateFile({ originalname: "fixture.txt", mimetype: "text/plain", buffer: bytes });
-test("private attachments: real transactions, protected routes, failure recovery and deletion", { skip: !process.env.DCC_ATTACHMENT_TEST_DATABASE_URL }, async t => {
+test("private attachments: real transactions, protected routes, failure recovery and deletion", { skip: !(process.env.DCC_ATTACHMENT_TEST_DATABASE_URL || process.env.DCC_TEST_DATABASE_URL) }, async t => {
   const fixture = await createFixtureDb(); t.after(fixture.cleanup);
   const { pool } = fixture;
   const objects = new Map(); let failPut = false, puts = 0, gets = 0;
@@ -65,7 +65,7 @@ test("private attachments: real transactions, protected routes, failure recovery
     await assert.rejects(store.download(actor,"task",id),e=>e.statusCode===404);
     await pool.query("UPDATE task_attachments SET object_key=$1 WHERE id=$2",[key,id]);
     objects.delete(key); await assert.rejects(store.download(actor,"task",id),e=>e.statusCode===404);
-    objects.set(key,Buffer.from("corrupt")); await assert.rejects(store.download(actor,"task",id),e=>e.statusCode===502); objects.set(key,bytes);
+    objects.set(key,Buffer.alloc(bytes.length,0x41)); await assert.rejects(store.download(actor,"task",id),e=>e.statusCode===502); objects.set(key,bytes);
   });
   await t.test("independent quick and legacy notes have the same owner-scoped binary lifecycle", async () => {
     for (const parent of ["quick-note","legacy-note"]) {
@@ -85,7 +85,12 @@ test("private attachments: real transactions, protected routes, failure recovery
     assert.equal(results.filter(r=>r.status==="fulfilled").length,1); assert.equal(results.find(r=>r.status==="rejected").reason.statusCode,409);
     await store.remove(actor,"task",id); await store.upload(actor,"task",crypto.randomUUID(),meta,bytes);
     await assert.rejects(store.restore(actor,"task",id),e=>e.statusCode===409);
-    await pool.query("UPDATE task_attachments SET size=10485760");
+    // Active files alone stay under 200 MB; only the removed originals push the owner over.
+    const { rows: [{ active }] } = await pool.query("SELECT COUNT(*)::int AS active FROM task_attachments WHERE user_id=1 AND deleted_at IS NULL");
+    const activeSize = Math.min(10485760, Math.floor((200 * 1024 * 1024 - 1024 * 1024) / (active + 1)));
+    await pool.query("UPDATE task_attachments SET size=CASE WHEN deleted_at IS NULL THEN $1 ELSE 10485760 END",[activeSize]);
+    const { rows: [{ activeBytes }] } = await pool.query("SELECT SUM(size)::bigint AS \"activeBytes\" FROM task_attachments WHERE user_id=1 AND deleted_at IS NULL");
+    assert.ok(Number(activeBytes) + bytes.length <= 200 * 1024 * 1024);
     await assert.rejects(store.upload(actor,"second",crypto.randomUUID(),meta,bytes),e=>e.statusCode===409);
     await pool.query("UPDATE task_attachments SET size=$1",[bytes.length]);
   });

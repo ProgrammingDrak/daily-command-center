@@ -22,15 +22,17 @@ function publicRow(row) {
   return { id: row.id, filename: row.filename, mime: row.mime, size: row.size, uploadedAt: row.created_at, removed: !!row.deleted_at, pending: row.state === "pending" };
 }
 function createStore({ pool, storage }) {
-  async function transaction(actor, blockId, run) {
+  // Writes lock the owner row (quota serialization) and the parent. Reads take no
+  // row locks, so listing and downloads never stall block saves or FK checks.
+  async function transaction(actor, blockId, run, { read = false } = {}) {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [actor.userId]);
+      if (!read) await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [actor.userId]);
       // Owner only. Neither invited workspace members nor commitment roles grant private Notes access.
       const { rows } = await client.query(`SELECT b.* FROM blocks b JOIN workspaces w ON w.id=b.workspace_id
         WHERE b.id=$1 AND b.workspace_id=$2 AND w.owner_id=$3 AND (b.user_id IS NULL OR b.user_id=$3)
-        AND b.deleted_at IS NULL FOR UPDATE OF b,w`, [blockId, actor.workspaceId, actor.userId]);
+        AND b.deleted_at IS NULL${read ? "" : " FOR UPDATE OF b,w"}`, [blockId, actor.workspaceId, actor.userId]);
       if (!rows[0] || !isTaskRow(rows[0])) throw fail("Task or note unavailable", 404);
       const result = await run(client);
       await client.query("COMMIT"); return result;
@@ -51,12 +53,12 @@ function createStore({ pool, storage }) {
   }
   return {
     configured: storage.configured,
-    async authorize(actor, blockId) { return transaction(actor, blockId, async () => true); },
+    async authorize(actor, blockId) { return transaction(actor, blockId, async () => true, { read: true }); },
     async list(actor, blockId) {
       return transaction(actor, blockId, async client => {
         const { rows } = await client.query("SELECT * FROM task_attachments WHERE block_id=$1 AND user_id=$2 AND workspace_id=$3 ORDER BY created_at", [blockId, actor.userId, actor.workspaceId]);
         return rows.map(publicRow);
-      });
+      }, { read: true });
     },
     async upload(actor, blockId, id, meta, bytes) {
       if (!storage.configured) throw fail("Private task file storage is not configured", 503);
@@ -85,14 +87,16 @@ function createStore({ pool, storage }) {
       });
     },
     async download(actor, blockId, id) {
-      // Hold parent lock through storage read: deletion/access changes cannot race the authorized read.
-      return transaction(actor, blockId, async client => {
-        const row = await find(client, actor, blockId, id);
-        if (row.deleted_at || row.state !== "ready") throw fail("Attachment unavailable", 404);
-        const bytes = await storage.get(row.object_key);
-        if (bytes.length !== row.size || crypto.createHash("sha256").update(bytes).digest("hex") !== row.sha256) throw fail("Stored file failed its integrity check", 502);
-        return { ...publicRow(row), bytes };
-      });
+      // Authorize in a short read, then fetch bytes with no connection or lock held.
+      // A removal racing the fetch can at most serve the owner a file removed moments ago.
+      const row = await transaction(actor, blockId, async client => {
+        const found = await find(client, actor, blockId, id);
+        if (found.deleted_at || found.state !== "ready") throw fail("Attachment unavailable", 404);
+        return found;
+      }, { read: true });
+      const bytes = await storage.get(row.object_key);
+      if (bytes.length !== row.size || crypto.createHash("sha256").update(bytes).digest("hex") !== row.sha256) throw fail("Stored file failed its integrity check", 502);
+      return { ...publicRow(row), bytes };
     },
     async remove(actor, blockId, id) {
       return transaction(actor, blockId, async client => {

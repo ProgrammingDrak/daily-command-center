@@ -3,6 +3,9 @@
 (function () {
   'use strict';
   var DCC = window.DCC = window.DCC || {};
+  // Panels re-mount on every list re-render (Quick Notes rebuilds all cards), so
+  // reuse a recent list per account+parent instead of one GET per card per render.
+  var LIST_TTL_MS = 30000, listCache = new Map();
   function mount(host, blockId, options) {
     var parentKind = options && options.kind === "note" ? "note" : "task";
     var old = host._taskAttachments;
@@ -33,12 +36,12 @@
     function sameAccount() {
       if (account !== JSON.stringify(window.DCC_ACCOUNT_CONTEXT || null)) throw new Error('Account changed. Reopen task Notes before accessing files.');
     }
+    var cacheKey = account + ' ' + base;
     async function request(path, method) {
       sameAccount();
-      var response = await fetch(base + path, { method: method || 'GET', credentials: 'same-origin', cache: 'no-store', headers: method ? { 'X-DCC-Attachment': '1' } : {} });
-      var body = await response.json();
+      if (method) listCache.delete(cacheKey);
+      var body = await DCC.api(base + path, { method: method || 'GET', credentials: 'same-origin', cache: 'no-store', headers: method ? { 'X-DCC-Attachment': '1' } : {}, errorLabel: 'Task file request failed' });
       sameAccount();
-      if (!response.ok) throw new Error(body.error || 'Task file request failed');
       return body;
     }
     function draw() {
@@ -57,7 +60,7 @@
             try {
               sameAccount();
               var response = await fetch(link.href, { credentials: 'same-origin', cache: 'no-store' });
-              if (!response.ok) { var errorBody = await response.json(); throw new Error(errorBody.error || 'Download failed'); }
+              if (!response.ok) { var errorBody = await response.json().catch(function () { return {}; }); throw new Error(errorBody.error || 'Download failed'); }
               var blob = await response.blob(); sameAccount();
               if (!live) return;
               var url = URL.createObjectURL(blob), download = document.createElement('a');
@@ -87,14 +90,18 @@
       });
       retry.hidden = !pending.length; retry.disabled = busy;
     }
-    async function refresh() {
-      var result = await request('');
-      files = result.files; listed = true; draw();
+    async function refresh(useCache) {
+      var cached = useCache && listCache.get(cacheKey);
+      var result = cached && Date.now() - cached.at < LIST_TTL_MS ? cached.result : await request('');
+      if (!cached || result !== cached.result) listCache.set(cacheKey, { at: Date.now(), result: result });
+      files = result.files.slice(); listed = true; draw();
       if (!result.configured) status.textContent = 'Private ' + parentKind + ' file storage is not configured. Your selection remains available for Retry while Notes is open.';
       return result;
     }
     function send(entry) {
       sameAccount();
+      // Any attempt may leave a server reservation, success or not.
+      listCache.delete(cacheKey);
       return new Promise(function (resolve, reject) {
         var xhr = currentXHR = new XMLHttpRequest();
         xhr.open('POST', base); xhr.withCredentials = true; xhr.timeout = 90000;
@@ -147,7 +154,7 @@
     var api = { hasAttachments: function () { return !listed || busy || pending.length > 0 || files.length > 0; }, add: function (file) { add([file]); }, destroy: function () { live = false; if (currentXHR && currentXHR.readyState !== 4) currentXHR.abort(); panel.remove(); } };
     host._taskAttachments = api;
     if (!blockId) { picker.disabled = true; status.textContent = 'Save this ' + parentKind + ' before attaching files.'; }
-    else initialized = refresh().catch(function (error) { if (live) status.textContent = error.message; });
+    else initialized = refresh(true).catch(function (error) { if (live) status.textContent = error.message; });
     return api;
   }
   DCC.TaskAttachments = { mount: mount };

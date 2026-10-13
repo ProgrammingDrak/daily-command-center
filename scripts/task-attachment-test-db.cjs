@@ -4,7 +4,7 @@ const { URL } = require("node:url");
 const { Pool } = require("pg");
 const crypto = require("node:crypto");
 async function createFixtureDb() {
-  const raw = process.env.DCC_ATTACHMENT_TEST_DATABASE_URL;
+  const raw = process.env.DCC_ATTACHMENT_TEST_DATABASE_URL || process.env.DCC_TEST_DATABASE_URL;
   if (!raw || !["localhost", "127.0.0.1", "[::1]"].includes(new URL(raw).hostname)) throw new Error("Provide a dedicated localhost DCC_ATTACHMENT_TEST_DATABASE_URL");
   const schema = "attachment_test_" + crypto.randomBytes(8).toString("hex");
   const admin = new Pool({ connectionString: raw });
