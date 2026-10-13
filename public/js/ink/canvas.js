@@ -56,6 +56,9 @@
       eraserRadius: 12,
       scale: 1,
       penSeen: false,
+      fingerDraw: opts.fingerDraw || "auto",
+      style: null,
+      revision: 0,
       activePointer: null,
       activePointerType: null,
       current: null,
@@ -112,9 +115,7 @@
 
     function redraw() {
       clear(baseCtx, base);
-      baseCtx.fillStyle = "#ffffff";
-      baseCtx.fillRect(0, 0, state.page.w, state.page.h);
-      for (const s of state.page.strokes) S.drawStroke(baseCtx, s, { scale: 1 });
+      S.drawPage(baseCtx, state.page, { scale: 1 });
     }
 
     // A new stroke or layout invalidates both live pixels and the stable prefix.
@@ -129,19 +130,22 @@
       if (!append) clearLive();
       else clear(liveCtx, live);
       if (!state.current) return;
+      const modern = S.modernHighlight(state.current);
+      live.style.opacity = modern ? spec.alpha : spec.graphite ? 0.7 : 1;
+      live.style.mixBlendMode = modern ? "multiply" : "normal";
       const n = S.pointCount(state.current);
-      if (spec.alpha >= 1 && n >= 3) {
+      if ((spec.alpha >= 1 || S.modernHighlight(state.current)) && n >= 3) {
         if (finalized < n - 2) {
-          S.drawStroke(prefixCtx, state.current, { scale: 1, from: finalized + 1, to: n - 1 });
+          S.drawStroke(prefixCtx, state.current, { scale: 1, from: finalized + 1, to: n - 1, mask: S.modernStroke(state.current) });
           finalized = n - 2;
         }
         liveCtx.save();
         liveCtx.setTransform(1, 0, 0, 1, 0, 0);
         liveCtx.drawImage(prefix, 0, 0);
         liveCtx.restore();
-        S.drawStroke(liveCtx, state.current, { scale: 1, from: n - 1 });
+        S.drawStroke(liveCtx, state.current, { scale: 1, from: n - 1, mask: S.modernStroke(state.current) });
       } else {
-        S.drawStroke(liveCtx, state.current, { scale: 1 });
+        S.drawStroke(liveCtx, state.current, { scale: 1, mask: S.modernStroke(state.current) });
       }
     }
 
@@ -159,6 +163,9 @@
       if (entry.type === "add") {
         const i = state.page.strokes.indexOf(entry.stroke);
         if (i >= 0) state.page.strokes.splice(i, 1);
+      } else if (entry.type === "paper") {
+        if (entry.before) state.page.paper = entry.before;
+        else delete state.page.paper;
       } else if (entry.type === "erase") {
         // Reinsert at the original indices, ascending, so z-order is restored
         // exactly rather than the erased strokes jumping to the top.
@@ -175,6 +182,7 @@
       const entry = state.redo.pop();
       if (!entry) return;
       if (entry.type === "add") state.page.strokes.push(entry.stroke);
+      else if (entry.type === "paper") state.page.paper = entry.after;
       else if (entry.type === "erase") {
         for (const item of entry.removed) {
           const i = state.page.strokes.indexOf(item.stroke);
@@ -188,6 +196,7 @@
 
     function changed() {
       state.dirty = true;
+      state.revision++;
       onChange(state.page);
     }
 
@@ -199,19 +208,42 @@
     function pointerDraws(ev) {
       if (ev.pointerType === "pen") return true;
       if (ev.pointerType === "mouse") return true;
-      return !state.penSeen;
+      return state.fingerDraw === "on" || (state.fingerDraw === "auto" && !state.penSeen);
     }
 
+    const touches = new Set();
+    let navigation = null;
+    let lastPen = -Infinity;
     function onDown(ev) {
       // Even rejected palm contacts must not start a native selection gesture.
       ev.preventDefault();
-      if (ev.pointerType === "pen") state.penSeen = true;
+      if (ev.pointerType === "pen") {
+        state.penSeen = true;
+        lastPen = Date.now();
+        navigation = null;
+      }
+      if (ev.pointerType === "touch") {
+        touches.add(ev.pointerId);
+        if (touches.size > 1) {
+          navigation = null;
+          if (state.activePointerType === "touch") onCancel({ pointerId: state.activePointer });
+          return;
+        }
+      }
       // A resting palm can arrive before the first Pencil event. Let the pen
       // take over that provisional touch rather than waiting for the palm up.
       if (ev.pointerType === "pen" && state.activePointerType === "touch") {
         onCancel({ pointerId: state.activePointer });
       }
-      if (!pointerDraws(ev)) return;
+      if (!pointerDraws(ev)) {
+        // Paper uses explicit horizontal page swipes, not native touch scrolling.
+        // Delay after Pencil contact prevents a resting palm from turning pages.
+        if (ev.pointerType === "touch" && opts.onNavigate && state.activePointer === null && Date.now() - lastPen > 800) {
+          navigation = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, dx: 0, dy: 0, start: Date.now() };
+          try { base.setPointerCapture(ev.pointerId); } catch { navigation = null; }
+        }
+        return;
+      }
       if (state.activePointer !== null) return;
       // A pen's barrel button and an inverted stylus both mean erase.
       const erasing = state.tool === "eraser" || ev.button === 5 || ev.buttons === 32;
@@ -232,13 +264,19 @@
         eraseAt(p.x, p.y);
       } else {
         state.erasing = null;
-        state.current = S.newStroke(state.tool, state.color, state.size);
+        state.current = S.newStroke(state.tool, state.color, state.size, state.style);
         S.addPoint(state.current, p.x, p.y, ev.pressure, 0);
         redrawLive();
       }
     }
 
     function onMove(ev) {
+      if (navigation && navigation.id === ev.pointerId) {
+        ev.preventDefault();
+        navigation.dx = ev.clientX - navigation.x;
+        navigation.dy = ev.clientY - navigation.y;
+        return;
+      }
       if (ev.pointerId !== state.activePointer) return;
       ev.preventDefault();
 
@@ -263,7 +301,18 @@
     }
 
     function onUp(ev) {
+      touches.delete(ev.pointerId);
+      if (navigation && navigation.id === ev.pointerId) {
+        const gesture = navigation;
+        navigation = null;
+        try { base.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
+        if (Math.abs(gesture.dx) > 80 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 2 && Date.now() - gesture.start < 1200 && Date.now() - lastPen > 800) {
+          opts.onNavigate(gesture.dx < 0 ? 1 : -1);
+        }
+        return;
+      }
       if (ev.pointerId !== state.activePointer) return;
+      if (state.activePointerType === "pen") lastPen = Date.now();
       state.activePointer = null;
       state.activePointerType = null;
       try { base.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
@@ -288,13 +337,8 @@
       // Copy in device pixels, without applying the page transform a second time.
       // Highlighter segments multiply individually, so keep their vector replay:
       // flattening them first would change overlaps on existing colored ink.
-      if (S.toolSpec(stroke.tool).alpha >= 1) {
-        baseCtx.save();
-        baseCtx.setTransform(1, 0, 0, 1, 0, 0);
-        baseCtx.globalAlpha = 1;
-        baseCtx.globalCompositeOperation = "source-over";
-        baseCtx.drawImage(live, 0, 0);
-        baseCtx.restore();
+      if (S.toolSpec(stroke.tool).alpha >= 1 || S.modernHighlight(stroke)) {
+        S.compositeStroke(baseCtx, live, stroke);
       } else {
         S.drawStroke(baseCtx, stroke, { scale: 1 });
       }
@@ -311,6 +355,11 @@
     }
 
     function onCancel(ev) {
+      touches.delete(ev.pointerId);
+      if (navigation && navigation.id === ev.pointerId) {
+        navigation = null;
+        try { base.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
+      }
       if (ev.pointerId !== state.activePointer) return;
       // A cancelled pointer (a system gesture, a call coming in) must not leave
       // half a stroke behind.
@@ -352,6 +401,8 @@
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(layout, 120);
     };
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(onResize) : null;
+    if (resizeObserver) resizeObserver.observe(wrap);
     window.addEventListener("resize", onResize);
     window.addEventListener("orientationchange", onResize);
 
@@ -365,7 +416,19 @@
       redo,
       canUndo: () => state.undo.length > 0,
       canRedo: () => state.redo.length > 0,
-      setTool(tool) { state.tool = tool; },
+      setTool(tool) { if (state.activePointer === null) state.tool = tool; },
+      setStyle(style) { state.style = style ? { ...style } : null; },
+      setFingerDraw(value) { state.fingerDraw = value === "on" ? "on" : value === "auto" ? "auto" : "off"; },
+      setPaper(paper) {
+        if (state.activePointer !== null) return false;
+        const before = state.page.paper;
+        const after = S.normalizePaper(paper);
+        if (JSON.stringify(before) === JSON.stringify(after)) return false;
+        state.page.paper = after;
+        pushUndo({ type: "paper", before, after });
+        redraw(); changed();
+        return true;
+      },
       setColor(color) { state.color = color; },
       setSize(size) { state.size = Number(size) || 2.6; },
       // A pending save from the previous stroke may fire during erasing. Only
@@ -394,10 +457,12 @@
         c.width = Math.round(state.page.w * scale);
         c.height = Math.round(state.page.h * scale);
         const ctx = c.getContext("2d");
-        S.drawPage(ctx, state.page, { scale, background: "#ffffff" });
+        S.drawPage(ctx, state.page, { scale });
         return c;
       },
       destroy() {
+        clearTimeout(resizeTimer);
+        if (resizeObserver) resizeObserver.disconnect();
         wrap.removeEventListener("touchstart", preventTouch);
         wrap.removeEventListener("touchmove", preventTouch);
         window.removeEventListener("resize", onResize);

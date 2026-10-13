@@ -8,7 +8,7 @@ const S = require("./public/js/ink/strokes.js");
 
 // Execute the actual pointer handlers with synthetic events and recording canvas
 // contexts. This measures synchronous drawing work, not physical Pencil latency.
-function surface() {
+function surface(options = {}) {
   const events = {};
   const captured = new Set();
   const operations = [];
@@ -34,7 +34,7 @@ function surface() {
   scope.self = scope;
   vm.runInNewContext(fs.readFileSync(process.env.INK_CANVAS_SOURCE || require.resolve("./public/js/ink/canvas.js"), "utf8"), scope);
   let changes = 0;
-  const ink = scope.InkCanvas.create({ base, live,
+  const ink = scope.InkCanvas.create({ ...options, base, live,
     wrap: { getBoundingClientRect: () => ({ width: 638, height: 825 }),
       addEventListener: (type, handler, options) => { events[type] = handler; events[type + "Options"] = options; },
       removeEventListener() {} },
@@ -186,4 +186,68 @@ test("cancelled provisional erasing restores exact stroke order", () => {
   h.send("pointercancel", 4);
   assert.deepEqual(h.ink.getPage().strokes, before);
   assert.equal(S.serialize(h.ink.getPage()), saved);
+});
+
+
+test("Pencil-first mode rejects fingers; explicit finger drawing enables them", () => {
+  const h = surface({ fingerDraw: "off" });
+  h.send("pointerdown", 1, 20, { pointerType: "touch" });
+  h.send("pointerup", 1, 20, { pointerType: "touch" });
+  assert.equal(h.ink.getPage().strokes.length, 0);
+  h.ink.setFingerDraw("on");
+  h.send("pointerdown", 2, 20, { pointerType: "touch" });
+  h.send("pointerup", 2, 20, { pointerType: "touch" });
+  assert.equal(h.ink.getPage().strokes.length, 1);
+});
+
+test("finger navigation swipes turn pages but taps and multitouch do not", () => {
+  const turns = [];
+  const h = surface({ fingerDraw: "off", onNavigate: delta => turns.push(delta) });
+  h.send("pointerdown", 1, 140, { pointerType: "touch" });
+  h.send("pointermove", 1, 20, { pointerType: "touch" });
+  h.send("pointerup", 1, 20, { pointerType: "touch" });
+  assert.deepEqual(turns, [1]);
+  h.send("pointerdown", 2, 20, { pointerType: "touch" });
+  h.send("pointerup", 2, 20, { pointerType: "touch" });
+  h.send("pointerdown", 3, 140, { pointerType: "touch" });
+  h.send("pointerdown", 4, 150, { pointerType: "touch" });
+  h.send("pointermove", 3, 20, { pointerType: "touch" });
+  h.send("pointerup", 3, 20, { pointerType: "touch" });
+  h.send("pointerup", 4, 20, { pointerType: "touch" });
+  assert.deepEqual(turns, [1]);
+  assert.equal(h.ink.getPage().strokes.length, 0);
+});
+
+test("a palm cannot navigate during Pencil contact or immediately after lift", () => {
+  const turns = [];
+  const h = surface({ fingerDraw: "off", onNavigate: delta => turns.push(delta) });
+  h.send("pointerdown", 1);
+  h.send("pointerdown", 2, 140, { pointerType: "touch" });
+  h.send("pointermove", 2, 20, { pointerType: "touch" });
+  h.send("pointerup", 2, 20, { pointerType: "touch" });
+  h.send("pointerup", 1);
+  h.send("pointerdown", 3, 140, { pointerType: "touch" });
+  h.send("pointermove", 3, 20, { pointerType: "touch" });
+  h.send("pointerup", 3, 20, { pointerType: "touch" });
+  assert.deepEqual(turns, []);
+  assert.equal(h.ink.getPage().strokes.length, 1);
+});
+
+test("paper changes retain strokes and share undo history without resetting ink", () => {
+  const h = surface(); h.send("pointerdown"); h.send("pointerup");
+  const before = S.serialize(h.ink.getPage());
+  h.ink.setPaper({ type: "blank", tint: "cream" });
+  assert.equal(h.ink.getPage().strokes.length, 1);
+  h.ink.undo(); assert.equal(S.serialize(h.ink.getPage()), before);
+  h.ink.redo(); assert.equal(h.ink.getPage().paper.tint, "cream");
+  assert.equal(h.ink.getPage().strokes.length, 1);
+});
+
+test("new highlighter lift composites the already rasterized mask without replay", () => {
+  const h = surface(); h.ink.setTool("highlighter"); h.ink.setStyle({ angle: 45 });
+  h.send("pointerdown"); h.send("pointermove", 1, 50);
+  h.operations.length = 0; h.send("pointerup");
+  assert.equal(h.operations.filter(o => o.method === "drawImage").length, 1);
+  assert.equal(h.operations.filter(o => o.method === "stroke").length, 0);
+  assert.equal(h.ink.getPage().strokes[0].style.v, 2);
 });

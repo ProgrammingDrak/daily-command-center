@@ -12,8 +12,8 @@
 // twenty years from now is worth more than a few saved kilobytes.
 //
 // SHAPE (v1):
-//   { v: 1, w: <page width>, h: <page height>, strokes: [Stroke] }
-//   Stroke = { tool, color, size, pts: [x, y, pressure, x, y, pressure, ...] }
+//   { v: 1, w: <page width>, h: <page height>, strokes: [Stroke], paper?: {...} }
+//   Stroke = { tool, color, size, pts: [x, y, pressure, ...], style?: {v:2,angle} }
 //
 // Points are FLAT, not objects. A dense page runs to a few thousand points, and
 // [x,y,p,x,y,p] costs a fraction of [{x,y,p},{x,y,p}] in JSON and gzips better.
@@ -34,14 +34,22 @@
   const PAGE_H = 1650;
 
   const TOOLS = {
+    ballpoint: { label: "Ballpoint", sizes: [1.8, 3, 5], minRatio: 0.8, alpha: 1, cap: "round", composite: "source-over" },
+    fineliner: { label: "Fineliner", sizes: [1, 2, 3.5], minRatio: 1, alpha: 1, cap: "round", composite: "source-over" },
+    fountain: { label: "Fountain pen", sizes: [2.5, 5, 8], minRatio: 0.35, nib: true, alpha: 1, cap: "round", composite: "source-over" },
+    pencil: { label: "Graphite pencil", sizes: [2.5, 5, 10], minRatio: 0.3, graphite: true, alpha: 1, cap: "round", composite: "source-over" },
+    mechanical: { label: "Mechanical pencil", sizes: [1, 1.8, 2.8], minRatio: 1, graphite: true, alpha: 1, cap: "round", composite: "source-over" },
+    marker: { label: "Marker", sizes: [8, 16, 28], minRatio: 0.9, nib: true, alpha: 1, cap: "square", composite: "source-over" },
+    brush: { label: "Brush pen", sizes: [5, 12, 24], minRatio: 0.08, curve: 1.8, alpha: 1, cap: "round", composite: "source-over" },
+    calligraphy: { label: "Calligraphy", sizes: [4, 8, 14], minRatio: 1, nib: true, alpha: 1, cap: "round", composite: "source-over" },
     pen: { minRatio: 0.35, alpha: 1, cap: "round", composite: "source-over" },
     // A highlighter keeps one width and multiplies, so overlaps darken the way
     // a real one does instead of building up opaque bands.
-    highlighter: { minRatio: 1, alpha: 0.32, cap: "butt", composite: "multiply" },
+    highlighter: { label: "Highlighter", sizes: [14, 24, 38], minRatio: 1, alpha: 0.32, cap: "butt", composite: "multiply" },
   };
 
   function toolSpec(tool) {
-    return TOOLS[tool] || TOOLS.pen;
+    return Object.prototype.hasOwnProperty.call(TOOLS, tool) ? TOOLS[tool] : TOOLS.pen;
   }
 
   function emptyPage(w, h) {
@@ -63,7 +71,7 @@
     const spec = toolSpec(stroke.tool);
     const size = Number(stroke.size) || 2.5;
     if (spec.minRatio >= 1) return size;
-    return size * (spec.minRatio + (1 - spec.minRatio) * normalizePressure(pressure));
+    return size * (spec.minRatio + (1 - spec.minRatio) * Math.pow(normalizePressure(pressure), spec.curve || 1));
   }
 
   function pointCount(stroke) {
@@ -81,8 +89,12 @@
     return Math.round(n * 100) / 100;
   }
 
-  function newStroke(tool, color, size) {
-    return { tool: tool || "pen", color: color || "#1b1b2f", size: Number(size) || 2.5, pts: [] };
+  function newStroke(tool, color, size, style) {
+    const stroke = { tool: tool || "pen", color: color || "#1b1b2f", size: Number(size) || 2.5, pts: [] };
+    // Optional appearance settings are captured once, never borrowed from UI state.
+    // Legacy strokes without this field keep their original rendering.
+    if (style) stroke.style = { v: 2, angle: Number.isFinite(Number(style.angle)) ? Math.max(0, Math.min(170, Number(style.angle))) : 45 };
+    return stroke;
   }
 
   // Drop points that land essentially on top of the previous one. Pointer events
@@ -120,7 +132,32 @@
   // stroke gets, which is exactly backwards.
   // opts.to is an exclusive segment boundary for a finalized prefix; omitting
   // it draws through the provisional endpoint, as before.
+  const masks = new WeakMap();
+  function modernStroke(stroke) { return !!(stroke.style && stroke.style.v === 2); }
+  function modernHighlight(stroke) { return stroke.tool === "highlighter" && stroke.style && stroke.style.v === 2; }
   function drawStroke(ctx, stroke, opts) {
+    // New styles share the transparent-layer rendering used during input.
+    // Highlighter gets one translucent multiply composite per coverage mask,
+    // so overlapping samples cannot leave dark dots. Graphite opacity is also
+    // applied once. Reuse scratch canvases; input uses its existing prefix.
+    if (modernStroke(stroke) && !(opts && opts.mask)) {
+      let mask = masks.get(ctx);
+      if (!mask) {
+        const canvas = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
+        mask = { canvas, ctx: canvas.getContext("2d") };
+        masks.set(ctx, mask);
+      }
+      const c = mask.canvas;
+      if (c.width !== ctx.canvas.width || c.height !== ctx.canvas.height) {
+        c.width = ctx.canvas.width; c.height = ctx.canvas.height;
+      }
+      mask.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      mask.ctx.clearRect(0, 0, c.width, c.height);
+      mask.ctx.setTransform(ctx.getTransform());
+      drawStroke(mask.ctx, stroke, { ...opts, mask: true });
+      compositeStroke(ctx, c, stroke);
+      return;
+    }
     const n = pointCount(stroke);
     if (!n) return;
     const spec = toolSpec(stroke.tool);
@@ -129,17 +166,18 @@
     const to = Math.min(n, opts && opts.to != null ? opts.to : n);
 
     ctx.save();
-    ctx.globalAlpha = spec.alpha;
-    ctx.globalCompositeOperation = spec.composite;
+    ctx.globalAlpha = opts && opts.mask ? 1 : spec.alpha;
+    ctx.globalCompositeOperation = opts && opts.mask ? "source-over" : spec.composite;
     ctx.strokeStyle = stroke.color;
     ctx.fillStyle = stroke.color;
-    ctx.lineCap = spec.cap;
+    ctx.lineCap = modernHighlight(stroke) ? "round" : spec.cap;
     ctx.lineJoin = "round";
 
     // A single tap is a dot, not a line. Without this a quick period or the dot
     // on an "i" leaves nothing behind.
     if (n === 1) {
       const p = pointAt(stroke, 0);
+      if (spec.graphite) ctx.globalAlpha = 1;
       ctx.beginPath();
       ctx.arc(p.x * scale, p.y * scale, (widthAt(stroke, p.p) * scale) / 2, 0, Math.PI * 2);
       ctx.fill();
@@ -150,7 +188,8 @@
     if (n === 2) {
       const a = pointAt(stroke, 0);
       const b = pointAt(stroke, 1);
-      ctx.lineWidth = widthAt(stroke, b.p) * scale;
+      ctx.lineWidth = segmentWidth(stroke, b.p, a, b) * scale;
+      if (spec.graphite) ctx.globalAlpha = 1;
       ctx.beginPath();
       ctx.moveTo(a.x * scale, a.y * scale);
       ctx.lineTo(b.x * scale, b.y * scale);
@@ -167,14 +206,49 @@
     for (let i = from; i < to; i++) {
       const cur = pointAt(stroke, i);
       const nextMid = i + 1 < n ? midpoint(cur, pointAt(stroke, i + 1)) : cur;
-      ctx.lineWidth = widthAt(stroke, cur.p) * scale;
+      ctx.lineWidth = segmentWidth(stroke, cur.p, mid, nextMid) * scale;
+      if (spec.graphite) { ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over"; }
       ctx.beginPath();
       ctx.moveTo(mid.x * scale, mid.y * scale);
       ctx.quadraticCurveTo(cur.x * scale, cur.y * scale, nextMid.x * scale, nextMid.y * scale);
       ctx.stroke();
+      if (spec.graphite) {
+        // Deterministic graphite flecks, derived from point coordinates rather
+        // than random state. Reload, incremental rendering and export agree.
+        ctx.globalAlpha = 0.15 + (1 - cur.p) * 0.65;
+        ctx.globalCompositeOperation = "destination-out";
+        for (let grain = 0; grain < 3; grain++) {
+          const seed = Math.sin(cur.x * 12.9898 + cur.y * 78.233 + grain * 23.1) * 43758.5453;
+          const fraction = seed - Math.floor(seed);
+          const radius = widthAt(stroke, cur.p) * 0.6;
+          ctx.beginPath();
+          ctx.arc((cur.x + (fraction - 0.5) * radius) * scale,
+            (cur.y + (grain - 1) * radius * 0.35) * scale, Math.max(0.15, radius * 0.09) * scale, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
       mid = nextMid;
       prev = cur;
     }
+    ctx.restore();
+  }
+
+  function segmentWidth(stroke, pressure, a, b) {
+    const spec = toolSpec(stroke.tool);
+    const width = widthAt(stroke, pressure);
+    if (!spec.nib) return width;
+    const angle = (stroke.style && Number.isFinite(stroke.style.angle) ? stroke.style.angle : 45) * Math.PI / 180;
+    const direction = Math.atan2(b.y - a.y, b.x - a.x);
+    const minimum = stroke.tool === "marker" ? 0.65 : 0.3;
+    return width * (minimum + (1 - minimum) * Math.abs(Math.sin(direction - angle)));
+  }
+
+  function compositeStroke(ctx, canvas, stroke) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = modernHighlight(stroke) ? toolSpec(stroke.tool).alpha : toolSpec(stroke.tool).graphite ? 0.7 : 1;
+    ctx.globalCompositeOperation = modernHighlight(stroke) ? "multiply" : "source-over";
+    ctx.drawImage(canvas, 0, 0);
     ctx.restore();
   }
 
@@ -187,12 +261,128 @@
     const scale = o.scale || 1;
     if (o.background !== false) {
       ctx.save();
-      ctx.fillStyle = o.background || "#ffffff";
-      ctx.fillRect(0, 0, page.w * scale, page.h * scale);
+      drawPaper(ctx, page, { scale, background: o.background });
       ctx.restore();
     }
     const strokes = page.strokes || [];
     for (let i = 0; i < strokes.length; i++) drawStroke(ctx, strokes[i], { scale });
+  }
+
+  const PAPERS = [
+    { id: "blank", label: "Blank", spacing: 7 },
+    { id: "ruled-narrow", label: "Narrow ruled", spacing: 6 },
+    { id: "ruled", label: "College ruled", spacing: 7 },
+    { id: "ruled-wide", label: "Wide ruled", spacing: 9 },
+    { id: "dots", label: "Dot grid", spacing: 5 },
+    { id: "grid", label: "Square grid", spacing: 5 },
+    { id: "engineering", label: "Engineering grid", spacing: 5 },
+    { id: "cornell", label: "Cornell notes", spacing: 7 },
+    { id: "music", label: "Music staff", spacing: 7 },
+    { id: "checklist", label: "Checklist", spacing: 9 },
+    { id: "daily", label: "Daily planner", spacing: 7 },
+    { id: "weekly", label: "Weekly planner", spacing: 7 },
+    { id: "monthly", label: "Monthly planner", spacing: 7 },
+    { id: "handwriting", label: "Handwriting practice", spacing: 9 },
+    { id: "isometric", label: "Isometric grid", spacing: 5 },
+  ];
+  const TINTS = { white: "#ffffff", cream: "#fff9eb", gray: "#f0f2f4" };
+  function normalizePaper(raw) {
+    const r = raw || {};
+    const preset = PAPERS.find(p => p.id === r.type) || PAPERS[0];
+    return { type: preset.id, tint: Object.prototype.hasOwnProperty.call(TINTS, r.tint) ? r.tint : "white",
+      spacing: Math.min(12, Math.max(4, Number(r.spacing) || preset.spacing)), margin: r.margin !== false };
+  }
+
+  // One procedural renderer for actual paper, picker thumbnails and vault images.
+  // Paper remains metadata beneath editable ink; it never becomes erasable strokes.
+  function drawPaper(ctx, page, opts) {
+    const o = opts || {}, k = o.scale || 1;
+    const p = normalizePaper(page.paper), w = page.w, h = page.h;
+    const gap = p.spacing * 150 / 25.4, m = w * 0.075, top = h * 0.075;
+    ctx.save();
+    ctx.fillStyle = page.paper ? TINTS[p.tint] : o.background || "#ffffff";
+    ctx.fillRect(0, 0, w * k, h * k);
+    if (p.type === "blank") { ctx.restore(); return; }
+    ctx.strokeStyle = "#b6c3cf"; ctx.fillStyle = "#6d7f90"; ctx.lineWidth = 0.9 * k;
+    ctx.globalAlpha = 0.65;
+    function line(x, y, x2, y2) {
+      ctx.beginPath(); ctx.moveTo(x * k, y * k); ctx.lineTo(x2 * k, y2 * k); ctx.stroke();
+    }
+    function box(x, y, bw, bh) {
+      line(x, y, x + bw, y); line(x + bw, y, x + bw, y + bh);
+      line(x + bw, y + bh, x, y + bh); line(x, y + bh, x, y);
+    }
+    function label(text, x, y, size = 18) {
+      ctx.font = `${size * k}px system-ui, sans-serif`; ctx.globalAlpha = 0.8;
+      ctx.fillText(text, x * k, y * k); ctx.globalAlpha = 0.65;
+    }
+    function ruled(left = m, right = w - m, start = top, end = h - m) {
+      for (let y = start; y < end; y += gap) line(left, y, right, y);
+    }
+    if (p.type.startsWith("ruled")) {
+      ruled();
+      if (p.margin) { ctx.strokeStyle = "#dca5aa"; line(w * 0.15, top / 2, w * 0.15, h - m); }
+    } else if (["grid", "engineering", "dots", "isometric"].includes(p.type)) {
+      if (p.type === "dots" || p.type === "isometric") {
+        const rowGap = p.type === "isometric" ? gap * Math.sqrt(3) / 2 : gap;
+        let row = 0;
+        for (let y = top; y < h - m; y += rowGap, row++) {
+          for (let x = m + (p.type === "isometric" && row % 2 ? gap / 2 : 0); x < w - m; x += gap) {
+            ctx.beginPath(); ctx.arc(x * k, y * k, 1.25 * k, 0, Math.PI * 2); ctx.fill();
+          }
+        }
+      } else {
+        let i = 0;
+        for (let x = m; x < w - m; x += gap, i++) {
+          ctx.globalAlpha = p.type === "engineering" && i % 5 === 0 ? 0.8 : 0.4; line(x, top, x, h - m);
+        }
+        i = 0;
+        for (let y = top; y < h - m; y += gap, i++) {
+          ctx.globalAlpha = p.type === "engineering" && i % 5 === 0 ? 0.8 : 0.4; line(m, y, w - m, y);
+        }
+      }
+    } else if (p.type === "cornell") {
+      label("TOPIC / DATE", m, top * 0.7);
+      const split = w * 0.3, summary = h * 0.8;
+      line(m, top, w - m, top); line(split, top, split, summary); line(m, summary, w - m, summary);
+      ruled(split + gap / 2, w - m, top + gap, summary - gap / 2);
+      label("CUES", m, top + gap); label("SUMMARY", m, summary + gap);
+    } else if (p.type === "music") {
+      for (let y = top; y < h - m - gap * 2; y += gap * 5) {
+        for (let i = 0; i < 5; i++) line(m, y + i * gap / 4, w - m, y + i * gap / 4);
+      }
+    } else if (p.type === "checklist") {
+      label("TO DO", m, top * 0.7);
+      for (let y = top + gap; y < h - m; y += gap) { box(m, y - gap * 0.35, gap * 0.28, gap * 0.28); line(m + gap * 0.7, y, w - m, y); }
+    } else if (p.type === "handwriting") {
+      for (let y = top; y < h - m - gap; y += gap * 1.8) {
+        line(m, y, w - m, y); line(m, y + gap, w - m, y + gap);
+        ctx.setLineDash([5 * k, 6 * k]); line(m, y + gap / 2, w - m, y + gap / 2); ctx.setLineDash([]);
+      }
+    } else if (p.type === "daily") {
+      label("DATE", m, top * 0.7);
+      label("SCHEDULE", m, top + gap); label("PRIORITIES / NOTES", w * 0.55, top + gap);
+      const row = (h * 0.8 - top) / 13;
+      for (let i = 0; i <= 12; i++) {
+        const y = top + gap * 2 + i * row;
+        label(`${String(i + 7).padStart(2, "0")}:00`, m, y - 8, 16);
+        line(m + 65, y, w * 0.48, y); line(w * 0.55, y, w - m, y);
+      }
+      label("TODAY'S REFLECTION", m, h * 0.9);
+    } else if (p.type === "weekly") {
+      label("WEEK OF", m, top * 0.7);
+      const days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY", "NOTES"];
+      const bw = (w - 2 * m) / 2, bh = (h - top - m) / 4;
+      days.forEach((day, i) => { const x = m + (i % 2) * bw, y = top + Math.floor(i / 2) * bh;
+        box(x, y, bw, bh); label(day, x + 18, y + 30); });
+    } else if (p.type === "monthly") {
+      label("MONTH / YEAR", m, top * 0.7);
+      const bw = (w - 2 * m) / 7, bh = (h * 0.72 - top) / 6;
+      ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].forEach((day, i) => label(day, m + i * bw + 12, top + 24, 16));
+      for (let row = 0; row < 6; row++) for (let col = 0; col < 7; col++) box(m + col * bw, top + 40 + row * bh, bw, bh);
+      label("NOTES", m, h * 0.82); ruled(m, w - m, h * 0.85, h - m);
+    }
+    ctx.restore();
   }
 
   // ── Erasing ────────────────────────────────────────────────────────────────
@@ -272,7 +462,7 @@
   // ── Serialization ──────────────────────────────────────────────────────────
 
   function serialize(page) {
-    return JSON.stringify({ v: FORMAT_VERSION, w: page.w, h: page.h, strokes: page.strokes || [] });
+    return JSON.stringify({ v: FORMAT_VERSION, w: page.w, h: page.h, ...(page.paper ? { paper: normalizePaper(page.paper) } : {}), strokes: page.strokes || [] });
   }
 
   // Total by design: anything unreadable becomes a blank page rather than an
@@ -282,7 +472,7 @@
       const raw = typeof text === "string" ? JSON.parse(text) : text;
       if (!raw || typeof raw !== "object") return emptyPage(fallbackW, fallbackH);
       const strokes = Array.isArray(raw.strokes) ? raw.strokes.filter(validStroke) : [];
-      return { v: FORMAT_VERSION, w: Number(raw.w) || fallbackW || PAGE_W, h: Number(raw.h) || fallbackH || PAGE_H, strokes };
+      return { v: FORMAT_VERSION, w: Number(raw.w) || fallbackW || PAGE_W, h: Number(raw.h) || fallbackH || PAGE_H, ...(raw.paper ? { paper: normalizePaper(raw.paper) } : {}), strokes };
     } catch {
       return emptyPage(fallbackW, fallbackH);
     }
@@ -294,7 +484,7 @@
   }
 
   return {
-    FORMAT_VERSION, PAGE_W, PAGE_H, TOOLS,
+    FORMAT_VERSION, PAGE_W, PAGE_H, TOOLS, PAPERS, TINTS, normalizePaper, drawPaper, modernStroke, modernHighlight, compositeStroke,
     emptyPage, newStroke, addPoint, pointCount, pointAt,
     normalizePressure, widthAt, toolSpec,
     drawStroke, drawPage,
