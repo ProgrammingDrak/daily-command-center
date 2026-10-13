@@ -42,3 +42,23 @@
   .admin-login-head{display:none}
   .admin-login-row{grid-template-columns:1fr;gap:4px}
 }
+
+.admin-panel{margin-bottom:16px;min-width:0}
+.admin-actions{flex-wrap:wrap}
+.admin-panel-note{padding:10px 14px;color:var(--text-muted);font-size:12px;line-height:1.5}
+.admin-list{max-height:none}
+.admin-inbox-footer{display:flex;align-items:center;flex-wrap:wrap;gap:12px;padding:12px 14px;font-size:12px;color:var(--text-muted)}
+.admin-inbox-footer button{min-height:44px;padding:8px 14px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font:inherit;cursor:pointer}
+.admin-inbox-footer button[hidden]{display:none}
+.admin-feedback-panel .dcc-collection table{min-width:1100px;table-layout:fixed}
+.admin-feedback-panel .dcc-collection :is(th,td){width:150px;vertical-align:top}
+.admin-feedback-panel .dcc-collection :is(th,td):has([data-sort="message"]),
+.admin-feedback-panel .dcc-collection td[data-label="Message"]{width:360px}
+.admin-feedback-panel .dcc-collection td[data-label="Page Path"]{width:220px}
+.admin-feedback-panel .dcc-collection-multiline{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}
+.admin-feedback-panel .dcc-collection td[data-label="Created At"]{white-space:normal}
+.admin-actions :is(button,a){min-height:44px}
+.admin-body .dcc-collection-tools :is(input,select){min-height:44px;width:100%}
+.admin-body .dcc-collection th button{min-height:44px}
+
+@media (max-width:760px){.admin-feedback-panel .dcc-collection td[data-label="Message"],.admin-feedback-panel .dcc-collection th:has([data-sort="message"]){width:250px}}

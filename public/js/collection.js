@@ -48,8 +48,8 @@
     const params = new URLSearchParams(location.search);
     const state = {
       query: opts.urlKey && params.has(opts.urlKey) ? params.get(opts.urlKey) : (stored.query || ""),
-      sortKey: stored.sortKey || "",
-      sortDirection: stored.sortDirection === "desc" ? "desc" : "asc",
+      sortKey: stored.sortKey || opts.defaultSortKey || "",
+      sortDirection: (stored.sortDirection || opts.defaultSortDirection) === "desc" ? "desc" : "asc",
       filterKey: stored.filterKey || "",
       filterValue: stored.filterValue || "",
       columns: Array.isArray(stored.columns) ? stored.columns : null
@@ -63,7 +63,7 @@
         '<label><span>Value</span><select data-collection-filter-value><option value="">All values</option></select></label>' +
         '<span class="dcc-collection-count" aria-live="polite"></span>' +
       '</div>' +
-      '<div class="dcc-collection-scroll"><table><thead></thead><tbody></tbody></table></div>' +
+      '<div class="dcc-collection-scroll" tabindex="0" role="region" aria-label="' + DCC.esc(opts.label || 'Records') + '"><table><thead></thead><tbody></tbody></table></div>' +
       '<div class="dcc-collection-empty" hidden>No matching records.</div>';
 
     const search = root.querySelector("input[type=search]");
@@ -73,7 +73,8 @@
 
     function columns() {
       const inferred = inferColumns(rows);
-      const saved = state.columns && state.columns.filter((key) => inferred.includes(key));
+      const preferred = state.columns || opts.columnOrder;
+      const saved = preferred && preferred.filter((key) => inferred.includes(key));
       return saved && saved.length ? saved : inferred;
     }
 
@@ -130,9 +131,10 @@
           (active ? (state.sortDirection === "asc" ? "ascending" : "descending") : "none") + '">' + DCC.esc(label(key) + mark) + '</button></th>';
       }).join("") + '</tr>';
       body.innerHTML = visible.map((row) => '<tr>' + keys.map((key) =>
-        '<td data-label="' + DCC.esc(label(key)) + '">' + DCC.esc(displayValue(row[key])) + '</td>'
+        '<td' + ((opts.multilineColumns || []).includes(key) ? ' class="dcc-collection-multiline"' : '') + ' data-label="' + DCC.esc(label(key)) + '">' + DCC.esc(displayValue(row[key])) + '</td>'
       ).join("") + '</tr>').join("");
       root.querySelector(".dcc-collection-count").textContent = visible.length + " of " + rows.length;
+      root.querySelector(".dcc-collection-empty").textContent = rows.length ? "No matching records." : (opts.emptyMessage || "No matching records.");
       root.querySelector(".dcc-collection-empty").hidden = visible.length !== 0;
       root.querySelector(".dcc-collection-scroll").hidden = visible.length === 0;
       head.querySelectorAll("[data-sort]").forEach((button) => button.addEventListener("click", () => {
