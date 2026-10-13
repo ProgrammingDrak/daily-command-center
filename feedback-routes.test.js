@@ -27,10 +27,12 @@ function harness() {
       rows.push(row);
       return { rows: [row] };
     }
-    if (sql.startsWith('SELECT COUNT')) return { rows: [{ total: rows.length, latest_at: rows[0]?.created_at }] };
+    if (sql.startsWith('SELECT COUNT')) return { rows: [{ total: rows.length, latest_at: [...rows].sort((a,b)=>b.created_at.localeCompare(a.created_at))[0]?.created_at }] };
     assert.match(sql, /LEFT JOIN users u ON u.id = f.user_id/);
     assert.match(sql, /ORDER BY f.created_at DESC, f.id DESC/);
-    const items = [...rows].sort((a,b) => b.id - a.id).filter(r => !params[2] || r.id < Number(params[2]));
+    assert.match(sql, /\(f\.created_at, f\.id\) < \(\$2::timestamptz, \$3::integer\)/);
+    const items = [...rows].sort((a,b) => b.created_at.localeCompare(a.created_at) || b.id - a.id)
+      .filter(r => !params[1] || r.created_at < params[1] || (r.created_at === params[1] && r.id < Number(params[2])));
     return { rows: items.slice(0, params[0]) };
   } };
   require('./routes/feedback')(app, { pool, requireAdmin, ensureFeedbackTable: async () => {} });
@@ -38,6 +40,7 @@ function harness() {
   const source = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
   const start = source.indexOf('app.get(["/admin", "/admin.html"]');
   assert.ok(start >= 0, 'both admin paths must be registered before static serving');
+  assert.ok(start < source.indexOf('app.use(express.static(PROJECT_DIR'), 'admin guard must precede static serving');
   const end = source.indexOf('// ── Startup', start);
   vm.runInNewContext(source.slice(start, end), { app, requireAdmin, path, PROJECT_DIR: __dirname, express });
   return { app, rows, setFailure(value) { fail = value; }, queries() { return queryCount; } };
@@ -111,4 +114,17 @@ test('invalid submissions do not write; storage/read errors are honest and conta
   const empty = await request(h.app, '/api/admin/feedback');
   assert.deepEqual(empty.body.feedback, []);
   assert.equal(empty.body.summary.total, 0);
+});
+
+test('pagination orders by timestamp before ID and sends both cursor components',async()=>{
+  const h=harness();
+  h.rows.push(
+    {id:100,message:'older high ID',created_at:'2026-10-12T12:00:00.123456Z',cursor_time:'2026-10-12T12:00:00.123456Z'},
+    {id:1,message:'newer low ID',created_at:'2026-10-13T12:00:00.123456Z',cursor_time:'2026-10-13T12:00:00.123456Z'}
+  );
+  const first=await request(h.app,'/api/admin/feedback?limit=1');
+  assert.equal(first.body.feedback[0].id,1);
+  assert.equal(first.body.nextCursor,'2026-10-13T12:00:00.123456Z|1');
+  const second=await request(h.app,'/api/admin/feedback?limit=1&before='+encodeURIComponent(first.body.nextCursor));
+  assert.equal(second.body.feedback[0].id,100);assert.equal(second.body.nextCursor,null);
 });

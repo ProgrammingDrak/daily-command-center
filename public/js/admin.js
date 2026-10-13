@@ -16,15 +16,12 @@
     var controller = new AbortController();
     var timeout = setTimeout(function(){ controller.abort(); }, 15000);
     try {
-      var response = await fetch(url, { signal: controller.signal, cache: "no-store" });
-      var data = await response.json().catch(function(){ return {}; });
-      if (response.status === 401) throw new Error("Your session expired. Sign in again to read feedback.");
-      if (response.status === 403) throw new Error("Admin access required for this inbox.");
-      if (!response.ok) throw new Error("Could not load this data. Please try again.");
-      return data;
+      return await window.DCC.api(url, { signal: controller.signal, cache: "no-store" });
     } catch (err) {
+      if (err.status === 401) throw new Error("Your session expired. Sign in again to read feedback.");
+      if (err.status === 403) throw new Error("Admin access required for this inbox.");
       if (err.name === "AbortError") throw new Error("Request timed out. Please try again.");
-      throw err;
+      throw new Error("Could not load this data. Please try again.");
     } finally { clearTimeout(timeout); }
   }
   function renderActivity(items){
@@ -65,8 +62,11 @@
       var url = "/api/admin/feedback?limit=50" + (append ? "&before=" + encodeURIComponent(nextCursor) : "");
       var data = await getData(url);
       if (!Array.isArray(data.feedback) || !data.summary) throw new Error("Could not read feedback. Please try again.");
-      feedbackItems = append ? feedbackItems.concat(data.feedback).filter(function(item, index, all){
-        return all.findIndex(function(other){ return other.id === item.id; }) === index;
+      var seen = new Set();
+      feedbackItems = append ? feedbackItems.concat(data.feedback).filter(function(item){
+        if (seen.has(item.id)) return false;
+        seen.add(item.id);
+        return true;
       }) : data.feedback;
       nextCursor = data.nextCursor || null;
       renderFeedback();
