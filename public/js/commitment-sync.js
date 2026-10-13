@@ -82,7 +82,7 @@
     const startGeneration = generation, sequence = ++refreshSequence;
     try {
       const durableStart = await durableGeneration();
-      const items = await DCC.api("/api/commitments");
+      const items = await DCC.api("/api/commitments?summary=1");
       if (generation !== startGeneration || sequence !== refreshSequence) return rows("cache");
       const pending = await rows("outbox");
       const protectedIds = new Set(pending.filter(p => p.create && !p.error).map(p => p.commitmentId));
@@ -91,7 +91,12 @@
         request.onsuccess = () => {
           if (generation !== startGeneration || sequence !== refreshSequence) return;
           for (const item of request.result) if (!protectedIds.has(item.id)) cache.delete(item.id);
-          for (const item of items) if (!protectedIds.has(item.id)) cache.put(item);
+          const previous = new Map(request.result.map(item => [item.id,item]));
+          for (const item of items) if (!protectedIds.has(item.id)) {
+            const old = previous.get(item.id);
+            cache.put(old && old.revision === item.revision && old.role === item.role && old.loadedDetail
+              ? { ...old, ...item, summary:false, loadedDetail:true } : item);
+          }
         };
         return true;
       }, durableStart);
@@ -115,12 +120,12 @@
           if (action.scope !== scope || action.error) continue;
           const durableStart = await durableGeneration();
           try {
-            const result = await DCC.api(action.create ? "/api/commitments" : "/api/commitments/" + encodeURIComponent(action.commitmentId) + "/actions", { method: "POST", body: action.body });
+            const result = await DCC.api(action.create ? "/api/commitments?limit=30" : "/api/commitments/" + encodeURIComponent(action.commitmentId) + "/actions?limit=30", { method: "POST", body: action.body });
             await transaction("readwrite", (cache, outbox, current) => {
               // Clear this exact receipt even when another tab already installed
               // newer state. An old acknowledgement cannot restore revoked data.
               if (current === durableStart) {
-                if (result.declined) cache.delete(action.commitmentId); else cache.put(result);
+                if (result.declined) cache.delete(action.commitmentId); else cache.put({ ...result, loadedDetail:true });
               }
               outbox.delete(action.actionId);
             });
@@ -165,7 +170,41 @@
     await flush();
     await refresh();
   }
-  window.DCCCommitmentSync = { queue, refresh, flush, discard, retry,
+  async function detail(id, beforeRevision) {
+    const old = (await rows("cache")).find(r => r.id === id);
+    if (!old) throw new Error("Commitment unavailable; sync the itinerary first");
+    const start = await durableGeneration();
+    try {
+      const result = await DCC.api("/api/commitments/" + encodeURIComponent(id) + "?limit=30" + (beforeRevision ? "&beforeRevision=" + beforeRevision : ""));
+      let applied = false;
+      await transaction("readwrite", cache => {
+        const req = cache.get(id);
+        req.onsuccess = () => {
+          const current = req.result;
+          if (!current || current.revision > result.revision) return;
+          if (beforeRevision && (current.revision !== result.revision || current.role !== result.role)) return;
+          const events = beforeRevision ? [...new Map([...(result.events || []), ...(current.events || [])].map(e => [e.id,e])).values()].sort((a,b)=>a.revision-b.revision) : result.events;
+          cache.put({ ...result, events, loadedDetail:true }); applied = true;
+        };
+      }, start);
+      if (!applied) return (await rows("cache")).find(r => r.id === id);
+      summary.remoteError = null;
+      return (await rows("cache")).find(r => r.id === id);
+    } catch (e) {
+      if ([401,403,404].includes(e.status)) { await transaction("readwrite", cache => cache.delete(id), start); throw e; }
+      if (e.status) throw e;
+      summary.remoteError = e.message;
+      if (beforeRevision || !old.loadedDetail) throw new Error("Connect to load this history. Only previously viewed details are available offline.");
+      return old;
+    }
+  }
+  async function seen(id, revision) {
+    await DCC.api("/api/commitments/" + encodeURIComponent(id) + "/seen", {method:"POST",body:{revision}});
+    await transaction("readwrite",cache=>{
+      const req=cache.get(id);req.onsuccess=()=>{if(req.result)cache.put({...req.result,seen_revision:Math.max(req.result.seen_revision || 0,revision)});};
+    });
+  }
+  window.DCCCommitmentSync = { detail, seen, queue, refresh, flush, discard, retry,
     cached: () => rows("cache"), pending: () => rows("outbox"), get summary() { return { ...summary }; } };
   window.addEventListener("online", () => { void flush().then(refresh).catch(() => {}); });
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") void flush().then(refresh).catch(() => {}); });

@@ -228,6 +228,7 @@
       ? '<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+bountySvg+'</button>'
       : '';
     var reactionHtml=reactionChipsHtml(ev)||"";
+    var collaborationHtml=!guest&&opts.collaboration&&window.DCCCommitments?window.DCCCommitments.chip(ev):"";
     var footerHtml=(guest&&opts.footerHtml)?opts.footerHtml:'';
 
     // Subtask point pie: a linear progress bar (earned / pool) on the parent.
@@ -272,7 +273,7 @@
         prepTab+fuTab+trivialTab+
         '<div class="card'+(waitChip?' waiting-row':'')+(active?' card-active':'')+(isBounty?' card-bounty':'')+(bountyMeta.hasSponsor?' card-bounty-sponsor':'')+(tt&&tt.cardClass?' '+tt.cardClass:'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>'+
           (inProgress?'<span class="task-progress-ring" aria-hidden="true"></span>':'')+
-          reactionHtml+
+          reactionHtml+collaborationHtml+
           (guest?'':'<div class="grip" title="Drag to reorder">'+gripSvg+'</div>')+
           (guest?'':'<button class="chk-quick quick-complete-control'+(chkBlocked?' chk-blocked':'')+'" title="Click to quick complete. Hold for completion notes. Shift+Enter also opens notes." aria-label="Click to quick complete. Hold for completion notes. Shift+Enter also opens notes."><span aria-hidden="true">'+_boltSvg+'</span></button>')+
           '<div class="bar" style="background:'+(waitChip?'var(--waiting,#7c3aed)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
@@ -368,7 +369,7 @@
         '<div class="it-list-title-row">'+(opts.collapseHtml||"")+'<span class="ttl" title="'+escHtml(ev.title||"")+'">'+escHtml(ev.title||"")+'</span>'+(opts.titleExtrasHtml||"")+addButton+'</div>'+
         '<div class="it-list-meta">'+(opts.metaHtml||"")+(ev.sourceContext?'<span class="task-source-context">'+escHtml(ev.sourceContext)+'</span>':'')+scheduleButton+durationButton+'</div>'+
       '</div>'+
-      '<div class="it-list-actions">'+(opts.actionsBeforeHtml||"")+radialButton+deleteButton+'</div>';
+      '<div class="it-list-actions">'+(opts.actionsBeforeHtml||"")+(window.DCCCommitments&&opts.collaboration?window.DCCCommitments.chip(ev):"")+radialButton+deleteButton+'</div>';
 
     var completionButton=el.querySelector(".it-list-check");
     if(completionButton&&typeof opts.onComplete==="function"){
