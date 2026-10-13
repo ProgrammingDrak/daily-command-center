@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
-const {sourceOffer, registerSourceOffer} = require('./source-offer.cjs');
+const {sourceOffer, registerSourceOffer} = require('./source-offer.js');
 const options = {repository: 'daily-command-center', isPublic: true};
 const revision = 'a'.repeat(40);
 

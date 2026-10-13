@@ -58,7 +58,7 @@ const CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY || null;
 const CLERK_PUBLISHABLE_KEY = process.env.CLERK_PUBLISHABLE_KEY || null;
 
 const app = express();
-require('./source-offer.cjs').registerSourceOffer(app, {repository: 'daily-command-center', isPublic: true});
+require('./source-offer.js').registerSourceOffer(app, {repository: 'daily-command-center', isPublic: true});
 app.set("trust proxy", 1); // required for secure cookies behind hosted reverse proxies
 const PORT = process.env.PORT || 8090;
 const APP_TIME_ZONE = process.env.DCC_TIME_ZONE || process.env.APP_TIME_ZONE || "America/New_York";
