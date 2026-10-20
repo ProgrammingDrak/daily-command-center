@@ -310,3 +310,23 @@ test('new template is selectable in every existing workout controller without re
  assert.equal(h.controller.library.length,1);assert.equal(second.library.length,1);
  assert.equal((await h.controllerApi('task-2')).library[0].id,'new-template');
 });
+
+test('card builder duplicates occurrences independently, removes cards and retains explicit rounds',async()=>{
+ const h=await harness();await h.click('duplicate-entry',{entry:'bench-entry'});
+ assert.equal(h.controller.v.plan.exercises.length,2);const duplicate=h.controller.v.plan.exercises[1];assert.notEqual(duplicate.id,'bench-entry');assert.notEqual(duplicate.sets[0].id,'target-1');
+ await h.click('remove-entry',{entry:duplicate.id});assert.equal(h.controller.v.plan.exercises.length,1);assert.equal(h.controller.v.plan.groups.length,1);
+ await h.click('group',{kind:'superset'});assert.equal(h.controller.v.plan.groups[1].rounds,1);assert.match(h.host.html,/Draft group/);await h.click('save');assert.match(h.controller.error,/supersets/);assert.equal(h.puts().length,0);
+});
+test('prompted guidance uses revision-safe saves, preserves side order and recovers paused position',async()=>{
+ const v=W.empty();v.plan=W.gentleReset(()=>crypto.randomUUID());const h=await harness(v);
+ await h.click('guide-begin');assert.equal(h.state.row.record.guidance.stepIndex,0);assert.ok(h.state.row.record.baseline);
+ await h.click('guide-next');assert.equal(h.controller.v.guidance.stepIndex,1);assert.match(h.host.html,/Seated side bend · RIGHT/);
+ await h.click('guide-next');assert.match(h.host.html,/Seated side bend · LEFT/);
+ await h.click('guide-exit');await h.click('reload');assert.equal(h.controller.v.guidance.status,'paused');assert.equal(h.controller.v.guidance.stepIndex,2);
+ await h.click('guide-resume');await h.click('guide-back');assert.equal(h.controller.v.guidance.stepIndex,1);
+ h.state.uncertainNext=true;await h.click('guide-next');const payload=clone(h.controller.pending);await h.click('retry');assert.deepEqual(h.puts().at(-1).body,payload);assert.equal(h.controller.v.guidance.stepIndex,2);
+ assert.equal(h.controller.v.actual.sets.length,0);assert.equal(h.controller.v.occurredOn,null);assert.equal(h.controller.v.session.events.length,0);
+});
+test('card actions cannot alter a frozen plan, even through a stale DOM button',async()=>{
+ const h=await harness();const old=h.host.button('duplicate-entry',{entry:'bench-entry'});await h.click('guide-begin');const baseline=clone(h.controller.v.plan);await h.host.emit('click',old);assert.deepEqual(h.controller.v.plan,baseline);
+});

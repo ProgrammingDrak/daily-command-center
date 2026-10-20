@@ -26,6 +26,7 @@ const closePlanner = async () => {
   await page.locator('.wp-dialog').waitFor({ state: 'detached' });
 };
 const openPlanner = async id => {
+  if (await page.locator('.wp-dialog').count()) await closePlanner();
   await page.locator('[data-act="open"][data-id="' + id + '"]').click();
   await planner().locator('.wp-status').waitFor();
 };
@@ -131,10 +132,12 @@ try {
   mark('template starts detached session; session edits and Save as new template preserve original and lineage');
 
   await openPlanner(session.taskId);
+  await planner().locator('.wp-session > summary').click();
   const started = await persistedAction(session.taskId, 'start');
+  await planner().locator('.wp-entry').first().locator('details[class^="wp-results-"] > summary').click();
   assert.deepEqual(started.record.baseline, planned.record.plan);
   assert.deepEqual(started.record.actual.sets, []);
-  const actualTarget = () => planner().locator('.wp-target').first().locator('.wp-columns section').last();
+  const actualTarget = () => planner().locator('details[class^="wp-results-"]').first().locator('.wp-target').first().locator('.wp-columns section').last();
   assert.equal(await actualTarget().locator('[data-w-path$=".reps"]').inputValue(), '');
   assert.equal(await actualTarget().locator('[data-w-path$=".weight"]').inputValue(), '');
   await actualTarget().locator('[data-w-act="log"]').click();

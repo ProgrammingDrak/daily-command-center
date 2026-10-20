@@ -20,6 +20,7 @@ module.exports = function mountActivity(app, ctx) {
   function range(req) { return { from: req.query.from, to: req.query.to, includeArchived: req.query.includeArchived === "true" }; }
   app.get("/api/activity/exercises", route(async req => ({exercises:await library.catalog(req.activityOwner)})));
   app.post("/api/activity/exercises", route(req => library.createExercise(req.body||{},req.activityOwner)));
+  app.put("/api/activity/exercises/:id", route(req => library.updateExercise(req.params.id,req.body||{},req.activityOwner)));
   app.get("/api/activity/templates", route(async req => ({templates:await library.list(req.activityOwner)})));
   app.post("/api/activity/templates", route(req => library.save(req.body||{},req.activityOwner)));
   app.get("/api/activity/templates/:id", route(req => library.get(req.params.id,req.activityOwner)));

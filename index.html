@@ -22,7 +22,7 @@
 <link rel="stylesheet" href="/public/css/calendar-week.css?v=calendar-week-1">
 <link rel="stylesheet" href="/public/css/vault.css?v=vault-b6-1">
 <link rel="stylesheet" href="/public/css/ui-optimization.css?v=dcc-ui-1">
-<link rel="stylesheet" href="/public/css/activity.css?v=workout-2">
+<link rel="stylesheet" href="/public/css/activity.css?v=movement-cards-1">
 <link rel="stylesheet" href="/public/css/task-sources.css">
 <link rel="stylesheet" href="/public/css/commitments.css">
 </head>
@@ -391,6 +391,9 @@
 
         <!-- Repeat responsibilities: due ones surface in the Itinerary triage
              strip; the full library lives in a dedicated manage modal. -->
+        <div class="tm-section" data-sidecar-label="Guided routines">
+          <button type="button" class="tm-section-header tm-section-link" id="workout-library-open">Guided routines · workouts</button>
+        </div>
         <div class="tm-section" id="tm-repeat-responsibilities-section" data-sidecar-label="Repeat responsibilities">
           <button type="button" class="tm-section-header tm-section-link" id="repeat-responsibilities-open"
                   style="width:100%;border:0;background:none;font:inherit;color:inherit;cursor:pointer;text-align:left;display:flex;align-items:center;gap:6px">
@@ -2232,10 +2235,12 @@
 <script src="/public/js/budget.js"></script>
 <script src="/public/js/reimbursements.js"></script>
 <script src="/public/js/mobile-shell.js"></script>
-<script src="/public/js/workout-model.js?v=workout-2"></script>
+<script src="/public/js/prompted-sequence.js?v=1"></script>
+<script src="/public/js/workout-model.js?v=movement-cards-1"></script>
 <script src="/public/js/activity-model.js?v=workout-2"></script>
-<script src="/public/js/workout-planner.js?v=workout-2"></script>
-<script src="/public/js/activity.js?v=workout-2"></script>
+<script src="/public/js/workout-planner.js?v=movement-cards-1"></script>
+<script src="/public/js/workout-library.js?v=movement-cards-1"></script>
+<script src="/public/js/activity.js?v=movement-cards-1"></script>
 <script>
 // Feature flags — controls which features use the new BlockStore vs old localStorage.
 // Phase 5: All flags ON — BlockStore is now the primary data store.
