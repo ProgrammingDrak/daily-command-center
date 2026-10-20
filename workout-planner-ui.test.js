@@ -38,6 +38,7 @@ class Host {
         const options = [...contents.matchAll(/<option\b([^>]*)>/g)].map(m => attributes(m[1]));
         node.value = (options.find(o => Object.hasOwn(o, 'selected')) || options[0] || {}).value || '';
       }
+      if (match[1] === 'span' || match[1] === 'p') node.textContent = html.slice(match.index + match[0].length).split('</' + match[1] + '>')[0];
       node.attrs = attributes(match[2]); this.nodes.push(node);
     }
   }
@@ -87,7 +88,19 @@ async function harness(initialRecord = record()) {
       if (url === '/api/activity/tasks/task-1' && method === 'GET') return clone(state.row);
       if (url === '/api/activity/exercises') return { exercises: clone(W.CATALOG) };
       if (url === '/api/activity/tasks/task-2' && method==='GET') return {...clone(state.row),taskId:'task-2'};
-      if (url === '/api/activity/templates') {if(method==='POST'){const template={...body,id:'new-template'};state.templates.push(template);return {template};}return {templates:clone(state.templates)};}
+      if (url === '/api/activity/templates' && method === 'GET') {
+        if (state.templateRefreshFailNext) { state.templateRefreshFailNext = false; throw new Error('Library unavailable'); }
+        return { templates: clone(state.templates) };
+      }
+      if (url.startsWith('/api/activity/templates') && ['POST', 'PUT'].includes(method)) {
+        if (state.templateGate) await state.templateGate.promise;
+        if (state.templateFailNext) { const failure = state.templateFailNext; state.templateFailNext = null; throw failure; }
+        const current = method === 'PUT' ? state.templates.find(t => url.endsWith('/' + t.id)) : null;
+        if (method === 'PUT' && (!current || body.expectedRevision !== current.revision)) throw new Error('Template changed elsewhere');
+        const template = { ...body, id: current?.id || 'new-template', revision: (current?.revision || 0) + 1 };
+        if (current) Object.assign(current, template); else state.templates.push(template);
+        return clone(template);
+      }
       if (url.startsWith('/api/activity?')) return { records: [] };
       if (url === '/api/activity/tasks/task-1' && method === 'PUT') {
         if (state.putGate) await state.putGate.promise;
@@ -121,6 +134,7 @@ async function harness(initialRecord = record()) {
   const host = modals[0].body, controller = await D.Workout.controller('task-1');
   return {
     state, requests, modals, host, controller,
+    editTemplate(template) { D.Workout.editTemplate(template, clone(W.CATALOG), clone(state.templates)); return modals.at(-1).body; },
     getController: () => D.Workout.controller('task-1'),
     controllerApi: id => D.Workout.controller(id),
     puts: () => requests.filter(r => r.method === 'PUT'),
@@ -329,4 +343,88 @@ test('prompted guidance uses revision-safe saves, preserves side order and recov
 });
 test('card actions cannot alter a frozen plan, even through a stale DOM button',async()=>{
  const h=await harness();const old=h.host.button('duplicate-entry',{entry:'bench-entry'});await h.click('guide-begin');const baseline=clone(h.controller.v.plan);await h.host.emit('click',old);assert.deepEqual(h.controller.v.plan,baseline);
+});
+
+
+const templateStatus = host => host.querySelector('.wp-status').textContent;
+const saveTemplate = host => host.emit('click', host.button('save'));
+
+test('new blank and example templates remain drafts until an acknowledged save', async () => {
+  const h = await harness();
+  assert.equal(templateStatus(h.editTemplate(null)), 'Draft · not saved');
+  const host = h.editTemplate({ title: 'Gentle Reset', plan: W.gentleReset(crypto.randomUUID) });
+  assert.equal(templateStatus(host), 'Draft · not saved');
+  await host.fill('templateName', 'My reset');
+  assert.equal(templateStatus(host), 'Draft · not saved');
+  const gate = deferred(); h.state.templateGate = gate;
+  const saving = saveTemplate(host);
+  for (let i = 0; i < 20 && !h.requests.some(r => r.method === 'POST'); i++) await Promise.resolve();
+  assert.equal(templateStatus(host), 'Saving…');
+  assert.match(host.innerHTML, /<fieldset disabled>/);
+  await saveTemplate(host);
+  assert.equal(h.requests.filter(r => r.method === 'POST').length, 1);
+  gate.resolve(); await saving;
+  assert.equal(templateStatus(host), 'Saved');
+  assert.equal(h.state.templates[0].title, 'My reset');
+  assert.equal(h.state.templates[0].revision, 1);
+});
+
+test('saved template metadata, goals and card actions show unsaved changes across redraws', async () => {
+  const h = await harness();
+  h.state.templates.push({ id: 'saved-template', revision: 4, title: 'Saved reset', plan: W.gentleReset(crypto.randomUUID) });
+  const host = h.editTemplate(clone(h.state.templates[0]));
+  assert.equal(templateStatus(host), 'Saved');
+  for (const [field, value] of [['templateName', 'Renamed'], ['collection', 'Recovery'], ['variant', 'Easy'], ['plan.exercises.0.suggestedSeconds', '75']]) {
+    await host.fill(field, value);
+    assert.equal(templateStatus(host), 'Unsaved changes', field);
+    await saveTemplate(host); assert.equal(templateStatus(host), 'Saved');
+  }
+  await host.emit('click', host.button('duplicate-entry'));
+  assert.equal(templateStatus(host), 'Unsaved changes');
+  await saveTemplate(host);
+  assert.equal(templateStatus(host), 'Saved');
+  assert.equal(h.state.templates.length, 1);
+  assert.equal(h.state.templates[0].revision, 9);
+  assert.ok(h.requests.filter(r => r.method === 'PUT').every(r => r.url.endsWith('/saved-template')));
+});
+
+test('template validation or server failure shows not saved and keeps the draft for retry', async () => {
+  const h = await harness();
+  const host = h.editTemplate({ title: 'Draft reset', plan: W.gentleReset(crypto.randomUUID) });
+  await host.fill('plan.groups.0.rounds', '0'); await saveTemplate(host);
+  assert.equal(templateStatus(host), 'Not saved');
+  assert.equal(h.requests.filter(r => r.method === 'POST').length, 0);
+  await host.fill('plan.groups.0.rounds', '1');
+  h.state.templateFailNext = new Error('Save rejected'); await saveTemplate(host);
+  assert.equal(templateStatus(host), 'Not saved');
+  assert.match(host.querySelector('[role=alert]').textContent, /Save rejected/);
+  assert.equal(host.querySelector('[data-w-path="templateName"]').value, 'Draft reset');
+  assert.equal(h.state.templates.length, 0);
+  await saveTemplate(host);
+  assert.equal(templateStatus(host), 'Saved');
+  assert.equal(h.state.templates.length, 1);
+});
+
+test('stale template revision keeps unsaved edits and does not overwrite the stored template', async () => {
+  const h = await harness();
+  h.state.templates.push({ id: 'saved-template', revision: 1, title: 'Original', plan: record().plan });
+  const host = h.editTemplate(clone(h.state.templates[0]));
+  await host.fill('templateName', 'Local edit'); h.state.templates[0].revision = 2;
+  await saveTemplate(host);
+  assert.equal(templateStatus(host), 'Not saved');
+  assert.equal(h.state.templates[0].title, 'Original');
+  assert.equal(host.querySelector('[data-w-path="templateName"]').value, 'Local edit');
+});
+
+test('library refresh failure after an acknowledged save keeps saved status and identity', async () => {
+  const h = await harness();
+  const host = h.editTemplate({ title: 'Draft reset', plan: W.gentleReset(crypto.randomUUID) });
+  h.state.templateRefreshFailNext = true; await saveTemplate(host);
+  assert.equal(templateStatus(host), 'Saved');
+  assert.match(host.querySelector('[role=alert]').textContent, /Template saved, but the library could not refresh/);
+  await host.fill('templateName', 'Updated reset'); await saveTemplate(host);
+  assert.equal(templateStatus(host), 'Saved');
+  assert.equal(h.state.templates.length, 1);
+  assert.equal(h.state.templates[0].revision, 2);
+  assert.equal(h.requests.filter(r => r.method === 'POST').length, 1);
 });
