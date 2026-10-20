@@ -8,21 +8,24 @@ const deferred = () => { let resolve; const promise = new Promise(r => {resolve=
 const read = name => fs.readFileSync('public/js/'+name+'.js','utf8');
 
 test('today renders and signals ready before slow supporting data; late data cannot reset edits',async()=>{
- const supplemental=deferred(), ready=deferred();let renders=0;const calls=[];
+ const supplemental=deferred(), ready=deferred();let renders=0;const calls=[],surfaces=[];
  const state={date:'2026-10-20'};
  const ctx={console,setInterval:()=>0,setTimeout:()=>0,CustomEvent:function(type){this.type=type;},
   document:{createElement:()=>({style:{},remove(){}}),body:{prepend(){}}},
   fetch:async url=>{calls.push(url);return {ok:true,json:async()=>url==='/api/sync/bootstrap'?{dayState:state,blocks:[],globals:[]}:supplemental.promise};},
   transformState:()=>({sched:[{id:'task',title:'original'}],consider:[],bklog:[]}),
   blockStore:{hydrateSyncSnapshot(){},getByType:()=>[],debug:()=>({})},
-  render:()=>{renders++;},updateClock(){},PREP_REGISTRY:{},__tomorrowDate:null,__archiveDates:[],
+  render:keys=>{renders++;surfaces.push(keys);},updateClock(){},PREP_REGISTRY:{},__tomorrowDate:null,__archiveDates:[],
   DCC_DELTA_SYNC_ENABLED:true,dispatchEvent:event=>{if(event.type==='dcc:data-ready')ready.resolve();},
  };
  ctx.window=ctx;vm.createContext(ctx);vm.runInContext(read('boot'),ctx);
  await ready.promise;
  assert.equal(renders,1);assert.deepEqual(calls.slice(0,1),['/api/sync/bootstrap']);
  assert.equal(ctx.scheduled[0].title,'original');ctx.scheduled[0].title='edited while support loads';ctx.viewDate='2026-10-21';
- supplemental.resolve({});await tick();
+ supplemental.resolve({meetings:[{id:'meeting'}],actions:[{id:'action'}]});await tick();
+ assert.equal(renders,2);assert.deepEqual(Array.from(surfaces[1]),['upcoming','actionItems']);
+ assert.equal(ctx.__DCC_UPCOMING__.meetings[0].id,'meeting');
+ assert.equal(ctx.__SECOND_BRAIN_GLOBALS__.actions[0].id,'action');
  assert.equal(ctx.scheduled[0].title,'edited while support loads');assert.equal(ctx.viewDate,'2026-10-21');
  assert.ok(!calls.includes('/api/brain/recent'),'retired endpoint is not fetched');
 });

@@ -129,7 +129,7 @@
     Object.entries(window.__PREP_FILES__ || {}).forEach(([k,v]) => {
       PREP_REGISTRY[k] = v; PREP_REGISTRY['meeting-prep/' + k] = v;
     });
-    if (typeof buildUpcomingBoard === 'function') buildUpcomingBoard();
+    if (typeof render === 'function') render(['upcoming', 'actionItems']);
     if (typeof updateDateNav === 'function') updateDateNav();
     if (!window.__DCC_BOOT_FAILED__) {
       if (results.some(result => result.status === 'rejected')) {

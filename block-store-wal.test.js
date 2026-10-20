@@ -1174,11 +1174,11 @@ test("a permanently rejected restore replay removes every speculative cached mem
  });
 
 test('rapid complete/reopen is locally durable before the first ack and old ack cannot repaint it',async()=>{
- const gate={};gate.promise=new Promise(resolve=>{gate.resolve=resolve;});let count=0;
+ const gate={},secondGate={};gate.promise=new Promise(resolve=>{gate.resolve=resolve;});secondGate.promise=new Promise(resolve=>{secondGate.resolve=resolve;});let count=0;
  const row={id:'b1',type:'block',date:'2026-07-08',properties:{status:'open'}};
  const h=makeStore({fetchBodyFn:async(url,init)=>{
   if(!url.includes('/completion'))return row;
-  const body=JSON.parse(init.body);if(++count===1)await gate.promise;
+  const body=JSON.parse(init.body);if(++count===1)await gate.promise;else await secondGate.promise;
   return {ok:true,task:{...row,properties:{status:body.completed?'done':'open',_completionRevision:'r'+count,_completionMutationId:body.mutationId}}};
  }});
  await h.store.handleBlocksChanged({blockIds:['b1']});
@@ -1187,7 +1187,10 @@ test('rapid complete/reopen is locally durable before the first ack and old ack 
  assert.equal(wal(h.storage).length,1);assert.equal(wal(h.storage)[0].data.mutationId,'undo');
  assert.deepEqual(wal(h.storage)[0].meta.predecessorMutationIds,['complete']);
  assert.equal(h.store.get('b1').properties.status,'open');
- await new Promise(setImmediate);assert.equal(count,1);gate.resolve();await Promise.all([first,second]);
+ await new Promise(setImmediate);assert.equal(count,1);gate.resolve();await first;await new Promise(setImmediate);
+ assert.equal(count,2);assert.equal(h.store.get('b1').properties.status,'open');
+ assert.equal(wal(h.storage).length,1);assert.equal(wal(h.storage)[0].data.mutationId,'undo');
+ secondGate.resolve();await second;
  assert.equal(h.store.get('b1').properties.status,'open');assert.equal(wal(h.storage).length,0);
  const bodies=h.fetchCalls.filter(c=>c.url.includes('/completion')).map(c=>JSON.parse(c.init.body));
  assert.equal(bodies[1].expectedRevision,'r1');
