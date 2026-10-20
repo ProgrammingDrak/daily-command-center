@@ -87,7 +87,7 @@ function convertCtx(tasks, save) {
   };
   vm.createContext(context);
   const stateSrc=fs.readFileSync(require.resolve("./public/js/state.js"),"utf8");
-  vm.runInContext("let _rowPropsChain=Promise.resolve();\n"+slice(stateSrc,"enqueueRowPropsWrite"),context);
+  vm.runInContext("const _rowPropsChains=new Map();\n"+slice(stateSrc,"enqueueRowPropsWrite"),context);
   vm.runInContext("async " + slice(stSrc, "convertTaskType") + "\nthis.convertTaskType=convertTaskType;", context);
   return { context, persists, toasts };
 }

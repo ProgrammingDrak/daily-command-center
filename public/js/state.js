@@ -1180,7 +1180,8 @@ async function _rowForDateWrite(blockId){
   }catch(e){return null;}
 }
 
-// ONE serialized read-modify-write for a row's properties, for every caller (C4).
+// ONE serialized read-modify-write per row, shared by every caller (C4).
+// Unrelated rows run concurrently; only writers of the same properties bag wait.
 //
 // `db.updateBlock` REPLACES properties wholesale, so two concurrent read-modify-writes both
 // read the pre-write bag and whichever PATCH lands second drops the other's field. For a
@@ -1206,10 +1207,11 @@ async function _rowForDateWrite(blockId){
 // `extra` carries the top-level metadata `blockStore.updateBlock` accepts beyond
 // properties. It may be a function of the freshly-read block when a column decision
 // (such as promoting a dateless completion) must not be made from a stale cache.
-let _rowPropsChain=Promise.resolve();
+const _rowPropsChains=new Map();
 function enqueueRowPropsWrite(blockId,merge,extra,options){
   if(!window.blockStore||!blockId||typeof merge!=="function")return null;
-  const write=_rowPropsChain
+  const previous=_rowPropsChains.get(blockId)||Promise.resolve();
+  const write=previous
     .then(()=>_rowForDateWrite(blockId))
     .then(b=>{
       // Refuse on an unresolvable row: spreading nothing over `properties` is a wipe.
@@ -1228,8 +1230,10 @@ function enqueueRowPropsWrite(blockId,merge,extra,options){
     })
   ;
   // Keep the shared queue recoverable, while forms can observe the actual failure.
-  _rowPropsChain=write.catch(e=>{console.warn("[row] properties write failed for "+blockId+":",e);});
-  return options&&options.rejectOnError?write:_rowPropsChain;
+  const settled=write.catch(e=>{console.warn("[row] properties write failed for "+blockId+":",e);});
+  _rowPropsChains.set(blockId,settled);
+  void settled.then(()=>{if(_rowPropsChains.get(blockId)===settled)_rowPropsChains.delete(blockId);});
+  return options&&options.rejectOnError?write:settled;
 }
 
 // ── C6b: the ONE writer for a per-row order-axis property (pin, lock) ──
@@ -1724,7 +1728,24 @@ async function rescheduleTaskToDate(id,targetDate,opts){
   // date", "Invalid targetDate", "Block has no source date", "Block is deleted",
   // "Block not found". Cloning through those produced a second task with a new id and a
   // tombstone that could not be restored. The user now gets the server's own reason.
+  window.__DCC_PENDING_MOVES__=(window.__DCC_PENDING_MOVES__||0)+1;
   window.__RESCHEDULE_IN_FLIGHT__=true;
+  let preview=null;
+  function previewMove(){
+    if(viewDate!==fromDate)return;
+    const ids=_subtreeIdsOf(id);
+    preview=scheduled.map((row,index)=>({row,index})).filter(item=>ids.has(item.row.id));
+    scheduled=scheduled.filter(row=>!ids.has(row.id));
+    render();
+    if(!opts.silent&&typeof showToast==="function")showToast("Move queued — waiting to sync","info");
+  }
+  function restorePreview(){
+    if(!preview||viewDate!==fromDate)return;
+    for(const item of preview){
+      if(!scheduled.some(row=>row.id===item.row.id))scheduled.splice(Math.min(item.index,scheduled.length),0,item.row);
+    }
+    render();
+  }
   try{
     const srcBlock=_findTaskBlockForDate(id,fromDate,ev);
     if(srcBlock&&window.blockStore&&typeof window.blockStore.rescheduleBlock==="function"){
@@ -1739,7 +1760,7 @@ async function rescheduleTaskToDate(id,targetDate,opts){
         // `userSetStart:!!pinned` is the whole distinction the server cannot make for
         // itself: BOTH branches above send a parentStart, but only the pinned one came
         // from a person picking a time.
-        result=await window.blockStore.rescheduleBlock(srcBlock.id,targetDate,{parentStart:slot&&slot.start,parentEnd:slot&&slot.end,fromDate,userSetStart:!!pinned});
+        result=await window.blockStore.rescheduleBlock(srcBlock.id,targetDate,{parentStart:slot&&slot.start,parentEnd:slot&&slot.end,fromDate,userSetStart:!!pinned,onQueued:previewMove});
       }catch(e){
         // blockStore stamps e.permanent using its single permanence rule
         // (400/404 final; 401/403 auth blips and 5xx/network stay buffered).
@@ -1749,6 +1770,7 @@ async function rescheduleTaskToDate(id,targetDate,opts){
           if(!opts.silent&&typeof showToast==="function")showToast("Connection hiccup — move queued, will retry","info");
           return;
         }
+        restorePreview();
         // Permanent: report what the server said rather than inventing a second task.
         console.warn("[reschedule] move rejected: "+(e.message||e.status));
         if(!opts.silent&&typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate)+(e.message?" — "+e.message:""),"error");
@@ -1758,7 +1780,8 @@ async function rescheduleTaskToDate(id,targetDate,opts){
         // committing on a date the task is not on credits the wrong day.
         return false;
       }
-      _removeSubtreeFromScheduled(id);
+      if(preview&&viewDate===fromDate){for(const item of preview)_clearTaskPinAndLock(item.row);}
+      if(viewDate===fromDate)_removeSubtreeFromScheduled(id);
       log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
       if(!opts.silent&&typeof showToast==="function")showToast("Moved to "+_prettyDateLabel(targetDate),"success");
       if(typeof recalcTimes==="function")recalcTimes();
@@ -1770,7 +1793,8 @@ async function rescheduleTaskToDate(id,targetDate,opts){
     // target date under its own id. The one honest non-re-date case.
     return await _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts);
   }finally{
-    window.__RESCHEDULE_IN_FLIGHT__=false;
+    window.__DCC_PENDING_MOVES__--;
+    window.__RESCHEDULE_IN_FLIGHT__=window.__DCC_PENDING_MOVES__>0;
   }
 }
 

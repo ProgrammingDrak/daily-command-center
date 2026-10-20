@@ -41,6 +41,7 @@
   // parallel.
   const _rescheduleChains = new Map();
   const _updateChains = new Map();
+  const _completionBases = new Map(); // authoritative rollback rows while intents are queued
   // Server IDs for day_root are workspace-prefixed (e.g. "day-root-ws-1-2026-04-24").
   // Resolved from the block list returned by loadDay() so callsites can look up
   // the cached root reliably, not a naive "day-root-<date>" that misses.
@@ -89,9 +90,12 @@
       return _syncPullPromise.catch(() => null).then(() => pullSyncChanges(dateStr));
     }
     _syncPullDate = dateStr;
+    const generation = _mutationGeneration;
+    const canApply = () => generation === _mutationGeneration;
     _syncPullPromise = (async () => {
       if (_syncCursor === null || _currentDate !== dateStr) {
         const snapshot = await apiGet("/api/sync/bootstrap?date=" + encodeURIComponent(dateStr));
+        if (!canApply()) return null;
         hydrateSyncSnapshot(snapshot);
         _syncForceStateDates.delete(dateStr);
         if (snapshot.dayState) window.dispatchEvent(new CustomEvent("dcc-sync-day-state", { detail: snapshot.dayState }));
@@ -107,11 +111,13 @@
         } catch (error) {
           if (!error || error.status !== 410) throw error;
           const snapshot = await apiGet("/api/sync/bootstrap?date=" + encodeURIComponent(dateStr));
+          if (!canApply()) return null;
           hydrateSyncSnapshot(snapshot);
           _syncForceStateDates.delete(dateStr);
           if (snapshot.dayState) window.dispatchEvent(new CustomEvent("dcc-sync-day-state", { detail: snapshot.dayState }));
           return { ...snapshot, bootstrap: true };
         }
+        if (!canApply() || hasPendingWritesNow()) return null;
         // Clear the forced refresh only after the server returned its projection.
         // A transient rejection keeps the request pending for the next safe pull.
         if (includeState) _syncForceStateDates.delete(dateStr);
@@ -153,6 +159,10 @@
   }
   function setSaved() {
     if (_localSaveError) return setError(_localSaveError);
+    if (hasPendingWritesNow()) {
+      if (typeof updateSaveStatus === "function") updateSaveStatus("saving", "Changes queued — waiting to sync");
+      return;
+    }
     if (typeof updateSaveStatus === "function") updateSaveStatus("ok", "All changes saved");
   }
   function setError(msg) {
@@ -183,7 +193,7 @@
       // one segment. The stale one carries a different actionId, so the server does not
       // see a duplicate, and it is APPLIED if its pieces still fit the now-shorter
       // source: a second, unrequested re-attribution of time already moved.
-      if (entry && (entry.op === "update" || entry.op === "completion" || entry.op === "realloc") && entry.id) {
+      if (entry && (entry.op === "update" || entry.op === "completion" || entry.op === "reschedule" || entry.op === "realloc") && entry.id) {
         wal = wal.filter(e => !(e && e.op === entry.op && e.id === entry.id));
       }
       wal.push({ ...entry, accountScope: ACCOUNT_SCOPE, _walId: entryId, timestamp: new Date().toISOString() });
@@ -702,7 +712,20 @@
           case "completion": {
             const result = await queueUpdateRequest(entry.id, async () => {
               if (!walGet().some(e => e && e._walId === entry._walId)) return null;
-              return apiPost("/api/tasks/" + encodeURIComponent(entry.id) + "/completion", { ...entry.data, _replay: true });
+              const url = "/api/tasks/" + encodeURIComponent(entry.id) + "/completion";
+              try { return await apiPost(url, { ...entry.data, _replay: true }); }
+              catch (error) {
+                // A reload can occur after the preceding click committed but before
+                // its ack updated this queued intent's revision. Rebase only over
+                // that exact known predecessor, never another device's decision.
+                const current = error.currentTask;
+                if (error.status !== 409 || error.code !== "COMPLETION_CONFLICT"
+                  || !entry.meta?.predecessorMutationIds?.includes(current?.properties?._completionMutationId)
+                  || !walGet().some(e => e._walId === entry._walId)) throw error;
+                entry.data.expectedRevision = current.properties._completionRevision || null;
+                walReplaceData(entry._walId, entry.data);
+                return apiPost(url, { ...entry.data, _replay: true });
+              }
             });
             if (result) {
               _completionMetrics.replayed++;
@@ -733,7 +756,16 @@
             await apiPost("/api/blocks/" + entry.id + "/undelete", {});
             break;
           case "reschedule": {
-            const result=await apiPost("/api/blocks/" + entry.id + "/reschedule", entry.data);
+            const previous = _rescheduleChains.get(entry.id) || Promise.resolve();
+            const request = previous.catch(() => {}).then(() => {
+              if (!walGet().some(e => e._walId === entry._walId)) return null;
+              return apiPost("/api/blocks/" + entry.id + "/reschedule", entry.data);
+            });
+            _rescheduleChains.set(entry.id, request);
+            let result;
+            try { result = await request; }
+            finally { if (_rescheduleChains.get(entry.id) === request) _rescheduleChains.delete(entry.id); }
+            if (!result) break;
             (result.blocks||[]).forEach(cacheSet);
             if(entry.data.placement?.kind==="unplanned" && window.DCC?.TimeBlocks && typeof isCollapsed==="function"){
               const key=window.DCC.TimeBlocks.collapseKey(entry.data.targetDate,window.DCC.TimeBlocks.UNPLANNED_BLOCK);
@@ -1015,7 +1047,9 @@
             walReplaceData(walId, { properties, ...extra });
             block = await apiPatch("/api/blocks/" + id, { properties, ...extra });
           }
-          cacheSet(block); // Replace optimistic with server response
+          // A later direct edit may already own the optimistic properties. An
+          // older ack must not replace that edit while its request waits in line.
+          if (!walGet().some(entry => entry.op === "update" && entry.id === id && entry._walId !== walId)) cacheSet(block);
           walRemove(walId);
           _completionMetrics.acknowledged++;
           setSaved();
@@ -1032,43 +1066,56 @@
     // The only client primitive for changing task completion. It sends an intent,
     // not a full properties document, and distinguishes acknowledged, pending, and
     // permanently failed states for callers.
-    setTaskCompletion(taskRef, completed, context) {
+    async setTaskCompletion(taskRef, completed, context) {
       context = { ...(context || {}) };
       const mutationId = context.mutationId || ((crypto && crypto.randomUUID)
         ? crypto.randomUUID() : ("cm-" + Date.now() + "-" + Math.random().toString(36).slice(2)));
-      return queueUpdateRequest(taskRef, async () => {
-        setSaving();
-        let existing = context.block || cacheGet(taskRef) || null;
-        // A rendered task can retain its row id while the cache is being refreshed.
-        // Fetch that row so the first request carries the real revision instead of
-        // manufacturing a conflict from a null base.
-        if (!existing && context.resolveRow !== false) {
-          try { existing = await apiGet("/api/blocks/" + encodeURIComponent(taskRef)); }
-          catch (e) { if (e && e.status !== 404) throw e; }
-        }
-        const completedAt = completed
-          ? (context.completedAt instanceof Date ? context.completedAt.toISOString() : (context.completedAt || new Date().toISOString()))
-          : null;
-        const body = {
-          completed: !!completed,
-          completedAt,
-          taskDate: context.taskDate || (existing && existing.date) || null,
-          mutationId,
-          expectedRevision: context.expectedRevision !== undefined
-            ? context.expectedRevision
-            : (existing && existing.properties ? (existing.properties._completionRevision || null) : null),
-        };
-        const optimistic = existing ? {
-          ...existing,
-          date: completed && !existing.date && body.taskDate ? body.taskDate : existing.date,
-          properties: applyCompletionState(existing.properties, !!completed, completedAt),
-          _completionState: "pending",
-          _completionMutationId: mutationId,
-          updated_at: new Date().toISOString(),
-        } : null;
-        const walId = walPush({ op: "completion", id: taskRef, data: body, meta: context.sideEffects || null });
-        if (optimistic) cacheSet(optimistic);
+      setSaving();
+      let existing = cacheGet(taskRef) || context.block || null;
+
+      const completedAt = completed
+        ? (context.completedAt instanceof Date ? context.completedAt.toISOString() : (context.completedAt || new Date().toISOString()))
+        : null;
+      const body = {
+        completed: !!completed,
+        completedAt,
+        taskDate: context.taskDate || (existing && existing.date) || null,
+        mutationId,
+        expectedRevision: context.expectedRevision !== undefined
+          ? context.expectedRevision
+          : (existing && existing.properties ? (existing.properties._completionRevision || null) : null),
+      };
+      const optimistic = existing ? {
+        ...existing,
+        date: completed && !existing.date && body.taskDate ? body.taskDate : existing.date,
+        properties: applyCompletionState(existing.properties, !!completed, completedAt),
+        _completionState: "pending",
+        _completionMutationId: mutationId,
+        updated_at: new Date().toISOString(),
+      } : null;
+      const predecessor = walPendingTaskCompletion(taskRef);
+      const predecessors = predecessor
+        ? [...(predecessor.meta?.predecessorMutationIds || []), predecessor.data.mutationId].slice(-100) : [];
+      const walId = walPush({ op: "completion", id: taskRef, data: body,
+        meta: { ...(context.sideEffects || {}), predecessorMutationIds: predecessors } });
+      if (!_completionBases.has(taskRef)) _completionBases.set(taskRef, existing);
+      if (optimistic) cacheSet(optimistic);
+      const write = queueUpdateRequest(taskRef, async () => {
+        // The intent is durable before waiting for an earlier click. Resolve its
+        // CAS revision at send time, after the preceding acknowledgement, while
+        // keeping the original mutation ID and timestamp for every retry.
         try {
+          existing = cacheGet(taskRef) || context.block || existing;
+          if (!existing && context.resolveRow !== false) {
+            try {
+              existing = await apiGet("/api/blocks/" + encodeURIComponent(taskRef));
+              _completionBases.set(taskRef, existing);
+            } catch (e) { if (e && e.status !== 404) throw e; }
+          }
+          if (context.expectedRevision === undefined) {
+            body.expectedRevision = existing?.properties?._completionRevision || null;
+            walReplaceData(walId, body);
+          }
           let result;
           try {
             result = await apiPost("/api/tasks/" + encodeURIComponent(taskRef) + "/completion", body);
@@ -1083,8 +1130,14 @@
             result = await apiPost("/api/tasks/" + encodeURIComponent(taskRef) + "/completion", body);
           }
           walRemove(walId);
-          (result.affectedTasks || []).forEach(cacheSet);
-          if (result.task && result.task.type !== "legacy_task") cacheSet(result.task);
+          (result.affectedTasks || []).forEach(row => {
+            if (_completionBases.has(row.id)) _completionBases.set(row.id, row);
+            cacheSet(row);
+          });
+          if (result.task && result.task.type !== "legacy_task") {
+            _completionBases.set(taskRef, result.task);
+            cacheSet(result.task);
+          }
           if (typeof window.notifyReadyTaskDependencies === "function") {
             window.notifyReadyTaskDependencies(result.dependencyTransitions || []);
           }
@@ -1104,8 +1157,14 @@
             _completionMetrics.rejected++;
             walMoveToDeadLetter(walGet().find(entry => entry && entry._walId === walId),
               `${error.status || "error"} ${error.message || ""}`.trim());
-            if (error.currentTask && error.currentTask.type !== "legacy_task") cacheSet(error.currentTask);
-            else if (existing) cacheSet(existing);
+            if (error.currentTask && error.currentTask.type !== "legacy_task") {
+              _completionBases.set(taskRef, error.currentTask);
+              cacheSet(error.currentTask);
+            }
+            else if (_completionBases.get(taskRef)) {
+              error.currentTask = _completionBases.get(taskRef);
+              cacheSet(error.currentTask);
+            }
             else cacheDelete(taskRef);
             setError((error.message || "Completion rejected") + (error.requestId ? " (request " + error.requestId + ")" : ""));
             throw error;
@@ -1114,6 +1173,9 @@
           setPending("Completion pending - will retry");
           return { ok: false, pending: true, mutationId, task: optimistic, error };
         }
+      });
+      return write.finally(() => {
+        if (!_updateChains.has(taskRef)) _completionBases.delete(taskRef);
       });
     },
 
@@ -1384,9 +1446,7 @@
     // of subtree size, one broadcast the origin client ignores (own clientId) — so
     // no snap-back, no duplication, no stranded children. The moved blocks now live
     // on targetDate, so evict them from the current-day cache.
-    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate, placement, userSetStart, reviewGuard } = {}) {
-      const previous = _rescheduleChains.get(blockId) || Promise.resolve();
-      const run = previous.catch(() => {}).then(async () => {
+    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate, placement, userSetStart, reviewGuard, onQueued } = {}) {
       setSaving();
       // fromDate: the viewed origin day, used by the server when the block row
       // itself is undated (task-bar pending_tasks) so the move can't 400.
@@ -1395,7 +1455,15 @@
       // and the flag is what makes the client cascade leave the start alone.
       const body = { targetDate, parentStart, parentEnd, fromDate, placement, userSetStart, ...(reviewGuard ? { reviewGuard } : {}) };
       // Confirmed review moves must never replay after leaving the preview.
-      const walId = reviewGuard ? null : walPush({ op: "reschedule", id: blockId, data: body });
+      let walId;
+      try { walId = reviewGuard ? null : walPush({ op: "reschedule", id: blockId, data: body }); }
+      catch (error) { error.permanent = true; throw error; }
+      // Only expose optimistic feedback once the intent survives a reload.
+      if (walId && typeof onQueued === "function") {
+        try { onQueued(); } catch (error) { console.warn("[BlockStore] Move preview failed", error); }
+      }
+      const previous = _rescheduleChains.get(blockId) || Promise.resolve();
+      const run = previous.catch(() => {}).then(async () => {
       try {
         let result;
         try {
