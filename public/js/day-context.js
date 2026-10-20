@@ -258,24 +258,15 @@
   }
 
   async function _loadDayContext(dateStr) {
-    let state = _resolveKnownState(dateStr);
-    if (!state) {
-      try {
-        state = await _root
-          .fetch("/api/state/day?date=" + encodeURIComponent(dateStr))
-          .then((r) => r.json());
-      } catch (e) {
-        state = null;
-      }
-    }
-    let blocks = [];
-    try {
-      blocks = await _root
-        .fetch("/api/blocks?date=" + encodeURIComponent(dateStr))
-        .then((r) => r.json());
-    } catch (e) {
-      blocks = [];
-    }
+    const knownState = _resolveKnownState(dateStr);
+    // Independent reads: fetching the destination state must not delay its blocks.
+    const [state, blocks] = await Promise.all([
+      knownState ? Promise.resolve(knownState) : _root
+        .fetch("/api/state/day?date=" + encodeURIComponent(dateStr))
+        .then(r => r.json()).catch(() => null),
+      _root.fetch("/api/blocks?date=" + encodeURIComponent(dateStr))
+        .then(r => r.json()).catch(() => []),
+    ]);
     return buildDayContext(dateStr, state, Array.isArray(blocks) ? blocks : []);
   }
 

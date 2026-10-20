@@ -7,34 +7,22 @@
   document.body.prepend(loadEl);
 
   try {
-    // Fetch all data endpoints in parallel
-    const [syncBootstrap, legacyDayState, upcoming, archives, tomorrow, local, brainRecent, brainGlobals, prepFiles] = await Promise.all([
-      window.DCC_DELTA_SYNC_ENABLED
-        ? fetch('/api/sync/bootstrap').then(r => r.ok ? r.json() : null).catch(() => null)
-        : Promise.resolve(null),
-      window.DCC_DELTA_SYNC_ENABLED
-        ? Promise.resolve(null)
-        : fetch('/api/state/day').then(r => r.json()).catch(() => null),
-      fetch('/api/state/upcoming').then(r => r.json()).catch(() => []),
-      fetch('/api/state/archives').then(r => r.json()).catch(() => ({})),
-      fetch('/api/state/tomorrow').then(r => r.json()).catch(() => null),
-      fetch('/api/state/local').then(r => r.json()).catch(() => null),
-      fetch('/api/brain/recent').then(r => r.json()).catch(() => ({})),
-      fetch('/api/brain/globals').then(r => r.json()).catch(() => ({})),
-      fetch('/api/prep').then(r => r.json()).catch(() => ({})),
-    ]);
-    const dayState = (syncBootstrap && syncBootstrap.dayState) || legacyDayState;
+    // Only today's authoritative state gates the first usable task render. Prep,
+    // archives and tomorrow can be much slower and must not hold today's work hostage.
+    async function readCore(url) {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Task data request failed (' + response.status + ')');
+      return response.json();
+    }
+    let syncBootstrap = null;
+    if (window.DCC_DELTA_SYNC_ENABLED) {
+      try { syncBootstrap = await readCore('/api/sync/bootstrap'); }
+      catch (error) { console.warn('[API Boot] Bootstrap unavailable; trying day state', error); }
+    }
+    const dayState = (syncBootstrap && syncBootstrap.dayState) || await readCore('/api/state/day');
+    if (!dayState || !dayState.date || dayState._unavailable) throw new Error('Current task data unavailable');
     window.__DCC_SYNC_BOOTSTRAP__ = syncBootstrap;
-
-    // Populate window globals (same shape the rest of the app expects)
     window.__DCC_STATE__ = dayState;
-    window.__DCC_UPCOMING__ = upcoming;
-    window.__DCC_ARCHIVES__ = archives;
-    window.__DCC_TOMORROW__ = tomorrow;
-    window.__DCC_LOCAL__ = local;
-    window.__SECOND_BRAIN__ = brainRecent;
-    window.__SECOND_BRAIN_GLOBALS__ = brainGlobals;
-    window.__PREP_FILES__ = prepFiles;
 
     // Re-initialize state from fetched data
     __state = window.__DCC_STATE__ || null;
@@ -61,21 +49,15 @@
       Object.entries(window.__PREP_FILES__).forEach(([k,v]) => { PREP_REGISTRY[k] = v; PREP_REGISTRY["meeting-prep/" + k] = v; });
     }
 
-    console.log('[API Boot] All data loaded from API', {
-      date: dayState?.date,
-      upcoming: upcoming?.length,
-      archives: Object.keys(archives).length,
-      prepFiles: Object.keys(prepFiles).length,
-    });
-
-    loadEl.textContent = 'Data loaded!';
+    console.log('[API Boot] Today loaded from API', { date: dayState.date });
+    loadEl.textContent = 'Today loaded; loading supporting data…';
     loadEl.style.background = 'var(--green)';
-    setTimeout(() => loadEl.remove(), 1200);
+
   } catch (e) {
     console.error('[API Boot] Failed to load data:', e);
-    loadEl.textContent = 'API load failed -- using cached data';
+    loadEl.textContent = 'Could not refresh tasks — displayed data may be out of date';
     loadEl.style.background = 'var(--red)';
-    setTimeout(() => loadEl.remove(), 3000);
+    window.__DCC_BOOT_FAILED__ = true;
   }
 
   // Load BlockStore data for today (primary data source)
@@ -84,15 +66,20 @@
       if (window.DCC_DELTA_SYNC_ENABLED && window.__DCC_SYNC_BOOTSTRAP__) {
         window.blockStore.hydrateSyncSnapshot(window.__DCC_SYNC_BOOTSTRAP__);
       } else {
-        await window.blockStore.loadDay(viewDate);
-        await window.blockStore.loadGlobals();
+        const loaded = await Promise.all([window.blockStore.loadDay(viewDate), window.blockStore.loadGlobals()]);
+        if (loaded.some(value => !Array.isArray(value))) throw new Error("Task blocks unavailable");
       }
       // Build the global tag index so tag-aware scheduling can resolve ancestors
       if (typeof buildTagIndex === 'function') {
         window.__TAGS__ = buildTagIndex([...window.blockStore.getByType('tag'),...window.blockStore.getByType('block').filter(b=>(b.properties||{}).name&&(b.properties||{}).color!==undefined)]);
       }
       console.log('[BlockStore] Loaded blocks for', viewDate, window.blockStore.debug());
-    } catch(e) { console.warn("[BlockStore] Load failed (non-fatal):", e); }
+    } catch(e) {
+      window.__DCC_BOOT_FAILED__ = true;
+      loadEl.textContent = "Could not refresh all tasks — displayed data may be out of date";
+      loadEl.style.background = "var(--red)";
+      console.warn("[BlockStore] Load failed:", e);
+    }
   }
 
   // Reload persisted UI state AFTER blockstore cache is populated —
@@ -124,6 +111,33 @@
   if (typeof updateDateNav === 'function') updateDateNav();
   if (typeof initCatchUp === 'function') initCatchUp();
   window.dispatchEvent(new CustomEvent('dcc:data-ready', { detail: { date: viewDate } }));
+  // Hydrate supporting surfaces without resetting task arrays or applying an old
+  // today snapshot after the user has already edited or navigated to another day.
+  void (async function loadSupportingData() {
+    const endpoints = ['/api/state/upcoming', '/api/state/archives', '/api/state/tomorrow',
+      '/api/state/local', '/api/brain/globals', '/api/prep'];
+    const results = await Promise.allSettled(endpoints.map(async url => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(url + ': ' + response.status);
+      return response.json();
+    }));
+    const keys = ['__DCC_UPCOMING__', '__DCC_ARCHIVES__', '__DCC_TOMORROW__',
+      '__DCC_LOCAL__', '__SECOND_BRAIN_GLOBALS__', '__PREP_FILES__'];
+    results.forEach((result, i) => { if (result.status === 'fulfilled') window[keys[i]] = result.value; });
+    __tomorrowDate = window.__DCC_TOMORROW__?.date || __tomorrowDate;
+    __archiveDates = Object.keys(window.__DCC_ARCHIVES__ || {}).sort();
+    Object.entries(window.__PREP_FILES__ || {}).forEach(([k,v]) => {
+      PREP_REGISTRY[k] = v; PREP_REGISTRY['meeting-prep/' + k] = v;
+    });
+    if (typeof buildUpcomingBoard === 'function') buildUpcomingBoard();
+    if (typeof updateDateNav === 'function') updateDateNav();
+    if (!window.__DCC_BOOT_FAILED__) {
+      if (results.some(result => result.status === 'rejected')) {
+        loadEl.textContent = 'Tasks loaded; some supporting data is unavailable';
+        loadEl.style.background = 'var(--red)';
+      } else loadEl.remove();
+    }
+  })().catch(error => console.warn('[API Boot] Supporting data failed', error));
   // Keep the current-time marker aligned without rebuilding the segments.
   setInterval(() => { if(typeof updateProgressNow === 'function') updateProgressNow(); }, 60000);
 })();

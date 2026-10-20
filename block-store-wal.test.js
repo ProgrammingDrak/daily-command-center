@@ -1172,3 +1172,70 @@ test("a permanently rejected restore replay removes every speculative cached mem
   release();await hide;const result=await restoring;assert.equal(result.ok,true);
   assert.equal(wal(h.storage).length,0);assert.equal(h.store.get("child").properties.subtaskOf,"local-root");
  });
+
+test('rapid complete/reopen is locally durable before the first ack and old ack cannot repaint it',async()=>{
+ const gate={};gate.promise=new Promise(resolve=>{gate.resolve=resolve;});let count=0;
+ const row={id:'b1',type:'block',date:'2026-07-08',properties:{status:'open'}};
+ const h=makeStore({fetchBodyFn:async(url,init)=>{
+  if(!url.includes('/completion'))return row;
+  const body=JSON.parse(init.body);if(++count===1)await gate.promise;
+  return {ok:true,task:{...row,properties:{status:body.completed?'done':'open',_completionRevision:'r'+count,_completionMutationId:body.mutationId}}};
+ }});
+ await h.store.handleBlocksChanged({blockIds:['b1']});
+ const first=h.store.setTaskCompletion('b1',true,{mutationId:'complete'});
+ const second=h.store.setTaskCompletion('b1',false,{mutationId:'undo'});
+ assert.equal(wal(h.storage).length,1);assert.equal(wal(h.storage)[0].data.mutationId,'undo');
+ assert.deepEqual(wal(h.storage)[0].meta.predecessorMutationIds,['complete']);
+ assert.equal(h.store.get('b1').properties.status,'open');
+ await new Promise(setImmediate);assert.equal(count,1);gate.resolve();await Promise.all([first,second]);
+ assert.equal(h.store.get('b1').properties.status,'open');assert.equal(wal(h.storage).length,0);
+ const bodies=h.fetchCalls.filter(c=>c.url.includes('/completion')).map(c=>JSON.parse(c.init.body));
+ assert.equal(bodies[1].expectedRevision,'r1');
+});
+
+for(const predecessor of ['own-complete','foreign-complete'])test('reload replay rebases only over its recorded predecessor: '+predecessor,async()=>{
+ const storage=new Map();seedWal(storage,[{op:'completion',id:'b1',_walId:'undo-wal',data:{completed:false,mutationId:'undo',expectedRevision:null,taskDate:'2026-07-08'},meta:{predecessorMutationIds:['own-complete']}}]);let writes=0;
+ const row={id:'b1',type:'block',date:'2026-07-08',properties:{status:'done',_completionRevision:'r1',_completionMutationId:predecessor}};
+ const h=makeStore({storage,fetchImpl:async(url,init)=>{
+  if(!url.includes('/completion'))return {ok:true,json:async()=>row};
+  const body=JSON.parse(init.body);writes++;
+  if(writes===1)return {ok:false,status:409,json:async()=>({error:'Conflict',code:'COMPLETION_CONFLICT',currentTask:row})};
+  assert.equal(body.expectedRevision,'r1');return {ok:true,json:async()=>({ok:true,task:{...row,properties:{status:'open'}}})};
+ }});
+ await h.store.replayWAL();assert.equal(writes,predecessor==='own-complete'?2:1);
+ assert.equal(dead(storage).length,predecessor==='own-complete'?0:1);
+});
+
+test('queued moves are durable immediately and a newer move supersedes an older failed move',async()=>{
+ let release;const gate=new Promise(r=>{release=r;});let n=0,previews=0;
+ const h=makeStore({fetchImpl:async()=>{if(++n===1){await gate;throw new Error('offline');}return {ok:true,json:async()=>({moved:[],blocks:[]})};}});
+ const first=h.store.rescheduleBlock('b1','2026-07-10',{onQueued(){previews++;}}).catch(e=>e);
+ const second=h.store.rescheduleBlock('b1','2026-07-11',{onQueued(){previews++;}});
+ assert.equal(previews,2);assert.equal(wal(h.storage).length,1);assert.equal(wal(h.storage)[0].data.targetDate,'2026-07-11');
+ release();await Promise.all([first,second]);assert.equal(wal(h.storage).length,0);await h.store.replayWAL();assert.equal(n,2);
+});
+
+test('local quota failure prevents completion optimism and move preview',async()=>{
+ const row={id:'b1',type:'block',date:'2026-07-08',properties:{status:'open'}};
+ const h=makeStore({fetchBody:row});await h.store.handleBlocksChanged({blockIds:['b1']});h.fetchCalls.length=0;
+ h.storage.set=()=>{throw new Error('quota');};
+ await assert.rejects(h.store.setTaskCompletion('b1',true),/Local save failed/);
+ assert.equal(h.store.get('b1').properties.status,'open');let preview=false;
+ await assert.rejects(h.store.rescheduleBlock('b1','2026-07-10',{onQueued(){preview=true;}}),e=>e.permanent===true);
+ assert.equal(preview,false);assert.equal(h.fetchCalls.length,0);
+});
+
+test('old delta response cannot overwrite an edit or advance its cursor',async()=>{
+ let release;const gate=new Promise(r=>{release=r;});let pulls=0;
+ const row={id:'b1',type:'block',date:'2026-07-08',properties:{title:'old'}};
+ const h=makeStore({fetchBodyFn:async(url,init)=>{
+  if(url.includes('/sync/bootstrap'))return {workspaceId:'ws-1',date:row.date,cursor:1,blocks:[row],globals:[]};
+  if(url.includes('/sync/pull')){pulls++;await gate;return {cursor:2,blocks:[row],deletedBlockIds:[],hasMore:false};}
+  if(init?.method==='PATCH')return {...row,properties:JSON.parse(init.body).properties};
+  return [];
+ }});
+ h.context.DCC_DELTA_SYNC_ENABLED=true;
+ await h.store.loadDay(row.date);const pull=h.store.loadDay(row.date);await new Promise(setImmediate);
+ await h.store.updateBlock('b1',{title:'new'});release();assert.equal(await pull,null);
+ assert.equal(h.store.get('b1').properties.title,'new');assert.equal(h.storage.get('dcc-sync-cursor:ws-1'),'1');assert.equal(pulls,1);
+});
