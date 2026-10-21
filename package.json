@@ -1,7 +1,7 @@
 {
   "name": "daily-command-center",
   "version": "1.0.0",
-  "description": "Drake's Daily Command Center — standalone Express dashboard",
+  "description": "Drake's Daily Command Center \u2014 standalone Express dashboard",
   "main": "server.js",
   "scripts": {
     "check:db": "node scripts/check-db.js",
@@ -38,7 +38,7 @@
     "chokidar": "^3.6.0",
     "connect-pg-simple": "^10.0.0",
     "dotenv": "^16.4.0",
-    "drake-auth": "github:ProgrammingDrak/drake-auth#v0.1.1",
+    "drake-auth": "file:vendor/drake-auth-0.1.2.tgz",
     "express": "^4.21.0",
     "express-session": "^1.19.0",
     "googleapis": "^171.4.0",
@@ -54,5 +54,6 @@
     "eslint": "^9.0.0",
     "playwright-core": "^1.61.1",
     "prettier": "^3.3.0"
-  }
+  },
+  "license": "AGPL-3.0-only"
 }
