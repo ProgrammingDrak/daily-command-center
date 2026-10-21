@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
-const {sourceOffer, registerSourceOffer} = require('./source-offer.js');
+const {sourceOffer} = require('./source-offer.js');
+const vm = require('node:vm');
 const options = {repository: 'daily-command-center', isPublic: true};
 const revision = 'a'.repeat(40);
 
@@ -48,7 +49,11 @@ test('real HTTP source and license routes precede rejecting authentication', asy
     process.env.SOURCE_REVISION = revision;
     delete process.env.SOURCE_ARCHIVE_URL;
     const app = express();
-    registerSourceOffer(app, options);
+    const serverSource = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
+    const registration = serverSource.match(/^require\('\.\/source-offer\.js'\)\.registerSourceOffer\(app, .*\);$/m);
+    assert.ok(registration, 'production must register source access');
+    assert.ok(registration.index < serverSource.indexOf('app.use('), 'source routes must precede all production middleware, including authentication');
+    vm.runInNewContext(registration[0], { app, require });
     app.use((_req, res) => res.status(403).send('sign in'));
     server = app.listen(0, '127.0.0.1');
     await new Promise(resolve => server.once('listening', resolve));
