@@ -25,7 +25,7 @@
 
   let state = { publishable: [], requests: [], friends: [], feed: [], grants: [], granted: [] };
   const selectedPosts = new Set();
-  // The viewer's own handle, for the "Your username" chip. Fetched once and kept:
+  // The viewer's own handle, shown as identity text. Fetched once and kept:
   // a username does not change while the page is open, and the Social tab reloads
   // on every open.
   let myUsername = "";
@@ -223,19 +223,6 @@
     if (!myUsername) { wrap.hidden = true; return; }
     name.textContent = myUsername;
     wrap.hidden = false;
-  }
-
-  async function copyMyUsername() {
-    if (!myUsername) return;
-    try {
-      await navigator.clipboard.writeText(myUsername);
-      toast("Username copied", "success");
-    } catch (e) {
-      // Clipboard is refused on an insecure origin and in some embedded views.
-      // Say the name out loud instead of failing silently -- it is short enough
-      // to read off a toast and type by hand.
-      toast("Copy blocked here. Your username is " + myUsername, "info");
-    }
   }
 
   function renderAll() {
@@ -605,8 +592,6 @@
     if (send) send.addEventListener("click", sendRequest);
     const input = document.getElementById("social-lookup-input");
     if (input) input.addEventListener("keydown", e => { if (e.key === "Enter") sendRequest(); });
-    const copyMe = document.getElementById("social-you-copy");
-    if (copyMe) copyMe.addEventListener("click", copyMyUsername);
 
     const shell = document.getElementById("tab-social");
     if (!shell) return;
