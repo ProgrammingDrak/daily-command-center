@@ -25,6 +25,13 @@ toolbar text selection, and usable selection in the rename input. Synthetic
 Pencil tests cover rapid strokes and a 10,000-point stroke. These are distinct
 from the user's physical-device report.
 
+## Brush and paper extension
+
+The `ink-v8` app extends this same component with writing implements and paper
+metadata. See [the implement/paper guide](ink-brush-paper-library.md) for its
+inventory, input options, format compatibility, tests and hardware release gate.
+The `ink-v7` physical-device report above remains baseline evidence only.
+
 ## Source of truth and boundaries
 
 | Part | Source | Responsibility |
@@ -119,11 +126,12 @@ replace real data with the example's empty page during adoption or testing.
 - The paper's non-passive `touchstart`/`touchmove` listeners cancel native
   defaults. They do not draw. Drawing from both touch and pointer events would
   duplicate strokes. Do not make these listeners passive.
-- Mouse and pen draw. Touch draws only until a pen has been observed for that
-  component instance. Pencil can cancel a provisional touch that arrived first;
+- Mouse and pen draw. The reusable default (`fingerDraw: "auto"`) allows touch
+  only until a pen has been observed for that component instance. Pencil can cancel a provisional touch that arrived first;
   a resting palm must not hold the active pointer hostage. After pen use, touch
-  is ignored for drawing. This component does not implement finger navigation
-  or pinch zoom; those require an explicit host gesture design.
+  is ignored for drawing. The DCC host now chooses `fingerDraw: "off"`, with an
+  explicit writing toggle and optional horizontal page-swiping callback. Pinch
+  zoom and finger panning are not implemented.
 - One active pointer owns a stroke. Pointer capture keeps it alive outside the
   paper. Up clears active ownership synchronously before the save callback;
   a subsequent capture-loss event does not commit that finished stroke twice.
@@ -134,7 +142,8 @@ replace real data with the example's empty page during adoption or testing.
   Coalesced samples are feature-detected. Predicted samples are not implemented.
 - Committed and live ink use separate canvases, with a detached finalized-prefix
   canvas for the current pen stroke. Pencil lift copies the already-rasterized
-  opaque stroke instead of replaying all its segments. Keep the live context
+  opaque stroke instead of replaying all its segments. New style-v2 strokes
+  also composite once at lift, including graphite and highlighter masks. Keep the live context
   synchronized: a desynchronized source previously exposed stale pixels during
   copy/clear. Highlighter keeps its per-segment multiply replay for correct
   overlaps; do not flatten it through the opaque-pen shortcut.
@@ -154,18 +163,20 @@ replace real data with the example's empty page during adoption or testing.
 | `isDirty()`, `clearDirty()` | Dirty state is not a version token. Clear only after the corresponding local save succeeds and no newer change has occurred; serialize async saves or track a host revision. |
 | `isPenDown()` | Gate expensive host work and page switching. It reports active drawing input, not exclusively physical pen input. |
 | `undo()`, `redo()`, `canUndo()`, `canRedo()` | Operate on the current page; history is bounded to 60 entries. Call at an idle input boundary. |
-| `setTool()`, `setColor()`, `setSize()` | Existing tools are pen, highlighter and whole-stroke eraser. Select tools between strokes. |
-| `renderToCanvas(scale)` | Synchronous full-page white-background render. Schedule outside input; it renders internal state, so do not use it as a persistence snapshot during provisional erasing. |
-| `destroy()` | Removes wrap touch and window resize/orientation listeners. It is not a complete reusable-node teardown: base pointer listeners and a pending resize timer are not removed. Use one long-lived instance per DOM canvas pair; do not destroy/recreate repeatedly on the same nodes. |
+| `setTool()`, `setColor()`, `setSize()`, `setStyle()` | The shared registry includes writing implements; `pen` preserves old records. Eraser still removes whole strokes. Style settings are captured on creation. Select tools between strokes. |
+| `setPaper(paper, opts)` | Changes normalized paper beneath ink and creates an undo entry, unless `opts.history === false` (used for a new page's inherited paper); never clears strokes. Call at idle. |
+| `setFingerDraw()` | `auto` retains legacy behavior; `off` is Pencil-first; `on` explicitly enables finger drawing. |
+| `renderToCanvas(scale)` | Synchronous full-page render including paper metadata (tint and pattern). Schedule outside input; it renders internal state, so do not use it as a persistence snapshot during provisional erasing. |
+| `destroy()` | Removes wrap touch, window resize/orientation and ResizeObserver listeners, and clears a pending resize timer. It is not a complete reusable-node teardown: base pointer listeners are not removed. Use one long-lived instance per DOM canvas pair; do not destroy/recreate repeatedly on the same nodes. |
 
 The portable format remains v1: `{v, w, h, strokes}`; each stroke contains
-`tool`, `color`, `size`, and flat `[x, y, pressure, ...]` points in page units.
-Use `InkStrokes.serialize`/`deserialize`. Keep editable strokes as source data;
+`tool`, `color`, `size`, optional `style`, and flat `[x, y, pressure, ...]` points in page units.
+Pages may also include optional `paper`. Use `InkStrokes.serialize`/`deserialize`. Keep editable strokes as source data;
 rendered images and OCR are derived artifacts. Do not migrate or clear real
 IndexedDB/localStorage merely to adopt this component. The DCC service worker
 caches shell assets only and its version is independent of note format.
 
-This is a fixed-page white-paper component, not yet a transparent image-editor
+This is a fixed-page component with procedural paper backgrounds, not yet a transparent image-editor
 overlay, infinite canvas, transformable layer stack, or general disposal-safe
 framework widget. Preserve the input and persistence contract if those features
 are added later; the current documentation does not claim them as supported.

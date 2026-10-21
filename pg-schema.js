@@ -77,6 +77,8 @@ CREATE INDEX IF NOT EXISTS idx_blocks_time_entry_task
   ON blocks(workspace_id, (properties->>'blockId'), date)
   WHERE type = 'time_entry' AND deleted_at IS NULL;
 
+${require("./task-attachment-store").SCHEMA_SQL}
+
 -- ── Workspace Members ──
 CREATE TABLE IF NOT EXISTS workspace_members (
   id           SERIAL PRIMARY KEY,

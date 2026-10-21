@@ -16,7 +16,27 @@
   // whole palette swaps from this block.
   const COLORS = ["#1b1b2f", "#2f6fb0", "#b0402f", "#2f7a4f", "#8a5aa8"];
   const HIGHLIGHTS = ["#ffe66d", "#a8e6a1", "#9fd6ff", "#ffc2e0"];
-  const SIZES = [1.6, 2.6, 4.2, 7];
+  const IMPLEMENTS = ["ballpoint", "fineliner", "fountain", "pencil", "mechanical", "marker", "highlighter", "brush", "calligraphy"];
+  const HINTS = {
+    ballpoint: "Smooth rounded ink with a restrained pressure response.",
+    fineliner: "A uniform, precise line, independent of pressure.",
+    fountain: "A directional nib with moderate pressure variation.",
+    pencil: "Graphite grain with pressure-controlled darkness and width.",
+    mechanical: "Fine graphite with a fixed width and pressure-controlled darkness.",
+    marker: "Broad opaque ink with a chisel nib.",
+    highlighter: "One translucent layer per stroke. Separate strokes darken where they overlap.",
+    brush: "A flexible brush pen with a strong pressure response, from hairlines to broad marks.",
+    calligraphy: "A flat nib: line width follows direction and nib angle.",
+  };
+  let preferences = {};
+  try { preferences = JSON.parse(localStorage.getItem("mycelium-ink-tools") || "{}") || {}; } catch { /* optional preferences */ }
+  if (!preferences || typeof preferences !== "object" || Array.isArray(preferences)) preferences = {};
+  function toolSettings(name) {
+    const prior = preferences[name] || {}, spec = S.toolSpec(name);
+    return { color: /^#[0-9a-f]{6}$/i.test(prior.color) ? prior.color : name === "highlighter" ? HIGHLIGHTS[0] : COLORS[0],
+      size: Math.max(0.6, Math.min(48, Number(prior.size) || spec.sizes[1])),
+      angle: Math.max(S.NIB_ANGLE.min, Math.min(S.NIB_ANGLE.max, Number.isFinite(prior.angle) ? prior.angle : S.NIB_ANGLE.default)) };
+  }
   const COVERS = ["slate", "moss", "clay", "plum", "ink", "sand"];
   const BOOK_ACTION_ICON = "⋮";
   const SAVE_DEBOUNCE_MS = 700;
@@ -29,6 +49,11 @@
     base: $("base"), live: $("live"),
     penBtn: $("penBtn"), hlBtn: $("hlBtn"), eraseBtn: $("eraseBtn"),
     swatches: $("swatches"), sizes: $("sizes"),
+    widthRange: $("widthRange"), widthLabel: $("widthLabel"),
+    brushDlg: $("brushDlg"), brushChoices: $("brushChoices"), brushClose: $("brushClose"), brushHint: $("brushHint"),
+    nibControl: $("nibControl"), nibAngle: $("nibAngle"), nibLabel: $("nibLabel"),
+    paperDlg: $("paperDlg"), paperBtn: $("paperBtn"), paperChoices: $("paperChoices"), paperClose: $("paperClose"),
+    paperTint: $("paperTint"), paperSpacing: $("paperSpacing"), paperMargin: $("paperMargin"), fingerBtn: $("fingerBtn"),
     undoBtn: $("undoBtn"), redoBtn: $("redoBtn"), backBtn: $("backBtn"),
     prevBtn: $("prevBtn"), nextBtn: $("nextBtn"), addPageBtn: $("addPageBtn"),
     delPageBtn: $("delPageBtn"), pgLabel: $("pgLabel"), syncStatus: $("syncStatus"),
@@ -126,7 +151,7 @@
     el.shelfSub.textContent = [
       books.length ? `${books.length} notebook${books.length === 1 ? "" : "s"}` : "",
       // This is the server build. Cached app assets may be older.
-      "ink-v7",
+      "ink-v8",
       serverBuildLabel,
     ].filter(Boolean).join(" · ");
     el.shelfStatus.textContent = st.unsynced ? `${st.unsynced} page${st.unsynced === 1 ? "" : "s"} to sync` : "";
@@ -247,7 +272,7 @@
     el.writer.classList.add("on");
 
     if (!ink) {
-      ink = Canvas.create({ base: el.base, live: el.live, wrap: el.wrap, onChange: onInkChange });
+      ink = Canvas.create({ base: el.base, live: el.live, wrap: el.wrap, onChange: onInkChange, fingerDraw: "off", onNavigate: goPage });
       buildToolbar();
     }
     await loadPage(0);
@@ -262,6 +287,7 @@
     ink.loadPage(S.deserialize(rec.data));
     updatePager();
     updateHistoryButtons();
+    updatePaperLabel();
   }
 
   function updatePager() {
@@ -278,43 +304,64 @@
 
   function onInkChange() {
     updateHistoryButtons();
+    updatePaperLabel();
     clearTimeout(saveTimer);
     saveTimer = setTimeout(savePage, SAVE_DEBOUNCE_MS);
     setStatus({ state: "unsaved" });
   }
 
+  let saving = null;
+  let navigating = false;
   async function savePage() {
     clearTimeout(saveTimer);
-    if (!ink || !ink.isDirty()) return;
+    while (saving) await saving;
+    if (!ink || !ink.isDirty()) return true;
     const rec = current.pages[current.index];
-    if (!rec) return;
+    if (!rec) return false;
+    const revision = ink.state.revision;
     const serialized = S.serialize(ink.getPage());
-    const saved = await Store.savePage(rec.id, serialized);
-    if (saved) current.pages[current.index] = saved;
-    ink.clearDirty();
-    setStatus({ state: "saved" });
-    // Nudge, never syncNow. The local save above is the durability guarantee and
-    // it has already happened; the upload is a 5.4-megapixel render on the pen's
-    // own thread, so it waits for a gap in the writing. Calling syncNow here is
-    // what made the app impossible to write in.
-    if (sync) sync.nudge();
+    let successful = false;
+    saving = (async () => {
+      try {
+        const saved = await Store.savePage(rec.id, serialized);
+        if (!saved) throw new Error("Page was not saved");
+        const index = current.pages.findIndex(p => p.id === rec.id);
+        if (index >= 0) current.pages[index] = saved;
+        // Input can continue while IndexedDB writes. Acknowledging an older save
+        // must never clear the dirty flag for newer ink or a new paper setting.
+        if (current.pages[current.index]?.id === rec.id && ink.state.revision === revision) ink.clearDirty();
+        setStatus({ state: ink.isDirty() ? "unsaved" : "saved" });
+        if (sync) sync.nudge();
+        successful = true;
+      } catch (e) {
+        localStatus = "Local save failed — keep this notebook open";
+        setStatus({ state: "error", message: e.message });
+      }
+    })();
+    try { await saving; } finally { saving = null; }
+    return successful;
   }
 
   async function goPage(delta) {
+    if (ink.isPenDown() || navigating) return;
     const next = current.index + delta;
     if (next < 0 || next >= current.pages.length) return;
-    await savePage();
-    await loadPage(next);
+    navigating = true;
+    try { if (await savePage()) await loadPage(next); } finally { navigating = false; }
   }
 
   el.prevBtn.addEventListener("click", () => goPage(-1));
   el.nextBtn.addEventListener("click", () => goPage(1));
 
   el.addPageBtn.addEventListener("click", async () => {
-    await savePage();
+    if (ink.isPenDown() || navigating) return;
+    if (!await savePage()) return;
+    const paper = ink.getPage().paper;
     const page = await Store.addPage(current.notebook.id, current.pages.length);
     current.pages.push(page);
     await loadPage(current.pages.length - 1);
+    // Inherited paper is the new page's starting state, not an undoable edit.
+    if (paper) ink.setPaper(paper, { history: false });
   });
 
   el.delPageBtn.addEventListener("click", async () => {
@@ -327,7 +374,8 @@
   });
 
   el.backBtn.addEventListener("click", async () => {
-    await savePage();
+    if (ink.isPenDown() || navigating) return;
+    if (!await savePage()) return;
     el.writer.classList.remove("on");
     el.shelf.classList.remove("hidden");
     await renderShelf();
@@ -407,7 +455,8 @@
   async function exportNotebooks(ids, label) {
     // A debounced save could still be pending, and exporting a backup that is
     // missing the last thing written would be the worst possible bug here.
-    await savePage();
+    const saved = await savePage();
+    if (!saved) throw new Error("The latest page could not be saved. Keep the notebook open and retry export.");
     const entries = await Store.exportEntries(ids);
     if (!entries.length) {
       showArchiveResult("Export", "There is nothing to export yet.", true);
@@ -488,49 +537,143 @@
 
   // ── toolbar ────────────────────────────────────────────────────────────────
 
-  function buildToolbar() {
-    const tools = { pen: el.penBtn, highlighter: el.hlBtn, eraser: el.eraseBtn };
-    function selectTool(name) {
-      ink.setTool(name);
-      for (const [k, btn] of Object.entries(tools)) btn.classList.toggle("on", k === name);
-      renderSwatches();
+  let selectedImplement = "ballpoint";
+  function rememberTool() {
+    if (ink.state.tool === "eraser") return;
+    preferences[selectedImplement] = { color: ink.state.color, size: ink.state.size, angle: ink.state.style.angle };
+    try { localStorage.setItem("mycelium-ink-tools", JSON.stringify(preferences)); } catch { /* drawing works without preference storage */ }
+  }
+  function selectTool(name) {
+    if (ink.isPenDown()) return;
+    ink.setTool(name);
+    if (name !== "eraser") {
+      selectedImplement = name;
+      const settings = toolSettings(name);
+      ink.setColor(settings.color); ink.setSize(settings.size); ink.setStyle({ angle: settings.angle });
     }
-    for (const [name, btn] of Object.entries(tools)) btn.addEventListener("click", () => selectTool(name));
-
-    function renderSwatches() {
-      const list = ink.state.tool === "highlighter" ? HIGHLIGHTS : COLORS;
-      el.swatches.innerHTML = "";
-      // Switching tools keeps its own last colour rather than carrying a pen
-      // colour into the highlighter, where it would be nearly invisible.
-      if (!list.includes(ink.state.color)) ink.setColor(list[0]);
-      for (const c of list) {
-        const b = document.createElement("button");
-        b.className = "swatch" + (c === ink.state.color ? " on" : "");
-        b.style.background = c;
-        b.addEventListener("click", () => { ink.setColor(c); renderSwatches(); });
-        el.swatches.appendChild(b);
-      }
-    }
-
-    el.sizes.innerHTML = "";
-    for (const size of SIZES) {
+    el.penBtn.textContent = `${S.toolSpec(selectedImplement).label} ▾`;
+    el.penBtn.classList.toggle("on", name !== "eraser");
+    el.hlBtn.classList.toggle("on", name === "highlighter");
+    el.eraseBtn.classList.toggle("on", name === "eraser");
+    for (const btn of [el.penBtn, el.hlBtn, el.eraseBtn]) btn.setAttribute("aria-pressed", btn.classList.contains("on"));
+    renderSwatches(); renderSizes();
+  }
+  function renderSwatches() {
+    const list = selectedImplement === "highlighter" ? HIGHLIGHTS : COLORS;
+    el.swatches.innerHTML = "";
+    for (const color of list) {
       const b = document.createElement("button");
-      b.className = "size-dot" + (size === ink.state.size ? " on" : "");
-      b.innerHTML = `<i style="width:${Math.max(3, size * 1.7)}px;height:${Math.max(3, size * 1.7)}px"></i>`;
+      b.className = "swatch" + (color === ink.state.color ? " on" : "");
+      b.style.background = color;
+      b.setAttribute("aria-label", `Ink color ${color}`); b.setAttribute("aria-pressed", color === ink.state.color);
+      b.disabled = ink.state.tool === "eraser";
+      b.addEventListener("click", () => { ink.setColor(color); rememberTool(); renderSwatches(); });
+      el.swatches.appendChild(b);
+    }
+  }
+  function renderSizes() {
+    const eraser = ink.state.tool === "eraser";
+    const sizes = eraser ? [6, 12, 24] : S.toolSpec(selectedImplement).sizes;
+    const active = eraser ? ink.state.eraserRadius : ink.state.size;
+    el.sizes.innerHTML = "";
+    for (const size of sizes) {
+      const b = document.createElement("button");
+      b.className = "size-dot" + (size === active ? " on" : "");
+      b.setAttribute("aria-label", `${eraser ? "Eraser radius" : "Stroke width"} ${size}`);
+      b.setAttribute("aria-pressed", size === active);
+      b.innerHTML = `<i style="width:${Math.min(20, Math.max(3, size * 1.3))}px;height:${Math.min(20, Math.max(3, size * 1.3))}px"></i>`;
       b.addEventListener("click", () => {
-        ink.setSize(size);
-        [...el.sizes.children].forEach((c, i) => c.classList.toggle("on", SIZES[i] === size));
+        if (eraser) ink.state.eraserRadius = size; else { ink.setSize(size); rememberTool(); }
+        renderSizes();
       });
       el.sizes.appendChild(b);
     }
-
-    el.undoBtn.addEventListener("click", () => { ink.undo(); updateHistoryButtons(); });
-    el.redoBtn.addEventListener("click", () => { ink.redo(); updateHistoryButtons(); });
-    selectTool("pen");
+    el.widthRange.value = active;
+    el.widthRange.setAttribute("aria-label", eraser ? "Eraser radius" : "Stroke width");
+    el.widthLabel.textContent = active.toFixed(1);
+  }
+  function brushPreview(canvas, name) {
+    canvas.width = 320; canvas.height = 96;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff9eb"; ctx.fillRect(0, 0, 320, 96);
+    const settings = toolSettings(name);
+    const stroke = S.newStroke(name, settings.color, settings.size * 1.5, settings);
+    for (let i = 0; i < 64; i++) S.addPoint(stroke, 22 + i * 4.3, 48 + Math.sin(i / 7) * 17,
+      0.1 + Math.sin(i / 63 * Math.PI) * 0.85, 0);
+    S.drawStroke(ctx, stroke);
+  }
+  function renderBrushes() {
+    el.brushChoices.innerHTML = "";
+    for (const name of IMPLEMENTS) {
+      const b = document.createElement("button"); b.className = "picker-card";
+      b.setAttribute("aria-pressed", ink.state.tool === name);
+      const canvas = document.createElement("canvas"), label = document.createElement("span");
+      label.textContent = S.toolSpec(name).label;
+      canvas.setAttribute("aria-hidden", "true"); brushPreview(canvas, name);
+      b.append(canvas, label);
+      b.addEventListener("click", () => { selectTool(name); renderBrushes(); });
+      el.brushChoices.appendChild(b);
+    }
+    const nib = !!S.toolSpec(selectedImplement).nib;
+    el.nibControl.classList.toggle("hidden", !nib);
+    el.nibAngle.value = ink.state.style.angle;
+    el.nibLabel.textContent = `${ink.state.style.angle}°`;
+    el.brushHint.textContent = HINTS[selectedImplement];
+  }
+  function updatePaperLabel() {
+    const paper = S.normalizePaper(ink.getPage().paper);
+    el.paperBtn.textContent = `Paper: ${S.PAPERS.find(p => p.id === paper.type).label} ▾`;
+  }
+  function renderPaperChoices() {
+    const paper = S.normalizePaper(ink.getPage().paper);
+    el.paperTint.value = paper.tint; el.paperSpacing.value = paper.spacing; el.paperMargin.checked = paper.margin;
+    el.paperSpacing.disabled = !(S.PAPERS.find(p => p.id === paper.type) || {}).usesSpacing;
+    el.paperMargin.disabled = !paper.type.startsWith("ruled");
+    el.paperChoices.innerHTML = "";
+    for (const preset of S.PAPERS) {
+      const b = document.createElement("button"); b.className = "picker-card";
+      b.setAttribute("aria-pressed", paper.type === preset.id);
+      const canvas = document.createElement("canvas"), label = document.createElement("span");
+      canvas.width = 170; canvas.height = 220; canvas.setAttribute("aria-hidden", "true");
+      S.drawPaper(canvas.getContext("2d"), { w: S.PAGE_W, h: S.PAGE_H,
+        paper: { ...paper, type: preset.id, spacing: preset.id === paper.type ? paper.spacing : preset.spacing } }, { scale: 170 / S.PAGE_W });
+      label.textContent = preset.label; b.append(canvas, label);
+      b.addEventListener("click", () => { ink.setPaper({ ...paper, type: preset.id, spacing: preset.spacing }); renderPaperChoices(); });
+      el.paperChoices.appendChild(b);
+    }
+  }
+  function buildToolbar() {
+    el.penBtn.addEventListener("click", () => { if (!ink.isPenDown()) { renderBrushes(); el.brushDlg.showModal(); } });
+    el.brushClose.addEventListener("click", () => el.brushDlg.close());
+    el.hlBtn.addEventListener("click", () => selectTool("highlighter"));
+    el.eraseBtn.addEventListener("click", () => selectTool("eraser"));
+    el.widthRange.addEventListener("input", () => {
+      const value = Number(el.widthRange.value);
+      if (ink.state.tool === "eraser") ink.state.eraserRadius = value; else { ink.setSize(value); rememberTool(); }
+      renderSizes();
+    });
+    el.nibAngle.addEventListener("input", () => {
+      ink.setStyle({ angle: Number(el.nibAngle.value) }); rememberTool(); renderBrushes();
+    });
+    el.paperBtn.addEventListener("click", () => { if (!ink.isPenDown()) { renderPaperChoices(); el.paperDlg.showModal(); } });
+    el.paperClose.addEventListener("click", () => el.paperDlg.close());
+    for (const field of [el.paperTint, el.paperSpacing, el.paperMargin]) field.addEventListener("change", () => {
+      ink.setPaper({ ...S.normalizePaper(ink.getPage().paper), tint: el.paperTint.value,
+        spacing: Number(el.paperSpacing.value), margin: el.paperMargin.checked }); renderPaperChoices();
+    });
+    el.fingerBtn.addEventListener("click", () => {
+      const on = ink.state.fingerDraw !== "on";
+      ink.setFingerDraw(on ? "on" : "off");
+      el.fingerBtn.textContent = `Finger draw: ${on ? "on" : "off"}`; el.fingerBtn.setAttribute("aria-pressed", on);
+      el.fingerBtn.title = on ? "Fingers draw ink; turn off to navigate with swipes" : "Pencil and mouse draw; fingers swipe between pages";
+    });
+    el.undoBtn.addEventListener("click", () => { if (!ink.isPenDown()) { ink.undo(); updateHistoryButtons(); } });
+    el.redoBtn.addEventListener("click", () => { if (!ink.isPenDown()) { ink.redo(); updateHistoryButtons(); } });
+    selectTool("ballpoint");
   }
 
   document.addEventListener("keydown", (e) => {
-    if (!el.writer.classList.contains("on")) return;
+    if (!el.writer.classList.contains("on") || document.querySelector("dialog[open]") || e.target.matches("input, select, textarea") || ink.isPenDown()) return;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === "z") {
       e.preventDefault();

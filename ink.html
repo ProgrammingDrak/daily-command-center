@@ -46,7 +46,7 @@
     touch-action: manipulation;
   }
   button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
-  .hidden { display: none !important; }
+  .hidden, [hidden] { display: none !important; }
 
   /* ── shelf ───────────────────────────────────────────────────────────── */
   #shelf { height: 100%; overflow-y: auto; padding: max(24px, env(safe-area-inset-top)) 24px 40px; }
@@ -177,6 +177,46 @@
   .row button.primary { background: var(--accent); }
   .row button.danger { background: transparent; color: var(--danger); margin-right: auto; }
   .delete-row button.danger { margin-right: 0; background: var(--danger); color: white; }
+  .tbtn, .size-dot { min-width: 44px; width: 44px; height: 44px; }
+  .swatch { width: 44px; height: 44px; box-shadow: inset 0 0 0 9px var(--chrome-2); }
+  .tool-choice { min-height: 44px; padding: 8px 12px; border-radius: 9px; background: var(--chrome-3); font-size: 13px; white-space: nowrap; }
+  .tool-choice.on { box-shadow: inset 0 0 0 2px var(--accent); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .width-control { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+  .width-control input { width: 85px; min-height: 44px; accent-color: var(--accent); }
+  .width-control output { width: 28px; }
+  .bar { gap: 6px; }
+  .pager { flex-wrap: wrap; gap: 8px; }
+  .picker-dialog { width: min(680px, 94vw); max-height: 88dvh; overflow-y: auto; }
+  .picker-dialog, .picker-dialog * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .picker-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  .picker-head h2 { margin-bottom: 4px; font-size: 19px; }
+  .picker-head p, .picker-note { font-size: 12.5px; color: var(--muted); margin: 0; }
+  .picker-note { margin-top: 16px; }
+  .brush-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+  .paper-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+  .picker-card { border: 1px solid var(--edge); border-radius: 10px; padding: 10px 8px; text-align: left; min-width: 0; background: var(--chrome); }
+  .picker-card[aria-pressed=true] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .picker-card canvas { display: block; width: 100%; border-radius: 4px; margin-bottom: 8px; }
+  .picker-card span { display: block; font-size: 12px; line-height: 1.3; }
+  .paper-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .paper-settings label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; }
+  .paper-settings select { min-height: 44px; border: 1px solid var(--edge); border-radius: 8px; background: var(--chrome); color: var(--text); padding: 6px; }
+  .margin-control { min-height: 44px; }
+  .nib-control { display: flex; align-items: center; gap: 12px; margin-top: 14px; font-size: 13px; }
+  .nib-control input { min-height: 44px; accent-color: var(--accent); }
+  @media (max-width: 600px) {
+    .bar { padding-inline: 8px; }
+    .bar .name { max-width: calc(100vw - 92px); }
+    .bar .sep { display: none; }
+    .bar .status { width: 100%; font-size: 11px; min-height: 16px; }
+    .bar .grow { display: none; }
+    #stage { padding: 6px; }
+    .picker-dialog { padding: 16px; }
+    .brush-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .paper-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    #paperBtn, #fingerBtn { font-size: 12px; }
+  }
 </style>
 </head>
 <body>
@@ -205,18 +245,19 @@
     <button class="tbtn" id="backBtn" title="Back to shelf">‹</button>
     <span class="name" id="nbName"></span>
     <span class="sep"></span>
-    <button class="tbtn" id="penBtn" title="Pen">✎</button>
-    <button class="tbtn" id="hlBtn" title="Highlighter">▬</button>
-    <button class="tbtn" id="eraseBtn" title="Eraser">⌫</button>
+    <button class="tool-choice" id="penBtn" title="Choose a writing implement" aria-haspopup="dialog">Ballpoint ▾</button>
+    <button class="tool-choice" id="hlBtn" title="Highlighter">Highlight</button>
+    <button class="tool-choice" id="eraseBtn" title="Erase whole strokes">Erase</button>
     <span class="sep"></span>
     <span id="swatches" style="display:flex;gap:6px"></span>
     <span class="sep"></span>
     <span class="sizes" id="sizes"></span>
+    <label class="width-control">Width <input type="range" id="widthRange" min="0.6" max="48" step="0.2" aria-label="Stroke width"><output id="widthLabel"></output></label>
     <span class="sep"></span>
     <button class="tbtn" id="undoBtn" title="Undo">↶</button>
     <button class="tbtn" id="redoBtn" title="Redo">↷</button>
     <span class="grow"></span>
-    <span class="status" id="syncStatus"></span>
+    <span class="status" id="syncStatus" aria-live="polite"></span>
   </div>
 
   <div id="stage">
@@ -232,9 +273,29 @@
     <button class="tbtn" id="nextBtn" title="Next page">›</button>
     <span class="sep"></span>
     <button class="tbtn" id="addPageBtn" title="Add a page">+</button>
+    <button class="tool-choice" id="paperBtn" aria-haspopup="dialog">Paper: Blank ▾</button>
+    <button class="tool-choice" id="fingerBtn" aria-pressed="false" title="Pencil and mouse draw; fingers swipe between pages">Finger draw: off</button>
     <button class="tbtn" id="delPageBtn" title="Delete this page" hidden>🗑</button>
   </div>
 </section>
+
+<dialog id="brushDlg" class="picker-dialog" aria-labelledby="brushDlgTitle">
+  <div class="picker-head"><div><h2 id="brushDlgTitle">Writing implements</h2><p>Choose a nib. Pressure changes the mark with a Pencil.</p></div><button class="tool-choice" id="brushClose" aria-label="Close writing implements">Done</button></div>
+  <div class="brush-grid" id="brushChoices"></div>
+  <label class="nib-control hidden" id="nibControl">Nib angle <input id="nibAngle" type="range" min="0" max="170" step="5" aria-label="Nib angle"><output id="nibLabel"></output></label>
+  <p class="picker-note" id="brushHint"></p>
+</dialog>
+
+<dialog id="paperDlg" class="picker-dialog" aria-labelledby="paperDlgTitle">
+  <div class="picker-head"><div><h2 id="paperDlgTitle">Paper</h2><p>Change the page underneath your ink.</p></div><button class="tool-choice" id="paperClose" aria-label="Close paper picker">Done</button></div>
+  <div class="paper-settings">
+    <label>Paper tone <select id="paperTint"><option value="white">White</option><option value="cream">Cream</option><option value="gray">Soft gray</option></select></label>
+    <label>Spacing <select id="paperSpacing"><option value="4">4 mm</option><option value="5">5 mm</option><option value="6">6 mm</option><option value="7">7 mm</option><option value="8">8 mm</option><option value="9">9 mm</option><option value="10">10 mm</option><option value="12">12 mm</option></select></label>
+    <label class="margin-control"><input id="paperMargin" type="checkbox"> Ruled margin</label>
+  </div>
+  <div class="paper-grid" id="paperChoices"></div>
+  <p class="picker-note">Applies to this page. New pages inherit its paper. Undo restores the previous paper.</p>
+</dialog>
 
 <dialog id="newDlg">
   <h2>New notebook</h2>

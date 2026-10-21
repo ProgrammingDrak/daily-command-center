@@ -53,8 +53,8 @@ test('v1 empty actual rows do not count; explicit zero still counts',()=>{
   v.actual.sets[0].reps=0;v.occurredOn='2026-10-08';assert.equal(A.hasActual(A.validate(v)),true);
 });
 test('catalog seed has friendly names, canonical IDs, and dumbbell load convention',()=>{
-  assert.deepEqual(W.CATALOG.map(e=>e.name),['Bench Press','Dumbbell Curls','Overhead Barbell Press']);
-  assert.equal(new Set(W.CATALOG.map(e=>e.id)).size,3);assert.equal(W.CATALOG.find(e=>e.id==='dumbbell-curls').loadMode,'per-dumbbell');
+  assert.deepEqual(W.CATALOG.slice(0,3).map(e=>e.name),['Bench Press','Dumbbell Curls','Overhead Barbell Press']);
+  assert.equal(new Set(W.CATALOG.map(e=>e.id)).size,W.CATALOG.length);assert.equal(W.CATALOG.find(e=>e.id==='dumbbell-curls').loadMode,'per-dumbbell');
 });
 test('repeated canonical exercise keeps two distinct local entries and independent targets',()=>{
   const v=W.validate(workout());assert.equal(v.plan.exercises[0].catalogExerciseId,v.plan.exercises[1].catalogExerciseId);

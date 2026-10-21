@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 
 const engine = process.env.INK_ENGINE || "webkit";
 const browser = await (engine === "webkit" ? webkit : chromium).launch({
-  headless: true, ...(engine === "chromium" ? { channel: "msedge" } : {}),
+  headless: true, ...(engine === "chromium" ? { channel: process.env.INK_BROWSER_CHANNEL || "msedge" } : {}),
 });
 try {
   const context = await browser.newContext({ viewport: { width: 1024, height: 768 },
@@ -48,6 +48,10 @@ try {
   }
   // Browser-injected touch verifies the non-passive guard still permits the
   // pointer stream and a no-motion tap creates exactly one dot.
+  // Finger drawing is now opt-in: first prove the default creates no ink.
+  await page.touchscreen.tap(canvas.x + 120, canvas.y + 40);
+  assert.equal(await page.evaluate(() => window.testInk.getPage().strokes.length), 99);
+  await page.locator("#fingerBtn").click();
   await page.touchscreen.tap(canvas.x + 120, canvas.y + 40);
   await page.waitForFunction(() => document.querySelector("#syncStatus").textContent.includes("Saved locally"));
   assert.equal(await page.evaluate(() => window.testInk.getPage().strokes.length), 100);

@@ -1,0 +1,36 @@
+const test=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto'),express=require('express');
+const {createActivityDb}=require('./test-support/activity-db');
+const {createActivityStore}=require('./activity-store');
+const {createWorkoutLibrary,SCHEMA_SQL}=require('./workout-library-store');
+const W=require('./public/js/workout-model');
+const configured=!!(process.env.DCC_PGLITE_MODULE||process.env.DCC_TEST_DATABASE_URL);
+const owner={userId:1,workspaceId:'ws-1'},other={userId:2,workspaceId:'ws-2'};
+test('movement library and guidance PostgreSQL/API contracts',{skip:!configured},async t=>{
+ const ctx=await createActivityDb();t.after(()=>ctx.close());const library=createWorkoutLibrary(ctx),store=createActivityStore(ctx);
+ const def={name:'Synthetic reset seat',loadMode:'bodyweight',movement:{visualInstructions:'Visual instruction',spokenCue:'Spoken cue',goalKind:'window',supportsSide:true,breath:'none'}};
+ const card=await library.createExercise(def,owner);assert.equal(card.revision,1);assert.deepEqual(card.movement,W.movement(def.movement));
+ assert.equal((await library.createExercise(def,owner)).id,card.id);
+ await assert.rejects(library.createExercise({...def,movement:{...def.movement,spokenCue:'Unsaved replacement'}},owner),{statusCode:409});
+ await assert.rejects(library.createExercise({...def,loadMode:'total'},owner),{statusCode:409});
+ await ctx.pool.query(SCHEMA_SQL);await ctx.pool.query(SCHEMA_SQL);assert.deepEqual((await library.catalog(owner)).find(x=>x.id===card.id),card);
+ const v=W.empty();v.plan=W.gentleReset(()=>crypto.randomUUID());v.plan.exercises[0]= {...W.makeEntry(card,()=>crypto.randomUUID()),id:v.plan.exercises[0].id};
+ const template=await library.save({title:'Synthetic reset',plan:v.plan},owner);
+ let session=await store.create({title:'Synthetic guided session',date:'2026-10-20',templateId:template.id},owner);
+ const savedStart=W.guide(session.record,'begin');session=await store.save(session.taskId,{record:savedStart,expectedRevision:session.revision,mutationId:'guide-start'},owner);
+ const frozen=structuredClone(session.record.baseline);
+ const edited=await library.updateExercise(card.id,{...def,movement:{...def.movement,spokenCue:'Updated cue'},expectedRevision:1},owner);
+ assert.equal(edited.revision,2);assert.ok(edited.updatedAt);assert.equal((await library.get(template.id,owner)).plan.exercises[0].movement.spokenCue,'Spoken cue');
+ await assert.rejects(library.updateExercise(card.id,{...def,expectedRevision:1},owner),{statusCode:409});await assert.rejects(library.updateExercise(card.id,{...def,expectedRevision:2},other),{statusCode:404});
+ const changed=structuredClone(template.plan);changed.exercises[0].movement.spokenCue='Template-only cue';
+ await library.save({title:template.title,plan:changed,expectedRevision:1},owner,template.id);
+ assert.deepEqual((await store.get(session.taskId,owner)).record.baseline,frozen);
+ const body={record:W.guide(session.record,'next'),expectedRevision:session.revision,mutationId:'guide-next'};
+ const next=await store.save(session.taskId,body,owner),retry=await store.save(session.taskId,body,owner);assert.equal(retry.revision,next.revision);assert.equal(next.record.guidance.stepIndex,1);assert.deepEqual(next.record.actual,{sets:[],runs:[]});assert.equal(next.record.occurredOn,null);
+ await assert.rejects(store.save(session.taskId,{...body,mutationId:'stale'},owner),{statusCode:409});
+ const tamper=structuredClone(next.record);tamper.plan.exercises[0].movement.spokenCue='Overwrite frozen';await assert.rejects(store.save(session.taskId,{record:tamper,expectedRevision:next.revision,mutationId:'tamper'},owner),{statusCode:409});
+ const resumed=await store.save(session.taskId,{record:W.guide(next.record,'exit'),expectedRevision:next.revision,mutationId:'exit'},owner);assert.equal((await store.get(session.taskId,owner)).record.guidance.status,'paused');assert.deepEqual(resumed.record.baseline,frozen);
+ const app=express();app.use(express.json());app.use((req,_res,n)=>{if(req.headers['x-owner']){req.session={userId:Number(req.headers['x-owner'])};req.workspaceId=req.headers['x-owner']==='2'?'ws-2':'ws-1';}n();});require('./routes/activity')(app,{...ctx,broadcast(){}});
+ const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});t.after(()=>new Promise(resolve=>server.close(resolve)));const url='http://127.0.0.1:'+server.address().port+'/api/activity/exercises/'+card.id;
+ for(const [headers,status] of [[{},401],[{'authorization':'Bearer scheduling-only'},401],[{'x-owner':'3'},403],[{'x-owner':'2'},404]]){const response=await fetch(url,{method:'PUT',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({...def,expectedRevision:2})});assert.equal(response.status,status);}
+ const response=await fetch(url,{method:'PUT',headers:{'x-owner':'1','Content-Type':'application/json'},body:JSON.stringify({...def,expectedRevision:2})});assert.equal(response.status,200);assert.equal((await response.json()).revision,3);
+});
