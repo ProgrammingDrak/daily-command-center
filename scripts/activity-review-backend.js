@@ -16,7 +16,13 @@ module.exports = async function mountActivityReview(app) {
     if (mode !== "none") { req.session = { userId: mode === "other" ? 2 : mode === "viewer" ? 3 : 1 }; req.workspaceId = mode === "other" ? "ws-2" : "ws-1"; }
     next();
   });
+  if(process.env.DCC_COMBINED_REVIEW==='1') {
+    app.get('/public/js/app-config.js',(req,res)=>res.type('js').set('Cache-Control','no-store').send('window.DCC_APP_TIME_ZONE="UTC";window.DCC_DELTA_SYNC_ENABLED=false;window.DCC_ACCOUNT_CONTEXT='+JSON.stringify({userId:req.session?.userId,workspaceId:req.workspaceId})+';'));
+    app.get('/api/me',(req,res)=>res.json({id:req.session?.userId,username:req.session?.userId===2?'Riley-demo':'Morgan-demo',onboardingState:{dailyCommandCenterTour:{version:2,completedAt:'2026-01-01T00:00:00Z'}}}));
+    app.use(require('../lib/account-binding'));
+  }
   if (process.env.DCC_SHARED_TASK_REVIEW === "1") await require("./shared-task-review-backend")(app,ctx,date);
+  if(process.env.DCC_COMBINED_REVIEW==='1')require("./combined-collaboration-review")(app,ctx);
   require("../routes/activity")(app, ctx);
   require("../routes/blocks")(app, ctx);
   const store = createActivityStore(ctx), owner = { userId: 1, workspaceId: "ws-1" };
