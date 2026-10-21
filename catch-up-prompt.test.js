@@ -804,7 +804,7 @@ test("Today on a triage row schedules it on the current day and clears the row",
   assert.equal(first._removed, true, "a scheduled item leaves the list");
 });
 
-test("triage Details expands the item context without changing its metadata", async () => {
+test("triage Details retains source and age without retired priority metadata", async () => {
   const d = ymd(1);
   const item = TRI("m1", { summary: "Needs a reply before Friday", draft_preview: "Thanks for checking in." });
   const { ctx } = triageCtx({ [d]: [dayRoot()] }, [d], [item]);
@@ -812,7 +812,7 @@ test("triage Details expands the item context without changing its metadata", as
   const row = [...rowsOf(ctx)][0];
   const toggle = row.querySelector(".ttl");
   const details = row.querySelector(".cu-details");
-  assert.match(row.innerHTML, /slack · High · \d+d old · <a class="cu-tri-link"/);
+  assert.match(row.innerHTML, /slack · \d+d old · <a class="cu-tri-link"/);
   toggle.fire("click");
   assert.equal(details.hidden, false);
   assert.equal(toggle.getAttribute("aria-expanded"), "true");
