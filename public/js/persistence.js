@@ -489,7 +489,7 @@ function reloadPersistedEdits() {
           start: "00:00", end: fmt(d),
           meta: t.meta || ("Custom task \u00b7 " + ms(d)),
           detail: t.detail || "", source: t.source || "manual",
-          notionUrl: t.notionUrl || "", calUrl: t.calUrl || "", priority: t.priority || "High",
+          notionUrl: t.notionUrl || "", calUrl: t.calUrl || "", priority: t.priority || "High", taskPriority: t.taskPriority,
           tags: Array.isArray(t.tags) ? t.tags : [],
           triageId: t.triageId || null,
           delegatedItemId: t.delegatedItemId || null,
@@ -671,13 +671,14 @@ async function switchToDate(dateStr) {
   // Toggle tomorrow indicator
   document.body.classList.toggle("view-tomorrow", viewMode === "tomorrow");
 
-  // Default to Actual tab for archives, List otherwise (Blocks view removed 2026-07)
-  let preferredView="list";
-  try{preferredView=localStorage.getItem("dcc-itinerary-view")||"list";}catch(e){}
-  const targetView = (viewMode === "archive") ? "actual" : (["list","calendar","actual"].includes(preferredView)?preferredView:"list");
+  // Default to Actual tab for archives, Itinerary otherwise (Blocks view removed 2026-07)
+  let preferredView="itinerary";
+  try{preferredView=localStorage.getItem("dcc-itinerary-view")||"itinerary";}catch(e){}
+  const targetView = (viewMode === "archive") ? "actual" : (["itinerary","list","calendar","actual"].includes(preferredView)?preferredView:"itinerary");
   const toggleBtns = document.querySelectorAll("#sched-view-toggle .svt-btn");
   toggleBtns.forEach(b => {
     b.classList.toggle("active", b.dataset.view === targetView);
+    b.setAttribute("aria-pressed",String(b.dataset.view === targetView));
   });
   schedView = targetView;
   const timelineEl = document.getElementById("timeline");
@@ -685,7 +686,7 @@ async function switchToDate(dateStr) {
   const actualViewEl = document.getElementById("actual-view");
   const calendarViewEl = document.getElementById("calendar-view");
   if (timelineEl) timelineEl.style.display = schedView === "plan" ? "block" : "none";
-  if (listViewEl) listViewEl.style.display = schedView === "list" ? "flex" : "none";
+  if (listViewEl) listViewEl.style.display = ["itinerary","list"].includes(schedView) ? "flex" : "none";
   if (actualViewEl) actualViewEl.style.display = schedView === "actual" ? "block" : "none";
   if (calendarViewEl) calendarViewEl.style.display = schedView === "calendar" ? "block" : "none";
 
@@ -697,7 +698,7 @@ async function switchToDate(dateStr) {
   // Re-render all tabs
   if (typeof buildSchedule === "function") buildSchedule();
   if (schedView === "actual") { if (typeof buildDayReview === "function") buildDayReview(viewDate); else if (typeof buildActualView === "function") buildActualView(); }
-  else if (schedView === "list" && typeof buildListView === "function") buildListView();
+  else if (["itinerary","list"].includes(schedView) && typeof buildListView === "function") buildListView();
   else if (schedView === "calendar" && typeof buildItineraryCalendar === "function") buildItineraryCalendar();
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();

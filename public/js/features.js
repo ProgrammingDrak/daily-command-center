@@ -433,6 +433,8 @@ function openAddModal(taskId, taskTitle) {
     detEl.style.display = detHtml ? '' : 'none';
   }
 
+  if(window.DCCPriorityUI)window.DCCPriorityUI.mountDetails(taskId,taskEntry,_addModalBlockId);
+
   // Initialize tag picker
   var tagContainer = document.getElementById('am-tag-picker');
   if (tagContainer && typeof createTagPicker === 'function') {
@@ -1657,7 +1659,7 @@ const SURFACES = {
   sync:            {build:()=>{if(typeof updateSync==="function")updateSync();},                isVisible:()=>true},
   snBadge:         {build:()=>{if(typeof updateSnBadge==="function")updateSnBadge();},          isVisible:()=>true},
   taskMenusBadge:  {build:()=>{if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();},isVisible:()=>true},
-  listView:        {build:()=>{if(typeof buildListView==="function")buildListView();},          isVisible:()=>_tabActive("schedule")&&schedView==="list"},
+  listView:        {build:()=>{if(typeof buildListView==="function")buildListView();},          isVisible:()=>_tabActive("schedule")&&["itinerary","list"].includes(schedView)},
   actualView:      {build:()=>{if(typeof buildActualView==="function")buildActualView();},      isVisible:()=>_tabActive("schedule")&&schedView==="actual"},
 };
 

@@ -1,3 +1,4 @@
+const TaskPriority = require("./public/js/task-priority");
 // responsibility-store.js — the responsibility domain, the server-side slot
 // engine, and the block apply-forward engine, extracted from routes/blocks.js
 // (dcc-improvements P8). This is a CODE MOVE, not a rewrite: every function
@@ -251,6 +252,7 @@ function normalizeTemplateTree(tree, opts = {}) {
       title: String(n.title || "").slice(0, 300),
       type: isRoot ? "task" : (typeof n.type === "string" && n.type ? n.type : "task"),
       priority: PRIORITIES.includes(n.priority) ? n.priority : "Medium",
+      taskPriority: TaskPriority.read(n),
       detail: typeof n.detail === "string" ? n.detail.slice(0, 2000) : ""
     };
     if (isRoot) out.occurrenceAnchor = !!(n.occurrenceAnchor || n.type === "shell");
@@ -290,6 +292,7 @@ function buildResponsibilityTaskProps(responsibility, { duration, slot, localId,
     start: minutesToHHMM(slot),
     end: minutesToHHMM(slot + duration),
     priority,
+    taskPriority: TaskPriority.read(sourceProps.taskPriority===undefined?props:sourceProps),
     meta: "Responsibility · " + (props.area || props.domain || "general") + " · " + duration + "m",
     detail: sourceProps.detail || props.description || "",
     source: sourceProps.source || "responsibility",
@@ -780,6 +783,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
           start: occurrence.start,
           end: minutesToHHMM(startMin + duration),
           priority: props.priority || "Medium",
+          taskPriority: TaskPriority.read(props),
           meta: `Scheduled repeat · ${props.area || props.domain || "general"} · ${duration}m`,
         },
       };
@@ -824,6 +828,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
         type: "task",
         duration: nodeDuration,
         priority: node.priority || (isRoot ? "High" : "Medium"),
+        taskPriority: TaskPriority.read(node),
         meta: isRoot ? "Scheduled repeat anchor" : "Scheduled repeat step",
       };
       if (isRoot) {

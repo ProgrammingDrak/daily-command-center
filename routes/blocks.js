@@ -1,3 +1,4 @@
+const TaskPriority = require("../public/js/task-priority");
 const { slackTarget } = require("../lib/slack-status");
 // Extracted from server.js — mounted via routes/index pattern: module.exports(app, ctx).
 // ctx carries shared server-scope helpers/stores; see server.js where ctx is built.
@@ -2265,7 +2266,7 @@ module.exports = function mount(app, ctx) {
   function normalizeGroupItems(items) {
     if (!Array.isArray(items)) return [];
     return items.map((it) => {
-      const base = { local_id: it.local_id || ("tgi-" + crypto.randomUUID().slice(0, 12)), duration: Math.max(1, Math.round(Number(it.duration || 30))), priority: it.priority || "Medium" };
+      const base = { local_id: it.local_id || ("tgi-" + crypto.randomUUID().slice(0, 12)), duration: Math.max(1, Math.round(Number(it.duration || 30))), priority: it.priority || "Medium", taskPriority: TaskPriority.read(it) };
       if (it.isPlaceholder) return { ...base, isPlaceholder: true, placeholderMenus: Array.isArray(it.placeholderMenus) ? it.placeholderMenus : [], label: String(it.label || "Placeholder").trim() };
       return { ...base, isPlaceholder: false, title: String(it.title || "").trim(), detail: it.detail || "" };
     }).filter(it => it.isPlaceholder || it.title);
@@ -2445,6 +2446,7 @@ module.exports = function mount(app, ctx) {
         start: minutesToHHMM(slot),
         end: minutesToHHMM(slot + duration),
         priority: item.priority || "Medium",
+        taskPriority: TaskPriority.read(item),
         source: "task_group",
         taskGroupId: group.id,
         createdAt: new Date().toISOString()

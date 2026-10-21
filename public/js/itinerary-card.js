@@ -276,7 +276,7 @@
           (guest?'':'<button class="chk-quick quick-complete-control'+(chkBlocked?' chk-blocked':'')+'" title="Click to quick complete. Hold for completion notes. Shift+Enter also opens notes." aria-label="Click to quick complete. Hold for completion notes. Shift+Enter also opens notes."><span aria-hidden="true">'+_boltSvg+'</span></button>')+
           '<div class="bar" style="background:'+(waitChip?'var(--waiting,#7c3aed)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
           '<div class="body">'+
-            '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+waitChip+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+tinlineHtml+(guest||isMeeting(ev)||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>')+(isMeeting(ev)?'<button class="btn-mtg-tags" title="Tags — mark this meeting for Recording Review" style="border:none;background:none;cursor:pointer;font-size:13px;line-height:1;padding:2px 6px;opacity:.65" onclick="event.stopPropagation();openAddModal(\''+ev.id.replace(/'/g,"\\'")+'\',\''+ev.title.replace(/'/g,"\\'")+'\')">🏷</button>':'')+(guest||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
+            '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+waitChip+(!guest&&window.DCCPriorityUI?window.DCCPriorityUI.cardHtml(ev):'')+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+tinlineHtml+(guest||isMeeting(ev)||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>')+(isMeeting(ev)?'<button class="btn-mtg-tags" title="Tags — mark this meeting for Recording Review" style="border:none;background:none;cursor:pointer;font-size:13px;line-height:1;padding:2px 6px;opacity:.65" onclick="event.stopPropagation();openAddModal(\''+ev.id.replace(/'/g,"\\'")+'\',\''+ev.title.replace(/'/g,"\\'")+'\')">🏷</button>':'')+(guest||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
             '<div class="meta">'+inProgressChip+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+(sub?'Subtask':c.tag)+'</span>'+stackedBadge+chipSlotHtml+habitStreakChip(ev)+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
               petPrivacyChip(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
@@ -365,7 +365,7 @@
       '<div class="bar" style="background:'+(opts.barColor||"")+'"></div>'+
       '<div class="it-list-main">'+
         '<div class="it-list-title-row">'+(opts.collapseHtml||"")+'<span class="ttl" title="'+escHtml(ev.title||"")+'">'+escHtml(ev.title||"")+'</span>'+(opts.titleExtrasHtml||"")+addButton+'</div>'+
-        '<div class="it-list-meta">'+(opts.metaHtml||"")+(ev.sourceContext?'<span class="task-source-context">'+escHtml(ev.sourceContext)+'</span>':'')+scheduleButton+durationButton+'</div>'+
+        '<div class="it-list-meta">'+(opts.metaHtml||"")+((window.DCCPriorityUI&&typeof opts.onOpen==="function")?window.DCCPriorityUI.cardHtml(ev):"")+(ev.sourceContext?'<span class="task-source-context">'+escHtml(ev.sourceContext)+'</span>':'')+scheduleButton+durationButton+'</div>'+
       '</div>'+
       '<div class="it-list-actions">'+(opts.actionsBeforeHtml||"")+radialButton+deleteButton+'</div>';
 
@@ -399,7 +399,7 @@
     var add=el.querySelector(".row-add-menu");
     if(add)add.addEventListener("click",function(e){e.stopPropagation();opts.onAdd(add,e,ev);});
     if(typeof opts.onOpen==="function")el.addEventListener("click",function(e){
-      if(e.target.closest("button,a,input,textarea,.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag,.recap-flag"))return;
+      if(e.target.closest("button,a,input,select,textarea,.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag,.recap-flag"))return;
       opts.onOpen(e,ev);
     });
     if(typeof opts.afterRender==="function")opts.afterRender(el,ev);
