@@ -2,7 +2,7 @@
 let scheduled=JSON.parse(JSON.stringify(INIT_SCHED));
 let consider=JSON.parse(JSON.stringify(INIT_CONSIDER));
 let backlog=JSON.parse(JSON.stringify(INIT_BACKLOG));
-let manualDone=new Set(), doneAt={}, actionLog=[], durChanges={}, commuteTimes={}, nextId=200, schedView="list";
+let manualDone=new Set(), doneAt={}, actionLog=[], durChanges={}, commuteTimes={}, nextId=200, schedView="itinerary";
 let dailyBounty=null;
 function qaId(){return "qa-"+Date.now()+"-"+Math.random().toString(36).slice(2,7)}
 
@@ -197,7 +197,7 @@ function captureShellTemplate(shellId,pool){
   const stack=[{ev:root,out:rootNode,isRoot:true}];
   while(stack.length){
     const {ev,out,isRoot}=stack.pop();if(seen.has(ev.id))continue;seen.add(ev.id);
-    Object.assign(out,{title:ev.title||"",type:ev.type||"task",priority:ev.priority||"Medium",detail:ev.detail||"",children:[]});
+    Object.assign(out,{title:ev.title||"",type:ev.type||"task",priority:ev.priority||"Medium",taskPriority:ev.taskPriority||"Medium",detail:ev.detail||"",children:[]});
     if(!isRoot){out.edge=relOf(ev)==="subtask"?"subtask":"wrap";out.durationMin=Math.max(1,dur(ev)||0)||30;}
     const kids=_TM().selectNotDeleted(index.children.get(ev.id)||[]).filter(k=>!seen.has(k.id));
     const entries=kids.map(ev=>({ev,out:{},isRoot:false}));out.children=entries.map(e=>e.out);
@@ -1222,7 +1222,7 @@ function enqueueRowPropsWrite(blockId,merge,extra,options){
         // On a cache miss, BlockStore cannot otherwise know which revision/property
         // snapshot the merge used. Hand the freshly fetched row through as client-only
         // base metadata for explicit completion CAS and exact-delta construction.
-        const writeExtra=resolvedExtra&&resolvedExtra.completionIntent
+        const writeExtra=resolvedExtra&&(resolvedExtra.completionIntent||resolvedExtra._priorityEdit)
           ?{...resolvedExtra,_completionBaseBlock:b}
           :(resolvedExtra||undefined);
         return window.blockStore.updateBlock(b.id,next,writeExtra);
@@ -1496,7 +1496,7 @@ async function _moveTaskToBacklogStage(id,stage,toastMsg){
     const entry=Object.assign(
       window.DCC.taskCommonProps(ev,{
         meta:ms(mintedDur)+" · from schedule",
-        priority:ev.priority||"Medium",
+        priority:ev.priority||"Medium",taskPriority:ev.taskPriority||"Medium",
         source:ev.source||"manual"
       }),
       {id:mintedId,type:ev.type||"task",durMin:mintedDur,stage:stage}
@@ -1674,7 +1674,7 @@ async function _writeRescheduleTombstone(ev,fromDate,targetDate,movedBlockId,hid
       local_id:"resched-tomb-"+movedBlockId,
       kind:"reschedule_tombstone",
       title:ev.title||"Task",
-      priority:ev.priority||"Medium",
+      priority:ev.priority||"Medium",taskPriority:ev.taskPriority||"Medium",
       movedBlockId:movedBlockId,
       sourceLocalId:ev.id,
       // Every id this move hid on the origin day, so Restore can reverse ALL of it. The

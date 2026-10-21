@@ -101,6 +101,8 @@
 
   // Trigger initial render with the loaded data
   if (typeof render === 'function') render();
+  // Calendar is outside the render registry; restore it after day hydration.
+  if (typeof schedView !== 'undefined' && schedView === 'calendar' && typeof buildItineraryCalendar === 'function') buildItineraryCalendar();
   if (typeof buildTriage === 'function') buildTriage();
   if (typeof buildNotifications === 'function') buildNotifications();
   if (typeof buildUpcomingBoard === 'function') buildUpcomingBoard();

@@ -66,7 +66,10 @@ function localDateKey(date = new Date()) {
 function liveReviewBlocks() {
   return [...reviewBlocks.values()].filter((block) => !block.deleted_at);
 }
-if (process.env.DCC_REVIEW_TASK_DETAILS === '1') seedTaskDetailReview(reviewBlocks, localDateKey(new Date()));
+if (process.env.DCC_REVIEW_TASK_DETAILS === '1') {
+  seedTaskDetailReview(reviewBlocks, localDateKey(new Date()));
+  app.post('/api/review/task-details/reset',(_req,res)=>{reviewBlocks.clear();seedTaskDetailReview(reviewBlocks,localDateKey(new Date()));res.json({ok:true});});
+}
 if (process.env.DCC_REVIEW_HIERARCHY === '1') seedHierarchyReview(reviewBlocks, localDateKey(new Date()));
 if (process.env.DCC_REVIEW_HIERARCHY === '1') app.post('/api/review/hierarchy/reset',(_req,res)=>{reviewBlocks.clear();seedHierarchyReview(reviewBlocks,localDateKey(new Date()));res.json({ok:true});});
 

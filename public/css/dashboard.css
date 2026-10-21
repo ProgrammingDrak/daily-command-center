@@ -5878,3 +5878,15 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 
 /* Deep hierarchies keep room for task titles and controls on phones. */
 @media(max-width:480px){.it-list-item,.tl-item{--task-indent-max:44px}}
+
+/* Optional shared-list composers: author display rules must not override hidden. */
+.todo-public-body [data-composer-form][hidden],
+.todo-public-body #todo-guest-add-form[hidden],
+.todo-public-body #todo-create-note-panel[hidden] { display:none !important; }
+.todo-public-body .todo-composer-toggle { min-height:44px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; color:var(--text); background:var(--card); font:inherit; font-size:12px; cursor:pointer; align-self:flex-start; }
+.todo-public-body .todo-composer-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.todo-public-body .todo-composer-toggle[aria-expanded="true"] > span { display:inline-block; transform:rotate(90deg); }
+.todo-public-body .todo-reward-row { flex-wrap:wrap; }
+.todo-public-body .todo-reward-row input { min-width:0; flex-basis:100px; }
+.todo-public-body .todo-public-comment-form input,.todo-public-body .todo-public-comment-form button,.todo-public-body .todo-reward-form input,.todo-public-body .todo-reward-form button { min-height:44px; }
+@media print { .todo-public-body .todo-composer-toggle { display:none!important; } }

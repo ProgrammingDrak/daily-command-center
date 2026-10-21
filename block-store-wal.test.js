@@ -1242,3 +1242,80 @@ test('old delta response cannot overwrite an edit or advance its cursor',async()
  await h.store.updateBlock('b1',{title:'new'});release();assert.equal(await pull,null);
  assert.equal(h.store.get('b1').properties.title,'new');assert.equal(h.storage.get('dcc-sync-cursor:ws-1'),'1');assert.equal(pulls,1);
 });
+
+
+test("priority rejection restores only priority and removes its queued write", async()=>{
+ const initial={id:'priority-row',type:'block',date:'2026-07-08',properties:{title:'Keep',taskPriority:'Low',start:'09:00',end:'09:30'}};
+ const options={fetchBody:initial};const {store,storage}=makeStore(options);
+ await store.handleBlocksChanged({blockIds:[initial.id]});
+ options.fetchStatus=403;
+ await assert.rejects(store.updateBlock(initial.id,{...initial.properties,taskPriority:'High'},{_reportSaveStatus:true,_priorityEdit:{before:'Low',after:'High'}}));
+ assert.equal(store.get(initial.id).properties.taskPriority,'Low');
+ assert.equal(store.get(initial.id).properties.title,'Keep');assert.equal(store.get(initial.id).properties.start,'09:00');
+ assert.equal(wal(storage).length,0);
+});
+test("priority stays queued on network failure, survives reload, and replays unchanged",async()=>{
+ const initial={id:'priority-row',type:'block',date:'2026-07-08',properties:{title:'Keep',taskPriority:'Medium',start:'09:00',end:'09:30'}};
+ const options={fetchBody:initial};const {store,storage}=makeStore(options);
+ await store.handleBlocksChanged({blockIds:[initial.id]});options.fetchReject=true;
+ const result=await store.updateBlock(initial.id,{...initial.properties,taskPriority:'High'},{_reportSaveStatus:true,_priorityEdit:{before:'Medium',after:'High'}});
+ assert.equal(result._savePending,true);assert.equal(wal(storage)[0].data.properties.taskPriority,'High');
+ const restored=makeStore({storage,fetchBody:initial});await restored.store.replayWAL();
+ const patch=restored.fetchCalls.find(call=>call.init?.method==='PATCH');
+ assert.equal(JSON.parse(patch.init.body).properties.taskPriority,'High');assert.equal(JSON.parse(patch.init.body).properties.start,'09:00');assert.equal(wal(storage).length,0);
+});
+test("an offline priority rejection after reload is removed, not retried forever",async()=>{
+ const storage=new Map();seedWal(storage,[{op:'update',id:'p',data:{properties:{taskPriority:'High'}},priorityEdit:{before:null,after:'High'},_walId:'p1',timestamp:minsAgo(1)}]);
+ const {store}=makeStore({storage,fetchStatus:403});await store.replayWAL();assert.equal(wal(storage).length,0);assert.equal(dead(storage).length,1);
+});
+test("unavailable local storage cannot leave an unqueued optimistic priority in cache",async()=>{
+ const initial={id:'p',type:'block',date:'2026-07-08',properties:{taskPriority:'Low'}};
+ const {store,context}=makeStore({fetchBody:initial});await store.handleBlocksChanged({blockIds:['p']});
+ context.localStorage.setItem=()=>{throw new Error('quota');};
+ assert.throws(()=>store.updateBlock('p',{taskPriority:'High'},{_priorityEdit:{before:'Low',after:'High'}}));
+ assert.equal(store.get('p').properties.taskPriority,'Low');
+});
+
+test('priority coalescing keeps rename retryable across authentication failure',async()=>{
+ const initial={id:'p',type:'block',date:'2026-07-08',properties:{title:'Original',taskPriority:'Low'}};
+ const options={fetchBody:initial};const {store,storage}=makeStore(options);await store.handleBlocksChanged({blockIds:['p']});options.fetchReject=true;
+ await store.updateBlock('p',{...initial.properties,taskPriority:'High'},{_reportSaveStatus:true,_priorityEdit:{before:'Low',after:'High'}});
+ await store.updateBlock('p',{...store.get('p').properties,title:'Renamed'});
+ assert.equal(wal(storage)[0].priorityEdit.only,false);
+ options.fetchReject=false;options.fetchStatus=401;await store.replayWAL();
+ assert.equal(wal(storage).length,1);assert.equal(wal(storage)[0].data.properties.title,'Renamed');
+ options.fetchStatus=200;await store.replayWAL();assert.equal(wal(storage).length,0);
+});
+test('success advances inherited rollback baseline before a later rejection',async()=>{
+ const initial={id:'p',type:'block',date:'2026-07-08',properties:{title:'Original',taskPriority:'Low'}};
+ let ack;let calls=0;const {store,storage}=makeStore({fetchImpl:async(_url,init)=>{
+  if(init?.method!=='PATCH')return {ok:true,status:200,json:async()=>initial};
+  if(++calls===1){await new Promise(resolve=>{ack=resolve;});return {ok:true,status:200,json:async()=>({...initial,properties:JSON.parse(init.body).properties})};}
+  return {ok:false,status:403,json:async()=>({error:'Denied'})};
+ }});await store.handleBlocksChanged({blockIds:['p']});
+ const first=store.updateBlock('p',{...initial.properties,taskPriority:'High'},{_priorityEdit:{before:'Low',after:'High'}});
+ await new Promise(resolve=>setImmediate(resolve));
+ const second=store.updateBlock('p',{...store.get('p').properties,title:'Renamed'});
+ ack();await first;await second;
+ assert.equal(store.get('p').properties.taskPriority,'High');assert.equal(wal(storage).length,1);assert.equal(wal(storage)[0].priorityEdit,undefined);
+});
+test('multiple queued priority choices retain the durable rollback baseline',async()=>{
+ const initial={id:'p',type:'block',date:'2026-07-08',properties:{taskPriority:'Low'}};
+ const options={fetchBody:initial};const {store,storage}=makeStore(options);await store.handleBlocksChanged({blockIds:['p']});options.fetchReject=true;
+ for(const [before,after] of [['Low','High'],['High','Medium']])await store.updateBlock('p',{taskPriority:after},{_reportSaveStatus:true,_priorityEdit:{before,after}});
+ assert.equal(wal(storage).length,1);assert.equal(wal(storage)[0].priorityEdit.before,'Low');
+ options.fetchReject=false;options.fetchStatus=403;await store.replayWAL();
+ assert.equal(wal(storage).length,0);assert.equal(store.get('p').properties.taskPriority,'Low');
+});
+
+test('offline priority paired with completion replays both acknowledged changes',async()=>{
+ const initial={id:'p',type:'block',date:'2026-07-08',properties:{title:'Task',taskPriority:'Low',status:'open'}};
+ const storage=new Map();seedWal(storage,[{op:'update',id:'p',data:{properties:{...initial.properties,taskPriority:'High',status:'done'},completionIntent:'complete',completionMutationId:'c1',completionBaseRevision:null},priorityEdit:{before:'Low',after:'High',only:false},_walId:'p1',timestamp:minsAgo(1)}]);
+ const {store,fetchCalls}=makeStore({storage,fetchImpl:async(_url,init)=>{
+  const sent=init?.body?JSON.parse(init.body):{};
+  const row=sent.completionIntent?{...initial,properties:{...initial.properties,status:'done',_completionRevision:'r1'}}:{...initial,properties:sent.properties||initial.properties};
+  return {ok:true,status:200,json:async()=>row};
+ }});await store.replayWAL();
+ const patches=fetchCalls.filter(c=>c.init?.method==='PATCH').map(c=>JSON.parse(c.init.body));
+ assert.equal(patches.length,2);assert.equal(patches[1].completionIntent,undefined);assert.equal(patches[1].properties.status,'done');assert.equal(patches[1].properties.taskPriority,'High');assert.equal(wal(storage).length,0);
+});

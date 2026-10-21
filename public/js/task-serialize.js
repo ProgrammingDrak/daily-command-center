@@ -22,7 +22,7 @@
 // SOURCE over a base carrying the positional title (e.g. schedulePickerFields)
 // must drop title first, or the "" default clobbers the real one.
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === "object" && module.exports ? require("./task-priority") : root.DCC.TaskPriority);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) {
     const DCC = (root.DCC = root.DCC || {});
@@ -33,7 +33,7 @@
     DCC.taskSourceLabel = api.taskSourceLabel;
     DCC.recoverSourceUrl = api.recoverSourceUrl;
   }
-})(typeof self !== "undefined" ? self : this, function () {
+})(typeof self !== "undefined" ? self : this, function (priority) {
   // Source-backed triage items arrive with several field names depending on the
   // reader that produced them. Resolve that vocabulary once so scheduling, row
   // rendering and the one-time backfill cannot disagree about the deeplink.
@@ -121,6 +121,7 @@
     return {
       title: src.title || "",
       priority: src.priority || "High",
+      taskPriority: priority ? priority.read(src) : "Medium",
       meta: src.meta || "",
       detail: src.detail || "",
       notionUrl: src.notionUrl || "",

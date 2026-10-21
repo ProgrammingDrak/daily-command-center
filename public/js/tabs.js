@@ -385,7 +385,7 @@ function addSubtask(taskId, text, options){
   const parent=anchor?anchor.ev:((typeof scheduled!=="undefined")?scheduled.find(e=>e.id===taskId):null);
   // Rollup containers (shells) only take full-fledged nested tasks, never
   // timeless pie subtasks — reroute so the parent's pie is never created.
-  if(parent&&window.TaskTypes&&window.TaskTypes.rule(parent,"childEdge")==="wrap")return addStackedTask(taskId,text);
+  if(parent&&window.TaskTypes&&window.TaskTypes.rule(parent,"childEdge")==="wrap")return addStackedTask(taskId,text,undefined,options);
   const id="st-"+Date.now()+"-"+Math.random().toString(36).slice(2,7);
   // A newly scheduled future parent is not in scheduled[] yet, so taskAnchorById
   // cannot discover its date or start. The schedule picker passes both explicitly.
@@ -401,7 +401,7 @@ function addSubtask(taskId, text, options){
   // subtaskOf edge and start===end / duration:0 (timeless until promoted). Every
   // other field is editable through the same details modal + radial as any task.
   const inheritedVisibility=options.publicVisibility||((parent&&parent.publicVisibility)==="private"?"private":"public");
-  const overrides={title:text,source:"manual",priority:"Medium",publicVisibility:inheritedVisibility};
+  const overrides={title:text,source:"manual",priority:"Medium",taskPriority:options.taskPriority||"Medium",publicVisibility:inheritedVisibility};
   const common=(window.DCC&&window.DCC.taskCommonProps)?window.DCC.taskCommonProps({},overrides)
     :{title:text,source:"manual",priority:"Medium",meta:"",detail:"",tags:[]};
   const task=Object.assign({id:id,type:"task",subtaskOf:taskId,start:startStr,end:startStr,
@@ -502,12 +502,12 @@ function addStackedTask(taskId, text, durMinArg, opts){
   // Per-child type/priority/detail/tags come from opts (used by the shell
   // template materializer, which rebuilds a saved shell child by child).
   const inheritedVisibility=opts.publicVisibility||((parent&&parent.publicVisibility)==="private"?"private":"public");
-  const overrides={publicVisibility:inheritedVisibility,title:text,source:opts.source||"manual",priority:priority,
+  const overrides={publicVisibility:inheritedVisibility,title:text,source:opts.source||"manual",priority:priority,taskPriority:opts.taskPriority||"Medium",
     meta:(typeof ms==="function"?("Stacked · "+ms(durMin)):"Stacked")};
   if(opts.detail)overrides.detail=opts.detail;
   if(opts.tags)overrides.tags=opts.tags;
   const common=(window.DCC&&window.DCC.taskCommonProps)?window.DCC.taskCommonProps({},overrides)
-    :{title:text,source:opts.source||"manual",priority:priority,meta:overrides.meta,detail:opts.detail||"",tags:opts.tags||[]};
+    :{title:text,source:opts.source||"manual",priority:priority,taskPriority:opts.taskPriority||"Medium",meta:overrides.meta,detail:opts.detail||"",tags:opts.tags||[]};
   const task=Object.assign({id:id,type:type,wrapId:taskId,start:startStr,end:endStr,
     publicVisibility:inheritedVisibility,added_at:new Date().toISOString()},common);
   // Sequential shells lay their children out in the reflow (back-to-back from the
@@ -529,7 +529,7 @@ function addStackedTask(taskId, text, durMinArg, opts){
       :((typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null));
     const blockProps=(window.DCC&&window.DCC.taskBlockProps)
       ? window.DCC.taskBlockProps({},Object.assign({},overrides,{local_id:id,duration:durMin,start:startStr,end:endStr}))
-      : {local_id:id,title:text,source:opts.source||"manual",start:startStr,end:endStr,duration:durMin,priority:priority,tags:opts.tags||[],detail:opts.detail||""};
+      : {local_id:id,title:text,source:opts.source||"manual",start:startStr,end:endStr,duration:durMin,priority:priority,taskPriority:opts.taskPriority||"Medium",tags:opts.tags||[],detail:opts.detail||""};
     if(anchor&&anchor.whenever)Object.assign(blockProps,{kind:'backlog',stage:'Whenever',durMin:durMin,start:null,end:null});
     blockProps.type=type;blockProps.wrapId=anchor&&anchor.whenever&&anchor.blockId?((window.blockStore.get&&window.blockStore.get(anchor.blockId)?.properties?.local_id)||anchor.blockId):taskId;blockProps.publicVisibility=anchor&&anchor.whenever?(parent.publicVisibility||"private"):inheritedVisibility;blockProps.added_at=new Date().toISOString();
     created=window.blockStore.createBlock("block",blockProps,{date:date,...(anchor&&anchor.whenever?{parentId:anchor.blockId||null}:{})});
