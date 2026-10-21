@@ -713,7 +713,6 @@ function createTaskListRowRenderer(context){
     const bcMeta=(typeof getBountyMetaForTask==="function")?getBountyMetaForTask(ev.id):{hasSponsor:false,sponsorName:""};
     const bountyChip=(openRow&&bcCount>0)?'<span class="bounty-chip'+(bcMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bcMeta.hasSponsor?' title="'+("Bounty from "+(bcMeta.sponsorName||"a visitor")).replace(/"/g,'&quot;')+'"':'')+'>Bounty x'+Math.pow(2,Math.max(1,bcCount))+'</span>':'';
     const nowChip=(openRow&&isTodayView&&isActive(ev))?'<span class="it-list-now">&#9654; Now</span>':'';
-    const priChip=(openRow&&ev.priority==="High")?'<span class="pri-chip pri-hi">High</span>':'';
     const recQueued=(openRow&&isMeeting(ev)&&ev.recordingReview&&!ev.dashboardRef)?'<span class="prep-flag rec-queued" title="Queued for recording review">&#128252; Review</span>':'';
     const recFlag=(openRow&&isMeeting(ev)&&ev.dashboardRef)?'<a class="prep-flag rec-flag" href="/meetings/'+encodeURIComponent(ev.id)+'/dashboard" target="_blank" rel="noopener" title="Open the recording review dashboard" onclick="event.stopPropagation()" style="text-decoration:none">&#9654; Recording</a>':'';
     const streakChip=openRow?habitStreakChip(ev):'';
@@ -748,7 +747,7 @@ function createTaskListRowRenderer(context){
       (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
       (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" style="cursor:pointer" title="View prep briefing">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" style="cursor:pointer" title="Prep pending — open to view or generate">&#9675; Prep</span>':'')+
       (ev.recapStatus==='ready'?'<span class="recap-flag" style="cursor:pointer" title="View recap & action items">&#9670; Recap</span>':'')+
-      recQueued+recFlag+priChip+
+      recQueued+recFlag+
       (typeof triageTaskSourceActionsHtml==="function"?triageTaskSourceActionsHtml(ev):"")+
       (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
       (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
@@ -1509,8 +1508,7 @@ function openMoveMenu(id, anchorEl){
     {label:"Today",     action:()=>_mv(_resolvedTodayDate(),moveTaskToToday)},
     {label:"Next week", action:()=>_mv(_nextSundayDate(),moveTaskToNextWeek)},
     {label:"Trivial",   action:()=>moveTaskToTrivial(id)},
-    {label:"Task Library (Solo)", action:()=>moveTaskToBacklog(id)},
-    {label:"Priority",  action:()=>moveTaskToPriority(id)}
+    {label:"Task Library (Solo)", action:()=>moveTaskToBacklog(id)}
   ];
   const pop=document.createElement("div");
   pop.className="move-menu-popup";
@@ -1540,15 +1538,12 @@ function openMoveMenu(id, anchorEl){
 }
 
 // ======== CONSIDER FOR TODAY TAB ========
-function buildConsider(){
-  const board=document.getElementById("consider-board");board.innerHTML="";
-  // Surface backlog items flagged Priority alongside Notion-driven consider items.
-  const fromBacklog=backlog.filter(t=>t.stage==="Priority");
-  const merged=consider.concat(fromBacklog);
+function buildUnscheduledSuggestions(){
+  const board=document.getElementById("suggestions-board");board.innerHTML="";
+  const merged=consider;
   const ccBadge=document.getElementById("consider-count");if(ccBadge)ccBadge.textContent=merged.length;
-  if(!merged.length){board.innerHTML='<div class="board-empty">Nothing flagged for today. Nice work, or add tasks via Notion.</div>';return}
-  const priOrder={High:0,Medium:1,Low:2,undefined:3};
-  const sorted=[...merged].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
+  if(!merged.length){board.innerHTML='<div class="board-empty">No unscheduled suggestions.</div>';return}
+  const sorted=typeof taskBankSort==="function"?taskBankSort(merged):merged;
   sorted.forEach(t=>{
     const c=cfg(t.type);
     const stageClass=t.stage==="Backlog"?"stage-backlog":t.stage==="Next Sprint"?"stage-next":t.stage==="Tasks for Today"?"stage-today":"stage-scheduled";
@@ -1559,8 +1554,7 @@ function buildConsider(){
     if(t.notionUrl)dLinks.push('<a href="'+t.notionUrl+'" target="_blank" onclick="event.stopPropagation()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h6v6H4z"/><path d="M14 4h6v6h-6z"/><path d="M4 14h6v6H4z"/><path d="M14 14h6v6h-6z"/></svg>Open in Notion</a>');
     if(dLinks.length)dParts.push('<div class="detail-links">'+dLinks.join('')+'</div>');
     const dMeta=[];
-    if(t.priority)dMeta.push('<span class="pri-'+(t.priority==="High"?"hi":t.priority==="Medium"?"med":"lo")+'">Priority: '+t.priority+'</span>');
-    if(t.stage)dMeta.push('<span>Stage: '+t.stage+'</span>');
+    if(t.stage&&t.stage!=="Priority")dMeta.push('<span>Stage: '+t.stage+'</span>');
     dMeta.push('<span>Est: '+ms(t.durMin)+'</span>');
     if(dMeta.length)dParts.push('<div class="detail-meta">'+dMeta.join('')+'</div>');
     const hasD=dParts.length>0;
@@ -1573,9 +1567,8 @@ function buildConsider(){
         '<div class="title-row"><span class="ttl">'+t.title+'</span>'+tSrcTag+'</div>'+
         '<div class="meta">'+
           '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
-          (t.stage?'<span class="stage-badge '+stageClass+'">'+t.stage+'</span>':'')+
+          (t.stage&&t.stage!=="Priority"?'<span class="stage-badge '+stageClass+'">'+t.stage+'</span>':'')+
           '<span>'+ms(t.durMin)+'</span>'+
-          (t.priority?'<span class="pri-'+(t.priority==="High"?"hi":t.priority==="Medium"?"med":"lo")+'">'+t.priority+'</span>':'')+
         '</div>'+
       '</div>'+
       (hasD?chev:'')+
@@ -1596,13 +1589,11 @@ function buildConsider(){
 // ======== BACKLOG TAB ========
 function buildBacklog(){
   const board=document.getElementById("backlog-board");board.innerHTML="";
-  // Priority-stage items are surfaced in the Priority drawer via buildConsider, not here.
-  const items=backlog.filter(t=>t.stage!=="Priority");
+  // Legacy Priority-stage rows remain ordinary backlog tasks.
+  const items=backlog;
   document.getElementById("backlog-count").textContent=items.length;
   if(!items.length){board.innerHTML='<div class="board-empty">Nothing in Task Library yet. Add tasks above or check your Notion board.</div>';return}
-  // Sort: High > Medium > Low
-  const priOrder={High:0,Medium:1,Low:2,undefined:3};
-  const sorted=[...items].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
+  const sorted=typeof taskBankSort==="function"?taskBankSort(items):items;
   sorted.forEach(t=>{
     const c=cfg(t.type);
     const stageClass=t.stage==="Backlog"?"stage-backlog":t.stage==="Next Sprint"?"stage-next":t.stage==="Tasks for Today"?"stage-today":"stage-scheduled";
@@ -1616,8 +1607,7 @@ function buildBacklog(){
     if(links.length)detailParts.push('<div class="detail-links">'+links.join('')+'</div>');
     const metaParts=[];
     metaParts.push('<span class="tag '+c.cls+'">'+c.tag+'</span>');
-    if(t.priority)metaParts.push('<span class="pri-'+(t.priority==="High"?"hi":t.priority==="Medium"?"med":"lo")+'">'+t.priority+'</span>');
-    if(t.stage)metaParts.push('<span class="stage-badge '+stageClass+'">'+t.stage+'</span>');
+    if(t.stage&&t.stage!=="Priority")metaParts.push('<span class="stage-badge '+stageClass+'">'+t.stage+'</span>');
     if(tSrcTag)metaParts.push(tSrcTag);
     detailParts.push('<div class="detail-meta">'+metaParts.join('')+'</div>');
 

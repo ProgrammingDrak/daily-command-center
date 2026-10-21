@@ -6,9 +6,9 @@ const FROM = "2026-10-05", TO = "2026-10-06";
 const state = { schedule: { working_hours: { start: "09:00", end: "17:00" }, timeline: [] } };
 const row = (id, p = {}, date = FROM) => ({ id, type: "block", date, workspace_id: "ws-1", updated_at: "2026-10-05T16:00:00Z", properties: { kind: "task", type: "task", local_id: id, title: id, duration: 30, ...p } });
 const plan = (rows, extras = {}) => review.buildPlan({ sourceDate: FROM, rows, targetState: state, targetBlocks: [], ...extras });
-test("priority then age controls scheduling, with exact work-hour boundaries", () => {
+test("age controls scheduling regardless of legacy priority, with exact work-hour boundaries", () => {
  const p = plan([row("low", { priority: "Low" }), row("new", { priority: "High" }), row("old", { priority: "High" }, "2026-10-04")], { targetBlocks: [row("meeting", { type: "meeting", start: "09:00", end: "10:00" }, TO)] });
- assert.deepEqual(p.items.map(i => [i.id, i.placement.start]), [["old", "10:00"], ["new", "10:30"], ["low", "11:00"]]);
+ assert.deepEqual(p.items.map(i => [i.id, i.placement.start]), [["old", "10:00"], ["low", "10:30"], ["new", "11:00"]]);
  assert.deepEqual(p.bounds, { start: "09:00", end: "17:00" });
 });
 test("overflow goes to Unscheduled, without the legacy one-hour grace", () => {

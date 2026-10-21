@@ -185,7 +185,6 @@ function openUpcomingNotesDrawer(id, title) {
       '<div class="notes-ai-item">' +
         '<div class="ai-check' + (item.done ? " done" : "") + '" onclick="toggleUpAction(\'' + id + '\',' + idx + ')">\u2713</div>' +
         '<span class="ai-text"' + (item.done ? ' style="text-decoration:line-through;opacity:0.5"' : '') + '>' + item.text + '</span>' +
-        '<span class="ai-pri ai-pri-' + item.priority + '">' + item.priority + '</span>' +
         '<span class="ai-del" onclick="deleteUpAction(\'' + id + '\',' + idx + ')">&times;</span>' +
       '</div>'
     ).join('');
@@ -233,7 +232,7 @@ function pushToDoc(mtgId, mtgTitle, docUrl, docTitle, mtgDate) {
   if (noteText) content += noteText + "\n\n";
   if (actionItems.length) {
     content += "### Action Items\n";
-    actionItems.forEach(a => { content += "- [" + (a.done ? "x" : " ") + "] " + a.text + " (" + a.priority + ")\n"; });
+    actionItems.forEach(a => { content += "- [" + (a.done ? "x" : " ") + "] " + a.text + "\n"; });
     content += "\n";
   }
   // Copy to clipboard as fallback and mark as pushed
@@ -331,7 +330,7 @@ addActionItem = function(taskId) {
   if (window._upcomingNotesMode && window._upcomingNotesId) {
     const text = document.getElementById("notes-action-text").value.trim();
     if (!text) return;
-    const priority = document.getElementById("notes-action-priority").value;
+    const priority = "Medium";
     const actions = loadUpActions();
     if (!actions[window._upcomingNotesId]) actions[window._upcomingNotesId] = [];
     actions[window._upcomingNotesId].push({ text, priority, done: false, created: new Date().toISOString() });

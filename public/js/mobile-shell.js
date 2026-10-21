@@ -189,7 +189,7 @@
     { id:"tm-task-library-section",           label:"Task Library" },
     { id:"tm-triage-section",                 label:"Triage" },
     { id:"tm-scheduled-section",              label:"Scheduled" },
-    { id:"tm-soon-section",                   label:"Priority" },
+    { id:"tm-action-items-section",           label:"Action items" },
     { id:"tm-repeat-responsibilities-section",label:"Repeat" }
   ];
 

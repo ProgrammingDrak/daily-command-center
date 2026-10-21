@@ -1452,7 +1452,6 @@
     setVal("td-dependent-id", dependent.id);
     setVal("td-new-title", "");
     setVal("td-new-duration", "30");
-    setVal("td-new-priority", "Medium");
     const label = document.getElementById("td-dependent-label");
     if (label) label.textContent = '“' + dependentTitle + '” will move to Waiting until its prerequisite is complete.';
     const select = document.getElementById("td-blocker-task");
@@ -1487,7 +1486,6 @@
         newBlocker = {
           title: newTitle,
           duration: Math.max(1, Number(valueOf("td-new-duration")) || 30),
-          priority: valueOf("td-new-priority") || "Medium",
         };
         blockerId = null;
         blockerTitle = newTitle;

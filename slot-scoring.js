@@ -159,21 +159,13 @@ function resolveCommuteMinutes(input = {}) {
   return Math.round(to + back);
 }
 
-function isHighPriority(input = {}) {
-  const priority = normalizeText(input.priority);
-  return priority === "high" || priority === "urgent" || priority === "p1" || priority === "critical";
-}
 
 function isUrgent(input = {}) {
   const urgency = normalizeText(input.urgency);
-  const priority = normalizeText(input.priority);
   return input.urgent === true ||
     urgency === "urgent" ||
     urgency === "now" ||
-    urgency === "today" ||
-    priority === "urgent" ||
-    priority === "p1" ||
-    priority === "critical";
+    urgency === "today";
 }
 
 function isResponsibilityTask(input = {}) {
@@ -207,11 +199,6 @@ function inferAttentionTier(input = {}) {
 function inferImportanceTier(input = {}) {
   const explicit = normalizeText(input.importance_tier ?? input.importanceTier ?? input.importance);
   if (IMPORTANCE_MULTIPLIERS[explicit]) return explicit;
-  const priority = normalizeText(input.priority);
-  if (priority === "critical" || priority === "p1") return "critical";
-  if (priority === "urgent" || priority === "high") return "high";
-  if (priority === "medium" || priority === "normal") return "normal";
-  if (priority === "low") return "low";
   if (isResponsibilityTask(input)) return "important";
   return "normal";
 }

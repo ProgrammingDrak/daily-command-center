@@ -162,15 +162,13 @@ function buildActionItemsTab(){
 function buildAITabCard(item){
   const isDone=item.done||item.status==="done";
   const age=item.created_at?timeAgo(item.created_at):"";
-  const priCls=item.priority==="High"?"pri-hi":item.priority==="Low"?"pri-lo":"pri-med";
-  const barColor=isDone?"var(--green)":item.priority==="High"?"#ef4444":item.priority==="Low"?"#64748b":"#a78bfa";
+  const barColor=isDone?"var(--green)":"var(--accent)";
   const dataAttrs='data-ai-id="'+item.id+'" data-ai-source="'+(item._source||"")+'" data-ai-task-id="'+(item._taskId||"")+'" data-ai-idx="'+(item._idx!=null?item._idx:"")+'"';
   return '<div class="board-card'+(isDone?" board-card-done":"")+'" style="'+(isDone?"opacity:0.5":"")+'" data-ai-id="'+item.id+'">'+
     '<div class="bar" style="background:'+barColor+'"></div>'+
     '<div class="body">'+
       '<div class="title-row"><span class="ttl"'+(isDone?' style="text-decoration:line-through"':'')+'>'+DCC.esc(item.title)+'</span></div>'+
       '<div class="meta">'+
-        '<span class="'+priCls+'">'+(item.priority||"Medium")+'</span>'+
         (item._sourceLabel?'<span>'+item._sourceLabel+'</span>':'')+
         (age?'<span>'+age+'</span>':'')+
       '</div>'+
@@ -550,11 +548,10 @@ function renderDmActions(id){
     '<div class="notes-ai-item">'+
       '<div class="ai-check'+(item.done?" done":"")+'" onclick="toggleDmAction(\''+id+'\','+idx+')">\u2713</div>'+
       '<span class="ai-text"'+(item.done?' style="text-decoration:line-through;opacity:0.5"':'')+'>'+item.text+'</span>'+
-      '<span class="ai-pri ai-pri-'+item.priority+'">'+item.priority+'</span>'+
       (item._scheduled?'<span class="ai-sched-btn queued">Scheduled</span>':
         '<span class="ai-sched-btn" onclick="event.stopPropagation();scheduleActionToday(\''+id+'\','+idx+')" title="Add to today\'s schedule">Urgent</span>')+
       (item._notionQueued?'<span class="ai-sched-btn later queued">Queued</span>':
-        '<span class="ai-sched-btn later" onclick="event.stopPropagation();queueActionForLater(\''+id+'\','+idx+')" title="Queue for Priority review">Schedule</span>')+
+        '<span class="ai-sched-btn later" onclick="event.stopPropagation();queueActionForLater(\''+id+'\','+idx+')" title="Queue for task review">Schedule</span>')+
       '<span class="ai-del" onclick="deleteDmAction(\''+id+'\','+idx+')">&times;</span>'+
     '</div>'
   ).join('');
@@ -566,7 +563,7 @@ function showDmActionInput(){
 function addDmAction(){
   const text=document.getElementById("dm-action-text").value.trim();
   if(!text||!_dmId)return;
-  const priority=document.getElementById("dm-action-priority").value;
+  const priority="Medium";
   const actions=loadActions();
   if(!actions[_dmId])actions[_dmId]=[];
   actions[_dmId].push({text,priority,done:false,created:new Date().toISOString()});
@@ -1086,7 +1083,6 @@ function buildTriageCard(item) {
   }
   const triTypeColors = {unanswered_dm:"#a78bfa",email_needs_response:"#f87171",slack_mention:"#22d3ee"};
   const barColor = isDismissed ? "var(--green)" : (isWaitingCheckIn(item) ? "var(--waiting,#7c3aed)" : (triTypeColors[item.type] || "#a78bfa"));
-  const priCls = item.priority === "high" ? "pri-hi" : item.priority === "medium" ? "pri-med" : "pri-lo";
   const t = TRI_ICONS[item.type] || {emoji:"\u{2753}"};
   const linkLabel = DCC.esc(item.link_label || item.action_label || "Open");
   const sourceLink = window.DCC.safeUrlAttr(item.link || item.source_url);
@@ -1108,7 +1104,6 @@ function buildTriageCard(item) {
         triEscBadge(item.escalation) +
       '</div>' +
       '<div class="meta">' +
-        '<span class="' + priCls + '">' + (item.priority || 'medium') + '</span>' +
         (item.queue_label || item.source_label ? '<span>' + DCC.esc(item.queue_label || item.source_label) + '</span>' : '') +
         (sourceLink && !draftAction ? '<a href="' + sourceLink + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none;font-size:10px">' + linkLabel + '</a>' : '') +
         (window.DCC.safeUrlAttr(item.auto_task_url) ? '<a href="' + window.DCC.safeUrlAttr(item.auto_task_url) + '" target="_blank" onclick="event.stopPropagation()" style="background:var(--purple-bg,rgba(168,85,247,0.1));color:var(--purple,#a855f7);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;text-decoration:none">TASK</a>' : '') +
@@ -1172,7 +1167,7 @@ function triageTaskPayload(item){
     ...ev,
     task_id:ev.id,
     type:"task",
-    urgent:String(item.priority||"").toLowerCase()==="high"
+    urgent:item.urgent===true
   };
 }
 function triageCompletionDateKey(value){
@@ -1532,7 +1527,6 @@ function buildScheduled() {
           (!isMeeting(ev) && canEditBounty && (!bountyPlaced || isBounty) ? '<button class="add-btn sched-bounty-btn" data-id="' + ev.id + '" style="background:rgba(251,191,36,0.12);color:var(--amber)">Bounty</button>' : '') +
           '<button class="add-btn sched-repeat-btn" data-id="' + ev.id + '" title="Turn into a repeat responsibility">Repeat</button>' +
           '<button class="add-btn sched-done-btn" data-id="' + ev.id + '" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>' +
-          '<button class="add-btn sched-push-btn" data-id="' + ev.id + '">Priority</button>' +
           '<button class="add-btn sched-backlog-btn" data-id="' + ev.id + '" style="background:rgba(255,255,255,0.06);color:var(--text-muted)">Task Library (Solo)</button>' +
         '</div>';
     });
@@ -1578,9 +1572,6 @@ function buildScheduled() {
       if (ev && typeof openRepeatResponsibilityFromTask === "function") openRepeatResponsibilityFromTask(ev);
     });
   });
-  el.querySelectorAll(".sched-push-btn").forEach(btn => {
-    btn.addEventListener("click", () => { pushTask(btn.dataset.id); });
-  });
   // C4: one backlog mechanic. This used to be its own copy of the day → backlog move,
   // and it was the WORSE of the two: it minted a `bl-<timestamp>` row and only added the
   // original to `deletedSet`, never removing it — so the task ended up as TWO live rows,
@@ -1596,27 +1587,9 @@ function buildScheduled() {
   if (badge) { badge.textContent = needsReview.length; badge.style.display = needsReview.length ? "" : "none"; }
 }
 
-// The Priority section's badge. Its "Pushed from Schedule" card list is DELETED (C3):
-// a pushed task is now simply a task on tomorrow, so there is nothing on this day to
-// list and nothing to "Restore to schedule" (the origin day's amber Rescheduled-away
-// entry owns that). The Repeat affordance those cards carried is not lost — the row
-// radial, the details modal and the backlog all reach openRepeatResponsibilityFromTask.
-//
-// The count is `consider` alone now. It was `pushed.length + consider.length`, but that
-// line sat AFTER an early `return` taken whenever nothing was pushed — so on any normal
-// day this badge never updated at all. Counting what the section actually shows is the
-// fix, and it is why the number can differ from before.
-function buildScheduleSoon() {
-  const badge=document.getElementById("soon-count");
-  if(!badge)return;
-  const soonCount=(typeof consider!=="undefined"&&Array.isArray(consider))?consider.length:0;
-  badge.textContent=soonCount;
-  badge.style.display=soonCount?"":"none";
-}
 function buildTriage() {
   const dismissed = loadDismissed();
   const triageParents = loadTriageParents();
-  const priColors = {high:"var(--red)", medium:"var(--amber)", low:"var(--text-muted)"};
   const deletedTriage = loadDeletedTriage();
 
   // Split into active vs completed (dismissed)
@@ -1639,10 +1612,6 @@ function buildTriage() {
     .filter(id => !inInit.has(id) && suppressed[id].reason === "done")
     .map(id => Object.assign({ id: id, title: suppressed[id].title || "(handled)", priority: "low", _remote: true, _note: suppressed[id].note || "" }, suppressed[id].item || {}));
 
-  const high = active.filter(i => i.priority === "high");
-  const med = active.filter(i => i.priority === "medium");
-  const low = active.filter(i => i.priority === "low" || (i.priority !== "high" && i.priority !== "medium"));
-
   const countEl = document.getElementById("triage-count");
   // Count what the section actually renders, remote rows included -- otherwise a day
   // whose completions all came from another device shows a bare active count above a
@@ -1650,26 +1619,10 @@ function buildTriage() {
   const completedRows = completed.concat(completedRemote);
   if (countEl) countEl.textContent = active.length + (completedRows.length ? " / " + (active.length + completedRows.length) : "");
 
-  const highEl = document.getElementById("triage-high");
-  if (highEl) {
-    highEl.innerHTML = high.length ?
-      '<div class="tri-group-label"><span class="tri-dot" style="background:var(--red)"></span>High Priority (' + high.length + ')</div>' +
-      high.map(buildTriageCard).join('') : '';
-  }
-  const medEl = document.getElementById("triage-medium");
-  if (medEl) {
-    medEl.innerHTML = med.length ?
-      '<div class="tri-group-label"><span class="tri-dot" style="background:var(--amber)"></span>Medium (' + med.length + ')</div>' +
-      med.map(buildTriageCard).join('') : '';
-  }
-  const lowEl = document.getElementById("triage-low");
-  if (lowEl) {
-    lowEl.innerHTML = low.length ?
-      '<div class="tri-group-label"><span class="tri-dot" style="background:var(--text-muted)"></span>Low / FYI (' + low.length + ')</div>' +
-      low.map(buildTriageCard).join('') : '';
-  }
+  const activeEl = document.getElementById("triage-active");
+  if (activeEl) activeEl.innerHTML = active.map(buildTriageCard).join("");
 
-  // Completed triage compact rows (between priority groups and resolved)
+  // Completed triage compact rows (between active items and resolved)
   let completedEl = document.getElementById("triage-completed");
   if (!completedEl) {
     // Create it if not in DOM yet (insert before resolved section)
@@ -1696,7 +1649,7 @@ function buildTriage() {
           // in the one tab that dismissed it. There is no CSP to fall back on.
           return '<div class="tri-compact-row" data-tri-id="' + DCC.esc(item.id) + '">' +
             '<span class="tri-compact-chk" data-undo-tri="' + DCC.esc(item.id) + '" title="Undo — restore to triage">✓</span>' +
-            '<span class="tri-compact-bar" style="background:' + (priColors[item.priority] || "var(--text-muted)") + '"></span>' +
+            '<span class="tri-compact-bar" style="background:' + "var(--text-muted)" + '"></span>' +
             '<span class="tri-compact-title">' + DCC.esc(item.title) + '</span>' +
             (parentTask ? '<span class="tri-compact-parent">' + DCC.esc(parentTask.title) + '</span>' : '') +
             (note ? '<span class="tri-compact-note">' + DCC.esc(note) + '</span>' : '') +

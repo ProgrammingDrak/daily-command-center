@@ -188,7 +188,6 @@
   function triageMeta(item) {
     return [
       item.source || item.type || "triage",
-      (typeof triagePriorityLabel === "function") ? triagePriorityLabel(item.priority) : item.priority,
       triageAge(item)
     ].filter(Boolean).join(" · ");
   }

@@ -261,8 +261,7 @@
     const title=(document.getElementById("tg-add-fixed-title").value||"").trim();
     if(!title){ toast("Task title required","error"); return; }
     const duration=Math.max(1,parseInt(document.getElementById("tg-add-fixed-dur").value,10)||30);
-    const priority=document.getElementById("tg-add-fixed-pri").value||"Medium";
-    _editItems.push({local_id:uid("tgi"),isPlaceholder:false,title,duration,priority,detail:""});
+    _editItems.push({local_id:uid("tgi"),isPlaceholder:false,title,duration,detail:""});
     document.getElementById("tg-add-fixed-title").value="";
     renderGroupItems();
   }

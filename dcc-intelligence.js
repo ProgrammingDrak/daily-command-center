@@ -277,7 +277,7 @@ function taskFromTriage(item, index) {
     id: stableId("triage-task", [item.id, item.title]),
     title: item.source === "notion" ? item.title : `Review: ${item.title}`,
     priority: item.priority || "Medium",
-    duration_minutes: item.priority === "High" ? 30 : 20,
+    duration_minutes: 20,
     recommended_start: formatMinute(9 * 60 + index * 30),
     confidence: "reader signal",
     reason: item.summary || `Pulled from ${item.source || item.type || "DCC"} triage.`,
@@ -306,8 +306,7 @@ function buildBrief({ state, openItems, meetings, health }) {
   const previousCurrent = existingBrief.current || null;
   const deepContext = state.glymphatic_context || {};
   const highSignalItems = openItems
-    .filter((item) => item.status !== "resolved")
-    .sort((a, b) => (a.priority === "High" ? -1 : 1) - (b.priority === "High" ? -1 : 1));
+    .filter((item) => item.status !== "resolved");
   const triageTasks = highSignalItems.slice(0, 6).map(taskFromTriage);
   const meetingTasks = meetings
     .filter((meeting) => meeting.start)
