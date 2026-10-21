@@ -1,0 +1,23 @@
+.shared-task-badge { display:flex; align-items:center; gap:var(--sp-1); margin-left:auto; flex-shrink:0; max-width:100%; border:1px solid var(--line); border-radius:var(--r-full); padding:var(--sp-1) var(--sp-2); background:var(--surface-base); color:var(--text); font:inherit; font-size:var(--fs-xs); cursor:pointer; min-height:var(--target-min); }
+.shared-task-badge:focus-visible,.shared-tasks-dialog button:focus-visible { outline:none; box-shadow:var(--focus-ring); }
+.shared-avatar { position:relative; display:inline-flex; align-items:center; justify-content:center; width:var(--sp-8); height:var(--sp-8); border:1px solid var(--line-strong); border-radius:var(--r-full); background:var(--surface-hover); color:var(--ink-strong); font-size:var(--fs-xs); flex-shrink:0; }
+.shared-avatar img { width:100%; height:100%; object-fit:cover; border-radius:inherit; }
+.shared-avatar.completed { border-color:var(--success); }
+.shared-avatar b { position:absolute; right:calc(-1 * var(--sp-1)); bottom:calc(-1 * var(--sp-1)); border-radius:var(--r-full); color:var(--ink-strong); background:var(--success); padding:0 var(--sp-1); }
+.shared-count { white-space:nowrap; margin-left:var(--sp-1); }
+.shared-summary { display:flex; align-items:center; flex-wrap:wrap; gap:var(--sp-2); }
+.shared-task-entry { border:1px solid var(--line); border-radius:var(--r-md); padding:var(--sp-3); margin-block:var(--sp-3); }
+.shared-tasks-dialog { font-size:var(--fs-sm); overflow-wrap:anywhere; }
+.shared-tasks-dialog button,.shared-tasks-dialog select { min-height:var(--target-min); border:1px solid var(--line); border-radius:var(--r-sm); background:var(--surface-raised); color:var(--text); padding:var(--sp-2); font:inherit; cursor:pointer; max-width:100%; }
+.shared-tasks-dialog label { display:grid; gap:var(--sp-2); margin-bottom:var(--sp-2); }
+.shared-task-status { color:var(--warning); }
+@media(max-width:760px) { .shared-task-badge { flex-wrap:wrap; } .shared-task-badge .shared-avatar { width:var(--sp-6); height:var(--sp-6); } .it-list-title-row:has(.shared-task-badge) { flex-wrap:wrap; } }
+
+/* Completed rows normally hide every title-row control. Participation remains
+   visible while another person finishes, including after everybody is done. */
+.it-list-item.done:not(.sub) .it-list-title-row > .shared-task-badge.has-participants { display:flex; }
+.it-list-item.done:has(.shared-task-badge.has-participants) { opacity:1; }
+.shared-include { grid-template-columns:auto 1fr; align-items:center; }
+.shared-instructions { margin-block:var(--sp-3); }
+.shared-instructions li { margin-block:var(--sp-2); }
+#shared-tasks-open { min-height:var(--target-min); border:1px solid var(--line); border-radius:var(--r-sm); background:var(--surface-raised); color:var(--text); padding:var(--sp-2); font:inherit; cursor:pointer; }

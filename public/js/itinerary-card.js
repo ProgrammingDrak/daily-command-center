@@ -312,6 +312,7 @@
         (hasFu?'<div class="edge-panel edge-panel-fu" data-panel="fu"><div class="edge-panel-inner"><div class="edge-items">'+fuHtml+'</div></div></div>':'')+
       '</div>';
 
+    if (!guest && window.DCC?.SharedTasks) window.DCC.SharedTasks.attach(el,ev);
     return el;
   }
 
@@ -403,6 +404,7 @@
       if(e.target.closest("button,a,input,textarea,.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag,.recap-flag"))return;
       opts.onOpen(e,ev);
     });
+    if (!opts.guest && window.DCC?.SharedTasks) window.DCC.SharedTasks.attach(el,ev);
     if(typeof opts.afterRender==="function")opts.afterRender(el,ev);
     return el;
   }

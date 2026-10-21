@@ -339,6 +339,7 @@
     sse.onmessage = async function(e){
       if(e.data === 'connected') {
         console.log('[SSE] Connected to live update stream');
+        window.DCC?.SharedTasks?.refresh();
         // Replay any buffered writes from when server was down
         if(window.blockStore && typeof window.blockStore.replayWAL === 'function') {
           window.blockStore.replayWAL();
@@ -350,6 +351,9 @@
         console.log('[SSE] Event:', msg.type, msg.source || msg.file || '');
 
         switch(msg.type) {
+          case 'shared-tasks-changed':
+            document.dispatchEvent(new CustomEvent('shared-tasks-changed'));
+            break;
           case "commitments-changed":
             window.DCCCommitmentSync?.refresh().catch(() => {});
             break;

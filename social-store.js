@@ -74,8 +74,8 @@ async function resolveWorkspaceId(userId) {
   return rows[0] ? rows[0].workspace_id : `ws-${userId}`;
 }
 
-async function isBlocked(ownerUserId, otherUserId) {
-  const { rows } = await pool.query(
+async function isBlocked(ownerUserId, otherUserId, q = pool) {
+  const { rows } = await q.query(
     `SELECT 1 FROM friendships
       WHERE status='blocked'
         AND ((requester_id=$1 AND addressee_id=$2) OR (requester_id=$2 AND addressee_id=$1))
@@ -97,8 +97,8 @@ async function isBlocked(ownerUserId, otherUserId) {
  *
  *  Reading BOTH rows and letting a block veto is the fix, and it belongs here
  *  rather than at each call site so a future gate cannot forget it. */
-async function areFriends(a, b) {
-  const { rows } = await pool.query(
+async function areFriends(a, b, q = pool) {
+  const { rows } = await q.query(
     `SELECT bool_or(status='accepted') AS friends,
             bool_or(status='blocked')  AS blocked
        FROM friendships
