@@ -70,7 +70,7 @@ const SRC = {
 // helper lands in EVERY context at once — the round-3 fixes added two, and hand-listing
 // them per test is how a context ends up missing one and failing for the wrong reason.
 const PRIMITIVES = [
-  "let _rowPropsChain = Promise.resolve();",
+  "const _rowPropsChains = new Map();",
   SRC.scheduleRowOnDay, SRC.unscheduleRow, SRC.writeRowDate, SRC.rowForDateWrite,
   SRC.syncBacklog, SRC.positiveDuration, SRC.enqueueRowProps, SRC.hydrateBacklog,
 ];
@@ -538,7 +538,7 @@ test("setTaskCommuteTimes writes the ROW when handed its id", () => {
   // shadowing trap that made an earlier spy in this file never run.
   // A CARRYOVER ev: deliberately NOT in scheduled[], reachable only through the anchor.
   const carryEv = { id: "c-1", title: "Do laundry" };
-  const ctx = ctxWith([src, propsSrc, "let _rowPropsChain = Promise.resolve();", SRC.enqueueRowProps], {
+  const ctx = ctxWith([src, propsSrc, "const _rowPropsChains = new Map();", SRC.enqueueRowProps], {
     window: { blockStore: store },
     commuteTimes: {},
     scheduled: [],
@@ -1183,14 +1183,14 @@ test("_amWriteRowProps addresses the ROW, carries the rest, and refuses on a mis
   // queue rather than a local one. The chain assertion moved with it: it lives in state.js
   // and is shared with the commute writer, which is the whole point of the round-3 fix.
   const src = mustSlice(featuresSource, /^function _amWriteRowProps\(patch\) \{[\s\S]*?\n\}/m, "_amWriteRowProps");
-  assert.ok(/const write=_rowPropsChain\n?\s*\.then\(/.test(stateSource),
+  assert.ok(/const write=previous\n?\s*\.then\(/.test(stateSource),
     "row-properties writes must be serialized, or a rename and a tag edit from the same click drop one of the two");
   assert.equal(/_amWriteChain/.test(featuresSource), false,
     "and there must be no second, per-file chain — four writers with the queue in one of them is the bug");
   const r = row("row-77", "2026-07-28", { local_id: "c-1", title: "Do laundry", notes: "keep me", tags: ["old"] });
   const { store, calls } = makeStore([r], { cached: false });
 
-  const queue = ["let _rowPropsChain = Promise.resolve();", SRC.enqueueRowProps];
+  const queue = ["const _rowPropsChains = new Map();", SRC.enqueueRowProps];
   const ok = ctxWith([src].concat(queue), {
     window: { USE_BLOCKSTORE: { addedTasks: true }, blockStore: store },
     _addModalBlockId: "row-77",
@@ -1257,7 +1257,7 @@ test("row-properties writes are SERIALIZED, so two edits from one click both sur
   const base = row("row-77", "2026-07-28", { local_id: "c-1", title: "Old title", tags: [] });
   const { store, calls } = makeStore([base], { cached: false });
   let served = 0;
-  const ctx = ctxWith(["let _rowPropsChain = Promise.resolve();", SRC.enqueueRowProps], {
+  const ctx = ctxWith(["const _rowPropsChains = new Map();", SRC.enqueueRowProps], {
     window: { blockStore: store },
     // Models an uncached row: every read is a fresh fetch of what the SERVER has. The
     // queue's own writes are what must be visible to the next link, so this returns the
@@ -1290,7 +1290,7 @@ test("row-properties writes are SERIALIZED, so two edits from one click both sur
 test("the queue forwards the `extra` column write (a completion promotes a dateless row)", () => {
   const base = row("row-88", null, { local_id: "u-1", title: "Someday", kind: "backlog" });
   const { store, calls } = makeStore([base], { cached: true });
-  const ctx = ctxWith(["let _rowPropsChain = Promise.resolve();", SRC.enqueueRowProps], {
+  const ctx = ctxWith(["const _rowPropsChains = new Map();", SRC.enqueueRowProps], {
     window: { blockStore: store },
     _rowForDateWrite: async () => ({ id: "row-88", properties: base.properties }),
   });
@@ -1315,7 +1315,7 @@ test("the queue forwards the `extra` column write (a completion promotes a datel
 test("no `extra` means no column write", () => {
   const base = row("row-89", "2026-07-28", { local_id: "c-9", title: "Dated" });
   const { store, calls } = makeStore([base], { cached: true });
-  const ctx = ctxWith(["let _rowPropsChain = Promise.resolve();", SRC.enqueueRowProps], {
+  const ctx = ctxWith(["const _rowPropsChains = new Map();", SRC.enqueueRowProps], {
     window: { blockStore: store },
     _rowForDateWrite: async () => ({ id: "row-89", properties: base.properties }),
   });
@@ -1331,7 +1331,7 @@ test("one failed row write does not wedge the queue for the rest of the session"
   const r = row("row-77", "2026-07-28", { local_id: "c-1", title: "T" });
   const { store, calls } = makeStore([r], { cached: false });
   let n = 0;
-  const ctx = ctxWith(["let _rowPropsChain = Promise.resolve();", SRC.enqueueRowProps], {
+  const ctx = ctxWith(["const _rowPropsChains = new Map();", SRC.enqueueRowProps], {
     window: { blockStore: store },
     _rowForDateWrite: async () => { n++; if (n === 1) throw new Error("GET failed"); return r; },
   });

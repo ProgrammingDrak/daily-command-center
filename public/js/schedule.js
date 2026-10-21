@@ -520,6 +520,10 @@ async function commitDoneOnDate(id,dateStr,opts){
     const checkIn=waiting.completeCheckInTask(ev);
     if(checkIn!==null)return await checkIn;
   }
+  const intents=window.__DCC_COMPLETION_UI_INTENTS__||(window.__DCC_COMPLETION_UI_INTENTS__=new Map());
+  const intent=(intents.get(id)||0)+1;intents.set(id,intent);
+  const rollbacks=window.__DCC_COMPLETION_ROLLBACKS__||(window.__DCC_COMPLETION_ROLLBACKS__=new Map());
+  const settled=window.__DCC_COMPLETION_SETTLED__||(window.__DCC_COMPLETION_SETTLED__=new Map());
   const completedAt=new Date();
   const completedIso=completedAt.toISOString();
   const award=opts.awardPoints!==undefined?opts.awardPoints:_pointAwardOverride(id);
@@ -532,6 +536,9 @@ async function commitDoneOnDate(id,dateStr,opts){
   }
   try{
     const result=await _persistDone(id,true,{ev:ev,dateStr:dateStr,completedAt:completedIso});
+    if(!(result&&result.pending))rollbacks.delete(id); // server accepted the subtree
+    if(intents.get(id)!==intent)return result;
+    if(!(result&&result.pending))settled.set(id,intent);
     if(result&&result.pending){
       if(typeof showToast==="function")showToast("Completion queued and will retry","info",3200);
       return result;
@@ -552,9 +559,18 @@ async function commitDoneOnDate(id,dateStr,opts){
     }
     return result;
   }catch(error){
+    if(intents.get(id)!==intent){
+      // Keep the original child snapshots for the newer intent's eventual verdict.
+      // A stale failure must neither repaint it now nor strand children if all
+      // queued attempts are later rejected.
+      if(settled.get(id)!==intents.get(id))rollbacks.set(id,[...(rollbacks.get(id)||[]),...optimisticSubtasks]);
+      return false;
+    }
+    settled.set(id,intent);
     if(currentDate===dateStr){
       manualDone.delete(id);delete doneAt[id];
-      _rollbackOptimisticSubtasks(optimisticSubtasks);
+      _rollbackOptimisticSubtasks([...(rollbacks.get(id)||[]),...optimisticSubtasks]);
+      rollbacks.delete(id);
       render();
     }
     if(typeof showToast==="function")showToast(error.message||"Completion was not saved","error",4200);
@@ -700,7 +716,7 @@ function _optimisticallyCompleteSubtasks(id,completedAt){
   const at=(completedAt instanceof Date)?completedAt:new Date(completedAt||Date.now());
   DCC.TaskModel.descendantsOf(id,scheduled,{edge:"subtask"}).forEach(c=>{
     if(!manualDone.has(c.id)){
-      changed.push({id:c.id,hadDoneAt:Object.prototype.hasOwnProperty.call(doneAt,c.id),doneAt:doneAt[c.id]});
+      changed.push({id:c.id,optimisticAt:at,hadDoneAt:Object.prototype.hasOwnProperty.call(doneAt,c.id),doneAt:doneAt[c.id]});
       manualDone.add(c.id);doneAt[c.id]=at;
     }
   });
@@ -709,6 +725,7 @@ function _optimisticallyCompleteSubtasks(id,completedAt){
 function _rollbackOptimisticSubtasks(changed){
   if(!Array.isArray(changed))return;
   changed.forEach(entry=>{
+    if(entry.optimisticAt&&doneAt[entry.id]!==entry.optimisticAt)return;
     manualDone.delete(entry.id);
     if(entry.hadDoneAt)doneAt[entry.id]=entry.doneAt;
     else delete doneAt[entry.id];
@@ -931,6 +948,10 @@ if(typeof window!=="undefined"&&typeof window.addEventListener==="function"){
 function toggleDone(id,opts){
   opts=opts||{};
   if(manualDone.has(id)){
+    const intents=window.__DCC_COMPLETION_UI_INTENTS__||(window.__DCC_COMPLETION_UI_INTENTS__=new Map());
+    const intent=(intents.get(id)||0)+1;intents.set(id,intent);
+    const rollbacks=window.__DCC_COMPLETION_ROLLBACKS__||(window.__DCC_COMPLETION_ROLLBACKS__=new Map());
+    const settled=window.__DCC_COMPLETION_SETTLED__||(window.__DCC_COMPLETION_SETTLED__=new Map());
     manualDone.delete(id);delete doneAt[id];log("unchecked",id);
     // Clears the row AND any legacy `_done` entry for this id — see `_persistDone`.
     // Either half left set re-hydrates the completion on the next load and the row snaps
@@ -945,10 +966,20 @@ function toggleDone(id,opts){
     const _reopen=_clearRowDone(id,{ev:_uev,dateStr:(typeof _viewedDateStr==="function")?_viewedDateStr():null});
     render();
     Promise.resolve(_reopen).then(result=>{
+      if(intents.get(id)!==intent)return;
       if(result&&result.pending){if(typeof showToast==="function")showToast("Reopen queued and will retry","info",3200);return;}
+      settled.set(id,intent);
+      _rollbackOptimisticSubtasks(rollbacks.get(id)||[]);rollbacks.delete(id);
+      render();
       _refreshResponsibilityAfterDone(_uev,Promise.resolve(result));
     }).catch(error=>{
-      manualDone.add(id);doneAt[id]=new Date();render();
+      if(intents.get(id)!==intent)return;
+      settled.set(id,intent);
+      _rollbackOptimisticSubtasks(rollbacks.get(id)||[]);rollbacks.delete(id);
+      const current=error.currentTask&&error.currentTask.properties;
+      if(current&&current.status!=="done"&&!current.done&&!current.completed){manualDone.delete(id);delete doneAt[id];}
+      else {manualDone.add(id);doneAt[id]=new Date();}
+      render();
       if(typeof showToast==="function")showToast(error.message||"Reopen was not saved","error",4200);
     });
     return;

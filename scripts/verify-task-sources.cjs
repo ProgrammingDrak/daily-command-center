@@ -6,7 +6,7 @@ const root=require('path').resolve(__dirname,'..');
 (async()=>{const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
 try{for(const width of [1280,390]){
  const page=await browser.newPage({viewport:{width,height:800}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
- const html=fs.readFileSync(root+'/index.html','utf8');const section=html.slice(html.indexOf('<div id="am-source-references"'),html.indexOf('<details class="am-disclosure"><summary>Task settings'));
+ const html=fs.readFileSync(root+'/index.html','utf8');const section=html.slice(html.indexOf('<div id="am-source-references"'),html.indexOf('<div id="am-panel-settings"'));
  await page.setContent('<style>'+fs.readFileSync(root+'/public/css/task-sources.css','utf8')+'</style>'+section);
  await page.addScriptTag({path:root+'/public/js/task-sources.js'});
  await page.addScriptTag({path:root+'/public/js/block-editor.js'});
@@ -21,7 +21,7 @@ try{for(const width of [1280,390]){
  },rail);
  assert.equal(await page.locator('.task-source-pill').count(),2);
  assert.equal(await page.locator('.task-source-remove').count(),1);
- await page.locator('input[name=url]').fill('https://example.com/image.png');await page.locator('input[name=name]').fill('Original image.png');await page.locator('select').selectOption('image');await page.getByRole('button',{name:'Attach link'}).click();
+ await page.locator('input[name=url]').fill('https://example.com/image.png');await page.locator('input[name=name]').fill('Original image.png');await page.locator('#am-source-form select[name=kind]').selectOption('image');await page.getByRole('button',{name:'Attach link'}).click();
  await page.waitForFunction(()=>stored.sourceReferences.length===2);assert.equal(await page.evaluate(()=>stored.slack_ts),'1');
  await page.getByRole('button',{name:'Remove source reference: Original image.png',exact:true}).click();await page.waitForFunction(()=>stored.sourceReferences.length===1);
  await page.evaluate(()=>failSave=true);await page.locator('input[name=url]').fill('https://example.com/denied');await page.locator('input[name=name]').fill('Denied');await page.getByRole('button',{name:'Attach link'}).click();await page.waitForFunction(()=>document.getElementById('am-source-status').textContent==='Access revoked');assert.equal(await page.evaluate(()=>stored.sourceReferences.length),1);

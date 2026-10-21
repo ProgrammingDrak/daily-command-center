@@ -2420,9 +2420,11 @@ async function getDccStateCompact(date, workspaceId, client) {
 
 async function purgeSoftDeleted(olderThanDays = 30) {
   const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - olderThanDays);
-  // Activity history and its parent chain survive normal tombstone cleanup.
+  // Activity history, private attachment parents and their parent chains survive
+  // normal tombstone cleanup (task_attachments.block_id deliberately does not cascade).
   const result = await pool.query(`WITH RECURSIVE retained AS (
     SELECT b.id,b.parent_id FROM blocks b JOIN task_activity_records r ON r.task_id=b.id
+    UNION SELECT b.id,b.parent_id FROM blocks b JOIN task_attachments a ON a.block_id=b.id
     UNION SELECT b.id,b.parent_id FROM blocks b JOIN retained child ON child.parent_id=b.id
   ) DELETE FROM blocks WHERE deleted_at IS NOT NULL AND deleted_at < $1
     AND id NOT IN (SELECT id FROM retained)`, [cutoff.toISOString()]);
