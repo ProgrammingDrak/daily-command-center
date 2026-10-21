@@ -274,11 +274,7 @@
       '<span class="tag-chip card-tag-chip" style="--chip-color:' + esc(t.color || "var(--accent)") + '">' + esc(t.name || "") + '</span>'
     ).join("");
   }
-  function guestColorMeta(ev){
-    if (!ev.priority) return "";
-    const cls = ev.priority === "High" ? "pri-hi" : ev.priority === "Medium" ? "pri-med" : "pri-lo";
-    return '<span class="' + cls + '">' + esc(ev.priority) + '</span>';
-  }
+  function guestColorMeta(){ return ""; }
   function guestPoints(ev){
     if (ev.points == null || ev.points <= 0) return "";
     return '<span class="points-chip' + (ev.points >= 20 ? ' bonus' : '') + '">' + esc(ev.points) + ' pts</span>';

@@ -46,15 +46,15 @@ manual checks below in a few seconds.
 
 - [ ] **Notes drawer**: Click notes icon on any schedule/consider/backlog/upcoming item. Drawer slides out with rich-text editor and action items.
 - [ ] **Rich text formatting**: Bold, italic, underline, strikethrough, checkbox, bullets, numbered list all work in notes.
-- [ ] **Action item in notes**: Click "+ Add Action Item". Type text, select priority, optionally "Schedule today" with duration. "Add" creates it.
+- [ ] **Action item in notes**: Click "+ Add Action Item". Type text, optionally "Schedule today" with duration. "Add" creates it.
 - [ ] **Schedule action today**: Action item's "Today" option inserts it into the schedule immediately.
 - [ ] **Action Items tab (aggregated)**: Click "Action Items" tab. Shows items from: pending tasks, schedule task notes, upcoming meeting notes.
-- [ ] **Add action from tab**: Type in Action Items tab input, click "+ Add". Creates pending task with selected priority.
+- [ ] **Add action from tab**: Type in Action Items tab input, click "+ Add". Creates pending task in creation order.
 - [ ] **Toggle/delete action items**: Checkbox toggles done, X deletes, from both notes drawer and Action Items tab.
 
 ## 3. TRIAGE
 
-- [ ] **Triage display**: Click "Triage" tab. Items grouped by priority (High/Medium/Low) with escalation indicators, cycle counts, source badges, links.
+- [ ] **Triage display**: Click "Triage" tab. Items shown in source order with escalation indicators, cycle counts, source badges, links.
 - [ ] **Dismiss triage item**: Click dismiss button. Modal opens. Use instant dismiss, or add note and save. Item moves to Resolved section.
 - [ ] **Complete triage item**: Click done on triage item. Done Modal opens (without time sessions). Parent-task linking dropdown works.
 - [ ] **Side projects section**: Add a side project from the task bar or move a task into Side Projects. Checkbox toggles, X deletes. Done items collapse.

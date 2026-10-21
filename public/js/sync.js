@@ -272,7 +272,6 @@ function renderActionItems(taskId) {
     return '<div class="notes-ai-item">' +
       '<div class="ai-check' + (item.done ? " done" : "") + '" onclick="toggleActionDone(\'' + taskId + '\',' + idx + ')">\u2713</div>' +
       '<span class="ai-text"' + (item.done ? ' style="text-decoration:line-through;opacity:0.5"' : '') + '>' + item.text + '</span>' +
-      '<span class="ai-pri ai-pri-' + item.priority + '">' + item.priority + '</span>' +
       (item._scheduled ? '<span class="ai-sched-btn queued">Scheduled</span>' :
         '<span class="ai-sched-btn" onclick="event.stopPropagation();scheduleActionToday(\'' + taskId + '\',' + idx + ')" title="Add to today\'s schedule">Today</span>') +
       (item._notionQueued ? '<span class="ai-sched-btn later queued">Queued</span>' :
@@ -284,7 +283,7 @@ function renderActionItems(taskId) {
 function addActionItem(taskId) {
   const text = document.getElementById("notes-action-text").value.trim();
   if (!text) return;
-  const priority = document.getElementById("notes-action-priority").value;
+  const priority = "Medium";
   const actions = loadActions();
   if (!actions[taskId]) actions[taskId] = [];
   actions[taskId].push({ text, priority, done: false, created: new Date().toISOString() });
@@ -402,7 +401,7 @@ function queueActionForLater(taskId, idx){
   item._notionQueued=true;
   item._notionQueuedAt=new Date().toISOString();
   saveActions(actions);
-  if(typeof showToast==="function")showToast("Queued for Priority review","success");
+  if(typeof showToast==="function")showToast("Queued for task review","success");
   if(document.getElementById("done-modal-overlay").classList.contains("open")) renderDmActions(taskId);
   else renderActionItems(taskId);
 }

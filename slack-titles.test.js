@@ -84,7 +84,7 @@ test("both Scheduled board sections render decoded Slack markup as text", () => 
   const raw = "&lt;img src=x onerror=alert(1)&gt;";
   const title = titles.titleFromText(raw);
   const task = model.fromBlock({ id: "proof-task", properties: { source: "slack-bookmark", title, captureTitle: title, start: "09:00", end: "09:05" } });
-  const fn = triageCode.slice(triageCode.indexOf("function buildScheduled()"), triageCode.indexOf("// The Priority section", triageCode.indexOf("function buildScheduled()")));
+  const fn = triageCode.slice(triageCode.indexOf("function buildScheduled()"), triageCode.indexOf("function buildTriage()", triageCode.indexOf("function buildScheduled()")));
   for (const minutes of [0, 600]) {
     const board = { innerHTML: "", querySelectorAll: () => [] };
     const ctx = vm.createContext({ document: { getElementById: id => id === "scheduled-board" ? board : null }, __state: { date: "2026-09-09" }, now: () => minutes,

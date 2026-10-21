@@ -366,7 +366,6 @@ function _amBuildDetails(ev){
   if(!ev) return '';
   var esc=(window.DCC&&typeof window.DCC.esc==='function')?window.DCC.esc:function(v){return String(v==null?'':v);};
   var meta=[];
-  if(ev.priority) meta.push('<span class="pri-'+(ev.priority==="High"?"hi":ev.priority==="Medium"?"med":"lo")+'">'+esc(ev.priority)+' priority</span>');
   if(typeof dur==='function') meta.push('<span>'+(typeof ms==='function'?ms(dur(ev)):dur(ev)+'m')+'</span>');
   if(ev.start&&ev.end&&typeof f12==='function') meta.push('<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>');
   if(ev.source&&typeof srcTag==='function'&&srcTag(ev.source)) meta.push('<span class="am-det-src">Source:</span>'+srcTag(ev.source));
@@ -831,7 +830,6 @@ function renderModalItems(taskId) {
       '<span id="am-item-label-' + index + '" class="am-text' + (item.done ? ' done' : '') + '">' + DCC.esc(item.text) + '</span>' +
       shareHtml +
       '<span class="am-tag" style="color:' + tagColors[item.type] + '">' + tagLabels[item.type] + '</span>' +
-      (item.priority ? '<span class="am-pri" style="color:' + (item.priority === 'High' ? 'var(--red)' : item.priority === 'Medium' ? 'var(--amber)' : 'var(--text-muted)') + '">' + item.priority + '</span>' : '') +
       '<button type="button" class="am-del" aria-label="Delete item">&times;</button>' +
     '</div>';
   }).join('');
@@ -1515,105 +1513,6 @@ function updateAddModalCommuteHint() {
   var win = commuteLeaveWindow(preview);
   hint.textContent = win ? (win.label + (pointsText ? ' · ' + pointsText : '')) : (pointsText || 'No leave window');
 }
-// ======== TASK QUEUE PANEL ========
-function buildTaskQueuePanel(){
-  const triagePanel=document.getElementById("tqp-panel-triage");
-  const priorityPanel=document.getElementById("tqp-panel-priority");
-  const backlogPanel=document.getElementById("tqp-panel-backlog");
-  const counts=document.getElementById("tqp-counts");
-  if(!triagePanel||!priorityPanel||!backlogPanel)return;
-
-  // ---- Triage ----
-  const dismissed=(typeof loadDismissed==="function")?loadDismissed():{};
-  const deletedTriage=(typeof loadDeletedTriage==="function")?loadDeletedTriage():[];
-  const priColors={high:"var(--red)",medium:"var(--amber)",low:"var(--text-muted)"};
-  const activeTriage=(typeof INIT_TRIAGE!=="undefined")?INIT_TRIAGE.filter(i=>!dismissed[i.id]&&!deletedTriage.includes(i.id)):[];
-  const tqpTriageBadge=document.getElementById("tqp-triage-count");
-  if(tqpTriageBadge)tqpTriageBadge.textContent=activeTriage.length;
-  if(!activeTriage.length){
-    triagePanel.innerHTML='<div class="tqp-empty">No triage items \u2014 you\'re clear.</div>';
-  }else{
-    triagePanel.innerHTML=activeTriage.map(item=>{
-      const dotColor=priColors[item.priority]||"var(--text-muted)";
-      return '<div class="tqp-triage-card">'+
-        '<span class="tqp-tri-dot" style="background:'+dotColor+'"></span>'+
-        '<span class="tqp-tri-title">'+item.title+'</span>'+
-        '<span class="tqp-tri-meta">'+[item.priority||"", item.queue_label||item.source_label||""].filter(Boolean).join(" · ")+'</span>'+
-        '<button class="tqp-delete-btn" data-tqp-delete-tri="'+item.id+'" title="Delete triage item" aria-label="Delete triage item">'+
-          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>'+
-        '</button>'+
-      '</div>';
-    }).join('');
-    triagePanel.querySelectorAll('.tqp-delete-btn').forEach(btn=>{
-      btn.addEventListener('click',e=>{
-        e.stopPropagation();
-        if(typeof deleteTriageItem==='function')deleteTriageItem(btn.dataset.tqpDeleteTri);
-      });
-    });
-  }
-
-  // ---- Priority (consider) ----
-  const priorityTasks=(typeof consider!=="undefined")?consider:[];
-  const tqpPrioBadge=document.getElementById("tqp-priority-count");
-  if(tqpPrioBadge){tqpPrioBadge.textContent=priorityTasks.length;tqpPrioBadge.style.display=priorityTasks.length?"":"none";}
-  if(!priorityTasks.length){
-    priorityPanel.innerHTML='<div class="tqp-empty">No priority tasks.</div>';
-  }else{
-    const priOrder={High:0,Medium:1,Low:2};
-    const sorted=[...priorityTasks].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
-    priorityPanel.innerHTML=sorted.map(t=>{
-      const c=(typeof cfg==="function")?cfg(t.type):{color:"var(--text-muted)",tag:t.type||""};
-      const durStr=(typeof ms==="function")?ms(t.durMin):t.durMin+"m";
-      return '<div class="tqp-task-card">'+
-        '<div class="tqp-task-bar" style="background:'+c.color+'"></div>'+
-        '<span class="tqp-task-title">'+t.title+'</span>'+
-        '<span class="tqp-task-meta">'+durStr+'</span>'+
-        '<button class="tqp-sched-btn" data-tqp-add-id="'+t.id+'" title="Add to schedule">+ Schedule</button>'+
-      '</div>';
-    }).join('');
-    priorityPanel.querySelectorAll('.tqp-sched-btn').forEach(btn=>{
-      btn.addEventListener('click',e=>{
-        e.stopPropagation();
-        if(typeof addToSchedule==='function')addToSchedule(btn.dataset.tqpAddId);
-      });
-    });
-  }
-
-  // ---- Backlog ----
-  const backlogTasks=(typeof backlog!=="undefined")?backlog:[];
-  const tqpBacklogBadge=document.getElementById("tqp-backlog-count");
-  if(tqpBacklogBadge)tqpBacklogBadge.textContent=backlogTasks.length;
-  if(!backlogTasks.length){
-    backlogPanel.innerHTML='<div class="tqp-empty">Task Library is empty.</div>';
-  }else{
-    const priOrder={High:0,Medium:1,Low:2};
-    const sorted=[...backlogTasks].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
-    backlogPanel.innerHTML=sorted.map(t=>{
-      const c=(typeof cfg==="function")?cfg(t.type):{color:"var(--text-muted)",tag:t.type||""};
-      const durStr=(typeof ms==="function")?ms(t.durMin):t.durMin+"m";
-      return '<div class="tqp-task-card">'+
-        '<div class="tqp-task-bar" style="background:'+c.color+'"></div>'+
-        '<span class="tqp-task-title">'+t.title+'</span>'+
-        '<span class="tqp-task-meta">'+durStr+'</span>'+
-        '<button class="tqp-sched-btn" data-tqp-add-id="'+t.id+'" title="Add to schedule">+ Schedule</button>'+
-      '</div>';
-    }).join('');
-    backlogPanel.querySelectorAll('.tqp-sched-btn').forEach(btn=>{
-      btn.addEventListener('click',e=>{
-        e.stopPropagation();
-        if(typeof addToSchedule==='function')addToSchedule(btn.dataset.tqpAddId);
-      });
-    });
-  }
-
-  // Summary counts in header
-  if(counts)counts.textContent=
-    (activeTriage.length?""+activeTriage.length+" triage":"")+(activeTriage.length&&priorityTasks.length?" · ":"")+
-    (priorityTasks.length?priorityTasks.length+" priority":"")+
-    ((activeTriage.length||priorityTasks.length)&&backlogTasks.length?" · ":"")+
-    (backlogTasks.length?backlogTasks.length+" backlog":"");
-}
-
 // Wire TQP collapse toggle + accordion expand/collapse-all (runs once after DOM load)
 document.addEventListener('DOMContentLoaded',function(){
   // PIN 4: expand/collapse-all controls for both accordions.
@@ -1742,7 +1641,7 @@ const SURFACES = {
   // live inside schedule cards, so that one is gated to the schedule tab.
   delegated:       {build:()=>{if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();},isVisible:()=>true},
   meetingAutoPanels:{build:()=>{if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels();},isVisible:()=>_tabActive("schedule")},
-  consider:        {build:()=>{if(typeof buildConsider==="function")buildConsider();},          isVisible:()=>true},
+  suggestions:     {build:()=>{if(typeof buildUnscheduledSuggestions==="function")buildUnscheduledSuggestions();},          isVisible:()=>true},
   backlog:         {build:()=>{if(typeof buildBacklog==="function")buildBacklog();},            isVisible:()=>true},
   triage:          {build:()=>{if(typeof buildTriage==="function")buildTriage();},              isVisible:()=>true},
   actionItems:     {build:()=>{if(typeof buildActionItemsTab==="function")buildActionItemsTab();},isVisible:()=>true},
@@ -1752,7 +1651,6 @@ const SURFACES = {
   // Writes the always-visible header pill count, so it builds every render like delegated.
   whenever:        {build:()=>{if(typeof buildWhenever==="function")buildWhenever();},           isVisible:()=>true},
   scheduled:       {build:()=>{if(typeof buildScheduled==="function")buildScheduled();},        isVisible:()=>true},
-  scheduleSoon:    {build:()=>{if(typeof buildScheduleSoon==="function")buildScheduleSoon();},  isVisible:()=>true},
   glymphaticBrief: {build:()=>{if(typeof buildGlymphaticBrief==="function")buildGlymphaticBrief();},isVisible:()=>true},
   upcoming:        {build:()=>{if(typeof buildUpcoming==="function")buildUpcoming();},          isVisible:()=>!!document.getElementById("upcoming-board")},
   progress:        {build:()=>{if(typeof buildProgress==="function")buildProgress();},          isVisible:()=>true},

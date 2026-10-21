@@ -602,7 +602,6 @@
           '</div>' +
           '<div class="carryover-row-meta">' + (d > 0 ? esc(fmtDur(d)) : "step") +
             (kids ? " · +" + kids + " nested" : "") +
-            (ev.priority ? " · " + esc(ev.priority) : "") +
             ' · from ' + esc(prettyDate(originOf(ev).sourceDate)) +
           '</div>' +
         '</div>' +

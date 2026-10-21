@@ -1046,13 +1046,13 @@ async function scheduleRowOnDay(blockId,dateStr,opts){
   // A row arriving from the backlog carries kind:"backlog" (and legacy dated ones
   // carry it too). It is scheduled work now, so the marker goes -- otherwise it
   // renders in the Backlog drawer AND on its day, which is the double home C4 exists
-  // to close. `stage` stays: it is a real user field (Backlog / Priority), not state.
+  // to close. `stage` stays: it is a real user field (Backlog), not state.
   if(props.kind==="backlog")delete props.kind;
   return _writeRowDate(blockId,block,props,dateStr);
 }
 
 // Take an existing row's date away: it becomes unscheduled, which is the Backlog.
-// opts.stage sets the Backlog/Priority drawer it lands in.
+// opts.stage sets the Backlog drawer it lands in.
 // opts.block: the already-resolved row — see scheduleRowOnDay for why that matters.
 // opts.durMin: the row's REAL duration, from the caller that knows it. Required for
 //   correctness, not a convenience — see below.
@@ -1447,7 +1447,7 @@ function moveScheduledTaskToSideProject(id){
   return true;
 }
 
-// Send a scheduled task to the Backlog / Priority drawer.
+// Send a scheduled task to the Backlog drawer.
 //
 // C4: this is an in-place `date = null` UPDATE now. It used to mint a brand-new
 // `bl-<timestamp>` row and DELETE the original, so the task came back with a different
@@ -1496,7 +1496,7 @@ async function _moveTaskToBacklogStage(id,stage,toastMsg){
     const entry=Object.assign(
       window.DCC.taskCommonProps(ev,{
         meta:ms(mintedDur)+" · from schedule",
-        priority:ev.priority||(stage==="Priority"?"High":"Low"),
+        priority:ev.priority||"Medium",
         source:ev.source||"manual"
       }),
       {id:mintedId,type:ev.type||"task",durMin:mintedDur,stage:stage}
@@ -1541,7 +1541,6 @@ async function _moveTaskToBacklogStage(id,stage,toastMsg){
 }
 
 function moveTaskToBacklog(id){_moveTaskToBacklogStage(id,"Backlog","Moved to backlog");}
-function moveTaskToPriority(id){_moveTaskToBacklogStage(id,"Priority","Moved to priority");}
 // No set time after all (laundry, the mail): the same in-place unschedule, landing on
 // the Whenever stage so the header pill's pool picks it up. See whenever.js.
 //

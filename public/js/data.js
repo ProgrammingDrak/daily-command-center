@@ -18,11 +18,9 @@ function cfg(t){
   if(R&&typeof R.get==="function"){const e=R.get(t);return {tag:e.label,cls:e.tagCls,color:e.color};}
   return TC[t]||TC.task;
 }
-function priCls(p){return p==="High"?"pri-hi":p==="Medium"?"pri-med":"pri-lo"}
 function colorMeta(ev){
-  if(!ev.meta)return'';
-  if(!ev.priority)return'<span>'+ev.meta+'</span>';
-  return ev.meta.replace(ev.priority+' priority','<span class="'+priCls(ev.priority)+'">'+ev.priority+' priority</span>');
+  const meta=String(ev.meta||"").replace(/\b(?:high|medium|low|urgent|critical) priority\b/gi, "").replace(/^\s*[·|]\s*|\s*[·|]\s*$/g, "").trim();
+  return meta ? '<span>'+meta+'</span>' : '';
 }
 
 // ── Category (root tag) color for a task ──
@@ -213,8 +211,7 @@ function transformState(state) {
         title: item.label || "Untitled",
         start: startStr, end: endStr,
         type: typeMap[item.type] || "task",
-        meta: (item.priority ? item.priority + " priority" : "") +
-              (item.estimated_minutes ? " \u00b7 " + item.estimated_minutes + " min" : ""),
+        meta: (item.estimated_minutes ? item.estimated_minutes + " min" : ""),
         detail: item.detail || item.description || item.notes || "", source: item.source || "manual",
         source_id: item.source_id || "",
         ...(Array.isArray(item.sourceReferences)?{sourceReferences:item.sourceReferences.map(ref=>Object.assign({},ref))}:{}),
@@ -253,7 +250,7 @@ function transformState(state) {
         commuteMinutes: task.commuteMinutes || task.commute_minutes || task.travel_minutes || null,
         commuteToMinutes: task.commuteToMinutes || task.commute_to_minutes || task.commuteMinutes || task.commute_minutes || task.travel_minutes || null,
         commuteBackMinutes: task.commuteBackMinutes || task.commute_back_minutes || task.commuteReturnMinutes || task.commute_return_minutes || null,
-        meta: (task.priority || "Medium") + " \u00b7 " + (task.reason || ""),
+        meta: task.reason || "",
         detail: "", source: "notion",
         notionUrl: task.url || "", priority: task.priority || "Medium"
       });

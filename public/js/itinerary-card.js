@@ -150,7 +150,6 @@
       if(ev.delegatedItemId&&typeof openDelegatedModal==="function")dLinks.push('<button type="button" class="detail-action-link" onclick="event.stopPropagation();openDelegatedModal(\''+String(ev.delegatedItemId).replace(/'/g,"\\'")+'\')">Edit delegated item</button>');
       if(dLinks.length)detailParts.push('<div class="detail-links">'+dLinks.join('')+'</div>');
       var detailMeta=[];
-      if(ev.priority)detailMeta.push('<span class="pri-'+(ev.priority==="High"?"hi":ev.priority==="Medium"?"med":"lo")+'">Priority: '+ev.priority+'</span>');
       if(ev.estTime)detailMeta.push('<span>Est: '+ev.estTime+'</span>');
       var commuteWin=typeof commuteLeaveWindow==="function"?commuteLeaveWindow(ev):null;
       if(commuteWin)detailMeta.push('<span>'+commuteWin.label+'</span>');

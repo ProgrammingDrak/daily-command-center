@@ -93,11 +93,6 @@
       <div class="notes-action-input" id="notes-action-input" style="display:none">
         <input type="text" id="notes-action-text" placeholder="Describe the action item...">
         <div class="nai-row">
-          <select id="notes-action-priority">
-            <option value="High">High</option>
-            <option value="Medium" selected>Medium</option>
-            <option value="Low">Low</option>
-          </select>
           <button id="notes-action-today" class="nai-today-btn" type="button">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
             Schedule today
@@ -309,7 +304,7 @@
           <label class="task-bank-sort">
             <span>Sort</span>
             <select id="task-bank-sort">
-              <option value="priority">Priority</option>
+              <option value="manual">Original order</option>
               <option value="title">Title</option>
               <option value="duration">Duration</option>
               <option value="newest">Newest</option>
@@ -341,9 +336,7 @@
           </summary>
           <div class="tm-section-body" id="tm-triage">
             <div id="triage-notifications" style="margin-bottom:16px"></div>
-            <div id="triage-high" style="margin-bottom:12px"></div>
-            <div id="triage-medium" style="margin-bottom:12px"></div>
-            <div id="triage-low" style="margin-bottom:12px"></div>
+            <div id="triage-active" style="margin-bottom:12px"></div>
             <details id="triage-history-section" style="margin-top:16px">
               <summary style="font-size:12px;font-weight:600;color:var(--text-muted);cursor:pointer;padding:8px 0">
                 Resolution history <span id="triage-resolved-count" style="opacity:0.6">(0)</span>
@@ -365,17 +358,16 @@
           </div>
         </details>
 
-        <details class="tm-section" id="tm-soon-section">
+        <details class="tm-section" id="tm-action-items-section">
           <summary class="tm-section-header">
             <span class="tm-chevron"></span>
-            Priority
-            <span class="badge" id="soon-count" style="display:none">0</span>
+            Action items
           </summary>
-          <div class="tm-section-body" id="tm-soon">
+          <div class="tm-section-body" id="tm-action-items">
             <div style="margin-bottom:12px;font-size:12px;color:var(--text-muted);line-height:1.5">
-              Tasks flagged for soon. Schedule them into your day.
+              Unscheduled suggestions. Schedule them into your day.
             </div>
-            <div class="board" id="consider-board"></div>
+            <div class="board" id="suggestions-board"></div>
             <div style="margin-top:16px">
               <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:8px">Action Items</div>
               <div id="ai-tab-list"></div>
@@ -730,7 +722,6 @@
         </div>
         <div class="dm-action-input" id="dm-action-input">
           <input id="dm-action-text" placeholder="Add an action item..." />
-          <select id="dm-action-priority"><option>High</option><option selected>Medium</option><option>Low</option></select>
           <button class="dm-add-btn" onclick="addDmAction()">Add</button>
         </div>
         <div id="dm-ai-list"></div>
@@ -943,8 +934,6 @@
         <select id="td-new-duration" class="delegated-modal-input"><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option></select>
       </div>
       <div>
-        <label class="delegated-modal-label" for="td-new-priority">Priority</label>
-        <select id="td-new-priority" class="delegated-modal-input"><option>Low</option><option selected>Medium</option><option>High</option></select>
       </div>
     </div>
     <div class="delegated-modal-actions">
@@ -1295,11 +1284,6 @@
         <div class="tg-add-row">
           <input type="text" id="tg-add-fixed-title" class="delegated-modal-input" maxlength="200" placeholder="Fixed task title" />
           <input type="number" id="tg-add-fixed-dur" class="delegated-modal-input tg-dur-input" min="1" max="480" value="15" title="Minutes" />
-          <select id="tg-add-fixed-pri" class="delegated-modal-input tg-pri-input">
-            <option value="High">High</option>
-            <option value="Medium" selected>Medium</option>
-            <option value="Low">Low</option>
-          </select>
           <button type="button" class="secondary" id="tg-add-fixed-btn">Add task</button>
         </div>
         <div class="tg-add-row">

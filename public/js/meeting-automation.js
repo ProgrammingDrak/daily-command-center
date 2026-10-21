@@ -65,7 +65,7 @@
         '<div class="ma-label">Proposed actions</div>';
       if(proposed.length){
         html+='<div class="ma-actions">'+proposed.map(a=>
-          '<label class="ma-action"><input type="checkbox" checked value="'+esc(a.id)+'"><span>'+esc(a.text||a.title)+'</span><em>'+esc(a.priority||"Medium")+'</em></label>'
+          '<label class="ma-action"><input type="checkbox" checked value="'+esc(a.id)+'"><span>'+esc(a.text||a.title)+'</span></label>'
         ).join('')+'</div>'+
         '<button class="ma-approve-btn" data-meeting-id="'+esc(id)+'" type="button">Approve selected</button>';
       }else{
@@ -270,7 +270,7 @@
       const isPlaced=!isDropped&&(!!pl||a.status==="placed"||!!a.placedDate);
       const when=(pl&&pl.date)||a.placedDate||"";
       const ownerOther=(a.owner==="other"||a.owner==="others");
-      const meta=(a.priority?'<em>'+esc(a.priority)+'</em>':'')+(ownerOther?'<em class="recap-owner">delegated</em>':'');
+      const meta=(ownerOther?'<em class="recap-owner">delegated</em>':'');
       const citation=a.citation&&typeof a.citation==="object"?a.citation:{};
       const offset=citation.startOffset!==undefined?citation.startOffset:a.start;
       const quote=citation.quote!==undefined?citation.quote:a.quote;

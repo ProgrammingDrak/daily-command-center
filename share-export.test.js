@@ -285,7 +285,7 @@ test("csv: the column contract is exactly these labels, in this order", () => {
   // CSV and every spreadsheet import mapping built against this file breaks.
   assert.deepEqual(ShareExport.TASK_COLUMNS.map(c => c.label), [
     "Date", "Start", "End", "Duration (min)", "Title", "Type", "Status",
-    "Priority", "Points", "Calendar", "Tags", "Notes", "Added by guest"
+    "Points", "Calendar", "Tags", "Notes", "Added by guest"
   ]);
 });
 
