@@ -2,6 +2,31 @@
   const token = location.pathname.split("/").filter(Boolean).pop();
   let current = null;
   let loadPromise = null;
+  // Page-memory drafts only: never persisted or shared with another viewer/day.
+  const composers = new Map();
+  let composerScope = null;
+  function composerId(task,kind){ return 'todo-composer-'+encodeURIComponent(JSON.stringify([task.blockId || task.id,kind])); }
+  function composerState(form){
+    if(!composers.has(form.id))composers.set(form.id,{open:false,values:{},sending:false});
+    return composers.get(form.id);
+  }
+  function rememberComposer(form){
+    const state=composerState(form);
+    form.querySelectorAll('input[name]').forEach(input=>{state.values[input.name]=input.value;});
+    return state;
+  }
+  function restoreComposers(list){
+    list.querySelectorAll('[data-composer-form]').forEach(form=>{
+      const state=composerState(form);form.hidden=!state.open;
+      for(const [name,value] of Object.entries(state.values)){const input=form.elements.namedItem(name);if(input)input.value=value;}
+      form.querySelectorAll('input,button').forEach(input=>{input.disabled=state.sending;});
+      const button=Array.from(list.querySelectorAll('[data-composer-toggle]')).find(b=>b.getAttribute('aria-controls')===form.id);
+      if(button)button.setAttribute('aria-expanded',String(state.open));
+    });
+  }
+  function composerToggle(task,kind,label){
+    return '<button class="todo-composer-toggle todo-'+kind+'-btn" type="button" data-composer-toggle aria-controls="'+esc(composerId(task,kind))+'" aria-expanded="false" aria-label="'+esc(label+' for '+task.title)+'"><span aria-hidden="true">▸</span> '+esc(label)+'</button>';
+  }
   const filters = {
     types: new Set(["task", "repeat"]),
     status: "all",
@@ -155,16 +180,16 @@
 
   function rewardButtonHtml(task){
     if (!can("sponsor_reward")) return "";
-    return '<button class="todo-reward-btn" type="button" data-reward-toggle="' + esc(task.id) + '" title="Offer a reward for finishing this">🎁 Offer reward</button>';
+    return composerToggle(task,'reward','Offer reward');
   }
 
   function rewardFormHtml(task){
     if (!can("sponsor_reward")) return "";
-    return '<form class="todo-reward-form" hidden data-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '">' +
-        '<input type="text" class="todo-reward-title" maxlength="160" placeholder="Reward if completed (e.g. coffee on me)">' +
+    return '<form class="todo-reward-form" data-composer-form="reward" id="'+esc(composerId(task,'reward'))+'" hidden data-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '">' +
+        '<input type="text" class="todo-reward-title" name="rewardTitle" aria-label="Reward if completed" maxlength="160" placeholder="Reward if completed (e.g. coffee on me)">' +
         '<div class="todo-reward-row">' +
-          '<input type="text" class="todo-reward-name" maxlength="80" placeholder="Your name">' +
-          '<input type="number" class="todo-reward-value" min="0" step="0.01" placeholder="$ optional">' +
+          '<input type="text" class="todo-reward-name" name="sponsorName" aria-label="Your name for this reward" maxlength="80" placeholder="Your name">' +
+          '<input type="number" class="todo-reward-value" name="value" aria-label="Reward value in dollars (optional)" min="0" step="0.01" placeholder="$ optional">' +
           '<button type="submit" class="todo-public-btn primary">Send</button>' +
         '</div>' +
       '</form>';
@@ -206,8 +231,8 @@
         ).join("") + '</div>'
       : '';
     const form = can("comment")
-      ? '<form class="todo-public-comment-form" data-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '">' +
-          '<input type="text" class="todo-public-comment-input" maxlength="1000" placeholder="Add a comment...">' +
+      ? composerToggle(task,'comment','Add comment') + '<form class="todo-public-comment-form" data-composer-form="comment" id="'+esc(composerId(task,'comment'))+'" hidden data-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '">' +
+          '<input type="text" class="todo-public-comment-input" name="comment" aria-label="Comment" maxlength="1000" placeholder="Add a comment...">' +
           '<button type="submit" class="todo-public-comment-send">Send</button>' +
         '</form>'
       : '';
@@ -385,6 +410,9 @@
   function renderTasks(tasks){
     const list = document.getElementById("todo-public-list");
     if (!list) return;
+    const focused=document.activeElement;
+    const focusedForm=focused?.closest?.('[data-composer-form]');
+    const cursor=focusedForm && list.contains(focusedForm) ? {id:focusedForm.id,name:focused.name,start:focused.selectionStart,end:focused.selectionEnd} : null;
     const visible = visibleTasks(tasks);
     updateStats(tasks);
     list.innerHTML = "";
@@ -419,6 +447,9 @@
     });
 
     list.appendChild(frag);
+    restoreComposers(list);
+    if(cursor){const form=document.getElementById(cursor.id),input=form?.elements.namedItem(cursor.name);if(input && !form.hidden){input.focus({preventScroll:true});if(cursor.start!==null && input.setSelectionRange)input.setSelectionRange(cursor.start,cursor.end);}}
+
   }
 
   function renderCalendarOptions(data){
@@ -443,7 +474,11 @@
   }
 
   function render(data){
+    const scope=JSON.stringify([token,data.date,data.ownerUsername,data.viewer?.loggedIn,data.viewer?.username,data.viewer?.tier]);
+    if(scope!==composerScope){composers.clear();composerScope=scope;}
     current = data;
+    const allowed=new Set((data.tasks || []).filter(t=>!t.redacted).flatMap(t=>['reward','comment'].filter(k=>can(k==='reward'?'sponsor_reward':'comment')).map(k=>composerId(t,k))));
+    for(const key of composers.keys())if(!allowed.has(key))composers.delete(key);
     document.getElementById("todo-public-content").hidden = false;
     document.getElementById("todo-public-error").hidden = true;
     const status = document.getElementById("todo-public-status");
@@ -556,6 +591,7 @@
     const input = form.querySelector(".todo-public-comment-input");
     const body = input ? input.value.trim() : "";
     if (!body) return;
+    const scope=composerScope,draft=rememberComposer(form);if(draft.sending)return;draft.sending=true;restoreComposers(document.getElementById("todo-public-list"));
     const taskId = form.dataset.taskId;
     const task = (current && current.tasks || []).find(t => String(t.id) === String(taskId));
     if (input) input.disabled = true;
@@ -571,13 +607,18 @@
           body
         })
       });
-      if (task) {
-        task.comments = data.comments || [];
+      if(scope!==composerScope)return;
+      composers.delete(form.id);
+      const latestTask = (current && current.tasks || []).find(t => String(t.id) === String(taskId));
+      if (latestTask) {
+        latestTask.comments = data.comments || [];
         renderTasks(current.tasks || []);
       } else {
         await load();
       }
     } catch (e) {
+      if(scope!==composerScope)return;
+      draft.sending=false;restoreComposers(document.getElementById("todo-public-list"));
       if (input) { input.disabled = false; }
       alert(e.message);
     }
@@ -612,6 +653,7 @@
     const titleEl = form.querySelector(".todo-reward-title");
     const title = titleEl ? titleEl.value.trim() : "";
     if (!title) { if (titleEl) titleEl.focus(); return; }
+    const scope=composerScope,draft=rememberComposer(form);if(draft.sending)return;draft.sending=true;restoreComposers(document.getElementById("todo-public-list"));
     const taskId = form.dataset.taskId;
     const task = (current && current.tasks || []).find(t => String(t.id) === String(taskId));
     const submit = form.querySelector('button[type="submit"]');
@@ -632,8 +674,12 @@
           sponsorName: (form.querySelector(".todo-reward-name") || {}).value ? form.querySelector(".todo-reward-name").value.trim() : ""
         })
       });
+      if(scope!==composerScope)return;
+      composers.delete(form.id);
       await load();
     } catch (e) {
+      if(scope!==composerScope)return;
+      draft.sending=false;restoreComposers(document.getElementById("todo-public-list"));
       if (submit) submit.disabled = false;
       alert(e.message);
     }
@@ -821,6 +867,8 @@
         if (open) { const t = document.getElementById("todo-create-title"); if (t) t.focus(); }
       });
     }
+    const noteToggle=document.getElementById('todo-create-note-toggle'),notePanel=document.getElementById('todo-create-note-panel');
+    if(noteToggle && notePanel)noteToggle.addEventListener('click',()=>{notePanel.hidden=!notePanel.hidden;noteToggle.setAttribute('aria-expanded',String(!notePanel.hidden));if(!notePanel.hidden)document.getElementById('todo-create-note').focus();});
     const createBtn = document.getElementById("todo-create-task");
     if (createBtn) createBtn.addEventListener("click", submitCreateTask);
     const createTitle = document.getElementById("todo-create-title");
@@ -829,16 +877,11 @@
     const list = document.getElementById("todo-public-list");
     if (list) {
       list.addEventListener("click", e => {
-        const rewardToggle = e.target.closest("[data-reward-toggle]");
-        if (rewardToggle) {
-          e.preventDefault();
-          e.stopPropagation();
-          const card = rewardToggle.closest(".tl-item");
-          const form = card ? card.querySelector(".todo-reward-form") : null;
-          if (form) {
-            form.hidden = !form.hidden;
-            if (!form.hidden) { const t = form.querySelector(".todo-reward-title"); if (t) t.focus(); }
-          }
+        const toggle=e.target.closest('[data-composer-toggle]');
+        if(toggle){
+          e.preventDefault();e.stopPropagation();
+          const form=document.getElementById(toggle.getAttribute('aria-controls'));
+          if(form){const state=rememberComposer(form);state.open=!state.open;restoreComposers(list);if(state.open)form.querySelector('input')?.focus();else toggle.focus();}
           return;
         }
         const bountyBtn = e.target.closest("[data-bounty-task-id]");
@@ -853,6 +896,11 @@
         e.preventDefault();
         e.stopPropagation();
         toggleReaction(reactBtn);
+      });
+      list.addEventListener('input',e=>{const form=e.target.closest('[data-composer-form]');if(form)rememberComposer(form);});
+      list.addEventListener('keydown',e=>{
+        const form=e.target.closest('[data-composer-form]');
+        if(e.key==='Escape' && form){e.preventDefault();e.stopPropagation();rememberComposer(form).open=false;restoreComposers(list);Array.from(list.querySelectorAll('[data-composer-toggle]')).find(b=>b.getAttribute('aria-controls')===form.id)?.focus();}
       });
       list.addEventListener("submit", e => {
         const rewardForm = e.target.closest(".todo-reward-form");
