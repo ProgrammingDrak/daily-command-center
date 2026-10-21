@@ -21,6 +21,8 @@ async function count(p,id,text){await p.waitForFunction(({id,text})=>[...documen
 try{
   await ready(page);await badge(page,info.taskId).first().click();
   const dialog=page.locator('.shared-tasks-dialog');
+  await dialog.locator('[data-scope]').selectOption('series');
+  await page.screenshot({path:path.join(output,'series-invitation.png')});
   await dialog.locator('[data-friend]').selectOption('2');
   assert.equal(await dialog.locator('[data-include-instructions]').isChecked(),true);
   await dialog.locator('.shared-instructions summary').click();
@@ -56,7 +58,17 @@ try{
   assert.ok(await other.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1));
   await other.locator('[data-nav-key="__more"]').click();await other.locator('#mobile-more-sheet').getByRole('button',{name:'Shared tasks',exact:false}).click();await other.locator('.shared-tasks-dialog').waitFor();await close(other);
   mark('375px layout keeps participant avatars visible and Shared tasks is reachable from More');
-  await page.locator('#shared-tasks-open').click();await page.locator('[data-action="remove"][data-user="2"]').click();await close(page);
+  const tomorrow=new Date(Date.parse(info.date+'T12:00:00Z')+86400000).toISOString().slice(0,10);
+  const next=await other.evaluate(async date=>{
+    const synced=await fetch('/api/shared-tasks/sync',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({date})});
+    if(!synced.ok)throw new Error(await synced.text());
+    return (await(await fetch('/api/shared-tasks?date='+date)).json()).shares.find(s=>s.date===date);
+  },tomorrow);
+  assert.ok(next);assert.equal(next.scope,'series');assert.equal(next.participants.length,2);assert.ok(next.participants.every(p=>!p.completed));assert.notEqual(next.taskId,ownTask);
+  const fresh=await other.evaluate(async id=>(await(await fetch('/api/activity/tasks/'+id)).json()),next.taskId);
+  assert.equal(fresh.record.plan.exercises.length,10);assert.deepEqual(fresh.record.actual,{sets:[],runs:[]});
+  mark('one explicit series acceptance generates tomorrow’s two fresh tasks and private guided logs without another invitation');
+  await page.locator('#shared-tasks-open').click();await page.locator('[data-action="remove"][data-user="2"]').first().click();await close(page);
   await other.evaluate(()=>window.DCC.SharedTasks.refresh());
   await count(other,ownTask,'Share task');
   const saved=await other.evaluate(async id=>(await(await fetch('/api/activity/tasks/'+id)).json()),ownTask);

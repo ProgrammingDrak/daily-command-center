@@ -21,9 +21,14 @@ module.exports = function mount(app,ctx) {
     if (!require('../public/js/activity-model').validDate(date)) throw Object.assign(new Error('Valid occurrence date required'),{statusCode:400});
     return {shares:await store.list(req.sharedTaskActor,date)};
   }));
+  app.post('/api/shared-tasks/sync',route(async req=>{
+    const result=await store.sync(req.sharedTaskActor,req.body?.date || ctx.getTodayStr());
+    for(const change of result.changes || [])ctx.broadcast('blocks-changed',{action:'shared-series-sync',blockIds:[change.taskId]},change.workspaceId);
+    return {created:result.created}; // Other participants' private task IDs never cross the response boundary.
+  }));
   app.get('/api/shared-tasks/preview/:taskId',route(req=>store.preview(req.params.taskId,req.sharedTaskActor)));
   app.post('/api/shared-tasks/invite',route(async req => {
-    const result = await store.invite(req.body?.taskId,req.body?.userId,req.sharedTaskActor,{includeInstructions:req.body?.includeInstructions===true,instructionsHash:req.body?.instructionsHash});
+    const result = await store.invite(req.body?.taskId,req.body?.userId,req.sharedTaskActor,{scope:req.body?.scope,includeInstructions:req.body?.includeInstructions===true,instructionsHash:req.body?.instructionsHash});
     await notify(result.id);
     return result;
   }));

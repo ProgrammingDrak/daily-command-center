@@ -3,7 +3,7 @@ const src = fs.readFileSync(require.resolve('./public/js/shared-tasks'),'utf8');
 function fixture(api) {
   const hosts=[], events={};
   const document={readyState:'loading',addEventListener:(name,fn)=>events[name]=fn,querySelectorAll:selector=>selector==='[data-shared-task]'?hosts:[],getElementById:()=>null};
-  const ctx={AbortController,setTimeout,clearTimeout,document,window:{DCC:{api,dates:{todayKey:()=> '2026-10-21'},esc:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;')}},setInterval(){},isDone:ev=>!!ev.optimistic};
+  const ctx={AbortController,setTimeout,clearTimeout,document,window:{DCC:{api:(path,options)=>path.endsWith('/sync')?Promise.resolve({created:0}):api(path,options),dates:{todayKey:()=> '2026-10-21'},esc:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;')}},setInterval(){},isDone:ev=>!!ev.optimistic};
   vm.runInNewContext(src,ctx);return {D:ctx.window.DCC,hosts,events,ctx};
 }
 const share={id:'occurrence',taskId:'mine',state:'accepted',title:'Workout',participants:[{userId:1,self:true,name:'Me <x>',completed:false,state:'accepted'},{userId:2,name:'Friend',completed:false,state:'accepted'}]};
@@ -27,7 +27,7 @@ test('duplicate live events coalesce and never let older requests overwrite newe
   const {D,hosts}=fixture(()=>{calls.push(1);return new Promise(resolve=>resolves.push(resolve));});
   const host={dataset:{sharedTask:'mine'},setAttribute(){}};hosts.push(host);
   const first=D.SharedTasks.refresh();void D.SharedTasks.refresh();void D.SharedTasks.refresh();
-  assert.equal(calls.length,1);resolves.shift()({shares:[share]});await first;
+  await new Promise(r=>setTimeout(r,0));assert.equal(calls.length,1);resolves.shift()({shares:[share]});await first;await new Promise(r=>setTimeout(r,0));
   assert.equal(calls.length,2);resolves.shift()({shares:[]});await new Promise(r=>setTimeout(r,0));
   assert.equal(host.innerHTML,'Share task');assert.equal(calls.length,2);
 });

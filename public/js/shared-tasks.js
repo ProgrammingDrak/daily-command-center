@@ -40,7 +40,10 @@
     if (loading) { again = true; return loading; }
     loading = (async () => {
       const controller = new AbortController(), timer = setTimeout(() => controller.abort(),10000);
-      try { const date=typeof _viewedDateStr === 'function' ? _viewedDateStr() : D.dates.todayKey(); const data = await api('?date='+encodeURIComponent(date),{signal:controller.signal}); shares = data.shares || []; fresh = true; }
+      try { const date=typeof _viewedDateStr === 'function' ? _viewedDateStr() : D.dates.todayKey();
+        const synced=await api('/sync',{method:'POST',body:{date},signal:controller.signal});
+        if(synced.created)window.refreshDccStateFromServer?.();
+        const data = await api('?date='+encodeURIComponent(date),{signal:controller.signal}); shares = data.shares || []; fresh = true; }
       catch (_) { shares = []; fresh = false; } // Never retain another account's identity or stale green checkmarks.
       finally { clearTimeout(timer); loading = null; paint(); if (again) { again = false; void refresh(); } }
     })();
@@ -68,7 +71,7 @@
   async function open(ev) {
     const body = document.createElement('div'); body.className = 'shared-tasks-dialog';
     body.textContent = 'Loading shared tasks…';
-    D.modal({title:ev ? 'Share this occurrence' : 'Shared tasks',body,actions:[{label:'Close'}]});
+    D.modal({title:ev ? 'Share this task' : 'Shared tasks',body,actions:[{label:'Close'}]});
     let friends = [], preview = null;
     async function draw() {
       await refresh();
@@ -83,24 +86,25 @@
       }
       const share = ev ? forTask(ev._blockId) : null;
       preview = null;
-      if (ev?.type === 'workout' && !share) {
+      if (ev && !share) {
         try { preview = await api('/preview/'+encodeURIComponent(ev._blockId)); }
         catch (e) { preview = {error:e.message}; }
       }
       const visible = ev ? (share ? [share] : []) : shares;
-      body.innerHTML = '<p>Share a title and date, with a separate task and completion for each person. Results, personal weights/reps, notes and timing stay private. You may include a reviewed instruction snapshot for each person’s Plan &amp; Log.</p><p>This invitation covers only this dated occurrence. Future repeats need a new invitation.</p>' +
+      body.innerHTML = '<p>Share a title and date, with a separate task and completion for each person. Results, personal weights/reps, notes and timing stay private. You may include a reviewed instruction snapshot for each person’s Plan &amp; Log.</p><p>Choose this occurrence or, for an eligible scheduled repeat, this recurring routine. A routine invitation is accepted once; each scheduled date has separate completion and private logs. Leaving or removing a participant stops sharing for the whole routine.</p>' +
         '<div class="shared-task-status" role="status" aria-live="polite"></div>' +
-        visible.map(s => '<section class="shared-task-entry"><strong>' + esc(s.title) + '</strong><p>' + esc(s.date) + '</p>' + instructionsHtml(s.instructions) +
-          (s.state === 'pending' ? '<p>You are invited to participate. Accept adds your own private task for this date and shares your completion with the other accepted participants.</p><button data-action="accept" data-share="' + esc(s.id) + '">Accept</button> <button data-action="decline" data-share="' + esc(s.id) + '">Decline</button>' :
+        visible.map(s => '<section class="shared-task-entry"><strong>' + esc(s.title) + '</strong><p>' + esc(s.date) + (s.scope==='series' ? ' · Recurring routine (accepted once)' : ' · This occurrence') + '</p>' + instructionsHtml(s.instructions) +
+          (s.state === 'pending' ? '<p>You are invited to participate. Accept adds your own private task'+(s.scope==='series' ? ' for each scheduled occurrence from this date onward' : ' for this date')+' and shares only completion with the other accepted participants. You can leave at any time.</p><button data-action="accept" data-share="' + esc(s.id) + '">Accept</button> <button data-action="decline" data-share="' + esc(s.id) + '">Decline</button>' :
             '<div class="shared-summary" data-shared-summary="' + esc(s.id) + '">' + badge(s) + '</div>' +
-            (s.isOwner ? s.participants.filter(p => !p.self).map(p => '<p>' + esc(p.name) + ' · ' + (p.state === 'pending' ? 'Invited' : 'Participating') + ' <button data-action="remove" data-share="' + esc(s.id) + '" data-user="' + p.userId + '">Remove</button></p>').join('') :
-              '<button data-action="remove" data-share="' + esc(s.id) + '">Leave shared task</button>')) + '</section>').join('') +
+            (s.isOwner ? s.participants.filter(p => !p.self).map(p => '<p>' + esc(p.name) + ' · ' + (p.state === 'pending' ? 'Invited' : 'Participating') + ' <button data-action="remove" data-share="' + esc(s.seriesId || s.id) + '" data-user="' + p.userId + '">Remove</button></p>').join('') :
+              '<button data-action="remove" data-share="' + esc(s.seriesId || s.id) + '">Leave shared '+(s.scope==='series' ? 'routine' : 'task')+'</button>')) + '</section>').join('') +
         (!ev && !visible.length ? '<p>No shared tasks or invitations yet. Use Share task on a dated task card.</p>' : '') +
         (ev?.type === 'workout' && !share ? (preview?.instructions ? instructionsHtml(preview.instructions) + '<label class="shared-include"><input type="checkbox" data-include-instructions checked> Include this reviewed instruction snapshot</label>' : '<p>'+esc(preview?.error || 'No saved instructions yet. Save a workout in Plan & Log to include its movement cards, or invite with title/date only.')+'</p>') : '') +
-        (ev && (!share || share.isOwner) ? '<label>Invite an existing friend <select data-friend><option value="">Choose a friend</option>' + friends.filter(f => !share?.participants.some(p => p.userId === f.friend_id)).map(f => '<option value="' + f.friend_id + '">' + esc(f.name || f.username) + '</option>').join('') + '</select></label><button data-invite type="button">Invite to this occurrence</button><p>Only accepted friends are listed. Manage friendships in Social.</p>' : '') +
+        (ev && !share && preview?.seriesEligible ? '<label>Invitation scope <select data-scope><option value="occurrence">This occurrence</option><option value="series">This recurring routine · accept once</option></select></label>' : '') +
+        (ev && (!share || share.isOwner) ? '<label>Invite an existing friend <select data-friend><option value="">Choose a friend</option>' + friends.filter(f => !share?.participants.some(p => p.userId === f.friend_id)).map(f => '<option value="' + f.friend_id + '">' + esc(f.name || f.username) + '</option>').join('') + '</select></label><button data-invite type="button">Send invitation</button><p>Only accepted friends are listed. Manage friendships in Social.</p>' : '') +
         '<button data-retry type="button">Refresh</button>';
       body.querySelector('[data-retry]').onclick = draw;
-      body.querySelector('[data-invite]')?.addEventListener('click', () => mutate('/invite',{taskId:ev._blockId,userId:Number(body.querySelector('[data-friend]').value),includeInstructions:!!body.querySelector('[data-include-instructions]')?.checked,instructionsHash:preview?.hash}));
+      body.querySelector('[data-invite]')?.addEventListener('click', () => mutate('/invite',{taskId:ev._blockId,scope:share?.scope || body.querySelector('[data-scope]')?.value || 'occurrence',userId:Number(body.querySelector('[data-friend]').value),includeInstructions:!!body.querySelector('[data-include-instructions]')?.checked,instructionsHash:preview?.hash}));
       body.querySelectorAll('[data-action]').forEach(button => button.onclick = () => mutate('/' + encodeURIComponent(button.dataset.share) + '/respond',{
         action:button.dataset.action,...(button.dataset.user ? {userId:Number(button.dataset.user)} : {})
       }));

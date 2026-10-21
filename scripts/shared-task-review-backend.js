@@ -20,6 +20,11 @@ module.exports = async function mountSharedReview(app,ctx,date) {
   await ctx.pool.query("UPDATE users SET username=CASE WHEN id=1 THEN 'Morgan-demo' ELSE 'Riley-demo' END WHERE id IN (1,2)");
   const W=require('../public/js/workout-model'), record=W.empty(); record.plan=W.gentleReset(ctx.crypto.randomUUID);
   record.plan.exercises[0].sets[0].weight=123;record.plan.exercises[0].sets[0].reps=45;
-  const task=await require('../activity-store').createActivityStore(ctx).create({title:'DEMO · Morning workout together',date,record},{userId:1,workspaceId:'ws-1'});
-  app.get('/api/shared-task-review-info',(_req,res)=>res.json({synthetic:true,storage:'memory',date,taskId:task.taskId}));
+  const definition=ctx.crypto.randomUUID();
+  const props={kind:'responsibility_item',repeatType:'scheduled',title:'DEMO · Morning workout together',activityTaskType:'workout',estimatedMinutes:20,status:'active',scheduleRule:{version:1,patternType:'calendar',timeZone:'UTC',startDate:date,frequency:'daily',interval:1,times:['07:00'],end:{type:'never'}}};
+  await ctx.pool.query("INSERT INTO blocks(id,type,properties,created_at,updated_at,user_id,workspace_id) VALUES($1,'task',$2,NOW(),NOW(),1,'ws-1')",[definition,props]);
+  await ctx.pool.query("INSERT INTO task_activity_records(task_id,workspace_id,owner_user_id,task_type,record) VALUES($1,'ws-1',1,'workout',$2)",[definition,record]);
+  const repeats=require('../responsibility-store')({blockDB:ctx.blockDB,getTodayStr:()=>date,appTimeZone:'UTC'});
+  const [task]=await repeats.materializeDefinitionForDate(definition,{date,userId:1,workspaceId:'ws-1',targetTimeZone:'UTC'});
+  app.get('/api/shared-task-review-info',(_req,res)=>res.json({synthetic:true,storage:'memory',date,taskId:task.id,series:true}));
 };
