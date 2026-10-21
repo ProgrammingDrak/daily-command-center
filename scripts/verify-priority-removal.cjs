@@ -1,3 +1,4 @@
+/* global process, window, scheduled, openAddModal, document, innerWidth, closeAddModal, render, console, localStorage, Buffer, openTasksToSection */
 /* Fixture-only browser regression. Start scripts/ui-review-server.mjs with
    DCC_REVIEW_TASK_DETAILS=1 and pass its URL. Uses a fresh browser profile. */
 const assert=require('node:assert/strict');
