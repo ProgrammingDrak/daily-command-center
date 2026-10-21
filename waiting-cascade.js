@@ -12,7 +12,7 @@
 //                 touched the item -- which is how Drake ended up with live check-ins
 //                 chasing work that was already finished.
 //
-// Completing any one of the three now closes the cluster. This module is the pure half:
+// Completing the work or Waiting item closes the cluster. A reminder only closes its check-in. This module is the pure half:
 // it decides WHICH rows a completion must also close, from plain rows, so the rule is
 // testable without a database and cannot fork between the three entry points that call
 // it (the task-completion route, the legacy PATCH completionIntent branch, and the
@@ -102,6 +102,7 @@ function itemIdForTask(task, items) {
 // Rows already done are excluded too, which is what makes the whole cascade re-runnable:
 // a retry after a partial failure closes only what is still open.
 function cascadeTargets({ trigger, item, tasks }) {
+  if (roleOf(trigger) === "reminder") return { item: null, tasks: [] };
   const triggerId = String((trigger && trigger.id) || "");
   const openTasks = (tasks || []).filter(row =>
     isLive(row) && String(row.id) !== triggerId && !isDone(row) && !!roleOfOrLinked(row, item));

@@ -41,6 +41,7 @@
   // parallel.
   const _rescheduleChains = new Map();
   const _updateChains = new Map();
+  const _completionBases = new Map(); // authoritative rollback rows while intents are queued
   // Server IDs for day_root are workspace-prefixed (e.g. "day-root-ws-1-2026-04-24").
   // Resolved from the block list returned by loadDay() so callsites can look up
   // the cached root reliably, not a naive "day-root-<date>" that misses.
@@ -89,9 +90,12 @@
       return _syncPullPromise.catch(() => null).then(() => pullSyncChanges(dateStr));
     }
     _syncPullDate = dateStr;
+    const generation = _mutationGeneration;
+    const canApply = () => generation === _mutationGeneration;
     _syncPullPromise = (async () => {
       if (_syncCursor === null || _currentDate !== dateStr) {
         const snapshot = await apiGet("/api/sync/bootstrap?date=" + encodeURIComponent(dateStr));
+        if (!canApply()) return null;
         hydrateSyncSnapshot(snapshot);
         _syncForceStateDates.delete(dateStr);
         if (snapshot.dayState) window.dispatchEvent(new CustomEvent("dcc-sync-day-state", { detail: snapshot.dayState }));
@@ -107,11 +111,13 @@
         } catch (error) {
           if (!error || error.status !== 410) throw error;
           const snapshot = await apiGet("/api/sync/bootstrap?date=" + encodeURIComponent(dateStr));
+          if (!canApply()) return null;
           hydrateSyncSnapshot(snapshot);
           _syncForceStateDates.delete(dateStr);
           if (snapshot.dayState) window.dispatchEvent(new CustomEvent("dcc-sync-day-state", { detail: snapshot.dayState }));
           return { ...snapshot, bootstrap: true };
         }
+        if (!canApply() || hasPendingWritesNow()) return null;
         // Clear the forced refresh only after the server returned its projection.
         // A transient rejection keeps the request pending for the next safe pull.
         if (includeState) _syncForceStateDates.delete(dateStr);
@@ -153,6 +159,10 @@
   }
   function setSaved() {
     if (_localSaveError) return setError(_localSaveError);
+    if (hasPendingWritesNow()) {
+      if (typeof updateSaveStatus === "function") updateSaveStatus("saving", "Changes queued — waiting to sync");
+      return;
+    }
     if (typeof updateSaveStatus === "function") updateSaveStatus("ok", "All changes saved");
   }
   function setError(msg) {
@@ -183,7 +193,7 @@
       // one segment. The stale one carries a different actionId, so the server does not
       // see a duplicate, and it is APPLIED if its pieces still fit the now-shorter
       // source: a second, unrequested re-attribution of time already moved.
-      if (entry && (entry.op === "update" || entry.op === "completion" || entry.op === "realloc") && entry.id) {
+      if (entry && (entry.op === "update" || entry.op === "completion" || entry.op === "reschedule" || entry.op === "realloc") && entry.id) {
         wal = wal.filter(e => !(e && e.op === entry.op && e.id === entry.id));
       }
       wal.push({ ...entry, accountScope: ACCOUNT_SCOPE, _walId: entryId, timestamp: new Date().toISOString() });
@@ -601,12 +611,45 @@
     // as B2's to wire up, and prod has 32 duplicate key groups of exactly this shape.
     // A reschedule gets 409 only when the row is an imported meeting whose
     // source calendar owns placement. That authority will not change on retry.
-    if ((entry.op === "undelete" || entry.op === "reschedule") && err.status === 409) return true;
+    if ((entry.op === "undelete" || entry.op === "reschedule" || (entry.op === "batch" && entry.data?.operations?.some(op => op.op === "undelete"))) && err.status === 409) return true;
     if ((entry.op === "update" || entry.op === "completion") && err.status === 409) return true;
     if ((entry.op === "work" || entry.op === "realloc") && err.status === 409) return true;
     return false;
   }
 
+  function restoreMetadata(entry) { return entry && entry.meta && entry.meta.restore; }
+  function restoreWaitsForDelete(entry){
+    const token=restoreMetadata(entry)?.deleteMutationId;
+    return token&&walGet().some(other=>other._walId!==entry._walId&&((other.op==="batch"&&other.data?.operations?.some(op=>op.op==="delete"&&op.deleteMutationId===token))||(other.op==="update"&&other.id===restoreMetadata(entry).overlayBlockId)));
+  }
+
+  function sendBatchRequest(entry) {
+    const send=()=>apiPost("/api/blocks/batch",entry.data);
+    const overlayId=restoreMetadata(entry)?.overlayBlockId;
+    return overlayId?queueUpdateRequest(overlayId,send):send();
+  }
+
+  function notifyRestore(entry, outcome) {
+    const meta = restoreMetadata(entry);
+    if (meta && typeof CustomEvent === "function" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(new CustomEvent("task-restore-result", { detail: { ...outcome, meta } }));
+    }
+  }
+  function applyBatchAcknowledgement(result, entry) {
+    const restores = (entry.data.operations || []).filter(op => op.op === "undelete");
+    if (restores.length) {
+      const rows = new Map((result.blocks || []).map(row => [row.id, row]));
+      if (restores.some(op => !rows.get(op.id)?.type || rows.get(op.id).deleted_at)) {
+        throw new Error("Restore acknowledgement did not confirm every original row");
+      }
+    }
+    for (const block of [...(result.blocks || []), ...(result.restoredDayRoots || [])]) {
+      if (!block?.id) continue;
+      if (block.deleted_at) cacheDelete(block.id);
+      else { _tombstones.delete(block.id); cacheSet(block); }
+    }
+    notifyRestore(entry, { ok: true, result });
+  }
   let _replaying = false;
   function hasPendingWritesNow() {
     return _replaying || _activeWriteRequests > 0 || Object.keys(_contentTimers).length > 0 || walGet().length > 0;
@@ -669,7 +712,20 @@
           case "completion": {
             const result = await queueUpdateRequest(entry.id, async () => {
               if (!walGet().some(e => e && e._walId === entry._walId)) return null;
-              return apiPost("/api/tasks/" + encodeURIComponent(entry.id) + "/completion", { ...entry.data, _replay: true });
+              const url = "/api/tasks/" + encodeURIComponent(entry.id) + "/completion";
+              try { return await apiPost(url, { ...entry.data, _replay: true }); }
+              catch (error) {
+                // A reload can occur after the preceding click committed but before
+                // its ack updated this queued intent's revision. Rebase only over
+                // that exact known predecessor, never another device's decision.
+                const current = error.currentTask;
+                if (error.status !== 409 || error.code !== "COMPLETION_CONFLICT"
+                  || !entry.meta?.predecessorMutationIds?.includes(current?.properties?._completionMutationId)
+                  || !walGet().some(e => e._walId === entry._walId)) throw error;
+                entry.data.expectedRevision = current.properties._completionRevision || null;
+                walReplaceData(entry._walId, entry.data);
+                return apiPost(url, { ...entry.data, _replay: true });
+              }
             });
             if (result) {
               _completionMetrics.replayed++;
@@ -690,14 +746,26 @@
           case "delete":
             await apiDelete("/api/blocks/" + entry.id);
             break;
-          case "batch":
-            await apiPost("/api/blocks/batch", entry.data);
+          case "batch": {
+            if(restoreWaitsForDelete(entry)){failed++;continue;}
+            const result = await sendBatchRequest(entry);
+            applyBatchAcknowledgement(result, entry);
             break;
+          }
           case "undelete":
             await apiPost("/api/blocks/" + entry.id + "/undelete", {});
             break;
           case "reschedule": {
-            const result=await apiPost("/api/blocks/" + entry.id + "/reschedule", entry.data);
+            const previous = _rescheduleChains.get(entry.id) || Promise.resolve();
+            const request = previous.catch(() => {}).then(() => {
+              if (!walGet().some(e => e._walId === entry._walId)) return null;
+              return apiPost("/api/blocks/" + entry.id + "/reschedule", entry.data);
+            });
+            _rescheduleChains.set(entry.id, request);
+            let result;
+            try { result = await request; }
+            finally { if (_rescheduleChains.get(entry.id) === request) _rescheduleChains.delete(entry.id); }
+            if (!result) break;
             (result.blocks||[]).forEach(cacheSet);
             if(entry.data.placement?.kind==="unplanned" && window.DCC?.TimeBlocks && typeof isCollapsed==="function"){
               const key=window.DCC.TimeBlocks.collapseKey(entry.data.targetDate,window.DCC.TimeBlocks.UNPLANNED_BLOCK);
@@ -732,6 +800,11 @@
           // transiently (so undoDeleteTask keeps the optimistic restore), then the replay
           // gets a 409 because a live row holds the key. Put the row back where the server
           // has it, and say so, rather than letting the task silently vanish on next load.
+          if (restoreMetadata(entry)) {
+            for (const op of entry.data.operations || []) { _tombstones.add(op.id); cacheDelete(op.id); }
+            notifyRestore(entry, { ok: false, permanent: true, error: e.message });
+            setError("Task tree restore rejected — no partial restore was applied");
+          }
           if (entry.op === "undelete" && entry.id) {
             _tombstones.add(entry.id);
             cacheDelete(entry.id);
@@ -974,7 +1047,9 @@
             walReplaceData(walId, { properties, ...extra });
             block = await apiPatch("/api/blocks/" + id, { properties, ...extra });
           }
-          cacheSet(block); // Replace optimistic with server response
+          // A later direct edit may already own the optimistic properties. An
+          // older ack must not replace that edit while its request waits in line.
+          if (!walGet().some(entry => entry.op === "update" && entry.id === id && entry._walId !== walId)) cacheSet(block);
           walRemove(walId);
           _completionMetrics.acknowledged++;
           setSaved();
@@ -991,43 +1066,56 @@
     // The only client primitive for changing task completion. It sends an intent,
     // not a full properties document, and distinguishes acknowledged, pending, and
     // permanently failed states for callers.
-    setTaskCompletion(taskRef, completed, context) {
+    async setTaskCompletion(taskRef, completed, context) {
       context = { ...(context || {}) };
       const mutationId = context.mutationId || ((crypto && crypto.randomUUID)
         ? crypto.randomUUID() : ("cm-" + Date.now() + "-" + Math.random().toString(36).slice(2)));
-      return queueUpdateRequest(taskRef, async () => {
-        setSaving();
-        let existing = context.block || cacheGet(taskRef) || null;
-        // A rendered task can retain its row id while the cache is being refreshed.
-        // Fetch that row so the first request carries the real revision instead of
-        // manufacturing a conflict from a null base.
-        if (!existing && context.resolveRow !== false) {
-          try { existing = await apiGet("/api/blocks/" + encodeURIComponent(taskRef)); }
-          catch (e) { if (e && e.status !== 404) throw e; }
-        }
-        const completedAt = completed
-          ? (context.completedAt instanceof Date ? context.completedAt.toISOString() : (context.completedAt || new Date().toISOString()))
-          : null;
-        const body = {
-          completed: !!completed,
-          completedAt,
-          taskDate: context.taskDate || (existing && existing.date) || null,
-          mutationId,
-          expectedRevision: context.expectedRevision !== undefined
-            ? context.expectedRevision
-            : (existing && existing.properties ? (existing.properties._completionRevision || null) : null),
-        };
-        const optimistic = existing ? {
-          ...existing,
-          date: completed && !existing.date && body.taskDate ? body.taskDate : existing.date,
-          properties: applyCompletionState(existing.properties, !!completed, completedAt),
-          _completionState: "pending",
-          _completionMutationId: mutationId,
-          updated_at: new Date().toISOString(),
-        } : null;
-        const walId = walPush({ op: "completion", id: taskRef, data: body, meta: context.sideEffects || null });
-        if (optimistic) cacheSet(optimistic);
+      setSaving();
+      let existing = cacheGet(taskRef) || context.block || null;
+
+      const completedAt = completed
+        ? (context.completedAt instanceof Date ? context.completedAt.toISOString() : (context.completedAt || new Date().toISOString()))
+        : null;
+      const body = {
+        completed: !!completed,
+        completedAt,
+        taskDate: context.taskDate || (existing && existing.date) || null,
+        mutationId,
+        expectedRevision: context.expectedRevision !== undefined
+          ? context.expectedRevision
+          : (existing && existing.properties ? (existing.properties._completionRevision || null) : null),
+      };
+      const optimistic = existing ? {
+        ...existing,
+        date: completed && !existing.date && body.taskDate ? body.taskDate : existing.date,
+        properties: applyCompletionState(existing.properties, !!completed, completedAt),
+        _completionState: "pending",
+        _completionMutationId: mutationId,
+        updated_at: new Date().toISOString(),
+      } : null;
+      const predecessor = walPendingTaskCompletion(taskRef);
+      const predecessors = predecessor
+        ? [...(predecessor.meta?.predecessorMutationIds || []), predecessor.data.mutationId].slice(-100) : [];
+      const walId = walPush({ op: "completion", id: taskRef, data: body,
+        meta: { ...(context.sideEffects || {}), predecessorMutationIds: predecessors } });
+      if (!_completionBases.has(taskRef)) _completionBases.set(taskRef, existing);
+      if (optimistic) cacheSet(optimistic);
+      const write = queueUpdateRequest(taskRef, async () => {
+        // The intent is durable before waiting for an earlier click. Resolve its
+        // CAS revision at send time, after the preceding acknowledgement, while
+        // keeping the original mutation ID and timestamp for every retry.
         try {
+          existing = cacheGet(taskRef) || context.block || existing;
+          if (!existing && context.resolveRow !== false) {
+            try {
+              existing = await apiGet("/api/blocks/" + encodeURIComponent(taskRef));
+              _completionBases.set(taskRef, existing);
+            } catch (e) { if (e && e.status !== 404) throw e; }
+          }
+          if (context.expectedRevision === undefined) {
+            body.expectedRevision = existing?.properties?._completionRevision || null;
+            walReplaceData(walId, body);
+          }
           let result;
           try {
             result = await apiPost("/api/tasks/" + encodeURIComponent(taskRef) + "/completion", body);
@@ -1042,8 +1130,14 @@
             result = await apiPost("/api/tasks/" + encodeURIComponent(taskRef) + "/completion", body);
           }
           walRemove(walId);
-          (result.affectedTasks || []).forEach(cacheSet);
-          if (result.task && result.task.type !== "legacy_task") cacheSet(result.task);
+          (result.affectedTasks || []).forEach(row => {
+            if (_completionBases.has(row.id)) _completionBases.set(row.id, row);
+            cacheSet(row);
+          });
+          if (result.task && result.task.type !== "legacy_task") {
+            _completionBases.set(taskRef, result.task);
+            cacheSet(result.task);
+          }
           if (typeof window.notifyReadyTaskDependencies === "function") {
             window.notifyReadyTaskDependencies(result.dependencyTransitions || []);
           }
@@ -1063,8 +1157,14 @@
             _completionMetrics.rejected++;
             walMoveToDeadLetter(walGet().find(entry => entry && entry._walId === walId),
               `${error.status || "error"} ${error.message || ""}`.trim());
-            if (error.currentTask && error.currentTask.type !== "legacy_task") cacheSet(error.currentTask);
-            else if (existing) cacheSet(existing);
+            if (error.currentTask && error.currentTask.type !== "legacy_task") {
+              _completionBases.set(taskRef, error.currentTask);
+              cacheSet(error.currentTask);
+            }
+            else if (_completionBases.get(taskRef)) {
+              error.currentTask = _completionBases.get(taskRef);
+              cacheSet(error.currentTask);
+            }
             else cacheDelete(taskRef);
             setError((error.message || "Completion rejected") + (error.requestId ? " (request " + error.requestId + ")" : ""));
             throw error;
@@ -1073,6 +1173,9 @@
           setPending("Completion pending - will retry");
           return { ok: false, pending: true, mutationId, task: optimistic, error };
         }
+      });
+      return write.finally(() => {
+        if (!_updateChains.has(taskRef)) _completionBases.delete(taskRef);
       });
     },
 
@@ -1225,6 +1328,7 @@
     // real undo and leave the server disagreeing with the UI, silently. False means
     // "already gone, do it for real."
     cancelBufferedWrite(walId, ids) {
+      if (_replaying) return false;
       const pending = !!walId && walGet().some(e => e && e._walId === walId);
       if (!pending) return false;
       walRemove(walId);
@@ -1278,15 +1382,28 @@
     },
 
     // Atomic multi-block operation
-    async batchOp(operations) {
+    async restoreBlocks(ids, meta) {
+      const overlayWrite=meta.overlayBlockId&&_updateChains.get(meta.overlayBlockId);
+      if(overlayWrite)await overlayWrite.catch(()=>{});
+      return this.batchOp(ids.map(id => ({ op: "undelete", id, expectedDeleteMutationId: meta.deleteMutationId })), { restore: meta });
+    },
+
+    async batchOp(operations, meta) {
       setSaving();
       for (const op of operations) {
         if (op && op.op === "delete" && op.id) _tombstones.add(op.id);
       }
-      const walId = walPush({ op: "batch", data: { operations } });
+      const entry = { op: "batch", data: { operations }, ...(meta ? { meta } : {}) };
+      const walId = walPush(entry);
+      entry._walId=walId;
+      if(restoreWaitsForDelete(entry)){
+        setError("Task tree restore pending — waiting for deletion to settle");
+        return {blocks:[],ok:false,buffered:true,walId};
+      }
       try {
-        const result = await apiPost("/api/blocks/batch", { operations });
-        if (result.blocks) {
+        const result = await (restoreMetadata(entry)?sendBatchRequest(entry):apiPost("/api/blocks/batch", { operations }));
+        if (restoreMetadata(entry)) applyBatchAcknowledgement(result, entry);
+        else if (result.blocks) {
           for (const block of result.blocks) {
             if (!block || !block.id) continue;
             // A delete op's result is a bare { id, deleted_at } stub (db.deleteBlock),
@@ -1300,7 +1417,14 @@
         setSaved();
         return { ...result, ok: true, walId, buffered: false };
       } catch (e) {
-        setError("Batch save failed — buffered for retry");
+        if (restoreMetadata(entry) && isPermanentReplayFailure(entry, e)) {
+          walMoveToDeadLetter({ ...entry, _walId: walId }, `${e.status || "error"} ${e.message || ""}`.trim());
+          for (const op of operations) { _tombstones.add(op.id); cacheDelete(op.id); }
+          notifyRestore(entry, { ok: false, permanent: true, error: e.message });
+          setError("Task tree restore rejected — no partial restore was applied");
+          return { blocks: [], ok: false, permanent: true, buffered: false, walId, error: { message: e.message, status: e.status } };
+        }
+        setError(restoreMetadata(entry) ? "Task tree restore pending — will retry" : "Batch save failed — buffered for retry");
         // `buffered: true` says the write did NOT land and is still in the WAL. Callers
         // could not tell before: this returned the same empty-blocks shape either way,
         // so a caller that needed to know whether its write reached the server had to
@@ -1322,9 +1446,7 @@
     // of subtree size, one broadcast the origin client ignores (own clientId) — so
     // no snap-back, no duplication, no stranded children. The moved blocks now live
     // on targetDate, so evict them from the current-day cache.
-    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate, placement, userSetStart, reviewGuard } = {}) {
-      const previous = _rescheduleChains.get(blockId) || Promise.resolve();
-      const run = previous.catch(() => {}).then(async () => {
+    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate, placement, userSetStart, reviewGuard, onQueued } = {}) {
       setSaving();
       // fromDate: the viewed origin day, used by the server when the block row
       // itself is undated (task-bar pending_tasks) so the move can't 400.
@@ -1333,7 +1455,15 @@
       // and the flag is what makes the client cascade leave the start alone.
       const body = { targetDate, parentStart, parentEnd, fromDate, placement, userSetStart, ...(reviewGuard ? { reviewGuard } : {}) };
       // Confirmed review moves must never replay after leaving the preview.
-      const walId = reviewGuard ? null : walPush({ op: "reschedule", id: blockId, data: body });
+      let walId;
+      try { walId = reviewGuard ? null : walPush({ op: "reschedule", id: blockId, data: body }); }
+      catch (error) { error.permanent = true; throw error; }
+      // Only expose optimistic feedback once the intent survives a reload.
+      if (walId && typeof onQueued === "function") {
+        try { onQueued(); } catch (error) { console.warn("[BlockStore] Move preview failed", error); }
+      }
+      const previous = _rescheduleChains.get(blockId) || Promise.resolve();
+      const run = previous.catch(() => {}).then(async () => {
       try {
         let result;
         try {

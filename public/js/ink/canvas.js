@@ -37,9 +37,16 @@
     const onChange = opts.onChange || function () {};
 
     // `desynchronized` is a hint, not a guarantee, and Safari ignores it on some
-    // versions. Requesting it costs nothing where it is unsupported.
+    // versions. Keep the live layer synchronized: it is a drawImage source, and
+    // desynchronized buffers can expose stale pixels during rapid copy/clear.
     const baseCtx = base.getContext("2d", { desynchronized: true });
-    const liveCtx = live.getContext("2d", { desynchronized: true });
+    const liveCtx = live.getContext("2d");
+    // Finalized segments of the current pen stroke. Only its last segment can
+    // still change shape; keeping that tail separate avoids painting over stale
+    // endpoints and makes the live pixels match the durable vector rendering.
+    const prefix = document.createElement("canvas");
+    const prefixCtx = prefix.getContext("2d");
+    let finalized = 0;
 
     const state = {
       page: S.emptyPage(),
@@ -49,7 +56,11 @@
       eraserRadius: 12,
       scale: 1,
       penSeen: false,
+      fingerDraw: opts.fingerDraw || "auto",
+      style: null,
+      revision: 0,
       activePointer: null,
+      activePointerType: null,
       current: null,
       undo: [],
       redo: [],
@@ -68,7 +79,7 @@
       const dpr = Math.min(window.devicePixelRatio || 1, 3);
       const cssW = state.page.w * scale;
       const cssH = state.page.h * scale;
-      for (const c of [base, live]) {
+      for (const c of [base, live, prefix]) {
         c.style.width = `${cssW}px`;
         c.style.height = `${cssH}px`;
         c.width = Math.round(cssW * dpr);
@@ -79,7 +90,10 @@
       const k = scale * dpr;
       baseCtx.setTransform(k, 0, 0, k, 0, 0);
       liveCtx.setTransform(k, 0, 0, k, 0, 0);
+      prefixCtx.setTransform(k, 0, 0, k, 0, 0);
+      finalized = 0;
       redraw();
+      redrawLive();
     }
 
     function toPage(ev) {
@@ -101,42 +115,38 @@
 
     function redraw() {
       clear(baseCtx, base);
-      baseCtx.fillStyle = "#ffffff";
-      baseCtx.fillRect(0, 0, state.page.w, state.page.h);
-      for (const s of state.page.strokes) S.drawStroke(baseCtx, s, { scale: 1 });
+      S.drawPage(baseCtx, state.page, { scale: 1 });
     }
 
-    // Points of `state.current` already painted onto the live layer.
-    let liveDrawn = 0;
-
-    // The live layer holds exactly one stroke, and it only ever grows, so on a
-    // pointermove it appends the new segments instead of clearing and redrawing
-    // the stroke from point zero. Redrawing from zero is O(n^2) over a stroke
-    // and gets worse the longer you write without lifting the pen.
-    //
-    // Appending is exact only for an opaque tool. The highlighter multiplies at
-    // 0.32 alpha, so re-touching its last segment would darken that one segment;
-    // it keeps the full redraw, which is affordable because a highlight is
-    // short. Everything else composites source-over at full alpha, where
-    // redrawing the joining segment over itself is invisible.
-
-    // Clearing the live layer and forgetting what is painted on it must happen
-    // together, or a later append draws onto a canvas that no longer holds the
-    // segments it is joining to.
+    // A new stroke or layout invalidates both live pixels and the stable prefix.
     function clearLive() {
       clear(liveCtx, live);
-      liveDrawn = 0;
+      clear(prefixCtx, prefix);
+      finalized = 0;
     }
 
     function redrawLive(append) {
       const spec = state.current ? S.toolSpec(state.current.tool) : null;
-      const canAppend = !!(append && state.current && liveDrawn >= 2 && spec && spec.alpha >= 1);
-      if (!canAppend) clearLive();
+      if (!append) clearLive();
+      else clear(liveCtx, live);
       if (!state.current) return;
-      // Resume one segment back: the previous last segment ends at the midpoint
-      // toward the new point, so it has to be redrawn to meet the new ink.
-      S.drawStroke(liveCtx, state.current, { scale: 1, from: canAppend ? liveDrawn - 1 : 1 });
-      liveDrawn = S.pointCount(state.current);
+      const modern = S.modernHighlight(state.current);
+      live.style.opacity = modern ? spec.alpha : spec.graphite ? 0.7 : 1;
+      live.style.mixBlendMode = modern ? "multiply" : "normal";
+      const n = S.pointCount(state.current);
+      if ((spec.alpha >= 1 || S.modernHighlight(state.current)) && n >= 3) {
+        if (finalized < n - 2) {
+          S.drawStroke(prefixCtx, state.current, { scale: 1, from: finalized + 1, to: n - 1, mask: S.modernStroke(state.current) });
+          finalized = n - 2;
+        }
+        liveCtx.save();
+        liveCtx.setTransform(1, 0, 0, 1, 0, 0);
+        liveCtx.drawImage(prefix, 0, 0);
+        liveCtx.restore();
+        S.drawStroke(liveCtx, state.current, { scale: 1, from: n - 1, mask: S.modernStroke(state.current) });
+      } else {
+        S.drawStroke(liveCtx, state.current, { scale: 1, mask: S.modernStroke(state.current) });
+      }
     }
 
     // ── history ──────────────────────────────────────────────────────────────
@@ -153,6 +163,9 @@
       if (entry.type === "add") {
         const i = state.page.strokes.indexOf(entry.stroke);
         if (i >= 0) state.page.strokes.splice(i, 1);
+      } else if (entry.type === "paper") {
+        if (entry.before) state.page.paper = entry.before;
+        else delete state.page.paper;
       } else if (entry.type === "erase") {
         // Reinsert at the original indices, ascending, so z-order is restored
         // exactly rather than the erased strokes jumping to the top.
@@ -169,6 +182,7 @@
       const entry = state.redo.pop();
       if (!entry) return;
       if (entry.type === "add") state.page.strokes.push(entry.stroke);
+      else if (entry.type === "paper") state.page.paper = entry.after;
       else if (entry.type === "erase") {
         for (const item of entry.removed) {
           const i = state.page.strokes.indexOf(item.stroke);
@@ -182,6 +196,7 @@
 
     function changed() {
       state.dirty = true;
+      state.revision++;
       onChange(state.page);
     }
 
@@ -193,34 +208,75 @@
     function pointerDraws(ev) {
       if (ev.pointerType === "pen") return true;
       if (ev.pointerType === "mouse") return true;
-      return !state.penSeen;
+      return state.fingerDraw === "on" || (state.fingerDraw === "auto" && !state.penSeen);
     }
 
+    const touches = new Set();
+    let navigation = null;
+    let lastPen = -Infinity;
     function onDown(ev) {
-      if (ev.pointerType === "pen") state.penSeen = true;
-      if (!pointerDraws(ev)) return;
+      // Even rejected palm contacts must not start a native selection gesture.
+      ev.preventDefault();
+      if (ev.pointerType === "pen") {
+        state.penSeen = true;
+        lastPen = Date.now();
+        navigation = null;
+      }
+      if (ev.pointerType === "touch") {
+        touches.add(ev.pointerId);
+        if (touches.size > 1) {
+          navigation = null;
+          if (state.activePointerType === "touch") onCancel({ pointerId: state.activePointer });
+          return;
+        }
+      }
+      // A resting palm can arrive before the first Pencil event. Let the pen
+      // take over that provisional touch rather than waiting for the palm up.
+      if (ev.pointerType === "pen" && state.activePointerType === "touch") {
+        onCancel({ pointerId: state.activePointer });
+      }
+      if (!pointerDraws(ev)) {
+        // Paper uses explicit horizontal page swipes, not native touch scrolling.
+        // Delay after Pencil contact prevents a resting palm from turning pages.
+        if (ev.pointerType === "touch" && opts.onNavigate && state.activePointer === null && Date.now() - lastPen > 800) {
+          navigation = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, dx: 0, dy: 0, start: Date.now() };
+          try { base.setPointerCapture(ev.pointerId); } catch { navigation = null; }
+        }
+        return;
+      }
       if (state.activePointer !== null) return;
       // A pen's barrel button and an inverted stylus both mean erase.
       const erasing = state.tool === "eraser" || ev.button === 5 || ev.buttons === 32;
 
       state.activePointer = ev.pointerId;
-      base.setPointerCapture(ev.pointerId);
-      ev.preventDefault();
+      state.activePointerType = ev.pointerType;
+      try { base.setPointerCapture(ev.pointerId); }
+      catch {
+        state.activePointer = null;
+        state.activePointerType = null;
+        return;
+      }
 
       const p = toPage(ev);
       if (erasing) {
         state.current = null;
-        state.erasing = { removed: [] };
+        state.erasing = { removed: [], original: state.page.strokes.slice() };
         eraseAt(p.x, p.y);
       } else {
         state.erasing = null;
-        state.current = S.newStroke(state.tool, state.color, state.size);
+        state.current = S.newStroke(state.tool, state.color, state.size, state.style);
         S.addPoint(state.current, p.x, p.y, ev.pressure, 0);
         redrawLive();
       }
     }
 
     function onMove(ev) {
+      if (navigation && navigation.id === ev.pointerId) {
+        ev.preventDefault();
+        navigation.dx = ev.clientX - navigation.x;
+        navigation.dy = ev.clientY - navigation.y;
+        return;
+      }
       if (ev.pointerId !== state.activePointer) return;
       ev.preventDefault();
 
@@ -245,8 +301,20 @@
     }
 
     function onUp(ev) {
+      touches.delete(ev.pointerId);
+      if (navigation && navigation.id === ev.pointerId) {
+        const gesture = navigation;
+        navigation = null;
+        try { base.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
+        if (Math.abs(gesture.dx) > 80 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 2 && Date.now() - gesture.start < 1200 && Date.now() - lastPen > 800) {
+          opts.onNavigate(gesture.dx < 0 ? 1 : -1);
+        }
+        return;
+      }
       if (ev.pointerId !== state.activePointer) return;
+      if (state.activePointerType === "pen") lastPen = Date.now();
       state.activePointer = null;
+      state.activePointerType = null;
       try { base.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
 
       if (state.erasing) {
@@ -260,14 +328,21 @@
       if (!state.current) return;
       const stroke = state.current;
       state.current = null;
-      clearLive();
-      if (S.pointCount(stroke) === 0) return;
+      if (S.pointCount(stroke) === 0) { clearLive(); return; }
 
       state.page.strokes.push(stroke);
       pushUndo({ type: "add", stroke });
-      // Only the new stroke is painted onto the base layer. A full redraw here
-      // would stall for a moment on a dense page, right as you lift the pen.
-      S.drawStroke(baseCtx, stroke, { scale: 1 });
+      // The opaque ink is already rasterized. Replaying every pressure segment
+      // here blocks the next pointerdown, especially after a long Pencil stroke.
+      // Copy in device pixels, without applying the page transform a second time.
+      // Highlighter segments multiply individually, so keep their vector replay:
+      // flattening them first would change overlaps on existing colored ink.
+      if (S.toolSpec(stroke.tool).alpha >= 1 || S.modernHighlight(stroke)) {
+        S.compositeStroke(baseCtx, live, stroke);
+      } else {
+        S.drawStroke(baseCtx, stroke, { scale: 1 });
+      }
+      clearLive();
       changed();
     }
 
@@ -280,11 +355,24 @@
     }
 
     function onCancel(ev) {
+      touches.delete(ev.pointerId);
+      if (navigation && navigation.id === ev.pointerId) {
+        navigation = null;
+        try { base.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
+      }
       if (ev.pointerId !== state.activePointer) return;
       // A cancelled pointer (a system gesture, a call coming in) must not leave
       // half a stroke behind.
       state.activePointer = null;
+      state.activePointerType = null;
+      try { base.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
       state.current = null;
+      // Erasing updates the base immediately. Roll those provisional removals
+      // back if a palm is preempted or the browser cancels the gesture.
+      if (state.erasing && state.erasing.removed.length) {
+        state.page.strokes = state.erasing.original;
+        redraw();
+      }
       state.erasing = null;
       clearLive();
     }
@@ -293,14 +381,28 @@
     base.addEventListener("pointermove", onMove);
     base.addEventListener("pointerup", onUp);
     base.addEventListener("pointercancel", onCancel);
-    base.addEventListener("pointerleave", onUp);
+    // Leaving the canvas while captured is still the same stroke. An unexpected
+    // capture loss must finish it, however, or activePointer blocks the next one.
+    base.addEventListener("pointerleave", (ev) => {
+      if (!base.hasPointerCapture(ev.pointerId)) onUp(ev);
+    });
+    base.addEventListener("lostpointercapture", onUp);
     base.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    // Safari's native touch/selection recognizers are separate from pointer
+    // drawing. Cancel their defaults on the paper only, including ignored palms;
+    // do not draw from touch events (that would duplicate Pencil strokes).
+    const preventTouch = (ev) => { if (ev.cancelable) ev.preventDefault(); };
+    wrap.addEventListener("touchstart", preventTouch, { passive: false });
+    wrap.addEventListener("touchmove", preventTouch, { passive: false });
 
     let resizeTimer = null;
     const onResize = () => {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(layout, 120);
     };
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(onResize) : null;
+    if (resizeObserver) resizeObserver.observe(wrap);
     window.addEventListener("resize", onResize);
     window.addEventListener("orientationchange", onResize);
 
@@ -314,10 +416,26 @@
       redo,
       canUndo: () => state.undo.length > 0,
       canRedo: () => state.redo.length > 0,
-      setTool(tool) { state.tool = tool; },
+      setTool(tool) { if (state.activePointer === null) state.tool = tool; },
+      setStyle(style) { state.style = style ? { ...style } : null; },
+      setFingerDraw(value) { state.fingerDraw = value === "on" ? "on" : value === "auto" ? "auto" : "off"; },
+      // opts.history === false applies paper without an undo entry, for a
+      // page's initial state.
+      setPaper(paper, opts) {
+        if (state.activePointer !== null) return false;
+        const before = state.page.paper;
+        const after = S.normalizePaper(paper);
+        if (JSON.stringify(before) === JSON.stringify(after)) return false;
+        state.page.paper = after;
+        if (!(opts && opts.history === false)) pushUndo({ type: "paper", before, after });
+        redraw(); changed();
+        return true;
+      },
       setColor(color) { state.color = color; },
       setSize(size) { state.size = Number(size) || 2.6; },
-      getPage: () => state.page,
+      // A pending save from the previous stroke may fire during erasing. Only
+      // expose committed ink, so a cancelled palm cannot persist deletions.
+      getPage: () => state.erasing ? { ...state.page, strokes: state.erasing.original } : state.page,
       // True while a stroke is actually under the pen. Sync asks this before
       // taking the main thread for a full-page render, so a background upload
       // can never stall the stroke someone is in the middle of drawing.
@@ -341,10 +459,14 @@
         c.width = Math.round(state.page.w * scale);
         c.height = Math.round(state.page.h * scale);
         const ctx = c.getContext("2d");
-        S.drawPage(ctx, state.page, { scale, background: "#ffffff" });
+        S.drawPage(ctx, state.page, { scale });
         return c;
       },
       destroy() {
+        clearTimeout(resizeTimer);
+        if (resizeObserver) resizeObserver.disconnect();
+        wrap.removeEventListener("touchstart", preventTouch);
+        wrap.removeEventListener("touchmove", preventTouch);
         window.removeEventListener("resize", onResize);
         window.removeEventListener("orientationchange", onResize);
       },

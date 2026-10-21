@@ -88,3 +88,20 @@ test("_shellAlreadyOnDay dedupes any live responsibility occurrence", () => {
   context.scheduled[0].deleted = true;
   assert.equal(context._shellAlreadyOnDay("r1"), false);
 });
+
+for(const visibility of ['private','public'])test(`template children persist ${visibility} through real task creators`,()=>{
+ const writes=[],options=[],context={console,scheduled:[{id:'root',start:'06:25',type:'task',publicVisibility:visibility}],viewDate:'2026-10-13',render(){},_recollectCarryover(){},window:{DCC:require('./public/js/task-serialize'),blockStore:{createBlock(type,properties,placement){writes.push({properties,placement});return Promise.resolve({id:'row-'+writes.length});}}}};
+ context.taskAnchorById=id=>{const ev=context.scheduled.find(x=>x.id===id);return ev?{ev,date:'2026-10-13'}:null;};
+ context.insertTaskNow=(title,duration,opts)=>{options.push(opts);const task=Object.assign({id:'direct',title,start:'06:25',type:'task'},context.schedulePickerFields(duration,opts));context.scheduled.push(task);context.persistAddedTask(task);return task;};
+ context.window.USE_BLOCKSTORE={addedTasks:true};context.dur=()=>30;context.ms=n=>n+'m';
+ vm.createContext(context);installTaskModel(context);
+ for(const name of ['schedulePickerFields','persistAddedTask'])vm.runInContext(src.match(new RegExp('function '+name+'[\\s\\S]*?\\n}'))[0],context);
+ const tabs=fs.readFileSync(require.resolve('./public/js/tabs.js'),'utf8');
+ for(const name of ['addSubtask','addStackedTask'])vm.runInContext(tabs.match(new RegExp('function '+name+'[\\s\\S]*?\\n}'))[0],context);
+ vm.runInContext(attachSrc,context);
+ context.attachTemplateChildren('root',[{title:'Direct task',children:[{title:'Nested step',edge:'subtask',children:[{title:'Nested ride',edge:'wrap'}]}]}],true,visibility);
+ assert.equal(options[0].publicVisibility,visibility);assert.equal(writes.length,3);
+ for(const row of writes){assert.equal(row.properties.publicVisibility,visibility);assert.equal(row.placement.date,'2026-10-13');}
+ const child=context.addSubtask('future-parent','Future step',{date:'2026-10-16',parentStart:'06:25',publicVisibility:visibility});
+ assert.equal(child.publicVisibility,visibility);assert.equal(writes[3].properties.publicVisibility,visibility);assert.equal(writes[3].placement.date,'2026-10-16');assert.equal(writes[3].properties.start,'06:25');
+});

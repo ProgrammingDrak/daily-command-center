@@ -7,6 +7,7 @@ const fsp = require("fs/promises");
 const crypto = require("crypto");
 const multer = require("multer");
 const matter = require("gray-matter");
+const InkStrokes = require("../public/js/ink/strokes.js");
 
 // The shared vault parser (.mycelium/lib/parse.js) is the ONE source of truth
 // for the wikilink regex + tag color math (Track A owns it; B/C/D require it,
@@ -335,13 +336,24 @@ function validateNotebookInk(buffer) {
       || !Array.isArray(page.strokes)) {
     throw new Error("ink must match the version 1 stroke format");
   }
+  if (page.paper != null && (!page.paper || typeof page.paper !== "object"
+      || !InkStrokes.PAPERS.some(p => p.id === page.paper.type)
+      || !Object.prototype.hasOwnProperty.call(InkStrokes.TINTS, page.paper.tint)
+      || !Number.isFinite(page.paper.spacing) || page.paper.spacing < InkStrokes.PAPER_SPACING.min || page.paper.spacing > InkStrokes.PAPER_SPACING.max
+      || typeof page.paper.margin !== "boolean")) {
+    throw new Error("ink contains invalid paper settings");
+  }
   let points = 0;
   for (const stroke of page.strokes) {
-    if (!stroke || !["pen", "highlighter"].includes(stroke.tool)
+    if (!stroke || !Object.prototype.hasOwnProperty.call(InkStrokes.TOOLS, stroke.tool)
         || !/^#[0-9a-f]{3,8}$/i.test(String(stroke.color || ""))
         || !Number.isFinite(stroke.size) || stroke.size <= 0 || stroke.size > 200
         || !Array.isArray(stroke.pts) || stroke.pts.length < 3 || stroke.pts.length % 3 !== 0) {
       throw new Error("ink contains an invalid stroke");
+    }
+    if (stroke.style != null && (!stroke.style || stroke.style.v !== 2
+        || !Number.isFinite(stroke.style.angle) || stroke.style.angle < InkStrokes.NIB_ANGLE.min || stroke.style.angle > InkStrokes.NIB_ANGLE.max)) {
+      throw new Error("ink contains invalid nib settings");
     }
     points += stroke.pts.length / 3;
     if (points > NOTEBOOK_INK_MAX_POINTS) throw new Error("ink contains too many points");

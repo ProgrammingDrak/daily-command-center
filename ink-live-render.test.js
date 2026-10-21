@@ -110,16 +110,16 @@ test("the live layer appends, and only for opaque tools", () => {
   // The highlighter multiplies at 0.32 alpha, so re-touching its joining
   // segment would darken that one segment. It keeps the full redraw.
   assert.match(CANVAS, /spec\.alpha >= 1/);
-  assert.match(CANVAS, /from: canAppend \? liveDrawn - 1 : 1/);
+  assert.match(CANVAS, /from: finalized \+ 1, to: n - 1/);
   assert.match(CANVAS, /if \(added\) redrawLive\(true\)/);
 });
 
-test("clearing the live layer and forgetting its contents happen together", () => {
-  // A bare clear that left liveDrawn stale would append onto a canvas that no
-  // longer holds the segments being joined to.
-  assert.match(CANVAS, /function clearLive\(\) \{\s*\n\s*clear\(liveCtx, live\);\s*\n\s*liveDrawn = 0;/);
-  const strayClears = CANVAS.split("\n").filter(
-    (l) => l.includes("clear(liveCtx, live)") && !l.includes("function"),
-  );
-  assert.strictEqual(strayClears.length, 1, "every live clear must go through clearLive()");
+test("finalized prefix plus provisional tail emits exactly a canonical stroke", () => {
+  for (const n of [3, 4, 40, 1000]) {
+    const st = strokeOf(n);
+    const prefix = draw(st, { scale: 1, to: n - 1 });
+    const tail = draw(st, { scale: 1, from: n - 1 });
+    assert.deepStrictEqual([...prefix, ...tail], draw(st, { scale: 1 }));
+    assert.deepStrictEqual(draw(st, { scale: 1, to: 1 }), []);
+  }
 });

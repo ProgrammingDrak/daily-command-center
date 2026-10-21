@@ -254,24 +254,22 @@ function insertTaskFromDrawer(title, durMin, opts){
 // and its kind is never "responsibility_task" (which the itinerary fold in
 // persistence.js rejects). Recurses into nested children. The shell root is
 // created by materializeShellTemplate, which then calls this in its onScheduled.
-function attachTemplateChildren(parentLocalId,children,promoteDirect){
+function attachTemplateChildren(parentLocalId,children,promoteDirect,publicVisibility){
   if(!parentLocalId||!Array.isArray(children))return;
-  children.forEach(function(node){
-    if(!node||!node.title)return;
-    var created=null;
-    if(promoteDirect){
-      var directDur=Math.max(1,Number(node.durationMin)||30);
-      if(typeof insertTaskNow==="function")created=insertTaskNow(node.title,directDur,{priority:node.priority||"Medium",type:"task",detail:node.detail||""});
+  const seen=new Set(),stack=children.slice().reverse().map(node=>({parentLocalId,node,promoteDirect}));
+  while(stack.length){
+    const entry=stack.pop(),node=entry.node;
+    if(!node||!node.title||seen.has(node))continue;seen.add(node);
+    let created=null;
+    if(entry.promoteDirect){
+      if(typeof insertTaskNow==="function")created=insertTaskNow(node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:"task",detail:node.detail||"",publicVisibility:publicVisibility||"public"});
     }else if(node.edge==="subtask"){
-      if(typeof addSubtask==="function")created=addSubtask(parentLocalId,node.title);
-    }else{
-      var d=Math.max(1,Number(node.durationMin)||30);
-      if(typeof addStackedTask==="function")created=addStackedTask(parentLocalId,node.title,d,{priority:node.priority||"Medium",type:node.type||"task",detail:node.detail||""});
+      if(typeof addSubtask==="function")created=addSubtask(entry.parentLocalId,node.title,{publicVisibility:publicVisibility||"public"});
+    }else if(typeof addStackedTask==="function")created=addStackedTask(entry.parentLocalId,node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:node.type||"task",detail:node.detail||"",publicVisibility:publicVisibility||"public"});
+    if(created&&created.id&&Array.isArray(node.children)){
+      for(let i=node.children.length-1;i>=0;i--)stack.push({parentLocalId:created.id,node:node.children[i],promoteDirect:false});
     }
-    if(created&&created.id&&Array.isArray(node.children)&&node.children.length){
-      attachTemplateChildren(created.id,node.children,false);
-    }
-  });
+  }
 }
 window.attachTemplateChildren=attachTemplateChildren;
 
@@ -299,6 +297,7 @@ function materializeShellTemplate(templateTree,opts){
   insertTaskNow(root.title,0,{
     type:"task",
     retiredContainerHidden:true,
+    publicVisibility:opts.publicVisibility||"public",
     occurrenceAnchor:true,
     point_multiplier:0,
     responsibilityId:opts.responsibilityId||null,
@@ -313,7 +312,7 @@ function materializeShellTemplate(templateTree,opts){
     idempotencyKey:opts.responsibilityId?("resp-shell:"+opts.responsibilityId+":"+curDate):null,
     onScheduled:function(info){
       rootId=info&&info.localId;
-      if(rootId)attachTemplateChildren(rootId,root.children||[],true);
+      if(rootId)attachTemplateChildren(rootId,root.children||[],true,opts.publicVisibility);
       if(typeof opts.onScheduled==="function"){try{opts.onScheduled(info);}catch(e){}}
     }
   });
@@ -516,6 +515,15 @@ async function commitDoneOnDate(id,dateStr,opts){
   opts=opts||{};
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   const ev=((typeof scheduled!=="undefined"&&scheduled.find(e=>e.id===id))||opts.ev||null);
+  const waiting=window.DCC&&window.DCC.Waiting;
+  if(waiting&&typeof waiting.completeCheckInTask==="function"){
+    const checkIn=waiting.completeCheckInTask(ev);
+    if(checkIn!==null)return await checkIn;
+  }
+  const intents=window.__DCC_COMPLETION_UI_INTENTS__||(window.__DCC_COMPLETION_UI_INTENTS__=new Map());
+  const intent=(intents.get(id)||0)+1;intents.set(id,intent);
+  const rollbacks=window.__DCC_COMPLETION_ROLLBACKS__||(window.__DCC_COMPLETION_ROLLBACKS__=new Map());
+  const settled=window.__DCC_COMPLETION_SETTLED__||(window.__DCC_COMPLETION_SETTLED__=new Map());
   const completedAt=new Date();
   const completedIso=completedAt.toISOString();
   const award=opts.awardPoints!==undefined?opts.awardPoints:_pointAwardOverride(id);
@@ -528,6 +536,9 @@ async function commitDoneOnDate(id,dateStr,opts){
   }
   try{
     const result=await _persistDone(id,true,{ev:ev,dateStr:dateStr,completedAt:completedIso});
+    if(!(result&&result.pending))rollbacks.delete(id); // server accepted the subtree
+    if(intents.get(id)!==intent)return result;
+    if(!(result&&result.pending))settled.set(id,intent);
     if(result&&result.pending){
       if(typeof showToast==="function")showToast("Completion queued and will retry","info",3200);
       return result;
@@ -548,9 +559,18 @@ async function commitDoneOnDate(id,dateStr,opts){
     }
     return result;
   }catch(error){
+    if(intents.get(id)!==intent){
+      // Keep the original child snapshots for the newer intent's eventual verdict.
+      // A stale failure must neither repaint it now nor strand children if all
+      // queued attempts are later rejected.
+      if(settled.get(id)!==intents.get(id))rollbacks.set(id,[...(rollbacks.get(id)||[]),...optimisticSubtasks]);
+      return false;
+    }
+    settled.set(id,intent);
     if(currentDate===dateStr){
       manualDone.delete(id);delete doneAt[id];
-      _rollbackOptimisticSubtasks(optimisticSubtasks);
+      _rollbackOptimisticSubtasks([...(rollbacks.get(id)||[]),...optimisticSubtasks]);
+      rollbacks.delete(id);
       render();
     }
     if(typeof showToast==="function")showToast(error.message||"Completion was not saved","error",4200);
@@ -694,24 +714,18 @@ function _optimisticallyCompleteSubtasks(id,completedAt){
   const changed=[];
   if(typeof scheduled==="undefined")return changed;
   const at=(completedAt instanceof Date)?completedAt:new Date(completedAt||Date.now());
-  (function completeSubs(pid){
-    DCC.TaskModel.subtasksOf(pid,scheduled).forEach(c=>{
-      if(!manualDone.has(c.id)){
-        changed.push({
-          id:c.id,
-          hadDoneAt:Object.prototype.hasOwnProperty.call(doneAt,c.id),
-          doneAt:doneAt[c.id]
-        });
-        manualDone.add(c.id);doneAt[c.id]=at;
-      }
-      completeSubs(c.id);
-    });
-  })(id);
+  DCC.TaskModel.descendantsOf(id,scheduled,{edge:"subtask"}).forEach(c=>{
+    if(!manualDone.has(c.id)){
+      changed.push({id:c.id,optimisticAt:at,hadDoneAt:Object.prototype.hasOwnProperty.call(doneAt,c.id),doneAt:doneAt[c.id]});
+      manualDone.add(c.id);doneAt[c.id]=at;
+    }
+  });
   return changed;
 }
 function _rollbackOptimisticSubtasks(changed){
   if(!Array.isArray(changed))return;
   changed.forEach(entry=>{
+    if(entry.optimisticAt&&doneAt[entry.id]!==entry.optimisticAt)return;
     manualDone.delete(entry.id);
     if(entry.hadDoneAt)doneAt[entry.id]=entry.doneAt;
     else delete doneAt[entry.id];
@@ -736,7 +750,8 @@ function _onParentCompleted(id){
     return;
   }
   let promoted=0;
-  DCC.TaskModel.selectOpen(DCC.TaskModel.ridersOf(id,scheduled)).forEach(c=>{
+  const completedParents=new Set([id].concat(DCC.TaskModel.descendantsOf(id,scheduled,{edge:"subtask"}).map(c=>c.id)));
+  DCC.TaskModel.selectOpen(DCC.TaskModel.selectNotDeleted(scheduled).filter(c=>c.wrapId&&completedParents.has(c.wrapId))).forEach(c=>{
     c.wrapId=null;
     if(typeof _clearPin==="function")_clearPin(c);
     if(typeof _persistEvWrap==="function")_persistEvWrap(c);
@@ -933,6 +948,10 @@ if(typeof window!=="undefined"&&typeof window.addEventListener==="function"){
 function toggleDone(id,opts){
   opts=opts||{};
   if(manualDone.has(id)){
+    const intents=window.__DCC_COMPLETION_UI_INTENTS__||(window.__DCC_COMPLETION_UI_INTENTS__=new Map());
+    const intent=(intents.get(id)||0)+1;intents.set(id,intent);
+    const rollbacks=window.__DCC_COMPLETION_ROLLBACKS__||(window.__DCC_COMPLETION_ROLLBACKS__=new Map());
+    const settled=window.__DCC_COMPLETION_SETTLED__||(window.__DCC_COMPLETION_SETTLED__=new Map());
     manualDone.delete(id);delete doneAt[id];log("unchecked",id);
     // Clears the row AND any legacy `_done` entry for this id — see `_persistDone`.
     // Either half left set re-hydrates the completion on the next load and the row snaps
@@ -947,13 +966,29 @@ function toggleDone(id,opts){
     const _reopen=_clearRowDone(id,{ev:_uev,dateStr:(typeof _viewedDateStr==="function")?_viewedDateStr():null});
     render();
     Promise.resolve(_reopen).then(result=>{
+      if(intents.get(id)!==intent)return;
       if(result&&result.pending){if(typeof showToast==="function")showToast("Reopen queued and will retry","info",3200);return;}
+      settled.set(id,intent);
+      _rollbackOptimisticSubtasks(rollbacks.get(id)||[]);rollbacks.delete(id);
+      render();
       _refreshResponsibilityAfterDone(_uev,Promise.resolve(result));
     }).catch(error=>{
-      manualDone.add(id);doneAt[id]=new Date();render();
+      if(intents.get(id)!==intent)return;
+      settled.set(id,intent);
+      _rollbackOptimisticSubtasks(rollbacks.get(id)||[]);rollbacks.delete(id);
+      const current=error.currentTask&&error.currentTask.properties;
+      if(current&&current.status!=="done"&&!current.done&&!current.completed){manualDone.delete(id);delete doneAt[id];}
+      else {manualDone.add(id);doneAt[id]=new Date();}
+      render();
       if(typeof showToast==="function")showToast(error.message||"Reopen was not saved","error",4200);
     });
     return;
+  }
+
+  const waitingCompletion=window.DCC&&window.DCC.Waiting;
+  if(waitingCompletion&&typeof waitingCompletion.completeCheckInTask==="function"){
+    const checkIn=waitingCompletion.completeCheckInTask(scheduled.find(e=>e.id===id)||opts.ev||null);
+    if(checkIn!==null)return checkIn;
   }
 
   // A rollup container (shell) can't be checked while children are open — its
@@ -1261,8 +1296,9 @@ function _pruneOverlayMap(key,keep){
 
 function pinStartTime(id,timeStr){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
-  const s=pt(timeStr),d=dur(ev);
+  const oldStart=pt(ev.start),s=pt(timeStr),d=dur(ev);
   ev.start=timeStr;ev.end=fmt(s+d);
+  if(typeof _shiftWrapChildren==="function")_shiftWrapChildren(ev,oldStart);
   // Meetings hold their slot via fixedTime (isFixedTimeBlock), not the pin map —
   // recording a pin for them is meaningless and would clutter it. Every other
   // task pins so recalcTimes() won't overwrite the chosen start.
@@ -1547,10 +1583,28 @@ function addWheneverTask(title,durMin){
 // ======== UNIVERSAL TASK ADD BAR ========
 function addTaskUniversal(barEl){
   const inp=barEl.querySelector(".tab-title");
-  const title=inp.value.trim();
-  if(!title){_flashBlankTitle(barEl,()=>addTaskUniversal(barEl));return}
-  const durMin=parseInt(barEl.querySelector(".tab-dur").value)||30;
   const dest=barEl.querySelector(".tab-dest").value;
+  const activityType=dest==="workout"||dest==="meal";
+  const title=inp.value.trim()||(activityType?(dest==="workout"?"Workout":"Meal"):"");
+  if(!title){_flashBlankTitle(barEl,()=>addTaskUniversal(barEl));return false}
+  const durMin=parseInt(barEl.querySelector(".tab-dur").value)||30;
+  // Activity creation is a deferred save. Keep the composer draft until the
+  // owner commits; close it before opening the private dialog to release inert.
+  if(activityType){
+    const activity=window.DCC&&window.DCC.Activity;
+    if(!activity||typeof activity.create!=="function"){
+      if(typeof showToast==="function")showToast("Workout and meal logging is still loading. Try again in a moment.","info");
+      return false;
+    }
+    if(typeof Event==="function"&&typeof barEl.dispatchEvent==="function")barEl.dispatchEvent(new Event("dcc:launcher-handoff"));
+    const draftTitle=inp.value, duration=barEl.querySelector(".tab-dur"), draftDuration=duration.value;
+    activity.create(dest,null,title,{durationMinutes:durMin,onCreated:()=>{
+      const select=barEl.querySelector(".tab-dest");
+      if(!select||inp.value!==draftTitle||select.value!==dest||duration.value!==draftDuration)return;
+      inp.value="";select.value="urgent";
+    }});
+    return false;
+  }
   // "Schedule…" defers the clear to commit time so dismissing the popover
   // doesn't eat the typed title; every other destination commits right here.
   if(dest!=="schedule")inp.value="";
@@ -1585,9 +1639,6 @@ function addTaskUniversal(barEl){
     // ride along. insertTaskNow flags it isWrap from birth (dragMovesSubtree).
     // Habit: recurring earn; the row grows a streak chip from prior completions.
     case"habit":insertTaskNow(title,durMin,{type:"habit"});break;
-    case"workout":case"meal":
-      if(window.DCC&&DCC.Activity)DCC.Activity.create(dest,null,title);
-      break;
     // Manually-added meeting: no source_id, so the calendar materializer never
     // touches it. Fixed-time (reflow-exempt) but user-movable, like a synced one.
     case"meeting":insertTaskNow(title,durMin,{type:"meeting"});break;
@@ -1926,6 +1977,7 @@ function schedulePickerFields(durMin,options){
   const common=window.DCC.taskCommonProps(options,{meta:options.meta||("Custom task · "+ms(durMin))});
   delete common.title;
   return Object.assign(common,{
+    publicVisibility:options.activityPlanSourceId?"private":options.publicVisibility||"public",
     responsibilityId:options.responsibilityId||null,
     responsibilityTitle:options.responsibilityTitle||null,
     capacityBucket:options.capacityBucket||null,
@@ -2267,8 +2319,8 @@ function initDestRadial(bar){
       _hideDestPreview();
       closeRadialMenu();
       const title=inp?inp.value.trim():"";
-      if(!title){_flashBlankTitle(bar,submitLauncher);return}
-      addTaskUniversal(bar);
+      if(!title&&!['workout','meal'].includes(sel.value)){_flashBlankTitle(bar,submitLauncher);return}
+      if(addTaskUniversal(bar)===false)return;
       if(typeof Event==="function"&&typeof bar.dispatchEvent==="function"){
         bar.dispatchEvent(new Event("dcc:launcher-submit-success"));
       }

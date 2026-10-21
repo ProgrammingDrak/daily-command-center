@@ -514,7 +514,7 @@ function openAddModal(taskId, taskTitle) {
       }catch(error){if(_addModalTaskId===activeTaskId)status.textContent=error.message;}
       finally{button.disabled=false;}
     };
-    document.getElementById('am-source-status').textContent='Attach stable links to originals. Private files open at their provider. File uploads are not configured.';
+    document.getElementById('am-source-status').textContent='Attach stable links to originals. Private links open at their provider. Use private file controls for uploads.';
   }
 
   // Load notes into block editor
@@ -522,7 +522,8 @@ function openAddModal(taskId, taskTitle) {
   var noteVal = notes[taskId];
   var initialBlocks=typeof noteBlocksForTask === 'function' ? noteBlocksForTask(taskId, noteVal, taskEntry) : null;
   if(window._amBlockEditor) window._amBlockEditor.destroy();
-  window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks, { accessibleLabel: 'Task notes', stableImagesOnly: true, onAttachmentError: function(message){ document.getElementById('am-source-status').textContent=message; } });
+  var taskFileControls=window.DCC.TaskAttachments.mount(document.getElementById('am-notes-block-editor'),_addModalBlockId);
+  window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks, { onAttachmentFile: function(file){taskFileControls.add(file);}, accessibleLabel: 'Task notes', stableImagesOnly: true, onAttachmentError: function(message){ document.getElementById('am-source-status').textContent=message; } });
   _addModalNotesSnapshot = _addModalNotesFingerprint();
 
   // Render combined items list
@@ -1169,6 +1170,8 @@ function _snInitialBlocks(n){
 
 function _snEditorIsEmpty(editor){
   if(!editor) return true;
+  // Preserve attachment-only notes, including retained removals and unknown loading state.
+  if(editor.hasAttachments && editor.hasAttachments())return false;
   if(editor.isEmpty()) return true;
   return !editor.toMarkdown().trim();
 }
@@ -1260,7 +1263,8 @@ function renderStickyNotesList(){
     // Mount the shared block editor inside the card body so each card behaves
     // exactly like the notes editor in the done modal / notes drawer / add modal.
     const mount=card.querySelector('[data-sn-mount]');
-    const editor=createBlockEditor(mount, _snInitialBlocks(n));
+    const files=window.DCC.TaskAttachments.mount(mount,n._blockId,{kind:'note'});
+    const editor=createBlockEditor(mount, _snInitialBlocks(n),{accessibleLabel:'Quick note',stableImagesOnly:true,onAttachmentFile:file=>files.add(file)});
     _snEditors.set(n.id, editor);
     _snLastSig.set(n.id, editor.toHtml());
 

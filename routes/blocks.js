@@ -1,3 +1,4 @@
+const { slackTarget } = require("../lib/slack-status");
 // Extracted from server.js — mounted via routes/index pattern: module.exports(app, ctx).
 // ctx carries shared server-scope helpers/stores; see server.js where ctx is built.
 //
@@ -217,6 +218,7 @@ module.exports = function mount(app, ctx) {
         : (properties.dependencyWaitingItemId ? [String(properties.dependencyWaitingItemId)] : []);
       const next = waitingId ? [...new Set(current.concat(String(waitingId)))] : [];
       if (next.length) {
+        if (slackTarget(properties)) properties.slackWaitingManaged = true;
         properties.dependencyWaitingItemIds = next;
         properties.dependencyWaitingItemId = next[0];
       } else {
@@ -309,8 +311,8 @@ module.exports = function mount(app, ctx) {
   }
 
   // ── Waiting cluster cascade ──
-  // Completing any one of {the delegated task, its Waiting item, its check-in reminders}
-  // closes the other two. Before this, each route closed only what it was pointed at:
+  // Completing the delegated task or Waiting item closes its cluster.
+  // Completing a check-in reminder only records that occurrence. Before this, each route closed only what it was pointed at:
   // the Waiting card's Complete button took the item and its linked task, and NOTHING
   // took the reminders, so a finished delegation kept nagging from the itinerary.
   //
@@ -327,6 +329,7 @@ module.exports = function mount(app, ctx) {
   // this by mistake" is a much more common reopen than "the whole delegation is live
   // again", and guessing wrong there resurrects work Drake had legitimately closed.
   async function cascadeWaitingCompletion({ req, trigger, itemId: knownItemId, completedAt, userId: knownUserId, workspaceId: knownWorkspaceId }) {
+    if (waitingCascade.roleOf(trigger) === "reminder") return { blockIds: [] };
     const atMs = Number.isFinite(Date.parse(completedAt)) ? Date.parse(completedAt) : Date.now();
     const at = new Date(atMs).toISOString();
     const blockIds = [];
@@ -1281,6 +1284,14 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks/batch", route(async (req, res) => {
     const { operations, _clientId } = req.body;
     if (!Array.isArray(operations)) { res.status(400).json({ error: "operations must be an array" }); return; }
+    for (const op of operations) {
+      if (op?.op === "undelete" && (typeof op.expectedDeleteMutationId !== "string" || !op.expectedDeleteMutationId || op.expectedDeleteMutationId.length > 128)) {
+        res.status(400).json({ error: "Atomic restore requires its original deletion token" }); return;
+      }
+      if (op?.deleteMutationId != null && (typeof op.deleteMutationId !== "string" || !op.deleteMutationId || op.deleteMutationId.length > 128)) {
+        res.status(400).json({ error: "Invalid deletion token" }); return;
+      }
+    }
     const batchCompletion = operations.some(op => op && op.op === "update" && op.completionIntent);
     if (batchCompletion) {
       res.status(409).json({
@@ -1299,8 +1310,12 @@ module.exports = function mount(app, ctx) {
         res.status(409).json({ error: "Mutate task dependencies through the Waiting API" });
         return;
       }
-      if ((op.op === "update" || op.op === "delete") && op.id) {
+      if ((op.op === "update" || op.op === "delete" || op.op === "undelete") && op.id) {
         const target = await blockDB.getBlockIncludingDeleted(op.id);
+        if (op.op === "undelete" && !target) { res.status(404).json({ error: "Block not found" }); return; }
+        if (op.op === "undelete" && target?.properties?.kind === "delegated_item" && Array.isArray(target.properties.slackDelegateClusterIds)) {
+          res.status(409).json({ error: "Restore Waiting clusters through the Waiting API" }); return;
+        }
         if (target && waitingItems.isTaskDependency(target)) {
           res.status(409).json({ error: "Mutate task dependencies through the Waiting API" });
           return;
@@ -1490,7 +1505,7 @@ module.exports = function mount(app, ctx) {
       };
       const blocks = [];
       for (let i = 0; i < ops.length; i++) { const row = rowAt(i); if (row !== undefined) blocks.push(row); }
-      return { batchId: raw.batchId, blocks };
+      return { batchId: raw.batchId, blocks, restoredDayRoots: raw.restoredDayRoots || [] };
     }
 
     let result;
@@ -1523,7 +1538,13 @@ module.exports = function mount(app, ctx) {
     // whole subtree as one batch), so it is not the rare branch it looks like.
     for (const block of deletedBlocks) await settleLinkedMeetingAction(block, "dropped", Date.now());
 
-    broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b && (b.id || b.reordered)).filter(Boolean).concat(dependencyBroadcastIds), clientId: _clientId }, req.workspaceId);
+    const restoreIds = new Set(operations.filter(op => op?.op === "undelete").map(op => op.id));
+    const restored = result.blocks.filter(block => block && restoreIds.has(block.id));
+    for (const block of restored) {
+      if (!isCompleted(block)) await transitionLinkedTriage(block, "scheduled", Date.now());
+      await settleLinkedMeetingAction(block, "restored", Date.now());
+    }
+    broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b && (b.id || b.reordered)).filter(Boolean).concat(dependencyBroadcastIds, (result.restoredDayRoots || []).map(b => b.id)), undeletedIds: restored.map(b => b.id), clientId: _clientId }, req.workspaceId);
     for (const block of deletedBlocks) await syncSlack({ ...block, deleted_at: new Date().toISOString() });
     for (const block of result.blocks || []) if (block && block.id && !block.deleted_at) await syncSlack(block);
     return result;
@@ -1689,7 +1710,7 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks/:id/reschedule", async (req, res) => {
     try {
       const { targetDate, parentStart, parentEnd, placement, userSetStart, _clientId } = req.body || {};
-      if (placement && ["whenever", "whenever_schedule", "pool_schedule"].includes(placement.kind)) {
+      if (placement && ["whenever", "whenever_schedule", "pool_schedule", "pool_date"].includes(placement.kind)) {
         if (req.body.reviewGuard) return res.status(400).json({error:"Review placements cannot move to Whenever"});
         if (placement.kind !== "whenever" && !isValidDate(targetDate)) return res.status(400).json({error:"Invalid targetDate"});
         const parent = await blockDB.getBlockIncludingDeleted(req.params.id);
@@ -2607,6 +2628,8 @@ module.exports = function mount(app, ctx) {
         props.linkedBlockId = task.id;
         props.myTask = String((task.properties || {}).title || props.myTask).slice(0, 300);
         props.parksLinkedTask = true;
+        const target = slackTarget(task.properties);
+        if (target) { props.slack_channel = target.channel; props.slack_ts = target.ts; }
         created = await blockDB.createBlock({
           type: "block", parent_id: null, date: null, properties: props, sort_order: 0,
           user_id: userId, workspace_id: workspaceId,
@@ -2619,6 +2642,8 @@ module.exports = function mount(app, ctx) {
       } finally {
         client.release();
       }
+      await syncSlack(created);
+      for (const id of affected) await syncSlack(id);
       broadcast("blocks-changed", { action: "waiting-task-converted", blockIds: [created.id].concat(affected) }, workspaceId);
       return created;
     }
@@ -2653,6 +2678,8 @@ module.exports = function mount(app, ctx) {
         props.linkedBlockId = context.blocked.id;
         props.title = String((context.blocker.properties || {}).title || props.title || "Prerequisite").slice(0, 300);
         props.myTask = String((context.blocked.properties || {}).title || props.myTask || "Blocked task").slice(0, 300);
+        const target = slackTarget(context.blocked.properties);
+        if (target) { props.slack_channel = target.channel; props.slack_ts = target.ts; }
         props.status = "open";
         props.checkInDate = null;
         props.snoozedUntil = null;
@@ -2671,6 +2698,8 @@ module.exports = function mount(app, ctx) {
       } finally {
         client.release();
       }
+      await syncSlack(created);
+      for (const id of affected) await syncSlack(id);
       broadcast("blocks-changed", { action: "task-dependency-create", blockIds: [created.id].concat(createdBlocker ? [createdBlocker.id] : [], affected) }, workspaceId);
       return created;
     }
@@ -2683,6 +2712,7 @@ module.exports = function mount(app, ctx) {
       user_id: userId,
       workspace_id: workspaceId
     });
+    await syncSlack(created);
     broadcast("blocks-changed", { action: "delegated-create", blockIds: [created.id] }, workspaceId);
     return created;
   }));
@@ -2762,10 +2792,12 @@ module.exports = function mount(app, ctx) {
       } finally {
         client.release();
       }
-      broadcast("blocks-changed", { action: "delegated-update", blockIds: [req.params.id].concat(createdBlocker ? [createdBlocker.id] : []) }, req.workspaceId);
+      await syncSlack(result);
+    broadcast("blocks-changed", { action: "delegated-update", blockIds: [req.params.id].concat(createdBlocker ? [createdBlocker.id] : []) }, req.workspaceId);
       return result;
     }
     const result = await blockDB.updateBlock(req.params.id, { properties: merged });
+    await syncSlack(result);
     broadcast("blocks-changed", { action: "delegated-update", blockIds: [req.params.id] }, req.workspaceId);
     return result;
   }));
@@ -2800,6 +2832,7 @@ module.exports = function mount(app, ctx) {
       status: "open",
     }, existing.properties || {});
     const updated = await blockDB.updateBlock(existing.id, { properties });
+    await syncSlack(updated);
     broadcast("blocks-changed", { action: "waiting-check-in-scheduled", blockIds: [existing.id, taskBlockId], date }, req.workspaceId);
     return updated;
   }));
@@ -2851,6 +2884,23 @@ module.exports = function mount(app, ctx) {
       if (completion.status !== "completed") {
         result = { ok: true, status: completion.status, expectedCycleKey: completion.expectedCycleKey };
       } else {
+        const reminderRef = String(body.checkInTaskId || existing.properties.checkInTaskId || "").trim();
+        let reminder = null;
+        if (reminderRef) {
+          reminder = await blockDB.findUniqueLiveBlockByReference(reminderRef, req.workspaceId, client, true);
+          if (!reminder || reminder.deleted_at || waitingCascade.roleOf(reminder) !== "reminder" ||
+              waitingCascade.itemIdForTask(reminder, [existing]) !== String(existing.id)) {
+            if (body.checkInTaskId) throw clientError("This check-in occurrence is no longer available", 409);
+            reminder = null;
+          }
+          if (reminder) {
+            assertBlockOwnership(reminder, req.workspaceId);
+            await blockDB.updateBlock(reminder.id, { properties: {
+              ...reminder.properties, status: "done", done: true, completedAt,
+              waitingCycleKey: cycleKey, checkInNextDate: options.nextCheckInDate,
+            }, completionIntent: "complete", completionMutationId: `waiting-checkin:${existing.id}:${history.length}` }, client);
+          }
+        }
         const date = waitingItems.dateFromIso(completedAt, APP_TIME_ZONE);
         const parentId = await blockDB.ensureDayRoot(date, existing.user_id, existing.workspace_id, client);
         const task = await blockDB.createBlock({
@@ -2868,14 +2918,14 @@ module.exports = function mount(app, ctx) {
         }, client);
         completion.properties.checkInHistory[completion.properties.checkInHistory.length - 1].taskBlockId = task.id;
         const updated = await blockDB.updateBlock(existing.id, { properties: completion.properties }, client);
-        result = { ok: true, status: "completed", item: updated, task };
+        result = { ok: true, status: "completed", item: updated, task, checkInTaskId: reminder && reminder.id };
       }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
     } finally { client.release(); }
-    if (result.status === "completed") broadcast("blocks-changed", { action: "waiting-check-in-complete", blockIds: [req.params.id, result.task.id], date: result.task.date }, req.workspaceId);
+    if (result.status === "completed") broadcast("blocks-changed", { action: "waiting-check-in-complete", blockIds: [req.params.id, result.task.id].concat(result.checkInTaskId ? [result.checkInTaskId] : []), date: result.task.date }, req.workspaceId);
     return result;
   }));
 
@@ -3278,10 +3328,14 @@ module.exports = function mount(app, ctx) {
         client.release();
       }
       const affectedIds = (subtree.length ? subtree : [task]).map(row => row.id);
+      await syncSlack(updated);
+      await syncSlack(task.id);
       broadcast("blocks-changed", { action: "waiting-unblocked", blockIds: [existing.id].concat(affectedIds), date: destination === "schedule" ? date : null }, req.workspaceId);
       return { ok: true, status: "unblocked", item: updated, task };
     }
     const updated = await blockDB.updateBlock(existing.id, { properties });
+    await syncSlack(updated);
+    await syncSlack(task.id);
     broadcast("blocks-changed", { action: "waiting-unblocked", blockIds: [existing.id, taskBlockId], date }, req.workspaceId);
     return { ok: true, status: "unblocked", item: updated, task };
   }));
@@ -3324,6 +3378,8 @@ module.exports = function mount(app, ctx) {
       } finally {
         client.release();
       }
+      await syncSlack({ ...existing, deleted_at: result.deleted_at || new Date().toISOString() });
+      for (const id of affectedIds) await syncSlack(id);
       broadcast("blocks-changed", { action: "delegated-delete", blockIds: [req.params.id].concat(affectedIds) }, req.workspaceId);
       return result;
     }

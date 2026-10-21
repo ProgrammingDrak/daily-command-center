@@ -37,7 +37,7 @@ test('source write errors reach forms and the shared queue still recovers',async
  const fn=state.slice(state.indexOf('function enqueueRowPropsWrite('),state.indexOf('// ── C6b:'));
  let fails=true;
  const ctx=vm.createContext({window:{blockStore:{updateBlock:async()=>{if(fails)throw new Error('revoked');return 'saved';}}},_rowForDateWrite:async()=>({id:'a',properties:{}}),console:{warn(){}}});
- vm.runInContext('let _rowPropsChain=Promise.resolve();'+fn,ctx);
+ vm.runInContext('const _rowPropsChains=new Map();'+fn,ctx);
  await assert.rejects(ctx.enqueueRowPropsWrite('a',()=>({sourceReferences:[]}),undefined,{rejectOnError:true}),/revoked/);
  fails=false;assert.equal(await ctx.enqueueRowPropsWrite('a',()=>({sourceReferences:[]}),undefined,{rejectOnError:true}),'saved');
 });
@@ -45,7 +45,7 @@ test('missing task fails explicitly rather than announcing a saved source',async
  const state=fs.readFileSync(require.resolve('./public/js/state'),'utf8');
  const fn=state.slice(state.indexOf('function enqueueRowPropsWrite('),state.indexOf('// ── C6b:'));
  const ctx=vm.createContext({window:{blockStore:{}},_rowForDateWrite:async()=>null,console:{warn(){}}});
- vm.runInContext('let _rowPropsChain=Promise.resolve();'+fn,ctx);
+ vm.runInContext('const _rowPropsChains=new Map();'+fn,ctx);
  await assert.rejects(ctx.enqueueRowPropsWrite('a',()=>({}),undefined,{rejectOnError:true}),/unavailable/);
 });
 

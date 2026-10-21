@@ -22,15 +22,7 @@ function makeDragDay(scheduled) {
     console,
     document: { querySelectorAll: () => [] },
     window: { blockStore: { _blocks: [], getByType: () => [], get: () => null, updateBlock: () => {} } },
-    DCC: { TaskModel: {
-      ridersOf: (id, pool) => pool.filter((task) => task.wrapId === id),
-      subtasksOf: (id, pool) => pool.filter((task) => task.subtaskOf === id),
-      childrenOf: (id, pool) => pool.filter((task) => task.wrapId === id || task.subtaskOf === id),
-      selectActive: (pool) => pool.filter((task) => !task.done && !task.deleted),
-      selectOpen: (pool) => pool.filter((task) => !task.done && !task.deleted),
-      selectTimedActive: (pool) => pool.filter((task) => !task.done && !task.deleted && !task.untimed),
-      selectNotDeleted: (pool) => pool.filter((task) => !task.deleted),
-    } },
+    DCC: {},
     scheduled,
     INIT_SCHED: scheduled.slice(),
     __state: { schedule: { blocks: [] } },
@@ -62,6 +54,7 @@ function makeDragDay(scheduled) {
     render: () => {},
   };
   vm.createContext(context);
+  require("./task-model-vm-fixture").installTaskModel(context);
   vm.runInContext(dragSource, context);
   return context;
 }
@@ -132,6 +125,7 @@ test("quick add creates both nested tasks and subtasks under a meeting", () => {
     ms: (m) => m + "m",
   };
   vm.createContext(context);
+  require("./task-model-vm-fixture").installTaskModel(context);
   vm.runInContext(
     sourceFunction(tabsSource, "addSubtask") + "\n" + sourceFunction(tabsSource, "addStackedTask"),
     context,
@@ -210,6 +204,7 @@ test("a non-earning meeting with subtasks keeps a zero point pool", () => {
     },
   };
   vm.createContext(context);
+  require("./task-model-vm-fixture").installTaskModel(context);
   vm.runInContext(pointPlanSource, context);
   const plan = context.window.PointPlan.compute("meeting");
   assert.equal(plan.pool, 0);

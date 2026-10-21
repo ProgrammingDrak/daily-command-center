@@ -16,7 +16,7 @@ function mountApp() {
     },
   };
   let nextId = 1;
-  const slackSync = [];
+  const slackSync = [], broadcasts=[];
   const blockDB = {
     VALID_TYPES: new Set(["block"]),
     getBlockIncludingDeleted: async id => rows[id] || null,
@@ -45,8 +45,11 @@ function mountApp() {
     },
     batchOp: async operations => {
       const blocks = [];
-      for (const operation of operations) if (operation.op === "delete") blocks.push(await blockDB.deleteBlock(operation.id));
-      return { batchId: "batch-1", blocks };
+      for (const operation of operations){
+        if (operation.op === "delete") blocks.push(await blockDB.deleteBlock(operation.id));
+        if (operation.op === "undelete") blocks.push(await blockDB.undeleteBlock(operation.id));
+      }
+      return { batchId: "batch-1", blocks, restoredDayRoots: operations.some(op=>op.op==="undelete")?[{id:"restored-day-root",type:"day_root",properties:{_deleted:[]}}]:[] };
     },
     isIdempotencyConflict: () => false,
     createBlock: async row => {
@@ -70,7 +73,7 @@ function mountApp() {
   };
   const ctx = {
     blockDB,
-    broadcast: () => {},
+    broadcast: (...args) => broadcasts.push(args),
     crypto: require("node:crypto"),
     filterLegacyGcalBlocks: value => value,
     getScheduleBlocks: async () => [],
@@ -84,7 +87,7 @@ function mountApp() {
     syncSlackTaskReactions: async row => { slackSync.push(row.id); return true; },
   };
   require("./routes/blocks.js")(app, ctx);
-  return { app, rows, slackSync, ctx };
+  return { app, rows, slackSync, ctx,broadcasts };
 }
 
 async function request(app, path, options = {}) {
@@ -162,4 +165,22 @@ test("deleting a Triage task suppresses its source, and ordinary Undo restores t
   const active=Object.values(rows).filter(row=>(row.properties||{}).kind==="triage_suppression"&&row.properties.active!==false);
   assert.equal(active.length,1);
   assert.equal(active[0].properties.reason,"scheduled");
+});
+
+test("atomic batch restore forwards every original row and overlay, linked triage, and undeleted broadcast IDs",async()=>{
+ const h=mountApp();h.rows["task-1"].deleted_at="2026-08-14T14:05:00Z";
+ h.rows.child={...h.rows["task-1"],id:"child",parent_id:"task-1",properties:{local_id:"child",subtaskOf:"task-1",title:"Child",notes:"Keep"}};
+ h.rows["task-1"].properties.meetingAutomation={proposedActionId:"proposal"};h.rows.proposal={id:"proposal",type:"block",workspace_id:MINE,properties:{kind:"proposed_action_item",status:"dismissed",dismissedReason:"task-dropped",droppedFromDate:"2026-08-14",droppedFromStart:"09:00"}};
+ const ops=["task-1","child"].map(id=>({op:"undelete",id,expectedDeleteMutationId:"delete-1"}));
+ const result=await request(h.app,"/api/blocks/batch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({operations:ops})});
+ assert.equal(result.status,200);assert.equal(result.body.blocks.length,2);assert.equal(result.body.restoredDayRoots[0].id,"restored-day-root");
+ const suppression=Object.values(h.rows).find(row=>row.properties?.kind==="triage_suppression");assert.equal(suppression.properties.reason,"scheduled");
+ const event=h.broadcasts.find(([name,payload])=>name==="blocks-changed"&&payload.action==="batch")[1];assert.deepEqual(event.undeletedIds,["task-1","child"]);assert.ok(event.blockIds.includes("restored-day-root"));
+ assert.equal(h.rows.proposal.properties.status,"placed");assert.equal(h.rows.proposal.properties.placedDate,"2026-08-14");assert.equal(h.rows.proposal.properties.placedStart,"09:00");assert.equal(h.rows.proposal.properties.dismissedReason,undefined);
+ assert.equal(h.rows.child.properties.notes,"Keep");assert.equal(h.rows.child.parent_id,"task-1");
+});
+test("a rejected atomic restore produces no triage or broadcast side effects",async()=>{
+ const h=mountApp();h.ctx.blockDB.batchOp=async()=>{const e=new Error("restore conflict");e.statusCode=409;throw e;};
+ const result=await request(h.app,"/api/blocks/batch",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({operations:[{op:"undelete",id:"task-1",expectedDeleteMutationId:"delete-1"}]})});
+ assert.equal(result.status,409);assert.equal(h.broadcasts.length,0);assert.equal(Object.values(h.rows).some(row=>row.properties?.kind==="triage_suppression"),false);
 });

@@ -91,13 +91,9 @@ function dOver(e,id){
   // Meetings are valid parents too: a ride-along nest represents concurrent work
   // during the meeting, while a subtask nest is pie work relevant to the meeting.
   // Only the existing carryover and cycle guards block nesting.
-  // An Unscheduled row never nests: dDrop gates its nest on !wasUntimed, so without
-  // the same term here the purple "wrap inside" overlay promises a nest that the drop
-  // then refuses, and the task lands top-level instead. Cursor position used to decide
-  // this; a sideways touch drag makes it a deliberate request, so the lie is louder.
-  const draggingEv=(typeof scheduled!=="undefined")?scheduled.find(x=>x.id===dragId):null;
-  const draggingUntimed=!!(draggingEv&&draggingEv.untimed);
-  const canNest=!draggingCarryover&&!draggingUntimed&&targetEv&&!(typeof _isAncestor==="function"&&_isAncestor(dragId,id));
+  // An explicit sideways/Shift gesture nests even an untimed row. A straight
+  // drop keeps the existing schedule/reorder behavior.
+  const canNest=!draggingCarryover&&targetEv&&!(typeof _isAncestor==="function"&&_isAncestor(dragId,id));
   if(canNest&&_nestZone(e)){
     tgt.classList.add("drag-over-nest");
     tgt.classList.toggle("drag-over-nest-sub",_dragMode(e)==="sub");
@@ -166,13 +162,12 @@ async function dBlockDrop(e){
     return;
   }
   if(!moved||!/^([01]\d|2[0-3]):[0-5]\d$/.test(start||"")){dEnd();return;}
-  const old=JSON.stringify(scheduled),oldStart=pt(moved.start);
+  const old=JSON.stringify(scheduled);
   if(parentIdOf(moved))_promoteMutate(moved);
   const duration=dur(moved)||30;
   moved.untimed=false;
   moved.end=fmt(pt(moved.start)+duration);
   pinStartTime(moved.id,start);
-  _shiftWrapChildren(moved,oldStart);
   _persistPromoted(moved);
   _finishDrag(old);
 }
@@ -262,7 +257,13 @@ function taskMatchesBlock(task, block){
 
 // Tag-aware cascade: tasks are placed into the earliest matching schedule block.
 // Falls back to sequential placement when no block matches or block is full.
+function _reflowTaskTime(ev,start,duration,hierarchy){
+  const oldStart=pt(ev.start);
+  ev.start=fmt(start);ev.end=fmt(start+duration);
+  _shiftWrapChildren(ev,oldStart,hierarchy);
+}
 function recalcTimesTagAware(schedBlocks){
+  const hierarchy=DCC.TaskModel.hierarchyIndex(scheduled);
   const active = DCC.TaskModel.selectActive(scheduled);
   if(!active.length) return;
 
@@ -287,9 +288,8 @@ function recalcTimesTagAware(schedBlocks){
     if(isFixedTimeBlock(ev)) return;
     if(_holdsTime(ev)){
       const ps = pt(ev._pinnedStart || ev.start);
-      ev.start = fmt(ps);
-      const d = _isSeqShell(ev) ? _layoutShellChildren(ev) : dur(ev);
-      if(!_isSeqShell(ev)) ev.end = fmt(ps + d);
+      const d = _isSeqShell(ev) ? _shellSpan(ev) : dur(ev);
+      if(_isSeqShell(ev)){ev.start=fmt(ps);_layoutShellChildren(ev);}else _reflowTaskTime(ev,ps,d,hierarchy);
       blockers.push({s: ps, e: ps + d});
     }
   });
@@ -332,15 +332,13 @@ function recalcTimesTagAware(schedBlocks){
     }
 
     if(bestBlock){
-      ev.start = fmt(bestStart);
-      if(_isSeqShell(ev)) _layoutShellChildren(ev); else ev.end = fmt(bestStart + d);
+      if(_isSeqShell(ev)){ev.start=fmt(bestStart);_layoutShellChildren(ev);}else _reflowTaskTime(ev,bestStart,d,hierarchy);
       nextFree[bestBlock.id] = bestStart + d;
       fallbackCursor = Math.max(fallbackCursor, bestStart + d);
     } else {
       // No block matched or had room — use fallback sequential cascade
       const s = _freeStart(fallbackCursor, d, blockers);
-      ev.start = fmt(s);
-      if(_isSeqShell(ev)) _layoutShellChildren(ev); else ev.end = fmt(s + d);
+      if(_isSeqShell(ev)){ev.start=fmt(s);_layoutShellChildren(ev);}else _reflowTaskTime(ev,s,d,hierarchy);
       fallbackCursor = s + d;
     }
   });
@@ -362,6 +360,7 @@ function recalcTimesTagAware(schedBlocks){
 // very top lands BEFORE a meeting or a hand-set start instead of after it.
 // When any schedule block has acceptedTags, delegates to recalcTimesTagAware.
 function recalcTimes(opts){
+  const hierarchy=DCC.TaskModel.hierarchyIndex(scheduled);
   opts=opts||{};
 
   // Untimed tasks (no start; e.g. Slack-bookmark inserts) are excluded from the
@@ -379,11 +378,12 @@ function recalcTimes(opts){
     if(isFixedTimeBlock(ev))return;     // already represented in _meetingBlocks()
     if(_holdsTime(ev,opts)){
       const ps=pt(ev._pinnedStart||ev.start);
+      const oldStart=pt(ev.start);
       ev.start=fmt(ps);
       // A pinned/locked shell derives its span from its children, laid out from
       // the pinned start; a normal task uses its own duration.
       const d=_isSeqShell(ev)?_layoutShellChildren(ev):dur(ev);
-      if(!_isSeqShell(ev))ev.end=fmt(ps+d);
+      if(!_isSeqShell(ev)){ev.end=fmt(ps+d);_shiftWrapChildren(ev,oldStart,hierarchy);}
       blockers.push({s:ps,e:ps+d});
     }
   });
@@ -464,8 +464,7 @@ function recalcTimes(opts){
     // task uses its own duration.
     const d=_isSeqShell(ev)?_shellSpan(ev):dur(ev);
     const s=_freeStart(cursor,d,blockers);
-    ev.start=fmt(s);
-    if(_isSeqShell(ev))_layoutShellChildren(ev); else ev.end=fmt(s+d);
+    if(_isSeqShell(ev)){ev.start=fmt(s);_layoutShellChildren(ev);}else _reflowTaskTime(ev,s,d,hierarchy);
     if(opts.orderWins&&ev._pinnedStart&&ev._pinnedStart!==ev.start){
       ev._pinnedStart=ev.start;
       repinned.push(ev);
@@ -509,7 +508,7 @@ function _persistEvProps(ev,patch){
 }
 // Persist an item's parent membership (wrapId/subtaskOf) + times to the blockstore.
 function _persistEvWrap(ev){
-  _persistEvProps(ev,{wrapId:ev.wrapId||null,subtaskOf:ev.subtaskOf||null,isWrap:!!ev.isWrap,start:ev.start,end:ev.end});
+  _persistEvProps(ev,{wrapId:ev.wrapId||null,subtaskOf:ev.subtaskOf||null,isWrap:!!ev.isWrap,start:ev.untimed?null:ev.start,end:ev.untimed?null:ev.end,duration:dur(ev),untimed:!!ev.untimed});
 }
 // Persist a promoted task: clears the parent edge AND writes the (now real) duration
 // so downstream readers don't see the timeless subtask's duration:0.
@@ -548,19 +547,11 @@ function promoteToTopLevel(id){
 // True if ancestorId is somewhere above nodeId in the parent chain (guards against
 // nesting a task into one of its own descendants).
 function _isAncestor(ancestorId,nodeId,pool){
-  pool=pool||scheduled;
-  let cur=pool.find(e=>e.id===nodeId),guard=0;
-  while(cur&&guard++<50){
-    const pid=parentIdOf(cur);
-    if(!pid)return false;
-    if(pid===ancestorId)return true;
-    cur=pool.find(e=>e.id===pid);
-  }
-  return false;
+  return DCC.TaskModel.isAncestor(ancestorId,nodeId,pool||scheduled);
 }
 // First free slot inside a wrap's [start,end] window for a ride-along.
 function _placeInWrapWindow(moved,wrapEv){
-  const ws=pt(wrapEv.start),we=pt(wrapEv.end),d=dur(moved)||15;
+  const ws=pt(wrapEv.start),we=pt(wrapEv.end),d=dur(moved)>0?dur(moved):30;
   const blockers=DCC.TaskModel.ridersOf(wrapEv.id,scheduled).filter(c=>c.id!==moved.id)
     .map(c=>({s:pt(c.start),e:pt(c.end)})).sort((a,b)=>a.s-b.s);
   let s=_freeStart(ws,d,blockers);
@@ -571,14 +562,16 @@ function _placeInWrapWindow(moved,wrapEv){
 // (child N+1 starts when child N ends). Window full: remaining children stack
 // from the start again (over-capacity; the bandwidth chip shows it).
 function _chainWrapChildren(wrapEv){
+  const index=DCC.TaskModel.hierarchyIndex(scheduled);
   const ws=pt(wrapEv.start),we=pt(wrapEv.end);
   let cursor=ws;
   DCC.TaskModel.selectActive(DCC.TaskModel.ridersOf(wrapEv.id,scheduled)).forEach(c=>{
-    const d=dur(c)||15;
+    const oldStart=pt(c.start),d=dur(c)||30;
     if(cursor>=we)cursor=ws;
     c.start=fmt(cursor);c.end=fmt(cursor+d);
     cursor+=d;
     _persistEvWrap(c);
+    _shiftWrapChildren(c,oldStart,index);
   });
 }
 // ── SEQUENTIAL SHELL LAYOUT ──
@@ -595,62 +588,57 @@ function _isSeqShell(ev){
 // durations, recursing so a nested shell child is sized by its own children.
 // Pure read — moves nothing. Empty shell => 0. `seen` guards against a data
 // cycle (matches captureShellTemplate) so recursion can't blow the stack.
+function _shellSpans(shellEv,seen){
+  const index=DCC.TaskModel.hierarchyIndex(scheduled),spans=new Map(),visited=seen||new Set();
+  const stack=[{ev:shellEv,expanded:false}];
+  while(stack.length){
+    const {ev,expanded}=stack.pop();if(!ev)continue;
+    if(expanded){
+      let sum=0;
+      for(const c of DCC.TaskModel.selectNotDeleted(index.children.get(ev.id)||[]))sum+=_isSeqShell(c)?(spans.get(c.id)||0):(dur(c)>0?dur(c):15);
+      spans.set(ev.id,sum);continue;
+    }
+    if(visited.has(ev.id))continue;visited.add(ev.id);stack.push({ev,expanded:true});
+    const kids=DCC.TaskModel.selectNotDeleted(index.children.get(ev.id)||[]);
+    for(let i=kids.length-1;i>=0;i--)if(_isSeqShell(kids[i]))stack.push({ev:kids[i],expanded:false});
+  }
+  return {index,spans};
+}
 function _shellSpan(shellEv,seen){
   if(!shellEv)return 0;
-  seen=seen||new Set();
-  if(seen.has(shellEv.id))return 0;
-  seen.add(shellEv.id);
-  // C6a: the old `typeof childrenOf==="function"` fallback filtered on wrapId ONLY,
-  // so in any context without childrenOf a shell's SUBTASK children were silently
-  // dropped from its span. childrenOf is the unified-tree edge and is what this means.
-  const kids=DCC.TaskModel.selectNotDeleted(childrenOf(shellEv.id,scheduled));
-  let sum=0;
-  kids.forEach(c=>{ sum += _isSeqShell(c)?_shellSpan(c,seen):(dur(c)>0?dur(c):15); });
-  return sum;
+  return _shellSpans(shellEv,seen).spans.get(shellEv.id)||0;
 }
-// Lay a shell's children out sequentially from the shell's current start, stamp
-// the shell's derived end, persist each child's new time, and return the span.
-// Recurses into nested shells (sized before they're placed); `seen` guards cycles.
 function _layoutShellChildren(shellEv,seen){
   if(!shellEv)return 0;
-  seen=seen||new Set();
-  if(seen.has(shellEv.id))return 0;
-  seen.add(shellEv.id);
-  const start=pt(shellEv.start||"00:00");
-  let cursor=start;
-  const kids=DCC.TaskModel.selectNotDeleted(childrenOf(shellEv.id,scheduled));
-  kids.forEach(c=>{
-    let d;
-    if(_isSeqShell(c)){
-      c.start=fmt(cursor);
-      d=_layoutShellChildren(c,seen);                       // sizes from ITS children, sets c.end
-    }else{
-      d=dur(c);if(!(d>0))d=15;                              // capture duration BEFORE moving the start
-      c.start=fmt(cursor);c.end=fmt(cursor+d);
+  const {index,spans}=_shellSpans(shellEv),visited=seen||new Set(),stack=[shellEv];
+  while(stack.length){
+    const ev=stack.pop();if(visited.has(ev.id))continue;visited.add(ev.id);
+    let cursor=pt(ev.start||"00:00");
+    const shells=[];
+    for(const c of DCC.TaskModel.selectNotDeleted(index.children.get(ev.id)||[])){
+      if(visited.has(c.id))continue;
+      const oldStart=pt(c.start),d=_isSeqShell(c)?(spans.get(c.id)||0):(dur(c)>0?dur(c):15);
+      c.start=fmt(cursor);c.end=fmt(cursor+d);cursor+=d;
+      if(_isSeqShell(c))shells.push(c);else _shiftWrapChildren(c,oldStart,index);
+      _persistEvWrap(c);
     }
-    if(typeof _persistEvWrap==="function")_persistEvWrap(c);
-    cursor+=d;
-  });
-  const span=cursor-start;
-  shellEv.end=fmt(start+span);
-  if(typeof _persistEvWrap==="function")_persistEvWrap(shellEv);
-  return span;
+    ev.end=fmt(pt(ev.start||"00:00")+(spans.get(ev.id)||0));_persistEvWrap(ev);
+    for(let i=shells.length-1;i>=0;i--)stack.push(shells[i]);
+  }
+  return spans.get(shellEv.id)||0;
 }
 // Shift a wrap's ride-alongs by the wrap's own movement during a reflow, so
 // their intra-window layout survives the wrap changing start time (Case A's
 // delta idiom, shared by every path that reflows after touching a nest).
-function _shiftWrapChildren(wrapEv,oldStart){
+function _shiftWrapChildren(wrapEv,oldStart,hierarchy){
   const delta=pt(wrapEv.start)-oldStart;
   if(!delta)return;
   const seen=new Set([wrapEv.id]);
-  const kids=(id)=>typeof childrenOf==="function"
-    ?childrenOf(id,scheduled)
-    :(typeof DCC.TaskModel.childrenOf==="function"
-      ?DCC.TaskModel.childrenOf(id,scheduled)
-      :DCC.TaskModel.ridersOf(id,scheduled).concat(DCC.TaskModel.subtasksOf(id,scheduled)));
+  const index=hierarchy||DCC.TaskModel.hierarchyIndex(scheduled);
+  const kids=(id)=>index.children.get(id)||[];
   const stack=kids(wrapEv.id).slice();
-  while(stack.length){
-    const c=stack.shift();
+  for(let i=0;i<stack.length;i++){
+    const c=stack[i];
     if(!c||seen.has(c.id))continue;
     seen.add(c.id);
     if(c.start&&c.end){c.start=fmt(pt(c.start)+delta);c.end=fmt(pt(c.end)+delta);}
@@ -818,25 +806,23 @@ function dDrop(e,tid){
     moved.start=fmt(_s);moved.end=fmt(_s+_d);
   }
 
-  // Slot from the cursor's vertical position, mode from _dragMode. A drop OUT of
-  // the Unscheduled queue always means "schedule here", never nest, so a sideways
-  // drift can't silently turn the scheduled task into a subtask.
+  // Vertical position selects the slot; an explicit sideways/Shift mode nests.
   const r=e.currentTarget.getBoundingClientRect();
   const y=e.clientY-r.top,h=r.height;
-  const nest=(!wasUntimed&&_nestZone(e)&&!_isAncestor(moved.id,target.id));
+  const nest=(_nestZone(e)&&!_isAncestor(moved.id,target.id));
   const after=y>=h/2;
 
   // ---- Case A: dragging a WRAP -> move it; its ride-alongs follow by the same delta ----
   // Rollup containers (shells) always carry their subtree, even without the
   // isWrap flag (e.g. API-created shells).
-  if((typeof isWrap==="function"&&isWrap(moved))||(window.TaskTypes&&window.TaskTypes.rule(moved,"dragMovesSubtree"))){
-    const oldStart=pt(moved.start);
+  if(!nest&&((typeof isWrap==="function"&&isWrap(moved))||(window.TaskTypes&&window.TaskTypes.rule(moved,"dragMovesSubtree")))){
+    if(parentIdOf(moved))_promoteMutate(moved);
     _clearPin(moved);
     _reorderActive(moved.id,target.id,after);
     // Top-level reorder, so it may have landed first: let the anchor reach back.
     // recalcTimes ignores this unless the task really is first in the chain.
     recalcTimes({orderWins:true,reachBackFor:moved.id});
-    _shiftWrapChildren(moved,oldStart);
+    _persistPromoted(moved);
     _finishDrag(old);return;
   }
 
@@ -853,19 +839,20 @@ function dDrop(e,tid){
   if(newWrapId){
     // ---- Case B: NEST as a ride-along (concurrent, inside the wrap window). The
     // target becomes a wrap if it wasn't one. ----
+    const oldStart=pt(moved.start);
     const wrapEv=scheduled.find(x=>x.id===newWrapId);
-    moved.wrapId=newWrapId;moved.subtaskOf=null;
+    moved.wrapId=newWrapId;moved.subtaskOf=null;moved.untimed=!!target.untimed;
     _clearPin(moved);
     if(wrapEv){
       if(!isWrap(wrapEv)){wrapEv.isWrap=true;_persistEvWrap(wrapEv);} // target is now a wrap
       _placeInWrapWindow(moved,wrapEv);
     }
     _persistEvWrap(moved);
+    _shiftWrapChildren(moved,oldStart);
     // The reflow can move the wrap itself (moved just left the top level);
     // shift the nest by the wrap's delta so the children stay in its window.
-    const bWs=wrapEv?pt(wrapEv.start):0;
     recalcTimes({orderWins:true});
-    if(wrapEv)_shiftWrapChildren(wrapEv,bWs);
+
     if(typeof showToast==="function"&&wrapEv)showToast('Nested inside "'+wrapEv.title+'"',"success",2200);
   }else if(!wasUntimed&&(joined=_dropAtTargetLevel(moved,target,after))){
     // ---- Case C': edge drop on a NESTED row -> joined the target's level;
@@ -874,9 +861,8 @@ function dDrop(e,tid){
     // the drop target happens to be a nested row.)
     // reflow the top-level chain (the moved task left it or never consumed it),
     // then shift the joined wrap's nest by the wrap's own movement. ----
-    const jWs=joined&&joined.id?pt(joined.start):0;
     recalcTimes({orderWins:true});
-    if(joined&&joined.id)_shiftWrapChildren(joined,jWs);
+
   }else{
     // ---- Case C: TOP-LEVEL drop -> promote out of any parent, then sequential reorder ----
     // _promoteMutate clears the edge, gives a timeless subtask a real 30m duration

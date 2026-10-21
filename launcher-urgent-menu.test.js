@@ -131,7 +131,7 @@ test("launcher markup starts on Urgent without changing other add bars", () => {
   assert.match(sticky, /option value="schedule"/);
   assert.match(sticky, /option value="backlog"/);
   assert.doesNotMatch(sticky, /option value="(?:shell|wrap)"/);
-  assert.match(launcher, /<select class="tab-dest" aria-label="Task type">/);
+  assert.match(launcher, /<select class="tab-dest" aria-label="Task type or destination">/);
 });
 
 test("launcher quick radial contains only Habit and Meeting and only changes selection", () => {
@@ -202,6 +202,7 @@ test("Anytime destination opens the configured creation form", () => {
 function loadLauncher(){
   const source = fs.readFileSync(require.resolve("./public/js/launcher.js"), "utf8");
   const launcher = new FakeElement();
+  launcher.querySelectorAll = () => [];
   const button = new FakeElement();
   const utilityRadial = new FakeElement();
   const compose = new FakeElement();
@@ -378,4 +379,60 @@ test("Whenever destination drops the task into the no-set-time pool", () => {
 
   const broken = run(fnSource.replace('case"whenever"', 'case"removed-whenever"'));
   assert.deepEqual(broken.added, [], "mutation must prove the destination guard can fail");
+});
+
+function loadActivityAdd(type, titleValue = "Evening run") {
+  const source=fs.readFileSync(require.resolve("./public/js/schedule.js"),"utf8");
+  const start=source.indexOf("function addTaskUniversal(barEl){"), end=source.indexOf("// ======== SCHEDULE-AT PICKER",start);
+  const bar=makeAddBar("task-add-launcher"), opened=[], events=[], toasts=[];
+  bar.parts.title.value=titleValue; bar.parts.duration.value="90"; bar.parts.destination.value=type;
+  bar.addEventListener("dcc:launcher-handoff",()=>events.push("handoff"));
+  const DCC={Activity:{create:(...args)=>opened.push(args)}};
+  class Event {constructor(type){this.type=type;}}
+  const context={window:{DCC},DCC,Event,showToast:(...args)=>toasts.push(args)};
+  vm.createContext(context); vm.runInContext(source.slice(start,end),context);
+  return {bar,opened,events,toasts,context};
+}
+
+test("Workout and Meal handoff preserve duration and draft until confirmed creation", () => {
+  for(const type of ["workout","meal"]){
+    const {bar,opened,events,context}=loadActivityAdd(type);
+    assert.equal(context.addTaskUniversal(bar),false,"deferred dialog is not a successful save");
+    assert.equal(opened[0][0],type); assert.equal(opened[0][2],"Evening run");
+    assert.equal(opened[0][3].durationMinutes,90); assert.deepEqual(events,["handoff"]);
+    assert.equal(bar.parts.title.value,"Evening run"); assert.equal(bar.parts.destination.value,type);
+    // Cancel or failure does not call onCreated: reopening retains the original draft.
+    opened[0][3].onCreated();
+    assert.equal(bar.parts.title.value,""); assert.equal(bar.parts.destination.value,"urgent");
+    assert.equal(bar.parts.duration.value,"90");
+  }
+});
+
+test("activity shortcuts allow a type title and unavailable logger preserves input", () => {
+  const blank=loadActivityAdd("meal",""); blank.context.addTaskUniversal(blank.bar);
+  assert.equal(blank.opened[0][2],"Meal");
+  const loaded=loadActivityAdd("workout"); loaded.context.window.DCC.Activity=null;
+  assert.equal(loaded.context.addTaskUniversal(loaded.bar),false);
+  assert.equal(loaded.bar.parts.title.value,"Evening run"); assert.equal(loaded.bar.parts.destination.value,"workout");
+  assert.equal(loaded.events.length,0); assert.equal(loaded.toasts.length,1);
+});
+
+test("launcher handoff releases modal state without taking focus back", () => {
+  const loaded=loadLauncher(); loaded.button.emit("click",{});
+  loaded.button.focused=false; loaded.bar.dispatchEvent({type:"dcc:launcher-handoff"});
+  assert.equal(loaded.compose.classList.contains("open"),false); assert.equal(loaded.button.focused,false);
+});
+
+
+test("late activity acknowledgement leaves a newer composer draft intact", () => {
+  for(const field of ["title","duration","destination"]){
+    const {bar,opened,context}=loadActivityAdd("workout");
+    context.addTaskUniversal(bar);
+    bar.parts[field].value={title:"Run B",duration:"60",destination:"meal"}[field];
+    const before=Object.fromEntries(["title","duration","destination"].map(key=>[key,bar.parts[key].value]));
+    opened[0][3].onCreated();
+    for(const key of Object.keys(before))assert.equal(bar.parts[key].value,before[key]);
+  }
+  const blank=loadActivityAdd("meal","");blank.context.addTaskUniversal(blank.bar);blank.opened[0][3].onCreated();
+  assert.equal(blank.bar.parts.destination.value,"urgent");
 });

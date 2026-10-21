@@ -31,15 +31,7 @@ function makeDragDay(scheduled) {
     console,
     document: { querySelectorAll: () => [] },
     window: { blockStore: { _blocks: [], getByType: () => [], get: () => null, updateBlock: () => {} } },
-    DCC: { TaskModel: {
-      ridersOf: (id, pool) => pool.filter((task) => task.wrapId === id),
-      subtasksOf: (id, pool) => pool.filter((task) => task.subtaskOf === id),
-      childrenOf: (id, pool) => pool.filter((task) => task.wrapId === id || task.subtaskOf === id),
-      selectActive: (pool) => pool.filter((task) => !task.done && !task.deleted),
-      selectOpen: (pool) => pool.filter((task) => !task.done && !task.deleted),
-      selectTimedActive: (pool) => pool.filter((task) => !task.done && !task.deleted && !task.untimed),
-      selectNotDeleted: (pool) => pool.filter((task) => !task.deleted),
-    } },
+    DCC: {},
     scheduled,
     INIT_SCHED: scheduled.slice(),
     __state: { schedule: { blocks: [] } },
@@ -71,6 +63,7 @@ function makeDragDay(scheduled) {
     render: () => {},
   };
   vm.createContext(context);
+  require("./task-model-vm-fixture").installTaskModel(context);
   vm.runInContext(dragSource, context);
   return context;
 }
@@ -234,25 +227,15 @@ test("touch reorder feedback is the blue bar, not the purple nest overlay", () =
   assert.ok(subRow.classes.has("drag-over-nest-sub"));
 });
 
-test("an Unscheduled row is never offered a nest it will not get", () => {
-  // dDrop gates nesting on !wasUntimed, so dOver must not paint the purple "wrap
-  // inside" overlay for an untimed row. Otherwise the drag promises a nest and the
-  // drop schedules the task top-level instead, which reads as the app ignoring you.
-  const tasks = twoTasks();
-  tasks.find((t) => t.id === "moved").untimed = true;
-  const context = makeDragDay(tasks);
-  startDrag(context, "moved");
-
+test("an explicit nest from Unscheduled promises and produces the same parent edge", () => {
+  const tasks = twoTasks(); tasks[1].untimed = true;
+  const context = makeDragDay(tasks); startDrag(context, "moved");
   const row = fakeRow(100);
   context.window.DCC_DRAG.over(row, "target", 50, "nest");
-  assert.equal(row.classes.has("drag-over-nest"), false, "no nest promise for an untimed row");
-  assert.ok(row.classes.has("drag-over-top") || row.classes.has("drag-over-bottom"));
-
-  // And the drop agrees: it schedules top-level rather than nesting.
-  context.window.DCC_DRAG.drop(fakeRow(100), "target", 50, "nest");
-  const moved = tasks.find((t) => t.id === "moved");
-  assert.equal(moved.wrapId ?? null, null);
-  assert.equal(moved.subtaskOf ?? null, null);
+  assert.equal(row.classes.has("drag-over-nest"), true);
+  context.window.DCC_DRAG.drop(row, "target", 50, "nest");
+  assert.equal(tasks[1].wrapId, "target");
+  assert.equal(tasks[1].untimed, false);
 });
 
 test("_modeForDx pins the exact reorder / nest / sub boundaries", () => {

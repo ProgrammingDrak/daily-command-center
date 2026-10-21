@@ -27,7 +27,7 @@
   // open-space click exclusion (schedule-tab.js row()) MINUS .grip: the grip is
   // labeled "Drag to reorder" and IS the drag handle, so a long-press on it must
   // lift (a quick tap on it still no-ops — onUp resets before the hold fires).
-  var LIFT_EXCLUDE = "button,a,input,textarea,.chk,.chk-quick,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag";
+  var LIFT_EXCLUDE = "button,a,input,textarea,select,.workout-planner,.chk,.chk-quick,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag";
 
   var listView = null;
   var state = null;           // active gesture, or null
@@ -118,6 +118,13 @@
   function modeFor(x, y) {
     if (!window.DCC_DRAG || typeof DCC_DRAG.modeForPoint !== "function") return "reorder";
     return DCC_DRAG.modeForPoint(x, y);
+  }
+
+  // touch-action is chosen when the finger goes down; changing it at lift
+  // cannot stop that gesture's native pan. Cancel touchmove only after the
+  // hold has lifted the row, so ordinary pre-lift swipes still scroll.
+  function onTouchMove(e) {
+    if (state && state.lifted && e.cancelable) e.preventDefault();
   }
 
   function onMove(e) {
@@ -218,6 +225,7 @@
     // Delegated: buildListView() only replaces innerHTML, so #list-view (and these
     // listeners) survive every re-render.
     listView.addEventListener("pointerdown", onDown, true);
+    listView.addEventListener("touchmove", onTouchMove, { passive: false });
     listView.addEventListener("click", onClickCapture, true);
     listView.addEventListener("contextmenu", onContextMenu, true);
   }

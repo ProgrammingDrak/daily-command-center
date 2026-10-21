@@ -94,6 +94,7 @@ function makeHarness(opts = {}) {
 
 // A bookmarked task, live and open — projectTaskToSlack's ordinary case.
 function task(h, ts, extra = {}) {
+  ts = ts.replace(/^([a-z-]+)\./, (_, prefix) => (1791470000 + [...prefix].reduce((n, c) => n + c.charCodeAt(0), 0)) + ".");
   const row = {
     id: `task-${ts}`, type: "block", date: TODAY, workspace_id: "ws-1", user_id: 1, deleted_at: null,
     properties: {

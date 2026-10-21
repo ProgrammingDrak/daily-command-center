@@ -835,3 +835,44 @@ test("a TRANSIENT failure still commits, because the WAL will land the move", as
   assert.equal(calls.commit.length, 1, "a queued move still completes the task");
   assert.equal(calls.credit.length, 1);
 });
+
+test("completing a deep subtask chain promotes its open ride-along and preserves the rider's descendants",async()=>{
+ const scheduled=[{id:"t1",title:"Root",type:"task",start:"09:00",end:"09:30"},{id:"sub1",subtaskOf:"t1",type:"task",start:"09:00",end:"09:00"},{id:"sub2",subtaskOf:"sub1",type:"task",start:"09:00",end:"09:00"},{id:"rider",wrapId:"sub2",type:"task",start:"09:00",end:"09:15"},{id:"rider-child",subtaskOf:"rider",type:"task",start:"09:00",end:"09:00"},{id:"other",type:"task",start:"10:00",end:"10:30"},{id:"unrelated",wrapId:"other",type:"task",start:"10:00",end:"10:15"}];
+ const {context}=makeChainCtx({viewing:TODAY,scheduled});context.promotions=[];
+ vm.runInContext('isDeleted=()=>false;recalcTimes=()=>{};_clearPin=()=>{};_persistEvWrap=ev=>promotions.push(ev.id);\n'+ON_PARENT_SRC,context);
+ vm.runInContext('_onParentCompleted("t1")',context);await flush();
+ assert.equal(context.scheduled.find(ev=>ev.id==="rider").wrapId,null);assert.deepEqual(context.promotions,["rider"]);
+ assert.equal(context.scheduled.find(ev=>ev.id==="rider-child").subtaskOf,"rider");assert.equal(context.scheduled.find(ev=>ev.id==="unrelated").wrapId,"other");
+});
+
+test('a late rejection from an older completion cannot undo a newer complete intent',async()=>{
+ const {context,manualDone}=makeChainCtx();let rejectFirst;let count=0;
+ context.window.blockStore.setTaskCompletion=()=>++count===1?new Promise((_resolve,reject)=>{rejectFirst=reject;}):Promise.resolve({ok:true,mutationId:'latest'});
+ const old=vm.runInContext(`commitDoneOnDate("t1","${PAST}",{cascade:false})`,context);
+ vm.runInContext('toggleDone("t1")',context);await flush();
+ await vm.runInContext(`commitDoneOnDate("t1","${PAST}",{cascade:false})`,context);
+ rejectFirst(new Error('Old rejection'));await old;
+ assert.equal(manualDone.has('t1'),true);
+});
+
+test('failed rapid parent complete/reopen/complete restores children when the latest attempt also fails',async()=>{
+ const scheduled=[{id:'t1',title:'Parent',type:'task',_blockId:'row-t1'},{id:'kid',title:'Child',type:'task',subtaskOf:'t1',_blockId:'row-kid'}];
+ const {context,manualDone}=makeChainCtx({scheduled});const rejects=[];
+ context.window.blockStore.setTaskCompletion=()=>new Promise((_resolve,reject)=>rejects.push(reject));
+ const first=vm.runInContext(`commitDoneOnDate("t1","${PAST}")`,context);
+ vm.runInContext('toggleDone("t1")',context);
+ const latest=vm.runInContext(`commitDoneOnDate("t1","${PAST}")`,context);
+ assert.equal(manualDone.has('kid'),true);
+ rejects[0](new Error('first rejected'));await first;
+ rejects[1](new Error('reopen rejected'));await flush();
+ rejects[2](new Error('latest rejected'));await latest;
+ assert.equal(manualDone.has('t1'),false);assert.equal(manualDone.has('kid'),false);
+});
+
+test('subtree rollback preserves a newer independent child completion',()=>{
+ const scheduled=[{id:'t1',title:'Parent'},{id:'kid',title:'Child',subtaskOf:'t1'}];const {context,manualDone}=makeChainCtx({scheduled});
+ const snapshot=vm.runInContext('_optimisticallyCompleteSubtasks("t1",new Date())',context);
+ const later=new Date('2026-10-20T12:00:00Z');context.doneAt.kid=later;
+ context.snapshot=snapshot;vm.runInContext('_rollbackOptimisticSubtasks(snapshot)',context);
+ assert.equal(manualDone.has('kid'),true);assert.equal(context.doneAt.kid,later);
+});

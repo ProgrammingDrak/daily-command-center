@@ -6,8 +6,11 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import express from "express";
 import reschedule from "../lib/reschedule.js";
+import poolPlacement from "../lib/whenever-placement.js";
 import createTaskTiming from "../lib/task-timing.js";
 import seedTaskDetailReview from "./task-detail-review-fixtures.cjs";
+import seedHierarchyReview from "./hierarchy-review-fixtures.cjs";
+import hierarchy from "../lib/task-hierarchy.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -22,7 +25,7 @@ if (process.env.DCC_ACTIVITY_REVIEW === "1") {
   const { default: mountActivityReview } = await import("./activity-review-backend.js");
   await mountActivityReview(app);
 }
-if (process.env.DCC_REVIEW_TASK_DETAILS === '1') app.use((_req,res,next) => {
+if (process.env.DCC_REVIEW_TASK_DETAILS === '1' || process.env.DCC_REVIEW_HIERARCHY === '1') app.use((_req,res,next) => {
   res.setHeader('Content-Security-Policy', "connect-src 'self'; form-action 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'");
   next();
 });
@@ -64,6 +67,8 @@ function liveReviewBlocks() {
   return [...reviewBlocks.values()].filter((block) => !block.deleted_at);
 }
 if (process.env.DCC_REVIEW_TASK_DETAILS === '1') seedTaskDetailReview(reviewBlocks, localDateKey(new Date()));
+if (process.env.DCC_REVIEW_HIERARCHY === '1') seedHierarchyReview(reviewBlocks, localDateKey(new Date()));
+if (process.env.DCC_REVIEW_HIERARCHY === '1') app.post('/api/review/hierarchy/reset',(_req,res)=>{reviewBlocks.clear();seedHierarchyReview(reviewBlocks,localDateKey(new Date()));res.json({ok:true});});
 
 const emptyState = {
   ok: true,
@@ -179,6 +184,31 @@ app.get("/api/blocks", (req, res) => {
   }
   res.json(blocks);
 });
+// Synthetic transaction boundary for the subtree Undo browser verifier only.
+if(process.env.DCC_REVIEW_HIERARCHY==='1'){
+ let failureStatus=0;
+ const deleteReceipts=new Set();
+ app.post('/api/review/hierarchy/restore-failure',(req,res)=>{failureStatus=Number(req.body.status)||0;res.json({ok:true});});
+ app.post('/api/blocks/batch',(req,res)=>{
+  const ops=req.body.operations||[],next=new Map([...reviewBlocks].map(([id,row])=>[id,structuredClone(row)])),blocks=[],restoredDayRoots=[];
+  for(const op of ops){
+   const row=next.get(op.id);if(!row)return res.status(404).json({error:'Synthetic block not found'});
+   if(op.op==='delete'){
+    if(!deleteReceipts.has(op.id+':'+op.deleteMutationId)){row.deleted_at=new Date().toISOString();row.properties._deleteUndoToken=op.deleteMutationId;}
+    blocks.push(structuredClone(row));
+   }else if(op.op==='undelete'){
+    if(failureStatus)return res.status(failureStatus).json({error:'Injected synthetic atomic restore failure'});
+    if(row.deleted_at&&row.properties._deleteUndoToken!==op.expectedDeleteMutationId)return res.status(409).json({error:'Newer deletion superseded restore'});
+    row.deleted_at=null;blocks.push(structuredClone(row));
+   }else return res.status(400).json({error:'Unsupported synthetic batch operation'});
+  }
+  const ids=new Set(blocks.filter((_,i)=>ops[i].op==='undelete').flatMap(b=>[b.id,b.properties.local_id]));
+  for(const root of next.values())if(root.type==='day_root'&&root.properties._deleted?.some(id=>ids.has(id))){root.properties._deleted=root.properties._deleted.filter(id=>!ids.has(id));restoredDayRoots.push(root);}
+  for(const op of ops)if(op.op==='delete')deleteReceipts.add(op.id+':'+op.deleteMutationId);
+  reviewBlocks.clear();for(const [id,row]of next)reviewBlocks.set(id,row);
+  res.json({blocks,restoredDayRoots});
+ });
+}
 app.post("/api/blocks", (req, res) => {
   const body = req.body || {};
   const now = new Date().toISOString();
@@ -203,6 +233,12 @@ app.post("/api/blocks/:id/reschedule",(req,res)=>{
   try{
     const parent=reviewBlocks.get(req.params.id);
     if(!parent)return res.status(404).json({error:"Block not found"});
+    if(req.body.placement?.kind==="pool_date"){
+      const planned=poolPlacement.plan(parent,liveReviewBlocks(),req.body);
+      const blocks=planned.moves.map(move=>({...reviewBlocks.get(move.id),date:move.date,parent_id:move.parentId===undefined?reviewBlocks.get(move.id).parent_id:move.parentId,properties:move.properties}));
+      blocks.forEach(row=>reviewBlocks.set(row.id,row));
+      return res.json({moved:planned.ids,blocks,created:[],targetDate:req.body.targetDate});
+    }
     if(req.body.placement?.kind!=="unplanned")return res.status(400).json({error:"Unsupported review placement"});
     const ids=reschedule.collectSubtreeBlockIds(liveReviewBlocks(),parent);
     const blocks=ids.map(id=>{const row=reviewBlocks.get(id);return {...row,date:req.body.targetDate,parent_id:id===parent.id?null:row.parent_id,properties:reschedule.unplannedProperties(row,parent.id,req.body.placement.durations)};});
@@ -272,6 +308,12 @@ app.patch("/api/blocks/:id", (req, res) => {
     properties: req.body?.properties || block.properties,
     updated_at: new Date().toISOString(),
   };
+  if (process.env.DCC_REVIEW_HIERARCHY === '1') {
+    try {
+      const plan=hierarchy.planParentChange(block,next.properties,req.body.parent_id,liveReviewBlocks(),next.date);
+      next.properties=plan.properties;next.parent_id=plan.parentId;
+    } catch(error) { return res.status(error.statusCode||400).json({error:error.message}); }
+  }
   reviewBlocks.set(next.id, next);
   res.json(next);
 });
@@ -517,9 +559,14 @@ app.get("/api/vault/index", (_req, res) => res.json({ nodes: [], edges: [], summ
 app.get("/api/vault/nodes", (_req, res) => res.json([]));
 app.get("/api/vault/timeline", (_req, res) => res.json({ nodes: [], threads: [], lockedCount: 0 }));
 app.get("/api/vault/graph", (_req, res) => res.json({ nodes: [], edges: [] }));
+app.get("/api/task-library", (_req,res)=>res.json({
+  tasks:liveReviewBlocks().filter(row=>row.type==='block'&&((row.properties||{}).local_id||['task','backlog'].includes((row.properties||{}).kind))),
+  projects:[],facets:[],views:[],readiness:{}
+}));
 app.get("/api/*", (req, res) => {
   if (req.path.includes("social/feed/publishable") || req.path.includes("social/friends") || req.path.includes("social/rewards/queue") || req.path.includes("access/grants") || req.path.includes("access/granted-to-me")) return res.json([]);
   if (req.path.includes("responsibilities")) return res.json([]);
+  if (req.path === "/api/commitments") return res.json([]);
   if (req.path.includes("tasks/open")) return res.json({ items: [] });
   if (req.path.includes("blocks")) return res.json([]);
   if (req.path.includes("admin")) return res.json({ activity: [], feedback: [], items: [] });

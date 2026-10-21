@@ -1,8 +1,8 @@
 // Versioned, shared workout/meal contract. No network, storage or health targets.
 (function (root, factory) {
-  if (typeof module === "object" && module.exports) module.exports = factory();
-  else root.ActivityModel = factory();
-})(typeof self !== "undefined" ? self : this, function () {
+  if (typeof module === "object" && module.exports) module.exports = factory(require("./workout-model"));
+  else root.ActivityModel = factory(root.WorkoutModel);
+})(typeof self !== "undefined" ? self : this, function (W) {
   "use strict";
   const TYPES = ["workout", "meal"];
   const NUTRIENTS = ["calories", "protein", "carbs", "fat"];
@@ -45,9 +45,10 @@
   }
   function empty(taskType) { return { schemaVersion: 1, taskType, plan: taskType === "workout" ? { exercises: [], runs: [] } : { foods: [] }, actual: taskType === "workout" ? { sets: [], runs: [] } : { foods: [] }, occurredOn: null }; }
   function validDate(v) { return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v)) && new Date(v + "T12:00:00Z").toISOString().slice(0, 10) === v; }
-  function hasActual(v) { return v.taskType === "meal" ? v.actual.foods.length > 0 : v.actual.sets.length + v.actual.runs.length > 0; }
+  function hasActual(v) { if(v.schemaVersion === 2) return W.hasActual(v); return v.taskType === "meal" ? v.actual.foods.some(f => f.portion != null || NUTRIENTS.some(k => f[k] != null)) : v.actual.sets.some(s => s.reps != null || s.weight != null) || v.actual.runs.some(r => r.distance != null || r.seconds != null); }
   function validate(input) {
     object(input, "Record");
+    if(input.schemaVersion === 2) { if(!validDate(input.occurredOn) && input.occurredOn != null) fail("Invalid results date"); return W.validate(input); }
     if (input.schemaVersion !== 1) fail("Unsupported record version");
     const type = choice(input.taskType, TYPES, "task type"), out = empty(type);
     const plan = object(input.plan, "Plan"), actual = object(input.actual, "Actual");
@@ -77,7 +78,7 @@
     if (JSON.stringify(out).length > 200000) fail("Record is too large");
     return out;
   }
-  function planOnly(input) { const v = validate(input); return { ...empty(v.taskType), plan: v.plan }; }
+  function planOnly(input) { if(input.schemaVersion === 2) return W.planOnly(input); const v = validate(input); return { ...empty(v.taskType), plan: v.plan }; }
   function weight(v, from, to) { return v == null ? null : v * (from === "kg" ? 1 : 0.45359237) / (to === "kg" ? 1 : 0.45359237); }
   function distance(v, from, to) { return v == null ? null : v * DISTANCE_METERS[from] / DISTANCE_METERS[to]; }
   function nutrition(foods) {
@@ -105,18 +106,19 @@
         if (plannedDay) { plannedDay.workoutTasks++; if (row.completed) plannedDay.completedWorkouts++; plannedDay.plannedRuns.push(...v.plan.runs); }
         if (actualDay && hasActual(v)) {
           actualDay.loggedWorkouts++;
-          actualDay.actualRuns.push(...v.actual.runs);
+          actualDay.actualRuns.push(...v.actual.runs.filter(r => r.distance != null || r.seconds != null));
           for (const e of v.plan.exercises) {
-            const sets = v.actual.sets.filter(s => s.exerciseId === e.id);
+            const sets = v.actual.sets.filter(s => s.exerciseId === e.id && (v.schemaVersion !== 2 || s.status === "logged") && (s.reps != null || s.weight != null || s.seconds != null));
             if (!sets.length) continue;
-            const key = e.name.trim().toLowerCase().replace(/\s+/g, " ");
-            const agg = actualDay.exercises[key] ||= { name: e.name, sets: 0, reps: null, maxLoad: null, volume: null, volumeSets: 0 };
             for (const s of sets) {
+              const convention=(s.loadMode||"total")+":"+(s.repsMode||"total");
+              const key = e.catalogExerciseId ? "catalog:" + e.catalogExerciseId + ":" + convention : e.name.trim().toLowerCase().replace(/\s+/g, " ");
+              const agg = actualDay.exercises[key] ||= { name: e.name+(v.schemaVersion===2?" · "+convention:""), sets: 0, reps: null, maxLoad: null, volume: null, volumeSets: 0 };
               agg.sets++;
               const w = weight(s.weight, s.unit, units.weight);
               if (s.reps != null) agg.reps = (agg.reps || 0) + s.reps;
               if (w != null) agg.maxLoad = agg.maxLoad == null ? w : Math.max(agg.maxLoad, w);
-              if (w != null && s.reps != null) { agg.volume = (agg.volume || 0) + w * s.reps; agg.volumeSets++; }
+              if (w != null && s.reps != null && !["bodyweight","assistance"].includes(s.loadMode)) { agg.volume = (agg.volume || 0) + w * s.reps; agg.volumeSets++; }
             }
           }
         }
@@ -135,20 +137,21 @@
   }
   // Flat export preserves individual sets/foods, relations and missing fields.
   function csv(records) {
-    const columns = ["taskId", "taskType", "title", "scheduledDate", "resultsDate", "completed", "removed", "archived", "phase", "kind", "id", "planId", "exerciseId", "name", "reps", "weight", "weightUnit", "distance", "distanceUnit", "elapsedSeconds", "portion", "portionUnit", "calories", "protein", "carbs", "fat", "nutritionState", "source"];
+    const columns = ["taskId", "taskType", "title", "scheduledDate", "resultsDate", "completed", "removed", "archived", "phase", "kind", "id", "planId", "exerciseId", "name", "reps", "weight", "weightUnit", "distance", "distanceUnit", "elapsedSeconds", "portion", "portionUnit", "calories", "protein", "carbs", "fat", "nutritionState", "source", "catalogExerciseId", "round", "loadMode", "repsMode", "seconds", "status", "loggedAt", "templateId", "templateRevision", "timing"];
     const rows = [];
     records.forEach(r => {
-      const base = { taskId: r.taskId, taskType: r.record.taskType, title: r.title, scheduledDate: r.date, resultsDate: r.record.occurredOn, completed: r.completed, removed: r.removed, archived: r.archived };
+      const base = { taskId: r.taskId, taskType: r.record.taskType, title: r.title, scheduledDate: r.date, resultsDate: r.record.occurredOn, completed: r.completed, removed: r.removed, archived: r.archived, templateId:r.record.provenance?.templateId, templateRevision:r.record.provenance?.templateRevision };
       const push = x => rows.push({ ...base, ...x });
       ["plan", "actual"].forEach(phase => {
         const v = r.record[phase];
         if (r.record.taskType === "meal") v.foods.forEach(f => push({ ...f, phase, kind: "food", planId: f.planFoodId }));
         else {
-          if (phase === "plan") v.exercises.forEach(e => e.sets.forEach(s => push({ ...s, phase, kind: "set", exerciseId: e.id, name: e.name, weightUnit: s.unit })));
-          else v.sets.forEach(s => push({ ...s, phase, kind: "set", name: r.record.plan.exercises.find(e => e.id === s.exerciseId)?.name, planId: s.planSetId, weightUnit: s.unit }));
+          if (phase === "plan") v.exercises.forEach(e => e.sets.forEach(s => push({ ...s, phase, kind: "set", exerciseId: e.id, catalogExerciseId:e.catalogExerciseId, name: e.name, weightUnit: s.unit })));
+          else v.sets.forEach(s => push({ ...s, catalogExerciseId:r.record.plan.exercises.find(e => e.id === s.exerciseId)?.catalogExerciseId, phase, kind: "set", name: r.record.plan.exercises.find(e => e.id === s.exerciseId)?.name, planId: s.planSetId, weightUnit: s.unit }));
           v.runs.forEach(run => push({ ...run, phase, kind: "run", planId: run.planRunId, distanceUnit: run.unit, elapsedSeconds: run.seconds }));
         }
       });
+      if(r.record.schemaVersion === 2) push({kind:"session", timing:JSON.stringify(W.replay(r.record, r.record.session.events.at(-1)?.at)), status:W.replay(r.record).status});
       if (!rows.some(row => row.taskId === r.taskId)) push({ kind: "empty" });
     });
     const cell = v => '"' + String(v == null ? "" : v).replace(/^(\s*[=+@-]|[\t\r\n])/, m => "'" + m).replace(/"/g, '""') + '"';

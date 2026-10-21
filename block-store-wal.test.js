@@ -1109,3 +1109,136 @@ test("an unverified entry inside a scoped log is retained for export and never s
   assert.equal(fetchCalls.length, 0);
   assert.equal(store.exportPending().pending.length, 1);
 });
+
+const restoreMeta={rootId:"root",ids:["local-root","local-child"],blockIds:["root","child"],date:"2026-07-08",deleteMutationId:"delete-1"};
+const restoredRows=()=>["root","child"].map(id=>({id,type:"block",date:"2026-07-08",deleted_at:null,properties:{local_id:"local-"+id,_deleteUndoToken:"delete-1",notes:"Keep "+id,...(id==="child"?{subtaskOf:"local-root"}:{})}}));
+test("atomic restore posts one batch, confirms every original row, and clears tombstones together",async()=>{
+ const h=makeStore({fetchBodyFn:()=>({blocks:restoredRows()})});
+ const result=await h.store.restoreBlocks(["root","child"],restoreMeta);
+ assert.equal(result.ok,true);assert.equal(h.fetchCalls.length,1);assert.match(h.fetchCalls[0].url,/\/api\/blocks\/batch$/);
+ const sent=JSON.parse(h.fetchCalls[0].init.body);assert.deepEqual(sent.operations,["root","child"].map(id=>({op:"undelete",id,expectedDeleteMutationId:"delete-1"})));
+ assert.equal(wal(h.storage).length,0);assert.equal(h.store.get("child").properties.notes,"Keep child");
+});
+test("a partial or malformed restore acknowledgement stays pending and never caches a partial tree",async()=>{
+ const h=makeStore({fetchBodyFn:()=>({blocks:[restoredRows()[0]]})});
+ const result=await h.store.restoreBlocks(["root","child"],restoreMeta);
+ assert.equal(result.ok,false);assert.equal(result.buffered,true);assert.equal(wal(h.storage).length,1);
+ assert.equal(h.store.get("root"),null);assert.equal(h.store.get("child"),null);
+});
+test("atomic restore WAL retains full membership across reload and retries as one batch",async()=>{
+ const first=makeStore({fetchStatus:503});await first.store.restoreBlocks(["root","child"],restoreMeta);
+ assert.equal(wal(first.storage)[0].meta.restore.ids.length,2);
+ const reload=makeStore({storage:first.storage,fetchBodyFn:()=>({blocks:restoredRows()})});
+ await reload.store.replayWAL();assert.equal(wal(reload.storage).length,0);
+ assert.equal(reload.fetchCalls.length,1);assert.equal(JSON.parse(reload.fetchCalls[0].init.body).operations.length,2);
+ assert.equal(reload.store.get("child").properties.subtaskOf,"local-root");
+});
+test("an atomic restore 409 is terminal and can be explicitly retried after the conflict is resolved",async()=>{
+ const opts={fetchStatus:409};const h=makeStore(opts);
+ const failed=await h.store.restoreBlocks(["root","child"],restoreMeta);assert.equal(failed.permanent,true);assert.equal(wal(h.storage).length,0);assert.equal(dead(h.storage).length,1);
+ opts.fetchStatus=200;opts.fetchBodyFn=()=>({blocks:restoredRows()});
+ const result=await h.store.restoreBlocks(["root","child"],restoreMeta);assert.equal(result.ok,true);assert.equal(wal(h.storage).length,0);
+});
+test("restore replay cannot pass an unsettled delete and retains both operations until the delete is acknowledged",async()=>{
+ let offline=true;
+ const h=makeStore({fetchImpl:async(_url,init)=>{
+  const ops=JSON.parse(init.body).operations;
+  if(offline)return {ok:false,status:503,json:async()=>({error:"offline"})};
+  return {ok:true,status:200,json:async()=>({blocks:ops[0].op==="delete"?ops.map(op=>({id:op.id,deleted_at:"now"})):restoredRows()})};
+ }});
+ await h.store.batchOp(["root","child"].map(id=>({op:"delete",id,deleteMutationId:"delete-1"})));
+ const waiting=await h.store.restoreBlocks(["root","child"],restoreMeta);assert.equal(waiting.buffered,true);assert.equal(h.fetchCalls.length,1);
+ await h.store.replayWAL();assert.equal(wal(h.storage).length,2);assert.equal(h.fetchCalls.length,2,"only the failed delete is attempted");
+ offline=false;await h.store.replayWAL();assert.equal(wal(h.storage).length,0);
+ const last=h.fetchCalls.slice(-2).map(call=>JSON.parse(call.init.body).operations[0].op);assert.deepEqual(last,["delete","undelete"]);
+});
+test("a permanently rejected restore replay removes every speculative cached member",async()=>{
+ const first=makeStore({fetchStatus:503});await first.store.restoreBlocks(["root","child"],restoreMeta);
+ let rejected=false;
+ const reload=makeStore({storage:first.storage,fetchStatus:(_url,init)=>{if(init?.method==="POST"){rejected=true;return 409;}return 200;},fetchBodyFn:()=>{if(rejected){assert.equal(reload.store.get("root"),null);assert.equal(reload.store.get("child"),null);return [];}return restoredRows();}});
+ await reload.store.loadDay("2026-07-08");assert.ok(reload.store.get("root"));assert.ok(reload.store.get("child"));
+ await reload.store.replayWAL();assert.equal(wal(reload.storage).length,0);
+ assert.equal(reload.store.get("root"),null);assert.equal(reload.store.get("child"),null);
+});
+
+ test("restore waits for a pending hide overlay and replay commits the overlay before restoring the tree",async()=>{
+  let release;const gate=new Promise(resolve=>release=resolve);
+  const root={id:"day-root",type:"day_root",date:"2026-07-08",properties:{}};
+  const h=makeStore({fetchImpl:async(url,init)=>{if(init?.method==="PATCH"){await gate;return {ok:true,status:200,json:async()=>({...root,properties:{_deleted:["local-root","local-child"]}})};}return {ok:true,status:200,json:async()=>init?.method==="POST"?{blocks:restoredRows(),restoredDayRoots:[root]}:[root,...restoredRows()]};}});
+  await h.store.loadDay(root.date);
+  const hide=h.store.updateBlock(root.id,{_deleted:["local-root","local-child"]});
+  const restoring=h.store.restoreBlocks(["root","child"],{...restoreMeta,overlayBlockId:root.id});
+  await Promise.resolve();assert.equal(h.fetchCalls.filter(c=>c.init?.method==="POST").length,0);
+  release();await hide;const result=await restoring;assert.equal(result.ok,true);
+  assert.equal(wal(h.storage).length,0);assert.equal(h.store.get("child").properties.subtaskOf,"local-root");
+ });
+
+test('rapid complete/reopen is locally durable before the first ack and old ack cannot repaint it',async()=>{
+ const gate={},secondGate={};gate.promise=new Promise(resolve=>{gate.resolve=resolve;});secondGate.promise=new Promise(resolve=>{secondGate.resolve=resolve;});let count=0;
+ const row={id:'b1',type:'block',date:'2026-07-08',properties:{status:'open'}};
+ const h=makeStore({fetchBodyFn:async(url,init)=>{
+  if(!url.includes('/completion'))return row;
+  const body=JSON.parse(init.body);if(++count===1)await gate.promise;else await secondGate.promise;
+  return {ok:true,task:{...row,properties:{status:body.completed?'done':'open',_completionRevision:'r'+count,_completionMutationId:body.mutationId}}};
+ }});
+ await h.store.handleBlocksChanged({blockIds:['b1']});
+ const first=h.store.setTaskCompletion('b1',true,{mutationId:'complete'});
+ const second=h.store.setTaskCompletion('b1',false,{mutationId:'undo'});
+ assert.equal(wal(h.storage).length,1);assert.equal(wal(h.storage)[0].data.mutationId,'undo');
+ assert.deepEqual(wal(h.storage)[0].meta.predecessorMutationIds,['complete']);
+ assert.equal(h.store.get('b1').properties.status,'open');
+ await new Promise(setImmediate);assert.equal(count,1);gate.resolve();await first;await new Promise(setImmediate);
+ assert.equal(count,2);assert.equal(h.store.get('b1').properties.status,'open');
+ assert.equal(wal(h.storage).length,1);assert.equal(wal(h.storage)[0].data.mutationId,'undo');
+ secondGate.resolve();await second;
+ assert.equal(h.store.get('b1').properties.status,'open');assert.equal(wal(h.storage).length,0);
+ const bodies=h.fetchCalls.filter(c=>c.url.includes('/completion')).map(c=>JSON.parse(c.init.body));
+ assert.equal(bodies[1].expectedRevision,'r1');
+});
+
+for(const predecessor of ['own-complete','foreign-complete'])test('reload replay rebases only over its recorded predecessor: '+predecessor,async()=>{
+ const storage=new Map();seedWal(storage,[{op:'completion',id:'b1',_walId:'undo-wal',data:{completed:false,mutationId:'undo',expectedRevision:null,taskDate:'2026-07-08'},meta:{predecessorMutationIds:['own-complete']}}]);let writes=0;
+ const row={id:'b1',type:'block',date:'2026-07-08',properties:{status:'done',_completionRevision:'r1',_completionMutationId:predecessor}};
+ const h=makeStore({storage,fetchImpl:async(url,init)=>{
+  if(!url.includes('/completion'))return {ok:true,json:async()=>row};
+  const body=JSON.parse(init.body);writes++;
+  if(writes===1)return {ok:false,status:409,json:async()=>({error:'Conflict',code:'COMPLETION_CONFLICT',currentTask:row})};
+  assert.equal(body.expectedRevision,'r1');return {ok:true,json:async()=>({ok:true,task:{...row,properties:{status:'open'}}})};
+ }});
+ await h.store.replayWAL();assert.equal(writes,predecessor==='own-complete'?2:1);
+ assert.equal(dead(storage).length,predecessor==='own-complete'?0:1);
+});
+
+test('queued moves are durable immediately and a newer move supersedes an older failed move',async()=>{
+ let release;const gate=new Promise(r=>{release=r;});let n=0,previews=0;
+ const h=makeStore({fetchImpl:async()=>{if(++n===1){await gate;throw new Error('offline');}return {ok:true,json:async()=>({moved:[],blocks:[]})};}});
+ const first=h.store.rescheduleBlock('b1','2026-07-10',{onQueued(){previews++;}}).catch(e=>e);
+ const second=h.store.rescheduleBlock('b1','2026-07-11',{onQueued(){previews++;}});
+ assert.equal(previews,2);assert.equal(wal(h.storage).length,1);assert.equal(wal(h.storage)[0].data.targetDate,'2026-07-11');
+ release();await Promise.all([first,second]);assert.equal(wal(h.storage).length,0);await h.store.replayWAL();assert.equal(n,2);
+});
+
+test('local quota failure prevents completion optimism and move preview',async()=>{
+ const row={id:'b1',type:'block',date:'2026-07-08',properties:{status:'open'}};
+ const h=makeStore({fetchBody:row});await h.store.handleBlocksChanged({blockIds:['b1']});h.fetchCalls.length=0;
+ h.storage.set=()=>{throw new Error('quota');};
+ await assert.rejects(h.store.setTaskCompletion('b1',true),/Local save failed/);
+ assert.equal(h.store.get('b1').properties.status,'open');let preview=false;
+ await assert.rejects(h.store.rescheduleBlock('b1','2026-07-10',{onQueued(){preview=true;}}),e=>e.permanent===true);
+ assert.equal(preview,false);assert.equal(h.fetchCalls.length,0);
+});
+
+test('old delta response cannot overwrite an edit or advance its cursor',async()=>{
+ let release;const gate=new Promise(r=>{release=r;});let pulls=0;
+ const row={id:'b1',type:'block',date:'2026-07-08',properties:{title:'old'}};
+ const h=makeStore({fetchBodyFn:async(url,init)=>{
+  if(url.includes('/sync/bootstrap'))return {workspaceId:'ws-1',date:row.date,cursor:1,blocks:[row],globals:[]};
+  if(url.includes('/sync/pull')){pulls++;await gate;return {cursor:2,blocks:[row],deletedBlockIds:[],hasMore:false};}
+  if(init?.method==='PATCH')return {...row,properties:JSON.parse(init.body).properties};
+  return [];
+ }});
+ h.context.DCC_DELTA_SYNC_ENABLED=true;
+ await h.store.loadDay(row.date);const pull=h.store.loadDay(row.date);await new Promise(setImmediate);
+ await h.store.updateBlock('b1',{title:'new'});release();assert.equal(await pull,null);
+ assert.equal(h.store.get('b1').properties.title,'new');assert.equal(h.storage.get('dcc-sync-cursor:ws-1'),'1');assert.equal(pulls,1);
+});
