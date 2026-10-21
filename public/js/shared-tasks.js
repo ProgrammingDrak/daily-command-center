@@ -19,11 +19,22 @@
     }).join('');
     return people + '<span class="shared-count">' + label + '</span>';
   }
+  function placeBadge(host) {
+    const card=host.closest?.('.it-list-item');
+    if(!card)return;
+    const head=card.querySelector(':scope > .it-list-main > .it-list-title-row');
+    if(!head)return;
+    const active=host.classList.contains('has-participants');
+    host.classList.toggle('shared-card-corner',active);
+    if(active && host.parentElement!==card)card.prepend(host);
+    else if(!active && host.parentElement!==head)head.append(host);
+  }
   function paint() {
     document.querySelectorAll('[data-shared-task]').forEach(host => {
       const share = forTask(host.dataset.sharedTask);
       host.classList?.toggle('has-participants',fresh && !!share);
       host.innerHTML = fresh && share ? badge(share, host._sharedTask) : esc(fresh ? 'Share task' : 'Sharing unavailable');
+      placeBadge(host);
       host.setAttribute('aria-label', fresh && share ? 'Shared task participants: ' + share.title : 'Share this task occurrence');
     });
     const launcher = document.getElementById('shared-tasks-open');
@@ -62,6 +73,7 @@
     host.setAttribute('aria-label','Shared task participants: ' + (ev.title || 'Task'));
     host.onclick = e => { e.stopPropagation(); void open(ev); };
     head.append(host);
+    placeBadge(host);
   }
   function instructionsHtml(plan) {
     if (!plan) return '<p>No workout instructions included. Each person chooses their own plan.</p>';
