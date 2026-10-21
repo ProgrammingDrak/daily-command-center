@@ -16,11 +16,12 @@
     return state;
   }
   function restoreComposers(list){
+    const toggleById=new Map(Array.from(list.querySelectorAll('[data-composer-toggle]'),button=>[button.getAttribute('aria-controls'),button]));
     list.querySelectorAll('[data-composer-form]').forEach(form=>{
       const state=composerState(form);form.hidden=!state.open;
       for(const [name,value] of Object.entries(state.values)){const input=form.elements.namedItem(name);if(input)input.value=value;}
       form.querySelectorAll('input,button').forEach(input=>{input.disabled=state.sending;});
-      const button=Array.from(list.querySelectorAll('[data-composer-toggle]')).find(b=>b.getAttribute('aria-controls')===form.id);
+      const button=toggleById.get(form.id);
       if(button)button.setAttribute('aria-expanded',String(state.open));
     });
   }

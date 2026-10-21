@@ -139,6 +139,11 @@ const id='review-detail-task';
   assert.equal(await page.evaluate(()=>__state.date),tomorrow);assert.equal(await page.evaluate(()=>JSON.stringify(scheduled)),futureBefore);
   await page.evaluate(date=>switchToDate(date),beforeViews.date);await ready();
   assert.equal(await page.evaluate(()=>schedView),'list');
+  await page.locator('[data-view="calendar"]').click();await page.reload();await ready();
+  assert.equal(await page.evaluate(()=>schedView),'calendar');await page.waitForSelector('#calendar-view .iwc-week-scroll');
+  await page.locator('[data-view="actual"]').click();await page.reload();await ready();
+  assert.equal(await page.evaluate(()=>schedView),'actual');await page.waitForFunction(()=>document.getElementById('actual-view').children.length>0);
+  await page.locator('[data-view="list"]').click();
   assert.deepEqual(errors,[]);console.log('PASS '+width+'px: priorities/reload/rollback/offline/keyboard/layout; both views, stable groups, scoped tasks, read-only switching, date navigation and persisted selection');
   await context.close();
  }}finally{await browser.close();}

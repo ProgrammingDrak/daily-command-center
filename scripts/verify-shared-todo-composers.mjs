@@ -67,6 +67,12 @@ try{
  const rects=await page.locator('#todo-public-list .tl-item').evaluateAll(items=>items.map(e=>{const r=e.getBoundingClientRect();return {top:r.top,bottom:r.bottom};}));for(let i=1;i<rects.length;i++)assert.ok(rects[i].top>=rects[i-1].bottom);
  assert.ok((await toggle('comment','two').boundingBox()).height>=44);await toggle('reward','two').click();const openHeight=(await form('reward','two').locator('xpath=ancestor::*[contains(@class,"tl-item")][1]').boundingBox()).height;assert.ok(openHeight>initialHeight);await toggle('reward','two').click();}
  assert.equal(posts.length,before);mark('desktop/mobile cards stack without overflow; composers use 44px targets and optional task notes preserve text');
+ // A late response from the old viewer must not erase or disable a new viewer's draft.
+ await toggle('comment','two').click();await form('comment','two').locator('input').fill('Old viewer pending comment');
+ holdComment=true;releaseComment=undefined;await form('comment','two').getByRole('button',{name:'Send',exact:true}).click();while(!releaseComment)await new Promise(r=>setTimeout(r,5));
+ fixture.viewer.username='Mid-send-synthetic-viewer';await refresh();await toggle('comment','two').click();await form('comment','two').locator('input').fill('New viewer unsent draft');
+ const settled=page.waitForResponse(response=>response.url().endsWith('/comments')&&response.request().method()==='POST');releaseComment();await settled;await page.evaluate(()=>new Promise(resolve=>window.requestAnimationFrame(()=>window.requestAnimationFrame(resolve))));holdComment=false;
+ assert.equal(await form('comment','two').locator('input').inputValue(),'New viewer unsent draft');assert.equal(await form('comment','two').locator('input').isDisabled(),false);assert.equal(await page.getByText('Old viewer pending comment',{exact:true}).count(),0);mark('late submission responses from a prior viewer do not overwrite the current draft or rendered comments');
  fixture.viewer.username='Other-synthetic-viewer';await refresh();await toggle('comment','two').click();assert.equal(await form('comment','two').locator('input').inputValue(),'');
  fixture.viewer.capabilities.comment=false;fixture.viewer.capabilities.sponsor_reward=false;await refresh();assert.equal(await page.locator('[data-composer-toggle]').count(),0);assert.equal(await page.getByText('My unsent note',{exact:true}).isVisible(),true);
  assert.deepEqual(errors,[]);mark('viewer changes discard prior unsent drafts; capability loss removes composers without hiding submitted content');
