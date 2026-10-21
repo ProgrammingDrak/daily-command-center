@@ -193,7 +193,7 @@ function getRequestOrigin(req) {
   const proxyIp = req.headers["cf-connecting-ip"] || req.headers["x-real-ip"] || forwardedFor;
   return String(proxyIp || req.ip || req.socket?.remoteAddress || "").slice(0, 80) || null;
 }
-const { isAdminSession, requireAdmin } = require("./lib/admin-access")(ADMIN_USERNAMES);
+const { isAdminSession, requireAdmin, guardAdminPage } = require("./lib/admin-access")(ADMIN_USERNAMES);
 
 function previousDateStr(dateStr) {
   const d = new Date(`${dateStr}T12:00:00Z`);
@@ -1161,6 +1161,7 @@ app.get("/todo/:token", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "pub
 // Mycelium is Drake's personal vault. DCC has multiple accounts, so the ink
 // shell must not become a shared authenticated surface by accident.
 app.get(["/ink", "/ink.html"], requireAdmin, (req, res) => { res.sendFile(path.join(PROJECT_DIR, "ink.html")); });
+app.use(guardAdminPage);
 app.get(["/admin", "/admin.html"], requireAdmin, (req, res) => { res.set("Cache-Control", "no-store"); res.sendFile(path.join(PROJECT_DIR, "admin.html")); });
 app.use(express.static(PROJECT_DIR, { extensions: ["html"], etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 app.get("/", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "index.html")); });

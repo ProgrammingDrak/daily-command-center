@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const express = require('express');
-const { isAdminSession, requireAdmin } = require('./lib/admin-access')(new Set(['drake']));
+const { isAdminSession, requireAdmin, guardAdminPage } = require('./lib/admin-access')(new Set(['drake']));
 
 function harness() {
   const app = express();
@@ -38,11 +38,11 @@ function harness() {
   require('./routes/feedback')(app, { pool, requireAdmin, ensureFeedbackTable: async () => {} });
   // Exercise the exact admin/static registration from the production server.
   const source = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
-  const start = source.indexOf('app.get(["/admin", "/admin.html"]');
+  const start = source.indexOf('app.use(guardAdminPage)');
   assert.ok(start >= 0, 'both admin paths must be registered before static serving');
   assert.ok(start < source.indexOf('app.use(express.static(PROJECT_DIR'), 'admin guard must precede static serving');
   const end = source.indexOf('// ── Startup', start);
-  vm.runInNewContext(source.slice(start, end), { app, requireAdmin, path, PROJECT_DIR: __dirname, express });
+  vm.runInNewContext(source.slice(start, end), { app, requireAdmin, guardAdminPage, path, PROJECT_DIR: __dirname, express });
   return { app, rows, setFailure(value) { fail = value; }, queries() { return queryCount; } };
 }
 async function request(app, url, { user = 'drake', method = 'GET', body } = {}) {
@@ -62,7 +62,7 @@ test('existing username allowlist grants site-admin access; workspace roles do n
 });
 test('ordinary and anonymous users cannot read inbox or either admin page path', async () => {
   const h = harness();
-  for (const url of ['/api/admin/feedback', '/admin', '/admin.html']) {
+  for (const url of ['/api/admin/feedback', '/admin', '/admin.html', '/%61dmin.html', '/admin%2ehtml', '/%61dmin', '//admin.html', '/x/%2e%2e%2fadmin.html', '/admin.html/']) {
     assert.equal((await request(h.app, url, { user: 'member' })).status, 403, url);
     assert.equal((await request(h.app, url, { user: null })).status, 401, url);
   }

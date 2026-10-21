@@ -15,7 +15,7 @@ The inbox displays complete multiline message text, existing author display name
 
 A failed refresh preserves loaded messages. Initial failures, session expiry, permission denial and timeouts have readable messages. Login activity loads independently. Submission failures retain the draft; repeated keyboard submissions while Send is disabled do not create duplicate requests. Inbox responses, the admin shell and legacy admin activity are marked `no-store`.
 
-## Validation on 2026-10-13
+## Initial validation on 2026-10-13
 
 - Existing site-admin account mapping verified with a read-only transaction. No account or access settings changed.
 - `npm test`: 2,723 passed, 3 skipped, 0 failed under the already-installed supported Node 20.20.2 runtime (`/opt/homebrew/Cellar/node@20/20.20.2/bin/node`). The earlier Node 24 run also passed. No tooling was installed.
@@ -41,3 +41,12 @@ The harness refuses production mode and non-loopback database hosts. It binds on
 ## Release gate
 
 The feedback change is isolated on `codex/admin-feedback-inbox`. Publication requires user authorization under the workspace startup contract; the `/ship-it` workflow then requires current local review, CI, release evidence, and verified production deployment. Existing review policy remains authoritative.
+
+## Reconciled readiness on 2026-10-21
+
+Reconciled with main `d6e86e12d4013366364eeb8c435a694de03b921d`. The adversarial review found an encoded admin-page path bypass; decoded, normalized paths now pass through the same allowlist before static serving. Canonical, encoded, normalized-dot, double-slash, uppercase, trailing-slash and malformed paths were independently checked with synthetic identities. The feedback API was already protected.
+
+- Node 20: 3,107 tests passed, 11 skipped, 0 failures; lint has 0 errors and 70 existing warnings. Real collection rendering now has regression coverage for ordering, column order, escaped multiline content and empty updates.
+- Actual Chrome page zoom is verified at 200% through Appearance settings in a newly isolated profile: outer width stayed 1280, CSS viewport changed from 1280 to 640, DPR changed from 2 to 4, visualViewport scale stayed 1. No existing Chrome window or tab inventory was used.
+- Synthetic local Postgres QA passed at 200%: all 55 fixtures, multiline/literal text, keyboard-focusable table scrolling, read-failure row retention, empty state, 4,000-character member submission, save-failure draft retention and ordinary-member denial. A separate 320px layout check passed with no document overflow. No page errors.
+- The previous zoom blocker is resolved. No merge, deployment or live feedback mutation has occurred. The separate licensing PR411 still follows this feature's merge and verified deployment.
