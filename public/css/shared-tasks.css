@@ -26,3 +26,4 @@
    independent of the separate collaboration/action controls. It grows for
    additional participants without covering the title or touch targets. */
 .it-list-item > .shared-card-corner { grid-column:1 / -1; grid-row:1; justify-self:end; flex-wrap:wrap; }
+@media(min-width:761px) { .it-list-item > .shared-card-corner { margin-right:var(--sp-8); } }
