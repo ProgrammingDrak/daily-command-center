@@ -46,7 +46,6 @@
     { key: "title",       label: "Title",        get: (t) => t.title || "" },
     { key: "type",        label: "Type",         get: (t) => t.itemTypeLabel || t.itemType || "" },
     { key: "status",      label: "Status",       get: (t) => t.status || "" },
-    { key: "priority",    label: "Priority",     get: (t) => t.priority || "" },
     { key: "points",      label: "Points",       get: (t) => (t.points == null ? "" : String(t.points)) },
     { key: "calendar",    label: "Calendar",     get: (t) => (t.calendar && t.calendar.name) || "" },
     { key: "tags",        label: "Tags",         get: (t) => (Array.isArray(t.tags) ? t.tags.map(x => (x && x.name) || "").filter(Boolean).join(", ") : "") },

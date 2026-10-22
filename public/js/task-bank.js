@@ -3,9 +3,10 @@
 // the active workspace_id, so edits/deletes stay account-specific.
 (function(){
   const UI_KEY = "pa-task-bank-ui";
-  const priorityRank = { High: 0, high: 0, Medium: 1, medium: 1, Low: 2, low: 2 };
-  let state = { query: "", sort: "priority" };
+  let state = { query: "", sort: "manual" };
   try { state = Object.assign(state, JSON.parse(localStorage.getItem(UI_KEY) || "{}")); } catch(e) {}
+
+  if(state.sort === "priority") state.sort = "manual";
 
   let editingBacklogId = null;
   let editingTrivialId = null;
@@ -26,7 +27,7 @@
   }
 
   function taskBankSort(items, options){
-    const sort = (options && options.sort) || state.sort || "priority";
+    const sort = (options && options.sort) || state.sort || "manual";
     const getTitle = t => norm(t.title || t.text);
     const getDur = t => Number(t.durMin || t.duration || 0);
     const getCreated = t => new Date(t.createdAt || t.addedAt || t.added_at || 0).getTime() || 0;
@@ -35,9 +36,7 @@
       if(sort === "duration") return getDur(a) - getDur(b) || getTitle(a).localeCompare(getTitle(b));
       if(sort === "newest") return getCreated(b) - getCreated(a) || getTitle(a).localeCompare(getTitle(b));
       if(sort === "oldest") return getCreated(a) - getCreated(b) || getTitle(a).localeCompare(getTitle(b));
-      const pa = priorityRank[a.priority] ?? 3;
-      const pb = priorityRank[b.priority] ?? 3;
-      return pa - pb || getTitle(a).localeCompare(getTitle(b));
+      return 0;
     });
   }
 
@@ -86,9 +85,6 @@
       '<select class="tbe-dur" aria-label="Duration">'+[15,30,45,60,90,120,180].map(m =>
         '<option value="'+m+'"'+((Number(t.durMin)||30)===m?' selected':'')+'>'+m+'m</option>'
       ).join('')+'</select>'+
-      '<select class="tbe-priority" aria-label="Priority">'+["High","Medium","Low"].map(p =>
-        '<option value="'+p+'"'+((t.priority||"Medium")===p?' selected':'')+'>'+p+'</option>'
-      ).join('')+'</select>'+
       '<textarea class="tbe-detail" aria-label="Detail" placeholder="Details">'+esc(t.detail||"")+'</textarea>'+
       '<div class="task-bank-edit-actions">'+
         '<button type="button" class="bc-act tbe-cancel">Cancel</button>'+
@@ -106,7 +102,6 @@
       persistBacklogUpdate(t.id, {
         title,
         durMin: parseInt(form.querySelector(".tbe-dur").value, 10) || 30,
-        priority: form.querySelector(".tbe-priority").value || "Medium",
         detail: form.querySelector(".tbe-detail").value.trim()
       });
       editingBacklogId = null;
@@ -168,7 +163,7 @@
       });
     }
     if(sort){
-      sort.value = state.sort || "priority";
+      sort.value = state.sort || "manual";
       sort.addEventListener("change", () => {
         state.sort = sort.value;
         saveUi();

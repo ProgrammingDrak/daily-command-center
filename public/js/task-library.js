@@ -3,7 +3,7 @@
 
   const STORAGE_KEY = "dcc.task-library.state.v1";
   const DATE_RE = /^\d{4}-\d{2}-\d{2}/;
-  const DEFAULT_COLUMNS = ["select","title","project","schedule","readiness","priority","duration"];
+  const DEFAULT_COLUMNS = ["select","title","project","schedule","readiness","duration"];
   const BUILTIN_IDS = new Set(["all-open","unscheduled","scheduled","solo","waiting","completed"]);
   const state = {
     activeViewId: "all-open", query: "", filters: [], groupBy: "none",
@@ -89,7 +89,6 @@
       {key:"schedule",label:"Schedule",kind:"enum",values:[{id:"scheduled",name:"Scheduled"},{id:"unscheduled",name:"Unscheduled"}]},
       {key:"status",label:"Status",kind:"enum",values:[{id:"open",name:"Open"},{id:"waiting",name:"Waiting"},{id:"done",name:"Completed"}]},
       {key:"readiness",label:"Readiness",kind:"enum",values:[{id:"ready",name:"Ready"},{id:"blocked",name:"Blocked"}]},
-      {key:"priority",label:"Priority",kind:"enum",values:[{id:"High",name:"High"},{id:"Medium",name:"Medium"},{id:"Low",name:"Low"}]},
       {key:"duration",label:"Duration",kind:"number"},
       {key:"createdAt",label:"Created",kind:"date"},
       {key:"date",label:"Scheduled date",kind:"date"},
@@ -177,7 +176,7 @@
     const query=state.query.trim().toLowerCase();
     if(query)rows=rows.filter(item=>{
       const facetText=Object.entries(item.facetValues).flatMap(([facetId,ids])=>[facetName(facetId),...ids.map(id=>facetValue(facetId,id))]).join(" ");
-      return [item.title,item.detail,projectName(item.project==="solo"?null:item.project),item.priority,facetText].join(" ").toLowerCase().includes(query);
+      return [item.title,item.detail,projectName(item.project==="solo"?null:item.project),facetText].join(" ").toLowerCase().includes(query);
     });
     rows=rows.filter(item=>state.filters.every(filter=>matchesFilter(item,filter)));
     const key=state.sort&&state.sort.key||"title",dir=state.sort&&state.sort.dir==="desc"?-1:1;
@@ -242,7 +241,6 @@
     if(key==="schedule")return item.date?'<button class="tlb-date-btn" data-schedule-task="'+esc(item.id)+'">'+esc(formatDate(item.date))+'</button>':'<span class="tlb-muted">Unscheduled</span>';
     if(key==="readiness")return item.readiness==='blocked'?'<span class="tlb-status warning" title="'+esc(item.blockers.map(blocker=>blocker.title).join(', '))+'">Blocked '+item.dependencySatisfied+'/'+item.dependencyTotal+'</span>':'<span class="tlb-status ready">Ready</span>';
     if(key==="status")return '<span class="tlb-status '+(item.status==='done'?'done':item.status==='waiting'?'warning':'open')+'">'+esc(item.status)+'</span>';
-    if(key==="priority")return '<span class="tlb-priority '+esc(item.priority.toLowerCase())+'">'+esc(item.priority)+'</span>';
     if(key==="duration")return esc(item.duration+'m');
     if(["createdAt","date","completedAt"].includes(key))return esc(formatDate(item[key]));
     if(key.startsWith("facet:")){
@@ -298,6 +296,13 @@
   }
 
   function render(){
+    // Ignore retired fields in old local state, shared URLs and saved views.
+    state.filters=state.filters.filter(filter=>filter.key!=="priority");
+    state.columns=state.columns.filter(key=>key!=="priority");
+    if(state.sort&&state.sort.key==="priority")state.sort={key:"projectOrder",dir:"asc"};
+    if(state.groupBy==="priority")state.groupBy="none";
+    if(state.matrixRows==="priority")state.matrixRows=null;
+    if(state.matrixColumns==="priority")state.matrixColumns=null;
     const root=document.getElementById("task-library-root");if(!root)return;
     if(loading&&!payload){root.innerHTML='<div class="task-library-loading">Loading your task library…</div>';return;}
     if(!payload){root.innerHTML='<div class="tlb-error">Task Library could not load. <button id="tlb-retry">Try again</button></div>';root.querySelector('#tlb-retry').onclick=refresh;return;}
@@ -422,11 +427,11 @@
   function taskEditor(taskId,defaults){
     const row=taskId&&(payload.tasks||[]).find(item=>item.id===taskId),p=row?props(row):{},projectId=defaults&&defaults.projectId!==undefined?defaults.projectId:(p.projectId||''),facets=(payload.facets||[]).filter(facet=>!props(facet).archived&&(props(facet).scope==='workspace'||props(facet).projectId===projectId));
     const facetFields=facets.map(facet=>{const fp=props(facet),selected=(p.facetValues&&p.facetValues[facet.id])||[];if(fp.cardinality==='multi')return '<fieldset class="tlb-facet-field"><legend>'+esc(fp.name)+'</legend>'+(fp.values||[]).filter(v=>!v.archived).map(value=>'<label><input type="checkbox" data-facet="'+esc(facet.id)+'" value="'+esc(value.id)+'"'+(selected.includes(value.id)?' checked':'')+'>'+esc(value.name)+'</label>').join('')+'</fieldset>';return '<label class="tlb-field"><span>'+esc(fp.name)+'</span><select data-facet="'+esc(facet.id)+'"><option value="">Unassigned</option>'+(fp.values||[]).filter(v=>!v.archived).map(value=>'<option value="'+esc(value.id)+'"'+(selected.includes(value.id)?' selected':'')+'>'+esc(value.name)+'</option>').join('')+'</select></label>';}).join('');
-    const body='<form id="tlb-task-form"><label class="tlb-field"><span>Task</span><input id="tlb-task-title" required value="'+esc(row?taskTitle(row):'')+'"></label><label class="tlb-field"><span>Project</span><select id="tlb-task-project"><option value="">Solo</option>'+(payload.projects||[]).filter(project=>props(project).status!=='archived').map(project=>'<option value="'+esc(project.id)+'"'+(project.id===projectId?' selected':'')+'>'+esc(props(project).name)+'</option>').join('')+'</select></label><div class="tlb-form-grid"><label class="tlb-field"><span>Priority</span><select id="tlb-task-priority">'+['High','Medium','Low'].map(value=>'<option'+((p.priority||'Medium')===value?' selected':'')+'>'+value+'</option>').join('')+'</select></label><label class="tlb-field"><span>Duration</span><input id="tlb-task-duration" type="number" min="1" max="1440" value="'+esc(p.duration||p.durMin||30)+'"></label></div><label class="tlb-field"><span>Details</span><textarea id="tlb-task-detail">'+esc(p.detail||'')+'</textarea></label><div id="tlb-task-facets">'+facetFields+'</div><div class="tlb-modal-actions">'+(row?'<button type="button" id="tlb-task-dependencies">Dependencies</button>':'')+'<button type="button" data-cancel>Cancel</button><button class="primary" type="submit">Save task</button></div></form>';
+    const body='<form id="tlb-task-form"><label class="tlb-field"><span>Task</span><input id="tlb-task-title" required value="'+esc(row?taskTitle(row):'')+'"></label><label class="tlb-field"><span>Project</span><select id="tlb-task-project"><option value="">Solo</option>'+(payload.projects||[]).filter(project=>props(project).status!=='archived').map(project=>'<option value="'+esc(project.id)+'"'+(project.id===projectId?' selected':'')+'>'+esc(props(project).name)+'</option>').join('')+'</select></label><div class="tlb-form-grid"><label class="tlb-field"><span>Duration</span><input id="tlb-task-duration" type="number" min="1" max="1440" value="'+esc(p.duration||p.durMin||30)+'"></label></div><label class="tlb-field"><span>Details</span><textarea id="tlb-task-detail">'+esc(p.detail||'')+'</textarea></label><div id="tlb-task-facets">'+facetFields+'</div><div class="tlb-modal-actions">'+(row?'<button type="button" id="tlb-task-dependencies">Dependencies</button>':'')+'<button type="button" data-cancel>Cancel</button><button class="primary" type="submit">Save task</button></div></form>';
     const m=modal(row?'Edit task':'New task',body);m.overlay.querySelector('[data-cancel]').onclick=m.close;
     m.overlay.querySelector('#tlb-task-project').onchange=()=>{const draft={projectId:m.overlay.querySelector('#tlb-task-project').value};m.close();taskEditor(taskId,draft);};
     const dep=m.overlay.querySelector('#tlb-task-dependencies');if(dep)dep.onclick=()=>{m.close();if(typeof openTaskDependencyModal==='function')openTaskDependencyModal(row.id);};
-    m.overlay.querySelector('form').onsubmit=async event=>{event.preventDefault();const facetValues={};m.overlay.querySelectorAll('[data-facet]').forEach(input=>{if((input.type==='checkbox'&&!input.checked)||!input.value)return;(facetValues[input.dataset.facet]||(facetValues[input.dataset.facet]=[])).push(input.value);});const body={title:m.overlay.querySelector('#tlb-task-title').value,projectId:m.overlay.querySelector('#tlb-task-project').value||null,priority:m.overlay.querySelector('#tlb-task-priority').value,duration:Number(m.overlay.querySelector('#tlb-task-duration').value),detail:m.overlay.querySelector('#tlb-task-detail').value,facetValues};try{await api(row?'/api/task-library/tasks/'+row.id:'/api/task-library/tasks',{method:row?'PATCH':'POST',body:JSON.stringify(body)});m.close();await refresh();notify(row?'Task updated':'Task added');}catch(error){notify(error.message,'error');}};
+    m.overlay.querySelector('form').onsubmit=async event=>{event.preventDefault();const facetValues={};m.overlay.querySelectorAll('[data-facet]').forEach(input=>{if((input.type==='checkbox'&&!input.checked)||!input.value)return;(facetValues[input.dataset.facet]||(facetValues[input.dataset.facet]=[])).push(input.value);});const body={title:m.overlay.querySelector('#tlb-task-title').value,projectId:m.overlay.querySelector('#tlb-task-project').value||null,duration:Number(m.overlay.querySelector('#tlb-task-duration').value),detail:m.overlay.querySelector('#tlb-task-detail').value,facetValues};try{await api(row?'/api/task-library/tasks/'+row.id:'/api/task-library/tasks',{method:row?'PATCH':'POST',body:JSON.stringify(body)});m.close();await refresh();notify(row?'Task updated':'Task added');}catch(error){notify(error.message,'error');}};
   }
 
   function importProject(){

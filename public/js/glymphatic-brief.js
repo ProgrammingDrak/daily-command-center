@@ -358,12 +358,6 @@
     });
   }
 
-  function gbPriorityRank(p){
-    p = String(p || "").toLowerCase();
-    if(/high|urgent|stale/.test(p))return 0;
-    if(/med|normal/.test(p))return 1;
-    return 2;
-  }
 
   function gbTriage(current, opts){
     var triage = current.triage || {};
@@ -371,7 +365,7 @@
     if(opts && opts.sort){
       items = items.slice().sort(function(a, b){
         var drafted = (b.draft_status === "drafted" ? 1 : 0) - (a.draft_status === "drafted" ? 1 : 0);
-        return drafted || gbPriorityRank(a.priority) - gbPriorityRank(b.priority);
+        return drafted;
       });
     }
     var summary = triage.summary || "Reader sweeps should surface conversations needing attention, then writer skills create reviewable drafts in place.";
@@ -404,7 +398,6 @@
     return '<article class="gb-triage-card">'+
       '<div class="gb-triage-top">'+
         '<span class="gb-triage-channel">'+gbEsc(icon)+'</span>'+
-        '<span class="gb-triage-priority">'+gbEsc(item.priority || "normal")+'</span>'+
         '<span class="gb-triage-status '+(drafted?'ready':'pending')+'">'+(drafted?'draft ready':'needs draft')+'</span>'+
       '</div>'+
       '<div class="gb-triage-title">'+gbEsc(item.title || "Untitled triage item")+'</div>'+
@@ -444,7 +437,6 @@
         '<div class="gb-task-main">'+
           '<div class="gb-task-title">'+gbEsc(task.title)+'</div>'+
           '<div class="gb-task-meta">'+
-            '<span>'+gbEsc(task.priority || "Medium")+'</span>'+
             '<span>'+gbEsc(planItem.start)+' - '+gbEsc(planItem.end)+'</span>'+
             confidence+
           '</div>'+
@@ -624,7 +616,6 @@
           '<div class="gb-task-title">'+gbEsc(task.title)+'</div>'+
           '<div class="gb-task-meta">'+
             '<span>'+gbEsc(task.suggested_start || "anytime")+(task.duration?' &middot; '+gbEsc(task.duration)+'m':'')+'</span>'+
-            '<span>'+gbEsc(task.priority || "Medium")+'</span>'+
             (task.project ? '<span class="gb-pill">'+gbEsc(task.project)+'</span>' : "")+
             gbDecisionBadge(decision)+
           '</div>'+

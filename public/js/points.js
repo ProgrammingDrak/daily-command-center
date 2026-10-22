@@ -150,14 +150,9 @@
     const back = num(input.commute_back_minutes || input.commuteBackMinutes || input.commute_return_minutes || input.commuteReturnMinutes || input.returnCommuteMinutes || input.commute_minutes_back || input.commuteMinutesBack);
     return Math.round(to + back);
   }
-  function highPriority(input){
-    const p = norm(input.priority);
-    return p === "high" || p === "urgent" || p === "p1" || p === "critical";
-  }
   function urgent(input){
     const u = norm(input.urgency);
-    const p = norm(input.priority);
-    return input.urgent === true || u === "urgent" || u === "now" || u === "today" || p === "urgent" || p === "p1" || p === "critical";
+    return input.urgent === true || u === "urgent" || u === "now" || u === "today";
   }
   function responsibility(input){
     return input.responsibility === true || input.is_responsibility === true || input.responsibility_id != null || input.responsibilityId != null || norm(input.source) === "responsibility";
@@ -183,11 +178,6 @@
   function importanceTier(input){
     const explicit = norm(input.importance_tier || input.importanceTier || input.importance);
     if(IMPORTANCE[explicit]) return explicit;
-    const p = norm(input.priority);
-    if(p === "critical" || p === "p1") return "critical";
-    if(p === "urgent" || p === "high") return "high";
-    if(p === "medium" || p === "normal") return "normal";
-    if(p === "low") return "low";
     if(responsibility(input)) return "important";
     return "normal";
   }

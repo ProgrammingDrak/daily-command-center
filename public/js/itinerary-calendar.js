@@ -254,7 +254,6 @@
         {value:"in_progress",label:"In progress"},
         {value:"done",label:"Done"}
       ],disabled:past})+
-      (!meeting?inspectorField("Priority","priority",ev.priority||"Medium",{options:["Low","Medium","High","Critical"],disabled:past}):'')+
       inspectorField("Date","date",ev._block.date,{type:"date",readonly:timeReadonly})+
       (ev.allDay?'<label class="iwc-field">All day through<input name="allDayEnd" type="date" value="'+escapeHtml(ev.allDayEnd||addDays(ev._block.date,1))+'" '+(timeReadonly?'readonly':'')+'></label>':inspectorField("Start","start",ev.start,{type:"time",readonly:timeReadonly})+inspectorField("End","end",ev.end,{type:"time",readonly:timeReadonly}))+
       (!meeting?inspectorField("Tags","tags",ev.tags.join(", "),{readonly:past}):'')+

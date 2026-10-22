@@ -286,7 +286,6 @@
             <div class="cal-task-meta">
               <span style="color:${tc.color}">${tc.tag}</span>
               ${dur ? `<span>${dur}</span>` : ""}
-              ${item.priority ? `<span>${item.priority}</span>` : ""}
             </div>
           </div>
         </div>`;
