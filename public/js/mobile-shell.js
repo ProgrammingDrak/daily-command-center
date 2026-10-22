@@ -80,6 +80,7 @@
   // Owner actions: each row triggers the existing header element's own handler,
   // so there is no duplicated logic. `find` returns the live source element.
   const MORE_ACTIONS = [
+    { label:"Shared tasks", icon:"👥", find(){ return byId("shared-tasks-open"); } },
     { label:"Admin",            icon:"⚙", find(){ return document.querySelector('a.admin-link[href="/admin"]'); } },
     { label:"Share list",       icon:"🔗", find(){ return byId("todo-share-open"); } },
     { label:"Refresh reactions",icon:"🔄", find(){ return byId("todo-reactions-toggle"); } },
