@@ -414,6 +414,10 @@
   </div>
 
   <script>
+    window.dccAuthNext = function(value) {
+      if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//") || /[\\\r\n]/.test(value)) return "/";
+      try { const url = new URL(value, location.origin); return url.origin === location.origin ? url.pathname + url.search + url.hash : "/"; } catch { return "/"; }
+    };
     let mode = window.location.pathname === "/register" ? "register" : "login";
 
     const loginTab = document.getElementById("loginTab");
@@ -511,7 +515,7 @@
         if (res.ok) {
           // Redirect to the app (or the originally requested page)
           const params = new URLSearchParams(window.location.search);
-          window.location.href = params.get("next") || "/";
+          window.location.href = window.dccAuthNext(params.get("next"));
         } else {
           errorEl.textContent = data.error || (mode === "register" ? "Registration failed." : "Sign in failed. Check your credentials.");
           errorEl.classList.add("visible");
@@ -613,7 +617,7 @@
       redirectUrl: authReturnUrl,
       onSignedIn: () => {
         const params = new URLSearchParams(window.location.search);
-        const destination = params.get("next") || "/";
+        const destination = window.dccAuthNext(params.get("next"));
         clearClerkHandoff();
         window.location.href = destination;
       },

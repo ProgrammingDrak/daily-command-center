@@ -1238,6 +1238,7 @@ app.get("/api/todo-share/sponsorships", async (req, res) => {
       `SELECT *
          FROM todo_sponsorships
         WHERE workspace_id = $1
+          AND accountability_commitment_id IS NULL
         ORDER BY created_at DESC
         LIMIT 100`,
       [req.workspaceId]
@@ -1310,6 +1311,10 @@ app.post("/api/todo-share/sponsorships/:id/status", async (req, res) => {
     );
     if (!existingRows[0]) { await client.query("ROLLBACK"); return res.status(404).json({ error: "Sponsorship not found" }); }
     let sponsorship = existingRows[0];
+    if (sponsorship.accountability_commitment_id) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "Manage this offer from its itinerary collaboration" });
+    }
     if (sponsorship.status === status) {
       await client.query("COMMIT");
       return res.json({ sponsorship, reward: null, bounty: null });
@@ -2033,4 +2038,5 @@ app.post("/api/public/todo-share/:token/comments", async (req, res) => {
   }
 });
 
+return { activate: activateTodoShareBounty, revoke: revokeTodoShareBounty };
 };
