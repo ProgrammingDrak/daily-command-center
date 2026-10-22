@@ -381,3 +381,14 @@ test('ordinary reschedule converts a previous pool origin marker back to a visib
  assert.equal(calls.reschedule[0].creates.length,0);const updated=calls.reschedule[0].moves.find(move=>move.id===tomb.id);
  assert.equal(updated.properties.poolOrigin,undefined);assert.equal(updated.properties.rescheduledTo,TO);assert.equal(result.body.count,1);
 });
+
+test("same-day placement dates an existing unscheduled recurring checklist and keeps IDs/history",async()=>{
+  const parent=blk('B1','routine',{properties:{duration:60,responsibilityId:'repeat-1',_taskNotes:{text:'keep'}}});parent.date=null;
+  const child=blk('B2','step',{subtaskOf:'routine',properties:{duration:0,status:'done',completedAt:'2026-10-21T12:00:00Z'}});child.date=null;
+  const {app,calls}=mountApp({parent,pool:[parent,child]});
+  const {status}=await post(app,'B1',{fromDate:FROM,targetDate:FROM,parentStart:'12:00',parentEnd:'13:00',userSetStart:true});
+  assert.equal(status,200);const {moves,creates}=calls.reschedule[0];
+  assert.deepEqual(moves.map(m=>m.id),['B1','B2']);assert.ok(moves.every(m=>m.date===FROM));assert.equal(creates.length,0);
+  assert.equal(moves[0].properties.responsibilityId,'repeat-1');assert.deepEqual(moves[0].properties._taskNotes,{text:'keep'});
+  assert.equal(moves[1].properties.subtaskOf,'routine');assert.equal(moves[1].properties.status,'done');
+});

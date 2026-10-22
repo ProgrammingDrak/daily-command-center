@@ -1057,3 +1057,10 @@ button.dbadge { font-family: inherit; border: 0; min-height: 44px; }
 .dcc-activity-shortcuts { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; align-items:center; }
 .dcc-activity-shortcuts button { min-height:44px; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--text); }
 .dcc-activity-shortcuts span { flex-basis:100%; font-size:12px; color:var(--text-muted); }
+
+/* Preserve the drag source while exposing itinerary targets outside the queue. */
+body.unscheduled-drag-out #tasks-drawer[data-queue="unscheduled"] .side-drawer-body,
+body.unscheduled-drag-out .side-drawer-backdrop {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
