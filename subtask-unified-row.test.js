@@ -153,7 +153,7 @@ function dropEvent({ clientY = 50, height = 100, shiftKey = false } = {}) {
   };
 }
 
-test("Unscheduled drop onto a row's middle band schedules top-level, never nests", () => {
+test("Unscheduled drop onto a row's middle band requests durable top-level placement, never nests", async () => {
   const sched = [
     { id: "target", title: "Target", type: "task", start: "09:00", end: "09:30" },
     { id: "u", title: "Unscheduled one", type: "task", start: "00:00", end: "00:00", untimed: true },
@@ -162,14 +162,18 @@ test("Unscheduled drop onto a row's middle band schedules top-level, never nests
   // dragId is a lexical binding inside drag.js — set it the real way, via dStart.
   context.dStart({ dataTransfer: { effectAllowed: "", setData() {} }, target: { closest: () => null } }, "u");
   // clientY 50 of height 100 = dead center = the nest band.
-  context.dDrop(dropEvent({ clientY: 50, height: 100 }), "target");
+  const placements=[];
+  context._viewedDateStr=()=>"2026-10-22";
+  context.rescheduleTaskToDate=async(id,date,options)=>{placements.push({id,date,start:options.pinnedStart});return true;};
+  await context.dDrop(dropEvent({ clientY: 50, height: 100 }), "target");
+  assert.deepEqual(placements,[{id:"u",date:"2026-10-22",start:"09:30"}]);
   const u = find(sched, "u");
-  assert.equal(u.untimed, false, "task is now scheduled");
+  assert.equal(u.untimed, true, "only the acknowledged placement projection may schedule the task");
   assert.equal(u.subtaskOf ?? null, null, "must NOT become a subtask of the drop target");
   assert.equal(u.wrapId ?? null, null, "must NOT become a ride-along of the drop target");
 });
 
-test("Unscheduled drop onto a NESTED row still schedules top-level (guard covers _dropAtTargetLevel)", () => {
+test("Unscheduled drop onto a NESTED row requests top-level placement without adopting its parent", async () => {
   // The nest-band guard alone isn't enough: an edge-drop onto a nested row routes
   // through _dropAtTargetLevel, which would join the moved task to the target's
   // parent. An Unscheduled-origin drop must skip that join too.
@@ -181,9 +185,13 @@ test("Unscheduled drop onto a NESTED row still schedules top-level (guard covers
   const { context } = makeDay(sched);
   context.dStart({ dataTransfer: { effectAllowed: "", setData() {} }, target: { closest: () => null } }, "u");
   // Edge drop (clientY near the top) onto the nested "sub" row.
-  context.dDrop(dropEvent({ clientY: 8, height: 100 }), "sub");
+  const placements=[];
+  context._viewedDateStr=()=>"2026-10-22";
+  context.rescheduleTaskToDate=async(id,date,options)=>{placements.push({id,date,start:options.pinnedStart});return true;};
+  await context.dDrop(dropEvent({ clientY: 8, height: 100 }), "sub");
+  assert.deepEqual(placements,[{id:"u",date:"2026-10-22",start:"09:00"}]);
   const u = find(sched, "u");
-  assert.equal(u.untimed, false, "unscheduled task is now scheduled");
+  assert.equal(u.untimed, true, "drag does not invent an acknowledged scheduled state");
   assert.equal(u.subtaskOf ?? null, null, "must not inherit the nested target's parent as subtaskOf");
   assert.equal(u.wrapId ?? null, null, "must not inherit the nested target's parent as wrapId");
 });
