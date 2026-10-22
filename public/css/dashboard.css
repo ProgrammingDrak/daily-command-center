@@ -5891,3 +5891,19 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .todo-public-body .todo-reward-row input { min-width:0; flex-basis:100px; }
 .todo-public-body .todo-public-comment-form input,.todo-public-body .todo-public-comment-form button,.todo-public-body .todo-reward-form input,.todo-public-body .todo-reward-form button { min-height:44px; }
 @media print { .todo-public-body .todo-composer-toggle { display:none!important; } }
+
+/* Shared-task reactions: quiet at rest, available on both open and done rows. */
+.todo-public-body .todo-reaction-disclosure{max-height:0;opacity:0;overflow:hidden}
+.todo-public-body .tl-item:hover .todo-reaction-disclosure,
+.todo-public-body .tl-compact:hover .todo-reaction-disclosure,
+.todo-public-body .tl-item:focus-within .todo-reaction-disclosure,
+.todo-public-body .tl-compact:focus-within .todo-reaction-disclosure{max-height:160px;opacity:1}
+.todo-public-body .todo-reaction-reveal{display:none}
+.todo-public-body .todo-reaction-btn{min-width:44px;min-height:44px}
+@media (hover:none),(pointer:coarse){
+ .todo-public-body .todo-reaction-disclosure{max-height:none;opacity:1}
+ .todo-public-body .todo-reaction-reveal{display:inline-flex;align-items:center;min-height:44px;border:1px solid var(--border);border-radius:999px;background:var(--card);color:var(--muted);padding:4px 12px}
+ .todo-public-body .todo-reaction-disclosure .todo-public-reactions{display:none}
+ .todo-public-body .todo-reaction-disclosure[data-reaction-open="true"] .todo-public-reactions{display:flex}
+}
+@media print{.todo-public-body .todo-reaction-disclosure{display:none!important}}

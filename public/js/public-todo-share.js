@@ -2,6 +2,7 @@
   const token = location.pathname.split("/").filter(Boolean).pop();
   let current = null;
   let loadPromise = null;
+  const reactionOpen = new Set(), reactionPending = new Set();
   // Page-memory drafts only: never persisted or shared with another viewer/day.
   const composers = new Map();
   let composerScope = null;
@@ -213,15 +214,18 @@
   }
 
   function reactionBar(task){
-    const counts = task.reactions || {};
-    return '<div class="todo-public-reactions itinerary-reactions" aria-label="Task reactions">' + COMMON_REACTIONS.map(emoji => {
-      const count = Number(counts[emoji]) || 0;
-      const active = (task.viewerReactions || []).includes(emoji);
-      return '<button class="todo-reaction-btn' + (active ? ' active' : '') + '" type="button" data-reaction-emoji="' + esc(emoji) + '" data-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '" title="React ' + esc(emoji) + '">' +
-        '<span>' + esc(emoji) + '</span>' +
-        '<b>' + (count ? esc(count) : '') + '</b>' +
-      '</button>';
-    }).join("") + '</div>';
+    // The shared card renderer passes an event projection; recover social data
+    // from the current share payload rather than dropping counts on open rows.
+    task=(current?.tasks||[]).find(t=>String(t.id)===String(task.id))||task;
+    if(!can('react'))return '';
+    const id=String(task.id),counts=task.reactions||{},open=reactionOpen.has(id);
+    const toolbarId='todo-reactions-'+encodeURIComponent(id);
+    return '<div class="todo-reaction-disclosure" data-reaction-open="'+open+'">'+
+      '<button type="button" class="todo-reaction-reveal" data-reaction-toggle="'+esc(id)+'" aria-expanded="'+open+'" aria-controls="'+esc(toolbarId)+'" aria-label="Reactions for '+esc(task.title)+'">React</button>'+
+      '<div id="'+esc(toolbarId)+'" class="todo-public-reactions itinerary-reactions" aria-label="Task reactions">'+COMMON_REACTIONS.map(emoji=>{
+        const count=Number(counts[emoji])||0,active=(task.viewerReactions||[]).includes(emoji);
+        return '<button class="todo-reaction-btn'+(active?' active':'')+'" type="button" data-reaction-emoji="'+esc(emoji)+'" data-task-id="'+esc(id)+'" data-task-block-id="'+esc(task.blockId||'')+'" aria-label="React '+esc(emoji)+' to '+esc(task.title)+'" aria-pressed="'+active+'"'+(reactionPending.has(id)?' disabled':'')+'><span>'+esc(emoji)+'</span><b>'+(count?esc(count):'')+'</b></button>';
+      }).join('')+'</div></div>';
   }
 
   function relTime(value){
@@ -374,6 +378,9 @@
         '<span class="c-title">' + (ev.redacted ? "🔒 Private task" : esc(task.title)) + '</span>' +
         '<span class="c-time">' + esc(t1) + (task.end ? ' - ' + esc(fmtTime(task.end)) : '') + '</span>' +
       '</div>';
+    el.insertAdjacentHTML('beforeend',reactionBar(task));
+    // A task completed during an interrupted offer keeps its existing draft reachable.
+    if(composers.has(composerId(task,'reward')))el.insertAdjacentHTML('beforeend',rewardButtonHtml(task)+rewardFormHtml(task));
     return el;
   }
 
@@ -492,7 +499,7 @@
 
   function render(data){
     const scope=JSON.stringify([token,data.date,data.ownerUsername,data.viewer?.loggedIn,data.viewer?.username,data.viewer?.tier]);
-    if(scope!==composerScope){saveComposers();composers.clear();composerScope=scope;loadComposers();}
+    if(scope!==composerScope){saveComposers();composers.clear();reactionOpen.clear();reactionPending.clear();composerScope=scope;loadComposers();}
     current = data;
     const allowed=new Set((data.tasks || []).filter(t=>!t.redacted).flatMap(t=>['reward','comment'].filter(k=>can(k==='reward'?'sponsor_reward':'comment')).map(k=>composerId(t,k))));
     for(const key of composers.keys())if(!allowed.has(key))composers.delete(key);
@@ -579,6 +586,11 @@
   }
 
   async function toggleReaction(button){
+    const id=String(button.dataset.taskId),scope=composerScope;
+    if(reactionPending.has(id)||!can('react'))return;
+    reactionPending.add(id);
+    button.closest('.todo-public-reactions')?.querySelectorAll('button').forEach(el=>el.disabled=true);
+    const emoji=button.dataset.reactionEmoji;
     const task = (current && current.tasks || []).find(t => String(t.id) === String(button.dataset.taskId));
     try {
       const data = await api("/api/public/todo-share/" + encodeURIComponent(token) + "/reactions", {
@@ -592,16 +604,21 @@
           emoji: button.dataset.reactionEmoji
         })
       });
-      if (task) {
-        task.reactions = data.counts || {};
-        task.viewerReactions = data.viewerReactions || [];
+      if(scope!==composerScope)return;
+      const latest=(current?.tasks||[]).find(t=>String(t.id)===id);
+      reactionPending.delete(id);
+      if (latest) {
+        latest.reactions = data.counts || {};
+        latest.viewerReactions = data.viewerReactions || [];
         renderTasks(current.tasks || []);
+        if(button===document.activeElement || !button.isConnected)Array.from(document.querySelectorAll('[data-reaction-emoji]')).find(el=>el.dataset.taskId===id && el.dataset.reactionEmoji===emoji)?.focus({preventScroll:true});
       } else {
         await load();
       }
     } catch (e) {
-      /* transient; next poll reconciles */
-    }
+      /* The next refresh reconciles an uncertain toggle; never retry it blindly. */
+    } finally { if(scope===composerScope){reactionPending.delete(id);button.closest('.todo-public-reactions')?.querySelectorAll('button').forEach(el=>el.disabled=false);} }
+
   }
 
   async function submitComment(form){
@@ -887,6 +904,13 @@
     const list = document.getElementById("todo-public-list");
     if (list) {
       list.addEventListener("click", e => {
+        const reactionToggle=e.target.closest('[data-reaction-toggle]');
+        if(reactionToggle){
+          const id=reactionToggle.dataset.reactionToggle;
+          if(reactionOpen.has(id))reactionOpen.delete(id);else reactionOpen.add(id);
+          reactionToggle.setAttribute('aria-expanded',String(reactionOpen.has(id)));
+          reactionToggle.closest('.todo-reaction-disclosure').dataset.reactionOpen=String(reactionOpen.has(id));return;
+        }
         const toggle=e.target.closest('[data-composer-toggle]');
         if(toggle){
           e.preventDefault();e.stopPropagation();
