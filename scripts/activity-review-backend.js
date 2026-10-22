@@ -16,6 +16,7 @@ module.exports = async function mountActivityReview(app) {
     if (mode !== "none") { req.session = { userId: mode === "other" ? 2 : mode === "viewer" ? 3 : 1 }; req.workspaceId = mode === "other" ? "ws-2" : "ws-1"; }
     next();
   });
+  if (process.env.DCC_SHARED_TASK_REVIEW === "1") await require("./shared-task-review-backend")(app,ctx,date);
   require("../routes/activity")(app, ctx);
   require("../routes/blocks")(app, ctx);
   const store = createActivityStore(ctx), owner = { userId: 1, workspaceId: "ws-1" };

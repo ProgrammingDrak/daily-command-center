@@ -1379,6 +1379,7 @@ async function createSchema() {
   console.log("[pg-schema] Creating tables...");
   await pool.query(SCHEMA_SQL);
   await pool.query(require("./activity-store").SCHEMA_SQL);
+  await pool.query(require("./shared-task-store").SCHEMA_SQL);
   await pool.query(require("./commitment-store").SCHEMA_SQL);
   await pool.query(require("./friend-invite-store").SCHEMA_SQL);
   await pool.query("ALTER TABLE todo_sponsorships ADD COLUMN IF NOT EXISTS accountability_commitment_id TEXT REFERENCES accountability_commitments(id)");

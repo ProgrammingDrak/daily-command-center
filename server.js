@@ -405,6 +405,11 @@ app.get("/api/events", (req, res) => {
 });
 
 function broadcast(eventType, data, workspaceId) {
+  if (eventType === "blocks-changed" && workspaceId && ctx.sharedTasks) {
+    for (const id of data.blockIds || []) {
+      ctx.sharedTasks.notifyTask(id, workspaceId, broadcast).catch(e => console.error("[shared-tasks] refresh failed:", e.message));
+    }
+  }
   const payload = JSON.stringify({ type: eventType, ...data });
   let targets;
   if (workspaceId) { targets = sseClients.get(workspaceId) || new Set(); }
@@ -978,6 +983,8 @@ const ctx = {
   get vault() { return vault; },
   get syncMgr() { return syncMgr; },
 };
+ctx.sharedTasks = require("./shared-task-store").createSharedTaskStore(ctx);
+require("./routes/shared-tasks")(app, ctx);
 require("./routes/access")(app, ctx);
 ctx.commitmentBounty = require("./routes/social-todo")(app, ctx);
 require("./routes/commitments")(app, ctx);

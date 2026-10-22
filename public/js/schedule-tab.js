@@ -1250,7 +1250,7 @@ function buildSchedule(){
       timeRange:f12(ev.start)+' - '+f12(ev.end),
       trailingHtml:(window.todoShareCompactFeedbackHtml?window.todoShareCompactFeedbackHtml(ev):''),
       onCheck:()=>toggleDone(ev.id),
-      afterRender:el=>{const rb=el.querySelector(".review-badge");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();openReviewPopover(rb)});}
+      afterRender:el=>{window.DCC?.SharedTasks?.attach(el,ev);const rb=el.querySelector(".review-badge");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();openReviewPopover(rb)});}
     });
     tl.appendChild(el);
   });
