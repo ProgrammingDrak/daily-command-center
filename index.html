@@ -25,6 +25,7 @@
 <link rel="stylesheet" href="/public/css/activity.css?v=movement-cards-1">
 <link rel="stylesheet" href="/public/css/task-sources.css">
 <link rel="stylesheet" href="/public/css/commitments.css">
+<link rel="stylesheet" href="/public/css/task-priority.css">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -244,8 +245,9 @@
   <div id="active-work-dock" class="active-work-dock" hidden></div>
   <div class="source-row">
     <span style="margin-left:auto">
-      <span class="sched-view-toggle" id="sched-view-toggle">
-        <button class="svt-btn active" data-view="list">List</button>
+      <span class="sched-view-toggle" id="sched-view-toggle" role="group" aria-label="Task view">
+        <button type="button" class="svt-btn active" data-view="itinerary" aria-pressed="true">Itinerary</button>
+        <button type="button" class="svt-btn" data-view="list" aria-pressed="false">List</button>
         <button class="svt-btn" data-view="calendar">Calendar</button>
         <button class="svt-btn" data-view="actual">Actual</button>
       </span>
@@ -751,6 +753,7 @@
     <div class="add-modal-body dcc-task-detail-flow">
       <p id="am-task-status" class="am-task-status" aria-live="polite"></p>
       <!-- Read-only details (description lives in Notes below) -->
+      <div id="am-priority" class="am-priority"></div>
       <div class="am-det-meta" id="am-details-section" style="display:none"></div>
       <div class="am-next"><span>Next step</span><p id="am-next-step" aria-live="polite">Start work on this task.</p></div>
       <div id="am-work-actions" class="am-work-actions" aria-label="Task execution"></div>
@@ -2120,6 +2123,7 @@
 <!-- task-serialize.js: the one task-property serializer (window.DCC.taskBlockProps/taskCommonProps); must load before state.js/schedule.js/unfinished-tasks.js consume it -->
 <script src="/public/js/task-attachments.js"></script>
 <script src="/public/js/task-sources.js"></script>
+<script src="/public/js/task-priority.js"></script>
 <script src="/public/js/task-serialize.js?v=task-serialize-1"></script>
 <!-- task-model.js: the one block -> ev projection (window.DCC.TaskModel.fromBlock); must load before data.js/persistence.js/state.js and the carryover lane consume it -->
 <script src="/public/js/app-config.js?v=app-config-1"></script>
@@ -2179,6 +2183,7 @@
 <script src="/public/js/vault-graph.js?v=vault-b7-1"></script>
 <script src="/public/js/vault-tab.js?v=vault-b7-1"></script>
 <script src="/public/js/features.js"></script>
+<script src="/public/js/task-priority-ui.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>
 <script src="/public/js/urgency.js"></script>

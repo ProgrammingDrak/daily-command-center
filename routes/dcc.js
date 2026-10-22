@@ -1,3 +1,4 @@
+const TaskPriority = require("../public/js/task-priority");
 // routes/dcc.js — DCC ingest + glymphatic-brief spine.
 // Extracted verbatim from server.js (2026-07-04). Mounted via the shared
 // module.exports(app, ctx) pattern; every dependency comes from ctx.
@@ -556,6 +557,7 @@ module.exports = function mount(app, ctx) {
         kind: body.kind || "task",
         estimatedMinutes: minutes,
         priority: body.priority ? String(body.priority) : "Medium",
+        taskPriority: TaskPriority.read(body),
         source: body.source || "quick-task",
         created_by: body.created_by || "quick-task",
         created_at: new Date().toISOString(),

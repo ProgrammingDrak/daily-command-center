@@ -114,7 +114,7 @@
              submitCreateTask() is unchanged; guest-created tasks come back marked
              createdByGuest and render with a distinct border. -->
         <div class="todo-guest-add">
-          <button id="todo-guest-add-toggle" class="todo-guest-add-toggle" type="button" aria-expanded="false">+ Add a task</button>
+          <button id="todo-guest-add-toggle" class="todo-guest-add-toggle" type="button" aria-expanded="false" aria-controls="todo-guest-add-form">+ Add a task</button>
           <div id="todo-guest-add-form" class="todo-guest-add-form" hidden>
             <input id="todo-create-title" type="text" maxlength="220" placeholder="What needs doing?">
             <div class="todo-guest-add-row">
@@ -129,7 +129,8 @@
               </select>
               <button id="todo-create-task" class="todo-public-btn primary" type="button">Add</button>
             </div>
-            <input id="todo-create-note" type="text" maxlength="1000" placeholder="Note (optional)">
+            <button id="todo-create-note-toggle" class="todo-composer-toggle" type="button" aria-expanded="false" aria-controls="todo-create-note-panel">Add a note (optional)</button>
+            <div id="todo-create-note-panel" hidden><input id="todo-create-note" type="text" maxlength="1000" aria-label="Task note (optional)" placeholder="Note (optional)"></div>
             <input id="todo-create-email" type="hidden">
             <div id="todo-create-status" class="todo-sponsor-status"></div>
           </div>

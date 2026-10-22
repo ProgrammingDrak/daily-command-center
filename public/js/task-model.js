@@ -43,13 +43,13 @@
 // unscheduleTaskFromDate (deletes) and rescheduleTaskToDate (moves) -- so the next
 // person to add a fourth sees all of them at once. See `scheduleRowOnDay` there.
 (function (root, factory) {
-  const api = factory(typeof module === "object" && module.exports ? require("./slack-titles") : root.DCC && root.DCC.SlackTitles);
+  const api = factory(typeof module === "object" && module.exports ? require("./slack-titles") : root.DCC && root.DCC.SlackTitles, typeof module === "object" && module.exports ? require("./task-priority") : root.DCC && root.DCC.TaskPriority);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) {
     const DCC = (root.DCC = root.DCC || {});
     DCC.TaskModel = api;
   }
-})(typeof self !== "undefined" ? self : this, function (slackTitles) {
+})(typeof self !== "undefined" ? self : this, function (slackTitles, priorityModel) {
   // state.js owns the canonical pt/fmt/ms trio and is NOT a module, so prefer the
   // globals in the browser (zero drift by construction) and fall back to these
   // identical locals under node so the projection stays require()able + testable.
@@ -132,6 +132,7 @@
       pointsDurationMinutes: p.pointsDurationMinutes == null ? null : Number(p.pointsDurationMinutes),
       aiSummary: p.aiSummary || "",
       notionUrl: p.notionUrl || "", calUrl: p.calUrl || "", priority: p.priority || "High",
+      taskPriority: priorityModel ? priorityModel.read(p) : "Medium",
       calendarId: p.calendar_id || "", calendarName: p.calendar_name || "",
       calendarColor: p.calendar_color || "", calendarAccountKey: p.account_key || "",
       calendarAccountEmail: p.account_email || "",
@@ -248,6 +249,7 @@
       durationMinutes: duration,
       duration_minutes: duration,
       priority: priority,
+      taskPriority: priorityModel ? priorityModel.read(item) : "Medium",
       source: "triage",
       source_id: item.link || item.source_url || "",
       ...(Array.isArray(item.sourceReferences) ? {sourceReferences:item.sourceReferences.map(ref => Object.assign({},ref))} : {}),

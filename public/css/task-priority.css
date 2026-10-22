@@ -1,0 +1,25 @@
+/* Compact controls preserve the dense card layout. Words/arrows carry meaning without color. */
+.task-priority-action{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;min-width:28px;min-height:28px;padding:2px 5px;border:0;border-radius:5px;background:transparent;color:var(--text-muted);font:inherit;font-size:11px;white-space:nowrap;cursor:pointer}
+.task-priority-action[data-priority="High"]{color:var(--amber)}
+.task-priority-action:hover,.task-priority-action:focus-visible{background:var(--bg-hover,rgba(128,128,128,.14));outline:2px solid var(--cyan);outline-offset:1px}
+.task-priority-action:disabled{opacity:.5;cursor:wait}
+.am-priority{display:flex;align-items:center;gap:10px;margin:0 0 10px;font-size:12px}
+.am-priority[hidden]{display:none}
+.am-priority label,.task-priority-popover label{display:flex;align-items:center;gap:8px}
+.am-priority select,.task-priority-popover select{font:inherit;min-height:32px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text);padding:3px 8px}
+.priority-save-status{font-size:11px;color:var(--text-muted)}
+.task-priority-popover{position:fixed;inset:auto;margin:0;box-sizing:border-box;width:240px;max-width:calc(100vw - 16px);padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--surface,var(--bg));color:var(--text);box-shadow:0 6px 24px #0004;font-size:13px}
+.task-priority-popover small,.task-priority-popover [role="status"]{display:block;margin-top:8px;font-size:11px;color:var(--text-muted)}
+.task-priority-popover button{margin-top:8px;min-height:28px;background:transparent;color:var(--text);border:1px solid var(--border);border-radius:4px;cursor:pointer}
+@media(max-width:600px){.task-priority-action{min-width:32px;min-height:32px}.am-priority{flex-wrap:wrap}}
+
+.priority-list-group{display:flex;flex-direction:column;gap:4px;min-width:0}
+.priority-list-group .it-list-section{margin:8px 0 2px;font-size:12px}
+.priority-list-empty,.priority-parent{font-size:11px;color:var(--text-muted)}
+.priority-list-empty{padding:4px 10px 8px}
+#sched-view-toggle{flex-wrap:nowrap;flex-shrink:0}
+@media(max-width:760px){.source-row>span:last-child{flex-wrap:wrap;gap:6px}.source-row .sched-drag-hint{flex-basis:100%}}
+/* Mobile density rules hide unlisted metadata controls after focus leaves the
+   card. Priority must remain discoverable and focusable when its popover closes. */
+.it-list-item .it-list-meta > .task-priority-action{display:inline-flex;margin:0;min-width:28px;min-height:28px;height:28px}
+@media(max-width:760px){.it-list-item .it-list-meta > .task-priority-action{min-width:32px;min-height:32px;height:32px}}
