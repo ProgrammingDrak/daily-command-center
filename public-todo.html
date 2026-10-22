@@ -10,7 +10,18 @@
   <link rel="stylesheet" href="/public/css/tokens.css">
   <link rel="stylesheet" href="/public/css/dashboard.css">
   <link rel="stylesheet" href="/public/css/ui-optimization.css">
-</head>
+<style>
+[data-condition-editor]{flex-basis:100%;min-width:0;width:100%}
+[data-condition-editor] button,[data-condition-editor] select{min-height:44px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:inherit;padding:6px 10px;max-width:100%}
+.reward-condition-group{margin:8px 0 8px calc(var(--condition-depth)*8px);padding:8px;border:1px solid var(--border);border-radius:8px;min-width:0}
+.reward-condition-group summary{cursor:pointer;min-height:44px;display:flex;align-items:center;overflow-wrap:anywhere}
+.reward-condition-group label{display:flex;align-items:center;gap:8px;min-height:44px}
+.reward-condition-group input[type=checkbox]{width:18px;flex:none}
+.reward-condition-picker{max-height:240px;overflow:auto}
+.reward-condition-members{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.reward-condition-members span{display:inline-flex;align-items:center;gap:4px;max-width:100%;overflow-wrap:anywhere}
+.reward-condition-help,.reward-condition-error{font-size:12px;line-height:1.5;opacity:.8}
+</style></head>
 <body class="todo-public-body guest-mode">
   <main class="todo-public-shell">
     <section class="todo-public-hero">
@@ -151,6 +162,8 @@
 <script src="/public/js/time-block-view.js"></script>
   <script src="/public/js/itinerary-card.js"></script>
   <script src="/public/js/share-export.js"></script>
+  <script src="/public/js/reward-conditions.js"></script>
+  <script src="/public/js/reward-condition-editor.js"></script>
   <script src="/public/js/public-todo-share.js"></script>
 <footer style="padding: 0.75rem; text-align: center"><a href="/source">Source and license</a></footer>
 </body>

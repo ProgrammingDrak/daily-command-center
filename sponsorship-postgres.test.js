@@ -18,7 +18,7 @@ test("pending sponsorship activation is owner-only, atomic and idempotent", { sk
   }).join("\n");
   const handlers = new Map(), broadcasts = [];
   let publicTasks = [{id:"public-task",title:"Canonical fictional task",blockId:"public-block",identityIds:["public-task"]}];
-  const ctx = { pool, console, slotStore:{ensureSchema:async()=>{}}, capabilities:require("./capabilities"),
+  const ctx = { pool, console, rewardConditions:require("./public/js/reward-conditions"), crypto:require("node:crypto"), todoActorKey:()=>"user:2", slotStore:{ensureSchema:async()=>{}}, capabilities:require("./capabilities"),
     getTodayStr:()=>"2026-10-08",coerceDateString:String,isValidDate:value=>/^\d{4}-\d{2}-\d{2}$/.test(value),
     buildPublicTodoShare:async()=>({tasks:publicTasks}), broadcast:(...args)=>broadcasts.push(args),
     app:{post:(path,fn)=>handlers.set(path,fn),get:(path,fn)=>handlers.set(path,fn)}, blockDB:{
@@ -60,6 +60,22 @@ test("pending sponsorship activation is owner-only, atomic and idempotent", { sk
     const saved=(await pool.query('SELECT * FROM todo_sponsorships WHERE id=$1',[linked.id])).rows[0];
     assert.equal(saved.status,'pending');assert.equal(saved.review_state,'pending');
     assert.equal((await pool.query('SELECT * FROM slot_rewards')).rows.length,0);
+  });
+  await t.test("nested conditions canonicalize all tasks, reject hidden tasks, and retry once",async()=>{
+    publicTasks=[{id:"a",title:"Task A",blockId:"block-a",identityIds:["a","alias-a"]},{id:"b",title:"Task B",blockId:"block-b",identityIds:["b"]}];
+    const body={kind:"reward",taskId:"forged",sponsorName:"Blair",rewardTitle:"Conditional treat",requestKey:"nested-request-key-123",condition:{type:"group",op:"all",children:[{type:"task",taskId:"alias-a"},{type:"group",op:"any",children:[{type:"task",taskId:"b"}]}]}};
+    const results=await Promise.all([submit(body),submit(body)]);assert.ok(results.every(r=>r.status===201||r.status===200));
+    assert.equal(results[0].body.id,results[1].body.id);
+    const saved=(await pool.query("SELECT * FROM todo_sponsorships WHERE id=$1",[results[0].body.id])).rows[0];
+    assert.equal(saved.offer_settings.condition.children[0].taskId,"a");
+    assert.equal(saved.offer_settings.condition.children[0].blockId,"block-a");
+    assert.equal((await change(saved.id)).status,200);
+    assert.equal((await pool.query("SELECT * FROM slot_rewards")).rows.length,0,'approval must not leak a conditional reward into slots');
+    publicTasks=[];
+    assert.equal((await submit(body)).status,200,'a lost accepted response remains retryable after deletion');
+    assert.equal((await submit({...body,rewardTitle:"Changed"})).status,409);
+    assert.equal((await submit({...body,requestKey:"different-request-123"})).status,400);
+    publicTasks=[{id:"public-task",title:"Canonical fictional task",blockId:"public-block",identityIds:["public-task"]}];
   });
   let offer;
   await t.test("submission records a pending canonical offer without activating it, preserving private settings",async()=>{

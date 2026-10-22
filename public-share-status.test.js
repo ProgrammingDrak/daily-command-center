@@ -52,6 +52,7 @@ function build({ rootProps = {}, rows = [], tombstoneReadThrows = false } = {}) 
     ? [{ id: "root-1", type: "day_root", properties: rootProps }].concat(rows)
     : rows.slice();
   const ctx = {
+    shared: undefined,
     // BOTH channels: the fail-closed path logs with console.error, and a fake missing the
     // method turns the real throw into "console.error is not a function" — a harness bug
     // masquerading as the assertion passing for the wrong reason.

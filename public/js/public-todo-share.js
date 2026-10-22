@@ -5,6 +5,15 @@
   // Page-memory drafts only: never persisted or shared with another viewer/day.
   const composers = new Map();
   let composerScope = null;
+  function saveComposers(){
+    if(!composerScope)return;
+    try{sessionStorage.setItem('dcc-reward-drafts:'+composerScope,JSON.stringify(Array.from(composers).filter(([id])=>id.includes('reward')).map(([id,s])=>[id,{...s,sending:false}])));}catch(_e){}
+  }
+  function loadComposers(){
+    try{const saved=JSON.parse(sessionStorage.getItem('dcc-reward-drafts:'+composerScope)||'[]');
+      for(const [id,s] of saved){if(s.condition)window.DCC.RewardConditions.normalize(s.condition);composers.set(id,{...s,sending:false});}
+    }catch(_e){}
+  }
   function composerId(task,kind){ return 'todo-composer-'+encodeURIComponent(JSON.stringify([task.blockId || task.id,kind])); }
   function composerState(form){
     if(!composers.has(form.id))composers.set(form.id,{open:false,values:{},sending:false});
@@ -12,7 +21,8 @@
   }
   function rememberComposer(form){
     const state=composerState(form);
-    form.querySelectorAll('input[name]').forEach(input=>{state.values[input.name]=input.value;});
+    form.querySelectorAll('input[name]:not([type=checkbox])').forEach(input=>{state.values[input.name]=input.value;});
+    saveComposers();
     return state;
   }
   function restoreComposers(list){
@@ -20,7 +30,12 @@
     list.querySelectorAll('[data-composer-form]').forEach(form=>{
       const state=composerState(form);form.hidden=!state.open;
       for(const [name,value] of Object.entries(state.values)){const input=form.elements.namedItem(name);if(input)input.value=value;}
-      form.querySelectorAll('input,button').forEach(input=>{input.disabled=state.sending;});
+      form.querySelectorAll('input,button,select').forEach(input=>{input.disabled=state.sending;});
+      const editor=form.querySelector('[data-condition-editor]');
+      if(editor && window.DCC.RewardConditionEditor){
+        window.DCC.RewardConditionEditor.render(editor,state,current.tasks||[],state.sending);
+        window.DCC.RewardConditionEditor.bind(editor,state,current.tasks||[],form.dataset.taskId,()=>{saveComposers();});
+      }
       const button=toggleById.get(form.id);
       if(button)button.setAttribute('aria-expanded',String(state.open));
     });
@@ -148,7 +163,7 @@
     return '<div class="todo-public-sponsors">' + offers.slice(0, 3).map(s => {
       const label = s.kind === "reward" ? "Reward" : "Bounty";
       const amount = money(s.valueCents);
-      return '<span>' + esc(label) + ': ' + esc(s.rewardTitle || (s.kind === "reward" ? "a reward" : "2x points")) + (amount ? " " + esc(amount) : "") + '</span>';
+      return '<span>' + esc(label) + ': ' + esc(s.rewardTitle || (s.kind === "reward" ? "a reward" : "2x points")) + (amount ? " " + esc(amount) : "") + (s.conditionText ? ' · '+esc(s.conditionText)+' · '+esc(s.status) : '') + '</span>';
     }).join("") + '</div>';
   }
 
@@ -188,6 +203,7 @@
     if (!can("sponsor_reward")) return "";
     return '<form class="todo-reward-form" data-composer-form="reward" id="'+esc(composerId(task,'reward'))+'" hidden data-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '">' +
         '<input type="text" class="todo-reward-title" name="rewardTitle" aria-label="Reward if completed" maxlength="160" placeholder="Reward if completed (e.g. coffee on me)">' +
+        '<div data-condition-editor></div>' +
         '<div class="todo-reward-row">' +
           '<input type="text" class="todo-reward-name" name="sponsorName" aria-label="Your name for this reward" maxlength="80" placeholder="Your name">' +
           '<input type="number" class="todo-reward-value" name="value" aria-label="Reward value in dollars (optional)" min="0" step="0.01" placeholder="$ optional">' +
@@ -476,7 +492,7 @@
 
   function render(data){
     const scope=JSON.stringify([token,data.date,data.ownerUsername,data.viewer?.loggedIn,data.viewer?.username,data.viewer?.tier]);
-    if(scope!==composerScope){composers.clear();composerScope=scope;}
+    if(scope!==composerScope){saveComposers();composers.clear();composerScope=scope;loadComposers();}
     current = data;
     const allowed=new Set((data.tasks || []).filter(t=>!t.redacted).flatMap(t=>['reward','comment'].filter(k=>can(k==='reward'?'sponsor_reward':'comment')).map(k=>composerId(t,k))));
     for(const key of composers.keys())if(!allowed.has(key))composers.delete(key);
@@ -651,38 +667,31 @@
   }
 
   async function placeTaskReward(form){
-    const titleEl = form.querySelector(".todo-reward-title");
-    const title = titleEl ? titleEl.value.trim() : "";
-    if (!title) { if (titleEl) titleEl.focus(); return; }
-    const scope=composerScope,draft=rememberComposer(form);if(draft.sending)return;draft.sending=true;restoreComposers(document.getElementById("todo-public-list"));
-    const taskId = form.dataset.taskId;
-    const task = (current && current.tasks || []).find(t => String(t.id) === String(taskId));
-    const submit = form.querySelector('button[type="submit"]');
-    if (submit) submit.disabled = true;
-    try {
-      await api("/api/public/todo-share/" + encodeURIComponent(token) + "/sponsorships", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind: "reward",
-          target: "task",
-          taskId,
-          taskBlockId: form.dataset.taskBlockId,
-          taskTitle: task ? task.title : "",
-          date: current ? current.date : "",
-          rewardTitle: title,
-          value: (form.querySelector(".todo-reward-value") || {}).value || "",
-          sponsorName: (form.querySelector(".todo-reward-name") || {}).value ? form.querySelector(".todo-reward-name").value.trim() : ""
-        })
-      });
+    const titleEl=form.querySelector('.todo-reward-title');
+    const title=titleEl?.value.trim();if(!title){titleEl?.focus();return;}
+    const scope=composerScope,draft=rememberComposer(form);if(draft.sending)return;
+    let condition;
+    try { if(draft.condition) condition=window.DCC.RewardConditions.normalize(draft.condition, id => {
+      const task=(current.tasks||[]).find(t=>String(t.id)===id && !t.redacted);
+      return task ? {taskId:String(task.id)} : null;
+    }); } catch(e){alert(e.message);return;}
+    const payload={kind:'reward',target:'task',taskId:form.dataset.taskId,date:current.date,rewardTitle:title,
+      value:form.querySelector('.todo-reward-value').value||'',sponsorName:form.querySelector('.todo-reward-name').value.trim(),
+      ...(condition?{condition}:{})};
+    const encoded=JSON.stringify(payload);
+    // Retain the exact request identity after an uncertain response; changed terms
+    // get a new identity. Double-clicks and accepted-but-lost replies cannot duplicate.
+    if(draft.requestPayload!==encoded){draft.requestPayload=encoded;draft.requestKey=crypto.randomUUID();}
+    payload.requestKey=draft.requestKey;saveComposers();
+    draft.sending=true;restoreComposers(document.getElementById('todo-public-list'));
+    try{
+      await api('/api/public/todo-share/'+encodeURIComponent(token)+'/sponsorships',{
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       if(scope!==composerScope)return;
-      composers.delete(form.id);
-      await load();
-    } catch (e) {
+      composers.delete(form.id);saveComposers();await load();
+    }catch(e){
       if(scope!==composerScope)return;
-      draft.sending=false;restoreComposers(document.getElementById("todo-public-list"));
-      if (submit) submit.disabled = false;
-      alert(e.message);
+      draft.sending=false;restoreComposers(document.getElementById('todo-public-list'));alert(e.message);
     }
   }
 
@@ -882,7 +891,7 @@
         if(toggle){
           e.preventDefault();e.stopPropagation();
           const form=document.getElementById(toggle.getAttribute('aria-controls'));
-          if(form){const state=rememberComposer(form);state.open=!state.open;restoreComposers(list);if(state.open)form.querySelector('input')?.focus();else toggle.focus();}
+          if(form){const state=rememberComposer(form);state.open=!state.open;saveComposers();restoreComposers(list);if(state.open)form.querySelector('input')?.focus();else toggle.focus();}
           return;
         }
         const bountyBtn = e.target.closest("[data-bounty-task-id]");

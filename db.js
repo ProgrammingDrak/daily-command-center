@@ -1699,10 +1699,10 @@ async function getBlocksByDate(date, workspaceId, client) {
 // needs these: a meeting the user deleted must NOT be resurrected when the next
 // calendar sweep re-ingests the same event, so we look it up by source_id even
 // once it's soft-deleted. parseBlock preserves deleted_at for the caller.
-async function getBlocksByDateIncludingDeleted(date, workspaceId) {
+async function getBlocksByDateIncludingDeleted(date, workspaceId, client) {
   const { rows } = workspaceId
-    ? await pool.query(`SELECT * FROM blocks WHERE date = $1 AND workspace_id = $2 ORDER BY sort_order ASC, created_at ASC`, [date, workspaceId])
-    : await pool.query(`SELECT * FROM blocks WHERE date = $1 ORDER BY sort_order ASC, created_at ASC`, [date]);
+    ? await (client || pool).query(`SELECT * FROM blocks WHERE date = $1 AND workspace_id = $2 ORDER BY sort_order ASC, created_at ASC`, [date, workspaceId])
+    : await (client || pool).query(`SELECT * FROM blocks WHERE date = $1 ORDER BY sort_order ASC, created_at ASC`, [date]);
   return rows.map(parseBlock);
 }
 

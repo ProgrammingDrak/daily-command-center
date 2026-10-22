@@ -294,10 +294,10 @@ async function enqueueReward({
   chanceSharesSnapshot = null,
   tierSnapshot = null,
   durationMinutesSnapshot = null,
-}) {
-  const client = await pool.connect();
+}, transaction = null) {
+  const client = transaction || await pool.connect();
   try {
-    await client.query("BEGIN");
+    if (!transaction) await client.query("BEGIN");
 
     // Idempotency guard: the `won` event is the arbiter.
     const wonEvent = await recordEvent(client, {
@@ -320,7 +320,7 @@ async function enqueueReward({
           LIMIT 1`,
         [ownerUserId, sourceType, sourceId]
       );
-      await client.query("COMMIT");
+      if (!transaction) await client.query("COMMIT");
       return { item: existing.rows[0] || null, duplicate: true };
     }
 
@@ -349,13 +349,13 @@ async function enqueueReward({
       );
     }
 
-    await client.query("COMMIT");
+    if (!transaction) await client.query("COMMIT");
     return { item, duplicate: false };
   } catch (err) {
-    await client.query("ROLLBACK");
+    if (!transaction) await client.query("ROLLBACK");
     throw err;
   } finally {
-    client.release();
+    if (!transaction) client.release();
   }
 }
 
