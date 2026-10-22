@@ -6,7 +6,7 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/public/icons/favicon-32x32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="/public/icons/favicon-16x16.png">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Admin Activity - Daily Command Center</title>
+<title>Feedback Inbox - Daily Command Center</title>
 <link rel="stylesheet" href="/public/css/tokens.css">
 <link rel="stylesheet" href="/public/css/dashboard.css">
 <link rel="stylesheet" href="/public/css/admin.css">
@@ -15,8 +15,8 @@
 <body class="admin-body">
   <header class="admin-top">
     <div>
-      <h1>Admin</h1>
-      <p>Recent logins and feedback messages.</p>
+      <h1>Feedback inbox</h1>
+      <p>Feedback from all accounts, visible only to site admins.</p>
     </div>
     <div class="admin-actions">
       <a href="/">Dashboard</a>
@@ -45,22 +45,25 @@
       </div>
     </section>
 
-    <section class="admin-grid">
-      <div class="admin-panel">
-        <div class="admin-panel-head">
-          <h2>Logins</h2>
-          <span id="activity-count">--</span>
-        </div>
-        <div class="admin-list" id="activity-list"></div>
+    <section class="admin-panel admin-feedback-panel" aria-labelledby="feedback-heading">
+      <div class="admin-panel-head">
+        <h2 id="feedback-heading">Feedback</h2>
+        <span id="feedback-count">Loading…</span>
       </div>
-
-      <div class="admin-panel">
-        <div class="admin-panel-head">
-          <h2>Feedback</h2>
-          <span id="feedback-count">--</span>
-        </div>
-        <div class="admin-list" id="feedback-list"></div>
+      <p class="admin-panel-note">Newest first. Search and filters apply to loaded messages. Load older feedback to search further back.</p>
+      <div class="admin-list" id="feedback-list" aria-busy="false"></div>
+      <div class="admin-inbox-footer">
+        <button id="feedback-older" type="button" hidden>Load older feedback</button>
+        <span id="feedback-status" role="status" aria-live="polite"></span>
       </div>
+    </section>
+    <section class="admin-panel" aria-labelledby="activity-heading">
+      <div class="admin-panel-head">
+        <h2 id="activity-heading">Recent logins</h2>
+        <span id="activity-count">Loading…</span>
+      </div>
+      <div class="admin-list" id="activity-list"></div>
+      <p id="activity-status" class="admin-panel-note" role="status"></p>
     </section>
   </main>
 
