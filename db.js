@@ -964,9 +964,17 @@ async function setTaskCompletion({
 
 async function updateBlock(id, fields, client) {
   const {
-    properties, sort_order, parent_id, date, completionIntent,
+    properties, sort_order, parent_id, date, completionIntent, taskPriority,
     completionMutationId, completionBaseRevision,
   } = fields;
+  // Explicit priority edits are field-only, including offline replay. Never let
+  // a cached full properties document erase a more recent placement or notes.
+  if (taskPriority !== undefined && (!["Low", "Medium", "High"].includes(taskPriority)
+      || [properties, sort_order, parent_id, date, completionIntent, completionMutationId, completionBaseRevision].some(value => value !== undefined))) {
+    const error = new Error("taskPriority must be Low, Medium, or High and cannot be combined with other block edits");
+    error.statusCode = 400;
+    throw error;
+  }
   if (completionIntent !== undefined && completionIntent !== "complete" && completionIntent !== "reopen") {
     throw new Error("Invalid completion intent");
   }
@@ -1012,7 +1020,9 @@ async function updateBlock(id, fields, client) {
         throw conflict;
       }
     }
-    let newProps = existing.properties;
+    let newProps = taskPriority !== undefined
+      ? { ...existing.properties, taskPriority }
+      : existing.properties;
     if (properties !== undefined) {
       const parsed = typeof properties === "string" ? JSON.parse(properties) : properties;
       const requestedTaskType = String(parsed && parsed.type || "").trim().toLowerCase();
