@@ -15,6 +15,55 @@ async function account(user,width=1440){
 async function settle(page){await page.evaluate(()=>DCCCommitmentSync.flush());await page.waitForFunction(()=>DCCCommitmentSync.summary.pending===0);}
 async function refresh(page){await page.evaluate(async()=>{await DCCCommitmentSync.refresh();});await page.locator('#commitment-inline-sync').isVisible().then(async visible=>{await page.locator(visible?'#commitment-inline-sync':'#commitment-refresh').click();});}
 async function action(page,kind,note){await page.locator('#commitment-action-form [name=kind]').selectOption(kind);await page.locator('#commitment-action-form [name=note]').fill(note);await page.locator('#commitment-action-form button[type=submit]').click();await settle(page);}
+async function delayedSeenDraft(page,id,entry,{invitation=false,fail=false}={}) {
+ let release,started;
+ const gate=new Promise(resolve=>{release=resolve;});
+ const requestStarted=new Promise(resolve=>{started=resolve;});
+ const pattern='**/api/commitments/'+id+'/seen';
+ await page.evaluate(()=>{
+  window.__seenSettled=false;
+  const original=DCCCommitmentSync.seen;
+  window.__restoreSeen=()=>{DCCCommitmentSync.seen=original;};
+  DCCCommitmentSync.seen=async(...args)=>{try{return await original(...args);}finally{window.__seenSettled=true;}};
+ });
+ await page.route(pattern,async route=>{
+  started();await gate;
+  if(fail)await route.fulfill({status:503,contentType:'application/json',body:'{"error":"Synthetic acknowledgement failure"}'});
+  else await route.continue();
+ });
+ try{
+  if(entry==='inline')await page.evaluate(id=>window.DCCCommitments.select(id),id);
+  else await page.locator('[data-commitment="'+id+'"]').click();
+  await requestStarted;
+  // Exercise the in-memory attention update independently of an already-seen
+  // synthetic actor revision. No server or persisted fixture data is changed.
+  await page.evaluate(id=>{const r=window.DCCCommitments.records.find(r=>r.id===id);r.seen_revision=r.revision-1;},id);
+  assert.equal(await page.evaluate(id=>{const r=window.DCCCommitments.records.find(r=>r.id===id);return r.seen_revision<r.revision;},id),true);
+  const note=page.locator('#commitment-action-form [name=note]');
+  await page.locator('#commitment-action-form [name=kind]').selectOption('comment');
+  await note.fill('Draft survives delayed seen '+entry);
+  if(invitation){
+   await page.locator('#commitment-detail details:not(.commitment-history-details) summary').click();
+   await page.locator('#commitment-invite-form [name=person]').fill('unfinished-invitation');
+   await page.locator('#commitment-invite-form [name=role]').selectOption('manager');
+   await page.locator('#commitment-inline-sync').focus();
+  }
+  release();
+  await page.waitForFunction(()=>window.__seenSettled);
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert.equal(await note.inputValue(),'Draft survives delayed seen '+entry);
+  if(invitation){
+   assert.equal(await page.locator('#commitment-invite-form [name=person]').inputValue(),'unfinished-invitation');
+   assert.equal(await page.locator('#commitment-invite-form [name=role]').inputValue(),'manager');
+   await page.locator('#commitment-invite-form [name=person]').fill('');
+   await page.locator('#commitment-detail details:not(.commitment-history-details) summary').click();
+  }else assert.equal(await note.evaluate(el=>el===document.activeElement),true,'acknowledgement preserves focus');
+  assert.equal(await page.evaluate(id=>{const r=window.DCCCommitments.records.find(r=>r.id===id);return r.seen_revision>=r.revision;},id),!fail);
+  await note.fill('');
+ }finally{
+  release();await page.unroute(pattern);await page.evaluate(()=>window.__restoreSeen());
+ }
+}
 await fs.mkdir('test-results/accountability-completion',{recursive:true});
 try{
  const {page:owner}=await account(1);
@@ -41,11 +90,14 @@ try{
  assert.equal(await owner.locator('.commitment-create').isVisible(),false);
  assert.equal(await owner.locator('#commitment-create-form [name=sourceBlockId]').inputValue(),task);
  assert.match(await owner.locator('#commitment-detail').innerText(),/existing checkbox|itinerary checkbox/);
+ await delayedSeenDraft(owner,id,'inline',{invitation:true});
+ await delayedSeenDraft(owner,id,'inline',{fail:true});
  for(const [name,role] of [['blair','coach'],['casey','manager']]){await owner.locator('#commitment-detail details:not(.commitment-history-details) summary').click();await owner.locator('#commitment-invite-form [name=person]').fill(name);await owner.locator('#commitment-invite-form [name=role]').selectOption(role);await owner.locator('#commitment-invite-form button[type=submit]').click();await settle(owner);}
  const {page:coach,context:coachContext}=await account(2,390);
  await coach.locator('#itinerary-collaboration > summary').click();await coach.locator('[data-commitment="'+id+'"]').click();
  assert.ok(!(await coach.locator('#tab-schedule').innerText()).includes('OWNER PRIVATE'));
  await coach.locator('[data-invite-answer=accept]').click();await settle(coach);
+ await delayedSeenDraft(coach,id,'card');
  await action(coach,'comment','Synthetic inline coaching comment');
  await coach.locator('[data-commitment-reaction="💪"]').click();await settle(coach);
  await action(coach,'highlight','Focus on the rehearsal conclusion');
@@ -59,6 +111,6 @@ try{
  for(const width of [320,390,760,1024,1440]){await owner.setViewportSize({width,height:900});assert.ok(await owner.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),'overflow '+width);await owner.screenshot({path:'test-results/accountability-completion/itinerary-'+width+'.png'});}
  await refresh(coach);await coachContext.setOffline(true);await coach.locator('#commitment-action-form [name=kind]').selectOption('comment');await coach.locator('#commitment-action-form [name=note]').fill('Offline coach text');await coach.locator('#commitment-action-form button[type=submit]').click();await coach.waitForFunction(()=>DCCCommitmentSync.summary.pending===1);await coachContext.setOffline(false);await settle(coach);
  // Queue is expected to remain pending offline; the separate regression suite covers replay.
- console.log('PASS: itinerary links, audience, roles, comments/reactions/highlights/check-ins/evidence/review, owner-approved points and five responsive widths');
+ console.log('PASS: delayed seen success/failure preserves focused and blurred action/invite drafts, itinerary links, audience, roles, comments/reactions/highlights/check-ins/evidence/review, owner-approved points and five responsive widths');
  assert.deepEqual(errors,[]);
 }finally{await Promise.all(contexts.map(c=>c.close()));await browser.close();}
