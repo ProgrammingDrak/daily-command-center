@@ -5878,3 +5878,4 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 
 /* Deep hierarchies keep room for task titles and controls on phones. */
 @media(max-width:480px){.it-list-item,.tl-item{--task-indent-max:44px}}
+.admin-link[hidden]{display:none!important}
