@@ -39,7 +39,6 @@
   // those intents per row so the server sees them in click order and the final
   // destination is always the most recent one. Different tasks still move in
   // parallel.
-  const _rescheduleChains = new Map();
   const _updateChains = new Map();
   const _completionBases = new Map(); // authoritative rollback rows while intents are queued
   // Server IDs for day_root are workspace-prefixed (e.g. "day-root-ws-1-2026-04-24").
@@ -202,6 +201,9 @@
         if(entry.priorityEdit&&wal.some(e=>e&&e.op==='update'&&e.id===entry.id&&!e.priorityEdit))entry.priorityEdit.only=false;
         wal = wal.filter(e => !(e && e.op === entry.op && e.id === entry.id));
       }
+      // A priority-only intent must stay narrow in durable storage as well as
+      // on the wire. Its cached timing/notes are not part of the user's edit.
+      entry.data = priorityRequestData(entry);
       wal.push({ ...entry, accountScope: ACCOUNT_SCOPE, _walId: entryId, timestamp: new Date().toISOString() });
       localStorage.setItem(WAL_KEY, JSON.stringify(wal));
     } catch (e) {
@@ -292,13 +294,37 @@
     };
   }
 
+  function priorityRequestData(entry) {
+    if (entry.priorityEdit && entry.priorityEdit.only !== false && !entry.data?.completionIntent) {
+      return { taskPriority: entry.priorityEdit.after };
+    }
+    return entry.data;
+  }
+
+  function assertPriorityAcknowledgement(block, data) {
+    if (data.taskPriority !== undefined && block?.properties?.taskPriority !== data.taskPriority) {
+      throw new Error("Priority was not acknowledged");
+    }
+  }
+
+  function cachePriorityAcknowledgement(block) {
+    const current = block && cacheGet(block.id);
+    // A priority response can predate a placement/refresh. Acknowledging this
+    // single field must never restore the response's unrelated row snapshot.
+    cacheSet(current ? { ...current, properties: { ...current.properties, taskPriority: block.properties.taskPriority } } : block);
+  }
+
   function acknowledgePriority(id,walId,block){
     if(!block||!block.properties)return;
     const durable=block.properties.taskPriority??null;
     const pending=walGet();let changed=false;
     for(const entry of pending){
       if(entry.id!==id||entry._walId===walId||!entry.priorityEdit)continue;
-      if(entry.priorityEdit.after===durable)delete entry.priorityEdit;
+      // Keep the wire intent even if an earlier acknowledgement already has
+      // this value. Legacy priority-only entries are narrowed before metadata
+      // can be removed, so replay can never turn back into a full-row write.
+      entry.data = priorityRequestData(entry);
+      if(entry.priorityEdit.after===durable && entry.data.taskPriority === undefined)delete entry.priorityEdit;
       else entry.priorityEdit={...entry.priorityEdit,before:durable};
       changed=true;
     }
@@ -737,16 +763,20 @@
               // The replay loop snapshots the WAL before awaiting. A newer live
               // update may supersede this entry while it waits on the row chain.
               if (!walGet().some(e => e && e._walId === entry._walId)) return;
-              let saved=await apiPatch("/api/blocks/" + entry.id, entry.data);
+              let data = priorityRequestData(entry);
+              walReplaceData(entry._walId, data);
+              let saved=await apiPatch("/api/blocks/" + entry.id, data);
               // The completion compatibility endpoint acknowledges only completion.
               // Preserve an explicit queued priority as an ordinary edit after that ack.
               if(entry.priorityEdit&&entry.data.completionIntent&&saved?.properties
                   &&saved.properties.taskPriority!==entry.priorityEdit.after){
-                const data={properties:{...saved.properties,taskPriority:entry.priorityEdit.after}};
+                data={taskPriority:entry.priorityEdit.after};
                 walReplaceData(entry._walId,data);
                 saved=await apiPatch("/api/blocks/"+entry.id,data);
               }
+              assertPriorityAcknowledgement(saved, data);
               acknowledgePriority(entry.id,entry._walId,saved);
+              if (data.taskPriority !== undefined && saved?.properties) cachePriorityAcknowledgement(saved);
             });
             break;
           case "completion": {
@@ -796,15 +826,11 @@
             await apiPost("/api/blocks/" + entry.id + "/undelete", {});
             break;
           case "reschedule": {
-            const previous = _rescheduleChains.get(entry.id) || Promise.resolve();
-            const request = previous.catch(() => {}).then(() => {
+            const request = queueUpdateRequest(entry.id, () => {
               if (!walGet().some(e => e._walId === entry._walId)) return null;
               return apiPost("/api/blocks/" + entry.id + "/reschedule", entry.data);
             });
-            _rescheduleChains.set(entry.id, request);
-            let result;
-            try { result = await request; }
-            finally { if (_rescheduleChains.get(entry.id) === request) _rescheduleChains.delete(entry.id); }
+            const result = await request;
             if (!result) break;
             (result.blocks||[]).forEach(cacheSet);
             if(entry.data.placement?.kind==="unplanned" && window.DCC?.TimeBlocks && typeof isCollapsed==="function"){
@@ -1055,17 +1081,21 @@
       const optimistic = existing ? { ...existing, ...extra, properties, updated_at: new Date().toISOString() } : null;
       if (optimistic && !priorityEdit) cacheSet(optimistic);
       // Pre-write to WAL so the mutation survives a mid-flight reload / close.
-      const walId = walPush({
+      const entry = {
         op: "update", id, data: { properties, ...extra },
         ...(priorityEdit ? { priorityEdit } : {}),
         ...(completionPropertyPatch ? { completionPropertyPatch } : {}),
-      });
+      };
+      const walId = walPush(entry);
       if (optimistic && priorityEdit) cacheSet(optimistic);
+      // walPush narrows the entry after coalescing. Keep that exact durable
+      // payload without depending on a second localStorage read succeeding.
+      const requestData = entry.data;
       const write = queueUpdateRequest(id, async () => {
         try {
           let block;
           try {
-            block = await apiPatch("/api/blocks/" + id, { properties, ...extra });
+            block = await apiPatch("/api/blocks/" + id, requestData);
           } catch (e) {
             if (!(e && e.status === 409 && e.code === "COMPLETION_CONFLICT" && extra.completionIntent)) throw e;
             // This is a live user action, not replayWAL. Refresh the server revision
@@ -1094,8 +1124,12 @@
           }
           // A later direct edit may already own the optimistic properties. An
           // older ack must not replace that edit while its request waits in line.
+          assertPriorityAcknowledgement(block, requestData);
           acknowledgePriority(id,walId,block);
-          if (!walGet().some(entry => entry.op === "update" && entry.id === id && entry._walId !== walId)) cacheSet(block);
+          if (!walGet().some(entry => entry.op === "update" && entry.id === id && entry._walId !== walId)) {
+            if (requestData.taskPriority !== undefined) cachePriorityAcknowledgement(block);
+            else cacheSet(block);
+          }
           walRemove(walId);
           _completionMetrics.acknowledged++;
           setSaved();
@@ -1515,8 +1549,9 @@
       if (walId && typeof onQueued === "function") {
         try { onQueued(); } catch (error) { console.warn("[BlockStore] Move preview failed", error); }
       }
-      const previous = _rescheduleChains.get(blockId) || Promise.resolve();
-      const run = previous.catch(() => {}).then(async () => {
+      // Placement shares the row queue (and cross-tab lock) with property and
+      // completion writes. Independent queues let a late whole-row ack undo a move.
+      const run = queueUpdateRequest(blockId, async () => {
       try {
         let result;
         try {
@@ -1565,12 +1600,7 @@
         throw e;
       }
       });
-      _rescheduleChains.set(blockId, run);
-      try {
-        return await run;
-      } finally {
-        if (_rescheduleChains.get(blockId) === run) _rescheduleChains.delete(blockId);
-      }
+      return await run;
     },
 
     // Reorder blocks

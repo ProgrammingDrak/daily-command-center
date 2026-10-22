@@ -1085,6 +1085,10 @@ module.exports = function mount(app, ctx) {
     // Ignore the stale full properties snapshot and delegate only the completion
     // intent to the same narrow transaction as the dedicated endpoint.
     if (req.body && req.body.completionIntent) {
+      if (Object.prototype.hasOwnProperty.call(req.body, "taskPriority")) {
+        res.status(400).json({ error: "Priority and completion require separate edits" });
+        return;
+      }
       if (!Object.prototype.hasOwnProperty.call(req.body, "completionBaseRevision")) {
         res.status(400).json({
           error: "completionBaseRevision is required for completion transitions",

@@ -1259,10 +1259,10 @@ test("priority stays queued on network failure, survives reload, and replays unc
  const options={fetchBody:initial};const {store,storage}=makeStore(options);
  await store.handleBlocksChanged({blockIds:[initial.id]});options.fetchReject=true;
  const result=await store.updateBlock(initial.id,{...initial.properties,taskPriority:'High'},{_reportSaveStatus:true,_priorityEdit:{before:'Medium',after:'High'}});
- assert.equal(result._savePending,true);assert.equal(wal(storage)[0].data.properties.taskPriority,'High');
- const restored=makeStore({storage,fetchBody:initial});await restored.store.replayWAL();
+ assert.equal(result._savePending,true);assert.deepEqual(wal(storage)[0].data,{taskPriority:'High'});
+ const restored=makeStore({storage,fetchBody:{...initial,properties:{...initial.properties,taskPriority:'High'}}});await restored.store.replayWAL();
  const patch=restored.fetchCalls.find(call=>call.init?.method==='PATCH');
- assert.equal(JSON.parse(patch.init.body).properties.taskPriority,'High');assert.equal(JSON.parse(patch.init.body).properties.start,'09:00');assert.equal(wal(storage).length,0);
+ assert.equal(JSON.parse(patch.init.body).taskPriority,'High');assert.equal(JSON.parse(patch.init.body).properties,undefined);assert.equal(wal(storage).length,0);
 });
 test("an offline priority rejection after reload is removed, not retried forever",async()=>{
  const storage=new Map();seedWal(storage,[{op:'update',id:'p',data:{properties:{taskPriority:'High'}},priorityEdit:{before:null,after:'High'},_walId:'p1',timestamp:minsAgo(1)}]);
@@ -1290,7 +1290,7 @@ test('success advances inherited rollback baseline before a later rejection',asy
  const initial={id:'p',type:'block',date:'2026-07-08',properties:{title:'Original',taskPriority:'Low'}};
  let ack;let calls=0;const {store,storage}=makeStore({fetchImpl:async(_url,init)=>{
   if(init?.method!=='PATCH')return {ok:true,status:200,json:async()=>initial};
-  if(++calls===1){await new Promise(resolve=>{ack=resolve;});return {ok:true,status:200,json:async()=>({...initial,properties:JSON.parse(init.body).properties})};}
+  if(++calls===1){await new Promise(resolve=>{ack=resolve;});return {ok:true,status:200,json:async()=>({...initial,properties:{...initial.properties,taskPriority:JSON.parse(init.body).taskPriority}})};}
   return {ok:false,status:403,json:async()=>({error:'Denied'})};
  }});await store.handleBlocksChanged({blockIds:['p']});
  const first=store.updateBlock('p',{...initial.properties,taskPriority:'High'},{_priorityEdit:{before:'Low',after:'High'}});
@@ -1311,11 +1311,105 @@ test('multiple queued priority choices retain the durable rollback baseline',asy
 test('offline priority paired with completion replays both acknowledged changes',async()=>{
  const initial={id:'p',type:'block',date:'2026-07-08',properties:{title:'Task',taskPriority:'Low',status:'open'}};
  const storage=new Map();seedWal(storage,[{op:'update',id:'p',data:{properties:{...initial.properties,taskPriority:'High',status:'done'},completionIntent:'complete',completionMutationId:'c1',completionBaseRevision:null},priorityEdit:{before:'Low',after:'High',only:false},_walId:'p1',timestamp:minsAgo(1)}]);
+ let durable=initial;
  const {store,fetchCalls}=makeStore({storage,fetchImpl:async(_url,init)=>{
   const sent=init?.body?JSON.parse(init.body):{};
-  const row=sent.completionIntent?{...initial,properties:{...initial.properties,status:'done',_completionRevision:'r1'}}:{...initial,properties:sent.properties||initial.properties};
-  return {ok:true,status:200,json:async()=>row};
+  const row=sent.completionIntent?{...initial,properties:{...initial.properties,status:'done',_completionRevision:'r1'}}:{...durable,properties:sent.taskPriority?{...durable.properties,taskPriority:sent.taskPriority}:sent.properties||durable.properties};
+  durable=row;return {ok:true,status:200,json:async()=>row};
  }});await store.replayWAL();
  const patches=fetchCalls.filter(c=>c.init?.method==='PATCH').map(c=>JSON.parse(c.init.body));
- assert.equal(patches.length,2);assert.equal(patches[1].completionIntent,undefined);assert.equal(patches[1].properties.status,'done');assert.equal(patches[1].properties.taskPriority,'High');assert.equal(wal(storage).length,0);
+ assert.equal(patches.length,2);assert.equal(patches[1].completionIntent,undefined);assert.equal(patches[1].properties,undefined);assert.equal(patches[1].taskPriority,'High');assert.equal(durable.properties.status,'done');assert.equal(durable.properties.taskPriority,'High');assert.equal(wal(storage).length,0);
+});
+
+// Deliberately hold the first response, so the row queues must order both kinds
+// of writes instead of depending on fetch timing. The fake endpoint models the
+// field-only PATCH contract; the real PostgreSQL contract is tested separately.
+for (const first of ['priority', 'placement']) {
+ test(`priority and placement retain both intents when ${first} responds first`, async () => {
+  let row = {id:'race',type:'block',date:null,properties:{local_id:'race',title:'Keep',detail:'Keep notes',recurrence:{frequency:'daily'},duration:30,start:null,end:null,taskPriority:'Medium'}};
+  let release, entered; const gate=new Promise(resolve=>{release=resolve;}); const started=new Promise(resolve=>{entered=resolve;});
+  const sent=[];
+  const {store,storage}=makeStore({fetchImpl:async(url,init)=>{
+   const body=init?.body?JSON.parse(init.body):{};
+   const kind=url.endsWith('/reschedule')?'placement':init?.method==='PATCH'?'priority':null;
+   if(kind){sent.push(kind);if(sent.length===1){entered();await gate;}}
+   if(kind==='priority')row={...row,properties:body.taskPriority?{...row.properties,taskPriority:body.taskPriority}:body.properties};
+   if(kind==='placement')row={...row,date:body.targetDate,properties:{...row.properties,start:body.parentStart,end:body.parentEnd,_pinnedStart:body.parentStart,userSetStart:true}};
+   const saved=structuredClone(row);
+   return {ok:true,status:200,json:async()=>kind==='placement'?{moved:['race'],blocks:[saved]}:saved};
+  }});
+  await store.handleBlocksChanged({blockIds:['race']});
+  const priority=()=>store.updateBlock('race',{...store.get('race').properties,taskPriority:'High'},{_reportSaveStatus:true,_priorityEdit:{before:'Medium',after:'High'}});
+  const place=()=>store.rescheduleBlock('race','2026-10-22',{fromDate:'2026-10-22',parentStart:'12:00',parentEnd:'12:30',userSetStart:true});
+  const a=first==='priority'?priority():place();await started;
+  const b=first==='priority'?place():priority();await new Promise(setImmediate);
+  const beforeRelease=[...sent];release();await Promise.all([a,b]);
+  assert.deepEqual(beforeRelease,[first],'the second kind of mutation waits for the first acknowledgement');
+  for(const saved of [row,store.get('race')]){
+   assert.equal(saved.date,'2026-10-22');assert.equal(saved.properties.start,'12:00');assert.equal(saved.properties.end,'12:30');
+   assert.equal(saved.properties._pinnedStart,'12:00');assert.equal(saved.properties.taskPriority,'High');
+   assert.equal(saved.properties.detail,'Keep notes');assert.equal(saved.properties.recurrence.frequency,'daily');
+  }
+  assert.equal(wal(storage).length,0);
+ });
+}
+
+test('offline priority replay preserves a placement and notes changed on another device', async()=>{
+ const initial={id:'race',type:'block',date:null,properties:{local_id:'race',title:'Keep',detail:'Old notes',start:null,end:null,taskPriority:'Medium'}};
+ const options={fetchBody:initial};const first=makeStore(options);
+ await first.store.handleBlocksChanged({blockIds:['race']});options.fetchReject=true;
+ await first.store.updateBlock('race',{...initial.properties,taskPriority:'High'},{_reportSaveStatus:true,_priorityEdit:{before:'Medium',after:'High'}});
+ let row={...initial,date:'2026-10-22',properties:{...initial.properties,detail:'New notes',start:'12:00',end:'12:30',_pinnedStart:'12:00',userSetStart:true,recurrence:{frequency:'weekly'}}};
+ const reload=makeStore({storage:first.storage,fetchImpl:async(_url,init)=>{
+  const body=JSON.parse(init.body);row={...row,properties:body.taskPriority?{...row.properties,taskPriority:body.taskPriority}:body.properties};
+  return {ok:true,status:200,json:async()=>structuredClone(row)};
+ }});
+ await reload.store.replayWAL();
+ assert.equal(row.date,'2026-10-22');assert.equal(row.properties.start,'12:00');assert.equal(row.properties.end,'12:30');assert.equal(row.properties._pinnedStart,'12:00');
+ assert.equal(row.properties.taskPriority,'High');assert.equal(row.properties.detail,'New notes');assert.equal(row.properties.recurrence.frequency,'weekly');
+ assert.equal(wal(first.storage).length,0);
+});
+
+test('an unacknowledged narrow priority stays queued instead of silently succeeding', async()=>{
+ const row={id:'p',type:'block',properties:{taskPriority:'Medium'}};
+ const h=makeStore({fetchBody:row});await h.store.handleBlocksChanged({blockIds:['p']});
+ const result=await h.store.updateBlock('p',{taskPriority:'High'},{_reportSaveStatus:true,_priorityEdit:{before:'Medium',after:'High'}});
+ assert.equal(result._savePending,true);assert.deepEqual(wal(h.storage)[0].data,{taskPriority:'High'});
+ await h.store.replayWAL();assert.equal(wal(h.storage).length,1,'a server that ignores the new field must not consume the intent');
+});
+
+test('satisfied priority acknowledgement cannot turn a queued narrow intent back into a full-row replay', async()=>{
+ const initial={id:'p',type:'block',date:null,properties:{local_id:'p',title:'Keep',taskPriority:'Low',start:null,end:null}};
+ let release,entered;const gate=new Promise(resolve=>{release=resolve;});const started=new Promise(resolve=>{entered=resolve;});let patches=0;
+ const h=makeStore({fetchImpl:async(_url,init)=>{
+  if(init?.method!=='PATCH')return {ok:true,status:200,json:async()=>initial};
+  if(++patches===1){entered();await gate;return {ok:true,status:200,json:async()=>({...initial,properties:{...initial.properties,taskPriority:'High'}})};}
+  throw new TypeError('Offline');
+ }});
+ await h.store.handleBlocksChanged({blockIds:['p']});
+ const save=()=>h.store.updateBlock('p',{...h.store.get('p').properties,taskPriority:'High'},{_reportSaveStatus:true,_priorityEdit:{before:'Low',after:'High'}});
+ const first=save();await started;const second=save();release();await Promise.all([first,second]);
+ assert.deepEqual(wal(h.storage)[0].data,{taskPriority:'High'});assert.equal(wal(h.storage)[0].priorityEdit.before,'High');
+ const newer={...initial,date:'2026-10-22',properties:{...initial.properties,taskPriority:'High',start:'12:00',end:'12:30',detail:'New notes'}};
+ const reload=makeStore({storage:h.storage,fetchBody:newer});await reload.store.replayWAL();
+ const body=JSON.parse(reload.fetchCalls[0].init.body);assert.equal(body.properties,undefined);assert.equal(body.taskPriority,'High');assert.equal(wal(h.storage).length,0);
+});
+
+test('legacy priority-only WAL entries narrow before replay without crossing account scope', async()=>{
+ const storage=new Map();seedWal(storage,[{op:'update',id:'p',data:{properties:{title:'Old',start:null,end:null,taskPriority:'High'}},priorityEdit:{before:'Low',after:'High'},_walId:'legacy',timestamp:minsAgo(1)}]);
+ const foreign=makeStore({storage,account:{userId:2,workspaceId:'ws-2'}});await foreign.store.replayWAL();assert.equal(foreign.fetchCalls.length,0);
+ const h=makeStore({storage,fetchBody:{id:'p',type:'block',date:'2026-10-22',properties:{taskPriority:'High',start:'12:00',end:'12:30',detail:'New'}}});
+ await h.store.replayWAL();const body=JSON.parse(h.fetchCalls[0].init.body);assert.equal(body.properties,undefined);assert.equal(body.taskPriority,'High');assert.equal(wal(storage).length,0);
+});
+
+test('a temporary WAL reread failure cannot prevent an already durably queued priority request', async()=>{
+ const initial={id:'p',type:'block',properties:{taskPriority:'Low'}};
+ const h=makeStore({fetchBodyFn:(_url,init)=>init?.method==='PATCH'?{...initial,properties:{taskPriority:JSON.parse(init.body).taskPriority}}:initial});
+ await h.store.handleBlocksChanged({blockIds:['p']});
+ const storage=h.context.localStorage;const get=storage.getItem;const set=storage.setItem;let readsAfterWrite=null;
+ storage.setItem=(key,value)=>{set(key,value);if(key===WAL_KEY)readsAfterWrite=0;};
+ storage.getItem=key=>{if(key===WAL_KEY&&readsAfterWrite!==null&&++readsAfterWrite===2)throw new Error('Temporary read error');return get(key);};
+ const result=await h.store.updateBlock('p',{taskPriority:'High'},{_reportSaveStatus:true,_priorityEdit:{before:'Low',after:'High'}});
+ assert.equal(result._savePending,undefined);assert.equal(result.properties.taskPriority,'High');
+ assert.equal(h.fetchCalls.filter(call=>call.init?.method==='PATCH').length,1);assert.equal(wal(h.storage).length,0);
 });

@@ -14,7 +14,7 @@
     "sweep:check": "node scripts/sweep-suite-check.js",
     "ship": "node scripts/ship-pr.js",
     "test": "node --test",
-    "test:postgres": "node --test meeting-citation-migration.test.js proposal-postgres.test.js activity-postgres.test.js commitment-postgres.test.js sponsorship-postgres.test.js accountability-completion-postgres.test.js accountability-completion-route.test.js task-attachment-postgres.test.js shared-task-postgres.test.js shared-task-series.test.js shared-task-notifications.test.js",
+    "test:postgres": "node --test meeting-citation-migration.test.js proposal-postgres.test.js activity-postgres.test.js commitment-postgres.test.js sponsorship-postgres.test.js accountability-completion-postgres.test.js accountability-completion-route.test.js task-attachment-postgres.test.js task-priority-placement-postgres.test.js shared-task-postgres.test.js shared-task-series.test.js shared-task-notifications.test.js",
     "lint": "eslint .",
     "format": "prettier --write .",
     "start": "npm run check:db && node pg-schema.js && node server.js",
