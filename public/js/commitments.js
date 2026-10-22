@@ -22,14 +22,27 @@
     const day = dates.get(zone);
     return r.role === 'invited' || r.revision > (r.seen_revision || 0) || (r.status !== 'completed' && r.committed_date < day) || (!!r.check_in_at && Date.parse(r.check_in_at) <= now.getTime()) || (r.role === 'manager' && r.status === 'completed' && (!r.last_review || r.last_review.status !== r.status || r.last_review.evidence !== r.evidence));
   }
+  function updateAttention() {
+    const dates = new Map(), now = new Date();
+    const count = records.filter(r => attention(r, dates, now)).length;
+    document.getElementById('commitment-attention').textContent = count ? '· ' + count + ' need attention' : '';
+    window.dispatchEvent(new CustomEvent('dcc:commitment-view'));
+  }
+  async function acknowledgeSeen(record) {
+    await sync().seen(record.id, record.revision);
+    // Acknowledgement is metadata only. Rebuilding the form here would erase
+    // drafts entered while the request was in flight, including blurred fields.
+    // Ignore a response for records replaced by a later load or account change.
+    if (!records.includes(record)) return;
+    record.seen_revision = Math.max(record.seen_revision || 0, record.revision);
+    updateAttention();
+  }
   function render() {
     const dates = new Map(), now = new Date(), needsAttention = r => attention(r,dates,now);
     const day = document.getElementById("commitment-date").value;
     const view=document.getElementById('commitment-view').value;
     const today = records.filter(r => view === 'open' ? r.status !== 'completed' && r.role !== 'invited' : view === 'invites' ? r.role === 'invited' : view === 'attention' ? needsAttention(r) : view === 'review' ? r.status === 'completed' : r.committed_date === day || r.role === 'invited');
-    const attentionCount = records.filter(needsAttention).length;
-    document.getElementById('commitment-attention').textContent=attentionCount ? '· '+attentionCount+' need attention' : '';
-    window.dispatchEvent(new CustomEvent('dcc:commitment-view'));
+    updateAttention();
     const list = document.getElementById("commitment-list");
     const detail = document.getElementById("commitment-detail");
     const columns = document.querySelector("#commitment-workspace .commitment-columns");
@@ -147,8 +160,8 @@
         if (button.dataset.commitment) {
           selected = button.dataset.commitment;await load(false);
           const item=records.find(r=>r.id===selected);
-          if(item?.loadedDetail)void sync().seen(item.id,item.revision).then(()=>load(false)).catch(()=>{});
-          return render();
+          if(item?.loadedDetail)void acknowledgeSeen(item).catch(()=>{});
+          return;
         }
         if (button.dataset.bountyDecision) return await act({kind:'bounty_decision',sponsorshipId:Number(button.dataset.bountyOffer),decision:button.dataset.bountyDecision,note:'Owner '+button.dataset.bountyDecision+' the in-app points offer'});
         if (button.dataset.commitmentReaction) { const r=records.find(r=>r.id===selected); return await act({kind:'reaction',emoji:button.dataset.commitmentReaction,enabled:!(r.myReactions || []).includes(button.dataset.commitmentReaction)}); }
@@ -179,7 +192,7 @@
     void load();
   }
   window.DCCCommitments={ get records(){return records;},attention,
-    async select(id){selected=id;await load(false);const r=records.find(r=>r.id===id);if(r?.loadedDetail)void sync().seen(id,r.revision).then(()=>load(false)).catch(()=>{});},
+    async select(id){selected=id;await load(false);const r=records.find(r=>r.id===id);if(r?.loadedDetail)void acknowledgeSeen(r).catch(()=>{});},
     clear(){selected=null;render();},
     chip(ev){const refs=[ev._blockId,ev.blockId,ev.id];const r=records.find(r=>r.role==='owner' && (refs.includes(r.source_block_id)||refs.includes(r.source_local_id)));
       return '<button type="button" class="task-collaboration-chip" data-task-collaborate="'+esc(ev._blockId||ev.blockId||ev.id)+'" data-task-local="'+esc(ev.id)+'"'+(r?' data-linked-commitment="'+esc(r.id)+'"':'')+' aria-label="Open task collaboration">'+(r ? (r.highlighted?'★ ':'')+(attention(r)?'● ':'')+'Shared' : 'Collaborate')+'</button>';
