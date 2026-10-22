@@ -1702,7 +1702,8 @@ async function scheduleUntimedTask(id,targetDate,start,opts){
     }
     const fromDate=_viewedDateStr(),row=_findTaskBlockForDate(id,fromDate,ev);
     if(!row||!window.blockStore){showToast("Task is still saving. Try scheduling it again shortly.","error");return false;}
-    const duration=dur(ev);
+    // A zero-minute checklist gains the same default slot as cross-day placement.
+    const rawDuration=dur(ev),duration=rawDuration===0?30:rawDuration;
     if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(start||"")||!Number.isFinite(duration)||duration<0||pt(start)+duration>1439){
       showToast("Choose a time that fits the task's duration within this day","error");return false;
     }

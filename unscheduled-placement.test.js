@@ -76,3 +76,12 @@ test('failed day-context read leaves a retryable error instead of a silent no-op
   assert.equal(await h.c.rescheduleTaskToDate('existing-task','2026-10-22'),false);
   assert.equal(h.calls.length,0);assert.match(h.toasts.at(-1).message,/Try again/);assert.ok(h.c.scheduled[0].untimed);
 });
+
+
+test('a zero-minute checklist receives the established 30-minute placement slot',async()=>{
+  const h=harness();Object.assign(h.row.properties,{duration:0,start:null,end:null});
+  h.c.refoldTaskStateFromBlockCache();assert.equal(h.c.dur(h.c.scheduled[0]),0);
+  await h.c.rescheduleTaskToDate('existing-task','2026-10-22',{pinnedStart:'12:00'});
+  assert.equal(h.calls[0].opts.parentStart,'12:00');assert.equal(h.calls[0].opts.parentEnd,'12:30');
+  assert.equal(h.c.scheduled[0].untimed,false);
+});

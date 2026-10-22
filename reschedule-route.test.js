@@ -33,7 +33,7 @@ function mountApp({ parent, pool: poolRows = [], existingTomb = null } = {}) {
       getBlockIncludingDeleted: async () => parent || null,
       // Recorded so the test can prove the route makes exactly ONE pool call with the
       // origin date -- it used to concatenate getBlocksByDate + getUndatedTaskBlocks.
-      getRescheduleSubtreePool: async (fromDate, ws) => { calls.poolFor.push({ fromDate, ws }); return poolRows; },
+      getRescheduleSubtreePool: async (fromDate, ws, options) => { calls.poolFor.push({ fromDate, ws, options }); return typeof poolRows === "function" ? poolRows(options) : poolRows; },
       // Its own lookup, not a scan of the pool: a tombstone is not a task row, so the
       // dedupe must not depend on the pool's task predicate admitting one.
       // Keys on its argument, so the lookup key is load-bearing in every test that uses it
@@ -93,7 +93,7 @@ test("the origin day's pool is fetched ONCE, for the origin date", async () => {
   const { app, calls } = mountApp({ parent, pool: [parent] });
   const { status } = await post(app, "B1", { targetDate: TO });
   assert.equal(status, 200);
-  assert.deepEqual(calls.poolFor, [{ fromDate: FROM, ws: MINE }]);
+  assert.deepEqual(calls.poolFor, [{ fromDate: FROM, ws: MINE, options: { includeDatelessRoots: false } }]);
 });
 
 test("the parent carries the pinned times; its subtree just changes date", async () => {
@@ -323,7 +323,7 @@ test("an undated row moves using the caller's fromDate", async () => {
   const { app, calls } = mountApp({ parent, pool: [parent] });
   const { status } = await post(app, "B1", { targetDate: TO, fromDate: FROM });
   assert.equal(status, 200);
-  assert.deepEqual(calls.poolFor, [{ fromDate: FROM, ws: MINE }]);
+  assert.deepEqual(calls.poolFor, [{ fromDate: FROM, ws: MINE, options: { includeDatelessRoots: true } }]);
   assert.equal(calls.reschedule[0].creates[0].date, FROM);
 });
 
@@ -391,4 +391,20 @@ test("same-day placement dates an existing unscheduled recurring checklist and k
   assert.deepEqual(moves.map(m=>m.id),['B1','B2']);assert.ok(moves.every(m=>m.date===FROM));assert.equal(creates.length,0);
   assert.equal(moves[0].properties.responsibilityId,'repeat-1');assert.deepEqual(moves[0].properties._taskNotes,{text:'keep'});
   assert.equal(moves[1].properties.subtaskOf,'routine');assert.equal(moves[1].properties.status,'done');
+});
+
+
+test("dateless root placement includes descendants linked only by parent_id",async()=>{
+  const parent=blk('P','parent',{properties:{duration:30}});parent.date=null;
+  const child=blk('C','child',{parent_id:'P',properties:{duration:0,status:'done',completedAt:'2026-10-21T12:00:00Z'}});child.date=null;
+  const unrelated=blk('U','unrelated');unrelated.date=null;
+  // The SQL pool cannot walk parent_id children unless the dateless root is seeded.
+  const {app,calls}=mountApp({parent,pool:options=>options?.includeDatelessRoots?[parent,child,unrelated]:[]});
+  const result=await post(app,'P',{fromDate:FROM,targetDate:FROM,parentStart:'12:00',parentEnd:'12:30',userSetStart:true});
+  assert.equal(result.status,200);
+  assert.deepEqual(result.body.moved,['P','C']);
+  assert.equal(calls.reschedule[0].creates.length,0);
+  const movedChild=calls.reschedule[0].moves.find(row=>row.id==='C');
+  assert.equal(movedChild.date,FROM);assert.equal(movedChild.properties.status,'done');
+  assert.equal(movedChild.properties.completedAt,'2026-10-21T12:00:00Z');
 });
