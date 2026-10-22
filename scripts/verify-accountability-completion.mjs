@@ -50,7 +50,7 @@ async function delayedSeenDraft(page,id,entry,{invitation=false,fail=false}={}) 
   }
   release();
   await page.waitForFunction(()=>window.__seenSettled);
-  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  await page.evaluate(()=>new Promise(resolve=>window.requestAnimationFrame(()=>window.requestAnimationFrame(resolve))));
   assert.equal(await note.inputValue(),'Draft survives delayed seen '+entry);
   if(invitation){
    assert.equal(await page.locator('#commitment-invite-form [name=person]').inputValue(),'unfinished-invitation');
