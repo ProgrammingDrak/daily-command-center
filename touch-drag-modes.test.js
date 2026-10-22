@@ -357,7 +357,7 @@ function blockDay(tasks) {
   return { c, rows };
 }
 
-for (const origin of ['scheduled', 'unscheduled', 'subtask', 'ride-along']) {
+for (const origin of ['scheduled', 'subtask', 'ride-along']) {
   test(`${origin} task drops at an empty block start with duration and persisted promotion`, () => {
     const tasks = twoTasks();
     const moved = tasks[1];
@@ -401,4 +401,33 @@ test('locked tasks and invalid block times never get scheduled', () => {
     c.window.DCC_DRAG.drop(blockTarget(locked ? '19:00' : '24:00'), undefined, 18, 'reorder');
     assert.equal(tasks[1].start, '10:00');
   }
+});
+
+for (const targetKind of ['row','block']) test('Unscheduled '+targetKind+' drop awaits durable placement without optimistic reflow', async()=>{
+  const tasks=twoTasks(),moved=tasks[1];moved.untimed=true;moved.start='00:00';moved.end='00:30';
+  const c=makeDragDay(tasks),calls=[];
+  c._viewedDateStr=()=> '2026-10-22';
+  c.rescheduleTaskToDate=async(id,date,opts)=>{calls.push({id,date,start:opts.pinnedStart});return false;};
+  const el=targetKind==='block'?blockTarget('12:00'):fakeRow(100);
+  c.window.DCC_DRAG.begin('moved',null,300);
+  if(targetKind==='block')await c.dBlockDrop({...mouseEvt(el,75,300),stopPropagation(){}});
+  else await c.dDrop(mouseEvt(el,75,300),'target');
+  assert.deepEqual(calls,[{id:'moved',date:'2026-10-22',start:targetKind==='block'?'12:00':'09:30'}]);
+  assert.equal(moved.untimed,true,'a refused save cannot visually schedule the task');
+  assert.equal(tasks[0].start,'09:00','the anchor is not moved by placement');
+  assert.equal(c.window.DCC_DRAG.activeId(),null);
+});
+
+test('queue drag reveals itinerary only after leaving, then restores on cancel',()=>{
+  const c=makeDragDay(twoTasks()),classes=new Set(),listeners=new Map();
+  c.document.body={classList:{add:n=>classes.add(n),remove:n=>classes.delete(n)}};
+  c.document.addEventListener=(n,fn)=>listeners.set(n,fn);
+  c.document.removeEventListener=n=>listeners.delete(n);
+  const panel={getBoundingClientRect:()=>({left:100,right:400,top:100,bottom:500})};
+  const row={closest:()=>({querySelector:()=>panel}),classList:{add(){}}};
+  c.window.DCC_DRAG.begin('moved',row,200);
+  listeners.get('dragover')({clientX:220,clientY:150});assert.equal(classes.size,0);
+  listeners.get('dragover')({clientX:500,clientY:150});assert.ok(classes.has('unscheduled-drag-out'));
+  assert.equal(c._dragMode({clientX:500,clientY:150}),'reorder','leaving sideways does not accidentally nest');
+  c.window.DCC_DRAG.end();assert.equal(classes.size,0);assert.equal(listeners.size,0);
 });

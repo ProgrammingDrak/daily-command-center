@@ -101,7 +101,7 @@ function openSchedulePopover(cfg){
     // second arg is documented as nullable.
     ((mode==="pick"&&cfg.allowTime)?(
     '<div class="resched-adjust resched-time-only">'+
-      '<div class="resched-time"><input type="time" class="resched-time-input" /></div>'+
+      '<div class="resched-time"><input type="time" class="resched-time-input" aria-label="Start time" /></div>'+
     '</div>'):'')+
     (showDate?(
     '<div class="resched-quick">'+
@@ -124,7 +124,7 @@ function openSchedulePopover(cfg){
         '<button class="resched-dur-btn" type="button" data-d="15" title="Longer" aria-label="Increase duration">+</button>'+
       '</div>'+
       '<div class="resched-time">'+
-        '<input type="time" class="resched-time-input" />'+
+        '<input type="time" class="resched-time-input" aria-label="Start time" />'+
       '</div>'+
     '</div>'):'');
 
@@ -274,6 +274,10 @@ function openSchedulePopover(cfg){
         const v=timeInput.value;
         if(!v||!/^\d{2}:\d{2}$/.test(v)){if(typeof showToast==="function")showToast("Pick a valid time","error");return}
         closePop();
+        if(ev.untimed||ev._dateless){
+          const date=(typeof viewDate!=="undefined"&&viewDate)||(__state&&__state.date)||_resolvedTodayDate();
+          return rescheduleTaskToDate(cfg.id,date,{pinnedStart:v});
+        }
         if(typeof pinStartTime==="function")pinStartTime(cfg.id,v);
         if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
         if(typeof showToast==="function")showToast("Start pinned to "+(typeof f12==="function"?f12(v):v),"success");

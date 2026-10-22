@@ -1792,7 +1792,7 @@ module.exports = function mount(app, ctx) {
       // links and the parent_id column — because neither one is complete on real data;
       // lib/reschedule.js carries the measurements. An undated row only moves if the
       // walk actually links it into this parent's subtree.
-      const dayBlocks = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId);
+      const dayBlocks = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId, { includeDatelessRoots: !parent.date });
       const subtreeIds = collectSubtreeBlockIds(dayBlocks, parent);
       const byId = new Map(dayBlocks.map(b => [b.id, b]));
       byId.set(parent.id, parent); // parent may lack local_id and be absent from dayBlocks
@@ -1914,7 +1914,7 @@ module.exports = function mount(app, ctx) {
         lockKey: "dcc-review:" + req.workspaceId + ":" + targetDate,
         beforeApply: async client => {
           const freshParent = await blockDB.getBlock(parent.id, client);
-          const freshPool = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId, { client });
+          const freshPool = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId, { client, includeDatelessRoots: !freshParent?.date });
           const freshById = new Map(freshPool.map(row => [row.id, row]));
           freshById.set(parent.id, freshParent);
           const members = freshParent && collectSubtreeBlockIds(freshPool, freshParent).map(id => freshById.get(id));

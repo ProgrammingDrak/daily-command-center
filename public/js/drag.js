@@ -49,6 +49,32 @@ function _startNativeDragGhost(e,row){
   nativeDragGhost={el:ghost,blank,x:e.clientX,y:e.clientY};
   document.addEventListener("dragover",_nativeDragMove,true);
 }
+// Keep in-queue reordering available. Once a lifted row leaves the queue,
+// reveal the itinerary without removing the native drag source from the DOM.
+let _queueDrag=null;
+function _queueDragMove(e){
+  if(!_queueDrag||_queueDrag.outside)return;
+  const r=_queueDrag.rect;
+  if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom){
+    _queueDrag.outside=true;
+    document.body.classList.add("unscheduled-drag-out");
+  }
+}
+function _beginQueueDrag(row){
+  const queue=row&&typeof row.closest==="function"&&row.closest('#tasks-drawer[data-queue="unscheduled"]');
+  if(!queue)return;
+  const panel=queue.querySelector(".side-drawer-body")||queue;
+  _queueDrag={rect:panel.getBoundingClientRect(),outside:false};
+  document.addEventListener("dragover",_queueDragMove,true);
+  document.addEventListener("pointermove",_queueDragMove,true);
+}
+async function _placeUnscheduledDrop(task,start){
+  const outside=!!(_queueDrag&&_queueDrag.outside);
+  dEnd();
+  const result=await rescheduleTaskToDate(task.id,_viewedDateStr(),{pinnedStart:start});
+  if(result&&outside&&typeof window.closeTasksDrawer==="function")window.closeTasksDrawer({keepFocus:true});
+  return result;
+}
 function dStart(e,id){
   dragId=id;
   dragStartX=(typeof e.clientX==="number")?e.clientX:null;
@@ -58,8 +84,15 @@ function dStart(e,id){
   const el=e.target.closest(".tl-item");if(el)el.classList.add("dragging");
   const listEl=e.target.closest(".it-list-item");if(listEl)listEl.classList.add("dragging");
   _startNativeDragGhost(e,listEl||el);
+  _beginQueueDrag(listEl||el);
 }
 function dEnd(){
+  if(_queueDrag){
+    document.body.classList.remove("unscheduled-drag-out");
+    document.removeEventListener("dragover",_queueDragMove,true);
+    document.removeEventListener("pointermove",_queueDragMove,true);
+    _queueDrag=null;
+  }
   dragId=null;dragStartX=null;dragGesture=null;window._dragNowPill=false;
   if(nativeDragGhost){
     nativeDragGhost.el.remove();nativeDragGhost.blank.remove();nativeDragGhost=null;
@@ -125,6 +158,7 @@ function _modeForDx(dx){
 function _dragMode(e){
   if(e.dccMode)return e.dccMode;
   if(e.shiftKey)return "sub";
+  if(_queueDrag&&_queueDrag.outside)return "reorder";
   if(typeof dragStartX!=="number"||typeof e.clientX!=="number")return "reorder";
   return _resolveDragGesture(e.clientX,e.clientY);
 }
@@ -162,6 +196,7 @@ async function dBlockDrop(e){
     return;
   }
   if(!moved||!/^([01]\d|2[0-3]):[0-5]\d$/.test(start||"")){dEnd();return;}
+  if(moved.untimed&&!parentIdOf(moved))return _placeUnscheduledDrop(moved,start);
   const old=JSON.stringify(scheduled);
   if(parentIdOf(moved))_promoteMutate(moved);
   const duration=dur(moved)||30;
@@ -766,6 +801,14 @@ function dDrop(e,tid){
   const moved=scheduled.find(x=>x.id===dragId);
   const target=scheduled.find(x=>x.id===tid);
   if(!moved||!target){dragId=null;clearCls();return;}
+  // A plain queue-to-itinerary drop is a placement of the existing task tree.
+  // Explicit nesting and same-queue reorder keep their established handlers.
+  if(moved.untimed&&!target.untimed&&!parentIdOf(moved)&&!_nestZone(e)){
+    const rect=e.currentTarget.getBoundingClientRect();
+    const after=e.clientY-rect.top>=rect.height/2;
+    const minute=after?pt(target.end):Math.max(0,pt(target.start)-dur(moved));
+    return _placeUnscheduledDrop(moved,fmt(minute));
+  }
   const old=JSON.stringify(scheduled);
 
   // ---- Manual meeting move ----
@@ -893,7 +936,7 @@ function _dccSynthEvt(rowEl, clientY, mode){
            preventDefault(){}, stopPropagation(){} };
 }
 window.DCC_DRAG = {
-  begin(id, rowEl, x){ dragId = id; _beginDragGesture(x); if(rowEl) rowEl.classList.add("dragging"); },
+  begin(id, rowEl, x){ _beginQueueDrag(rowEl); dragId = id; _beginDragGesture(x); if(rowEl) rowEl.classList.add("dragging"); },
   over(rowEl, id, y, mode){ if(rowEl){const e=_dccSynthEvt(rowEl,y,mode);if(rowEl.classList.contains("time-block-drop-zone"))dBlockOver(e);else dOver(e,id);} },
   leave(rowEl){ if(rowEl){rowEl.classList.remove("drag-over-block");dLeave(_dccSynthEvt(rowEl, 0, "reorder"));} },
   drop(rowEl, tid, y, mode){ if(rowEl){const e=_dccSynthEvt(rowEl,y,mode);if(rowEl.classList.contains("time-block-drop-zone"))dBlockDrop(e);else dDrop(e,tid);} },
