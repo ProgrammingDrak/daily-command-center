@@ -23,7 +23,7 @@ try {
  const field=owner.locator('[aria-label="Friend Invite Link"]');await field.waitFor();const link=await field.inputValue(),path=new URL(link).pathname;
  await owner.getByRole('button',{name:'Copy Invite Link',exact:true}).click();assert.equal(await owner.evaluate(()=>navigator.clipboard.readText()),link);
  await fs.mkdir('test-results/accountability-completion',{recursive:true});
- for(const width of [320,390,760,1024,1440]){await owner.setViewportSize({width,height:900});assert.ok(await owner.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),'Invite Link overflow '+width);await owner.screenshot({path:'test-results/accountability-completion/invite-link-header-'+width+'.png'});} 
+ for(const width of [320,390,760,1024,1440]){await owner.setViewportSize({width,height:900});assert.ok(await owner.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),'Invite Link overflow '+width);await owner.screenshot({path:'test-results/accountability-completion/invite-link-header-'+width+'.png'});}
  await owner.setViewportSize({width:390,height:900});
  const {page:anonymous}=await account(0,path);await anonymous.getByRole('link',{name:'Set up and add friend',exact:true}).click();
  assert.equal(new URL(anonymous.url()).searchParams.get('next'),path);
