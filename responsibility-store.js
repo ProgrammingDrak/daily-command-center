@@ -856,7 +856,15 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     return rows;
   }
 
-  function withSeriesLock(id, workspaceId, work) {
+  async function withSeriesLock(id, workspaceId, work, transactionClient = null) {
+    // A shared-task sync already owns a transaction and must keep its consent
+    // check, owner occurrence and participant tasks inside that same commit.
+    // Re-acquiring an advisory lock on that client is safe and never opens a
+    // nested transaction (or waits for a second pool connection).
+    if (transactionClient) {
+      await transactionClient.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`${workspaceId || ""}:${id}`]);
+      return work(transactionClient);
+    }
     return typeof blockDB.withRepeatSeriesLock === "function"
       ? blockDB.withRepeatSeriesLock(id, workspaceId, work)
       : work(null);
@@ -917,7 +925,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     return block && (block.workspace_id || null) === (workspaceId || null);
   }
 
-  async function materializeDefinitionForDate(id, { date, userId, workspaceId, targetTimeZone, allowPast = false, outputDate = null, occurrenceKey = null, publicVisibility = null }) {
+  async function materializeDefinitionForDate(id, { date, userId, workspaceId, targetTimeZone, allowPast = false, outputDate = null, occurrenceKey = null, publicVisibility = null }, transactionClient = null) {
     return withSeriesLock(id, workspaceId, async (client) => {
       // Re-read after taking the shared series lock. This makes an update or
       // deletion authoritative over a day load that began a moment earlier.
@@ -947,10 +955,12 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
       try {
         return await blockDB.createItineraryTasks(rows, { userId, workspaceId }, client);
       } catch (error) {
-        if (blockDB.isIdempotencyConflict && blockDB.isIdempotencyConflict(error)) return [];
+        // Do not hide a failed statement in a caller-owned transaction: it
+        // must roll back the share and private tasks together with this write.
+        if (!transactionClient && blockDB.isIdempotencyConflict && blockDB.isIdempotencyConflict(error)) return [];
         throw error;
       }
-    });
+    }, transactionClient);
   }
 
   async function materializeScheduledRepeatsForDate({ date, userId, workspaceId, targetTimeZone = appTimeZone, strict = false }) {

@@ -3,6 +3,29 @@ const {createActivityDb}=require('./test-support/activity-db');
 const {createSharedTaskStore}=require('./shared-task-store');
 const W=require('./public/js/workout-model');
 const owner={userId:1,workspaceId:'ws-1'},peer={userId:2,workspaceId:'ws-2'};
+test('recurrence materialization reuses the caller transaction, lock and tombstone lookup',async()=>{
+  const calls=[],client={query:async(sql,args)=>{calls.push({kind:'lock',sql,args});return {rows:[]};}};
+  const definition={id:'shared-series',workspace_id:'ws-1',properties:{kind:'responsibility_item',repeatType:'scheduled',title:'Shared routine',status:'active',estimatedMinutes:20,
+    scheduleRule:{version:1,patternType:'calendar',timeZone:'UTC',startDate:'2026-10-21',frequency:'daily',interval:1,times:['07:00'],end:{type:'never'}}}};
+  let existing=[],createError=null;
+  const blockDB={
+    withRepeatSeriesLock:async()=>{assert.fail('must not open a second transaction');},
+    getBlock:async(id,q)=>{assert.equal(id,definition.id);assert.equal(q,client);calls.push({kind:'definition'});return definition;},
+    getBlocksByIdempotencyKeys:async(workspace,keys,q)=>{assert.equal(workspace,'ws-1');assert.equal(q,client);calls.push({kind:'identities',keys});return existing;},
+    createItineraryTasks:async(rows,opts,q)=>{assert.equal(q,client);assert.deepEqual(opts,owner);calls.push({kind:'create'});if(createError)throw createError;return rows;},
+    isIdempotencyConflict:error=>error.code==='23505'
+  };
+  const repeats=require('./responsibility-store')({blockDB,getTodayStr:()=> '2026-10-21',appTimeZone:'UTC'});
+  const args={date:'2026-10-22',...owner,targetTimeZone:'UTC'};
+  const rows=await repeats.materializeDefinitionForDate(definition.id,args,client);
+  assert.ok(rows.length);assert.deepEqual(calls.map(c=>c.kind),['lock','definition','identities','create']);
+  assert.match(calls[0].sql,/pg_advisory_xact_lock/);assert.deepEqual(calls[0].args,['ws-1:shared-series']);
+  existing=[{deleted_at:'2026-10-21T12:00:00Z',properties:{idempotency_key:calls[2].keys[0]}}];calls.length=0;
+  assert.deepEqual(await repeats.materializeDefinitionForDate(definition.id,args,client),[]);
+  assert.deepEqual(calls.map(c=>c.kind),['lock','definition','identities'],'a deleted occurrence remains reserved inside the caller transaction');
+  existing=[];createError=Object.assign(new Error('synthetic conflict'),{code:'23505'});
+  await assert.rejects(repeats.materializeDefinitionForDate(definition.id,args,client),createError,'caller must roll back a failed statement');
+});
 test('accepted scheduled series: real recurrence, grants and private histories',{skip:!process.env.DCC_PGLITE_MODULE && !process.env.DCC_TEST_DATABASE_URL},async t=>{
   const ctx=await createActivityDb();t.after(ctx.close);
   let today='2026-10-21';Object.assign(ctx,{getTodayStr:()=>today,APP_TIME_ZONE:'UTC',socialStore:require('./social-store')});
@@ -44,6 +67,25 @@ test('accepted scheduled series: real recurrence, grants and private histories',
   await t.test('one-off consent cannot be widened into a recurring invitation',async()=>{
     const r=await routine();await store.invite(r.task.id,2,owner);await assert.rejects(store.invite(r.task.id,2,owner,{scope:'series'}),{statusCode:409});
   });
+  await t.test('revocation after the initial grant check prevents owner generation and every participant write',async()=>{
+    const r=await shareRoutine();await store.respond(r.share.id,'accept',peer);
+    const query=ctx.pool.query;let revoked=false;
+    ctx.pool.query=async(sql,args)=>{
+      const result=await query.call(ctx.pool,sql,args);
+      if(sql==='SELECT * FROM shared_task_participants WHERE share_id=$1' && args[0]===r.share.id) {
+        // Return the accepted preflight snapshot only after the owner has
+        // committed removal, immediately before sync can materialize anything.
+        ctx.pool.query=query;
+        await store.respond(r.share.id,'remove',owner,peer.userId);revoked=true;
+      }
+      return result;
+    };
+    try {await store.sync(peer,'2026-10-22');}finally{ctx.pool.query=query;}
+    assert.equal(revoked,true,'exercise the stale-grant window rather than an already-removed request');
+    assert.equal((await ctx.pool.query("SELECT count(*)::int n FROM blocks WHERE workspace_id='ws-1' AND date='2026-10-22' AND properties->>'repeatSeriesId'=$1",[r.id])).rows[0].n,0);
+    assert.equal((await ctx.pool.query('SELECT count(*)::int n FROM shared_task_occurrences WHERE series_parent_id=$1',[r.share.id])).rows[0].n,0);
+    assert.equal((await ctx.pool.query('SELECT state FROM shared_task_participants WHERE share_id=$1 AND user_id=2',[r.share.id])).rows[0].state,'removed');
+  });
   await t.test('blocked users, outsiders and lost ownership cannot materialize participant tasks',async()=>{
     const r=await shareRoutine();await store.respond(r.share.id,'accept',peer);
     const before=(await ctx.pool.query('SELECT count(*) AS n FROM blocks')).rows[0].n;
@@ -70,9 +112,11 @@ test('accepted scheduled series: real recurrence, grants and private histories',
   });
   await t.test('sync failures roll back participant tasks and retry preserves a single private session',async()=>{
     const r=await shareRoutine();await store.respond(r.share.id,'accept',peer);
+    const before=(await ctx.pool.query("SELECT id FROM blocks WHERE date='2026-10-24' ORDER BY id")).rows;
     const create=ctx.blockDB.createItineraryTask;
     ctx.blockDB.createItineraryTask=async args=>{if(args.workspaceId==='ws-2')throw new Error('synthetic failure');return create(args);};
     try {await assert.rejects(store.sync(peer,'2026-10-24'),/synthetic failure/);}finally{ctx.blockDB.createItineraryTask=create;}
+    assert.deepEqual((await ctx.pool.query("SELECT id FROM blocks WHERE date='2026-10-24' ORDER BY id")).rows,before,'owner generation and both day roots roll back along with participant creation');
     assert.equal((await find(r.share.id,'2026-10-24')).length,0);
     await store.sync(peer,'2026-10-24');await store.sync(peer,'2026-10-24');assert.equal((await find(r.share.id,'2026-10-24')).length,1);
   });

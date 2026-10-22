@@ -14,7 +14,7 @@
     "sweep:check": "node scripts/sweep-suite-check.js",
     "ship": "node scripts/ship-pr.js",
     "test": "node --test",
-    "test:postgres": "node --test meeting-citation-migration.test.js proposal-postgres.test.js activity-postgres.test.js commitment-postgres.test.js sponsorship-postgres.test.js task-attachment-postgres.test.js",
+    "test:postgres": "node --test meeting-citation-migration.test.js proposal-postgres.test.js activity-postgres.test.js commitment-postgres.test.js sponsorship-postgres.test.js task-attachment-postgres.test.js shared-task-postgres.test.js shared-task-series.test.js shared-task-notifications.test.js",
     "lint": "eslint .",
     "format": "prettier --write .",
     "start": "npm run check:db && node pg-schema.js && node server.js",
@@ -26,7 +26,8 @@
     "smoke:ci": "node scripts/smoke-ci.mjs",
     "test:ui-review": "node scripts/verify-ui-optimization.mjs",
     "ui-review:serve": "node scripts/ui-review-server.mjs",
-    "start:render": "npm run check:db && node pg-schema.js && node server.js"
+    "start:render": "npm run check:db && node pg-schema.js && node server.js",
+    "test:shared-tasks": "DCC_PGLITE_MODULE=@electric-sql/pglite node --test shared-task-postgres.test.js shared-task-series.test.js shared-task-notifications.test.js shared-task-ui.test.js"
   },
   "engines": {
     "node": ">=20 <23"
@@ -50,6 +51,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.11",
     "@eslint/js": "^9.0.0",
     "eslint": "^9.0.0",
     "playwright-core": "^1.61.1",

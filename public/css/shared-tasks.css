@@ -27,3 +27,6 @@
    additional participants without covering the title or touch targets. */
 .it-list-item > .shared-card-corner { grid-column:1 / -1; grid-row:1; justify-self:end; flex-wrap:wrap; }
 @media(min-width:761px) { .it-list-item > .shared-card-corner { margin-right:var(--sp-8); } }
+.shared-notifications { border:1px solid var(--border); border-radius:8px; padding:10px; margin:12px 0; }
+.shared-notifications li { overflow-wrap:anywhere; margin:8px 0; }
+.shared-notifications .unread { font-weight:600; }

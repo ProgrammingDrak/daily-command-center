@@ -1,9 +1,10 @@
 const test = require('node:test'), assert = require('node:assert/strict'), vm = require('node:vm'), fs = require('node:fs');
 const src = fs.readFileSync(require.resolve('./public/js/shared-tasks'),'utf8');
-function fixture(api) {
+function fixture(api, options={}) {
   const hosts=[], events={};
   const document={readyState:'loading',addEventListener:(name,fn)=>events[name]=fn,querySelectorAll:selector=>selector==='[data-shared-task]'?hosts:[],getElementById:()=>null};
-  const ctx={AbortController,setTimeout,clearTimeout,document,window:{DCC:{api:(path,options)=>path.endsWith('/sync')?Promise.resolve({created:0}):api(path,options),dates:{todayKey:()=> '2026-10-21'},esc:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;')}},setInterval(){},isDone:ev=>!!ev.optimistic};
+  const ctx={AbortController,setTimeout:options.setTimeout || setTimeout,clearTimeout,document,window:{DCC:{api:(path,requestOptions)=>path.endsWith('/sync')?(options?.sync ? options.sync(path,requestOptions) : Promise.resolve({created:0})):api(path,requestOptions),dates:{todayKey:()=> '2026-10-21'},esc:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;')}},setInterval(){},isDone:ev=>!!ev.optimistic};
+  if(options.date)ctx._viewedDateStr=()=>options.date;
   vm.runInNewContext(src,ctx);return {D:ctx.window.DCC,hosts,events,ctx};
 }
 const share={id:'occurrence',taskId:'mine',state:'accepted',title:'Workout',participants:[{userId:1,self:true,name:'Me <x>',completed:false,state:'accepted'},{userId:2,name:'Friend',completed:false,state:'accepted'}]};
@@ -34,4 +35,25 @@ test('duplicate live events coalesce and never let older requests overwrite newe
 test('unsafe avatar URL never creates an executable or remote image',()=>{
   const {D}=fixture(()=>{});const html=D.SharedTasks.badge({...share,participants:[{...share.participants[0],avatar:'javascript:alert(1)'}]});
   assert.doesNotMatch(html,/<img|javascript:/);
+});
+
+test('distant one-off dates skip bounded recurrence sync but still read participants',async()=>{
+  const calls=[];const {D,hosts}=fixture(async path=>{calls.push(path);return {shares:[share]};},{date:'2027-01-01',sync:()=>{throw new Error('must not generate');}});
+  const host={dataset:{sharedTask:'mine'},setAttribute(){}};hosts.push(host);
+  await D.SharedTasks.refresh();assert.match(host.innerHTML,/Friend/);assert.deepEqual(calls,['/api/shared-tasks?date=2027-01-01']);
+});
+test('recurrence preparation failure does not hide independently readable shares',async()=>{
+  const {D,hosts}=fixture(async()=>({shares:[share]}),{sync:async()=>{throw new Error('generation unavailable');}});
+  const host={dataset:{sharedTask:'mine'},setAttribute(){}};hosts.push(host);
+  await D.SharedTasks.refresh();assert.match(host.innerHTML,/Friend/);
+});
+
+test('timed-out generation gets a fresh read timeout and does not poison the share request',async()=>{
+  let syncSignal;
+  const {D,hosts}=fixture(async(_path,options)=>{assert.equal(syncSignal.aborted,true);assert.equal(options.signal.aborted,false);assert.notEqual(options.signal,syncSignal);return {shares:[share]};},{
+    setTimeout:callback=>setTimeout(callback,1),
+    sync:(_path,options)=>new Promise((_,reject)=>{syncSignal=options.signal;syncSignal.addEventListener('abort',()=>reject(new Error('timed out')));})
+  });
+  const host={dataset:{sharedTask:'mine'},setAttribute(){}};hosts.push(host);
+  await D.SharedTasks.refresh();assert.match(host.innerHTML,/Friend/);
 });

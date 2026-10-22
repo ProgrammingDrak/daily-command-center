@@ -77,6 +77,47 @@ jobs:
           if [ -z "$ok" ]; then echo "::error::server never became healthy"; cat server.log; exit 1; fi
           node scripts/smoke-ci.mjs "http://localhost:${PORT}"
 
+  shared-task-browser:
+    # Disposable synthetic sessions and in-memory data only. No production URL,
+    # deployment action, account credentials or real invitations are used.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run test:shared-tasks
+      - run: npx playwright-core install --with-deps --no-progress chromium
+      - name: Verify shared tasks in two browser profiles and mobile layout
+        run: |
+          export PORT=8317 DCC_ACTIVITY_REVIEW=1 DCC_SHARED_TASK_REVIEW=1
+          export DCC_PGLITE_MODULE="${GITHUB_WORKSPACE}/node_modules/@electric-sql/pglite"
+          export DCC_CHROMIUM_PATH="$(node -p "require('playwright-core').chromium.executablePath()")"
+          export DCC_QA_OUTPUT="${RUNNER_TEMP}/shared-task-qa"
+          node scripts/ui-review-server.mjs > "${RUNNER_TEMP}/shared-task-server.log" 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          ready=""
+          for i in $(seq 1 30); do
+            if curl -sf "http://127.0.0.1:${PORT}/api/shared-task-review-info" | grep -q '"synthetic":true'; then
+              ready=1; break
+            fi
+            sleep 1
+          done
+          if [ -z "$ready" ]; then cat "${RUNNER_TEMP}/shared-task-server.log"; exit 1; fi
+          node scripts/verify-shared-tasks.mjs "http://127.0.0.1:${PORT}"
+      - name: Preserve synthetic QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-task-browser-evidence
+          path: |
+            ${{ runner.temp }}/shared-task-qa
+            ${{ runner.temp }}/shared-task-server.log
+
   guardrails:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest

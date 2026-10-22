@@ -19,7 +19,17 @@ module.exports = function mount(app,ctx) {
   app.get('/api/shared-tasks',route(async req => {
     const date=req.query.date || ctx.getTodayStr();
     if (!require('../public/js/activity-model').validDate(date)) throw Object.assign(new Error('Valid occurrence date required'),{statusCode:400});
-    return {shares:await store.list(req.sharedTaskActor,date)};
+    return {shares:await store.list(req.sharedTaskActor,date),notifications:await store.notifications(req.sharedTaskActor),notificationPreferences:await store.notificationPreferences(req.sharedTaskActor)};
+  }));
+  app.post('/api/shared-tasks/notification-preferences',route(async req=>{
+    const result=await store.setNotificationPreferences(req.sharedTaskActor,req.body?.enabled);
+    ctx.broadcast('shared-tasks-changed',{},req.workspaceId);
+    return result;
+  }));
+  app.post('/api/shared-tasks/notifications/read',route(async req=>{
+    const result=await store.readNotifications(req.sharedTaskActor,req.body?.ids);
+    ctx.broadcast('shared-tasks-changed',{},req.workspaceId);
+    return result;
   }));
   app.post('/api/shared-tasks/sync',route(async req=>{
     const result=await store.sync(req.sharedTaskActor,req.body?.date || ctx.getTodayStr());

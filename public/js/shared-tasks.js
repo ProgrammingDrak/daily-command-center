@@ -3,9 +3,13 @@
 (function () {
   'use strict';
   const D = window.DCC, esc = D.esc;
-  let shares = [], fresh = false, loading = null, again = false;
+  let shares = [], notifications = [], notificationPreferences = {enabled:true}, syncWarning = '', fresh = false, loading = null, again = false;
   const api = (path = '', options) => D.api('/api/shared-tasks' + path, options);
   const forTask = id => shares.find(s => s.taskId === id && s.state === 'accepted');
+  async function timedApi(path,options={}) {
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
+    try {return await api(path,{...options,signal:controller.signal});}finally{clearTimeout(timer);}
+  }
   function badge(share, ev) {
     const accepted = share.participants.filter(p => p.state === 'accepted');
     const done = p => p.self && ev && typeof isDone === 'function' ? isDone(ev) : p.completed;
@@ -40,7 +44,8 @@
     const launcher = document.getElementById('shared-tasks-open');
     if (launcher) {
       const pending = shares.filter(s => s.state === 'pending').length;
-      launcher.textContent = 'Shared tasks' + (pending ? ' · ' + pending + ' invited' : '');
+      const unread=notificationPreferences.enabled ? notifications.filter(n=>!n.read).length : 0;
+      launcher.textContent = 'Shared tasks' + (pending ? ' · ' + pending + ' invited' : '') + (unread ? ' · ' + unread + ' new' : '');
     }
     document.querySelectorAll('[data-shared-summary]').forEach(host => {
       const share = shares.find(s => s.id === host.dataset.sharedSummary);
@@ -50,13 +55,20 @@
   async function refresh() {
     if (loading) { again = true; return loading; }
     loading = (async () => {
-      const controller = new AbortController(), timer = setTimeout(() => controller.abort(),10000);
       try { const date=typeof _viewedDateStr === 'function' ? _viewedDateStr() : D.dates.todayKey();
-        const synced=await api('/sync',{method:'POST',body:{date},signal:controller.signal});
-        if(synced.created)window.refreshDccStateFromServer?.();
-        const data = await api('?date='+encodeURIComponent(date),{signal:controller.signal}); shares = data.shares || []; fresh = true; }
-      catch (_) { shares = []; fresh = false; } // Never retain another account's identity or stale green checkmarks.
-      finally { clearTimeout(timer); loading = null; paint(); if (again) { again = false; void refresh(); } }
+        const today=D.dates.todayKey(), limit=new Date(Date.parse(today+'T12:00:00Z')+14*86400000).toISOString().slice(0,10);
+        syncWarning='';
+        // The generation horizon is not a read/invitation horizon. A one-off
+        // occurrence remains usable on any valid past or future date.
+        if(date>=today && date<=limit) {
+          try {const synced=await timedApi('/sync',{method:'POST',body:{date}});
+            if(synced.created)window.refreshDccStateFromServer?.();}
+          catch (_) {syncWarning='New recurring tasks could not be prepared. Existing shared tasks are shown; refresh to retry.';}
+        }
+        const data = await timedApi('?date='+encodeURIComponent(date));
+        shares = data.shares || []; notifications=data.notifications || []; notificationPreferences=data.notificationPreferences || {enabled:true}; fresh = true; }
+      catch (_) { shares = []; notifications = []; fresh = false; } // Never retain another account's identity or stale green checkmarks.
+      finally { loading = null; paint(); if (again) { again = false; void refresh(); } }
     })();
     return loading;
   }
@@ -103,8 +115,13 @@
         catch (e) { preview = {error:e.message}; }
       }
       const visible = ev ? (share ? [share] : []) : shares;
+      const history=ev ? notifications.filter(n=>n.shareId===share?.id) : notifications;
+      const unread=notificationPreferences.enabled ? history.filter(n=>!n.read) : [];
       body.innerHTML = '<p>Share a title and date, with a separate task and completion for each person. Results, personal weights/reps, notes and timing stay private. You may include a reviewed instruction snapshot for each person’s Plan &amp; Log.</p><p>Choose this occurrence or, for an eligible scheduled repeat, this recurring routine. A routine invitation is accepted once; each scheduled date has separate completion and private logs. Leaving or removing a participant stops sharing for the whole routine.</p>' +
         '<div class="shared-task-status" role="status" aria-live="polite"></div>' +
+        (syncWarning ? '<p role="alert">'+esc(syncWarning)+'</p>' : '') +
+        '<label class="shared-include"><input type="checkbox" data-notification-preference'+(notificationPreferences.enabled ? ' checked' : '')+'> In-app completion alerts</label><p>Completion and reopening history stays here. Turning alerts off clears new badges; it does not affect invitations or anyone’s task.</p>' +
+        (history.length ? '<details class="shared-notifications"><summary>Completion history'+(unread.length ? ' · '+unread.length+' unread' : '')+'</summary><ol>'+history.map(n=>'<li'+(!n.read && notificationPreferences.enabled ? ' class="unread"' : '')+'>'+esc(n.actorName)+' '+(n.completed ? 'completed' : 'reopened')+' '+esc(n.title)+' · '+esc(n.date)+(n.currentCompleted!==n.completed ? (n.currentCompleted ? ' (now completed)' : ' (now reopened)') : '')+'</li>').join('')+'</ol>'+(unread.length ? '<button data-read-notifications type="button">Mark shown updates read</button>' : '')+'</details>' : '') +
         visible.map(s => '<section class="shared-task-entry"><strong>' + esc(s.title) + '</strong><p>' + esc(s.date) + (s.scope==='series' ? ' · Recurring routine (accepted once)' : ' · This occurrence') + '</p>' + instructionsHtml(s.instructions) +
           (s.state === 'pending' ? '<p>You are invited to participate. Accept adds your own private task'+(s.scope==='series' ? ' for each scheduled occurrence from this date onward' : ' for this date')+' and shares only completion with the other accepted participants. You can leave at any time.</p><button data-action="accept" data-share="' + esc(s.id) + '">Accept</button> <button data-action="decline" data-share="' + esc(s.id) + '">Decline</button>' :
             '<div class="shared-summary" data-shared-summary="' + esc(s.id) + '">' + badge(s) + '</div>' +
@@ -116,13 +133,15 @@
         (ev && (!share || share.isOwner) ? '<label>Invite an existing friend <select data-friend><option value="">Choose a friend</option>' + friends.filter(f => !share?.participants.some(p => p.userId === f.friend_id)).map(f => '<option value="' + f.friend_id + '">' + esc(f.name || f.username) + '</option>').join('') + '</select></label><button data-invite type="button">Send invitation</button><p>Only accepted friends are listed. Manage friendships in Social.</p>' : '') +
         '<button data-retry type="button">Refresh</button>';
       body.querySelector('[data-retry]').onclick = draw;
+      body.querySelector('[data-notification-preference]').onchange=e=>mutate('/notification-preferences',{enabled:e.target.checked});
+      body.querySelector('[data-read-notifications]')?.addEventListener('click',()=>mutate('/notifications/read',{ids:unread.map(n=>n.id)}));
       body.querySelector('[data-invite]')?.addEventListener('click', () => mutate('/invite',{taskId:ev._blockId,scope:share?.scope || body.querySelector('[data-scope]')?.value || 'occurrence',userId:Number(body.querySelector('[data-friend]').value),includeInstructions:!!body.querySelector('[data-include-instructions]')?.checked,instructionsHash:preview?.hash}));
       body.querySelectorAll('[data-action]').forEach(button => button.onclick = () => mutate('/' + encodeURIComponent(button.dataset.share) + '/respond',{
         action:button.dataset.action,...(button.dataset.user ? {userId:Number(button.dataset.user)} : {})
       }));
     }
     async function mutate(path, payload) {
-      body.querySelectorAll('button,select').forEach(b => b.disabled = true);
+      body.querySelectorAll('button,select,input').forEach(b => b.disabled = true);
       const status = body.querySelector('.shared-task-status'); status.textContent = 'Saving…';
       try {
         await api(path,{method:'POST',body:payload});
@@ -132,7 +151,7 @@
         window.refreshDccStateFromServer?.();
       } catch (e) {
         status.textContent = e.message + ' — retry the same action or Refresh to check whether it saved.';
-        body.querySelectorAll('button,select').forEach(b => b.disabled = false);
+        body.querySelectorAll('button,select,input').forEach(b => b.disabled = false);
       }
     }
     await draw();
@@ -143,7 +162,7 @@
     void refresh();
     setInterval(() => { if (!document.hidden) void refresh(); },15000);
     window.addEventListener('online',refresh);
-    window.addEventListener('offline',() => { shares=[]; fresh=false; paint(); });
+    window.addEventListener('offline',() => { shares=[]; notifications=[]; fresh=false; paint(); });
     window.addEventListener('dcc:view-date-changed',refresh);
     window.addEventListener('dcc:data-ready',refresh);
     document.addEventListener('visibilitychange',() => { if (!document.hidden) void refresh(); });

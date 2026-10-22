@@ -29,6 +29,73 @@ CREATE TABLE IF NOT EXISTS shared_task_participants (
 );
 CREATE INDEX IF NOT EXISTS idx_shared_task_participant_user
   ON shared_task_participants(user_id,state);
+CREATE TABLE IF NOT EXISTS shared_task_notification_preferences (
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  PRIMARY KEY(user_id,workspace_id)
+);
+ALTER TABLE shared_task_notification_preferences ADD COLUMN IF NOT EXISTS alerts_after TIMESTAMPTZ NOT NULL DEFAULT '-infinity';
+CREATE TABLE IF NOT EXISTS shared_task_notifications (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  share_id TEXT NOT NULL REFERENCES shared_task_occurrences(id),
+  actor_user_id INTEGER NOT NULL REFERENCES users(id),
+  recipient_user_id INTEGER NOT NULL REFERENCES users(id),
+  recipient_workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  completion_revision TEXT NOT NULL,
+  completed BOOLEAN NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  read_at TIMESTAMPTZ,
+  UNIQUE(share_id,actor_user_id,recipient_user_id,completion_revision)
+);
+CREATE INDEX IF NOT EXISTS idx_shared_task_notifications_recipient
+  ON shared_task_notifications(recipient_user_id,recipient_workspace_id,id DESC);
+-- Capture transitions in the same transaction as every canonical completion
+-- writer (including offline WAL/batch), not in a best-effort SSE callback.
+CREATE OR REPLACE FUNCTION shared_task_completed(p JSONB) RETURNS BOOLEAN
+LANGUAGE SQL IMMUTABLE AS $$
+  SELECT COALESCE(p->>'status'='done',FALSE) OR COALESCE(p->'done'='true'::jsonb,FALSE)
+    OR COALESCE(p->'completed'='true'::jsonb,FALSE)
+    OR COALESCE(NULLIF(p->>'completedAt','') IS NOT NULL,FALSE)
+    OR COALESCE(NULLIF(p->>'doneAt','') IS NOT NULL,FALSE)
+$$;
+CREATE OR REPLACE FUNCTION shared_task_connected(a INTEGER,b INTEGER) RETURNS BOOLEAN
+LANGUAGE SQL STABLE AS $$
+  SELECT a=b OR (
+    EXISTS (SELECT 1 FROM friendships WHERE status='accepted'
+      AND ((requester_id=a AND addressee_id=b) OR (requester_id=b AND addressee_id=a)))
+    AND NOT EXISTS (SELECT 1 FROM friendships WHERE status='blocked'
+      AND ((requester_id=a AND addressee_id=b) OR (requester_id=b AND addressee_id=a))))
+$$;
+CREATE OR REPLACE FUNCTION record_shared_task_transition() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.deleted_at IS NOT NULL OR shared_task_completed(OLD.properties)=shared_task_completed(NEW.properties)
+    OR NULLIF(NEW.properties->>'_completionRevision','') IS NULL THEN RETURN NEW; END IF;
+  INSERT INTO shared_task_notifications(share_id,actor_user_id,recipient_user_id,recipient_workspace_id,completion_revision,completed,created_at,read_at)
+  SELECT s.id,actor.user_id,recipient.user_id,rb.workspace_id,NEW.properties->>'_completionRevision',shared_task_completed(NEW.properties),clock_timestamp(),
+    CASE WHEN COALESCE(pref.enabled,TRUE) THEN NULL ELSE NOW() END
+  FROM shared_task_participants actor
+  JOIN shared_task_occurrences s ON s.id=actor.share_id
+  JOIN blocks source ON source.id=s.source_task_id AND source.workspace_id=s.workspace_id AND source.deleted_at IS NULL
+  JOIN workspace_members sw ON sw.workspace_id=s.workspace_id AND sw.user_id=s.owner_user_id AND sw.role='owner'
+  JOIN workspace_members aw ON aw.workspace_id=NEW.workspace_id AND aw.user_id=actor.user_id AND aw.role='owner'
+  JOIN shared_task_participants recipient ON recipient.share_id=s.id AND recipient.state='accepted' AND recipient.user_id<>actor.user_id
+  JOIN blocks rb ON rb.id=recipient.task_id AND rb.deleted_at IS NULL AND (rb.user_id IS NULL OR rb.user_id=recipient.user_id)
+  JOIN workspace_members rw ON rw.workspace_id=rb.workspace_id AND rw.user_id=recipient.user_id AND rw.role='owner'
+  LEFT JOIN shared_task_notification_preferences pref ON pref.user_id=recipient.user_id AND pref.workspace_id=rb.workspace_id
+  WHERE actor.task_id=NEW.id AND actor.state='accepted' AND (NEW.user_id IS NULL OR NEW.user_id=actor.user_id)
+    AND shared_task_connected(s.owner_user_id,actor.user_id) AND shared_task_connected(s.owner_user_id,recipient.user_id)
+    AND NOT EXISTS (SELECT 1 FROM friendships WHERE status='blocked'
+      AND ((requester_id=actor.user_id AND addressee_id=recipient.user_id) OR (requester_id=recipient.user_id AND addressee_id=actor.user_id)))
+    AND (s.series_parent_id IS NULL OR (
+      EXISTS (SELECT 1 FROM shared_task_participants root_actor WHERE root_actor.share_id=s.series_parent_id AND root_actor.user_id=actor.user_id AND root_actor.state='accepted')
+      AND EXISTS (SELECT 1 FROM shared_task_participants root_recipient WHERE root_recipient.share_id=s.series_parent_id AND root_recipient.user_id=recipient.user_id AND root_recipient.state='accepted')))
+  ON CONFLICT DO NOTHING;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE TRIGGER shared_task_completion_notifications
+  AFTER UPDATE OF properties ON blocks FOR EACH ROW EXECUTE FUNCTION record_shared_task_transition();
 `;
 function fail(message = 'Shared task not found', statusCode = 404) {
   throw Object.assign(new Error(message), { statusCode });
@@ -84,13 +151,13 @@ function createSharedTaskStore({ pool, blockDB, socialStore, crypto = require('n
       if (m.user_id !== actor.userId && await socialStore.isBlocked(actor.userId, m.user_id, q)) continue;
       if (m.state !== 'accepted' && !(base.isOwner && m.state === 'pending')) continue;
       const { rows } = await q.query(`SELECT u.username, COALESCE(NULLIF(p.display_name,''),u.username) AS name,
-        COALESCE(NULLIF(u.avatar_url,''),p.avatar) AS avatar, b.properties, b.deleted_at
+        COALESCE(NULLIF(u.avatar_url,''),p.avatar) AS avatar, b.id AS authorized_task_id, b.properties, b.deleted_at
         FROM users u LEFT JOIN user_profiles p ON p.user_id=u.id
         LEFT JOIN blocks b ON b.id=$2 AND (b.user_id=u.id OR b.user_id IS NULL)
           AND EXISTS (SELECT 1 FROM workspace_members w WHERE w.workspace_id=b.workspace_id AND w.user_id=u.id AND w.role='owner')
         WHERE u.id=$1`, [m.user_id, m.task_id]);
       const row = rows[0];
-      if (!row) continue;
+      if (!row || (m.state==='accepted' && !row.authorized_task_id)) continue;
       base.participants.push({ userId: m.user_id, name: row.name, avatar: row.avatar || null,
         self: m.user_id === actor.userId, state: m.state,
         completed: m.state === 'accepted' && !!row.properties && blockDB.isCompletedTaskProps(row.properties),
@@ -235,14 +302,19 @@ function createSharedTaskStore({ pool, blockDB, socialStore, crypto = require('n
     for(const root of roots) {
       let grant;
       try {grant=(await live(pool,root.id,actor)).share;}catch(e){if(e.statusCode===404)continue;throw e;}
-      const generated=await repeats.materializeDefinitionForDate(grant.series_definition_id,{date,userId:grant.owner_user_id,workspaceId:grant.workspace_id,targetTimeZone:APP_TIME_ZONE});
-      for(const row of generated)changes.push({workspaceId:grant.workspace_id,taskId:row.id});
       await tx(async q=>{
+        // Keep this order: repeat-series lock, share-row lock, then occurrence
+        // writes. respond() holds the share row while revoking a participant,
+        // so a stale preflight grant cannot generate even the owner's tasks.
         await q.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[grant.workspace_id+':'+grant.series_definition_id]);
         let state;
         try {state=await live(q,root.id,actor,true);}catch(e){if(e.statusCode===404)return;throw e;}
+        if(state.self.state!=='accepted' || state.share.series_definition_id!==grant.series_definition_id || state.share.workspace_id!==grant.workspace_id)return;
+        grant=state.share;
         const definition=(await q.query('SELECT * FROM blocks WHERE id=$1',[grant.series_definition_id])).rows[0];
         if(!repeats.activeScheduledDefinition(definition) || definition.workspace_id!==grant.workspace_id || (definition.user_id && definition.user_id!==grant.owner_user_id) || definition.properties.templateTree)return;
+        const generated=await repeats.materializeDefinitionForDate(grant.series_definition_id,{date,userId:grant.owner_user_id,workspaceId:grant.workspace_id,targetTimeZone:APP_TIME_ZONE},q);
+        for(const row of generated)changes.push({workspaceId:grant.workspace_id,taskId:row.id});
         const recurrence=require('./lib/scheduled-recurrence');
         const rule=recurrence.normalizeScheduleRule(definition.properties.scheduleRule,{defaultTimeZone:APP_TIME_ZONE,today});
         const validKeys=new Set(recurrence.occurrencesForDate(rule,date,{targetTimeZone:APP_TIME_ZONE,today}).map(o=>o.occurrenceKey));
@@ -274,6 +346,54 @@ function createSharedTaskStore({ pool, blockDB, socialStore, crypto = require('n
     }
     return {created,changes};
   }
+  async function notificationPreferences(actor) {
+    await assertOwner(pool,actor);
+    const row=(await pool.query('SELECT enabled FROM shared_task_notification_preferences WHERE user_id=$1 AND workspace_id=$2',[actor.userId,actor.workspaceId])).rows[0];
+    return {enabled:row ? row.enabled : true};
+  }
+  async function setNotificationPreferences(actor,enabled) {
+    if(typeof enabled!=='boolean')fail('Choose whether completion alerts are enabled',400);
+    return tx(async q=>{
+      await assertOwner(q,actor);
+      await q.query(`INSERT INTO shared_task_notification_preferences(user_id,workspace_id,enabled,alerts_after) VALUES($1,$2,$3,clock_timestamp())
+        ON CONFLICT(user_id,workspace_id) DO UPDATE SET enabled=EXCLUDED.enabled,alerts_after=clock_timestamp()`,[actor.userId,actor.workspaceId,enabled]);
+      // Changing the preference clears old alert badges too. History stays available; re-enabling
+      // must not replay a backlog of alerts that arrived while muted. The cutoff
+      // also covers notification rows that were still uncommitted at this sweep.
+      await q.query('UPDATE shared_task_notifications SET read_at=COALESCE(read_at,NOW()) WHERE recipient_user_id=$1 AND recipient_workspace_id=$2',[actor.userId,actor.workspaceId]);
+      return {enabled};
+    });
+  }
+  async function notifications(actor) {
+    await assertOwner(pool,actor);
+    const rows=(await pool.query(`SELECT n.id,n.share_id,n.actor_user_id,n.completed,n.created_at,
+      (n.read_at IS NOT NULL OR pref.enabled=FALSE OR n.created_at<=pref.alerts_after) AS effectively_read
+      FROM shared_task_notifications n LEFT JOIN shared_task_notification_preferences pref
+        ON pref.user_id=n.recipient_user_id AND pref.workspace_id=n.recipient_workspace_id
+      WHERE n.recipient_user_id=$1 AND n.recipient_workspace_id=$2 ORDER BY n.id DESC LIMIT 200`,[actor.userId,actor.workspaceId])).rows;
+    const items=[];
+    for(const row of rows) {
+      let share;
+      try {share=await project(pool,row.share_id,actor);}catch(e){if(e.statusCode===404 || e.statusCode===403)continue;throw e;}
+      const peer=share.participants.find(p=>p.userId===row.actor_user_id && p.state==='accepted' && !p.removedTask);
+      const self=share.participants.find(p=>p.self && p.state==='accepted' && !p.removedTask);
+      // Revalidate every read, including after a block, leave, deletion or lost
+      // workspace ownership. Durable history never becomes a new access grant.
+      if(!peer || !self)continue;
+      items.push({id:String(row.id),shareId:share.id,title:share.title,date:share.date,
+        actorName:peer.name,completed:row.completed,currentCompleted:peer.completed,
+        createdAt:row.created_at,read:!!row.effectively_read});
+      if(items.length===50)break;
+    }
+    return items;
+  }
+  async function readNotifications(actor,ids) {
+    if(!Array.isArray(ids) || ids.length>50 || ids.some(id=>typeof id!=='string' || !/^[0-9]{1,20}$/.test(id)))fail('Choose notifications to mark read',400);
+    await assertOwner(pool,actor);
+    await pool.query(`UPDATE shared_task_notifications SET read_at=COALESCE(read_at,NOW())
+      WHERE recipient_user_id=$1 AND recipient_workspace_id=$2 AND id=ANY($3::bigint[])`,[actor.userId,actor.workspaceId,ids]);
+    return {ok:true};
+  }
   // Payload-free invalidations only, to currently authorized participant owners.
   async function notifyTask(taskId, actorWorkspace, broadcast) {
     const { rows } = await pool.query(`SELECT p.share_id,p.user_id FROM shared_task_participants p JOIN blocks b ON b.id=p.task_id
@@ -301,6 +421,6 @@ function createSharedTaskStore({ pool, blockDB, socialStore, crypto = require('n
     if (rows.some(p => p.user_id !== actor.userId)) fail('Only your own participation task can be changed',403);
     await assertOwner(pool,actor);
   }
-  return { list,invite,respond,notify,notifyTask,guardWrites,preview,sync };
+  return { list,invite,respond,notify,notifyTask,guardWrites,preview,sync,notifications,notificationPreferences,setNotificationPreferences,readNotifications };
 }
 module.exports = { SCHEMA_SQL,createSharedTaskStore };
