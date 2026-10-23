@@ -17,6 +17,10 @@ const root = path.resolve(here, "..");
 const port = Number(process.env.PORT || 8099);
 const app = express();
 app.use(express.json());
+if (process.env.DCC_WAITING_REVIEW === '1') {
+  const { default: mountWaitingReview } = await import('./waiting-review-backend.js');
+  await mountWaitingReview(app);
+}
 if (process.env.DCC_REVIEW_COMMITMENTS === "1") {
   const { default: mountCommitmentReview } = await import("./commitment-review-backend.js");
   await mountCommitmentReview(app);

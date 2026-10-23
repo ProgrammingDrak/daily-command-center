@@ -610,10 +610,21 @@ function collectCompletionSubtreeIds(rows, parent) {
 async function setTaskCompletion({
   taskRef, completed, completedAt = null, taskDate = null, mutationId,
   expectedRevision = null, userId = null, workspaceId = null, companionUpdates = [],
-  transactionLockKey = null,
+  transactionLockKey = null, resolveWaitingItemId = null, waitingCompletionGuard = null,
 }) {
   validateTaskCompletionInput({ taskRef, completed, completedAt, taskDate, mutationId, expectedRevision });
   if (!Array.isArray(companionUpdates)) throw new Error("companionUpdates must be an array");
+  if (resolveWaitingItemId != null && (!completed || typeof resolveWaitingItemId !== "string"
+      || !resolveWaitingItemId || resolveWaitingItemId.length > 256 || userId == null
+      || companionUpdates.length !== 1 || companionUpdates[0]?.id !== resolveWaitingItemId
+      || companionUpdates[0]?.properties?.status !== "done"
+      || !Number.isFinite(new Date(companionUpdates[0]?.expectedUpdatedAt || "").getTime()))) {
+    throw taskCompletionError("Explicit Waiting completion requires its versioned Waiting item", 400, "COMPLETION_WAITING_INVALID");
+  }
+  if (waitingCompletionGuard != null && (!completed || !waitingCompletionGuard.itemId
+      || !Number.isFinite(Date.parse(waitingCompletionGuard.completedAt)))) {
+    throw taskCompletionError("Invalid Waiting completion guard", 400, "COMPLETION_WAITING_INVALID");
+  }
   const q = await pool.connect();
   const at = completed ? (completedAt || new Date().toISOString()) : null;
   const now = new Date().toISOString();
@@ -623,9 +634,26 @@ async function setTaskCompletion({
   let target = null;
   let companionBlocks = [];
   let dependencyTransitions = [];
+  let completionCompanionUpdates = companionUpdates;
+  let resolvedWaitingIds = new Set();
+  let duplicateWaitingBlocks = [];
   const applyCompanionUpdates = async () => {
-    companionBlocks = [];
-    for (const update of companionUpdates) {
+    // Keep the task -> Waiting lock order used by completion/reopen. A stale
+    // cleanup is rolled back even if its task writes happened before this check.
+    if (waitingCompletionGuard) {
+      const { rows } = await q.query(
+        `SELECT * FROM blocks WHERE id = $1 AND deleted_at IS NULL
+          AND workspace_id IS NOT DISTINCT FROM $2 FOR UPDATE`,
+        [waitingCompletionGuard.itemId, workspaceId]
+      );
+      const item = rows[0] ? parseBlock(rows[0]) : null;
+      if (!item || item.properties?.kind !== "delegated_item" || item.properties.status !== "done"
+          || Date.parse(item.properties.completedAt) !== Date.parse(waitingCompletionGuard.completedAt)) {
+        throw taskCompletionError("Waiting completion was superseded", 409, "WAITING_COMPLETION_SUPERSEDED");
+      }
+    }
+    companionBlocks = [...duplicateWaitingBlocks];
+    for (const update of completionCompanionUpdates) {
       if (!update || !update.id || !update.properties || typeof update.properties !== "object") {
         throw new Error("Invalid companion update");
       }
@@ -639,8 +667,8 @@ async function setTaskCompletion({
       const existing = rows[0] ? parseBlock(rows[0]) : null;
       if (!existing) throw taskCompletionError("Companion block not found", 404, "COMPLETION_COMPANION_NOT_FOUND");
       if (update.expectedUpdatedAt) {
-        const expectedMs = Date.parse(update.expectedUpdatedAt);
-        const actualMs = Date.parse(existing.updated_at || "");
+        const expectedMs = new Date(update.expectedUpdatedAt).getTime();
+        const actualMs = new Date(existing.updated_at || "").getTime();
         if (!Number.isFinite(expectedMs) || expectedMs !== actualMs) {
           throw taskCompletionError("Companion block changed during completion", 409, "COMPLETION_COMPANION_CONFLICT", existing);
         }
@@ -693,6 +721,7 @@ async function setTaskCompletion({
     }
 
     if (!target) {
+      if (resolveWaitingItemId != null) throw taskCompletionError("Linked task is unavailable", 409, "COMPLETION_WAITING_TARGET_CONFLICT");
       if (!taskDate) throw taskCompletionError("Task not found", 404, "COMPLETION_TARGET_NOT_FOUND");
       const rootId = await ensureDayRoot(taskDate, userId, workspaceId, q);
       const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [rootId]);
@@ -747,38 +776,87 @@ async function setTaskCompletion({
     }
 
     const currentProps = target.properties || {};
-    let releasedDependencyId = null;
-    const dependencyIds = Array.isArray(currentProps.dependencyWaitingItemIds)
-      ? currentProps.dependencyWaitingItemIds.map(String)
-      : (currentProps.dependencyWaitingItemId ? [String(currentProps.dependencyWaitingItemId)] : []);
-    if (completed && dependencyIds.length) {
-      const dependencyId = dependencyIds[0];
-      const companionReleases = companionUpdates.some(update => update && String(update.id) === dependencyId
-        && !["open", "ready"].includes(String((update.properties || {}).status || "open")));
-      if (companionReleases) releasedDependencyId = dependencyId;
-      if (!companionReleases) {
-        const { rows: dependencyRows } = await q.query(
-          `SELECT * FROM blocks
-            WHERE id = ANY($1::text[]) AND deleted_at IS NULL
-              AND properties->>'kind' = 'delegated_item'
-              AND properties->>'blockerType' = 'task'
-              AND COALESCE(properties->>'status', 'open') = 'open'
-              AND workspace_id IS NOT DISTINCT FROM $2
-            FOR UPDATE`,
-          [dependencyIds, workspaceId]
-        );
-        if (dependencyRows.length) {
-          throw taskCompletionError("Release this task from Waiting before completing it", 409,
-            "TASK_DEPENDENCY_BLOCKED", target);
-        }
-      }
-    }
     const currentRevision = currentProps._completionRevision || null;
     const sameMutation = currentProps._completionMutationId === mutationId
       && isCompletedTaskProps(currentProps) === completed;
     if (!sameMutation && (expectedRevision || null) !== currentRevision) {
       throw taskCompletionError("Task completion changed since this edit was created", 409,
         "COMPLETION_CONFLICT", target);
+    }
+    if (resolveWaitingItemId != null) {
+      // This is not a general dependency bypass. Only the explicit, versioned
+      // Waiting action may close relations owned by this participant and linked
+      // to this exact task occurrence. Marker IDs alone never establish ownership.
+      if (target.user_id != null && String(target.user_id) !== String(userId)) {
+        throw taskCompletionError("Linked task is unavailable", 409, "COMPLETION_WAITING_TARGET_CONFLICT");
+      }
+      const refs = [...new Set([target.id, currentProps.local_id].filter(Boolean).map(String))];
+      const { rows } = await q.query(
+        `SELECT * FROM blocks WHERE type = 'block' AND deleted_at IS NULL
+          AND workspace_id IS NOT DISTINCT FROM $2
+          AND (user_id IS NOT DISTINCT FROM $3 OR ($3::integer IS NULL AND user_id = $6))
+          AND properties->>'kind' = 'delegated_item'
+          AND (id = $1 OR (properties->>'blockerType' = 'task'
+            AND properties->>'linkedBlockId' = ANY($4::text[])
+            AND COALESCE(properties->>'status', 'open') = ANY($5::text[])))
+          ORDER BY id FOR UPDATE`,
+        [resolveWaitingItemId, workspaceId, target.user_id, refs, ["open", "ready"], userId]
+      );
+      const candidates = rows.map(parseBlock);
+      const primary = candidates.find(row => row.id === resolveWaitingItemId);
+      const supplied = companionUpdates[0];
+      if (!primary || String(primary.properties.linkedBlockId || "") !== String(supplied.properties.linkedBlockId || "")) {
+        throw taskCompletionError("Waiting link changed during completion", 409, "COMPLETION_WAITING_TARGET_CONFLICT");
+      }
+      const alreadyClosed = sameMutation && primary.properties.status === "done"
+        && primary.properties.waitingCompletionMutationId === mutationId;
+      if (!alreadyClosed && (new Date(primary.updated_at).getTime() !== new Date(supplied.expectedUpdatedAt).getTime()
+          || !["open", "ready"].includes(primary.properties.status || "open"))) {
+        throw taskCompletionError("Companion block changed during completion", 409, "COMPLETION_COMPANION_CONFLICT", primary);
+      }
+      for (const row of candidates) {
+        const linked = await findUniqueLiveBlockByReference(String(row.properties.linkedBlockId || ""), workspaceId, q, true);
+        if (!linked || linked.id !== target.id) {
+          throw taskCompletionError("Waiting link changed during completion", 409, "COMPLETION_WAITING_TARGET_CONFLICT");
+        }
+      }
+      if (alreadyClosed) {
+        // A replay cannot close a relation opened after the original completion.
+        completionCompanionUpdates = [];
+        duplicateWaitingBlocks = [primary];
+      } else {
+        const itemIds = candidates.map(row => row.id);
+        resolvedWaitingIds = new Set(itemIds);
+        completionCompanionUpdates = candidates.map(row => ({
+          id: row.id, expectedUpdatedAt: row.updated_at,
+          properties: { ...row.properties, status: "done", completedAt: at,
+            completedBy: supplied.properties.completedBy || String(userId),
+            snoozedUntil: null, checkInScheduledFor: null, checkInTaskId: null,
+            waitingCompletionMutationId: mutationId, waitingCompletionItemIds: itemIds,
+            waitingCompletionTaskId: target.id, waitingCompletionTaskDate: target.date || null,
+            waitingCompletionTaskLocalId: currentProps.local_id || null },
+        }));
+      }
+    }
+    const dependencyIds = Array.isArray(currentProps.dependencyWaitingItemIds)
+      ? currentProps.dependencyWaitingItemIds.map(String)
+      : (currentProps.dependencyWaitingItemId ? [String(currentProps.dependencyWaitingItemId)] : []);
+    const guardedDependencyIds = dependencyIds.filter(id => !resolvedWaitingIds.has(id));
+    if (completed && guardedDependencyIds.length) {
+      const { rows: dependencyRows } = await q.query(
+        `SELECT * FROM blocks
+          WHERE id = ANY($1::text[]) AND deleted_at IS NULL
+            AND properties->>'kind' = 'delegated_item'
+            AND properties->>'blockerType' = 'task'
+            AND COALESCE(properties->>'status', 'open') = 'open'
+            AND workspace_id IS NOT DISTINCT FROM $2
+          FOR UPDATE`,
+        [guardedDependencyIds, workspaceId]
+      );
+      if (dependencyRows.length) {
+        throw taskCompletionError("Release this task from Waiting before completing it", 409,
+          "TASK_DEPENDENCY_BLOCKED", target);
+      }
     }
     if (sameMutation) {
       let duplicateAffected = [target];
@@ -844,10 +922,19 @@ async function setTaskCompletion({
       let props = completed
         ? completedProps(before, before, completionAt, mutationId)
         : reopenedProps(before, before, mutationId);
-      if (releasedDependencyId && String(props.dependencyWaitingItemId || "") === releasedDependencyId) {
-        delete props.dependencyWaitingItemId;
-      }
-      if (completed && dependencyIds.length) {
+      if (completed && resolvedWaitingIds.size) {
+        const markers = Array.isArray(props.dependencyWaitingItemIds)
+          ? props.dependencyWaitingItemIds.map(String)
+          : (props.dependencyWaitingItemId ? [String(props.dependencyWaitingItemId)] : []);
+        const remaining = markers.filter(id => !resolvedWaitingIds.has(id));
+        if (remaining.length) {
+          props.dependencyWaitingItemIds = remaining;
+          props.dependencyWaitingItemId = remaining[0];
+        } else {
+          delete props.dependencyWaitingItemIds;
+          delete props.dependencyWaitingItemId;
+        }
+      } else if (completed && dependencyIds.length) {
         delete props.dependencyWaitingItemIds;
         delete props.dependencyWaitingItemId;
       }

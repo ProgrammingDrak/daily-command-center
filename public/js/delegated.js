@@ -945,13 +945,15 @@
     return checkInHistoryHtml(getAllDelegatedItems().filter(item => ids.has(String((item.properties || {}).linkedBlockId || '__none__'))));
   }
 
-  // Opening is read-only. Only Save sends the captured cycle and draft fields.
+  // Opening is read-only. The explicit choice determines which canonical action runs.
   function markDelegatedItemCheckedById(id, options) {
     options = options || {};
     const item = getDelegatedItemById(id);
-    if (!item || !isOpenDelegated(item) || _checkInPrompt || _savingCheckIns.has(id)) return false;
+    const alreadyCompleted = item && (item.properties || {}).status === 'done';
+    if (!item || (!isOpenDelegated(item) && !(options.cleanup && alreadyCompleted)) || _checkInPrompt || _savingCheckIns.has(id)) return false;
     const key = cycleKey(item);
-    if (!key) return false;
+    const expectedUpdatedAt = item.updated_at;
+    const linkedTaskRef = String((item.properties || {}).linkedBlockId || '');
     const expectedCheckInCount = Array.isArray((item.properties || {}).checkInHistory) ? item.properties.checkInHistory.length : 0;
     const minDate = todayStr();
     const suggested = parseLocalDate(todayStr());
@@ -960,24 +962,33 @@
     form.className = 'waiting-checkin-form';
     // Keep native date validity and keyboard editing: the shared picker upgrades
     // date inputs to hidden fields, which do not enforce required/min constraints.
-    form.innerHTML = '<p>When should you check in next? This task will stay Waiting.</p>' +
+    form.innerHTML = '<p><strong>' + esc((item.properties || {}).myTask || (item.properties || {}).title || 'Waiting task') + '</strong></p><fieldset class="waiting-checkin-choice"><legend>What happened?</legend>' +
+      '<label><input type="radio" name="wci-outcome" value="check-in" checked> Check-in done — still waiting</label>' +
+      '<label><input type="radio" name="wci-outcome" value="task"> Complete task</label></fieldset>' +
+      '<p data-wci-complete hidden>Complete your task and close its Waiting item and pending check-ins. Other people’s tasks and any prerequisite stay unchanged.</p>' +
+      '<div data-wci-followup><p>When should you check in next? This task will stay Waiting.</p>' +
       '<label class="delegated-modal-label" for="wci-date">Next check-in</label>' +
       '<input class="delegated-modal-input" type="date" data-tw-skip id="wci-date" required min="' + minDate + '" value="' + toDateInputValue(suggested) + '">' +
       '<label class="delegated-modal-label" for="wci-note">Note (optional)</label>' +
       '<textarea class="delegated-modal-input" id="wci-note" rows="3" maxlength="1000" placeholder="What did you do? Did you hear back?"></textarea>' +
-      '<p class="waiting-checkin-error" role="alert"></p>' +
+      '</div><p class="waiting-checkin-error" role="alert"></p>' +
       '<div class="delegated-modal-actions"><button type="button" data-wci-cancel class="secondary">Cancel</button>' +
       '<button type="submit" class="primary">Save check-in</button></div>';
     let saving = false;
     let saved = false;
+    let completedAt; // Keep the same intent on retry, including a lost response.
+    let taskAwardCaptured = false;
+    let taskAward = null;
+    let taskComplete = !!alreadyCompleted || !key;
+    let cleanupPending = !!alreadyCompleted;
     let settle;
     const outcome = new Promise(resolve => { settle = resolve; });
-    const opener = document.activeElement;
+    const opener = options.anchor || document.activeElement;
     const editOverlay = document.getElementById('delegated-modal-overlay');
     const returnToEdit = editOverlay && editOverlay.classList.contains('open');
     closeDelegatedModal();
     const handle = window.DCC.overlay.open({
-      kind: window.innerWidth <= 600 ? 'sheet' : 'modal', title: 'Checked in', body: form, anchor: opener,
+      kind: window.innerWidth <= 600 ? 'sheet' : 'modal', title: 'Finish check-in', body: form, anchor: opener,
       canClose: () => !saving,
       onClose: reason => {
         _checkInPrompt = null;
@@ -987,6 +998,22 @@
     });
     _checkInPrompt = handle;
     form.querySelector('[data-wci-cancel]').addEventListener('click', () => handle.close('cancel'));
+    const updateChoice = () => {
+      if (saving) return;
+      if (!cleanupPending) taskComplete = form.querySelector('[name="wci-outcome"]:checked').value === 'task';
+      form.querySelector('[data-wci-followup]').hidden = taskComplete;
+      form.querySelector('[data-wci-complete]').hidden = !taskComplete;
+      form.querySelector('#wci-date').required = !taskComplete;
+      form.querySelector('#wci-date').disabled = taskComplete;
+      form.querySelector('#wci-note').disabled = taskComplete;
+      form.querySelector('[type="submit"]').textContent = cleanupPending ? 'Retry cleanup' : (taskComplete ? 'Complete task' : 'Save check-in');
+      form.querySelector('[role="alert"]').textContent = cleanupPending ? 'Your task is already completed. Close its remaining check-ins.' : '';
+    };
+    form.addEventListener('change', updateChoice);
+    if (alreadyCompleted || !key) {
+      form.querySelectorAll('[name="wci-outcome"]').forEach(control => { control.checked = control.value === 'task'; control.disabled = !!alreadyCompleted || control.value === 'check-in'; });
+      updateChoice();
+    }
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (saving || _savingCheckIns.has(id) || !form.reportValidity()) return;
@@ -999,27 +1026,96 @@
       const controls = Array.from(handle.el.querySelectorAll('button, input, textarea'));
       controls.forEach(control => { control.disabled = true; });
       try {
-        const result = await completeCheckInCycle(id, key, new Date().toISOString(), {
-          expectedCheckInCount,
-          checkInTaskId: options.checkInTaskId || undefined,
-          nextCheckInDate: form.querySelector('#wci-date').value,
-          note: form.querySelector('#wci-note').value.trim()
-        });
-        saved = result.status === 'completed';
+        completedAt = completedAt || new Date().toISOString();
+        if (taskComplete && !taskAwardCaptured) {
+          taskAward = alreadyCompleted ? null : captureWaitingTaskAward(linkedTaskRef);
+          taskAwardCaptured = true;
+        }
+        const result = taskComplete
+          ? await postWaitingAction(id, 'complete', { completedAt, expectedUpdatedAt, resolveBlockedTask: true })
+          : await completeCheckInCycle(id, key, completedAt, {
+            expectedCheckInCount,
+            checkInTaskId: options.checkInTaskId || undefined,
+            nextCheckInDate: form.querySelector('#wci-date').value,
+            note: form.querySelector('#wci-note').value.trim()
+          });
+        saved = result.status === 'completed' && (taskComplete ? 'task_completed' : true);
+        if (taskComplete) awardCompletedWaitingTask(result, taskAward);
+        cleanupPending = !!result.cleanupPending;
+        if (cleanupPending) {
+          errorEl.textContent = 'Task completed. Some pending check-ins could not be closed. Retry cleanup; your task will not be completed twice.';
+          return;
+        }
         saving = false;
         handle.close('saved');
         await afterWaitingAction().catch(error => console.warn('[waiting] saved check-in refresh failed:', error.message || error));
-        toast(result.status === 'completed' ? 'Checked in. Next check-in saved.' : 'This Waiting item changed elsewhere. Review its current schedule.', result.status === 'completed' ? 'success' : 'info');
+        toast(result.status === 'completed' ? (taskComplete ? 'Task completed and Waiting item closed.' : 'Checked in. Next check-in saved.') : 'This Waiting item changed elsewhere. Review its current schedule.', result.status === 'completed' ? 'success' : 'info');
       } catch (error) {
-        errorEl.textContent = 'Could not save check-in: ' + (error.message || error);
+        errorEl.textContent = (taskComplete ? 'Could not confirm task completion. Retry safely: ' : 'Could not save check-in: ') + (error.message || error);
       } finally {
         saving = false;
         _savingCheckIns.delete(id);
         controls.forEach(control => { control.disabled = false; });
-        submit.textContent = 'Save check-in';
+        form.querySelector('#wci-date').disabled = taskComplete;
+        form.querySelector('#wci-note').disabled = taskComplete;
+        if (cleanupPending || !key) form.querySelectorAll('[name="wci-outcome"]').forEach(control => { control.disabled = cleanupPending || control.value === 'check-in'; });
+        submit.textContent = cleanupPending ? 'Retry cleanup' : (taskComplete ? 'Complete task' : 'Save check-in');
       }
     });
     return outcome;
+  }
+
+  // A reminder completes through Waiting, not commitDoneOnDate. Credit only the
+  // canonical work receipt, including when its row is undated or off the viewed
+  // day. The server withholds this receipt after a reopen/newer completion, and
+  // repeats it for a lost acknowledgement or a reminder-cleanup retry.
+  function awardCompletedWaitingTask(result, taskAward) {
+    const block = result && result.actualWork;
+    const p = (block && block.properties) || {};
+    const source = String(p.source || '').replace(/_/g, '-');
+    const model = window.DCC && window.DCC.TaskModel;
+    if (!result || result.status !== 'completed' || result.pending || !block || block.deleted_at
+        || !model || !model.isTaskRow(block) || p.status !== 'done'
+        || !p._completionMutationId || !Number.isFinite(Date.parse(p.completedAt))
+        || source === 'waiting-checkin' || source === 'waiting-checkin-log'
+        || /^waiting-checkin-task:/.test(String(p.local_id || block.id || ''))) return;
+    const receiptMutation = result.item && (result.item.properties || {}).waitingCompletionMutationId;
+    if (receiptMutation && receiptMutation !== p._completionMutationId) return;
+    const task = model.fromBlock(block, { deriveEnd: true });
+    // The row projection carries clock times; keep an explicit duration as well
+    // so an undated task's stale clock cannot change its ordinary point score.
+    task.durMin = p.duration == null ? (p.estimatedMinutes || 30) : p.duration;
+    const sourceDate = block.date || result.actualWorkCreditDate;
+    if (!sourceDate || !/^\d{4}-\d{2}-\d{2}$/.test(sourceDate)) return;
+    // Only use the pre-write share for the same canonical row/occurrence/date.
+    // Reading PointPlan now would lose open-child shares if an SSE echo already
+    // applied the completion cascade. Off-view work keeps the normal fallback.
+    const awardPoints = taskAward && taskAward.blockId === String(block.id)
+      && taskAward.id === String(task.id) && taskAward.date === (block.date || null)
+      ? taskAward.points : undefined;
+    // Use the ordinary date/occurrence key, also used by the rewards reconciler.
+    // A separate Waiting/mutation key would pay again when this task is viewed.
+    awardSlotTaskCredit(task, {
+      sourceDate,
+      completedAt: p.completedAt,
+      sourceKey: sourceDate + ':' + task.id,
+      awardPoints,
+    });
+  }
+
+  function captureWaitingTaskAward(linkedTaskRef) {
+    if (!linkedTaskRef || typeof scheduled === 'undefined' || !Array.isArray(scheduled)
+        || typeof _pointAwardOverride !== 'function') return null;
+    const task = scheduled.find(row => String(row._blockId || row.id) === linkedTaskRef || String(row.id) === linkedTaskRef);
+    // The ordinary helper resolves by event id. A colliding local id must not
+    // borrow another row's share before the canonical receipt can verify it.
+    if (!task || scheduled.find(row => row.id === task.id) !== task) return null;
+    return {
+      blockId: String(task._blockId || task.id),
+      id: String(task.id),
+      date: task._dateless ? null : ((typeof viewDate !== 'undefined' && viewDate) || (window.__state && window.__state.date) || null),
+      points: _pointAwardOverride(task.id),
+    };
   }
 
   function completeCheckInTask(ev) {
@@ -1029,7 +1125,7 @@
       toast("This check-in's Waiting item is unavailable. Refresh and try again.", "error");
       return Promise.resolve(false);
     }
-    return Promise.resolve(markDelegatedItemCheckedById(id, { checkInTaskId: ev._blockId || ev.id }));
+    return Promise.resolve(markDelegatedItemCheckedById(id, { checkInTaskId: ev._blockId || ev.id, cleanup: true }));
   }
 
   async function snoozeWaitingItem(id, until) {

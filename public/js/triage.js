@@ -631,7 +631,16 @@ async function dismissTriage(triageId, note, trivial) {
     if (item.waiting_item_id && item.waiting_cycle_key) {
       const waiting = window.DCC && window.DCC.Waiting;
       if (!waiting || typeof waiting.completeCheckIn !== "function") throw new Error("Waiting module unavailable. Reload and try again.");
-      if (!await waiting.completeCheckIn(item.waiting_item_id)) return false;
+      const outcome = await waiting.completeCheckIn(item.waiting_item_id);
+      if (!outcome) return false;
+      if (outcome === "task_completed") {
+        // Canonical task completion already owns credit/history. The closed
+        // Waiting item removes this reminder on the refreshed triage read.
+        closeDismissModal();
+        if (typeof buildScheduleTriage === "function") buildScheduleTriage();
+        buildTriage();
+        return true;
+      }
       cadenceAdvanced = true;
     }
     const saved = await persistTriageSuppression(triageId, item, "done", note || (trivial ? "Dismissed" : ""), trivial);
