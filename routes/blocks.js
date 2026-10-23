@@ -2962,6 +2962,8 @@ module.exports = function mount(app, ctx) {
     let result, linked;
     try {
       await client.query("BEGIN");
+      // Serialize with cluster completion/deletion before taking either row lock.
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`waiting-cluster:${req.workspaceId || ""}:${req.params.id}`]);
       const snapshot = await blockDB.getBlockIncludingDeleted(req.params.id, client);
       if (!snapshot || snapshot.deleted_at || snapshot.properties?.kind !== "delegated_item") throw clientError("Waiting item not found", 404);
       assertBlockOwnership(snapshot, req.workspaceId);
@@ -2972,6 +2974,10 @@ module.exports = function mount(app, ctx) {
         if (!linked || !blockDB.isTaskRow(linked)) throw clientError("Linked task is unavailable. Refresh before renaming.", 409);
         assertBlockOwnership(linked, req.workspaceId);
       }
+      // Dependency propagation can already hold Waiting while acquiring its task.
+      // Never wait on that inverse order while we hold the task: return a retryable
+      // conflict instead, releasing both locks without writing either title.
+      await client.query("SELECT id FROM blocks WHERE id = $1 FOR UPDATE NOWAIT", [req.params.id]);
       const item = await blockDB.getBlockIncludingDeleted(req.params.id, client, true);
       if (!item || item.deleted_at || item.properties?.kind !== "delegated_item") throw clientError("Waiting item not found", 404);
       assertBlockOwnership(item, req.workspaceId);
@@ -2987,6 +2993,7 @@ module.exports = function mount(app, ctx) {
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
+      if (error.code === "55P03") throw clientError("This task is changing elsewhere. Try saving again.", 409);
       throw error;
     } finally { client.release(); }
     broadcast("blocks-changed", { action: "waiting-title", blockIds: [result.id, ...(linked ? [linked.id] : [])] }, req.workspaceId);
@@ -3557,22 +3564,29 @@ module.exports = function mount(app, ctx) {
     if (!task || task.deleted_at || (destination === "schedule" && task.date !== date)) { res.status(400).json({ error: "Underlying task was not placed at the requested destination" }); return; }
     assertBlockOwnership(task, req.workspaceId);
     const now = new Date().toISOString();
-    const properties = waitingItems.normalizeProperties({
-      status: "unblocked",
-      completedAt: now,
-      unblockedAt: now,
-      unblockedTaskId: taskBlockId,
-      unblockedDestination: destination,
-      snoozedUntil: null,
-    }, existing.properties || {});
-    if (waitingItems.isTaskDependency(existing) || existingProps.parksLinkedTask) {
-      const subtree = await blockDB.getSubtree([task.id], req.workspaceId);
-      const client = await pool.connect();
-      let updated;
-      try {
-        await client.query("BEGIN");
-        updated = await blockDB.updateBlock(existing.id, { properties }, client);
-        for (const row of (subtree.length ? subtree : [task])) {
+    const client = await pool.connect();
+    let updated, currentTask;
+    const affectedIds = [];
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`waiting-cluster:${req.workspaceId || ""}:${existing.id}`]);
+      currentTask = await blockDB.getBlockIncludingDeleted(task.id, client, true);
+      await client.query("SELECT id FROM blocks WHERE id = $1 FOR UPDATE NOWAIT", [existing.id]);
+      const current = await blockDB.getBlockIncludingDeleted(existing.id, client, true);
+      if (!current || current.deleted_at || !currentTask || currentTask.deleted_at) throw clientError("Waiting task changed. Refresh before unblocking.", 409);
+      assertBlockOwnership(current, req.workspaceId);
+      assertBlockOwnership(currentTask, req.workspaceId);
+      if ((current.properties.linkedBlockId || null) !== (existingProps.linkedBlockId || null) ||
+          (destination === "schedule" && currentTask.date !== date)) throw clientError("Waiting task changed. Refresh before unblocking.", 409);
+      const properties = waitingItems.normalizeProperties({
+        status: "unblocked", completedAt: now, unblockedAt: now,
+        unblockedTaskId: taskBlockId, unblockedDestination: destination, snoozedUntil: null,
+      }, current.properties || {});
+      if (waitingItems.isTaskDependency(current) || current.properties.parksLinkedTask) {
+        const subtree = await blockDB.getSubtree([currentTask.id], req.workspaceId, client);
+        for (const ref of (subtree.length ? subtree : [currentTask])) {
+          const row = ref.id === currentTask.id ? currentTask : await blockDB.getBlockIncludingDeleted(ref.id, client, true);
+          if (!row || row.deleted_at) continue;
           const next = { ...(row.properties || {}) };
           const remaining = (Array.isArray(next.dependencyWaitingItemIds)
             ? next.dependencyWaitingItemIds : [next.dependencyWaitingItemId]).filter(Boolean)
@@ -3584,26 +3598,22 @@ module.exports = function mount(app, ctx) {
             delete next.dependencyWaitingItemIds;
             delete next.dependencyWaitingItemId;
           }
-          await blockDB.updateBlock(row.id, { properties: next, date: destination === "backlog" ? null : row.date }, client);
+          const saved = await blockDB.updateBlock(row.id, { properties: next, date: destination === "backlog" ? null : row.date }, client);
+          if (row.id === currentTask.id) currentTask = saved;
+          affectedIds.push(row.id);
         }
-        await client.query("COMMIT");
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
       }
-      const affectedIds = (subtree.length ? subtree : [task]).map(row => row.id);
-      await syncSlack(updated);
-      await syncSlack(task.id);
-      broadcast("blocks-changed", { action: "waiting-unblocked", blockIds: [existing.id].concat(affectedIds), date: destination === "schedule" ? date : null }, req.workspaceId);
-      return { ok: true, status: "unblocked", item: updated, task };
-    }
-    const updated = await blockDB.updateBlock(existing.id, { properties });
+      updated = await blockDB.updateBlock(existing.id, { properties }, client);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (error.code === "55P03") throw clientError("This task is changing elsewhere. Try unblocking again.", 409);
+      throw error;
+    } finally { client.release(); }
     await syncSlack(updated);
-    await syncSlack(task.id);
-    broadcast("blocks-changed", { action: "waiting-unblocked", blockIds: [existing.id, taskBlockId], date }, req.workspaceId);
-    return { ok: true, status: "unblocked", item: updated, task };
+    await syncSlack(currentTask.id);
+    broadcast("blocks-changed", { action: "waiting-unblocked", blockIds: [existing.id, ...new Set([taskBlockId, ...affectedIds])], date: destination === "schedule" ? date : null }, req.workspaceId);
+    return { ok: true, status: "unblocked", item: updated, task: currentTask };
   }));
 
   app.delete(["/api/delegated-items/:id", "/api/waiting-items/:id"], route(async (req, res) => {
@@ -3618,9 +3628,12 @@ module.exports = function mount(app, ctx) {
       let result;
       try {
         await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`waiting-cluster:${req.workspaceId || ""}:${existing.id}`]);
         if (linked) {
-          const subtree = await blockDB.getSubtree([linked.id], req.workspaceId);
-          for (const row of (subtree.length ? subtree : [linked])) {
+          const subtree = await blockDB.getSubtree([linked.id], req.workspaceId, client);
+          for (const ref of (subtree.length ? subtree : [linked])) {
+            const row = await blockDB.getBlockIncludingDeleted(ref.id, client, true);
+            if (!row || row.deleted_at) continue;
             const next = { ...(row.properties || {}) };
             const remaining = (Array.isArray(next.dependencyWaitingItemIds)
               ? next.dependencyWaitingItemIds : [next.dependencyWaitingItemId]).filter(Boolean)
