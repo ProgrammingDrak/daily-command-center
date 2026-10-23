@@ -19,7 +19,8 @@ const close=async p=>p.locator('.dcc-overlay-actions').getByRole('button',{name:
 const ready=async p=>{await p.goto(base);await p.locator('#api-loading').waitFor({state:'detached'});};
 async function count(p,id,text){await p.waitForFunction(({id,text})=>[...document.querySelectorAll('[data-shared-task]')].some(e=>e.dataset.sharedTask===id&&e.textContent.includes(text)),{id,text});}
 try{
-  await ready(page);await badge(page,info.taskId).first().click();
+  await ready(page);assert.equal(await page.evaluate(()=>window.blockStore.debug().accountScope),'1:ws-1');
+  await badge(page,info.taskId).first().click();
   const dialog=page.locator('.shared-tasks-dialog');
   await dialog.locator('[data-scope]').selectOption('series');
   await page.screenshot({path:path.join(output,'series-invitation.png')});
@@ -29,7 +30,8 @@ try{
   assert.match(await dialog.innerText(),/Comfortable seat/);assert.doesNotMatch(await dialog.innerText(),/123|45 reps/);
   await page.screenshot({path:path.join(output,'instruction-preview.png')});
   await dialog.locator('[data-invite]').click();await dialog.getByText('Riley-demo · Invited',{exact:false}).waitFor();await close(page);
-  await ready(other);await other.locator('#shared-tasks-open').click();
+  await ready(other);assert.equal(await other.evaluate(()=>window.blockStore.debug().accountScope),'2:ws-2');
+  await other.locator('#shared-tasks-open').click();
   await other.locator('[data-action="accept"]').click();
   await other.locator('[data-action="remove"]').waitFor();await close(other);
   const shares=await other.evaluate(async()=> (await(await fetch('/api/shared-tasks')).json()).shares);
