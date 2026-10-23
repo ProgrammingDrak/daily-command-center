@@ -46,7 +46,7 @@ test('workout planner private PostgreSQL contracts', { skip: !configured }, asyn
     const legacy = await make(workout(date), 'Legacy unchanged');
     await ctx.pool.query(SCHEMA_SQL); await ctx.pool.query(SCHEMA_SQL);
     assert.deepEqual((await store.get(legacy.taskId, owner)).record, M.validate(workout(date)));
-    const tables = (await ctx.pool.query("SELECT table_name FROM information_schema.tables WHERE table_name IN ('workout_templates','workout_exercises','task_activity_records')")).rows;
+    const tables = (await ctx.pool.query("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_name IN ('workout_templates','workout_exercises','task_activity_records')")).rows;
     assert.equal(tables.length, 3);
   });
 

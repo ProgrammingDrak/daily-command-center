@@ -1,7 +1,7 @@
 {
   "name": "daily-command-center",
   "version": "1.0.0",
-  "description": "Drake's Daily Command Center — standalone Express dashboard",
+  "description": "Drake's Daily Command Center \u2014 standalone Express dashboard",
   "main": "server.js",
   "scripts": {
     "check:db": "node scripts/check-db.js",
@@ -14,7 +14,7 @@
     "sweep:check": "node scripts/sweep-suite-check.js",
     "ship": "node scripts/ship-pr.js",
     "test": "node --test",
-    "test:postgres": "node --test meeting-citation-migration.test.js proposal-postgres.test.js activity-postgres.test.js commitment-postgres.test.js sponsorship-postgres.test.js task-attachment-postgres.test.js",
+    "test:postgres": "node --test waiting-title-postgres.test.js waiting-completion-postgres.test.js waiting-multi-dependency-postgres.test.js meeting-citation-migration.test.js proposal-postgres.test.js activity-postgres.test.js commitment-postgres.test.js sponsorship-postgres.test.js accountability-completion-postgres.test.js accountability-completion-route.test.js task-attachment-postgres.test.js task-priority-placement-postgres.test.js shared-task-postgres.test.js shared-task-series.test.js shared-task-notifications.test.js conditional-reward-postgres.test.js conditional-reward-routes-postgres.test.js shared-task-suggestion-postgres.test.js",
     "lint": "eslint .",
     "format": "prettier --write .",
     "start": "npm run check:db && node pg-schema.js && node server.js",
@@ -26,7 +26,8 @@
     "smoke:ci": "node scripts/smoke-ci.mjs",
     "test:ui-review": "node scripts/verify-ui-optimization.mjs",
     "ui-review:serve": "node scripts/ui-review-server.mjs",
-    "start:render": "npm run check:db && node pg-schema.js && node server.js"
+    "start:render": "npm run check:db && node pg-schema.js && node server.js",
+    "test:shared-tasks": "DCC_PGLITE_MODULE=@electric-sql/pglite node --test shared-task-postgres.test.js shared-task-series.test.js shared-task-notifications.test.js shared-task-ui.test.js"
   },
   "engines": {
     "node": ">=20 <23"
@@ -38,21 +39,23 @@
     "chokidar": "^3.6.0",
     "connect-pg-simple": "^10.0.0",
     "dotenv": "^16.4.0",
-    "drake-auth": "github:ProgrammingDrak/drake-auth#v0.1.1",
+    "drake-auth": "file:vendor/drake-auth-0.1.2.tgz",
     "express": "^4.21.0",
     "express-session": "^1.19.0",
     "googleapis": "^171.4.0",
     "gray-matter": "^4.0.3",
-    "multer": "^2.2.0",
+    "multer": "^2.4.0",
     "pg": "^8.13.0",
     "rrule": "^2.8.1",
     "simple-git": "^3.25.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.11",
     "@eslint/js": "^9.0.0",
     "eslint": "^9.0.0",
     "playwright-core": "^1.61.1",
     "prettier": "^3.3.0"
-  }
+  },
+  "license": "AGPL-3.0-only"
 }

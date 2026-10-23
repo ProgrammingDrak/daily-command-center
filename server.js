@@ -58,6 +58,7 @@ const CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY || null;
 const CLERK_PUBLISHABLE_KEY = process.env.CLERK_PUBLISHABLE_KEY || null;
 
 const app = express();
+require('./source-offer.js').registerSourceOffer(app, {repository: 'daily-command-center', isPublic: true});
 app.set("trust proxy", 1); // required for secure cookies behind hosted reverse proxies
 const PORT = process.env.PORT || 8090;
 const APP_TIME_ZONE = process.env.DCC_TIME_ZONE || process.env.APP_TIME_ZONE || "America/New_York";
@@ -154,9 +155,9 @@ if (!LOCAL_AUTH_ENABLED) {
 app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
-const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
+const AUTH_PUBLIC = new Set(["/register", "/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/ingest/day-state/v2", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts", "/api/dcc/meeting-signals", "/api/dcc/slack-reconcile"]);
-function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/sponsor/") || req.path.startsWith("/reimburse/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
+function isPublicRoute(req) { return req.path.startsWith("/friend-invite/") || req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/sponsor/") || req.path.startsWith("/reimburse/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 // On Render the app runs behind a same-host reverse proxy, so EVERY request's
 // socket peer is 127.0.0.1 — trusting localhost there would open the DCC service
@@ -193,19 +194,12 @@ function getRequestOrigin(req) {
   const proxyIp = req.headers["cf-connecting-ip"] || req.headers["x-real-ip"] || forwardedFor;
   return String(proxyIp || req.ip || req.socket?.remoteAddress || "").slice(0, 80) || null;
 }
-function isAdminSession(req) {
-  return ADMIN_USERNAMES.has(String(req.session?.username || "").toLowerCase());
-}
+const { isAdminSession, requireAdmin, guardAdminPage } = require("./lib/admin-access")(ADMIN_USERNAMES);
 
 function previousDateStr(dateStr) {
   const d = new Date(`${dateStr}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
-}
-function requireAdmin(req, res, next) {
-  if (isAdminSession(req)) return next();
-  if (req.path.startsWith("/api/")) return res.status(403).json({ error: "Admin access required" });
-  return res.status(403).send("Admin access required");
 }
 
 app.get("/sponsor/:token", (req, res) => res.sendFile(path.join(PROJECT_DIR, "sponsor.html")));
@@ -265,7 +259,7 @@ app.use(async (req, res, next) => {
 // ── Auth Routes ──
 app.use(require("./lib/account-binding"));
 function sendAuthPage(req, res) {
-  if (req.session.userId) return res.redirect("/");
+  if (req.session.userId) return res.redirect(typeof req.query.next === "string" && /^\/friend-invite\/[A-Za-z0-9_-]{43}$/.test(req.query.next) ? req.query.next : "/");
   res.sendFile(path.join(PROJECT_DIR, "login.html"));
 }
 
@@ -319,6 +313,7 @@ app.get("/api/me", async (req, res) => {
       displayName: user.display_name || null,
       workspaceId: req.workspaceId || req.session.workspaceId || null,
       onboardingState: user.onboarding_state || {},
+      isAdmin: isAdminSession(req),
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -410,6 +405,11 @@ app.get("/api/events", (req, res) => {
 });
 
 function broadcast(eventType, data, workspaceId) {
+  if (eventType === "blocks-changed" && workspaceId && ctx.sharedTasks) {
+    for (const id of data.blockIds || []) {
+      ctx.sharedTasks.notifyTask(id, workspaceId, broadcast).catch(e => console.error("[shared-tasks] refresh failed:", e.message));
+    }
+  }
   const payload = JSON.stringify({ type: eventType, ...data });
   let targets;
   if (workspaceId) { targets = sseClients.get(workspaceId) || new Set(); }
@@ -858,26 +858,10 @@ app.get("/api/prep", (req, res) => { if (!fs.existsSync(PREP_DIR)) return res.js
 app.get("/api/prep/:filename", (req, res) => { const safeName = path.basename(req.params.filename); if (safeName !== req.params.filename || !safeName.endsWith(".html")) return res.status(400).json({ error: "Invalid filename" }); const fp = path.join(PREP_DIR, safeName); if (!fs.existsSync(fp)) return res.status(404).json({ error: "Not found" }); res.type("html").send(fs.readFileSync(fp, "utf8")); });
 app.get("/api/dcc-log", (req, res) => { if (!fs.existsSync(DCC_LOG_FILE)) return res.json({ html: '<div style="color:var(--text-muted);padding:24px">dcc activity log not found.</div>' }); const raw = fs.readFileSync(DCC_LOG_FILE, "utf8"); const match = raw.match(/(### (\d{4}-\d{2}-\d{2}T[\d:+\-]+) -- (?:overnight-oracle|pa-offpeak|clever-assistant|dcc-refresh)[^\n]*\n)([\s\S]*?)(?=\n---|\Z)/); if (!match) return res.json({ html: '<div style="color:var(--text-muted);padding:24px">No overnight review found.</div>' }); const ts = match[2], body = match[3].trim(); const lines = body.split("\n"), parts = []; let inUl = false; for (const line of lines) { const stripped = line.trim(); if (stripped.startsWith("- ")) { if (!inUl) { parts.push('<ul style="margin:4px 0 8px 16px;padding:0;list-style:disc">'); inUl = true; } parts.push(`<li style="margin:3px 0;font-size:12px;line-height:1.5">${stripped.slice(2).replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}</li>`); } else { if (inUl) { parts.push("</ul>"); inUl = false; } if (!stripped) parts.push('<div style="height:6px"></div>'); else parts.push(`<div style="font-size:12px;line-height:1.5;margin:2px 0">${stripped.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}</div>`); } } if (inUl) parts.push("</ul>"); res.json({ html: `<div style="margin-bottom:12px"><div style="font-size:11px;color:var(--text-muted);margin-bottom:12px">Last DCC sweep ran <strong style="color:var(--text)">${ts}</strong></div><div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px">${parts.join("\n")}</div></div>`, timestamp: ts }); });
 
-app.post("/api/feedback", async (req, res) => {
-  try {
-    const message = String(req.body?.message || "").trim();
-    const pagePath = String(req.body?.pagePath || req.body?.path || "").slice(0, 500);
-    if (!message) return res.status(400).json({ error: "Feedback message is required" });
-    if (message.length > 4000) return res.status(400).json({ error: "Feedback message is too long" });
-    await ensureFeedbackTable();
-    const { rows } = await pool.query(
-      `INSERT INTO feedback_messages (workspace_id, user_id, message, page_path, user_agent, created_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())
-       RETURNING id, workspace_id, user_id, message, page_path, created_at`,
-      [req.workspaceId || null, req.session.userId || null, message, pagePath || null, String(req.headers["user-agent"] || "").slice(0, 500) || null]
-    );
-    res.status(201).json({ ok: true, feedback: rows[0] });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+require("./routes/feedback")(app, { pool, requireAdmin, ensureFeedbackTable });
 
 app.get("/api/admin/activity", requireAdmin, async (req, res) => {
+  res.set("Cache-Control", "no-store");
   try {
     await ensureFeedbackTable();
     await ensureLoginEventsTable();
@@ -999,9 +983,12 @@ const ctx = {
   get vault() { return vault; },
   get syncMgr() { return syncMgr; },
 };
+ctx.sharedTasks = require("./shared-task-store").createSharedTaskStore(ctx);
+require("./routes/shared-tasks")(app, ctx);
 require("./routes/access")(app, ctx);
+ctx.commitmentBounty = require("./routes/social-todo")(app, ctx);
 require("./routes/commitments")(app, ctx);
-require("./routes/social-todo")(app, ctx);
+require("./routes/friend-invites")(app, { ...ctx, PROJECT_DIR });
 require("./routes/pet-home")(app, ctx);
 require("./routes/blocks")(app, ctx);
 require("./routes/task-attachments")(app, ctx);
@@ -1183,9 +1170,10 @@ app.get("/todo/:token", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "pub
 // Mycelium is Drake's personal vault. DCC has multiple accounts, so the ink
 // shell must not become a shared authenticated surface by accident.
 app.get(["/ink", "/ink.html"], requireAdmin, (req, res) => { res.sendFile(path.join(PROJECT_DIR, "ink.html")); });
+app.use(guardAdminPage);
+app.get(["/admin", "/admin.html"], requireAdmin, (req, res) => { res.set("Cache-Control", "no-store"); res.sendFile(path.join(PROJECT_DIR, "admin.html")); });
 app.use(express.static(PROJECT_DIR, { extensions: ["html"], etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 app.get("/", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "index.html")); });
-app.get("/admin", requireAdmin, (req, res) => { res.sendFile(path.join(PROJECT_DIR, "admin.html")); });
 
 // ── Startup ──
 let defaultUserId = 1;

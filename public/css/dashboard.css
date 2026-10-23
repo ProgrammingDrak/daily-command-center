@@ -5878,3 +5878,60 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 
 /* Deep hierarchies keep room for task titles and controls on phones. */
 @media(max-width:480px){.it-list-item,.tl-item{--task-indent-max:44px}}
+.admin-link[hidden]{display:none!important}
+
+/* Optional shared-list composers: author display rules must not override hidden. */
+.todo-public-body [data-composer-form][hidden],
+.todo-public-body #todo-guest-add-form[hidden],
+.todo-public-body #todo-create-note-panel[hidden] { display:none !important; }
+.todo-public-body .todo-composer-toggle { min-height:44px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; color:var(--text); background:var(--card); font:inherit; font-size:12px; cursor:pointer; align-self:flex-start; }
+.todo-public-body .todo-composer-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.todo-public-body .todo-composer-toggle[aria-expanded="true"] > span { display:inline-block; transform:rotate(90deg); }
+.todo-public-body .todo-reward-row { flex-wrap:wrap; }
+.todo-public-body .todo-reward-row input { min-width:0; flex-basis:100px; }
+.todo-public-body .todo-public-comment-form input,.todo-public-body .todo-public-comment-form button,.todo-public-body .todo-reward-form input,.todo-public-body .todo-reward-form button { min-height:44px; }
+@media print { .todo-public-body .todo-composer-toggle { display:none!important; } }
+
+/* Shared-task reactions: quiet at rest, available on both open and done rows. */
+.todo-public-body .todo-reaction-disclosure{max-height:0;opacity:0;overflow:hidden}
+.todo-public-body .tl-item:hover .todo-reaction-disclosure,
+.todo-public-body .tl-compact:hover .todo-reaction-disclosure,
+.todo-public-body .tl-item:focus-within .todo-reaction-disclosure,
+.todo-public-body .tl-compact:focus-within .todo-reaction-disclosure{max-height:160px;opacity:1}
+.todo-public-body .todo-reaction-reveal{display:none}
+.todo-public-body .todo-reaction-btn{min-width:44px;min-height:44px}
+@media (hover:none),(pointer:coarse){
+ .todo-public-body .todo-reaction-disclosure{max-height:none;opacity:1}
+ .todo-public-body .todo-reaction-reveal{display:inline-flex;align-items:center;min-height:44px;border:1px solid var(--border);border-radius:999px;background:var(--card);color:var(--muted);padding:4px 12px}
+ .todo-public-body .todo-reaction-disclosure .todo-public-reactions{display:none}
+ .todo-public-body .todo-reaction-disclosure[data-reaction-open="true"] .todo-public-reactions{display:flex}
+}
+@media print{.todo-public-body .todo-reaction-disclosure{display:none!important}}
+
+/* Public header uses the inclusive multi-select pill contract. */
+.todo-public-body .todo-public-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.shared-filter-pills{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.todo-public-body .shared-filter-pills button{width:auto;flex:0 0 auto;min-height:44px;padding:6px 12px;border:1px solid var(--border);border-radius:999px;color:var(--text);background:var(--card);font:inherit;font-size:12px;cursor:pointer}
+.shared-filter-pills button[aria-pressed=true]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 15%,var(--card));color:var(--text)}
+.shared-filter-pills button:disabled{opacity:.45;cursor:default}
+.shared-filter-more{width:100%}.shared-filter-more>summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-size:12px;color:var(--muted)}
+.shared-filter-more[open]{display:flex;flex-wrap:wrap;gap:12px}.shared-filter-more[open]>summary{width:100%}
+#todo-suggestion-feedback:empty{display:none}
+.shared-suggestion-form{display:grid;gap:14px}.shared-suggestion-form p{font-size:13px;line-height:1.5;color:var(--muted);margin:0}
+.shared-suggestion-form label{display:grid;gap:6px;font-size:13px}.shared-suggestion-form input,.shared-suggestion-form textarea,.shared-suggestion-form select{width:100%;box-sizing:border-box;min-height:44px;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font:inherit}
+.shared-suggestion-timing{display:grid;grid-template-columns:1fr 1fr;gap:12px}.shared-suggestion-actions{display:flex;justify-content:flex-end;gap:8px}.shared-suggestion-actions button{min-height:44px;padding:8px 14px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);cursor:pointer}
+.shared-suggestion-form summary{min-height:44px;cursor:pointer}.shared-suggestion-form details label{margin-top:8px}
+@media(max-width:480px){.shared-suggestion-timing{grid-template-columns:1fr}.todo-public-body .todo-public-toolbar{gap:8px;flex-wrap:wrap}}
+
+.todo-public-body #todo-suggest-task{width:auto;margin-left:auto}
+
+/* The same check-in choice is used by itinerary and Loose Ends. */
+.waiting-checkin-choice { border: 0; padding: 0; margin: 0 0 12px; }
+.waiting-checkin-choice legend { font-weight: 600; margin-bottom: 6px; }
+.waiting-checkin-choice label { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }
+.waiting-checkin-choice input { flex: none; }
+.waiting-checkin-form [hidden] { display: none; }
+/* Waiting headlines use the same compact title affordance as task details. */
+.waiting-title-edit { font: inherit; color: inherit; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.waiting-title-edit:hover { text-decoration: underline; }
+.waiting-title-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }

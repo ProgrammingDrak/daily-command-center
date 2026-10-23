@@ -39,7 +39,6 @@
   // those intents per row so the server sees them in click order and the final
   // destination is always the most recent one. Different tasks still move in
   // parallel.
-  const _rescheduleChains = new Map();
   const _updateChains = new Map();
   const _completionBases = new Map(); // authoritative rollback rows while intents are queued
   // Server IDs for day_root are workspace-prefixed (e.g. "day-root-ws-1-2026-04-24").
@@ -194,8 +193,17 @@
       // see a duplicate, and it is APPLIED if its pieces still fit the now-shorter
       // source: a second, unrequested re-attribution of time already moved.
       if (entry && (entry.op === "update" || entry.op === "completion" || entry.op === "reschedule" || entry.op === "realloc") && entry.id) {
+        const old=wal.find(e=>e&&e.op===entry.op&&e.id===entry.id&&e.priorityEdit);
+        if(old&&entry.op==='update'){
+          if(entry.priorityEdit)entry.priorityEdit={...entry.priorityEdit,before:old.priorityEdit.before,only:old.priorityEdit.only!==false};
+          else if(entry.data?.properties?.taskPriority===old.priorityEdit.after)entry.priorityEdit={...old.priorityEdit,only:false};
+        }
+        if(entry.priorityEdit&&wal.some(e=>e&&e.op==='update'&&e.id===entry.id&&!e.priorityEdit))entry.priorityEdit.only=false;
         wal = wal.filter(e => !(e && e.op === entry.op && e.id === entry.id));
       }
+      // A priority-only intent must stay narrow in durable storage as well as
+      // on the wire. Its cached timing/notes are not part of the user's edit.
+      entry.data = priorityRequestData(entry);
       wal.push({ ...entry, accountScope: ACCOUNT_SCOPE, _walId: entryId, timestamp: new Date().toISOString() });
       localStorage.setItem(WAL_KEY, JSON.stringify(wal));
     } catch (e) {
@@ -284,6 +292,53 @@
       data,
       propertyPatch: entry.completionPropertyPatch,
     };
+  }
+
+  function priorityRequestData(entry) {
+    if (entry.priorityEdit && entry.priorityEdit.only !== false && !entry.data?.completionIntent) {
+      return { taskPriority: entry.priorityEdit.after };
+    }
+    return entry.data;
+  }
+
+  function assertPriorityAcknowledgement(block, data) {
+    if (data.taskPriority !== undefined && block?.properties?.taskPriority !== data.taskPriority) {
+      throw new Error("Priority was not acknowledged");
+    }
+  }
+
+  function cachePriorityAcknowledgement(block) {
+    const current = block && cacheGet(block.id);
+    // A priority response can predate a placement/refresh. Acknowledging this
+    // single field must never restore the response's unrelated row snapshot.
+    cacheSet(current ? { ...current, properties: { ...current.properties, taskPriority: block.properties.taskPriority } } : block);
+  }
+
+  function acknowledgePriority(id,walId,block){
+    if(!block||!block.properties)return;
+    const durable=block.properties.taskPriority??null;
+    const pending=walGet();let changed=false;
+    for(const entry of pending){
+      if(entry.id!==id||entry._walId===walId||!entry.priorityEdit)continue;
+      // Keep the wire intent even if an earlier acknowledgement already has
+      // this value. Legacy priority-only entries are narrowed before metadata
+      // can be removed, so replay can never turn back into a full-row write.
+      entry.data = priorityRequestData(entry);
+      if(entry.priorityEdit.after===durable && entry.data.taskPriority === undefined)delete entry.priorityEdit;
+      else entry.priorityEdit={...entry.priorityEdit,before:durable};
+      changed=true;
+    }
+    if(changed)localStorage.setItem(WAL_KEY,JSON.stringify(pending));
+  }
+
+  function rollbackPriority(id,edit){
+    const current=cacheGet(id);
+    if(!current || current.properties.taskPriority!==edit.after)return;
+    const properties={...current.properties};
+    if(edit.before==null)delete properties.taskPriority;
+    else properties.taskPriority=edit.before;
+    cacheSet({...current,properties});
+    if(typeof window.dispatchEvent==="function"&&typeof CustomEvent==="function")window.dispatchEvent(new CustomEvent("task-priority-rejected",{detail:{id,value:edit.before}}));
   }
 
   function samePropertyValue(a, b) {
@@ -386,7 +441,8 @@
       const wal = walGet();
       let changed = false;
       const migrated = wal.map(entry => {
-        if (!entry || entry.op !== "update" || !entry.data || !entry.data.completionIntent) return entry;
+        // Explicit priority edits need the durable follow-up in update replay.
+        if (!entry || entry.op !== "update" || !entry.data || !entry.data.completionIntent || entry.priorityEdit) return entry;
         changed = true;
         const data = entry.data;
         const props = data.properties || {};
@@ -581,6 +637,7 @@
   // a partial failure no longer wipes the unreplayed entries.
   function isPermanentReplayFailure(entry, err) {
     if (!entry || !err) return false;
+    if(entry.priorityEdit?.only!==false && entry.priorityEdit && [400,401,403,404,409,422].includes(err.status))return true;
     if (err.status === 401 || err.status === 403) return false;
     if (err.status === 400) return true;
     // "batch" belongs in this list as of #260/#262, and its absence was a
@@ -706,7 +763,25 @@
               // The replay loop snapshots the WAL before awaiting. A newer live
               // update may supersede this entry while it waits on the row chain.
               if (!walGet().some(e => e && e._walId === entry._walId)) return;
-              await apiPatch("/api/blocks/" + entry.id, entry.data);
+              let data = priorityRequestData(entry);
+              walReplaceData(entry._walId, data);
+              let saved=await apiPatch("/api/blocks/" + entry.id, data);
+              // The completion compatibility endpoint acknowledges only completion.
+              // Preserve an explicit queued priority as an ordinary edit after that ack.
+              if(entry.priorityEdit&&entry.data.completionIntent&&saved?.properties
+                  &&saved.properties.taskPriority!==entry.priorityEdit.after){
+                data={taskPriority:entry.priorityEdit.after};
+                walReplaceData(entry._walId,data);
+                saved=await apiPatch("/api/blocks/"+entry.id,data);
+              }
+              assertPriorityAcknowledgement(saved, data);
+              acknowledgePriority(entry.id,entry._walId,saved);
+              // A live edit can supersede the replay while its response is pending.
+              // Advance its rollback baseline above without replacing that newer intent.
+              if (data.taskPriority !== undefined && saved?.properties
+                  && !walGet().some(e => e.op === "update" && e.id === entry.id && e._walId !== entry._walId)) {
+                cachePriorityAcknowledgement(saved);
+              }
             });
             break;
           case "completion": {
@@ -756,15 +831,11 @@
             await apiPost("/api/blocks/" + entry.id + "/undelete", {});
             break;
           case "reschedule": {
-            const previous = _rescheduleChains.get(entry.id) || Promise.resolve();
-            const request = previous.catch(() => {}).then(() => {
+            const request = queueUpdateRequest(entry.id, () => {
               if (!walGet().some(e => e._walId === entry._walId)) return null;
               return apiPost("/api/blocks/" + entry.id + "/reschedule", entry.data);
             });
-            _rescheduleChains.set(entry.id, request);
-            let result;
-            try { result = await request; }
-            finally { if (_rescheduleChains.get(entry.id) === request) _rescheduleChains.delete(entry.id); }
+            const result = await request;
             if (!result) break;
             (result.blocks||[]).forEach(cacheSet);
             if(entry.data.placement?.kind==="unplanned" && window.DCC?.TimeBlocks && typeof isCollapsed==="function"){
@@ -792,6 +863,7 @@
       } catch (e) {
         if (isPermanentReplayFailure(entry, e)) {
           walMoveToDeadLetter(entry, `${e.status || "error"} ${e.message || ""}`.trim());
+          if(entry.priorityEdit){rollbackPriority(entry.id,entry.priorityEdit);setError("Queued priority was rejected");}
           // `undelete` is the first op where dropping the entry leaves the CLIENT ahead of
           // the server rather than in step with it. For every other op a permanent failure
           // means the write never happened and the UI never claimed it did; here the UI
@@ -949,6 +1021,8 @@
       // an Unscheduled row, while `completionIntent` makes a deliberate done/open
       // transition survive stale full-properties writers and WAL replay.
       extra = { ...(extra || {}) };
+      const priorityEdit = extra._priorityEdit ? {...extra._priorityEdit,only:true} : null;
+      delete extra._priorityEdit;
       const reportSaveStatus = !!extra._reportSaveStatus;
       delete extra._reportSaveStatus;
       // The shared row queue may have fetched an uncached row immediately before
@@ -1010,17 +1084,23 @@
         completionPropertyPatch = makeCompletionPropertyPatch(existing && existing.properties, properties);
       }
       const optimistic = existing ? { ...existing, ...extra, properties, updated_at: new Date().toISOString() } : null;
-      if (optimistic) cacheSet(optimistic);
+      if (optimistic && !priorityEdit) cacheSet(optimistic);
       // Pre-write to WAL so the mutation survives a mid-flight reload / close.
-      const walId = walPush({
+      const entry = {
         op: "update", id, data: { properties, ...extra },
+        ...(priorityEdit ? { priorityEdit } : {}),
         ...(completionPropertyPatch ? { completionPropertyPatch } : {}),
-      });
+      };
+      const walId = walPush(entry);
+      if (optimistic && priorityEdit) cacheSet(optimistic);
+      // walPush narrows the entry after coalescing. Keep that exact durable
+      // payload without depending on a second localStorage read succeeding.
+      const requestData = entry.data;
       const write = queueUpdateRequest(id, async () => {
         try {
           let block;
           try {
-            block = await apiPatch("/api/blocks/" + id, { properties, ...extra });
+            block = await apiPatch("/api/blocks/" + id, requestData);
           } catch (e) {
             if (!(e && e.status === 409 && e.code === "COMPLETION_CONFLICT" && extra.completionIntent)) throw e;
             // This is a live user action, not replayWAL. Refresh the server revision
@@ -1049,12 +1129,24 @@
           }
           // A later direct edit may already own the optimistic properties. An
           // older ack must not replace that edit while its request waits in line.
-          if (!walGet().some(entry => entry.op === "update" && entry.id === id && entry._walId !== walId)) cacheSet(block);
+          assertPriorityAcknowledgement(block, requestData);
+          acknowledgePriority(id,walId,block);
+          if (!walGet().some(entry => entry.op === "update" && entry.id === id && entry._walId !== walId)) {
+            if (requestData.taskPriority !== undefined) cachePriorityAcknowledgement(block);
+            else cacheSet(block);
+          }
           walRemove(walId);
           _completionMetrics.acknowledged++;
           setSaved();
           return block;
         } catch (e) {
+          const failedEntry=walGet().find(entry=>entry._walId===walId);
+          if(failedEntry?.priorityEdit && failedEntry.priorityEdit.only!==false && [400,401,403,404,409,422].includes(e.status)){
+            walRemove(walId);
+            rollbackPriority(id,failedEntry.priorityEdit);
+            setError("Priority was not saved");
+            throw e;
+          }
           setError("Save failed — buffered for retry");
           // A newer same-row update may already have superseded this WAL entry.
           return reportSaveStatus ? { ...(optimistic || existing || {}), _savePending: true } : (optimistic || existing);
@@ -1462,8 +1554,9 @@
       if (walId && typeof onQueued === "function") {
         try { onQueued(); } catch (error) { console.warn("[BlockStore] Move preview failed", error); }
       }
-      const previous = _rescheduleChains.get(blockId) || Promise.resolve();
-      const run = previous.catch(() => {}).then(async () => {
+      // Placement shares the row queue (and cross-tab lock) with property and
+      // completion writes. Independent queues let a late whole-row ack undo a move.
+      const run = queueUpdateRequest(blockId, async () => {
       try {
         let result;
         try {
@@ -1512,12 +1605,7 @@
         throw e;
       }
       });
-      _rescheduleChains.set(blockId, run);
-      try {
-        return await run;
-      } finally {
-        if (_rescheduleChains.get(blockId) === run) _rescheduleChains.delete(blockId);
-      }
+      return await run;
     },
 
     // Reorder blocks

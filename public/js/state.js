@@ -2,7 +2,7 @@
 let scheduled=JSON.parse(JSON.stringify(INIT_SCHED));
 let consider=JSON.parse(JSON.stringify(INIT_CONSIDER));
 let backlog=JSON.parse(JSON.stringify(INIT_BACKLOG));
-let manualDone=new Set(), doneAt={}, actionLog=[], durChanges={}, commuteTimes={}, nextId=200, schedView="list";
+let manualDone=new Set(), doneAt={}, actionLog=[], durChanges={}, commuteTimes={}, nextId=200, schedView="itinerary";
 let dailyBounty=null;
 function qaId(){return "qa-"+Date.now()+"-"+Math.random().toString(36).slice(2,7)}
 
@@ -197,7 +197,7 @@ function captureShellTemplate(shellId,pool){
   const stack=[{ev:root,out:rootNode,isRoot:true}];
   while(stack.length){
     const {ev,out,isRoot}=stack.pop();if(seen.has(ev.id))continue;seen.add(ev.id);
-    Object.assign(out,{title:ev.title||"",type:ev.type||"task",priority:ev.priority||"Medium",detail:ev.detail||"",children:[]});
+    Object.assign(out,{title:ev.title||"",type:ev.type||"task",priority:ev.priority||"Medium",taskPriority:ev.taskPriority||"Medium",detail:ev.detail||"",children:[]});
     if(!isRoot){out.edge=relOf(ev)==="subtask"?"subtask":"wrap";out.durationMin=Math.max(1,dur(ev)||0)||30;}
     const kids=_TM().selectNotDeleted(index.children.get(ev.id)||[]).filter(k=>!seen.has(k.id));
     const entries=kids.map(ev=>({ev,out:{},isRoot:false}));out.children=entries.map(e=>e.out);
@@ -1222,7 +1222,7 @@ function enqueueRowPropsWrite(blockId,merge,extra,options){
         // On a cache miss, BlockStore cannot otherwise know which revision/property
         // snapshot the merge used. Hand the freshly fetched row through as client-only
         // base metadata for explicit completion CAS and exact-delta construction.
-        const writeExtra=resolvedExtra&&resolvedExtra.completionIntent
+        const writeExtra=resolvedExtra&&(resolvedExtra.completionIntent||resolvedExtra._priorityEdit)
           ?{...resolvedExtra,_completionBaseBlock:b}
           :(resolvedExtra||undefined);
         return window.blockStore.updateBlock(b.id,next,writeExtra);
@@ -1496,7 +1496,7 @@ async function _moveTaskToBacklogStage(id,stage,toastMsg){
     const entry=Object.assign(
       window.DCC.taskCommonProps(ev,{
         meta:ms(mintedDur)+" · from schedule",
-        priority:ev.priority||"Medium",
+        priority:ev.priority||"Medium",taskPriority:ev.taskPriority||"Medium",
         source:ev.source||"manual"
       }),
       {id:mintedId,type:ev.type||"task",durMin:mintedDur,stage:stage}
@@ -1674,7 +1674,7 @@ async function _writeRescheduleTombstone(ev,fromDate,targetDate,movedBlockId,hid
       local_id:"resched-tomb-"+movedBlockId,
       kind:"reschedule_tombstone",
       title:ev.title||"Task",
-      priority:ev.priority||"Medium",
+      priority:ev.priority||"Medium",taskPriority:ev.taskPriority||"Medium",
       movedBlockId:movedBlockId,
       sourceLocalId:ev.id,
       // Every id this move hid on the origin day, so Restore can reverse ALL of it. The
@@ -1688,6 +1688,49 @@ async function _writeRescheduleTombstone(ev,fromDate,targetDate,movedBlockId,hid
   }catch(e){}
 }
 
+// Giving untimed work a clock time is a durable placement, not a pin overlay.
+// Leave the original row visible until acknowledgement; failed saves therefore
+// need no optimistic rollback and the block store owns reconnect/reload retries.
+const _untimedPlacements = new Map();
+async function scheduleUntimedTask(id,targetDate,start,opts){
+  if(_untimedPlacements.has(id))return _untimedPlacements.get(id);
+  const run=(async()=>{
+    const ev=scheduled.find(task=>task.id===id);
+    if(!ev)return false;
+    if(ev._locked||(typeof isFixedTimeBlock==="function"&&isFixedTimeBlock(ev))){
+      showToast("Unlock this task or use its calendar to change its time","error");return false;
+    }
+    const fromDate=_viewedDateStr(),row=_findTaskBlockForDate(id,fromDate,ev);
+    if(!row||!window.blockStore){showToast("Task is still saving. Try scheduling it again shortly.","error");return false;}
+    // A zero-minute checklist gains the same default slot as cross-day placement.
+    const rawDuration=dur(ev),duration=rawDuration===0?30:rawDuration;
+    if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(start||"")||!Number.isFinite(duration)||duration<0||pt(start)+duration>1439){
+      showToast("Choose a time that fits the task's duration within this day","error");return false;
+    }
+    window.__DCC_PENDING_MOVES__=(window.__DCC_PENDING_MOVES__||0)+1;
+    window.__RESCHEDULE_IN_FLIGHT__=true;
+    try{
+      const result=await window.blockStore.rescheduleBlock(row.id,targetDate,{
+        fromDate,parentStart:start,parentEnd:fmt(pt(start)+duration),userSetStart:!(opts&&opts.autoPlaced),
+        onQueued:()=>showToast("Scheduling — waiting to sync","info")
+      });
+      if(_viewedDateStr()===fromDate){
+        refoldTaskStateFromBlockCache();render();
+      }
+      showToast("Scheduled for "+_prettyDateLabel(targetDate)+" at "+(typeof f12==="function"?f12(start):start),"success");
+      return result;
+    }catch(error){
+      showToast(error.permanent?("Could not schedule — "+error.message):"Scheduling queued — will retry when connected",error.permanent?"error":"info");
+      return false;
+    }finally{
+      window.__DCC_PENDING_MOVES__--;
+      window.__RESCHEDULE_IN_FLIGHT__=window.__DCC_PENDING_MOVES__>0;
+    }
+  })();
+  _untimedPlacements.set(id,run);
+  try{return await run;}finally{_untimedPlacements.delete(id);}
+}
+
 // Move a task off of the currently-viewed date and onto `targetDate`. Used by
 // the reschedule popover (Today / Tomorrow / custom date) on every task card.
 async function rescheduleTaskToDate(id,targetDate,opts){
@@ -1698,7 +1741,15 @@ async function rescheduleTaskToDate(id,targetDate,opts){
   const fromDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   const pinned=(opts.pinnedStart&&/^\d{2}:\d{2}$/.test(opts.pinnedStart))?opts.pinnedStart:null;
   if(fromDate===targetDate){
-    // Same-day with a chosen time: that's a start pin, not a re-slot.
+    // Untimed work needs a persisted date AND time before it can leave the queue.
+    if(ev.untimed||ev._dateless){
+      let slot;
+      try{slot=pinned?{start:pinned}:await _computeRescheduleSlot(ev,targetDate);}
+      catch(error){showToast("Could not load this day's schedule. Try again when connected.","error");return false;}
+      if(!slot){showToast("No free slot on this day. Choose a time explicitly.","error");return false;}
+      return scheduleUntimedTask(id,targetDate,slot.start,{autoPlaced:!pinned});
+    }
+    // Already timed work can retain the existing pin/reorder behavior.
     if(pinned){
       if(typeof pinStartTime==="function")pinStartTime(id,pinned);
       if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();

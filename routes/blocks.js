@@ -1,3 +1,4 @@
+const TaskPriority = require("../public/js/task-priority");
 const { slackTarget } = require("../lib/slack-status");
 // Extracted from server.js — mounted via routes/index pattern: module.exports(app, ctx).
 // ctx carries shared server-scope helpers/stores; see server.js where ctx is built.
@@ -305,6 +306,89 @@ module.exports = function mount(app, ctx) {
     return result;
   }
 
+  // A completion can commit before its timing writes run. Recover the exact
+  // rows written by that mutation, even after a root is reopened or a child moves.
+  // Current subtree membership is not a durable receipt of the original work.
+  async function completionEffectRows(mutationId, workspaceId) {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT b.id FROM operations o JOIN blocks b ON b.id = o.block_id
+        WHERE o.op_type = 'completion' AND o.after_data->>'_completionMutationId' = $1
+          AND b.workspace_id IS NOT DISTINCT FROM $2`,
+      [mutationId, workspaceId || null]
+    );
+    return (await Promise.all(rows.filter(row => row.id).map(row => blockDB.getBlockIncludingDeleted(row.id)))).filter(Boolean);
+  }
+
+  async function waitingCompletionGroup(item, workspaceId) {
+    const props = item.properties || {};
+    const ids = [...new Set([item.id, ...(Array.isArray(props.waitingCompletionItemIds) ? props.waitingCompletionItemIds : [])])];
+    const rows = await Promise.all(ids.map(id => blockDB.getBlockIncludingDeleted(id)));
+    return rows.filter(row => row && !row.deleted_at && row.workspace_id === workspaceId
+      && (row.properties || {}).kind === "delegated_item" && isCompleted(row)
+      && Date.parse(row.properties.completedAt) === Date.parse(props.completedAt)
+      && (props.waitingCompletionMutationId
+        ? row.properties.waitingCompletionMutationId === props.waitingCompletionMutationId
+          && row.properties.waitingCompletionTaskId === props.waitingCompletionTaskId
+        : row.id === item.id));
+  }
+
+  async function actualWaitingCompletionWork(item, workspaceId) {
+    const props = item.properties || {};
+    const mutationId = props.waitingCompletionMutationId || `waiting:${item.id}:${Date.parse(props.completedAt)}`;
+    const task = props.waitingCompletionTaskId
+      ? await blockDB.getBlockIncludingDeleted(props.waitingCompletionTaskId)
+      : props.linkedBlockId ? await blockDB.findUniqueLiveBlockByReference(props.linkedBlockId, workspaceId) : null;
+    if (!task || task.deleted_at || task.workspace_id !== workspaceId || !isCompleted(task)
+        || (task.properties || {})._completionMutationId !== mutationId) return null;
+    if (Object.prototype.hasOwnProperty.call(props, "waitingCompletionTaskDate")
+        && (task.date || null) !== props.waitingCompletionTaskDate) return null;
+    if (Object.prototype.hasOwnProperty.call(props, "waitingCompletionTaskLocalId")
+        && ((task.properties || {}).local_id || null) !== props.waitingCompletionTaskLocalId) return null;
+    return task;
+  }
+
+  // Waiting retries may outlive a reopen or another completion. Check identity on
+  // a fresh locked row, and keep ALL timing/session writes in that transaction.
+  // Binding a private adapter avoids changing the shared store for other requests.
+  async function normalizeWaitingCompletionWork(result, { atMs, actor, mutationId, workspaceId }) {
+    if (result.persistenceTarget && result.persistenceTarget !== "task_row") return result;
+    const refreshed = [];
+    for (const row of result.affectedTasks || []) {
+      const client = await pool.connect();
+      const events = [];
+      try {
+        await client.query("BEGIN");
+        const current = await blockDB.getBlockIncludingDeleted(row.id, client, true);
+        if (current && !current.deleted_at && current.workspace_id === workspaceId
+            && isCompleted(current) && (current.properties || {})._completionMutationId === mutationId) {
+          const transactionDB = {
+            ...blockDB,
+            getBlock: id => blockDB.getBlock(id, client),
+            getBlockIncludingDeleted: id => blockDB.getBlockIncludingDeleted(id, client),
+            getTaskTimeEntries: (id, owner, options) => blockDB.getTaskTimeEntries(id, owner, options, client),
+            ensureDayRoot: (date, userId, owner) => blockDB.ensureDayRoot(date, userId, owner, client),
+            createBlock: input => blockDB.createBlock(input, client),
+            updateBlock: (id, input) => blockDB.updateBlock(id, input, client),
+            undeleteBlock: id => blockDB.undeleteBlock(id, client),
+            deleteBlock: id => blockDB.deleteBlock(id, client),
+          };
+          const timing = createTaskTiming({ pool: client, blockDB: transactionDB, timeZone: ctx.APP_TIME_ZONE });
+          await timing.completeWork({ block: current, atMs, actor, actionId: `${mutationId}:${current.id}`, normalizeExisting: true });
+          await transitionLinkedTriage(current, "done", atMs, { store: transactionDB, client, emit: (...args) => events.push(args) });
+          refreshed.push(current);
+        }
+        if (result.task && result.task.id === row.id) result.task = current;
+        await client.query("COMMIT");
+        for (const args of events) broadcast(...args);
+      } catch (error) {
+        try { await client.query("ROLLBACK"); } catch { /* preserve the normalization failure */ }
+        throw error;
+      } finally { client.release(); }
+    }
+    result.affectedTasks = refreshed;
+    return result;
+  }
+
   function isCompleted(block) {
     const props = (block && block.properties) || {};
     return props.status === "done" || props.done === true || !!props.completedAt;
@@ -328,7 +412,7 @@ module.exports = function mount(app, ctx) {
   // Cascades on COMPLETE only. Reopening one row does not reopen the cluster: "I ticked
   // this by mistake" is a much more common reopen than "the whole delegation is live
   // again", and guessing wrong there resurrects work Drake had legitimately closed.
-  async function cascadeWaitingCompletion({ req, trigger, itemId: knownItemId, completedAt, userId: knownUserId, workspaceId: knownWorkspaceId }) {
+  async function cascadeWaitingCompletion({ req, trigger, itemId: knownItemId, completedAt, userId: knownUserId, workspaceId: knownWorkspaceId, remindersOnly = false }) {
     if (waitingCascade.roleOf(trigger) === "reminder") return { blockIds: [] };
     const atMs = Number.isFinite(Date.parse(completedAt)) ? Date.parse(completedAt) : Date.now();
     const at = new Date(atMs).toISOString();
@@ -356,12 +440,44 @@ module.exports = function mount(app, ctx) {
         if (linked && !linked.deleted_at) clusterTasks.push(linked);
       }
 
+      // An old acknowledgement must not close reminders created by a newer
+      // Waiting cycle. The canonical item completion is the retry boundary.
+      if (item && String(trigger.id) === String(item.id)
+          && (!isCompleted(item) || Date.parse(item.properties.completedAt) !== atMs)) return { blockIds };
+      // Discover receipts independently of today's cluster membership. A deleted
+      // reminder root or a moved child can still have unfinished original effects.
+      const prefix = `waiting-cascade:${String(itemId).slice(0, 40)}:`;
+      const suffix = `:${atMs}`;
+      const receipts = await pool.query(
+        `SELECT DISTINCT o.after_data->>'_completionMutationId' AS mutation_id
+           FROM operations o JOIN blocks b ON b.id = o.block_id
+          WHERE o.op_type = 'completion' AND b.workspace_id IS NOT DISTINCT FROM $1
+            AND left(o.after_data->>'_completionMutationId', length($2)) = $2
+            AND right(o.after_data->>'_completionMutationId', length($3)) = $3`,
+        [workspaceId || null, prefix, suffix]
+      );
+      const replayed = new Set();
+      for (const receipt of receipts.rows) {
+        const mutationId = receipt.mutation_id;
+        if (typeof mutationId !== "string") continue;
+        const priorRows = await completionEffectRows(mutationId, workspaceId);
+        const result = { affectedTasks: priorRows };
+        await normalizeWaitingCompletionWork(result, { atMs, actor: userId ? `dcc:${userId}` : "dcc", mutationId, workspaceId });
+        for (const row of result.affectedTasks) await syncSlack(row);
+        blockIds.push(...result.affectedTasks.map(row => row.id));
+        replayed.add(mutationId);
+      }
       const plan = waitingCascade.cascadeTargets({ trigger, item, tasks: clusterTasks });
-      for (const task of plan.tasks) {
+      const pendingIds = new Set(plan.tasks.map(row => row.id));
+      for (const task of clusterTasks.filter(row => String(row.id) !== String(trigger.id)
+          && (!remindersOnly || waitingCascade.roleOf(row) === "reminder"))) {
         // Ownership is re-checked per row: getWaitingClusterTasks is already
         // workspace-scoped, but the linked row above came from a different resolver.
         assertBlockOwnership(task, workspaceId);
         const mutationId = waitingCascade.cascadeMutationId(itemId, task.id, atMs);
+        if (replayed.has(mutationId) || !pendingIds.has(task.id)) continue;
+        const current = await blockDB.getBlockIncludingDeleted(task.id);
+        if (!current || current.deleted_at || isCompleted(current)) continue;
         const result = await blockDB.setTaskCompletion({
           taskRef: task.id,
           completed: true,
@@ -371,9 +487,12 @@ module.exports = function mount(app, ctx) {
           expectedRevision: ((task.properties || {})._completionRevision) || null,
           userId,
           workspaceId,
+          ...(String(trigger.id) === itemId ? {
+            transactionLockKey: `waiting-cluster:${workspaceId || ""}:${itemId}`,
+            waitingCompletionGuard: { itemId, completedAt: at },
+          } : {}),
         });
-        await normalizeCompletionWork(result, true, { atMs, actor: userId ? `dcc:${userId}` : "dcc", mutationId });
-        if (result.task) await transitionLinkedTriage(result.task, "done", atMs);
+        await normalizeWaitingCompletionWork(result, { atMs, actor: userId ? `dcc:${userId}` : "dcc", mutationId, workspaceId });
         for (const row of result.affectedTasks || []) await syncSlack(row);
         blockIds.push(...(result.broadcastIds || [task.id]));
       }
@@ -387,6 +506,7 @@ module.exports = function mount(app, ctx) {
       }
     } catch (error) {
       console.error("[waiting-cascade] failed:", error && error.message);
+      return { blockIds, cleanupPending: error.publicCode !== "WAITING_COMPLETION_SUPERSEDED" };
     }
     return { blockIds };
   }
@@ -394,12 +514,19 @@ module.exports = function mount(app, ctx) {
   // The itinerary task is the durable lifecycle handle for a scheduled Sweep item.
   // Completion upgrades its placement link to done, reopen restores scheduled, and
   // deleting unfinished work releases only the placement link back to triage.
-  async function transitionLinkedTriage(block, reason, atMs) {
+  async function transitionLinkedTriage(block, reason, atMs, { store = blockDB, client = null, emit = broadcast } = {}) {
     const props = (block && block.properties) || {};
     const triageId = String(props.triageId || props.triage_id || "").trim();
-    if (!triageId || typeof blockDB.getBlocksByKind !== "function") return null;
+    if (!triageId || typeof store.getBlocksByKind !== "function") return null;
     const workspaceId = block.workspace_id || null;
-    const rows = await blockDB.getBlocksByKind(triageSuppressions.SUPPRESSION_KIND, workspaceId);
+    // Lock only this task's suppression rows. A workspace-wide FOR SHARE read
+    // would make parallel task repairs deadlock while upgrading different rows.
+    const rows = client ? (await client.query(
+      `SELECT * FROM blocks WHERE type = 'block' AND deleted_at IS NULL
+        AND properties->>'kind' = $1 AND properties->>'triage_id' = $2
+        AND workspace_id IS NOT DISTINCT FROM $3 FOR UPDATE`,
+      [triageSuppressions.SUPPRESSION_KIND, triageId, workspaceId]
+    )).rows : await store.getBlocksByKind(triageSuppressions.SUPPRESSION_KIND, workspaceId);
     const active = rows
       .map((row) => ({ row, suppression: triageSuppressions.suppressionFromBlock(row) }))
       .filter(({ suppression }) => suppression && suppression.active && suppression.triage_id === triageId);
@@ -408,12 +535,12 @@ module.exports = function mount(app, ctx) {
       let released = 0;
       for (const { row, suppression } of active) {
         if (suppression.reason !== "scheduled") continue;
-        await blockDB.updateBlock(row.id, {
+        await store.updateBlock(row.id, {
           properties: { ...(row.properties || {}), active: false, reopenedAt: new Date(Number.isFinite(atMs) ? atMs : Date.now()).toISOString() },
         });
         released += 1;
       }
-      if (released) broadcast("dcc-state-changed", { source: "triage-suppression", action: "remove" }, workspaceId);
+      if (released) emit("dcc-state-changed", { source: "triage-suppression", action: "remove" }, workspaceId);
       return released;
     }
     const deleted = active.find(({ suppression }) => suppression.reason === "deleted");
@@ -422,19 +549,25 @@ module.exports = function mount(app, ctx) {
     const at = new Date(Number.isFinite(atMs) ? atMs : Date.now()).toISOString();
     if (active.length) {
       let last = null;
+      let changed = false;
       for (const { row } of active) {
         const nextProps = {
           ...(row.properties || {}), reason: nextReason, at,
           task_id: String(props.local_id || block.id || "").slice(0, 300),
           scheduled_for: String(block.date || "").slice(0, 80), active: true,
         };
-        last = await blockDB.updateBlock(row.id, { properties: nextProps });
+        if (["reason", "at", "task_id", "scheduled_for", "active"].every(key => (row.properties || {})[key] === nextProps[key])) {
+          last = row;
+          continue;
+        }
+        last = await store.updateBlock(row.id, { properties: nextProps });
+        changed = true;
       }
       const suppression = triageSuppressions.suppressionFromBlock(last);
-      broadcast("dcc-state-changed", { source: "triage-suppression", action: "update" }, workspaceId);
+      if (changed) emit("dcc-state-changed", { source: "triage-suppression", action: "update" }, workspaceId);
       return suppression;
     }
-    const created = await blockDB.createBlock({
+    const created = await store.createBlock({
       type: "block",
       properties: triageSuppressions.buildSuppressionProperties({
         triageId, key: String(props.triageKey || ""), itemTitle: props.triageTitle || props.title || "",
@@ -449,7 +582,7 @@ module.exports = function mount(app, ctx) {
       workspace_id: workspaceId,
     });
     const suppression = triageSuppressions.suppressionFromBlock(created);
-    broadcast("dcc-state-changed", { source: "triage-suppression", action: "add" }, workspaceId);
+    emit("dcc-state-changed", { source: "triage-suppression", action: "add" }, workspaceId);
     return suppression;
   }
   ctx.transitionLinkedTriage = transitionLinkedTriage;
@@ -1084,6 +1217,10 @@ module.exports = function mount(app, ctx) {
     // Ignore the stale full properties snapshot and delegate only the completion
     // intent to the same narrow transaction as the dedicated endpoint.
     if (req.body && req.body.completionIntent) {
+      if (Object.prototype.hasOwnProperty.call(req.body, "taskPriority")) {
+        res.status(400).json({ error: "Priority and completion require separate edits" });
+        return;
+      }
       if (!Object.prototype.hasOwnProperty.call(req.body, "completionBaseRevision")) {
         res.status(400).json({
           error: "completionBaseRevision is required for completion transitions",
@@ -1791,7 +1928,7 @@ module.exports = function mount(app, ctx) {
       // links and the parent_id column — because neither one is complete on real data;
       // lib/reschedule.js carries the measurements. An undated row only moves if the
       // walk actually links it into this parent's subtree.
-      const dayBlocks = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId);
+      const dayBlocks = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId, { includeDatelessRoots: !parent.date });
       const subtreeIds = collectSubtreeBlockIds(dayBlocks, parent);
       const byId = new Map(dayBlocks.map(b => [b.id, b]));
       byId.set(parent.id, parent); // parent may lack local_id and be absent from dayBlocks
@@ -1913,7 +2050,7 @@ module.exports = function mount(app, ctx) {
         lockKey: "dcc-review:" + req.workspaceId + ":" + targetDate,
         beforeApply: async client => {
           const freshParent = await blockDB.getBlock(parent.id, client);
-          const freshPool = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId, { client });
+          const freshPool = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId, { client, includeDatelessRoots: !freshParent?.date });
           const freshById = new Map(freshPool.map(row => [row.id, row]));
           freshById.set(parent.id, freshParent);
           const members = freshParent && collectSubtreeBlockIds(freshPool, freshParent).map(id => freshById.get(id));
@@ -2265,7 +2402,7 @@ module.exports = function mount(app, ctx) {
   function normalizeGroupItems(items) {
     if (!Array.isArray(items)) return [];
     return items.map((it) => {
-      const base = { local_id: it.local_id || ("tgi-" + crypto.randomUUID().slice(0, 12)), duration: Math.max(1, Math.round(Number(it.duration || 30))), priority: it.priority || "Medium" };
+      const base = { local_id: it.local_id || ("tgi-" + crypto.randomUUID().slice(0, 12)), duration: Math.max(1, Math.round(Number(it.duration || 30))), priority: it.priority || "Medium", taskPriority: TaskPriority.read(it) };
       if (it.isPlaceholder) return { ...base, isPlaceholder: true, placeholderMenus: Array.isArray(it.placeholderMenus) ? it.placeholderMenus : [], label: String(it.label || "Placeholder").trim() };
       return { ...base, isPlaceholder: false, title: String(it.title || "").trim(), detail: it.detail || "" };
     }).filter(it => it.isPlaceholder || it.title);
@@ -2445,6 +2582,7 @@ module.exports = function mount(app, ctx) {
         start: minutesToHHMM(slot),
         end: minutesToHHMM(slot + duration),
         priority: item.priority || "Medium",
+        taskPriority: TaskPriority.read(item),
         source: "task_group",
         taskGroupId: group.id,
         createdAt: new Date().toISOString()
@@ -2802,6 +2940,66 @@ module.exports = function mount(app, ctx) {
     return result;
   }));
 
+  app.get("/api/waiting-items/:id/title", route(async (req) => {
+    const item = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!item || item.deleted_at || item.properties?.kind !== "delegated_item") throw clientError("Waiting item not found", 404);
+    assertBlockOwnership(item, req.workspaceId);
+    const linkedRef = item.properties.linkedBlockId || null;
+    const linked = linkedRef ? await blockDB.findUniqueLiveBlockByReference(linkedRef, req.workspaceId) : null;
+    if (linkedRef && (!linked || !blockDB.isTaskRow(linked))) throw clientError("Linked task is unavailable. Refresh before renaming.", 409);
+    if (linked) assertBlockOwnership(linked, req.workspaceId);
+    const expectedTitle = item.properties.myTask || item.properties.title || "";
+    const expectedLinkedTitle = linked ? (linked.properties.title || "") : null;
+    return { title: linked ? expectedLinkedTitle : expectedTitle, expectedTitle, expectedLinkedTitle, expectedLinkedBlockId: linkedRef };
+  }));
+
+  app.patch("/api/waiting-items/:id/title", route(async (req) => {
+    const title = req.body && req.body.title;
+    if (typeof title !== "string" || !title.trim() || title.trim().length > 300) {
+      throw clientError("Task title must contain 1 to 300 characters", 400);
+    }
+    const client = await pool.connect();
+    let result, linked;
+    try {
+      await client.query("BEGIN");
+      // Serialize with cluster completion/deletion before taking either row lock.
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`waiting-cluster:${req.workspaceId || ""}:${req.params.id}`]);
+      const snapshot = await blockDB.getBlockIncludingDeleted(req.params.id, client);
+      if (!snapshot || snapshot.deleted_at || snapshot.properties?.kind !== "delegated_item") throw clientError("Waiting item not found", 404);
+      assertBlockOwnership(snapshot, req.workspaceId);
+      const linkedRef = snapshot.properties.linkedBlockId || null;
+      // Match completion's task -> Waiting lock order, then revalidate the link.
+      if (linkedRef) {
+        linked = await blockDB.findUniqueLiveBlockByReference(linkedRef, req.workspaceId, client, true);
+        if (!linked || !blockDB.isTaskRow(linked)) throw clientError("Linked task is unavailable. Refresh before renaming.", 409);
+        assertBlockOwnership(linked, req.workspaceId);
+      }
+      // Dependency propagation can already hold Waiting while acquiring its task.
+      // Never wait on that inverse order while we hold the task: return a retryable
+      // conflict instead, releasing both locks without writing either title.
+      await client.query("SELECT id FROM blocks WHERE id = $1 FOR UPDATE NOWAIT", [req.params.id]);
+      const item = await blockDB.getBlockIncludingDeleted(req.params.id, client, true);
+      if (!item || item.deleted_at || item.properties?.kind !== "delegated_item") throw clientError("Waiting item not found", 404);
+      assertBlockOwnership(item, req.workspaceId);
+      const currentTitle = item.properties.myTask || item.properties.title || "";
+      if ((item.properties.linkedBlockId || null) !== linkedRef ||
+          req.body.expectedLinkedBlockId !== linkedRef || req.body.expectedTitle !== currentTitle ||
+          req.body.expectedLinkedTitle !== (linked ? (linked.properties.title || "") : null)) {
+        throw clientError("This task changed elsewhere. Reopen it before renaming.", 409);
+      }
+      if (linked) await blockDB.updateBlock(linked.id, { properties: { ...linked.properties, title: title.trim() } }, client);
+      // Field-only edit: preserve cadence, status, history, placement and links.
+      result = await blockDB.updateBlock(item.id, { properties: { ...item.properties, myTask: title.trim() } }, client);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (error.code === "55P03") throw clientError("This task is changing elsewhere. Try saving again.", 409);
+      throw error;
+    } finally { client.release(); }
+    broadcast("blocks-changed", { action: "waiting-title", blockIds: [result.id, ...(linked ? [linked.id] : [])] }, req.workspaceId);
+    return result;
+  }));
+
   app.post("/api/waiting-items/:id/snooze", route(async (req, res) => {
     const until = req.body && req.body.until;
     if (!isValidDate(until)) { res.status(400).json({ error: "until must be YYYY-MM-DD" }); return; }
@@ -2936,7 +3134,7 @@ module.exports = function mount(app, ctx) {
     itemId, completedAt: requestedCompletedAt, completedBy = "waiting",
     linkedTaskRef: requestedLinkedTaskRef = null, req = null,
     userId: knownUserId, workspaceId: knownWorkspaceId,
-    broadcastAction = "waiting-completed",
+    broadcastAction = "waiting-completed", expectedUpdatedAt, resolveBlockedTask = false,
   }) {
     const existing = await blockDB.getBlockIncludingDeleted(itemId);
     if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") {
@@ -2944,7 +3142,49 @@ module.exports = function mount(app, ctx) {
     }
     const workspaceId = knownWorkspaceId !== undefined ? knownWorkspaceId : req && req.workspaceId;
     assertBlockOwnership(existing, workspaceId);
-    if (waitingItems.isTaskDependency(existing) && (existing.properties || {}).status !== "ready") {
+    if (resolveBlockedTask && expectedUpdatedAt === undefined) throw clientError("expectedUpdatedAt is required for explicit task completion");
+    if (expectedUpdatedAt !== undefined && (typeof expectedUpdatedAt !== "string" || !Number.isFinite(Date.parse(expectedUpdatedAt)))) {
+      throw clientError("expectedUpdatedAt must be a valid timestamp");
+    }
+    // A lost acknowledgement or repeated click must not re-complete work that
+    // was subsequently reopened. Only outstanding reminders may be retried.
+    if ((existing.properties || {}).status === "done") {
+      // Timing normalization is post-commit. Repair an interrupted first request,
+      // but only for rows still carrying this completion (never reopened work).
+      const priorMutation = existing.properties.waitingCompletionMutationId || `waiting:${existing.id}:${Date.parse(existing.properties.completedAt)}`;
+      const affectedTasks = await completionEffectRows(priorMutation, workspaceId);
+      if (affectedTasks.length) {
+        const owner = knownUserId !== undefined && knownWorkspaceId !== undefined
+          ? { userId: knownUserId } : await resolveOwnerStrict(req);
+        const repaired = await normalizeWaitingCompletionWork({ affectedTasks }, {
+          atMs: Date.parse(existing.properties.completedAt), actor: owner.userId ? `dcc:${owner.userId}` : "dcc", mutationId: priorMutation, workspaceId,
+        });
+        for (const row of repaired.affectedTasks) await syncSlack(row);
+      }
+      const cleanup = { blockIds: [], cleanupPending: false };
+      for (const member of await waitingCompletionGroup(existing, workspaceId)) {
+        const cascaded = await cascadeWaitingCompletion({
+          req, trigger: { id: member.id }, itemId: member.id,
+          completedAt: member.properties.completedAt,
+          userId: knownUserId, workspaceId: knownWorkspaceId, remindersOnly: true,
+        });
+        cleanup.blockIds.push(...cascaded.blockIds);
+        cleanup.cleanupPending ||= !!cascaded.cleanupPending;
+      }
+      if (cleanup.blockIds.length) broadcast("blocks-changed", { action: broadcastAction, blockIds: cleanup.blockIds }, workspaceId);
+      const actualWork = await actualWaitingCompletionWork(existing, workspaceId);
+      return { ok: true, status: "completed", duplicate: true, item: existing, task: null, actualWork,
+        actualWorkCreditDate: actualWork ? actualWork.date || waitingItems.dateFromIso(actualWork.properties.completedAt, APP_TIME_ZONE) : null,
+        cleanupPending: cleanup.cleanupPending };
+    }
+    function assertCurrentIntent(row) {
+      if (expectedUpdatedAt !== undefined && new Date(row.updated_at || "").getTime() !== Date.parse(expectedUpdatedAt)) {
+        throw clientError("This Waiting item changed. Close this dialog, refresh, and review it before completing the task", 409);
+      }
+      if (expectedUpdatedAt !== undefined && !waitingItems.isOpen(row)) throw clientError("This Waiting item is no longer open", 409);
+    }
+    assertCurrentIntent(existing);
+    if (waitingItems.isTaskDependency(existing) && (existing.properties || {}).status !== "ready" && !resolveBlockedTask) {
       throw clientError("Complete the prerequisite before completing this blocked task", 409);
     }
     const completedAt = String(requestedCompletedAt || new Date().toISOString());
@@ -2964,6 +3204,9 @@ module.exports = function mount(app, ctx) {
     let linkedTask = linkedBlockId
       ? await blockDB.findUniqueLiveBlockByReference(linkedBlockId, workspaceId)
       : null;
+    // The check-in dialog explicitly targets the captured linked work. Never
+    // silently close its Waiting item if that work was deleted or is unavailable.
+    if (expectedUpdatedAt !== undefined && linkedBlockId && !linkedTask) throw clientError("Linked task is unavailable. Refresh and review the Waiting item", 409);
     let updated;
     let blockIds = [existing.id];
     let dependencyTransitions = [];
@@ -2986,29 +3229,57 @@ module.exports = function mount(app, ctx) {
         workspaceId,
         transactionLockKey: `waiting-cluster:${workspaceId || ""}:${existing.id}`,
         companionUpdates: [{ id: existing.id, properties, expectedUpdatedAt: existing.updated_at }],
+        resolveWaitingItemId: resolveBlockedTask ? existing.id : null,
       });
-      await normalizeCompletionWork(result, true, {
-        atMs: Date.parse(completedAt), actor: userId ? `dcc:${userId}` : "dcc", mutationId,
+      await normalizeWaitingCompletionWork(result, {
+        atMs: Date.parse(completedAt), actor: userId ? `dcc:${userId}` : "dcc", mutationId, workspaceId,
       });
       linkedTask = result.task;
       dependencyTransitions = result.dependencyTransitions || [];
       updated = (result.companionBlocks || []).find(row => row.id === existing.id) || existing;
       blockIds = result.broadcastIds || [existing.id, linkedTask.id];
-      if (linkedTask) await transitionLinkedTriage(linkedTask, "done", Date.parse(completedAt));
       for (const row of result.affectedTasks || []) await syncSlack(row);
     } else {
       linkedTask = null;
-      updated = await blockDB.updateBlock(existing.id, { properties });
+      // Standalone Waiting work has no task row. Lock the record so a check-in,
+      // edit, or another completion cannot be overwritten by a stale dialog.
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const current = await blockDB.getBlockIncludingDeleted(existing.id, client, true);
+        if (!current || current.deleted_at) throw clientError("Waiting item not found", 404);
+        assertBlockOwnership(current, workspaceId);
+        if ((current.properties || {}).status === "done") updated = current;
+        else {
+          assertCurrentIntent(current);
+          if (String((current.properties || {}).linkedBlockId || "") !== String((existing.properties || {}).linkedBlockId || "")) throw clientError("Linked task changed. Refresh and try again", 409);
+          updated = await blockDB.updateBlock(existing.id, { properties: waitingItems.normalizeProperties({
+            status: "done", completedAt, completedBy, snoozedUntil: null, checkInScheduledFor: null, checkInTaskId: null,
+          }, current.properties || {}) }, client);
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
     }
     await syncSlack(updated);
     // The item and its linked task are closed above; the reminders were never anyone's
     // job. `trigger` is the item, so the cascade skips it and takes only what is left.
-    const cascaded = await cascadeWaitingCompletion({
-      req, trigger: { id: existing.id }, itemId: existing.id, completedAt,
-      userId: knownUserId, workspaceId: knownWorkspaceId,
-    });
-    broadcast("blocks-changed", { action: broadcastAction, blockIds: blockIds.concat(cascaded.blockIds), dependencyTransitions, date: linkedTask && linkedTask.date || null }, workspaceId);
-    return { ok: true, status: "completed", item: updated, task: linkedTask, dependencyTransitions };
+    const cleanup = { blockIds: [], cleanupPending: false };
+    for (const member of await waitingCompletionGroup(updated, workspaceId)) {
+      const cascaded = await cascadeWaitingCompletion({
+        req, trigger: { id: member.id }, itemId: member.id, completedAt: member.properties.completedAt,
+        userId: knownUserId, workspaceId: knownWorkspaceId, remindersOnly: resolveBlockedTask,
+      });
+      cleanup.blockIds.push(...cascaded.blockIds);
+      cleanup.cleanupPending ||= !!cascaded.cleanupPending;
+    }
+    broadcast("blocks-changed", { action: broadcastAction, blockIds: blockIds.concat(cleanup.blockIds), dependencyTransitions, date: linkedTask && linkedTask.date || null }, workspaceId);
+    const actualWork = await actualWaitingCompletionWork(updated, workspaceId);
+    return { ok: true, status: "completed", item: updated, task: linkedTask, dependencyTransitions, actualWork,
+      actualWorkCreditDate: actualWork ? actualWork.date || waitingItems.dateFromIso(actualWork.properties.completedAt, APP_TIME_ZONE) : null,
+      cleanupPending: cleanup.cleanupPending };
   }
 
   // Reopening intentionally does not resurrect completed reminders. It reverses
@@ -3269,6 +3540,8 @@ module.exports = function mount(app, ctx) {
     return completeWaitingItem({
       itemId: req.params.id,
       completedAt: req.body && req.body.completedAt,
+      expectedUpdatedAt: req.body && req.body.expectedUpdatedAt,
+      resolveBlockedTask: req.body && req.body.resolveBlockedTask === true,
       req,
     });
   }));
@@ -3291,22 +3564,29 @@ module.exports = function mount(app, ctx) {
     if (!task || task.deleted_at || (destination === "schedule" && task.date !== date)) { res.status(400).json({ error: "Underlying task was not placed at the requested destination" }); return; }
     assertBlockOwnership(task, req.workspaceId);
     const now = new Date().toISOString();
-    const properties = waitingItems.normalizeProperties({
-      status: "unblocked",
-      completedAt: now,
-      unblockedAt: now,
-      unblockedTaskId: taskBlockId,
-      unblockedDestination: destination,
-      snoozedUntil: null,
-    }, existing.properties || {});
-    if (waitingItems.isTaskDependency(existing) || existingProps.parksLinkedTask) {
-      const subtree = await blockDB.getSubtree([task.id], req.workspaceId);
-      const client = await pool.connect();
-      let updated;
-      try {
-        await client.query("BEGIN");
-        updated = await blockDB.updateBlock(existing.id, { properties }, client);
-        for (const row of (subtree.length ? subtree : [task])) {
+    const client = await pool.connect();
+    let updated, currentTask;
+    const affectedIds = [];
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`waiting-cluster:${req.workspaceId || ""}:${existing.id}`]);
+      currentTask = await blockDB.getBlockIncludingDeleted(task.id, client, true);
+      await client.query("SELECT id FROM blocks WHERE id = $1 FOR UPDATE NOWAIT", [existing.id]);
+      const current = await blockDB.getBlockIncludingDeleted(existing.id, client, true);
+      if (!current || current.deleted_at || !currentTask || currentTask.deleted_at) throw clientError("Waiting task changed. Refresh before unblocking.", 409);
+      assertBlockOwnership(current, req.workspaceId);
+      assertBlockOwnership(currentTask, req.workspaceId);
+      if ((current.properties.linkedBlockId || null) !== (existingProps.linkedBlockId || null) ||
+          (destination === "schedule" && currentTask.date !== date)) throw clientError("Waiting task changed. Refresh before unblocking.", 409);
+      const properties = waitingItems.normalizeProperties({
+        status: "unblocked", completedAt: now, unblockedAt: now,
+        unblockedTaskId: taskBlockId, unblockedDestination: destination, snoozedUntil: null,
+      }, current.properties || {});
+      if (waitingItems.isTaskDependency(current) || current.properties.parksLinkedTask) {
+        const subtree = await blockDB.getSubtree([currentTask.id], req.workspaceId, client);
+        for (const ref of (subtree.length ? subtree : [currentTask])) {
+          const row = ref.id === currentTask.id ? currentTask : await blockDB.getBlockIncludingDeleted(ref.id, client, true);
+          if (!row || row.deleted_at) continue;
           const next = { ...(row.properties || {}) };
           const remaining = (Array.isArray(next.dependencyWaitingItemIds)
             ? next.dependencyWaitingItemIds : [next.dependencyWaitingItemId]).filter(Boolean)
@@ -3318,26 +3598,22 @@ module.exports = function mount(app, ctx) {
             delete next.dependencyWaitingItemIds;
             delete next.dependencyWaitingItemId;
           }
-          await blockDB.updateBlock(row.id, { properties: next, date: destination === "backlog" ? null : row.date }, client);
+          const saved = await blockDB.updateBlock(row.id, { properties: next, date: destination === "backlog" ? null : row.date }, client);
+          if (row.id === currentTask.id) currentTask = saved;
+          affectedIds.push(row.id);
         }
-        await client.query("COMMIT");
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
       }
-      const affectedIds = (subtree.length ? subtree : [task]).map(row => row.id);
-      await syncSlack(updated);
-      await syncSlack(task.id);
-      broadcast("blocks-changed", { action: "waiting-unblocked", blockIds: [existing.id].concat(affectedIds), date: destination === "schedule" ? date : null }, req.workspaceId);
-      return { ok: true, status: "unblocked", item: updated, task };
-    }
-    const updated = await blockDB.updateBlock(existing.id, { properties });
+      updated = await blockDB.updateBlock(existing.id, { properties }, client);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (error.code === "55P03") throw clientError("This task is changing elsewhere. Try unblocking again.", 409);
+      throw error;
+    } finally { client.release(); }
     await syncSlack(updated);
-    await syncSlack(task.id);
-    broadcast("blocks-changed", { action: "waiting-unblocked", blockIds: [existing.id, taskBlockId], date }, req.workspaceId);
-    return { ok: true, status: "unblocked", item: updated, task };
+    await syncSlack(currentTask.id);
+    broadcast("blocks-changed", { action: "waiting-unblocked", blockIds: [existing.id, ...new Set([taskBlockId, ...affectedIds])], date: destination === "schedule" ? date : null }, req.workspaceId);
+    return { ok: true, status: "unblocked", item: updated, task: currentTask };
   }));
 
   app.delete(["/api/delegated-items/:id", "/api/waiting-items/:id"], route(async (req, res) => {
@@ -3352,9 +3628,12 @@ module.exports = function mount(app, ctx) {
       let result;
       try {
         await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`waiting-cluster:${req.workspaceId || ""}:${existing.id}`]);
         if (linked) {
-          const subtree = await blockDB.getSubtree([linked.id], req.workspaceId);
-          for (const row of (subtree.length ? subtree : [linked])) {
+          const subtree = await blockDB.getSubtree([linked.id], req.workspaceId, client);
+          for (const ref of (subtree.length ? subtree : [linked])) {
+            const row = await blockDB.getBlockIncludingDeleted(ref.id, client, true);
+            if (!row || row.deleted_at) continue;
             const next = { ...(row.properties || {}) };
             const remaining = (Array.isArray(next.dependencyWaitingItemIds)
               ? next.dependencyWaitingItemIds : [next.dependencyWaitingItemId]).filter(Boolean)

@@ -1,3 +1,4 @@
+const TaskPriority = require("./public/js/task-priority");
 // responsibility-store.js — the responsibility domain, the server-side slot
 // engine, and the block apply-forward engine, extracted from routes/blocks.js
 // (dcc-improvements P8). This is a CODE MOVE, not a rewrite: every function
@@ -251,6 +252,7 @@ function normalizeTemplateTree(tree, opts = {}) {
       title: String(n.title || "").slice(0, 300),
       type: isRoot ? "task" : (typeof n.type === "string" && n.type ? n.type : "task"),
       priority: PRIORITIES.includes(n.priority) ? n.priority : "Medium",
+      taskPriority: TaskPriority.read(n),
       detail: typeof n.detail === "string" ? n.detail.slice(0, 2000) : ""
     };
     if (isRoot) out.occurrenceAnchor = !!(n.occurrenceAnchor || n.type === "shell");
@@ -290,6 +292,7 @@ function buildResponsibilityTaskProps(responsibility, { duration, slot, localId,
     start: minutesToHHMM(slot),
     end: minutesToHHMM(slot + duration),
     priority,
+    taskPriority: TaskPriority.read(sourceProps.taskPriority===undefined?props:sourceProps),
     meta: "Responsibility · " + (props.area || props.domain || "general") + " · " + duration + "m",
     detail: sourceProps.detail || props.description || "",
     source: sourceProps.source || "responsibility",
@@ -780,6 +783,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
           start: occurrence.start,
           end: minutesToHHMM(startMin + duration),
           priority: props.priority || "Medium",
+          taskPriority: TaskPriority.read(props),
           meta: `Scheduled repeat · ${props.area || props.domain || "general"} · ${duration}m`,
         },
       };
@@ -824,6 +828,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
         type: "task",
         duration: nodeDuration,
         priority: node.priority || (isRoot ? "High" : "Medium"),
+        taskPriority: TaskPriority.read(node),
         meta: isRoot ? "Scheduled repeat anchor" : "Scheduled repeat step",
       };
       if (isRoot) {
@@ -856,7 +861,15 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     return rows;
   }
 
-  function withSeriesLock(id, workspaceId, work) {
+  async function withSeriesLock(id, workspaceId, work, transactionClient = null) {
+    // A shared-task sync already owns a transaction and must keep its consent
+    // check, owner occurrence and participant tasks inside that same commit.
+    // Re-acquiring an advisory lock on that client is safe and never opens a
+    // nested transaction (or waits for a second pool connection).
+    if (transactionClient) {
+      await transactionClient.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`${workspaceId || ""}:${id}`]);
+      return work(transactionClient);
+    }
     return typeof blockDB.withRepeatSeriesLock === "function"
       ? blockDB.withRepeatSeriesLock(id, workspaceId, work)
       : work(null);
@@ -917,7 +930,7 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     return block && (block.workspace_id || null) === (workspaceId || null);
   }
 
-  async function materializeDefinitionForDate(id, { date, userId, workspaceId, targetTimeZone, allowPast = false, outputDate = null, occurrenceKey = null, publicVisibility = null }) {
+  async function materializeDefinitionForDate(id, { date, userId, workspaceId, targetTimeZone, allowPast = false, outputDate = null, occurrenceKey = null, publicVisibility = null }, transactionClient = null) {
     return withSeriesLock(id, workspaceId, async (client) => {
       // Re-read after taking the shared series lock. This makes an update or
       // deletion authoritative over a day load that began a moment earlier.
@@ -947,10 +960,12 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
       try {
         return await blockDB.createItineraryTasks(rows, { userId, workspaceId }, client);
       } catch (error) {
-        if (blockDB.isIdempotencyConflict && blockDB.isIdempotencyConflict(error)) return [];
+        // Do not hide a failed statement in a caller-owned transaction: it
+        // must roll back the share and private tasks together with this write.
+        if (!transactionClient && blockDB.isIdempotencyConflict && blockDB.isIdempotencyConflict(error)) return [];
         throw error;
       }
-    });
+    }, transactionClient);
   }
 
   async function materializeScheduledRepeatsForDate({ date, userId, workspaceId, targetTimeZone = appTimeZone, strict = false }) {
@@ -1418,6 +1433,8 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     scheduleResponsibilityTask,
     materializeTriageResponsibility,
     materializeScheduledRepeatsForDate,
+    materializeDefinitionForDate,
+    activeScheduledDefinition,
     catchUpScheduledRepeats,
     changeScheduledSeries,
     convertScheduledToReadiness,

@@ -31,7 +31,7 @@ function persistAddedTask(item,targetDate){
       duration:_itemDur,
       start:item.start,
       end:item.end,
-      priority:item.priority||"High",
+      priority:item.priority||"High",taskPriority:item.taskPriority||"Medium",
       meta:item.meta||"",
       detail:item.detail||"",
       notionUrl:item.notionUrl||"",
@@ -93,7 +93,7 @@ function persistAddedTask(item,targetDate){
   if(!added.find(t=>t.id===item.id)){
     added.push({
       id:item.id,title:item.title,type:item.type||"task",durMin:_itemDur,
-      priority:item.priority||"High",source:item.source||"manual",
+      priority:item.priority||"High",taskPriority:item.taskPriority||"Medium",source:item.source||"manual",
       meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",
       calUrl:item.calUrl||"",tags:item.tags||[],
       triageId:item.triageId||null,delegatedItemId:item.delegatedItemId||null,
@@ -262,10 +262,10 @@ function attachTemplateChildren(parentLocalId,children,promoteDirect,publicVisib
     if(!node||!node.title||seen.has(node))continue;seen.add(node);
     let created=null;
     if(entry.promoteDirect){
-      if(typeof insertTaskNow==="function")created=insertTaskNow(node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:"task",detail:node.detail||"",publicVisibility:publicVisibility||"public"});
+      if(typeof insertTaskNow==="function")created=insertTaskNow(node.title,Math.max(1,Number(node.durationMin)||30),{taskPriority:node.taskPriority||"Medium",priority:node.priority||"Medium",type:"task",detail:node.detail||"",publicVisibility:publicVisibility||"public"});
     }else if(node.edge==="subtask"){
-      if(typeof addSubtask==="function")created=addSubtask(entry.parentLocalId,node.title,{publicVisibility:publicVisibility||"public"});
-    }else if(typeof addStackedTask==="function")created=addStackedTask(entry.parentLocalId,node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:node.type||"task",detail:node.detail||"",publicVisibility:publicVisibility||"public"});
+      if(typeof addSubtask==="function")created=addSubtask(entry.parentLocalId,node.title,{taskPriority:node.taskPriority||"Medium",publicVisibility:publicVisibility||"public"});
+    }else if(typeof addStackedTask==="function")created=addStackedTask(entry.parentLocalId,node.title,Math.max(1,Number(node.durationMin)||30),{taskPriority:node.taskPriority||"Medium",priority:node.priority||"Medium",type:node.type||"task",detail:node.detail||"",publicVisibility:publicVisibility||"public"});
     if(created&&created.id&&Array.isArray(node.children)){
       for(let i=node.children.length-1;i>=0;i--)stack.push({parentLocalId:created.id,node:node.children[i],promoteDirect:false});
     }
@@ -302,7 +302,7 @@ function materializeShellTemplate(templateTree,opts){
     point_multiplier:0,
     responsibilityId:opts.responsibilityId||null,
     responsibilityTitle:opts.responsibilityTitle||root.title,
-    priority:root.priority||"High",
+    taskPriority:root.taskPriority||"Medium",priority:root.priority||"High",
     source:opts.source||"responsibility",
     tags:opts.tags||["responsibility"],
     detail:root.detail||"",
@@ -1438,7 +1438,7 @@ function addToSchedule(blId,opts){
   if(idx!==-1){task=consider.splice(idx,1)[0]}else{idx=backlog.findIndex(b=>b.id===blId);if(idx===-1)return;task=backlog.splice(idx,1)[0];fromBacklog=true}
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
   const s=pt(lastEnd),e=s+task.durMin;
-  const newItem={id:task.id,title:task.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:task.type,meta:task.meta,detail:task.detail||"",source:task.source||"notion",notionUrl:task.notionUrl||"",priority:task.priority,commuteMinutes:task.commuteMinutes||null,commuteToMinutes:task.commuteToMinutes||task.commuteMinutes||null,commuteBackMinutes:task.commuteBackMinutes||task.commuteReturnMinutes||null};
+  const newItem={id:task.id,title:task.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:task.type,meta:task.meta,detail:task.detail||"",source:task.source||"notion",notionUrl:task.notionUrl||"",priority:task.priority,taskPriority:task.taskPriority||"Medium",commuteMinutes:task.commuteMinutes||null,commuteToMinutes:task.commuteToMinutes||task.commuteMinutes||null,commuteBackMinutes:task.commuteBackMinutes||task.commuteReturnMinutes||null};
   // Carry the row id across so the write below re-dates THIS row rather than
   // resolving it again by local_id (two rows can share one — the prod restore has a
   // live `carry-200` twin, and resolving by local_id picks whichever comes first).
@@ -1474,7 +1474,7 @@ function addToSchedule(blId,opts){
 function addFollowupToSchedule(fu,parentId){
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
   const s=pt(lastEnd),e=s+(fu.durMin||30);
-  const newItem={id:fu.id||"fu-"+(nextId++),title:fu.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:"task",meta:(fu.durMin||30)+"min \u00b7 Action item from "+parentId,detail:fu.detail||"",source:fu.source||"notion",notionUrl:fu.href||"",priority:fu.priority||"Medium"};
+  const newItem={id:fu.id||"fu-"+(nextId++),title:fu.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:"task",meta:(fu.durMin||30)+"min \u00b7 Action item from "+parentId,detail:fu.detail||"",source:fu.source||"notion",notionUrl:fu.href||"",priority:fu.priority||"Medium",taskPriority:fu.taskPriority||"Medium"};
   scheduled.push(newItem);
   // Remove from parent followups
   const parent=scheduled.find(x=>x.id===parentId);
@@ -1499,7 +1499,7 @@ function persistBacklogItem(item){
       detail:item.detail||"",
       source:item.source||"manual",
       notionUrl:item.notionUrl||"",
-      priority:item.priority||"",
+      priority:item.priority||"",taskPriority:item.taskPriority||"Medium",
       stage:item.stage||"",
       commuteMinutes:item.commuteMinutes||null,
       commuteToMinutes:item.commuteToMinutes||item.commuteMinutes||null,
@@ -1566,7 +1566,7 @@ function addNewTask(titleArg, durMinArg, opts){
   const durMin=durMinArg||30;
   const item={id:(opts.idPrefix||"custom")+"-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),
     title:String(title).trim(),type:"task",durMin,meta:(opts.metaLabel||"Custom task")+" \u00b7 "+ms(durMin),
-    detail:"",source:"manual",notionUrl:"",priority:opts.priority||"",stage:opts.stage||"",createdAt:new Date().toISOString()};
+    detail:"",source:"manual",notionUrl:"",priority:opts.priority||"",taskPriority:opts.taskPriority||"Medium",stage:opts.stage||"",createdAt:new Date().toISOString()};
   backlog.push(item);
   persistBacklogItem(item);
   log("created","custom","New "+(opts.stage||"backlog")+": "+item.title);render();

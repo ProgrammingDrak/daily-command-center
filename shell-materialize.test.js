@@ -99,8 +99,9 @@ for(const visibility of ['private','public'])test(`template children persist ${v
  const tabs=fs.readFileSync(require.resolve('./public/js/tabs.js'),'utf8');
  for(const name of ['addSubtask','addStackedTask'])vm.runInContext(tabs.match(new RegExp('function '+name+'[\\s\\S]*?\\n}'))[0],context);
  vm.runInContext(attachSrc,context);
- context.attachTemplateChildren('root',[{title:'Direct task',children:[{title:'Nested step',edge:'subtask',children:[{title:'Nested ride',edge:'wrap'}]}]}],true,visibility);
+ context.attachTemplateChildren('root',[{title:'Direct task',children:[{title:'Nested step',edge:'subtask',taskPriority:'High',children:[{title:'Nested ride',edge:'wrap',taskPriority:'Low'}]}]}],true,visibility);
  assert.equal(options[0].publicVisibility,visibility);assert.equal(writes.length,3);
+ assert.deepEqual(writes.map(row=>row.properties.taskPriority),['Medium','High','Low']);
  for(const row of writes){assert.equal(row.properties.publicVisibility,visibility);assert.equal(row.placement.date,'2026-10-13');}
  const child=context.addSubtask('future-parent','Future step',{date:'2026-10-16',parentStart:'06:25',publicVisibility:visibility});
  assert.equal(child.publicVisibility,visibility);assert.equal(writes[3].properties.publicVisibility,visibility);assert.equal(writes[3].placement.date,'2026-10-16');assert.equal(writes[3].properties.start,'06:25');

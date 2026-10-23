@@ -149,7 +149,7 @@ test("every completion entry point runs the cascade, and only on complete", () =
   // card's own Complete. A fourth caller of setTaskCompletion that forgets this is the
   // realistic regression, which is why the count is asserted rather than the presence.
   const calls = ROUTES_SRC.match(/await cascadeWaitingCompletion\(\{/g) || [];
-  assert.equal(calls.length, 3, "expected the three completion entry points to cascade");
+  assert.equal(calls.length, 4, "three completion entry points plus reminder-only cleanup retry");
 
   assert.match(ROUTES_SRC, /body\.completed && !result\.duplicate && result\.task/,
     "the canonical route must skip the cascade on a reopen and on a deduped replay");

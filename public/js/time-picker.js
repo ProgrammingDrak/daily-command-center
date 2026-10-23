@@ -39,7 +39,7 @@
   }
 
   // --- shared overlay --------------------------------------------------------
-  var overlay = null, card = null, onClose = null;
+  var overlay = null, card = null, onClose = null, returnFocus = null;
   function ensureOverlay() {
     if (overlay) return;
     overlay = document.createElement("div");
@@ -50,7 +50,16 @@
     document.body.appendChild(overlay);
     overlay.addEventListener("click", function (e) { if (e.target === overlay) close(); });
     document.addEventListener("keydown", function (e) {
-      if (e.key !== "Escape" || !overlay.classList.contains("open")) return;
+      if (!overlay.classList.contains("open")) return;
+      if (e.key === "Tab") {
+        var items = Array.from(card.querySelectorAll('button:not([disabled]),[tabindex="0"]'));
+        var first = items[0], last = items[items.length - 1];
+        if (!card.contains(document.activeElement) || (e.shiftKey && document.activeElement === first) || (!e.shiftKey && document.activeElement === last)) {
+          e.preventDefault(); (e.shiftKey ? last : first)?.focus();
+        }
+        return;
+      }
+      if (e.key !== "Escape") return;
       // CONSUME it. The marker below tells a host's own dismissal listener to keep
       // out of the way, but a marker can only be read while it is still set, so it
       // only protects hosts whose listener runs BEFORE this one. Capture-phase
@@ -84,6 +93,11 @@
   function open(anchor, closeCb) {
     ensureOverlay();
     onClose = closeCb || null;
+    returnFocus = anchor || document.activeElement;
+    // A reusable picker may have been marked inert when its parent modal opened.
+    overlay.inert = false;
+    card.setAttribute("role", "dialog");card.setAttribute("aria-label", "Choose date or time");
+    requestAnimationFrame(function () { card.querySelector('[tabindex="0"],button')?.focus(); });
     overlay.classList.add("open");
     // This overlay floats ABOVE whatever opened it, and it lives in <body> --
     // a SIBLING of any anchored popover that owns the field being edited, not a
@@ -103,6 +117,8 @@
     overlay.removeAttribute("data-dcc-layer");
     var cb = onClose; onClose = null;
     if (cb) cb();
+    if (returnFocus && returnFocus.isConnected) returnFocus.focus({preventScroll:true});
+    returnFocus = null;
   }
 
   // --- one scroll-wheel column ----------------------------------------------

@@ -16,7 +16,7 @@
     var input = $("feedback-message");
     var status = $("feedback-status");
     var button = $("feedback-submit");
-    if (!input || !button) return;
+    if (!input || !button || button.disabled) return;
     var message = input.value.trim();
     if (!message) {
       if (status) status.textContent = "Write a note first.";
@@ -50,6 +50,10 @@
   window.dccOpenFeedback = function(){ setOpen(true); };
 
   document.addEventListener("DOMContentLoaded", function(){
+    var inbox = document.querySelector('a.admin-link[href="/admin"]');
+    if (inbox) fetch("/api/me").then(function(response){
+      return response.ok ? response.json() : {};
+    }).then(function(me){ inbox.hidden = me.isAdmin !== true; }).catch(function(){ inbox.hidden = true; });
     var close = $("feedback-close");
     var submit = $("feedback-submit");
     var input = $("feedback-message");

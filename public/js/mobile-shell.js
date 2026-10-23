@@ -80,7 +80,8 @@
   // Owner actions: each row triggers the existing header element's own handler,
   // so there is no duplicated logic. `find` returns the live source element.
   const MORE_ACTIONS = [
-    { label:"Admin",            icon:"⚙", find(){ return document.querySelector('a.admin-link[href="/admin"]'); } },
+    { label:"Shared tasks", icon:"👥", find(){ return byId("shared-tasks-open"); } },
+    { label:"Feedback inbox",   icon:"⚙", find(){ var link = document.querySelector('a.admin-link[href="/admin"]'); return link && !link.hidden ? link : null; } },
     { label:"Share list",       icon:"🔗", find(){ return byId("todo-share-open"); } },
     { label:"Refresh reactions",icon:"🔄", find(){ return byId("todo-reactions-toggle"); } },
     { label:"Sticky Notes",     icon:"📌", find(){ return byId("sn-open-btn"); } },
@@ -138,6 +139,14 @@
       sheet.appendChild(makeMoreRow(t.label, "📄", () => activateTab(t.tab)));
     });
 
+    const utilityTitle = document.createElement("div");
+    utilityTitle.className = "mmore-title";
+    utilityTitle.textContent = "Utilities";
+    sheet.appendChild(utilityTitle);
+    [{label:"Personal vault",tab:"vault"},{label:"People & sharing",tab:"social"}].forEach(t => {
+      sheet.appendChild(makeMoreRow(t.label,"📄",() => activateTab(t.tab)));
+    });
+
     const divider = document.createElement("div");
     divider.className = "mmore-divider";
     sheet.appendChild(divider);
@@ -161,7 +170,7 @@
   function syncActiveNav(){
     const active = document.querySelector(".tab.active");
     const key = active ? active.dataset.tab : null;
-    const overflow = ["delegated", "pet-home", "activity"];
+    const overflow = ["delegated", "pet-home", "activity", "vault", "social"];
     document.querySelectorAll("#mobile-tabbar .mtab").forEach(b => {
       const navKey = b.dataset.navKey;
       let on = false;
@@ -244,7 +253,7 @@
     // Keep nav active-state + badges in sync with the existing top tab strip.
     const tabBar = byId("tab-bar");
     if(tabBar){
-      tabBar.addEventListener("click", () => { closeMoreSheet(); setTimeout(() => { syncActiveNav(); syncBadges(); }, 0); });
+      document.addEventListener("click", e => { if(!e.target.closest(".tab[data-tab]"))return;closeMoreSheet();setTimeout(() => {syncActiveNav();syncBadges();},0); });
       new MutationObserver(() => { syncActiveNav(); syncBadges(); })
         .observe(tabBar, { subtree:true, childList:true, attributes:true, characterData:true });
     }

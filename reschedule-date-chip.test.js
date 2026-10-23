@@ -215,7 +215,7 @@ test("the shared picker marks its overlay while open and unmarks it on close", (
   const CLOSE = mustSlice(PICKER_SRC, /^ {2}function close\(\) \{[\s\S]*?\n {2}\}/m, "time-picker close");
   const ctx = makeContext();
   vm.runInContext(
-    "var overlay=null,card=null,onClose=null;function position(){}" +
+    "var overlay=null,card=null,onClose=null,returnFocus=null;function position(){}function requestAnimationFrame(fn){fn();}" +
     ENSURE + OPEN + CLOSE +
     "window.__tp={open:open,close:close,peek:function(){return overlay}};",
     ctx
@@ -622,4 +622,15 @@ test("preset picks populate the calendar value before invoking the pick writer",
   tomorrow.dispatchEvent({ type: "click", stopPropagation() {} });
   assert.equal(picked, "2026-09-03");
   assert.equal(tomorrow.getAttribute("aria-pressed"), "true");
+});
+
+test("an Unscheduled time pick schedules the existing task instead of reporting a pin",async()=>{
+  const calls=[];
+  const ctx=makeContext({viewDate:'2026-10-22',scheduled:[{id:'bankrate-fixture',title:'Test task',start:'00:00',end:'00:30',untimed:true}],
+    rescheduleTaskToDate:async(id,date,opts)=>calls.push({id,date,start:opts.pinnedStart}),
+    pinStartTime:()=>assert.fail('A pin cannot schedule untimed work')});
+  ctx.openSchedulePopover({mode:'reschedule',id:'bankrate-fixture',anchorEl:makeEl('button')});
+  const pop=ctx.document.body.children.at(-1),input=pop.querySelector('.resched-time-input');
+  input.value='12:00';input.dispatchEvent({type:'change'});
+  assert.deepEqual(calls,[{id:'bankrate-fixture',date:'2026-10-22',start:'12:00'}]);
 });

@@ -591,16 +591,17 @@ test("the anonymous POST answers 500 for an unexpected failure, and keeps its de
   assert.doesNotMatch(c, /e\.statusCode \|\| 400/);
 });
 
-// The cap is per (date, workspace) and the guest chose the date, so without a clamp it bounded
-// nothing: a script walks dates, 50 items each, minting a `dcc_state` row per date across every
-// date Postgres accepts. `isValidDate` is only a shape check with no range. The real client
-// never sends `date` at all, so clamping breaks nothing.
-test("a guest-chosen date is clamped to today or tomorrow, so the cap actually bounds", () => {
+// Legacy clients retain the today fallback; modern suggestions preserve the
+// requested day or reject it after checking for an already-accepted receipt.
+test("guest-chosen dates remain bounded to today or tomorrow", () => {
   const handler = SOCIAL_SRC.slice(SOCIAL_SRC.indexOf('app.post("/api/public/todo-share/:token/tasks"'));
   const region = handler.slice(0, handler.indexOf("appendPublicShareTriageItem"));
-  assert.match(region, /requestedDate === todayStr \|\| requestedDate === tomorrowStr/,
-    "an arbitrary guest date must not reach the writer");
-  assert.match(region, /: todayStr;/, "and anything else falls back to today");
+  assert.match(region, /allowedDates = \[todayStr, tomorrowStr\]/);
+  assert.match(region, /requestKey \? requestedDate : \(allowedDates\.includes\(requestedDate\) \? requestedDate : todayStr\)/,
+    "legacy dates fall back; modern requests are checked against the same bound in the receipt transaction");
+  const store = fs.readFileSync(require.resolve('./shared-task-suggestion-store'), 'utf8');
+  assert.ok(store.indexOf('if(prior)') < store.indexOf('!allowedDates.includes(date)'), 'accepted retries are checked first');
+  assert.ok(store.indexOf('!allowedDates.includes(date)') < store.indexOf('INSERT INTO dcc_state'), 'new unsupported dates are rejected before creating a day');
 });
 
 test("guest submissions are CAPPED, because this is a durable unauthenticated append", async () => {

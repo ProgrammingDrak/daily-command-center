@@ -3,20 +3,30 @@ document.querySelectorAll(".svt-btn").forEach(btn=>{
   btn.addEventListener("click",()=>{
     schedView=btn.dataset.view;
     try{localStorage.setItem("dcc-itinerary-view",schedView);}catch(e){}
-    document.querySelectorAll(".svt-btn").forEach(b=>b.classList.toggle("active",b.dataset.view===schedView));
-    document.getElementById("timeline").style.display=schedView==="plan"?"block":"none";
-    const listView=document.getElementById("list-view");
-    if(listView)listView.style.display=schedView==="list"?"flex":"none";
-    const calendarView=document.getElementById("calendar-view");
-    if(calendarView)calendarView.style.display=schedView==="calendar"?"block":"none";
-    document.getElementById("actual-view").style.display=schedView==="actual"?"block":"none";
-    if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
-    if(typeof buildScheduleTriage==="function")buildScheduleTriage();
-    if(schedView==="list")buildListView();
+    syncScheduleViewControls();
+    // A view switch only renders existing state; source loaders run on day load.
+    // In particular, do not materialize or reschedule tasks here.
+    if(["itinerary","list"].includes(schedView))buildListView();
     if(schedView==="calendar"&&typeof buildItineraryCalendar==="function")buildItineraryCalendar();
     if(schedView==="actual"){if(typeof buildDayReview==="function")buildDayReview(typeof viewDate!=="undefined"?viewDate:null);else buildActualView();}
   });
 });
+function syncScheduleViewControls(){
+    document.querySelectorAll(".sched-drag-hint").forEach(hint=>{hint.style.display=schedView==="list"?"none":"";});
+    document.querySelectorAll(".svt-btn").forEach(b=>{b.classList.toggle("active",b.dataset.view===schedView);b.setAttribute("aria-pressed",String(b.dataset.view===schedView));});
+    document.getElementById("timeline").style.display=schedView==="plan"?"block":"none";
+    const listView=document.getElementById("list-view");
+    if(listView)listView.style.display=["itinerary","list"].includes(schedView)?"flex":"none";
+    const calendarView=document.getElementById("calendar-view");
+    if(calendarView)calendarView.style.display=schedView==="calendar"?"block":"none";
+    document.getElementById("actual-view").style.display=schedView==="actual"?"block":"none";
+}
+// Restore without loading sources or writing tasks. Boot renders the chosen pane.
+try{
+  const saved=localStorage.getItem("dcc-itinerary-view");
+  if(["itinerary","list","calendar","actual"].includes(saved))schedView=saved;
+}catch(e){}
+syncScheduleViewControls();
 // The "Actual" tab is rendered by buildDayReview (day-review.js): one
 // blockStore-backed scheduled-vs-actual view that also supports past days and
 // time_entry editing. This shim keeps the legacy entry point working for the
@@ -669,7 +679,7 @@ function createTaskListRowRenderer(context){
     const r=isUnfRow?ev.__unf:null;
     // userMovable already excludes meetings/ooo/break (registry-aware). Carryover
     // rows are always draggable (their drops route through handleUnscheduledDrop).
-    const movable=!isDoneRow&&(isUnfRow||(userMovable(ev)&&!ev._locked));
+    const movable=!context.priorityView&&!isDoneRow&&(isUnfRow||(userMovable(ev)&&!ev._locked));
     const c=cfg(ev.type);
     const original=origDur(ev.id);
     const changed=original&&dur(ev)!==original;
@@ -753,15 +763,16 @@ function createTaskListRowRenderer(context){
       (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
       (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'');
     const el=renderItineraryListRow(ev,{
+      collaboration:!!(context.collaboration && (ev._blockId||ev.blockId)),
       done:isDoneRow,
       draggable:movable,
       inProgress:inProgress,
       completionBlocked:chkBlocked,
-      depth:node&&node.depth,
+      depth:context.priorityView?0:node&&node.depth,
       extraClass:(isUnfRow?"unfinished-row ":"")+(subRow?"sub ":"")+(isActive(ev)&&!isUnfRow?"active ":"")+(isRideAlong(ev)?"ride-along ":"")+(isWrap(ev)?"wrap-parent ":"")+(tt&&tt.cardClass?tt.cardClass+" ":"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?"row-bounty ":"")+(waitChip?"waiting-row":""),
       gripTitle:gripTitle,
       collapseHtml:chev,
-      titleExtrasHtml:dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip,
+      titleExtrasHtml:(context.priorityView&&DCC.TaskModel.parentIdOf(ev)?'<span class="priority-parent">In '+escHtml((context.parentById.get(DCC.TaskModel.parentIdOf(ev))||{}).title||"parent task")+'</span>':'')+dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip,
       metaHtml:metaHtml,
       barColor:isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#7c3aed)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)),
       actionsBeforeHtml:(!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+workButton,
@@ -776,7 +787,7 @@ function createTaskListRowRenderer(context){
       onCollapse:()=>{if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render("schedule");}},
       onOpen:()=>{if(context.onOpen){context.onOpen(ev);return;}if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);},
       onDragStart:(e)=>dStart(e,ev.id),onDragEnd:dEnd,
-      onDragOver:!isDoneRow?(e)=>dOver(e,ev.id):null,onDragLeave:!isDoneRow?dLeave:null,onDrop:!isDoneRow?(e)=>dDrop(e,ev.id):null,
+      onDragOver:!context.priorityView&&!isDoneRow?(e)=>dOver(e,ev.id):null,onDragLeave:!context.priorityView&&!isDoneRow?dLeave:null,onDrop:!context.priorityView&&!isDoneRow?(e)=>dDrop(e,ev.id):null,
       afterRender:(rowEl)=>{
         if(window.DCC&&window.DCC.Workout)window.DCC.Workout.attach(rowEl,ev);
         if(typeof wireTriageTaskSourceActions==="function")wireTriageTaskSourceActions(rowEl);
@@ -951,11 +962,33 @@ function renderTriageInto(listEl,model){
 }
 window.renderTriageInto=renderTriageInto;
 
+// The same day partition drives both views. List surfaces open unscheduled work
+// inline (Itinerary keeps it in the header drawer). Finished subtasks retain their
+// established home in parent details. A task's own priority determines its group,
+// independent of parent collapse state; no schedule or manual-order writes occur.
+function buildPriorityListView(wrap,model){
+  const parentById=new Map(model.day.visible.map(task=>[task.id,task]));
+  const row=createTaskListRowRenderer({pool:model.unfPool,isTodayView:model.isTodayView,priorityView:true,parentById});
+  const ordered=DCC.TaskModel.selectTree(model.day.timed.concat(_orderUnscheduled(model.day.unscheduled)),{pool:model.day.visible,isCollapsed:()=>false}).map(node=>node.ev);
+  const groups=DCC.TaskPriority.group(ordered);
+  groups.forEach(group=>{
+    const section=document.createElement("section");section.className="priority-list-group";section.dataset.priorityGroup=group.priority;
+    const heading=document.createElement("h3");heading.className="it-list-section";heading.id="priority-group-"+group.priority.toLowerCase();
+    heading.textContent=group.priority+" · "+group.tasks.length;section.setAttribute("aria-labelledby",heading.id);section.appendChild(heading);
+    group.tasks.forEach((task,index)=>{
+      const nestedSub=DCC.TaskModel.isSubtask(task)&&parentById.has(DCC.TaskModel.parentIdOf(task));
+      section.appendChild(row(task,index,isDone(task)?"done":"open",nestedSub?{rel:"subtask",depth:1}:null));
+    });
+    if(!group.tasks.length){const empty=document.createElement("div");empty.className="priority-list-empty";empty.textContent="No "+group.priority.toLowerCase()+" priority tasks";section.appendChild(empty);}
+    wrap.appendChild(section);
+  });
+}
 function buildListView(){
   const wrap=document.getElementById("list-view");
   if(!wrap)return;
   wrap.innerHTML="";
   const model=_itineraryListModel();
+  if(schedView==="list"){buildPriorityListView(wrap,model);return;}
   const {viewDate,isTodayView,unfPool,day}=model;
   const visible=day.visible;
   // The old `doneItems` here was DEAD -- computed and never read; buildListView
@@ -994,7 +1027,7 @@ function buildListView(){
     wrap.appendChild(el);
   }
 
-  const row=createTaskListRowRenderer({pool:unfPool,isTodayView});
+  const row=createTaskListRowRenderer({pool:unfPool,isTodayView,collaboration:true});
   function emitNode(node,idx,mode){return row(node.ev,_isSubRow(node)?0:idx,mode,node);}
   // Idle-gap marker between two spaced-out timed rows (fixed tiny height; see
   // .it-list-gap CSS). Label via ms() -> "45m" / "1h 30m".
@@ -1217,7 +1250,7 @@ function buildSchedule(){
       timeRange:f12(ev.start)+' - '+f12(ev.end),
       trailingHtml:(window.todoShareCompactFeedbackHtml?window.todoShareCompactFeedbackHtml(ev):''),
       onCheck:()=>toggleDone(ev.id),
-      afterRender:el=>{const rb=el.querySelector(".review-badge");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();openReviewPopover(rb)});}
+      afterRender:el=>{window.DCC?.SharedTasks?.attach(el,ev);const rb=el.querySelector(".review-badge");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();openReviewPopover(rb)});}
     });
     tl.appendChild(el);
   });
@@ -1301,6 +1334,7 @@ function buildSchedule(){
     const pinnedStyle = isPinnedActive && typeof getPinnedOverdueStyle === "function" ? getPinnedOverdueStyle(ev) : null;
     const active=!!isFocusActive;
     const el=renderItineraryCard(ev,{
+      collaboration:!!(ev._blockId||ev.blockId),
       node:node,active:active,isPinnedActive:isPinnedActive,pinnedStyle:pinnedStyle,isToday:isToday,
       variant:isSubNode?"sub":undefined,
       canEditBounty:(typeof viewMode==="undefined"||viewMode!=="archive"),

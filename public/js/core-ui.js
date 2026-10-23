@@ -206,7 +206,7 @@
         if (!goBack()) close("escape");
         return;
       }
-      if (event.key !== "Tab" || !blocking) return;
+      if (event.key !== "Tab" || !blocking || layerAboveOpen()) return;
       const items = visibleFocusable(panel);
       if (!items.length) { event.preventDefault(); panel.focus(); return; }
       const first = items[0];

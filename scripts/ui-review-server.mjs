@@ -17,6 +17,10 @@ const root = path.resolve(here, "..");
 const port = Number(process.env.PORT || 8099);
 const app = express();
 app.use(express.json());
+if (process.env.DCC_WAITING_REVIEW === '1') {
+  const { default: mountWaitingReview } = await import('./waiting-review-backend.js');
+  await mountWaitingReview(app);
+}
 if (process.env.DCC_REVIEW_COMMITMENTS === "1") {
   const { default: mountCommitmentReview } = await import("./commitment-review-backend.js");
   await mountCommitmentReview(app);
@@ -66,7 +70,10 @@ function localDateKey(date = new Date()) {
 function liveReviewBlocks() {
   return [...reviewBlocks.values()].filter((block) => !block.deleted_at);
 }
-if (process.env.DCC_REVIEW_TASK_DETAILS === '1') seedTaskDetailReview(reviewBlocks, localDateKey(new Date()));
+if (process.env.DCC_REVIEW_TASK_DETAILS === '1') {
+  seedTaskDetailReview(reviewBlocks, localDateKey(new Date()));
+  app.post('/api/review/task-details/reset',(_req,res)=>{reviewBlocks.clear();seedTaskDetailReview(reviewBlocks,localDateKey(new Date()));res.json({ok:true});});
+}
 if (process.env.DCC_REVIEW_HIERARCHY === '1') seedHierarchyReview(reviewBlocks, localDateKey(new Date()));
 if (process.env.DCC_REVIEW_HIERARCHY === '1') app.post('/api/review/hierarchy/reset',(_req,res)=>{reviewBlocks.clear();seedHierarchyReview(reviewBlocks,localDateKey(new Date()));res.json({ok:true});});
 
@@ -300,12 +307,20 @@ app.get('/api/blocks/:id', (req,res) => {
 app.patch("/api/blocks/:id", (req, res) => {
   const block = reviewBlocks.get(req.params.id);
   if (!block || block.deleted_at) return res.status(404).json({ error: "Block not found" });
+  // Mirror the production field-only priority contract. Returning an unchanged
+  // row here makes the real client correctly reject its save acknowledgement.
+  const priorityOnly = Object.hasOwn(req.body || {}, "taskPriority");
+  if (priorityOnly && (!["Low", "Medium", "High"].includes(req.body.taskPriority)
+      || ["properties", "date", "parent_id", "sort_order", "completionIntent", "completionMutationId", "completionBaseRevision"]
+        .some(key => req.body[key] !== undefined))) {
+    return res.status(400).json({ error: "Priority requires a separate Low, Medium, or High edit" });
+  }
   const next = {
     ...block,
     ...(Object.hasOwn(req.body || {}, "date") ? { date: req.body.date } : {}),
     ...(Object.hasOwn(req.body || {}, "parent_id") ? { parent_id: req.body.parent_id } : {}),
     ...(Object.hasOwn(req.body || {}, "sort_order") ? { sort_order: req.body.sort_order } : {}),
-    properties: req.body?.properties || block.properties,
+    properties: priorityOnly ? { ...block.properties, taskPriority: req.body.taskPriority } : req.body?.properties || block.properties,
     updated_at: new Date().toISOString(),
   };
   if (process.env.DCC_REVIEW_HIERARCHY === '1') {

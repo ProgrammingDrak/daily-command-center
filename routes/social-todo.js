@@ -9,6 +9,52 @@ module.exports = function mount(app, ctx) {
 // download in public/js/public-todo-share.js). Pure + UMD, so requiring the
 // browser file here is deliberate, not a layering accident.
 const shareExport = require("../public/js/share-export.js");
+const rewardConditions = require("../public/js/reward-conditions");
+const suggestionStore = require("../shared-task-suggestion-store");
+const conditionalRewards = require("../conditional-reward-store").createConditionalRewardStore({
+  pool, enqueueReward: (...args) => socialStore.enqueueReward(...args),
+  // Build non-transactional enrichment before borrowing a transaction connection.
+  // Eligibility itself reads/locks current task rows on that connection.
+  prepareTasks: offer => buildDayResponse(coerceDateString(offer.task_date), null, offer.workspace_id),
+  async resolveTasks(offer, client, state) {
+    // Freeze the relevant rows/legacy day overlay through award commit. A
+    // concurrent reopen/delete/private change serializes before or after earning.
+    const date = coerceDateString(offer.task_date);
+    const blockIds = rewardConditions.leaves(offer.offer_settings.condition).map(n => n.blockId).filter(Boolean);
+    const { rows: lockedRows } = await client.query(`SELECT id, type, date, properties, deleted_at FROM blocks WHERE workspace_id=$1
+      AND (id=ANY($2::text[]) OR (date=$3::date AND type='day_root')) ORDER BY id FOR SHARE`,
+      [offer.workspace_id, blockIds, date]);
+    const blocksById = new Map(lockedRows.map(row => [row.id, row]));
+    const legacyDoneIds = new Set(lockedRows.filter(row => row.type === "day_root" && !row.deleted_at)
+      .flatMap(row => [...(row.properties?._done?.ids || []), ...Object.keys(row.properties?._done?.at || {})]).map(String));
+    const { rows: [share] } = await client.query("SELECT * FROM todo_shares WHERE id=$1 AND workspace_id=$2 AND active=TRUE FOR SHARE", [offer.share_id, offer.workspace_id]);
+    if (!share) return new Map();
+    // Only the current canonical projection can establish day membership. A
+    // prepared timeline may still contain a completed twin after a move/undo.
+    const canonicalBlockIds = new Set();
+    const view = await buildPublicTodoShare(share, date, null, { state, exec: client, canonicalBlockIds });
+    const states = new Map();
+    for (const leaf of rewardConditions.leaves(offer.offer_settings.condition)) {
+      const task = findPublicShareTask(view.tasks, leaf.taskId);
+      if (!leaf.blockId) {
+        states.set(leaf.taskId, !!task && task.status === "done");
+        continue;
+      }
+      const block = blocksById.get(leaf.blockId);
+      const props = block?.properties || {};
+      const eligible = !!task && task.blockId === leaf.blockId && !!block && !block.deleted_at
+        && canonicalBlockIds.has(block.id) && (!block.date || coerceDateString(block.date) === date)
+        && props.publicVisibility !== "private" && !["workout", "meal"].includes(props.type);
+      // Archive-day overlays remain valid for unmigrated rows, but an explicit
+      // canonical reopen (revision present) always supersedes legacy evidence.
+      const legacyDone = !props._completionRevision && !!task
+        && task.identityIds.some(id => legacyDoneIds.has(String(id)));
+      states.set(leaf.taskId, eligible && (blockDB.isCompletedTaskProps(props) || legacyDone));
+    }
+    return states;
+  }
+});
+
 
 // ── Live Todo Share API ──
 function makeShareToken() {
@@ -27,12 +73,17 @@ function centsFromBody(value) {
 
 function todoActorKey(req) {
   if (req.session?.userId) return `user:${req.session.userId}`;
+  if (req.session?.todoActorKey) return req.session.todoActorKey;
   const raw = [
     getRequestOrigin(req),
     String(req.headers["user-agent"] || "").slice(0, 300),
     req.sessionID || ""
   ].join("|");
-  return "guest:" + crypto.createHash("sha256").update(raw).digest("hex").slice(0, 32);
+  const actor = "guest:" + crypto.createHash("sha256").update(raw).digest("hex").slice(0, 32);
+  // saveUninitialized:false otherwise gives an anonymous browser a new identity
+  // on each request. Keep the existing hash for current sessions and persist it.
+  if (req.session) req.session.todoActorKey = actor;
+  return actor;
 }
 
 function localHHMMFromDate(date = new Date()) {
@@ -71,6 +122,7 @@ async function ensureTodoShareTables() {
       last_viewed_at TIMESTAMPTZ
     )
   `);
+  await pool.query(suggestionStore.SCHEMA_SQL);
   await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_shares_workspace_active ON todo_shares(workspace_id, active, created_at DESC)");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS todo_sponsorships (
@@ -96,6 +148,9 @@ async function ensureTodoShareTables() {
   `);
   await pool.query("ALTER TABLE todo_sponsorships ADD COLUMN IF NOT EXISTS task_date DATE");
   await pool.query("ALTER TABLE todo_sponsorships ADD COLUMN IF NOT EXISTS offer_settings JSONB NOT NULL DEFAULT '{}'::jsonb");
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_sponsor_request
+    ON todo_sponsorships(share_id, (offer_settings->>'actorKey'), (offer_settings->>'requestKey'))
+    WHERE offer_settings ? 'requestKey'`);
   await pool.query("ALTER TABLE todo_sponsorships ADD COLUMN IF NOT EXISTS slot_reward_id INTEGER REFERENCES slot_rewards(id)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_sponsorships_workspace_status ON todo_sponsorships(workspace_id, status, created_at DESC)");
   await pool.query(`
@@ -341,9 +396,9 @@ async function getPublicCalendarMap() {
 // Resolve the workspace tag taxonomy (id -> {name,color}) so guest itinerary
 // cards can show the same tag chips the owner sees. Mirrors the client tag index
 // (buildTagIndex), which is keyed by block id.
-async function getPublicTagMap(workspaceId) {
+async function getPublicTagMap(workspaceId, exec = pool) {
   try {
-    const { rows } = await pool.query(
+    const { rows } = await exec.query(
       `SELECT id, properties
          FROM blocks
         WHERE workspace_id = $1 AND type = 'tag' AND deleted_at IS NULL`,
@@ -434,7 +489,8 @@ function normalizePublicTask(input, doneIds, calendarsById = new Map(), opts = {
 // queries 31 times (getPublicCalendarMap has no WHERE clause at all).
 async function buildPublicTodoShare(share, dateStr, req, shared) {
   const date = isValidDate(dateStr) ? dateStr : getTodayStr();
-  const state = await buildDayResponse(date, null, share.workspace_id);
+  const exec = shared?.exec || pool;
+  const state = shared?.state || await buildDayResponse(date, null, share.workspace_id);
   // ONE day read, split locally. `getBlocksByDateIncludingDeleted` is a strict superset of
   // `getBlocksByDate` (same table, same date, same order; only the `deleted_at IS NULL`
   // predicate differs), and this handler is genuinely hot: public-todo-share.js polls
@@ -457,14 +513,14 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
   // re-polls in 15s, so refusing to publish is cheap and correct.
   let allRows;
   try {
-    allRows = await blockDB.getBlocksByDateIncludingDeleted(date, share.workspace_id);
+    allRows = await blockDB.getBlocksByDateIncludingDeleted(date, share.workspace_id, shared?.exec);
   } catch (e) {
     console.error("[public-share] tombstone read failed for " + date + ", refusing to publish:", e.message);
     throw e;
   }
   // Only global Triage trees belong in this dated view, never backlog or Loose Ends.
   const poolRows=typeof blockDB.getRescheduleSubtreePool==="function"
-    ?await blockDB.getRescheduleSubtreePool(date,share.workspace_id,{includeTriageRoots:true}):[];
+    ?await blockDB.getRescheduleSubtreePool(date,share.workspace_id,{includeTriageRoots:true,client:shared?.exec}):[];
   const globalIds=new Set();
   for(const row of poolRows){
     if(!row.date && row.properties?.triageBlock && !row.properties.subtaskOf && !row.properties.wrapId && !row.parent_id && row.properties.kind!=="backlog" && !row.deleted_at){
@@ -533,7 +589,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
     if (aliases.some(id => hiddenIds.has(id))) aliases.forEach(id => hiddenIds.add(id));
   }
   const calendarsById = (shared && shared.calendarsById) || await getPublicCalendarMap();
-  const tagsById = (shared && shared.tagsById) || await getPublicTagMap(share.workspace_id);
+  const tagsById = (shared && shared.tagsById) || await getPublicTagMap(share.workspace_id, exec);
   const tasks = [];
   const seen = new Set();
   const addTask = (task) => {
@@ -585,6 +641,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
       kind
     }, doneIds, calendarsById, { redacted, tagsById });
     addTask(task);
+    shared?.canonicalBlockIds?.add(block.id);
   }
 
   for (const item of ((state.schedule && state.schedule.timeline) || [])) {
@@ -640,8 +697,8 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
   }
 
 
-  const { rows: sponsors } = await pool.query(
-    `SELECT id, task_id, task_date, task_title, sponsor_name, sponsor_user_id, kind, reward_title, note, value_cents, status, created_at
+  const { rows: sponsors } = await exec.query(
+    `SELECT id, task_id, task_date, task_title, sponsor_name, sponsor_user_id, kind, reward_title, note, value_cents, status, created_at, offer_settings
        FROM todo_sponsorships
       WHERE share_id = $1 AND COALESCE(offer_settings->>'private','false') <> 'true'
       ORDER BY created_at DESC
@@ -654,7 +711,11 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
   const viewerUserId = req?.session?.userId || null;
   const sponsorByTask = new Map();
   for (const s of sponsors) {
-    const key = String(s.task_id);
+    const saved = s.offer_settings?.condition;
+    if (saved && coerceDateString(s.task_date) !== date) continue;
+    const memberIds = saved ? rewardConditions.leaves(rewardConditions.normalize(saved)).map(n => n.taskId) : [String(s.task_id)];
+    const conditionText = saved ? rewardConditions.describe(saved, n => findPublicShareTask(tasks, n.taskId)?.title || "Unavailable task") : null;
+    for (const key of memberIds) {
     if (!sponsorByTask.has(key)) sponsorByTask.set(key, []);
     sponsorByTask.get(key).push({
       id: s.id,
@@ -665,11 +726,12 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
       valueCents: s.value_cents,
       status: s.status,
       createdAt: s.created_at,
-      mine: !!(viewerUserId && s.sponsor_user_id === viewerUserId)
+      mine: !!(viewerUserId && s.sponsor_user_id === viewerUserId), conditionText
     });
+    }
   }
   for (const task of tasks) task.sponsorships = sponsorByTask.get(String(task.id)) || [];
-  const { rows: reactionRows } = await pool.query(
+  const { rows: reactionRows } = await exec.query(
     `SELECT task_id, task_date, task_block_id, task_title, identity_ids, emoji, COUNT(*)::int AS count
        FROM todo_task_reactions
       WHERE share_id = $1
@@ -681,7 +743,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
   reactionRows.forEach(row => addReactionToMap(reactionByTask, row));
   const actorKey = req ? todoActorKey(req) : "";
   const { rows: viewerReactionRows } = actorKey
-    ? await pool.query(
+    ? await exec.query(
         `SELECT task_id, emoji
            FROM todo_task_reactions
           WHERE share_id = $1
@@ -696,7 +758,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
     if (!viewerByTask.has(taskId)) viewerByTask.set(taskId, []);
     viewerByTask.get(taskId).push(row.emoji);
   }
-  const { rows: commentRows } = await pool.query(
+  const { rows: commentRows } = await exec.query(
     `SELECT task_id, task_date, task_block_id, task_title, identity_ids, body, author_name, author_kind, created_at
        FROM todo_task_comments
       WHERE share_id = $1
@@ -715,7 +777,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
     task.comments = comment && comment.items ? comment.items : [];
   }
   tasks.sort((a, b) => (a.status === "done") - (b.status === "done") || (a.start || "99:99").localeCompare(b.start || "99:99"));
-  const { rows: rewardRows } = await pool.query(
+  const { rows: rewardRows } = await exec.query(
     `SELECT id, title, kind, value_cents, public_visibility, expires_at, uses_remaining
        FROM slot_rewards
       WHERE workspace_id = $1
@@ -743,6 +805,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
   const tier = capabilities.resolveTier(req);
   return {
     date,
+    timeZone: APP_TIME_ZONE,
     workspaceName: share.workspace_name || "Daily Command Center",
     ownerUsername: share.owner_username || "",
     updatedAt: new Date().toISOString(),
@@ -764,7 +827,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
     // Re-project associated records against CURRENT task visibility. A stored
     // title or old discussion is never a back door around a later private flag.
     sponsorships: sponsors.filter(s => tasks.some(t => String(t.id) === String(s.task_id)))
-      .map(({ task_title, reward_title, note, sponsor_user_id, ...rest }) => ({ ...rest,
+      .map(({ task_title, reward_title, note, sponsor_user_id, offer_settings: _offer_settings, ...rest }) => ({ ...rest,
         task_title: tasks.find(t => String(t.id) === String(rest.task_id)).title,
         reward_title, note })),
     stats: {
@@ -794,7 +857,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
 // routes/dcc.js were repointed: `saveDccState` is `DO UPDATE SET state_json =
 // EXCLUDED.state_json`, so basing the write on a stale file would full-replace the real day
 // with it. Async because of that read; the single caller awaits.
-async function appendPublicShareTriageItem({ share, date, title, durationMinutes, visitorName, visitorEmail, note, req }) {
+async function appendPublicShareTriageItem({ share, date, title, durationMinutes, visitorName, visitorEmail, note, req, suggestedTime = null, requestKey = null, fingerprint = null, allowedDates = null }) {
   const now = new Date().toISOString();
   const localId = "public-" + crypto.randomUUID();
   const item = {
@@ -806,8 +869,9 @@ async function appendPublicShareTriageItem({ share, date, title, durationMinutes
     source_ref: todoShareUrl(req, share.token),
     source_id: localId,
     title,
-    summary: note,
+    summary: suggestedTime ? `Suggested time: ${suggestedTime} (${APP_TIME_ZONE}). ${note}`.trim() : note,
     notes: note,
+    ...(suggestedTime ? { suggested_time: suggestedTime, suggested_date: date, suggested_timezone: APP_TIME_ZONE } : {}),
     priority: "medium",
     escalation: "normal",
     received_at: now,
@@ -823,6 +887,7 @@ async function appendPublicShareTriageItem({ share, date, title, durationMinutes
     createdByGuestEmail: visitorEmail
   };
 
+  if (requestKey) return suggestionStore.recordSuggestion({pool,share,date,item,requestKey,fingerprint,allowedDates,skeleton:buildSkeletonState(date)});
   const dayFile = getDayFilePath(date);
   // ── This is an UNAUTHENTICATED writer, and `saveDccState` is a FULL REPLACE ──
   //
@@ -1176,8 +1241,11 @@ app.post("/api/social/sponsorships/:id/remove", route(req =>
   socialStore.removeSponsorship(intParam(req, "id"), req.session.userId)));
 
 // ── Reward queue ──
-app.get("/api/social/rewards/queue", route(req =>
-  socialStore.listRewardQueue(req.session.userId, { status: req.query.status || null })));
+app.get("/api/social/rewards/queue", route(async req => {
+  await ensureTodoShareTables();
+  await conditionalRewards.reconcile(req.workspaceId, req.session.userId);
+  return socialStore.listRewardQueue(req.session.userId, { status: req.query.status || null });
+}));
 
 app.post("/api/social/rewards/queue/:id/claim", route(req =>
   socialStore.claimReward(intParam(req, "id"), req.session.userId)));
@@ -1234,10 +1302,12 @@ app.post("/api/social/feed/:id/hide", route(req =>
 app.get("/api/todo-share/sponsorships", async (req, res) => {
   try {
     await ensureTodoShareTables();
+    await conditionalRewards.reconcile(req.workspaceId, req.session?.userId || 0);
     const { rows } = await pool.query(
       `SELECT *
          FROM todo_sponsorships
         WHERE workspace_id = $1
+          AND accountability_commitment_id IS NULL
         ORDER BY created_at DESC
         LIMIT 100`,
       [req.workspaceId]
@@ -1310,6 +1380,14 @@ app.post("/api/todo-share/sponsorships/:id/status", async (req, res) => {
     );
     if (!existingRows[0]) { await client.query("ROLLBACK"); return res.status(404).json({ error: "Sponsorship not found" }); }
     let sponsorship = existingRows[0];
+    if (sponsorship.accountability_commitment_id) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "Manage this offer from its itinerary collaboration" });
+    }
+    if (sponsorship.offer_settings?.condition && sponsorship.status === "earned") {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "This reward is already earned; manage it in the reward queue" });
+    }
     if (sponsorship.status === status) {
       await client.query("COMMIT");
       return res.json({ sponsorship, reward: null, bounty: null });
@@ -1326,7 +1404,7 @@ app.post("/api/todo-share/sponsorships/:id/status", async (req, res) => {
       // Activation occurs only after the owner approves.
       bounty = await activateTodoShareBounty(sponsorship, userId, client);
     }
-    if (status === "approved" && sponsorship.kind === "reward") {
+    if (status === "approved" && sponsorship.kind === "reward" && !sponsorship.offer_settings?.condition) {
       const applied = await applyTodoShareReward(sponsorship, req.workspaceId, sponsorship.offer_settings || {}, client);
       reward = applied.reward;
       slotRewardId = applied.slotRewardId;
@@ -1334,7 +1412,7 @@ app.post("/api/todo-share/sponsorships/:id/status", async (req, res) => {
     if (status === "dismissed" && sponsorship.kind === "bounty") {
       await revokeTodoShareBounty(sponsorship, userId, client);
     }
-    if (status === "dismissed" && sponsorship.kind === "reward" && slotRewardId) {
+    if (status === "dismissed" && sponsorship.kind === "reward" && slotRewardId && !sponsorship.offer_settings?.condition) {
       // Remove this sponsor's split; soft-delete the reward if nothing remains.
       const { rows: rewardRows } = await client.query(
         "SELECT * FROM slot_rewards WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE",
@@ -1342,12 +1420,17 @@ app.post("/api/todo-share/sponsorships/:id/status", async (req, res) => {
       );
       const existingReward = rewardRows[0];
       if (existingReward) {
-        const splits = (Array.isArray(existingReward.sponsor_splits) ? existingReward.sponsor_splits : [])
+        const priorSplits = Array.isArray(existingReward.sponsor_splits) ? existingReward.sponsor_splits : [];
+        const splits = priorSplits
           .filter(split => String(split && split.sponsorshipId) !== String(sponsorship.id));
-        if (!splits.length) {
-          await client.query("UPDATE slot_rewards SET deleted_at = NOW(), active = FALSE, updated_at = NOW() WHERE workspace_id = $1 AND id = $2", [req.workspaceId, slotRewardId]);
-        } else {
-          await client.query("UPDATE slot_rewards SET sponsor_splits = $3, updated_at = NOW() WHERE workspace_id = $1 AND id = $2", [req.workspaceId, slotRewardId, JSON.stringify(splits)]);
+        // A pending/rejected reference did not contribute a split. It must not
+        // delete or rewrite an unrelated reward already in the owner's catalog.
+        if (splits.length !== priorSplits.length) {
+          if (!splits.length) {
+            await client.query("UPDATE slot_rewards SET deleted_at = NOW(), active = FALSE, updated_at = NOW() WHERE workspace_id = $1 AND id = $2", [req.workspaceId, slotRewardId]);
+          } else {
+            await client.query("UPDATE slot_rewards SET sponsor_splits = $3, updated_at = NOW() WHERE workspace_id = $1 AND id = $2", [req.workspaceId, slotRewardId, JSON.stringify(splits)]);
+          }
         }
 
       }
@@ -1696,23 +1779,28 @@ app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
     const share = await findTodoShareByToken(req.params.token);
     if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
     const body = req.body || {};
+    const requestKey = body.requestKey == null ? null : body.requestKey;
+    if (requestKey != null && (typeof requestKey !== "string" || !/^[a-zA-Z0-9_-]{16,80}$/.test(requestKey))) return res.status(400).json({error:"Invalid suggestion request key"});
+    const suggestedTime = body.suggestedTime || null;
+    if (suggestedTime != null && (typeof suggestedTime !== "string" || !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(suggestedTime))) return res.status(400).json({error:"Choose a valid suggested time"});
+    if (requestKey && (!Number.isInteger(Number(body.durationMinutes)) || Number(body.durationMinutes)<1 || Number(body.durationMinutes)>240)) return res.status(400).json({error:"Choose a duration from 1 to 240 minutes"});
+    const fingerprint = requestKey ? crypto.createHash("sha256").update(JSON.stringify(body)).digest("hex") : null;
     const title = String(body.title || "").trim().slice(0, 220);
     if (!title) return res.status(400).json({ error: "Task title is required" });
     const durationMinutes = Math.max(1, Math.min(240, Math.round(Number(body.durationMinutes || body.duration || 30) || 30)));
     const visitorName = String(body.visitorName || body.visitor_name || "").trim().slice(0, 80);
     const visitorEmail = String(body.visitorEmail || body.visitor_email || "").trim().slice(0, 180);
     const note = String(body.note || "").trim().slice(0, 1000);
-    // CLAMPED to today or tomorrow. The 50-item cap is per (date, workspace) and the guest
-    // chose the date, so without this it bounded nothing: a script walks dates, 50 items each,
-    // minting a `dcc_state` row per date across every date Postgres accepts. `isValidDate` is
-    // only a shape check (`/^\d{4}-\d{2}-\d{2}$/`, no range). Costs nothing to close — the real
-    // client never sends `date` at all (public-todo-share.js posts name, email, title,
-    // durationMinutes, note), so an arbitrary one is a stale client or an attempt to spread
-    // past the cap.
+    // Keep the 50-item per-day cap bounded to today/tomorrow. Modern clients
+    // send the viewed date: reject unsupported new suggestions instead of
+    // silently moving them. The store checks existing receipts first so a lost
+    // accepted response remains retryable across midnight. Legacy clients keep
+    // their historical today fallback, including when they omit the date.
     const todayStr = getTodayStr();
     const tomorrowStr = new Date(new Date(`${todayStr}T12:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10);
-    const requestedDate = isValidDate(body.date) ? body.date : todayStr;
-    const date = (requestedDate === todayStr || requestedDate === tomorrowStr) ? requestedDate : todayStr;
+    const requestedDate = body.date == null ? todayStr : body.date;
+    const allowedDates = [todayStr, tomorrowStr];
+    const date = requestKey ? requestedDate : (allowedDates.includes(requestedDate) ? requestedDate : todayStr);
     // AWAITED as of C5b: the writer persists to Postgres now, and its DB save throws on
     // failure. Without the await this handler would answer 201 for a task that never landed,
     // and the enclosing catch (which turns it into a 500) would never see the rejection.
@@ -1724,7 +1812,7 @@ app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
       visitorName,
       visitorEmail,
       note,
-      req
+      req, suggestedTime, requestKey, fingerprint, allowedDates
     });
     broadcast("dcc-state-changed", { source: "public-todo-triage", date }, share.workspace_id);
     broadcast("todo-share-changed", { action: "public-triage-create", id: triageItem.id }, share.workspace_id);
@@ -1763,9 +1851,24 @@ app.post("/api/public/todo-share/:token/sponsorships", async (req, res) => {
         requiredTier: capabilities.CAPABILITY_MIN_TIER[capability]
       });
     }
+    let requestKey = null, actorKey = null, fingerprint = null;
+    if (body.requestKey != null) {
+      if (typeof body.requestKey !== "string" || !/^[a-zA-Z0-9_-]{16,80}$/.test(body.requestKey)) return res.status(400).json({ error: "Invalid offer request key" });
+      requestKey = body.requestKey; actorKey = req.session?.userId ? `user:${req.session.userId}` : "guest";
+      fingerprint = crypto.createHash("sha256").update(JSON.stringify(body)).digest("hex");
+      const { rows: [existing] } = await pool.query(`SELECT * FROM todo_sponsorships WHERE share_id=$1
+        AND offer_settings->>'actorKey'=$2 AND offer_settings->>'requestKey'=$3`, [share.id, actorKey, requestKey]);
+      if (existing) {
+        if (existing.offer_settings.fingerprint !== fingerprint) return res.status(409).json({ error: "This request was already used for a different offer" });
+        return res.status(200).json({ id: existing.id, status: existing.status, duplicate: true });
+      }
+    }
+    if (body.condition != null && (kind !== "reward" || body.target === "slot" || body.rewardTarget === "slot")) return res.status(400).json({ error: "Task conditions apply only to task rewards" });
+    let condition = null;
     const sponsorName = String(body.sponsorName || body.sponsor_name || req.session?.username || "").trim().slice(0, 80);
     // Reward offers can target a specific task or the slot machine directly.
     const rewardTarget = kind === "reward" && String(body.target || body.rewardTarget || "").toLowerCase() === "slot" ? "slot" : "task";
+    if (body.condition != null && rewardTarget !== "task") return res.status(400).json({ error: "Task conditions apply only to task rewards" });
     let taskId = String(body.taskId || body.task_id || "").trim().slice(0, 200);
     let taskTitle = String(body.taskTitle || body.task_title || "").trim().slice(0, 220);
     let taskBlockId = null;
@@ -1774,10 +1877,18 @@ app.post("/api/public/todo-share/:token/sponsorships", async (req, res) => {
     const taskDate = isValidDate(requestedDate) ? requestedDate : getTodayStr();
     if (rewardTarget === "task") {
       const view = await buildPublicTodoShare(share, taskDate, req);
+      if (body.condition != null) {
+        if (!requestKey) return res.status(400).json({ error: "A request key is required for grouped rewards" });
+        condition = rewardConditions.normalize(body.condition, id => {
+          const selected = findPublicShareTask(view.tasks, id);
+          return selected && { taskId: String(selected.id), blockId: selected.blockId || null, title: selected.title };
+        });
+        taskId = rewardConditions.leaves(condition)[0].taskId;
+      }
       const target = findPublicShareTask(view.tasks, taskId);
       if (!target) return res.status(404).json({ error: "Task unavailable on this shared list" });
       taskId = target.id;
-      taskTitle = target.title;
+      taskTitle = condition ? rewardConditions.describe(condition).slice(0, 220) : target.title;
       taskBlockId = target.blockId || null;
     }
     // Private flag and slot-machine lifespan (expiry date and/or win-count cap).
@@ -1837,7 +1948,7 @@ app.post("/api/public/todo-share/:token/sponsorships", async (req, res) => {
       `INSERT INTO todo_sponsorships
        (workspace_id, share_id, task_id, task_date, task_block_id, task_title, sponsor_name, sponsor_email, sponsor_user_id, kind, reward_title, note, value_cents, slot_reward_id, offer_settings, status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending')
-       RETURNING *`,
+       ON CONFLICT DO NOTHING RETURNING *`,
       [
         share.workspace_id,
         share.id,
@@ -1853,15 +1964,20 @@ app.post("/api/public/todo-share/:token/sponsorships", async (req, res) => {
         String(body.note || "").trim().slice(0, 1000),
         centsFromBody(body.value || body.valueDollars || body.value_dollars),
         slotRewardId,
-        JSON.stringify({ private: rewardPrivate, expiresAt: rewardExpiresAt, usesRemaining: rewardUses })
+        JSON.stringify({ private: rewardPrivate, expiresAt: rewardExpiresAt, usesRemaining: rewardUses, ...(condition ? { condition } : {}), ...(requestKey ? { requestKey, actorKey, fingerprint } : {}) })
       ]
     );
-    const sponsorship = rows[0];
+    let sponsorship = rows[0];
+    if (!sponsorship && requestKey) {
+      const retry = await pool.query(`SELECT * FROM todo_sponsorships WHERE share_id=$1 AND offer_settings->>'actorKey'=$2 AND offer_settings->>'requestKey'=$3`, [share.id, actorKey, requestKey]);
+      sponsorship = retry.rows[0];
+      if (!sponsorship || sponsorship.offer_settings.fingerprint !== fingerprint) return res.status(409).json({ error: "This request was already used for a different offer" });
+    }
     // Offers require the owner's existing approval path; nothing activates here.
     const reward = null;
     const bounty = null;
     broadcast("todo-share-changed", { action: "sponsorship-create", id: sponsorship.id }, share.workspace_id);
-    res.status(201).json({ ...sponsorship, reward, bounty });
+    res.status(201).json({ ...sponsorship, offer_settings: { private: rewardPrivate, expiresAt: rewardExpiresAt, usesRemaining: rewardUses, ...(condition ? { condition } : {}) }, reward, bounty });
   } catch (e) {
     // ANONYMOUS endpoint, same convention as the share GET and the guest task POST. C5b is what
     // made this reachable: `buildPublicTodoShare` now THROWS on a failed tombstone read and
@@ -2033,4 +2149,5 @@ app.post("/api/public/todo-share/:token/comments", async (req, res) => {
   }
 });
 
+return { activate: activateTodoShareBounty, revoke: revokeTodoShareBounty };
 };

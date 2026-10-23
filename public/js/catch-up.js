@@ -503,7 +503,7 @@
         barColor: "var(--waiting)",
         metaHtml: '<span>' + esc(blocker + " · " + api.dueLabel(item) + " · urgency " + urgency.score) + '</span>',
         detailId,
-        onComplete: () => runWaiting(() => api.completeCheckIn(item.id)),
+        onComplete: () => runWaiting(anchor => api.completeCheckIn(item.id, { anchor })),
         onDate: date => runWaiting(() => api.snooze(item.id, date)),
         dateHeader: 'Snooze "' + task + '" until…',
         dateAction: "Snooze",
@@ -531,8 +531,10 @@
         (reviewHref ? '<a class="carryover-btn carryover-btn-schedule cu-wait-draft' + (shouldCopyDraft ? ' cu-wait-copy' : '') + '" target="_blank" rel="noopener">Review and Send</a>' :
           (draft && draft.draft_preview ? '<button class="carryover-btn carryover-btn-schedule cu-wait-copy">Copy Draft</button>' : '')) +
         '<button class="carryover-btn cu-wait-schedule">Schedule check-in</button>' +
+        '<button class="carryover-btn cu-wait-rename">Edit task title</button>' +
         '<button class="carryover-btn carryover-btn-schedule cu-wait-unblock">Unblock</button>';
       detailBody.appendChild(detailActions);
+      detailActions.querySelector('.cu-wait-rename').addEventListener('click', event => api.rename(item.id, event.currentTarget));
       const toggleDetails = () => {
         const opening = details.hidden;
         details.hidden = !opening;
@@ -542,7 +544,7 @@
       };
       const busy = on => el.querySelectorAll("button").forEach(button => { button.disabled = !!on; });
       const forget = () => forgetRow(el, waitingEls, item.id);
-      const runWaiting = async fn => { busy(true); if (await fn()) forget(); else busy(false); };
+      const runWaiting = async fn => { const anchor = document.activeElement; busy(true); if (await fn(anchor)) forget(); else busy(false); };
       el.querySelector(".cu-wait-schedule").addEventListener("click", event => api.scheduleCheckIn(item.id, event.currentTarget, forget));
       el.querySelector(".cu-wait-unblock").addEventListener("click", () => runWaiting(() => api.unblock(item.id)));
       const draftLink = el.querySelector(".cu-wait-draft");
@@ -745,6 +747,9 @@
     const wasOpen = !!document.getElementById("catchup-overlay") && document.getElementById("catchup-overlay").classList.contains("open");
     const snapshot = await collectSnapshot();
     if (!snapshot) return null;
+    // Keep the initiating row stable beneath an active check-in dialog. A late
+    // background collection must not remove its focus-return target mid-edit.
+    if (wasOpen && window.DCC?.overlay?.activeBlocking) return snapshot;
     if ((opts.open || wasOpen) && snapshotCount(snapshot)) {
       openPrompt(snapshot.res.rows, snapshot.res.total, {
         triage: snapshot.triage,

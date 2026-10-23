@@ -143,12 +143,13 @@
         '<div>' +
           '<strong>' + esc(s.reward_title) + (amount ? " " + esc(amount) : "") + '</strong>' +
           '<span>' + esc(s.kind) + ' for "' + esc(s.task_title) + '" from ' + esc(s.sponsor_name) + '</span>' +
+          (s.offer_settings?.condition ? '<p>'+esc(window.DCC.RewardConditions.describe(s.offer_settings.condition))+'</p><small>One reward when this condition is met. Unavailable tasks do not count.</small>' : '') +
           (s.note ? '<p>' + esc(s.note) + '</p>' : '') +
         '</div>' +
         '<div class="todo-share-offer-actions">' +
           '<em>' + esc(s.status) + '</em>' +
           (s.status === "pending" ? '<button data-todo-sponsor-id="' + s.id + '" data-todo-sponsor-status="approved">Approve</button>' : '') +
-          (s.status !== "dismissed" ? '<button data-todo-sponsor-id="' + s.id + '" data-todo-sponsor-status="dismissed">' + (s.status === "pending" ? "Dismiss" : "Remove") + '</button>' : '') +
+          (!["dismissed","earned"].includes(s.status) ? '<button data-todo-sponsor-id="' + s.id + '" data-todo-sponsor-status="dismissed">' + (s.status === "pending" ? "Dismiss" : "Remove") + '</button>' : '') +
         '</div>' +
       '</div>';
     }).join("");

@@ -761,7 +761,9 @@ function mount(app, ctx) {
 
   // multer: in-memory, 12 MB request cap (the gate-v2 hard error fires above 10
   // MB inside the handler; multer rejects >12 MB before we ever buffer it).
-  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024, files: 10 } });
+  // Journal evidence lists accept at most 50 entries. Bound bracket indexes
+  // before append-field can allocate/iterate a huge sparse array (GHSA-535w-7cp7-47q4).
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024, files: 10, fieldArrayIndexLimit: 49 } });
 
 // ── Vault API (Phase 1) ──
 // The vault is a git-backed markdown store that holds long-term memory.

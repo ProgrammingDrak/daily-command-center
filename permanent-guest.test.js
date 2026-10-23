@@ -6,6 +6,7 @@ const source=fs.readFileSync('routes/social-todo.js','utf8');
 const fn=name=>source.match(new RegExp('function '+name+'\\([^]*?\\n\\}'))[0];
 async function project(rows,poolRows,triage=[]){
   const context={
+    exec: undefined,
     crypto:require('node:crypto'),console,date:'2026-09-09',share:{workspace_id:'ws'},state:{triage:{open_items:triage}},
     collectSubtreeBlockIds:require('./lib/reschedule').collectSubtreeBlockIds,
     blockDB:{getBlocksByDateIncludingDeleted:async()=>rows,getRescheduleSubtreePool:async(_date,ws,opts)=>{assert.equal(ws,'ws');assert.equal(opts.includeTriageRoots,true);return poolRows;}},

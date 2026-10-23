@@ -46,3 +46,12 @@ Task durations support any positive whole-minute value.
 | Feature reports | `none` |
 | Feature report channel | `none` |
 | Closing post | `none` |
+
+
+## License
+
+Copyright (C) 2026 Drake Shadwell. The Drake-owned software in this
+revision is licensed under **GNU AGPL version 3 only**
+(`AGPL-3.0-only`); see [LICENSE](LICENSE) and [COPYRIGHT](COPYRIGHT).
+It comes without warranty. Third-party components retain their own licenses.
+See [LICENSE-SOURCES.md](LICENSE-SOURCES.md) for source delivery and build material.

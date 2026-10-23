@@ -7,6 +7,7 @@
   // scalar DOM fields, so a nested template can't ride a form input — it's stashed
   // here between openResponsibilityModal and formProps/saveResponsibility.
   let _pendingTemplateTree = null;
+  let _pendingTaskPriority = "Medium";
   let _pendingActivitySourceId = null;
   let _sharingExplicit = false;
   let _seriesEditContext = null;
@@ -319,7 +320,7 @@
       if(typeof insertTaskNow!=="function"){if(typeof showToast==="function")showToast("Cannot add task","error");return;}
       const curDate=(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||"";
       insertTaskNow(title,dur,{
-        publicVisibility:repeatVisibility(p),type:p.activityTaskType||"task",responsibilityId:id,responsibilityTitle:title,priority:"High",
+        publicVisibility:repeatVisibility(p),type:p.activityTaskType||"task",responsibilityId:id,responsibilityTitle:title,priority:"High",taskPriority:p.taskPriority||"Medium",
         ...(p.activityTaskType?{activityPlanSourceId:id,publicVisibility:"private"}:{}),
         source:"responsibility",tags:tags,detail:p.description||"",
         idempotencyKey:"resp:"+id+":"+curDate,
@@ -643,7 +644,7 @@
       responsibilityId:id,
       responsibilityTitle:title,
       capacityBucket:p.capacityBucket||null,
-      priority:"High",
+      priority:"High",taskPriority:p.taskPriority||"Medium",
       source:"responsibility",
       tags:tags,
       meta:"Responsibility · "+(p.area||p.domain||"general")+" · "+dur+"m",
@@ -785,6 +786,7 @@
       ?captureShellTemplate(task.id,scheduled):null;
     const result={
       title,
+      taskPriority:task&&task.taskPriority||"Medium",
       publicVisibility:task&&task.publicVisibility||"public",
       domain:"professional",
       area:taskArea(task),
@@ -980,6 +982,7 @@
     _seriesEditContext=seriesEditContext||null;
     // Carry any saved shell structure through the modal (editing keeps the
     // existing tree; a shell-sourced create stashes the freshly captured one).
+    _pendingTaskPriority=window.DCC.TaskPriority?window.DCC.TaskPriority.read(p):"Medium";
     _pendingTemplateTree=(p.templateTree&&p.templateTree.root)?p.templateTree:null;
     _pendingActivitySourceId=id?null:(p.activityPlanSourceId||null);
     const today=new Date();
@@ -1203,6 +1206,7 @@
     const cadenceDays=cadence==="as_needed"?null:(cadenceMap[cadence]||customDays);
     const preferredCadence=document.getElementById("resp-preferred-cadence")?.value||"none";
     const result={
+      taskPriority:_pendingTaskPriority,
       templateTree:(_pendingTemplateTree&&_pendingTemplateTree.root)?_pendingTemplateTree:undefined,
       ...(_pendingActivitySourceId?{activityPlanSourceId:_pendingActivitySourceId}:{}),
       title:document.getElementById("resp-title").value.trim(),

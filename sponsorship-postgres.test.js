@@ -18,10 +18,15 @@ test("pending sponsorship activation is owner-only, atomic and idempotent", { sk
   }).join("\n");
   const handlers = new Map(), broadcasts = [];
   let publicTasks = [{id:"public-task",title:"Canonical fictional task",blockId:"public-block",identityIds:["public-task"]}];
-  const ctx = { pool, console, slotStore:{ensureSchema:async()=>{}}, capabilities:require("./capabilities"),
+  const conditionalRewards = require("./conditional-reward-store").createConditionalRewardStore({
+    pool,
+    enqueueReward: async () => assert.fail("The collaboration guard must not enqueue any reward"),
+    resolveTasks: async () => assert.fail("The pending collaboration offer must not be reconciled"),
+  });
+  const ctx = { pool, console, conditionalRewards, suggestionStore:require("./shared-task-suggestion-store"), rewardConditions:require("./public/js/reward-conditions"), crypto:require("node:crypto"), todoActorKey:()=>"user:2", slotStore:{ensureSchema:async()=>{}}, capabilities:require("./capabilities"),
     getTodayStr:()=>"2026-10-08",coerceDateString:String,isValidDate:value=>/^\d{4}-\d{2}-\d{2}$/.test(value),
     buildPublicTodoShare:async()=>({tasks:publicTasks}), broadcast:(...args)=>broadcasts.push(args),
-    app:{post:(path,fn)=>handlers.set(path,fn)}, blockDB:{
+    app:{post:(path,fn)=>handlers.set(path,fn),get:(path,fn)=>handlers.set(path,fn)}, blockDB:{
       ensureDayRoot:async(date,_user,ws,q)=>{assert.ok(q && q!==pool);const id=ws+":"+date;await q.query("INSERT INTO blocks(id) VALUES($1) ON CONFLICT DO NOTHING",[id]);return id;},
       getBlockIncludingDeleted:async(id,q,lock)=>{assert.equal(lock,true);return (await q.query("SELECT * FROM blocks WHERE id=$1 FOR UPDATE",[id])).rows[0];},
       updateBlock:async(id,fields,q)=>{assert.ok(q && q!==pool);await q.query("UPDATE blocks SET properties=$2 WHERE id=$1",[id,fields.properties]);}
@@ -32,10 +37,53 @@ test("pending sponsorship activation is owner-only, atomic and idempotent", { sk
     vm.runInContext(source.slice(start,end),ctx);
   }
   await ctx.ensureTodoShareTables();
+  const queueStart=source.indexOf('app.get("/api/todo-share/sponsorships"');
+  vm.runInContext(source.slice(queueStart,source.indexOf('\n});',queueStart)+4),ctx);
   await pool.query("INSERT INTO todo_shares(workspace_id,token,created_by) VALUES('ws-1','fictional-token',1)");
   async function call(path,req){let body,status=200;const res={status(n){status=n;return this;},json(value){body=value;return this;}};await handlers.get(path)(req,res);return {status,body};}
   const submit = body => call("/api/public/todo-share/:token/sponsorships",{params:{token:"fictional-token"},body,session:{userId:2,username:"blair"}});
   const change = (id,status="approved",who=1) => call("/api/todo-share/sponsorships/:id/status",{params:{id},workspaceId:"ws-1",body:{status},session:{userId:who}});
+  await t.test("collaboration offers cannot enter legacy sponsorship queues or state transitions",async()=>{
+    // Use the real generalized sponsorship migration, including its pending review default.
+    const schema=fs.readFileSync(require.resolve('./pg-schema'),'utf8').replace(/\r\n/g,'\n');
+    const migrationStart=schema.indexOf('ALTER TABLE todo_sponsorships\n  ADD COLUMN IF NOT EXISTS target_type');
+    const migrationEnd=schema.indexOf('CREATE INDEX IF NOT EXISTS idx_todo_sponsorships_owner_review',migrationStart);
+    assert.ok(migrationStart>=0);await pool.query(schema.slice(migrationStart,migrationEnd));
+    await pool.query('ALTER TABLE todo_sponsorships ADD COLUMN accountability_commitment_id TEXT');
+    const linked=(await pool.query("INSERT INTO todo_sponsorships(workspace_id,owner_user_id,sponsor_user_id,sponsor_name,task_id,task_title,kind,reward_title,status,accountability_commitment_id) VALUES('ws-1',1,2,'Blair','task','Shared outcome','bounty','2x points','pending','linked-fixture') RETURNING *")).rows[0];
+    const socialModule={exports:{}};
+    const localRequire=require('node:module').createRequire(require.resolve('./social-store'));
+    vm.runInNewContext(fs.readFileSync(require.resolve('./social-store'),'utf8'),{module:socialModule,exports:socialModule.exports,console,require:name=>name==='./pg-pool'?pool:localRequire(name)});
+    const social=socialModule.exports;
+    assert.equal((await social.listPendingSponsorships(1)).some(row=>row.id===linked.id),false);
+    const queue=await call('/api/todo-share/sponsorships',{workspaceId:'ws-1',session:{userId:1}});
+    assert.equal(queue.status,200,JSON.stringify(queue.body));
+    assert.ok(Array.isArray(queue.body));
+    assert.equal(queue.body.some(row=>row.id===linked.id),false);
+    for(const status of ['approved','dismissed','pending'])assert.equal((await change(linked.id,status)).status,409);
+    await assert.rejects(social.approveSponsorship(linked.id,1),/not found/);
+    assert.equal((await social.rejectSponsorship(linked.id,1)).changed,false);
+    await assert.rejects(social.removeSponsorship(linked.id,1),/not found/);
+    const saved=(await pool.query('SELECT * FROM todo_sponsorships WHERE id=$1',[linked.id])).rows[0];
+    assert.equal(saved.status,'pending');assert.equal(saved.review_state,'pending');
+    assert.equal((await pool.query('SELECT * FROM slot_rewards')).rows.length,0);
+  });
+  await t.test("nested conditions canonicalize all tasks, reject hidden tasks, and retry once",async()=>{
+    publicTasks=[{id:"a",title:"Task A",blockId:"block-a",identityIds:["a","alias-a"]},{id:"b",title:"Task B",blockId:"block-b",identityIds:["b"]}];
+    const body={kind:"reward",taskId:"forged",sponsorName:"Blair",rewardTitle:"Conditional treat",requestKey:"nested-request-key-123",condition:{type:"group",op:"all",children:[{type:"task",taskId:"alias-a"},{type:"group",op:"any",children:[{type:"task",taskId:"b"}]}]}};
+    const results=await Promise.all([submit(body),submit(body)]);assert.ok(results.every(r=>r.status===201||r.status===200));
+    assert.equal(results[0].body.id,results[1].body.id);
+    const saved=(await pool.query("SELECT * FROM todo_sponsorships WHERE id=$1",[results[0].body.id])).rows[0];
+    assert.equal(saved.offer_settings.condition.children[0].taskId,"a");
+    assert.equal(saved.offer_settings.condition.children[0].blockId,"block-a");
+    assert.equal((await change(saved.id)).status,200);
+    assert.equal((await pool.query("SELECT * FROM slot_rewards")).rows.length,0,'approval must not leak a conditional reward into slots');
+    publicTasks=[];
+    assert.equal((await submit(body)).status,200,'a lost accepted response remains retryable after deletion');
+    assert.equal((await submit({...body,rewardTitle:"Changed"})).status,409);
+    assert.equal((await submit({...body,requestKey:"different-request-123"})).status,400);
+    publicTasks=[{id:"public-task",title:"Canonical fictional task",blockId:"public-block",identityIds:["public-task"]}];
+  });
   let offer;
   await t.test("submission records a pending canonical offer without activating it, preserving private settings",async()=>{
     const result=await submit({kind:"reward",taskId:"public-task",taskTitle:"Forged title",taskBlockId:"secret",sponsorName:"Blair",rewardTitle:"Fictional treat",rewardPrivate:true,target:"slot",uses:2,expiresAt:"2026-12-01T00:00:00Z"});
@@ -94,5 +142,29 @@ test("pending sponsorship activation is owner-only, atomic and idempotent", { sk
     assert.equal((await change(bounty.id)).status,200);
     assert.equal((await change(bounty.id,"dismissed")).status,200);
     assert.equal((await pool.query("SELECT * FROM blocks")).rows[0].properties._bounty.partner,null);
+  });
+  await t.test("conditional and pending references never remove unrelated catalog rewards",async()=>{
+    publicTasks=[{id:"public-task",title:"Canonical fictional task",blockId:"public-block",identityIds:["public-task"]}];
+    for(const conditional of [false,true])for(const approve of conditional?[false,true]:[false])for(const otherSponsor of [false,true]){
+      const catalog=(await pool.query("INSERT INTO slot_rewards(workspace_id,title,kind,active,public_visibility,sponsor_splits) VALUES('ws-1',$1,'sponsor',TRUE,'public',$2) RETURNING *",[`Protected catalog ${conditional}-${approve}-${otherSponsor}`,JSON.stringify(otherSponsor?[{sponsorshipId:999999,sponsorName:"Unrelated sponsor"}]:[])])).rows[0];
+      const body={kind:"reward",taskId:"public-task",slotRewardId:catalog.id,sponsorName:"Blair"};
+      if(conditional)Object.assign(body,{requestKey:`conditional-catalog-${approve}-${otherSponsor}`,condition:{type:"task",taskId:"public-task"}});
+      const submitted=await submit(body);assert.equal(submitted.status,201,JSON.stringify(submitted.body));
+      if(approve)assert.equal((await change(submitted.body.id)).status,200);
+      const before=(await pool.query("SELECT * FROM slot_rewards WHERE id=$1",[catalog.id])).rows[0];
+      assert.equal((await change(submitted.body.id,"dismissed",2)).status,404);
+      assert.equal((await call("/api/todo-share/sponsorships/:id/status",{params:{id:submitted.body.id},workspaceId:"ws-2",body:{status:"dismissed"},session:{userId:2}})).status,404);
+      assert.equal((await change(submitted.body.id,"dismissed")).status,200);
+      const after=(await pool.query("SELECT * FROM slot_rewards WHERE id=$1",[catalog.id])).rows[0];
+      assert.deepEqual(after,before,'no split means no catalog mutation');
+    }
+  });
+  await t.test("dismissing the last matching ordinary sponsorship still retires its reward",async()=>{
+    const submitted=await submit({kind:"reward",target:"slot",sponsorName:"Blair",rewardTitle:"Last split reward"});
+    assert.equal(submitted.status,201);
+    const approved=await change(submitted.body.id);assert.equal(approved.status,200);
+    assert.equal((await change(submitted.body.id,"dismissed")).status,200);
+    const reward=(await pool.query("SELECT * FROM slot_rewards WHERE id=$1",[approved.body.sponsorship.slot_reward_id])).rows[0];
+    assert.ok(reward.deleted_at);assert.equal(reward.active,false);
   });
 });

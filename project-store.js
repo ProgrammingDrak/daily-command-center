@@ -1,3 +1,4 @@
+const TaskPriority = require("./public/js/task-priority");
 const nodeCrypto = require("node:crypto");
 
 const ORGANIZATION_KINDS = new Set(["project", "task_facet", "task_view"]);
@@ -494,6 +495,7 @@ function createProjectStore(deps = {}) {
       source: input.source || "manual",
       status: "open",
       priority: ["High", "Medium", "Low"].includes(input.priority) ? input.priority : "Medium",
+      taskPriority: TaskPriority.read(input),
       stage: input.stage || "Backlog",
       duration,
       durMin: duration,
@@ -542,6 +544,7 @@ function createProjectStore(deps = {}) {
       props.title = cleanText(input.title, 300);
       if (!props.title) throw clientError("Task title is required");
     }
+    if (input.taskPriority !== undefined) props.taskPriority = TaskPriority.read(input);
     if (input.detail !== undefined) props.detail = cleanText(input.detail, 5000);
     if (input.priority !== undefined && ["High", "Medium", "Low"].includes(input.priority)) props.priority = input.priority;
     if (input.duration !== undefined) {

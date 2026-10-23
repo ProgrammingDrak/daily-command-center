@@ -74,8 +74,8 @@ async function resolveWorkspaceId(userId) {
   return rows[0] ? rows[0].workspace_id : `ws-${userId}`;
 }
 
-async function isBlocked(ownerUserId, otherUserId) {
-  const { rows } = await pool.query(
+async function isBlocked(ownerUserId, otherUserId, q = pool) {
+  const { rows } = await q.query(
     `SELECT 1 FROM friendships
       WHERE status='blocked'
         AND ((requester_id=$1 AND addressee_id=$2) OR (requester_id=$2 AND addressee_id=$1))
@@ -97,8 +97,8 @@ async function isBlocked(ownerUserId, otherUserId) {
  *
  *  Reading BOTH rows and letting a block veto is the fix, and it belongs here
  *  rather than at each call site so a future gate cannot forget it. */
-async function areFriends(a, b) {
-  const { rows } = await pool.query(
+async function areFriends(a, b, q = pool) {
+  const { rows } = await q.query(
     `SELECT bool_or(status='accepted') AS friends,
             bool_or(status='blocked')  AS blocked
        FROM friendships
@@ -294,10 +294,10 @@ async function enqueueReward({
   chanceSharesSnapshot = null,
   tierSnapshot = null,
   durationMinutesSnapshot = null,
-}) {
-  const client = await pool.connect();
+}, transaction = null) {
+  const client = transaction || await pool.connect();
   try {
-    await client.query("BEGIN");
+    if (!transaction) await client.query("BEGIN");
 
     // Idempotency guard: the `won` event is the arbiter.
     const wonEvent = await recordEvent(client, {
@@ -320,7 +320,7 @@ async function enqueueReward({
           LIMIT 1`,
         [ownerUserId, sourceType, sourceId]
       );
-      await client.query("COMMIT");
+      if (!transaction) await client.query("COMMIT");
       return { item: existing.rows[0] || null, duplicate: true };
     }
 
@@ -349,13 +349,13 @@ async function enqueueReward({
       );
     }
 
-    await client.query("COMMIT");
+    if (!transaction) await client.query("COMMIT");
     return { item, duplicate: false };
   } catch (err) {
-    await client.query("ROLLBACK");
+    if (!transaction) await client.query("ROLLBACK");
     throw err;
   } finally {
-    client.release();
+    if (!transaction) client.release();
   }
 }
 
@@ -696,6 +696,7 @@ async function listPendingSponsorships(ownerUserId) {
   const { rows } = await pool.query(
     `SELECT * FROM todo_sponsorships
       WHERE owner_user_id=$1 AND review_state='pending'
+        AND accountability_commitment_id IS NULL
       ORDER BY created_at DESC`,
     [ownerUserId]
   );
@@ -714,7 +715,7 @@ async function earnSponsorshipRoute({ sponsorshipId, ownerUserId, routeType, tar
   try {
     await client.query("BEGIN");
     const { rows: [sponsorship] } = await client.query(
-      "SELECT * FROM todo_sponsorships WHERE id=$1 AND owner_user_id=$2 FOR UPDATE",
+      "SELECT * FROM todo_sponsorships WHERE id=$1 AND owner_user_id=$2 AND accountability_commitment_id IS NULL FOR UPDATE",
       [sponsorshipId, ownerUserId]
     );
     if (!sponsorship) { const e = new Error("sponsorship not found"); e.statusCode = 404; throw e; }
@@ -830,7 +831,7 @@ async function approveSponsorship(sponsorshipId, reviewerUserId) {
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `SELECT * FROM todo_sponsorships WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`,
+      `SELECT * FROM todo_sponsorships WHERE id=$1 AND owner_user_id=$2 AND accountability_commitment_id IS NULL FOR UPDATE`,
       [sponsorshipId, reviewerUserId]
     );
     const row = rows[0];
@@ -858,6 +859,7 @@ async function rejectSponsorship(sponsorshipId, reviewerUserId) {
     `UPDATE todo_sponsorships
         SET review_state='rejected', status='rejected', reviewed_by_user_id=$2, reviewed_at=NOW()
       WHERE id=$1 AND owner_user_id=$2 AND review_state='pending'
+        AND accountability_commitment_id IS NULL
       RETURNING *`,
     [sponsorshipId, reviewerUserId]
   );
@@ -872,7 +874,7 @@ async function removeSponsorship(sponsorshipId, ownerUserId) {
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `SELECT * FROM todo_sponsorships WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`,
+      `SELECT * FROM todo_sponsorships WHERE id=$1 AND owner_user_id=$2 AND accountability_commitment_id IS NULL FOR UPDATE`,
       [sponsorshipId, ownerUserId]
     );
     const row = rows[0];
