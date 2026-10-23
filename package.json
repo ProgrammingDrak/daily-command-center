@@ -44,7 +44,7 @@
     "express-session": "^1.19.0",
     "googleapis": "^171.4.0",
     "gray-matter": "^4.0.3",
-    "multer": "^2.2.0",
+    "multer": "^2.4.0",
     "pg": "^8.13.0",
     "rrule": "^2.8.1",
     "simple-git": "^3.25.0",
