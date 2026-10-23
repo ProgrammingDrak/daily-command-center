@@ -196,7 +196,7 @@ test('explicit Waiting completion atomically resolves only this work\'s owned de
     assert.equal(await operationCount(), before);
   });
 
-  await t.test('a queued duplicate loses to a concurrent canonical reopen without restoring completion', async () => {
+  await t.test('a concurrent duplicate cannot undo canonical reopen in either lock order', async () => {
     const { work, items } = await pair();
     const result = await complete(work, items[1]);
     const outcomes = await Promise.allSettled([
@@ -205,11 +205,20 @@ test('explicit Waiting completion atomically resolves only this work\'s owned de
       complete(work, items[1]),
     ]);
     assert.equal(outcomes[0].status, 'fulfilled');
-    assert.equal(outcomes[1].status, 'rejected');
-    assert.equal(outcomes[1].reason.publicCode, 'COMPLETION_CONFLICT');
+    // Real PostgreSQL may grant either request the row lock first. A duplicate
+    // that wins first is a no-op; one following the reopen must conflict.
+    if (outcomes[1].status === 'rejected') {
+      assert.equal(outcomes[1].reason.publicCode, 'COMPLETION_CONFLICT');
+    } else {
+      assert.equal(outcomes[1].value.duplicate, true);
+      assert.equal(outcomes[1].value.revision, result.revision);
+    }
     const current = await read(work.id);
     assert.equal(current.properties.status, 'open');
     assert.equal(current.properties._completionMutationId, 'concurrent-group-reopen');
+    assert.equal(current.properties._completionRevision, outcomes[0].value.revision);
+    await assert.rejects(complete(work, items[1]), { publicCode: 'COMPLETION_CONFLICT' });
+    assert.deepEqual(await read(work.id), current, 'a later stale retry cannot alter reopened work');
   });
 
   await t.test('cleanup guard atomically rejects a reopened, replaced, or foreign Waiting completion', async () => {
