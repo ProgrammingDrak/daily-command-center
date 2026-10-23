@@ -1,5 +1,5 @@
 // Two disposable browser profiles against the opt-in in-memory review backend.
-/* global document, window */
+/* global document, window, navigator */
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -65,8 +65,21 @@ try{
   await close(other);await ownerRow.locator('.it-list-check').click();await count(other,ownTask,'1/2');
   await other.waitForFunction(()=>document.querySelector('#shared-tasks-open').textContent.includes('1 new'));
   mark('durable in-app history, mark-read and mute/re-enable preserve per-recipient alert choices without duplicate badges');
-  await peer.setOffline(true);await row.locator('.it-list-check').click();
+  const beforeOffline=await other.evaluate(()=>({debug:window.blockStore.debug(),deadLetters:window.blockStore.exportPending().deadLetters.length}));
+  await peer.setOffline(true);await other.waitForFunction(()=>navigator.onLine===false);
+  await row.locator('.it-list-check').click();
+  // Prove that the click actually failed offline and entered the durable outbox
+  // before reconnecting. A click resolving is not a network-settlement barrier.
+  await other.waitForFunction(({id,queued})=>window.blockStore.debug().completionMetrics.queued>queued
+    &&window.blockStore.exportPending().pending.some(e=>e.op==='completion'&&e.id===id&&e.data.completed===true),
+  {id:ownTask,queued:beforeOffline.debug.completionMetrics.queued});
   await peer.setOffline(false);await other.evaluate(()=>window.blockStore?.replayWAL());
+  // The online listener may already own replay; a second replayWAL call returns
+  // immediately in that case. Observe the persisted entry draining instead.
+  await other.waitForFunction(id=>!window.blockStore.exportPending().pending.some(e=>e.op==='completion'&&e.id===id),ownTask);
+  const afterOffline=await other.evaluate(()=>({debug:window.blockStore.debug(),deadLetters:window.blockStore.exportPending().deadLetters.length}));
+  assert.equal(afterOffline.debug.completionMetrics.rejected,beforeOffline.debug.completionMetrics.rejected);
+  assert.equal(afterOffline.deadLetters,beforeOffline.deadLetters);
   await count(page,info.taskId,'All done');await count(other,ownTask,'All done');
   assert.equal(await badge(page,info.taskId).first().isVisible(),true);assert.equal(await badge(other,ownTask).first().isVisible(),true);
   await page.screenshot({path:path.join(output,'both-done-desktop.png')});
@@ -93,4 +106,14 @@ try{
   mark('removal hides participation and preserves the peer’s private task and instruction log');
   assert.deepEqual(errors,[]);
   await fs.writeFile(path.join(output,'results.json'),JSON.stringify({synthetic:true,checks,errors,completedAt:new Date().toISOString()},null,2));
+} catch(error){
+  // Only disposable synthetic accounts are used by this runner. Preserve the
+  // failed transition rather than silently retrying a checkbox that toggles.
+  const diagnostics={message:error.message,checks,errors};
+  for(const [name,p] of [['owner',page],['peer',other]]){
+    diagnostics[name]=await p.evaluate(()=>({online:navigator.onLine,debug:window.blockStore?.debug(),outbox:window.blockStore?.exportPending()})).catch(e=>({captureError:e.message}));
+    await p.screenshot({path:path.join(output,name+'-failure.png')}).catch(()=>{});
+  }
+  await fs.writeFile(path.join(output,'failure.json'),JSON.stringify(diagnostics,null,2));
+  throw error;
 } finally {await browser.close();}
