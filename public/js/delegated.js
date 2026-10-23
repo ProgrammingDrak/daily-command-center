@@ -980,7 +980,7 @@
     let cleanupPending = !!alreadyCompleted;
     let settle;
     const outcome = new Promise(resolve => { settle = resolve; });
-    const opener = document.activeElement;
+    const opener = options.anchor || document.activeElement;
     const editOverlay = document.getElementById('delegated-modal-overlay');
     const returnToEdit = editOverlay && editOverlay.classList.contains('open');
     closeDelegatedModal();

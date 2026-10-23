@@ -27,6 +27,11 @@ for (const width of [1280, 390, 320]) for (const surface of ['itinerary', 'loose
   await page.goto(base); await ready();
   const opener = await open();
   assert.equal(await page.getByRole('radio', { name: 'Check-in done — still waiting' }).isChecked(), true);
+  if (surface === 'loose-ends') {
+    const anchor = await opener.elementHandle();
+    await page.evaluate(() => window.DCC.CatchUp.refresh({ focus: false }));
+    assert.equal(await anchor.evaluate(el => el.isConnected), true, 'background refresh keeps the dialog focus-return target');
+  }
   await page.keyboard.press('Escape'); await page.locator('.dcc-overlay').waitFor({ state: 'detached' });
   assert.equal(writes.length, 0);
   assert.equal(await opener.evaluate(el => el === document.activeElement), true, 'cancel restores the triggering checkbox');
