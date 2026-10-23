@@ -54,7 +54,14 @@ test('accepted scheduled series: real recurrence, grants and private histories',
     await Promise.all([store.sync(peer,'2026-10-22'),store.sync(owner,'2026-10-22'),store.sync(peer,'2026-10-22')]);
     const [next]=await find(r.share.id,'2026-10-22');assert.ok(next);assert.notEqual(next.taskId,joined.taskId);assert.equal(next.participants.length,2);assert.ok(next.participants.every(p=>!p.completed));
     const fresh=(await activity.get(next.taskId,peer)).record;assert.equal(fresh.plan.exercises.length,10);assert.equal(fresh.plan.exercises[0].sets[0].weight,null);assert.deepEqual(fresh.actual,{sets:[],runs:[]});
-    assert.doesNotMatch(JSON.stringify(await store.list(owner)),/PRIVATE-RESULT|997/);
+    const sharedJson=JSON.stringify(await store.list(owner),(_key,value)=>{
+      // Check the private measurement as a value, not as a substring of a
+      // random task UUID (which can legitimately contain the digits 997).
+      assert.notEqual(value,997,'private weight must not enter the shared projection');
+      assert.notEqual(value,'997','stringified private weight must not enter the shared projection');
+      return value;
+    });
+    assert.doesNotMatch(sharedJson,/PRIVATE-RESULT/);
     assert.equal((await find(r.share.id,'2026-10-21'))[0].participants.find(p=>p.self).completed,true);
     assert.equal((await ctx.pool.query('SELECT count(*)::int AS n FROM shared_task_occurrences WHERE series_parent_id=$1',[r.share.id])).rows[0].n,1);
     await assert.rejects(store.preview(next.taskId,owner),{statusCode:404});
