@@ -22,6 +22,9 @@ choosing completion hides and disables them without losing an unsaved draft.
   is open: the user is declaring their work finished. The prerequisite is not
   completed. Existing callers without the explicit flag keep the prior ready-only
   guard. The explicit action requires the Waiting version captured on opening.
+  When several owned Waiting dependencies refer to that same task occurrence,
+  completion from any one closes the whole active group atomically. Other tasks,
+  occurrences, workspaces and participants remain outside that group.
 - Ownership remains workspace-scoped. Missing/deleted linked work and stale edits
   return a conflict rather than silently closing the Waiting record. The linked
   task and Waiting record commit together using the existing companion CAS. CAS
@@ -31,11 +34,22 @@ choosing completion hides and disables them without losing an unsaved draft.
   timestamp/version. Once Waiting is done, replay repairs only that completion's
   interrupted timing and outstanding reminders; it cannot re-complete reopened
   work. Shared notification revisions and canonical completion remain unchanged.
+  Recovery uses the original canonical operation receipt, including surviving
+  children moved away from a deleted reminder root. Timing, session changes and
+  triage cleanup revalidate the completion identity under a fresh row lock and
+  commit together, so a concurrent reopen or new timer cannot be overwritten.
 - Reminder cleanup retains the existing post-commit canonical cascade. A partial
   failure returns `cleanupPending`, honestly shows “Task completed” with **Retry
   cleanup**, and locks the outcome choice. After reload, a remaining itinerary
   reminder offers cleanup only. A check-in with no active cadence offers actual
   completion only. Reopening a task does not resurrect finished check-ins.
+- Actual linked work receives ordinary task credit through the existing award
+  and durable retry queue, including off-view and undated work. The server returns
+  a canonical receipt only while the original completion still owns that task.
+  Credit uses the normal date/task identity so a lost acknowledgement, cleanup
+  retry or scheduled-task reconciliation does not introduce a separate award.
+  Reminder tasks, standalone Waiting records and check-in logs gain no extra
+  task or triage credit.
 - This existing cross-row action requires a connection. An error keeps the dialog
   and draft for a manual retry; it does not optimistically mark work done or queue
   an unconfirmed offline completion. Reload discards unsent drafts and reads the
@@ -48,6 +62,10 @@ Use Node 20. `npm test`, `npm run test:postgres`, and `npm run lint` apply. The 
 explicit in-memory PGlite. It covers concurrent/repeated completion, stale edits,
 missing work, workspace isolation, dependencies, recurrence, per-person completion,
 notification deduplication, millisecond CAS, and interrupted cleanup.
+`waiting-multi-dependency-postgres.test.js` additionally checks grouped ownership,
+secondary-card invocation, legacy ownership, atomic rollback and concurrent
+completion/reopen. Socket-free UI tests cover ordinary credit and durable retries;
+these are not a substitute for exact-head browser verification.
 
 For real browser coverage (synthetic data only):
 

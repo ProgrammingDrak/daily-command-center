@@ -1033,6 +1033,7 @@
             note: form.querySelector('#wci-note').value.trim()
           });
         saved = result.status === 'completed' && (taskComplete ? 'task_completed' : true);
+        if (taskComplete) awardCompletedWaitingTask(result);
         cleanupPending = !!result.cleanupPending;
         if (cleanupPending) {
           errorEl.textContent = 'Task completed. Some pending check-ins could not be closed. Retry cleanup; your task will not be completed twice.';
@@ -1055,6 +1056,46 @@
       }
     });
     return outcome;
+  }
+
+  // A reminder completes through Waiting, not commitDoneOnDate. Credit only the
+  // canonical work receipt, including when its row is undated or off the viewed
+  // day. The server withholds this receipt after a reopen/newer completion, and
+  // repeats it for a lost acknowledgement or a reminder-cleanup retry.
+  function awardCompletedWaitingTask(result) {
+    const block = result && result.actualWork;
+    const p = (block && block.properties) || {};
+    const source = String(p.source || '').replace(/_/g, '-');
+    const model = window.DCC && window.DCC.TaskModel;
+    if (!result || result.status !== 'completed' || result.pending || !block || block.deleted_at
+        || !model || !model.isTaskRow(block) || p.status !== 'done'
+        || !p._completionMutationId || !Number.isFinite(Date.parse(p.completedAt))
+        || source === 'waiting-checkin' || source === 'waiting-checkin-log'
+        || /^waiting-checkin-task:/.test(String(p.local_id || block.id || ''))) return;
+    const receiptMutation = result.item && (result.item.properties || {}).waitingCompletionMutationId;
+    if (receiptMutation && receiptMutation !== p._completionMutationId) return;
+    const task = model.fromBlock(block, { deriveEnd: true });
+    // The row projection carries clock times; keep an explicit duration as well
+    // so an undated task's stale clock cannot change its ordinary point score.
+    task.durMin = p.duration == null ? (p.estimatedMinutes || 30) : p.duration;
+    const sourceDate = block.date || result.actualWorkCreditDate;
+    if (!sourceDate || !/^\d{4}-\d{2}-\d{2}$/.test(sourceDate)) return;
+    // The ordinary completion path has a parent/subtask share only while that
+    // exact work row is in the current plan. Never borrow a same-id occurrence's
+    // share from another date; off-view work keeps the ordinary duration fallback.
+    const visibleTask = typeof scheduled !== 'undefined' && scheduled.find(row => row.id === task.id);
+    const viewedDate = (typeof viewDate !== 'undefined' && viewDate) || (window.__state && window.__state.date);
+    const awardPoints = visibleTask && String(visibleTask._blockId || visibleTask.id) === String(block.id)
+      && (!block.date || block.date === viewedDate) && typeof _pointAwardOverride === 'function'
+      ? _pointAwardOverride(task.id) : undefined;
+    // Use the ordinary date/occurrence key, also used by the rewards reconciler.
+    // A separate Waiting/mutation key would pay again when this task is viewed.
+    awardSlotTaskCredit(task, {
+      sourceDate,
+      completedAt: p.completedAt,
+      sourceKey: sourceDate + ':' + task.id,
+      awardPoints,
+    });
   }
 
   function completeCheckInTask(ev) {
