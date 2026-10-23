@@ -776,7 +776,12 @@
               }
               assertPriorityAcknowledgement(saved, data);
               acknowledgePriority(entry.id,entry._walId,saved);
-              if (data.taskPriority !== undefined && saved?.properties) cachePriorityAcknowledgement(saved);
+              // A live edit can supersede the replay while its response is pending.
+              // Advance its rollback baseline above without replacing that newer intent.
+              if (data.taskPriority !== undefined && saved?.properties
+                  && !walGet().some(e => e.op === "update" && e.id === entry.id && e._walId !== entry._walId)) {
+                cachePriorityAcknowledgement(saved);
+              }
             });
             break;
           case "completion": {

@@ -1402,6 +1402,40 @@ test('legacy priority-only WAL entries narrow before replay without crossing acc
  await h.store.replayWAL();const body=JSON.parse(h.fetchCalls[0].init.body);assert.equal(body.properties,undefined);assert.equal(body.taskPriority,'High');assert.equal(wal(storage).length,0);
 });
 
+for (const failure of ['offline', 'rejected']) test('older replay acknowledgement preserves newer priority intent: '+failure, async()=>{
+ const initial={id:'p',type:'block',date:'2026-07-08',properties:{title:'Keep',taskPriority:'Low',start:'12:00',end:'12:30'}};
+ const storage=new Map();seedWal(storage,[{op:'update',id:'p',data:{taskPriority:'High'},priorityEdit:{before:'Low',after:'High'},_walId:'replay-high',timestamp:minsAgo(1)}]);
+ let release,entered;const gate=new Promise(resolve=>{release=resolve;});const started=new Promise(resolve=>{entered=resolve;});let patches=0,row=initial;
+ const h=makeStore({storage,fetchImpl:async(_url,init)=>{
+  if(init?.method!=='PATCH')return {ok:true,status:200,json:async()=>row};
+  const body=JSON.parse(init.body);assert.equal(body.properties,undefined);
+  if(++patches===1){entered();await gate;}
+  else if(patches===2){
+   if(failure==='offline')throw new TypeError('Offline');
+   return {ok:false,status:403,json:async()=>({error:'Forbidden'})};
+  }
+  row={...row,properties:{...row.properties,taskPriority:body.taskPriority}};
+  return {ok:true,status:200,json:async()=>row};
+ }});
+ await h.store.handleBlocksChanged({blockIds:['p']});
+ const replay=h.store.replayWAL();await started;
+ const newer=h.store.updateBlock('p',{...initial.properties,taskPriority:'Medium'},{_reportSaveStatus:true,_priorityEdit:{before:'High',after:'Medium'}}).catch(error=>error);
+ assert.equal(h.store.get('p').properties.taskPriority,'Medium');release();
+ await replay;const result=await newer;
+ if(failure==='offline'){
+  assert.equal(result._savePending,true);
+  assert.equal(h.store.get('p').properties.taskPriority,'Medium','older replay must not replace the pending optimistic choice');
+  assert.deepEqual(wal(storage)[0].data,{taskPriority:'Medium'});
+  assert.equal(wal(storage)[0].priorityEdit.before,'High','acknowledgement still advances the rollback baseline');
+  await h.store.replayWAL();assert.equal(wal(storage).length,0);
+  assert.equal(h.store.get('p').properties.taskPriority,'Medium');
+ }else{
+  assert.equal(result.status,403);assert.equal(wal(storage).length,0);
+  assert.equal(h.store.get('p').properties.taskPriority,'High','rejection restores the acknowledged baseline');
+ }
+ assert.equal(h.store.get('p').properties.start,'12:00');assert.equal(h.store.get('p').properties.end,'12:30');
+});
+
 test('a temporary WAL reread failure cannot prevent an already durably queued priority request', async()=>{
  const initial={id:'p',type:'block',properties:{taskPriority:'Low'}};
  const h=makeStore({fetchBodyFn:(_url,init)=>init?.method==='PATCH'?{...initial,properties:{taskPriority:JSON.parse(init.body).taskPriority}}:initial});
