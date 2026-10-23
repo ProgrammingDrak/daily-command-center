@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { setImmediate } = require("node:timers");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const delegated = fs.readFileSync(require.resolve("./public/js/delegated.js"), "utf8");
