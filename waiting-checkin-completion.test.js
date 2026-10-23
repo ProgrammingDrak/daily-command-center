@@ -13,10 +13,10 @@ const promptSource = region(delegated, '  function markDelegatedItemCheckedById(
 const commitSource = region(schedule, 'async function commitDoneOnDate(', '\n// Completion bonus');
 function harness({ mobile = false, result = { status: "completed" } } = {}) {
   const requests = [], notices = [], overlays = [];
-  const item = { id: "w1", properties: { status: "open", checkInHistory: [] } };
+  const item = { id: "w1", updated_at: '2026-10-12T00:00:00Z', properties: { status: "open", checkInHistory: [] } };
   const controls = new Map();
-  for (const selector of ['[data-wci-cancel]', '[role="alert"]', '[type="submit"]', '#wci-date', '#wci-note']) controls.set(selector, { value: selector === '#wci-date' ? '2026-10-21' : '', disabled: false, addEventListener(event, fn) { this[event] = fn; } });
-  const form = { listeners: {}, valid: true, reportValidity() { return this.valid; }, querySelector(s) { return controls.get(s); }, addEventListener(e, fn) { this.listeners[e] = fn; } };
+  for (const selector of ['[data-wci-cancel]', '[role="alert"]', '[type="submit"]', '#wci-date', '#wci-note', '[name="wci-outcome"]:checked', '[data-wci-followup]', '[data-wci-complete]']) controls.set(selector, { value: selector === '#wci-date' ? '2026-10-21' : '', disabled: false, addEventListener(event, fn) { this[event] = fn; } });
+  const form = { listeners: {}, valid: true, reportValidity() { return this.valid; }, querySelector(s) { return controls.get(s); }, querySelectorAll() { return []; }, addEventListener(e, fn) { this.listeners[e] = fn; } };
   const context = vm.createContext({
     Promise, Set, Date, document: { activeElement: {}, getElementById: () => null, createElement: () => form },
     window: { innerWidth: mobile ? 375 : 1200, DCC: { overlay: { open(options) {
@@ -29,6 +29,7 @@ function harness({ mobile = false, result = { status: "completed" } } = {}) {
     parseLocalDate: value => new Date(value + 'T12:00:00'), checkInDaysFor: () => 7,
     toDateInputValue: date => date.toISOString().slice(0, 10), esc: String, closeDelegatedModal() {},
     checkInItemId: ev => ev && ev.source === 'waiting-checkin' ? ev.delegatedItemId || '' : null,
+    postWaitingAction: async (...args) => { requests.push(args); if (result instanceof Error) throw result; return result; },
     completeCheckInCycle: async (...args) => { requests.push(args); return result; }, afterWaitingAction: async () => {},
     toast: (...args) => notices.push(args), console,
   });
@@ -112,7 +113,7 @@ test("primary task checkbox routes reminders to Checked in before any normal com
 test("triage check-in cancellation leaves suppression, dismissal, and reward untouched; Save resolves them", async () => {
   const triage = fs.readFileSync(require.resolve('./public/js/triage.js'), 'utf8');
   const src = region(triage, 'async function dismissTriage(', '\n// ── Durable triage');
-  for (const saved of [false, true]) {
+  for (const saved of [false, true, 'task_completed']) {
     const writes = [], rewards = [], dismissed = {};
     const context = vm.createContext({
       _triageSuppressionInFlight: new Set(), INIT_TRIAGE: [{ id: 'triage1', waiting_item_id: 'w1', waiting_cycle_key: 'waiting:w1:2026-10-12' }],
@@ -122,10 +123,51 @@ test("triage check-in cancellation leaves suppression, dismissal, and reward unt
       closeDismissModal() {}, buildTriage() {},
     });
     const fn = vm.runInContext('(' + src + ')', context);
-    assert.equal(await fn('triage1'), saved);
-    assert.equal(writes.length, saved ? 1 : 0);
-    assert.equal(rewards.length, saved ? 1 : 0);
-    assert.equal(Object.keys(dismissed).length, saved ? 1 : 0);
+    assert.equal(await fn('triage1'), !!saved);
+    assert.equal(writes.length, saved === true ? 1 : 0);
+    assert.equal(rewards.length, saved === true ? 1 : 0);
+    assert.equal(Object.keys(dismissed).length, saved === true ? 1 : 0);
     assert.equal(context._triageSuppressionInFlight.size, 0);
   }
+});
+
+
+test("Complete task uses canonical action once, with the captured revision and no check-in fields", async () => {
+  const h = harness();
+  const pending = h.context.completeCheckInTask({ id: 'reminder', source: 'waiting-checkin', delegatedItemId: 'w1' });
+  h.controls.get('[name="wci-outcome"]:checked').value = 'task';
+  h.form.listeners.change();
+  const capturedVersion = h.item.updated_at;
+  h.item.updated_at = '2026-10-12T01:00:00Z';
+  assert.equal(h.controls.get('#wci-date').required, false);
+  assert.equal(h.controls.get('#wci-date').disabled, true);
+  const submit = () => h.form.listeners.submit({ preventDefault() {} });
+  await Promise.all([submit(), submit()]);
+  assert.equal(await pending, 'task_completed');
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests[0][1], 'complete');
+  assert.equal(h.requests[0][2].expectedUpdatedAt, capturedVersion);
+  assert.equal(h.requests[0][2].resolveBlockedTask, true);
+  assert.equal(h.requests[0][2].nextCheckInDate, undefined);
+});
+
+test("failed actual completion retains the dialog and retries the identical intent", async () => {
+  const h = harness({ result: new Error('connection lost') });
+  h.context.completeCheckInTask({ id: 'reminder', source: 'waiting-checkin', delegatedItemId: 'w1' });
+  h.controls.get('[name="wci-outcome"]:checked').value = 'task'; h.form.listeners.change();
+  await h.form.listeners.submit({ preventDefault() {} });
+  assert.match(h.controls.get('[role="alert"]').textContent, /Retry safely/);
+  await h.form.listeners.submit({ preventDefault() {} });
+  assert.deepEqual(h.requests[0], h.requests[1]);
+  assert.equal(h.controls.get('#wci-date').disabled, true);
+  h.overlays[0].handle.close('cancel');
+});
+
+test("cleanup can be retried from a leftover itinerary reminder after reload without reopening work", async () => {
+  const h = harness(); h.item.properties.status = 'done';
+  const pending = h.context.completeCheckInTask({ id: 'reminder', source: 'waiting-checkin', delegatedItemId: 'w1' });
+  assert.equal(h.controls.get('[type="submit"]').textContent, 'Retry cleanup');
+  await h.form.listeners.submit({ preventDefault() {} });
+  assert.equal(await pending, 'task_completed');
+  assert.equal(h.requests[0][1], 'complete');
 });

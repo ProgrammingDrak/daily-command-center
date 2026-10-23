@@ -639,8 +639,8 @@ async function setTaskCompletion({
       const existing = rows[0] ? parseBlock(rows[0]) : null;
       if (!existing) throw taskCompletionError("Companion block not found", 404, "COMPLETION_COMPANION_NOT_FOUND");
       if (update.expectedUpdatedAt) {
-        const expectedMs = Date.parse(update.expectedUpdatedAt);
-        const actualMs = Date.parse(existing.updated_at || "");
+        const expectedMs = new Date(update.expectedUpdatedAt).getTime();
+        const actualMs = new Date(existing.updated_at || "").getTime();
         if (!Number.isFinite(expectedMs) || expectedMs !== actualMs) {
           throw taskCompletionError("Companion block changed during completion", 409, "COMPLETION_COMPANION_CONFLICT", existing);
         }

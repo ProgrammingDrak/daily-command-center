@@ -329,7 +329,7 @@ module.exports = function mount(app, ctx) {
   // Cascades on COMPLETE only. Reopening one row does not reopen the cluster: "I ticked
   // this by mistake" is a much more common reopen than "the whole delegation is live
   // again", and guessing wrong there resurrects work Drake had legitimately closed.
-  async function cascadeWaitingCompletion({ req, trigger, itemId: knownItemId, completedAt, userId: knownUserId, workspaceId: knownWorkspaceId }) {
+  async function cascadeWaitingCompletion({ req, trigger, itemId: knownItemId, completedAt, userId: knownUserId, workspaceId: knownWorkspaceId, remindersOnly = false }) {
     if (waitingCascade.roleOf(trigger) === "reminder") return { blockIds: [] };
     const atMs = Number.isFinite(Date.parse(completedAt)) ? Date.parse(completedAt) : Date.now();
     const at = new Date(atMs).toISOString();
@@ -358,7 +358,7 @@ module.exports = function mount(app, ctx) {
       }
 
       const plan = waitingCascade.cascadeTargets({ trigger, item, tasks: clusterTasks });
-      for (const task of plan.tasks) {
+      for (const task of plan.tasks.filter(row => !remindersOnly || waitingCascade.roleOf(row) === "reminder")) {
         // Ownership is re-checked per row: getWaitingClusterTasks is already
         // workspace-scoped, but the linked row above came from a different resolver.
         assertBlockOwnership(task, workspaceId);
@@ -388,6 +388,7 @@ module.exports = function mount(app, ctx) {
       }
     } catch (error) {
       console.error("[waiting-cascade] failed:", error && error.message);
+      return { blockIds, cleanupPending: true };
     }
     return { blockIds };
   }
@@ -2942,7 +2943,7 @@ module.exports = function mount(app, ctx) {
     itemId, completedAt: requestedCompletedAt, completedBy = "waiting",
     linkedTaskRef: requestedLinkedTaskRef = null, req = null,
     userId: knownUserId, workspaceId: knownWorkspaceId,
-    broadcastAction = "waiting-completed",
+    broadcastAction = "waiting-completed", expectedUpdatedAt, resolveBlockedTask = false,
   }) {
     const existing = await blockDB.getBlockIncludingDeleted(itemId);
     if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") {
@@ -2950,7 +2951,46 @@ module.exports = function mount(app, ctx) {
     }
     const workspaceId = knownWorkspaceId !== undefined ? knownWorkspaceId : req && req.workspaceId;
     assertBlockOwnership(existing, workspaceId);
-    if (waitingItems.isTaskDependency(existing) && (existing.properties || {}).status !== "ready") {
+    if (resolveBlockedTask && expectedUpdatedAt === undefined) throw clientError("expectedUpdatedAt is required for explicit task completion");
+    if (expectedUpdatedAt !== undefined && (typeof expectedUpdatedAt !== "string" || !Number.isFinite(Date.parse(expectedUpdatedAt)))) {
+      throw clientError("expectedUpdatedAt must be a valid timestamp");
+    }
+    // A lost acknowledgement or repeated click must not re-complete work that
+    // was subsequently reopened. Only outstanding reminders may be retried.
+    if ((existing.properties || {}).status === "done") {
+      // Timing normalization is post-commit. Repair an interrupted first request,
+      // but only for rows still carrying this completion (never reopened work).
+      const priorMutation = `waiting:${existing.id}:${Date.parse(existing.properties.completedAt)}`;
+      const linkedRef = String(existing.properties.linkedBlockId || "");
+      const linked = linkedRef ? await blockDB.findUniqueLiveBlockByReference(linkedRef, workspaceId) : null;
+      if (linked && isCompleted(linked) && (linked.properties || {})._completionMutationId === priorMutation) {
+        assertBlockOwnership(linked, workspaceId);
+        const rows = typeof blockDB.getSubtree === "function" ? await blockDB.getSubtree([linked.id], workspaceId) : [linked];
+        const affectedTasks = rows.filter(row => row.workspace_id === linked.workspace_id && isCompleted(row)
+          && (row.properties || {})._completionMutationId === priorMutation);
+        const owner = knownUserId !== undefined && knownWorkspaceId !== undefined
+          ? { userId: knownUserId } : await resolveOwnerStrict(req);
+        await normalizeCompletionWork({ task: linked, affectedTasks, persistenceTarget: "task_row" }, true, {
+          atMs: Date.parse(existing.properties.completedAt), actor: owner.userId ? `dcc:${owner.userId}` : "dcc", mutationId: priorMutation,
+        });
+        await transitionLinkedTriage(linked, "done", Date.parse(existing.properties.completedAt));
+      }
+      const cascaded = await cascadeWaitingCompletion({
+        req, trigger: { id: existing.id }, itemId: existing.id,
+        completedAt: existing.properties.completedAt,
+        userId: knownUserId, workspaceId: knownWorkspaceId, remindersOnly: true,
+      });
+      if (cascaded.blockIds.length) broadcast("blocks-changed", { action: broadcastAction, blockIds: cascaded.blockIds }, workspaceId);
+      return { ok: true, status: "completed", duplicate: true, item: existing, task: null, cleanupPending: !!cascaded.cleanupPending };
+    }
+    function assertCurrentIntent(row) {
+      if (expectedUpdatedAt !== undefined && new Date(row.updated_at || "").getTime() !== Date.parse(expectedUpdatedAt)) {
+        throw clientError("This Waiting item changed. Close this dialog, refresh, and review it before completing the task", 409);
+      }
+      if (expectedUpdatedAt !== undefined && !waitingItems.isOpen(row)) throw clientError("This Waiting item is no longer open", 409);
+    }
+    assertCurrentIntent(existing);
+    if (waitingItems.isTaskDependency(existing) && (existing.properties || {}).status !== "ready" && !resolveBlockedTask) {
       throw clientError("Complete the prerequisite before completing this blocked task", 409);
     }
     const completedAt = String(requestedCompletedAt || new Date().toISOString());
@@ -2970,6 +3010,9 @@ module.exports = function mount(app, ctx) {
     let linkedTask = linkedBlockId
       ? await blockDB.findUniqueLiveBlockByReference(linkedBlockId, workspaceId)
       : null;
+    // The check-in dialog explicitly targets the captured linked work. Never
+    // silently close its Waiting item if that work was deleted or is unavailable.
+    if (expectedUpdatedAt !== undefined && linkedBlockId && !linkedTask) throw clientError("Linked task is unavailable. Refresh and review the Waiting item", 409);
     let updated;
     let blockIds = [existing.id];
     let dependencyTransitions = [];
@@ -3004,17 +3047,37 @@ module.exports = function mount(app, ctx) {
       for (const row of result.affectedTasks || []) await syncSlack(row);
     } else {
       linkedTask = null;
-      updated = await blockDB.updateBlock(existing.id, { properties });
+      // Standalone Waiting work has no task row. Lock the record so a check-in,
+      // edit, or another completion cannot be overwritten by a stale dialog.
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const current = await blockDB.getBlockIncludingDeleted(existing.id, client, true);
+        if (!current || current.deleted_at) throw clientError("Waiting item not found", 404);
+        assertBlockOwnership(current, workspaceId);
+        if ((current.properties || {}).status === "done") updated = current;
+        else {
+          assertCurrentIntent(current);
+          if (String((current.properties || {}).linkedBlockId || "") !== String((existing.properties || {}).linkedBlockId || "")) throw clientError("Linked task changed. Refresh and try again", 409);
+          updated = await blockDB.updateBlock(existing.id, { properties: waitingItems.normalizeProperties({
+            status: "done", completedAt, completedBy, snoozedUntil: null, checkInScheduledFor: null, checkInTaskId: null,
+          }, current.properties || {}) }, client);
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
     }
     await syncSlack(updated);
     // The item and its linked task are closed above; the reminders were never anyone's
     // job. `trigger` is the item, so the cascade skips it and takes only what is left.
     const cascaded = await cascadeWaitingCompletion({
       req, trigger: { id: existing.id }, itemId: existing.id, completedAt,
-      userId: knownUserId, workspaceId: knownWorkspaceId,
+      userId: knownUserId, workspaceId: knownWorkspaceId, remindersOnly: resolveBlockedTask,
     });
     broadcast("blocks-changed", { action: broadcastAction, blockIds: blockIds.concat(cascaded.blockIds), dependencyTransitions, date: linkedTask && linkedTask.date || null }, workspaceId);
-    return { ok: true, status: "completed", item: updated, task: linkedTask, dependencyTransitions };
+    return { ok: true, status: "completed", item: updated, task: linkedTask, dependencyTransitions, cleanupPending: !!cascaded.cleanupPending };
   }
 
   // Reopening intentionally does not resurrect completed reminders. It reverses
@@ -3275,6 +3338,8 @@ module.exports = function mount(app, ctx) {
     return completeWaitingItem({
       itemId: req.params.id,
       completedAt: req.body && req.body.completedAt,
+      expectedUpdatedAt: req.body && req.body.expectedUpdatedAt,
+      resolveBlockedTask: req.body && req.body.resolveBlockedTask === true,
       req,
     });
   }));
