@@ -953,6 +953,7 @@
     if (!item || (!isOpenDelegated(item) && !(options.cleanup && alreadyCompleted)) || _checkInPrompt || _savingCheckIns.has(id)) return false;
     const key = cycleKey(item);
     const expectedUpdatedAt = item.updated_at;
+    const linkedTaskRef = String((item.properties || {}).linkedBlockId || '');
     const expectedCheckInCount = Array.isArray((item.properties || {}).checkInHistory) ? item.properties.checkInHistory.length : 0;
     const minDate = todayStr();
     const suggested = parseLocalDate(todayStr());
@@ -976,6 +977,8 @@
     let saving = false;
     let saved = false;
     let completedAt; // Keep the same intent on retry, including a lost response.
+    let taskAwardCaptured = false;
+    let taskAward = null;
     let taskComplete = !!alreadyCompleted || !key;
     let cleanupPending = !!alreadyCompleted;
     let settle;
@@ -1024,6 +1027,10 @@
       controls.forEach(control => { control.disabled = true; });
       try {
         completedAt = completedAt || new Date().toISOString();
+        if (taskComplete && !taskAwardCaptured) {
+          taskAward = alreadyCompleted ? null : captureWaitingTaskAward(linkedTaskRef);
+          taskAwardCaptured = true;
+        }
         const result = taskComplete
           ? await postWaitingAction(id, 'complete', { completedAt, expectedUpdatedAt, resolveBlockedTask: true })
           : await completeCheckInCycle(id, key, completedAt, {
@@ -1033,7 +1040,7 @@
             note: form.querySelector('#wci-note').value.trim()
           });
         saved = result.status === 'completed' && (taskComplete ? 'task_completed' : true);
-        if (taskComplete) awardCompletedWaitingTask(result);
+        if (taskComplete) awardCompletedWaitingTask(result, taskAward);
         cleanupPending = !!result.cleanupPending;
         if (cleanupPending) {
           errorEl.textContent = 'Task completed. Some pending check-ins could not be closed. Retry cleanup; your task will not be completed twice.';
@@ -1062,7 +1069,7 @@
   // canonical work receipt, including when its row is undated or off the viewed
   // day. The server withholds this receipt after a reopen/newer completion, and
   // repeats it for a lost acknowledgement or a reminder-cleanup retry.
-  function awardCompletedWaitingTask(result) {
+  function awardCompletedWaitingTask(result, taskAward) {
     const block = result && result.actualWork;
     const p = (block && block.properties) || {};
     const source = String(p.source || '').replace(/_/g, '-');
@@ -1080,14 +1087,12 @@
     task.durMin = p.duration == null ? (p.estimatedMinutes || 30) : p.duration;
     const sourceDate = block.date || result.actualWorkCreditDate;
     if (!sourceDate || !/^\d{4}-\d{2}-\d{2}$/.test(sourceDate)) return;
-    // The ordinary completion path has a parent/subtask share only while that
-    // exact work row is in the current plan. Never borrow a same-id occurrence's
-    // share from another date; off-view work keeps the ordinary duration fallback.
-    const visibleTask = typeof scheduled !== 'undefined' && scheduled.find(row => row.id === task.id);
-    const viewedDate = (typeof viewDate !== 'undefined' && viewDate) || (window.__state && window.__state.date);
-    const awardPoints = visibleTask && String(visibleTask._blockId || visibleTask.id) === String(block.id)
-      && (!block.date || block.date === viewedDate) && typeof _pointAwardOverride === 'function'
-      ? _pointAwardOverride(task.id) : undefined;
+    // Only use the pre-write share for the same canonical row/occurrence/date.
+    // Reading PointPlan now would lose open-child shares if an SSE echo already
+    // applied the completion cascade. Off-view work keeps the normal fallback.
+    const awardPoints = taskAward && taskAward.blockId === String(block.id)
+      && taskAward.id === String(task.id) && taskAward.date === (block.date || null)
+      ? taskAward.points : undefined;
     // Use the ordinary date/occurrence key, also used by the rewards reconciler.
     // A separate Waiting/mutation key would pay again when this task is viewed.
     awardSlotTaskCredit(task, {
@@ -1096,6 +1101,21 @@
       sourceKey: sourceDate + ':' + task.id,
       awardPoints,
     });
+  }
+
+  function captureWaitingTaskAward(linkedTaskRef) {
+    if (!linkedTaskRef || typeof scheduled === 'undefined' || !Array.isArray(scheduled)
+        || typeof _pointAwardOverride !== 'function') return null;
+    const task = scheduled.find(row => String(row._blockId || row.id) === linkedTaskRef || String(row.id) === linkedTaskRef);
+    // The ordinary helper resolves by event id. A colliding local id must not
+    // borrow another row's share before the canonical receipt can verify it.
+    if (!task || scheduled.find(row => row.id === task.id) !== task) return null;
+    return {
+      blockId: String(task._blockId || task.id),
+      id: String(task.id),
+      date: task._dateless ? null : ((typeof viewDate !== 'undefined' && viewDate) || (window.__state && window.__state.date) || null),
+      points: _pointAwardOverride(task.id),
+    };
   }
 
   function completeCheckInTask(ev) {

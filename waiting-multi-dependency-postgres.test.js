@@ -132,13 +132,20 @@ test('explicit Waiting completion atomically resolves only this work\'s owned de
     const before = await operationCount(), originalConnect = ctx.pool.connect;
     let writes = 0;
     ctx.pool.connect = async () => {
-      const client = await originalConnect();
+      const client = await originalConnect.call(ctx.pool);
+      const originalQuery = client.query;
+      const originalRelease = client.release;
       const query = client.query.bind(client);
       client.query = async (sql, args) => {
         if (sql.startsWith('UPDATE blocks SET properties = $1, updated_at = $2 WHERE id = $3') && items.some(row => row.id === args[2])) {
           if (++writes === 2) throw new Error('synthetic second companion write failure');
         }
         return query(sql, args);
+      };
+      client.release = (...args) => {
+        client.query = originalQuery;
+        client.release = originalRelease;
+        return originalRelease.apply(client, args);
       };
       return client;
     };

@@ -370,18 +370,20 @@ test("later ordinary reconciliation and repeated cleanup share the same date-occ
 });
 
 test("canonical subtask shares preserve explicit zero without borrowing another row or date's override", async () => {
-  for (const variant of ['share', 'zero', 'other-row', 'other-date']) {
+  for (const variant of ['share', 'zero', 'other-row', 'other-date', 'colliding-id']) {
     const actualWork = completedWork({ properties: { subtaskOf: 'parent-task' } });
     const h = harness({ result: { status: 'completed', actualWork } });
     const rewards = installRewards(h);
     let overrides = 0;
     h.context._pointAwardOverride = id => { assert.equal(id, actualWork.properties.local_id); overrides++; return variant === 'share' ? 7 : 0; };
+    h.item.properties.linkedBlockId = actualWork.id;
     h.context.viewDate = variant === 'other-date' ? '2026-10-23' : actualWork.date;
     h.context.scheduled = [{ id: actualWork.properties.local_id, _blockId: variant === 'other-row' ? 'different-work' : actualWork.id }];
+    if (variant === 'colliding-id') h.context.scheduled.unshift({ id: actualWork.properties.local_id, _blockId: 'different-work' });
     const pending = chooseTask(h);
     await submitPrompt(h); await drainRewards();
     assert.equal(await pending, 'task_completed');
-    assert.equal(overrides, ['share', 'zero'].includes(variant) ? 1 : 0);
+    assert.equal(overrides, ['other-row', 'colliding-id'].includes(variant) ? 0 : 1);
     assert.equal(rewards.ledger.size, variant === 'zero' ? 0 : 1, 'an explicit zero must never fall back to ordinary scoring');
     if (variant !== 'zero') {
       assert.equal(rewards.requests[0].task_id, actualWork.properties.local_id);
@@ -393,4 +395,42 @@ test("canonical subtask shares preserve explicit zero without borrowing another 
   const rewards = installRewards(h, { missing: true });
   const pending = chooseTask(h); await submitPrompt(h); await pending;
   assert.equal(JSON.parse(rewards.storage.get('pa-slot-award-queue'))[0].task.subtaskOf, 'canonical-parent');
+});
+
+test("parent point-plan snapshot survives early completion echoes, lost acknowledgements and cleanup retries", async () => {
+  for (const mode of ['immediate', 'lost-ack', 'cleanup']) {
+    let attempt = 0;
+    const actualWork = completedWork({ date: '2026-10-23', properties: { local_id: 'parent-task' } });
+    const h = harness({ result: () => {
+      // The production mutation broadcasts before its HTTP response is read.
+      // Applying that echo closes the child and changes the remaining bonus.
+      h.context.manualDone.add('child-task');
+      if (++attempt === 1 && mode === 'lost-ack') throw new Error('completion acknowledgement lost');
+      return { status: 'completed', actualWork, cleanupPending: attempt === 1 && mode === 'cleanup' };
+    } });
+    const rewards = installRewards(h);
+    h.item.properties.linkedBlockId = actualWork.id;
+    Object.assign(h.context, {
+      DCC: h.context.window.DCC,
+      manualDone: new Set(),
+      childrenOf: id => h.context.scheduled.filter(row => row.subtaskOf === id), relOf: () => null,
+      _bsProp: () => ({ 'parent-task': { pool: 40, bonus: 10, shares: { 'child-task': { pts: 30, locked: true } } } }),
+      scheduled: [taskModel.fromBlock(actualWork), { id: 'child-task', _blockId: 'canonical-child', subtaskOf: 'parent-task' }],
+    });
+    vm.runInContext(fs.readFileSync(require.resolve('./public/js/point-plan.js'), 'utf8'), h.context);
+    vm.runInContext(region(schedule, 'function _pointAwardOverride(', '\nfunction awardSlotTaskCredit('), h.context);
+    assert.equal(h.context._pointAwardOverride('parent-task'), 40);
+    const pending = chooseTask(h);
+    await submitPrompt(h); await drainRewards();
+    assert.equal(h.context._pointAwardOverride('parent-task'), 10, 'the real plan has already consumed the open-child slice');
+    if (mode !== 'immediate') {
+      h.context.viewDate = '2026-10-24';
+      await submitPrompt(h); await drainRewards();
+      assert.deepEqual(h.requests[0], h.requests[1]);
+    }
+    assert.equal(await pending, 'task_completed');
+    assert.equal(rewards.ledger.size, 1);
+    assert.ok(rewards.requests.every(row => row.points_override === 40), 'every award/retry keeps the pre-write parent share');
+    assert.ok(rewards.requests.every(row => row.source_key === '2026-10-23:parent-task'));
+  }
 });
