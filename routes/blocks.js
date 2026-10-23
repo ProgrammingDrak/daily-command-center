@@ -910,13 +910,13 @@ module.exports = function mount(app, ctx) {
 
   // Completion is a state transition, not a full-document block edit. This route is
   // the single durable boundary used by every browser completion surface.
-  app.post("/api/tasks/:taskRef/completion", async (req, res) => {
+  async function completeTaskAction(req, res, principal = null) {
     const requestId = crypto.randomUUID();
     const startedAt = Date.now();
     res.setHeader("X-Request-Id", requestId);
     const body = req.body || {};
     try {
-      const { userId, workspaceId } = await resolveOwnerStrict(req);
+      const { userId, workspaceId } = principal || await resolveOwnerStrict(req);
       const result = await blockDB.setTaskCompletion({
         taskRef: req.params.taskRef,
         completed: body.completed,
@@ -924,6 +924,7 @@ module.exports = function mount(app, ctx) {
         taskDate: body.taskDate || null,
         mutationId: body.mutationId,
         expectedRevision: body.expectedRevision ?? null,
+        ...(principal ? {expectedUpdatedAt:principal.expectedUpdatedAt,authorize:principal.authorize} : {}),
         userId,
         workspaceId,
       });
@@ -932,7 +933,7 @@ module.exports = function mount(app, ctx) {
         : Date.now();
       await normalizeCompletionWork(result, body.completed, {
         atMs: recordedMs,
-        actor: userId ? `dcc:${userId}` : "dcc",
+        actor: principal ? `dcc:${principal.actorUserId}` : userId ? `dcc:${userId}` : "dcc",
         mutationId: body.mutationId,
       });
       if (result.duplicate) completionMetrics.duplicate++;
@@ -986,7 +987,8 @@ module.exports = function mount(app, ctx) {
         ...(error.currentTask ? { currentTask: error.currentTask } : {}),
       });
     }
-  });
+  }
+  app.post("/api/tasks/:taskRef/completion", (req,res) => completeTaskAction(req,res));
 
   app.post("/api/blocks/:id/work", route(async (req, res) => {
     const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
@@ -1844,7 +1846,9 @@ module.exports = function mount(app, ctx) {
   // Kept as an explicit handler (not routed through route()) on purpose: this is
   // the atomic-delegation reference pattern — bespoke HH:MM validation + the
   // load-bearing subtree move should not be churned by the P8 extraction.
-  app.post("/api/blocks/:id/reschedule", async (req, res) => {
+  async function rescheduleTaskAction(req, res, principal = null) {
+    const workspaceId=principal ? principal.workspaceId : req.workspaceId;
+    const userId=principal ? principal.userId : req.session.userId;
     try {
       const { targetDate, parentStart, parentEnd, placement, userSetStart, _clientId } = req.body || {};
       if (placement && ["whenever", "whenever_schedule", "pool_schedule", "pool_date"].includes(placement.kind)) {
@@ -1852,23 +1856,23 @@ module.exports = function mount(app, ctx) {
         if (placement.kind !== "whenever" && !isValidDate(targetDate)) return res.status(400).json({error:"Invalid targetDate"});
         const parent = await blockDB.getBlockIncludingDeleted(req.params.id);
         if (!parent) return res.status(404).json({error:"Block not found"});
-        assertBlockOwnership(parent, req.workspaceId);
-        const pool = await blockDB.getRescheduleSubtreePool(parent.date, req.workspaceId, {includeDatelessRoots:!parent.date});
+        assertBlockOwnership(parent, workspaceId);
+        const pool = await blockDB.getRescheduleSubtreePool(parent.date, workspaceId, {includeDatelessRoots:!parent.date});
         const planned = require("../lib/whenever-placement").plan(parent,pool,{targetDate,placement,parentStart,parentEnd});
         const byId = new Map(pool.map(row => [row.id,row]));byId.set(parent.id,parent);
-        planned.ids.forEach(id => assertBlockOwnership(byId.get(id),req.workspaceId));
+        planned.ids.forEach(id => assertBlockOwnership(byId.get(id),workspaceId));
         // Keep archive timeline seeds suppressed after the task leaves the pool.
         // Reuse the standard origin marker and commit it with the entire move.
         const creates=[],moves=[...planned.moves];
         if(placement.kind==='whenever'&&parent.date){
-          const existing=await blockDB.getRescheduleTombstone(parent.date,parent.id,req.workspaceId);
+          const existing=await blockDB.getRescheduleTombstone(parent.date,parent.id,workspaceId);
           const hiddenLocalIds=[...new Set(planned.ids.flatMap(id=>{const row=byId.get(id);return [row.id,(row.properties||{}).local_id].filter(Boolean);} ))];
           const properties={...(existing&&existing.properties),local_id:'resched-tomb-'+parent.id,kind:'reschedule_tombstone',title:(parent.properties||{}).title||'Task',movedBlockId:parent.id,sourceLocalId:(parent.properties||{}).local_id||parent.id,rescheduledFrom:{date:parent.date},rescheduledTo:null,poolOrigin:true,publicVisibility:'private',hiddenLocalIds,at:new Date().toISOString()};
-          if(existing){assertBlockOwnership(existing,req.workspaceId);moves.push({id:existing.id,date:existing.date,properties,expectedDate:existing.date,expectedUpdatedAt:existing.updated_at});}
-          else creates.push({type:'block',date:parent.date,user_id:parent.user_id||req.session.userId||null,workspace_id:parent.workspace_id||req.workspaceId||null,properties});
+          if(existing){assertBlockOwnership(existing,workspaceId);moves.push({id:existing.id,date:existing.date,properties,expectedDate:existing.date,expectedUpdatedAt:existing.updated_at});}
+          else creates.push({type:'block',date:parent.date,user_id:parent.user_id||userId||null,workspace_id:parent.workspace_id||workspaceId||null,properties});
         }
         const result = await blockDB.rescheduleBlocks(moves,creates);
-        broadcast("blocks-changed",{action:"reschedule",blockIds:result.blocks.map(row=>row.id),clientId:_clientId},req.workspaceId);
+        broadcast("blocks-changed",{action:"reschedule",blockIds:result.blocks.map(row=>row.id),clientId:_clientId},workspaceId);
         return res.json({moved:planned.ids,blocks:result.blocks.slice(0,planned.moves.length),created:result.blocks.slice(planned.moves.length),parentId:parent.id,fromDate:parent.date,targetDate,count:planned.ids.length});
       }
       // Did a HUMAN name the landing time? A timed placement cannot answer that on its
@@ -1898,8 +1902,9 @@ module.exports = function mount(app, ctx) {
       // "Block is deleted" the move path raises, not a 404 that reads as "never existed".
       const parent = await blockDB.getBlockIncludingDeleted(req.params.id);
       if (!parent) return res.status(404).json({ error: "Block not found" });
-      assertBlockOwnership(parent, req.workspaceId);
+      assertBlockOwnership(parent, workspaceId);
       if (parent.deleted_at) return res.status(400).json({ error: "Block is deleted" });
+      if(principal?.expectedUpdatedAt && new Date(parent.updated_at).getTime()!==new Date(principal.expectedUpdatedAt).getTime()) return res.status(409).json({error:"Task changed. Refresh before scheduling."});
       const parentProps = parent.properties || {};
       const calendarOwned = ["calendar", "gcal"].includes(String(parentProps.source || "").toLowerCase()) || !!parentProps.calendar_id;
       if (calendarOwned && (parentProps.type === "meeting" || parentProps.kind === "meeting" || parentProps.type === "oneone")) {
@@ -1928,7 +1933,7 @@ module.exports = function mount(app, ctx) {
       // links and the parent_id column — because neither one is complete on real data;
       // lib/reschedule.js carries the measurements. An undated row only moves if the
       // walk actually links it into this parent's subtree.
-      const dayBlocks = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId, { includeDatelessRoots: !parent.date });
+      const dayBlocks = await blockDB.getRescheduleSubtreePool(fromDate, workspaceId, { includeDatelessRoots: !parent.date });
       const subtreeIds = collectSubtreeBlockIds(dayBlocks, parent);
       const byId = new Map(dayBlocks.map(b => [b.id, b]));
       byId.set(parent.id, parent); // parent may lack local_id and be absent from dayBlocks
@@ -2020,9 +2025,9 @@ module.exports = function mount(app, ctx) {
       // that meant any future tightening of the pool's task predicate would silently
       // restart the pile-up.
       const creates = [];
-      const existingTomb = dateChanged ? await blockDB.getRescheduleTombstone(fromDate, parent.id, req.workspaceId) : null;
+      const existingTomb = dateChanged ? await blockDB.getRescheduleTombstone(fromDate, parent.id, workspaceId) : null;
       if(dateChanged&&existingTomb&&(existingTomb.properties||{}).poolOrigin){
-        assertBlockOwnership(existingTomb,req.workspaceId);
+        assertBlockOwnership(existingTomb,workspaceId);
         const properties={...existingTomb.properties,rescheduledTo:targetDate,at:now};delete properties.poolOrigin;
         moves.push({id:existingTomb.id,date:existingTomb.date,properties,expectedDate:existingTomb.date,expectedUpdatedAt:existingTomb.updated_at});
       }
@@ -2030,8 +2035,8 @@ module.exports = function mount(app, ctx) {
         creates.push({
           type: "block",
           date: fromDate,
-          user_id: parent.user_id || req.session.userId || null,
-          workspace_id: parent.workspace_id || req.workspaceId || null,
+          user_id: parent.user_id || userId || null,
+          workspace_id: parent.workspace_id || workspaceId || null,
           properties: {
             local_id: "resched-tomb-" + parent.id,
             kind: "reschedule_tombstone",
@@ -2047,10 +2052,10 @@ module.exports = function mount(app, ctx) {
       }
 
       const reviewOptions = req.body.reviewGuard ? {
-        lockKey: "dcc-review:" + req.workspaceId + ":" + targetDate,
+        lockKey: "dcc-review:" + workspaceId + ":" + targetDate,
         beforeApply: async client => {
           const freshParent = await blockDB.getBlock(parent.id, client);
-          const freshPool = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId, { client, includeDatelessRoots: !freshParent?.date });
+          const freshPool = await blockDB.getRescheduleSubtreePool(fromDate, workspaceId, { client, includeDatelessRoots: !freshParent?.date });
           const freshById = new Map(freshPool.map(row => [row.id, row]));
           freshById.set(parent.id, freshParent);
           const members = freshParent && collectSubtreeBlockIds(freshPool, freshParent).map(id => freshById.get(id));
@@ -2060,17 +2065,19 @@ module.exports = function mount(app, ctx) {
           await reviewTomorrow.validateMove(ctx, req, freshParent, members, place, req.body.reviewGuard, client);
         },
       } : undefined;
-      const result = await blockDB.rescheduleBlocks(moves, creates, reviewOptions);
+      const guardedOptions = principal?.authorize ? { ...reviewOptions, lockKey: reviewOptions?.lockKey || "task-action:" + parent.id, beforeApply: async client => { await principal.authorize(client); if (reviewOptions?.beforeApply) await reviewOptions.beforeApply(client); } } : reviewOptions;
+      const result = await blockDB.rescheduleBlocks(moves, creates, guardedOptions);
       const movedIds = subtreeIds;
       const created = result.blocks.slice(moves.length); // tombstone(s) appended after moves
-      broadcast("blocks-changed", { action: "reschedule", blockIds: result.blocks.map(b => b.id), clientId: _clientId }, req.workspaceId);
+      broadcast("blocks-changed", { action: "reschedule", blockIds: result.blocks.map(b => b.id), clientId: _clientId }, workspaceId);
       res.json({ moved: movedIds, blocks: result.blocks.slice(0, moves.length), created, parentId: parent.id, fromDate, targetDate, count: movedIds.length });
     } catch (e) {
       const body = { error: e.message };
       if (e.code) body.code = e.code;
-      res.status(e.statusCode || e.status || 400).json(body);
+      res.status(e.statusCode || e.status || (principal ? 500 : 400)).json(body);
     }
-  });
+  }
+  app.post("/api/blocks/:id/reschedule", (req,res) => rescheduleTaskAction(req,res));
 
   // Quick-task route removed from blocks.js 2026-07: it duplicated (and shadowed)
   // the richer handler in routes/dcc.js, which preserves source_id / notes /
@@ -2734,7 +2741,7 @@ module.exports = function mount(app, ctx) {
     };
   }));
 
-  app.post(["/api/delegated-items", "/api/waiting-items"], route(async (req, res) => {
+  async function delegateTaskAction(req, res, principal = null) {
     const body = req.body || {};
     if (!body.properties || typeof body.properties !== "object") { res.status(400).json({ error: "properties required" }); return; }
     const props = waitingItems.normalizeProperties(body.properties);
@@ -2746,16 +2753,18 @@ module.exports = function mount(app, ctx) {
     // The slimmed modal anchors items on myTask; title survives for legacy items.
     const named = v => typeof v === "string" && v.trim();
     if (!named(props.title) && !named(props.myTask) && !named(newBlocker && newBlocker.title)) { res.status(400).json({ error: "properties.title or properties.myTask required" }); return; }
-    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const { userId, workspaceId } = principal || await resolveOwnerStrict(req);
     if (convertTaskId && !waitingItems.isTaskDependency(props)) {
       const client = await pool.connect();
       let created;
       let affected;
       try {
         await client.query("BEGIN");
+        if (principal?.authorize) await principal.authorize(client);
         const task = await blockDB.findUniqueLiveBlockByReference(convertTaskId, workspaceId, client, true);
         if (!task || task.deleted_at || !blockDB.isTaskRow(task)) throw clientError("Selected task is no longer available", 409);
         assertBlockOwnership(task, workspaceId);
+        if(principal?.expectedUpdatedAt && new Date(task.updated_at).getTime()!==new Date(principal.expectedUpdatedAt).getTime()) throw clientError("Task changed. Refresh before moving to Waiting.",409);
         if (isCompleted(task)) throw clientError("A completed task cannot move to Waiting", 409);
         const subtree = await blockDB.getSubtree([task.id], workspaceId, client);
         const rows = subtree.length ? subtree : [task];
@@ -2853,7 +2862,12 @@ module.exports = function mount(app, ctx) {
     await syncSlack(created);
     broadcast("blocks-changed", { action: "delegated-create", blockIds: [created.id] }, workspaceId);
     return created;
-  }));
+  }
+  app.post(["/api/delegated-items", "/api/waiting-items"], route((req,res) => delegateTaskAction(req,res)));
+
+  // Only server-resolved principals enter these adapters. Never accept owner or
+  // workspace overrides from an ordinary task endpoint or request body.
+  ctx.taskActionHandlers = {complete:completeTaskAction,schedule:rescheduleTaskAction,delegate:delegateTaskAction};
 
   // Both delegated-item mutations mirror the block PATCH/DELETE contract above:
   // tombstone-inclusive fetch, so authorization cannot be dodged and a repeat delete
@@ -3143,7 +3157,7 @@ module.exports = function mount(app, ctx) {
     const workspaceId = knownWorkspaceId !== undefined ? knownWorkspaceId : req && req.workspaceId;
     assertBlockOwnership(existing, workspaceId);
     if (resolveBlockedTask && expectedUpdatedAt === undefined) throw clientError("expectedUpdatedAt is required for explicit task completion");
-    if (expectedUpdatedAt !== undefined && (typeof expectedUpdatedAt !== "string" || !Number.isFinite(Date.parse(expectedUpdatedAt)))) {
+    if (expectedUpdatedAt !== undefined && (typeof expectedUpdatedAt !== "string" || !Number.isFinite(new Date(expectedUpdatedAt).getTime()))) {
       throw clientError("expectedUpdatedAt must be a valid timestamp");
     }
     // A lost acknowledgement or repeated click must not re-complete work that
@@ -3178,7 +3192,7 @@ module.exports = function mount(app, ctx) {
         cleanupPending: cleanup.cleanupPending };
     }
     function assertCurrentIntent(row) {
-      if (expectedUpdatedAt !== undefined && new Date(row.updated_at || "").getTime() !== Date.parse(expectedUpdatedAt)) {
+      if (expectedUpdatedAt !== undefined && new Date(row.updated_at || "").getTime() !== new Date(expectedUpdatedAt).getTime()) {
         throw clientError("This Waiting item changed. Close this dialog, refresh, and review it before completing the task", 409);
       }
       if (expectedUpdatedAt !== undefined && !waitingItems.isOpen(row)) throw clientError("This Waiting item is no longer open", 409);

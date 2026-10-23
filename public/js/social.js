@@ -187,6 +187,7 @@
             ["viewer", "commenter", "coach", "manager"].map(r =>
               '<option value="' + r + '"' + (r === g.role ? " selected" : "") + '>' + r + '</option>').join("") +
           '</select>' +
+          '<button class="social-btn" data-task-permissions="' + g.grantee_user_id + '" type="button">Task actions</button>' +
           '<button class="social-btn" data-revoke="' + g.grantee_user_id + '" type="button">Revoke</button>' +
         '</div>' +
       '</div>').join("");
@@ -469,17 +470,12 @@
     // _blockId is the durable row id TaskModel.fromBlock stamps; `id` may be a
     // local_id alias. The route accepts either, but prefer the row id.
     const id = ev._blockId || ev.id || "";
-    return '<div class="coach-row' + (done ? " done" : "") + '">' +
-      '<span class="coach-time">' + esc(time || "--") + '</span>' +
-      '<span class="coach-title">' + esc(ev.label || ev.title || "Untitled") + '</span>' +
-      '<span class="coach-points">' + (points ? points + ' pts' : '') + adjusted + '</span>' +
-      (canAdjust && id
-        ? '<span class="coach-adjust">' +
-            '<input type="number" min="0" max="100000" value="' + points + '" data-points-for="' + esc(id) + '" aria-label="Points">' +
-            '<button class="social-btn" data-save-points="' + esc(id) + '" type="button">Set</button>' +
-          '</span>'
-        : "") +
-    '</div>';
+    const el=window.renderItineraryListRow({...ev,blockId:id},{guest:true,done,
+      barColor:'#a78bfa',metaHtml:'<span>'+esc(time||'Unscheduled')+'</span><span>'+points+' pts</span>'+adjusted,
+      onOpen:()=>DCC.TaskActions.open({owner:coach.ownerUserId,id}),
+      actionsBeforeHtml:canAdjust?'<input type="number" min="0" max="100000" value="'+points+'" data-points-for="'+esc(id)+'" aria-label="Points"><button class="social-btn" data-save-points="'+esc(id)+'" type="button">Set</button>':''});
+    DCC.TaskActions.attach(el,{...ev,blockId:id},{owner:coach.ownerUserId,modes:coach.taskModes,changed:()=>openCoachDay(coach.ownerUserId,coach.name,coach.date)});
+    return el;
   }
 
   async function openCoachDay(ownerUserId, name, date, keepMessage) {
@@ -511,6 +507,7 @@
       if (token !== coachRequestId) return;
       coach.capabilities = (caps && caps.capabilities) || {};
       coach.role = (caps && caps.role) || "none";
+      coach.taskModes=caps.taskModes||{};
       coach.date = day.date;
       const roleEl = document.getElementById("coach-day-role");
       const dateEl = document.getElementById("coach-day-date");
@@ -522,9 +519,8 @@
       const tasks = day.tasks || [];
       if (status && !keepMessage) status.textContent = "";
       if (list) {
-        list.innerHTML = tasks.length
-          ? tasks.map(coachRow).join("")
-          : '<div class="social-empty">Nothing on this day.</div>';
+        list.replaceChildren(...tasks.map(coachRow));
+        if(!tasks.length)list.textContent="Nothing on this day.";
       }
     } catch (e) {
       if (token !== coachRequestId) return;

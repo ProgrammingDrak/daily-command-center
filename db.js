@@ -610,7 +610,7 @@ function collectCompletionSubtreeIds(rows, parent) {
 async function setTaskCompletion({
   taskRef, completed, completedAt = null, taskDate = null, mutationId,
   expectedRevision = null, userId = null, workspaceId = null, companionUpdates = [],
-  transactionLockKey = null, resolveWaitingItemId = null, waitingCompletionGuard = null,
+  transactionLockKey = null, resolveWaitingItemId = null, waitingCompletionGuard = null, expectedUpdatedAt = null, authorize = null,
 }) {
   validateTaskCompletionInput({ taskRef, completed, completedAt, taskDate, mutationId, expectedRevision });
   if (!Array.isArray(companionUpdates)) throw new Error("companionUpdates must be an array");
@@ -689,6 +689,7 @@ async function setTaskCompletion({
   };
   try {
     await q.query("BEGIN");
+    if (authorize) await authorize(q);
     if (transactionLockKey) {
       await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [transactionLockKey]);
     }
@@ -720,6 +721,9 @@ async function setTaskCompletion({
       target = rows[0] ? parseBlock(rows[0]) : null;
     }
 
+    if (expectedUpdatedAt && (!target || new Date(target.updated_at).getTime()!==new Date(expectedUpdatedAt).getTime())) {
+      throw taskCompletionError("Task changed. Refresh before completing.",409,"COMPLETION_CONFLICT",target);
+    }
     if (!target) {
       if (resolveWaitingItemId != null) throw taskCompletionError("Linked task is unavailable", 409, "COMPLETION_WAITING_TARGET_CONFLICT");
       if (!taskDate) throw taskCompletionError("Task not found", 404, "COMPLETION_TARGET_NOT_FOUND");

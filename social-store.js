@@ -66,8 +66,8 @@ async function recordEvent(q, {
 // Workspace / relationship helpers
 // ──────────────────────────────────────────────────────────────────────────
 
-async function resolveWorkspaceId(userId) {
-  const { rows } = await pool.query(
+async function resolveWorkspaceId(userId, q = pool) {
+  const { rows } = await q.query(
     "SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND role='owner' LIMIT 1",
     [userId]
   );
@@ -147,14 +147,16 @@ async function respondFriend(addresseeId, requesterId, accept) {
 /** Block another user (either direction). Marks an existing edge blocked or
  *  creates one. Blocking also disables auto-approval via isBlocked checks. */
 async function blockUser(userId, otherId) {
-  const { rows } = await pool.query(
-    `INSERT INTO friendships (requester_id, addressee_id, status)
-     VALUES ($1,$2,'blocked')
-     ON CONFLICT (requester_id, addressee_id) DO UPDATE SET status='blocked', updated_at=NOW()
-     RETURNING *`,
-    [userId, otherId]
-  );
-  return rows[0];
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`task-access:${[Number(userId),Number(otherId)].sort((a,b)=>a-b).join(':')}`]);
+    const {rows}=await client.query(`INSERT INTO friendships (requester_id, addressee_id, status)
+      VALUES ($1,$2,'blocked') ON CONFLICT (requester_id, addressee_id)
+      DO UPDATE SET status='blocked', updated_at=NOW() RETURNING *`,[userId,otherId]);
+    await client.query('COMMIT');return rows[0];
+  } catch(error) { await client.query('ROLLBACK');throw error; }
+  finally {client.release();}
 }
 
 // Both list functions join the name. They used to return bare ids, which no UI
@@ -589,6 +591,7 @@ async function requestSponsorship({
   note = "",
   workspaceId = null,
   routes = null,
+  authorize = null, // Internal capability guard; never read from request JSON.
 }) {
   const unlockRoutes = normalizeUnlockRoutes(routes, targetType, targetId);
   const scope = unlockRoutes.some(route => route.type === "casino") ? "slot" : "task";
@@ -605,17 +608,18 @@ async function requestSponsorship({
   // must already be the owner's friend or on their allowlist (self-sponsorship is
   // always allowed). This is the consent gate for *offering*; auto-approval still
   // additionally requires the allowlist.
-  if (sponsorUserId && sponsorUserId !== ownerUserId && !allowlisted
+  if (sponsorUserId && sponsorUserId !== ownerUserId && !allowlisted && !authorize
       && !(await areFriends(sponsorUserId, ownerUserId))) {
     const e = new Error("must be friends with this user to sponsor them"); e.statusCode = 403; throw e;
   }
   const reviewState = resolveReviewState(allowlisted);
-  const active = reviewState === "auto_approved";
+  const active = reviewState === "auto_approved" || !!authorize;
   const ws = workspaceId || (await resolveWorkspaceId(ownerUserId));
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    if (authorize) await authorize(client);
     const { rows } = await client.query(
       `INSERT INTO todo_sponsorships
          (workspace_id, owner_user_id, sponsor_user_id, sponsor_name, target_type, target_id,
@@ -626,7 +630,7 @@ async function requestSponsorship({
       [ws, ownerUserId, sponsorUserId, sponsorName, targetType, targetId,
        targetType === "task" ? String(targetId) : "", rewardTitle || "", "reward",
        rewardTitle || "", rewardDefinitionId, valueCents, chanceShares, note,
-       active ? "active" : "pending", reviewState, active ? new Date().toISOString() : null]
+       active ? "active" : "pending", authorize ? "approved" : reviewState, active ? new Date().toISOString() : null]
     );
     let row = rows[0];
     for (const unlockRoute of unlockRoutes) {
@@ -678,7 +682,7 @@ async function _activateSponsorship(client, row) {
     chance_shares: row.chance_shares || (source && source.chance_shares) || 1,
     value_cents: row.value_cents || (source && source.value_cents) || 0,
     notes: row.note || (source && source.notes) || "",
-  });
+  }, client);
   await client.query(
     `UPDATE slot_rewards SET vault_enabled=TRUE,vault_reuse_mode='one_off',vault_min_cents=value_cents,
      vault_quick_add=FALSE,vault_random_draw=$2,vault_milestone=FALSE,sponsor_visible=TRUE,

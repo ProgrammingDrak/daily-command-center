@@ -991,6 +991,7 @@ require("./routes/commitments")(app, ctx);
 require("./routes/friend-invites")(app, { ...ctx, PROJECT_DIR });
 require("./routes/pet-home")(app, ctx);
 require("./routes/blocks")(app, ctx);
+require("./routes/task-actions")(app, ctx);
 require("./routes/task-attachments")(app, ctx);
 require("./routes/sync")(app, ctx);
 require("./routes/projects")(app, ctx);

@@ -59,7 +59,7 @@ async function recordGrantEvent({ ownerUserId, granteeUserId, actorUserId, event
  * "none" rather than leaving a caller to decide what a thrown error means about
  * authorization.
  */
-async function resolveRole(viewerUserId, ownerUserId) {
+async function resolveRole(viewerUserId, ownerUserId, q = pool) {
   const viewer = Number(viewerUserId);
   const owner = Number(ownerUserId);
   // POSITIVE integers, not merely finite. Number(null), Number(false) and
@@ -78,7 +78,7 @@ async function resolveRole(viewerUserId, ownerUserId) {
     // Two scalar subqueries, so exactly one row comes back whether or not a
     // grant exists, and the block check travels WITH the role rather than being
     // a second call a caller could skip.
-    const { rows } = await pool.query(
+    const { rows } = await q.query(
       `SELECT
          (SELECT role FROM access_grants
            WHERE owner_user_id=$2 AND grantee_user_id=$1) AS role,
@@ -178,11 +178,26 @@ async function revokeAccess({ ownerUserId, granteeUserId }) {
   return { revoked: rows.length > 0, previousRole: rows[0] ? rows[0].role : null };
 }
 
+async function setTaskPermissions({ownerUserId,granteeUserId,permissions}) {
+  if(!require('./public/js/task-action-policy').valid(permissions))throw Object.assign(new Error('Invalid task permissions'),{statusCode:400});
+  const client=await pool.connect();let grant,previous;
+  try {
+    await client.query('BEGIN');
+    const rows=(await client.query('SELECT * FROM access_grants WHERE owner_user_id=$1 AND grantee_user_id=$2 FOR UPDATE',[ownerUserId,granteeUserId])).rows;
+    if(!rows[0])throw Object.assign(new Error('Grant access before setting task permissions'),{statusCode:404});
+    previous=rows[0];
+    grant=(await client.query('UPDATE access_grants SET task_permissions=$3,updated_at=NOW() WHERE id=$1 AND owner_user_id=$2 RETURNING *',[previous.id,ownerUserId,permissions])).rows[0];
+    await client.query('COMMIT');
+  }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+  await recordGrantEvent({ownerUserId,granteeUserId,actorUserId:ownerUserId,eventType:'task_permissions_changed',role:grant.role,metadata:{previous:previous.task_permissions,permissions}});
+  return {grant};
+}
+
 /** People the owner has given access to. Names joined so no UI needs a lookup
  *  per row, same as social-store's friend lists. */
 async function listGrants(ownerUserId) {
   const { rows } = await pool.query(
-    `SELECT g.id, g.grantee_user_id, g.role, g.note, g.created_at, g.updated_at,
+    `SELECT g.id, g.grantee_user_id, g.role, g.note, g.task_permissions, g.created_at, g.updated_at,
             COALESCE(NULLIF(pr.display_name, ''), u.username) AS name,
             u.username
        FROM access_grants g
@@ -244,4 +259,5 @@ module.exports = {
   listGrantedToMe,
   listGrantEvents,
   recordGrantEvent,
+  setTaskPermissions,
 };

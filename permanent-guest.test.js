@@ -13,7 +13,7 @@ async function project(rows,poolRows,triage=[]){
     filterLegacyGcalBlocks:rows=>rows,shared:null,getPublicCalendarMap:async()=>new Map(),getPublicTagMap:async()=>new Map(),
     publicFeedType:()=> 'task',calendarMeta:()=>null,localTimeFromAny:v=>v||'',publicFeedTypeLabel:()=> 'Task',taskMinutes:(_a,_b,d)=>d||30,publicTaskPoints:()=>0,publicTaskStatus:(task,done)=>done.has(task.id)||task.completed?'done':'open'
   };
-  vm.createContext(context);
+  context.require=require('node:module').createRequire(require.resolve('./routes/social-todo')); vm.createContext(context);
   const start=source.indexOf('  let allRows;'),end=source.indexOf('\n  const { rows: sponsors }',start);
   vm.runInContext(fn('taskMinutes')+'\n'+fn('publicTaskIdentityIds')+'\n'+fn('normalizePublicTask')+'\nasync function run(){'+source.slice(start,end)+'\nreturn tasks;}globalThis.result=run();',context);
   return JSON.parse(JSON.stringify(await context.result));

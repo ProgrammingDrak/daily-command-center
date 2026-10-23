@@ -72,8 +72,7 @@
     const viewer = (current && current.viewer) || {};
     const caps = viewer.capabilities || {};
     if (Object.prototype.hasOwnProperty.call(caps, cap)) return !!caps[cap];
-    if (cap === "place_bounty") return !!viewer.loggedIn;
-    return true;
+    return false;
   }
 
   function esc(value) { return window.DCC.esc(value); } // delegates to core.js
@@ -267,6 +266,8 @@
     const type = itemType(task);
     return {
       id: task.id,
+      blockId: task.blockId,
+      taskPriority: task.taskPriority||"Medium",
       title: task.redacted ? "🔒 Private task" : task.title,
       untimed: task.untimed,
       subtaskOf: task.subtaskOf,
@@ -337,51 +338,26 @@
 
   const noop = () => "";
   function renderGuestCard(task){
-    const ev = guestTaskToEv(task);
-    if (typeof window.renderItineraryCard !== "function") {
-      const fallback = document.createElement("div");
-      fallback.className = "tl-item";
-      fallback.textContent = ev.title;
-      return fallback;
-    }
-    const el = window.renderItineraryCard(ev, {
-      guest: true,
-      cfg: guestCfg, srcTag: noop, colorMeta: guestColorMeta,
-      taskTagColor: guestTagColor, taskTagChipsHtml: guestTagChipsHtml,
-      f12: fmtTime, ms: guestMs,
-      dur: (e) => e.durationMinutes || 0, origDur: () => 0,
-      isMeeting: (e) => e.type === "calendar" || e.type === "meeting" || e.type === "oneone",
-      isWrap: () => false, isRideAlong: () => false,
-      escHtml: esc, notesButton: noop,
-      pointsChip: guestPoints, petPrivacyChip: noop,
-      reactionChipsHtml: reactionBar,
-      bountyCount: taskBountied(task) ? 1 : 0,
-      bountyMeta: { count: taskBountied(task) ? 1 : 0, hasSponsor: false, sponsorName: "" },
-      footerHtml: guestFooterHtml(task)
+    const ev=guestTaskToEv(task),done=task.status==="done";
+    const access=current.taskAccess||{},modes=access.modes||{};
+    const id=task.blockId,canAct=action=>!task.redacted&&id&&window.DCC.TaskActionPolicy.mode(modes,action)!=='view';
+    const open=action=>DCC.TaskActions.open({owner:access.ownerUserId,id,action,changed:()=>load()});
+    const config=guestCfg(ev.type);
+    const time=task.untimed?'Unscheduled':[task.start,task.end].filter(Boolean).map(fmtTime).join(' - ');
+    const el=window.renderItineraryListRow(ev,{
+      guest:true,done,barColor:guestTagColor(ev)||config.color,escHtml:esc,
+      extraClass:task.createdByGuest?'guest-submitted':'',
+      titleExtrasHtml:guestTagChipsHtml(ev),
+      metaHtml:'<span class="tag '+esc(config.cls)+'">'+esc(config.tag)+'</span>'+guestPoints(ev)+'<span>'+esc(time)+'</span>'+(ev.taskPriority==='Medium'?'':'<span class="task-priority-action">'+esc(ev.taskPriority)+'</span>'),
+      onComplete:canAct('complete')?()=>open('complete'):null,
+      completionTitle:modes.complete==='suggest'?'Suggest completion':'Complete task',
+      onSchedule:!done&&canAct('schedule')?()=>open('schedule'):null,
+      onOpen:()=>{const body=document.createElement('p');body.textContent=task.detail||task.title;DCC.modal({title:task.title,body});}
     });
-    if (task.createdByGuest) el.classList.add("guest-submitted");
-    return el;
-  }
-
-  // Compact one-liner for completed tasks — mirrors the owner's done rows.
-  function compactRowEl(task){
-    const ev = guestTaskToEv(task);
-    const color = guestTagColor(ev) || guestCfg(ev.type).color;
-    const t1 = fmtTime(task.start);
-    const el = document.createElement("div");
-    el.className = "tl-compact" + (task.createdByGuest ? " guest-submitted" : "");
-    el.innerHTML =
-      '<div class="tl-time">' + esc(t1.replace(/ (AM|PM)/, "")) + '</div>' +
-      '<div class="tl-node"></div>' +
-      '<div class="compact-row">' +
-        '<div class="c-check" title="Done">' + CK_SVG + '</div>' +
-        '<div class="bar" style="background:' + esc(color) + '"></div>' +
-        '<span class="c-title">' + (ev.redacted ? "🔒 Private task" : esc(task.title)) + '</span>' +
-        '<span class="c-time">' + esc(t1) + (task.end ? ' - ' + esc(fmtTime(task.end)) : '') + '</span>' +
-      '</div>';
-    el.insertAdjacentHTML('beforeend',reactionBar(task));
-    // A task completed during an interrupted offer keeps its existing draft reachable.
-    if(composers.has(composerId(task,'reward')))el.insertAdjacentHTML('beforeend',rewardButtonHtml(task)+rewardFormHtml(task));
+    const footer=document.createElement('div');footer.className='task-row-social';
+    footer.innerHTML=reactionBar(task)+(done?(composers.has(composerId(task,'reward'))?rewardButtonHtml(task)+rewardFormHtml(task):''):guestFooterHtml(task));
+    if(footer.innerHTML)el.append(footer);
+    DCC.TaskActions.attach(el,ev,{owner:access.ownerUserId,modes,changed:()=>load()});
     return el;
   }
 
@@ -440,6 +416,7 @@
     const visible = visibleTasks(tasks);
     updateStats(tasks);
     list.innerHTML = "";
+    list.classList.remove("tl");list.classList.add("unified-task-list");
     const blocks = window.DCC.TimeBlocks
       ? window.DCC.TimeBlocks.forDate((current && current.blocks) || [],current && current.date)
       : [];
@@ -452,7 +429,7 @@
         if(timed&&!node.depth&&prevEnd!==null&&start!==null&&start-prevEnd>=15)frag.appendChild(gapEl(start-prevEnd));
         const end=window.DCC.TimeBlocks.minutes(task.end,true);
         if(!node.depth&&end!==null)prevEnd=end;
-        const el=task.status==="done"?compactRowEl(task):renderGuestCard(task);
+        const el=renderGuestCard(task);
         if(node.depth)el.style.marginLeft=(Math.min(node.depth,6)*22)+"px";
         frag.appendChild(el);
       });
@@ -518,6 +495,7 @@
     if (hero) hero.setAttribute("data-print-url", location.href.split("?")[0]);
     document.getElementById("todo-public-updated").textContent = "Updated " + new Date(data.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     renderCalendarOptions(data);
+    const accessBar=document.getElementById("task-access-context");if(accessBar)accessBar.textContent="Access: "+(data.taskAccess?.role||"public")+" · Task actions follow owner-granted permissions. Suggestions require approval.";
     renderTasks(data.tasks || []);
     applyCapabilities();
   }
