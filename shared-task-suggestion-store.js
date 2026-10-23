@@ -1,6 +1,6 @@
 // Modern shared suggestions are append-only proposals, never scheduled tasks.
 // Serialize the append and its receipt so concurrent/lost-response retries are safe.
-async function recordSuggestion({pool,share,date,item,requestKey,fingerprint,skeleton}) {
+async function recordSuggestion({pool,share,date,item,requestKey,fingerprint,skeleton,allowedDates = null}) {
   const client=await pool.connect();
   try {
     await client.query('BEGIN');
@@ -13,6 +13,9 @@ async function recordSuggestion({pool,share,date,item,requestKey,fingerprint,ske
     if(prior){
       if(prior.fingerprint!==fingerprint){const e=new Error('This request was already used for a different suggestion');e.statusCode=409;throw e;}
       await client.query('COMMIT');return prior.item;
+    }
+    if(allowedDates && !allowedDates.includes(date)){
+      const e=new Error('Suggestions can only be added for today or tomorrow');e.statusCode=400;throw e;
     }
     await client.query(`INSERT INTO dcc_state(date,workspace_id,user_id,state_json,updated_at)
       VALUES($1,$2,$3,$4,NOW()) ON CONFLICT(date,workspace_id) DO NOTHING`,[date,share.workspace_id,share.owner_id||null,skeleton]);

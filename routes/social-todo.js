@@ -19,17 +19,37 @@ const conditionalRewards = require("../conditional-reward-store").createConditio
   async resolveTasks(offer, client, state) {
     // Freeze the relevant rows/legacy day overlay through award commit. A
     // concurrent reopen/delete/private change serializes before or after earning.
+    const date = coerceDateString(offer.task_date);
     const blockIds = rewardConditions.leaves(offer.offer_settings.condition).map(n => n.blockId).filter(Boolean);
-    await client.query(`SELECT id FROM blocks WHERE workspace_id=$1
+    const { rows: lockedRows } = await client.query(`SELECT id, type, date, properties, deleted_at FROM blocks WHERE workspace_id=$1
       AND (id=ANY($2::text[]) OR (date=$3::date AND type='day_root')) ORDER BY id FOR SHARE`,
-      [offer.workspace_id, blockIds, coerceDateString(offer.task_date)]);
+      [offer.workspace_id, blockIds, date]);
+    const blocksById = new Map(lockedRows.map(row => [row.id, row]));
+    const legacyDoneIds = new Set(lockedRows.filter(row => row.type === "day_root" && !row.deleted_at)
+      .flatMap(row => [...(row.properties?._done?.ids || []), ...Object.keys(row.properties?._done?.at || {})]).map(String));
     const { rows: [share] } = await client.query("SELECT * FROM todo_shares WHERE id=$1 AND workspace_id=$2 AND active=TRUE FOR SHARE", [offer.share_id, offer.workspace_id]);
     if (!share) return new Map();
-    const view = await buildPublicTodoShare(share, coerceDateString(offer.task_date), null, { state, exec: client });
+    // Only the current canonical projection can establish day membership. A
+    // prepared timeline may still contain a completed twin after a move/undo.
+    const canonicalBlockIds = new Set();
+    const view = await buildPublicTodoShare(share, date, null, { state, exec: client, canonicalBlockIds });
     const states = new Map();
     for (const leaf of rewardConditions.leaves(offer.offer_settings.condition)) {
       const task = findPublicShareTask(view.tasks, leaf.taskId);
-      states.set(leaf.taskId, !!task && (!leaf.blockId || task.blockId === leaf.blockId) && task.status === "done");
+      if (!leaf.blockId) {
+        states.set(leaf.taskId, !!task && task.status === "done");
+        continue;
+      }
+      const block = blocksById.get(leaf.blockId);
+      const props = block?.properties || {};
+      const eligible = !!task && task.blockId === leaf.blockId && !!block && !block.deleted_at
+        && canonicalBlockIds.has(block.id) && (!block.date || coerceDateString(block.date) === date)
+        && props.publicVisibility !== "private" && !["workout", "meal"].includes(props.type);
+      // Archive-day overlays remain valid for unmigrated rows, but an explicit
+      // canonical reopen (revision present) always supersedes legacy evidence.
+      const legacyDone = !props._completionRevision && !!task
+        && task.identityIds.some(id => legacyDoneIds.has(String(id)));
+      states.set(leaf.taskId, eligible && (blockDB.isCompletedTaskProps(props) || legacyDone));
     }
     return states;
   }
@@ -621,6 +641,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
       kind
     }, doneIds, calendarsById, { redacted, tagsById });
     addTask(task);
+    shared?.canonicalBlockIds?.add(block.id);
   }
 
   for (const item of ((state.schedule && state.schedule.timeline) || [])) {
@@ -836,7 +857,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
 // routes/dcc.js were repointed: `saveDccState` is `DO UPDATE SET state_json =
 // EXCLUDED.state_json`, so basing the write on a stale file would full-replace the real day
 // with it. Async because of that read; the single caller awaits.
-async function appendPublicShareTriageItem({ share, date, title, durationMinutes, visitorName, visitorEmail, note, req, suggestedTime = null, requestKey = null, fingerprint = null }) {
+async function appendPublicShareTriageItem({ share, date, title, durationMinutes, visitorName, visitorEmail, note, req, suggestedTime = null, requestKey = null, fingerprint = null, allowedDates = null }) {
   const now = new Date().toISOString();
   const localId = "public-" + crypto.randomUUID();
   const item = {
@@ -866,7 +887,7 @@ async function appendPublicShareTriageItem({ share, date, title, durationMinutes
     createdByGuestEmail: visitorEmail
   };
 
-  if (requestKey) return suggestionStore.recordSuggestion({pool,share,date,item,requestKey,fingerprint,skeleton:buildSkeletonState(date)});
+  if (requestKey) return suggestionStore.recordSuggestion({pool,share,date,item,requestKey,fingerprint,allowedDates,skeleton:buildSkeletonState(date)});
   const dayFile = getDayFilePath(date);
   // ── This is an UNAUTHENTICATED writer, and `saveDccState` is a FULL REPLACE ──
   //
@@ -1391,7 +1412,7 @@ app.post("/api/todo-share/sponsorships/:id/status", async (req, res) => {
     if (status === "dismissed" && sponsorship.kind === "bounty") {
       await revokeTodoShareBounty(sponsorship, userId, client);
     }
-    if (status === "dismissed" && sponsorship.kind === "reward" && slotRewardId) {
+    if (status === "dismissed" && sponsorship.kind === "reward" && slotRewardId && !sponsorship.offer_settings?.condition) {
       // Remove this sponsor's split; soft-delete the reward if nothing remains.
       const { rows: rewardRows } = await client.query(
         "SELECT * FROM slot_rewards WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE",
@@ -1399,12 +1420,17 @@ app.post("/api/todo-share/sponsorships/:id/status", async (req, res) => {
       );
       const existingReward = rewardRows[0];
       if (existingReward) {
-        const splits = (Array.isArray(existingReward.sponsor_splits) ? existingReward.sponsor_splits : [])
+        const priorSplits = Array.isArray(existingReward.sponsor_splits) ? existingReward.sponsor_splits : [];
+        const splits = priorSplits
           .filter(split => String(split && split.sponsorshipId) !== String(sponsorship.id));
-        if (!splits.length) {
-          await client.query("UPDATE slot_rewards SET deleted_at = NOW(), active = FALSE, updated_at = NOW() WHERE workspace_id = $1 AND id = $2", [req.workspaceId, slotRewardId]);
-        } else {
-          await client.query("UPDATE slot_rewards SET sponsor_splits = $3, updated_at = NOW() WHERE workspace_id = $1 AND id = $2", [req.workspaceId, slotRewardId, JSON.stringify(splits)]);
+        // A pending/rejected reference did not contribute a split. It must not
+        // delete or rewrite an unrelated reward already in the owner's catalog.
+        if (splits.length !== priorSplits.length) {
+          if (!splits.length) {
+            await client.query("UPDATE slot_rewards SET deleted_at = NOW(), active = FALSE, updated_at = NOW() WHERE workspace_id = $1 AND id = $2", [req.workspaceId, slotRewardId]);
+          } else {
+            await client.query("UPDATE slot_rewards SET sponsor_splits = $3, updated_at = NOW() WHERE workspace_id = $1 AND id = $2", [req.workspaceId, slotRewardId, JSON.stringify(splits)]);
+          }
         }
 
       }
@@ -1765,17 +1791,16 @@ app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
     const visitorName = String(body.visitorName || body.visitor_name || "").trim().slice(0, 80);
     const visitorEmail = String(body.visitorEmail || body.visitor_email || "").trim().slice(0, 180);
     const note = String(body.note || "").trim().slice(0, 1000);
-    // CLAMPED to today or tomorrow. The 50-item cap is per (date, workspace) and the guest
-    // chose the date, so without this it bounded nothing: a script walks dates, 50 items each,
-    // minting a `dcc_state` row per date across every date Postgres accepts. `isValidDate` is
-    // only a shape check (`/^\d{4}-\d{2}-\d{2}$/`, no range). Costs nothing to close — the real
-    // client never sends `date` at all (public-todo-share.js posts name, email, title,
-    // durationMinutes, note), so an arbitrary one is a stale client or an attempt to spread
-    // past the cap.
+    // Keep the 50-item per-day cap bounded to today/tomorrow. Modern clients
+    // send the viewed date: reject unsupported new suggestions instead of
+    // silently moving them. The store checks existing receipts first so a lost
+    // accepted response remains retryable across midnight. Legacy clients keep
+    // their historical today fallback, including when they omit the date.
     const todayStr = getTodayStr();
     const tomorrowStr = new Date(new Date(`${todayStr}T12:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10);
-    const requestedDate = isValidDate(body.date) ? body.date : todayStr;
-    const date = (requestedDate === todayStr || requestedDate === tomorrowStr) ? requestedDate : todayStr;
+    const requestedDate = body.date == null ? todayStr : body.date;
+    const allowedDates = [todayStr, tomorrowStr];
+    const date = requestKey ? requestedDate : (allowedDates.includes(requestedDate) ? requestedDate : todayStr);
     // AWAITED as of C5b: the writer persists to Postgres now, and its DB save throws on
     // failure. Without the await this handler would answer 201 for a task that never landed,
     // and the enclosing catch (which turns it into a 500) would never see the rejection.
@@ -1787,7 +1812,7 @@ app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
       visitorName,
       visitorEmail,
       note,
-      req, suggestedTime, requestKey, fingerprint
+      req, suggestedTime, requestKey, fingerprint, allowedDates
     });
     broadcast("dcc-state-changed", { source: "public-todo-triage", date }, share.workspace_id);
     broadcast("todo-share-changed", { action: "public-triage-create", id: triageItem.id }, share.workspace_id);
