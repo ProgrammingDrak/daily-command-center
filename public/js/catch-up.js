@@ -531,8 +531,10 @@
         (reviewHref ? '<a class="carryover-btn carryover-btn-schedule cu-wait-draft' + (shouldCopyDraft ? ' cu-wait-copy' : '') + '" target="_blank" rel="noopener">Review and Send</a>' :
           (draft && draft.draft_preview ? '<button class="carryover-btn carryover-btn-schedule cu-wait-copy">Copy Draft</button>' : '')) +
         '<button class="carryover-btn cu-wait-schedule">Schedule check-in</button>' +
+        '<button class="carryover-btn cu-wait-rename">Edit task title</button>' +
         '<button class="carryover-btn carryover-btn-schedule cu-wait-unblock">Unblock</button>';
       detailBody.appendChild(detailActions);
+      detailActions.querySelector('.cu-wait-rename').addEventListener('click', event => api.rename(item.id, event.currentTarget));
       const toggleDetails = () => {
         const opening = details.hidden;
         details.hidden = !opening;

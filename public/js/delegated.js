@@ -666,7 +666,7 @@
     }
     return '<div class="delegated-card delegated-itinerary-card task-dependency-card' + ((ready || closed) ? " dependency-ready" : "") + '" data-id="' + esc(item.id) + '">' +
       '<div class="delegated-card-score dependency' + ((ready || closed) ? " ready" : "") + '">' + icon + "</div>" +
-      '<div class="delegated-card-body"><div class="delegated-card-title">' + esc(dependent) + '</div><div class="delegated-card-meta">' + statePill + "</div></div>" +
+      '<div class="delegated-card-body"><div class="delegated-card-title"><button type="button" class="waiting-title-edit" data-delegated-action="rename" data-id="' + esc(item.id) + '" aria-label="Rename task: ' + esc(dependent) + '">' + esc(dependent) + '</button></div><div class="delegated-card-meta">' + statePill + "</div></div>" +
       '<div class="delegated-card-actions">' + actions + "</div></div>";
   }
 
@@ -712,8 +712,8 @@
       '<details class="waiting-more"><summary>More actions</summary><div>' +
       '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
       '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button></div></details>' :
-      (followUpComplete ? '' : '<button type="button" data-delegated-action="check-in" data-id="' + esc(item.id) + '">Checked in</button>' +
-      '<button type="button" data-delegated-action="schedule" data-id="' + esc(item.id) + '">Schedule check-in</button>') +
+      (followUpComplete ? '' : '<button type="button" data-delegated-action="check-in" data-id="' + esc(item.id) + '">Checked in</button>') +
+      '<button type="button" data-delegated-action="schedule" data-id="' + esc(item.id) + '">Schedule check-in</button>' +
       '<details class="waiting-more"><summary>More actions</summary><div>' +
       '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
       '<button type="button" data-delegated-action="unblock" data-id="' + esc(item.id) + '" title="The blocker is gone. Put the actual task on your schedule.">Schedule task</button>' +
@@ -723,7 +723,7 @@
     return '<div class="' + cardCls + '" data-id="' + esc(item.id) + '">' +
       '<div class="delegated-card-body">' +
         badge +
-        '<div class="delegated-card-title">' + esc(headline) + linkChip + sourceLink + '</div>' +
+        '<div class="delegated-card-title"><button type="button" class="waiting-title-edit" data-delegated-action="rename" data-id="' + esc(item.id) + '" aria-label="Rename task: ' + esc(headline) + '">' + esc(headline) + '</button>' + linkChip + sourceLink + '</div>' +
         '<dl class="waiting-facts"><div><dt>Waiting for</dt><dd>' + sub + '</dd></div>' +
           '<div><dt>Follow-up</dt><dd>' + esc(p.checkInDate || (followUpComplete ? 'Complete' : 'From repeat cadence')) + '</dd></div></dl>' +
         (note ? '<div class="delegated-card-note">' + esc(note) + '</div>' : '') +
@@ -744,6 +744,8 @@
           markDelegatedItemCheckedById(id);
         } else if (action === "schedule") {
           scheduleDelegatedItem(id, btn);
+        } else if (action === "rename") {
+          renameWaitingTitle(id, btn);
         } else if (action === "edit") {
           openDelegatedModal(id);
         } else if (action === "unblock") {
@@ -1369,6 +1371,52 @@
     return true;
   }
 
+  async function renameWaitingTitle(id, anchor) {
+    const item = getDelegatedItemById(id);
+    if (!item || !window.DCC?.overlay) return;
+    const original = item.properties.myTask || item.properties.title || "";
+    const form = document.createElement('form');
+    form.innerHTML = '<label class="delegated-modal-label" for="waiting-title-input">Task title</label>' +
+      '<input id="waiting-title-input" class="delegated-modal-input" maxlength="300" required>' +
+      '<p role="alert" class="waiting-title-error"></p><div class="delegated-modal-actions">' +
+      '<button type="button" class="secondary" data-cancel>Cancel</button><button type="submit" class="primary">Save title</button></div>';
+    const input = form.querySelector('input'); input.value = original;
+    let saving = false, snapshot = null;
+    const handle = window.DCC.overlay.open({ title: 'Edit task title', body: form, anchor,
+      kind: window.innerWidth <= 600 ? 'sheet' : 'modal', canClose: () => !saving });
+    form.querySelector('[data-cancel]').onclick = () => handle.close('cancel');
+    form.onsubmit = async event => {
+      event.preventDefault();
+      if (saving || !snapshot || !input.value.trim()) return;
+      saving = true;
+      form.querySelectorAll('button,input').forEach(el => { el.disabled = true; });
+      try {
+        await window.DCC.api('/api/waiting-items/' + encodeURIComponent(id) + '/title', {
+          method: 'PATCH', body: { ...snapshot, title: input.value.trim() }, errorLabel: 'Title could not be saved'
+        });
+        saving = false; handle.close('saved');
+        await afterWaitingAction();
+        toast('Task title updated', 'success');
+      } catch (error) {
+        form.querySelector('[role="alert"]').textContent = error.message || 'Title could not be saved';
+      } finally {
+        saving = false; form.querySelectorAll('button,input').forEach(el => { el.disabled = false; });
+      }
+    };
+    input.disabled = true;
+    form.querySelector('[type="submit"]').disabled = true;
+    try {
+      const result = await window.DCC.api('/api/waiting-items/' + encodeURIComponent(id) + '/title', { errorLabel: 'Title could not be loaded' });
+      snapshot = result;
+      input.value = result.title;
+      input.disabled = false;
+      form.querySelector('[type="submit"]').disabled = false;
+      if (input.isConnected) input.focus();
+    } catch (error) {
+      form.querySelector('[role="alert"]').textContent = error.message || 'Title could not be loaded';
+    }
+  }
+
   function openDelegatedModal(idOrNull, prefill) {
     const overlay = document.getElementById("delegated-modal-overlay");
     if (!overlay) return;
@@ -1406,6 +1454,8 @@
 
     const titleEl = document.getElementById("delegated-modal-title");
     if (titleEl) titleEl.textContent = idOrNull ? "Edit Waiting item" : "New Waiting item";
+    const rename = document.getElementById('dm-rename-title');
+    if (rename) { rename.hidden = !idOrNull; rename.onclick = () => { closeDelegatedModal(); renameWaitingTitle(idOrNull, rename); }; }
     const checkBtn = document.getElementById("dm-mark-checked");
     if (checkBtn) checkBtn.style.display = (idOrNull && item && isOpenDelegated(item) && !(p.checkInRepeat === false && !p.checkInDate)) ? "" : "none";
 
@@ -1887,6 +1937,7 @@
     unblock: unblockWaitingItem,
     complete: completeWaitingItem,
     open: openWaitingItem,
+    rename: renameWaitingTitle,
     completeCheckIn: markDelegatedItemCheckedById,
     completeCheckInTask,
     completeCheckInCycle,

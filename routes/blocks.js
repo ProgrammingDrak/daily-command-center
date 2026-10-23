@@ -2940,6 +2940,59 @@ module.exports = function mount(app, ctx) {
     return result;
   }));
 
+  app.get("/api/waiting-items/:id/title", route(async (req) => {
+    const item = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!item || item.deleted_at || item.properties?.kind !== "delegated_item") throw clientError("Waiting item not found", 404);
+    assertBlockOwnership(item, req.workspaceId);
+    const linkedRef = item.properties.linkedBlockId || null;
+    const linked = linkedRef ? await blockDB.findUniqueLiveBlockByReference(linkedRef, req.workspaceId) : null;
+    if (linkedRef && (!linked || !blockDB.isTaskRow(linked))) throw clientError("Linked task is unavailable. Refresh before renaming.", 409);
+    if (linked) assertBlockOwnership(linked, req.workspaceId);
+    const expectedTitle = item.properties.myTask || item.properties.title || "";
+    const expectedLinkedTitle = linked ? (linked.properties.title || "") : null;
+    return { title: linked ? expectedLinkedTitle : expectedTitle, expectedTitle, expectedLinkedTitle, expectedLinkedBlockId: linkedRef };
+  }));
+
+  app.patch("/api/waiting-items/:id/title", route(async (req) => {
+    const title = req.body && req.body.title;
+    if (typeof title !== "string" || !title.trim() || title.trim().length > 300) {
+      throw clientError("Task title must contain 1 to 300 characters", 400);
+    }
+    const client = await pool.connect();
+    let result, linked;
+    try {
+      await client.query("BEGIN");
+      const snapshot = await blockDB.getBlockIncludingDeleted(req.params.id, client);
+      if (!snapshot || snapshot.deleted_at || snapshot.properties?.kind !== "delegated_item") throw clientError("Waiting item not found", 404);
+      assertBlockOwnership(snapshot, req.workspaceId);
+      const linkedRef = snapshot.properties.linkedBlockId || null;
+      // Match completion's task -> Waiting lock order, then revalidate the link.
+      if (linkedRef) {
+        linked = await blockDB.findUniqueLiveBlockByReference(linkedRef, req.workspaceId, client, true);
+        if (!linked || !blockDB.isTaskRow(linked)) throw clientError("Linked task is unavailable. Refresh before renaming.", 409);
+        assertBlockOwnership(linked, req.workspaceId);
+      }
+      const item = await blockDB.getBlockIncludingDeleted(req.params.id, client, true);
+      if (!item || item.deleted_at || item.properties?.kind !== "delegated_item") throw clientError("Waiting item not found", 404);
+      assertBlockOwnership(item, req.workspaceId);
+      const currentTitle = item.properties.myTask || item.properties.title || "";
+      if ((item.properties.linkedBlockId || null) !== linkedRef ||
+          req.body.expectedLinkedBlockId !== linkedRef || req.body.expectedTitle !== currentTitle ||
+          req.body.expectedLinkedTitle !== (linked ? (linked.properties.title || "") : null)) {
+        throw clientError("This task changed elsewhere. Reopen it before renaming.", 409);
+      }
+      if (linked) await blockDB.updateBlock(linked.id, { properties: { ...linked.properties, title: title.trim() } }, client);
+      // Field-only edit: preserve cadence, status, history, placement and links.
+      result = await blockDB.updateBlock(item.id, { properties: { ...item.properties, myTask: title.trim() } }, client);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+    broadcast("blocks-changed", { action: "waiting-title", blockIds: [result.id, ...(linked ? [linked.id] : [])] }, req.workspaceId);
+    return result;
+  }));
+
   app.post("/api/waiting-items/:id/snooze", route(async (req, res) => {
     const until = req.body && req.body.until;
     if (!isValidDate(until)) { res.status(400).json({ error: "until must be YYYY-MM-DD" }); return; }

@@ -1,0 +1,63 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const express = require('express');
+const { createActivityDb } = require('./test-support/activity-db');
+const { route, isValidDate } = require('./lib/route-helpers');
+
+test('Waiting title edits are atomic, scoped and preserve follow-up state', {skip: !process.env.DCC_PGLITE_MODULE && !process.env.DCC_TEST_DATABASE_URL}, async t => {
+  const ctx = await createActivityDb(); t.after(ctx.close);
+  Object.assign(ctx, {route, isValidDate, broadcast() {}, getTodayStr: () => '2026-10-23', getScheduleBlocks: async () => []});
+  const app = express(); require('./routes/blocks')(app, ctx);
+  const handler = app._router.stack.find(l => l.route?.path === '/api/waiting-items/:id/title' && l.route.methods.patch).route.stack[0].handle;
+  const getHandler = app._router.stack.find(l => l.route?.path === '/api/waiting-items/:id/title' && l.route.methods.get).route.stack[0].handle;
+  const get = async (id, workspaceId='ws-1') => {
+    const res={statusCode:200,headersSent:false,status(c){this.statusCode=c;return this;},json(b){this.body=b;this.headersSent=true;return this;}};
+    await getHandler({params:{id},workspaceId},res);return {status:res.statusCode,body:res.body};
+  };
+  const snapshot = async id => {
+    const row=await ctx.blockDB.getBlock(id),linked=row.properties.linkedBlockId?await ctx.blockDB.getBlock(row.properties.linkedBlockId):null;
+    return {expectedTitle:row.properties.myTask||row.properties.title||'',expectedLinkedTitle:linked?.properties.title||null,expectedLinkedBlockId:row.properties.linkedBlockId||null};
+  };
+  const patch = async (id, body, workspaceId = 'ws-1') => {
+    body={...await snapshot(id),...body};
+    const res = { statusCode:200, headersSent:false, status(c){this.statusCode=c;return this;},json(b){this.body=b;this.headersSent=true;return this;} };
+    await handler({params:{id},body,workspaceId,session:{userId:workspaceId==='ws-1'?1:2}},res);
+    return {status:res.statusCode,body:res.body};
+  };
+  const task = await ctx.blockDB.createItineraryTask({date:'2026-10-23',workspaceId:'ws-1',userId:1,properties:{title:'Original',kind:'task',start:'11:00',end:'11:30',status:'blocked',waitingItemId:'keep',custom:'retain'}});
+  const props = {kind:'delegated_item',myTask:'Original',title:'Approval',status:'open',waitingReason:'blocked',linkedBlockId:task.id,checkInDate:null,checkInRepeat:false,checkInHistory:[{note:'Previous check-in',completedAt:'2026-10-22T12:00:00Z'}],delegatee:{name:'Synthetic colleague'},notes:'Keep context',source_id:'https://example.com/source',parksLinkedTask:true};
+  const item = await ctx.blockDB.createBlock({type:'block',date:null,user_id:1,workspace_id:'ws-1',properties:props});
+  const beforeTask = await ctx.blockDB.getBlock(task.id), beforeItem = await ctx.blockDB.getBlock(item.id);
+  assert.equal((await patch(item.id,{title:'Renamed',expectedTitle:'Original'})).status,200);
+  const savedItem = await ctx.blockDB.getBlock(item.id),savedTask = await ctx.blockDB.getBlock(task.id);
+  assert.deepEqual(savedItem.properties,{...beforeItem.properties,myTask:'Renamed'});
+  assert.deepEqual(savedTask.properties,{...beforeTask.properties,title:'Renamed'});
+  for(const key of ['date','parent_id','sort_order'])assert.equal(savedTask[key],beforeTask[key]);
+  assert.equal((await patch(item.id,{title:'Stale',expectedTitle:'Original'})).status,409);
+  assert.equal((await patch(item.id,{title:'Foreign'},'ws-2')).status,404);
+  for(const title of ['', ' ', 123, 'x'.repeat(301)])assert.equal((await patch(item.id,{title})).status,400);
+  const orphan = await ctx.blockDB.createBlock({type:'block',date:null,user_id:1,workspace_id:'ws-1',properties:{...props,linkedBlockId:null}});
+  assert.equal((await patch(orphan.id,{title:'Unlinked renamed'})).status,200);
+  assert.equal((await ctx.blockDB.getBlock(orphan.id)).properties.myTask,'Unlinked renamed');
+  const stale = await snapshot(item.id);
+  await ctx.blockDB.updateBlock(task.id,{properties:{...savedTask.properties,title:'Newer ordinary task title'}});
+  assert.equal((await get(item.id)).body.title,'Newer ordinary task title');
+  assert.deepEqual((await get(item.id)).body,{title:'Newer ordinary task title',expectedTitle:'Renamed',expectedLinkedTitle:'Newer ordinary task title',expectedLinkedBlockId:task.id});
+  assert.equal((await get(item.id,'ws-2')).status,404);
+  assert.equal((await patch(item.id,{...stale,title:'Stale overwrite'})).status,409);
+  assert.equal((await patch(item.id,{title:'Stale link',expectedLinkedBlockId:'no-longer-linked'})).status,409);
+  assert.equal((await ctx.blockDB.getBlock(task.id)).properties.title,'Newer ordinary task title');
+  await ctx.blockDB.updateBlock(task.id,{properties:savedTask.properties});
+  const update=ctx.blockDB.updateBlock;
+  ctx.blockDB.updateBlock=async(id,...args)=>{if(id===item.id)throw new Error('Synthetic second-write failure');return update(id,...args);};
+  assert.equal((await patch(item.id,{title:'Must roll back'})).status,500);
+  ctx.blockDB.updateBlock=update;
+  assert.equal((await ctx.blockDB.getBlock(task.id)).properties.title,'Renamed');
+  assert.equal((await ctx.blockDB.getBlock(item.id)).properties.myTask,'Renamed');
+  const dependency=await ctx.blockDB.createBlock({type:'block',date:null,user_id:1,workspace_id:'ws-1',properties:{...props,waitingReason:'task-dependency',blockerBlockId:orphan.id,myTask:'Stale task caption'}});
+  assert.equal((await get(dependency.id)).body.title,'Renamed');
+  assert.equal((await patch(dependency.id,{title:'Dependency title'})).status,200);
+  assert.deepEqual((await ctx.blockDB.getBlock(dependency.id)).properties,{...dependency.properties,myTask:'Dependency title'});
+  await ctx.blockDB.deleteBlock(task.id);
+  assert.equal((await patch(item.id,{title:'Missing link'})).status,409);
+});
