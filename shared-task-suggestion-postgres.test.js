@@ -1,0 +1,36 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const {createFixtureDb}=require('./scripts/commitment-test-db.cjs');
+const store=require('./shared-task-suggestion-store');
+const configured=!!process.env.DCC_TEST_DATABASE_URL;
+test('shared suggestions persist task inputs once without scheduling or replacing the day',{skip:!configured},async t=>{
+ const fixture=await createFixtureDb();t.after(fixture.cleanup);const {pool}=fixture;
+ await pool.query(`CREATE TABLE todo_shares(id SERIAL PRIMARY KEY,workspace_id TEXT,active BOOLEAN DEFAULT TRUE);
+  INSERT INTO todo_shares(workspace_id) VALUES('ws-1');
+  CREATE TABLE dcc_state(date DATE,workspace_id TEXT,user_id INTEGER,state_json JSONB,updated_at TIMESTAMPTZ,PRIMARY KEY(date,workspace_id));`);
+ await pool.query(store.SCHEMA_SQL);
+ await pool.query(`INSERT INTO dcc_state VALUES('2026-10-22','ws-1',1,'{"schedule":{"timeline":[{"title":"Keep scheduled work"}]},"triage":{"open_items":[],"resolved_items":[]},"privateData":"keep"}',NOW())`);
+ const share={id:1,workspace_id:'ws-1',owner_id:1,token:'synthetic'};
+ const source=fs.readFileSync(require.resolve('./routes/social-todo'),'utf8');
+ const ctx={pool,crypto:require('node:crypto'),APP_TIME_ZONE:'America/New_York',suggestionStore:store,todoShareUrl:()=>'/todo/synthetic',buildSkeletonState:date=>({date,triage:{open_items:[]}})};
+ vm.createContext(ctx);vm.runInContext(source.match(/async function appendPublicShareTriageItem\([\s\S]*?\n\}/)[0],ctx);
+ const input={share,date:'2026-10-22',title:'Plan a walk',durationMinutes:45,visitorName:'Riley',visitorEmail:'',note:'At the park',suggestedTime:'14:30',requestKey:'suggestion-request-123',fingerprint:'one',req:{}};
+ const results=await Promise.all([ctx.appendPublicShareTriageItem(input),ctx.appendPublicShareTriageItem(input)]);
+ assert.equal(results[0].id,results[1].id);
+ const read=async()=>(await pool.query("SELECT * FROM dcc_state WHERE date='2026-10-22' AND workspace_id='ws-1'")).rows[0];
+ let row=await read();assert.equal(row.user_id,1);assert.equal(row.state_json.privateData,'keep');assert.equal(row.state_json.schedule.timeline.length,1);
+ const item=row.state_json.triage.open_items[0];assert.equal(row.state_json.triage.open_items.length,1);
+ assert.equal(item.duration_minutes,45);assert.equal(item.estimated_minutes,45);assert.equal(item.suggested_time,'14:30');assert.equal(item.suggested_timezone,'America/New_York');assert.equal(item.suggested_date,'2026-10-22');assert.match(item.summary,/Suggested time: 14:30/);assert.equal(item.start,undefined);
+ await assert.rejects(ctx.appendPublicShareTriageItem({...input,fingerprint:'changed'}),/different suggestion/);
+ // An accepted response lost across midnight still returns its original receipt.
+ assert.equal((await ctx.appendPublicShareTriageItem({...input,date:'2026-10-23'})).id,item.id);
+ assert.equal((await pool.query("SELECT * FROM dcc_state WHERE date='2026-10-23'")).rows.length,0);
+ await pool.query(`CREATE FUNCTION fail_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic lost write'; END $$;
+ CREATE TRIGGER fail_receipt BEFORE INSERT ON todo_task_suggestion_requests FOR EACH ROW EXECUTE FUNCTION fail_receipt()`);
+ await assert.rejects(ctx.appendPublicShareTriageItem({...input,requestKey:'suggestion-request-456'}),/lost write/);
+ row=await read();assert.equal(row.state_json.triage.open_items.length,1);
+ await pool.query('DROP TRIGGER fail_receipt ON todo_task_suggestion_requests; DROP FUNCTION fail_receipt()');
+ await ctx.appendPublicShareTriageItem({...input,requestKey:'suggestion-request-456'});
+ assert.equal((await read()).state_json.triage.open_items.length,2);
+ await pool.query('UPDATE todo_shares SET active=FALSE');
+ await assert.rejects(ctx.appendPublicShareTriageItem({...input,requestKey:'suggestion-request-789'}),/unavailable/);
+});

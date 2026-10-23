@@ -51,7 +51,7 @@ try{
  await toggle('comment','two').click();await form('comment','two').locator('input').fill('Second task draft');
  await form('reward').locator('[name=rewardTitle]').focus();await form('reward').locator('[name=rewardTitle]').evaluate(e=>e.setSelectionRange(4,4));await refresh();
  assert.equal(await form('reward').locator('[name=rewardTitle]').inputValue(),'Coffee after workout');assert.equal(await form('reward').locator('[name=rewardTitle]').evaluate(e=>e===document.activeElement&&e.selectionStart===4),true);
- await page.locator('#todo-filter-status').selectOption('done');await page.locator('#todo-filter-status').selectOption('all');
+ await page.locator('[data-status-filter=open]').click();await page.locator('[data-status-filter=open]').click();
  assert.equal(await form('comment','two').locator('input').inputValue(),'Second task draft');
  await page.locator('[data-task-id="one"][data-reaction-emoji="👍"]').click();await page.waitForTimeout(70);
  assert.equal(await form('reward').locator('[name=sponsorName]').inputValue(),'Riley');
@@ -60,13 +60,11 @@ try{
  holdComment=true;await form('comment').getByRole('button',{name:'Send',exact:true}).click();while(!releaseComment)await new Promise(r=>setTimeout(r,5));await refresh();assert.equal(await form('comment').locator('input').isDisabled(),true);releaseComment();await page.getByText('My unsent note',{exact:true}).waitFor();assert.equal(await form('comment').isVisible(),false);assert.equal(await form('reward').locator('[name=rewardTitle]').inputValue(),'Coffee after workout');
  holdReward=true;await form('reward').getByRole('button',{name:'Send',exact:true}).click();while(!releaseReward)await new Promise(r=>setTimeout(r,5));await refresh();assert.equal(await form('reward').locator('[name=rewardTitle]').isDisabled(),true);assert.equal(await form('reward').getByRole('button',{name:'Send',exact:true}).isDisabled(),true);await toggle('reward').click();await toggle('reward').click();assert.equal(posts.filter(p=>p.url.endsWith('/sponsorships')).length,1);releaseReward();await page.getByText('Reward: Coffee after workout',{exact:true}).waitFor();assert.equal(await form('reward').isVisible(),false);
  assert.equal(await form('comment','two').locator('input').inputValue(),'Second task draft');mark('failed sends retain drafts; pending sends survive refresh without duplicates; success clears only its own composer');
- await page.locator('#todo-guest-add-toggle').click();assert.equal(await page.locator('#todo-create-title').isVisible(),true);assert.equal(await page.locator('#todo-create-note').isVisible(),false);
- await page.locator('#todo-create-note-toggle').click();await page.locator('#todo-create-note').fill('Optional task note');await page.locator('#todo-create-note-toggle').click();await page.locator('#todo-guest-add-toggle').click();await page.locator('#todo-guest-add-toggle').click();await page.locator('#todo-create-note-toggle').click();assert.equal(await page.locator('#todo-create-note').inputValue(),'Optional task note');await page.locator('#todo-guest-add-toggle').click();
  await toggle('comment','two').click();const before=posts.length;
  for(const width of [1440,375]){await page.setViewportSize({width,height:1100});await page.screenshot({path:path.join(out,width===1440?'desktop-collapsed.png':'mobile-collapsed.png'),fullPage:true});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1));
  const rects=await page.locator('#todo-public-list .tl-item').evaluateAll(items=>items.map(e=>{const r=e.getBoundingClientRect();return {top:r.top,bottom:r.bottom};}));for(let i=1;i<rects.length;i++)assert.ok(rects[i].top>=rects[i-1].bottom);
  assert.ok((await toggle('comment','two').boundingBox()).height>=44);await toggle('reward','two').click();const openHeight=(await form('reward','two').locator('xpath=ancestor::*[contains(@class,"tl-item")][1]').boundingBox()).height;assert.ok(openHeight>initialHeight);await toggle('reward','two').click();}
- assert.equal(posts.length,before);mark('desktop/mobile cards stack without overflow; composers use 44px targets and optional task notes preserve text');
+ assert.equal(posts.length,before);mark('desktop/mobile cards stack without overflow; composers use 44px targets');
  // A late response from the old viewer must not erase or disable a new viewer's draft.
  await toggle('comment','two').click();await form('comment','two').locator('input').fill('Old viewer pending comment');
  holdComment=true;releaseComment=undefined;await form('comment','two').getByRole('button',{name:'Send',exact:true}).click();while(!releaseComment)await new Promise(r=>setTimeout(r,5));

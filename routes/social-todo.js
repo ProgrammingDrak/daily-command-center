@@ -10,6 +10,7 @@ module.exports = function mount(app, ctx) {
 // browser file here is deliberate, not a layering accident.
 const shareExport = require("../public/js/share-export.js");
 const rewardConditions = require("../public/js/reward-conditions");
+const suggestionStore = require("../shared-task-suggestion-store");
 const conditionalRewards = require("../conditional-reward-store").createConditionalRewardStore({
   pool, enqueueReward: (...args) => socialStore.enqueueReward(...args),
   // Build non-transactional enrichment before borrowing a transaction connection.
@@ -52,12 +53,17 @@ function centsFromBody(value) {
 
 function todoActorKey(req) {
   if (req.session?.userId) return `user:${req.session.userId}`;
+  if (req.session?.todoActorKey) return req.session.todoActorKey;
   const raw = [
     getRequestOrigin(req),
     String(req.headers["user-agent"] || "").slice(0, 300),
     req.sessionID || ""
   ].join("|");
-  return "guest:" + crypto.createHash("sha256").update(raw).digest("hex").slice(0, 32);
+  const actor = "guest:" + crypto.createHash("sha256").update(raw).digest("hex").slice(0, 32);
+  // saveUninitialized:false otherwise gives an anonymous browser a new identity
+  // on each request. Keep the existing hash for current sessions and persist it.
+  if (req.session) req.session.todoActorKey = actor;
+  return actor;
 }
 
 function localHHMMFromDate(date = new Date()) {
@@ -96,6 +102,7 @@ async function ensureTodoShareTables() {
       last_viewed_at TIMESTAMPTZ
     )
   `);
+  await pool.query(suggestionStore.SCHEMA_SQL);
   await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_shares_workspace_active ON todo_shares(workspace_id, active, created_at DESC)");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS todo_sponsorships (
@@ -777,6 +784,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
   const tier = capabilities.resolveTier(req);
   return {
     date,
+    timeZone: APP_TIME_ZONE,
     workspaceName: share.workspace_name || "Daily Command Center",
     ownerUsername: share.owner_username || "",
     updatedAt: new Date().toISOString(),
@@ -798,7 +806,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
     // Re-project associated records against CURRENT task visibility. A stored
     // title or old discussion is never a back door around a later private flag.
     sponsorships: sponsors.filter(s => tasks.some(t => String(t.id) === String(s.task_id)))
-      .map(({ task_title, reward_title, note, sponsor_user_id, offer_settings, ...rest }) => ({ ...rest,
+      .map(({ task_title, reward_title, note, sponsor_user_id, offer_settings: _offer_settings, ...rest }) => ({ ...rest,
         task_title: tasks.find(t => String(t.id) === String(rest.task_id)).title,
         reward_title, note })),
     stats: {
@@ -828,7 +836,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
 // routes/dcc.js were repointed: `saveDccState` is `DO UPDATE SET state_json =
 // EXCLUDED.state_json`, so basing the write on a stale file would full-replace the real day
 // with it. Async because of that read; the single caller awaits.
-async function appendPublicShareTriageItem({ share, date, title, durationMinutes, visitorName, visitorEmail, note, req }) {
+async function appendPublicShareTriageItem({ share, date, title, durationMinutes, visitorName, visitorEmail, note, req, suggestedTime = null, requestKey = null, fingerprint = null }) {
   const now = new Date().toISOString();
   const localId = "public-" + crypto.randomUUID();
   const item = {
@@ -840,8 +848,9 @@ async function appendPublicShareTriageItem({ share, date, title, durationMinutes
     source_ref: todoShareUrl(req, share.token),
     source_id: localId,
     title,
-    summary: note,
+    summary: suggestedTime ? `Suggested time: ${suggestedTime} (${APP_TIME_ZONE}). ${note}`.trim() : note,
     notes: note,
+    ...(suggestedTime ? { suggested_time: suggestedTime, suggested_date: date, suggested_timezone: APP_TIME_ZONE } : {}),
     priority: "medium",
     escalation: "normal",
     received_at: now,
@@ -857,6 +866,7 @@ async function appendPublicShareTriageItem({ share, date, title, durationMinutes
     createdByGuestEmail: visitorEmail
   };
 
+  if (requestKey) return suggestionStore.recordSuggestion({pool,share,date,item,requestKey,fingerprint,skeleton:buildSkeletonState(date)});
   const dayFile = getDayFilePath(date);
   // ── This is an UNAUTHENTICATED writer, and `saveDccState` is a FULL REPLACE ──
   //
@@ -1743,6 +1753,12 @@ app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
     const share = await findTodoShareByToken(req.params.token);
     if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
     const body = req.body || {};
+    const requestKey = body.requestKey == null ? null : body.requestKey;
+    if (requestKey != null && (typeof requestKey !== "string" || !/^[a-zA-Z0-9_-]{16,80}$/.test(requestKey))) return res.status(400).json({error:"Invalid suggestion request key"});
+    const suggestedTime = body.suggestedTime || null;
+    if (suggestedTime != null && (typeof suggestedTime !== "string" || !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(suggestedTime))) return res.status(400).json({error:"Choose a valid suggested time"});
+    if (requestKey && (!Number.isInteger(Number(body.durationMinutes)) || Number(body.durationMinutes)<1 || Number(body.durationMinutes)>240)) return res.status(400).json({error:"Choose a duration from 1 to 240 minutes"});
+    const fingerprint = requestKey ? crypto.createHash("sha256").update(JSON.stringify(body)).digest("hex") : null;
     const title = String(body.title || "").trim().slice(0, 220);
     if (!title) return res.status(400).json({ error: "Task title is required" });
     const durationMinutes = Math.max(1, Math.min(240, Math.round(Number(body.durationMinutes || body.duration || 30) || 30)));
@@ -1771,7 +1787,7 @@ app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
       visitorName,
       visitorEmail,
       note,
-      req
+      req, suggestedTime, requestKey, fingerprint
     });
     broadcast("dcc-state-changed", { source: "public-todo-triage", date }, share.workspace_id);
     broadcast("todo-share-changed", { action: "public-triage-create", id: triageItem.id }, share.workspace_id);

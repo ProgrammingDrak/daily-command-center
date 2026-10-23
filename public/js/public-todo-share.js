@@ -45,8 +45,9 @@
     return '<button class="todo-composer-toggle todo-'+kind+'-btn" type="button" data-composer-toggle aria-controls="'+esc(composerId(task,kind))+'" aria-expanded="false" aria-label="'+esc(label+' for '+task.title)+'"><span aria-hidden="true">▸</span> '+esc(label)+'</button>';
   }
   const filters = {
-    types: new Set(["task", "repeat"]),
-    status: "all",
+    types: new Set(["task", "repeat", "calendar", "time"]),
+    statuses: new Set(["open", "done"]),
+    sponsored: false,
     calendar: "all",
     sort: "time"
   };
@@ -408,9 +409,8 @@
       const type = itemType(task);
       const typeKey = (type === "break" || type === "ooo") ? "time" : type;
       if (!filters.types.has(typeKey)) return false;
-      if (filters.status === "open" && task.status === "done") return false;
-      if (filters.status === "done" && task.status !== "done") return false;
-      if (filters.status === "sponsored" && !(task.sponsorships || []).some(s => s.status !== "dismissed")) return false;
+      if (!filters.statuses.has(task.status === "done" ? "done" : "open")) return false;
+      if (filters.sponsored && !(task.sponsorships || []).some(s => s.status !== "dismissed")) return false;
       if (filters.calendar !== "all" && type === "calendar" && calendarId(task) !== filters.calendar) return false;
       return true;
     });
@@ -464,7 +464,8 @@
       button.addEventListener("click",()=>{for(const {block} of groups){try{localStorage.setItem(guestCollapseKey(block),collapse?"1":"0");}catch(_error){}}renderTasks(current.tasks||[]);});
       controls.appendChild(button);
     }
-    frag.appendChild(controls);
+    if(!visible.length){const empty=document.createElement('p');empty.className='todo-share-empty';empty.textContent='No tasks match. Select task types and completion statuses to show tasks.';frag.appendChild(empty);}
+    else frag.appendChild(controls);
     groups.forEach(({block,nodes})=>{
       frag.appendChild(blockHeaderEl(block));
       if(!guestCollapsed(block))emitGroup(nodes,block.timed);
@@ -501,6 +502,7 @@
     const scope=JSON.stringify([token,data.date,data.ownerUsername,data.viewer?.loggedIn,data.viewer?.username,data.viewer?.tier]);
     if(scope!==composerScope){saveComposers();composers.clear();reactionOpen.clear();reactionPending.clear();composerScope=scope;loadComposers();}
     current = data;
+    window.DCC.SharedTaskSuggestions?.updateScope(scope);
     const allowed=new Set((data.tasks || []).filter(t=>!t.redacted).flatMap(t=>['reward','comment'].filter(k=>can(k==='reward'?'sponsor_reward':'comment')).map(k=>composerId(t,k))));
     for(const key of composers.keys())if(!allowed.has(key))composers.delete(key);
     document.getElementById("todo-public-content").hidden = false;
@@ -520,25 +522,12 @@
     applyCapabilities();
   }
 
-  function typeFilterLabel(){
-    const labels = [
-      ["task", "Tasks"],
-      ["repeat", "Repeat"],
-      ["calendar", "Calendar"],
-      ["time", "Breaks / OOO"]
-    ].filter(([key]) => filters.types.has(key)).map(([, label]) => label);
-    if (labels.length === 4) return "Everything";
-    if (!labels.length) return "Nothing";
-    if (labels.length <= 2) return labels.join(", ");
-    return labels.slice(0, 2).join(", ") + " +" + (labels.length - 2);
-  }
-
-  function syncTypeFilterButton(){
-    const button = document.getElementById("todo-filter-type-button");
-    if (button) button.textContent = typeFilterLabel();
-    document.querySelectorAll("[data-type-filter]").forEach(input => {
-      input.checked = filters.types.has(input.dataset.typeFilter);
-    });
+  function syncFilterPills(){
+    document.querySelectorAll('[data-type-filter]').forEach(el=>el.setAttribute('aria-pressed',String(filters.types.has(el.dataset.typeFilter))));
+    document.querySelectorAll('[data-status-filter]').forEach(el=>el.setAttribute('aria-pressed',String(filters.statuses.has(el.dataset.statusFilter))));
+    document.querySelector('[data-types-all]').disabled=filters.types.size===4;
+    document.querySelector('[data-types-none]').disabled=filters.types.size===0;
+    document.getElementById('todo-filter-sponsored').setAttribute('aria-pressed',String(filters.sponsored));
   }
 
   async function load(){
@@ -554,36 +543,6 @@
     return loadPromise;
   }
 
-  async function submitCreateTask(){
-    const status = document.getElementById("todo-create-status");
-    const titleEl = document.getElementById("todo-create-title");
-    const nameEl = document.getElementById("todo-create-name");
-    const emailEl = document.getElementById("todo-create-email");
-    const durEl = document.getElementById("todo-create-duration");
-    const noteEl = document.getElementById("todo-create-note");
-    const payload = {
-      visitorName: nameEl ? nameEl.value.trim() : "",
-      visitorEmail: emailEl ? emailEl.value.trim() : "",
-      title: titleEl ? titleEl.value.trim() : "",
-      durationMinutes: durEl ? durEl.value : "30",
-      note: noteEl ? noteEl.value.trim() : ""
-    };
-    if (!payload.title) return;
-    if (status) status.textContent = "Adding...";
-    try {
-      await api("/api/public/todo-share/" + encodeURIComponent(token) + "/tasks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      if (status) status.textContent = "Added.";
-      if (titleEl) titleEl.value = "";
-      if (noteEl) noteEl.value = "";
-      await load();
-    } catch (e) {
-      if (status) status.textContent = e.message;
-    }
-  }
 
   async function toggleReaction(button){
     const id=String(button.dataset.taskId),scope=composerScope;
@@ -617,7 +576,7 @@
       }
     } catch (e) {
       /* The next refresh reconciles an uncertain toggle; never retry it blindly. */
-    } finally { if(scope===composerScope){reactionPending.delete(id);button.closest('.todo-public-reactions')?.querySelectorAll('button').forEach(el=>el.disabled=false);} }
+    } finally { if(scope===composerScope){reactionPending.delete(id);document.querySelectorAll('[data-reaction-emoji]').forEach(el=>{if(el.dataset.taskId===id)el.disabled=false;});} }
 
   }
 
@@ -846,7 +805,6 @@
 
   function bindControls(){
     [
-      ["todo-filter-status", "status"],
       ["todo-filter-calendar", "calendar"],
       ["todo-sort", "sort"]
     ].forEach(([id, key]) => {
@@ -858,48 +816,16 @@
         if (current) renderTasks(current.tasks || []);
       });
     });
-    const typeButton = document.getElementById("todo-filter-type-button");
-    const typeMenu = document.getElementById("todo-filter-type-menu");
-    if (typeButton && typeMenu) {
-      typeButton.addEventListener("click", () => {
-        const nextOpen = typeMenu.hidden;
-        typeMenu.hidden = !nextOpen;
-        typeButton.setAttribute("aria-expanded", String(nextOpen));
-      });
-      typeMenu.addEventListener("change", e => {
-        const input = e.target.closest("[data-type-filter]");
-        if (!input) return;
-        const key = input.dataset.typeFilter;
-        if (input.checked) filters.types.add(key);
-        else filters.types.delete(key);
-        syncTypeFilterButton();
-        if (current) renderTasks(current.tasks || []);
-      });
-      document.addEventListener("click", e => {
-        if (typeMenu.hidden || e.target.closest("#todo-type-filter")) return;
-        typeMenu.hidden = true;
-        typeButton.setAttribute("aria-expanded", "false");
-      });
-      syncTypeFilterButton();
-    }
-
-    // Inline guest add-task toggle.
-    const addToggle = document.getElementById("todo-guest-add-toggle");
-    const addForm = document.getElementById("todo-guest-add-form");
-    if (addToggle && addForm) {
-      addToggle.addEventListener("click", () => {
-        const open = addForm.hidden;
-        addForm.hidden = !open;
-        addToggle.setAttribute("aria-expanded", String(open));
-        if (open) { const t = document.getElementById("todo-create-title"); if (t) t.focus(); }
-      });
-    }
-    const noteToggle=document.getElementById('todo-create-note-toggle'),notePanel=document.getElementById('todo-create-note-panel');
-    if(noteToggle && notePanel)noteToggle.addEventListener('click',()=>{notePanel.hidden=!notePanel.hidden;noteToggle.setAttribute('aria-expanded',String(!notePanel.hidden));if(!notePanel.hidden)document.getElementById('todo-create-note').focus();});
-    const createBtn = document.getElementById("todo-create-task");
-    if (createBtn) createBtn.addEventListener("click", submitCreateTask);
-    const createTitle = document.getElementById("todo-create-title");
-    if (createTitle) createTitle.addEventListener("keydown", e => { if (e.key === "Enter") submitCreateTask(); });
+    document.querySelectorAll('[data-type-filter],[data-status-filter],[data-types-all],[data-types-none],#todo-filter-sponsored').forEach(button=>button.addEventListener('click',()=>{
+      if(button.hasAttribute('data-types-all'))filters.types=new Set(['task','repeat','calendar','time']);
+      else if(button.hasAttribute('data-types-none'))filters.types.clear();
+      else if(button.id==='todo-filter-sponsored')filters.sponsored=!filters.sponsored;
+      else {const key=button.dataset.typeFilter||button.dataset.statusFilter,set=button.dataset.typeFilter?filters.types:filters.statuses;if(set.has(key))set.delete(key);else set.add(key);}
+      syncFilterPills();if(current)renderTasks(current.tasks||[]);
+    }));
+    syncFilterPills();
+    const suggestButton=document.getElementById('todo-suggest-task');
+    suggestButton.addEventListener('click',()=>{if(current)window.DCC.SharedTaskSuggestions.open({button:suggestButton,data:current,api,onSuccess:()=>{document.getElementById('todo-suggestion-feedback').textContent='Suggestion sent to the owner for review.';load();}});});
 
     const list = document.getElementById("todo-public-list");
     if (list) {

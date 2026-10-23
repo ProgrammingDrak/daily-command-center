@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/public/css/tokens.css">
   <link rel="stylesheet" href="/public/css/dashboard.css">
   <link rel="stylesheet" href="/public/css/ui-optimization.css">
+  <link rel="stylesheet" href="/public/css/core-ui.css">
 <style>
 [data-condition-editor]{flex-basis:100%;min-width:0;width:100%}
 [data-condition-editor] button,[data-condition-editor] select{min-height:44px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:inherit;padding:6px 10px;max-width:100%}
@@ -20,6 +21,7 @@
 .reward-condition-picker{max-height:240px;overflow:auto}
 .reward-condition-members{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .reward-condition-members span{display:inline-flex;align-items:center;gap:4px;max-width:100%;overflow-wrap:anywhere}
+.reward-condition-group summary::before{content:"▸";margin-right:6px}.reward-condition-group[open]>summary::before,.reward-condition-picker[open]>summary::before{content:"▾"}
 .reward-condition-help,.reward-condition-error{font-size:12px;line-height:1.5;opacity:.8}
 </style></head>
 <body class="todo-public-body guest-mode">
@@ -52,24 +54,20 @@
           </div>
         </div>
         <div class="todo-public-controls" aria-label="Feed controls">
-          <div class="todo-public-multiselect" id="todo-type-filter">
-            <span class="todo-public-control-label">Show</span>
-            <button id="todo-filter-type-button" class="todo-filter-menu-button" type="button" aria-haspopup="true" aria-expanded="false">Tasks, Repeat</button>
-            <div id="todo-filter-type-menu" class="todo-filter-menu" hidden>
-              <label><input type="checkbox" data-type-filter="task" checked> Tasks</label>
-              <label><input type="checkbox" data-type-filter="repeat" checked> Repeat</label>
-              <label><input type="checkbox" data-type-filter="calendar"> Calendar</label>
-              <label><input type="checkbox" data-type-filter="time"> Breaks / OOO</label>
-            </div>
+          <div class="shared-filter-pills" role="group" aria-label="Task types">
+            <button type="button" data-type-filter="task" aria-pressed="true">Tasks</button>
+            <button type="button" data-type-filter="repeat" aria-pressed="true">Repeat</button>
+            <button type="button" data-type-filter="calendar" aria-pressed="true">Calendar</button>
+            <button type="button" data-type-filter="time" aria-pressed="true">Breaks / OOO</button>
+            <button type="button" data-types-all>Show all</button><button type="button" data-types-none>Remove all</button>
           </div>
-          <label>Status
-            <select id="todo-filter-status">
-              <option value="all">All statuses</option>
-              <option value="open">Open</option>
-              <option value="done">Done</option>
-              <option value="sponsored">Sponsored</option>
-            </select>
-          </label>
+          <div class="shared-filter-pills" role="group" aria-label="Completion status">
+            <button type="button" data-status-filter="open" aria-pressed="true">Open</button>
+            <button type="button" data-status-filter="done" aria-pressed="true">Done</button>
+            <button type="button" id="todo-filter-sponsored" aria-pressed="false">With rewards</button>
+          </div>
+          <button id="todo-suggest-task" class="todo-public-btn primary" type="button">Suggest a Task</button>
+          <details class="shared-filter-more"><summary>More filters &amp; export</summary>
           <label>Calendar
             <select id="todo-filter-calendar">
               <option value="all">All calendars</option>
@@ -119,33 +117,10 @@
               </div>
             </div>
           </div>
+          </details>
         </div>
 
-        <!-- Inline guest task creation. Reuses the same fields the sidebar used so
-             submitCreateTask() is unchanged; guest-created tasks come back marked
-             createdByGuest and render with a distinct border. -->
-        <div class="todo-guest-add">
-          <button id="todo-guest-add-toggle" class="todo-guest-add-toggle" type="button" aria-expanded="false" aria-controls="todo-guest-add-form">+ Add a task</button>
-          <div id="todo-guest-add-form" class="todo-guest-add-form" hidden>
-            <input id="todo-create-title" type="text" maxlength="220" placeholder="What needs doing?">
-            <div class="todo-guest-add-row">
-              <input id="todo-create-name" type="text" maxlength="80" placeholder="Your name">
-              <select id="todo-create-duration" aria-label="Duration">
-                <option value="15">15m</option>
-                <option value="30" selected>30m</option>
-                <option value="45">45m</option>
-                <option value="60">1h</option>
-                <option value="90">1.5h</option>
-                <option value="120">2h</option>
-              </select>
-              <button id="todo-create-task" class="todo-public-btn primary" type="button">Add</button>
-            </div>
-            <button id="todo-create-note-toggle" class="todo-composer-toggle" type="button" aria-expanded="false" aria-controls="todo-create-note-panel">Add a note (optional)</button>
-            <div id="todo-create-note-panel" hidden><input id="todo-create-note" type="text" maxlength="1000" aria-label="Task note (optional)" placeholder="Note (optional)"></div>
-            <input id="todo-create-email" type="hidden">
-            <div id="todo-create-status" class="todo-sponsor-status"></div>
-          </div>
-        </div>
+        <p id="todo-suggestion-feedback" role="status" aria-live="polite"></p>
 
         <div id="todo-public-list" class="todo-public-list tl"></div>
       </section>
@@ -158,6 +133,9 @@
        drew, which is why it read as an empty day rather than a broken page.
        Found while adding the export bar; the break predates it. -->
   <script src="/public/js/core.js"></script>
+  <script src="/public/js/core-ui.js"></script>
+  <script src="/public/js/time-picker.js"></script>
+  <script src="/public/js/shared-task-suggestions.js"></script>
   <script src="/public/js/time-blocks.js?v=time-blocks-1"></script>
 <script src="/public/js/time-block-view.js"></script>
   <script src="/public/js/itinerary-card.js"></script>

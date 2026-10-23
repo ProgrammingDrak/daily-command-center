@@ -36,3 +36,49 @@ The existing `todo_sponsorships.offer_settings` JSONB carries `condition`, reque
 - Build/type checks: repository has no build or typecheck script (plain JavaScript served directly). Production boot/migrations/canary were not run.
 
 Subsequent commits add the separately requested shared-task reaction and header/suggestion UI changes; final combined validation is recorded separately.
+
+## Shared UI and suggestion behavior
+
+- Reactions render for open and completed tasks. Desktop controls reveal on card hover or keyboard focus; touch/coarse-pointer devices have a visible React disclosure. Counts and existing data remain unchanged. Repeated sends are gated while pending. Anonymous actor identity is now persisted in the existing session so repeated reactions refer to the same actor with `saveUninitialized:false`.
+- Task-type pills are inclusive multi-select filters, initially all selected, with Show all/Remove all. Open and Done are independent status pills. With rewards is optional. Calendar selection, ordering and export remain in a secondary disclosure.
+- Suggest a Task opens the existing DCC overlay controller. It reuses main task-entry duration choices and the existing time-wheel input. Suggestions remain owner-reviewed triage proposals; they never schedule a task automatically. Duration and optional suggested time/date/timezone are persisted; the time also appears in the proposal summary for existing review UI.
+- The modal restores focus on close, traps keyboard focus, keeps unsent drafts through cancel/reload in the same tab, and disables repeated submission while pending. Server errors retain the draft and exact request identity. A reusable time picker previously remained inert after reopening its parent modal; its inert state and nested keyboard/focus behavior are fixed here.
+- A new additive `todo_task_suggestion_requests` receipt table atomically deduplicates modern suggestion requests with the triage append. A per-share transaction lock handles concurrent retries across midnight. The append locks the current day row and preserves private/scheduled state and ownership. Daily limits and active-share checks are enforced. Legacy clients without request keys retain their existing route behavior.
+- Reward task checklists populate lazily on disclosure; the UI enforces the same 256-node resource budget as the server.
+
+## Multi-person completion integration
+
+Read-only inspection of local commit `6945838f0ce34bf62b45d138a30de977886e0e44` confirmed that participants retain separate owned task rows and independent completion. This branch does not copy or modify that implementation. Reward leaves continue to mean the shared task owner's dated completion state. Participant counts, avatars and All done are separate presentation; private participant tasks must not become selectable public reward leaves. The release coordinator should reconcile overlapping `index.html`, `social-store.js` and shared-task routes/UI, then run the combined candidate checks. PR418 remains the base dependency; PR419 and multi-person completion are not prerequisites for this branch. Both PRs were rechecked open at their original heads during final validation.
+
+## Final combined validation
+
+- PASS: `npm test` — 3,113 passed, 13 skipped, zero failed. Skips are environment-dependent; database-backed feature tests were run separately with PostgreSQL enabled.
+- PASS: `npm run test:postgres` on PostgreSQL 16 — 48 passed, zero skipped/failed; the three focused feature suites account for 16 checks. Includes suggestion concurrency, identical retry across midnight, duration/time persistence, active-share denial and failure rollback, plus nested reward authorization, aliases, earning/ledger rollback, pagination, concurrent earning and repeated redemption.
+- PASS: lint — zero errors, 69 existing warnings. All changed JavaScript runtime syntax checks and whitespace checks pass.
+- PASS: nested reward browser suite (5 groups), reactions (2 groups), suggestions/filter/modal (4 groups), and existing shared composer regression suite (7 groups), using synthetic APIs and fresh local Chrome profiles. Desktop/mobile screenshots are in `test-results/nested-rewards/`, `test-results/shared-reactions/` and `test-results/shared-suggestions/`. The suggestion test selects 2:30 PM through the actual shared wheel, tests nested Escape/reopening, cancellation/focus restoration, error/reload retry and repeated submission.
+- PASS: deliberately inverting ALL/ANY evaluation causes the truth-table suite to fail; restoring the evaluator passes. Browser verification likewise caught the reusable picker inert-state defect before its fix.
+- Earlier combined-suite failures were source-slice test fixtures missing the new timezone and animation-frame globals. Fixtures were corrected without removing their assertions; the final full suite passes.
+- NOT RUN: standalone build/typecheck, because this plain-JavaScript repository defines neither script. Production boot, production migrations, remote CI and combined-release verification were not run. Initial checks used Node 24.13.1; supported Node 20.20.2 recovery checks are recorded below. The new database suites are included in `test:postgres` for CI.
+- Release hold remains with the coordinator. No merge, deployment, credential changes, production database writes or Slack announcement occurred.
+
+## Recovery and integration handoff — 2026-10-23
+
+The Mac disconnected before the final composer rerun/commit on October 22. On reconnect, the original two commits and all uncommitted changes were intact. A tracked binary patch and a separate archive of the five untracked source/test files were saved in `/tmp/dcc-nested-recovery-20261023.patch` and `/tmp/dcc-nested-untracked-20261023.tar.gz` before continuing; nothing was discarded or recreated.
+
+Fresh checks used supported Node 20.20.2:
+
+- Full suite: 3,113 passed, 13 skipped, zero failed. The first Node 20 run had one `fetch failed` in the unchanged `tasks-open-route.test.js` localhost harness; that file passed all 12 tests in isolation and the complete rerun passed without code changes.
+- All PostgreSQL suites: 48 passed, zero skipped/failed, against synthetic PostgreSQL 16 on localhost:58371.
+- All 18 browser groups passed: existing composers (7), nested rewards (5), reactions (2), suggestions/pills/modal (4). The interrupted composer check is now resolved against the correct localhost:8328 preview.
+- Lint: zero errors, 69 baseline warnings. Changed JavaScript syntax and whitespace checks passed.
+- No standalone build/typecheck scripts exist. Production boot/migrations, release integration and remote CI remain not run.
+
+The parent reports combined readiness candidate `d06559f90333df4f2d0ea85a0a0c24fc2bdf6b72`, containing PRs 403/410/411/418/419/420 and a priority/scheduling race fix. That object is not in this independent clone; it was not modified or represented as locally tested.
+
+Safe integration procedure:
+
+1. Preserve the cloud candidate and its existing checks. Fetch the supplied local bundle into a new review branch/ref; do not replace files wholesale or reset the candidate.
+2. In a fresh integration checkout of the candidate, cherry-pick only the three feature commits after `b09dfc8942d5b63da1e7106811d20878c6d0eff1`, in order. Do not reapply PR418 ancestors already present there.
+3. Reconcile overlapping shared-task routes/UI, `social-store.js`, `db.js`, `index.html`, and common overlay/time-picker code. Preserve the candidate's priority/scheduling race fix and multi-person completion/notification changes. Reward eligibility remains the owner's dated task completion, separate from participant counts.
+4. Rerun the combined candidate's full suite, PostgreSQL tests, these four browser scripts, scheduling/priority and participant/notification regressions, lint, then exact-candidate CI. Inspect conflict resolutions and review the additive suggestion receipt table and reward request index before any release.
+5. Keep the Railway security hold and production verification gates with the release coordinator. This branch is local only; no push, merge or deploy was authorized in the recovery request.

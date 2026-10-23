@@ -215,7 +215,7 @@ test("the shared picker marks its overlay while open and unmarks it on close", (
   const CLOSE = mustSlice(PICKER_SRC, /^ {2}function close\(\) \{[\s\S]*?\n {2}\}/m, "time-picker close");
   const ctx = makeContext();
   vm.runInContext(
-    "var overlay=null,card=null,onClose=null;function position(){}" +
+    "var overlay=null,card=null,onClose=null,returnFocus=null;function position(){}function requestAnimationFrame(fn){fn();}" +
     ENSURE + OPEN + CLOSE +
     "window.__tp={open:open,close:close,peek:function(){return overlay}};",
     ctx

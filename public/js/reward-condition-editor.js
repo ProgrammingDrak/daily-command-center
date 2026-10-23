@@ -3,6 +3,7 @@
   const C = window.DCC.RewardConditions;
   const esc = window.DCC.esc;
   function at(root, path) { return path ? path.split('.').reduce((n, i) => n.children[Number(i)], root) : root; }
+  function nodeCount(root){let count=0;const stack=[root];while(stack.length){const n=stack.pop();count++;if(n.children)stack.push(...n.children);}return count;}
   function render(host, state, tasks, disabled) {
     host.innerHTML = '';
     if (!state.condition) {
@@ -26,7 +27,7 @@
             ? '<span>'+esc(tasks.find(t => String(t.id) === child.taskId)?.title || 'Unavailable task')+' <button type="button" data-condition-remove="'+i+'" aria-label="Remove '+esc(tasks.find(t => String(t.id) === child.taskId)?.title || 'unavailable task')+'">×</button></span>'
             : '<span>'+esc(child.op.toUpperCase()+' group '+(path ? number+'.' : '')+(i+1))+'</span>').join('')+'</div>' +
           (!node.children.length ? '<p class="reward-condition-error">Choose tasks or remove this empty group.</p>' : '') +
-          '<details class="reward-condition-picker"><summary>Select tasks</summary>'+tasks.filter(t => !t.redacted).map(task => {
+          '<details class="reward-condition-picker"'+(state.pickers?.[path]?' open':'')+'><summary>Select tasks</summary>'+(state.pickers?.[path]?tasks:[]).filter(t => !t.redacted).map(task => {
             const here = node.children.some(n => n.type === 'task' && n.taskId === String(task.id));
             return '<label><input type="checkbox" data-condition-task="'+esc(task.id)+'"'+(here?' checked':'')+(!here && selected.has(String(task.id))?' disabled':'')+'>'+esc(task.title)+(task.status==='done'?' (done)':'')+'</label>';
           }).join('')+'</details>' +
@@ -51,8 +52,7 @@
       const group = state.condition && at(state.condition, path);
       if (button.hasAttribute('data-condition-start')) state.condition = { type: 'group', op: 'all', children: [{ type: 'task', taskId: String(initialTaskId) }] };
       else if (button.hasAttribute('data-condition-add')) {
-        let count = 0; const stack = [state.condition]; while(stack.length) { const n = stack.pop(); count++; if(n.children)stack.push(...n.children); }
-        if (count >= C.MAX_NODES) { alert('Use at most 256 conditions per reward'); return; }
+        if (nodeCount(state.condition) >= C.MAX_NODES) { alert('Use at most 256 conditions per reward'); return; }
         group.children.push({ type: 'group', op: 'any', children: [] });
       } else if (button.hasAttribute('data-condition-remove')) group.children.splice(Number(button.dataset.conditionRemove), 1);
       else if (button.hasAttribute('data-condition-delete')) { const parts = path.split('.'); const index = Number(parts.pop()); at(state.condition, parts.join('.')).children.splice(index, 1); }
@@ -67,6 +67,7 @@
       if (event.target.hasAttribute('data-condition-op')) group.op = event.target.value;
       else if (event.target.hasAttribute('data-condition-task')) {
         const id = event.target.dataset.conditionTask;
+        if (event.target.checked && nodeCount(state.condition)>=C.MAX_NODES){event.target.checked=false;alert('Use at most 256 conditions per reward');return;}
         if (event.target.checked) group.children.push({ type: 'task', taskId: id });
         else group.children = group.children.filter(n => n.type !== 'task' || n.taskId !== id);
       } else return;
@@ -79,6 +80,10 @@
     // Group disclosure also hides/reveals descendants in the flat rendering.
     if(host._conditionToggle)host.removeEventListener('toggle',host._conditionToggle,true);
     host._conditionToggle = event => {
+      if(event.target.matches('.reward-condition-picker')){
+        const path=event.target.closest('[data-group-path]').dataset.groupPath;
+        if(state.pickers?.[path]!==event.target.open){state.pickers=state.pickers||{};state.pickers[path]=event.target.open;redraw();}
+      }
       if (event.target.matches('.reward-condition-group')) {
         const path = event.target.dataset.groupPath;
         if (state.closedGroups?.[path] !== !event.target.open) {

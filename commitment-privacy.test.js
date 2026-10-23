@@ -14,7 +14,7 @@ test("public projection excludes private rows, stale twins, associated discussio
     { id:"public",type:"block",properties:{title:"Synthetic shared commitment",source_id:"public-source",gcal_calendar_id:"private@example.invalid",calendarName:"Secret account name"} },
   ];
   const queries = [];
-  const ctx = { console, crypto, isValidDate:()=>true,getTodayStr:()=>"2026-10-08",coerceDateString:x=>x,
+  const ctx = { console, crypto, APP_TIME_ZONE:"America/New_York", isValidDate:()=>true,getTodayStr:()=>"2026-10-08",coerceDateString:x=>x,
     filterLegacyGcalBlocks:x=>x,scoreTaskPoints:()=>({eligible:false}),capabilities:require("./capabilities"),
     buildDayResponse:async()=>({schedule:{timeline:[{id:"secret",label:"Synthetic confidential appointment",source_id:"secret-source"}],timeBlocks:[]},triage:{open_items:[]}}),
     blockDB:{ getBlocksByDateIncludingDeleted:async()=>blocks },

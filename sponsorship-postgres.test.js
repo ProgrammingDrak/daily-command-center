@@ -18,7 +18,7 @@ test("pending sponsorship activation is owner-only, atomic and idempotent", { sk
   }).join("\n");
   const handlers = new Map(), broadcasts = [];
   let publicTasks = [{id:"public-task",title:"Canonical fictional task",blockId:"public-block",identityIds:["public-task"]}];
-  const ctx = { pool, console, rewardConditions:require("./public/js/reward-conditions"), crypto:require("node:crypto"), todoActorKey:()=>"user:2", slotStore:{ensureSchema:async()=>{}}, capabilities:require("./capabilities"),
+  const ctx = { pool, console, suggestionStore:require("./shared-task-suggestion-store"), rewardConditions:require("./public/js/reward-conditions"), crypto:require("node:crypto"), todoActorKey:()=>"user:2", slotStore:{ensureSchema:async()=>{}}, capabilities:require("./capabilities"),
     getTodayStr:()=>"2026-10-08",coerceDateString:String,isValidDate:value=>/^\d{4}-\d{2}-\d{2}$/.test(value),
     buildPublicTodoShare:async()=>({tasks:publicTasks}), broadcast:(...args)=>broadcasts.push(args),
     app:{post:(path,fn)=>handlers.set(path,fn),get:(path,fn)=>handlers.set(path,fn)}, blockDB:{

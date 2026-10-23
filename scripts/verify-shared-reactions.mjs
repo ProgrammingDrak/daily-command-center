@@ -1,4 +1,4 @@
-/* global window, document */
+/* global window, document, getComputedStyle */
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright-core';
 import fs from 'node:fs/promises';
