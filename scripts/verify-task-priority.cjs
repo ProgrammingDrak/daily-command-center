@@ -1,6 +1,7 @@
 /* global requestAnimationFrame, console, fetch, process, window, document, scheduled, switchToDate, schedView, __state, itineraryListModel, _orderUnscheduled, openAddModal, closeAddModal, blockStore, innerWidth, localStorage */
 // Uses only scripts/ui-review-server.mjs synthetic tasks and a fresh browser profile.
 const assert=require('node:assert/strict');
+const {URL}=require('node:url');
 const {chromium}=require('playwright-core');
 const base=process.argv[2]||'http://127.0.0.1:8108';
 const output=process.env.DCC_PRIORITY_SCREENSHOTS||'/tmp';
@@ -18,11 +19,18 @@ const id='review-detail-task';
   assert.equal(await page.evaluate(()=>scheduled.find(t=>t.id==='review-detail-task').taskPriority),'Medium','legacy High is inert');
   assert.equal(await page.locator('[data-view="itinerary"]').getAttribute('aria-pressed'),'true');
   const baseline=await page.evaluate(()=>scheduled.map(t=>({id:t.id,start:t.start,end:t.end})));
+  const priorityWrites=[];
+  page.on('request',request=>{if(request.method()==='PATCH'&&new URL(request.url()).pathname==='/api/blocks/'+id)priorityWrites.push(request.postDataJSON());});
   const persistedBefore=await(await page.request.get(base+'/api/blocks/'+id)).json();
+  for(const data of [{taskPriority:'urgent'},{taskPriority:'Low',date:null}]){
+   assert.equal((await page.request.patch(base+'/api/blocks/'+id,{data})).status(),400);
+   assert.deepEqual(await(await page.request.get(base+'/api/blocks/'+id)).json(),persistedBefore);
+  }
   await page.evaluate(()=>openAddModal('review-detail-task'));
   const choice=page.locator('#am-priority select');
   for(const value of ['Medium','Low','High']){
    console.log('Checking',width,value);await choice.selectOption(value);await page.waitForFunction(()=>document.querySelector('#am-priority [role=status]').textContent==='Saved');
+   assert.deepEqual(Object.fromEntries(Object.entries(priorityWrites.at(-1)).filter(([key])=>key!=='_clientId')),{taskPriority:value},'priority sends only its field plus transport metadata, never a stale placement snapshot');
    await page.reload();await ready();
    assert.equal(await page.evaluate(()=>scheduled.find(t=>t.id==='review-detail-task').taskPriority),value);
    await page.evaluate(()=>openAddModal('review-detail-task'));assert.equal(await choice.inputValue(),value);
