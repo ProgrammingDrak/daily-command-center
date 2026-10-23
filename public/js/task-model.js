@@ -596,6 +596,39 @@
     }
     return null;
   }
+  // Shared iterative graph operations: depth is data, never a truncation limit.
+  function hierarchyIndex(pool) {
+    const byId = new Map(), children = new Map();
+    for (const ev of _arr(pool)) {
+      if (!ev) continue;
+      byId.set(ev.id, ev);
+      const pid = parentIdOf(ev);
+      if (pid) { if (!children.has(pid)) children.set(pid, []); children.get(pid).push(ev); }
+    }
+    return {byId, children};
+  }
+  function descendantsOf(id, pool, opts) {
+    opts = opts || {};
+    const index = opts.index || hierarchyIndex(pool), seen = new Set([id]), out = [];
+    const stack = (index.children.get(id) || []).slice().reverse();
+    while (stack.length) {
+      const ev = stack.pop();
+      if (seen.has(ev.id) || (opts.edge && relOf(ev) !== opts.edge)) continue;
+      seen.add(ev.id); out.push(ev);
+      const kids = index.children.get(ev.id) || [];
+      for (let i=kids.length-1;i>=0;i--) stack.push(kids[i]);
+    }
+    return out;
+  }
+  function isAncestor(ancestorId, nodeId, pool) {
+    const {byId} = hierarchyIndex(pool), seen = new Set(); let cur = byId.get(nodeId);
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id); const pid = parentIdOf(cur);
+      if (pid === ancestorId) return true;
+      cur = byId.get(pid);
+    }
+    return false;
+  }
   function parentIdOf(ev) { return (ev && (ev.wrapId || ev.subtaskOf)) || null; }
   function relOf(ev) { return ev ? (ev.wrapId ? "ride-along" : (ev.subtaskOf ? "subtask" : null)) : null; }
   function isSubtask(ev) { return !!(ev && ev.subtaskOf); }
@@ -775,33 +808,18 @@
     // was always computed by really walking children; and if any member of a ring is open,
     // that `done(kids[k])` test fails and the false propagates all the way round. So the
     // memo cannot hand back a stale true.
-    const subtreeDone = new Map();
-    function allDone(ev, seen, cyc) {
-      if (subtreeDone.has(ev.id)) return subtreeDone.get(ev.id);
-      // ★ A short-circuited answer is NOT cacheable, and an earlier version of this code
-      // memoised it with a comment claiming that was impossible. It is not: a ring can have
-      // branches hanging BELOW it. With A<->B a ring and open C parented on A, walking A
-      // first resolves allDone(B) to true via this short-circuit and CACHES it, before C has
-      // been looked at. B then folds with open work inside its subtree, and selectTree drops
-      // C along with it. `cyc` marks the walk as tainted so nothing on that path is stored.
-      if (seen.has(ev.id)) { cyc.hit = true; return true; }
-      seen.add(ev.id);
-      const kids = kidsOf.get(ev.id) || [];
-      let ok = true;
-      for (let k = 0; k < kids.length && ok; k++) {
-        // ★ `isSubtask` HERE, not just `done`. `kidsOf` is built from `parentIdOf`, so a done
-        // subtask's descendants can include a RIDE-ALONG -- which the fold below can never
-        // claim, because the detail panel has no rider item type. Fold the parent anyway and
-        // that rider is left in `timed` with its parent absent, which selectTree hides: the
-        // row renders on no surface and cannot be un-checked. A fuzz over 30k random days lost
-        // a row on 3.7% of them and EVERY loss was exactly this shape. So the fold requires a
-        // subtree that is itself fold-eligible, which is what makes "the subtree leaves
-        // together" true rather than merely asserted.
-        if (!isSubtask(kids[k]) || !done(kids[k]) || !allDone(kids[k], seen, cyc)) ok = false;
-      }
-      if (!cyc.hit) subtreeDone.set(ev.id, ok);
-      return ok;
+    // A node cannot fold if any descendant is open or has its own-time edge.
+    // Propagate those facts upward once; a visited set handles corrupt cycles.
+    const subtreeNotDone = new Set(), pending = [];
+    for (const ev of visible) {
+      if ((kidsOf.get(ev.id) || []).some(k => !isSubtask(k) || !done(k))) pending.push(ev.id);
     }
+    for (let i=0;i<pending.length;i++) {
+      const id = pending[i]; if (subtreeNotDone.has(id)) continue;
+      subtreeNotDone.add(id);
+      const pid = parentIdOf(byId.get(id)); if (byId.has(pid)) pending.push(pid);
+    }
+    function allDone(ev) { return !subtreeNotDone.has(ev.id); }
     // ★ THE FOLD IS THE SUBTASK EDGE ONLY, and the reason is a capability, not a preference.
     //
     // Folding means "no row of your own; you live in your parent's detail panel". That panel
@@ -829,7 +847,7 @@
       if (!done(ev) || !isSubtask(ev)) continue;
       const pid = ev.subtaskOf;
       if (!pid || !byId.has(pid)) continue;
-      if (!allDone(ev, new Set(), { hit: false })) continue;
+      if (!allDone(ev)) continue;
       foldedIds.add(ev.id); folded.push(ev);
     }
 
@@ -929,38 +947,38 @@
     // a cycling chain as rootless so the ring flattens instead. Corrupt data only (every
     // reparent path guards against cycles), but "standalone work must never disappear" is the
     // rule this phase is built on, and a lost OPEN row is the worst way to break it.
+    const cycleMemo = new Map();
     function chainCycles(ev) {
-      const walked = new Set();
-      let cur = ev;
+      const path = [], walked = new Set(); let cur = ev, cyclic = false;
       while (cur) {
-        if (walked.has(cur.id)) return true;
-        walked.add(cur.id);
-        const p = parentIdOf(cur);
-        if (!p || !poolIds.has(p)) return false;
-        cur = poolById.get(p);
+        if (cycleMemo.has(cur.id)) { cyclic = cycleMemo.get(cur.id); break; }
+        if (walked.has(cur.id)) { cyclic = true; break; }
+        walked.add(cur.id); path.push(cur.id);
+        cur = poolById.get(parentIdOf(cur));
       }
-      return false;
+      path.forEach(id => cycleMemo.set(id, cyclic)); return cyclic;
     }
-    const out = [], seen = new Set();
-    function walk(ev, depth) {
-      if (seen.has(ev.id) || depth > 20) return;   // cycle / runaway guard
-      seen.add(ev.id);
-      const kids = childrenOf(ev.id, list);
-      const hasKids = kids.length > 0;
-      const collapsed = hasKids && !!collapsedFn(ev.id);
-      out.push({ ev: ev, depth: depth, rel: relOf(ev), hasKids: hasKids, collapsed: collapsed });
-      if (hasKids && !collapsed) {
-        const ride = kids.filter(function (k) { return relOf(k) === "ride-along"; })
-          .sort(function (a, b) { return _pt(a.start) - _pt(b.start); });
-        const subs = kids.filter(function (k) { return relOf(k) === "subtask"; });
-        subs.concat(ride).forEach(function (k) { walk(k, depth + 1); });
+    const childIndex = hierarchyIndex(list), out = [], seen = new Set();
+    function walk(root) {
+      const stack = [{ev: root, depth: 0}];
+      while (stack.length) {
+        const {ev, depth} = stack.pop();
+        if (seen.has(ev.id)) continue;
+        seen.add(ev.id);
+        const kids = childIndex.children.get(ev.id) || [];
+        const hasKids = kids.length > 0, collapsed = hasKids && !!collapsedFn(ev.id);
+        out.push({ev, depth, rel: relOf(ev), hasKids, collapsed});
+        if (collapsed) continue;
+        const subs = kids.filter(k => relOf(k) === "subtask");
+        const ride = kids.filter(k => relOf(k) === "ride-along").sort((a,b) => _pt(a.start)-_pt(b.start));
+        const ordered = subs.concat(ride);
+        for (let i=ordered.length-1;i>=0;i--) stack.push({ev: ordered[i], depth: depth+1});
       }
     }
-    for (let i = 0; i < list.length; i++) {
-      const ev = list[i];
+    for (const ev of list) {
       if (!ev) continue;
       const p = parentIdOf(ev);
-      if (!p || !poolIds.has(p) || chainCycles(ev)) walk(ev, 0);
+      if (!p || !poolIds.has(p) || chainCycles(ev)) walk(ev);
     }
     return out;
   }
@@ -979,6 +997,7 @@
     isWheneverPoolRow: isWheneverPoolRow,
     fromBacklogBlock, backlogParentKeys, selectWheneverPoolBlocks, suppressWheneverSeeds,
     // C6a — shape
+    hierarchyIndex, descendantsOf, isAncestor,
     parentIdOf: parentIdOf,
     hierarchyRoot,
     relOf: relOf,

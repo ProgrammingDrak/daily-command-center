@@ -27,7 +27,6 @@
   // surface. 14 days is the review window; the modal's "Show older" toggle lifts it
   // (collect({days:null})) for the rare deep sweep.
   const SCAN_DAYS = 14;
-  const MAX_ROWS = 100;           // guard against an unbounded archive
 
   // ── small utils ──
   function pad(n) { return String(n).padStart(2, "0"); }
@@ -59,7 +58,7 @@
   }
 
   // ── collect ──
-  // Returns { rows, total, scanned } where rows is capped at MAX_ROWS and each row
+  // Returns { rows, total, scanned } with the full server-bounded pool and each row
   // is a full ev carrying __unf provenance. opts.days bounds the lookback
   // (default SCAN_DAYS); pass {days:null} for the unbounded sweep.
   // C2: the multi-day archive scan is GONE. This used to loadDateRange() every
@@ -97,7 +96,7 @@
       // the raw pool BEFORE the done filter below, and since C2 that pool is roots,
       // children and done rows together — so the default 500 would quietly turn "every
       // archived day" into "the newest month or so", while the modal footer still says
-      // otherwise. MAX_ROWS still caps what actually renders.
+      // otherwise. Keep every returned descendant for subtree actions.
       payload = await api("/api/tasks/open?before=" + encodeURIComponent(today) +
                           "&days=" + (days === null ? "all" : String(days)) +
                           (days === null ? "&limit=2000" : ""));
@@ -181,7 +180,7 @@
     // server off the dates it actually touched rather than by the client off the days
     // it walked. The modal's footer copy reads it. `truncated` says the server's LIMIT
     // clipped the raw pool, which makes `total` a floor rather than an exact count.
-    collectedRows = rows.slice(0, MAX_ROWS);
+    collectedRows = rows; // Keep the full server-bounded pool: slicing can sever a deep tree.
     return {
       rows: collectedRows, total,
       scanned: Number(payload.scanned) || 0,
@@ -199,22 +198,9 @@
   //
   // Each returns the ids it removed from the lane so the caller can drop the rows.
 
-  // Every descendant of `ev` inside the carryover pool, deepest last. Depth-capped
-  // and cycle-guarded, mirroring TaskModel.selectTree.
+  // Carryover actions use the same complete, cycle-safe graph walk as the day.
   function descendants(ev, pool) {
-    const out = [];
-    const seen = new Set([ev && ev.id]);
-    (function walk(id, depth) {
-      if (depth > 20) return;
-      (pool || []).forEach(c => {
-        const pid = _parentIdOf(c);
-        if (pid !== id || seen.has(c.id)) return;
-        seen.add(c.id);
-        out.push(c);
-        walk(c.id, depth + 1);
-      });
-    })(ev && ev.id, 0);
-    return out;
+    return DCC.TaskModel.descendantsOf(ev && ev.id, pool || []);
   }
 
   function originOf(ev) { return (ev && ev.__unf) || {}; }
@@ -581,7 +567,7 @@
       return;
     }
     // `rows` is roots-only now, so comparing it to `total` (every OPEN row) made the
-    // MAX_ROWS cap message fire for ordinary nesting: one parent with two open
+    // truncation message fire for ordinary nesting: one parent with two open
     // subtasks read "Showing 1 of 3". Compare against the open count, same as the
     // morning prompt, so the message means only what it says: rows were truncated.
     const openCount = openRows(pool).length;

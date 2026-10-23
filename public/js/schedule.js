@@ -256,22 +256,20 @@ function insertTaskFromDrawer(title, durMin, opts){
 // created by materializeShellTemplate, which then calls this in its onScheduled.
 function attachTemplateChildren(parentLocalId,children,promoteDirect){
   if(!parentLocalId||!Array.isArray(children))return;
-  children.forEach(function(node){
-    if(!node||!node.title)return;
-    var created=null;
-    if(promoteDirect){
-      var directDur=Math.max(1,Number(node.durationMin)||30);
-      if(typeof insertTaskNow==="function")created=insertTaskNow(node.title,directDur,{priority:node.priority||"Medium",type:"task",detail:node.detail||""});
+  const seen=new Set(),stack=children.slice().reverse().map(node=>({parentLocalId,node,promoteDirect}));
+  while(stack.length){
+    const entry=stack.pop(),node=entry.node;
+    if(!node||!node.title||seen.has(node))continue;seen.add(node);
+    let created=null;
+    if(entry.promoteDirect){
+      if(typeof insertTaskNow==="function")created=insertTaskNow(node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:"task",detail:node.detail||""});
     }else if(node.edge==="subtask"){
-      if(typeof addSubtask==="function")created=addSubtask(parentLocalId,node.title);
-    }else{
-      var d=Math.max(1,Number(node.durationMin)||30);
-      if(typeof addStackedTask==="function")created=addStackedTask(parentLocalId,node.title,d,{priority:node.priority||"Medium",type:node.type||"task",detail:node.detail||""});
+      if(typeof addSubtask==="function")created=addSubtask(entry.parentLocalId,node.title);
+    }else if(typeof addStackedTask==="function")created=addStackedTask(entry.parentLocalId,node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:node.type||"task",detail:node.detail||""});
+    if(created&&created.id&&Array.isArray(node.children)){
+      for(let i=node.children.length-1;i>=0;i--)stack.push({parentLocalId:created.id,node:node.children[i],promoteDirect:false});
     }
-    if(created&&created.id&&Array.isArray(node.children)&&node.children.length){
-      attachTemplateChildren(created.id,node.children,false);
-    }
-  });
+  }
 }
 window.attachTemplateChildren=attachTemplateChildren;
 
@@ -694,19 +692,12 @@ function _optimisticallyCompleteSubtasks(id,completedAt){
   const changed=[];
   if(typeof scheduled==="undefined")return changed;
   const at=(completedAt instanceof Date)?completedAt:new Date(completedAt||Date.now());
-  (function completeSubs(pid){
-    DCC.TaskModel.subtasksOf(pid,scheduled).forEach(c=>{
-      if(!manualDone.has(c.id)){
-        changed.push({
-          id:c.id,
-          hadDoneAt:Object.prototype.hasOwnProperty.call(doneAt,c.id),
-          doneAt:doneAt[c.id]
-        });
-        manualDone.add(c.id);doneAt[c.id]=at;
-      }
-      completeSubs(c.id);
-    });
-  })(id);
+  DCC.TaskModel.descendantsOf(id,scheduled,{edge:"subtask"}).forEach(c=>{
+    if(!manualDone.has(c.id)){
+      changed.push({id:c.id,hadDoneAt:Object.prototype.hasOwnProperty.call(doneAt,c.id),doneAt:doneAt[c.id]});
+      manualDone.add(c.id);doneAt[c.id]=at;
+    }
+  });
   return changed;
 }
 function _rollbackOptimisticSubtasks(changed){
@@ -736,7 +727,8 @@ function _onParentCompleted(id){
     return;
   }
   let promoted=0;
-  DCC.TaskModel.selectOpen(DCC.TaskModel.ridersOf(id,scheduled)).forEach(c=>{
+  const completedParents=new Set([id].concat(DCC.TaskModel.descendantsOf(id,scheduled,{edge:"subtask"}).map(c=>c.id)));
+  DCC.TaskModel.selectOpen(DCC.TaskModel.selectNotDeleted(scheduled).filter(c=>c.wrapId&&completedParents.has(c.wrapId))).forEach(c=>{
     c.wrapId=null;
     if(typeof _clearPin==="function")_clearPin(c);
     if(typeof _persistEvWrap==="function")_persistEvWrap(c);
@@ -1261,8 +1253,9 @@ function _pruneOverlayMap(key,keep){
 
 function pinStartTime(id,timeStr){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
-  const s=pt(timeStr),d=dur(ev);
+  const oldStart=pt(ev.start),s=pt(timeStr),d=dur(ev);
   ev.start=timeStr;ev.end=fmt(s+d);
+  if(typeof _shiftWrapChildren==="function")_shiftWrapChildren(ev,oldStart);
   // Meetings hold their slot via fixedTime (isFixedTimeBlock), not the pin map —
   // recording a pin for them is meaningless and would clutter it. Every other
   // task pins so recalcTimes() won't overwrite the chosen start.

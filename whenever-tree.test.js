@@ -40,7 +40,7 @@ test('ordinary subtask and nested creators persist dateless children of Whenever
  const reloaded=[...rows,...calls].map(TM.fromBacklogBlock);assert.deepEqual(TM.selectTree(reloaded,{isCollapsed:()=>false}).map(n=>n.depth),[0,1,1,2]);
 });
 test('pool deletion uses the same subtree resolver for child and grandchild ids',()=>{
- const items=tree().map(TM.fromBacklogBlock),ctx=vm.createContext({scheduled:[],parentIdOf:TM.parentIdOf});
+ const items=tree().map(TM.fromBacklogBlock),ctx=vm.createContext({scheduled:[],parentIdOf:TM.parentIdOf,_TM:()=>TM});
  vm.runInContext(slice('./public/js/state','function _subtreeIdsOf(','// Optimistically drop'),ctx);
  assert.deepEqual([...ctx._subtreeIdsOf('parent',items)],['parent','sub','nested','deep']);
 });
@@ -63,7 +63,7 @@ test('a denied root and invalid schedule never mutate the pool',async()=>{
 
 test('pool reparenting uses the two normal edges, persists parent_id and rejects cycles',()=>{
  const items=tree().map(TM.fromBacklogBlock),calls=[];
- const ctx=vm.createContext({window:{},parentIdOf:TM.parentIdOf,backlog:items,scheduled:[],render(){},taskAnchorById:id=>({ev:items.find(item=>item.id===id),whenever:true,blockId:'row-'+id}),enqueueRowPropsWrite:(id,merge,extra)=>calls.push({id,properties:merge({}),extra})});
+ const ctx=vm.createContext({window:{},DCC:{TaskModel:TM},parentIdOf:TM.parentIdOf,backlog:items,scheduled:[],render(){},taskAnchorById:id=>({ev:items.find(item=>item.id===id),whenever:true,blockId:'row-'+id}),enqueueRowPropsWrite:(id,merge,extra)=>calls.push({id,properties:merge({}),extra})});
  vm.runInContext(slice('./public/js/drag','function _isAncestor(','// First free slot'),ctx);
  vm.runInContext(slice('./public/js/tabs','function reparentAsSubtask(','// Popover anchored'),ctx);
  assert.equal(ctx.reparentAsSubtask('parent','deep',{childEdge:'wrap'}),false);assert.equal(calls.length,0);

@@ -82,6 +82,7 @@ function makeDay({ scheduled, rows = {}, alreadyDeleted = [], deferDelete = fals
   const deletedSet = new Set(alreadyDeleted);
   const context = {
     console,
+    _TM: () => require("./public/js/task-model"),
     scheduled,
     deletedSet,
     viewDate: DAY,
@@ -512,4 +513,17 @@ test("Whenever delete and undo use the normal transactional subtree path and ori
   assert.deepEqual([...h.deletedSet].sort(),items.map(item=>item.id).sort());
   await h.context.undoDeleteTask("parent");
   assert.deepEqual(h.undeletes,items.map(item=>"row-"+item.id));assert.equal(h.deletedSet.size,0);
+});
+
+
+test("delete and Undo preserve all 1,500 mixed descendants and original row IDs", async () => {
+  const tasks=Array.from({length:1500},(_,i)=>ev("deep-"+i,i?{[i%2?"subtaskOf":"wrapId"]:"deep-"+(i-1)}:{}));
+  const rows=Object.fromEntries(tasks.map(e=>[e.id,row("row-"+e.id,e.id,{notes:"Keep "+e.id,subtaskOf:e.subtaskOf,wrapId:e.wrapId})]));
+  const day=makeDay({scheduled:tasks,rows});
+  await day.context.deleteTaskWithUndo("deep-0");
+  assert.equal(day.deletedSet.size,1500);assert.equal(day.batches[0].length,1500);
+  await day.context.undoDeleteTask("deep-0");
+  assert.equal(day.deletedSet.size,0);assert.equal(day.undeletes.length,1500);
+  assert.deepEqual(new Set(day.undeletes),new Set(Object.values(rows).map(r=>r.id)));
+  assert.equal(day.batches.length,1,"Undo revives original rows rather than re-creating them");
 });

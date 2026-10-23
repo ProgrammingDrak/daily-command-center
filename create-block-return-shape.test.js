@@ -45,6 +45,8 @@ function makeMockPool() {
     lastInsert: () => lastInsert,
     async query(sql, params = []) {
       const text = String(sql).trim();
+      if (text.startsWith("WITH RECURSIVE ancestors")) return { rows: [] };
+      if (text.startsWith("SELECT * FROM blocks WHERE id")) return { rows: [] };
       if (text.startsWith("INSERT INTO blocks")) {
         const cols = text.match(/INSERT INTO blocks \(([^)]+)\)/)[1].split(",").map(c => c.trim());
         const row = {};

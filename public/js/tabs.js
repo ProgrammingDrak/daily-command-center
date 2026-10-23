@@ -575,10 +575,14 @@ function reparentAsSubtask(childId, parentId,options){
   }
   // Rollup containers (shells) take nested tasks via the wrap edge instead:
   // the child keeps its own time and its own duration-based points.
-  if(window.TaskTypes&&window.TaskTypes.rule(parent,"childEdge")==="wrap"){
+  if((options&&options.childEdge==="wrap")||(window.TaskTypes&&window.TaskTypes.rule(parent,"childEdge")==="wrap")){
     if(child.wrapId===parentId)return false; // already nested in this parent
+    const oldStart=typeof pt==="function"?pt(child.start):null;
     const prevP=(typeof parentIdOf==="function")?parentIdOf(child):(child.subtaskOf||child.wrapId||null);
     child.wrapId=parentId;child.subtaskOf=null;
+    child.untimed=!!parent.untimed;
+    if(typeof _placeInWrapWindow==="function")_placeInWrapWindow(child,parent);
+    if(oldStart!==null&&typeof _shiftWrapChildren==="function")_shiftWrapChildren(child,oldStart);
     if(typeof _clearPin==="function")_clearPin(child);
     if(typeof _persistEvWrap==="function")_persistEvWrap(child);
     if(prevP&&prevP!==parentId&&window.PointPlan&&typeof window.PointPlan.reconcile==="function")window.PointPlan.reconcile(prevP);
@@ -588,12 +592,15 @@ function reparentAsSubtask(childId, parentId,options){
     return true;
   }
   if(child.subtaskOf===parentId)return false; // already a subtask of this parent
+  const oldStart=typeof pt==="function"?pt(child.start):null;
   const prevParent=(typeof parentIdOf==="function")?parentIdOf(child):(child.subtaskOf||child.wrapId||null);
   child.subtaskOf=parentId;
   child.wrapId=null;
   if(typeof _clearPin==="function")_clearPin(child);
   // A subtask has no independent time; align it to the parent's start (like addSubtask).
   child.start=parent.start||child.start;child.end=child.start;
+  child.untimed=!!parent.untimed;
+  if(oldStart!==null&&typeof _shiftWrapChildren==="function")_shiftWrapChildren(child,oldStart);
   if(typeof _persistEvWrap==="function")_persistEvWrap(child);
   // Fold the child into the new parent's pie; rebalance the old parent's, if any.
   if(window.PointPlan){
