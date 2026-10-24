@@ -103,6 +103,7 @@ function makePage(opts) {
     persistRowProp: (id, key, value, ev, o) => { log.push(["persistRowProp", id, key, value, o && o.row && o.row.id]); return Promise.resolve(); },
     refoldTaskStateFromBlockCache: () => log.push(["refold"]),
   };
+  ctx.DCC = Object.assign(ctx.DCC || {}, { TaskQueues: require("./public/js/task-queues") });
   vm.createContext(ctx);
   vm.runInContext(opts.source || source, ctx);
   return { ctx, log, api: ctx.DCC.Whenever };

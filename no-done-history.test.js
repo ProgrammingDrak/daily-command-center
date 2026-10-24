@@ -31,10 +31,6 @@ const plain = (ctx, expr) => JSON.parse(vm.runInContext("JSON.stringify(" + expr
 // ── Waiting ──
 
 const WAITING = [
-  slice(DELEGATED, / {2}function isDoneDelegated\(item\) \{[\s\S]*?\n {2}\}/, "isDoneDelegated"),
-  slice(DELEGATED, / {2}function isOpenDelegated\(item\) \{[\s\S]*?\n {2}\}/, "isOpenDelegated"),
-  slice(DELEGATED, / {2}function wantsCheckIn\(item\) \{[\s\S]*?\n {2}\}/, "wantsCheckIn"),
-  slice(DELEGATED, / {2}function isOverdue\(item\) \{[\s\S]*?\n {2}\}/, "isOverdue"),
   slice(DELEGATED, / {2}function filterItems\(items, filter\) \{[\s\S]*?\n {2}\}/, "filterItems"),
   slice(DELEGATED, / {2}function updateBadge\(overdueCount\) \{[\s\S]*?\n {2}\}/, "updateBadge"),
 ].join("\n");
@@ -54,7 +50,14 @@ const ITEMS = [
   item("check-in-today", { remaining: -1, checkInTaskId: "t2", checkInScheduledFor: "2026-10-05" }),
   item("check-in-stale", { remaining: -1, checkInTaskId: "t3", checkInScheduledFor: "2026-10-04" }),
   item("dated-follow-up", { remaining: -1, checkInRepeat: false, checkInDate: "2026-10-04" }),
-];
+].map(row => {
+  const p=row.properties;
+  if(p.remaining!=null&&!p.checkInDate) {const d=new Date('2026-10-05T12:00:00Z');d.setUTCDate(d.getUTCDate()+p.remaining);p.checkInDate=d.toISOString().slice(0,10);}
+  if(p.snoozed)p.snoozedUntil='2026-10-10';
+  if(p.dependency)Object.assign(p,{blockerType:'task',blockerBlockId:'blocker',linkedBlockId:'work'});
+  if(row.id==='followed-up')delete p.checkInDate;
+  return row;
+});
 
 function waiting() {
   const els = {};
@@ -68,6 +71,7 @@ function waiting() {
     todayStr: () => "2026-10-05",
   };
   vm.createContext(ctx);
+  Object.assign(ctx, require("./public/js/task-queues").waitingRules({today:"2026-10-05",nowValue:new Date("2026-10-05T12:00:00")}));
   vm.runInContext(WAITING, ctx);
   ctx.ITEMS = ITEMS;
   return { ctx, els };
@@ -220,7 +224,8 @@ test("a task finished on ANOTHER day files under Outside as a plain Done, not at
 });
 
 test("Loose Ends and the Waiting badge share one check-in gate", () => {
-  const attention = slice(DELEGATED, / {2}function attentionItems\(items\) \{[\s\S]*?\n {2}\}/, "attentionItems");
-  assert.match(attention, /if \(!wantsCheckIn\(item\)\) return false;/);
-  assert.match(WAITING, /return wantsCheckIn\(item\) && itemUrgency\(item\)\.timing\.remaining < 0;/);
+  const rules=require('./public/js/task-queues').waitingRules({today:'2026-10-05',nowValue:new Date('2026-10-05T12:00:00')});
+  const soon=item('soon',{lastCheckedAt:'2026-09-28T12:00:00Z',checkInDate:'2026-10-08'});
+  assert.equal(rules.isOverdue(soon),false);
+  assert.deepEqual(rules.attentionItems(ITEMS.concat(soon)).map(i=>i.id), ['overdue','check-in-stale','dated-follow-up','soon']);
 });

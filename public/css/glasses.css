@@ -31,3 +31,23 @@ footer button { font-size: .7rem; padding: 8px; }
 @media (min-height: 700px) { #glasses { padding-top: 36px; padding-bottom: 36px; } }
 @media (max-width: 400px) { #glasses { padding: 18px; gap: 12px; } :root { font-size: 18px; } nav { gap: 10px; } button, a.control { padding: 10px 12px; } }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+
+/* Full itinerary: queues stay available while the task tree scrolls. */
+.queue-pills { gap: 6px; }
+.queue-pills button { min-height: 44px; padding: 8px 10px; font-size: .78rem; border-radius: 18px; }
+.queue-pills button[aria-pressed="true"] { background: #8fdbff; color: #000; border-color: #8fdbff; }
+.queue-pills span { font-weight: 800; }
+.time-group h2 { font-size: 1rem; border-top: 1px solid #617b91; padding-top: 12px; }
+.task-row { overflow-wrap: anywhere; }
+.task-row.nested { width: calc(100% - 18px); margin-left: 18px; border-left: 4px solid #8fdbff; }
+.task-row.done { color: #c3cbd4; border-color: #617080; padding-top: 8px; padding-bottom: 8px; }
+.task-row.done span { text-decoration: line-through; font-size: .95rem; }
+.task-row small { font-size: .76rem; }
+
+.view-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.view-heading h1 { font-size: 1.25rem; margin-bottom: 8px; }
+.view-heading p { margin-bottom: 8px; }
+.time-group h2 { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
+.time-group h2 small { font-size: .8rem; color: #d4dce7; font-weight: 400; }
+.task-row.depth-2 { width: calc(100% - 36px); margin-left: 36px; }
+.task-row.depth-3 { width: calc(100% - 54px); margin-left: 54px; }

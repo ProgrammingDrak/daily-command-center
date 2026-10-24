@@ -39,13 +39,13 @@
 (function (root, factory) {
   const api = factory(typeof module === "object" && module.exports
     ? require("./task-model.js")
-    : root && root.DCC && root.DCC.TaskModel);
+    : root && root.DCC && root.DCC.TaskModel, typeof module === "object" && module.exports ? require("./task-queues.js") : root.DCC.TaskQueues);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) {
     const DCC = (root.DCC = root.DCC || {});
     DCC.Whenever = api;
   }
-})(typeof self !== "undefined" ? self : this, function (TaskModel) {
+})(typeof self !== "undefined" ? self : this, function (TaskModel, Queues) {
   "use strict";
 
   // The stored value. Rows carry it, so it never changes with the label below. It is
@@ -83,26 +83,13 @@
 
   function isWhenever(item) { return !!item && item.stage === STAGE; }
 
-  function durationOf(item) {
-    const n = Number(item && (item.durMin || item.duration));
-    return Number.isFinite(n) && n > 0 ? n : 30;
-  }
+  function durationOf(item) { return Queues.durationOf(item); }
 
-  function createdMs(item) {
-    const t = new Date((item && (item.createdAt || item.addedAt || item.added_at)) || 0).getTime();
-    return Number.isFinite(t) ? t : 0;
-  }
+
 
   // The pool, in pick order. Quick wins first, because a free minute is usually a
   // small one. Equal lengths go oldest first, so nothing sinks to the bottom forever.
-  function selectWhenever(items) {
-    return (Array.isArray(items) ? items : [])
-      .filter(item=>isWhenever(item)&&item.status!=="done"&&item.done!==true)
-      .slice()
-      .sort((a, b) => durationOf(a) - durationOf(b) ||
-        createdMs(a) - createdMs(b) ||
-        String(a.title || "").localeCompare(String(b.title || "")));
-  }
+  function selectWhenever(items) { return Queues.selectWhenever(items); }
 
   // "Surprise me" never picks the same row twice in a row when there is a choice.
   function pickIndex(count, lastIndex, rand) {
