@@ -29,10 +29,7 @@
     return getAllDelegatedItems().find(i => i.id === id) || null;
   }
 
-  function isTaskDependency(item) {
-    const p = (item && item.properties) || {};
-    return p.blockerType === "task" && !!p.blockerBlockId && !!p.linkedBlockId;
-  }
+  function isTaskDependency(item) { return window.DCC.TaskQueues.waitingRules({today:todayStr(),scoreClass:score=>window.urgency.scoreClass(score)}).isTaskDependency(item); }
 
   function isActiveTaskDependency(item) {
     const p = (item && item.properties) || {};
@@ -415,102 +412,36 @@
   // How many days between check-ins. Prefers the explicit checkInDays; falls back
   // to mapping the legacy checkInCadence so pre-existing items still render. No
   // data migration needed.
-  function checkInDaysFor(props) {
-    props = props || {};
-    const explicit = Number(props.checkInDays);
-    if (Number.isFinite(explicit) && explicit > 0) return explicit;
-    const cad = String(props.checkInCadence || "").toLowerCase();
-    if (cad === "daily") return 1;
-    if (cad === "weekly") return 7;
-    if (cad === "monthly") return 30;
-    return 7;
-  }
+  function checkInDaysFor(props) { return window.DCC.TaskQueues.checkInDaysFor(props); }
 
   // Parse a yyyy-mm-dd string as a LOCAL calendar date (avoids the UTC shift you
   // get from new Date("2026-06-25")). Returns null if unparseable.
-  function parseLocalDate(s) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ""));
-    if (!m) return null;
-    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  }
+  function parseLocalDate(s) { return window.DCC.TaskQueues.parseLocalDate(s); }
 
   // Whole-day difference (target date - today), using local midnight on both
   // sides so "today" reads 0, "tomorrow" reads 1, and past dates go negative.
-  function dayDiffFromToday(targetDate, now) {
-    const today0 = new Date(now || Date.now());
-    today0.setHours(0, 0, 0, 0);
-    const tgt0 = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
-    return Math.round((tgt0.getTime() - today0.getTime()) / 86400000);
-  }
+
 
   // {score, cls, timing} for an item. Repeating items use the shared cadence
   // creep anchored on the last check-in; dated items creep from the anchor toward
   // the chosen calendar day, hitting 100 on that day.
-  function itemUrgency(item) {
-    const p = item.properties || {};
-    if (p.checkInRepeat === false && !p.checkInDate) {
-      return { score: 0, cls: "", timing: { cadence: 0, elapsed: 0, remaining: Infinity, progress: 0 } };
-    }
-    const anchorIso = p.lastCheckedAt || item.created_at || p.createdAt || null;
-    const now = new Date();
-    const anchor = parseLocalDate(String(anchorIso || "").slice(0, 10)) || new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    let target = parseLocalDate(p.checkInDate);
-    if (!target) {
-      target = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
-      target.setDate(target.getDate() + checkInDaysFor(p));
-    }
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const cadence = Math.max(1, Math.round((target.getTime() - anchor.getTime()) / 86400000));
-    const elapsed = Math.max(0, Math.round((today.getTime() - anchor.getTime()) / 86400000));
-    const remaining = dayDiffFromToday(target, now);
-    const progress = remaining <= 0 ? 100 : Math.max(0, Math.min(99, Math.round((elapsed / cadence) * 100)));
-    const timing = { cadence, elapsed, remaining, progress };
-    return { score: progress, cls: window.urgency.scoreClass(progress), timing };
-  }
+  function itemUrgency(item) { return window.DCC.TaskQueues.waitingRules({today:todayStr(),scoreClass:score=>window.urgency.scoreClass(score)}).itemUrgency(item); }
 
-  function sortByUrgency(a, b) {
-    const doneA = isDoneDelegated(a);
-    const doneB = isDoneDelegated(b);
-    if (doneA !== doneB) return doneA ? 1 : -1;
-    const readyA = isTaskDependency(a) && (a.properties || {}).status === "ready";
-    const readyB = isTaskDependency(b) && (b.properties || {}).status === "ready";
-    if (readyA !== readyB) return readyA ? -1 : 1;
-    if (isTaskDependency(a) !== isTaskDependency(b)) return isTaskDependency(a) ? -1 : 1;
-    const sa = itemUrgency(a).score;
-    const sb = itemUrgency(b).score;
-    if (sb !== sa) return sb - sa;
-    return ((a.properties || {}).title || "").localeCompare((b.properties || {}).title || "");
-  }
+  function sortByUrgency(a, b) { return window.DCC.TaskQueues.waitingRules({today:todayStr(),scoreClass:score=>window.urgency.scoreClass(score)}).sortByUrgency(a, b); }
 
-  function isDoneDelegated(item) {
-    if (!item) return false;
-    const p = item.properties || {};
-    return !!p.completedAt || p.status === "done" || p.status === "unblocked";
-  }
+  function isDoneDelegated(item) { return window.DCC.TaskQueues.waitingRules({today:todayStr(),scoreClass:score=>window.urgency.scoreClass(score)}).isDoneDelegated(item); }
 
-  function isOpenDelegated(item) {
-    return !isDoneDelegated(item);
-  }
+  function isOpenDelegated(item) { return window.DCC.TaskQueues.waitingRules({today:todayStr(),scoreClass:score=>window.urgency.scoreClass(score)}).isOpenDelegated(item); }
 
   // Is this item asking for a check-in at all? Shared by the Waiting badge and Loose
   // Ends (attentionItems), so the two cannot disagree on who is out of the running. A
   // snoozed item, a task dependency (no check-in, it waits on another task), a
   // finished follow-up, and a cycle whose check-in task is already scheduled are not.
-  function wantsCheckIn(item) {
-    if (!isOpenDelegated(item) || isSnoozed(item) || isTaskDependency(item)) return false;
-    const p = item.properties || {};
-    if (p.checkInRepeat === false && !p.checkInDate) return false;
-    // Once a real check-in task owns this cycle, it needs no second decision row. The
-    // triage draft remains available for review/send.
-    if (p.checkInTaskId && p.checkInScheduledFor && p.checkInScheduledFor >= todayStr()) return false;
-    return true;
-  }
+  function wantsCheckIn(item) { return window.DCC.TaskQueues.waitingRules({today:todayStr(),scoreClass:score=>window.urgency.scoreClass(score)}).wantsCheckIn(item); }
 
   // Overdue for a check-in: the ONE rule behind both the Waiting badge and the
   // Overdue filter, so the count always matches what that tab lists.
-  function isOverdue(item) {
-    return wantsCheckIn(item) && itemUrgency(item).timing.remaining < 0;
-  }
+  function isOverdue(item) { return window.DCC.TaskQueues.waitingRules({today:todayStr(),scoreClass:score=>window.urgency.scoreClass(score)}).isOverdue(item); }
 
   function collectVisibleContextIds() {
     const ids = new Set();
@@ -541,19 +472,10 @@
     return toDateInputValue(new Date());
   }
 
-  function isSnoozed(item) {
-    const until = String(((item.properties || {}).snoozedUntil) || "");
-    return /^\d{4}-\d{2}-\d{2}$/.test(until) && until > todayStr();
-  }
+  function isSnoozed(item) { return window.DCC.TaskQueues.waitingRules({today:todayStr(),scoreClass:score=>window.urgency.scoreClass(score)}).isSnoozed(item); }
 
   // Waiting enters Loose Ends as soon as its urgency reaches 70 percent.
-  function attentionItems(items) {
-    return items.filter(item => {
-      if (!wantsCheckIn(item)) return false;
-      const u = itemUrgency(item);
-      return u.score >= 70 || u.timing.remaining < 0;
-    });
-  }
+  function attentionItems(items) { return window.DCC.TaskQueues.waitingRules({today:todayStr(),scoreClass:score=>window.urgency.scoreClass(score)}).attentionItems(items); }
 
   function blockerLabel(item) {
     const p = item.properties || {};

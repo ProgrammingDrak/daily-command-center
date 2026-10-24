@@ -326,17 +326,7 @@ function _applySectionSort(items,mode,getTitle,getCreated){
 // dragged at the work list is a schedule-into-today gesture, not a reorder.
 function _orderUnscheduled(rows){
   const order=(typeof loadUnscheduledOrder==="function")?loadUnscheduledOrder():[];
-  const created=_unsCreated;
-  if(!order.length)return rows;
-  const pos={};order.forEach((id,i)=>{pos[id]=i;});
-  return rows.slice().sort((a,b)=>{
-    const ai=pos[a.id]!==undefined?pos[a.id]:9999;
-    const bi=pos[b.id]!==undefined?pos[b.id]:9999;
-    if(ai!==bi)return ai-bi;
-    const au=a.__unf?1:0,bu=b.__unf?1:0;
-    if(au!==bu)return au-bu;
-    return String(created(b)).localeCompare(String(created(a)));
-  });
+  return DCC.TaskQueues.orderUnscheduled(rows,order,_unsCreated);
 }
 // Current row ids of the Unscheduled drag group in DOM (display) order, as ONE
 // persisted order. Triage and Unscheduled rows share that order (both are
@@ -872,35 +862,7 @@ function _completionMinute(ev){
   return d.getHours()*60+d.getMinutes();
 }
 function _fileDoneUntimedOnTheDay(groups,sourceGroup,timeBlocks){
-  const chunks=[];
-  (sourceGroup.nodes||[]).forEach(node=>{if(!node.depth||!chunks.length)chunks.push([]);chunks[chunks.length-1].push(node);});
-  const open=[];
-  chunks.forEach(chunk=>{
-    const root=chunk[0].ev;
-    if(!isDone(root)){open.push(...chunk);return;}
-    const minute=_completionMinute(root);
-    const block=minute==null?null:DCC.TimeBlocks.blockForTask({start:fmt(minute)},timeBlocks);
-    let target=block?groups.find(g=>g.block.id===block.id):null;
-    if(!target){
-      target=groups.find(g=>g.block===DCC.TimeBlocks.OUTSIDE_BLOCK);
-      // Created where groupItineraryTree puts it: after the timed blocks, before Unplanned.
-      if(!target){
-        const at=groups.findIndex(g=>g.block.id===DCC.TimeBlocks.UNPLANNED_BLOCK.id);
-        target={block:DCC.TimeBlocks.OUTSIDE_BLOCK,nodes:[]};
-        groups.splice(at<0?groups.length:at,0,target);
-      }
-    }
-    // In time order among the block's roots, timed ones by start and rows already
-    // filed here by their own completion, so it reads where it happened.
-    let at=target.nodes.length;
-    if(minute!=null){
-      const when=n=>_rowIsTimed(n.ev)?pt(n.ev.start):(isDone(n.ev)?_completionMinute(n.ev):null);
-      const i=target.nodes.findIndex(n=>{if(n.depth)return false;const m=when(n);return m!=null&&m>minute;});
-      if(i>=0)at=i;
-    }
-    target.nodes.splice(at,0,...chunk);
-  });
-  sourceGroup.nodes=open;
+  DCC.TimeBlocks.fileDoneUntimed(groups,sourceGroup,timeBlocks,{isDone,completionMinute:_completionMinute});
 }
 // Apply the Unscheduled sort mode (Manual / A–Z / New) to a group's nodes, keeping
 // each root's subtree attached to it.

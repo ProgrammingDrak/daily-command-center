@@ -34,6 +34,38 @@
     });
     return [triage,...groups,...(outside.nodes.length?[outside]:[]),unplanned];
   }
+function fileDoneUntimed(groups,sourceGroup,timeBlocks,{isDone,completionMinute}){
+  const chunks=[];
+  (sourceGroup.nodes||[]).forEach(node=>{if(!node.depth||!chunks.length)chunks.push([]);chunks[chunks.length-1].push(node);});
+  const open=[];
+  chunks.forEach(chunk=>{
+    const root=chunk[0].ev;
+    if(!isDone(root)){open.push(...chunk);return;}
+    const minute=completionMinute(root);
+    const block=minute==null?null:blockForTask({start:String(Math.floor(minute/60)).padStart(2,"0")+":"+String(minute%60).padStart(2,"0")},timeBlocks);
+    let target=block?groups.find(g=>g.block.id===block.id):null;
+    if(!target){
+      target=groups.find(g=>g.block===OUTSIDE_BLOCK);
+      // Created where groupItineraryTree puts it: after the timed blocks, before Unplanned.
+      if(!target){
+        const at=groups.findIndex(g=>g.block.id===UNPLANNED_BLOCK.id);
+        target={block:OUTSIDE_BLOCK,nodes:[]};
+        groups.splice(at<0?groups.length:at,0,target);
+      }
+    }
+    // In time order among the block's roots, timed ones by start and rows already
+    // filed here by their own completion, so it reads where it happened.
+    let at=target.nodes.length;
+    if(minute!=null){
+      const when=n=>(!n.ev.untimed&&minutes(n.ev.start,false)!==null)?minutes(n.ev.start,false):(isDone(n.ev)?completionMinute(n.ev):null);
+      const i=target.nodes.findIndex(n=>{if(n.depth)return false;const m=when(n);return m!=null&&m>minute;});
+      if(i>=0)at=i;
+    }
+    target.nodes.splice(at,0,...chunk);
+  });
+  sourceGroup.nodes=open;
+}
+
   const DEFAULTS=[
     {name:"Morning Workout",start:"06:30",end:"09:00"},
     {name:"Clever",start:"09:00",end:"17:30"},
@@ -87,5 +119,5 @@
   }
   function rangeLabel(block){return formatTime(block.start)+" - "+formatTime(block.end);}
 
-  return {TRIAGE_BLOCK,UNPLANNED_BLOCK,OUTSIDE_BLOCK,collapseKey,isSourceReviewTask,groupItineraryTree,WEEKDAYS,DAYS,DAY_NAMES,DEFAULTS,DIVIDER_VARIANT,dayKey,isWeekday,activeDays,minutes,valid,normalize,forDate,groupByDay,blockForTask,formatTime,rangeLabel};
+  return {fileDoneUntimed,TRIAGE_BLOCK,UNPLANNED_BLOCK,OUTSIDE_BLOCK,collapseKey,isSourceReviewTask,groupItineraryTree,WEEKDAYS,DAYS,DAY_NAMES,DEFAULTS,DIVIDER_VARIANT,dayKey,isWeekday,activeDays,minutes,valid,normalize,forDate,groupByDay,blockForTask,formatTime,rangeLabel};
 });

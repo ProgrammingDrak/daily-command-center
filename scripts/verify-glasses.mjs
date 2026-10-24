@@ -35,13 +35,54 @@ try {
   assert.equal((await fetch(base + '/api/tasks/glasses-unplanned/completion', { method: 'POST', headers: foreignHeaders, body: JSON.stringify({ completed: true, mutationId: 'foreign-canonical-attempt', expectedRevision: null }) })).status, 404);
   assert.notEqual((await (await fixtureRead('/api/blocks/glasses-unplanned')).json()).properties.status, 'done');
   mark('real account-binding middleware rejects missing/stale user/workspace headers and foreign task access');
-  await page.goto(base + '/glasses.html'); await ready(); await page.getByRole('heading', { name: 'Your day, in view' }).waitFor();
+  await page.goto(base + '/glasses.html'); await ready(); await page.getByRole('heading', { name: 'Itinerary', exact: true }).waitFor();
   assert.match(await page.locator('#card').innerText(), /NOW/); assert.match(await page.locator('#card').innerText(), /UP NEXT/);
+  assert.equal(new URL(page.url()).searchParams.has('date'),false);
+  await page.reload(); await ready(); assert.equal(new URL(page.url()).searchParams.has('date'),false);
+  assert.deepEqual(await page.locator('.queue-pills button').allTextContents(), ['Triage 1','Loose Ends 3','Waiting 1','Unscheduled 2','Whenever 2']);
+  assert.equal(await act('open:glasses-done').getAttribute('class').then(c=>c.includes('done')), true);
+  assert.equal(await act('open:glasses-child-done').getAttribute('class').then(c=>c.includes('nested')&&c.includes('done')), true);
+  assert.match(await act('open:glasses-child-open').innerText(), /Open/);
+  assert.equal(await act('open:glasses-done-untimed').count(),1);
+  await screenshot('600-full-itinerary-top');
+  for(const [id,taskId] of [['triage','glasses-triage'],['loose','glasses-earlier'],['waiting','waiting:glasses-waiting'],['unscheduled','glasses-unplanned'],['whenever','glasses-backlog']]) {
+    await act('queue:'+id).click();
+    assert.equal(await act('queue:'+id).getAttribute('aria-pressed'),'true');
+    await act('open:'+taskId).waitFor();
+    if(id==='triage')await page.getByText(/additional source item/).waitFor();
+    if(id==='loose')assert.match(await act('open:'+taskId).innerText(),/Overdue/);
+    await screenshot('600-queue-'+id);
+    await act('open:'+taskId).click(); await ready();
+    if(id==='waiting')assert.equal(await act('confirm').count(),0);
+    await act('back').click(); await ready();
+    assert.equal(await page.locator(':focus').getAttribute('data-action'),'open:'+taskId);
+    await page.reload(); await ready(); assert.equal(await act('queue:'+id).getAttribute('aria-pressed'),'true');
+  }
+  await act('queue:loose').click();
+  await act('open:triage:unprepared-source').click(); await ready(); assert.equal(await act('confirm').count(),0);
+  await act('back').click(); await ready();
+  await page.route('**/api/tasks/open?**days=all**',route=>route.abort());
+  await act('older').click(); await page.getByRole('alert').waitFor();
+  assert.match(await page.locator('#card').innerText(),/Past 14 days/);
+  assert.equal(await act('older').innerText(),'Show older tasks');
+  await page.unroute('**/api/tasks/open?**days=all**');
+  await act('older').click(); await ready(); assert.match(await page.locator('#card').innerText(),/All earlier tasks/);
+  await page.reload(); await ready(); assert.equal(new URL(page.url()).searchParams.get('older'),'all');
+  await act('older').click(); await ready();
+  await act('itinerary').click();
+  for(const [width,height] of [[375,812],[1440,1000],[600,600]]) {
+    await page.setViewportSize({width,height});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
+    assert.ok(await page.locator('.queue-pills button').evaluateAll(es=>es.every(e=>{const b=e.getBoundingClientRect();return b.height>=44&&b.top>=0&&b.bottom<window.innerHeight;})));
+    await screenshot(width+'-full-itinerary');
+  }
+  mark('five canonical queue pills, counts/filters, completed hierarchy, overdue work, reload/back focus and responsive full-list layout');
   assert.equal(await page.locator(':focus').getAttribute('id'), 'card');
-  await page.keyboard.press('ArrowRight'); assert.equal(await page.locator(':focus').getAttribute('data-action'), 'open:glasses-now');
+  await page.keyboard.press('ArrowRight'); assert.match(await page.locator(':focus').getAttribute('data-action'), /^open:/);
+  await act('open:glasses-now').focus();
   await screenshot('600-itinerary'); await page.keyboard.press('Enter'); await ready();
   assert.match(await page.locator('h1').innerText(), /Prepare the weekly plan/); assert.equal(await page.locator(':focus').getAttribute('id'), 'card');
-  mark('600px current/next and arrow/Enter detail navigation, focus restored');
+  mark('600px full itinerary and arrow/Enter detail navigation, focus restored');
   await act('confirm').click(); assert.equal(await page.locator(':focus').getAttribute('data-action'), 'cancel');
   await page.keyboard.press('Enter'); assert.equal(await act('confirm').count(), 1); mark('confirmation defaults to Cancel; repeated activation cannot complete');
   await context.setOffline(true); await page.getByRole('alert').filter({ hasText: /Offline/ }).waitFor(); assert.equal(await act('confirm').isDisabled(), true); await screenshot('600-offline');
@@ -132,6 +173,17 @@ try {
   const routineCompletion = apiRequests.find(r => new URL(r.url()).pathname === '/api/tasks/' + info.routineId + '/completion');
   assert.equal(routineCompletion.headers()['x-dcc-user'], '1'); assert.equal(routineCompletion.headers()['x-dcc-workspace'], 'ws-1');
   mark('routine explicitly completes through protected canonical task/block endpoints after account recovery');
+  await context.addCookies([{ name: 'dcc-review-auth', value: 'other', url: base }]);
+  await page.goto(base+'/glasses.html'); await ready();
+  assert.deepEqual(await page.locator('.queue-pills button').allTextContents(),['Triage 0','Loose Ends 0','Waiting 0','Unscheduled 0','Whenever 0']);
+  await page.getByText('No scheduled items. Open the task pills above for unscheduled work.').waitFor();
+  for(const q of ['triage','loose','waiting','unscheduled','whenever']) {
+    await act('queue:'+q).click(); await page.getByText('No items here. All clear.').waitFor();
+  }
+  await screenshot('600-empty');
+  await page.goto(base+'/glasses.html?date='+info.date); await ready(); await page.reload(); await ready();
+  assert.equal(new URL(page.url()).searchParams.get('date'),info.date);
+  mark('empty account queues remain explicit; default Today reload stays automatic while an explicit date remains pinned');
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'checks.json'), JSON.stringify({ checks, errors, viewports: ['600x600', '375x812', '1440x1000'], realGlasses: false }, null, 2));
 } catch (e) { await screenshot('failure'); throw e; } finally { await browser.close(); }

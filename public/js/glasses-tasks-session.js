@@ -4,7 +4,7 @@
 })(typeof self !== 'undefined' ? self : this, function (M, TM) {
   'use strict';
   const issue = (message, status = 0) => Object.assign(new Error(message), { status });
-  function create({ request, storage, uuid, online = () => true, changed = () => {} }) {
+  function create({ request, storage, uuid, online = () => true, timeZone = 'UTC', changed = () => {} }) {
     const s = { row: null, view: null, busy: false, pending: null, error: '', status: 'Opening…', code: 0, account: null, date: null };
     const key = () => 'dcc.glasses.task-retry.v1:' + s.account;
     async function verify() {
@@ -40,11 +40,11 @@
       if ((!TM.foldsIntoItinerary(b) && !backlog) || b.deleted_at || ['deleted', 'archived'].includes(b.properties?.status)) throw issue('Task is no longer available.', 404);
       return M.fromBlock(b, s.view?.overlays?.[b.date]);
     }
-    async function refreshView(date) {
+    async function refreshView(date, allEarlier) {
       const snapshot = await request('/api/sync/bootstrap' + (date ? '?date=' + encodeURIComponent(date) : ''));
       if (s.account.split(':').slice(1).join(':') !== snapshot.workspaceId) throw issue('Workspace changed. Reload before continuing.', 403);
-      const carry = await request('/api/tasks/open?before=' + snapshot.date + '&days=all&limit=2000');
-      s.view = M.project(snapshot, carry); s.date = snapshot.date;
+      const carry = await request('/api/tasks/open?before=' + M.clock(timeZone).date + (allEarlier ? '&days=all&limit=2000' : '&days=14'));
+      s.view = M.project(snapshot, carry, { timeZone }); s.view.allEarlier = !!allEarlier; s.date = snapshot.date;
     }
     function restore() {
       const raw = storage.getItem(key());
@@ -71,10 +71,10 @@
     return {
       state: s,
       load: options => run(async () => {
-        const { taskId, date, discardConflict = false } = options || {};
+        const { taskId, date, allEarlier = false, discardConflict = false } = options || {};
         await verify();
         if (discardConflict && s.pending) { storage.removeItem(key()); s.pending = null; }
-        restore(); await refreshView(date);
+        restore(); await refreshView(date, allEarlier);
         const id = s.pending?.taskId || taskId;
         s.row = null;
         s.row = id ? await row(id) : null;

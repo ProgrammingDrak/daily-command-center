@@ -1245,7 +1245,7 @@ function activeTriageItems(){
   const scheduledTriage=currentTriageScheduled();
   const deletedTriage=loadDeletedTriage();
   const suppressed=serverTriageSuppressions();
-  return (INIT_TRIAGE||[]).filter(i=>!dismissed[i.id]&&!scheduledTriage[i.id]&&!deletedTriage.includes(i.id)&&!suppressed[i.id]);
+  return DCC.TaskQueues.activeTriage(INIT_TRIAGE,{dismissed,scheduled:scheduledTriage,deleted:deletedTriage,suppressed});
 }
 // The task-shaped properties a triage item becomes. Shared by every "put this
 // triage item on the schedule" path so the created row is spelled one way.
