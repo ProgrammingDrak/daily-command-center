@@ -93,9 +93,11 @@
     async function complete() {
       return run(async () => {
         if (s.pending || !s.row || s.row.completed || s.row.record.guidance?.status !== 'finished') return;
+        if (!s.row.date) throw issue('Schedule this task in DCC before completing it here.');
         await verify();
         const fresh = await row(s.row.taskId);
         s.row = fresh;
+        if (!fresh.date) throw issue('Schedule this task in DCC before completing it here.');
         if (fresh.completed) { s.status = 'Synced'; return; }
         if (fresh.record.guidance?.status !== 'finished') throw issue('Guidance changed. Review the saved card before completing.', 409);
         const block = await request('/api/blocks/' + encodeURIComponent(fresh.taskId));

@@ -115,3 +115,15 @@ test('routine controller reuses canonical guidance without fabricating actuals',
   await a.load({ taskId: 'routine' }); await a.guide('begin'); await a.guide('next'); await a.guide('exit'); await a.load({ taskId: 'routine' }); await a.guide('resume');
   assert.equal(a.state.row.record.guidance.stepIndex, 1); assert.equal(count, 4); assert.deepEqual(row.record.actual, { sets: [], runs: [] }); assert.deepEqual(row.record.session.events, []);
 });
+test('secondary guidance cannot bypass dateless completion restriction', async () => {
+  const { create: make } = require('./public/js/glasses-session'); let n = 0, writes = 0;
+  let record = W.empty(); record.plan = W.gentleReset(() => 'secondary-' + (++n)); record = W.guide(record, 'begin');
+  for (let i = 1; i < W.guidanceSteps(record.plan).length; i++) record = W.guide(record, 'next');
+  record = W.guide(record, 'finish');
+  const h = harness(), a = make({ ...h.options, request: async (url, opts) => {
+    if (opts?.method) writes++;
+    return url === '/api/me' ? { userId: 1, workspaceId: 'ws-1' } : { taskId: 'routine', date: null, revision: 1, record };
+  } });
+  await a.load({ taskId: 'routine' }); await a.complete();
+  assert.match(a.state.error, /Schedule this task/); assert.equal(writes, 0);
+});

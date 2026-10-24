@@ -52,7 +52,8 @@
         actions = button('Cancel', 'cancel', { disabled: s.busy }) + button('Confirm completion', 'complete', { primary: true, disabled: locked });
       } else if (g?.status === 'finished') {
         content += '<h1>Guidance finished</h1><p>All ' + steps.length + ' cards visited.</p><p class="muted">Your task is still open. Complete it only when you are ready.</p>';
-        actions = button('Complete task…', 'confirm', { primary: true, disabled: locked });
+        if (row.date) actions = button('Complete task…', 'confirm', { primary: true, disabled: locked });
+        else content += '<p class="muted">Schedule this task in DCC before completing it here.</p>';
       } else {
         content += '<h1>' + esc(entry.name) + '</h1>' + (entry.side && entry.side !== 'none' ? '<div class="side">' + esc(entry.side.toUpperCase()) + '</div>' : '') + '<p class="instruction">' + esc(entry.movement?.visualInstructions || 'Follow your planned movement at a comfortable pace.') + '</p>';
         if (entry.movement?.breath && entry.movement.breath !== 'none') content += '<p class="muted">Optional natural breath: ' + esc(entry.movement.breath) + '</p>';

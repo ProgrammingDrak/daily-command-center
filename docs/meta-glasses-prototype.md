@@ -49,15 +49,18 @@ node --test --test-concurrency=4
 
 Results on the final implementation:
 
-- Focused regression tests: **15/15 passed** (projection/order/hierarchy, timezone, legacy status, storage failure, offline refusal, serial completion, auth/account isolation, revision conflict, lost response/reload/retry, historical receipt after reopen, and canonical guidance).
+- Focused regression tests: **16/16 passed** (projection/order/hierarchy, timezone, legacy status, storage failure, offline refusal, serial completion, auth/account isolation, revision conflict, lost response/reload/retry, historical receipt after reopen, canonical guidance, and the secondary dateless-completion guard).
+- Five safety guards were mutation-checked: removing busy serialization, offline refusal, account isolation, revision comparison, or the Whenever restriction caused the corresponding test to fail. All files were restored and the focused suite passed again.
 - Reused PostgreSQL activity/movement API tests: **10/10 passed**, disposable PGlite only.
-- Full repository suite: **3,110 passed, 11 skipped, 0 failed** (3,121 total). The first run had one intermittent `triage-task-lifecycle.test.js` undelete 404; the isolated test passed both here and on clean base 8391073, and the final full run passed. No unrelated test was changed.
+- Full repository suite: **3,111 passed, 11 skipped, 0 failed** (3,122 total). The first run had one intermittent `triage-task-lifecycle.test.js` undelete 404; the isolated test passed both here and on clean base 8391073, and subsequent full runs passed. No unrelated test was changed.
 - ESLint: **0 errors**, 69 existing warnings. Browser scripts additionally load and execute in Chromium QA. This plain-JavaScript repo has no separate build or typecheck script.
 - Browser QA: **600×600**, **375×812**, **1440×1000**; current/next, arrow/Enter focus, safe confirmation, offline state, a real local completion with a lost acknowledgement then reload/retry, auth interruption, alias-less backlog read-only behavior, two-tab receipt isolation, server conflict, long-content scrolling, visible controls and secondary routine pause/reload/resume. No page errors.
-- Independent reviewer inspected code and reproduced defects; fixes added for backlog membership/hierarchy, consistent completion overlays, current/next refresh, cross-tab recovery, unreachable task recovery, and Whenever completion semantics.
+- Independent reviewer inspected code and reproduced defects; fixes added for backlog membership/hierarchy, consistent completion overlays, current/next refresh, cross-tab recovery, unreachable task recovery, and Whenever completion semantics. Final reviewer report: all findings addressed, no remaining blocker for the local prototype. A final Chromium check also proved dateless finished guidance exposes no completion control.
 
 ## Exact limitations before release
 
 This is a tested **local prototype**, not a Meta device-certified release. Real glasses, Neural Band pinch mapping, additive-optics legibility, the official simulator extension, and on-device authentication have not been tested. QA used Chromium viewport/keyboard simulation, not those systems.
+
+Screenshots and browser check results are saved in `/Users/drakeshadwell/Documents/Codex/2026-10-24/task-2/glasses-qa/`. The supported Library prepared-upload helper was attempted with current skill helper files. The default Python was incompatible before upload began; retrying with Python 3.11 failed with **Library prepare_uploads is not available**. No Library upload completed; the local PNG deliverables remain available.
 
 The itinerary presents saved canonical task rows and times. Legacy day-state timeline items without a canonical row are counted with a visible full-DCC notice; they are not resurrected as actionable tasks, because the bootstrap does not carry their tombstone identities. Earlier-task retrieval is limited to 2,000 records and shows truncation. The compact surface does not create, schedule, reorder, edit or reopen tasks, and does not run a parallel assistant. Existing app-wide security/release holds remain release prerequisites; this feature does not waive them.

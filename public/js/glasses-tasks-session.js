@@ -80,6 +80,7 @@
         if (!s.row.date) throw issue('Schedule this task in DCC before completing it here.');
         await verify();
         const fresh = await row(s.row.taskId);
+        if (!fresh.date) throw issue('Schedule this task in DCC before completing it here.');
         if (fresh.completed) { s.row = fresh; s.status = 'Already completed in DCC'; return; }
         if (fresh.completionRevision !== s.row.completionRevision) throw issue('Completion state changed.', 409);
         const pending = { account: s.account, taskId: fresh.taskId, body: { completed: true, taskDate: fresh.date, expectedRevision: fresh.completionRevision, mutationId: uuid() } };
