@@ -20,13 +20,13 @@ test("login page scripts remain syntactically valid", () => {
 test("Clerk card is constrained to the DCC card at every width", () => {
   assert.match(source, /\.clerk-mount :where\(\.cl-rootBox, \.cl-cardBox, \.cl-card, \.cl-main\)/);
   assert.match(source, /cardBox: \{ width: "100%", maxWidth: "100%", minWidth: "0"/);
-  assert.match(source, /#clerkSignIn \.cl-signIn-start :where\(\.cl-header, \.cl-form, \.cl-dividerRow, \.cl-footer\)/);
+  assert.match(source, /#clerkSignIn \.cl-signIn-start :where\(\.cl-header, \.cl-dividerRow, \.cl-footer\)/);
   assert.doesNotMatch(source, /querySelector\("\.logo"\)\.style\.display\s*=\s*"none"/);
 });
 
 test("managed and credential login methods share one visible card", () => {
   assert.match(source, /<section id="managedAuth"[\s\S]*?<div id="clerkSignIn"/);
-  assert.match(source, /or use your username or email/);
+  assert.match(source, /or use your DCC password/);
   assert.match(source, /<form id="authForm">/);
   assert.doesNotMatch(source, /legacyForm\.style\.display\s*=\s*"none"/);
   assert.doesNotMatch(source, /tabsEl\.style\.display\s*=\s*"none"/);
@@ -35,11 +35,12 @@ test("managed and credential login methods share one visible card", () => {
 test("register mode returns the shared credential field to username-only copy", () => {
   assert.match(source, /usernameLabel\.textContent = isRegister \? "Username" : "Username or email"/);
   assert.match(source, /usernameInput\.placeholder = isRegister \? "drake" : "drake or you@example\.com"/);
-  assert.match(source, /clerkDividerText\.textContent = isRegister \? "or create with a username" : "or use your username or email"/);
+  assert.match(source, /clerkDividerText\.textContent = isRegister \? "or create with a username" : "or use your DCC password"/);
 });
 
-test("Clerk contributes only the provider row at start and preserves continuation forms", () => {
-  assert.match(source, /#clerkSignIn \.cl-signIn-start :where\(\.cl-header, \.cl-form, \.cl-dividerRow, \.cl-footer\)/);
+test("Clerk exposes configured email sign-in and preserves continuation forms", () => {
+  assert.match(source, /#clerkSignIn \.cl-signIn-start :where\(\.cl-header, \.cl-dividerRow, \.cl-footer\)/);
+  assert.doesNotMatch(source, /:where\([^)]*\.cl-form[^)]*\)\s*\{\s*display:\s*none/);
   assert.doesNotMatch(source, /form: \{ display: "none" \}/);
   assert.doesNotMatch(source, /dividerRow: \{ display: "none" \}/);
   assert.doesNotMatch(source, /footer: \{ display: "none" \}/);

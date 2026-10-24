@@ -61,3 +61,6 @@ try {
   console.log('PASS missing and malicious paths fall back to home for both login methods');
   assert.deepEqual(errors, []);
 } finally { await browser.close(); }
+
+// Keep the existing login browser check covering the configured email fallback.
+await import('./verify-login-email.mjs');
