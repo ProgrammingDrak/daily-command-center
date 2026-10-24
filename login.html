@@ -413,6 +413,7 @@
     </form>
   </div>
 
+  <script src="/public/js/login-return.js"></script>
   <script>
     let mode = window.location.pathname === "/register" ? "register" : "login";
 
@@ -511,7 +512,7 @@
         if (res.ok) {
           // Redirect to the app (or the originally requested page)
           const params = new URLSearchParams(window.location.search);
-          window.location.href = params.get("next") || "/";
+          window.location.href = window.DccLoginReturn.normalize(params.get("next"));
         } else {
           errorEl.textContent = data.error || (mode === "register" ? "Registration failed." : "Sign in failed. Check your credentials.");
           errorEl.classList.add("visible");
@@ -602,6 +603,7 @@
     };
 
     const returnParams = new URLSearchParams(window.location.search);
+    returnParams.set("next", window.DccLoginReturn.normalize(returnParams.get("next")));
     returnParams.set("auth", "verifying");
     const authReturnUrl = "/login?" + returnParams.toString();
 
@@ -613,7 +615,7 @@
       redirectUrl: authReturnUrl,
       onSignedIn: () => {
         const params = new URLSearchParams(window.location.search);
-        const destination = params.get("next") || "/";
+        const destination = window.DccLoginReturn.normalize(params.get("next"));
         clearClerkHandoff();
         window.location.href = destination;
       },

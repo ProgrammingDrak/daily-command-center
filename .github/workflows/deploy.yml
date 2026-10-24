@@ -64,6 +64,8 @@ jobs:
         run: npm run test:postgres
       - name: Install Chromium for smoke
         run: npx playwright-core install --with-deps --no-progress chromium
+      - name: Verify synthetic login return paths
+        run: node scripts/verify-login-return.mjs
       - name: Boot server, wait for health, run smoke
         run: |
           node server.js > server.log 2>&1 &

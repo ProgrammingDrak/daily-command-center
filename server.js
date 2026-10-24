@@ -22,6 +22,7 @@ const pool = require("./pg-pool");
 const blockDB = require("./db");
 const timeBlockRules = require("./public/js/time-blocks");
 const auth = require("./auth");
+const loginReturn = require("./public/js/login-return");
 const VaultStore = require("./vault-store");
 const SyncManager = require("./sync-manager");
 const slotStore = require("./slot-store");
@@ -244,7 +245,10 @@ app.use(async (req, res, next) => {
     }
     if (req.method === "GET" && req.path === "/api/waiting-items/attention" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
     if (DCC_ENDPOINTS.has(req.path) && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) return next();
-    if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
+    if (!req.session.userId) {
+      if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" });
+      return res.redirect(loginReturn.loginUrl(req.method === "GET" || req.method === "HEAD" ? req.originalUrl : "/"));
+    }
     next();
   } catch (err) { next(err); }
 });
@@ -265,7 +269,7 @@ app.use(async (req, res, next) => {
 // ── Auth Routes ──
 app.use(require("./lib/account-binding"));
 function sendAuthPage(req, res) {
-  if (req.session.userId) return res.redirect("/");
+  if (req.session.userId) return res.redirect(loginReturn.normalize(req.query.next));
   res.sendFile(path.join(PROJECT_DIR, "login.html"));
 }
 
