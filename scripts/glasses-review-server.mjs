@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-if (process.env.NODE_ENV === 'production' || process.env.DCC_GLASSES_REVIEW !== '1' || !process.env.DCC_PGLITE_MODULE) throw new Error('Explicit glasses review and disposable PGlite runtime required');
+if (process.env.NODE_ENV === 'production' || process.env.DCC_GLASSES_REVIEW !== '1' || (!process.env.DCC_PGLITE_MODULE && !process.env.DCC_TEST_DATABASE_URL)) throw new Error('Explicit glasses review and disposable database runtime required');
 process.env.DCC_ACTIVITY_REVIEW = '1';
 const app = express(), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 app.use(express.json());
@@ -15,7 +15,7 @@ app.use((req, res, next) => {
   if (mode) req.headers['x-review-session'] = mode;
   next();
 });
-const ctx = await require('./activity-review-backend')(app);
+const ctx = await require('./activity-review-backend')(app, { enforceAccountBinding: true });
 const date = ctx.getTodayStr(), owner = { userId: 1, workspaceId: 'ws-1' };
 const hhmm = n => String(Math.floor(n / 60)).padStart(2, '0') + ':' + String(n % 60).padStart(2, '0');
 // Pair this fixture clock with Playwright's fixed Date clock, even across midnight.
@@ -33,10 +33,10 @@ await task('glasses-long', 'A long task title to verify wrapping and readable fo
 const W = require('../public/js/workout-model'), record = W.empty(); record.plan = W.gentleReset(() => ctx.crypto.randomUUID());
 const routine = await require('../activity-store').createActivityStore(ctx).create({ title: 'DEMO · Gentle Reset', date, record }, owner);
 app.get('/api/me', (req, res) => req.session?.userId ? res.json({ userId: req.session.userId, workspaceId: req.workspaceId }) : res.status(401).json({ error: 'Review session expired' }));
-app.get('/public/js/app-config.js', (_req, res) => res.type('js').send('window.DCC_APP_TIME_ZONE="UTC";'));
+app.get('/public/js/app-config.js', (req, res) => res.type('js').send('window.DCC_APP_TIME_ZONE="UTC";window.DCC_ACCOUNT_CONTEXT=' + JSON.stringify(req.session?.userId ? { userId: req.session.userId, workspaceId: req.workspaceId } : null) + ';'));
 require('../routes/sync')(app, { ...ctx, resolveOwnerStrict: require('../middleware/resolve-owner').resolveOwnerStrict,
   buildDayResponse: async () => ({ date, schedule: { timeline: [] } }) });
-app.get('/api/glasses-review-info', (_req, res) => res.json({ synthetic: true, storage: 'memory', date, now: fixtureNow, routineId: routine.taskId }));
+app.get('/api/glasses-review-info', (_req, res) => res.json({ synthetic: true, storage: process.env.DCC_PGLITE_MODULE ? 'memory' : 'isolated-schema', accountBinding: true, date, now: fixtureNow, routineId: routine.taskId }));
 app.get('/glasses.html', (_req, res) => res.sendFile(path.join(root, 'glasses.html')));
 app.get('/glasses-routine.html', (_req, res) => res.sendFile(path.join(root, 'glasses-routine.html')));
 app.use('/public', express.static(path.join(root, 'public')));

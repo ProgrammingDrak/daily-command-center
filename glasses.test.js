@@ -90,6 +90,28 @@ test('authentication interruption preserves receipt; different account cannot re
   h.account(2); await a.retry(); assert.equal(a.state.code, 403); assert.equal(a.state.row, null); assert.ok(a.state.pending);
   const b = h.create(); await b.load({}); assert.equal(b.state.pending, null); assert.equal(h.calls.filter(c => c.method === 'POST').length, 1);
 });
+test('account-binding conflicts clear visible data without discarding pending completion', async () => {
+  const h = harness(), original = h.options.request; let switched = false;
+  h.options.request = async (...args) => {
+    if (switched) throw Object.assign(new Error('Account binding'), { status: 409, code: 'ACCOUNT_CHANGED' });
+    return original(...args);
+  };
+  const a = h.create(); await a.load({ taskId: 'a' }); h.mode('lost'); await a.complete();
+  const receipt = a.state.pending; switched = true; await a.retry();
+  assert.equal(a.state.code, 403); assert.equal(a.state.accountChanged, true);
+  assert.equal(a.state.row, null); assert.equal(a.state.view, null); assert.equal(a.state.pending, receipt);
+  await a.load({ discardConflict: true }); assert.equal(a.state.pending, receipt);
+  switched = false; await a.retry(); assert.equal(a.state.accountChanged, false); assert.equal(a.state.row.completed, true);
+});
+test('both glasses entry points capture account context before starting their controllers', () => {
+  const fs = require('node:fs');
+  for (const name of ['glasses', 'glasses-routine']) {
+    const html = fs.readFileSync(require.resolve('./' + name + '.html'), 'utf8');
+    const scripts = [...html.matchAll(/<script defer src="([^"]+)"/g)].map(m => m[1]);
+    const config = scripts.indexOf('/public/js/app-config.js'), binding = scripts.indexOf('/public/js/account-context.js');
+    assert.ok(config >= 0 && binding > config && binding < scripts.indexOf('/public/js/' + name + '.js'));
+  }
+});
 test('stale completion revision refuses completion until user refreshes', async () => {
   const h = harness(), a = h.create(); await a.load({ taskId: 'a' }); h.db.get('a').properties._completionRevision = 'changed'; await a.complete();
   assert.equal(a.state.code, 409); assert.equal(h.calls.some(c => c.method === 'POST'), false);

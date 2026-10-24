@@ -1,7 +1,7 @@
 // Opt-in disposable backend for ui-review-server.mjs. Uses production activity
 // and block routes against an isolated database. Never imported by server.js.
-module.exports = async function mountActivityReview(app) {
-  if (process.env.DCC_ACTIVITY_REVIEW !== "1" || !process.env.DCC_PGLITE_MODULE) throw new Error("Activity review requires an explicit in-memory database runtime");
+module.exports = async function mountActivityReview(app, { enforceAccountBinding = false } = {}) {
+  if (process.env.DCC_ACTIVITY_REVIEW !== "1" || (!process.env.DCC_PGLITE_MODULE && !process.env.DCC_TEST_DATABASE_URL)) throw new Error("Activity review requires an explicit disposable database runtime");
   const { createActivityDb } = require("../test-support/activity-db");
   const { createActivityStore } = require("../activity-store");
   const { workout, meal } = require("../test-support/activity-fixtures");
@@ -16,6 +16,7 @@ module.exports = async function mountActivityReview(app) {
     if (mode !== "none") { req.session = { userId: mode === "other" ? 2 : mode === "viewer" ? 3 : 1 }; req.workspaceId = mode === "other" ? "ws-2" : "ws-1"; }
     next();
   });
+  if (enforceAccountBinding) app.use(require("../lib/account-binding"));
   require("../routes/activity")(app, ctx);
   require("../routes/blocks")(app, ctx);
   const store = createActivityStore(ctx), owner = { userId: 1, workspaceId: "ws-1" };

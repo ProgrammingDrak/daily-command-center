@@ -18,11 +18,16 @@
     }
     async function run(fn) {
       if (s.busy) return;
-      s.busy = true; s.error = ''; s.code = 0; changed(s);
+      s.busy = true; s.error = ''; s.code = 0; s.accountChanged = false; changed(s);
       try {
         if (!online()) throw issue('Offline. No change was sent. Reconnect to continue.');
         await fn();
       } catch (e) {
+        s.accountChanged = e.code === 'ACCOUNT_CHANGED';
+        if (s.accountChanged) {
+          s.row = null; s.view = null;
+          e.status = 403; e.message = 'Account changed. Reload this page for the current account. Pending work is kept for its original account.';
+        }
         s.code = e.status || 0;
         s.error = s.code === 401 ? 'Sign in again, then return here. No completion is assumed.'
           : s.code === 409 ? 'This task changed elsewhere. Refresh saved state and review it before continuing.' : e.message;
