@@ -17,7 +17,7 @@
         const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal,
           ...options, ...(options.body ? { body: JSON.stringify(options.body), headers: { 'Content-Type': 'application/json' } } : {}) });
         const body = await response.json().catch(() => null);
-        if (!response.ok) throw Object.assign(new Error(body?.error || 'DCC could not confirm this request.'), { status: response.status });
+        if (!response.ok) throw Object.assign(new Error(body?.error || 'DCC could not confirm this request.'), { status: response.status, code: body?.code });
         if (!body) throw new Error('DCC returned an unreadable response. Check saved state before retrying.');
         return body;
       } catch (e) {
@@ -69,6 +69,7 @@
     }
     const error = offline ? 'Offline · last confirmed state. Reconnect to save changes.' : s.error;
     let recovery = '';
+    if (s.accountChanged) recovery += button('Reload account', 'reload-account', { disabled: s.busy });
     if (s.code === 401) recovery += '<a class="control" data-action="login" href="/login?next=' + encodeURIComponent(url(selected)) + '">Sign in to DCC</a>';
     if (s.pending && s.code !== 409) recovery += button('Retry safely', 'retry', { disabled: s.busy || offline || s.code === 403 });
     if (s.pending && [403, 404].includes(s.code)) recovery += button('Leave unresolved', 'leave', { disabled: s.busy });
@@ -87,6 +88,7 @@
   host.addEventListener('click', async e => {
     const el = e.target.closest('[data-action]'); if (!el || el.disabled || session.state.busy) return;
     const action = el.dataset.action;
+    if (action === 'reload-account') { location.reload(); return; }
     if (action === 'login') return;
     if (action === 'leave') { session.leaveUnresolved(); selected = null; confirm = false; focusNext = 'card'; render(session.state); return; }
     if (action === 'confirm') { confirm = true; focusNext = 'cancel'; render(session.state); return; }

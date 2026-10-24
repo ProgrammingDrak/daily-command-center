@@ -18,7 +18,7 @@
         const r = await fetch(path, { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: abort.signal, ...options,
           ...(options.body ? { body: JSON.stringify(options.body), headers: { 'Content-Type': 'application/json' } } : {}) });
         const body = await r.json().catch(() => null);
-        if (!r.ok) throw Object.assign(new Error(body?.error || 'DCC could not confirm this request.'), { status: r.status });
+        if (!r.ok) throw Object.assign(new Error(body?.error || 'DCC could not confirm this request.'), { status: r.status, code: body?.code });
         if (!body) throw new Error('Unreadable response. Refresh saved state before continuing.');
         return body;
       } catch (e) {
@@ -71,6 +71,7 @@
     } else content = '<h1>Opening your day</h1><p>Waiting for DCC’s saved itinerary.</p>';
     const error = offline ? 'Offline · last confirmed view. Reconnect to complete tasks.' : s.error;
     let recovery = '';
+    if (s.accountChanged) recovery += button('Reload account', 'reload-account', s.busy);
     if (s.code === 401) recovery += '<a class="control" data-action="login" href="/login?next=' + encodeURIComponent(url()) + '">Sign in to DCC</a>';
     if (s.pending && s.code !== 409) recovery += button('Retry safely', 'retry', s.busy || offline || s.code === 403);
     if (s.pending && [403, 404].includes(s.code)) recovery += button('Leave unresolved', 'leave', s.busy);
@@ -89,6 +90,7 @@
   host.addEventListener('click', async e => {
     const el = e.target.closest('[data-action]'); if (!el || el.disabled || session.state.busy) return;
     const a = el.dataset.action;
+    if (a === 'reload-account') { location.reload(); return; }
     if (['login', 'routine', 'full-dcc'].includes(a)) return;
     if (a === 'leave') { session.leaveUnresolved(); selected = null; confirm = false; focusNext = 'card'; render(session.state); return; }
     if (a === 'confirm' || a === 'cancel') { confirm = a === 'confirm'; focusNext = confirm ? 'cancel' : 'confirm'; render(session.state); return; }

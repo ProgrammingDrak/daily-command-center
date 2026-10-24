@@ -30,11 +30,16 @@
     }
     async function run(fn) {
       if (s.busy) return;
-      s.busy = true; s.error = ''; s.code = 0; notify();
+      s.busy = true; s.error = ''; s.code = 0; s.accountChanged = false; notify();
       try {
         if (!online()) throw issue('Offline. No change was sent. Reconnect and retry.');
         await fn();
       } catch (e) {
+        s.accountChanged = e.code === 'ACCOUNT_CHANGED';
+        if (s.accountChanged) {
+          s.row = null; s.rows = [];
+          e.status = 403; e.message = 'Account changed. Reload this page for the current account. Pending work is kept for its original account.';
+        }
         s.code = e.status || 0;
         s.error = s.code === 401 ? 'Sign in again, then return here. Your last confirmed position is safe.'
           : s.code === 409 ? 'Changed in another window. Reload the saved routine before continuing.' : e.message;
