@@ -10,6 +10,7 @@ assert.equal(info.synthetic, true); assert.equal(info.storage, 'memory');
 const output = path.resolve(process.env.DCC_QA_OUTPUT || 'test-results/glasses'); await fs.mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true, executablePath: process.env.DCC_CHROMIUM_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
 const context = await browser.newContext({ viewport: { width: 600, height: 600 } }), page = await context.newPage(), errors = [], checks = [];
+await page.clock.setFixedTime(new Date(info.now));
 page.on('pageerror', e => errors.push(e.message));
 await context.route('**/*', route => new URL(route.request().url()).origin === new URL(base).origin ? route.continue() : route.abort());
 const mark = s => { checks.push(s); console.log('PASS ' + s); };
@@ -56,7 +57,7 @@ try {
   await page.route('**/api/tasks/glasses-unplanned/completion', route => route.abort());
   await act('confirm').click(); await act('complete').click(); await act('retry').waitFor();
   const receipt = await page.evaluate(() => Object.entries(sessionStorage).find(([k]) => k.startsWith('dcc.glasses.task-retry'))?.[1]); assert.ok(receipt);
-  const second = await context.newPage(); await second.goto(base + '/glasses.html?task=glasses-next');
+  const second = await context.newPage(); await second.clock.setFixedTime(new Date(info.now)); await second.goto(base + '/glasses.html?task=glasses-next');
   await second.getByRole('status').filter({ hasText: 'Synced' }).waitFor(); await second.locator('[data-action="confirm"]').click(); await second.locator('[data-action="complete"]').click();
   await second.getByText('Completed · confirmed by DCC', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => Object.entries(sessionStorage).find(([k]) => k.startsWith('dcc.glasses.task-retry'))?.[1]), receipt);

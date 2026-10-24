@@ -7,7 +7,7 @@
   let date = params.get('date') || new Intl.DateTimeFormat('en-CA', { timeZone: window.DCC_APP_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(today);
   if (!/^\d{4}-\d\d-\d\d$/.test(date) || !Number.isFinite(Date.parse(date))) date = today.toISOString().slice(0, 10);
   let selected = params.get('task'), confirm = false, focusNext = 'card';
-  const esc = text => String(text ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const esc = window.DCC.esc;
   const session = GlassesSession.create({
     storage: { getItem: key => sessionStorage.getItem(key), setItem: (key, value) => sessionStorage.setItem(key, value), removeItem: key => sessionStorage.removeItem(key) },
     uuid: () => crypto.randomUUID(), online: () => navigator.onLine, changed: render,

@@ -4,7 +4,7 @@
   const host = document.getElementById('glasses'), params = new URLSearchParams(location.search), zone = window.DCC_APP_TIME_ZONE;
   let date = params.get('date'), selected = params.get('task'), screen = params.get('view') === 'tasks' ? 'tasks' : 'today';
   let pageIndex = Math.max(0, Number(params.get('page')) || 0), confirm = false, focusNext = 'card';
-  const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const esc = window.DCC.esc;
   const button = (label, action, disabled = false, primary = false) => '<button data-action="' + esc(action) + '"' + (disabled ? ' disabled' : '') + (primary ? ' class="primary"' : '') + '>' + esc(label) + '</button>';
   function url() { const p = new URLSearchParams({ view: screen, page: String(pageIndex) }); if (date) p.set('date', date); if (selected) p.set('task', selected); return '/glasses.html?' + p; }
   function time(t) { return t.allDay ? 'All day' : t.untimed ? (t.date ? 'Unplanned' : 'Unscheduled') : t.start + '–' + t.end; }

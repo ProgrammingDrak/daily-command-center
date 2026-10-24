@@ -18,7 +18,8 @@ app.use((req, res, next) => {
 const ctx = await require('./activity-review-backend')(app);
 const date = ctx.getTodayStr(), owner = { userId: 1, workspaceId: 'ws-1' };
 const hhmm = n => String(Math.floor(n / 60)).padStart(2, '0') + ':' + String(n % 60).padStart(2, '0');
-const now = new Date(), minute = now.getUTCHours() * 60 + now.getUTCMinutes();
+// Pair this fixture clock with Playwright's fixed Date clock, even across midnight.
+const fixtureNow = date + 'T12:00:00.000Z', minute = 12 * 60;
 const currentStart = Math.max(0, minute - 15), nextStart = Math.min(1400, minute + 30);
 async function task(id, title, properties, taskDate = date) {
   return ctx.blockDB.createItineraryTask({ id, date: taskDate, ...owner, properties: { local_id: id, kind: 'manual_task', type: 'task', title, status: 'open', publicVisibility: 'private', duration: 30, ...properties } });
@@ -35,7 +36,7 @@ app.get('/api/me', (req, res) => req.session?.userId ? res.json({ userId: req.se
 app.get('/public/js/app-config.js', (_req, res) => res.type('js').send('window.DCC_APP_TIME_ZONE="UTC";'));
 require('../routes/sync')(app, { ...ctx, resolveOwnerStrict: require('../middleware/resolve-owner').resolveOwnerStrict,
   buildDayResponse: async () => ({ date, schedule: { timeline: [] } }) });
-app.get('/api/glasses-review-info', (_req, res) => res.json({ synthetic: true, storage: 'memory', date, routineId: routine.taskId }));
+app.get('/api/glasses-review-info', (_req, res) => res.json({ synthetic: true, storage: 'memory', date, now: fixtureNow, routineId: routine.taskId }));
 app.get('/glasses.html', (_req, res) => res.sendFile(path.join(root, 'glasses.html')));
 app.get('/glasses-routine.html', (_req, res) => res.sendFile(path.join(root, 'glasses-routine.html')));
 app.use('/public', express.static(path.join(root, 'public')));
