@@ -17,7 +17,7 @@ let syncs = 0, failSync = true;
 await page.addInitScript(() => {
   let listener;
   window.Clerk = {
-    load: async () => {}, user: null, session: { getToken: async () => 'synthetic-clerk-token' },
+    load: async () => {}, user: sessionStorage.getItem('fixture-signed-in') ? { id: 'synthetic-verified-user' } : null, session: { getToken: async () => 'synthetic-clerk-token' },
     addListener: fn => { listener = fn; return () => {}; },
     unmountSignIn: () => {},
     mountSignIn(el) {
@@ -28,7 +28,9 @@ await page.addInitScript(() => {
         el.querySelector('form').addEventListener('submit', e => {
           e.preventDefault();
           if (el.querySelector('input').value !== '123456') { document.getElementById('codeError').textContent = 'Code is incorrect or expired'; return; }
-          listener({ user: { id: 'synthetic-verified-user' } });
+          sessionStorage.setItem('fixture-signed-in', 'true');
+          window.Clerk.user = { id: 'synthetic-verified-user' };
+          listener({ user: window.Clerk.user });
         });
       });
     }
@@ -67,7 +69,9 @@ try {
   await page.getByRole('button', { name: 'Verify code' }).click();
   await page.locator('#error.visible').filter({ hasText: 'Synthetic sign-in sync interrupted' }).waitFor();
   assert.equal(new URL(page.url()).pathname, '/login'); assert.equal(syncs, 1);
-  failSync = false; await page.getByRole('button', { name: 'Verify code' }).click(); await page.waitForURL(base + target); assert.equal(syncs, 2);
+  // Clerk has established its session even if the DCC exchange failed. Reload
+  // exercises the real bridge's existing-user path without another email code.
+  failSync = false; await page.reload(); await page.waitForURL(base + target); assert.equal(syncs, 2);
   assert.deepEqual(errors, []);
   console.log('PASS email field visible at 600/375/1440; stalled Google keyboard click gives feedback; invalid code never syncs; sync failure remains on login; verified retry returns to glasses through unchanged auth bridge');
 } finally { await browser.close(); }
