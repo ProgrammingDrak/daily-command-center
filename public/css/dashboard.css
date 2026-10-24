@@ -5894,6 +5894,8 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 
 /* Shared-task reactions: quiet at rest, available on both open and done rows. */
 .todo-public-body .todo-reaction-disclosure{max-height:0;opacity:0;overflow:hidden}
+.todo-public-body .it-list-item:hover .todo-reaction-disclosure,
+.todo-public-body .it-list-item:focus-within .todo-reaction-disclosure,
 .todo-public-body .tl-item:hover .todo-reaction-disclosure,
 .todo-public-body .tl-compact:hover .todo-reaction-disclosure,
 .todo-public-body .tl-item:focus-within .todo-reaction-disclosure,
@@ -5935,3 +5937,23 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .waiting-title-edit { font: inherit; color: inherit; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
 .waiting-title-edit:hover { text-decoration: underline; }
 .waiting-title-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+
+/* Owner, share and delegated access use the same stacked task-row skeleton. */
+.unified-task-list{display:flex;flex-direction:column;gap:6px;padding:0!important}
+.task-row-social{grid-column:3/-1;min-width:0}
+.task-row-social:empty{display:none}
+.task-access-context{font-size:12px;color:var(--text-muted);line-height:1.5}
+.task-access-actions{border:1px solid var(--border);border-radius:6px;background:var(--surface);color:inherit;min-width:32px;min-height:32px;font-size:18px}
+.it-list-item.done:not(.sub) .it-list-actions:has(.task-access-actions){display:flex}
+.task-action-form{display:grid;gap:12px;min-width:0}.task-action-form>div{display:grid;gap:10px}
+.task-action-form label{display:grid;gap:4px}.task-action-form input,.task-action-form select{width:100%;min-height:44px;box-sizing:border-box;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px}
+.task-action-review section{border-bottom:1px solid var(--border);padding:12px 0}.task-action-review pre{white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:480px){.task-row-social{grid-column:1/-1}}
+/* The shared row keeps its social disclosure in the content columns. A stable
+   button avoids moving the hover target as reaction controls expand. */
+.unified-task-list .task-row-social{grid-column:2/-1}
+.unified-task-list .todo-reaction-disclosure{max-height:none;opacity:1;overflow:visible}
+.unified-task-list .todo-reaction-reveal{display:inline-flex;align-items:center;min-height:32px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text-muted);padding:4px 9px}
+.unified-task-list .todo-reaction-disclosure .todo-public-reactions{display:none;margin:6px 0}
+.unified-task-list .todo-reaction-disclosure[data-reaction-open="true"] .todo-public-reactions{display:flex}
+@media(max-width:760px){.unified-task-list .task-row-social{grid-column:1/-1}.task-access-actions,.unified-task-list .todo-reaction-reveal{min-width:44px;min-height:44px}}

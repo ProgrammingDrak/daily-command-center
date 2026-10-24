@@ -405,6 +405,7 @@
       opts.onOpen(e,ev);
     });
     if (!opts.guest && window.DCC?.SharedTasks) window.DCC.SharedTasks.attach(el,ev);
+    if (!opts.guest && window.DCC?.TaskActions) window.DCC.TaskActions.attach(el,ev);
     if(typeof opts.afterRender==="function")opts.afterRender(el,ev);
     return el;
   }

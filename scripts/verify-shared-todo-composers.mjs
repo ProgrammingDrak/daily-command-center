@@ -9,7 +9,7 @@ const out=process.env.DCC_QA_OUTPUT||'test-results/shared-todo-composers';await 
 const browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
 const context=await browser.newContext({viewport:{width:1440,height:1100},reducedMotion:'reduce'}),page=await context.newPage();
 const errors=[],posts=[],checks=[];let reads=0,failNext=false,holdReward=false,releaseReward,holdComment=false,releaseComment;
-const fixture={workspaceName:'Synthetic shared to do list',ownerUsername:'Morgan-demo',date:'2026-10-21',updatedAt:'2026-10-21T12:00:00Z',calendars:[],blocks:[],viewer:{loggedIn:true,username:'Riley-demo',tier:'friend',capabilities:{comment:true,sponsor_reward:true,place_bounty:true}},tasks:[
+const fixture={workspaceName:'Synthetic shared to do list',ownerUsername:'Morgan-demo',date:'2026-10-21',updatedAt:'2026-10-21T12:00:00Z',calendars:[],blocks:[],viewer:{loggedIn:true,username:'Riley-demo',tier:'friend',capabilities:{react:true,comment:true,sponsor_reward:true,place_bounty:true}},tasks:[
 {id:'one',blockId:'block-one',title:'Morning workout',start:'07:00',end:'07:30',durationMinutes:30,status:'open',itemType:'task',comments:[{authorName:'Morgan-demo',body:'Existing instructions stay visible',createdAt:'2026-10-21T12:00:00Z'}],sponsorships:[{kind:'reward',rewardTitle:'Existing smoothie reward',status:'pending'}]},
 {id:'two',blockId:'block-two',title:'Read together',start:'08:00',end:'08:30',durationMinutes:30,status:'open',itemType:'task'},
 {id:'three',blockId:'block-three',title:'Evening walk',start:'17:00',end:'17:30',durationMinutes:30,status:'open',itemType:'task'},
@@ -40,7 +40,7 @@ try{
  for(const kind of ['reward','comment'])assert.equal(await toggle(kind).getAttribute('aria-expanded'),'false');
  assert.equal(await page.getByText('Existing instructions stay visible',{exact:true}).isVisible(),true);assert.equal(await page.getByText('Reward: Existing smoothie reward',{exact:true}).isVisible(),true);
  assert.equal(await page.getByText('Completed task remains readable',{exact:true}).isVisible(),true);
- const initialHeight=(await form('reward','two').locator('xpath=ancestor::*[contains(@class,"tl-item")][1]').boundingBox()).height;
+ const initialHeight=(await form('reward','two').locator('xpath=ancestor::*[contains(@class,"it-list-item")][1]').boundingBox()).height;
  mark('all optional composers start collapsed while task identity, completed rows and submitted content remain visible');
  await toggle('reward').focus();await page.keyboard.press('Enter');assert.equal(await form('reward').isVisible(),true);assert.equal(await form('reward').locator('[name=rewardTitle]').evaluate(e=>e===document.activeElement),true);
  await form('reward').locator('[name=rewardTitle]').fill('Coffee after workout');await form('reward').locator('[name=sponsorName]').fill('Riley');await form('reward').locator('[name=value]').fill('5');
@@ -53,6 +53,8 @@ try{
  assert.equal(await form('reward').locator('[name=rewardTitle]').inputValue(),'Coffee after workout');assert.equal(await form('reward').locator('[name=rewardTitle]').evaluate(e=>e===document.activeElement&&e.selectionStart===4),true);
  await page.locator('[data-status-filter=open]').click();await page.locator('[data-status-filter=open]').click();
  assert.equal(await form('comment','two').locator('input').inputValue(),'Second task draft');
+ await page.locator('.it-list-item[data-id="one"]').hover();
+ if(await page.locator('[data-reaction-toggle="one"]').isVisible())await page.locator('[data-reaction-toggle="one"]').click();
  await page.locator('[data-task-id="one"][data-reaction-emoji="👍"]').click();await page.waitForTimeout(70);
  assert.equal(await form('reward').locator('[name=sponsorName]').inputValue(),'Riley');
  mark('live refresh, filter changes and reaction rerenders retain separate task drafts and input caret');
@@ -62,8 +64,8 @@ try{
  assert.equal(await form('comment','two').locator('input').inputValue(),'Second task draft');mark('failed sends retain drafts; pending sends survive refresh without duplicates; success clears only its own composer');
  await toggle('comment','two').click();const before=posts.length;
  for(const width of [1440,375]){await page.setViewportSize({width,height:1100});await page.screenshot({path:path.join(out,width===1440?'desktop-collapsed.png':'mobile-collapsed.png'),fullPage:true});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1));
- const rects=await page.locator('#todo-public-list .tl-item').evaluateAll(items=>items.map(e=>{const r=e.getBoundingClientRect();return {top:r.top,bottom:r.bottom};}));for(let i=1;i<rects.length;i++)assert.ok(rects[i].top>=rects[i-1].bottom);
- assert.ok((await toggle('comment','two').boundingBox()).height>=44);await toggle('reward','two').click();const openHeight=(await form('reward','two').locator('xpath=ancestor::*[contains(@class,"tl-item")][1]').boundingBox()).height;assert.ok(openHeight>initialHeight);await toggle('reward','two').click();}
+ const rects=await page.locator('#todo-public-list .it-list-item').evaluateAll(items=>items.map(e=>{const r=e.getBoundingClientRect();return {top:r.top,bottom:r.bottom};}));for(let i=1;i<rects.length;i++)assert.ok(rects[i].top>=rects[i-1].bottom);
+ assert.ok((await toggle('comment','two').boundingBox()).height>=44);await toggle('reward','two').click();const openHeight=(await form('reward','two').locator('xpath=ancestor::*[contains(@class,"it-list-item")][1]').boundingBox()).height;assert.ok(openHeight>initialHeight);await toggle('reward','two').click();}
  assert.equal(posts.length,before);mark('desktop/mobile cards stack without overflow; composers use 44px targets');
  // A late response from the old viewer must not erase or disable a new viewer's draft.
  await toggle('comment','two').click();await form('comment','two').locator('input').fill('Old viewer pending comment');

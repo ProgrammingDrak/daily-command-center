@@ -24,7 +24,7 @@ test("public projection excludes private rows, stale twins, associated discussio
         :sql.includes("FROM todo_sponsorships") ? [{id:1,task_id:"secret",task_title:"Synthetic confidential appointment",note:"Secret sponsor note",reward_title:"Secret reward"}]
         :sql.includes("FROM todo_task_comments") ? [{task_id:"secret",identity_ids:["secret"],body:"Secret discussion"}] : [] };
     }} };
-  vm.createContext(ctx); vm.runInContext(functions,ctx);
+  ctx.require=require('node:module').createRequire(require.resolve('./routes/social-todo')); vm.createContext(ctx); vm.runInContext(functions,ctx);
   const out = await ctx.buildPublicTodoShare({ id:1,workspace_id:"ws-1" },"2026-10-08",null);
   assert.equal(out.tasks.length,1); assert.equal(out.tasks[0].id,"public");
   assert.deepEqual(JSON.parse(JSON.stringify(out.sponsorships)),[]);

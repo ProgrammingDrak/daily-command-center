@@ -460,6 +460,7 @@ function normalizePublicTask(input, doneIds, calendarsById = new Map(), opts = {
     start: localTimeFromAny(input.start),
     end: localTimeFromAny(input.end),
     priority: redacted ? "" : String(input.priority || "").slice(0, 40),
+    taskPriority: redacted ? "Medium" : require("../public/js/task-priority").normalize(input.taskPriority),
     source: redacted ? "private" : String(input.source || "manual").slice(0, 80),
     // sourceId stays populated so addTask's dedupe key still works; identityIds
     // already carries the same opaque ids needed for reactions/comments.
@@ -633,6 +634,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
       calendarName: p.calendarName || p.calendar_name,
       calendarColor: p.calendarColor || p.calendar_color,
       is_recurring: p.is_recurring,
+      taskPriority: p.taskPriority,
       completed: p.completed,
       tags: p.tags,
       createdByGuestName: p.createdByGuestName,
@@ -776,6 +778,12 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
     const comment = ids.map(id => commentByTask[id]).find(Boolean);
     task.comments = comment && comment.items ? comment.items : [];
   }
+  const canonicalIds=tasks.map(t=>t.blockId).filter(Boolean);
+  if(canonicalIds.length){
+    const canonical=(await exec.query(`SELECT task_block_id,emoji,COUNT(DISTINCT actor_key)::int AS count,BOOL_OR(actor_key=$3) AS mine
+      FROM todo_task_reactions WHERE workspace_id=$1 AND task_block_id=ANY($2::text[]) GROUP BY task_block_id,emoji`,[share.workspace_id,canonicalIds,actorKey])).rows;
+    for(const task of tasks){if(!task.blockId)continue;const rows=canonical.filter(r=>r.task_block_id===task.blockId);task.reactions=Object.fromEntries(rows.map(r=>[r.emoji,r.count]));task.viewerReactions=rows.filter(r=>r.mine).map(r=>r.emoji);}
+  }
   tasks.sort((a, b) => (a.status === "done") - (b.status === "done") || (a.start || "99:99").localeCompare(b.start || "99:99"));
   const { rows: rewardRows } = await exec.query(
     `SELECT id, title, kind, value_cents, public_visibility, expires_at, uses_remaining
@@ -803,7 +811,13 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
     };
   });
   const tier = capabilities.resolveTier(req);
+  let taskAccess={ownerUserId:Number(share.owner_id),role:"public",modes:require("../public/js/task-action-policy").resolve()};
+  if(req?.session?.userId && ctx.taskActionStore){
+    try{const access=await ctx.taskActionStore.access(Number(req.session.userId),Number(share.owner_id));taskAccess={ownerUserId:Number(share.owner_id),role:access.role,modes:access.modes};}
+    catch(error){if(error.statusCode!==403)throw error;}
+  }
   return {
+    taskAccess,
     date,
     timeZone: APP_TIME_ZONE,
     workspaceName: share.workspace_name || "Daily Command Center",
@@ -2013,6 +2027,17 @@ app.post("/api/public/todo-share/:token/reactions", async (req, res) => {
     const taskBlockId = String(task.blockId || "").slice(0, 200) || null;
     const taskTitle = String(task.title || "").trim().slice(0, 220);
     const actorKey = todoActorKey(req);
+    if(taskBlockId){
+      const client=await pool.connect();let state;
+      try {
+        await client.query('BEGIN');
+        state=await require('../task-reaction-store').set(client,{workspaceId:share.workspace_id,taskId:taskBlockId,taskDate,title:taskTitle,actorUserId:req.session?.userId,actorKey,emoji,shareId:share.id});
+        await client.query('COMMIT');
+      }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+      const reactions=await require('../task-reaction-store').list(pool,share.workspace_id,taskBlockId,actorKey);
+      broadcast('todo-share-changed',{action:'reaction',taskId,taskDate,emoji,active:state.active},share.workspace_id);
+      return res.json({counts:Object.fromEntries(reactions.map(r=>[r.emoji,r.count])),viewerReactions:reactions.filter(r=>r.mine).map(r=>r.emoji),active:state.active});
+    }
     const deleted = await pool.query(
       `DELETE FROM todo_task_reactions
         WHERE share_id = $1 AND task_id = $2 AND emoji = $3 AND actor_key = $4 AND task_date = $5::date

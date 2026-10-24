@@ -2285,18 +2285,18 @@ async function setActiveMultiplier(workspaceId, tier) {
   }
 }
 
-async function createReward(workspaceId, body) {
+async function createReward(workspaceId, body, client = pool) {
   const r = normalizeRewardInput(body);
   // Place new rewards at the end of their source+tier bucket so they appear after
   // existing cards rather than jumping to the front (sort_order 0).
-  const { rows: [mx] } = await pool.query(
+  const { rows: [mx] } = await client.query(
     `SELECT COALESCE(MAX(sort_order), 0) + 1000 AS next
        FROM slot_rewards
       WHERE workspace_id = $1 AND payment_source = $2 AND tier_id = $3 AND deleted_at IS NULL`,
     [workspaceId, r.payment_source, r.tier_id]
   );
   const sortOrder = Number(mx && mx.next) || 1000;
-  const { rows } = await pool.query(
+  const { rows } = await client.query(
     `INSERT INTO slot_rewards
      (workspace_id,title,kind,sponsor_type,sponsor_splits,weight,chance_shares,payment_source,tier_id,active,sponsor_active,value_cents,bank_delta_cents,duration_minutes,requires_confirmation,cooldown_days,unlock_threshold_cents,notes,public_visibility,expires_at,uses_remaining,sort_order)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)

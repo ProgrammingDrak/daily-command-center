@@ -17,6 +17,7 @@ const root = path.resolve(here, "..");
 const port = Number(process.env.PORT || 8099);
 const app = express();
 app.use(express.json());
+if(process.env.DCC_TASK_ACTION_REVIEW==='1'){const {default:mount}=await import('./task-action-review-backend.js');await mount(app);}
 if (process.env.DCC_WAITING_REVIEW === '1') {
   const { default: mountWaitingReview } = await import('./waiting-review-backend.js');
   await mountWaitingReview(app);

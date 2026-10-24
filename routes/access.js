@@ -110,6 +110,7 @@ module.exports = function mount(app, ctx) {
   // is exposed.
   app.get("/api/coach/:ownerUserId/capabilities", requireGrant("view_itinerary"), route(async (req) => ({
     ownerUserId: req.grant.ownerUserId,
+    taskModes:ctx.taskActionStore?(await ctx.taskActionStore.access(Number(req.session.userId),req.grant.ownerUserId)).modes:{},
     role: req.grant.role,
     capabilities: Object.fromEntries(Object.keys(capabilities.CAPABILITY_MIN_ROLE).map(name => [name, capabilities.canForOwner(name, req.grant.role)]))
   })));
@@ -162,6 +163,7 @@ module.exports = function mount(app, ctx) {
         // surface that does not immediately recalc passes this; a read-only view
         // of someone else's day never recalcs.
         return Object.assign(TaskModel.fromBlock(row, { deriveEnd: true }), {
+          completed: require("../db").isCompletedTaskProps(props),
           points: Number(props.points) || 0,
           durationMinutes: Number(props.duration) || 0,
           // Provenance of a previous coach adjustment, so the view can show that
