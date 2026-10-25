@@ -9,6 +9,7 @@ import reschedule from "../lib/reschedule.js";
 import poolPlacement from "../lib/whenever-placement.js";
 import createTaskTiming from "../lib/task-timing.js";
 import seedTaskDetailReview from "./task-detail-review-fixtures.cjs";
+import seedGlassesDeviceReview from "./glasses-device-review-fixtures.cjs";
 import seedHierarchyReview from "./hierarchy-review-fixtures.cjs";
 import hierarchy from "../lib/task-hierarchy.js";
 
@@ -27,7 +28,7 @@ if (process.env.DCC_ACTIVITY_REVIEW === "1") {
   const { default: mountActivityReview } = await import("./activity-review-backend.js");
   await mountActivityReview(app);
 }
-if (process.env.DCC_REVIEW_TASK_DETAILS === '1' || process.env.DCC_REVIEW_HIERARCHY === '1') app.use((_req,res,next) => {
+if (process.env.DCC_REVIEW_GLASSES_DEVICE === '1' || process.env.DCC_REVIEW_TASK_DETAILS === '1' || process.env.DCC_REVIEW_HIERARCHY === '1') app.use((_req,res,next) => {
   res.setHeader('Content-Security-Policy', "connect-src 'self'; form-action 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'");
   next();
 });
@@ -67,6 +68,12 @@ function localDateKey(date = new Date()) {
 
 function liveReviewBlocks() {
   return [...reviewBlocks.values()].filter((block) => !block.deleted_at);
+}
+if (process.env.DCC_REVIEW_GLASSES_DEVICE === '1') {
+  seedGlassesDeviceReview(reviewBlocks, localDateKey(new Date()));
+  app.post('/api/review/glasses-device/reset', (_req,res) => {
+    reviewBlocks.clear(); seedGlassesDeviceReview(reviewBlocks,localDateKey(new Date())); res.json({ok:true});
+  });
 }
 if (process.env.DCC_REVIEW_TASK_DETAILS === '1') seedTaskDetailReview(reviewBlocks, localDateKey(new Date()));
 if (process.env.DCC_REVIEW_HIERARCHY === '1') seedHierarchyReview(reviewBlocks, localDateKey(new Date()));
