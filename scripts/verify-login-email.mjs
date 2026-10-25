@@ -8,6 +8,7 @@ import { chromium } from 'playwright-core';
 const require = createRequire(import.meta.url);
 const html = await fs.readFile(new URL('../login.html', import.meta.url), 'utf8');
 const helper = await fs.readFile(new URL('../public/js/login-return.js', import.meta.url), 'utf8');
+const handoff = await fs.readFile(new URL('../public/js/login-handoff.js', import.meta.url), 'utf8');
 const bridge = await fs.readFile(require.resolve('drake-auth/browser'), 'utf8');
 const browser = await chromium.launch({ headless: true, executablePath: process.env.DCC_CHROMIUM_PATH || (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined) });
 const base = 'http://127.0.0.1:8399', target = '/glasses.html?view=tasks';
@@ -17,11 +18,15 @@ let syncs = 0, failSync = true;
 await page.addInitScript(() => {
   let listener;
   window.Clerk = {
+    client: { signIn: {} },
     load: async () => {}, user: sessionStorage.getItem('fixture-signed-in') ? { id: 'synthetic-verified-user' } : null, session: { getToken: async () => 'synthetic-clerk-token' },
     addListener: fn => { listener = fn; return () => {}; },
     unmountSignIn: () => {},
     mountSignIn(el) {
       el.innerHTML = '<div class="cl-signIn-start"><button type="button">Continue with Google</button><form class="cl-form"><label>Email address<input type="email" required></label><button type="submit">Continue with email</button></form></div>';
+      el.querySelector('button').addEventListener('click', () => {
+        if (window.fixtureGoogleReady) window.Clerk.client.signIn = { id: 'fixture-attempt', firstFactorVerification: { status: 'unverified', externalVerificationRedirectURL: 'https://example.invalid/?token=do-not-display' } };
+      });
       el.querySelector('form').addEventListener('submit', event => {
         event.preventDefault();
         el.innerHTML = '<form><label>Verification code<input inputmode="numeric" required></label><p role="alert" id="codeError"></p><button type="submit">Verify code</button></form>';
@@ -42,6 +47,7 @@ await context.route('**/*', async route => {
   assert.equal(url.search.includes('synthetic-clerk-token'), false);
   if (url.pathname === '/login') return route.fulfill({ contentType: 'text/html', body: html });
   if (url.pathname === '/public/js/login-return.js') return route.fulfill({ contentType: 'application/javascript', body: helper });
+  if (url.pathname === '/public/js/login-handoff.js') return route.fulfill({ contentType: 'application/javascript', body: handoff });
   if (url.pathname === '/vendor/drake-auth/browser.js') return route.fulfill({ contentType: 'application/javascript', body: bridge });
   if (url.pathname === '/api/auth/config') return route.fulfill({ contentType: 'application/json', body: '{"clerkPublishableKey":"synthetic-config"}' });
   if (url.pathname === '/api/auth/clerk-sync') {
@@ -59,8 +65,16 @@ try {
   await page.getByRole('button', { name: 'Continue with Google', exact: true }).focus(); await page.keyboard.press('Enter');
   await page.getByRole('status').filter({ hasText: 'If nothing opens' }).waitFor();
   assert.equal(syncs, 0);
+  await page.getByRole('status').filter({ hasText: 'G-START-TOP' }).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'authProviderStatus');
+  await page.evaluate(() => { window.fixtureGoogleReady = true; });
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: 'G-READY-TOP' }).waitFor();
+  assert.doesNotMatch(await page.locator('body').innerText(), /do-not-display|fixture-attempt/);
+  assert.equal(syncs, 0);
   await page.getByRole('textbox', { name: 'Email address', exact: true }).fill('fixture@example.invalid');
   assert.equal(await page.evaluate(() => sessionStorage.getItem('dcc-clerk-pending')), null);
+  assert.equal(await page.locator('#authProviderStatus').isVisible(), false);
   await page.getByRole('button', { name: 'Continue with email' }).click();
   await page.getByRole('textbox', { name: 'Verification code' }).fill('000000');
   await page.getByRole('button', { name: 'Verify code' }).click();

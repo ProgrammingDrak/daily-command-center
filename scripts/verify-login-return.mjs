@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import { chromium } from 'playwright-core';
 const html = await fs.readFile(new URL('../login.html', import.meta.url), 'utf8');
 const helper = await fs.readFile(new URL('../public/js/login-return.js', import.meta.url), 'utf8');
+const handoff = await fs.readFile(new URL('../public/js/login-handoff.js', import.meta.url), 'utf8');
 const executablePath = process.env.DCC_CHROMIUM_PATH || (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined);
 const browser = await chromium.launch({ headless: true, executablePath });
 const context = await browser.newContext({ viewport: { width: 600, height: 600 } });
@@ -17,6 +18,7 @@ await context.route('**/*', async route => {
   const url = new URL(route.request().url());
   assert.equal(url.origin, base, 'No external navigation or provider request');
   if (url.pathname === '/public/js/login-return.js') return route.fulfill({ contentType: 'application/javascript', body: helper });
+  if (url.pathname === '/public/js/login-handoff.js') return route.fulfill({ contentType: 'application/javascript', body: handoff });
   if (url.pathname === '/vendor/drake-auth/browser.js') return route.fulfill({ contentType: 'application/javascript', body: 'export async function initClerkAuth(options) { window.fixtureAuth = options; return { clerk: { user: null } }; }' });
   if (url.pathname === '/api/auth/login') {
     if (failPassword) { failPassword = false; return route.abort(); }

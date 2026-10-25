@@ -379,7 +379,7 @@
     <section id="managedAuth" class="managed-auth" aria-label="Single sign-on options">
       <p class="auth-option-label">Google or email sign-in</p>
       <p class="email-signin-help">On glasses, use the email linked to your DCC account below. You can verify with an email code without opening Google.</p>
-      <div id="authProviderStatus" class="auth-provider-status" role="status">Loading secure sign-in options...</div>
+      <div id="authProviderStatus" class="auth-provider-status" role="status" tabindex="-1">Loading secure sign-in options...</div>
       <div id="clerkSignIn" class="clerk-mount"></div>
       <div id="clerkDivider" class="divider"><span id="clerkDividerText">or use your DCC password</span></div>
     </section>
@@ -416,6 +416,7 @@
   </div>
 
   <script src="/public/js/login-return.js"></script>
+  <script src="/public/js/login-handoff.js"></script>
   <script>
     let mode = window.location.pathname === "/register" ? "register" : "login";
 
@@ -548,6 +549,7 @@
     const progressTitle = document.getElementById("authProgressTitle");
     const progressCopy = document.getElementById("authProgressCopy");
     const CLERK_PENDING_KEY = "dcc-clerk-pending";
+    let googleHandoff = null;
 
     function rememberClerkHandoff() {
       try { sessionStorage.setItem(CLERK_PENDING_KEY, String(Date.now())); } catch {}
@@ -613,12 +615,14 @@
       // module loads, preventing the login card from flashing after OAuth.
       redirectUrl: authReturnUrl,
       onSignedIn: () => {
+        googleHandoff?.cancel();
         const params = new URLSearchParams(window.location.search);
         const destination = window.DccLoginReturn.normalize(params.get("next"));
         clearClerkHandoff();
         window.location.href = destination;
       },
       onError: (e) => {
+        googleHandoff?.cancel();
         failClerkReturn(e.message || "Sign-in could not be completed.");
       },
       onUnavailable: (reason) => {
@@ -638,6 +642,24 @@
     // Clerk owns Google and email verification; DCC's legacy password form
     // remains available without changing any configured authentication factors.
     if (ctrl.clerk && !ctrl.clerk.user) {
+      googleHandoff = window.DccLoginHandoff.create({
+        clerk: ctrl.clerk,
+        inFrame: window.self !== window.top,
+        isForeground: () => document.visibilityState === "visible" && document.hasFocus(),
+        onFailure: ({ message, code }) => {
+          clearClerkHandoff();
+          providerStatusEl.hidden = false;
+          providerStatusEl.textContent = message + " Support code: " + code;
+          providerStatusEl.focus();
+        },
+      });
+      window.addEventListener("pagehide", () => googleHandoff.cancel());
+      window.addEventListener("blur", () => googleHandoff.pause());
+      window.addEventListener("focus", () => googleHandoff.resume());
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") googleHandoff.pause();
+        else googleHandoff.resume();
+      });
       providerStatusEl.hidden = true;
       mountEl.classList.add("visible");
       mountEl.addEventListener("click", (event) => {
@@ -646,11 +668,19 @@
           rememberClerkHandoff();
           providerStatusEl.hidden = false;
           providerStatusEl.textContent = "Opening Google… If nothing opens, use email sign-in below.";
+          googleHandoff.start();
         }
       }, true);
       mountEl.addEventListener("input", () => {
+        googleHandoff.cancel();
+        providerStatusEl.hidden = true;
         clearClerkHandoff();
         hideAuthProgress();
+      });
+      document.getElementById("authForm").addEventListener("input", () => {
+        googleHandoff.cancel();
+        providerStatusEl.hidden = true;
+        clearClerkHandoff();
       });
     }
 
