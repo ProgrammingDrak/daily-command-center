@@ -1187,6 +1187,8 @@ app.get("/todo/:token", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "pub
 // Mycelium is Drake's personal vault. DCC has multiple accounts, so the ink
 // shell must not become a shared authenticated surface by accident.
 app.get(["/ink", "/ink.html"], requireAdmin, (req, res) => { res.sendFile(path.join(PROJECT_DIR, "ink.html")); });
+// Keep existing authentication and account binding ahead of the launch redirect.
+app.get(["/glasses", "/glasses.html"], require("./lib/glasses-launch"));
 app.use(express.static(PROJECT_DIR, { extensions: ["html"], etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 app.get("/", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "index.html")); });
 app.get("/admin", requireAdmin, (req, res) => { res.sendFile(path.join(PROJECT_DIR, "admin.html")); });
