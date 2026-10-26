@@ -14,6 +14,20 @@ CREATE TABLE IF NOT EXISTS guided_definition_versions (
  definition JSONB NOT NULL, provenance JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
  PRIMARY KEY(definition_id,revision)
 );
+-- These server-owned tables must not be exposed by Supabase's public data API.
+-- No client policies are created; the schema-owning server connection retains access.
+ALTER TABLE guided_definitions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE guided_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE guided_definition_versions ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON guided_definitions, guided_sessions, guided_definition_versions FROM PUBLIC;
+DO $guided_privacy$
+DECLARE client_role TEXT;
+BEGIN
+ FOR client_role IN SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated') LOOP
+  EXECUTE format('REVOKE ALL ON guided_definitions, guided_sessions, guided_definition_versions FROM %I', client_role);
+ END LOOP;
+END
+$guided_privacy$;
 CREATE INDEX IF NOT EXISTS guided_definition_owner ON guided_definitions(workspace_id,owner_user_id);
 CREATE INDEX IF NOT EXISTS guided_session_owner ON guided_sessions(workspace_id,owner_user_id);
 `;

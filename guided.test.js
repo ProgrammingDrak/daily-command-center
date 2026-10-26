@@ -26,6 +26,33 @@ test("guided real PostgreSQL lifecycle, ownership, rollback and concurrency",{sk
     let definition=await store.saveDefinition({id:uid(),expectedRevision:0,definition:spec()},owner);
     const make=async(def=definition)=>store.createTask({id:uid(),definitionId:def.id,date:"2099-01-02"},owner);
     let v=await make();
+    await t.test("database API roles cannot read or mutate private guided tables",async()=>{
+      const role="guided_untrusted_"+uid().replaceAll("-","");
+      const q=await ctx.pool.connect();
+      try {
+        const schema=(await q.query("SELECT current_schema() AS name")).rows[0].name;
+        await q.query(`CREATE ROLE "${role}" NOLOGIN`);
+        await q.query(`GRANT USAGE ON SCHEMA "${schema}" TO "${role}"`);
+        // Even accidental row read/write grants must not bypass the server-only RLS boundary.
+        await q.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON guided_definitions,guided_sessions,guided_definition_versions TO "${role}"`);
+        await q.query("BEGIN");
+        await q.query(`SET LOCAL ROLE "${role}"`);
+        for(const table of ["guided_definitions","guided_sessions","guided_definition_versions"]) {
+          assert.equal((await q.query(`SELECT * FROM ${table}`)).rows.length,0);
+          assert.equal((await q.query(`DELETE FROM ${table} RETURNING *`)).rows.length,0);
+        }
+        await assert.rejects(q.query("INSERT INTO guided_definitions(id,workspace_id,owner_user_id,definition) VALUES($1,$2,$3,$4)",[uid(),owner.workspaceId,owner.userId,spec()]),{code:"42501"});
+        await q.query("ROLLBACK");
+        assert.equal((await store.get(v.taskId,owner)).definitionId,definition.id);
+        const enabled=await q.query("SELECT relrowsecurity FROM pg_class WHERE oid IN ('guided_definitions'::regclass,'guided_sessions'::regclass,'guided_definition_versions'::regclass)");
+        assert.equal(enabled.rows.length,3);assert.ok(enabled.rows.every(r=>r.relrowsecurity));
+      } finally {
+        await q.query("ROLLBACK");
+        await q.query(`DROP OWNED BY "${role}"`);
+        await q.query(`DROP ROLE "${role}"`);
+        q.release();
+      }
+    });
     await t.test("create retries, GET and copy content never start work",async()=>{
       const again=await store.createTask({id:v.taskId,definitionId:definition.id,date:"2099-01-02"},owner);
       assert.equal(again.taskId,v.taskId);assert.equal(again.session,null);

@@ -40,7 +40,7 @@ Copy refreshes only the saved briefing view, never silently advances an unsaved 
 - Task row locks serialize actions. Operation IDs with payload hashes make retries idempotent and reject reuse with different content. Session writes use compare-and-swap revisions. Feedback application and validation share one transaction.
 - Bounds: 30 checklist items, 10 references, 12 prerequisites; individual string limits; 500 ordinary events and a 1 MB session budget, with pause/completion still available. The current library lists the latest 200 definitions and occurrences; no cross-account list or public export is added.
 
-Private tables are additive in `pg-schema.js`. No existing row migration or destructive data operation is required. All API routes use existing signed-in workspace-owner authentication plus pinned tab account headers. Bearer/header-selected service identity is deliberately not added.
+Private tables are additive in `pg-schema.js`. All three enable row-level security with no client policies and revoke public, anonymous and authenticated API-role grants. The existing schema-owning server database connection retains access, as do administrative database roles with explicit privileges and RLS bypass; DCC owner checks remain required. No existing row migration or destructive data operation is required. All API routes use existing signed-in workspace-owner authentication plus pinned tab account headers. Bearer/header-selected service identity is deliberately not added.
 
 ## Authenticated API contract
 
