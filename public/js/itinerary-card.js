@@ -290,6 +290,7 @@
               taskTagChipsHtml(ev)+
             '</div>'+
           '</div>'+
+          (ev.type==='guided'?'<a href="/guided?task='+encodeURIComponent(ev._blockId||ev.id)+'" onclick="event.stopPropagation()">Open guided conversation</a>':'')+
           workButton+
           // Radial on every row now, meetings included: it carries the Prep/Recap
           // spoke that opens the meeting-automation panel (schedule-tab.js). This

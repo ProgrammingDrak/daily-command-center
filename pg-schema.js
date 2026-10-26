@@ -1379,6 +1379,7 @@ async function createSchema() {
   console.log("[pg-schema] Creating tables...");
   await pool.query(SCHEMA_SQL);
   await pool.query(require("./activity-store").SCHEMA_SQL);
+  await pool.query(require("./guided-store").SCHEMA_SQL);
   await pool.query(require("./commitment-store").SCHEMA_SQL);
   await applyPostSchema();
   console.log("[pg-schema] All tables and indexes created.");

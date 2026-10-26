@@ -262,10 +262,10 @@ function attachTemplateChildren(parentLocalId,children,promoteDirect,publicVisib
     if(!node||!node.title||seen.has(node))continue;seen.add(node);
     let created=null;
     if(entry.promoteDirect){
-      if(typeof insertTaskNow==="function")created=insertTaskNow(node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:"task",detail:node.detail||"",publicVisibility:publicVisibility||"public"});
+      if(typeof insertTaskNow==="function")created=insertTaskNow(node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:node.guidedDefinitionId?"guided":"task",guidedDefinitionId:node.guidedDefinitionId,detail:node.detail||"",publicVisibility:publicVisibility||"public"});
     }else if(node.edge==="subtask"){
-      if(typeof addSubtask==="function")created=addSubtask(entry.parentLocalId,node.title,{publicVisibility:publicVisibility||"public"});
-    }else if(typeof addStackedTask==="function")created=addStackedTask(entry.parentLocalId,node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:node.type||"task",detail:node.detail||"",publicVisibility:publicVisibility||"public"});
+      if(typeof addSubtask==="function")created=addSubtask(entry.parentLocalId,node.title,{guidedDefinitionId:node.guidedDefinitionId,publicVisibility:publicVisibility||"public"});
+    }else if(typeof addStackedTask==="function")created=addStackedTask(entry.parentLocalId,node.title,Math.max(1,Number(node.durationMin)||30),{priority:node.priority||"Medium",type:node.type||"task",guidedDefinitionId:node.guidedDefinitionId,detail:node.detail||"",publicVisibility:publicVisibility||"public"});
     if(created&&created.id&&Array.isArray(node.children)){
       for(let i=node.children.length-1;i>=0;i--)stack.push({parentLocalId:created.id,node:node.children[i],promoteDirect:false});
     }

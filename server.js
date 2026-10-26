@@ -1012,6 +1012,7 @@ require("./routes/task-attachments")(app, ctx);
 require("./routes/sync")(app, ctx);
 require("./routes/projects")(app, ctx);
 require("./routes/activity")(app, ctx);
+require("./routes/guided")(app, ctx);
 require("./routes/dcc")(app, ctx);
 require("./routes/evaluation")(app, ctx);
 require("./routes/schedule-settings")(app, ctx);
@@ -1190,6 +1191,7 @@ app.get(["/ink", "/ink.html"], requireAdmin, (req, res) => { res.sendFile(path.j
 // Keep existing authentication and account binding ahead of the launch redirect.
 app.get(["/glasses", "/glasses.html"], require("./lib/glasses-launch"));
 app.use(express.static(PROJECT_DIR, { extensions: ["html"], etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
+app.get("/guided", (req, res) => { res.setHeader("Cache-Control", "private, no-store"); res.sendFile(path.join(PROJECT_DIR, "guided.html")); });
 app.get("/", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "index.html")); });
 app.get("/admin", requireAdmin, (req, res) => { res.sendFile(path.join(PROJECT_DIR, "admin.html")); });
 

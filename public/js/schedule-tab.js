@@ -751,7 +751,7 @@ function createTaskListRowRenderer(context){
       extraClass:(isUnfRow?"unfinished-row ":"")+(subRow?"sub ":"")+(isActive(ev)&&!isUnfRow?"active ":"")+(isRideAlong(ev)?"ride-along ":"")+(isWrap(ev)?"wrap-parent ":"")+(tt&&tt.cardClass?tt.cardClass+" ":"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?"row-bounty ":"")+(waitChip?"waiting-row":""),
       gripTitle:gripTitle,
       collapseHtml:chev,
-      titleExtrasHtml:dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip,
+      titleExtrasHtml:(ev.type==='guided'?'<a href="/guided?task='+encodeURIComponent(ev._blockId||ev.id)+'" onclick="event.stopPropagation()" class="prep-flag">Open guided conversation</a>':'')+dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip,
       metaHtml:metaHtml,
       barColor:isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#7c3aed)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)),
       actionsBeforeHtml:(!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+workButton,

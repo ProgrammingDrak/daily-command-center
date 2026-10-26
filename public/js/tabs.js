@@ -402,7 +402,7 @@ function addSubtask(taskId, text, options){
   // other field is editable through the same details modal + radial as any task.
   const inheritedVisibility=options.publicVisibility||((parent&&parent.publicVisibility)==="private"?"private":"public");
   const overrides={title:text,source:"manual",priority:"Medium",publicVisibility:inheritedVisibility};
-  const common=(window.DCC&&window.DCC.taskCommonProps)?window.DCC.taskCommonProps({},overrides)
+  const common=(window.DCC&&window.DCC.taskCommonProps)?window.DCC.taskCommonProps(options.guidedDefinitionId ? {guidedDefinitionId:options.guidedDefinitionId} : {},overrides)
     :{title:text,source:"manual",priority:"Medium",meta:"",detail:"",tags:[]};
   const task=Object.assign({id:id,type:"task",subtaskOf:taskId,start:startStr,end:startStr,
     publicVisibility:inheritedVisibility,added_at:new Date().toISOString()},common);

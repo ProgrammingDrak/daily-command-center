@@ -253,6 +253,7 @@ function normalizeTemplateTree(tree, opts = {}) {
       priority: PRIORITIES.includes(n.priority) ? n.priority : "Medium",
       detail: typeof n.detail === "string" ? n.detail.slice(0, 2000) : ""
     };
+    if(typeof n.guidedDefinitionId === "string" && /^[a-zA-Z0-9:_-]{1,100}$/.test(n.guidedDefinitionId)) {out.guidedDefinitionId=n.guidedDefinitionId;out.type="guided";}
     if (isRoot) out.occurrenceAnchor = !!(n.occurrenceAnchor || n.type === "shell");
     else {
       out.edge = n.edge === "subtask" ? "subtask" : "wrap";
@@ -271,7 +272,7 @@ function normalizeTemplateTree(tree, opts = {}) {
 // schedule endpoint and the placeholder-resolve endpoint so both produce an
 // identical task shape (DRY — see also attachDefaultSubtasks).
 function repeatVisibility(props = {}) {
-  if(props.activityTaskType) return "private";
+  if(props.activityTaskType || props.guidedDefinitionId) return "private";
   if(props.publicVisibility != null && !["private","public"].includes(props.publicVisibility)) throw Object.assign(new Error("Invalid repeat visibility"),{statusCode:400});
   return props.publicVisibility || "public"; // Preserve legacy defaults until explicitly edited.
 }
@@ -295,6 +296,7 @@ function buildResponsibilityTaskProps(responsibility, { duration, slot, localId,
     source: sourceProps.source || "responsibility",
     tags: ["responsibility", props.domain, props.area, props.capacityBucket].filter(Boolean),
     responsibilityId: responsibility.id,
+    ...(props.guidedDefinitionId ? {type:"guided",guidedDefinitionId:props.guidedDefinitionId,publicVisibility:"private"} : {}),
     ...(props.activityTaskType ? { type: props.activityTaskType, activityPlanSourceId: responsibility.id, publicVisibility: "private" } : {}),
     responsibilityTitle: props.title,
     capacityBucket: props.capacityBucket || null,
@@ -774,7 +776,8 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
           idempotency_key: key,
           title: props.nextTaskTitle || props.title,
           detail: props.description || "",
-          type: props.activityTaskType || "task",
+          type: props.guidedDefinitionId ? "guided" : props.activityTaskType || "task",
+          ...(props.guidedDefinitionId ? {guidedDefinitionId:props.guidedDefinitionId,publicVisibility:"private"} : {}),
           ...(props.activityTaskType ? { activityPlanSourceId: responsibility.id, publicVisibility: "private" } : {}),
           duration,
           start: occurrence.start,
@@ -821,7 +824,8 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
         local_id: localId,
         title: node.title,
         detail: node.detail || "",
-        type: "task",
+        type: node.guidedDefinitionId ? "guided" : "task",
+        ...(node.guidedDefinitionId ? {guidedDefinitionId:node.guidedDefinitionId,publicVisibility:"private"} : {}),
         duration: nodeDuration,
         priority: node.priority || (isRoot ? "High" : "Medium"),
         meta: isRoot ? "Scheduled repeat anchor" : "Scheduled repeat step",

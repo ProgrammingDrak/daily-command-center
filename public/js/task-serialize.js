@@ -119,6 +119,7 @@
     const src = Object.assign({}, ev || {}, overrides || {});
     const commuteMinutes = src.commuteMinutes || src.commute_minutes || null;
     return {
+      ...(src.guidedDefinitionId ? {guidedDefinitionId:src.guidedDefinitionId, type:"guided", publicVisibility:"private"} : {}),
       title: src.title || "",
       priority: src.priority || "High",
       meta: src.meta || "",

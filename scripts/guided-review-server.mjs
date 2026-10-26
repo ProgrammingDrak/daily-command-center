@@ -1,0 +1,20 @@
+// Disposable local QA only; never imported by production.
+import express from "express";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+const require=createRequire(import.meta.url);
+if(process.env.NODE_ENV==="production" || process.env.DCC_GUIDED_REVIEW!=="1" || !process.env.DCC_TEST_DATABASE_URL || !["localhost","127.0.0.1"].includes(new URL(process.env.DCC_TEST_DATABASE_URL).hostname)) throw new Error("Explicit isolated localhost database required");
+const ctx=await require("../test-support/activity-db").createActivityDb();
+Object.assign(ctx,{APP_TIME_ZONE:"UTC",broadcast(){}});
+const app=express(),root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..");
+app.use(express.json({limit:"150kb"}));
+app.use((req,res,next)=>{res.setHeader("Cache-Control","no-store");const id=Number(/guided-review-user=(\d)/.exec(req.headers.cookie||"")?.[1]||1);req.session=id?{userId:id}:{};req.workspaceId=id===2?"ws-2":"ws-1";next();});
+app.use(require("../lib/account-binding"));
+app.get("/public/js/app-config.js",(req,res)=>res.type("js").send("window.DCC_ACCOUNT_CONTEXT="+JSON.stringify({userId:req.session.userId,workspaceId:req.workspaceId})+";"));
+app.use("/public",express.static(path.join(root,"public")));
+require("../routes/guided")(app,ctx);
+app.get("/guided",(_req,res)=>res.sendFile(path.join(root,"guided.html")));
+app.get("/health",(_req,res)=>res.json({synthetic:true}));
+const server=app.listen(Number(process.env.PORT||3991),"127.0.0.1",()=>console.log("Synthetic guided review on "+server.address().port));
+process.on("SIGTERM",()=>server.close(async()=>{await ctx.close();process.exit(0);}));

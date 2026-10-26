@@ -144,7 +144,7 @@ test("pure: the source block is never mutated", () => {
 // reschedulePlacement (persistence.js branches on it one line after the call:
 // `if(task.reschedulePlacement==="earliest"&&!task.subtaskOf)scheduled.unshift(task)`)
 // and wrapId/isWrap, which drive ride-along nesting in the carryover lane.
-const BASE_KEYS = [
+const BASE_KEYS = ["guidedDefinitionId",
   "sourceContext", "originalTitle", "generatedTitle", "titleNamingVersion",
   "_blockId", "_dateless", "actualMinutes", "aiSummary", "alertKey", "alertType", "allDay", "allDayEnd", "allDayStart", "ampUrl", "calUrl",
   "calendarAccountEmail", "calendarAccountKey", "calendarColor", "calendarId", "calendarName", "capacityBucket",
@@ -171,7 +171,7 @@ test("every projected key round-trips its property, including the ones nothing a
   const ev = TaskModel.fromBlock(block({
     id: "row-9", date: "2026-07-28", created_at: "2026-07-28T14:00:00.000Z",
     properties: {
-      local_id: "qa-1", title: "T", type: "task", start: "09:00", end: "09:30", duration: 30,
+      guidedDefinitionId: "playbook-1", local_id: "qa-1", title: "T", type: "task", start: "09:00", end: "09:30", duration: 30,
       meta: "M", detail: "D", source: "slack", source_id: "https://s/1", notes: "N",
       notionUrl: "https://n", calUrl: "https://c", priority: "Low", tags: ["a"], kind: "task",
       location: "Room", conferenceUrl: "https://meet", rsvp_status: "yes",
@@ -197,7 +197,7 @@ test("every projected key round-trips its property, including the ones nothing a
     }
   }));
   assert.deepStrictEqual(ev, {
-    id: "qa-1", title: "T", type: "task", _blockId: "row-9", _dateless: false,
+    guidedDefinitionId: "playbook-1", id: "qa-1", title: "T", type: "task", _blockId: "row-9", _dateless: false,
     createdAt: "2026-07-28T14:00:00.000Z", start: "09:00", end: "09:30", meta: "M",
     detail: "D", source: "slack", source_id: "https://s/1", notes: "N", untimed: false,
     status: "open", allDay: false, allDayStart: null, allDayEnd: null,
