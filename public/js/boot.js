@@ -1,5 +1,10 @@
 // ======== ASYNC BOOT: FETCH FROM API + COLD-START RESTORATION ========
 (async function boot() {
+  // Fast API/history responses can beat the later synchronous scripts: BlockStore,
+  // USE_BLOCKSTORE flags and data-ready listeners must exist before hydration.
+  if (document.readyState === 'loading') {
+    await new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
+  }
   const loadEl = document.createElement('div');
   loadEl.id = 'api-loading';
   loadEl.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:var(--accent);color:white;text-align:center;padding:6px;font-size:12px;font-weight:600;letter-spacing:0.5px';
