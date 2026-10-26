@@ -19,11 +19,11 @@ const errors=[],checks=[];
 page.on('pageerror',error=>errors.push(error.message));
 const check=name=>{checks.push(name);console.log('PASS '+name);};
 const row=id=>page.locator('#list-view .it-list-item').filter({has:page.locator('.ttl')}).locator('xpath=self::*[@data-id="'+id+'"]');
-async function ready(glasses=true){
+async function ready(glasses=true,expectedUnscheduled="1"){
   await page.goto(base+'/?'+(glasses?'device=glasses':''));
   await page.waitForSelector('#list-view .it-list-item');
   if(glasses)await page.waitForSelector('#list-view .glasses-more',{state:'attached'});
-  await page.waitForFunction(()=>document.querySelector('#unscheduled-pill-nav-count')?.textContent==='1');
+  if(expectedUnscheduled!==null)await page.waitForFunction(expected=>document.querySelector('#unscheduled-pill-nav-count')?.textContent===expected,expectedUnscheduled);
 }
 async function snapshot(){
   return page.evaluate(()=>{
@@ -63,6 +63,18 @@ try {
   await page.waitForFunction(()=>document.querySelector('#add-modal-overlay')?.classList.contains('open'));
   await page.locator('#add-modal-close').click();
   check('Enter opens the existing task detail dialog');
+  await row('review-workout').locator('.ttl').focus();
+  assert.equal(await row('review-workout').locator('.ttl').evaluate(el=>{const e=new KeyboardEvent('keydown',{key:'Enter',repeat:true,bubbles:true,cancelable:true});el.dispatchEvent(e);return e.defaultPrevented;}),true);
+  assert.equal(await page.locator('#add-modal-overlay').evaluate(el=>el.classList.contains('open')),false);
+  await row('review-workout').locator('.ttl').focus();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(()=>document.querySelector('#add-modal-overlay')?.classList.contains('open'));
+  await page.locator('#am-tab-subtasks').click();
+  const field=page.locator('#am-item-input');
+  await field.focus();
+  assert.equal(await field.evaluate(el=>{const e=new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true});el.dispatchEvent(e);return e.defaultPrevented;}),false);
+  await page.locator('#add-modal-close').click();
+  check('repeated Enter does not reopen details; text-field arrow input remains native');
   await row('review-workout').locator('.ttl').focus();
   await row('review-workout').locator('.glasses-more').click();
   assert.equal(await row('review-workout').locator('.btn-schedule').isVisible(),true);
@@ -149,6 +161,20 @@ try {
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   }
   check('600x600, phone and desktop preview without horizontal page overflow');
+  await page.locator('#loose-ends-pill').click();
+  const looseTitles=page.locator('#catchup-overlay.open .it-list-item .ttl');
+  await looseTitles.first().waitFor();
+  await looseTitles.first().focus();
+  assert.equal(await looseTitles.first().evaluate(el=>{const e=new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true,cancelable:true});el.dispatchEvent(e);return e.defaultPrevented;}),false);
+  assert.equal(await looseTitles.first().evaluate(el=>el===document.activeElement),true);
+  await looseTitles.last().focus();
+  assert.equal(await looseTitles.last().evaluate(el=>{const e=new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true});el.dispatchEvent(e);return e.defaultPrevented;}),false);
+  await page.locator('#catchup-overlay .it-list-check').first().click();
+  assert.doesNotMatch(await page.locator('.glasses-confirm-note').innerText(),/can reopen/);
+  await page.locator('.glasses-confirm button').first().click();
+  assert.equal(await page.locator('#catchup-overlay').evaluate(el=>el.classList.contains('open')),true);
+  await page.locator('#catchup-close').click();
+  check('Loose Ends contains task arrows and confirmation does not promise unsupported undo');
   await page.locator('#unscheduled-pill-nav').click();
   await page.waitForSelector('#unscheduled-list .it-list-item');
   assert.ok(await page.locator('#unscheduled-list [data-id="review-unscheduled"]').count());
@@ -176,6 +202,13 @@ try {
   assert.equal(await page.locator('.glasses-nav button').first().isDisabled(),true);
   assert.equal(await page.locator('.glasses-nav button').nth(1).isDisabled(),true);
   check('empty itinerary disables task traversal without hiding queue pills');
+  await ready(false,null);
+  await ready(true,null);
+  await row('review-meal').locator('.ttl').focus();
+  await row('review-meal').locator('.it-list-check').click();
+  await page.goBack();
+  assert.equal(new URL(page.url()).searchParams.has('device'),false);
+  check('browser Back retains page history navigation; modal dismissal uses explicit cancel/Escape');
   assert.deepEqual(errors,[]);
   await fs.writeFile(path.join(out,'results.json'),JSON.stringify({checks,errors,hardware:false,spatialNavigation:'Browser-native movement outside task titles requires Meta simulator/device qualification',base},null,2));
 } finally {await browser.close(); await fetch(base+'/api/review/glasses-device/reset',{method:'POST'});}

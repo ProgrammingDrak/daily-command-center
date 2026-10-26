@@ -14,6 +14,8 @@
     if (confirming) return confirming.scope;
     const focusedDialog = document.activeElement?.closest('[role="dialog"], dialog');
     if (focusedDialog && visible(focusedDialog)) return focusedDialog;
+    const looseEnds = document.querySelector('#catchup-overlay.open');
+    if (visible(looseEnds)) return looseEnds;
     const drawer = document.querySelector('#tasks-drawer.open [role="dialog"]');
     return visible(drawer) ? drawer : document;
   }
@@ -105,7 +107,7 @@
     confirming = { id: row.dataset.id, done: row.classList.contains('done'), context: contextKey(), scope: activeScope() };
     heading.textContent = confirming.done ? 'Reopen this task?' : 'Mark this task done?';
     detail.textContent = titleOf(row)?.textContent || 'Task';
-    note.textContent = confirming.done ? 'Uses DCC’s existing reopen action.' : 'DCC’s normal task and subtask rules apply. You can reopen a completed task.';
+    note.textContent = confirming.done ? 'Uses DCC’s existing reopen action.' : 'DCC’s normal rules for this item apply.';
     confirm.textContent = confirming.done ? 'Reopen task' : 'Mark done';
     confirm.disabled = false;
     dialog.showModal(); cancel.focus();
