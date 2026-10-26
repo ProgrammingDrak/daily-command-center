@@ -116,6 +116,7 @@
       ...(p._taskNotes ? {_taskNotes:JSON.parse(JSON.stringify(p._taskNotes))} : {}),
       ...(Array.isArray(p.sourceReferences) ? {sourceReferences: p.sourceReferences.map(ref => Object.assign({}, ref))} : {}),
       source_id: p.source_id || "", notes: p.notes || "", untimed: untimed,
+      guidedDefinitionId: p.guidedDefinitionId || null,
       status: p.status || "open",
       allDay: allDay,
       allDayStart: p.all_day_start || (allDay ? block.date : null),

@@ -610,11 +610,11 @@ function collectCompletionSubtreeIds(rows, parent) {
 async function setTaskCompletion({
   taskRef, completed, completedAt = null, taskDate = null, mutationId,
   expectedRevision = null, userId = null, workspaceId = null, companionUpdates = [],
-  transactionLockKey = null,
+  transactionLockKey = null, transactionClient = null,
 }) {
   validateTaskCompletionInput({ taskRef, completed, completedAt, taskDate, mutationId, expectedRevision });
   if (!Array.isArray(companionUpdates)) throw new Error("companionUpdates must be an array");
-  const q = await pool.connect();
+  const q = transactionClient || await pool.connect();
   const at = completed ? (completedAt || new Date().toISOString()) : null;
   const now = new Date().toISOString();
   let beforeRows = [];
@@ -660,7 +660,7 @@ async function setTaskCompletion({
     }
   };
   try {
-    await q.query("BEGIN");
+    if (!transactionClient) await q.query("BEGIN");
     if (transactionLockKey) {
       await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [transactionLockKey]);
     }
@@ -730,7 +730,7 @@ async function setTaskCompletion({
         );
       }
       await applyCompanionUpdates();
-      await q.query("COMMIT");
+      if (!transactionClient) await q.query("COMMIT");
       const revision = alreadyApplied ? currentRevision : revisions[key];
       return {
         task: { id: key, type: "legacy_task", date: taskDate, properties: {
@@ -795,7 +795,7 @@ async function setTaskCompletion({
         duplicateAffected = [target, ...poolRows.filter(row => row.id !== target.id && ids.has(row.id))];
       }
       await applyCompanionUpdates();
-      await q.query("COMMIT");
+      if (!transactionClient) await q.query("COMMIT");
       return {
         task: target, affectedTasks: duplicateAffected, revision: currentRevision,
         persistenceTarget: "task_row", duplicate: true,
@@ -933,17 +933,17 @@ async function setTaskCompletion({
         client: q,
       }));
     }
-    await q.query("COMMIT");
+    if (!transactionClient) await q.query("COMMIT");
   } catch (error) {
-    try { await q.query("ROLLBACK"); } catch { /* preserve completion error */ }
+    try { if (!transactionClient) await q.query("ROLLBACK"); } catch { /* preserve completion error */ }
     throw error;
   } finally {
-    q.release();
+    if (!transactionClient) q.release();
   }
 
   // Cadence propagation is deliberately outside the task transaction and remains
   // non-fatal, matching updateBlock's existing completion contract.
-  for (let i = 0; i < affected.length; i++) {
+  for (let i = 0; !transactionClient && i < affected.length; i++) {
     const row = affected[i];
     const before = beforeRows.find(item => item.id === row.id);
     await propagateResponsibilityDone({

@@ -43,6 +43,7 @@
   };
 
   const TYPES = {
+    guided: { label: "Guided conversation", tagCls: "tag-task", color: "#22d3ee" },
     task:   { label: "Task",   tagCls: "tag-task" },
     triage: { label: "Triage", tagCls: "tag-triage" },
     focus:  { label: "Focus",  tagCls: "tag-focus", color: "#22d3ee" },
