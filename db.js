@@ -280,7 +280,7 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
     props.type = activityPlan.taskType;
     props.activityTaskType = activityPlan.taskType;
   }
-  if (["workout", "meal"].includes(props.type)) props.publicVisibility = "private";
+  if (["workout", "meal", "guided"].includes(props.type)) props.publicVisibility = "private";
   const requestedTaskType = String(props.type || "").trim().toLowerCase();
   if (requestedTaskType === "shell" || requestedTaskType === "wrap") {
     props.type = "task";
@@ -288,6 +288,11 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
   }
   validateBlock(type, props);
   const q = client || pool;
+  if(props.guidedDefinitionId) {
+    const {rows}=await q.query("SELECT 1 FROM guided_definitions WHERE id=$1 AND workspace_id=$2 AND owner_user_id=$3",[props.guidedDefinitionId,workspace_id,user_id]);
+    if(!rows.length) {const error=new Error("Guided definition not found");error.statusCode=404;throw error;}
+    props.publicVisibility="private";
+  }
   if(isTaskRow({type,properties:props}) &&
       (parent_id===blockId || [props.subtaskOf,props.wrapId].filter(Boolean).some(ref=>ref===blockId||ref===props.local_id))){
     const error=new Error("A task cannot be its own parent");error.statusCode=409;throw error;
@@ -610,7 +615,7 @@ function collectCompletionSubtreeIds(rows, parent) {
 async function setTaskCompletion({
   taskRef, completed, completedAt = null, taskDate = null, mutationId,
   expectedRevision = null, userId = null, workspaceId = null, companionUpdates = [],
-  transactionLockKey = null, transactionClient = null,
+  transactionLockKey = null, transactionClient = null, guidedCompletionTaskId = null,
 }) {
   validateTaskCompletionInput({ taskRef, completed, completedAt, taskDate, mutationId, expectedRevision });
   if (!Array.isArray(companionUpdates)) throw new Error("companionUpdates must be an array");
@@ -747,6 +752,7 @@ async function setTaskCompletion({
     }
 
     const currentProps = target.properties || {};
+    if(!completed && currentProps.type === "guided" && target.id !== guidedCompletionTaskId) throw taskCompletionError("Reopen this occurrence from its guided conversation page",409,"GUIDED_REOPEN_REQUIRED");
     let releasedDependencyId = null;
     const dependencyIds = Array.isArray(currentProps.dependencyWaitingItemIds)
       ? currentProps.dependencyWaitingItemIds.map(String)
@@ -834,6 +840,9 @@ async function setTaskCompletion({
       }
     }
 
+    if(completed && rowsToWrite.some(row => row.properties?.type === "guided" && row.id !== guidedCompletionTaskId && !isCompletedTaskProps(row.properties))) {
+      throw taskCompletionError("Complete guided conversations with a confirmed outcome from their guided page",409,"GUIDED_OUTCOME_REQUIRED");
+    }
     beforeRows = rowsToWrite.map(row => ({ ...row, properties: { ...(row.properties || {}) } }));
     for (const row of rowsToWrite) {
       const before = row.properties || {};
@@ -953,6 +962,7 @@ async function setTaskCompletion({
   }
   const task = affected.find(row => row.id === target.id) || affected[0];
   return {
+    responsibilityTransitions: transactionClient ? affected.map(row => ({id:row.id,before:beforeRows.find(item=>item.id===row.id)?.properties,after:row.properties,at:now,date:row.date,workspaceId,completionRevision:row.properties?._completionRevision})) : [],
     task, affectedTasks: affected, revision: task && task.properties && task.properties._completionRevision,
     persistenceTarget: "task_row", duplicate: false,
     broadcastIds: [...affected.map(row => row.id), ...(overlayBroadcastId ? [overlayBroadcastId] : []),
@@ -1030,8 +1040,13 @@ async function updateBlock(id, fields, client) {
     const existingProps = existing.properties || {};
     // Generic/stale block writes cannot silently detach an activity log or expose
     // a workout/meal in sharing. Detailed records never pass through this path.
-    if (["workout", "meal"].includes(existingProps.type)) newProps.type = existingProps.type;
-    if (["workout", "meal"].includes(newProps.type)) newProps.publicVisibility = "private";
+    if (["workout", "meal", "guided"].includes(existingProps.type)) newProps.type = existingProps.type;
+    if (["workout", "meal", "guided"].includes(newProps.type)) newProps.publicVisibility = "private";
+    if (existingProps.guidedDefinitionId) newProps.guidedDefinitionId = existingProps.guidedDefinitionId;
+    if(newProps.guidedDefinitionId) newProps.publicVisibility="private";
+    if(existingProps.type === "guided" && isCompletedTaskProps(existingProps) !== isCompletedTaskProps(newProps)) {
+      const error = new Error("Complete this guided conversation with a confirmed outcome"); error.statusCode=409; throw error;
+    }
     if (isCompletedTaskProps(existingProps) && newProps && newProps.startedAt && !existingProps.startedAt) {
       const conflict = new Error("Completed work must be reopened before it can be started");
       conflict.statusCode = 409;
@@ -1957,8 +1972,10 @@ async function rescheduleBlocks(moves, creates, options = {}) {
       }
       // Moves use a separate writer from updateBlock; retain the same private
       // activity identity even when a stale client sends generic task props.
-      if (["workout", "meal"].includes(existing.properties?.type)) newProps.type = existing.properties.type;
-      if (["workout", "meal"].includes(newProps?.type)) newProps.publicVisibility = "private";
+      if (["workout", "meal", "guided"].includes(existing.properties?.type)) newProps.type = existing.properties.type;
+      if (["workout", "meal", "guided"].includes(newProps?.type)) newProps.publicVisibility = "private";
+      if(existing.properties?.guidedDefinitionId) newProps.guidedDefinitionId=existing.properties.guidedDefinitionId;
+      if(newProps.guidedDefinitionId) newProps.publicVisibility="private";
       const newDate = m.date !== undefined ? m.date : existing.date;
       // C6c: a row that CHANGES DAY joins the target day's space at the end. It used to keep the
       // originating day's `sort_order`, so an arriving task landed wherever it happened to sit on

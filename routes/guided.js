@@ -25,6 +25,6 @@ module.exports = function mountGuided(app, ctx) {
   app.get("/api/guided/tasks/:id", route(req => store.get(req.params.id,req.guidedOwner)));
   app.post("/api/guided/tasks/:id/actions", route(async req => {
     const result=await store.act(req.params.id,req.body||{},req.guidedOwner);
-    ctx.broadcast("blocks-changed",{action:"guided-progress",blockIds:[result.taskId]},req.workspaceId); return result;
+    ctx.broadcast("blocks-changed",{action:"guided-progress",blockIds:result.broadcastIds || [result.taskId]},req.workspaceId); return result;
   }));
 };

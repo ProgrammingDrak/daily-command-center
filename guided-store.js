@@ -18,7 +18,8 @@ CREATE INDEX IF NOT EXISTS guided_definition_owner ON guided_definitions(workspa
 CREATE INDEX IF NOT EXISTS guided_session_owner ON guided_sessions(workspace_id,owner_user_id);
 `;
 function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP_TIME_ZONE = "America/New_York" }) {
-  async function tx(fn) {
+  async function tx(fn, transactionClient = null) {
+    if(transactionClient) return fn(transactionClient);
     const q = await pool.connect();
     try { await q.query("BEGIN"); const result = await fn(q); await q.query("COMMIT"); return result; }
     catch (e) { await q.query("ROLLBACK"); throw e; } finally { q.release(); }
@@ -60,7 +61,7 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       ORDER BY b.created_at DESC LIMIT 200`, [owner.workspaceId, owner.userId]);
     return { definitions, tasks };
   }
-  async function saveDefinition(body, owner, defId = null, provenance = {source:"manual-edit"}) {
+  async function saveDefinition(body, owner, defId = null, provenance = {source:"manual-edit"}, transactionClient = null) {
     const value = M.definition(body.definition), expected = M.revision(body.expectedRevision);
     const id = defId || M.id(body.id);
     return tx(async q => {
@@ -75,7 +76,7 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
         ON CONFLICT(id) DO UPDATE SET definition=EXCLUDED.definition,revision=guided_definitions.revision+1,updated_at=NOW() RETURNING *`, [id, owner.workspaceId, owner.userId, value]);
       await q.query("INSERT INTO guided_definition_versions(definition_id,revision,definition,provenance) VALUES($1,$2,$3,$4)", [id,result.rows[0].revision,value,provenance]);
       return result.rows[0];
-    });
+    }, transactionClient);
   }
   async function versions(id, owner) {
     await readDefinition(pool,id,owner);
@@ -125,6 +126,7 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       updateBlock: (id, fields) => blockDB.updateBlock(id, fields, q),
       getBlockIncludingDeleted: id => blockDB.getBlockIncludingDeleted(id, q),
       getBlock: id => blockDB.getBlock(id, q),
+      deleteBlock: id => blockDB.deleteBlock(id,q),
       createBlock: input => blockDB.createBlock(input, q),
       getTaskTimeEntries: (id, ws, opts) => blockDB.getTaskTimeEntries(id, ws, opts, q),
       ensureDayRoot: (date, userId, ws) => blockDB.ensureDayRoot(date, userId, ws, q) };
@@ -132,14 +134,22 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
   }
   async function act(id, body, owner) {
     const expected = M.revision(body.expectedRevision), operationId = M.id(body.operationId);
-    if (!["start","resume","pause","progress","complete","feedback","preflight"].includes(body.action)) throw M.error("Unknown guided action");
+    if (!["start","resume","pause","progress","complete","feedback","preflight","reopen"].includes(body.action)) throw M.error("Unknown guided action");
     const payload = { action: body.action, progress: M.text(body.progress ?? "", "Progress", 12000),
       outcome: M.text(body.outcome ?? "", "Outcome", 6000), checked: body.checked ?? [], confirmed: body.confirmed === true };
     if (!Array.isArray(payload.checked) || payload.checked.length > 30 || payload.checked.some(i => !Number.isInteger(i) || i < 0)) throw M.error("Invalid checklist progress");
     if (payload.action === "complete" && (!payload.confirmed || !payload.outcome)) throw M.error("Confirm the outcome before completion");
+    if(payload.action === "complete" && body.observations != null) {
+      if(!Array.isArray(body.observations) || body.observations.length>12) throw M.error("At most 12 current observations are allowed");
+      payload.observations=body.observations.map(o=>{
+        if(!Number.isInteger(o.index) || o.index<0 || o.index>=12 || !M.ACCESS_STATES.includes(o.status)) throw M.error("Invalid completion observation");
+        return {index:o.index,status:o.status,note:M.text(o.note ?? "","Current access evidence",2000,true),source:"user-or-assistant-reported"};
+      });
+      if(new Set(payload.observations.map(o=>o.index)).size!==payload.observations.length) throw M.error("Duplicate prerequisite observation");
+    }
     if (payload.action === "preflight") {
       if(!Number.isInteger(body.prerequisiteIndex) || body.prerequisiteIndex<0 || body.prerequisiteIndex>=12 || !M.ACCESS_STATES.includes(body.status)) throw M.error("Invalid preflight observation");
-      payload.observation={index:body.prerequisiteIndex,status:body.status,note:M.text(body.note ?? "","Access evidence",2000),source:"user-or-assistant-reported"};
+      payload.observation={index:body.prerequisiteIndex,status:body.status,note:M.text(body.note ?? "","Access evidence",2000,body.status==="ready"),source:"user-or-assistant-reported"};
     }
     if (payload.action === "feedback") {
       payload.feedback = {};
@@ -148,7 +158,7 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       payload.feedback.baseDefinitionRevision = M.revision(body.feedback?.baseDefinitionRevision);
     }
     const hash = crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-    let propagation = null;
+    let propagation = [], broadcastIds=[id];
     const result = await tx(async q => {
       const b = await readTask(q, id, owner, true), d = await readDefinition(q, b.properties.guidedDefinitionId, owner), old = await readSession(q, id, owner);
       const prior = old?.session;
@@ -156,18 +166,26 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       if (replay) { if (replay.hash !== hash) throw M.error("Operation identifier already used for different data", 409); return shape(b,d,old); }
       if ((old?.revision || 0) !== expected) throw M.error("Session changed. Reload before continuing", 409);
       if (["start","resume"].includes(payload.action) && (body.expectedDefinitionRevision !== d.revision || body.expectedContextVersion !== new Date(b.updated_at).toISOString())) throw M.error("Prompt context changed. Refresh the preview before starting or resuming",409);
-      if (payload.action !== "feedback" && (blockDB.isCompletedTaskProps(b.properties) || prior?.state === "completed")) throw M.error("This occurrence is completed. Create a new occurrence for new work",409);
+      if (!["feedback","reopen"].includes(payload.action) && (blockDB.isCompletedTaskProps(b.properties) || prior?.state === "completed")) throw M.error("This occurrence is completed. Create a new occurrence for new work",409);
+      if(payload.action === "reopen" && (prior?.state!=="completed" || !blockDB.isCompletedTaskProps(b.properties))) throw M.error("Only a completed guided occurrence can be reopened",409);
       if (!prior && payload.action !== "start") throw M.error("Start this occurrence before recording progress",409);
       if (prior && payload.action === "start") throw M.error("This occurrence already has a session. Resume it",409);
-      if (prior?.events.length >= 500) throw M.error("Session history limit reached",409);
+      if(payload.action === "pause" && prior?.state === "paused" && !b.properties.startedAt) return shape(b,d,old);
+      if(payload.action === "resume" && prior?.state === "active" && b.properties.startedAt) return shape(b,d,old);
+      if (prior?.events.length >= 500 && !["pause","complete"].includes(payload.action)) throw M.error("Session history limit reached",409);
       const atMs = Date.now(), at = new Date(atMs).toISOString();
       const session = prior ? structuredClone(prior) : { id: crypto.randomUUID(), state: "active", startedAt: at,
         definitionRevision: d.revision, snapshot: d.definition, contextVersion: new Date(b.updated_at).toISOString(),
         taskDetail: d.definition.includeTaskDetail ? String(b.properties.detail || "").slice(0,12000) : "", checked: [], progress: "", outcome: "", access: {}, events: [] };
+      if(!prior) session.initialPrompt={text:M.brief(d.definition,b,null,{generatedAt:at,definitionRevision:d.revision,contextVersion:new Date(b.updated_at).toISOString(),timeZone:APP_TIME_ZONE}),generatedAt:at,contextVersion:new Date(b.updated_at).toISOString(),definitionRevision:d.revision,promptSchemaVersion:1};
       if (payload.checked.some(i => i >= session.snapshot.checklist.length)) throw M.error("Checklist item is not in this session");
       if(payload.action === "preflight") {
         if(!session.snapshot.prerequisites?.[payload.observation.index]) throw M.error("Prerequisite is not in this session");
         session.access ||= {}; session.access[payload.observation.index]={...payload.observation,at};
+      }
+      if(payload.action === "complete") for(const observation of payload.observations || []) {
+        if(!session.snapshot.prerequisites?.[observation.index]) throw M.error("Prerequisite is not in this session");
+        session.access ||= {};session.access[observation.index]={...observation,at};
       }
       if(payload.action === "complete" && (session.snapshot.prerequisites || []).some((p,i)=>p.required && M.accessState(session.access?.[i],at)!=="ready")) throw M.error("A required prerequisite is unresolved or stale. Record a current permitted access check before completing",409);
       const clock = timing(q), workArgs = { block: b, atMs, actor: `dcc:${owner.userId}`, actionId: operationId };
@@ -176,31 +194,44 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       if (["progress","complete"].includes(payload.action)) { session.progress = payload.progress; session.checked = [...new Set(payload.checked)]; }
       if (payload.action === "complete") {
         // The canonical completion writer, timer ledger and guided outcome share one transaction.
-        const before = structuredClone(b.properties);
         const completion = await blockDB.setTaskCompletion({ taskRef: id, completed: true, completedAt: at,
           mutationId: operationId, expectedRevision: b.properties._completionRevision || null,
-          userId: owner.userId, workspaceId: owner.workspaceId, transactionClient: q });
-        await clock.completeWork({ ...workArgs, block: completion.task, actionId: operationId + ":finish", normalizeExisting: true });
+          userId: owner.userId, workspaceId: owner.workspaceId, transactionClient: q, guidedCompletionTaskId:id });
+        for(const affected of completion.affectedTasks || [completion.task]) {
+          if(String(affected.user_id)!==String(owner.userId)) throw M.error("A nested task belongs to a different owner",409);
+          await clock.completeWork({ ...workArgs, block: affected, actionId: operationId + ":finish", normalizeExisting: true });
+        }
+        broadcastIds=completion.broadcastIds || [id];
         session.state = "completed"; session.outcome = payload.outcome; session.completedAt = at;
-        propagation = { id, before, after: completion.task.properties, at, date: b.date, workspaceId: owner.workspaceId, completionRevision: completion.revision };
+        propagation = completion.responsibilityTransitions || [];
+      }
+      if(payload.action === "reopen") {
+        const reopened=await blockDB.setTaskCompletion({taskRef:id,completed:false,mutationId:operationId,expectedRevision:b.properties._completionRevision || null,userId:owner.userId,workspaceId:owner.workspaceId,transactionClient:q,guidedCompletionTaskId:id});
+        await clock.reopenWork({...workArgs,block:reopened.task,actionId:operationId+":reopen"});
+        session.state="paused";session.outcome="";delete session.completedAt;
+        propagation=reopened.responsibilityTransitions || [];broadcastIds=reopened.broadcastIds || [id];
       }
       if(payload.action === "feedback") session.feedback={...payload.feedback,recordedAt:at,recordedBy:`dcc:${owner.userId}`,source:"confirmed-conversation-feedback"};
-      session.events.push({ ...(payload.action === "feedback" ? {feedback:session.feedback} : {}), ...(payload.action === "preflight" ? {observation:session.access[payload.observation.index]} : {}), operationId, hash, action: payload.action, at, progress: session.progress, checked: session.checked, outcome: session.outcome });
+      session.events.push({ ...(payload.action === "feedback" ? {feedback:session.feedback} : {}), ...(payload.action === "preflight" ? {observation:session.access[payload.observation.index]} : {}), ...(payload.observations ? {observations:payload.observations.map(o=>session.access[o.index])} : {}), operationId, hash, action: payload.action, at, progress: session.progress, checked: session.checked, outcome: session.outcome });
+      if(Buffer.byteLength(JSON.stringify(session), "utf8") > 1000000 && !["pause","complete"].includes(payload.action)) throw M.error("Session history reached its size limit. Pause or complete this occurrence before beginning a new one",409);
       await q.query(`INSERT INTO guided_sessions(task_id,workspace_id,owner_user_id,session) VALUES($1,$2,$3,$4)
         ON CONFLICT(task_id) DO UPDATE SET session=EXCLUDED.session,revision=guided_sessions.revision+1,updated_at=NOW()`, [id, owner.workspaceId, owner.userId, session]);
       return get(id,owner,q);
     });
-    if (propagation) await blockDB.propagateResponsibilityDone(propagation);
-    return result;
+    for(const transition of propagation) await blockDB.propagateResponsibilityDone(transition);
+    return {...result,broadcastIds};
   }
   async function applyFeedback(id,body,owner) {
-    const current=await get(id,owner);
-    if(current.revision!==M.revision(body.expectedSessionRevision)) throw M.error("Feedback changed. Refresh before applying",409);
-    const f=current.session?.feedback;
-    if(!f?.proposedDefinition) throw M.error("Save a proposed definition in feedback first");
-    if(f.baseDefinitionRevision!==body.expectedRevision) throw M.error("The proposal is based on a different definition revision. Review it against the latest version",409);
-    return saveDefinition({definition:f.proposedDefinition,expectedRevision:body.expectedRevision},owner,current.definitionId,
-      {source:"reviewed-run-feedback",taskId:id,sessionId:current.session.id,sessionRevision:current.revision});
+    return tx(async q => {
+      await readTask(q,id,owner,true);
+      const current=await get(id,owner,q);
+      if(current.revision!==M.revision(body.expectedSessionRevision)) throw M.error("Feedback changed. Refresh before applying",409);
+      const f=current.session?.feedback;
+      if(!f?.proposedDefinition) throw M.error("Save a proposed definition in feedback first");
+      if(f.baseDefinitionRevision!==body.expectedRevision) throw M.error("The proposal is based on a different definition revision. Review it against the latest version",409);
+      return saveDefinition({definition:f.proposedDefinition,expectedRevision:body.expectedRevision},owner,current.definitionId,
+        {source:"reviewed-run-feedback",taskId:id,sessionId:current.session.id,sessionRevision:current.revision},q);
+    });
   }
   return { list, get, saveDefinition, versions, rollback, applyFeedback, createTask, attach, act };
 }

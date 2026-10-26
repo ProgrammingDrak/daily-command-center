@@ -198,6 +198,7 @@ function captureShellTemplate(shellId,pool){
   while(stack.length){
     const {ev,out,isRoot}=stack.pop();if(seen.has(ev.id))continue;seen.add(ev.id);
     Object.assign(out,{title:ev.title||"",type:ev.type||"task",priority:ev.priority||"Medium",detail:ev.detail||"",children:[]});
+    if(ev.guidedDefinitionId) out.guidedDefinitionId=ev.guidedDefinitionId;
     if(!isRoot){out.edge=relOf(ev)==="subtask"?"subtask":"wrap";out.durationMin=Math.max(1,dur(ev)||0)||30;}
     const kids=_TM().selectNotDeleted(index.children.get(ev.id)||[]).filter(k=>!seen.has(k.id));
     const entries=kids.map(ev=>({ev,out:{},isRoot:false}));out.children=entries.map(e=>e.out);

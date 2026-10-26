@@ -8,6 +8,7 @@
   // here between openResponsibilityModal and formProps/saveResponsibility.
   let _pendingTemplateTree = null;
   let _pendingActivitySourceId = null;
+  let _pendingGuidedDefinitionId = null;
   let _sharingExplicit = false;
   let _seriesEditContext = null;
   let _sidebarQuery = "";
@@ -320,7 +321,8 @@
       const curDate=(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||"";
       insertTaskNow(title,dur,{
         publicVisibility:repeatVisibility(p),type:p.activityTaskType||"task",responsibilityId:id,responsibilityTitle:title,priority:"High",
-        ...(p.activityTaskType?{activityPlanSourceId:id,publicVisibility:"private"}:{}),
+        ...(p.guidedDefinitionId?{type:"guided",guidedDefinitionId:p.guidedDefinitionId,publicVisibility:"private"}:{}),
+      ...(p.activityTaskType?{activityPlanSourceId:id,publicVisibility:"private"}:{}),
         source:"responsibility",tags:tags,detail:p.description||"",
         idempotencyKey:"resp:"+id+":"+curDate,
         onScheduled:async function(info){
@@ -639,6 +641,7 @@
     const defaults=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
     const scheduleOpts={
       publicVisibility:repeatVisibility(p),
+      ...(p.guidedDefinitionId?{type:"guided",guidedDefinitionId:p.guidedDefinitionId,publicVisibility:"private"}:{}),
       ...(p.activityTaskType?{type:p.activityTaskType,activityPlanSourceId:id,publicVisibility:"private"}:{}),
       responsibilityId:id,
       responsibilityTitle:title,
@@ -798,6 +801,7 @@
       createdFrom:"task",
       templateTree:templateTree||undefined
     };
+    if(task?.guidedDefinitionId) {result.guidedDefinitionId=task.guidedDefinitionId;result.publicVisibility="private";}
     if (task && ["workout", "meal"].includes(task.type)) {
       result.activityPlanSourceId = task._blockId || task.id;
       result.domain = "personal";
@@ -982,6 +986,7 @@
     // existing tree; a shell-sourced create stashes the freshly captured one).
     _pendingTemplateTree=(p.templateTree&&p.templateTree.root)?p.templateTree:null;
     _pendingActivitySourceId=id?null:(p.activityPlanSourceId||null);
+    _pendingGuidedDefinitionId=p.guidedDefinitionId||null;
     const today=new Date();
     const todayIso=today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0")+"-"+String(today.getDate()).padStart(2,"0");
     document.getElementById("resp-id").value=id||"";
@@ -1204,6 +1209,7 @@
     const preferredCadence=document.getElementById("resp-preferred-cadence")?.value||"none";
     const result={
       templateTree:(_pendingTemplateTree&&_pendingTemplateTree.root)?_pendingTemplateTree:undefined,
+      ...(_pendingGuidedDefinitionId?{guidedDefinitionId:_pendingGuidedDefinitionId,publicVisibility:"private"}:{}),
       ...(_pendingActivitySourceId?{activityPlanSourceId:_pendingActivitySourceId}:{}),
       title:document.getElementById("resp-title").value.trim(),
       publicVisibility:document.getElementById("resp-public-visibility")?.value||repeatVisibility(editing&&editing.properties),
