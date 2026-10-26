@@ -1,3 +1,4 @@
+/* global document, innerWidth */
 // Synthetic history regression: fast API responses must not outrun shell scripts.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
@@ -24,17 +25,17 @@ try{
    return route.continue();
   });
   const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const ready=async()=>{await page.waitForLoadState('load');await page.waitForFunction(()=>!document.querySelector('#api-loading'));await page.locator('[data-collapse-action="expand"]').click();};
   const rows=()=>page.locator('#list-view .it-list-item').evaluateAll(es=>es.map(e=>({id:e.dataset.id,done:e.classList.contains('done')})));
-  await page.goto(base+'/?device=glasses');await page.waitForSelector('#list-view .it-list-item');
+  await page.goto(base+'/?device=glasses');await ready();
   const expected=await rows();assert.ok(expected.some(row=>row.done));
   for(const [script,width] of [['block-store.js',600],['task-library.js',375],['block-store.js',1440]]){
    delayedScript=null;
    await page.setViewportSize({width,height:width===375?812:600});
-   await page.getByRole('link',{name:'Full app',exact:true}).click();await page.waitForSelector('#list-view .it-list-item');
+   await page.getByRole('link',{name:'Full app',exact:true}).click();await ready();
    assert.deepEqual(await rows(),expected);
    delayedScript='/public/js/'+script;
-   await page.goBack();await page.waitForLoadState('load');
-   await page.waitForFunction(()=>!document.querySelector('#api-loading'));
+   await page.goBack();await ready();
    assert.deepEqual(await rows(),expected,'history must retain exact task IDs/order/completed state despite late '+script);
    assert.equal(await page.locator('.glasses-nav').count(),1);
    assert.equal(await page.locator('#queue-pill button').count(),5);

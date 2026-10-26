@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
+const { setImmediate } = require('node:timers');
 const fs = require('node:fs');
 const source = fs.readFileSync(require.resolve('./public/js/boot.js'), 'utf8');
 
