@@ -7,7 +7,7 @@ const source = fs.readFileSync(require.resolve('./server'), 'utf8');
 
 test('login destinations preserve local page, query and fragment and default to home', () => {
   for (const value of [undefined, null, '', [], {}, 12]) assert.equal(loginReturn.normalize(value), '/');
-  for (const value of ['/glasses.html', '/glasses.html?view=tasks&task=one#detail', '/glasses-routine.html?date=2026-10-24', '/?tab=schedule', '/todo/a%20b']) {
+  for (const value of ['/glasses.html', '/glasses.html?view=tasks&task=one#detail', '/glasses-routine.html?date=2026-10-24', '/?tab=schedule', '/?device=glasses#schedule', '/todo/a%20b']) {
     assert.equal(loginReturn.normalize(value), value);
     assert.equal(new URL(loginReturn.loginUrl(value), 'https://dcc.invalid').searchParams.get('next'), value);
   }
@@ -38,6 +38,7 @@ const authPage = req => execute(source.slice(pageStart, pageEnd) + '\nsendAuthPa
 
 test('actual server gate retains glasses state and keeps API failures as 401', () => {
   const target = '/glasses.html?view=tasks&task=abc&page=2';
+  assert.equal(gate({path:'/',originalUrl:'/?device=glasses'}).redirect,loginReturn.loginUrl('/?device=glasses'));
   assert.equal(gate({ path: '/glasses.html', originalUrl: target }).redirect, loginReturn.loginUrl(target));
   assert.equal(gate({ path: '/glasses.html', originalUrl: target, method: 'HEAD' }).redirect, loginReturn.loginUrl(target));
   assert.equal(gate({ path: '/', originalUrl: '/' }).redirect, '/login');
@@ -48,6 +49,7 @@ test('actual server gate retains glasses state and keeps API failures as 401', (
 
 test('completed or interrupted login returns signed-in sessions safely without loops', () => {
   assert.equal(authPage({}).file, '/fixture/login.html');
+  assert.equal(authPage({session:{userId:1},query:{next:'/?device=glasses',auth:'verifying'}}).redirect,'/?device=glasses');
   assert.equal(authPage({ session: { userId: 1 } }).redirect, '/');
   assert.equal(authPage({ session: { userId: 1 }, query: { next: '/glasses.html?task=abc', auth: 'verifying' } }).redirect, '/glasses.html?task=abc');
   for (const next of ['//evil.example', '/login', ['/glasses.html', '//evil.example']]) {
