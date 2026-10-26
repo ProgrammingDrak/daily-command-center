@@ -104,7 +104,7 @@ try {
   await row('review-workout').locator('.it-list-check').click();
   await page.locator('.glasses-confirm button').last().evaluate(el=>{el.click();el.click();});
   await page.waitForFunction(()=>document.querySelector('#list-view [data-id="review-workout"]')?.classList.contains('done'));
-  
+
   await page.waitForFunction(()=>window.__DCC_COMPLETION_UI_INTENTS__?.has('review-workout') && window.__DCC_COMPLETION_SETTLED__?.get('review-workout')===window.__DCC_COMPLETION_UI_INTENTS__?.get('review-workout'));
   assert.equal(completions,1);
   check('duplicate confirm dispatches one shared completion; existing persistence settles');
