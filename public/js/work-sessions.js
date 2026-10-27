@@ -3,9 +3,9 @@
 (function () {
   "use strict";
 
-  var CHECK_IN_MINUTES = 25;
-  var MISSED_CHECK_IN_LIMIT = 2;
-  var MAX_SESSION_MINUTES = 8 * 60;
+  var CHECK_IN_MINUTES = window.DCCWorkCheckInPolicy.CHECK_IN_MINUTES;
+  var MISSED_CHECK_IN_LIMIT = window.DCCWorkCheckInPolicy.MISSED_CHECK_IN_LIMIT;
+  var MAX_SESSION_MINUTES = window.DCCWorkCheckInPolicy.MAX_SESSION_MINUTES;
   var BREAK_PROMPTS = [
     "Take two minutes for water and a stretch.",
     "Take two minutes to stand and look far away.",
@@ -100,30 +100,12 @@
   }
 
   function checkInState(task, nowMs) {
-    nowMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
-    var startedMs = Date.parse((task && task.startedAt) || "");
-    if (!Number.isFinite(startedMs)) return { active: false, due: false, shouldAutoPause: false };
-    var acknowledgedMs = Date.parse((task && task.workCheckInAt) || "");
-    var anchorMs = Number.isFinite(acknowledgedMs) && acknowledgedMs >= startedMs && acknowledgedMs <= nowMs
-      ? acknowledgedMs : startedMs;
-    var cadenceMs = CHECK_IN_MINUTES * 60_000;
-    var hardStopAtMs = startedMs + MAX_SESSION_MINUTES * 60_000;
-    var missed = Math.max(0, Math.floor((nowMs - anchorMs) / cadenceMs));
-    var autoPauseAtMs = Math.min(anchorMs + MISSED_CHECK_IN_LIMIT * cadenceMs, hardStopAtMs);
-    var shouldAutoPause = nowMs >= autoPauseAtMs;
+    var state = window.DCCWorkCheckInPolicy.checkInState(task, nowMs);
+    if (!state.active) return state;
     var count = Math.max(0, Number((task && task.workCheckInCount) || 0));
-    return {
-      active: true,
-      due: missed >= 1 && !shouldAutoPause,
-      missed: Math.min(missed, MISSED_CHECK_IN_LIMIT),
-      prompt: BREAK_PROMPTS[count % BREAK_PROMPTS.length],
-      promptIndex: count % BREAK_PROMPTS.length,
-      anchorMs: anchorMs,
-      nextCheckInAtMs: anchorMs + cadenceMs,
-      autoPauseAtMs: autoPauseAtMs,
-      hardStopAtMs: hardStopAtMs,
-      shouldAutoPause: shouldAutoPause,
-    };
+    state.prompt = BREAK_PROMPTS[count % BREAK_PROMPTS.length];
+    state.promptIndex = count % BREAK_PROMPTS.length;
+    return state;
   }
 
   function checkInKey(task, state) {
@@ -319,7 +301,7 @@
     dock.hidden = !active.length;
     dock.innerHTML = active.length ? '<div class="active-work-head"><span>Active work</span><span>' + active.length + " running</span></div>" + active.map(function (task) {
       var total = Number(task.actualMinutes) || 0;
-      return '<div class="active-work-row"><span class="active-work-dot"></span><span class="active-work-title">' + esc(task.title || "Task") + '</span><span class="active-work-time">' + elapsedLabel(task.startedAt) + (total ? " · " + total + "m saved" : "") + '</span><button class="work-action-btn pause" data-work-task="' + esc(task.id) + '" data-work-action="pause">Pause</button><button class="work-action-btn complete" data-work-task="' + esc(task.id) + '" data-work-complete="true">Complete</button><button class="work-detail-btn" data-work-task="' + esc(task.id) + '" data-work-open="true">Details</button>' + checkInHtml(task, nowMs) + '</div>';
+      return '<div class="active-work-row"><span class="active-work-dot"></span><span class="active-work-title">' + esc(task.title || "Task") + '</span><span class="active-work-time">' + elapsedLabel(task.startedAt) + (total ? " · " + total + "m saved" : "") + '</span><button type="button" class="work-action-btn" data-work-switch="' + esc(task.id) + '">Switch tasks</button><button class="work-action-btn pause" data-work-task="' + esc(task.id) + '" data-work-action="pause">Pause</button><button class="work-action-btn complete" data-work-task="' + esc(task.id) + '" data-work-complete="true">Complete</button><button class="work-detail-btn" data-work-task="' + esc(task.id) + '" data-work-open="true">Details</button>' + checkInHtml(task, nowMs) + '</div>';
     }).join("") : "";
   }
 
@@ -470,6 +452,9 @@
     checkInTick();
   });
   window.DCCWorkSessions = {
+    activeTasks: activeTasks,
+    availableTasks: availableTasks,
+    blockFor: blockFor,
     actionButtonHtml: actionButtonHtml,
     itineraryActionButtonsHtml: itineraryActionButtonsHtml,
     act: act,

@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const { setImmediate } = require("node:timers");
 
-const source = fs.readFileSync(require.resolve("./public/js/work-sessions.js"), "utf8");
+const source = fs.readFileSync(require.resolve("./public/js/work-checkin-policy.js"), "utf8") + "\n" + fs.readFileSync(require.resolve("./public/js/work-sessions.js"), "utf8");
 
 function loadCheckInApi() {
   const context = {
