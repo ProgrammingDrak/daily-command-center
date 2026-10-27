@@ -92,12 +92,10 @@ test(
       now += 2 * 60000;
       const first = await entry(active),
         claim = await body("queue-claim", active, { generation: first.generation });
-      const outcomes = await Promise.allSettled([
-        store.execute(claim, owner),
-        store.execute({ ...claim, sourceEventId: uid() }, owner)
-      ]);
+      const bodies=[claim,{...claim,sourceEventId:uid()}];
+      const outcomes = await Promise.allSettled(bodies.map(body=>store.execute(body,owner)));
       assert.equal(outcomes.filter((x) => x.status === "fulfilled" && x.value.claimed).length, 1);
-      assert.equal((await store.execute(claim, owner)).claimed, false);
+      assert.equal((await store.execute(bodies[outcomes.findIndex(x=>x.status==="fulfilled")], owner)).claimed, false);
       assert.ok(
         (await createConversationStore(ctx).state(owner)).queue.items.find((i) => i.task.id === active).notifiedAt
       );
@@ -223,5 +221,55 @@ test(
       assert.equal((await guided.get(view.taskId, owner)).session.state, "completed");
       assert.equal((await row(view.taskId)).properties.actualMinutes, 1);
     });
+    await t.test("recurring queue completion drains cadence only after commit and retries safely",async()=>{
+      await make('repeat-task',{responsibilityId:'repeat-def'});
+      await ctx.blockDB.createBlock({id:'repeat-def',type:'block',user_id:1,workspace_id:'ws-1',properties:{kind:'responsibility_item',title:'Recurring work',cadence:'weekly',lastCompletedAt:'2026-10-01T12:00:00Z',openInstanceBlockId:'repeat-task',openInstanceId:'repeat-task',openInstanceDate:'2026-10-20'}});
+      const command=await body('done','repeat-task');await store.execute(command,owner);
+      let definition=await row('repeat-def');assert.equal(definition.properties.lastCompletedTaskId,'repeat-task');assert.equal(definition.properties.openInstanceBlockId,undefined);
+      const timestamp=definition.properties.lastCompletedAt;
+      await store.execute(command,owner);definition=await row('repeat-def');assert.equal(definition.properties.lastCompletedAt,timestamp);assert.equal(definition.properties.previousCompletedAt,'2026-10-01T12:00:00Z','retry does not replace the cadence undo value');
+      assert.equal((await row('repeat-task')).properties.actualMinutes,undefined);
+    });
+    await t.test("guided recurring completion returns without waiting on its own row lock",{timeout:5000},async()=>{
+      const guided=require('./guided-store').createGuidedStore({...ctx,APP_TIME_ZONE:'UTC'});
+      const spec=await guided.saveDefinition({id:uid(),expectedRevision:0,definition:{title:'Recurring guided',goal:'Confirm source',starterPrompt:'Read source',completionCriteria:'Confirm outcome',checklist:[]}},owner);
+      const preview=v=>({expectedRevision:v.revision,expectedDefinitionRevision:v.definitionRevision,expectedContextVersion:v.contextVersion});
+      for(const repeatType of ['cadence','scheduled']) {
+        let view=await guided.createTask({id:uid(),definitionId:spec.id,date:'2026-10-20'},owner);
+        const defId=uid(),task=await row(view.taskId);
+        await ctx.blockDB.createBlock({id:defId,type:'block',user_id:1,workspace_id:'ws-1',properties:{kind:'responsibility_item',title:'Guided cadence',repeatType,cadence:'weekly',openInstanceBlockId:task.id}});
+        await ctx.blockDB.updateBlock(task.id,{properties:{...task.properties,responsibilityId:defId}});
+        view=await guided.get(task.id,owner);await send('start',task.id,{guided:preview(view)});now+=60000;view=await guided.get(task.id,owner);
+        await send('done',task.id,{guided:{...preview(view),confirmed:true,outcome:'Source confirmed'}});
+        assert.equal((await guided.get(task.id,owner)).session.state,'completed');
+        const definition=await row(defId);
+        if(repeatType==='cadence')assert.equal(definition.properties.lastCompletedTaskId,task.id);
+        else assert.equal(definition.properties.openInstanceBlockId,task.id,'scheduled series is not reset by completion');
+      }
+    });
+    await t.test("invalid and future acknowledgements use the shared unattended cutoff",async()=>{
+      for(const acknowledgement of ['invalid',new Date(now+86400000).toISOString()]) {
+        const id=uid();await make(id);await send('start',id);
+        await ctx.pool.query("UPDATE blocks SET properties=properties || $2::jsonb WHERE id=$1",[id,{workCheckInAt:acknowledgement}]);
+        now+=3*3600000;const continued=await send('continue',id);
+        assert.equal(continued.task.properties.actualMinutes,50);assert.equal(continued.task.properties.startedAt,new Date(now).toISOString());
+        assert.equal(continued.entries.length,1,'event stores only the new session rows');
+        now+=60000;const paused=await send('pause',id);assert.equal(paused.entries.length,1);assert.equal(paused.task.properties.actualMinutes,51);
+      }
+    });
+
+    await t.test("normal and replay propagation release the coordinator pool slot first",async()=>{
+      let leased=0,propagated=0;
+      const observed=createConversationStore({...ctx,now:()=>now,pool:{query:(...args)=>ctx.pool.query(...args),connect:async()=>{
+        const q=await ctx.pool.connect();leased++;return {query:(...args)=>q.query(...args),release:()=>{leased--;q.release();}};
+      }},blockDB:{...ctx.blockDB,propagateResponsibilityDone:async transition=>{
+        assert.equal(leased,0,'cadence side effects must not retain the coordinator pool slot');propagated++;return ctx.blockDB.propagateResponsibilityDone(transition);
+      }}});
+      await make('release-slot',{responsibilityId:'release-def'});
+      await ctx.blockDB.createBlock({id:'release-def',type:'block',user_id:1,workspace_id:'ws-1',properties:{kind:'responsibility_item',title:'Pool test',cadence:'weekly',openInstanceBlockId:'release-slot'}});
+      const command=await body('done','release-slot');await observed.execute(command,owner);await observed.execute(command,owner);
+      assert.equal(propagated,2);assert.equal(leased,0);assert.equal((await row('release-def')).properties.lastCompletedTaskId,'release-slot');
+    });
+
   }
 );

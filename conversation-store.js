@@ -251,6 +251,8 @@ function createConversationStore(ctx) {
         [owner.userId, owner.workspaceId, source.id]
       )
     ).rows.map(blockDB.parseBlock);
+    const otherWindows = otherEntries.filter(entry => entry.properties.allocationKind !== "unknown")
+      .map(entry => ({id:entry.id,...entryWindow(entry,timeZone)}));
     let cursor = window.startMs;
     if (!cursor || window.durSec > 36 * 3600) throw M.fail("Source interval is not correctable");
     const touched = new Map(),
@@ -285,11 +287,9 @@ function createConversationStore(ctx) {
         }
       }
       if (part.kind !== "unknown") {
-        for (const existing of otherEntries) {
-          if (existing.properties.allocationKind === "unknown") continue;
-          const prior = entryWindow(existing, timeZone);
+        for (const prior of otherWindows) {
           if (prior.startMs !== null && start < prior.endMs && end > prior.startMs)
-            throw M.fail("This interval overlaps existing recorded activity; review entry " + existing.id, 409);
+            throw M.fail("This interval overlaps existing recorded activity; review entry " + prior.id, 409);
         }
         const active = (
           await q.query(
@@ -360,6 +360,8 @@ function createConversationStore(ctx) {
     const b = M.command(input, (ctx.now || Date.now)()),
       hash = M.digest(b),
       q = transactionClient || (await pool.connect());
+    let released = false;
+    const releaseOwned = () => { if (!transactionClient && !released) { q.release(); released = true; } };
     try {
       if (!transactionClient) await q.query("BEGIN");
       await authorize(q, owner);
@@ -381,7 +383,12 @@ function createConversationStore(ctx) {
             ids
           ])
         ).rows.map(blockDB.parseBlock);
-        if (!transactionClient) await q.query("COMMIT");
+        if (!transactionClient) {
+          await q.query("COMMIT");
+          releaseOwned();
+          // A crash after commit can be recovered by the same idempotent retry.
+          for (const transition of prior.rows[0].result.responsibilityTransitions || []) await blockDB.propagateResponsibilityDone(transition);
+        }
         return { ...prior.rows[0].result, duplicate: true, claimed: false, affectedTasks, currentState };
       }
       await q.query("INSERT INTO conversation_state(user_id) VALUES($1) ON CONFLICT DO NOTHING", [owner.userId]);
@@ -414,7 +421,7 @@ function createConversationStore(ctx) {
           const guided = require("./guided-store").createGuidedStore(ctx),
             view = await guided.get(row.id, owner, q);
           if (view.session) {
-            await guided.act(
+            const pause = await guided.act(
               row.id,
               {
                 action: "pause",
@@ -426,7 +433,7 @@ function createConversationStore(ctx) {
               cutoff,
               true
             );
-            paused = { changed: true, sessions: await blockDB.getTaskTimeEntries(row.id, owner.workspaceId, {}, q) };
+            paused = { changed: true, entries: pause.entries || [] };
           }
         }
         if (!paused)
@@ -440,7 +447,7 @@ function createConversationStore(ctx) {
         Q.setStatus(queue, await task(q, row.id, owner), status, b);
         if (status === "background") queue.order = queue.order.filter((id) => id !== row.id).concat(row.id);
         changedIds.add(row.id);
-        detail.entries = [...(detail.entries || []), ...(paused.sessions || [])];
+        detail.entries = [...(detail.entries || []), ...(paused.entries || [])];
         if (!paused.changed) throw M.fail(paused.reason || "Foreground session could not be closed", 409);
         if (cutoff < atMs) {
           // Silence is not evidence of continued focus. Keep elapsed uncertainty
@@ -514,10 +521,8 @@ function createConversationStore(ctx) {
         }
 
         if (b.action === "continue") {
-          const start = Date.parse(target.properties.startedAt || "");
-          const checkIn = Date.parse(target.properties.workCheckInAt || target.properties.startedAt || "");
-          const deadline = Math.min(start + 8 * 3600000, Math.max(start, checkIn) + 50 * 60000);
-          if (Number.isFinite(deadline) && atMs >= deadline) {
+          const safety = checkInState(target.properties, atMs);
+          if (safety.shouldAutoPause) {
             await closeForeground(target);
             const resumed = await timing.startWork({
               block: await task(q, target.id, owner),
@@ -533,7 +538,7 @@ function createConversationStore(ctx) {
         }
         if (b.action === "done" && target.properties.guidedDefinitionId && !legacy) {
           if (!b.guided) throw M.fail("Confirm the guided outcome before completion", 409);
-          await require("./guided-store")
+          const completion = await require("./guided-store")
             .createGuidedStore(ctx)
             .act(
               target.id,
@@ -543,6 +548,8 @@ function createConversationStore(ctx) {
               atMs,
               true
             );
+          detail.responsibilityTransitions = completion.responsibilityTransitions || [];
+          for (const id of completion.broadcastIds || []) changedIds.add(id);
           Q.setStatus(queue, await task(q, target.id, owner), "completed", b);
         } else if (b.action === "done") {
           const completion = await blockDB.setTaskCompletion({
@@ -604,13 +611,17 @@ function createConversationStore(ctx) {
         "INSERT INTO conversation_events(user_id,workspace_id,source_event_id,request_hash,command,before_state,result) VALUES($1,$2,$3,$4,$5,$6,$7)",
         [owner.userId, owner.workspaceId, b.sourceEventId, hash, b, before, result]
       );
-      if (!transactionClient) await q.query("COMMIT");
+      if (!transactionClient) {
+        await q.query("COMMIT");
+        releaseOwned();
+        for (const transition of result.responsibilityTransitions || []) await blockDB.propagateResponsibilityDone(transition);
+      }
       return { ...result, currentState: result.state };
     } catch (e) {
-      if (!transactionClient) await q.query("ROLLBACK");
+      if (!transactionClient && !released) await q.query("ROLLBACK");
       throw e;
     } finally {
-      if (!transactionClient) q.release();
+      releaseOwned();
     }
   }
   async function history(owner) {

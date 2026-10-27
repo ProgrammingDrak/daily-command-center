@@ -182,13 +182,15 @@ try {
   await page.waitForFunction(() => !document.querySelector('[data-queue-id="b"] [data-queue-action="dismiss"]'));
   assert.equal(await card("b").count(), 1, "dismiss retains queue membership");
   // Lost response after commit: retry exact envelope after reload, no duplicate effort.
-  let lost = false;
+  let lost = false, originalEnvelope=null;const retriedEnvelopes=[];
   await page.route("**/api/working-queue", async (route) => {
     if (!lost && route.request().method() === "POST" && route.request().postDataJSON().action === "start") {
       lost = true;
+      originalEnvelope=route.request().postDataJSON();
       await route.fetch();
       return route.abort();
     }
+    if(route.request().method()==="POST")retriedEnvelopes.push(route.request().postDataJSON());
     return route.continue();
   });
   await button("c", "focus").click();
@@ -198,7 +200,8 @@ try {
   await closed();
   const before = (await ctx.blockDB.getTaskTimeEntries("a", "ws-1")).length;
   await page.reload();
-  await page.waitForFunction(() => DCCWorkingQueue.getState().foreground[0]?.id === "c");
+  await page.waitForFunction(() => DCCWorkingQueue.getState().foreground[0]?.id === "c" && !localStorage.getItem('dcc-working-queue:ws-1:1:pending') && !document.querySelector('[data-queue-action="retry"]'));
+  assert.ok(retriedEnvelopes.some(body=>JSON.stringify(body)===JSON.stringify(originalEnvelope)),"reload retries the exact persisted command envelope");
   assert.equal((await ctx.blockDB.getTaskTimeEntries("a", "ws-1")).length, before);
   await page.unroute("**/api/working-queue");
   await page.evaluate(() =>

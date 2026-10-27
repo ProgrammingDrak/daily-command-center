@@ -89,11 +89,12 @@ test("Reward Vault groups cards by type and filters by type plus card category",
   assert.doesNotMatch(budgetSource, /data-act="vault-category-menu"/);
 });
 
-test("Slots targets the embedded casino and mobile navigation targets Budget", () => {
+test("Slots targets the embedded casino and mobile navigation keeps Budget reachable beside Queue", () => {
   assert.match(slotsSource, /getElementById\("budget-casino"\)/);
   assert.doesNotMatch(slotsSource, /getElementById\("tab-slots"\)/);
   assert.doesNotMatch(slotsSource, /getElementById\("slots-tab-btn"\)/);
-  assert.match(mobileSource, /key:"budget",\s+label:"Budget",\s+icon:"💰"/);
+  assert.match(mobileSource, /key:"working-queue",\s+label:"Queue"/);
+  assert.match(mobileSource, /label:"Budget",\s+tab:"budget"/);
   assert.doesNotMatch(mobileSource, /activateTab\("slots"\)/);
 });
 

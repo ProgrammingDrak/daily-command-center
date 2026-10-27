@@ -1287,6 +1287,13 @@ async function propagateResponsibilityDone({ id, before, after, at, date, client
       return;
     }
 
+    // Deferred completion effects can replay after a process dies between commit
+    // and delivery. Preserve the original undo timestamp on that exact replay.
+    if (nowDone && defProps.completionUndoable && defProps.lastCompletedTaskId === id &&
+        Date.parse(defProps.lastCompletedAt || "") === Date.parse(afterProps.completedAt || at)) {
+      if (ownsTransaction) await q.query("COMMIT");
+      return;
+    }
     const next = nowDone
       ? recurrence.applyCompletion(defProps, { completedAt: afterProps.completedAt || at, taskId: id })
       // `date` is the block's date COLUMN, threaded in from the caller. Reading it

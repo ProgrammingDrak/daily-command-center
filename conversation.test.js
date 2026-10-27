@@ -175,13 +175,14 @@ test("account conversation persistence, race, rollback, corrections and OAuth", 
         }
       }
     });
+    const sessionsBeforeFailure=(await store.get("a",owner)).sessions;
     await assert.rejects(
       broken.execute(cmd("start", "b", revision, "interrupted", "2026-10-20T15:10:00Z"), owner),
       /synthetic interrupt/
     );
     assert.equal((await store.state(owner)).foreground[0].id, "a");
     assert.equal((await store.state(owner)).revision, revision);
-    assert.equal((await store.get("a", owner)).sessions.length, 1);
+    assert.deepEqual((await store.get("a", owner)).sessions, sessionsBeforeFailure);
     const retry = await store.execute(cmd("start", "b", revision, "interrupted", "2026-10-20T15:10:00Z"), owner);
     assert.equal(retry.state.foreground[0].id, "b");
     const entry = (await store.get("a", owner)).sessions.at(-1),
