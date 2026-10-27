@@ -1,6 +1,6 @@
 # Private workout Plan & Log
 
-Workout rows expose Plan & Log inline and from Workouts & meals. Quick Add exposes workout and meal logging; creation, reuse and Make repeat retain the selected duration. Conversion reports success only after the stored task type is acknowledged.
+Workout titles in the itinerary list and timeline, generic details, and Workouts & meals open the dedicated Plan & track view. Targets and actual inputs appear together without expanding notes or per-exercise panels. Supersets render each round with its movements together. Edit plan & tools retains the existing builder, manual timing, guidance, template, and recovery actions; Task details retains canonical/local task identity. Quick Add exposes workout and meal logging; creation, reuse and Make repeat retain the selected duration. Conversion reports success only after the stored task type is acknowledged.
 
 The planner separates planned targets, previous confirmed performance and actual results. Canonical catalog IDs are separate from session entry/target IDs; legacy names and IDs remain unchanged. Ordered single, superset and circuit groups support rounds, per-round targets and explicit measurement conventions. Log set confirms actuals; typing, saving plans, starting timers and skipping do not create results. Blank measurements remain unknown and explicit zero is valid. The plan baseline freezes on start or the first result.
 
@@ -31,3 +31,9 @@ Before v2 writes, reverting code can leave unused additive schema in place. Undo
 ## Separate connector plan
 
 See fitness-integration-plan.md and the fictional fitness-preview fixtures. Strava/Health Connect integration is deferred. No new OAuth grant, SDK permission, credential or health upload is enabled by this feature. Run metrics, source provenance, consent and deduplication need separate provider authorization.
+
+## Direct workout acceptance
+
+Optional `repsMax` extends planned v2 targets only; actual reps remain exact. Existing payloads retain their prior normalized shape. Rep ranges survive plans, baselines, round expansion, templates and CSV exports. Reopening a clean controller refreshes saved records; unsaved actual drafts retain their revision guard. Every pre-existing actual row remains visible even if historical data contains multiple results for one target.
+
+`node scripts/verify-direct-workout.mjs http://127.0.0.1:8198` requires the explicitly synthetic activity review backend. It creates separate canonical exercise IDs per run and covers the 170/175/180 lb bench targets, four OHP/curl superset rounds, real recorded comparison fixtures, local/canonical ID navigation, save/reload, conflicts, exact retries, no task completion, and mobile widths down to 320 px. It never writes live data.

@@ -1365,7 +1365,7 @@ test("the modal's row id is SET from the anchor and CLEARED on close", () => {
   // harness as uncovered: without the clear, the NEXT modal's tag/title/flag writes target
   // the PREVIOUS row, which is a cross-task write.
   const featuresSource = fs.readFileSync(require.resolve("./public/js/features.js"), "utf8");
-  const open = mustSlice(featuresSource, /^function openAddModal\(taskId, taskTitle\) \{[\s\S]*?\n\}/m, "openAddModal");
+  const open = mustSlice(featuresSource, /^function openAddModal\(taskId, taskTitle(?:, options)?\) \{[\s\S]*?\n\}/m, "openAddModal");
   assert.ok(/taskAnchorById/.test(open), "openAddModal must resolve through the shared anchor, not scheduled[] alone");
   assert.ok(/_addModalBlockId = \(anchor && anchor\.blockId\) \|\| null;/.test(open),
     "and stamp the row id, or every write helper below falls back to a cache search that misses a carryover");
