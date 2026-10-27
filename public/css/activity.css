@@ -71,3 +71,8 @@
 .wp-guidance>.wp-toolbar{position:sticky;bottom:0;padding:8px;background:var(--surface-raised);border-top:1px solid var(--line);z-index:1}.wp-guidance>.wp-toolbar button{flex:1}.wp-movement-card{background:var(--surface-raised);border-color:var(--line-subtle)}
 
 @media(max-width:700px){.wp-dialog .dcc-overlay-body{padding:8px}.wp-movers{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.wp-movers button{min-width:0;overflow-wrap:normal;word-break:normal}.wp-movers button:last-child:nth-child(odd){grid-column:1/-1}.wp-guidance{padding:14px}.wp-guidance>.wp-toolbar{padding-inline:0;gap:4px}.wp-guidance>.wp-toolbar button{margin:2px;padding:8px;white-space:nowrap}}
+
+/* Workout task opens with targets and explicit actuals together. */
+.wp-set-row{display:grid;grid-template-columns:minmax(150px,1fr) minmax(240px,1.5fr) minmax(140px,.8fr);gap:20px;border-top:1px solid var(--line-subtle);padding:16px 0;align-items:start}
+.wp-quick-inputs{display:grid;grid-template-columns:1fr 1fr 80px;gap:8px}.wp-set-row .wp-toolbar{margin:4px 0}.wp-set-row .wp-label{margin-top:0}.wp-set-row p{margin:8px 0}.wp-round h4{margin:12px 0}.wp-set-heading,.wp-actual-fields,.wp-previous{min-width:0;overflow-wrap:anywhere}.wp-tracking-group{background:var(--surface-raised)}.wp-top h2{margin:0}.wp-previous{color:var(--ink-muted);font-size:13px}
+@media(max-width:700px){.wp-set-row{grid-template-columns:1fr;gap:8px;padding:16px 0}.wp-quick-inputs{grid-template-columns:1fr 1fr 72px;gap:6px}.wp-set-row .wp-field{margin:4px 0}.wp-set-row .wp-toolbar button{flex:1}.wp-previous{border-left:2px solid var(--line-subtle);padding-left:8px}.wp-dialog .workout-planner{padding:4px}.wp-tracking-group{padding:10px}.wp-dialog input,.wp-dialog select{font-size:16px}}
