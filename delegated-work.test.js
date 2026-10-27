@@ -152,7 +152,7 @@ test(
       store.execute(await command(action, delegation, extra), owner);
     await t.test("delegated reports have RLS and no public table grants", async () => {
       const privacy = (
-        await ctx.pool.query("SELECT relrowsecurity,relacl FROM pg_class WHERE oid='delegated_work'::regclass")
+        await ctx.pool.query("SELECT relrowsecurity,relacl::text[] AS relacl FROM pg_class WHERE oid='delegated_work'::regclass")
       ).rows[0];
       assert.equal(privacy.relrowsecurity, true);
       assert.ok(!(privacy.relacl || []).some((acl) => acl.startsWith("=")), "PUBLIC receives no report privileges");
@@ -311,6 +311,53 @@ test(
         await assert.rejects(send("delegated-update", report({ work: identity, sequence: 2 })), { statusCode: 410 });
       }
     );
+    await t.test("concurrent registrations and retries cannot duplicate canonical work", async () => {
+      const identity = { ...work, id: "concurrent-work" };
+      const first = await command(
+        "delegated-register",
+        report({
+          work: identity,
+          intent: "explicit-work-handoff",
+          title: "Concurrent delegated request",
+          createIfMissing: true
+        })
+      );
+      const second = { ...first, sourceEventId: uid() };
+      const results = await Promise.allSettled([store.execute(first, owner), store.execute(second, owner)]);
+      assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+      const failure = results.find((r) => r.status === "rejected");
+      assert.equal(failure.reason.statusCode, 409);
+      const rejected = results[0].status === "rejected" ? first : second;
+      const resumed = await store.execute(
+        { ...rejected, expectedRevision: (await store.state(owner)).revision },
+        owner
+      );
+      assert.equal(resumed.delegated.reused, true);
+      const count = (
+        await ctx.pool.query("SELECT count(*)::int AS n FROM delegated_work WHERE work_key=$1", [
+          require("./lib/delegated-work").keyFor(identity)
+        ])
+      ).rows[0].n;
+      assert.equal(count, 1);
+      assert.equal(resumed.task.properties.actualMinutes, undefined);
+      const foreign = await store.state({ userId: 2, workspaceId: "ws-2" });
+      assert.ok(!foreign.queue.items.some((i) => i.task.id === resumed.task.id));
+      await store.execute(
+        {
+          action: "queue-remove",
+          taskId: resumed.task.id,
+          sourceEventId: uid(),
+          expectedRevision: (await store.state(owner)).revision,
+          at: new Date(time).toISOString()
+        },
+        owner
+      );
+      await send(
+        "delegated-update",
+        report({ work: identity, sequence: 2, note: "Progress after human removed this task from queue" })
+      );
+      assert.ok(!(await store.state(owner)).queue.items.some((i) => i.task.id === resumed.task.id));
+    });
     await t.test("coding closed but deployment blocked remains Needs You, parent nesting stays explicit", async () => {
       await make("umbrella");
       const coding = codingIdentity({
