@@ -197,17 +197,42 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   assert.equal(r.status, 200);
   result = await rpc("tools/call", { name: "dcc_working_queue", arguments: {} });
   assert.equal(result.body.result.structuredContent.queue.items[0].note, "Updated from UI");
-  result = await rpc("tools/call", {
-    name: "dcc_queue",
-    arguments: { ...args, action: "done", sourceEventId: "not-allowed" }
-  });
-  assert.equal(result.body.result.isError, true, "queue scope cannot grant completion");
+  const completionAttempt = async (name, error) => {
+    const state = (await mounted.store.state({userId:1,workspaceId:"ws-1"}));
+    const response = await rpc("tools/call", {name,arguments:{...args,action:"done",sourceEventId:crypto.randomUUID(),expectedRevision:state.revision,at:"2026-10-20T13:10:00Z"}});
+    assert.equal(response.body.result.isError,true);
+    assert.equal(JSON.parse(response.body.result.content[0].text).error,error);
+    assert.equal((await ctx.blockDB.getBlock("http-task")).properties.status,"open");
+    assert.equal((await mounted.store.state({userId:1,workspaceId:"ws-1"})).revision,state.revision);
+  };
+  await completionAttempt("dcc_queue", "Unsupported queue action");
   const priorQueue=(await rpc('tools/call',{name:'dcc_working_queue',arguments:{}})).body.result.structuredContent;
   result=await rpc('tools/call',{name:'dcc_delegate',arguments:{action:'delegated-register',sourceEventId:'http-delegate',expectedRevision:priorQueue.revision,at:'2026-10-20T13:03:00Z',taskId:'http-task',delegation:{work:{source:'test',id:'http-work',kind:'research'},sequence:1,phase:'needs-review',note:'Research is ready for your review',reviewActions:['Review the findings'],intent:'explicit-work-handoff'}}});
   assert.equal(result.body.result.isError,false);
   r=await call('/api/working-queue',{headers:{cookie}});const reported=await r.json();
   assert.equal(reported.queue.items[0].needsReview,true);assert.equal(reported.queue.items[0].status,'foreground','reporting must not steal human focus');
-  result=await rpc('tools/call',{name:'dcc_delegate',arguments:{...args,action:'done'}});assert.equal(result.body.result.isError,true);
+  await completionAttempt("dcc_delegate", "Unsupported delegated work action");
+  // Write-only grants receive acknowledgements, never read-protected state.
+  await ctx.blockDB.createBlock({id:"unrelated-private",type:"block",user_id:1,workspace_id:"ws-1",properties:{type:"task",kind:"backlog",title:"Unrelated private context",detail:"must not leak",status:"open"}});
+  await mounted.store.execute({action:"queue-add",taskId:"unrelated-private",sourceEventId:"private-fixture",expectedRevision:reported.revision,at:"2026-10-20T13:04:00Z"},{userId:1,workspaceId:"ws-1"});
+  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1",[JSON.stringify(["dcc.delegate","dcc.work"])]);
+  const writeOnly={action:"delegated-update",sourceEventId:"write-only",expectedRevision:(await mounted.store.state({userId:1,workspaceId:"ws-1"})).revision,at:"2026-10-20T13:05:00Z",delegation:{work:{source:"test",id:"http-work",kind:"research"},sequence:2,phase:"working",note:"Applying the requested research revision",reviewActions:[]}};
+  for (const duplicate of [false,true]) {
+    result=await rpc("tools/call",{name:"dcc_delegate",arguments:writeOnly});
+    const ack=result.body.result.structuredContent;
+    assert.equal(result.body.result.isError,false);
+    assert.deepEqual(Object.keys(ack).sort(),["duplicate","ok","revision","sourceEventId","taskId"]);
+    assert.equal(ack.duplicate,duplicate);assert.equal(ack.taskId,"http-task");
+    assert.equal(ack.revision,writeOnly.expectedRevision+1);
+    assert.deepEqual(JSON.parse(result.body.result.content[0].text),ack);
+    assert.ok(!JSON.stringify(result.body).includes("must not leak"));
+  }
+  result=await rpc("tools/call",{name:"dcc_working_queue",arguments:{}});assert.equal(result.status,403);
+  // The response filter also applies to pre-existing work tools and replay.
+  result=await rpc("tools/call",{name:"dcc_work",arguments:args});
+  assert.deepEqual(Object.keys(result.body.result.structuredContent).sort(),["duplicate","ok","revision","sourceEventId","taskId"]);
+  assert.equal(result.body.result.structuredContent.duplicate,true);
+  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1",[JSON.stringify(["dcc.read","dcc.work","dcc.delegate"])]);
   result = await rpc("tools/list", {}, { origin: "https://evil.example" });
   assert.equal(result.status, 403);
   r = await call("/connections/conversation", { headers: { cookie } });

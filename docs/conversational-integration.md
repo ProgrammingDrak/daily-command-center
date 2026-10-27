@@ -51,7 +51,7 @@ Official platform references checked October 27, 2026:
 
 ## MVP boundaries and follow-up
 
-- Existing task operations only: no automatic task creation, reopening, recurrence materialization, or general-purpose account write tool. A recurring definition must resolve to its existing occurrence before starting. Guided outcomes still use their existing explicit completion flow.
+- Existing work/queue tools operate on existing tasks. Explicit delegated handoffs can link/create tasks through the separately scoped `dcc_delegate` tool; see [delegated work reporting](delegated-work.md). No automatic reopening, recurrence materialization, or general-purpose account write tool is provided. A recurring definition must resolve to its existing occurrence before starting. Guided outcomes still use their existing explicit completion flow.
 - Calendar reads use the account's existing DCC snapshot and materialized meeting identities; they do not refresh Google Calendar. Missing/ambiguous meeting identities fail closed.
 - Tokens are for workspace owners in this MVP; delegated/editor permissions are not inferred.
 - One foreground task spans the account. A token scoped to one workspace refuses to mutate an active task in another workspace; pause that task through its own authorized connection first.
@@ -70,3 +70,5 @@ Local verification uses the existing `test-support/activity-db` harness. `DCC_TE
 - Browser QA: fresh synthetic account, consent scopes/account identity, Cancel with no connection, Allow, connection review, Disconnect, and an isolated second synthetic account were exercised in Chrome. The harness used an in-memory database and fake callback with no token exchange. No real consent was granted. Production Clerk signup/login and actual ChatGPT connection remain canary steps.
 
 Validation artifacts are in the task workspace's `conversation-evidence/` directory, outside the repository. An independent five-lane code review and separate verification pass have been completed; see `docs/conversational-integration-review.md`. No production or actual ChatGPT connection canary has been performed. This is not a third-party penetration-test certification.
+
+Write-only OAuth grants receive a minimal acknowledgement (event ID, canonical task ID when applicable, revision and replay status). Full state, task rows and private reports require `dcc.read`, including successful write replays.

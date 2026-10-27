@@ -1,6 +1,7 @@
 /* global window, document, localStorage, DCCWorkingQueue, petDeliveries, innerWidth */
 // Isolated PostgreSQL + real API/UI; no .env, live tasks, or shared browser profile.
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import express from "express";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -282,6 +283,22 @@ try {
   assert.match(await page.locator('.wq-needs').innerText(),/Review and send the draft/);
   await page.evaluate(()=>DCCWorkingQueue.tick());
   assert.equal((await task('b')).properties.status,'open');
+  const queueCommand=async(action,extra)=>coordinator.execute({action,sourceEventId:crypto.randomUUID(),expectedRevision:(await coordinator.state(owner)).revision,at:new Date().toISOString(),...extra},owner);
+  await queueCommand('queue-unblock',{taskId:'b'});
+  await page.evaluate(()=>DCCWorkingQueue.refresh());
+  assert.equal(await card('b').count(),1,'queued work needing review appears in only one lane');
+  assert.equal(await page.locator('.wq-next [data-queue-id="b"]').count(),0);
+  await queueCommand('background-start',{taskId:'b',remindMinutes:60});
+  await make('timer-only','Overdue background check');
+  await queueCommand('background-start',{taskId:'timer-only',remindMinutes:1});
+  await due('timer-only');
+  const order=(await coordinator.state(owner)).queue.order;
+  await queueCommand('queue-reorder',{order:['b','timer-only',...order.filter(id=>!['b','timer-only'].includes(id))]});
+  await page.evaluate(()=>{petDeliveries.length=0;});
+  await page.evaluate(()=>DCCWorkingQueue.tick());
+  assert.deepEqual(await page.evaluate(()=>petDeliveries),['Time to check back on Overdue background check.']);
+  const future=(await coordinator.state(owner)).queue.items.find(i=>i.task.id==='b');
+  assert.equal(future.notifiedAt,null,'future check-back is not claimed merely because review is needed');
   await page.setViewportSize({ width: 375, height: 812 });
   await page.screenshot({
     path: process.env.DCC_QUEUE_SCREENSHOT || "/tmp/dcc-working-queue-mobile.png",
@@ -297,6 +314,8 @@ try {
         "explicit tab link and reload",
         "back/forward navigation",
         "delegated review actions without clock changes",
+        "future review timer cannot starve overdue reminders",
+        "review-ready queued task has one card",
         "add",
         "cancel",
         "Escape",

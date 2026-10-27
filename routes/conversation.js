@@ -491,6 +491,16 @@ module.exports = function mount(app, ctx, config = {}) {
             },
             identity.workspaceId
           );
+          // A write grant does not imply permission to read unrelated queue rows,
+          // private reports or audit snapshots, including on idempotent replay.
+          if (!identity.scopes.includes("dcc.read"))
+            result = {
+              ok: result.ok,
+              sourceEventId: result.sourceEventId,
+              ...(result.task?.id ? { taskId: result.task.id } : {}),
+              revision: (result.currentState || result.state).revision,
+              duplicate: result.duplicate === true
+            };
         }
         reply({ content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, isError: false });
       } catch (e) {
