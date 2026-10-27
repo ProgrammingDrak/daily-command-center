@@ -2,7 +2,7 @@
 // opaque tokens. No shared DCC admin token or caller-selected identity is accepted.
 const crypto = require("node:crypto");
 const M = require("./lib/conversation-model");
-const SCOPES = ["dcc.read", "dcc.work", "dcc.correct", "dcc.complete"];
+const SCOPES = ["dcc.read", "dcc.work", "dcc.correct", "dcc.complete", "dcc.delegate"];
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS conversation_grants (
  id TEXT PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id),workspace_id TEXT NOT NULL REFERENCES workspaces(id),

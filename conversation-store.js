@@ -142,6 +142,7 @@ function createConversationStore(ctx) {
     const b = await task(q, id, owner);
     return {
       task: b,
+      delegated:(await q.query('SELECT report FROM delegated_work WHERE user_id=$1 AND workspace_id=$2 AND task_id=$3',[owner.userId,owner.workspaceId,b.id])).rows.map(row=>row.report),
       ...(b.properties.guidedDefinitionId
         ? { guided: await require("./guided-store").createGuidedStore(ctx).get(b.id, owner, q) }
         : {}),
@@ -396,9 +397,12 @@ function createConversationStore(ctx) {
       if (!legacy && before.revision !== b.expectedRevision)
         throw M.fail("Activity changed; read current state before retrying", 409);
       const s = (await q.query("SELECT * FROM conversation_state WHERE user_id=$1 FOR UPDATE", [owner.userId])).rows[0];
-      const clockAction = !b.action.startsWith("queue-") || b.action === "queue-block";
+      const clockAction = (!b.action.startsWith("queue-") && !b.action.startsWith("delegated-")) || b.action === "queue-block";
       if (clockAction && b.action !== "correct" && s.changed_at && M.instant(b.at) < new Date(s.changed_at).getTime())
         throw M.fail("Stale activity event; use a correction", 409);
+      // New child registration follows the hierarchy-before-row lock order used by creation.
+      if (b.action === "delegated-register" && b.delegation.parentTaskId)
+        await q.query("SELECT pg_advisory_xact_lock(hashtext('dcc-task-hierarchy'), hashtext($1))", [String(owner.workspaceId)]);
       // Lock owned rows in a stable order before read/modify/write, also excluding parallel completion.
       await q.query(
         `SELECT id FROM blocks WHERE user_id=$1 AND deleted_at IS NULL AND dcc_is_task_row(type,properties)
@@ -463,6 +467,7 @@ function createConversationStore(ctx) {
         }
       }
       if (b.action === "correct") detail = await correct(q, b, owner, owner.userId + ":" + b.sourceEventId);
+      else if (b.action.startsWith("delegated-")) detail = await require('./lib/delegated-work').apply(q,owner,queue,b,ctx,task);
       else if (b.action.startsWith("queue-") && b.action !== "queue-block") {
         detail = await Q.metadata(q, owner, queue, b, b.taskId ? await task(q, b.taskId, owner) : null, blockDB);
       } else {

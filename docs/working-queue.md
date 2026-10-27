@@ -2,6 +2,8 @@
 
 Working Queue is the working surface; Itinerary remains the plan and actuals. Existing tasks and recurrence occurrences can be added to an ordered queue without changing their schedule, hierarchy, or completion. One task is foreground for the account. Switching brings the selected task forward and puts previous focus at the end of Background. Paused and blocked tasks retain context; an optional check-back makes a background task appear in Needs You.
 
+Normal app entry opens Working Queue. Explicit tab links and navigation history are preserved; opening a view never starts a clock.
+
 ## Bounded first version
 
 - Foreground, Needs You, Up Next, Background/paused, and collapsed Completed sections.
@@ -9,7 +11,7 @@ Working Queue is the working surface; Itinerary remains the plan and actuals. Ex
 - Check-back options: none, 5/15/30 minutes, 2 hours, or 1–1440 custom minutes. Snooze re-arms for five minutes; dismissal clears the reminder and preserves the task.
 - Guided tasks require the current prompt preview before start/resume, and a confirmed outcome before completion. Existing prerequisite and revision guards still apply. Required access observations can be recorded in the existing guided task detail flow; no integrations are automatically approved.
 - Background elapsed time is informational. Only foreground sessions enter the effort ledger. After missed check-ins, effort stops at the existing 50-minute/eight-hour cutoff; the remainder is recorded as an unknown interval in the command audit.
-- These are manual reminders. No external assistant readiness detection, transcript monitoring, or closed-browser notifications are provided.
+- Manual reminders coexist with explicit delegated-work progress reports. Reported review/unblock actions appear in Needs You. No arbitrary external assistant readiness detection, transcript monitoring, installed hook, or closed-browser notifications are provided. See [delegated work reporting](delegated-work.md).
 
 ## One model for UI and GPT
 

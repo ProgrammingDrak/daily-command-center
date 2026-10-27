@@ -51,7 +51,7 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
     client_id: "chatgpt",
     response_type: "code",
     redirect_uri: "https://chatgpt.com/callback",
-    scope: "dcc.read dcc.work",
+    scope: "dcc.read dcc.work dcc.delegate",
     state: "synthetic-state",
     resource: "https://dcc.example/mcp/dcc",
     code_challenge_method: "S256",
@@ -114,6 +114,14 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   result = await rpc("tools/list");
   assert.ok(result.body.result.tools.some((t) => t.name === "dcc_work"));
   assert.ok(!result.body.result.tools.some((t) => t.name === "dcc_correct_time"));
+  assert.ok(result.body.result.tools.some((t) => t.name === "dcc_delegate"));
+  // An already-issued read/work grant does not acquire delegated creation power.
+  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.read", "dcc.work"])]);
+  result = await rpc("tools/list");
+  assert.ok(!result.body.result.tools.some((t) => t.name === "dcc_delegate"));
+  result = await rpc("tools/call", {name:"dcc_delegate", arguments:{}});
+  assert.equal(result.status, 403);
+  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.read", "dcc.work", "dcc.delegate"])]);
   result = await rpc("tools/call", { name: "dcc_correct_time", arguments: {} });
   assert.equal(result.status, 403);
   result = await rpc(
@@ -194,6 +202,12 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
     arguments: { ...args, action: "done", sourceEventId: "not-allowed" }
   });
   assert.equal(result.body.result.isError, true, "queue scope cannot grant completion");
+  const priorQueue=(await rpc('tools/call',{name:'dcc_working_queue',arguments:{}})).body.result.structuredContent;
+  result=await rpc('tools/call',{name:'dcc_delegate',arguments:{action:'delegated-register',sourceEventId:'http-delegate',expectedRevision:priorQueue.revision,at:'2026-10-20T13:03:00Z',taskId:'http-task',delegation:{work:{source:'test',id:'http-work',kind:'research'},sequence:1,phase:'needs-review',note:'Research is ready for your review',reviewActions:['Review the findings'],intent:'explicit-work-handoff'}}});
+  assert.equal(result.body.result.isError,false);
+  r=await call('/api/working-queue',{headers:{cookie}});const reported=await r.json();
+  assert.equal(reported.queue.items[0].needsReview,true);assert.equal(reported.queue.items[0].status,'foreground','reporting must not steal human focus');
+  result=await rpc('tools/call',{name:'dcc_delegate',arguments:{...args,action:'done'}});assert.equal(result.body.result.isError,true);
   result = await rpc("tools/list", {}, { origin: "https://evil.example" });
   assert.equal(result.status, 403);
   r = await call("/connections/conversation", { headers: { cookie } });

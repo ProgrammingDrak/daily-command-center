@@ -10,7 +10,9 @@ const descriptions = {
   "dcc.read": "Find current, completed, and recurring tasks; read timing and audit history.",
   "dcc.work": "Start and pause focused work; track background processing separately.",
   "dcc.correct": "Correct time allocation, including existing calendar meetings and unknown intervals.",
-  "dcc.complete": "Mark an explicitly selected task complete."
+  "dcc.complete": "Mark an explicitly selected task complete.",
+  "dcc.delegate":
+    "Link or create explicitly delegated tasks and report background progress or human review needs; never start focus or send external messages."
 };
 const envelope = {
   sourceEventId: {
@@ -21,6 +23,51 @@ const envelope = {
   at: { type: "string", description: "User-confirmed instant with explicit timezone offset." }
 };
 const tools = [
+  {
+    name: "dcc_delegate",
+    description:
+      "Register or update an explicit delegated work handoff (coding, email draft, research, small job). Never register hypothetical discussion, status questions or artifact retrieval. Reuse stable source+work ID; resolve/link an existing canonical task before allowing creation. Working/reporting never credits foreground effort. Deliverables requiring review/send/approval/deploy use needs-review or blocked with concise reviewActions. Completed is accepted only after the canonical task was explicitly completed with dcc_complete_task. No external message is sent and review status grants no permission. Preserve exact sourceEventId, at and envelope on transport retry; sequence increases only on meaningful progress.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        ...envelope,
+        action: { enum: ["delegated-register", "delegated-update"] },
+        taskId: { type: "string" },
+        delegation: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            work: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                source: { type: "string" },
+                id: { type: "string" },
+                kind: { enum: ["coding", "email-draft", "research", "other"] },
+                repository: { type: "string" },
+                worktreeId: { type: "string" },
+                codingTaskId: { type: "string" }
+              },
+              required: ["source", "id", "kind"]
+            },
+            sequence: { type: "integer", minimum: 1 },
+            phase: { enum: ["working", "paused", "blocked", "needs-review", "completed"] },
+            note: { type: "string", maxLength: 1000 },
+            reviewActions: { type: "array", maxItems: 5, items: { type: "string", maxLength: 240 } },
+            intent: { enum: ["explicit-work-handoff"] },
+            createIfMissing: { type: "boolean" },
+            title: { type: "string", maxLength: 200 },
+            parentTaskId: { type: "string" }
+          },
+          required: ["work", "sequence", "phase", "note", "reviewActions"]
+        }
+      },
+      required: ["action", "sourceEventId", "expectedRevision", "at", "delegation"]
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+  },
+
   {
     name: "dcc_working_queue",
     description:
@@ -182,13 +229,15 @@ const tools = [
   }
 ];
 const scopeFor = (name) =>
-  name === "dcc_work" || name === "dcc_queue"
-    ? "dcc.work"
-    : name === "dcc_correct_time"
-      ? "dcc.correct"
-      : name === "dcc_complete_task"
-        ? "dcc.complete"
-        : "dcc.read";
+  name === "dcc_delegate"
+    ? "dcc.delegate"
+    : name === "dcc_work" || name === "dcc_queue"
+      ? "dcc.work"
+      : name === "dcc_correct_time"
+        ? "dcc.correct"
+        : name === "dcc_complete_task"
+          ? "dcc.complete"
+          : "dcc.read";
 module.exports = function mount(app, ctx, config = {}) {
   const enabled =
     config.enabled ??
@@ -415,7 +464,9 @@ module.exports = function mount(app, ctx, config = {}) {
           ].includes(args.action)
         )
           throw M.fail("Unsupported queue action");
-        if (["dcc_queue", "dcc_work", "dcc_complete_task", "dcc_correct_time"].includes(name)) {
+        if (name === "dcc_delegate" && !["delegated-register", "delegated-update"].includes(args.action))
+          throw M.fail("Unsupported delegated work action");
+        if (["dcc_delegate", "dcc_queue", "dcc_work", "dcc_complete_task", "dcc_correct_time"].includes(name)) {
           result = await store.execute(
             {
               ...args,

@@ -52,8 +52,8 @@ app.get("/fixture/tasks", async (_req, res) =>
 );
 app.get("/", (_req, res) =>
   res.type("html")
-    .send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"></head><body style="padding:20px"><button class="tab" data-tab="working-queue">Working Queue</button><div id="working-queue-root"></div><div id="toast-container"></div>
-<script>window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:'ws-1'};</script><script src="/public/js/core.js"></script><script src="/public/js/core-ui.js"></script><script src="/public/js/task-types.js"></script><script src="/public/js/task-model.js"></script>
+    .send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"></head><body style="padding:20px"><button class="tab" data-tab="schedule">Itinerary</button><button class="tab active" data-tab="working-queue">Working Queue</button><button class="tab" data-tab="budget">Budget</button><div class="tab-content" id="tab-schedule">Itinerary fixture</div><div class="tab-content active" id="tab-working-queue"><div id="working-queue-root"></div></div><div class="tab-content" id="tab-budget">Budget fixture</div><div id="toast-container"></div>
+<script>window.addActionItem=()=>{};window.closeNotesDrawer=()=>{};window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:'ws-1'};</script><script src="/public/js/core.js"></script><script src="/public/js/core-ui.js"></script><script src="/public/js/task-types.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/tabs.js"></script>
 <script>window.scheduled=[];window.backlog=[];window.fixtureRows=[];window.isDone=t=>t.status==='done';window.render=()=>{};
 window.blockStore={get:id=>fixtureRows.find(r=>r.id===id),getByType:()=>fixtureRows,acceptWorkRotation:rows=>{for(const row of rows){const i=fixtureRows.findIndex(r=>r.id===row.id);if(i>=0)fixtureRows[i]=row;else fixtureRows.push(row);}scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));}};
 window.fixtureLoad=async()=>{fixtureRows=await fetch('/fixture/tasks').then(r=>r.json());scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));};window.petDeliveries=[];DCC.PetNudge={deliverWorkCheckIn:async(text,options)=>{petDeliveries.push(text);DCC.toast(text,'info',60000,{label:'Open queue',onClick:options.open});}};
@@ -100,6 +100,14 @@ const due = async (id) =>
 try {
   await page.goto(base);
   await page.waitForSelector(".wq-focus");
+  assert.equal(await page.locator('.tab.active').getAttribute('data-tab'),'working-queue');
+  await page.locator('.tab[data-tab="schedule"]').click();await page.locator('.tab[data-tab="budget"]').click();
+  await page.goBack();assert.equal(await page.locator('.tab.active').getAttribute('data-tab'),'schedule');
+  await page.goBack();assert.equal(await page.locator('.tab.active').getAttribute('data-tab'),'working-queue');
+  await page.goto(base+'/?tab=schedule');assert.equal(await page.locator('.tab.active').getAttribute('data-tab'),'schedule');
+  await page.reload();assert.equal(await page.locator('.tab.active').getAttribute('data-tab'),'schedule');
+  await page.goto(base);await page.waitForSelector('.wq-focus');
+  assert.equal((await task('a')).properties.startedAt,at,'default navigation never starts or changes a timer');
   await add(["b", "c"]);
   await button("b", "focus").click();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -266,6 +274,13 @@ try {
   assert.equal(await page.evaluate(()=>window.fixturePreview),'b');
   assert.equal((await task('b')).properties.startedAt,undefined,'workspace details do not start a clock');
   await page.evaluate(()=>{delete window.DCCTaskWorkspace;});
+  const coordinator=require('../conversation-store').createConversationStore(ctx),owner={userId:1,workspaceId:'ws-1'};
+  await coordinator.execute({action:'delegated-register',taskId:'b',sourceEventId:'fixture-review',expectedRevision:(await coordinator.state(owner)).revision,at:new Date().toISOString(),delegation:{work:{source:'codex',id:'fixture-draft',kind:'email-draft'},sequence:1,phase:'needs-review',note:'Draft ready; not sent',reviewActions:['Review and send the draft'],intent:'explicit-work-handoff'}},owner);
+  await page.evaluate(()=>DCCWorkingQueue.refresh());
+  assert.match(await page.locator('.wq-needs').innerText(),/Draft ready; not sent/);
+  assert.match(await page.locator('.wq-needs').innerText(),/Review and send the draft/);
+  await page.evaluate(()=>DCCWorkingQueue.tick());
+  assert.equal((await task('b')).properties.status,'open');
   await page.setViewportSize({ width: 375, height: 812 });
   await page.screenshot({
     path: process.env.DCC_QUEUE_SCREENSHOT || "/tmp/dcc-working-queue-mobile.png",
