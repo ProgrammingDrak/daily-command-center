@@ -669,6 +669,8 @@ async function setTaskCompletion({
   };
   try {
     if (!transactionClient) await q.query("BEGIN");
+    if (process.env.DCC_CONVERSATION_ENABLED === "true" && userId != null)
+      await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["dcc-foreground:" + userId]);
     if (transactionLockKey) {
       await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [transactionLockKey]);
     }
@@ -1044,7 +1046,7 @@ async function updateBlock(id, fields, client) {
     // Activity state is server-owned once the account coordinator is enabled.
     // A stale offline property bag must never revive or erase a foreground timer.
     if (process.env.DCC_CONVERSATION_ENABLED === "true" && !fields[require("./lib/conversation-model").TIMING_WRITE]) {
-      for (const key of ["startedAt", "activeWorkSessionId", "startedBy", "workStateChangedAt", "workStateOperationId", "actualMinutes", "actualMinutesFrom", "actualTimeUnknown"]) {
+      for (const key of ["startedAt", "activeWorkSessionId", "startedBy", "workCheckInAt", "workCheckInCount", "workCheckInBy", "workStateChangedAt", "workStateOperationId", "actualMinutes", "actualMinutesFrom", "actualTimeUnknown"]) {
         if (existingProps[key] === undefined) delete newProps[key]; else newProps[key] = existingProps[key];
       }
     }

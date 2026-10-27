@@ -144,7 +144,7 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       createBlock: input => blockDB.createBlock(input, q),
       getTaskTimeEntries: (id, ws, opts) => blockDB.getTaskTimeEntries(id, ws, opts, q),
       ensureDayRoot: (date, userId, ws) => blockDB.ensureDayRoot(date, userId, ws, q) };
-    return createTaskTiming({ pool: q, blockDB: db, timeZone: APP_TIME_ZONE });
+    return createTaskTiming({ pool: q, blockDB: db, timeZone: APP_TIME_ZONE, transactionClient: q });
   }
   async function act(id, body, owner, transactionClient = null, transitionAtMs = null) {
     const expected = M.revision(body.expectedRevision), operationId = M.id(body.operationId);
@@ -174,6 +174,8 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
     const hash = crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
     let propagation = [], broadcastIds=[id];
     const result = await tx(async q => {
+      if (process.env.DCC_CONVERSATION_ENABLED === "true")
+        await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["dcc-foreground:" + owner.userId]);
       const b = await readTask(q, id, owner, true), d = await readDefinition(q, b.properties.guidedDefinitionId, owner), old = await readSession(q, id, owner);
       const prior = old?.session;
       const replay = prior?.events.find(e => e.operationId === operationId);

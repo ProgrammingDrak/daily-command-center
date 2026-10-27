@@ -1,4 +1,5 @@
 const express = require("express");
+const { createIngress, createBudget, limited } = require("../lib/conversation-limits");
 const crypto = require("node:crypto");
 const { createOAuth, SCOPES } = require("../conversation-oauth");
 const { createConversationStore } = require("../conversation-store");
@@ -150,6 +151,8 @@ module.exports = function mount(app, ctx, config = {}) {
     config.enabled ??
     (process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false");
   if (!enabled) return null;
+  app.use(createIngress(config.limits));
+  const accountBudget = createBudget({ limit: 120, ...config.limits?.account });
   const oauth = createOAuth({
     pool: ctx.pool,
     baseUrl: config.baseUrl || process.env.DCC_CONVERSATION_URL,
@@ -183,7 +186,7 @@ module.exports = function mount(app, ctx, config = {}) {
       "Content-Security-Policy",
       "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
     );
-    res.set("Referrer-Policy", "no-referrer");
+    res.set("Referrer-Policy", "same-origin");
     res
       .type("html")
       .send(
@@ -309,6 +312,7 @@ module.exports = function mount(app, ctx, config = {}) {
         );
         throw e;
       }
+      if (!accountBudget(String(identity.userId))) return limited(res);
       if (req.method !== "POST") return res.status(405).set("Allow", "POST").end();
       const b = req.body;
       if (!b || Array.isArray(b) || b.jsonrpc !== "2.0" || typeof b.method !== "string")

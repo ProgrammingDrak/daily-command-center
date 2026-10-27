@@ -96,10 +96,11 @@ test("account conversation persistence, race, rollback, corrections and OAuth", 
   });
   await t.test("background effort is distinct and no-timer done retains unknown actuals", async () => {
     let revision = (await store.state(owner)).revision;
+    const priorForeground = (await store.state(owner)).foreground.filter((row) => row.id !== "b");
     await store.execute(cmd("background-start", "b", revision, "background", "2026-10-20T13:25:00Z"), owner);
     const before = await store.get("b", owner);
     assert.equal(before.background.length, 1);
-    assert.equal(before.foreground.length, 0);
+    assert.deepEqual(before.foreground, priorForeground);
     revision = (await store.state(owner)).revision;
     await store.execute(cmd("background-stop", "b", revision, "background-stop", "2026-10-20T13:35:00Z"), owner);
     assert.equal((await store.get("b", owner)).task.properties.actualMinutes, before.task.properties.actualMinutes);
@@ -210,6 +211,13 @@ test("account conversation persistence, race, rollback, corrections and OAuth", 
         properties: { ...(await ctx.blockDB.getBlock("b")).properties, startedAt: "2026-10-20T15:10:00Z" }
       });
       assert.equal((await store.state(owner)).foreground.length, 1);
+      const prior = (await ctx.blockDB.getBlock("a")).properties;
+      await ctx.blockDB.updateBlock("a", {
+        properties: { ...prior, workCheckInAt: "2026-10-20T23:00:00Z", workCheckInCount: 999 }
+      });
+      const after = (await ctx.blockDB.getBlock("a")).properties;
+      assert.equal(after.workCheckInAt, prior.workCheckInAt);
+      assert.equal(after.workCheckInCount, prior.workCheckInCount);
     } finally {
       delete process.env.DCC_CONVERSATION_ENABLED;
     }

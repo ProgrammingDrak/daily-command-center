@@ -67,6 +67,7 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   assert.match(html, /Allow access/);
   assert.match(html, /Synthetic 1/);
   assert.match(r.headers.get("content-security-policy"), /frame-ancestors 'none'/);
+  assert.equal(r.headers.get("referrer-policy"), "same-origin");
   const csrf = /name="csrf" value="([^"]+)"/.exec(html)[1];
   const consent = (token, origin = "https://dcc.example") =>
     call("/oauth/dcc/authorize", {

@@ -124,6 +124,9 @@ const VAULT_SENSITIVE_PIN = process.env.VAULT_SENSITIVE_PIN || null;
 let vault = null;
 let syncMgr = null;
 
+if (process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false")
+  app.use(require("./lib/conversation-limits").createIngress());
+
 // verify callback stashes the raw body so the Slack Events route can HMAC it
 // (express.json otherwise consumes the stream before any route runs).
 app.use(express.json({ limit: "5mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));

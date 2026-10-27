@@ -1,4 +1,5 @@
 const M = require("./lib/conversation-model");
+const meetingIdentity = require("./meeting-identity");
 const createTiming = require("./lib/task-timing");
 const { splitSessionByLocalDay, entryWindow, isBlockDone } = createTiming;
 const FOREGROUND_INDEX_SQL = `CREATE UNIQUE INDEX IF NOT EXISTS conversation_one_foreground_per_user ON blocks(user_id) WHERE deleted_at IS NULL AND user_id IS NOT NULL AND properties->>'startedAt' IS NOT NULL AND dcc_is_task_row(type,properties)`;
@@ -11,6 +12,7 @@ CREATE TABLE IF NOT EXISTS conversation_events (
  request_hash TEXT NOT NULL, command JSONB NOT NULL, before_state JSONB NOT NULL, result JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
  PRIMARY KEY(user_id,source_event_id)
 );
+CREATE INDEX IF NOT EXISTS conversation_events_history ON conversation_events(user_id,workspace_id,created_at DESC);
 CREATE TABLE IF NOT EXISTS conversation_background (
  user_id INTEGER NOT NULL REFERENCES users(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id), task_id TEXT NOT NULL REFERENCES blocks(id),
  started_at TIMESTAMPTZ NOT NULL, PRIMARY KEY(user_id,task_id)
@@ -75,14 +77,17 @@ function createConversationStore(ctx) {
       [owner.userId]
     );
     const background = await q.query(
-      "SELECT task_id,started_at FROM conversation_background WHERE user_id=$1 AND workspace_id=$2",
+      `SELECT bg.task_id,bg.started_at,b.properties FROM conversation_background bg JOIN blocks b ON b.id=bg.task_id
+       WHERE bg.user_id=$1 AND bg.workspace_id=$2 AND b.user_id=$1 AND b.workspace_id=$2 AND b.deleted_at IS NULL`,
       [owner.userId, owner.workspaceId]
     );
     return {
       revision: s.rows[0]?.revision || 0,
       foreground: active.rows.filter((r) => r.workspace_id === owner.workspaceId),
       otherWorkspaceForeground: active.rows.some((r) => r.workspace_id !== owner.workspaceId),
-      background: background.rows,
+      background: background.rows
+        .filter((r) => !isBlockDone(r))
+        .map(({ task_id, started_at }) => ({ task_id, started_at })),
       timeZone
     };
   }
@@ -153,7 +158,7 @@ function createConversationStore(ctx) {
     const events = new Map();
     for (const row of rows)
       for (const e of [...(row.state_json.meetings || []), ...(row.state_json.schedule?.timeline || [])]) {
-        const id = e.source_id || e.event_id || e.gcal_event_id || e.id;
+        const id = meetingIdentity(e);
         if (id && (e.type === "meeting" || e.source === "calendar" || (row.state_json.meetings || []).includes(e)))
           events.set(String(id), {
             calendarEventId: String(id),
@@ -198,7 +203,11 @@ function createConversationStore(ctx) {
     const found = [];
     for (const row of states.rows)
       for (const m of [...(row.state_json.meetings || []), ...(row.state_json.schedule?.timeline || [])]) {
-        if ([m.source_id, m.event_id, m.gcal_event_id, m.id].includes(eventId)) found.push(m);
+        if (
+          meetingIdentity(m) === eventId &&
+          (m.type === "meeting" || m.source === "calendar" || (row.state_json.meetings || []).includes(m))
+        )
+          found.push(m);
       }
     if (!found.length) throw M.fail("Calendar occurrence not found in this account; refresh calendar data", 404);
     return { eventId, title: found[0].title || found[0].summary || "Meeting", blockId: null };
@@ -227,9 +236,17 @@ function createConversationStore(ctx) {
     let cursor = window.startMs;
     if (!cursor || window.durSec > 36 * 3600) throw M.fail("Source interval is not correctable");
     const touched = new Map(),
+      priorTotals = new Map(),
       created = [];
-    if (source.properties.blockId)
-      touched.set(source.properties.blockId, await task(q, source.properties.blockId, owner));
+    async function remember(item) {
+      if (touched.has(item.id)) return;
+      touched.set(item.id, item);
+      const sessions = (await blockDB.getTaskTimeEntries(item.id, owner.workspaceId, {}, q)).filter(
+        (r) => r.user_id === owner.userId
+      );
+      priorTotals.set(item.id, timingFor(ctx, q, owner).sessionTotalMinutes(sessions));
+    }
+    if (source.properties.blockId) await remember(await task(q, source.properties.blockId, owner));
     for (const part of b.parts) {
       const start = M.instant(part.start),
         end = M.instant(part.end);
@@ -240,13 +257,13 @@ function createConversationStore(ctx) {
         meeting = null;
       if (part.kind === "focused") {
         target = await task(q, part.taskId, owner);
-        touched.set(target.id, target);
+        await remember(target);
       }
       if (part.kind === "meeting") {
         meeting = await calendar(q, part.calendarEventId, owner);
         if (meeting.blockId) {
           target = await task(q, meeting.blockId, owner);
-          touched.set(target.id, target);
+          await remember(target);
         }
       }
       if (part.kind !== "unknown") {
@@ -307,8 +324,19 @@ function createConversationStore(ctx) {
     if (cursor !== window.endMs) throw M.fail("Parts must cover the complete original interval");
     await blockDB.deleteBlock(source.id, q);
     for (const item of touched.values())
-      await timingFor(ctx, q, owner).recomputeActualMinutes({ block: item, workspaceId: owner.workspaceId, client: q });
-    return { sourceEntry: source, entries: created, originalWindow, correctedWindow: window };
+      await timingFor(ctx, q, owner).recomputeActualMinutes({
+        block: item,
+        workspaceId: owner.workspaceId,
+        priorSessionsTotal: priorTotals.get(item.id),
+        client: q
+      });
+    return {
+      sourceEntry: source,
+      entries: created,
+      originalWindow,
+      correctedWindow: window,
+      touchedTaskIds: [...touched.keys()]
+    };
   }
   async function execute(input, owner, { legacy = false, transactionClient = null } = {}) {
     const b = M.command(input),
@@ -339,13 +367,43 @@ function createConversationStore(ctx) {
         throw M.fail("Stale activity event; use a correction", 409);
       // Lock owned rows in a stable order before read/modify/write, also excluding parallel completion.
       await q.query(
-        "SELECT id FROM blocks WHERE user_id=$1 AND deleted_at IS NULL AND dcc_is_task_row(type,properties) ORDER BY id FOR UPDATE",
-        [owner.userId]
+        `SELECT id FROM blocks WHERE user_id=$1 AND deleted_at IS NULL AND dcc_is_task_row(type,properties)
+         AND ($2 OR id=$3 OR properties->>'local_id'=$3 OR properties->>'startedAt' IS NOT NULL) ORDER BY id FOR UPDATE`,
+        [owner.userId, ["correct", "done"].includes(b.action), b.taskId || null]
       );
       let detail = {};
+      const changedIds = new Set();
       const atMs = M.instant(b.at),
         timing = timingFor(ctx, q, owner),
         actor = "conversation:" + owner.userId;
+      async function closeForeground(row) {
+        if (atMs <= Date.parse(row.properties.startedAt)) throw M.fail("Transition must follow the active start", 409);
+        const start = Date.parse(row.properties.startedAt);
+        const checkIn = Date.parse(row.properties.workCheckInAt || row.properties.startedAt);
+        const cutoff = Math.min(atMs, start + 8 * 3600000, Math.max(start, checkIn) + 50 * 60000);
+        const paused = await timing.pauseWork({
+          block: row,
+          atMs: cutoff,
+          transitionAtMs: atMs,
+          actor,
+          actionId: b.sourceEventId
+        });
+        changedIds.add(row.id);
+        detail.entries = [...(detail.entries || []), ...(paused.sessions || [])];
+        if (!paused.changed) throw M.fail(paused.reason || "Foreground session could not be closed", 409);
+        if (cutoff < atMs) {
+          // Silence is not evidence of continued focus. Keep elapsed uncertainty
+          // in the audit event, never add it to a task's actualMinutes.
+          detail.uncertainIntervals = detail.uncertainIntervals || [];
+          detail.uncertainIntervals.push({
+            taskId: row.id,
+            start: new Date(cutoff).toISOString(),
+            end: b.at,
+            kind: "unknown",
+            reason: "No recent work check-in"
+          });
+        }
+      }
       if (b.action === "correct") detail = await correct(q, b, owner, owner.userId + ":" + b.sourceEventId);
       else {
         const target = await task(q, b.taskId, owner);
@@ -363,27 +421,7 @@ function createConversationStore(ctx) {
             b.action === "start" ? active.filter((r) => r.id !== target.id) : active.filter((r) => r.id === target.id);
           if (closing.some((r) => r.workspace_id !== owner.workspaceId))
             throw M.fail("Pause work in the other workspace before switching", 409);
-          for (const row of closing) {
-            if (atMs <= Date.parse(row.properties.startedAt))
-              throw M.fail("Transition must follow the active start", 409);
-            const start = Date.parse(row.properties.startedAt);
-            const checkIn = Date.parse(row.properties.workCheckInAt || row.properties.startedAt);
-            const cutoff = Math.min(atMs, start + 8 * 3600000, Math.max(start, checkIn) + 50 * 60000);
-            const paused = await timing.pauseWork({ block: row, atMs: cutoff, actor, actionId: b.sourceEventId });
-            if (!paused.changed) throw M.fail(paused.reason || "Foreground session could not be closed", 409);
-            if (cutoff < atMs) {
-              // Silence is not evidence of continued focus. Keep elapsed uncertainty
-              // in the audit event, never add it to a task's actualMinutes.
-              detail.uncertainIntervals = detail.uncertainIntervals || [];
-              detail.uncertainIntervals.push({
-                taskId: row.id,
-                start: new Date(cutoff).toISOString(),
-                end: b.at,
-                kind: "unknown",
-                reason: "No recent work check-in"
-              });
-            }
-          }
+          for (const row of closing) await closeForeground(row);
         }
         if (b.action === "start") {
           const result = await timing.startWork({
@@ -399,8 +437,22 @@ function createConversationStore(ctx) {
           ]);
         }
         if (b.action === "continue") {
-          const continued = await timing.continueWork({ block: target, atMs, actor, actionId: b.sourceEventId });
-          if (!continued.changed) throw M.fail(continued.reason || "Timer could not be continued", 409);
+          const start = Date.parse(target.properties.startedAt || "");
+          const checkIn = Date.parse(target.properties.workCheckInAt || target.properties.startedAt || "");
+          const deadline = Math.min(start + 8 * 3600000, Math.max(start, checkIn) + 50 * 60000);
+          if (Number.isFinite(deadline) && atMs >= deadline) {
+            await closeForeground(target);
+            const resumed = await timing.startWork({
+              block: await task(q, target.id, owner),
+              atMs,
+              actor,
+              actionId: b.sourceEventId + ":resume"
+            });
+            if (!resumed.changed) throw M.fail(resumed.reason || "Timer could not resume", 409);
+          } else {
+            const continued = await timing.continueWork({ block: target, atMs, actor, actionId: b.sourceEventId });
+            if (!continued.changed) throw M.fail(continued.reason || "Timer could not be continued", 409);
+          }
         }
         if (b.action === "done") {
           const completion = await blockDB.setTaskCompletion({
@@ -421,16 +473,22 @@ function createConversationStore(ctx) {
             throw M.fail("Completion includes another account", 403);
           detail.responsibilityTransitions = completion.responsibilityTransitions || [];
           for (const row of completion.affectedTasks) {
-            if (row.properties.startedAt)
-              await timing.pauseWork({ block: row, atMs, actor, actionId: b.sourceEventId + ":descendant" });
+            changedIds.add(row.id);
+            await q.query("DELETE FROM conversation_background WHERE user_id=$1 AND task_id=$2", [
+              owner.userId,
+              row.id
+            ]);
+            if (row.properties.startedAt) await closeForeground(row);
           }
-          const current = await task(q, target.id, owner);
-          if (current.properties.actualMinutes == null)
-            await blockDB.updateBlock(
-              target.id,
-              { properties: { ...current.properties, actualTimeUnknown: true }, [M.TIMING_WRITE]: true },
-              q
-            );
+          for (const row of completion.affectedTasks) {
+            const current = await task(q, row.id, owner);
+            if (current.properties.actualMinutes == null)
+              await blockDB.updateBlock(
+                current.id,
+                { properties: { ...current.properties, actualTimeUnknown: true }, [M.TIMING_WRITE]: true },
+                q
+              );
+          }
           // No completeWork inference: a task without tracked effort retains unknown actuals.
         }
         if (b.action === "background-start")
@@ -450,10 +508,12 @@ function createConversationStore(ctx) {
         "UPDATE conversation_state SET revision=revision+1,changed_at=GREATEST(changed_at,$2::timestamptz) WHERE user_id=$1",
         [owner.userId, b.at]
       );
+      if (detail.task) changedIds.add(detail.task.id);
+      for (const id of detail.touchedTaskIds || []) changedIds.add(id);
       const affectedTasks = (
         await q.query(
-          "SELECT * FROM blocks WHERE user_id=$1 AND workspace_id=$2 AND deleted_at IS NULL AND dcc_is_task_row(type,properties) AND (properties->>'workStateOperationId'=$3 OR id=$4)",
-          [owner.userId, owner.workspaceId, b.sourceEventId, detail.task?.id || null]
+          "SELECT * FROM blocks WHERE user_id=$1 AND workspace_id=$2 AND deleted_at IS NULL AND dcc_is_task_row(type,properties) AND id=ANY($3::text[])",
+          [owner.userId, owner.workspaceId, [...changedIds]]
         )
       ).rows.map(blockDB.parseBlock);
       const result = {
