@@ -19,7 +19,7 @@ Working Queue is the working surface; Itinerary remains the plan and actuals. Ex
 
 The existing `work_rotations` row becomes version 2 queue metadata (`order`, keyed `items`: status, note, joined/changed timestamps, reminder generation/deadline/claim). It is scoped by user and workspace, while `conversation_state.revision` and foreground ownership are account-wide. Task rows and the session ledger remain authoritative. Old rotation and conversational background records are adopted additively. No task hierarchy, schedules, recurrence definitions, workouts, or recorded actuals are migrated. The retired rotation endpoint returns 410; no second foreground writer remains.
 
-The floating workspace can continue calling `DCCWorkRotation.open(from,to)`; it navigates to the queue and previews bringing the target forward. Queue Details uses `DCCTaskWorkspace.open` when present, otherwise the existing task modal. The separate floating workspace change is not bundled here.
+The former rotation navigation entry point `DCCWorkRotation.open(from,to)` opens the queue. Queue Details uses `DCCTaskWorkspace.preview` when present so reading details never starts focus, otherwise the existing task modal. The separate floating-workspace commit `485ff46` is not bundled: its `DCCWorkRotation.focus(task)` caller must be adapted to this coordinator before that feature is merged. Do not restore its old rotation writer alongside the queue.
 
 ## Failure handling
 

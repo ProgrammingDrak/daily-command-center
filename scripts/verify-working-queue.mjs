@@ -261,6 +261,11 @@ try {
   await button("b", "details").click();
   await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).last().click();
   await closed();
+  await page.evaluate(()=>{window.DCCTaskWorkspace={preview:task=>{window.fixturePreview=task.id;},open:()=>{throw new Error('Details must not start focus');}};});
+  await button('b','details').click();
+  assert.equal(await page.evaluate(()=>window.fixturePreview),'b');
+  assert.equal((await task('b')).properties.startedAt,undefined,'workspace details do not start a clock');
+  await page.evaluate(()=>{delete window.DCCTaskWorkspace;});
   await page.setViewportSize({ width: 375, height: 812 });
   await page.screenshot({
     path: process.env.DCC_QUEUE_SCREENSHOT || "/tmp/dcc-working-queue-mobile.png",
