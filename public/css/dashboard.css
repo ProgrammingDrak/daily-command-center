@@ -5878,3 +5878,14 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 
 /* Deep hierarchies keep room for task titles and controls on phones. */
 @media(max-width:480px){.it-list-item,.tl-item{--task-indent-max:44px}}
+
+/* Manual task rotation uses the existing work dock and shared modal. */
+.background-work-dock{border-color:var(--border);background:var(--card)}
+.work-checkback-due{border-left:3px solid var(--cyan,#22d3ee);padding-left:8px}
+.work-switch-form{display:grid;gap:14px}
+.work-switch-form label{display:grid;gap:6px}
+.work-switch-form select,.work-switch-form input{min-width:0;width:100%;box-sizing:border-box;padding:9px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:8px;font:inherit}
+.work-switch-form pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;font-size:12px}
+.work-switch-form [hidden]{display:none}
+.work-switch-form [data-switch-error]{color:var(--text-muted);font-size:12px}
+.work-switch-pending{font-size:12px}

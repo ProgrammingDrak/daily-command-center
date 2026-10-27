@@ -146,7 +146,7 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       ensureDayRoot: (date, userId, ws) => blockDB.ensureDayRoot(date, userId, ws, q) };
     return createTaskTiming({ pool: q, blockDB: db, timeZone: APP_TIME_ZONE });
   }
-  async function act(id, body, owner) {
+  async function act(id, body, owner, transactionClient = null, transitionAtMs = null) {
     const expected = M.revision(body.expectedRevision), operationId = M.id(body.operationId);
     if (!["start","resume","pause","progress","complete","feedback","preflight","reopen"].includes(body.action)) throw M.error("Unknown guided action");
     const payload = { action: body.action, progress: M.text(body.progress ?? "", "Progress", 12000),
@@ -187,7 +187,7 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       if(payload.action === "pause" && prior?.state === "paused" && !b.properties.startedAt) return shape(b,d,old);
       if(payload.action === "resume" && prior?.state === "active" && b.properties.startedAt) return shape(b,d,old);
       if (prior?.events.length >= 500 && !["pause","complete"].includes(payload.action)) throw M.error("Session history limit reached",409);
-      const atMs = Date.now(), at = new Date(atMs).toISOString();
+      const atMs = transitionAtMs ?? Date.now(), at = new Date(atMs).toISOString();
       const session = prior ? structuredClone(prior) : { id: crypto.randomUUID(), state: "active", startedAt: at,
         definitionRevision: d.revision, snapshot: d.definition, contextVersion: new Date(b.updated_at).toISOString(),
         taskDetail: d.definition.includeTaskDetail ? String(b.properties.detail || "").slice(0,12000) : "", checked: [], progress: "", outcome: "", access: {}, events: [] };
@@ -231,7 +231,7 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       await q.query(`INSERT INTO guided_sessions(task_id,workspace_id,owner_user_id,session) VALUES($1,$2,$3,$4)
         ON CONFLICT(task_id) DO UPDATE SET session=EXCLUDED.session,revision=guided_sessions.revision+1,updated_at=NOW()`, [id, owner.workspaceId, owner.userId, session]);
       return get(id,owner,q);
-    });
+    }, transactionClient);
     for(const transition of propagation) await blockDB.propagateResponsibilityDone(transition);
     return {...result,broadcastIds};
   }

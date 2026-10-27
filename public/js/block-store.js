@@ -1763,6 +1763,14 @@
       else this._rangeCache.clear();
     },
 
+    // Apply only an acknowledged atomic rotation, then re-project existing surfaces.
+    acceptWorkRotation(blocks) {
+      _mutationGeneration++;
+      (blocks || []).forEach(row => { if (row.deleted_at) cacheDelete(row.id); else cacheSet(row); });
+      if (typeof reloadPersistedEdits === "function") reloadPersistedEdits();
+      if (typeof render === "function") render("schedule");
+    },
+
     // ── SSE Integration ──
 
     // Called by SSE when blocks change from another source (tab, scheduled task)
