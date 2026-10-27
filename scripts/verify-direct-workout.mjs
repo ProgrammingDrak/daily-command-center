@@ -71,5 +71,25 @@ try{
  await setRow('curls','curls-0').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(out,'mobile-superset-320.png')});
  mark('Mobile 390/375/320px direct entry and actual inputs without horizontal overflow');
  assert.deepEqual(errors,[]);saved=await json('/api/activity/tasks/'+row.taskId);assert.equal(saved.taskId,row.taskId);assert.equal(saved.completed,false);assert.equal(saved.record.actual.sets.length,2);assert.equal(saved.record.session.events.length,0);
+ // Reproduce the existing record shape: ranges authored as card notes before native ranges existed.
+ const flex=structuredClone(plan);flex.plan.runs=[];
+ flex.plan.exercises[0].movement={goalKind:'strength',visualInstructions:'PLANNED BENCH — 3 sets, 6–8 reps each. Loads 170 / 175 / 180 lb total.'};
+ flex.plan.exercises[1].movement={goalKind:'strength',visualInstructions:'PLANNED SUPERSET — 4 rounds. Overhead press 95 lb for 10–12 reps, then curls 35 lb per hand for 10 reps.'};
+ for(const e of flex.plan.exercises.slice(0,2))for(const t of e.sets){t.reps=null;delete t.repsMax;}
+ const flexTitle='SYNTHETIC flexible actuals '+Date.now(),flexRow=await json('/api/activity/tasks','POST',{title:flexTitle,date:info.date,record:flex});
+ await page.reload();await page.locator('#api-loading').waitFor({state:'detached'});await page.locator('#list-view .ttl').filter({hasText:flexTitle}).click();await loaded();
+ assert.match(await planner().innerText(),/6–8 reps each/);assert.match(await planner().innerText(),/10–12 reps/);
+ const logActual=async(id,target,reps,load,perSide=false)=>{const el=setRow(id,target);await el.getByLabel('Actual reps',{exact:true}).fill(String(reps));await el.getByLabel('Actual load',{exact:true}).fill(String(load));if(perSide){await el.locator('summary').click();await el.locator('[data-w-path$=".repsMode"]').selectOption('per-side');}const response=page.waitForResponse(r=>r.url().endsWith('/api/activity/tasks/'+flexRow.taskId)&&r.request().method()==='PUT');await el.getByRole('button',{name:'Log set',exact:true}).click();assert.equal((await response).status(),200);await planner().getByRole('status').filter({hasText:/Synced/}).waitFor();};
+ await logActual('bench','bench-0',8,136);await logActual('bench','bench-1',8,157.5);await logActual('bench','bench-2',6,165);
+ await setRow('bench','bench-0').getByRole('button',{name:'Edit actual',exact:true}).click();await page.getByLabel('Load',{exact:true}).fill('135');await page.getByRole('button',{name:'Save actual',exact:true}).click();await loaded();
+ await action('extra').first().click();await page.getByLabel('Reps',{exact:true}).fill('3');await page.getByLabel('Load',{exact:true}).fill('180');await page.getByRole('button',{name:'Log extra set',exact:true}).click();await loaded();
+ await planner().locator('.wp-extra .wp-saved-result').getByRole('button',{name:'Edit actual',exact:true}).click();await page.getByLabel('Load',{exact:true}).fill('185');await page.getByRole('button',{name:'Save actual',exact:true}).click();await loaded();
+ for(let i=0;i<3;i++){await logActual('ohp','ohp-'+i,[6,8,8][i],95);await logActual('curls','curls-'+i,10,30,true);}
+ let flexibleSaved=await json('/api/activity/tasks/'+flexRow.taskId);assert.equal(flexibleSaved.record.actual.sets.length,10);assert.deepEqual(flexibleSaved.record.plan,W.validate(flex).plan);assert.deepEqual(flexibleSaved.record.baseline,W.validate(flex).plan);assert.equal(flexibleSaved.completed,false);assert.equal(flexibleSaved.record.session.events.length,0);
+ assert.deepEqual(flexibleSaved.record.actual.sets.filter(a=>a.exerciseId==='bench').map(a=>[a.weight,a.reps]),[[135,8],[157.5,8],[165,6],[185,3]]);assert.equal(flexibleSaved.record.actual.sets.filter(a=>a.status==='skipped').length,0);
+ assert.equal(await setRow('ohp','ohp-3').getByLabel('Actual reps',{exact:true}).inputValue(),'');assert.equal(await setRow('curls','curls-3').getByLabel('Actual load',{exact:true}).inputValue(),'');
+ assert.match(await planner().innerText(),/4 confirmed \/ 3 planned · 1 extra · 0 without a recorded result/);assert.match(await planner().innerText(),/3 confirmed \/ 4 planned · 0 extra · 1 without a recorded result/);
+ await page.reload();await page.locator('#api-loading').waitFor({state:'detached'});await page.locator('#list-view .ttl').filter({hasText:flexTitle}).click();await loaded();await overflow();await page.screenshot({path:path.join(out,'flexible-actuals-mobile.png')});
+ await page.setViewportSize({width:1440,height:1050});await page.screenshot({path:path.join(out,'flexible-actuals-desktop.png')});assert.deepEqual(errors,[]);mark('Legacy notes, fractional corrections, fourth extra bench set and three of four superset rounds preserve plan and reload exactly');
  await fs.writeFile(path.join(out,'results.json'),JSON.stringify({checks,errors,taskId:row.taskId,synthetic:true},null,2));console.log('Evidence: '+out);
 }catch(e){await page.screenshot({path:path.join(out,'failure.png'),fullPage:true});console.log('Browser errors',errors);console.log((await page.locator('body').innerText()).slice(-6500));throw e;}finally{await browser.close();}
