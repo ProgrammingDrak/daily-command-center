@@ -75,7 +75,7 @@ test("manual rotation: atomic effort, reminders, reload, stale tabs and guided g
    const item=view.background[0];await ctx.blockDB.deleteBlock(a.id);
    assert.equal((await store.get(owner)).background.length,0);
    await assert.rejects(store.mutate(owner,await command("claim",{taskId:a.id,generation:item.generation})),{statusCode:409});
-   now+=60000;b=await read(b.id);view=await switchTo(b,c,1);
+   now+=60000;b=await read(b.id);c=await read(c.id);view=await switchTo(b,c,1);
    await ctx.blockDB.setTaskCompletion({taskRef:b.id,completed:true,completedAt:new Date(now).toISOString(),mutationId:uid(),expectedRevision:b.properties._completionRevision||null,userId:1,workspaceId:"ws-1"});
    assert.equal((await store.get(owner)).background.length,0);
   });
@@ -108,6 +108,41 @@ test("manual rotation: atomic effort, reminders, reload, stale tabs and guided g
    assert.equal(saved.properties.actualMinutes-before,50);
    assert.equal(entries.at(-1).properties.endedAt,new Date(startedAt+50*60000).toISOString());
    assert.equal((await read(target.id)).properties.startedAt,new Date(now).toISOString());
+  });
+
+  await t.test("ordinary work endpoint serializes with switching and rolls back failed ledger writes",async()=>{
+   const express=require("express"),app=express();app.use(express.json());
+   app.use((req,_res,next)=>{req.workspaceId="ws-1";req.session={userId:1};next();});
+   let failUpdate=false;
+   const routeDb={...ctx.blockDB,updateBlock:async(id,fields,q)=>{
+    const result=await ctx.blockDB.updateBlock(id,fields,q);
+    if(failUpdate && fields.properties?.workStateOperationId==="rollback-route")throw new Error("synthetic failure after task write");
+    return result;
+   }};
+   require("./routes/blocks")(app,{...ctx,blockDB:routeDb,APP_TIME_ZONE:"UTC",broadcast(){},filterLegacyGcalBlocks:v=>v,getScheduleBlocks:async()=>[],getTodayStr:()=>"2099-01-02",isAllowedSweepBlockItem:()=>true,isValidDate:()=>true});
+   const server=app.listen(0,"127.0.0.1");await new Promise(resolve=>server.once("listening",resolve));
+   const post=async(id,body)=>{
+    const response=await fetch("http://127.0.0.1:"+server.address().port+"/api/blocks/"+id+"/work",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+    return {status:response.status,body:await response.json()};
+   };
+   try {
+    const source=(await ctx.pool.query("SELECT * FROM blocks WHERE type='block' AND deleted_at IS NULL AND properties->>'startedAt' IS NOT NULL AND user_id=1")).rows[0];
+    const target=await make("Concurrent destination");now+=60000;
+    const outcomes=await Promise.allSettled([post(source.id,{action:"pause",at:new Date(now).toISOString(),actionId:uid()}),switchTo(source,target)]);
+    assert.equal(outcomes[0].status,"fulfilled");assert.equal(outcomes[0].value.status,200);
+    assert.equal((await read(source.id)).properties.startedAt,undefined);
+    assert.equal((await ctx.blockDB.getTaskTimeEntries(source.id,"ws-1")).length,1);
+    if(outcomes[1].status==="rejected"){
+     assert.equal(outcomes[1].reason.statusCode,409);assert.equal((await read(target.id)).properties.startedAt,undefined);
+     await switchTo(null,await read(target.id));
+    }
+    const active=await read(target.id),before=await ctx.blockDB.getTaskTimeEntries(target.id,"ws-1");
+    now+=60000;failUpdate=true;
+    const failed=await post(target.id,{action:"pause",at:new Date(now).toISOString(),actionId:"rollback-route"});
+    assert.equal(failed.status,500);
+    assert.deepEqual((await read(target.id)).properties,active.properties);
+    assert.deepEqual(await ctx.blockDB.getTaskTimeEntries(target.id,"ws-1"),before);
+   } finally {await new Promise(resolve=>server.close(resolve));}
   });
 
  }finally{await ctx.close();}
