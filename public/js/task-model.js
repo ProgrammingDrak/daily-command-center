@@ -126,6 +126,8 @@
       startedAt: p.startedAt || null,
       completedAt: p.completedAt || null,
       actualMinutes: p.actualMinutes == null ? null : Number(p.actualMinutes),
+      actualMinutesFrom: p.actualMinutesFrom || null,
+      actualTimeUnknown: p.actualTimeUnknown === true,
       workCheckInAt: p.workCheckInAt || null,
       workCheckInCount: Number(p.workCheckInCount || 0),
       workAutoPausedAt: p.workAutoPausedAt || null,

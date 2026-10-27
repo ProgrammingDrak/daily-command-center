@@ -255,6 +255,9 @@ async function nextSortOrderForDay(q, { date, workspace_id }) {
 async function createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id }, client) {
   // Recurring/reused activity plans are snapshotted with the task atomically.
   const sourceProps = typeof properties === "string" ? JSON.parse(properties) : (properties || {});
+  if (process.env.DCC_CONVERSATION_ENABLED === "true" && type !== "time_entry" && sourceProps.startedAt) {
+    const error = new Error("Start work through the foreground coordinator"); error.statusCode=409; throw error;
+  }
   const createsHierarchy=sourceProps.subtaskOf||sourceProps.wrapId||(parent_id&&!isDayRootId(parent_id));
   if ((sourceProps.activityPlanSourceId||createsHierarchy) && !client && typeof pool.connect === "function") {
     const c = await pool.connect();
@@ -1038,6 +1041,13 @@ async function updateBlock(id, fields, client) {
         isTaskRow({ type: existing.type, properties: existing.properties }), completionMutationId);
     }
     const existingProps = existing.properties || {};
+    // Activity state is server-owned once the account coordinator is enabled.
+    // A stale offline property bag must never revive or erase a foreground timer.
+    if (process.env.DCC_CONVERSATION_ENABLED === "true" && !fields[require("./lib/conversation-model").TIMING_WRITE]) {
+      for (const key of ["startedAt", "activeWorkSessionId", "startedBy", "workStateChangedAt", "workStateOperationId", "actualMinutes", "actualMinutesFrom", "actualTimeUnknown"]) {
+        if (existingProps[key] === undefined) delete newProps[key]; else newProps[key] = existingProps[key];
+      }
+    }
     // Generic/stale block writes cannot silently detach an activity log or expose
     // a workout/meal in sharing. Detailed records never pass through this path.
     if (["workout", "meal", "guided"].includes(existingProps.type)) newProps.type = existingProps.type;

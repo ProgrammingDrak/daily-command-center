@@ -776,6 +776,7 @@
           case "work": {
             const result = await apiPost("/api/blocks/" + entry.id + "/work", entry.data);
             if (result && result.block) cacheSet(result.block);
+            (result && result.affectedTasks || []).forEach(cacheSet);
             break;
           }
           case "realloc": {
@@ -1219,6 +1220,7 @@
       try {
         const result = await apiPost("/api/blocks/" + id + "/work", data);
         if (result && result.block) cacheSet(result.block);
+            (result && result.affectedTasks || []).forEach(cacheSet);
         walRemove(walId);
         setSaved();
         return result;

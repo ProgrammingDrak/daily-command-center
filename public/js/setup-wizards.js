@@ -368,7 +368,7 @@
       const triage = data.triage || {};
       const google = data.google || {};
       body.innerHTML =
-        '<p class="dcc-sw-p">Two power-ups. Both optional, both independent, do one at a time or neither.</p>'
+        '<p class="dcc-sw-p">Optional connections. Set up the ones you want to use.</p>'
         + cardFor({
           key: "slack", icon: "💬", title: "Slack task reactions",
           note: "React 🔖 on a message and it becomes a task on your day. ⌛ times it, ✅ finishes it.",
@@ -379,6 +379,7 @@
           note: "Your Claude sweeps email, Slack and calendar, then files the results onto your itinerary.",
           cta: "Walk me through it", done: !!triage.lastSeenAt, started: !!(setup.triage && setup.triage.startedAt),
         })
+        + (data.conversation && data.conversation.enabled ? '<div class="dcc-sw-oneclick"><span>ChatGPT conversational task tracking</span><a class="dcc-sw-btn" href="/connections/conversation">Connect or manage</a></div>' : '')
         + '<div class="dcc-sw-hr"></div>'
         + '<div class="dcc-sw-oneclick">'
           + "<span>" + (google.connected ? "📅 Google Calendar is connected" : "📅 Pull your calendar onto the itinerary") + "</span>"

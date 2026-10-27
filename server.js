@@ -154,6 +154,9 @@ if (!LOCAL_AUTH_ENABLED) {
 }
 app.use(session(sessionOptions));
 
+// Isolated OAuth/MCP boundary: bearer tokens here never enter the legacy service gate.
+require("./routes/conversation")(app, { pool, blockDB, APP_TIME_ZONE, broadcast });
+
 // ── Auth Middleware ──
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/ingest/day-state/v2", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts", "/api/dcc/meeting-signals", "/api/dcc/slack-reconcile"]);
@@ -1135,6 +1138,7 @@ app.get("/api/me/integrations", async (req, res) => {
       canOauth: !!(ctx.slackOAuth && ctx.slackOAuth.configured() && ctx.slackOAuth.hasEncryptionKey()),
     },
     google,
+    conversation: { enabled: process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false", url: "/connections/conversation" },
     triage: {
       // Everything the wizard needs to render a copy-paste login command. NOT
       // getRequestOrigin, which is the caller's IP for rate limiting; this has to

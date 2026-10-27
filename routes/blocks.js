@@ -903,10 +903,10 @@ module.exports = function mount(app, ctx) {
     await q.query("COMMIT");committed=true;
     } finally { try { if(!committed) await q.query("ROLLBACK"); } finally { q.release(); } }
     broadcast("blocks-changed", {
-      action: "work", workAction: body.action, blockIds: [req.params.id], clientId: body._clientId,
+      action: "work", workAction: body.action, blockIds: result.conversation?.affectedTasks?.map(row => row.id) || [req.params.id], clientId: body._clientId,
     }, req.workspaceId);
     await syncSlack(block);
-    return { ok: true, changed: !!result.changed, reason: result.reason || null, block };
+    return { ok: true, changed: !!result.changed, reason: result.reason || null, block, affectedTasks: result.conversation?.affectedTasks || [] };
   }));
 
   app.get("/api/blocks/:id/work", route(async (req, res) => {
