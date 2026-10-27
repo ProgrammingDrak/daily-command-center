@@ -7,7 +7,8 @@
  let state={revision:0,background:[]},pending=null,inFlight=false,refreshing=null,dialog=null,ticking=false;
  const esc=DCC.esc, sessions=()=>window.DCCWorkSessions;
  try {state=JSON.parse(localStorage.getItem(key)||"null")||state;pending=JSON.parse(localStorage.getItem(key+":pending")||"null");} catch(_e) {}
- function save(value) {if(value.revision<state.revision)return;localStorage.setItem(key,JSON.stringify(value));state=value;}
+ function older(value) {return value.revision<state.revision || (value.revision===state.revision && Date.parse(value.serverNow)<Date.parse(state.serverNow));}
+ function save(value) {if(older(value))return;localStorage.setItem(key,JSON.stringify(value));state=value;}
  function showError(error) {DCC.toast(error.message||"Work update failed","error");}
  function rowFor(task) {return sessions()?.blockFor(task);}
  function apply(result) {
@@ -120,6 +121,7 @@
    }).join("");
  }
  async function tick() {
+  render();
   if(document.hidden || inFlight || ticking)return;
   ticking=true;
   try {
@@ -128,7 +130,10 @@
    const due=state.background.find(i=>i.dueAt&&Date.parse(i.dueAt)<=Date.now()&&!i.notifiedAt);
    if(!due)return;
    const result=await DCC.api("/api/work-rotation",{method:"POST",signal:AbortSignal.timeout(15000),body:command("claim",{taskId:due.task.id,generation:due.generation})});
-   apply(result);
+   // Completion/deletion/resume can change eligibility without a rotation
+   // revision. Never restore a delayed claim snapshot; read current eligibility.
+   if(refreshing)await refreshing;
+   await refresh();
    if(!result.claimed || !state.background.some(i=>i.task.id===due.task.id && i.generation===due.generation))return;
    const reveal=()=>{const el=document.getElementById("background-work-dock");el?.scrollIntoView({block:"nearest",behavior:DCC.reducedMotion?.()?"auto":"smooth"});};
    const text="Time to check back on "+(due.task.properties.title||"your background task")+".";
@@ -147,7 +152,7 @@
   if(button.dataset.backgroundAction==="return"){returnTo(item);return;}
   send(command(button.dataset.backgroundAction,{taskId:item.task.id,generation:item.generation,minutes:5})).catch(showError);
  });
- window.addEventListener("storage",event=>{if(event.key===key+":pending"){try{pending=JSON.parse(event.newValue||"null");}catch(_e){}render();}if(event.key===key){try{const value=JSON.parse(event.newValue);if(value && value.revision>=state.revision){state=value;render();}}catch(_e){}}});
+ window.addEventListener("storage",event=>{if(event.key===key+":pending"){try{pending=JSON.parse(event.newValue||"null");}catch(_e){}render();}if(event.key===key){try{const value=JSON.parse(event.newValue);if(value && !older(value)){state=value;render();}}catch(_e){}}});
  document.addEventListener("visibilitychange",()=>{if(!document.hidden)tick();});
  window.addEventListener("dcc:work-session-changed",()=>refresh().catch(()=>{}));
  window.addEventListener("dcc:data-ready",()=>tick());

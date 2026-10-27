@@ -1,4 +1,4 @@
-/* global window, document, innerWidth, DCCWorkRotation, petDeliveries */
+/* global localStorage, window, document, innerWidth, DCCWorkRotation, petDeliveries */
 // Disposable review fixture: real PostgreSQL, real rotation routes and browser UI.
 // Never starts server.js or reads the application's live environment/database.
 import assert from "node:assert/strict";
@@ -81,6 +81,28 @@ try {
  lost=false;await page.route('**/api/work-rotation',async route=>{if(!lost&&route.request().method()==='POST'&&route.request().postDataJSON().action==='switch'){lost=true;await route.fetch();return route.abort();}return route.continue();});
  await open();await submit("b");await page.waitForSelector('[data-rotation-retry]');await page.reload();await page.waitForSelector('[data-rotation-retry]');await page.locator('[data-rotation-retry]').click();await page.waitForFunction(()=>!document.querySelector('[data-rotation-retry]'));await page.waitForSelector('[data-work-switch="b"]');
  await page.unroute('**/api/work-rotation');
+ // Cached backgrounds and pending Retry remain visible when the endpoint is offline.
+ await page.evaluate(()=>{const key='dcc-work-rotation:ws-1:1:pending';localStorage.setItem(key,JSON.stringify({action:'dismiss',operationId:'synthetic-offline',expectedRevision:0,taskId:'a',generation:'stale'}));});
+ await page.route('**/api/work-rotation',route=>route.abort());
+ await page.reload();await page.waitForSelector('[data-background-id="a"]');await page.waitForSelector('[data-rotation-retry]');
+ await page.evaluate(()=>localStorage.removeItem('dcc-work-rotation:ws-1:1:pending'));await page.unroute('**/api/work-rotation');
+ await page.reload();await page.waitForSelector('[data-background-id="a"]');
+ // Completion filters a background out without changing rotation revision.
+ await ctx.pool.query("UPDATE work_rotations SET state=jsonb_set(jsonb_set(state,'{background,a,dueAt}',to_jsonb($1::text)),'{background,a,notifiedAt}','null')",[new Date(Date.now()-1000).toISOString()]);
+ let completedClaimFetched,releaseCompletedClaim;
+ const completedFetched=new Promise(resolve=>{completedClaimFetched=resolve;}),completedReleased=new Promise(resolve=>{releaseCompletedClaim=resolve;});
+ await page.route('**/api/work-rotation',async route=>{
+  if(route.request().method()==='POST'&&route.request().postDataJSON().action==='claim'){
+   const response=await route.fetch();completedClaimFetched();await completedReleased;return route.fulfill({response});
+  }
+  return route.continue();
+ });
+ await page.evaluate(()=>{window.fixtureTick=DCCWorkRotation.tick();});await completedFetched;
+ await ctx.pool.query("UPDATE blocks SET properties=properties || $2::jsonb WHERE id=$1",['a',{completedAt:new Date().toISOString(),status:'done'}]);
+ await page.evaluate(()=>DCCWorkRotation.refresh());assert.equal(await page.locator('[data-background-id="a"]').count(),0);
+ releaseCompletedClaim();await page.evaluate(()=>window.fixtureTick);
+ assert.equal(await page.locator('[data-background-id="a"]').count(),0);assert.equal(await page.evaluate(()=>petDeliveries.length),0);
+ await page.unroute('**/api/work-rotation');
  await page.setViewportSize({width:375,height:812});await page.screenshot({path:process.env.DCC_ROTATION_SCREENSHOT||'/tmp/dcc-work-rotation-mobile.png',fullPage:true});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
- assert.deepEqual(errors,[]);console.log(JSON.stringify({passed:true,checks:["cancel","escape","switch","effort","hierarchy","reload","expiry","one delivery across tabs","snooze","return","dismiss","lost response retry","late reminder response","mobile overflow"]}));
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({passed:true,checks:["cancel","escape","switch","effort","hierarchy","reload","expiry","one delivery across tabs","snooze","return","dismiss","lost response retry","late reminder response","offline cache and retry","completion during delayed claim","mobile overflow"]}));
 }finally{await browser.close();await new Promise(r=>server.close(r));await ctx.close();}
