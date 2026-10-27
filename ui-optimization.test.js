@@ -73,7 +73,8 @@ test("task details provide explicit read and edit controls", () => {
     assert.match(index, new RegExp(`data-am-panel="${label}"`));
   }
   assert.match(index, /role="tablist" aria-label="Task detail sections"/);
-  assert.doesNotMatch(index, /id="am-activity-entry"|class="am-disclosure"/);
+  assert.match(index, /id="am-activity-entry"/);
+  assert.doesNotMatch(index, /class="am-disclosure"/);
   for (const id of ["add-modal-edit", "add-modal-save", "add-modal-cancel-edit", "add-modal-close"]) {
     assert.match(index, new RegExp(`id="${id}"`));
   }
@@ -103,7 +104,7 @@ test("clicking a task opens the details modal already in edit mode", () => {
   // Cancel only lands in read mode because it runs AFTER openAddModal, which ends in edit
   // mode. Hoisting it above that call would silently restore the hot-fields regression.
   const cancel = fnBody("cancelAddModalEdits");
-  assert.match(cancel, /openAddModal\(taskId, fallbackTitle\);[\s\S]*setAddModalMode\(false\)/);
+  assert.match(cancel, /openAddModal\(taskId, fallbackTitle, \{generic:true\}\);[\s\S]*setAddModalMode\(false\)/);
 
   // Save is one click from every open now, so an untouched tag draft must not be written.
   const save = fnBody("saveAddModalEdits");

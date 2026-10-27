@@ -237,3 +237,15 @@ test('timer capacity reserves the final slot for Stop and keeps rejected actions
  assert.throws(()=>W.action(v,event('overflow','pause',1001)),/Stop the workout/);assert.deepEqual(v,before);
  v=W.action(v,event('terminal','stop',1002,{outcome:'partial'}));assert.equal(v.session.events.length,W.MAX_EVENTS);assert.equal(W.replay(v).status,'partial');assert.doesNotThrow(()=>W.validate(v));
 });
+
+
+test('planned rep ranges survive normalization without turning targets into actuals', () => {
+  const v=W.empty();const e=W.makeEntry(W.CATALOG[0],(()=>{let i=0;return ()=>`range-${++i}`;})());
+  e.sets[0].reps=6;e.sets[0].repsMax=8;
+  v.plan.exercises=[e];v.plan.groups=[{id:'range-group',kind:'single',rounds:1,exerciseIds:[e.id]}];
+  assert.equal(W.validate(v).plan.exercises[0].sets[0].repsMax,8);
+  assert.equal(W.validate(v).actual.sets.length,0);
+  e.sets[0].repsMax=5;assert.throws(()=>W.validate(v),/Maximum reps/);
+  e.sets[0].repsMax=8.5;assert.throws(()=>W.validate(v),/measurement/);
+  e.sets[0].repsMax=8;e.sets[0].reps=null;assert.throws(()=>W.validate(v),/Maximum reps/);
+});

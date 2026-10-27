@@ -207,7 +207,7 @@
     if (!task || !['task', 'focus', 'habit', ...M.TYPES].includes(task.type || 'task')) return;
     const type = M.TYPES.includes(task.type) ? task.type : null;
     host.innerHTML = '<div class="am-section-label">Private activity record</div><div class="act-row">' + (type ? button('Open ' + type + ' plan & log', type) : button('Use as Workout', 'workout') + button('Use as Meal', 'meal')) + '</div>';
-    host.querySelectorAll('button').forEach(b => { b.onclick = () => { if (typeof closeAddModal === 'function') closeAddModal(); open(taskId, b.dataset.act, task.title); }; });
+    host.querySelectorAll('button').forEach(b => { if(type)b.setAttribute('data-activity-open',''); b.onclick = () => { if (typeof closeAddModal === 'function') closeAddModal(); open(taskId, b.dataset.act, task.title); }; });
   }
   D.Activity = { activate, open, create, taskButton, refresh };
   window.addEventListener('dcc:view-date-changed', () => {

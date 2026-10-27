@@ -56,11 +56,13 @@
   function round(x){const n=num(x,200,true);if(!n)fail("Round must be positive");return n;}
   function timestamp(x){if(x==null)return null;if(typeof x!=='string'||!/^\d{4}-\d\d-\d\dT/.test(x)||!Number.isFinite(Date.parse(x)))fail('Invalid workout timestamp');return new Date(x).toISOString();}
   function measurement(x){return {reps:num(x.reps,100000,true),weight:num(x.weight),unit:opt(x.unit||'lb',['lb','kg']),seconds:num(x.seconds,31536000),loadMode:opt(x.loadMode||'total',['total','per-dumbbell','bodyweight','added','assistance']),repsMode:opt(x.repsMode||'total',['total','per-side'])};}
+  // Ranges belong only to planned targets; actual repetitions are always exact.
+  function targetRange(s){if(s.repsMax==null)return {};const max=num(s.repsMax,100000,true);if(s.reps==null||max<s.reps)fail('Maximum reps must be at least the minimum reps');return {repsMax:max};}
   function meaningful(x){return ['reps','weight','seconds'].some(k=>x[k]!=null&&x[k]!=='');}
   function empty(){return {schemaVersion:2,taskType:'workout',plan:{exercises:[],groups:[],runs:[]},actual:{sets:[],runs:[]},occurredOn:null,baseline:null,provenance:null,session:{events:[]}};}
   function normalizePlan(p){
     if(!p||typeof p!=='object')fail('Workout plan is required');
-    const exercises=rows(p.exercises,e=>({id:ident(e.id),catalogExerciseId:e.catalogExerciseId==null?null:ident(e.catalogExerciseId),name:name(e.name),...entryMetadata(e),sets:rows(e.sets,s=>({id:ident(s.id),round:round(s.round),...measurement(s)}))}));
+    const exercises=rows(p.exercises,e=>({id:ident(e.id),catalogExerciseId:e.catalogExerciseId==null?null:ident(e.catalogExerciseId),name:name(e.name),...entryMetadata(e),sets:rows(e.sets,s=>({id:ident(s.id),round:round(s.round),...measurement(s),...targetRange(s)}))}));
     const groups=rows(p.groups,g=>({id:ident(g.id),kind:opt(g.kind,['single','superset','circuit']),rounds:num(g.rounds,200,true),...groupMetadata(g),exerciseIds:Array.isArray(g.exerciseIds)?g.exerciseIds.map(ident):fail('Exercise entries required')}));
     const used=[];
     for(const g of groups){if(!g.rounds||g.exerciseIds.length>200||g.exerciseIds.length<(g.kind==='circuit'?3:g.kind==='superset'?2:1)||(g.kind==='single'&&g.exerciseIds.length!==1)||(g.kind==='superset'&&g.exerciseIds.length!==2))fail('Single groups need one exercise, supersets two, circuits at least three');for(const id of g.exerciseIds){const e=exercises.find(e=>e.id===id);if(!e)fail('Group references a missing exercise entry');if(e.sets.some(s=>s.round>g.rounds))fail('Planned round exceeds group rounds');used.push(id);}}

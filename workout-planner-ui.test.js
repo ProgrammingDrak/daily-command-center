@@ -75,8 +75,8 @@ function record() {
   return W.validate(value);
 }
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
-async function harness(initialRecord = record()) {
-  const state = { row: { taskId: 'task-1', title: 'Synthetic workout', date: '2026-10-13', revision: 1, archived: false, removed: false, canUndo: false, record: clone(initialRecord) }, templates: [], failNext: null, uncertainNext: false, putGate: null };
+async function harness(initialRecord = record(), focused = false) {
+  const state = { row: { taskId: 'task-1', title: 'Synthetic workout', date: '2026-10-13', revision: 1, completed:false, archived: false, removed: false, canUndo: false, record: clone(initialRecord) }, templates: [], failNext: null, uncertainNext: false, putGate: null };
   const requests = [], mutations = new Map(), modals = [];
   const D = {
     esc: value => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'),
@@ -129,9 +129,10 @@ async function harness(initialRecord = record()) {
     }
   };
   const document = { activeElement: null, createElement: () => new Host() };
-  vm.runInNewContext(source, { window: { DCC: D, WorkoutModel: W, ActivityModel: M }, document, crypto, performance, structuredClone, URLSearchParams, Date, queueMicrotask: callback => Promise.resolve().then(callback) }, { filename: 'workout-planner.js' });
+  vm.runInNewContext(source, { window: { DCC: D, WorkoutModel: W, ActivityModel: M, markDone(){state.completionCalls=(state.completionCalls||0)+1;state.row.completed=true;} }, document, crypto, performance, structuredClone, URLSearchParams, Date, queueMicrotask: callback => Promise.resolve().then(callback) }, { filename: 'workout-planner.js' });
   await D.Workout.open(clone(state.row));
   const host = modals[0].body, controller = await D.Workout.controller('task-1');
+  if (!focused) await host.emit('click', host.button('edit-plan'));
   return {
     state, requests, modals, host, controller,
     editTemplate(template) { D.Workout.editTemplate(template, clone(W.CATALOG), clone(state.templates)); return modals.at(-1).body; },
@@ -427,4 +428,85 @@ test('library refresh failure after an acknowledged save keeps saved status and 
   assert.equal(h.state.templates.length, 1);
   assert.equal(h.state.templates[0].revision, 2);
   assert.equal(h.requests.filter(r => r.method === 'POST').length, 1);
+});
+
+
+test('dedicated workout opens targets alongside blank actuals and explicit log controls', async () => {
+  const v=record();v.plan.exercises[0].sets[0].reps=6;v.plan.exercises[0].sets[0].repsMax=8;v.plan.exercises[0].sets[0].weight=170;
+  const h=await harness(v,true);
+  assert.match(h.host.innerHTML,/Plan &amp; track/);
+  assert.match(h.host.innerHTML,/Planned · 6–8 reps · 170 lb total/);
+  assert.doesNotMatch(h.host.innerHTML,/<details class="wp-results/);
+  assert.equal(h.host.querySelector('[data-w-path="drafts.bench-entry__target-1.reps"]').value,'');
+  assert.match(h.host.innerHTML,/No matching recorded set/);
+  assert.equal(h.puts().length,0);
+  await h.host.fill('drafts.bench-entry__target-1.reps',7);
+  await h.host.fill('drafts.bench-entry__target-1.weight',170);
+  await h.click('log',{entry:'bench-entry',target:'target-1'});
+  assert.match(h.host.innerHTML,/Reps on target · Load on target/);
+  assert.equal(h.state.row.record.actual.sets.length,1);
+  assert.equal(h.state.row.record.plan.exercises[0].sets[0].repsMax,8);
+  assert.equal(h.state.row.record.actual.sets[0].repsMax,undefined);
+  assert.equal(h.state.row.record.session.events.length,0);
+  assert.equal(h.state.row.completed,false);
+  assert.equal(h.state.completionCalls||0,0);assert.equal(h.controller.error,'');
+});
+
+test('clean reopening refreshes saved changes while actual drafts retain their revision conflict guard', async () => {
+  const h=await harness(record(),true);
+  h.state.row.record.plan.exercises[0].sets[0].weight=175;h.state.row.revision++;
+  await h.getController();
+  assert.equal(h.controller.v.plan.exercises[0].sets[0].weight,175);
+  await h.host.fill('drafts.bench-entry__target-1.reps',8);
+  h.state.row.record.plan.exercises[0].sets[0].weight=180;h.state.row.revision++;
+  await h.getController();
+  assert.equal(h.controller.row.revision,2);
+  await h.click('log',{entry:'bench-entry',target:'target-1'});
+  assert.match(h.controller.error,/changed elsewhere/);
+  assert.equal(h.state.row.record.actual.sets.length,0);
+  await h.click('reload');
+  assert.equal(h.controller.v.plan.exercises[0].sets[0].weight,180);
+  assert.equal(h.controller.row.revision,3);
+});
+
+test('superset tracking is grouped by round and exposes per-hand load conventions', async () => {
+  const v=record();const e=clone(v.plan.exercises[0]);e.id='curls';e.name='Dumbbell curls';e.catalogExerciseId='dumbbell-curls';e.sets.forEach(t=>{t.weight=35;t.reps=10;t.loadMode='per-dumbbell';});v.plan.exercises.push(e);v.plan.groups[0].kind='superset';v.plan.groups[0].exerciseIds.push(e.id);
+  const h=await harness(v,true);
+  assert.match(h.host.innerHTML,/Superset/);assert.match(h.host.innerHTML,/Load per hand \(one dumbbell\)/);
+  assert.equal((h.host.innerHTML.match(/class="wp-round"/g)||[]).length,2);
+  assert.equal((h.host.innerHTML.match(/data-w-act="log"/g)||[]).length,4);
+  const old=h.host.button('log',{entry:'bench-entry',target:'target-1'});
+  await h.host.fill('drafts.bench-entry__target-1.reps',7);await h.host.emit('click',old);await h.host.emit('click',old);
+  assert.equal(h.state.row.record.actual.sets.length,1);assert.equal(h.controller.error,'');assert.equal(h.puts().length,1);
+});
+
+
+test('back from incomplete plan groups retains the draft and renders safely', async () => {
+  const h=await harness(record(),true);await h.click('edit-plan');
+  await h.host.emit('click',h.host.button('group',{kind:'single'}));
+  await h.click('view-session');
+  assert.match(h.host.innerHTML,/New exercise/);assert.equal(h.controller.dirty,true);
+  assert.equal(h.puts().length,0);
+});
+
+
+test('archived records retain a reachable restore action through workout tools', async () => {
+  const h=await harness(record(),true);h.state.row.archived=true;await h.getController();
+  await h.click('edit-plan');assert.ok(h.host.button('restore'));
+});
+
+
+test('focused view preserves all legacy saved results for one target and round expansion copies target ranges', async () => {
+ const v=record();v.occurredOn='2026-10-13';v.actual.sets=[7,9].map(reps=>({id:'actual-'+reps,exerciseId:'bench-entry',planSetId:'target-1',round:1,status:'logged',loggedAt:null,...W.measurement({reps,weight:135})}));
+ const h=await harness(v,true);assert.match(h.host.innerHTML,/7 reps/);assert.match(h.host.innerHTML,/9 reps/);
+ const plan=record();plan.plan.exercises[0].sets[0].reps=6;plan.plan.exercises[0].sets[0].repsMax=8;
+ const builder=await harness(plan);await builder.host.fill('plan.groups.0.rounds',3);
+ assert.equal(builder.controller.v.plan.exercises[0].sets[2].repsMax,8);
+});
+
+
+test('acknowledged actual drafts no longer block refreshing a later saved revision', async () => {
+ const h=await harness(record(),true);await h.host.fill('drafts.bench-entry__target-1.reps',7);await h.click('log',{entry:'bench-entry',target:'target-1'});
+ h.state.row.record.actual.sets[0].reps=9;h.state.row.revision++;await h.getController();
+ assert.equal(h.controller.row.revision,h.state.row.revision);assert.equal(h.controller.v.actual.sets[0].reps,9);
 });

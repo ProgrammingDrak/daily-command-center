@@ -2,7 +2,7 @@
 (function(){
   'use strict';
   const boundHosts=new WeakSet();
-  const D=window.DCC,W=window.WorkoutModel,M=window.ActivityModel,esc=D.esc,controllers=new Map(),expanded=new Set(),resources=new Map();
+  const D=window.DCC,W=window.WorkoutModel,M=window.ActivityModel,esc=D.esc,controllers=new Map(),resources=new Map();
   const uid=()=>crypto.randomUUID(),copy=x=>structuredClone(x),date=()=>typeof viewDate==='string'?viewDate:D.dates.todayKey();
   const button=(label,act,attrs='')=>'<button type="button" data-w-act="'+act+'" '+attrs+'>'+esc(label)+'</button>';
   const input=(label,path,value,type='text',attrs='')=>'<label class="wp-field"><span>'+esc(label)+'</span><input type="'+type+'" data-w-path="'+esc(path)+'" value="'+esc(value??'')+'" '+attrs+(type==='number'?' min="0" step="any" inputmode="decimal" placeholder="—"':'')+'></label>';
@@ -11,20 +11,21 @@
   const measurementFields=(s,path)=>input('Reps',path+'.reps',s.reps,'number')+input('Load',path+'.weight',s.weight,'number')+select('Unit',path+'.unit',s.unit,['lb','kg'])+input('Seconds (timed set)',path+'.seconds',s.seconds,'number')+select('Load convention',path+'.loadMode',s.loadMode,['total','per-dumbbell','bodyweight','added','assistance'])+select('Reps convention',path+'.repsMode',s.repsMode,['total','per-side']);
   const textarea=(label,path,value)=>'<label class="wp-field"><span>'+esc(label)+'</span><textarea data-w-path="'+esc(path)+'" rows="3">'+esc(value||'')+'</textarea></label>';
   function relevantFields(t,path,entry){const kind=entry.movement?.goalKind||'strength';
-    const main=kind==='strength'?input('Reps',path+'.reps',t.reps,'number')+input('Load',path+'.weight',t.weight,'number')+select('Unit',path+'.unit',t.unit,['lb','kg']):kind==='hold'?input('Planned hold (seconds)',path+'.seconds',t.seconds,'number'):'';
+    const main=kind==='strength'?input('Minimum / exact reps',path+'.reps',t.reps,'number')+input('Maximum reps (optional)',path+'.repsMax',t.repsMax,'number')+input('Load',path+'.weight',t.weight,'number')+select('Unit',path+'.unit',t.unit,['lb','kg']):kind==='hold'?input('Planned hold (seconds)',path+'.seconds',t.seconds,'number'):'';
     return '<div class="wp-goals">'+main+'</div><details class="wp-advanced-'+t.id+'"><summary>Other goals &amp; conventions</summary>'+ (kind!=='strength'?input('Reps',path+'.reps',t.reps,'number')+input('Load',path+'.weight',t.weight,'number')+select('Unit',path+'.unit',t.unit,['lb','kg']):'')+(kind!=='hold'?input('Planned hold (seconds)',path+'.seconds',t.seconds,'number'):'')+select('Load convention',path+'.loadMode',t.loadMode,['total','per-dumbbell','bodyweight','added','assistance'])+select('Reps convention',path+'.repsMode',t.repsMode,['total','per-side'])+'</details>';
   }
   const canEdit=c=>!c.v.baseline&&!readonly(c)&&!c.busy&&!c.pending;
   function changed(c,message,focus){c.dirty=true;c.announcement=message;c.focusAfter=focus;draw(c);}
   function moveCard(c,id,delta){const g=c.v.plan.groups.find(g=>g.exerciseIds.includes(id)),i=g?.exerciseIds.indexOf(id),j=i+delta;if(!g||j<0||j>=g.exerciseIds.length)return;W.moveEntry(c.v.plan,id,g.id,delta<0?g.exerciseIds[j]:g.exerciseIds[j+1]||null);changed(c,'Movement moved to position '+(j+1),'card-'+id);}
-  const description=s=>!s?'None logged':(s.reps==null?'—':s.reps)+' reps · '+(s.weight==null?'—':s.weight)+' '+s.unit+' '+s.loadMode+' · '+s.repsMode+(s.seconds!=null?' · '+s.seconds+'s':'');
+  const description=s=>!s?'None logged':(s.reps==null?'—':s.reps+(s.repsMax!=null&&s.repsMax!==s.reps?'–'+s.repsMax:''))+' reps · '+(s.weight==null?'—':s.weight)+' '+s.unit+' '+(s.loadMode==='per-dumbbell'?'per hand':s.loadMode)+' · '+s.repsMode+(s.seconds!=null?' · '+s.seconds+'s':'');
   const duration=n=>n==null?'Unknown':Math.floor(n/60)+'m '+Math.floor(n%60)+'s';
   async function api(path,opts){return D.api('/api/activity'+path,opts);}
   function resource(key,load){if(!resources.has(key)){const promise=load().catch(e=>{resources.delete(key);throw e;});resources.set(key,promise);}return resources.get(key);}
   function metadata(c,row){for(const key of ['title','date','duration','removed','completed'])c.row[key]=row[key];}
+  function clearLoggedDrafts(c){for(const a of c.v.actual.sets)if(a.planSetId)delete c.drafts[a.exerciseId+'__'+a.planSetId];}
   function invalidateHistory(row){for(const key of resources.keys())if(key.startsWith('history:'))resources.delete(key);if(row)for(const c of controllers.values()){c.history=c.history.filter(r=>r.taskId!==row.taskId);if(row.record.occurredOn)c.history.push(row);}}
   async function controller(id){
-    if(controllers.has(id)){const c=controllers.get(id);metadata(c,await api('/tasks/'+encodeURIComponent(id)));return c;}
+    if(controllers.has(id)){const c=controllers.get(id),fresh=await api('/tasks/'+encodeURIComponent(id));metadata(c,fresh);if(!c.dirty&&!c.pending&&!c.busy&&!Object.values(c.drafts).some(W.meaningful)){c.row=fresh;c.v=W.upgrade(fresh.record);}return c;}
     const row=await api('/tasks/'+encodeURIComponent(id));
     const c={row,v:W.upgrade(row.record),hosts:new Set(),dirty:false,busy:false,pending:null,error:'',status:'Synced',drafts:{},library:[],catalog:[],history:[],templateName:row.title,collection:'',variant:'',lastWall:Date.now(),lastMono:performance.now()};
     const range=new URLSearchParams({from:D.dates.addDays(date(),-365),to:date()}).toString();
@@ -41,13 +42,14 @@
     if(c.busy)return false;c.busy=true;c.error='';c.status='Saving…';
     try{if(M.hasActual(value)&&!c.v.occurredOn){const fresh=await api('/tasks/'+encodeURIComponent(c.row.taskId));metadata(c,fresh);value=copy(value);value.occurredOn=fresh.date||date();}
       const valid=M.validate(value);c.pending={record:valid,expectedRevision:c.row.revision,mutationId};draw(c);
-      const row=await api('/tasks/'+encodeURIComponent(c.row.taskId),{method:'PUT',body:c.pending});c.row=row;c.v=W.upgrade(row.record);c.pending=null;c.dirty=false;c.status='Synced';invalidateHistory(row);D.Activity?.refresh();return true;
+      const row=await api('/tasks/'+encodeURIComponent(c.row.taskId),{method:'PUT',body:c.pending});c.row=row;c.v=W.upgrade(row.record);clearLoggedDrafts(c);c.pending=null;c.dirty=false;c.status='Synced';invalidateHistory(row);D.Activity?.refresh();return true;
     }catch(e){c.error=e.message;c.status='Not saved';if(!c.pending)c.dirty=true;return false;}
     finally{c.busy=false;draw(c);}
   }
-  async function retry(c){if(!c.pending)return;const p=c.pending;c.busy=true;c.error='';draw(c);try{const row=await api('/tasks/'+encodeURIComponent(c.row.taskId),{method:'PUT',body:p});c.row=row;c.v=W.upgrade(row.record);c.pending=null;c.dirty=false;c.status='Synced';invalidateHistory(row);}catch(e){c.error=e.message;c.status='Not saved';}finally{c.busy=false;draw(c);}}
+  async function retry(c){if(!c.pending)return;const p=c.pending;c.busy=true;c.error='';draw(c);try{const row=await api('/tasks/'+encodeURIComponent(c.row.taskId),{method:'PUT',body:p});c.row=row;c.v=W.upgrade(row.record);clearLoggedDrafts(c);c.pending=null;c.dirty=false;c.status='Synced';invalidateHistory(row);}catch(e){c.error=e.message;c.status='Not saved';}finally{c.busy=false;draw(c);}}
   function render(c,host){
     if(c.templateEdit)return renderTemplate(c,host);
+    if(!c.editPlan)return renderSession(c,host);
     const v=c.v,s=W.replay(v),locked=!!v.baseline,ro=readonly(c),disabled=c.busy||!!c.pending,attrs=disabled?' disabled':'',editable=!locked&&!ro;
     const openSections=Array.from(host.querySelectorAll('details[open]')).map(e=>e.className);
     const focus=host.contains(document.activeElement)?document.activeElement:null,key=focus?.dataset.wPath,start=focus?.selectionStart,control=c.focusAfter||focus?.dataset.wFocus;
@@ -59,7 +61,7 @@
       (v.provenance?'<p class="wp-lineage">Detached from '+esc(v.provenance.templateName)+' · revision '+v.provenance.templateRevision+' · '+esc(v.provenance.collection)+' / '+esc(v.provenance.variant)+'. Changes affect this session only.</p>':'')+
       '<p class="act-error" role="alert">'+esc(c.error)+'</p>'+ (c.pending?button('Retry exact save','retry',c.busy?' disabled':''):'')+button('Reload saved record (discard draft)','reload',c.busy?' disabled':'')+
       (ro?'<p class="wp-notice">Removed or archived record: history retained. Restore using task recovery or the record tools before editing.</p>':'')+
-      '<div class="wp-toolbar">'+(!ro?button('Save plan','save',attrs+(editable?'':' disabled')):'')+(editable?button('Add Gentle Reset example','gentle-reset',attrs):'')+'</div>'+
+      '<div class="wp-toolbar">'+button('Back to workout','view-session')+(!ro?button('Save plan','save',attrs+(editable?'':' disabled')):'')+(editable?button('Add Gentle Reset example','gentle-reset',attrs):'')+'</div>'+
       guidance(c,ro||disabled)+'<details class="wp-session"'+(locked&&!v.guidance?' open':'')+'><summary>Session logging &amp; manual timing</summary><p class="wp-notice">Suggested windows are planning guidance. No audio, countdown or automatic advancement is enabled.</p><div class="wp-toolbar">'+
       (!ro&&s.status==='planned'?button('Start workout','start',attrs)+button('Skip workout','skip',attrs):'')+
       (!ro&&s.status==='running'?button('Pause workout','pause',attrs)+(s.current?button('Finish round · start rest','finish-round',attrs):nextRound(c)?button('Start next round · end rest','start-round',attrs):'')+button('Stop workout','stop',attrs):'')+
@@ -75,6 +77,31 @@
     for(const section of host.querySelectorAll('details'))if(openSections.includes(section.className))section.open=true;
     if(control){host.querySelector('[data-w-focus="'+control+'"]')?.focus();c.focusAfter=null;}
     if(key){const field=Array.from(host.querySelectorAll('[data-w-path]')).find(e=>e.dataset.wPath===key);if(field){field.focus();try{field.setSelectionRange(start,start);}catch{}}}
+  }
+  function comparison(actual,planned){
+    if(!actual||actual.status==='skipped')return 'No confirmed result';
+    const parts=[];
+    if(actual.reps!=null&&planned.reps!=null&&actual.repsMode===planned.repsMode){const max=planned.repsMax??planned.reps;parts.push(actual.reps<planned.reps?(actual.reps-planned.reps)+' reps below target':actual.reps>max?'+'+(actual.reps-max)+' reps above target':'Reps on target');}
+    if(actual.weight!=null&&planned.weight!=null&&actual.loadMode===planned.loadMode){const load=M.weight(actual.weight,actual.unit,planned.unit),delta=Math.round((load-planned.weight)*10)/10;parts.push(delta===0?'Load on target':(delta>0?'+':'')+delta+' '+planned.unit+' vs target');}
+    return parts.join(' · ')||'Conventions differ or target not specified';
+  }
+  function sessionSet(c,e,t,label,state,history){
+    const results=c.v.actual.sets.filter(a=>a.exerciseId===e.id&&a.planSetId===t.id),result=results[0],key=e.id+'__'+t.id;
+    const draft=c.drafts[key]||={...W.measurement(t),reps:null,weight:null,seconds:null};
+    const previous=history.find(a=>a.round===t.round&&a.loadMode===t.loadMode&&a.repsMode===t.repsMode);
+    const allowed=!readonly(c)&&!['skipped','completed','partial'].includes(state.status)&&!result;
+    return '<section class="wp-set-row" data-entry-id="'+esc(e.id)+'" data-target-id="'+esc(t.id)+'"><div class="wp-set-heading"><strong>'+esc(label)+'</strong><span class="wp-label">Planned · '+esc(description(t))+'</span></div>'+
+      '<div class="wp-actual-fields"><span class="wp-label">Actual</span>'+(result?results.map(a=>'<p>'+esc(a.status==='skipped'?'Skipped':description(a))+'</p><small>'+esc(comparison(a,t))+'</small>').join(''):allowed?'<div class="wp-quick-inputs">'+input('Actual reps','drafts.'+key+'.reps',draft.reps,'number')+input('Actual load','drafts.'+key+'.weight',draft.weight,'number')+select('Unit','drafts.'+key+'.unit',draft.unit,['lb','kg'])+'</div><small>'+esc(draft.loadMode==='per-dumbbell'?'Load per hand (one dumbbell)':draft.loadMode)+' · '+esc(draft.repsMode==='per-side'?'reps per side':'total reps')+'</small><details class="wp-conventions-'+key+'"><summary>Time &amp; conventions</summary>'+input('Actual seconds','drafts.'+key+'.seconds',draft.seconds,'number')+select('Load convention','drafts.'+key+'.loadMode',draft.loadMode,['total','per-dumbbell','bodyweight','added','assistance'])+select('Reps convention','drafts.'+key+'.repsMode',draft.repsMode,['total','per-side'])+'</details><div class="wp-toolbar">'+button('Log set','log','data-entry="'+esc(e.id)+'" data-target="'+esc(t.id)+'"')+button('Skip set','skip-set','data-entry="'+esc(e.id)+'" data-target="'+esc(t.id)+'"')+'</div>':'<p>No result recorded</p>')+'</div>'+
+      '<div class="wp-previous"><small>Previous confirmed'+(previous?' · '+esc(previous.occurredOn):'')+'</small><p>'+esc(previous?description(previous):'No matching recorded set')+'</p></div></section>';
+  }
+  function renderSession(c,host){
+    const v=c.v,s=W.replay(v),disabled=c.busy||!!c.pending||readonly(c),attrs=disabled?' disabled':'';
+    const histories=new Map(v.plan.exercises.map(e=>[e.id,W.previous(c.history,e,c.row.taskId)]));
+    const opened=Array.from(host.querySelectorAll('details[open]')).map(e=>e.className);
+    host.innerHTML='<div class="wp-top"><div><h2>Plan &amp; track</h2><p>'+esc(c.row.date||'Unscheduled')+' · Private workout</p></div><span class="wp-status" role="status">'+esc(c.status)+(c.dirty?' · Unsaved plan':'')+'</span></div><p class="wp-notice">'+v.actual.sets.filter(a=>a.status==='logged').length+' confirmed sets · Saved revision '+c.row.revision+'. Enter what happened, then Log set. Saving a set never completes this task.</p><p class="act-error" role="alert">'+esc(c.error)+'</p>'+(c.pending?button('Retry exact save','retry',c.busy?' disabled':''):'')+ '<div class="wp-toolbar">'+button('Edit plan & tools','edit-plan',c.busy||c.pending?' disabled':'')+button('Reload saved record (discard draft)','reload',c.busy?' disabled':'')+'</div>'+(readonly(c)?'<p>Removed or archived workout. Saved history is retained.</p>':'')+
+      (v.plan.groups.length?'':'<p>No exercises planned yet. Open Edit plan to add exercises or a superset.</p>')+
+      '<fieldset'+attrs+'>'+v.plan.groups.map(g=>'<section class="wp-group wp-tracking-group"><header><h3>'+esc(g.label|| (g.kind==='single'?v.plan.exercises.find(e=>e.id===g.exerciseIds[0])?.name||'New exercise':g.kind==='superset'?'Superset':'Circuit'))+'</h3><span>'+g.rounds+' '+(g.kind==='single'?'sets':'rounds')+'</span></header>'+(g.kind==='single'?'':'<p class="wp-notice">'+g.exerciseIds.map(id=>esc(v.plan.exercises.find(e=>e.id===id).name)).join(' + ')+' · Complete each movement in order per round.</p>')+Array.from({length:Number.isInteger(g.rounds)&&g.rounds>0&&g.rounds<=200?g.rounds:0},(_,i)=>'<div class="wp-round">'+(g.kind==='single'?'':'<h4>Round '+(i+1)+'</h4>')+g.exerciseIds.map(id=>{const e=v.plan.exercises.find(e=>e.id===id);return e.sets.filter(t=>t.round===i+1).map(t=>sessionSet(c,e,t,g.kind==='single'?'Set '+t.round:e.name,s,histories.get(e.id))).join('');}).join('')+'</div>').join('')+g.exerciseIds.map(id=>{const e=v.plan.exercises.find(e=>e.id===id);return '<div class="wp-extra">'+v.actual.sets.filter(a=>a.exerciseId===id&&!a.planSetId).map(a=>'<p>'+esc(e.name)+' · Extra · '+esc(description(a))+'</p>').join('')+(!readonly(c)&&!['skipped','completed','partial'].includes(s.status)?button('+ Extra set · '+e.name,'extra','data-entry="'+esc(id)+'"'):'')+'</div>';}).join('')+'</section>').join('')+running(c,false,disabled)+'</fieldset><p class="wp-notice">Blank actuals stay unknown. Draft inputs stay on this page until reload. Previous performance uses saved sets only, with matching movement and conventions.</p>';
+    for(const section of host.querySelectorAll('details'))if(opened.includes(section.className))section.open=true;
   }
   function guidance(c,disabled){const state=c.v.guidance,attrs=disabled?' disabled':'';
     if(!state&&['skipped','completed','partial'].includes(W.replay(c.v).status))return '';
@@ -125,13 +152,16 @@
       const keys=path.split('.'),key=keys.pop(),scope=['templateName','collection','variant'].includes(path)?c:path.startsWith('drafts.')?c:c.v;
       const obj=keys.reduce((o,k)=>o[k],scope);obj[key]=e.target.type==='number'?(e.target.value===''?null:Number(e.target.value)):e.target.value;
       if(path.startsWith('plan.')||(c.templateEdit&&['templateName','collection','variant'].includes(path))){c.dirty=true;host.querySelector('.wp-status').textContent=c.templateEdit?templateStatus(c):'Unsaved plan';}
-      if(path.endsWith('.rounds')){const gi=Number(keys.at(-1)),g=c.v.plan.groups[gi],n=obj[key];if(!Number.isInteger(n)||n<1||n>200)return;g.exerciseIds.forEach(id=>{const entry=c.v.plan.exercises.find(e=>e.id===id);entry.sets=entry.sets.filter(t=>t.round<=n);for(let i=1;i<=n;i++)if(!entry.sets.some(t=>t.round===i))entry.sets.push({...target(i,entry.sets[0]?.loadMode),...W.measurement(entry.sets[0]||target(i)),id:uid(),round:i});});draw(c);}
+      if(path.endsWith('.rounds')){const gi=Number(keys.at(-1)),g=c.v.plan.groups[gi],n=obj[key];if(!Number.isInteger(n)||n<1||n>200)return;g.exerciseIds.forEach(id=>{const entry=c.v.plan.exercises.find(e=>e.id===id);entry.sets=entry.sets.filter(t=>t.round<=n);for(let i=1;i<=n;i++)if(!entry.sets.some(t=>t.round===i))entry.sets.push({...target(i,entry.sets[0]?.loadMode),...W.measurement(entry.sets[0]||target(i)),...(entry.sets[0]?.repsMax!=null?{repsMax:entry.sets[0].repsMax}:{}),id:uid(),round:i});});draw(c);}
+      if(path.startsWith('drafts.')&&(path.endsWith('.loadMode')||path.endsWith('.repsMode')))draw(c);
       if(path.startsWith('plan.')&&(path.endsWith('.kind')||path.endsWith('.goalKind')||path.endsWith('.side')))draw(c);
     });
     host.addEventListener('change',e=>{if(e.target.tagName==='SELECT')e.target.dispatchEvent(new Event('input',{bubbles:true}));});
     host.addEventListener('click',async e=>{const b=e.target.closest('[data-w-act]');if(!b||c.busy)return;const a=b.dataset.wAct;if(c.pending&&!['retry','reload'].includes(a))return;
       try{
         if(a==='grip')return;
+        if(a==='edit-plan'){c.editPlan=true;return draw(c);}
+        if(a==='view-session'){c.editPlan=false;return draw(c);}
         if(['group','exercise','custom','up','down','remove-group','plan-run','gentle-reset','entry-up','entry-down','remove-entry','duplicate-entry','refresh-entry','template-use'].includes(a)&&!canEdit(c))return;
         if(a==='retry')return retry(c);
         if(a==='reload'){const r=await api('/tasks/'+encodeURIComponent(c.row.taskId));c.row=r;c.v=W.upgrade(r.record);c.pending=null;c.dirty=false;c.error='';c.status='Synced';c.drafts={};return draw(c);}
@@ -143,7 +173,7 @@
           else{const s=W.replay(v);if(a==='stop')return stopDialog(c);ev=event(c,a,a==='start-round'?nextRound(c):a==='finish-round'?{groupId:s.current.groupId,round:s.current.round}:{});v=W.action(v,ev);}
           return persist(c,v);
         }
-        if(['log','skip-set'].includes(a)){const entry=c.v.plan.exercises.find(x=>x.id===b.dataset.entry),t=entry.sets.find(x=>x.id===b.dataset.target),value=copy(c.v);value.actual.sets.push({id:uid(),exerciseId:entry.id,planSetId:t.id,round:t.round,status:a==='log'?'logged':'skipped',loggedAt:new Date().toISOString(),...W.measurement(a==='log'?c.drafts[entry.id+'__'+t.id]:{unit:t.unit,loadMode:t.loadMode,repsMode:t.repsMode})});value.occurredOn=value.occurredOn||c.row.date||date();if(!value.baseline)value.baseline=copy(value.plan);return persist(c,value);}
+        if(['log','skip-set'].includes(a)){if(c.v.actual.sets.some(x=>x.exerciseId===b.dataset.entry&&x.planSetId===b.dataset.target))return;const entry=c.v.plan.exercises.find(x=>x.id===b.dataset.entry),t=entry.sets.find(x=>x.id===b.dataset.target),value=copy(c.v);value.actual.sets.push({id:uid(),exerciseId:entry.id,planSetId:t.id,round:t.round,status:a==='log'?'logged':'skipped',loggedAt:new Date().toISOString(),...W.measurement(a==='log'?c.drafts[entry.id+'__'+t.id]:{unit:t.unit,loadMode:t.loadMode,repsMode:t.repsMode})});value.occurredOn=value.occurredOn||c.row.date||date();if(!value.baseline)value.baseline=copy(value.plan);return persist(c,value);}
         if(a==='extra')return extraDialog(c,b.dataset.entry);
         if(a==='run')return runDialog(c,Number(b.dataset.run));
         if(a==='group'){c.v.plan.groups.push({id:uid(),kind:b.dataset.kind,rounds:1,exerciseIds:[]});}
@@ -160,7 +190,7 @@
         if(a==='template-save'){const body={title:c.templateName,collection:c.collection,variant:c.variant,plan:c.v.plan,sourceTemplateId:c.v.provenance?.templateId,sourceSessionId:c.row.revision?c.row.taskId:null};c.busy=true;draw(c);try{await api('/templates',{method:'POST',body});resources.delete('templates');const library=(await resource('templates',()=>api('/templates'))).templates;for(const other of controllers.values()){other.library=library;draw(other);}D.toast('New template saved. Original unchanged.','success');}finally{c.busy=false;}return draw(c);}
         if(a==='template-use'||a==='template-start'){const id=host.querySelector('[data-template]').value,t=c.library.find(t=>t.id===id);if(!t)throw new Error('Choose a template');if(a==='template-start')return D.Activity.create('workout',{templateId:t.id,title:t.title});if(M.hasActual(c.v))throw new Error('This session has results. Start a detached session instead.');if(c.dirty||c.v.plan.exercises.length)return replaceDialog(c,t);return applyTemplate(c,t);}
         if(a==='reuse'||a==='repeat'){if(c.dirty||!c.row.revision)throw new Error('Save the plan first');if(a==='reuse')return D.Activity.create('workout',c.row);window.openRepeatResponsibilityFromTask({id:c.row.taskId,_blockId:c.row.taskId,title:c.row.title,type:'workout',publicVisibility:'private',durMin:c.row.duration||30});return;}
-        if(['undo','archive','restore'].includes(a)){if(c.dirty)throw new Error('Save or reload your draft first');const row=await api('/tasks/'+encodeURIComponent(c.row.taskId)+'/'+a,{method:'POST',body:{expectedRevision:c.row.revision}});c.row=row;c.v=W.upgrade(row.record);c.pending=null;invalidateHistory(row);D.Activity.refresh();return draw(c);}
+        if(['undo','archive','restore'].includes(a)){if(c.dirty)throw new Error('Save or reload your draft first');const row=await api('/tasks/'+encodeURIComponent(c.row.taskId)+'/'+a,{method:'POST',body:{expectedRevision:c.row.revision}});c.row=row;c.v=W.upgrade(row.record);clearLoggedDrafts(c);c.pending=null;invalidateHistory(row);D.Activity.refresh();return draw(c);}
         c.dirty=true;draw(c);
       }catch(err){c.error=err.message;draw(c);}
     });
@@ -183,7 +213,7 @@
   }
   async function persistTemplate(c){if(c.busy)return false;c.busy=true;c.error='';c.status='Saving…';draw(c);try{const body={title:c.templateName,collection:c.collection,variant:c.variant,plan:W.normalizePlan(c.v.plan),...(c.templateId?{expectedRevision:c.templateRevision}:{})};const saved=await api('/templates'+(c.templateId?'/'+encodeURIComponent(c.templateId):''),{method:c.templateId?'PUT':'POST',body});c.templateId=saved.id;c.templateRevision=saved.revision;c.v.plan=copy(saved.plan);c.dirty=false;c.status='Saved';resources.delete('templates');try{const library=(await api('/templates')).templates;for(const other of controllers.values())other.library=library;}catch(e){c.error='Template saved, but the library could not refresh: '+e.message;}return true;}catch(e){c.error=e.message;c.status='Not saved';return false;}finally{c.busy=false;draw(c);}}
   function editTemplate(t,catalog,library,existing){const c=existing||{templateEdit:true,templateId:t?.id||null,templateRevision:t?.revision||null,row:{record:W.empty()},v:W.empty(),hosts:new Set(),busy:false,pending:null,dirty:false,error:'',status:t?.id?'Saved':'Draft',drafts:{},history:[],catalog,library,templateName:t?.title||'',collection:t?.collection||'',variant:t?.variant||''};if(!existing&&t)c.v.plan=copy(t.plan);const body=document.createElement('div');body.className='workout-planner';const overlay=D.modal({title:'Edit workout template',body,actions:[{label:'Back to templates',onClick:()=>{D.WorkoutLibrary.open('workouts');return false;}}]});overlay.el.classList.add('wp-dialog');bind(c,body);}
-  async function open(row){const body=document.createElement('div');body.className='workout-planner';body.textContent='Loading private workout…';const overlay=D.modal({title:row.title,body,actions:[{label:'Close'}]});overlay.el.classList.add('wp-dialog');try{const c=await controller(row.taskId);bind(c,body);}catch(e){body.textContent=e.message;}}
-  function attach(rowEl,task){if(task.type!=='workout')return;const id=task._blockId||task.id,main=rowEl.querySelector('.it-list-main');if(!main)return;const toggle=document.createElement('button');toggle.type='button';toggle.className='wp-toggle';toggle.textContent='Plan & Log';toggle.setAttribute('aria-expanded',String(expanded.has(id)));const host=document.createElement('div');host.className='workout-planner';host.id='wp-'+id;host.hidden=!expanded.has(id);toggle.setAttribute('aria-controls',host.id);main.append(toggle);rowEl.append(host);async function load(){host.textContent='Loading private workout…';try{bind(await controller(id),host);}catch(e){host.textContent=e.message;}}toggle.onclick=e=>{e.stopPropagation();host.hidden=!host.hidden;toggle.setAttribute('aria-expanded',String(!host.hidden));if(host.hidden)expanded.delete(id);else{expanded.add(id);load();}};if(expanded.has(id))load();}
+  async function open(row){const localId=row.localId||controllers.get(row.taskId)?.localId||(typeof scheduled!=='undefined'?scheduled.find(e=>(e._blockId||e.id)===row.taskId)?.id:null);const details=localId&&typeof window.taskAnchorById==='function'&&window.taskAnchorById(localId);const body=document.createElement('div');body.className='workout-planner';body.textContent='Loading private workout…';const overlay=D.modal({title:row.title||'Workout',body,actions:[...(details?[{label:'Task details',onClick:()=>{overlay.close('replaced');if(typeof window.openAddModal==='function')window.openAddModal(localId,row.title,{generic:true});return false;}}]:[]),{label:'Close'}]});overlay.el.classList.add('wp-dialog');try{const c=await controller(row.taskId);if(localId)c.localId=localId;c.editPlan=false;bind(c,body);}catch(e){body.textContent=e.message;}}
+  function attach(rowEl,task){if(task.type!=='workout')return;const id=task._blockId||task.id,main=rowEl.querySelector('.it-list-main');if(!main)return;const toggle=document.createElement('button');toggle.type='button';toggle.className='wp-toggle';toggle.textContent='Open workout';main.append(toggle);toggle.onclick=e=>{e.stopPropagation();open({taskId:id,localId:task.id,title:task.title});};}
   D.Workout={open,attach,controller,editTemplate,refreshLibrary(catalog,library){resources.clear();for(const c of controllers.values()){c.catalog=catalog;c.library=library;draw(c);}}};
 })();

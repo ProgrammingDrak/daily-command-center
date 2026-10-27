@@ -1337,9 +1337,10 @@ function buildSchedule(){
       const ttlSpan=el.querySelector(".ttl");
       if(ttlSpan){
         ttlSpan.style.cursor="text";
-        ttlSpan.setAttribute("title","Click to rename");
+        ttlSpan.setAttribute("title",ev.type==='workout'?"Open workout plan and tracking":"Click to rename");
         ttlSpan.addEventListener("click",e=>{
           e.stopPropagation();
+          if(ev.type==='workout'&&window.DCC?.Workout){openTaskNotes(ev);return;}
           const inp=document.createElement("input");
           inp.type="text";
           inp.className="ttl-edit";

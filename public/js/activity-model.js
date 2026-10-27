@@ -137,7 +137,7 @@
   }
   // Flat export preserves individual sets/foods, relations and missing fields.
   function csv(records) {
-    const columns = ["taskId", "taskType", "title", "scheduledDate", "resultsDate", "completed", "removed", "archived", "phase", "kind", "id", "planId", "exerciseId", "name", "reps", "weight", "weightUnit", "distance", "distanceUnit", "elapsedSeconds", "portion", "portionUnit", "calories", "protein", "carbs", "fat", "nutritionState", "source", "catalogExerciseId", "round", "loadMode", "repsMode", "seconds", "status", "loggedAt", "templateId", "templateRevision", "timing"];
+    const columns = ["taskId", "taskType", "title", "scheduledDate", "resultsDate", "completed", "removed", "archived", "phase", "kind", "id", "planId", "exerciseId", "name", "reps", "weight", "weightUnit", "distance", "distanceUnit", "elapsedSeconds", "portion", "portionUnit", "calories", "protein", "carbs", "fat", "nutritionState", "source", "catalogExerciseId", "round", "loadMode", "repsMode", "seconds", "status", "loggedAt", "templateId", "templateRevision", "timing", "repsMax"];
     const rows = [];
     records.forEach(r => {
       const base = { taskId: r.taskId, taskType: r.record.taskType, title: r.title, scheduledDate: r.date, resultsDate: r.record.occurredOn, completed: r.completed, removed: r.removed, archived: r.archived, templateId:r.record.provenance?.templateId, templateRevision:r.record.provenance?.templateRevision };

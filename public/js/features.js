@@ -228,7 +228,7 @@ function _setAddModalControlsEditable(modal, editing) {
   var body = modal && modal.querySelector('.add-modal-body');
   if (!body) return;
   body.querySelectorAll('input, textarea, select, button, [contenteditable]').forEach(function(control) {
-    if (control.matches('[data-am-tab]')) return;
+    if (control.matches('[data-am-tab], [data-activity-open]')) return;
     var saved = _addModalControlState.get(control);
     if (!saved) {
       saved = {
@@ -400,7 +400,12 @@ function _amBuildDetails(ev){
 // id so their edits land on the origin day's row rather than silently going nowhere.
 // Those two failures together are why the row's open-space click was disabled on
 // carryovers: it looked like a working affordance and saved to the wrong place.
-function openAddModal(taskId, taskTitle) {
+function openAddModal(taskId, taskTitle, options) {
+  var workoutAnchor = typeof taskAnchorById === 'function' ? taskAnchorById(taskId) : null;
+  var workoutTask = workoutAnchor ? workoutAnchor.ev : (typeof scheduled !== 'undefined' ? scheduled.find(ev => ev.id === taskId) : null);
+  if (!options?.generic && workoutTask?.type === 'workout' && window.DCC?.Workout) {
+    return DCC.Workout.open({taskId:workoutAnchor?.blockId || workoutTask._blockId || taskId,title:workoutTask.title,localId:taskId});
+  }
   var taskOverlay = document.getElementById('add-modal-overlay');
   if (!taskOverlay.classList.contains('open')) {
     var activeOpener = document.activeElement;
@@ -623,7 +628,7 @@ function cancelAddModalEdits() {
   if (!_addModalTaskId) return;
   var taskId = _addModalTaskId;
   var fallbackTitle = taskForRepeatResponsibility(taskId, _addModalDraftTitle).title;
-  openAddModal(taskId, fallbackTitle);
+  openAddModal(taskId, fallbackTitle, {generic:true});
   // openAddModal now opens in edit mode, so Cancel has to step back out of it
   // explicitly -- otherwise discarding the drafts would leave the fields hot.
   setAddModalMode(false);
