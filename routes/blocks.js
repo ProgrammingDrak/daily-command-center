@@ -861,6 +861,10 @@ module.exports = function mount(app, ctx) {
     let result,block,committed=false;
     try {
     await q.query("BEGIN");
+    if (process.env.DCC_CONVERSATION_ENABLED === "true") {
+      const probe = await blockDB.getBlockIncludingDeleted(req.params.id,q);
+      if (probe?.user_id != null) await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",["dcc-foreground:"+probe.user_id]);
+    }
     const existing = await blockDB.getBlockIncludingDeleted(req.params.id,q,true);
     if (!existing || existing.deleted_at) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);

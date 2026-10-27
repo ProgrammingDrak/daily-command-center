@@ -135,7 +135,7 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       return get(id,owner,q);
     });
   }
-  function timing(q) {
+  function timing(q, coordinated = false) {
     const db = { ...blockDB,
       updateBlock: (id, fields) => blockDB.updateBlock(id, fields, q),
       getBlockIncludingDeleted: id => blockDB.getBlockIncludingDeleted(id, q),
@@ -144,9 +144,9 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       createBlock: input => blockDB.createBlock(input, q),
       getTaskTimeEntries: (id, ws, opts) => blockDB.getTaskTimeEntries(id, ws, opts, q),
       ensureDayRoot: (date, userId, ws) => blockDB.ensureDayRoot(date, userId, ws, q) };
-    return createTaskTiming({ pool: q, blockDB: db, timeZone: APP_TIME_ZONE, transactionClient: q });
+    return createTaskTiming({ pool: q, blockDB: db, timeZone: APP_TIME_ZONE, transactionClient: q, coordinated });
   }
-  async function act(id, body, owner, transactionClient = null, transitionAtMs = null) {
+  async function act(id, body, owner, transactionClient = null, transitionAtMs = null, coordinated = false) {
     const expected = M.revision(body.expectedRevision), operationId = M.id(body.operationId);
     if (!["start","resume","pause","progress","complete","feedback","preflight","reopen"].includes(body.action)) throw M.error("Unknown guided action");
     const payload = { action: body.action, progress: M.text(body.progress ?? "", "Progress", 12000),
@@ -204,7 +204,7 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
         session.access ||= {};session.access[observation.index]={...observation,at};
       }
       if(payload.action === "complete" && (session.snapshot.prerequisites || []).some((p,i)=>p.required && M.accessState(session.access?.[i],at)!=="ready")) throw M.error("A required prerequisite is unresolved or stale. Record a current permitted access check before completing",409);
-      const clock = timing(q), workArgs = { block: b, atMs, actor: `dcc:${owner.userId}`, actionId: operationId };
+      const clock = timing(q, coordinated), workArgs = { block: b, atMs, actor: `dcc:${owner.userId}`, actionId: operationId };
       if (["start","resume"].includes(payload.action)) { await clock.startWork(workArgs); session.state = "active"; }
       if (["pause","complete"].includes(payload.action)) { await clock.pauseWork(workArgs); session.state = "paused"; }
       if (["progress","complete"].includes(payload.action)) { session.progress = payload.progress; session.checked = [...new Set(payload.checked)]; }
@@ -215,6 +215,10 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
           userId: owner.userId, workspaceId: owner.workspaceId, transactionClient: q, guidedCompletionTaskId:id });
         for(const affected of completion.affectedTasks || [completion.task]) {
           if(String(affected.user_id)!==String(owner.userId)) throw M.error("A nested task belongs to a different owner",409);
+          if (coordinated && affected.properties.startedAt) {
+            const cutoff = Math.min(atMs, require('./public/js/work-checkin-policy').checkInState(affected.properties,atMs).autoPauseAtMs);
+            await clock.pauseWork({...workArgs,block:affected,atMs:cutoff,transitionAtMs:atMs,actionId:operationId+":cutoff"});
+          }
           await clock.completeWork({ ...workArgs, block: affected, actionId: operationId + ":finish", normalizeExisting: true });
         }
         broadcastIds=completion.broadcastIds || [id];

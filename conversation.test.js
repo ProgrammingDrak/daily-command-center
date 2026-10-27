@@ -99,7 +99,7 @@ test("account conversation persistence, race, rollback, corrections and OAuth", 
     const priorForeground = (await store.state(owner)).foreground.filter((row) => row.id !== "b");
     await store.execute(cmd("background-start", "b", revision, "background", "2026-10-20T13:25:00Z"), owner);
     const before = await store.get("b", owner);
-    assert.equal(before.background.length, 1);
+    assert.equal(before.background.filter(row => row.task_id === "b").length, 1);
     assert.deepEqual(before.foreground, priorForeground);
     revision = (await store.state(owner)).revision;
     await store.execute(cmd("background-stop", "b", revision, "background-stop", "2026-10-20T13:35:00Z"), owner);

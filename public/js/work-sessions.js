@@ -295,6 +295,7 @@
   }
 
   function refresh(nowMs) {
+    if(window.DCCWorkingQueue){window.DCCWorkingQueue.render();return;}
     var dock = document.getElementById("active-work-dock");
     if (!dock) return;
     var active = activeTasks();
@@ -454,6 +455,7 @@
   window.DCCWorkSessions = {
     activeTasks: activeTasks,
     availableTasks: availableTasks,
+    checkInHtml: checkInHtml,
     blockFor: blockFor,
     actionButtonHtml: actionButtonHtml,
     itineraryActionButtonsHtml: itineraryActionButtonsHtml,

@@ -24,6 +24,11 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
     baseUrl: "https://dcc.example",
     clients: { chatgpt: { name: "ChatGPT", redirect_uris: ["https://chatgpt.com/callback"] } }
   });
+  app.use((req, _res, next) => {
+    req.workspaceId = req.session?.workspaceId;
+    next();
+  });
+  require("./routes/working-queue")(app, ctx, { enabled: true });
   const server = await new Promise((resolve) => {
     const s = app.listen(0, "127.0.0.1", () => resolve(s));
   });
@@ -150,6 +155,45 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   assert.equal(result.body.result.structuredContent.task.properties.startedAt, args.at.replace("Z", ".000Z"));
   result = await rpc("tools/call", { name: "dcc_work", arguments: args });
   assert.equal(result.body.result.structuredContent.duplicate, true);
+  // Real browser session and scoped MCP tool share queue state and revisions.
+  r = await call("/api/working-queue", { headers: { cookie } });
+  const queueView = await r.json();
+  assert.equal(queueView.queue.items[0].status, "foreground");
+  result = await rpc("tools/call", {
+    name: "dcc_queue",
+    arguments: {
+      action: "queue-note",
+      taskId: "http-task",
+      note: "Return to the exact next step",
+      sourceEventId: "http-note",
+      expectedRevision: queueView.revision,
+      at: "2026-10-20T13:01:00Z"
+    }
+  });
+  assert.equal(result.body.result.isError, false);
+  r = await call("/api/working-queue", { headers: { cookie } });
+  const noted = await r.json();
+  assert.equal(noted.queue.items[0].note, "Return to the exact next step");
+  r = await call("/api/working-queue", {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "queue-note",
+      taskId: "http-task",
+      note: "Updated from UI",
+      sourceEventId: "ui-note",
+      expectedRevision: noted.revision,
+      at: "2026-10-20T13:02:00Z"
+    })
+  });
+  assert.equal(r.status, 200);
+  result = await rpc("tools/call", { name: "dcc_working_queue", arguments: {} });
+  assert.equal(result.body.result.structuredContent.queue.items[0].note, "Updated from UI");
+  result = await rpc("tools/call", {
+    name: "dcc_queue",
+    arguments: { ...args, action: "done", sourceEventId: "not-allowed" }
+  });
+  assert.equal(result.body.result.isError, true, "queue scope cannot grant completion");
   result = await rpc("tools/list", {}, { origin: "https://evil.example" });
   assert.equal(result.status, 403);
   r = await call("/connections/conversation", { headers: { cookie } });

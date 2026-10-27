@@ -1019,6 +1019,7 @@ require("./routes/sync")(app, ctx);
 require("./routes/projects")(app, ctx);
 require("./routes/activity")(app, ctx);
 require("./routes/guided")(app, ctx);
+require("./routes/working-queue")(app, ctx);
 require("./routes/work-rotation")(app, ctx);
 require("./routes/dcc")(app, ctx);
 require("./routes/evaluation")(app, ctx);

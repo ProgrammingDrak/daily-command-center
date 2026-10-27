@@ -22,6 +22,49 @@ const envelope = {
 };
 const tools = [
   {
+    name: "dcc_working_queue",
+    description:
+      "Read the same Working Queue as DCC: one foreground, ordered tasks, retained context, paused/blocked/background status and manual Needs You check-backs. Read revision before commands.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true }
+  },
+  {
+    name: "dcc_queue",
+    description:
+      "Control DCC Working Queue only on explicit instruction: add/remove/reorder existing tasks, keep context, bring forward (start), send background, pause/block/unblock, snooze or dismiss check-backs. Queue order never changes itinerary scheduling. Background time is not focused effort. Read dcc_task for guided preview and dcc_working_queue for revision; exact retries keep sourceEventId and at. Completion uses dcc_complete_task.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...envelope,
+        action: {
+          enum: [
+            "queue-add",
+            "queue-remove",
+            "queue-reorder",
+            "queue-note",
+            "start",
+            "pause",
+            "background-start",
+            "queue-block",
+            "queue-unblock",
+            "queue-snooze",
+            "queue-dismiss"
+          ]
+        },
+        taskId: { type: "string" },
+        order: { type: "array", items: { type: "string" }, maxItems: 100 },
+        note: { type: "string", maxLength: 4000 },
+        remindMinutes: { type: ["integer", "null"], minimum: 1, maximum: 1440 },
+        generation: { type: "string" },
+        guided: { type: "object" }
+      },
+      required: ["action", "sourceEventId", "expectedRevision", "at"],
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+  },
+
+  {
     name: "dcc_calendar_events",
     description:
       "Read existing calendar occurrences for a date before allocating meeting time. Returns stable calendarEventId; never creates tasks. Calendar data may need refreshing in DCC.",
@@ -90,7 +133,7 @@ const tools = [
       "Complete an explicitly selected task only when the user says done. Does not infer actual effort from planned duration.",
     inputSchema: {
       type: "object",
-      properties: { ...envelope, taskId: { type: "string" } },
+      properties: { ...envelope, taskId: { type: "string" }, guided: { type: "object" } },
       required: ["sourceEventId", "expectedRevision", "at", "taskId"],
       additionalProperties: false
     },
@@ -139,7 +182,7 @@ const tools = [
   }
 ];
 const scopeFor = (name) =>
-  name === "dcc_work"
+  name === "dcc_work" || name === "dcc_queue"
     ? "dcc.work"
     : name === "dcc_correct_time"
       ? "dcc.correct"
@@ -349,13 +392,30 @@ module.exports = function mount(app, ctx, config = {}) {
       try {
         let result;
         if (name === "dcc_search_tasks") result = await store.search(args, identity);
-        if (name === "dcc_current_activity") result = await store.state(identity);
+        if (name === "dcc_current_activity" || name === "dcc_working_queue") result = await store.state(identity);
         if (name === "dcc_calendar_events") result = await store.calendarEvents(args, identity);
         if (name === "dcc_task") result = await store.get(M.text(args.taskId, "taskId"), identity);
         if (name === "dcc_activity_history") result = { events: await store.history(identity) };
         if (name === "dcc_work" && !["start", "pause", "background-start", "background-stop"].includes(args.action))
           throw M.fail("Unsupported work action");
-        if (["dcc_work", "dcc_complete_task", "dcc_correct_time"].includes(name)) {
+        if (
+          name === "dcc_queue" &&
+          ![
+            "queue-add",
+            "queue-remove",
+            "queue-reorder",
+            "queue-note",
+            "start",
+            "pause",
+            "background-start",
+            "queue-block",
+            "queue-unblock",
+            "queue-snooze",
+            "queue-dismiss"
+          ].includes(args.action)
+        )
+          throw M.fail("Unsupported queue action");
+        if (["dcc_queue", "dcc_work", "dcc_complete_task", "dcc_correct_time"].includes(name)) {
           result = await store.execute(
             {
               ...args,
