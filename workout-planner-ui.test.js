@@ -510,3 +510,29 @@ test('acknowledged actual drafts no longer block refreshing a later saved revisi
  h.state.row.record.actual.sets[0].reps=9;h.state.row.revision++;await h.getController();
  assert.equal(h.controller.row.revision,h.state.row.revision);assert.equal(h.controller.v.actual.sets[0].reps,9);
 });
+
+test('focused notes preserve legacy rep ranges without inventing numeric targets', async () => {
+ const v=record();v.plan.exercises[0].sets.forEach(t=>t.reps=null);v.plan.exercises[0].movement={visualInstructions:'Bench target 6–8 reps. <img src=x onerror=alert(1)>',goalKind:'strength'};
+ const h=await harness(v,true);assert.match(h.host.innerHTML,/Plan note · Bench Press/);assert.match(h.host.innerHTML,/6–8 reps/);assert.doesNotMatch(h.host.innerHTML,/<img/);assert.equal(h.puts().length,0);assert.equal(h.controller.v.plan.exercises[0].sets[0].reps,null);
+});
+function recordedActuals(){const v=record();v.occurredOn='2026-10-13';v.baseline=clone(v.plan);v.actual.sets=[{id:'a1',exerciseId:'bench-entry',planSetId:'target-1',round:1,status:'logged',loggedAt:'2026-10-13T12:00:00.000Z',...W.measurement({reps:7,weight:150})},{id:'extra1',exerciseId:'bench-entry',planSetId:null,round:2,status:'logged',loggedAt:null,...W.measurement({reps:3,weight:185})}];return v;}
+test('correct a saved fractional actual in place without altering plan, other sets or completion', async () => {
+ const v=recordedActuals(),h=await harness(v,true);assert.match(h.host.innerHTML,/2 confirmed \/ 2 planned · 1 extra · 1 without a recorded result/);
+ await h.click('edit-actual',{actual:'a1'});const modal=h.modals.at(-1);await modal.body.fill('actual.weight',157.5);await modal.body.fill('actual.reps',8);
+ assert.equal(await modal.choose('Save actual'),true);const saved=h.state.row.record;assert.deepEqual(saved.plan,v.plan);assert.deepEqual(saved.baseline,v.baseline);assert.equal(saved.actual.sets.length,2);assert.deepEqual(saved.actual.sets[1],v.actual.sets[1]);assert.equal(saved.actual.sets[0].id,'a1');assert.equal(saved.actual.sets[0].loggedAt,v.actual.sets[0].loggedAt);assert.equal(saved.actual.sets[0].weight,157.5);assert.equal(saved.actual.sets[0].reps,8);assert.equal(h.state.row.completed,false);assert.equal(h.state.completionCalls||0,0);assert.equal(saved.session.events.length,0);
+});
+test('cancel an extra-set correction leaves the saved record untouched', async () => {
+ const v=recordedActuals(),h=await harness(v,true);await h.click('edit-actual',{actual:'extra1'});const modal=h.modals.at(-1);await modal.body.fill('actual.reps',4);await modal.choose('Cancel');assert.equal(h.puts().length,0);assert.deepEqual(h.state.row.record,v);
+});
+test('stale actual correction refuses overwrite and preserves external results', async () => {
+ const h=await harness(recordedActuals(),true);await h.click('edit-actual',{actual:'a1'});const modal=h.modals.at(-1);await modal.body.fill('actual.weight',157.5);h.state.row.revision++;h.state.row.record.actual.sets[0].reps=9;assert.equal(await modal.choose('Save actual'),false);assert.match(modal.body.querySelector('[role=alert]').textContent,/changed elsewhere/);assert.equal(h.state.row.record.actual.sets[0].reps,9);assert.equal(h.state.row.record.actual.sets[0].weight,150);
+});
+test('actual correction retries identical payload after an uncertain response and never duplicates a set', async () => {
+ const h=await harness(recordedActuals(),true);await h.click('edit-actual',{actual:'a1'});const modal=h.modals.at(-1);await modal.body.fill('actual.weight',157.5);h.state.uncertainNext=true;assert.equal(await modal.choose('Save actual'),false);assert.equal(await modal.choose('Save actual'),false);assert.equal(h.puts().length,1);await modal.choose('Cancel');for(let i=0;i<20&&!h.modals.at(-1).body.button('retry');i++)await Promise.resolve();const host=h.modals.at(-1).body;await host.emit('click',host.button('retry'));assert.equal(h.puts().length,2);assert.deepEqual(h.puts()[0].body,h.puts()[1].body);assert.equal(h.state.row.record.actual.sets.length,2);assert.equal(h.state.row.record.actual.sets[0].weight,157.5);
+});
+
+
+test('actual correction locks measurements while saving so visible edits cannot be lost', async () => {
+ const h=await harness(recordedActuals(),true);await h.click('edit-actual',{actual:'a1'});const modal=h.modals.at(-1);await modal.body.fill('actual.weight',157.5);h.state.putGate=deferred();const saving=modal.choose('Save actual');
+ assert.ok(modal.body.querySelector('[data-w-path="actual.weight"]').disabled);await modal.body.fill('actual.weight',160);h.state.putGate.resolve();assert.equal(await saving,true);assert.equal(h.state.row.record.actual.sets[0].weight,157.5);
+});
