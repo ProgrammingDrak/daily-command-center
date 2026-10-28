@@ -124,6 +124,9 @@ const VAULT_SENSITIVE_PIN = process.env.VAULT_SENSITIVE_PIN || null;
 let vault = null;
 let syncMgr = null;
 
+if (process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false")
+  app.use(require("./lib/conversation-limits").createIngress());
+
 // verify callback stashes the raw body so the Slack Events route can HMAC it
 // (express.json otherwise consumes the stream before any route runs).
 app.use(express.json({ limit: "5mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
@@ -153,6 +156,9 @@ if (!LOCAL_AUTH_ENABLED) {
   sessionOptions.store = new pgSession({ pool: pool, tableName: "session", createTableIfMissing: true, pruneSessionInterval: 15 * 60 });
 }
 app.use(session(sessionOptions));
+
+// Isolated OAuth/MCP boundary: bearer tokens here never enter the legacy service gate.
+require("./routes/conversation")(app, { pool, blockDB, APP_TIME_ZONE, broadcast });
 
 // ── Auth Middleware ──
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
@@ -1013,6 +1019,8 @@ require("./routes/sync")(app, ctx);
 require("./routes/projects")(app, ctx);
 require("./routes/activity")(app, ctx);
 require("./routes/guided")(app, ctx);
+require("./routes/working-queue")(app, ctx);
+require("./routes/work-rotation")(app, ctx);
 require("./routes/dcc")(app, ctx);
 require("./routes/evaluation")(app, ctx);
 require("./routes/schedule-settings")(app, ctx);
@@ -1134,6 +1142,7 @@ app.get("/api/me/integrations", async (req, res) => {
       canOauth: !!(ctx.slackOAuth && ctx.slackOAuth.configured() && ctx.slackOAuth.hasEncryptionKey()),
     },
     google,
+    conversation: { enabled: process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false", url: "/connections/conversation" },
     triage: {
       // Everything the wizard needs to render a copy-paste login command. NOT
       // getRequestOrigin, which is the caller's IP for rate limiting; this has to

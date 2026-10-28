@@ -261,7 +261,7 @@ module.exports = function mount(app, ctx) {
   // actualMinutes gets finalized. In-memory candidate filter first, so a day with
   // no orphaned timer costs zero queries. See lib/task-timing.js.
   const taskTiming = createTaskTiming({ pool, blockDB, timeZone: ctx.APP_TIME_ZONE });
-  const { reconcileTiming, startWork, continueWork, pauseWork, completeWork, reopenWork } = taskTiming;
+  const { reconcileTiming, pauseWork, completeWork, reopenWork } = taskTiming;
 
   async function syncSlack(blockOrId) {
     if (typeof ctx.syncSlackTaskReactions !== "function") return;
@@ -857,14 +857,22 @@ module.exports = function mount(app, ctx) {
   });
 
   app.post("/api/blocks/:id/work", route(async (req, res) => {
-    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
+    const body = req.body || {};
+    const q=await pool.connect();
+    let result,block,committed=false;
+    try {
+    await q.query("BEGIN");
+    if (process.env.DCC_CONVERSATION_ENABLED === "true") {
+      const probe = await blockDB.getBlockIncludingDeleted(req.params.id,q);
+      if (probe?.user_id != null) await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",["dcc-foreground:"+probe.user_id]);
+    }
+    const existing = await blockDB.getBlockIncludingDeleted(req.params.id,q,true);
     if (!existing || existing.deleted_at) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
     if (!isWorkTaskRow(existing)) {
       res.status(409).json({ error: "This row is not a trackable task", code: "WORK_NOT_TRACKABLE" });
       return;
     }
-    const body = req.body || {};
     if (!["start", "pause", "continue", "auto-pause"].includes(body.action)) {
       res.status(400).json({ error: "action must be start, pause, continue, or auto-pause" });
       return;
@@ -878,17 +886,17 @@ module.exports = function mount(app, ctx) {
     const actor = body.action === "auto-pause"
       ? "dcc:timer-check-in"
       : (req.session && req.session.userId ? `dcc:${req.session.userId}` : "dcc");
-    const operation = body.action === "start" ? startWork
-      : body.action === "continue" ? continueWork
-        : pauseWork;
-    const result = await operation({
+    const clock=require("../work-rotation-store").timingIn(ctx,q);
+    const operation = body.action === "start" ? clock.startWork
+      : body.action === "continue" ? clock.continueWork : clock.pauseWork;
+    result = await operation({
       block: existing,
       atMs,
       actor,
       actionId: body.actionId || null,
       pauseReason: body.action === "auto-pause" ? "two-missed-check-ins" : null,
     });
-    const block = await blockDB.getBlockIncludingDeleted(req.params.id);
+    block = await blockDB.getBlockIncludingDeleted(req.params.id,q);
     if (result.reason === "not-trackable") {
       res.status(409).json({ error: "This task type does not track active work", code: "WORK_NOT_TRACKABLE" });
       return;
@@ -897,11 +905,13 @@ module.exports = function mount(app, ctx) {
       res.status(409).json({ error: "Completed work must be reopened before it can be started", code: "WORK_ALREADY_COMPLETED" });
       return;
     }
+    await q.query("COMMIT");committed=true;
+    } finally { try { if(!committed) await q.query("ROLLBACK"); } finally { q.release(); } }
     broadcast("blocks-changed", {
-      action: "work", workAction: body.action, blockIds: [req.params.id], clientId: body._clientId,
+      action: "work", workAction: body.action, blockIds: result.conversation?.affectedTasks?.map(row => row.id) || [req.params.id], clientId: body._clientId,
     }, req.workspaceId);
     await syncSlack(block);
-    return { ok: true, changed: !!result.changed, reason: result.reason || null, block };
+    return { ok: true, changed: !!result.changed, reason: result.reason || null, block, affectedTasks: result.conversation?.affectedTasks || [] };
   }));
 
   app.get("/api/blocks/:id/work", route(async (req, res) => {

@@ -36,6 +36,10 @@ if (process.env.DCC_TIME_BLOCK_REVIEW === "1") {
   const { default: mount } = await import("./time-block-review-backend.js");
   await mount(app);
 }
+if (process.env.DCC_WORKING_QUEUE_REVIEW === "1") {
+  const { default: mount } = await import("./working-queue-review-backend.js");
+  await mount(app);
+}
 const reviewBlocks = new Map();
 const meetingReviewFixture = [
   { id: "review-investor", title: "Investor Network Weekly", date: "2026-09-25", status: "ready",

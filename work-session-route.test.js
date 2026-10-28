@@ -61,7 +61,7 @@ function mountApp(startedAt) {
     getTodayStr: () => "2026-09-28",
     isAllowedSweepBlockItem: () => true,
     isValidDate: value => /^\d{4}-\d{2}-\d{2}$/.test(String(value)),
-    pool: { query: async () => ({ rows: [] }) },
+    pool: { query: async () => ({ rows: [] }), connect: async () => ({query: async () => ({rows:[]}), release(){}}) },
   });
   return { app, getTask: () => task, rows };
 }

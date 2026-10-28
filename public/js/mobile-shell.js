@@ -44,7 +44,7 @@
   const NAV_ITEMS = [
     { key:"schedule",   label:"Today", icon:"🗓", action(){ activateTab("schedule"); } },
     { key:"__tasks",    label:"Tasks", icon:"☑",        action(){ closeMoreSheet(); toggleTasksDrawer(); }, center:true },
-    { key:"budget",     label:"Budget", icon:"💰", action(){ activateTab("budget"); } },
+    { key:"working-queue", label:"Queue", icon:"☷", action(){ activateTab("working-queue"); } },
     { key:"__more",     label:"More",  icon:"⋯",        action(){ toggleMoreSheet(); } }
   ];
 
@@ -72,6 +72,7 @@
 
   // Overflow content tabs (not surfaced directly in the bottom bar).
   const MORE_TABS = [
+    { label:"Budget", tab:"budget" },
     { label:"Workouts & meals", tab:"activity" },
     { label:"Delegated", tab:"delegated", badge:"delegated-count" },
     { label:"Pet Home",  tab:"pet-home", badge:"pet-home-badge" }

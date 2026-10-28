@@ -46,7 +46,9 @@
           type: ev.type || "task", start: ev.start, end: ev.end || ev.start,
           source: ev.source || "manual", tags: Array.isArray(ev.tags) ? ev.tags : [],
           done: (typeof isDone === "function") ? isDone(ev) : false,
-          meetingBlockId: ev.meetingBlockId || ev.block_id || null
+          meetingBlockId: ev.meetingBlockId || ev.block_id || null,
+          source_id: ev.source_id || null, gcal_event_id: ev.gcal_event_id || null,
+          actualMinutesFrom: ev.actualMinutesFrom || null, actualTimeUnknown: ev.actualTimeUnknown === true
         }))
         .sort((a, b) => toMin(a.start) - toMin(b.start));
     }
@@ -70,7 +72,8 @@
         source: p.source || "manual", tags: Array.isArray(p.tags) ? p.tags : [],
         done: !!p.done,
         meetingBlockId: p.meetingBlockId || p.block_id || null,
-        gcal_event_id: p.gcal_event_id || null
+        gcal_event_id: p.gcal_event_id || null, source_id: p.source_id || null,
+        actualMinutesFrom: p.actualMinutesFrom || null, actualTimeUnknown: p.actualTimeUnknown === true
       });
     }
     out.sort((a, b) => toMin(a.start) - toMin(b.start));
@@ -80,6 +83,9 @@
   // ── match a time_entry to a planned event ──
   function entryMatchesEvent(entryProps, ev) {
     if (!entryProps) return false;
+    if (entryProps.allocationKind === "unknown") return false;
+    if (entryProps.calendarEventId) return [ev.source_id, ev.gcal_event_id].includes(entryProps.calendarEventId);
+    if (entryProps.source === "conversation-correction") return !!entryProps.blockId && [ev.id, ev._blockId, ev.meetingBlockId].includes(entryProps.blockId);
     if (entryProps.blockId) {
       if (entryProps.blockId === ev.id) return true;
       if (ev.meetingBlockId && entryProps.blockId === ev.meetingBlockId) return true;
@@ -101,6 +107,7 @@
     }
     if (segs.length) return segs;
     // Legacy fallbacks (read-only, no ids — not editable as time_entry)
+    if (ev.actualMinutesFrom === "reallocated" || ev.actualTimeUnknown) return [];
     const sess = ctx.sessions[ev.id];
     if (Array.isArray(sess) && sess.length) {
       return sess.map(s => ({ startMin: s.start ? toMin(s.start) : null, durMin: s.durationMin || 0, source: "legacy", _id: null }));
@@ -153,9 +160,9 @@
       const p = te.properties || {};
       const matched = planned.some(ev => entryMatchesEvent(p, ev));
       if (matched) continue;
-      const key = (p.blockId || normTitle(p.taskTitle) || te.id);
-      if (!seenExtra.has(key)) { seenExtra.add(key); extras.push({ title: p.taskTitle || "(untracked)", min: 0, blockId: p.blockId || null }); }
-      const ex = extras.find(x => (x.blockId && x.blockId === p.blockId) || normTitle(x.title) === normTitle(p.taskTitle));
+      const key = p.calendarEventId || (p.allocationKind === "unknown" ? "unknown" : (p.blockId || normTitle(p.taskTitle) || te.id));
+      if (!seenExtra.has(key)) { seenExtra.add(key); extras.push({ key, title: p.taskTitle || "(untracked)", min: 0, blockId: p.blockId || null, allocationKind: p.allocationKind || "focused" }); }
+      const ex = extras.find(x => x.key === key);
       if (ex) ex.min += (p.durSec || 0) / 60;
     }
     return { dateStr, rows, extras, ctx };
@@ -178,6 +185,7 @@
       empty.className = "dr-empty";
       empty.innerHTML = "No scheduled items recorded for this day.";
       root.appendChild(empty);
+      appendExtras(root, model);
       wrap.appendChild(root);
       return;
     }
@@ -276,14 +284,7 @@
 
     root.appendChild(grid);
 
-    // unscheduled work
-    if (model.extras.length) {
-      const ex = document.createElement("div");
-      ex.className = "dr-extras";
-      ex.innerHTML = '<div class="dr-extras-head">Unscheduled work</div>' +
-        model.extras.map(x => '<div class="dr-extra-row"><span>' + esc(x.title) + '</span><b>' + fmtDur(x.min) + '</b></div>').join("");
-      root.appendChild(ex);
-    }
+    appendExtras(root, model);
 
     wrap.appendChild(root);
 
@@ -312,12 +313,25 @@
   }
 
   // ── HUD ──
+  function appendExtras(root, model) {
+    if (!model.extras.length) return;
+    const ex = document.createElement("div");
+    ex.className = "dr-extras";
+    ex.innerHTML = '<div class="dr-extras-head">Additional activity</div>' +
+      model.extras.map(x => '<div class="dr-extra-row"><span>' + esc(x.allocationKind === "unknown" ? "Unknown time (not focused effort)" : x.title) + '</span><b>' + fmtDur(x.min) + '</b></div>').join("");
+    root.appendChild(ex);
+  }
+
+  function knownActualMinutes(model) {
+    return model.rows.reduce((s, r) => s + r.actualMin, 0) + model.extras.filter(x => x.allocationKind !== "unknown").reduce((s, x) => s + x.min, 0);
+  }
+
   function renderHUD(model) {
     const hud = document.createElement("div");
     hud.className = "dr-hud";
     const planned = model.rows.length;
     const plannedMin = model.rows.reduce((s, r) => s + r.plannedMin, 0);
-    const actualMin = model.rows.reduce((s, r) => s + r.actualMin, 0) + model.extras.reduce((s, x) => s + x.min, 0);
+    const actualMin = knownActualMinutes(model);
     const variance = actualMin - plannedMin;
     const dispDate = (function () {
       const p = String(model.dateStr).split("-");
@@ -328,7 +342,7 @@
       '<div class="dr-hud-date">' + dispDate + '</div>' +
       '<div class="dr-hud-stats">' +
         statCard(fmtDur(plannedMin), 'planned time', 'muted') +
-        statCard(fmtDur(actualMin), 'actual time', 'green') +
+        statCard(fmtDur(actualMin), 'known actual time', 'green') +
         statCard((variance > 0 ? '+' : variance < 0 ? '-' : '') + fmtDur(Math.abs(variance)), variance > 0 ? 'over plan' : variance < 0 ? 'under plan' : 'on plan', variance > 0 ? 'accent' : '') +
       '</div>';
     return hud;
@@ -461,6 +475,9 @@
   }
 
   // expose
-  window.buildDayReview = buildDayReview;
-  window.editTimeEntries = editTimeEntries;
+  if (typeof module === "object" && module.exports) module.exports = { entryMatchesEvent, actualSegmentsFor, knownActualMinutes };
+  if (typeof window !== "undefined") {
+    window.buildDayReview = buildDayReview;
+    window.editTimeEntries = editTimeEntries;
+  }
 })();

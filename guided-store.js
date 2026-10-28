@@ -135,7 +135,7 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       return get(id,owner,q);
     });
   }
-  function timing(q) {
+  function timing(q, coordinated = false) {
     const db = { ...blockDB,
       updateBlock: (id, fields) => blockDB.updateBlock(id, fields, q),
       getBlockIncludingDeleted: id => blockDB.getBlockIncludingDeleted(id, q),
@@ -144,9 +144,9 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       createBlock: input => blockDB.createBlock(input, q),
       getTaskTimeEntries: (id, ws, opts) => blockDB.getTaskTimeEntries(id, ws, opts, q),
       ensureDayRoot: (date, userId, ws) => blockDB.ensureDayRoot(date, userId, ws, q) };
-    return createTaskTiming({ pool: q, blockDB: db, timeZone: APP_TIME_ZONE });
+    return createTaskTiming({ pool: q, blockDB: db, timeZone: APP_TIME_ZONE, transactionClient: q, coordinated });
   }
-  async function act(id, body, owner) {
+  async function act(id, body, owner, transactionClient = null, transitionAtMs = null, coordinated = false) {
     const expected = M.revision(body.expectedRevision), operationId = M.id(body.operationId);
     if (!["start","resume","pause","progress","complete","feedback","preflight","reopen"].includes(body.action)) throw M.error("Unknown guided action");
     const payload = { action: body.action, progress: M.text(body.progress ?? "", "Progress", 12000),
@@ -172,8 +172,10 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       payload.feedback.baseDefinitionRevision = M.revision(body.feedback?.baseDefinitionRevision);
     }
     const hash = crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-    let propagation = [], broadcastIds=[id];
+    let propagation = [], broadcastIds=[id], entries=[];
     const result = await tx(async q => {
+      if (process.env.DCC_CONVERSATION_ENABLED === "true")
+        await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["dcc-foreground:" + owner.userId]);
       const b = await readTask(q, id, owner, true), d = await readDefinition(q, b.properties.guidedDefinitionId, owner), old = await readSession(q, id, owner);
       const prior = old?.session;
       const replay = prior?.events.find(e => e.operationId === operationId);
@@ -187,7 +189,7 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       if(payload.action === "pause" && prior?.state === "paused" && !b.properties.startedAt) return shape(b,d,old);
       if(payload.action === "resume" && prior?.state === "active" && b.properties.startedAt) return shape(b,d,old);
       if (prior?.events.length >= 500 && !["pause","complete"].includes(payload.action)) throw M.error("Session history limit reached",409);
-      const atMs = Date.now(), at = new Date(atMs).toISOString();
+      const atMs = transitionAtMs ?? Date.now(), at = new Date(atMs).toISOString();
       const session = prior ? structuredClone(prior) : { id: crypto.randomUUID(), state: "active", startedAt: at,
         definitionRevision: d.revision, snapshot: d.definition, contextVersion: new Date(b.updated_at).toISOString(),
         taskDetail: d.definition.includeTaskDetail ? String(b.properties.detail || "").slice(0,12000) : "", checked: [], progress: "", outcome: "", access: {}, events: [] };
@@ -202,9 +204,9 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
         session.access ||= {};session.access[observation.index]={...observation,at};
       }
       if(payload.action === "complete" && (session.snapshot.prerequisites || []).some((p,i)=>p.required && M.accessState(session.access?.[i],at)!=="ready")) throw M.error("A required prerequisite is unresolved or stale. Record a current permitted access check before completing",409);
-      const clock = timing(q), workArgs = { block: b, atMs, actor: `dcc:${owner.userId}`, actionId: operationId };
+      const clock = timing(q, coordinated), workArgs = { block: b, atMs, actor: `dcc:${owner.userId}`, actionId: operationId };
       if (["start","resume"].includes(payload.action)) { await clock.startWork(workArgs); session.state = "active"; }
-      if (["pause","complete"].includes(payload.action)) { await clock.pauseWork(workArgs); session.state = "paused"; }
+      if (["pause","complete"].includes(payload.action)) { const paused=await clock.pauseWork(workArgs); entries=paused.entries || []; session.state = "paused"; }
       if (["progress","complete"].includes(payload.action)) { session.progress = payload.progress; session.checked = [...new Set(payload.checked)]; }
       if (payload.action === "complete") {
         // The canonical completion writer, timer ledger and guided outcome share one transaction.
@@ -213,6 +215,10 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
           userId: owner.userId, workspaceId: owner.workspaceId, transactionClient: q, guidedCompletionTaskId:id });
         for(const affected of completion.affectedTasks || [completion.task]) {
           if(String(affected.user_id)!==String(owner.userId)) throw M.error("A nested task belongs to a different owner",409);
+          if (coordinated && affected.properties.startedAt) {
+            const cutoff = Math.min(atMs, require('./public/js/work-checkin-policy').checkInState(affected.properties,atMs).autoPauseAtMs);
+            await clock.pauseWork({...workArgs,block:affected,atMs:cutoff,transitionAtMs:atMs,actionId:operationId+":cutoff"});
+          }
           await clock.completeWork({ ...workArgs, block: affected, actionId: operationId + ":finish", normalizeExisting: true });
         }
         broadcastIds=completion.broadcastIds || [id];
@@ -231,9 +237,9 @@ function createGuidedStore({ pool, blockDB, crypto = require("node:crypto"), APP
       await q.query(`INSERT INTO guided_sessions(task_id,workspace_id,owner_user_id,session) VALUES($1,$2,$3,$4)
         ON CONFLICT(task_id) DO UPDATE SET session=EXCLUDED.session,revision=guided_sessions.revision+1,updated_at=NOW()`, [id, owner.workspaceId, owner.userId, session]);
       return get(id,owner,q);
-    });
-    for(const transition of propagation) await blockDB.propagateResponsibilityDone(transition);
-    return {...result,broadcastIds};
+    }, transactionClient);
+    if (!transactionClient) for(const transition of propagation) await blockDB.propagateResponsibilityDone(transition);
+    return {...result,broadcastIds,entries,responsibilityTransitions:transactionClient?propagation:[]};
   }
   async function applyFeedback(id,body,owner) {
     return tx(async q => {

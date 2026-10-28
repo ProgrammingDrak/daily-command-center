@@ -36,17 +36,28 @@ DCC.tabs.register("tasks", () => {
 // later Just Works.
 DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && buildCalendar());
 
-document.querySelectorAll(".tab").forEach(tab=>{
-  tab.addEventListener("click",()=>{
-    if(typeof window.clearSlotCoinEffects === "function"){
-      window.clearSlotCoinEffects();
-    }
-    document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
-    document.querySelectorAll(".tab-content").forEach(c=>c.classList.remove("active"));
-    tab.classList.add("active");document.getElementById("tab-"+tab.dataset.tab).classList.add("active");
-    DCC.tabs.run(tab.dataset.tab);
-  });
-});
+// Navigation only: changing views never invokes a work-clock command.
+(function(){
+  const find=name=>Array.from(document.querySelectorAll('.tab')).find(t=>t.dataset.tab===name&&document.getElementById('tab-'+name));
+  function select(name,remember=false){
+    const tab=find(name);if(!tab)return false;
+    const previous=document.querySelector('.tab.active')?.dataset.tab;
+    if(typeof window.clearSlotCoinEffects==='function')window.clearSlotCoinEffects();
+    document.querySelectorAll('.tab,.tab-content').forEach(t=>t.classList.remove('active'));
+    tab.classList.add('active');document.getElementById('tab-'+name).classList.add('active');
+    if(remember&&previous!==name){const url=new URL(location.href);url.searchParams.set('tab',name);history.pushState({...history.state,dccTab:name},'',url);}
+    DCC.tabs.run(name);return true;
+  }
+  function destination(){
+    const explicit=new URLSearchParams(location.search).get('tab');
+    return find(explicit)?explicit:find(history.state?.dccTab)?history.state.dccTab:'working-queue';
+  }
+  document.querySelectorAll('.tab').forEach(tab=>tab.addEventListener('click',()=>select(tab.dataset.tab,true)));
+  const initial=destination();select(initial);history.replaceState({...history.state,dccTab:initial},'');
+  window.addEventListener('popstate',()=>select(destination()));
+  // Render after all tab modules register, without overriding intervening navigation.
+  document.addEventListener('DOMContentLoaded',()=>DCC.tabs.run(document.querySelector('.tab.active')?.dataset.tab));
+})();
 
 // ======== TASK MENU ACCORDION ========
 const TM_ACCORDION_KEY="pa-tm-accordion-state";

@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
-/* global window, document, innerWidth, scrollX, requestAnimationFrame, DCCWorkSessions, DCC */
+/* global window, document, innerWidth, scrollX, requestAnimationFrame, DCCWorkSessions, DCCWorkingQueue, DCC */
 const port = process.env.PET_REVIEW_PORT || '8138';
 const base = `http://127.0.0.1:${port}`;
-const server = spawn(process.execPath, ['scripts/ui-review-server.mjs'], { env: { ...process.env, PORT: port }, stdio: ['ignore', 'pipe', 'inherit'] });
+const server = spawn(process.execPath, ['scripts/ui-review-server.mjs'], { env: { ...process.env, PORT: port, DCC_WORKING_QUEUE_REVIEW: "1" }, stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise((resolve, reject) => {
   server.once('error', reject);
   server.once('exit', code => reject(new Error(`Review server exited: ${code}`)));
@@ -32,18 +32,19 @@ async function seed(page) {
     };
     requestAnimationFrame(sample);
   });
+  assert.equal((await page.request.post(base+"/api/queue-review/reset")).status(),200);
   await page.goto(base);
   await page.evaluate(async ({ id, startedAt }) => {
     const now = new Date();
     const date = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
-    const response = await fetch('/api/blocks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+    const response = await fetch('/api/queue-review/seed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
       id, type: 'block', date, properties: { local_id: id, title: 'Prepare the example project handoff', type: 'task', start: '10:00', duration: 30, startedAt },
     }) });
-    if (!response.ok) throw new Error('Fixture seed failed');
+    if (!response.ok) throw new Error('Fixture seed failed: '+response.status+' '+await response.text());
   }, { id, startedAt });
   await page.reload();
   await page.waitForFunction(id => window.blockStore?.get(id), id);
-  await page.evaluate(() => DCCWorkSessions.refresh());
+  await page.evaluate(async () => { await DCCWorkingQueue.refresh(); DCCWorkSessions.refresh(); });
 }
 async function geometry(page, label) {
   const state = await page.evaluate(() => ({
@@ -91,7 +92,7 @@ try {
     assert.equal(continued.startedAt, startedAt, 'Continue preserves the running session');
     assert.equal(continued.workCheckInCount, 1, 'Continue acknowledges exactly once');
     // A later cadence opens the same controls, with the next prompt.
-    await page.evaluate(id => DCCWorkSessions.checkInTick(Date.parse(window.blockStore.get(id).properties.workCheckInAt) + 26 * 60000), id);
+    await page.evaluate(id => { const now=Date.parse(window.blockStore.get(id).properties.workCheckInAt)+26*60000; Date.now=()=>now; return DCCWorkSessions.checkInTick(now); }, id);
     await page.waitForSelector(`[data-work-checkin-task="${id}"]`);
     await page.waitForTimeout(2100);
     await geometry(page, `${width}px repeated reminder`);

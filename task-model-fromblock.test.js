@@ -146,7 +146,7 @@ test("pure: the source block is never mutated", () => {
 // and wrapId/isWrap, which drive ride-along nesting in the carryover lane.
 const BASE_KEYS = ["guidedDefinitionId",
   "sourceContext", "originalTitle", "generatedTitle", "titleNamingVersion",
-  "_blockId", "_dateless", "actualMinutes", "aiSummary", "alertKey", "alertType", "allDay", "allDayEnd", "allDayStart", "ampUrl", "calUrl",
+  "_blockId", "_dateless", "actualMinutes", "actualMinutesFrom", "actualTimeUnknown", "aiSummary", "alertKey", "alertType", "allDay", "allDayEnd", "allDayStart", "ampUrl", "calUrl",
   "calendarAccountEmail", "calendarAccountKey", "calendarColor", "calendarId", "calendarName", "capacityBucket",
   "completedAt", "createdAt", "dashboardRef", "delegatedItemId", "detail", "end", "hangout_link",
   "facetValues", "hubspotUrl", "id", "isPlaceholder", "isWrap", "kind", "linkedBlockId", "linkedTagId",
@@ -191,7 +191,7 @@ test("every projected key round-trips its property, including the ones nothing a
       sourceTaskId: "st", status: "open", startedAt: "2026-07-28T15:00:00.000Z",
       workCheckInAt: "2026-07-28T15:25:00.000Z", workCheckInCount: 3,
       workAutoPausedAt: "2026-07-28T16:15:00.000Z", workAutoPauseReason: "two-missed-check-ins",
-      completedAt: null, actualMinutes: 12, pointsDurationMinutes: 20, aiSummary: "Thread context",
+      completedAt: null, actualMinutes: 12, actualMinutesFrom: "reallocated", actualTimeUnknown: true, pointsDurationMinutes: 20, aiSummary: "Thread context",
       projectId: "griffin", projectParentTaskId: "baseboards", projectRole: "leaf",
       projectOrder: 2400, facetValues: { area: ["kitchen"], workstream: ["trim"] }
     }
@@ -205,7 +205,7 @@ test("every projected key round-trips its property, including the ones nothing a
     startedAt: "2026-07-28T15:00:00.000Z", completedAt: null,
     workCheckInAt: "2026-07-28T15:25:00.000Z", workCheckInCount: 3,
     workAutoPausedAt: "2026-07-28T16:15:00.000Z", workAutoPauseReason: "two-missed-check-ins",
-    actualMinutes: 12, pointsDurationMinutes: 20, aiSummary: "Thread context",
+    actualMinutes: 12, actualMinutesFrom: "reallocated", actualTimeUnknown: true, pointsDurationMinutes: 20, aiSummary: "Thread context",
     notionUrl: "https://n", calUrl: "https://c", priority: "Low",
     calendarId: "", calendarName: "", calendarColor: "", calendarAccountKey: "", calendarAccountEmail: "",
     tags: ["a"], kind: "task",

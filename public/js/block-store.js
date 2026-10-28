@@ -776,6 +776,7 @@
           case "work": {
             const result = await apiPost("/api/blocks/" + entry.id + "/work", entry.data);
             if (result && result.block) cacheSet(result.block);
+            (result && result.affectedTasks || []).forEach(cacheSet);
             break;
           }
           case "realloc": {
@@ -1219,6 +1220,7 @@
       try {
         const result = await apiPost("/api/blocks/" + id + "/work", data);
         if (result && result.block) cacheSet(result.block);
+            (result && result.affectedTasks || []).forEach(cacheSet);
         walRemove(walId);
         setSaved();
         return result;
@@ -1762,6 +1764,14 @@
     invalidateRangeCache(dateStr) {
       if (dateStr) this._rangeCache.delete(dateStr);
       else this._rangeCache.clear();
+    },
+
+    // Apply only an acknowledged atomic rotation, then re-project existing surfaces.
+    acceptWorkRotation(blocks) {
+      _mutationGeneration++;
+      (blocks || []).forEach(row => { if (row.deleted_at) cacheDelete(row.id); else cacheSet(row); });
+      if (typeof reloadPersistedEdits === "function") reloadPersistedEdits();
+      if (typeof render === "function") render("schedule");
     },
 
     // ── SSE Integration ──

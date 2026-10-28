@@ -1242,3 +1242,15 @@ test('old delta response cannot overwrite an edit or advance its cursor',async()
  await h.store.updateBlock('b1',{title:'new'});release();assert.equal(await pull,null);
  assert.equal(h.store.get('b1').properties.title,'new');assert.equal(h.storage.get('dcc-sync-cursor:ws-1'),'1');assert.equal(pulls,1);
 });
+
+
+test("rotation acknowledgement updates real cache, invalidates stale reads and reprojects once",()=>{
+ const {store,context}=makeStore();const calls=[];
+ context.reloadPersistedEdits=()=>calls.push(["project",store.get("a")?.properties.startedAt,store.get("b")?.properties.startedAt]);
+ context.render=surface=>calls.push(["render",surface]);
+ const before=store.getMutationGeneration();
+ store.acceptWorkRotation([{id:"a",type:"block",date:"2026-07-08",properties:{title:"Previous"}},{id:"b",type:"block",date:"2026-07-08",properties:{title:"Next",startedAt:"2026-07-08T12:00:00.000Z"}}]);
+ assert.equal(store.getMutationGeneration(),before+1);assert.equal(store.get("a").properties.startedAt,undefined);assert.equal(store.get("b").properties.startedAt,"2026-07-08T12:00:00.000Z");
+ assert.deepEqual(calls,[["project",undefined,"2026-07-08T12:00:00.000Z"],["render","schedule"]]);
+ store.acceptWorkRotation([{id:"b",deleted_at:"2026-07-08T12:01:00.000Z"}]);assert.equal(store.get("b"),null);
+});
