@@ -134,21 +134,21 @@
       el.classList.remove("running");
       void el.offsetWidth;                       // reflow flush: re-trigger the gait
       el.classList.add("running");
-      dust(fromX, parseFloat(el.style.top || "0"), step);
+      dust(fromX, parseFloat(el.style.top || "0"), step, el.parentNode);
       el.style.transitionDuration = ms + "ms";
       el.style.left = x + "px";
       el.style.top = y + "px";
       setTimeout(resolve, ms + 20);
     });
   }
-  function dust(x, y, step) {
+  function dust(x, y, step, stage) {
     for (let i = 0; i < 3; i++) {
       const d = document.createElement("span");
       d.className = "pet-courier-dust";
       d.style.left = (x - 14 + i * 8) + "px";
       d.style.top = (y + 20 + (step % 2) * 3) + "px";
       d.style.animationDelay = (i * 38) + "ms";
-      document.body.appendChild(d);
+      stage.appendChild(d);
       d.addEventListener("animationend", () => d.remove(), { once: true });
     }
   }
@@ -158,6 +158,11 @@
     if (window.PetHome && typeof window.PetHome.identity === "function") {
       try { ident = (await window.PetHome.identity()) || ident; } catch (e) {}
     }
+    // Only decoration crosses the viewport edge. Clip it in its own layer,
+    // leaving the interactive bubble and reminder controls outside that layer.
+    const stage = document.createElement("div");
+    stage.className = "pet-nudge-stage";
+    stage.setAttribute("aria-hidden", "true");
     const el = document.createElement("div");
     el.className = "pet-courier pet-nudge-runner";
     el.setAttribute("aria-hidden", "true");
@@ -169,7 +174,8 @@
       "<em>" + esc(ident.accessory) + "</em>";
     el.style.left = "-80px";
     el.style.top = target.y + "px";
-    document.body.appendChild(el);
+    stage.appendChild(el);
+    document.body.appendChild(stage);
     try {
       await move(el, target.x - 120, target.y + 14, 440, 0);
       await move(el, target.x - 76, target.y, 200, 1);
@@ -179,7 +185,7 @@
       el.classList.remove("talking");
       await move(el, window.innerWidth + 90, target.y + 10, 480, 2);
     } finally {
-      el.remove();
+      stage.remove();
     }
   }
 

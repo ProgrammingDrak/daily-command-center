@@ -284,7 +284,8 @@ app.post("/api/blocks/:id/work", async (req, res) => {
   try {
     const block = reviewBlocks.get(req.params.id);
     if (!block) return res.status(404).json({ error: "Block not found" });
-    const operation = req.body.action === "start" ? reviewTiming.startWork : reviewTiming.pauseWork;
+    const operation = req.body.action === "start" ? reviewTiming.startWork
+      : req.body.action === "continue" ? reviewTiming.continueWork : reviewTiming.pauseWork;
     await operation({ block, atMs: Date.parse(req.body.at), actionId: req.body.actionId, actor: "review" });
     res.json({ block: reviewBlocks.get(block.id) });
   } catch (error) { res.status(400).json({ error: error.message }); }

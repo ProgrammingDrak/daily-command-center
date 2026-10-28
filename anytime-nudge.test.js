@@ -40,8 +40,8 @@ function FakeEl(tag, onUnmount) {
     setAttribute(k, v) { el[k] = v; },
     addEventListener(ev, fn) { (el._on[ev] = el._on[ev] || []).push(fn); },
     fire(ev, arg) { (el._on[ev] || []).slice().forEach(fn => fn(arg || { target: el })); },
-    appendChild(c) { el.children.push(c); return c; },
-    remove() { el._removed = true; if (onUnmount) onUnmount(el); }
+    appendChild(c) { el.children.push(c); c.parentNode = el; return c; },
+    remove() { el._removed = true; el.children.forEach(c => c.remove()); if (onUnmount) onUnmount(el); }
   };
   return el;
 }
@@ -137,7 +137,7 @@ function load(opts) {
     log, appended, stamped, settled, toasts, dock, byId,
     setBusy: v => { live.busy = !!v; },
     firePending: () => { const q = pending.splice(0); q.forEach(fn => fn()); },
-    runners: () => appended.filter(isRunner),
+    runners: () => appended.flatMap(el => [el, ...el.children]).filter(isRunner),
     bubbles: () => appended.filter(el => el.id === "pet-nudge-bubble" && !el._removed),
     // The run awaits a chain of collapsed timers; drain the microtask queue.
     settleAsync: async () => { for (let i = 0; i < 60; i++) await Promise.resolve(); }

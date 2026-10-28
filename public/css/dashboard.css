@@ -3457,6 +3457,8 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 @keyframes petCourierCarry{0%{transform:translateY(0) scale(0.95) rotate(-6deg)}100%{transform:translateY(-2px) scale(1.05) rotate(6deg)}}
 @keyframes petCourierDeposit{0%{transform:scaleX(var(--runner-turn)) scale(1)}54%{transform:scaleX(var(--runner-turn)) scale(1.18) rotate(-4deg)}100%{transform:scaleX(var(--runner-turn)) scale(0.96) rotate(2deg)}}
 @keyframes petCourierDrop{0%{opacity:0;transform:translateY(10px) scale(0.5)}40%{opacity:1;transform:translateY(-6px) scale(1.18)}100%{opacity:1;transform:translateY(0) scale(1)}}
+.pet-nudge-stage{position:fixed;inset:0;z-index:10006;overflow:hidden;pointer-events:none}
+.pet-nudge-stage .pet-courier,.pet-nudge-stage .pet-courier-dust{position:absolute}
 /* No pet animation in the app had this guard. The delivery still happens — the
    modal opens directly, pet-courier.js skips the run entirely. */
 @media (prefers-reduced-motion:reduce){
@@ -5544,6 +5546,8 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 /* Native work sessions */
 .active-work-dock{margin:0 0 12px;border:1px solid rgba(34,211,238,.28);background:rgba(8,145,178,.08);border-radius:12px;padding:10px 12px}
 .active-work-head,.active-work-row{display:flex;align-items:center;gap:10px}
+/* Check-ins occupy their own full row at every viewport width. */
+.active-work-row{flex-wrap:wrap;min-width:0}
 .active-work-head{justify-content:space-between;margin-bottom:7px;color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}
 .active-work-row+.active-work-row{border-top:1px solid var(--border);margin-top:7px;padding-top:7px}
 .active-work-dot{width:8px;height:8px;border-radius:50%;background:#22d3ee;box-shadow:0 0 0 4px rgba(34,211,238,.12)}
@@ -5555,7 +5559,7 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .work-action-btn.complete{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.12);color:var(--green)}
 .work-detail-btn{border:0;background:transparent;color:var(--text-muted);font-size:10px;font-weight:700;cursor:pointer;padding:4px 2px}
 .work-detail-btn:hover{color:var(--text)}
-.work-checkin{flex:1 0 100%;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px;margin-top:2px;padding:9px 10px;border:1px solid rgba(245,158,11,.38);border-radius:9px;background:rgba(245,158,11,.1)}
+.work-checkin{flex:1 0 100%;min-width:0;box-sizing:border-box;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px;margin-top:2px;padding:9px 10px;border:1px solid rgba(245,158,11,.38);border-radius:9px;background:rgba(245,158,11,.1)}
 .work-checkin-pet{font-size:18px;line-height:1}
 .work-checkin>span:nth-child(2){display:grid;gap:2px;min-width:0}
 .work-checkin strong{font-size:11px;color:var(--amber,#f59e0b)}
