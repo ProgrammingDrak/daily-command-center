@@ -3457,6 +3457,8 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 @keyframes petCourierCarry{0%{transform:translateY(0) scale(0.95) rotate(-6deg)}100%{transform:translateY(-2px) scale(1.05) rotate(6deg)}}
 @keyframes petCourierDeposit{0%{transform:scaleX(var(--runner-turn)) scale(1)}54%{transform:scaleX(var(--runner-turn)) scale(1.18) rotate(-4deg)}100%{transform:scaleX(var(--runner-turn)) scale(0.96) rotate(2deg)}}
 @keyframes petCourierDrop{0%{opacity:0;transform:translateY(10px) scale(0.5)}40%{opacity:1;transform:translateY(-6px) scale(1.18)}100%{opacity:1;transform:translateY(0) scale(1)}}
+.pet-nudge-stage{position:fixed;inset:0;z-index:10006;overflow:hidden;pointer-events:none}
+.pet-nudge-stage .pet-courier,.pet-nudge-stage .pet-courier-dust{position:absolute}
 /* No pet animation in the app had this guard. The delivery still happens — the
    modal opens directly, pet-courier.js skips the run entirely. */
 @media (prefers-reduced-motion:reduce){
@@ -3477,8 +3479,6 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
    ------------------------------------------------------------------------- */
 
 /* ── the collapsed pill ── */
-.pet-nudge-stage{position:fixed;inset:0;z-index:10006;overflow:hidden;pointer-events:none}
-.pet-nudge-stage .pet-courier,.pet-nudge-stage .pet-courier-dust{position:absolute}
 .anytime-dock{position:fixed;right:16px;bottom:96px;z-index:430;
   border:1px solid var(--border);background:var(--card);color:var(--text);
   font:inherit;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,0.45);

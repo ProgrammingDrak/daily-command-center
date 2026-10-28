@@ -27,6 +27,44 @@ function loadCheckInApi() {
   return context.window.DCCWorkSessions;
 }
 
+test("delayed reminder focus uses the current task view and never adds a focus scroll", async () => {
+  const raw = { id: "focus-block", type: "block", properties: {
+    local_id: "focus-task", type: "task", title: "Example", startedAt: new Date(Date.now() - 26 * 60_000).toISOString(),
+  } };
+  const model = require("./public/js/task-model.js");
+  const task = model.fromBlock(raw);
+  let open;
+  const scrolls = [], focuses = [];
+  const row = { dataset: { workCheckinTask: task.id },
+    scrollIntoView: options => scrolls.push(options),
+    querySelector: () => ({ focus: options => focuses.push(options) }),
+  };
+  let visibleRows = [row];
+  const context = {
+    window: { TaskTypes: { rule: () => "work_sessions" },
+      DCC: { TaskModel: model, PetNudge: { deliverWorkCheckIn: async (_text, options) => { open = options.open; } } },
+      blockStore: { get: () => raw, getByType: () => [raw] },
+    },
+    document: { getElementById: () => null, querySelectorAll: () => visibleRows, addEventListener() {} },
+    scheduled: [task], backlog: [], setInterval: () => 0, Date, Map, Set, Array, Number,
+  };
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  await context.window.DCCWorkSessions.checkInTick();
+  open();
+  assert.equal(focuses[0].preventScroll, true);
+  assert.equal(scrolls[0].inline, "nearest");
+  assert.equal(scrolls[0].block, "nearest");
+  // The task can be paused, dismissed, or replaced by another account/view
+  // while the pet is running. Its delayed callback must not target that view.
+  visibleRows = [{ ...row, dataset: { workCheckinTask: "different-task" } }];
+  open();
+  visibleRows = [];
+  open();
+  assert.equal(focuses.length, 1);
+  assert.equal(scrolls.length, 1);
+});
+
 test("pet check-ins use a 25-minute cadence and auto-pause after two misses", () => {
   const work = loadCheckInApi();
   const started = Date.parse("2026-09-28T13:00:00.000Z");
