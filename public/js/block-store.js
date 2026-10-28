@@ -1456,9 +1456,10 @@
       // alone cannot say that — an auto-slotted cross-day move sends parentStart too —
       // and the flag is what makes the client cascade leave the start alone.
       const body = { targetDate, parentStart, parentEnd, fromDate, placement, userSetStart, ...(reviewGuard ? { reviewGuard } : {}) };
-      // Confirmed review moves must never replay after leaving the preview.
+      const checkedPlacement = reviewGuard || placement?.kind === "time_block";
+      // Capacity-checked moves never replay later against a different schedule.
       let walId;
-      try { walId = reviewGuard ? null : walPush({ op: "reschedule", id: blockId, data: body }); }
+      try { walId = checkedPlacement ? null : walPush({ op: "reschedule", id: blockId, data: body }); }
       catch (error) { error.permanent = true; throw error; }
       // Only expose optimistic feedback once the intent survives a reload.
       if (walId && typeof onQueued === "function") {
@@ -1475,7 +1476,7 @@
           // before its transaction acquired the lock. The server rejects that stale
           // subtree plan so no children can be stranded. Repeating once rebuilds the
           // plan from the row's current day and preserves the user's intent.
-          if (reviewGuard || !(e && e.status === 409 && e.code === "RESCHEDULE_STALE")) throw e;
+          if (checkedPlacement || !(e && e.status === 409 && e.code === "RESCHEDULE_STALE")) throw e;
           result = await apiPost("/api/blocks/" + blockId + "/reschedule", body);
         }
         (result.moved || []).forEach(id => cacheDelete(id));
@@ -1495,7 +1496,7 @@
         // verdict is stamped on the error so callers don't re-derive it.
         // Review moves require a fresh explicit confirmation after any failure.
         // Never replay them later from the WAL after the user has left the preview.
-        if (e) e.permanent = !!reviewGuard || e.status === 400 || e.status === 404 || e.status === 409;
+        if (e) e.permanent = !!checkedPlacement || e.status === 400 || e.status === 404 || e.status === 409;
         if (e && e.permanent) {
           // Permanent rejection: the server refused for a reason a retry cannot change
           // ("Already on that date", "Block is deleted", "Block not found", a bad

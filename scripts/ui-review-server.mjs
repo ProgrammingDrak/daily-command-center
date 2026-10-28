@@ -32,6 +32,10 @@ if (process.env.DCC_REVIEW_GLASSES_DEVICE === '1' || process.env.DCC_REVIEW_TASK
   res.setHeader('Content-Security-Policy', "connect-src 'self'; form-action 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'");
   next();
 });
+if (process.env.DCC_TIME_BLOCK_REVIEW === "1") {
+  const { default: mount } = await import("./time-block-review-backend.js");
+  await mount(app);
+}
 const reviewBlocks = new Map();
 const meetingReviewFixture = [
   { id: "review-investor", title: "Investor Network Weekly", date: "2026-09-25", status: "ready",
@@ -280,7 +284,8 @@ app.post("/api/blocks/:id/work", async (req, res) => {
   try {
     const block = reviewBlocks.get(req.params.id);
     if (!block) return res.status(404).json({ error: "Block not found" });
-    const operation = req.body.action === "start" ? reviewTiming.startWork : reviewTiming.pauseWork;
+    const operation = req.body.action === "start" ? reviewTiming.startWork
+      : req.body.action === "continue" ? reviewTiming.continueWork : reviewTiming.pauseWork;
     await operation({ block, atMs: Date.parse(req.body.at), actionId: req.body.actionId, actor: "review" });
     res.json({ block: reviewBlocks.get(block.id) });
   } catch (error) { res.status(400).json({ error: error.message }); }

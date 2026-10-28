@@ -118,9 +118,9 @@
       return String(candidate.dataset.workCheckinTask) === String(taskId);
     });
     if (!row) return;
-    if (typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
     var button = row.querySelector && row.querySelector('[data-work-action="continue"]');
-    if (button && typeof button.focus === "function") button.focus();
+    if (button && typeof button.focus === "function") button.focus({ preventScroll: true });
   }
 
   function deliverCheckIn(task, state) {
