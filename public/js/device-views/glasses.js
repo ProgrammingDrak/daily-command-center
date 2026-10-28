@@ -3,13 +3,14 @@
   'use strict';
   if (new URLSearchParams(location.search).get('device') !== 'glasses') return;
   document.body.classList.add('device-glasses');
-  const rowSelector = '.it-list-item[data-id]:not(.resched-away-row)';
+  const rowSelector = '.it-list-item[data-id]:not(.resched-away-row), .wq-card[data-queue-id]';
+  const idOf = row => row.dataset.queueId || row.dataset.id;
   let selectedId = null;
   let focusToken = null;
   let confirming = null;
   const forwarded = new WeakSet();
   const expanded = new Set();
-  const visible = el => !!(el && el.getClientRects().length && !el.closest('[hidden],[inert],[aria-hidden="true"]'));
+  const visible = el => !!(el && el.getClientRects().length && !el.closest('[hidden],[inert],[aria-hidden="true"],details:not([open])'));
   function activeScope() {
     if (confirming) return confirming.scope;
     const focusedDialog = document.activeElement?.closest('[role="dialog"], dialog');
@@ -20,8 +21,8 @@
     return visible(drawer) ? drawer : document;
   }
   const rows = () => [...activeScope().querySelectorAll(rowSelector)].filter(visible);
-  const selected = () => rows().find(row => row.dataset.id === selectedId);
-  const titleOf = row => row.querySelector('.ttl');
+  const selected = () => rows().find(row => idOf(row) === selectedId);
+  const titleOf = row => row.matches('.wq-card') ? row : row.querySelector('.ttl');
   const contextKey = () => JSON.stringify([window.DCC_ACCOUNT_CONTEXT || null, typeof __state === 'undefined' ? null : __state.date]);
   const button = (text, action, label) => {
     const el = document.createElement('button');
@@ -38,7 +39,7 @@
   function announce(message) { status.textContent = message; }
   function select(row, focus) {
     if (!row) return;
-    selectedId = row.dataset.id;
+    selectedId = idOf(row);
     rows().forEach(item => item.classList.toggle('glasses-selected', item === row));
     if (focus) { titleOf(row)?.focus({ preventScroll: true }); row.scrollIntoView({ block: 'center', behavior: 'instant' }); }
     const list = rows();
@@ -48,7 +49,7 @@
   }
   function move(delta) {
     const list = rows();
-    const at = list.findIndex(row => row.dataset.id === selectedId);
+    const at = list.findIndex(row => idOf(row) === selectedId);
     select(list[Math.max(0, Math.min(list.length - 1, at + delta))], true);
   }
   const prev = button('↑ Previous', () => move(-1), 'Previous visible task');
@@ -120,13 +121,17 @@
   }, true);
   // Suppress the canonical quick-complete hold/key shortcut while confirmation owns it.
   document.addEventListener('pointerdown', event => {
-    if (event.target.closest(rowSelector + ' .it-list-check')) event.stopImmediatePropagation();
+    if (event.target.closest('.it-list-item[data-id] .it-list-check')) event.stopImmediatePropagation();
   }, true);
   document.addEventListener('keydown', event => {
-    if (event.repeat && ['Enter', ' '].includes(event.key) && event.target.matches('.ttl')) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+    if (event.repeat && ['Enter', ' '].includes(event.key) && event.target.matches('.ttl, .wq-card')) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+    if (event.target.matches('.wq-card') && event.key === 'Enter' && !event.repeat) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      event.target.querySelector('[data-queue-action=details]')?.click(); return;
+    }
     // A bounded list interaction, not a second page-wide spatial focus manager.
     // Prevent default only when moving a title; all other arrows stay native.
-    if (event.target.matches('.ttl') && event.target.closest(rowSelector) && ['ArrowUp', 'ArrowDown'].includes(event.key)) {
+    if (event.target.matches('.ttl, .wq-card') && event.target.closest(rowSelector) && ['ArrowUp', 'ArrowDown'].includes(event.key) && !event.altKey && !event.ctrlKey && !event.metaKey) {
       const list = rows(); const at = list.indexOf(event.target.closest(rowSelector));
       const destination = list[at + (event.key === 'ArrowDown' ? 1 : -1)];
       if (destination) { event.preventDefault(); event.stopImmediatePropagation(); select(destination, true); }
@@ -142,12 +147,29 @@
     const row = event.target.closest(rowSelector);
     if (!row) { if (event.target !== document.body) focusToken = null; return; }
     select(row, false);
-    if (event.target.matches('.ttl')) row.scrollIntoView({ block: 'center', behavior: 'instant' });
-    focusToken = { id: row.dataset.id, el: event.target, kind: event.target.classList.contains('it-list-check') ? '.it-list-check' : '.ttl' };
+    if (event.target.matches('.ttl, .wq-card')) row.scrollIntoView({ block: 'center', behavior: 'instant' });
+    focusToken = { id: idOf(row), el: event.target, kind: event.target.classList.contains('it-list-check') ? '.it-list-check' : row.matches('.wq-card') ? null : '.ttl' };
   });
 
   function adapt() {
+    document.body.classList.toggle('glasses-queue-view', !!document.querySelector('#tab-working-queue.active'));
     document.querySelectorAll(rowSelector).forEach(row => {
+      if (row.matches('.wq-card')) {
+        row.draggable = false;
+        row.setAttribute('aria-label', row.querySelector('h3')?.textContent || 'Task');
+        if (!row.querySelector('.glasses-more')) {
+          const more = button('More', () => {
+            if (expanded.has(idOf(row))) expanded.delete(idOf(row)); else expanded.add(idOf(row));
+            row.classList.toggle('glasses-expanded', expanded.has(idOf(row)));
+            more.setAttribute('aria-expanded', String(expanded.has(idOf(row))));
+          }, 'More actions for ' + row.querySelector('h3')?.textContent);
+          more.className = 'glasses-more';
+          row.querySelector('.wq-actions')?.append(more);
+        }
+        row.classList.toggle('glasses-expanded', expanded.has(idOf(row)));
+        row.querySelector('.glasses-more')?.setAttribute('aria-expanded', String(expanded.has(idOf(row))));
+        return;
+      }
       const title = titleOf(row);
       if (!title) return;
       const control = row.querySelector('.it-list-check');
@@ -175,19 +197,25 @@
     select(selected() || list[0], false);
     if (!list.length) { prev.disabled = true; next.disabled = true; position.textContent = 'No visible tasks'; }
     if (focusToken && !focusToken.el.isConnected && document.activeElement === document.body && !dialog.open) {
-      const row = list.find(item => item.dataset.id === focusToken.id) || selected();
-      const target = row?.querySelector(focusToken.kind) || (row && titleOf(row));
+      const row = list.find(item => idOf(item) === focusToken.id) || selected();
+      const target = (focusToken.kind && row?.querySelector(focusToken.kind)) || (row && titleOf(row));
       target?.focus({ preventScroll: true });
     }
   }
-  // Only child-list mutations: focus/selection styling must not feed this observer.
+  // Ignore selection styling; shared overlay inert changes must restore navigation.
   let queued = false;
   const observer = new MutationObserver(records => {
-    if (!records.some(record => [...record.addedNodes, ...record.removedNodes].some(node => node.nodeType === 1 && (node.matches?.(rowSelector) || node.querySelector?.(rowSelector))))) return;
+    if (!records.some(record => record.type === 'attributes' || [...record.addedNodes, ...record.removedNodes].some(node => node.nodeType === 1 && (node.matches?.(rowSelector) || node.querySelector?.(rowSelector))))) return;
     if (queued) return;
     queued = true; requestAnimationFrame(() => { queued = false; adapt(); });
   });
-  observer.observe(document.body, { childList: true, subtree: true });
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['inert'] });
+  document.querySelectorAll('.tab-content').forEach(tab => {
+    new MutationObserver(() => adapt()).observe(tab, { attributes: true, attributeFilter: ['class'] });
+  });
+  document.addEventListener('toggle', event => {
+    if (event.target.matches?.('.wq-completed')) adapt();
+  }, true);
   window.addEventListener('offline', () => announce('Offline. Completion is paused until you reconnect.'));
   window.addEventListener('online', () => announce('Connection restored. Review DCC’s save status before retrying.'));
   adapt();

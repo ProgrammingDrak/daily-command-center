@@ -20,7 +20,7 @@ page.on('pageerror',error=>errors.push(error.message));
 const check=name=>{checks.push(name);console.log('PASS '+name);};
 const row=id=>page.locator('#list-view .it-list-item').filter({has:page.locator('.ttl')}).locator('xpath=self::*[@data-id="'+id+'"]');
 async function ready(glasses=true,expectedUnscheduled="1"){
-  await page.goto(base+'/?'+(glasses?'device=glasses':''));
+  await page.goto(base+'/?tab=schedule'+(glasses?'&device=glasses':''));
   await page.waitForSelector('#list-view .it-list-item');
   if(glasses)await page.waitForSelector('#list-view .glasses-more',{state:'attached'});
   if(expectedUnscheduled!==null)await page.waitForFunction(expected=>document.querySelector('#unscheduled-pill-nav-count')?.textContent===expected,expectedUnscheduled);
@@ -58,15 +58,15 @@ try {
   assert.equal(await titles.first().evaluate(el=>{const event=new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true,cancelable:true});el.dispatchEvent(event);return event.defaultPrevented;}),false);
   assert.equal(await titles.first().evaluate(el=>{const event=new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true});el.dispatchEvent(event);return event.defaultPrevented;}),true);
   check('title Up/Down moves exactly one canonical row and consumes handled arrow events');
-  await row('review-workout').locator('.ttl').focus();
+  await row('review-detail-task').locator('.ttl').focus();
   await page.keyboard.press('Enter');
   await page.waitForFunction(()=>document.querySelector('#add-modal-overlay')?.classList.contains('open'));
   await page.locator('#add-modal-close').click();
   check('Enter opens the existing task detail dialog');
-  await row('review-workout').locator('.ttl').focus();
-  assert.equal(await row('review-workout').locator('.ttl').evaluate(el=>{const e=new KeyboardEvent('keydown',{key:'Enter',repeat:true,bubbles:true,cancelable:true});el.dispatchEvent(e);return e.defaultPrevented;}),true);
+  await row('review-detail-task').locator('.ttl').focus();
+  assert.equal(await row('review-detail-task').locator('.ttl').evaluate(el=>{const e=new KeyboardEvent('keydown',{key:'Enter',repeat:true,bubbles:true,cancelable:true});el.dispatchEvent(e);return e.defaultPrevented;}),true);
   assert.equal(await page.locator('#add-modal-overlay').evaluate(el=>el.classList.contains('open')),false);
-  await row('review-workout').locator('.ttl').focus();
+  await row('review-detail-task').locator('.ttl').focus();
   await page.keyboard.press('Enter');
   await page.waitForFunction(()=>document.querySelector('#add-modal-overlay')?.classList.contains('open'));
   await page.locator('#am-tab-subtasks').click();

@@ -31,6 +31,8 @@
   function render(){
     const root=document.getElementById('working-queue-root');if(!root)return;
     const focused=document.activeElement,focusKey=focused?.dataset.queueAction,focusId=focused?.dataset.taskId;
+    const completedOpen=root.querySelector('.wq-completed')?.open;
+    const completedFocused=focused?.matches('.wq-completed > summary');
     const all=items(),index=new Map((window.DCCWorkSessions?.availableTasks()||[]).map(t=>[t.id,t]));all.forEach(i=>{const t=DCC.TaskModel.fromBlock(i.task);index.set(t.id,t);});
     function card(item){
       const row=item.task,task=DCC.TaskModel.fromBlock(row),foreground=item.status==='foreground',completed=item.status==='completed';
@@ -48,6 +50,8 @@
     function lane(title,rows,empty,cls=''){return '<section class="wq-lane '+cls+'"><h2>'+title+' <small>'+rows.length+'</small></h2>'+(rows.length?rows.map(card).join(''):'<p class="wq-empty">'+empty+'</p>')+'</section>';}
     const fg=all.filter(i=>i.status==='foreground'),needs=all.filter(i=>i.needsYou&&i.status!=='foreground'),background=all.filter(i=>['background','paused','blocked'].includes(i.status)&&!i.needsYou),upNext=all.filter(i=>i.status==='queued'&&!i.needsYou),done=all.filter(i=>i.status==='completed');
     root.innerHTML='<header class="wq-header"><div><h1>Working Queue</h1><p>Bring one task forward. Keep the rest ready to return to.</p></div>'+button('add','Add tasks')+'</header><p class="wq-sync" role="status">'+esc(sending?'Saving…':pending?'Update saved on this device; awaiting confirmation.':problem?'Offline or unavailable: '+problem:'Synced · waiting time is not focused effort')+'</p>'+(pending?button('retry','Retry saved update'):'')+(conflict?'<p class="wq-conflict">'+esc(conflict.message)+' Your attempted change is retained. Review current work before trying again. '+button('conflict','Review attempted change')+button('clear-conflict','Dismiss conflict')+'</p>':'')+(state.otherWorkspaceForeground?'<p class="wq-conflict">Work is active in another workspace. Pause it there before bringing a task forward here.</p>':'')+'<div class="wq-grid">'+lane('Foreground',fg,'Choose a task below to begin focused work.','wq-foreground')+lane('Needs You',needs,'No reported review actions or manual check-backs due.','wq-needs')+lane('Up Next',upNext,'Add existing tasks to build your queue.','wq-next')+lane('Background & paused',background,'Tasks you set aside keep their context here.','wq-background')+'</div>'+(done.length?'<details class="wq-completed"><summary>Completed · '+done.length+'</summary>'+done.map(card).join('')+'</details>':'');
+    if(completedOpen)root.querySelector('.wq-completed')?.setAttribute('open','');
+    if(completedFocused)root.querySelector('.wq-completed > summary')?.focus({preventScroll:true});
     if(focusKey)root.querySelector('[data-queue-action="'+CSS.escape(focusKey)+'"][data-task-id="'+CSS.escape(focusId||'')+'"]')?.focus({preventScroll:true});
   }
   function modal(title,body,submit,label='Save'){let busy=false;return DCC.overlay.open({kind:'modal',title,body,canClose:()=>!busy,actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
