@@ -27,7 +27,9 @@ test('glasses launch uses actual auth gate and same-origin redirect, preserving 
     assert.equal(unauth.status,302);
     assert.equal(unauth.headers.get('location'),loginReturn.loginUrl(url));
     const response = await fetch(base+url,{headers:{'x-fixture-user':'yes'},redirect:'manual'});
-    const target = '/' + (url.includes('?') ? url.slice(url.indexOf('?')) : '');
+    const query = new URLSearchParams(url.includes('?') ? url.slice(url.indexOf('?')) : '');
+    query.set('device','glasses');
+    const target = '/?' + query.toString();
     assert.equal(response.status,302);
     assert.equal(response.headers.get('location'),target);
     assert.equal(new URL(target,base).origin,base);
@@ -43,7 +45,7 @@ test('glasses launch uses actual auth gate and same-origin redirect, preserving 
   assert.equal(await detail.text(),'existing task detail');
   const head = await fetch(base+'/glasses.html',{method:'HEAD',headers:{'x-fixture-user':'yes'},redirect:'manual'});
   assert.equal(head.status,302);
-  assert.equal(head.headers.get('location'),'/');
+  assert.equal(head.headers.get('location'),'/?device=glasses');
 });
 
 test('launch route remains behind production auth and account binding and before static files', () => {

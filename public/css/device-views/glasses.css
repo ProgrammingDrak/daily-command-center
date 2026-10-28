@@ -69,3 +69,35 @@ body.device-glasses{--task-indent-max:64px;--bg:#000;--text:#fff;--text-muted:#c
 .device-glasses .it-list-item .ttl{display:block!important;-webkit-line-clamp:unset!important;line-clamp:unset!important;max-height:none!important}
 .device-glasses .it-list-item:not(.glasses-selected):not(.glasses-expanded) .it-list-check{visibility:hidden!important}
 .device-glasses .it-list-item .it-list-meta .glasses-more{margin-left:auto}
+
+/* Working Queue uses the same cards, coordinator and action handlers as desktop. */
+.device-glasses.glasses-queue-view:not(.glasses-tools-open) :is(.date-nav,.progress-wrap,#active-work-dock){display:none!important}
+.device-glasses #tab-working-queue{padding:0 12px 16px}
+.device-glasses .wq-header{margin:12px 0;gap:10px}
+.device-glasses .wq-header h1{font-size:22px;margin:0}
+.device-glasses .wq-header p{display:none}
+.device-glasses .wq-sync{font-size:14px;margin:8px 0}
+.device-glasses .wq-grid{grid-template-columns:1fr;gap:12px}
+.device-glasses .wq-lane{padding:0;border:0;background:#000}
+.device-glasses .wq-lane h2{font-size:16px;margin:8px 0;color:#c5cbd6}
+.device-glasses .wq-lane:has(>.wq-empty):not(.wq-foreground){display:none}
+.device-glasses .wq-card{background:#050a10;color:#fff;border:1px solid #526170;padding:12px;margin-top:8px;scroll-margin:64px 0 130px}
+.device-glasses .wq-card.glasses-selected{outline:3px solid #8effe3;outline-offset:0;background:#101e26}
+.device-glasses .wq-focus{border:2px solid #8effe3}
+.device-glasses .wq-card h3{font-size:23px;line-height:1.3}
+.device-glasses .wq-status{font-size:12px;color:#d0dce2}
+.device-glasses .wq-card-top{flex-wrap:wrap}
+.device-glasses :is(.wq-time,.wq-note,.wq-attention){font-size:16px;line-height:1.35;margin:8px 0}
+.device-glasses .wq-actions button,.device-glasses .wq-header button{min-height:44px;font-size:16px;padding:8px 12px;background:#000;color:#fff;border:1px solid #8596a1;border-radius:8px}
+.device-glasses .wq-actions [data-queue-action=focus]{border-color:#8effe3;color:#8effe3}
+.device-glasses .wq-card:not(.glasses-selected):not(.glasses-expanded) .wq-actions{display:none}
+.device-glasses .wq-card:not(.glasses-expanded) .wq-actions button:not([data-queue-action=focus]):not([data-queue-action=background]):not([data-queue-action=complete]):not(.glasses-more){display:none}
+.device-glasses .wq-card:not(.glasses-selected):not(.wq-focus):not(.glasses-expanded) .wq-note{display:none}
+.device-glasses .wq-completed{margin:16px 0}
+.device-glasses .wq-completed>summary{font-size:17px;min-height:44px;padding:10px 0;box-sizing:border-box;cursor:pointer;color:#c5cbd6}
+.device-glasses .wq-completed .wq-card{padding:8px 12px}
+.device-glasses .wq-completed .wq-card h3{font-size:16px;text-decoration:line-through}
+.device-glasses .wq-completed .wq-card:not(.glasses-expanded) :is(.wq-time,.wq-note,.wq-status){display:none}
+.device-glasses .it-list-item.done:not(.glasses-expanded){min-height:44px!important;padding:8px 12px!important}
+.device-glasses .it-list-item.done:not(.glasses-expanded) .ttl{font-size:16px!important}
+.device-glasses .it-list-item.done:not(.glasses-selected):not(.glasses-expanded) :is(.it-list-meta,.it-list-utility){display:none!important}
