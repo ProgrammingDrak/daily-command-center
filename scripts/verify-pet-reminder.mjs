@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
-/* global window, document, innerWidth, scrollX, getComputedStyle, requestAnimationFrame, DCCWorkSessions, DCC */
+/* global window, document, innerWidth, scrollX, requestAnimationFrame, DCCWorkSessions, DCC */
 const port = process.env.PET_REVIEW_PORT || '8138';
 const base = `http://127.0.0.1:${port}`;
 const server = spawn(process.execPath, ['scripts/ui-review-server.mjs'], { env: { ...process.env, PORT: port }, stdio: ['ignore', 'pipe', 'inherit'] });
