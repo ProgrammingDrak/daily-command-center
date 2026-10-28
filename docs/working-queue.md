@@ -53,3 +53,7 @@ npm run lint
 ```
 
 The browser harness launches separate headless Chrome with a fresh profile. It checks cancellation, Escape, context, keyboard ordering, switch/effort/hierarchy, reload, expiry, multi-tab delivery, snooze, late responses, return/dismiss, lost-response recovery, offline cache, completion during delayed claim, Details, and mobile overflow. It never starts `server.js`, reads `.env`, or touches production.
+
+## PR435 release-specific decision
+
+The owner explicitly waived the backup prerequisite for this release on 2026-10-28. This supersedes the earlier PR435 backup hold above without claiming a backup exists or changing the default policy. See [the scoped release decision](releases/working-queue-pr435.md); migration audit, exact-candidate checks, deployment coordination and OAuth approval boundaries remain in place.
