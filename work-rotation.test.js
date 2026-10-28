@@ -18,7 +18,8 @@ test(
       await ctx.close();
     });
     await ctx.pool.query(FOREGROUND_INDEX_SQL);
-    let now = Date.now() - 86400000;
+    // Fixed daytime clock: row-count assertions must not depend on crossing UTC midnight.
+    let now = Date.parse("2026-10-20T08:00:00Z");
     const store = createConversationStore({ ...ctx, now: () => now, APP_TIME_ZONE: "UTC" });
     const make = (id, properties = {}) =>
       ctx.blockDB.createBlock({
