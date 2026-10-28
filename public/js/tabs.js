@@ -394,6 +394,11 @@ function addSubtask(taskId, text, options){
   text=text.trim();
   const anchor=(typeof taskAnchorById==="function")?taskAnchorById(taskId):null;
   const parent=anchor?anchor.ev:((typeof scheduled!=="undefined")?scheduled.find(e=>e.id===taskId):null);
+  if(!anchor&&!parent&&!options.date){
+    if(typeof showToast==="function")showToast("Open the parent task's day or Unscheduled view before adding a subtask.","error");
+    return null;
+  }
+
   // Rollup containers (shells) only take full-fledged nested tasks, never
   // timeless pie subtasks — reroute so the parent's pie is never created.
   if(parent&&window.TaskTypes&&window.TaskTypes.rule(parent,"childEdge")==="wrap")return addStackedTask(taskId,text);
@@ -740,7 +745,7 @@ function openTaskAdd(parentId, anchorEl){
   function add(){
     const v=input.value.trim();if(!v)return;
     const durMin=parseInt(durSel.value)||30;
-    if(place==="subtask"&&typeof addSubtask==="function")addSubtask(parentId,v);
+    if(place==="subtask"&&typeof addSubtask==="function"){if(!addSubtask(parentId,v))return;}
     else if(place==="nested"&&typeof addStackedTask==="function")addStackedTask(parentId,v,durMin);
     else if(typeof addTaskAdjacent==="function")addTaskAdjacent(parentId,v,durMin,place);
     input.value="";setTimeout(()=>input.focus(),0);

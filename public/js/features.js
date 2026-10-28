@@ -958,7 +958,7 @@ document.addEventListener('DOMContentLoaded', function() {
     var type = typeSelect.value;
 
     if (type === 'subtask') {
-      addSubtask(_addModalTaskId, text);
+      if(!addSubtask(_addModalTaskId, text))return;
     } else if (type === 'stacked') {
       if (typeof addStackedTask === 'function') addStackedTask(_addModalTaskId, text);
     } else if (type === 'trivial') {

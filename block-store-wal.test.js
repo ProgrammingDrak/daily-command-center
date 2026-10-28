@@ -1254,3 +1254,58 @@ test("rotation acknowledgement updates real cache, invalidates stale reads and r
  assert.deepEqual(calls,[["project",undefined,"2026-07-08T12:00:00.000Z"],["render","schedule"]]);
  store.acceptWorkRotation([{id:"b",deleted_at:"2026-07-08T12:01:00.000Z"}]);assert.equal(store.get("b"),null);
 });
+
+test('pending subtask repair previews, preserves unrelated edits, and only clears on original-ID acknowledgement', async () => {
+  const data = { id: 'original-child', type: 'block', date: '2026-10-28', properties: { title: 'Release', subtaskOf: 'parent', detail: 'keep me' } };
+  const entry = { op: 'create', data, accountScope: '1:ws-1', _walId: 'repair-one', timestamp: minsAgo(1) };
+  const unrelated = { op: 'update', id: 'other', data: { properties: { title: 'Other' } }, accountScope: '1:ws-1', _walId: 'untouched' };
+  const storage = new Map([[WAL_KEY, JSON.stringify([entry, unrelated])]]);
+  let reject = false, wrongId = false;
+  const h = makeStore({ storage, fetchImpl: async (_url, init) => {
+    const body = JSON.parse(init.body);
+    if (reject) throw new TypeError('offline');
+    return { ok: true, status: 200, json: async () => body.apply
+      ? { block: { ...data, id: wrongId ? 'wrong' : data.id, date: null, parent_id: 'parent' } }
+      : { expected: { parentId: 'parent', date: null }, title: data.properties.title } };
+  } });
+  const preview = await h.store.previewPendingSubtask('repair-one'); assert.equal(wal(storage).length, 2);
+  reject = true; await assert.rejects(h.store.repairPendingSubtask(preview), /offline/); assert.equal(wal(storage).length, 2);
+  reject = false; wrongId = true; await assert.rejects(h.store.repairPendingSubtask(preview), /acknowledgement/); assert.equal(wal(storage).length, 2);
+  wrongId = false; const row = await h.store.repairPendingSubtask(preview); assert.equal(row.id, 'original-child');
+  assert.deepEqual(wal(storage), [unrelated]); assert.equal(h.store.hasPendingWrites(), true);
+  assert.deepEqual(JSON.parse(h.fetchCalls.at(-1).init.body).original, data);
+});
+test('repair refuses a changed or foreign pending entry rather than clearing it', async () => {
+  const data = { id: 'child', properties: { title: 'Keep', subtaskOf: 'parent' } };
+  const entry = { op: 'create', data, accountScope: '1:ws-1', _walId: 'one' };
+  const storage = new Map([[WAL_KEY, JSON.stringify([entry])]]);
+  const h = makeStore({ storage, fetchBody: { expected: { date: null } } });
+  const preview = await h.store.previewPendingSubtask('one'); entry.data.properties.title = 'New edit'; storage.set(WAL_KEY, JSON.stringify([entry]));
+  await assert.rejects(h.store.repairPendingSubtask(preview), /changed/); assert.equal(wal(storage)[0].data.properties.title, 'New edit');
+  entry.accountScope = 'someone-else'; storage.set(WAL_KEY, JSON.stringify([entry]));
+  await assert.rejects(h.store.previewPendingSubtask('one'), /changed/);
+});
+
+test('a second tab edit arriving during repair is retained and last-entry success becomes synced', async () => {
+  const entry = { op: 'create', data: { id: 'child', properties: { title: 'Keep', subtaskOf: 'parent' } }, accountScope: '1:ws-1', _walId: 'one' };
+  const storage = new Map([[WAL_KEY, JSON.stringify([entry])]]);
+  let resolveApply;
+  const events = [], statuses = [];
+  const h = makeStore({ storage, fetchImpl: async (_url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.apply) await new Promise(resolve => { resolveApply = resolve; });
+    return { ok: true, status: 200, json: async () => body.apply ? { block: { ...entry.data, date: null } } : { expected: { date: null } } };
+  } });
+  h.context.updateSaveStatus = (status, message) => statuses.push({ status, message });
+  h.context.CustomEvent = function(type, options) { this.type = type; this.detail = options?.detail; };
+  h.context.dispatchEvent = event => events.push(event);
+  const preview = await h.store.previewPendingSubtask('one'); const pending = h.store.repairPendingSubtask(preview);
+  await new Promise(resolve => setImmediate(resolve));
+  const altered = structuredClone(entry); altered.data.properties.title = 'Another tab edit'; storage.set(WAL_KEY, JSON.stringify([altered]));
+  resolveApply(); await assert.rejects(pending, /local copy changed/); assert.equal(wal(storage)[0].data.properties.title, 'Another tab edit');
+  storage.set(WAL_KEY, JSON.stringify([entry]));
+  const next = h.store.repairPendingSubtask(preview); await new Promise(resolve => setImmediate(resolve)); resolveApply(); await next;
+  assert.equal(h.store.hasPendingWrites(), false);
+  assert.ok(events.some(e => e.type === 'blockstore-wal-drained'));
+  assert.equal(statuses.at(-1)?.status, 'ok');
+});

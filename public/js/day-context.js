@@ -332,6 +332,7 @@
     // write resolves. A failed write leaves the server unchanged, so we do NOT
     // invalidate on rejection. Where a date can't be resolved (batchOp, an undated
     // block), clear all (invalidateDayContext(undefined) === clear all).
+    _wrapWrite(bs, "repairPendingSubtask", () => null);
     _wrapWrite(bs, "createBlock", (a) => (a[2] && a[2].date ? [a[2].date] : null));
     _wrapWrite(bs, "rescheduleBlock", (a) => {
       const ds = [];

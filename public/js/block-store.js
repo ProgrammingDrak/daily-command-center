@@ -1833,6 +1833,41 @@
     },
 
     // ── WAL ──
+    pendingSubtaskCreates() {
+      return walGet().filter(entry => entry.accountScope === ACCOUNT_SCOPE && entry.op === "create"
+        && entry.data?.properties?.subtaskOf && !entry.data.properties.wrapId)
+        .map(entry => ({ walId: entry._walId, title: entry.data.properties.title || "Untitled task" }));
+    },
+    async previewPendingSubtask(walId) {
+      const entry = walGet().find(item => item._walId === walId && item.accountScope === ACCOUNT_SCOPE && item.op === "create");
+      if (!entry) throw new Error("This pending creation changed. Reopen Save status.");
+      const snapshot = JSON.stringify(entry.data);
+      const preview = await apiPost("/api/blocks/pending-create-repair", { original: entry.data });
+      return { ...preview, walId, snapshot };
+    },
+    async repairPendingSubtask(preview) {
+      if (_replaying) throw new Error("A sync attempt is finishing. Try the repair again shortly.");
+      const entry = walGet().find(item => item._walId === preview.walId && item.accountScope === ACCOUNT_SCOPE && item.op === "create");
+      if (!entry || JSON.stringify(entry.data) !== preview.snapshot) throw new Error("The pending creation changed. Review the repair again.");
+      // Prevent this tab's replay/expiry sweep during the repair. Other tabs can
+      // only replay the old invalid create; the server serializes actual writes.
+      setSaving();
+      _replaying = true;
+      try {
+        const result = await apiPost("/api/blocks/pending-create-repair", { original: entry.data, expected: preview.expected, apply: true });
+        if (!result.block || result.block.id !== entry.data.id || result.block.deleted_at) throw new Error("Repair acknowledgement was incomplete. The pending copy is retained.");
+        const current = walGet().find(item => item._walId === entry._walId);
+        if (current && JSON.stringify(current.data) !== preview.snapshot) throw new Error("Task saved, but the local copy changed. Keep it for review.");
+        walRemove(entry._walId);
+        cacheSet(result.block);
+        _replaying = false;
+        setSaved();
+        if (!hasPendingWritesNow() && typeof CustomEvent === "function" && typeof window.dispatchEvent === "function") {
+          window.dispatchEvent(new CustomEvent("blockstore-wal-drained"));
+        }
+        return result.block;
+      } finally { _replaying = false; }
+    },
     exportPending() {
       const read = (storage, key) => { try { return JSON.parse(storage.getItem(key) || "[]"); } catch { return []; } };
       return { accountScope: ACCOUNT_SCOPE, pending: walGet(),
