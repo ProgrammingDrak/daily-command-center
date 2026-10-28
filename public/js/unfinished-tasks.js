@@ -696,6 +696,12 @@
     refoldViewedDay: refoldViewedDay,
     complete: complete,
     moveTo: moveTo,
+    settlePlacement: (ev, result) => {
+      const moved=new Set(result.moved||[]);
+      const removed=[ev.id,...collectedRows.filter(row=>moved.has(originOf(row).sourceId)).map(row=>row.id)];
+      if(typeof window.invalidateHabitStreaks==="function")window.invalidateHabitStreaks();
+      return settle("move",ev,[...new Set(removed)]);
+    },
     drop: drop,
     toBacklog: toBacklog,
     prettyDate: prettyDate

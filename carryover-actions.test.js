@@ -424,3 +424,13 @@ test("the refill is scoped to the one day, and a genuinely missing row still ref
   assert.equal(res, null, "a row that truly cannot be resolved must still refuse");
   assert.equal(h.calls.updateBlock.length, 0, "and must still write nothing");
 });
+
+test("acknowledged time-block placement settles parent and children across carryover surfaces", async () => {
+  const { d, days } = parentAndKid();
+  const h = load(days, [d]);
+  const { rows } = await h.CO.collect();
+  const parent = rows.find(row => row.id === "p");
+  const result = h.CO.settlePlacement(parent, { moved: rows.map(row => row.__unf.sourceId) });
+  assert.deepEqual(JSON.parse(JSON.stringify(result.removed)).sort(), ["k", "p"]);
+  assert.equal(h.CO.rows().length, 0);
+});

@@ -37,6 +37,7 @@ const { planAllocations } = createTaskTiming;
 const MAX_REALLOCATABLE_SEC = 36 * 3600;
 const TaskModel = require("../public/js/task-model");
 const reviewTomorrow = require("../lib/review-tomorrow");
+const timeBlockPlacement = require("../lib/time-block-placement");
 const scheduleSettingsStore = require("../schedule-settings-store");
 const createMaterializeGuard = require("../lib/materialize-guard");
 const { dedupeStatus } = createMaterializeGuard;
@@ -1694,6 +1695,12 @@ module.exports = function mount(app, ctx) {
   app.get("/api/review-tomorrow", previewTomorrow);
   app.post("/api/review-tomorrow/preview", previewTomorrow);
 
+  app.get("/api/time-block-placement", route(async (req, res) => {
+    if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date" });
+    const blocks = await timeBlockPlacement.readBlocks(ctx, req.workspaceId);
+    res.json({ blocks: timeBlockPlacement.choices(blocks, req.query.date) });
+  }));
+
   // ── Reschedule: move a task (and its whole subtask subtree) to another date ──
   // A TRUE MOVE: the parent block and every descendant keep their ids and just
   // change `date`, all in one transaction, with a single broadcast. Replaces the
@@ -1745,8 +1752,10 @@ module.exports = function mount(app, ctx) {
       const isHHMM = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
       if (parentStart != null && !isHHMM(parentStart)) return res.status(400).json({ error: "Invalid parentStart (want HH:MM)" });
       if (parentEnd != null && !isHHMM(parentEnd)) return res.status(400).json({ error: "Invalid parentEnd (want HH:MM)" });
-      const place = placement || ((parentStart || parentEnd) ? { kind: "timed", start: parentStart, end: parentEnd } : null);
-      if (place && place.kind !== "timed" && place.kind !== "all_day" && place.kind !== "unplanned") return res.status(400).json({ error: "Invalid placement kind" });
+      let place = placement || ((parentStart || parentEnd) ? { kind: "timed", start: parentStart, end: parentEnd } : null);
+      const blockChoice = place && place.kind === "time_block";
+      if (blockChoice && (typeof place.blockId !== "string" || !/^[a-zA-Z0-9-]{16,80}$/.test(place.requestId || "") || req.body.reviewGuard)) return res.status(400).json({ error: "Invalid time block selection" });
+      if (place && !blockChoice && place.kind !== "timed" && place.kind !== "all_day" && place.kind !== "unplanned") return res.status(400).json({ error: "Invalid placement kind" });
       if (place && place.kind === "timed" && (!isHHMM(place.start) || !isHHMM(place.end))) {
         return res.status(400).json({ error: "Timed placement requires HH:MM start and end" });
       }
@@ -1764,6 +1773,14 @@ module.exports = function mount(app, ctx) {
       assertBlockOwnership(parent, req.workspaceId);
       if (parent.deleted_at) return res.status(400).json({ error: "Block is deleted" });
       const parentProps = parent.properties || {};
+      if (blockChoice && parentProps.timeBlockPlacement?.requestId === place.requestId) {
+        const receipt = parentProps.timeBlockPlacement;
+        if (parent.date !== targetDate || receipt.blockId !== place.blockId || parentProps.start !== receipt.start || parentProps.end !== receipt.end) return res.status(409).json({ error: "This move was already applied and the task changed. Refresh the day." });
+        const pool = await blockDB.getRescheduleSubtreePool(targetDate, req.workspaceId);
+        const ids = collectSubtreeBlockIds(pool, parent), byId = new Map(pool.map(row => [row.id, row])); byId.set(parent.id, parent);
+        const tomb = receipt.fromDate !== targetDate ? await blockDB.getRescheduleTombstone(receipt.fromDate, parent.id, req.workspaceId) : null;
+        return res.json({ moved: ids, blocks: ids.map(id => byId.get(id)), created: tomb ? [tomb] : [], parentId: parent.id, targetDate, repeated: true });
+      }
       const calendarOwned = ["calendar", "gcal"].includes(String(parentProps.source || "").toLowerCase()) || !!parentProps.calendar_id;
       if (calendarOwned && (parentProps.type === "meeting" || parentProps.kind === "meeting" || parentProps.type === "oneone")) {
         return res.status(409).json({ error: "Calendar meetings must be moved in their source calendar" });
@@ -1795,6 +1812,12 @@ module.exports = function mount(app, ctx) {
       const subtreeIds = collectSubtreeBlockIds(dayBlocks, parent);
       const byId = new Map(dayBlocks.map(b => [b.id, b]));
       byId.set(parent.id, parent); // parent may lack local_id and be absent from dayBlocks
+      let blockPlan = null;
+      if (blockChoice) {
+        await ctx.prepareScheduledDay(targetDate, req.session.userId, req.workspaceId);
+        blockPlan = await timeBlockPlacement.load(ctx, req, parent, subtreeIds.map(id => byId.get(id)));
+        place = blockPlan.placement;
+      }
       const completedMembers = req.body.reviewGuard ? await reviewTomorrow.validateMove(ctx, req, parent, subtreeIds.map(id => byId.get(id)), place, req.body.reviewGuard) : [];
       const now = new Date().toISOString();
       const toMin = v => v && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? Number(v.slice(0, 2)) * 60 + Number(v.slice(3)) : null;
@@ -1833,11 +1856,16 @@ module.exports = function mount(app, ctx) {
           if (dateChanged) properties.rescheduledFrom = { date: fromDate, at: now };
           if (place && place.kind === "timed") {
             properties.start = place.start; properties.end = place.end; properties._pinnedStart = place.start;
+            if (blockChoice) {
+              properties.timeBlockPlacement = { requestId: placement.requestId, blockId: placement.blockId, fromDate, start: place.start, end: place.end };
+              if (typeof placement.title === "string" && placement.title.trim()) properties.title = placement.title.trim().slice(0, 1000);
+            }
+            delete properties.schedulePlacement; delete properties.reschedulePlacement;
             // Absence is the only value that has ever meant "not user-set", same rule the
             // lock axis follows, so an auto-slotted move DELETES a stale flag rather than
             // storing false. Otherwise a task that was hand-placed once would keep
             // resisting reflow after the scheduler later re-slotted it.
-            if (userSetStart === true) properties.userSetStart = true; else delete properties.userSetStart;
+            if (userSetStart === true || blockChoice) properties.userSetStart = true; else delete properties.userSetStart;
             delete properties.all_day; delete properties.all_day_start; delete properties.all_day_end;
           } else if (place && place.kind === "all_day") {
             properties.all_day = true; properties.all_day_start = targetDate; properties.all_day_end = place.endDate;
@@ -1909,7 +1937,22 @@ module.exports = function mount(app, ctx) {
         });
       }
 
-      const reviewOptions = req.body.reviewGuard ? {
+      const reviewOptions = blockChoice ? {
+        lockKey: "dcc-time-block:" + req.workspaceId + ":" + targetDate,
+        beforeApply: async client => {
+          // Include concurrent inserts, calendar ingestion, and settings edits, not
+          // just existing row updates. Keep the lock bounded and the read fail-closed.
+          await client.query("SET LOCAL lock_timeout = '3s'");
+          await client.query("LOCK TABLE blocks, dcc_state IN SHARE ROW EXCLUSIVE MODE");
+          const freshParent = await blockDB.getBlock(parent.id, client);
+          const freshPool = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId, { client });
+          if (!freshParent || freshParent.deleted_at) timeBlockPlacement.reject("The task changed. Refresh the day.");
+          const freshById = new Map(freshPool.map(row => [row.id, row])); freshById.set(parent.id, freshParent);
+          const members = collectSubtreeBlockIds(freshPool, freshParent).map(id => freshById.get(id));
+          const fresh = await timeBlockPlacement.load(ctx, req, freshParent, members, client);
+          if (fresh.fingerprint !== blockPlan.fingerprint || JSON.stringify(fresh.placement) !== JSON.stringify(place)) timeBlockPlacement.reject("The schedule changed. Choose the block again to check available space.");
+        },
+      } : req.body.reviewGuard ? {
         lockKey: "dcc-review:" + req.workspaceId + ":" + targetDate,
         beforeApply: async client => {
           const freshParent = await blockDB.getBlock(parent.id, client);
