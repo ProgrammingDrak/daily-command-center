@@ -674,6 +674,19 @@ module.exports = function mount(app, ctx) {
   }
 
   // ── Block API ──
+  const pendingCreateRepair = require("../lib/pending-create-repair")({ pool, blockDB });
+  // Session-only recovery. Preview never writes; apply retains the original ID
+  // and uses createBlock's normal hierarchy validation and operation history.
+  app.post("/api/blocks/pending-create-repair", route(async (req) => {
+    if (req.dccServiceAuth || !req.session?.userId) throw clientError("Use an authenticated browser session to repair a pending task", 403);
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    validateSourceProps(req.body?.original?.properties);
+    const result = await pendingCreateRepair({ original: req.body?.original,
+      expected: req.body?.expected, apply: req.body?.apply === true, userId, workspaceId });
+    if (result.created) broadcast("blocks-changed", { action: "create", blockIds: [result.block.id], clientId: req.body?._clientId }, workspaceId);
+    return result;
+  }));
+
   app.post("/api/blocks", validate(schemas.blockCreate), route(async (req, res) => {
     const body = req.body;
     const items = Array.isArray(body) ? body : [body];

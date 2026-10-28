@@ -78,7 +78,7 @@
     button.title = saveDetail.message || "";
   }
 
-  function saveStatusBody() {
+  function saveStatusBody(onRepaired) {
     const wrap = document.createElement("div");
     wrap.className = "dcc-save-detail";
     const exact = saveDetail.timestamp ? new Date(saveDetail.timestamp).toLocaleString() : "No save timestamp yet";
@@ -93,6 +93,36 @@
         '<div><strong>Daily Brief</strong><span>Review today’s generated packet.</span></div>' +
         '<button type="button" data-open-brief>Open Brief</button>' +
       '</div>';
+    const pending = window.blockStore?.pendingSubtaskCreates?.() || [];
+    for (const item of pending) {
+      const row = document.createElement("div");
+      row.className = "dcc-save-repair";
+      const label = document.createElement("p"); label.textContent = item.title;
+      const review = document.createElement("button"); review.type = "button"; review.textContent = "Review subtask repair";
+      row.append(label, review); wrap.append(row);
+      review.addEventListener("click", async () => {
+        review.disabled = true;
+        try {
+          const preview = await window.blockStore.previewPendingSubtask(item.walId);
+          const summary = document.createElement("p");
+          summary.textContent = 'Keep this task and its contents under “' + preview.parentTitle + '”. Placement: '
+            + (preview.originalDate || "Unscheduled") + ' → ' + (preview.expected.date || "Unscheduled") + '. No timer will start.';
+          const apply = document.createElement("button"); apply.type = "button"; apply.textContent = "Repair this pending subtask";
+          const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "Back";
+          row.append(summary, apply, cancel); review.hidden = true;
+          cancel.onclick = () => { summary.remove(); apply.remove(); cancel.remove(); review.hidden = false; review.disabled = false; };
+          apply.onclick = async () => {
+            apply.disabled = true; cancel.disabled = true;
+            try {
+              await window.blockStore.repairPendingSubtask(preview);
+              row.replaceChildren(document.createTextNode("Subtask saved. Its original ID and content were preserved."));
+              if (onRepaired) onRepaired();
+              DCC.toast("Pending subtask repaired", "success");
+            } catch (error) { DCC.toast(error.message, "error"); apply.disabled = false; cancel.disabled = false; }
+          };
+        } catch (error) { DCC.toast(error.message, "error"); review.disabled = false; }
+      });
+    }
     return wrap;
   }
 
@@ -102,7 +132,7 @@
     const headerActions = document.querySelector(".header > div:last-child");
     if (headerActions && button.parentElement !== headerActions) headerActions.insertBefore(button, headerActions.firstChild);
     button.addEventListener("click", () => {
-      const details = saveStatusBody();
+      const details = saveStatusBody(() => statusOverlay.close("repaired"));
       const statusOverlay = DCC.overlay.open({
         kind: "popover",
         title: "Save status",
