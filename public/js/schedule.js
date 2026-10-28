@@ -1751,7 +1751,7 @@ function openPlacementPicker(cfg){
   if(!overlay){if(onPlace)onPlace(cfg.day||_resolvedTodayDate(),null);return}
   _schedPickerTitle=cfg.title||"";
   _schedPickerDur=cfg.durMin||30;
-  _schedPickerOptions={};
+  _schedPickerOptions={onBlockPlace:cfg.onBlockPlace};
   _schedPickerDate="";
   _schedPickerOnPlace=onPlace;
   _schedPickerVerb=cfg.verb||"Move";
@@ -1775,7 +1775,7 @@ function closeSchedulePicker(){
   // much: Escape, the header X and the overlay click all sit OUTSIDE
   // #sched-step-after, so _schedSetAfterBusy never disabled them, and a latch left
   // set would swallow every later commit for the life of the page.
-  _schedSession++;_schedCommitting=false;
+  _schedSession++;_schedCommitting=false;_schedSetAfterBusy(false);
 }
 function _schedShowStep(step){
   const dayEl=document.getElementById("sched-step-day");
@@ -1807,6 +1807,7 @@ function _schedPickDay(dateStr){
   _renderSchedAfterStep(dateStr);
 }
 async function _renderSchedAfterStep(dateStr){
+  const session=_schedSession;
   const label=document.getElementById("sched-after-daylabel");
   if(label)label.textContent=" "+(typeof _prettyDateLabel==="function"?_prettyDateLabel(dateStr):dateStr);
   // Default time-preset chips
@@ -1823,11 +1824,22 @@ async function _renderSchedAfterStep(dateStr){
     efb.type="button";efb.className="sched-chip sched-chip-earliest";efb.textContent="⚡ Earliest free";
     efb.addEventListener("click",()=>_schedCommit(dateStr,null));
     chipWrap.appendChild(efb);
-    loadSchedTimePresets().forEach(t=>{
-      const b=document.createElement("button");
-      b.type="button";b.className="sched-chip";b.textContent=_schedTimeLabel(t);
-      b.addEventListener("click",()=>_schedCommit(dateStr,t));
-      chipWrap.appendChild(b);
+    if(_schedPickerOptions.onBlockPlace){
+      const list=document.createElement("div");list.className="sched-block-list";list.textContent="Loading time blocks…";chipWrap.appendChild(list);
+      fetch("/api/time-block-placement?date="+encodeURIComponent(dateStr),{cache:"no-store"}).then(async response=>{
+        const result=await response.json();if(!response.ok)throw new Error(result.error||"Could not load time blocks");
+        if(_schedSession!==session)return;
+        list.textContent="";
+        (result.blocks||[]).forEach(block=>{
+          const button=document.createElement("button");button.type="button";button.className="sched-after-task";
+          button.textContent=block.name+" · "+_schedTimeLabel(block.start);
+          button.addEventListener("click",()=>_schedCommitBlock(dateStr,block.id));list.appendChild(button);
+        });
+        if(!list.children.length)list.textContent="No active time blocks on this day. Set a time manually or choose another day.";
+      }).catch(()=>{if(_schedSession===session)list.textContent="Could not load time blocks. Reopen to retry, or set a time manually.";});
+    }else loadSchedTimePresets().forEach(t=>{
+      const b=document.createElement("button");b.type="button";b.className="sched-chip";b.textContent=_schedTimeLabel(t);
+      b.addEventListener("click",()=>_schedCommit(dateStr,t));chipWrap.appendChild(b);
     });
   }
   // Every task already on that day, "After <title> · ends <end>"
@@ -1838,7 +1850,7 @@ async function _renderSchedAfterStep(dateStr){
     let items=[];
     try{items=await _schedDayTasks(dateStr)}catch(e){items=[]}
     // Guard against a stale render if the user navigated away meanwhile.
-    if(_schedPickerDate!==dateStr)return;
+    if(_schedSession!==session)return;
     taskWrap.setAttribute("aria-busy","false");
     taskWrap.innerHTML="";
     if(!items.length){
@@ -1965,6 +1977,24 @@ async function _schedCommit(dateStr,timeStr){
   if(onPlace){onPlace(dateStr,timeStr,title);return}
   commitScheduledTask(title,durMin,dateStr,timeStr,options,autoPlaced?{autoPlaced:true}:null);
   if(bar){const inp=bar.querySelector(".tab-title");if(inp){inp.value="";inp.classList.remove("tab-error");}}
+}
+async function _schedCommitBlock(dateStr,blockId){
+  if(_schedCommitting)return;
+  const session=_schedSession,onBlockPlace=_schedPickerOptions.onBlockPlace;
+  if(!onBlockPlace)return;
+  const priorError=document.getElementById("sched-block-error");if(priorError)priorError.remove();
+  _schedCommitting=true;_schedSetAfterBusy(true);
+  try{
+    const result=await onBlockPlace(dateStr,blockId,_schedPickerTitle);
+    if(result&&_schedSession===session)closeSchedulePicker();
+  }catch(error){
+    if(_schedSession===session){
+      const notice=document.createElement("div");notice.id="sched-block-error";notice.setAttribute("role","alert");
+      notice.textContent=error.message||"Could not confirm the move. Refresh the day before retrying.";
+      document.getElementById("sched-after-chips").appendChild(notice);
+    }
+  }
+  finally{if(_schedSession===session){_schedCommitting=false;_schedSetAfterBusy(false);}}
 }
 function schedulePickerFields(durMin,options){
   options=options||{};
@@ -2098,7 +2128,7 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options,placement){
   }
   // Step 2: back + custom time
   const backBtn=document.getElementById("sched-after-back");
-  if(backBtn)backBtn.addEventListener("click",()=>_schedShowStep("day"));
+  if(backBtn)backBtn.addEventListener("click",()=>{_schedSession++;_schedPickerDate="";_schedShowStep("day");});
   const customGo=document.getElementById("sched-custom-go");
   const customTime=document.getElementById("sched-custom-time");
   // Same HH:MM guard the row popover already applies before it commits a typed time.

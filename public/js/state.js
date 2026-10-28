@@ -1397,11 +1397,35 @@ function moveTaskViaPlacement(id,dateStr,opts){
   if(!ev||typeof openPlacementPicker!=="function")return move(dateStr,null);
   openPlacementPicker({
     title:ev.title,durMin:dur(ev)||30,verb:"Move",day:dateStr||null,
+    onBlockPlace:(date,blockId,title)=>_moveTaskIntoTimeBlock(ev,date,blockId,title),
     onPlace:async(dStr,timeStr,editedTitle)=>{
       if(editedTitle&&editedTitle!==ev.title)await _renameTaskForMove(ev,editedTitle);
       return move(dStr,timeStr);
     }
   });
+}
+
+async function _moveTaskIntoTimeBlock(ev,targetDate,blockId,title){
+  const fromDate=ev.__unf?.sourceDate||viewDate||__state?.date;
+  const row=_findTaskBlockForDate(ev.id,fromDate,ev)||ev.__unf?.sourceBlock||(ev.__unf?.sourceId?{id:ev.__unf.sourceId}:null);
+  if(!row||!window.blockStore)throw new Error("This task has not synced yet. Save it before choosing a time block.");
+  // Reuse a token after an uncertain response. The server receipt makes retrying
+  // the same selection idempotent, even if the first response was lost.
+  const key=row.id+"@"+targetDate+"@"+blockId;
+  const requests=window.__timeBlockMoveRequests||(window.__timeBlockMoveRequests=new Map());
+  if(!requests.has(key))requests.set(key,crypto.randomUUID());
+  let result;
+  try{result=await window.blockStore.rescheduleBlock(row.id,targetDate,{fromDate,placement:{kind:"time_block",blockId,requestId:requests.get(key),title}});}
+  catch(error){if(error.status>=400&&error.status<500)requests.delete(key);throw error;}
+  const saved=(result.blocks||[]).find(b=>b.id===row.id);
+  if(!saved||saved.date!==targetDate||!saved.properties?.start)throw new Error("The move was not confirmed. Refresh the day before retrying.");
+  requests.delete(key);
+  if(ev.__unf&&window.DCC?.Carryover?.settlePlacement)DCC.Carryover.settlePlacement(ev,result);
+  if(typeof refoldTaskStateFromBlockCache==="function")refoldTaskStateFromBlockCache();
+  if(viewDate!==targetDate&&typeof _removeSubtreeFromScheduled==="function")_removeSubtreeFromScheduled(ev.id);
+  render();
+  showToast("Moved to "+_prettyDateLabel(targetDate)+" at "+saved.properties.start,"success");
+  return result;
 }
 
 // Rename a task in place: the live row plus its backing block.
@@ -1699,14 +1723,18 @@ async function rescheduleTaskToDate(id,targetDate,opts){
   const fromDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   const pinned=(opts.pinnedStart&&/^\d{2}:\d{2}$/.test(opts.pinnedStart))?opts.pinnedStart:null;
   if(fromDate===targetDate){
-    // Same-day with a chosen time: that's a start pin, not a re-slot.
+    // Persist same-day timing through the same mover, including untimed rows.
     if(pinned){
-      if(typeof pinStartTime==="function")pinStartTime(id,pinned);
-      if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
-      log("rescheduled",id,"Pinned to "+pinned+" on "+targetDate+": "+ev.title);
-      if(!opts.silent&&typeof showToast==="function")showToast("Start pinned to "+(typeof f12==="function"?f12(pinned):pinned),"success");
-      render();
-      return ev;
+      const row=_findTaskBlockForDate(id,fromDate,ev);
+      if(!row||!window.blockStore){showToast("Save this task before moving it.","error");return false;}
+      try{
+        const result=await window.blockStore.rescheduleBlock(row.id,targetDate,{fromDate,parentStart:pinned,parentEnd:fmt(pt(pinned)+(dur(ev)||30)),userSetStart:true});
+        const saved=(result.blocks||[]).find(b=>b.id===row.id);
+        if(!saved||saved.date!==targetDate||saved.properties?.start!==pinned)throw new Error("Move not confirmed. Refresh the day.");
+        refoldTaskStateFromBlockCache();render();
+        if(!opts.silent)showToast("Moved to "+pinned,"success");
+        return result;
+      }catch(error){if(!opts.silent)showToast(error.permanent?(error.message||"Move rejected"):"Move queued. Waiting to sync.",error.permanent?"error":"info");return false;}
     }
     const isActualToday=targetDate===_resolvedTodayDate();
     const moved=isActualToday?_placeTaskAtNextTodaySlot(id):_placeTaskAtEarliestCurrentDateSlot(id);

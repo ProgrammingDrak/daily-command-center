@@ -32,6 +32,10 @@ if (process.env.DCC_REVIEW_GLASSES_DEVICE === '1' || process.env.DCC_REVIEW_TASK
   res.setHeader('Content-Security-Policy', "connect-src 'self'; form-action 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'");
   next();
 });
+if (process.env.DCC_TIME_BLOCK_REVIEW === "1") {
+  const { default: mount } = await import("./time-block-review-backend.js");
+  await mount(app);
+}
 const reviewBlocks = new Map();
 const meetingReviewFixture = [
   { id: "review-investor", title: "Investor Network Weekly", date: "2026-09-25", status: "ready",
