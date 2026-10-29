@@ -68,6 +68,7 @@ jobs:
         run: |
           node scripts/verify-shared-queue.cjs
           CHROME_PATH="$(node -e 'process.stdout.write(require("playwright-core").chromium.executablePath())')" node scripts/verify-work-completion.mjs
+          CHROME_PATH="$(node -e 'process.stdout.write(require("playwright-core").chromium.executablePath())')" node scripts/verify-completed-queue.mjs
       - name: Verify synthetic login return paths
         run: node scripts/verify-login-return.mjs
       - name: Verify glasses with production account binding
