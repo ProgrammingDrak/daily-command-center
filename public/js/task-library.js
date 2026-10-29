@@ -310,7 +310,7 @@
     const badge=document.getElementById("task-library-count");if(badge){badge.textContent=all.filter(item=>item.status!=='done').length;badge.style.display='';}
     root.innerHTML='<div class="task-library-shell">'+
       '<div class="tlb-head"><div><h2>Task Library</h2><p>Every task, organized your way. Unassigned work lives in Solo.</p></div><div class="tlb-head-actions">'+
-      '<button class="tlb-btn secondary" id="tlb-import">Import</button><button class="tlb-btn secondary" id="tlb-manage-facets">Categories</button><button class="tlb-btn secondary" id="tlb-manage-projects">Projects</button><button class="tlb-btn primary" id="tlb-add-task">+ Task</button></div></div>'+
+      '<button class="tlb-btn secondary" data-reading-session>Reading time</button><button class="tlb-btn secondary" id="tlb-import">Import</button><button class="tlb-btn secondary" id="tlb-manage-facets">Categories</button><button class="tlb-btn secondary" id="tlb-manage-projects">Projects</button><button class="tlb-btn primary" id="tlb-add-task">+ Task</button></div></div>'+
       summary(all)+viewTabs()+projectChips(all)+toolbar(schema,rows)+
       '<div class="tlb-mode-row"><button class="'+(state.mode==='table'?'active':'')+'" data-mode="table">Table</button><button class="'+(state.mode==='matrix'?'active':'')+'" data-mode="matrix">Matrix</button>'+
       (stateProjectId()?'<button class="tlb-continue" id="tlb-continue">Continue '+esc(projectName(stateProjectId()))+'</button>':'')+

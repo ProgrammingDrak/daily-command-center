@@ -418,6 +418,15 @@
   <script src="/public/js/login-return.js"></script>
   <script src="/public/js/login-handoff.js"></script>
   <script>
+    // HTTP redirects inherit fragments, but the server cannot include them in next.
+    // Capture a QuietShelf draft before either login method resolves its destination.
+    if (window.location.hash.startsWith("#reading=") && window.location.hash.length < 6000) {
+      const returnUrl = new URL(window.location.href);
+      returnUrl.searchParams.set("next", "/" + window.location.hash);
+      returnUrl.hash = "";
+      window.history.replaceState(null, "", returnUrl.pathname + returnUrl.search);
+    }
+
     let mode = window.location.pathname === "/register" ? "register" : "login";
 
     const loginTab = document.getElementById("loginTab");

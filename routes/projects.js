@@ -18,6 +18,14 @@ module.exports = function mountProjects(app, ctx) {
 
   app.get("/api/task-library", route(async req => store.listLibrary(req.workspaceId)));
 
+  app.post("/api/task-library/reading-sessions", route(async req => {
+    if (!req.session?.userId || !req.workspaceId) throw Object.assign(new Error("Sign in to plan reading time"), { status: 401 });
+    const taskOwner = await owner(req);
+    const result = await require("../lib/reading-session").saveReadingSession({ pool, blockDB, store }, req.body || {}, taskOwner);
+    if (!result.duplicate) announce("reading-session-create", result.task, taskOwner.workspaceId);
+    return result;
+  }));
+
   app.post("/api/task-library/tasks", route(async req => {
     const taskOwner = await owner(req);
     const task = await store.createTask(req.body || {}, taskOwner);
