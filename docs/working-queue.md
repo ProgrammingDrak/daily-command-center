@@ -59,3 +59,25 @@ The browser harness launches separate headless Chrome with a fresh profile. It c
 ## PR435 release-specific decision
 
 The owner explicitly waived the backup prerequisite for this release on 2026-10-28. This superseded the earlier PR435 backup hold without claiming a backup exists. The later [DCC release policy](releases/database-backup-policy.md) makes backups optional for future DCC releases. See [the scoped release decision](releases/working-queue-pr435.md); migration audit, exact-candidate checks, deployment coordination and OAuth approval boundaries remain in place.
+
+## Completed time filter
+
+Today is the initial selection on each page load; choices stay in memory only for
+that view. Today means the calendar day in the queue's configured timezone (shown
+beside the control), including daylight-saving transitions. Other ranges are rolling:
+1 hour, 24 hours (1 day), 7 days (1 week), and 30 days (1 month). Boundaries include
+both the cutoff and now. Last completed shows one newest timestamped occurrence;
+canonical task ID breaks equal-time ties deterministically.
+
+The complete retained queue snapshot is queried without LIMIT or pagination before
+filtering. All time covers that entire retained membership across scheduled dates,
+including older imported memberships; it is not the task-search result page or a
+browser task cache. Removed memberships, deleted/archived tasks and reopened tasks
+are excluded. Removing a card continues to remove it from this view.
+
+Completion time comes from the canonical task completion fields or its authoritative
+day-root completion overlay. Scheduled dates, updates, notes and session end times
+are not substitutes. Completed tasks without a usable timestamp appear in All time
+with “Completion time unavailable”; dated ranges explain how many are omitted.
+Recurrence occurrences remain separate canonical tasks. Viewing/filtering writes no
+queue state, completion, schedule, actuals or timers. Shared-link privacy is unchanged.

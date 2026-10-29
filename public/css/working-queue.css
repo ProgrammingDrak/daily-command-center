@@ -185,3 +185,9 @@
 .wq-effort > div { display: flex; justify-content: space-between; gap: 16px; }
 .wq-effort dd { margin: 0; font-weight: 600; white-space: nowrap; }
 .wq-effort dt { color: var(--text-muted); }
+
+.wq-completed > summary { cursor: pointer; min-height: 44px; padding: 10px 0; }
+.wq-completed-controls { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; margin: 8px 0; }
+.wq-completed-controls label { display: grid; gap: 6px; font-size: 13px; color: var(--text-muted); }
+.wq-completed-controls select { min-height: 44px; max-width: 100%; font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+.wq-completed-controls select:focus-visible { outline: 2px solid var(--cyan, #22d3ee); outline-offset: 2px; }
