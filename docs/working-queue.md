@@ -4,9 +4,11 @@ Working Queue is the working surface; Itinerary remains the plan and actuals. Ex
 
 Normal app entry opens Working Queue. Explicit tab links and navigation history are preserved; opening a view never starts a clock.
 
+See [Priority Queue semantics](priority-queue.md) for never-started classification and explicit priority ordering.
+
 ## Bounded first version
 
-- Foreground, Needs You, Up Next, Background/paused, and collapsed Completed sections.
+- Foreground, Needs You, Priority Queue, Background/paused, and collapsed Completed sections.
 - Add existing tasks, move up/down (also Alt+Arrow and drag), edit return context, bring forward, send background, pause, block/unblock, complete, and remove membership.
 - Check-back options: none, 5/15/30 minutes, 2 hours, or 1–1440 custom minutes. Snooze re-arms for five minutes; dismissal clears the reminder and preserves the task.
 - Guided tasks require the current prompt preview before start/resume, and a confirmed outcome before completion. Existing prerequisite and revision guards still apply. Required access observations can be recorded in the existing guided task detail flow; no integrations are automatically approved.
