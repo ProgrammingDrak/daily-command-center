@@ -49,9 +49,9 @@ async function createSharedQueueFixture() {
     await ctx.blockDB.createBlock({ id, type: 'block', user_id: 1, workspace_id: 'ws-1', date: id === 'older' ? '2026-10-28' : date,
       properties: { title, kind: id === 'backlog' ? 'backlog' : 'task', type: id === 'guided' ? 'guided' : 'task',
         local_id: 'local-' + id, publicVisibility: id === 'private' ? 'private' : 'public',
-        taskPriority: id === 'high' ? 'high' : id === 'low' ? 'low' : 'medium',
+        taskPriority: id === 'high' ? 'High' : id === 'low' ? 'Low' : 'Medium',
         ...(status === 'foreground' ? { startedAt: '2026-10-29T10:00:00.000Z' } : {}),
-        ...(status === 'completed' ? { status: 'done', completedAt: '2026-10-29T09:00:00.000Z' } : {}) } });
+        ...(status === 'completed' ? { doneAt: '2026-10-29T09:00:00.000Z' } : {}) } });
     if (status) { order.push(id); items[id] = { status, hasActivity: !['queued'].includes(status), note: 'PRIVATE QUEUE NOTE SENTINEL' }; }
   }
   await ctx.pool.query('INSERT INTO work_rotations(workspace_id,user_id,state) VALUES($1,$2,$3)', ['ws-1', 1, { version: 2, order, items }]);

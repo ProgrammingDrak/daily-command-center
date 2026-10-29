@@ -2,11 +2,31 @@
   const token = location.pathname.split("/").filter(Boolean).pop();
   let current = null;
   let loadPromise = null;
+  // Adapted from PR421's composer lifecycle: scoped page-memory drafts and
+  // pending actions survive filtering/refresh, without its unmerged reward model.
+  const cardDrafts = new Map(), pendingActions = new Set();
+  let viewerScope = '', viewerEpoch = 0;
+  function cardFor(id) { return Array.from(document.querySelectorAll('[data-shared-task]')).find(el => el.dataset.sharedTask === String(id)); }
+  function beginAction(kind, id) {
+    const key = kind + ':' + id;
+    if (pendingActions.has(key)) return null;
+    pendingActions.add(key); renderTasks(current.tasks || []);
+    return { key, epoch: viewerEpoch };
+  }
+  function endAction(action) {
+    if (action?.epoch !== viewerEpoch) return;
+    pendingActions.delete(action.key); renderTasks(current.tasks || []);
+  }
+  function clearDraft(id, classes) {
+    const saved = cardDrafts.get(String(id));
+    if (saved) saved.values = saved.values.filter(([cls]) => !classes.includes(cls));
+    for (const input of cardFor(id)?.querySelectorAll('input') || []) if (classes.includes(input.className)) input.value = '';
+  }
+  async function reloadAfterMutation() { if (loadPromise) await loadPromise; return load(); }
+
   const filters = {
     types: new Set(["task", "repeat", "calendar", "time"]),
-    status: "all",
-    calendar: "all",
-    sort: "time"
+    status: "all"
   };
   const COMMON_REACTIONS = ["👍", "🙌", "🔥", "💪", "🎉", "❤️"];
   // Capability gate, mirroring the server. Reads the resolved capability map off
@@ -75,14 +95,6 @@
     }[itemType(task)] || "Task");
   }
 
-  function calendarId(task){
-    return task.calendar && task.calendar.id ? String(task.calendar.id) : String(task.gcalCalendarId || "");
-  }
-
-  function calendarName(task){
-    return task.calendar && task.calendar.name ? task.calendar.name : calendarId(task);
-  }
-
   // ---- Sponsorship / bounty / reward helpers (shared across cards) ----
   function sponsorChips(task){
     const offers = (task.sponsorships || []).filter(s => s.status !== "dismissed");
@@ -110,6 +122,8 @@
     const bountied = taskBountied(task);
     const allowed = can("place_bounty");
     if (bountied) {
+      if (!(task.sponsorships || []).some(s => s.kind === "bounty" && s.status === "approved"))
+        return '<button class="todo-bounty-btn bountied" type="button" disabled title="This offer activates after owner approval">💎 Offer pending</button>';
       return '<button class="todo-bounty-btn bountied" type="button" disabled title="This task is bountied - completing it pays 2x">💎 2× points</button>';
     }
     if (!allowed) {
@@ -141,7 +155,7 @@
   function reactionBar(task){
     if (!can("react")) return "";
     const counts = task.reactions || {};
-    return '<div class="todo-public-reactions itinerary-reactions" aria-label="Task reactions">' + COMMON_REACTIONS.map(emoji => {
+    return '<div class="todo-public-reactions" aria-label="Task reactions">' + COMMON_REACTIONS.map(emoji => {
       const count = Number(counts[emoji]) || 0;
       const active = (task.viewerReactions || []).includes(emoji);
       return '<button class="todo-reaction-btn' + (active ? ' active' : '') + '" type="button" data-reaction-emoji="' + esc(emoji) + '" data-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '" aria-pressed="' + active + '" aria-label="React ' + esc(emoji) + '" title="React ' + esc(emoji) + '">' +
@@ -196,7 +210,7 @@
     el.className = "shared-queue-card";
     el.dataset.sharedTask = task.id;
     const q = task.queue || {};
-    const state = q.lane === "priority" ? (q.priority || "medium") + " priority" : q.status;
+    const state = q.lane === "priority" ? (q.priority || "medium") + " priority" : q.lane === "needs-you" ? "Needs attention" : q.status;
     const context = (task.tags || []).slice(0, 2).map(t => t.name).filter(Boolean).join(" · ");
     el.innerHTML = '<div class="shared-card-heading"><h3>' + esc(task.title) + '</h3>' +
       '<span class="shared-card-state">' + esc(state || "") + '</span></div>' +
@@ -217,7 +231,6 @@
       if (filters.status === "open" && task.status === "done") return false;
       if (filters.status === "done" && task.status !== "done") return false;
       if (filters.status === "sponsored" && !(task.sponsorships || []).some(s => s.status !== "dismissed")) return false;
-      if (filters.calendar !== "all" && type === "calendar" && calendarId(task) !== filters.calendar) return false;
       return true;
     });
     items.sort((a, b) => {
@@ -243,9 +256,11 @@
       [card.dataset.sharedTask, { open: card.querySelector('details')?.open,
         rewardOpen: !card.querySelector('.todo-reward-form')?.hidden,
         values: Array.from(card.querySelectorAll('input')).map(input => [input.className, input.value]) }]));
+    for (const [id, draft] of disclosures) cardDrafts.set(id, draft);
     const focused = document.activeElement;
     const focusTask = focused?.closest('[data-shared-task]')?.dataset.sharedTask;
     const focusClass = focused?.className, focusEmoji = focused?.dataset.reactionEmoji;
+    const selection = typeof focused?.selectionStart === "number" ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
     const visible = visibleTasks(tasks);
     updateStats(tasks);
     list.innerHTML = "";
@@ -261,11 +276,14 @@
         section.appendChild(empty);
       }
       for (const task of rows) {
-        const card = renderGuestCard(task), saved = disclosures.get(String(task.id));
+        const card = renderGuestCard(task), saved = cardDrafts.get(String(task.id));
         if (saved) {
           card.querySelector('details').open = saved.open;
           const form = card.querySelector('.todo-reward-form'); if (form) form.hidden = !saved.rewardOpen;
           for (const input of card.querySelectorAll('input')) input.value = saved.values.find(([cls]) => cls === input.className)?.[1] || '';
+        }
+        for (const [kind, selector] of [['react', '.todo-reaction-btn'], ['comment', '.todo-public-comment-form input,.todo-public-comment-form button'], ['reward', '.todo-reward-form input,.todo-reward-form button'], ['bounty', '[data-bounty-task-id]']]) {
+          if (pendingActions.has(kind + ':' + task.id)) card.querySelectorAll(selector).forEach(el => { el.disabled = true; });
         }
         section.appendChild(card);
       }
@@ -275,31 +293,20 @@
       const card = Array.from(list.querySelectorAll('[data-shared-task]')).find(el => el.dataset.sharedTask === focusTask);
       const target = card && Array.from(card.querySelectorAll('button,input,summary')).find(el => focusEmoji ? el.dataset.reactionEmoji === focusEmoji : el.className === focusClass);
       target?.focus({preventScroll:true});
+      if (selection && target?.setSelectionRange) target.setSelectionRange(...selection);
     }
   }
 
-  function renderCalendarOptions(data){
-    const select = document.getElementById("todo-filter-calendar");
-    if (!select) return;
-    const selected = filters.calendar;
-    const byId = new Map();
-    (data.calendars || []).forEach(cal => {
-      if (cal && cal.id) byId.set(String(cal.id), cal.name || cal.summary || cal.id);
-    });
-    (data.tasks || []).forEach(task => {
-      const id = calendarId(task);
-      if (id && !byId.has(id)) byId.set(id, calendarName(task) || id);
-    });
-    const options = ['<option value="all">All calendars</option>'];
-    Array.from(byId.entries())
-      .sort((a, b) => String(a[1]).localeCompare(String(b[1])))
-      .forEach(([id, name]) => options.push('<option value="' + esc(id) + '">' + esc(name) + '</option>'));
-    select.innerHTML = options.join("");
-    select.value = byId.has(selected) ? selected : "all";
-    filters.calendar = select.value;
-  }
-
   function render(data){
+    const scope = JSON.stringify([token, data.date, data.viewer?.loggedIn, data.viewer?.username]);
+    if (scope !== viewerScope) {
+      viewerEpoch++; cardDrafts.clear(); pendingActions.clear();
+      document.getElementById('todo-public-list').replaceChildren(); viewerScope = scope;
+    }
+    const allowed = new Set((data.tasks || []).map(task => String(task.id)));
+    for (const id of cardDrafts.keys()) if (!allowed.has(id)) cardDrafts.delete(id);
+    // Remove stale private/deleted cards before the draft collector runs.
+    for (const card of document.querySelectorAll('[data-shared-task]')) if (!allowed.has(card.dataset.sharedTask)) card.remove();
     current = data;
     document.getElementById("todo-public-content").hidden = false;
     document.getElementById("todo-public-error").hidden = true;
@@ -313,7 +320,6 @@
     const hero = document.querySelector(".todo-public-hero");
     if (hero) hero.setAttribute("data-print-url", location.href.split("?")[0]);
     document.getElementById("todo-public-updated").textContent = "Updated " + new Date(data.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    renderCalendarOptions(data);
     renderTasks(data.tasks || []);
     applyCapabilities();
   }
@@ -385,7 +391,9 @@
 
   async function toggleReaction(button){
     if (button.disabled) return;
-    button.disabled = true;
+    const action = beginAction('react', button.dataset.taskId);
+    if (!action) return;
+    document.getElementById("todo-action-status").textContent = "";
     const task = (current && current.tasks || []).find(t => String(t.id) === String(button.dataset.taskId));
     try {
       const data = await api("/api/public/todo-share/" + encodeURIComponent(token) + "/reactions", {
@@ -399,17 +407,19 @@
           emoji: button.dataset.reactionEmoji
         })
       });
-      if (task) {
-        task.reactions = data.counts || {};
-        task.viewerReactions = data.viewerReactions || [];
+      if (action.epoch !== viewerEpoch) return;
+      const latest = (current.tasks || []).find(t => String(t.id) === String(button.dataset.taskId));
+      if (latest) {
+        latest.reactions = data.counts || {};
+        latest.viewerReactions = data.viewerReactions || [];
         renderTasks(current.tasks || []);
       } else {
         await load();
       }
     } catch (e) {
-      document.getElementById("todo-action-status").textContent = e.message;
+      if (action.epoch === viewerEpoch) document.getElementById("todo-action-status").textContent = e.message;
     } finally {
-      button.disabled = false;
+      endAction(action);
     }
   }
 
@@ -419,7 +429,7 @@
     if (!body) return;
     const taskId = form.dataset.taskId;
     const task = (current && current.tasks || []).find(t => String(t.id) === String(taskId));
-    if (input) input.disabled = true;
+    const action = beginAction('comment', taskId); if (!action) return;
     try {
       const data = await api("/api/public/todo-share/" + encodeURIComponent(token) + "/comments", {
         method: "POST",
@@ -432,24 +442,25 @@
           body
         })
       });
-      if (task) {
-        if (input) input.value = "";
-        task.comments = data.comments || [];
+      if (action.epoch !== viewerEpoch) return;
+      clearDraft(taskId, ['todo-public-comment-input']);
+      const latest = (current.tasks || []).find(t => String(t.id) === String(taskId));
+      if (latest) {
+        latest.comments = data.comments || [];
         renderTasks(current.tasks || []);
       } else {
         await load();
       }
     } catch (e) {
-      if (input) { input.disabled = false; }
-      alert(e.message);
-    }
+      if (action.epoch === viewerEpoch) alert(e.message);
+    } finally { endAction(action); }
   }
 
   async function placeTaskBounty(button){
     if (button.disabled) return;
     const taskId = button.dataset.bountyTaskId;
     const task = (current && current.tasks || []).find(t => String(t.id) === String(taskId));
-    button.disabled = true;
+    const action = beginAction('bounty', taskId); if (!action) return;
     try {
       await api("/api/public/todo-share/" + encodeURIComponent(token) + "/sponsorships", {
         method: "POST",
@@ -462,12 +473,12 @@
           date: current ? current.date : ""
         })
       });
-      await load();
+      if (action.epoch !== viewerEpoch) return;
+      await reloadAfterMutation();
       alert("Offer sent. It activates after the owner approves it.");
     } catch (e) {
-      button.disabled = false;
-      alert(e.message);
-    }
+      if (action.epoch === viewerEpoch) alert(e.message);
+    } finally { endAction(action); }
   }
 
   async function placeTaskReward(form){
@@ -476,8 +487,7 @@
     if (!title) { if (titleEl) titleEl.focus(); return; }
     const taskId = form.dataset.taskId;
     const task = (current && current.tasks || []).find(t => String(t.id) === String(taskId));
-    const submit = form.querySelector('button[type="submit"]');
-    if (submit) submit.disabled = true;
+    const action = beginAction('reward', taskId); if (!action) return;
     try {
       await api("/api/public/todo-share/" + encodeURIComponent(token) + "/sponsorships", {
         method: "POST",
@@ -494,14 +504,15 @@
           sponsorName: (form.querySelector(".todo-reward-name") || {}).value ? form.querySelector(".todo-reward-name").value.trim() : ""
         })
       });
-      form.reset();
-      form.hidden = true;
+      if (action.epoch !== viewerEpoch) return;
+      clearDraft(taskId, ['todo-reward-title', 'todo-reward-name', 'todo-reward-value']);
+      const latestForm = cardFor(taskId)?.querySelector('.todo-reward-form'); if (latestForm) latestForm.hidden = true;
+      const saved = cardDrafts.get(String(taskId)); if (saved) saved.rewardOpen = false;
       document.getElementById("todo-action-status").textContent = "Reward offered. It activates after the owner approves it.";
-      await load();
+      await reloadAfterMutation();
     } catch (e) {
-      if (submit) submit.disabled = false;
-      alert(e.message);
-    }
+      if (action.epoch === viewerEpoch) alert(e.message);
+    } finally { endAction(action); }
   }
 
   // Gate the auth hint to the viewer's capabilities. Re-run on every render so
@@ -638,9 +649,7 @@
 
   function bindControls(){
     [
-      ["todo-filter-status", "status"],
-      ["todo-filter-calendar", "calendar"],
-      ["todo-sort", "sort"]
+      ["todo-filter-status", "status"]
     ].forEach(([id, key]) => {
       const el = document.getElementById(id);
       if (!el) return;
@@ -698,7 +707,7 @@
         if (rewardToggle) {
           e.preventDefault();
           e.stopPropagation();
-          const card = rewardToggle.closest(".tl-item");
+          const card = rewardToggle.closest("[data-shared-task]");
           const form = card ? card.querySelector(".todo-reward-form") : null;
           if (form) {
             form.hidden = !form.hidden;

@@ -87,15 +87,11 @@ test("nested tasks stay with their root assignment",()=>{
   assert.deepEqual(grouped[4].nodes.map(n=>n.ev.id),["late"]);
 });
 
-test("owner and shared itineraries use the same grouping and gap reset",()=>{
+test("owner itinerary retains grouping and gap reset",()=>{
   const owner=fs.readFileSync("public/js/schedule-tab.js","utf8");
-  const shared=fs.readFileSync("public/js/public-todo-share.js","utf8");
   assert.match(owner,/TimeBlocks\.groupItineraryTree\(DCC\.TaskModel\.selectTree/);
-  assert.match(shared,/TimeBlocks\.groupItineraryTree\(guestTree\(visible\),blocks\)/);
   assert.match(owner,/let prevEnd=null;\s*nodes\.forEach/);
-  assert.match(shared,/function emitGroup\(group,timed\)\{\s*let prevEnd=null;/);
   assert.match(owner,/TimeBlockView\.header/);
-  assert.match(shared,/TimeBlockView\.header/);
 });
 
 test("editor offers all-day controls and a grouped By Day tab",()=>{

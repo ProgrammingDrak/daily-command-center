@@ -41,6 +41,7 @@
             <span><b id="todo-stat-sponsored">0</b> sponsored</span>
           </div>
         </div>
+        <details class="shared-feed-controls"><summary>Filter and export</summary>
         <div class="todo-public-controls" aria-label="Feed controls">
           <div class="todo-public-multiselect" id="todo-type-filter">
             <span class="todo-public-control-label">Show</span>
@@ -60,21 +61,6 @@
               <option value="sponsored">Sponsored</option>
             </select>
           </label>
-          <label>Calendar
-            <select id="todo-filter-calendar">
-              <option value="all">All calendars</option>
-            </select>
-          </label>
-          <label>Sort
-            <select id="todo-sort">
-              <option value="time">Time</option>
-              <option value="type">Type</option>
-              <option value="status">Status</option>
-              <option value="title">Title</option>
-              <option value="duration">Duration</option>
-            </select>
-          </label>
-
           <!-- Export: for the visitor who is never going to open DCC. Takes the
                list they are looking at (same filters, same sort) into whatever
                their own system reads. Single-day formats serialize client-side
@@ -110,6 +96,8 @@
             </div>
           </div>
         </div>
+
+        </details>
 
         <!-- Inline guest task creation. Reuses the same fields the sidebar used so
              submitCreateTask() is unchanged; guest-created tasks come back marked
@@ -150,8 +138,6 @@
        drew, which is why it read as an empty day rather than a broken page.
        Found while adding the export bar; the break predates it. -->
   <script src="/public/js/core.js"></script>
-  <script src="/public/js/time-blocks.js?v=time-blocks-1"></script>
-<script src="/public/js/time-block-view.js"></script>
 
   <script src="/public/js/share-export.js"></script>
   <script src="/public/js/public-todo-share.js"></script>

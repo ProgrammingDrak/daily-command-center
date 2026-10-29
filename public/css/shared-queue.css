@@ -1,4 +1,5 @@
 /* Shared queue: presentation only, reusing existing social actions. */
+.todo-public-body [hidden] { display: none !important; }
 .todo-public-shell { max-width: 1100px; }
 .shared-queue-lane { margin: 24px 0; }
 .shared-queue-lane > h2, .shared-queue-lane > summary { font-size: 18px; font-weight: 700; margin: 0; }
@@ -26,3 +27,10 @@
  .shared-queue-card .todo-reward-row { flex-wrap: wrap; }
  .shared-queue-card .todo-reward-row input { width: 100%; }
 }
+
+.shared-card-details summary::before { content: "▸"; margin-right: 8px; }
+.shared-card-details[open] summary::before { content: "▾"; }
+
+.shared-feed-controls > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-size: 13px; }
+.shared-feed-controls > summary::before { content: "▸"; margin-right: 8px; }
+.shared-feed-controls[open] > summary::before { content: "▾"; }

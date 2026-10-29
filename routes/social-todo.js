@@ -1385,11 +1385,11 @@ app.get("/api/public/todo-share/:token/events", async (req, res) => {
 });
 
 app.get("/api/public/todo-share/:token", async (req, res) => {
+  res.set("Cache-Control", "private, no-store");
   try {
     const share = await findTodoShareByToken(req.params.token);
     if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
     await pool.query("UPDATE todo_shares SET last_viewed_at = NOW() WHERE id = $1", [share.id]);
-    res.set("Cache-Control", "private, no-store");
     const view = await buildPublicTodoShare(share, req.query.date, req);
     // Keep the existing shared-day allowlist. Queue membership cannot grant access
     // to backlog, other dates, guided/private tasks, notes or delegated reports.

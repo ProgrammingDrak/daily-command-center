@@ -18,7 +18,14 @@ test('foreground wins over attention, completion wins over attention, priority o
   const tasks = states.map((_, i) => ({ id: String(i), blockId: String(i) }));
   const result = projectPublicQueue(tasks, { priorityOrder: ['3', '2'], items: states.map((status, i) => ({ task: { id: String(i) }, status, needsYou: i < 2 })) });
   assert.deepEqual(result.map(t => t.queue.lane), ['foreground', 'completed', 'priority', 'priority', 'background', 'background']);
+  assert.equal(result[1].status, 'done');
   assert.equal(result[2].queue.order, 1); assert.equal(result[3].queue.order, 0);
+});
+test('hidden priority membership cannot be inferred from public ordering', () => {
+  const tasks = [{ id: 'a', blockId: 'a' }];
+  const item = { task: { id: 'a' }, status: 'queued' };
+  assert.deepEqual(projectPublicQueue(tasks, { items: [item], priorityOrder: ['a'] }),
+    projectPublicQueue(tasks, { items: [item], priorityOrder: ['secret-1', 'secret-2', 'a'] }));
 });
 test('shared queue actual routes preserve privacy and viewer permissions', { skip: !process.env.DCC_TEST_DATABASE_URL }, async t => {
   const f = await require('./test-support/shared-queue-fixture').createSharedQueueFixture(); t.after(() => f.close());

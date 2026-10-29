@@ -64,6 +64,10 @@ jobs:
         run: npm run test:postgres
       - name: Install Chromium for smoke
         run: npx playwright-core install --with-deps --no-progress chromium
+      - name: Verify shared activity queue privacy and mobile actions
+        run: |
+          node scripts/verify-shared-queue.cjs
+          CHROME_PATH="$(node -e 'process.stdout.write(require("playwright-core").chromium.executablePath())')" node scripts/verify-work-completion.mjs
       - name: Verify synthetic login return paths
         run: node scripts/verify-login-return.mjs
       - name: Verify glasses with production account binding

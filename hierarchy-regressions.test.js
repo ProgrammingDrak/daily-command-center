@@ -245,13 +245,11 @@ test("subtree moves include row-ID edges, respect canonical reparenting and keep
   assert.ok(findSubtreeRoots(rows).includes(rows[0]));
 });
 
-test("public shared-view rendering is also iterative at 20,000 levels", () => {
-  const guest = source("public-todo-share").match(/function guestTree\(tasks\)\{[\s\S]*?\n {2}\}/)[0];
-  const build = new Function(guest + ";return guestTree;")();
-  const tasks = tree(20000, true),
-    nodes = build(tasks);
+test("shared queue projection is flat even for deeply nested task context", () => {
+  const { projectPublicQueue } = require('./lib/public-working-queue');
+  const tasks = tree(20000, true).map(task => ({ ...task, blockId: task.id }));
+  const snapshot = { items: tasks.map(task => ({ task, status: 'background' })) };
+  const nodes = projectPublicQueue(tasks, snapshot);
   assert.equal(nodes.length, 20000);
-  assert.equal(nodes.at(-1).depth, 19999);
-  tasks[0].subtaskOf = "n19999";
-  assert.equal(build(tasks).length, 20000);
+  assert.deepEqual(nodes.map(task => task.id), tasks.map(task => task.id));
 });
