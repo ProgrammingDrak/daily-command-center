@@ -101,7 +101,7 @@ const tools = [
         },
         taskId: { type: "string" },
         order: { type: "array", items: { type: "string" }, maxItems: 100 },
-        taskPriority: { enum: ['Low', 'Medium', 'High'] },
+        taskPriority: { enum: ["Low", "Medium", "High"] },
         note: { type: "string", maxLength: 4000 },
         remindMinutes: { type: ["integer", "null"], minimum: 1, maximum: 1440 },
         generation: { type: "string" },
@@ -244,7 +244,26 @@ module.exports = function mount(app, ctx, config = {}) {
   const enabled =
     config.enabled ??
     (process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false");
-  if (!enabled) return null;
+  if (!enabled) {
+    // Machine discovery must not fall through to the interactive login page.
+    // This discloses no client/account configuration and never instantiates OAuth.
+    app.all(
+      [
+        "/mcp/dcc",
+        "/oauth/dcc/authorize",
+        "/oauth/dcc/token",
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/mcp/dcc"
+      ],
+      (_req, res) =>
+        res.status(503).set("Cache-Control", "no-store").json({
+          error: "conversation_remote_disabled",
+          message: "Remote DCC connection is not enabled. Account pairing requires approved server setup first."
+        })
+    );
+    return null;
+  }
   app.use(createIngress(config.limits));
   const accountBudget = createBudget({ limit: 120, ...config.limits?.account });
   const oauth = createOAuth({
