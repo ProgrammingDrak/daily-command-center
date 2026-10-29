@@ -14,7 +14,7 @@ async function checkConversationReadiness(baseUrl, { fetchImpl = fetch, timeoutM
         const response = await fetchImpl(origin + path, {
           redirect: "manual",
           headers: { Accept: "application/json" },
-          signal: AbortSignal.timeout(timeoutMs)
+          signal: globalThis.AbortSignal.timeout(timeoutMs)
         });
         const json = (response.headers.get("content-type") || "").includes("application/json")
           ? await response.json()
