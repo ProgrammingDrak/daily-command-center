@@ -38,7 +38,7 @@ The former rotation navigation entry point `DCCWorkRotation.open(from,to)` opens
 
 This is implemented code, not proof that the user's ChatGPT account is connected. Follow `docs/conversational-integration.md` for the existing additive schema, duplicate foreground audit and gated `010_conversation_foreground.sql` unique index. `DCC_CONVERSATION_ENABLED=true` enables the common coordinator and queue. The MCP endpoint can remain off via `DCC_CONVERSATION_REMOTE_ENABLED=false` until approved pairing.
 
-A verified current production backup remains required before the database release. The previous Railway CLI attempt was Unauthorized; no current backup is asserted. Do not treat a generic ship instruction or the workflow's `[migration-ok]` text as a backup. Applying the foreground index requires resolving any existing conflicting clocks with the user, not silently deleting or pausing them.
+A fresh production backup is optional under the [DCC release policy](releases/database-backup-policy.md); no current backup is asserted. Database-risk acknowledgment does not claim a backup occurred. Applying the foreground index requires resolving any existing conflicting clocks with the user, not silently deleting or pausing them.
 
 Production OAuth client registration, callback configuration, credentials/grants, and an actual ChatGPT connection require explicit action-time authorization. Synthetic OAuth tests establish protocol and scope behavior only. Once approved, verify the exact deployed SHA and use an expressly approved account task for a read/queue-write/read canary; do not alter live user records as release fixtures.
 
@@ -58,4 +58,4 @@ The browser harness launches separate headless Chrome with a fresh profile. It c
 
 ## PR435 release-specific decision
 
-The owner explicitly waived the backup prerequisite for this release on 2026-10-28. This supersedes the earlier PR435 backup hold above without claiming a backup exists or changing the default policy. See [the scoped release decision](releases/working-queue-pr435.md); migration audit, exact-candidate checks, deployment coordination and OAuth approval boundaries remain in place.
+The owner explicitly waived the backup prerequisite for this release on 2026-10-28. This superseded the earlier PR435 backup hold without claiming a backup exists. The later [DCC release policy](releases/database-backup-policy.md) makes backups optional for future DCC releases. See [the scoped release decision](releases/working-queue-pr435.md); migration audit, exact-candidate checks, deployment coordination and OAuth approval boundaries remain in place.

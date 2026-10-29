@@ -21,6 +21,6 @@ Validation: repository tests (3,170 pass, 18 skip), lint (0 errors; existing war
 
 ## Release boundary
 
-Prepared from deployed SHA `2ffa3fa23f2ff584e3aaecc36a9cc791e25a563f`. Ship the redirect, adapter, CSS and shared disclosure preservation together. Before release, reconcile current main and use the existing coordinated release lane and required independent reviews. The PR435 backup waiver is specific to PR435 and is not a general release waiver. Remote OAuth remains outside scope.
+Prepared from deployed SHA `2ffa3fa23f2ff584e3aaecc36a9cc791e25a563f`. Ship the redirect, adapter, CSS and shared disclosure preservation together. Before release, reconcile current main and use the existing coordinated release lane and required independent reviews. The historical PR435 backup waiver was scoped to that release; the later [DCC release policy](releases/database-backup-policy.md) makes backups optional for DCC releases. Remote OAuth remains outside scope.
 
 The user’s standing release instruction authorizes ship-it push, PR, merge and deploy after required tests, reviews and release checks. It does not waive required reviews or permit self-approval. The existing production URL is `https://daily-command-center-production-1d04.up.railway.app/glasses.html`. Verify the exact deployed SHA before reporting this change live. Local fixture URLs are not Android-accessible test links.

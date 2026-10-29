@@ -32,7 +32,7 @@ Tests cover real PostgreSQL concurrent writers (one revision winner), rollback a
 
 ## Release gates — not executed by this engineering task
 
-1. Complete normal repository review, security review of the OAuth server, DB-risk checks and a verified production backup. Do not bypass release gates or auto-merge.
+1. Complete normal repository review, security review of the OAuth server, DB-risk checks. Backups are optional under the [DCC release policy](releases/database-backup-policy.md). Do not bypass release gates or auto-merge.
 2. Deploy additive tables with the feature disabled. Inspect the production duplicate-foreground audit in `migrations/010_conversation_foreground.sql`. Resolve historical conflicts with their owner; do not choose a timer arbitrarily or infer elapsed effort. This task does not authorize changing the live QuickBuy fixture.
 3. With explicit migration approval, dry-run and then apply **only** `010_conversation_foreground.sql`. It is marked `@gated`, so the ordinary migration runner skips it. The remote routes return 503 until the unique index exists. Audit and review come before read/behavior activation.
 4. Official authentication docs support predefined OAuth clients and advertise public `none` token authentication. The implementation matches that documented protocol option. Verify the actual ChatGPT account/workspace exposes this builder option and supports a custom remote MCP plugin; documentation support is not an account-specific connection test. This MVP does not implement dynamic client registration or Client ID Metadata Documents. If the chosen installation flow requires those, implement and review that adapter before claiming it connects.

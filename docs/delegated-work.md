@@ -60,6 +60,6 @@ Review flags are independent of manual timed check-backs. Timer pet claims requi
 
 `dcc_delegate` requires the new `dcc.delegate` OAuth scope. Existing read/work grants gain no creation privilege. New client setup, grants or hook installation still require action-time approval. No credentials are created by this implementation. Session-authenticated `/api/working-queue` accepts the same two actions through the same coordinator.
 
-The private table is additive; existing queue/task data is untouched until an authorized lifecycle call. The original verified production-backup, foreground-index audit, OAuth setup and exact-SHA deployment gates remain in force. The current PR does not establish a live GPT connection.
+The private table is additive; existing queue/task data is untouched until an authorized lifecycle call. The foreground-index audit, OAuth setup and exact-SHA deployment gates remain in force. Backups are optional under the [DCC release policy](releases/database-backup-policy.md). The current PR does not establish a live GPT connection.
 
 Working Queue is the normal app-entry default. Explicit `?tab=` links, tab navigation history and browser back/forward take precedence. Navigation selects a view only and never creates a task or starts a clock. Existing compact glasses task URLs and onboarding navigation remain separate.
