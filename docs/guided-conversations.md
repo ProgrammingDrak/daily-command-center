@@ -65,4 +65,4 @@ Run `npm test`, `npm run lint`, and `DCC_TEST_DATABASE_URL=postgres://localhost:
 
 Browser verification: start `scripts/guided-review-server.mjs` with `DCC_GUIDED_REVIEW=1` and the isolated localhost database, then run `node scripts/verify-guided.mjs http://127.0.0.1:3991`. It creates synthetic tasks in a disposable schema and a fresh headless browser, never the user's existing login/profile. `CHROMIUM_PATH` can select the local browser executable.
 
-Shipping requires a verified current production backup, current-head checks/reviews, exact-candidate QA, and exact deployed-SHA plus authenticated functional readback. A draft or passing local harness is not proof that the live handoff has shipped.
+Shipping requires current-head checks/reviews, exact-candidate QA, and exact deployed-SHA plus authenticated functional readback. Backups are optional under the [DCC release policy](releases/database-backup-policy.md). A draft or passing local harness is not proof that the live handoff has shipped.

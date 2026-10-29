@@ -24,7 +24,7 @@ Verification uses Node 20, isolated PGlite PostgreSQL semantics, actual controll
 
 Run npm test and npm run lint. Configure DCC_PGLITE_MODULE for isolated database tests, or DCC_TEST_DATABASE_URL for a disposable PostgreSQL database. Optional browser scripts use the opt-in DCC_ACTIVITY_REVIEW backend and fictional fixtures. Do not point them at production.
 
-Release requires current-base CI, content-bound reviews, exact-candidate QA, a validated production backup, additive schema acknowledgement and exact deployed revision plus functional canary. Task-workspace evidence retains full logs, screenshots, reviews and any transient failures; the release report records the final result.
+Release requires current-base CI, content-bound reviews, exact-candidate QA, additive schema acknowledgement and exact deployed revision plus functional canary. Backups are optional under the [DCC release policy](releases/database-backup-policy.md). Task-workspace evidence retains full logs, screenshots, reviews and any transient failures; the release report records the final result.
 
 Before v2 writes, reverting code can leave unused additive schema in place. Undo restores the previous saved payload and schema reapplication preserves v1 data, as tested. After v2 writes, retain compatible readers and private tables; prefer a corrective release. Do not drop tables, bulk downgrade records or claim a production restore from local Undo tests. Keep commute repeats paused during any privacy rollback.
 

@@ -135,7 +135,7 @@ test(
       assert.equal(paused.uncertainIntervals.length, 1);
       assert.equal((await entry("c")).status, "blocked");
       await send("queue-unblock", "c");
-      assert.equal((await entry("c")).status, "queued");
+      assert.equal((await entry("c")).status, "paused");
       assert.equal((await entry("c")).dueAt, null);
       await send("done", "unknown");
       assert.equal((await entry("unknown")).actualMinutes, null);

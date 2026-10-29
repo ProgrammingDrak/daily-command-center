@@ -586,6 +586,8 @@ function createConversationStore(ctx) {
           }
           // No completeWork inference: a task without tracked effort retains unknown actuals.
         }
+        if (b.action === 'background-start' && !target.properties.everStarted)
+          await blockDB.updateBlock(target.id, { properties: { ...(await task(q, target.id, owner)).properties, everStarted: true }, [M.TIMING_WRITE]: true }, q);
         if (b.action === "background-start" || b.action === "queue-block")
           Q.setStatus(queue, await task(q, target.id, owner), b.action === "queue-block" ? "blocked" : "background", b);
         if (b.action === "background-stop" || b.action === "pause")

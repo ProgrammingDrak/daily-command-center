@@ -122,6 +122,7 @@
       ...(src.guidedDefinitionId ? {guidedDefinitionId:src.guidedDefinitionId, type:"guided", publicVisibility:"private"} : {}),
       title: src.title || "",
       priority: src.priority || "High",
+      taskPriority: src.taskPriority,
       meta: src.meta || "",
       detail: src.detail || "",
       notionUrl: src.notionUrl || "",

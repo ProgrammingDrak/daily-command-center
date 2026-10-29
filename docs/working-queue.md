@@ -4,9 +4,11 @@ Working Queue is the working surface; Itinerary remains the plan and actuals. Ex
 
 Normal app entry opens Working Queue. Explicit tab links and navigation history are preserved; opening a view never starts a clock.
 
+See [Priority Queue semantics](priority-queue.md) for never-started classification and explicit priority ordering.
+
 ## Bounded first version
 
-- Foreground, Needs You, Up Next, Background/paused, and collapsed Completed sections.
+- Foreground, Needs You, Priority Queue, Background/paused, and collapsed Completed sections.
 - Add existing tasks, move up/down (also Alt+Arrow and drag), edit return context, bring forward, send background, pause, block/unblock, complete, and remove membership.
 - Check-back options: none, 5/15/30 minutes, 2 hours, or 1–1440 custom minutes. Snooze re-arms for five minutes; dismissal clears the reminder and preserves the task.
 - Guided tasks require the current prompt preview before start/resume, and a confirmed outcome before completion. Existing prerequisite and revision guards still apply. Required access observations can be recorded in the existing guided task detail flow; no integrations are automatically approved.
@@ -36,7 +38,7 @@ The former rotation navigation entry point `DCCWorkRotation.open(from,to)` opens
 
 This is implemented code, not proof that the user's ChatGPT account is connected. Follow `docs/conversational-integration.md` for the existing additive schema, duplicate foreground audit and gated `010_conversation_foreground.sql` unique index. `DCC_CONVERSATION_ENABLED=true` enables the common coordinator and queue. The MCP endpoint can remain off via `DCC_CONVERSATION_REMOTE_ENABLED=false` until approved pairing.
 
-A verified current production backup remains required before the database release. The previous Railway CLI attempt was Unauthorized; no current backup is asserted. Do not treat a generic ship instruction or the workflow's `[migration-ok]` text as a backup. Applying the foreground index requires resolving any existing conflicting clocks with the user, not silently deleting or pausing them.
+A fresh production backup is optional under the [DCC release policy](releases/database-backup-policy.md); no current backup is asserted. Database-risk acknowledgment does not claim a backup occurred. Applying the foreground index requires resolving any existing conflicting clocks with the user, not silently deleting or pausing them.
 
 Production OAuth client registration, callback configuration, credentials/grants, and an actual ChatGPT connection require explicit action-time authorization. Synthetic OAuth tests establish protocol and scope behavior only. Once approved, verify the exact deployed SHA and use an expressly approved account task for a read/queue-write/read canary; do not alter live user records as release fixtures.
 
@@ -56,4 +58,4 @@ The browser harness launches separate headless Chrome with a fresh profile. It c
 
 ## PR435 release-specific decision
 
-The owner explicitly waived the backup prerequisite for this release on 2026-10-28. This supersedes the earlier PR435 backup hold above without claiming a backup exists or changing the default policy. See [the scoped release decision](releases/working-queue-pr435.md); migration audit, exact-candidate checks, deployment coordination and OAuth approval boundaries remain in place.
+The owner explicitly waived the backup prerequisite for this release on 2026-10-28. This superseded the earlier PR435 backup hold without claiming a backup exists. The later [DCC release policy](releases/database-backup-policy.md) makes backups optional for future DCC releases. See [the scoped release decision](releases/working-queue-pr435.md); migration audit, exact-candidate checks, deployment coordination and OAuth approval boundaries remain in place.

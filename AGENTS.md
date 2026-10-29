@@ -49,3 +49,13 @@ When asked to commit + PR + merge to `main` (auto-deploys to Render), run
   `gh pr create` / `gh pr merge` even when allowlisted. Wrapping them in a node
   script runs them as child processes, so the flow completes hands-off. Only run
   it on an explicit ship instruction.
+
+## DCC release backup policy
+
+A fresh production backup is optional, not a release prerequisite. The owner removed
+that requirement on 2026-10-29. Keep backup tools and existing backups intact; never
+claim a backup occurred unless verified. This applies only to DCC and does not waive
+database-change review/acknowledgment, tests, reviews, branch protection, deployment
+checks or exact-SHA production verification. See
+[the release policy](docs/releases/database-backup-policy.md) for the current rule;
+it supersedes older DCC documentation that lists a backup as a mandatory release gate.
