@@ -555,9 +555,8 @@
   }
 
   .progress-wrap{margin-bottom:18px}
-  .progress-box{background:var(--card);border:1px solid var(--border);border-radius:9px;padding:14px}
-  /* Keep the final segment reachable beside the fixed desktop sidecar tabs. */
-  @media(min-width:761px){.progress-box{padding-right:calc(14px + var(--target-min,44px))}}
+  /* Reserve the desktop sidecar tabs; the mobile rule below resets this padding. */
+  .progress-box{background:var(--card);border:1px solid var(--border);border-radius:9px;padding:14px;padding-right:calc(14px + var(--target-min,44px))}
   .progress-label{display:flex;justify-content:space-between;gap:12px;margin-bottom:8px;font-size:12px}
   .progress-label span:first-child{font-weight:600}
   .progress-label span:last-child{color:var(--text-muted);font-variant-numeric:tabular-nums}
