@@ -3,34 +3,19 @@
   let current = null;
   let loadPromise = null;
   const filters = {
-    types: new Set(["task", "repeat"]),
+    types: new Set(["task", "repeat", "calendar", "time"]),
     status: "all",
     calendar: "all",
     sort: "time"
   };
   const COMMON_REACTIONS = ["👍", "🙌", "🔥", "💪", "🎉", "❤️"];
-  const CK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
-
-  // Guest type config — mirrors the owner TC table so the shared renderer's
-  // type tag / bar color match the real itinerary.
-  const GUEST_TC = {
-    task:    {tag:"Task",    cls:"tag-task",    color:"#a78bfa"},
-    repeat:  {tag:"Repeat",  cls:"tag-task",    color:"#a78bfa"},
-    calendar:{tag:"Calendar",cls:"tag-meeting", color:"#f97316"},
-    meeting: {tag:"Meeting", cls:"tag-meeting", color:"#f97316"},
-    oneone:  {tag:"1:1",     cls:"tag-oneone",  color:"#f59e0b"},
-    break:   {tag:"Break",   cls:"tag-break",   color:"#22c55e"},
-    ooo:     {tag:"OOO",     cls:"tag-ooo",     color:"#64748b"}
-  };
-
   // Capability gate, mirroring the server. Reads the resolved capability map off
   // the share payload's viewer; defaults keep the page usable if it is absent.
   function can(cap){
     const viewer = (current && current.viewer) || {};
     const caps = viewer.capabilities || {};
     if (Object.prototype.hasOwnProperty.call(caps, cap)) return !!caps[cap];
-    if (cap === "place_bounty") return !!viewer.loggedIn;
-    return true;
+    return false;
   }
 
   function esc(value) { return window.DCC.esc(value); } // delegates to core.js
@@ -40,19 +25,6 @@
     if (!n) return "";
     return "$" + (n / 100).toFixed(n % 100 ? 2 : 0);
   }
-
-  function fmtTime(value){
-    if (!value) return "";
-    const m = String(value).match(/^(\d{1,2}):(\d{2})$/);
-    if (!m) return value;
-    let h = Number(m[1]);
-    const min = m[2];
-    const ap = h >= 12 ? "PM" : "AM";
-    h = h % 12 || 12;
-    return h + ":" + min + " " + ap;
-  }
-
-  function guestMs(m){ m = Number(m) || 0; return m >= 60 ? Math.floor(m/60) + "h" + (m%60 ? " " + (m%60) + "m" : "") : m + "m"; }
 
   async function api(path, options){
     const res = await fetch(path, options);
@@ -111,10 +83,6 @@
     return task.calendar && task.calendar.name ? task.calendar.name : calendarId(task);
   }
 
-  function timeKey(task){
-    return task.start || "99:99";
-  }
-
   // ---- Sponsorship / bounty / reward helpers (shared across cards) ----
   function sponsorChips(task){
     const offers = (task.sponsorships || []).filter(s => s.status !== "dismissed");
@@ -122,7 +90,7 @@
     return '<div class="todo-public-sponsors">' + offers.slice(0, 3).map(s => {
       const label = s.kind === "reward" ? "Reward" : "Bounty";
       const amount = money(s.valueCents);
-      return '<span>' + esc(label) + ': ' + esc(s.rewardTitle || (s.kind === "reward" ? "a reward" : "2x points")) + (amount ? " " + esc(amount) : "") + '</span>';
+      return '<span>' + esc(label) + ': ' + esc(s.rewardTitle || (s.kind === "reward" ? "a reward" : "2x points")) + (amount ? " " + esc(amount) : "") + ' · ' + esc(s.status === 'pending' ? 'Awaiting approval' : s.status) + '</span>';
     }).join("") + '</div>';
   }
 
@@ -161,21 +129,22 @@
   function rewardFormHtml(task){
     if (!can("sponsor_reward")) return "";
     return '<form class="todo-reward-form" hidden data-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '">' +
-        '<input type="text" class="todo-reward-title" maxlength="160" placeholder="Reward if completed (e.g. coffee on me)">' +
+        '<input type="text" class="todo-reward-title" maxlength="160" aria-label="Reward offered" required placeholder="Reward if completed (e.g. coffee on me)">' +
         '<div class="todo-reward-row">' +
-          '<input type="text" class="todo-reward-name" maxlength="80" placeholder="Your name">' +
-          '<input type="number" class="todo-reward-value" min="0" step="0.01" placeholder="$ optional">' +
+          '<input type="text" class="todo-reward-name" maxlength="80" aria-label="Your name" required placeholder="Your name">' +
+          '<input type="number" class="todo-reward-value" min="0" step="0.01" aria-label="Optional reward value in dollars" placeholder="$ optional">' +
           '<button type="submit" class="todo-public-btn primary">Send</button>' +
         '</div>' +
       '</form>';
   }
 
   function reactionBar(task){
+    if (!can("react")) return "";
     const counts = task.reactions || {};
     return '<div class="todo-public-reactions itinerary-reactions" aria-label="Task reactions">' + COMMON_REACTIONS.map(emoji => {
       const count = Number(counts[emoji]) || 0;
       const active = (task.viewerReactions || []).includes(emoji);
-      return '<button class="todo-reaction-btn' + (active ? ' active' : '') + '" type="button" data-reaction-emoji="' + esc(emoji) + '" data-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '" title="React ' + esc(emoji) + '">' +
+      return '<button class="todo-reaction-btn' + (active ? ' active' : '') + '" type="button" data-reaction-emoji="' + esc(emoji) + '" data-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '" aria-pressed="' + active + '" aria-label="React ' + esc(emoji) + '" title="React ' + esc(emoji) + '">' +
         '<span>' + esc(emoji) + '</span>' +
         '<b>' + (count ? esc(count) : '') + '</b>' +
       '</button>';
@@ -207,7 +176,7 @@
       : '';
     const form = can("comment")
       ? '<form class="todo-public-comment-form" data-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '">' +
-          '<input type="text" class="todo-public-comment-input" maxlength="1000" placeholder="Add a comment...">' +
+          '<input type="text" class="todo-public-comment-input" maxlength="1000" aria-label="Comment" placeholder="Add a comment...">' +
           '<button type="submit" class="todo-public-comment-send">Send</button>' +
         '</form>'
       : '';
@@ -215,141 +184,27 @@
     return '<div class="todo-public-comments">' + list + form + '</div>';
   }
 
-  // ---- Guest -> owner-ev adapter + helper shims for the shared renderer ----
-  function guestTaskToEv(task){
-    const type = itemType(task);
-    return {
-      id: task.id,
-      title: task.redacted ? "🔒 Private task" : task.title,
-      untimed: task.untimed,
-      subtaskOf: task.subtaskOf,
-      wrapId: task.wrapId,
-      start: task.start || "",
-      end: task.end || "",
-      type: type,
-      itemType: type,
-      itemTypeLabel: itemTypeLabel(task),
-      source: "",
-      priority: task.redacted ? "" : (task.priority || ""),
-      durationMinutes: task.durationMinutes || 0,
-      status: task.status,
-      points: task.redacted ? null : (task.points != null ? task.points : null),
-      tags: task.redacted ? [] : (task.tags || []),
-      createdByGuest: !!task.createdByGuest,
-      redacted: !!task.redacted
-    };
-  }
-  function guestTree(tasks){
-    const byId=new Map(tasks.map(task=>[String(task.id),task]));
-    const children=new Map();
-    tasks.forEach(task=>{
-      const parent=task.wrapId||task.subtaskOf;
-      if(parent&&byId.has(String(parent))){
-        if(!children.has(String(parent)))children.set(String(parent),[]);
-        children.get(String(parent)).push(task);
-      }
-    });
-    const nodes=[];
-    const seen=new Set();
-    function walk(task,depth){
-      const stack=[{task,depth}];
-      while(stack.length){
-        const current=stack.pop(),key=String(current.task.id);
-        if(seen.has(key))continue;seen.add(key);
-        nodes.push({ev:current.task,depth:current.depth});
-        const kids=children.get(key)||[];
-        for(let i=kids.length-1;i>=0;i--)stack.push({task:kids[i],depth:current.depth+1});
-      }
-    }
-    tasks.filter(task=>!byId.has(String(task.wrapId||task.subtaskOf||""))).forEach(task=>walk(task,0));
-    tasks.forEach(task=>walk(task,0));
-    return nodes;
-  }
-  function guestCfg(type){ return GUEST_TC[type] || GUEST_TC.task; }
-  function guestTagColor(ev){ return (ev && ev.tags && ev.tags[0] && ev.tags[0].color) || null; }
-  function guestTagChipsHtml(ev){
-    const tags = (ev && ev.tags) || [];
-    if (!tags.length) return "";
-    return tags.slice(0, 8).map(t =>
-      '<span class="tag-chip card-tag-chip" style="--chip-color:' + esc(t.color || "var(--accent)") + '">' + esc(t.name || "") + '</span>'
-    ).join("");
-  }
-  function guestColorMeta(){ return ""; }
-  function guestPoints(ev){
-    if (ev.points == null || ev.points <= 0) return "";
-    return '<span class="points-chip' + (ev.points >= 20 ? ' bonus' : '') + '">' + esc(ev.points) + ' pts</span>';
-  }
-  function guestFooterHtml(task){
-    return '<div class="todo-guest-footer">' +
-        '<div class="todo-guest-actions">' + bountyButtonHtml(task) + rewardButtonHtml(task) + '</div>' +
-        sponsorChips(task) +
-        rewardFormHtml(task) +
-        commentsHtml(task) +
-      '</div>';
-  }
-
-  const noop = () => "";
+  const LANES = [
+    ["foreground", "Foreground", "Current focus"],
+    ["needs-you", "Needs You", "Waiting for attention"],
+    ["priority", "Priority Queue", "Selected work that has never started"],
+    ["background", "Background", "Started, paused or blocked work"],
+    ["completed", "Completed", "Finished queue tasks"]
+  ];
   function renderGuestCard(task){
-    const ev = guestTaskToEv(task);
-    if (typeof window.renderItineraryCard !== "function") {
-      const fallback = document.createElement("div");
-      fallback.className = "tl-item";
-      fallback.textContent = ev.title;
-      return fallback;
-    }
-    const el = window.renderItineraryCard(ev, {
-      guest: true,
-      cfg: guestCfg, srcTag: noop, colorMeta: guestColorMeta,
-      taskTagColor: guestTagColor, taskTagChipsHtml: guestTagChipsHtml,
-      f12: fmtTime, ms: guestMs,
-      dur: (e) => e.durationMinutes || 0, origDur: () => 0,
-      isMeeting: (e) => e.type === "calendar" || e.type === "meeting" || e.type === "oneone",
-      isWrap: () => false, isRideAlong: () => false,
-      escHtml: esc, notesButton: noop,
-      pointsChip: guestPoints, petPrivacyChip: noop,
-      reactionChipsHtml: reactionBar,
-      bountyCount: taskBountied(task) ? 1 : 0,
-      bountyMeta: { count: taskBountied(task) ? 1 : 0, hasSponsor: false, sponsorName: "" },
-      footerHtml: guestFooterHtml(task)
-    });
-    if (task.createdByGuest) el.classList.add("guest-submitted");
-    return el;
-  }
-
-  // Compact one-liner for completed tasks — mirrors the owner's done rows.
-  function compactRowEl(task){
-    const ev = guestTaskToEv(task);
-    const color = guestTagColor(ev) || guestCfg(ev.type).color;
-    const t1 = fmtTime(task.start);
-    const el = document.createElement("div");
-    el.className = "tl-compact" + (task.createdByGuest ? " guest-submitted" : "");
-    el.innerHTML =
-      '<div class="tl-time">' + esc(t1.replace(/ (AM|PM)/, "")) + '</div>' +
-      '<div class="tl-node"></div>' +
-      '<div class="compact-row">' +
-        '<div class="c-check" title="Done">' + CK_SVG + '</div>' +
-        '<div class="bar" style="background:' + esc(color) + '"></div>' +
-        '<span class="c-title">' + (ev.redacted ? "🔒 Private task" : esc(task.title)) + '</span>' +
-        '<span class="c-time">' + esc(t1) + (task.end ? ' - ' + esc(fmtTime(task.end)) : '') + '</span>' +
-      '</div>';
-    return el;
-  }
-
-  function guestCollapseKey(block){return "dcc-guest:"+location.pathname+":"+window.DCC.TimeBlocks.collapseKey(current.date,block);}
-  function guestCollapsed(block){try{return localStorage.getItem(guestCollapseKey(block))==="1";}catch(_error){return false;}}
-  function blockHeaderEl(block){
-    return window.DCC.TimeBlockView.header(block,{key:guestCollapseKey(block),collapsed:guestCollapsed(block),onToggle:()=>{
-      try{localStorage.setItem(guestCollapseKey(block),guestCollapsed(block)?"0":"1");}catch(_error){}
-      renderTasks(current.tasks||[]);
-      const button=Array.from(document.querySelectorAll("[data-time-block-toggle]")).find(el=>el.dataset.timeBlockToggle===guestCollapseKey(block));
-      if(button)button.focus();
-    }});
-  }
-
-  function gapEl(mins){
-    const el=document.createElement("div");
-    el.className="it-list-gap";
-    el.innerHTML="<span>"+esc(guestMs(mins))+"</span>";
+    const el = document.createElement("article");
+    el.className = "shared-queue-card";
+    el.dataset.sharedTask = task.id;
+    const q = task.queue || {};
+    const state = q.lane === "priority" ? (q.priority || "medium") + " priority" : q.status;
+    const context = (task.tags || []).slice(0, 2).map(t => t.name).filter(Boolean).join(" · ");
+    el.innerHTML = '<div class="shared-card-heading"><h3>' + esc(task.title) + '</h3>' +
+      '<span class="shared-card-state">' + esc(state || "") + '</span></div>' +
+      (context ? '<p class="shared-card-context">' + esc(context) + '</p>' : '') +
+      '<div class="shared-card-social">' + reactionBar(task) +
+        (q.lane !== "completed" ? '<div class="todo-guest-actions">' + bountyButtonHtml(task) + rewardButtonHtml(task) + '</div>' : '') + '</div>' +
+      sponsorChips(task) + rewardFormHtml(task) +
+      '<details class="shared-card-details"><summary>Discussion' + ((task.comments || []).length ? ' (' + task.comments.length + ')' : '') + '</summary>' + commentsHtml(task) + '</details>';
     return el;
   }
 
@@ -366,11 +221,8 @@
       return true;
     });
     items.sort((a, b) => {
-      if (filters.sort === "type") return itemTypeLabel(a).localeCompare(itemTypeLabel(b)) || timeKey(a).localeCompare(timeKey(b));
-      if (filters.sort === "status") return String(a.status || "").localeCompare(String(b.status || "")) || timeKey(a).localeCompare(timeKey(b));
-      if (filters.sort === "title") return String(a.title || "").localeCompare(String(b.title || ""));
-      if (filters.sort === "duration") return (Number(a.durationMinutes) || 0) - (Number(b.durationMinutes) || 0) || timeKey(a).localeCompare(timeKey(b));
-      return timeKey(a).localeCompare(timeKey(b)) || String(a.id).localeCompare(String(b.id));
+      const rank = task => LANES.findIndex(lane => lane[0] === task.queue?.lane);
+      return rank(a) - rank(b) || (a.queue?.order || 0) - (b.queue?.order || 0);
     });
     return items;
   }
@@ -385,40 +237,45 @@
   function renderTasks(tasks){
     const list = document.getElementById("todo-public-list");
     if (!list) return;
+    // Preserve disclosure and draft state across polling and social mutations.
+    const completedOpen = !!list.querySelector('.shared-queue-completed')?.open;
+    const disclosures = new Map(Array.from(list.querySelectorAll('[data-shared-task]')).map(card =>
+      [card.dataset.sharedTask, { open: card.querySelector('details')?.open,
+        rewardOpen: !card.querySelector('.todo-reward-form')?.hidden,
+        values: Array.from(card.querySelectorAll('input')).map(input => [input.className, input.value]) }]));
+    const focused = document.activeElement;
+    const focusTask = focused?.closest('[data-shared-task]')?.dataset.sharedTask;
+    const focusClass = focused?.className, focusEmoji = focused?.dataset.reactionEmoji;
     const visible = visibleTasks(tasks);
     updateStats(tasks);
     list.innerHTML = "";
-    const blocks = window.DCC.TimeBlocks
-      ? window.DCC.TimeBlocks.forDate((current && current.blocks) || [],current && current.date)
-      : [];
-    const frag = document.createDocumentFragment();
-    function emitGroup(group,timed){
-      let prevEnd=null;
-      group.forEach(node=>{
-        const task=node.ev;
-        const start=window.DCC.TimeBlocks.minutes(task.start,false);
-        if(timed&&!node.depth&&prevEnd!==null&&start!==null&&start-prevEnd>=15)frag.appendChild(gapEl(start-prevEnd));
-        const end=window.DCC.TimeBlocks.minutes(task.end,true);
-        if(!node.depth&&end!==null)prevEnd=end;
-        const el=task.status==="done"?compactRowEl(task):renderGuestCard(task);
-        if(node.depth)el.style.marginLeft=(Math.min(node.depth,6)*22)+"px";
-        frag.appendChild(el);
-      });
+    for (const [key, title, description] of LANES) {
+      const rows = visible.filter(task => task.queue?.lane === key);
+      const section = document.createElement(key === 'completed' ? 'details' : 'section');
+      section.className = 'shared-queue-lane shared-queue-' + key;
+      if (key === 'completed') section.open = completedOpen;
+      section.innerHTML = '<' + (key === 'completed' ? 'summary' : 'h2') + '>' + title + ' <span>' + rows.length + '</span></' + (key === 'completed' ? 'summary' : 'h2') + '><p>' + description + '</p>';
+      if (!rows.length) {
+        const empty = document.createElement('p'); empty.className = 'shared-queue-empty';
+        empty.textContent = key === 'foreground' ? 'No shared foreground task.' : 'No shared tasks in this section.';
+        section.appendChild(empty);
+      }
+      for (const task of rows) {
+        const card = renderGuestCard(task), saved = disclosures.get(String(task.id));
+        if (saved) {
+          card.querySelector('details').open = saved.open;
+          const form = card.querySelector('.todo-reward-form'); if (form) form.hidden = !saved.rewardOpen;
+          for (const input of card.querySelectorAll('input')) input.value = saved.values.find(([cls]) => cls === input.className)?.[1] || '';
+        }
+        section.appendChild(card);
+      }
+      list.appendChild(section);
     }
-    const groups=window.DCC.TimeBlocks.groupItineraryTree(guestTree(visible),blocks);
-    const controls=document.createElement("div");controls.className="it-list-controls";
-    for(const collapse of [false,true]){
-      const button=document.createElement("button");button.type="button";button.className="it-list-ctrl-btn";button.textContent=collapse?"Collapse all":"Expand all";
-      button.addEventListener("click",()=>{for(const {block} of groups){try{localStorage.setItem(guestCollapseKey(block),collapse?"1":"0");}catch(_error){}}renderTasks(current.tasks||[]);});
-      controls.appendChild(button);
+    if (focusTask) {
+      const card = Array.from(list.querySelectorAll('[data-shared-task]')).find(el => el.dataset.sharedTask === focusTask);
+      const target = card && Array.from(card.querySelectorAll('button,input,summary')).find(el => focusEmoji ? el.dataset.reactionEmoji === focusEmoji : el.className === focusClass);
+      target?.focus({preventScroll:true});
     }
-    frag.appendChild(controls);
-    groups.forEach(({block,nodes})=>{
-      frag.appendChild(blockHeaderEl(block));
-      if(!guestCollapsed(block))emitGroup(nodes,block.timed);
-    });
-
-    list.appendChild(frag);
   }
 
   function renderCalendarOptions(data){
@@ -449,7 +306,7 @@
     const status = document.getElementById("todo-public-status");
     if (status) status.hidden = true;
     document.getElementById("todo-public-title").textContent = data.workspaceName || "Shared Todo List";
-    document.getElementById("todo-public-subtitle").textContent = data.ownerUsername ? "Live guest view for " + data.ownerUsername : "Live guest view";
+    document.getElementById("todo-public-subtitle").textContent = data.ownerUsername ? "Activity queue for " + data.ownerUsername : "Shared activity queue";
     document.getElementById("todo-public-date").textContent = data.date || "Today";
     // Printed copies carry the live URL (see the @media print block): a sheet of
     // paper with no way back to the list is a dead end.
@@ -517,7 +374,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      if (status) status.textContent = "Added.";
+      if (status) status.textContent = "Sent to the owner for triage. They can add it to the queue.";
       if (titleEl) titleEl.value = "";
       if (noteEl) noteEl.value = "";
       await load();
@@ -527,6 +384,8 @@
   }
 
   async function toggleReaction(button){
+    if (button.disabled) return;
+    button.disabled = true;
     const task = (current && current.tasks || []).find(t => String(t.id) === String(button.dataset.taskId));
     try {
       const data = await api("/api/public/todo-share/" + encodeURIComponent(token) + "/reactions", {
@@ -548,7 +407,9 @@
         await load();
       }
     } catch (e) {
-      /* transient; next poll reconciles */
+      document.getElementById("todo-action-status").textContent = e.message;
+    } finally {
+      button.disabled = false;
     }
   }
 
@@ -572,6 +433,7 @@
         })
       });
       if (task) {
+        if (input) input.value = "";
         task.comments = data.comments || [];
         renderTasks(current.tasks || []);
       } else {
@@ -632,6 +494,9 @@
           sponsorName: (form.querySelector(".todo-reward-name") || {}).value ? form.querySelector(".todo-reward-name").value.trim() : ""
         })
       });
+      form.reset();
+      form.hidden = true;
+      document.getElementById("todo-action-status").textContent = "Reward offered. It activates after the owner approves it.";
       await load();
     } catch (e) {
       if (submit) submit.disabled = false;
