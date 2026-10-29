@@ -41,7 +41,7 @@ const { chromium } = require('playwright-core');
       assert.ok(await focus.getByRole('textbox', { name: 'Reward offered' }).isVisible());
       await focus.locator('.todo-reward-form').getByRole('button', { name: 'Send', exact: true }).click();
       await page.getByText('Reward offered. It activates after the owner approves it.', { exact: true }).waitFor();
-      assert.ok(await focus.getByText(/Awaiting approval/).count());
+      await focus.getByText(/Awaiting approval/).first().waitFor();
       await focus.getByRole('button', { name: 'React 👍', exact: true }).click();
       await focus.locator('[data-reaction-emoji="👍"][aria-pressed="true"]').waitFor();
       await focus.locator('summary').click();

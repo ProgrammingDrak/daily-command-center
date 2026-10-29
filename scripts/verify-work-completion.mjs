@@ -93,7 +93,7 @@ try {
   for(const width of [1280,375]){
     await page.setViewportSize({width,height:900});await button('a','complete').click();
     await page.getByRole('dialog').getByText('Previously recorded',{exact:true}).waitFor();
-    assert.match(await page.getByRole('dialog').innerText(),/90m/);assert.match(await page.getByRole('dialog').innerText(),/92m/);
+    assert.match(await page.getByRole('dialog').innerText(),/90m/);assert.match(await page.getByRole('dialog').innerText(),/After completion \(estimated\)/);
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     await page.waitForFunction(()=>getComputedStyle(document.querySelector('.dcc-overlay')).opacity==='1');
     await page.screenshot({path:path.join(output,width===375?'owner-completion-mobile.png':'owner-completion-desktop.png'),fullPage:false});
@@ -113,10 +113,11 @@ try {
   await button('a','complete').click();await page.getByRole('dialog').getByText('Previously recorded',{exact:true}).waitFor();
   await page.getByRole('dialog').getByRole('button',{name:'Complete',exact:true}).evaluate(el=>{el.click();el.click();});
   await page.getByRole('dialog').getByRole('status').filter({hasText:'Completion not confirmed'}).waitFor();
-  assert.equal(posts,1);assert.equal(await page.getByText('Task completed · 92m recorded',{exact:true}).count(),0);
+  assert.equal(posts,1);assert.equal(await page.getByText(/^Task completed ·/).count(),0);
   await page.getByRole('dialog').getByRole('button',{name:'Complete',exact:true}).click();await closed();
   assert.equal(posts,2);assert.deepEqual(bodies[1],first);
-  assert.equal((await task('a')).properties.actualMinutes,92);assert.equal((await ctx.blockDB.getTaskTimeEntries('a','ws-1')).length,1);
+  const expectedMinutes=90+Math.max(1,Math.round((Date.parse(first.at)-Date.parse(at))/60000));
+  assert.equal((await task('a')).properties.actualMinutes,expectedMinutes);assert.equal((await ctx.blockDB.getTaskTimeEntries('a','ws-1')).length,1);
   assert.deepEqual(errors,[]);
   console.log(JSON.stringify({passed:true,checks:['short context with full accessible history','completion desktop/mobile','cancel writes nothing','legacy recorded history','double click','lost response unconfirmed','same envelope retry','one saved session'],screenshots:output}));
 } finally {await browser.close();await new Promise(resolve=>server.close(resolve));await ctx.close();}
