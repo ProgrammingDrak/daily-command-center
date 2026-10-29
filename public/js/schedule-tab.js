@@ -1725,6 +1725,7 @@ function updateProgressNow(nowValue){
 function buildProgress(){
   const track=document.getElementById("ptrack");
   if(!track)return;
+  if(_progressTooltipClose)_progressTooltipClose();
   const dayItems=DCC.TaskModel.selectDayScoped(scheduled); // Unscheduled-everywhere rows aren't today's plan
   const range=_progressRange(dayItems,typeof __state!=="undefined"?__state:null);
   const ds=range.start,de=range.end,tot=range.total;
@@ -1785,19 +1786,99 @@ function buildShellRails(dayItems,ds,tot){
     rails.appendChild(seg);
   });
 }
+let _progressTooltipClose=null;
+function _progressSummary(ev){
+  const value=[ev.detail,ev.description,ev.notes].find(value=>typeof value==="string"&&value.trim());
+  const text=(value||"").replace(/\s+/g," ").trim();
+  return text.length>240?text.slice(0,237).trimEnd()+"…":text;
+}
+function _bindProgressTooltip(seg,ev,time){
+  let tip=null,leaveTimer=null,anchorRect=null;
+  function close(){
+    clearTimeout(leaveTimer);
+    if(!tip)return;
+    tip.remove();tip=null;
+    seg.removeAttribute("aria-describedby");
+    document.removeEventListener("keydown",onKey,true);
+    document.removeEventListener("pointerdown",onOutside,true);
+    window.removeEventListener("scroll",onScroll,true);
+    window.removeEventListener("resize",close);
+    if(_progressTooltipClose===close)_progressTooltipClose=null;
+  }
+  function onKey(event){if(event.key==="Escape")close();}
+  function onOutside(event){if(!seg.contains(event.target)&&!tip.contains(event.target))close();}
+  function onScroll(event){
+    if(!tip||tip.contains(event.target))return;
+    const rect=seg.getBoundingClientRect();
+    // Ignore unrelated/pending scroll events that did not move the anchor.
+    if(rect.top!==anchorRect.top||rect.left!==anchorRect.left)close();
+  }
+  function cancelLeave(){clearTimeout(leaveTimer);}
+  function leave(){
+    cancelLeave();
+    leaveTimer=setTimeout(()=>{
+      if(tip&&document.activeElement!==seg&&!seg.matches(":hover")&&!tip.matches(":hover"))close();
+    },150);
+  }
+  function show(){
+    cancelLeave();
+    if(tip)return;
+    if(_progressTooltipClose)_progressTooltipClose();
+    tip=document.createElement("div");
+    tip.id="day-progress-tooltip";
+    tip.className="progress-task-tooltip";
+    tip.setAttribute("role","tooltip");
+    // Task content is always text, never HTML (including imported descriptions).
+    const title=document.createElement("strong");
+    title.textContent=ev.title||"Untitled task";
+    const timing=document.createElement("div");
+    timing.className="progress-task-tooltip-time";
+    timing.textContent=time;
+    tip.append(title,timing);
+    const summary=_progressSummary(ev);
+    if(summary){
+      const description=document.createElement("div");
+      description.className="progress-task-tooltip-summary";
+      description.textContent=summary;
+      tip.appendChild(description);
+    }
+    document.body.appendChild(tip);
+    seg.setAttribute("aria-describedby",tip.id);
+    const anchor=seg.getBoundingClientRect(),box=tip.getBoundingClientRect(),gap=8;
+    anchorRect=anchor;
+    tip.style.left=Math.max(gap,Math.min(anchor.left+anchor.width/2-box.width/2,window.innerWidth-box.width-gap))+"px";
+    const below=anchor.bottom+gap;
+    tip.style.top=Math.max(gap,Math.min(below+box.height<=window.innerHeight-gap?below:anchor.top-box.height-gap,window.innerHeight-box.height-gap))+"px";
+    tip.addEventListener("mouseenter",cancelLeave);
+    tip.addEventListener("mouseleave",leave);
+    document.addEventListener("keydown",onKey,true);
+    document.addEventListener("pointerdown",onOutside,true);
+    window.addEventListener("scroll",onScroll,true);
+    window.addEventListener("resize",close);
+    _progressTooltipClose=close;
+  }
+  seg.addEventListener("mouseenter",show);
+  seg.addEventListener("mouseleave",leave);
+  seg.addEventListener("focus",show);
+  seg.addEventListener("blur",leave);
+  seg.addEventListener("click",close);
+}
 function addPS(track,s,e,title,color,done,tot,ev){
   const w=((e-s)/tot)*100;
   if(w<=0)return;
   const seg=document.createElement(ev?"button":"span");
   seg.className="pseg";
   if(ev)seg.type="button";
-  seg.style.cssText="flex:0 0 "+w+"%;background:"+color+";opacity:"+(done?0.45:1);
-  const detail=title+" · "+(ev?f12(ev.start)+" - "+f12(ev.end):ms(e-s))+(done?" · Done":"");
-  seg.title=detail;
+  // Shrink proportionally to leave room for track gaps, including the last task.
+  seg.style.cssText="flex:0 1 "+w+"%;background:"+color+";opacity:"+(done?0.45:1);
+  const time=(ev?f12(ev.start)+" - "+f12(ev.end)+" · "+ms(pt(ev.end)-pt(ev.start)):ms(e-s))+(done?" · Done":"");
+  const detail=title+" · "+time;
   if(ev){
     seg.setAttribute("aria-label","Open details for "+detail);
+    _bindProgressTooltip(seg,ev,time);
     seg.addEventListener("click",()=>{if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
   }else{
+    seg.title=detail;
     seg.setAttribute("aria-hidden","true");
   }
   track.appendChild(seg);

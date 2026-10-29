@@ -55,6 +55,8 @@ test("a task segment opens that task's details modal", () => {
   let opened = null;
   const children = [];
   const context = {
+    pt,
+    _bindProgressTooltip: () => {},
     f12: (value) => value,
     ms: (value) => value + "m",
     openAddModal: (id, title) => { opened = { id, title }; },
