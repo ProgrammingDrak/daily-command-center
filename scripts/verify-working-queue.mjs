@@ -34,7 +34,9 @@ await make("a", "Review copy", {
   workStateChangedAt: at,
   activeWorkSessionId: "fixture-a"
 });
-await make("b", "Research options");
+await make("b", "Research options", {start:"09:00",end:"09:30"});
+await make("d", "Next recurring occurrence", {responsibilityId:"routine",taskPriority:"Low"});
+await make("legacy-pq", "Legacy activity needs review", {actualMinutes:0});
 await make("c", "Prepare outline");
 process.env.DCC_CONVERSATION_ENABLED = "true";
 const app = express();
@@ -111,6 +113,39 @@ try {
   await page.goto(base);await page.waitForSelector('.wq-focus');
   assert.equal((await task('a')).properties.startedAt,at,'default navigation never starts or changes a timer');
   await add(["b", "c"]);
+  await add(['d','legacy-pq']);
+  const setPriority=async(id,value)=>{
+    await button(id,'priority').click();
+    await page.getByRole('dialog').locator('[data-priority]').selectOption(value);
+    await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await closed();
+  };
+  await setPriority('c','High');
+  assert.deepEqual(await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId)),['c','b','d']);
+  assert.equal(await page.locator('.wq-background [data-queue-id="legacy-pq"]').count(),1);
+  assert.equal((await task('b')).properties.start,'09:00','schedule-only task remains unstarted');
+  assert.equal((await task('b')).properties.startedAt,undefined);
+  assert.equal((await task('a')).properties.startedAt,at,'priority changes preserve current foreground');
+  await page.screenshot({path:process.env.DCC_PRIORITY_DESKTOP_SCREENSHOT||'/tmp/dcc-priority-desktop.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  await page.locator('.wq-next').scrollIntoViewIfNeeded();
+  await page.screenshot({path:process.env.DCC_PRIORITY_MOBILE_SCREENSHOT||'/tmp/dcc-priority-mobile.png',fullPage:false});
+  await page.setViewportSize({width:1280,height:950});
+  const priorityOrder=await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId));
+  await button('b','up').click();
+  assert.deepEqual(await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId)),priorityOrder,'arrows cannot silently change priority');
+  await button('d','background').click();
+  await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await closed();
+  assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),0);
+  assert.equal((await task('d')).properties.actualMinutes,undefined,'background is not focused effort');
+  await button('d','block').click();await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await closed();
+  await button('d','unblock').click();
+  await page.waitForFunction(()=>DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='d')?.status==='paused');
+  assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),0,'unblock preserves start history');
+  await page.reload();await page.waitForSelector('[data-queue-id="b"]');
+  assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),0);
+  await setPriority('c','Medium');
+
   await button("b", "focus").click();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await closed();
@@ -310,6 +345,11 @@ try {
     JSON.stringify({
       passed: true,
       checks: [
+        "priority High/Medium/Low ordering and same-priority arrows",
+        "schedule-only task stays unstarted",
+        "background start and unblock never return to Priority Queue",
+        "new recurrence occurrence and legacy actuals classification",
+        "desktop/mobile priority screenshots and overflow",
         "default queue entry",
         "explicit tab link and reload",
         "back/forward navigation",

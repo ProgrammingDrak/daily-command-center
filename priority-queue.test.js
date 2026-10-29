@@ -14,6 +14,7 @@ test('Priority Queue distinguishes plans, real starts and ambiguous legacy actua
   assert.equal(classify(task({done:true,startedAt:'2026-10-01'})), 'completed');
   assert.equal(classify(planned, {}, {dayRoot:{_done:{ids:['t']}}}), 'completed');
   for(const status of ['cancelled','canceled','deleted','skipped','archived']) assert.equal(classify(task({status})), null);
+  assert.equal(classify(task({status:'cancelled',startedAt:'2026-10-01'})), 'foreground');
   assert.equal(classify({...planned,deleted_at:'2026-10-01'}), null);
   assert.equal(classify(task({kind:'responsibility_item'})), null);
   assert.equal(classify(task({responsibilityId:'r',occurrenceDate:'2099-01-01'})), 'queued');
@@ -52,6 +53,12 @@ test('Priority Queue coordinator lifecycle and legacy evidence', {skip:!process.
   assert.deepEqual((await ctx.blockDB.getBlock('scheduled')).properties,{...original,taskPriority:'High'});
   assert.equal((await entry('scheduled')).status,'queued');
   assert.equal((await store.state(owner)).queue.priorityOrder[0],'scheduled');
+  await ctx.blockDB.updateBlock('scheduled',{properties:{...original,title:'Renamed after priority save'}});
+  assert.equal((await ctx.blockDB.getBlock('scheduled')).properties.taskPriority,'High');
+  await ctx.blockDB.updateBlock('scheduled',{properties:{...original,taskPriority:'Low'}});
+  assert.equal((await ctx.blockDB.getBlock('scheduled')).properties.taskPriority,'High','stale priority cannot roll back');
+  await ctx.blockDB.rescheduleBlocks([{id:'scheduled',date:'2026-10-20',properties:{...original,title:'Move with stale properties'}}],[]);
+  assert.equal((await ctx.blockDB.getBlock('scheduled')).properties.taskPriority,'High');
   await send('start','scheduled');assert.equal((await entry('scheduled')).status,'foreground');
   await send('pause','scheduled');assert.equal((await entry('scheduled')).status,'paused');
   await send('queue-block','scheduled');await send('queue-unblock','scheduled');assert.equal((await entry('scheduled')).status,'paused');
@@ -68,6 +75,42 @@ test('Priority Queue coordinator lifecycle and legacy evidence', {skip:!process.
   assert.equal((await entry('ledger')).status,'paused');
   const savedBefore=JSON.stringify((await ctx.pool.query('SELECT state FROM work_rotations')).rows);
   await store.state(owner);assert.equal(JSON.stringify((await ctx.pool.query('SELECT state FROM work_rotations')).rows),savedBefore,'classification must not write history');
+  await make('legacy-background');await send('queue-add','legacy-background');
+  await ctx.pool.query("UPDATE work_rotations SET state=jsonb_set(state,'{items,legacy-background}', '{\"status\":\"background\"}')");
+  await send('queue-remove','legacy-background');await send('queue-add','legacy-background');
+  assert.equal((await entry('legacy-background')).status,'paused','removal retains legacy evidence without everStarted');
+  await make('legacy-blocked');await send('queue-add','legacy-blocked');
+  await ctx.pool.query("UPDATE work_rotations SET state=jsonb_set(state,'{items,legacy-blocked}', '{\"status\":\"blocked\"}')");
+  await send('queue-unblock','legacy-blocked');assert.equal((await entry('legacy-blocked')).status,'paused');
+  await make('new-blocked');await send('queue-add','new-blocked');await send('queue-block','new-blocked');
+  await send('queue-unblock','new-blocked');assert.equal((await entry('new-blocked')).status,'queued','blocking alone is not starting');
+  await send('queue-block','new-blocked');await send('queue-remove','new-blocked');await send('queue-add','new-blocked');
+  assert.equal((await entry('new-blocked')).status,'queued');
   await make('cancelled',{status:'cancelled'});await assert.rejects(send('queue-add','cancelled'),{statusCode:409});
+  await make('overlay');await send('queue-add','overlay');
+  const dayRoot=await ctx.blockDB.ensureDayRoot('2026-10-20',1,'ws-1');
+  const root=await ctx.blockDB.getBlock(dayRoot);
+  await ctx.blockDB.updateBlock(dayRoot,{properties:{...root.properties,_done:{ids:['overlay']}}});
+  await ctx.pool.query(`INSERT INTO delegated_work(user_id,workspace_id,work_key,task_id,report) VALUES(1,'ws-1','overlay-report','overlay',$1)`,[{phase:'needs-review',at:new Date(now).toISOString()}]);
+  assert.equal((await entry('overlay')).status,'completed');assert.equal((await entry('overlay')).needsYou,false);
   await ctx.blockDB.deleteBlock('next-occurrence');assert.equal(await entry('next-occurrence'),undefined);
+  await make('cancelled-clock');await send('start','cancelled-clock');
+  const ticking=await ctx.blockDB.getBlock('cancelled-clock');
+  await ctx.blockDB.updateBlock(ticking.id,{properties:{...ticking.properties,status:'cancelled'}});
+  assert.equal((await entry(ticking.id)).status,'foreground','a contradictory live clock remains visible for explicit pause');
+  assert.ok((await ctx.blockDB.getBlock(ticking.id)).properties.startedAt);
+  await send('pause',ticking.id);assert.equal(await entry(ticking.id),undefined);
+  // Invisible terminal memberships cannot consume all 100 slots.
+  const ids=Array.from({length:100},(_,i)=>'retired-'+i);
+  for(const id of ids)await make(id,{status:'cancelled'});
+  await ctx.pool.query('UPDATE work_rotations SET state=$1 WHERE user_id=1 AND workspace_id=$2',[{version:2,order:ids,items:Object.fromEntries(ids.map(id=>[id,{status:'queued'}]))},'ws-1']);
+  await make('after-retired');await send('queue-add','after-retired');
+  assert.equal((await entry('after-retired')).status,'queued');
+});
+
+test('canonical task projection and serializer preserve explicit priority',()=>{
+  const model=require('./public/js/task-model'),serializer=require('./public/js/task-serialize');
+  const projected=model.fromBlock(task({taskPriority:'High'}));
+  assert.equal(projected.taskPriority,'High');
+  assert.equal(serializer.taskCommonProps(projected).taskPriority,'High');
 });

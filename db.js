@@ -979,9 +979,15 @@ async function setTaskCompletion({
 
 async function updateBlock(id, fields, client) {
   const {
-    properties, sort_order, parent_id, date, completionIntent,
+    properties, sort_order, parent_id, date, completionIntent, taskPriority,
     completionMutationId, completionBaseRevision,
   } = fields;
+  if (taskPriority !== undefined && (!["Low", "Medium", "High"].includes(taskPriority)
+      || [properties, sort_order, parent_id, date, completionIntent, completionMutationId, completionBaseRevision].some(value => value !== undefined))) {
+    const error = new Error("taskPriority must be Low, Medium, or High and cannot be combined with other block edits");
+    error.statusCode = 400;
+    throw error;
+  }
   if (completionIntent !== undefined && completionIntent !== "complete" && completionIntent !== "reopen") {
     throw new Error("Invalid completion intent");
   }
@@ -1027,7 +1033,7 @@ async function updateBlock(id, fields, client) {
         throw conflict;
       }
     }
-    let newProps = existing.properties;
+    let newProps = taskPriority !== undefined ? { ...existing.properties, taskPriority } : existing.properties;
     if (properties !== undefined) {
       const parsed = typeof properties === "string" ? JSON.parse(properties) : properties;
       const requestedTaskType = String(parsed && parsed.type || "").trim().toLowerCase();
@@ -1043,10 +1049,16 @@ async function updateBlock(id, fields, client) {
         isTaskRow({ type: existing.type, properties: existing.properties }), completionMutationId);
     }
     const existingProps = existing.properties || {};
+    // Explicit field-only writes own priority. Full-property saves/replays cannot
+    // erase or roll back a choice made in another tab.
+    if (taskPriority === undefined) {
+      if (Object.hasOwn(existingProps, 'taskPriority')) newProps.taskPriority = existingProps.taskPriority;
+      else delete newProps.taskPriority;
+    }
     // Activity state is server-owned once the account coordinator is enabled.
     // A stale offline property bag must never revive or erase a foreground timer.
     if (process.env.DCC_CONVERSATION_ENABLED === "true" && !fields[require("./lib/conversation-model").TIMING_WRITE]) {
-      for (const key of ["startedAt", "activeWorkSessionId", "startedBy", "workCheckInAt", "workCheckInCount", "workCheckInBy", "workStateChangedAt", "workStateOperationId", "actualMinutes", "actualMinutesFrom", "actualTimeUnknown"]) {
+      for (const key of ["startedAt", "everStarted", "lastWorkedAt", "activeWorkSessionId", "startedBy", "workCheckInAt", "workCheckInCount", "workCheckInBy", "workStateChangedAt", "workStateOperationId", "actualMinutes", "actualMinutesFrom", "actualTimeUnknown"]) {
         if (existingProps[key] === undefined) delete newProps[key]; else newProps[key] = existingProps[key];
       }
     }
@@ -1988,6 +2000,11 @@ async function rescheduleBlocks(moves, creates, options = {}) {
         const parsed = typeof m.properties === "string" ? JSON.parse(m.properties) : m.properties;
         validateBlock(existing.type, parsed);
         newProps = parsed;
+      }
+      if (Object.hasOwn(existing.properties || {}, 'taskPriority')) newProps.taskPriority = existing.properties.taskPriority;
+      else delete newProps.taskPriority;
+      for (const key of ['everStarted', 'lastWorkedAt']) {
+        if (existing.properties?.[key] !== undefined) newProps[key] = existing.properties[key];
       }
       // Moves use a separate writer from updateBlock; retain the same private
       // activity identity even when a stale client sends generic task props.

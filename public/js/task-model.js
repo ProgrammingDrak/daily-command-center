@@ -135,6 +135,7 @@
       pointsDurationMinutes: p.pointsDurationMinutes == null ? null : Number(p.pointsDurationMinutes),
       aiSummary: p.aiSummary || "",
       notionUrl: p.notionUrl || "", calUrl: p.calUrl || "", priority: p.priority || "High",
+      taskPriority: p.taskPriority,
       calendarId: p.calendar_id || "", calendarName: p.calendar_name || "",
       calendarColor: p.calendar_color || "", calendarAccountKey: p.account_key || "",
       calendarAccountEmail: p.account_email || "",
