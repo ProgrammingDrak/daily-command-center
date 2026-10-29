@@ -174,3 +174,14 @@
     flex-wrap: wrap;
   }
 }
+
+.wq-summary { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.wq-context { margin: 10px 0; }
+.wq-context > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--text-muted); }
+.wq-context > summary::before { content: '▸'; margin-right: 8px; }
+.wq-context[open] > summary::before { content: '▾'; }
+.wq-context > summary:focus-visible { outline: 2px solid var(--cyan, #22d3ee); }
+.wq-effort { margin: 0; display: grid; gap: 10px; }
+.wq-effort > div { display: flex; justify-content: space-between; gap: 16px; }
+.wq-effort dd { margin: 0; font-weight: 600; white-space: nowrap; }
+.wq-effort dt { color: var(--text-muted); }

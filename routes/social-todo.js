@@ -1385,11 +1385,26 @@ app.get("/api/public/todo-share/:token/events", async (req, res) => {
 });
 
 app.get("/api/public/todo-share/:token", async (req, res) => {
+  res.set("Cache-Control", "private, no-store");
   try {
     const share = await findTodoShareByToken(req.params.token);
     if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
     await pool.query("UPDATE todo_shares SET last_viewed_at = NOW() WHERE id = $1", [share.id]);
-    res.json(await buildPublicTodoShare(share, req.query.date, req));
+    const view = await buildPublicTodoShare(share, req.query.date, req);
+    // Keep the existing shared-day allowlist. Queue membership cannot grant access
+    // to backlog, other dates, guided/private tasks, notes or delegated reports.
+    const snapshot = await require("../lib/working-queue").snapshot(pool,
+      { userId: share.owner_id, workspaceId: share.workspace_id }, blockDB);
+    view.tasks = require("../lib/public-working-queue").projectPublicQueue(view.tasks, snapshot);
+    view.sponsorships = view.sponsorships.filter(s => view.tasks.some(t => String(t.id) === String(s.task_id)));
+    view.stats = { total: view.tasks.length, done: view.tasks.filter(t => t.queue.lane === "completed").length,
+      open: view.tasks.filter(t => t.queue.lane !== "completed").length,
+      sponsored: view.tasks.filter(t => t.sponsorships?.some(s => s.status !== "dismissed")).length };
+    view.view = "working-queue";
+    // Schedule sections are no longer rendered on this surface.
+    delete view.blocks;
+    delete view.calendars;
+    res.json(view);
   } catch (e) {
     // Same convention as the sibling POST below, and C5b is what gave this route a real
     // failure path: `buildPublicTodoShare` calls `buildDayResponse`, which now THROWS on an

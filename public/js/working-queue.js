@@ -28,10 +28,20 @@
   function activate(id){document.querySelector('.tab[data-tab="working-queue"]')?.click();render();if(id)document.querySelector('[data-queue-id="'+CSS.escape(id)+'"]')?.scrollIntoView({block:'nearest',behavior:DCC.reducedMotion?.()?'auto':'smooth'});}
   function button(action,label,id,extra=''){return '<button type="button" data-queue-action="'+action+'" data-task-id="'+esc(id||'')+'" '+extra+'>'+label+'</button>';}
   function pathFor(task,index){const parts=[],seen=new Set();let t=task;while(t&&!seen.has(t.id)){seen.add(t.id);parts.unshift(t.title||'Task');t=index.get(DCC.TaskModel.parentIdOf(t));}return parts.join(' › ');}
+  function brief(value, limit=150){const text=String(value||'').replace(/\s+/g,' ').trim(), sentence=text.match(/^.{1,150}?[.!?](?:\s|$)/)?.[0]?.trim()||text;return sentence.length>limit?sentence.slice(0,limit-1).trimEnd()+'…':sentence;}
+  function contextHtml(item){
+    const reports=(item.delegated||[]).slice().sort((a,b)=>String(b.at).localeCompare(String(a.at)));
+    const latest=reports[0], summary=brief(latest?.note||item.note), next=brief(latest?.reviewActions?.[0],120);
+    if(!summary&&!next&&!reports.length)return '';
+    return (summary?'<p class="wq-summary">'+esc(summary)+'</p>':'')+(next?'<p class="wq-summary"><strong>Next:</strong> '+esc(next)+'</p>':'')+
+      '<details class="wq-context"><summary>Details</summary>'+(item.note?'<p class="wq-note">'+esc(item.note)+'</p>':'')+reports.map(report=>'<div class="wq-note"><small>'+esc(report.work.source+' · '+report.phase+' · '+report.at)+'</small><p>'+esc(report.note)+'</p>'+(report.reviewActions.length?'<ul>'+report.reviewActions.map(action=>'<li>'+esc(action)+'</li>').join('')+'</ul>':'')+'</div>').join('')+'</details>';
+  }
   function render(){
     const root=document.getElementById('working-queue-root');if(!root)return;
     const focused=document.activeElement,focusKey=focused?.dataset.queueAction,focusId=focused?.dataset.taskId;
     const completedOpen=root.querySelector('.wq-completed')?.open;
+    const contextOpen=new Set(Array.from(root.querySelectorAll('.wq-context[open]')).map(el=>el.closest('[data-queue-id]').dataset.queueId));
+    const contextFocused=focused?.matches('.wq-context > summary')?focused.closest('[data-queue-id]').dataset.queueId:null;
     const completedFocused=focused?.matches('.wq-completed > summary');
     const all=items(),index=new Map((window.DCCWorkSessions?.availableTasks()||[]).map(t=>[t.id,t]));all.forEach(i=>{const t=DCC.TaskModel.fromBlock(i.task);index.set(t.id,t);});
     function card(item){
@@ -44,14 +54,16 @@
       if(!completed){if(!foreground&&!['background','blocked'].includes(item.status))controls+=button('background',item.status==='queued'?'Start in background':'Resume in background',row.id);controls+=button('priority','Priority: '+esc(item.taskPriority||'Medium'),row.id)+button('note','Context',row.id);if(!foreground)controls+=button('up','↑',row.id,'aria-label="Move up" title="Move within this lane and priority"')+button('down','↓',row.id,'aria-label="Move down" title="Move within this lane and priority"')+button(item.status==='blocked'?'unblock':'block',item.status==='blocked'?'Unblock':'Blocked',row.id)+button('remove','Remove',row.id);}
       if(item.dueAt)controls+=button('snooze','Snooze 5m',row.id)+button('dismiss','Dismiss check-back',row.id);
       else if(['background','blocked'].includes(item.status))controls+=button('remind','Set check-back',row.id);
-      controls+=button('details','Details',row.id);
+      controls+=button('details','Open task',row.id);
       const readingUrl=DCC.safeUrlAttr?.(row.properties?.readingSession?.url||'');
       if(readingUrl)controls+='<a href="'+readingUrl+'" rel="noreferrer">Open book in QuietShelf</a>';
-      return '<article class="wq-card '+(foreground?'wq-focus':'')+'" data-queue-id="'+esc(row.id)+'" tabindex="0" draggable="'+(!foreground&&!completed)+'"><div class="wq-card-top"><h3>'+esc(pathFor(task,index))+'</h3><span class="wq-status">'+esc(item.status==='queued'?'Not started':item.status)+'</span></div><p class="wq-time">'+esc(foreground?activeMinutes+'m this session · '+actual:actual+(item.backgroundSince?' · '+elapsed+'m waiting':''))+'</p>'+(reminder?'<p class="wq-attention">'+esc(reminder)+'</p>':'')+(item.note?'<p class="wq-note">'+esc(item.note)+'</p>':'')+(item.delegated||[]).map(report=>'<div class="wq-note"><small>'+esc(report.work.source+' · '+report.phase+' · '+report.at)+'</small><p>'+esc(report.note)+'</p>'+(report.reviewActions.length?'<ul>'+report.reviewActions.map(action=>'<li>'+esc(action)+'</li>').join('')+'</ul>':'')+'</div>').join('')+'<div class="wq-actions">'+controls+'</div>'+(foreground&&window.DCCWorkSessions?.checkInHtml?window.DCCWorkSessions.checkInHtml(task,Date.now()):'')+'</article>';
+      return '<article class="wq-card '+(foreground?'wq-focus':'')+'" data-queue-id="'+esc(row.id)+'" tabindex="0" draggable="'+(!foreground&&!completed)+'"><div class="wq-card-top"><h3>'+esc(pathFor(task,index))+'</h3><span class="wq-status">'+esc(item.status==='queued'?'Not started':item.status)+'</span></div><p class="wq-time">'+esc(foreground?activeMinutes+'m this session · '+actual:actual+(item.backgroundSince?' · '+elapsed+'m waiting':''))+'</p>'+(reminder?'<p class="wq-attention">'+esc(reminder)+'</p>':'')+contextHtml(item)+'<div class="wq-actions">'+controls+'</div>'+(foreground&&window.DCCWorkSessions?.checkInHtml?window.DCCWorkSessions.checkInHtml(task,Date.now()):'')+'</article>';
     }
     function lane(title,rows,empty,cls=''){return '<section class="wq-lane '+cls+'"><h2>'+title+' <small>'+rows.length+'</small></h2>'+(cls==='wq-next'?'<p class="wq-empty">High → Medium → Low. Move tasks within a priority; change Priority to move between levels.</p>':'')+(rows.length?rows.map(card).join(''):'<p class="wq-empty">'+empty+'</p>')+'</section>';}
     const fg=all.filter(i=>i.status==='foreground'),needs=all.filter(i=>i.needsYou&&i.status!=='foreground'),background=all.filter(i=>['background','paused','blocked'].includes(i.status)&&!i.needsYou),upNext=(state.queue?.priorityOrder||all.filter(i=>i.status==='queued').map(i=>i.task.id)).map(id=>all.find(i=>i.task.id===id)).filter(i=>i&&i.status==='queued'&&!i.needsYou),done=all.filter(i=>i.status==='completed');
     root.innerHTML='<header class="wq-header"><div><h1>Working Queue</h1><p>Priority Queue is unstarted work. Working tasks stay here; Itinerary plans when.</p></div>'+button('add','Add tasks')+'</header><p class="wq-sync" role="status">'+esc(sending?'Saving…':pending?'Update saved on this device; awaiting confirmation.':problem?'Offline or unavailable: '+problem:'Synced · waiting time is not focused effort')+'</p>'+(pending?button('retry','Retry saved update'):'')+(conflict?'<p class="wq-conflict">'+esc(conflict.message)+' Your attempted change is retained. Review current work before trying again. '+button('conflict','Review attempted change')+button('clear-conflict','Dismiss conflict')+'</p>':'')+(state.otherWorkspaceForeground?'<p class="wq-conflict">Work is active in another workspace. Pause it there before bringing a task forward here.</p>':'')+'<div class="wq-grid">'+lane('Foreground',fg,'Choose a task below to begin focused work.','wq-foreground')+lane('Needs You',needs,'No reported review actions or manual check-backs due.','wq-needs')+lane('Priority Queue',upNext,'No unstarted tasks in your queue. Add existing tasks to prioritize them.','wq-next')+lane('Background & paused',background,'Tasks you set aside keep their context here.','wq-background')+'</div>'+(done.length?'<details class="wq-completed"><summary>Completed · '+done.length+'</summary>'+done.map(card).join('')+'</details>':'');
+    for(const id of contextOpen)root.querySelector('[data-queue-id="'+CSS.escape(id)+'"] .wq-context')?.setAttribute('open','');
+    if(contextFocused)root.querySelector('[data-queue-id="'+CSS.escape(contextFocused)+'"] .wq-context > summary')?.focus({preventScroll:true});
     if(completedOpen)root.querySelector('.wq-completed')?.setAttribute('open','');
     if(completedFocused)root.querySelector('.wq-completed > summary')?.focus({preventScroll:true});
     if(focusKey)root.querySelector('[data-queue-action="'+CSS.escape(focusKey)+'"][data-task-id="'+CSS.escape(focusId||'')+'"]')?.focus({preventScroll:true});
@@ -59,17 +71,34 @@
   function modal(title,body,submit,label='Save'){let busy=false;return DCC.overlay.open({kind:'modal',title,body,canClose:()=>!busy,actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
   function form(html){const body=document.createElement('div');body.className='wq-form';body.innerHTML=html+'<p role="status"></p>';return body;}
   async function transition(action,item){
-    const body=form('<p>'+esc(item.task.properties.title||'Task')+'</p>'+(['start','background-start','queue-block'].includes(action)?'<label>Check back on the background task<select data-minutes><option value="">No reminder</option><option value="5">5 minutes</option><option value="15" selected>15 minutes</option><option value="30">30 minutes</option><option value="120">2 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes<input type="number" min="1" max="1440" value="10"></label>':'')+(action==='done'?'<p>Mark this task complete? Recorded actuals stay unchanged; missing actuals remain unknown.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome required></textarea></label>':''):''));
-    let guided=null,ready=!item.task.properties.guidedDefinitionId;
+    const body=form('<p>'+esc(item.task.properties.title||'Task')+'</p>'+(['start','background-start','queue-block'].includes(action)?'<label>Check back on the background task<select data-minutes><option value="">No reminder</option><option value="5">5 minutes</option><option value="15" selected>15 minutes</option><option value="30">30 minutes</option><option value="120">2 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes<input type="number" min="1" max="1440" value="10"></label>':'')+(action==='done'?'<div data-completion-time aria-live="off">Loading recorded time…</div><p>Completing saves the current focused session to this task. The saved total is confirmed after the update succeeds.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome required></textarea></label>':''):''));
+    let guided=null,ready=!item.task.properties.guidedDefinitionId,completion=null,clockOffset=0,command=null;
+    const formatSeconds=seconds=>Math.floor(seconds/60)+'m '+String(seconds%60).padStart(2,'0')+'s';
+    function updateCompletion(){
+      const el=body.querySelector('[data-completion-time]');if(!el||!completion)return;
+      const value=window.DCCWorkCompletion.project(completion,command?Date.parse(command.at):Date.now()+clockOffset);
+      el.innerHTML='<dl class="wq-effort"><div><dt>Previously recorded'+(completion.history.estimated?' (estimated)':'')+'</dt><dd>'+esc(completion.history.savedMinutes==null?'Unknown':completion.history.savedMinutes+'m')+'</dd></div><div><dt>Current timer</dt><dd>'+esc(value.active?formatSeconds(value.elapsedSeconds):'Not running')+'</dd></div><div><dt>After completion'+(value.active?' (estimated)':'')+'</dt><dd>'+esc(value.projectedMinutes==null?'Unknown':value.projectedMinutes+'m')+'</dd></div></dl>'+(value.active?'<p class="wq-time">'+esc(formatSeconds(value.creditSeconds)+' of this session will be recorded.'+(value.capped?' Time after the missed check-in cutoff stays unknown.':' Totals round once after adding recorded seconds.'))+'</p>':'<p class="wq-time">No running session to add. Recorded time stays as saved.</p>')+(completion.history.carryMinutes?'<p class="wq-time">Includes '+esc(completion.history.carryMinutes)+'m saved before or outside the session ledger.</p>':'');
+    }
+    if(action==='done')DCC.api('/api/working-queue/tasks/'+encodeURIComponent(item.task.id)+'/completion-preview',{cache:'no-store'}).then(view=>{completion=view;clockOffset=view.serverNow-Date.now();updateCompletion();}).catch(error=>{body.querySelector('[role=status]').textContent='Time summary unavailable: '+error.message;});
     const select=body.querySelector('[data-minutes]');select?.addEventListener('change',()=>{body.querySelector('[data-custom]').hidden=select.value!=='custom';});
     const handle=modal(action==='start'?'Bring forward':action==='done'?'Complete task':'Set task aside',body,async()=>{
       if(!ready)throw new Error('Wait for current guided instructions.');
+      if(action==='done'&&!completion)throw new Error('Wait for the recorded-time summary, or reopen this dialog to retry.');
       const minutes=select?(select.value==='custom'?Number(body.querySelector('[data-custom] input').value):select.value?Number(select.value):null):null;
       if(minutes!==null&&(!Number.isInteger(minutes)||minutes<1||minutes>1440))throw new Error('Choose 1–1440 minutes.');
       const payload={taskId:item.task.id,...(select?{remindMinutes:minutes}:{})};
       if(guided)payload.guided={expectedRevision:guided.revision,expectedDefinitionRevision:guided.definitionRevision,expectedContextVersion:guided.contextVersion,...(action==='done'?{outcome:body.querySelector('[data-outcome]').value,confirmed:true}:{})};
-      await send(envelope(action,payload));
+      if(!command||action!=='done')command=envelope(action,{...payload,...(completion?{expectedRevision:completion.revision}:{})});
+      updateCompletion();
+      try {
+        const result=await send(command);
+        if(action==='done')DCC.toast('Task completed · '+(result.task?.properties.actualMinutes==null?'focused time unknown':result.task.properties.actualMinutes+'m recorded'),'success');
+      } catch(error) {
+        if([400,403,404,409].includes(error.status))throw new Error(error.message+(action==='done'?' Close this dialog and review the current task before completing.':''));
+        throw new Error((action==='done'?'Completion not confirmed. Retry uses the same saved update. ':'Update not confirmed. ')+error.message);
+      }
     },action==='start'?'Bring forward':action==='done'?'Complete':'Save');
+    if(action==='done'){const timer=setInterval(()=>{if(!body.isConnected){clearInterval(timer);return;}updateCompletion();},1000);}
     if(!ready)DCC.api('/api/guided/tasks/'+encodeURIComponent(item.task.id),{cache:'no-store'}).then(view=>{guided=view;ready=true;body.querySelector('[data-preview]').textContent=view.prompt;}).catch(error=>{body.querySelector('[role=status]').textContent=error.message;});
     return handle;
   }

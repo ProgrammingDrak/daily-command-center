@@ -1,0 +1,101 @@
+/* global window, document, innerWidth */
+const process = require("node:process"), console = require("node:console");
+// Synthetic actual-route browser QA. Requires a disposable localhost database.
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const { chromium } = require('playwright-core');
+(async () => {
+  const fixture = await require('../test-support/shared-queue-fixture').createSharedQueueFixture();
+  const output = process.env.DCC_QA_OUTPUT || '/tmp/dcc-shared-queue-qa';
+  await fs.mkdir(output, { recursive: true });
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.DCC_CHROMIUM_PATH || (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined) });
+  const errors = [], checks = [];
+  const mark = name => { checks.push(name); console.log('PASS ' + name); };
+  try {
+    for (const width of [1440, 375]) {
+      await fixture.pool.query("DELETE FROM todo_task_reactions; DELETE FROM todo_task_comments; DELETE FROM todo_sponsorships");
+      const context = await browser.newContext({ viewport: { width, height: 1000 } });
+      // Capture polling callback to drive the real refresh without time delays.
+      await context.addInitScript(() => { const original = window.setInterval; window.setInterval = (fn, ms, ...args) => { if (ms === 300000) window.refreshShareForTest = fn; return original(fn, ms, ...args); }; });
+      const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
+      page.on('dialog', dialog => dialog.accept());
+      await page.goto(fixture.base + '/todo/' + fixture.token);
+      await page.locator('.shared-queue-card').first().waitFor();
+      assert.equal(await page.locator('.shared-queue-card').count(), 8);
+      assert.equal(await page.locator('.shared-queue-priority h3').first().innerText(), 'Prepare the release checklist');
+      assert.ok(!(await page.locator('body').innerText()).includes('SENTINEL'));
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      assert.equal(await page.getByRole('button', { name: 'Bring forward' }).count(), 0);
+      const focus = page.locator('[data-shared-task="local-focus"]');
+      assert.equal(await focus.locator('.todo-bounty-btn').isDisabled(), true);
+      assert.equal(await focus.locator('.todo-reward-form').isVisible(), false);
+      assert.equal(await page.locator('#todo-guest-add-form').isVisible(), false);
+      await focus.getByRole('button', { name: 'Offer reward' }).click();
+      await focus.getByRole('textbox', { name: 'Reward offered' }).fill('Coffee together');
+      await focus.getByRole('textbox', { name: 'Your name', exact: true }).fill('Casey');
+      await focus.getByRole('textbox', { name: 'Reward offered' }).evaluate(el=>{el.focus();el.setSelectionRange(2,5);});
+      await page.evaluate(() => window.refreshShareForTest());
+      assert.deepEqual(await focus.getByRole('textbox', { name: 'Reward offered' }).evaluate(el=>[el.selectionStart,el.selectionEnd]),[2,5]);
+      assert.equal(await focus.getByRole('textbox', { name: 'Reward offered' }).inputValue(), 'Coffee together');
+      assert.ok(await focus.getByRole('textbox', { name: 'Reward offered' }).isVisible());
+      await focus.locator('.todo-reward-form').getByRole('button', { name: 'Send', exact: true }).click();
+      await page.getByText('Reward offered. It activates after the owner approves it.', { exact: true }).waitFor();
+      await focus.getByText(/Awaiting approval/).first().waitFor();
+      await focus.getByRole('button', { name: 'React 👍', exact: true }).click();
+      await focus.locator('[data-reaction-emoji="👍"][aria-pressed="true"]').waitFor();
+      await focus.locator('summary').click();
+      await focus.getByRole('textbox', { name: 'Comment', exact: true }).fill('Looking good');
+      await focus.locator('.todo-public-comment-form').getByRole('button', { name: 'Send' }).click();
+      await focus.getByText('Looking good', { exact: true }).first().waitFor();
+      assert.equal(await focus.getByRole('textbox', { name: 'Comment', exact: true }).inputValue(), '');
+      await page.route('**/reactions', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Try again shortly' }) }));
+      await focus.getByRole('button', { name: 'React 🔥', exact: true }).click();
+      await page.getByRole('status').filter({ hasText: 'Try again shortly' }).waitFor();
+      assert.equal(await focus.getByRole('button', { name: 'React 🔥', exact: true }).isDisabled(), false);
+      await page.unroute('**/reactions');
+      await page.locator('.shared-queue-completed > summary').click();
+      await page.evaluate(() => window.refreshShareForTest());
+      assert.equal(await page.locator('.shared-queue-completed').evaluate(el => el.open), true);
+      await focus.locator('summary').click();
+      await page.locator('.shared-queue-completed > summary').click();
+      await page.evaluate(() => { document.getElementById('todo-action-status').textContent = ''; });
+      await page.screenshot({ path: path.join(output, width === 1440 ? 'shared-queue-desktop.png' : 'shared-queue-mobile.png'), fullPage: true });
+      mark(width + 'px: queue order, privacy, guest capabilities, rewards, reactions, comments, refresh preservation and error feedback');
+      await context.close();
+    }
+    // A -> B -> A: an old A response must not clear the new A draft or busy state.
+    const abaContext=await browser.newContext();
+    await abaContext.addInitScript(()=>{const original=window.setInterval;window.setInterval=(fn,ms,...args)=>{if(ms===300000)window.refreshShareForTest=fn;return original(fn,ms,...args);};});
+    const aba=await abaContext.newPage();let viewer='A', commentRequests=0,releaseOld,releaseNew,oldFetched,newFetched;
+    const oldReady=new Promise(resolve=>oldFetched=resolve),newReady=new Promise(resolve=>newFetched=resolve);
+    const oldGate=new Promise(resolve=>releaseOld=resolve),newGate=new Promise(resolve=>releaseNew=resolve);
+    await aba.route('**/api/public/todo-share/'+fixture.token,async route=>{const response=await route.fetch();const data=await response.json();data.viewer.username=viewer;return route.fulfill({response,json:data});});
+    await aba.route('**/comments',async route=>{const response=await route.fetch();if(++commentRequests===1){oldFetched();await oldGate;}else{newFetched();await newGate;}return route.fulfill({response});});
+    await aba.goto(fixture.base+'/todo/'+fixture.token);
+    const card=aba.locator('[data-shared-task="local-focus"]');await card.waitFor();await card.locator('summary').click();
+    await card.getByRole('textbox',{name:'Comment',exact:true}).fill('Old A comment');await card.locator('.todo-public-comment-form button').click();await oldReady;
+    viewer='B';await aba.evaluate(()=>window.refreshShareForTest());viewer='A';await aba.evaluate(()=>window.refreshShareForTest());
+    await card.locator('summary').click();await card.getByRole('textbox',{name:'Comment',exact:true}).fill('New A comment');await card.locator('.todo-public-comment-form button').click();await newReady;
+    releaseOld();await aba.waitForTimeout(100);
+    assert.equal(await card.getByRole('textbox',{name:'Comment',exact:true}).inputValue(),'New A comment');
+    assert.equal(await card.locator('.todo-public-comment-form button').isDisabled(),true);
+    releaseNew();await aba.waitForFunction(()=>document.querySelector('[data-shared-task="local-focus"] .todo-public-comment-form input[aria-label="Comment"]').value==='');
+    assert.equal(commentRequests,2);await abaContext.close();mark('viewer A→B→A rejects stale responses and keeps the current submission locked');
+    const context = await browser.newContext({ extraHTTPHeaders: { 'X-Review-User': '3' } });
+    const page = await context.newPage(); page.on('dialog', dialog => dialog.accept());
+    await page.goto(fixture.base + '/todo/' + fixture.token);
+    const focus = page.locator('[data-shared-task="local-focus"]'); await focus.waitFor();
+    await focus.locator('[data-bounty-task-id]').click();
+    await focus.locator('.todo-bounty-btn.bountied').waitFor();
+    assert.equal((await fixture.pool.query("SELECT status FROM todo_sponsorships WHERE kind='bounty'")).rows[0].status, 'pending');
+    await fixture.pool.query('UPDATE todo_shares SET active=FALSE');
+    await page.reload(); await page.getByRole('alert').filter({ hasText: 'unavailable' }).waitFor();
+    assert.equal(await page.locator('#todo-public-content').isVisible(), false);
+    await page.goto(fixture.base + '/todo/invalid'); await page.getByRole('alert').waitFor();
+    mark('signed-in bounty remains pending; revoked and invalid pages hide the prior feed');
+    await context.close();
+    assert.deepEqual(errors, []);
+    await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ checks, errors }, null, 2));
+  } finally { await browser.close(); await fixture.close(); }
+})().catch(error => { console.error(error); process.exit(1); });

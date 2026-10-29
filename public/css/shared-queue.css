@@ -1,0 +1,36 @@
+/* Shared queue: presentation only, reusing existing social actions. */
+.todo-public-body [hidden] { display: none !important; }
+.todo-public-shell { max-width: 1100px; }
+.shared-queue-lane { margin: 24px 0; }
+.shared-queue-lane > h2, .shared-queue-lane > summary { font-size: 18px; font-weight: 700; margin: 0; }
+.shared-queue-lane > h2 span, .shared-queue-lane > summary span { font-size: 13px; color: var(--ink-muted); margin-left: 8px; }
+.shared-queue-lane > p, .shared-card-context, .shared-queue-scope, #todo-encourage-auth-note { color: var(--ink-muted); font-size: 13px; line-height: 1.5; }
+.shared-queue-empty { padding: 14px; border: 1px dashed var(--line); border-radius: 12px; }
+.shared-queue-card { padding: 18px; margin: 12px 0; background: var(--surface-base); border: 1px solid var(--line); border-radius: 14px; overflow-wrap: anywhere; }
+.shared-queue-foreground .shared-queue-card { border-color: var(--brand); border-left-width: 4px; }
+.shared-card-heading { display: flex; gap: 12px; justify-content: space-between; align-items: start; }
+.shared-card-heading h3 { font-size: 17px; line-height: 1.4; margin: 0; }
+.shared-card-state { font-size: 12px; text-transform: capitalize; flex-shrink: 0; color: var(--ink-muted); }
+.shared-card-social { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-top: 14px; }
+.shared-card-social .todo-public-reactions { flex-wrap: wrap; margin: 0; }
+.shared-card-social button, .shared-card-details summary, .shared-queue-completed > summary { min-height: 44px; }
+.shared-card-social .todo-reaction-btn { min-width: 44px; }
+.shared-card-details { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 4px; }
+.shared-card-details summary { display: flex; align-items: center; cursor: pointer; font-size: 13px; }
+.shared-queue-card input { min-width: 0; }
+.shared-queue-card :focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+@media (max-width: 760px) {
+ .shared-queue-card { padding: 14px; }
+ .shared-card-heading { flex-direction: column; gap: 4px; }
+ .shared-card-social { display: block; }
+ .shared-card-social .todo-guest-actions { margin-top: 10px; }
+ .shared-queue-card .todo-reward-row { flex-wrap: wrap; }
+ .shared-queue-card .todo-reward-row input { width: 100%; }
+}
+
+.shared-card-details summary::before { content: "▸"; margin-right: 8px; }
+.shared-card-details[open] summary::before { content: "▾"; }
+
+.shared-feed-controls > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-size: 13px; }
+.shared-feed-controls > summary::before { content: "▸"; margin-right: 8px; }
+.shared-feed-controls[open] > summary::before { content: "▾"; }

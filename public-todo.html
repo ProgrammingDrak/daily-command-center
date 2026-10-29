@@ -6,17 +6,18 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/public/icons/favicon-32x32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="/public/icons/favicon-16x16.png">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Shared Todo List</title>
+  <title>Shared Activity Queue</title>
   <link rel="stylesheet" href="/public/css/tokens.css">
   <link rel="stylesheet" href="/public/css/dashboard.css">
   <link rel="stylesheet" href="/public/css/ui-optimization.css">
+  <link rel="stylesheet" href="/public/css/shared-queue.css">
 </head>
 <body class="todo-public-body guest-mode">
   <main class="todo-public-shell">
     <section class="todo-public-hero">
       <div>
-        <h1 id="todo-public-title">Shared Todo List</h1>
-        <p id="todo-public-subtitle">A live view of today's active list.</p>
+        <h1 id="todo-public-title">Shared Activity Queue</h1>
+        <p id="todo-public-subtitle">Current focus and shared work in progress.</p>
       </div>
       <div class="todo-public-actions">
         <a class="todo-public-login" href="/login">Sign in</a>
@@ -25,7 +26,7 @@
     </section>
 
     <section id="todo-public-status" class="todo-public-error" role="status">Loading shared list…</section>
-    <section id="todo-public-error" class="todo-public-error" hidden></section>
+    <section id="todo-public-error" role="alert" class="todo-public-error" hidden></section>
 
     <section id="todo-public-content" class="todo-public-grid" hidden>
       <section class="todo-public-main">
@@ -40,15 +41,16 @@
             <span><b id="todo-stat-sponsored">0</b> sponsored</span>
           </div>
         </div>
+        <details class="shared-feed-controls"><summary>Filter and export</summary>
         <div class="todo-public-controls" aria-label="Feed controls">
           <div class="todo-public-multiselect" id="todo-type-filter">
             <span class="todo-public-control-label">Show</span>
-            <button id="todo-filter-type-button" class="todo-filter-menu-button" type="button" aria-haspopup="true" aria-expanded="false">Tasks, Repeat</button>
+            <button id="todo-filter-type-button" class="todo-filter-menu-button" type="button" aria-haspopup="true" aria-expanded="false">Everything</button>
             <div id="todo-filter-type-menu" class="todo-filter-menu" hidden>
               <label><input type="checkbox" data-type-filter="task" checked> Tasks</label>
               <label><input type="checkbox" data-type-filter="repeat" checked> Repeat</label>
-              <label><input type="checkbox" data-type-filter="calendar"> Calendar</label>
-              <label><input type="checkbox" data-type-filter="time"> Breaks / OOO</label>
+              <label><input type="checkbox" data-type-filter="calendar" checked> Calendar</label>
+              <label><input type="checkbox" data-type-filter="time" checked> Breaks / OOO</label>
             </div>
           </div>
           <label>Status
@@ -59,21 +61,6 @@
               <option value="sponsored">Sponsored</option>
             </select>
           </label>
-          <label>Calendar
-            <select id="todo-filter-calendar">
-              <option value="all">All calendars</option>
-            </select>
-          </label>
-          <label>Sort
-            <select id="todo-sort">
-              <option value="time">Time</option>
-              <option value="type">Type</option>
-              <option value="status">Status</option>
-              <option value="title">Title</option>
-              <option value="duration">Duration</option>
-            </select>
-          </label>
-
           <!-- Export: for the visitor who is never going to open DCC. Takes the
                list they are looking at (same filters, same sort) into whatever
                their own system reads. Single-day formats serialize client-side
@@ -99,9 +86,9 @@
               <div class="todo-export-range">
                 <label>Range
                   <select id="todo-export-range">
-                    <option value="day">This day</option>
-                    <option value="7">Next 7 days</option>
-                    <option value="30">Next 30 days</option>
+                    <option value="day">Visible queue</option>
+                    <option value="7">7-day itinerary</option>
+                    <option value="30">30-day itinerary</option>
                   </select>
                 </label>
                 <small id="todo-export-range-note">Exports exactly the rows shown above.</small>
@@ -109,6 +96,8 @@
             </div>
           </div>
         </div>
+
+        </details>
 
         <!-- Inline guest task creation. Reuses the same fields the sidebar used so
              submitCreateTask() is unchanged; guest-created tasks come back marked
@@ -135,7 +124,10 @@
           </div>
         </div>
 
-        <div id="todo-public-list" class="todo-public-list tl"></div>
+        <p class="shared-queue-scope">Only tasks already visible on this shared day appear here. Queue notes and assistant reports stay private.</p>
+        <p id="todo-action-status" role="status" aria-live="polite"></p>
+        <p id="todo-encourage-auth-note"></p>
+        <div id="todo-public-list" class="todo-public-list"></div>
       </section>
     </section>
   </main>
@@ -146,9 +138,7 @@
        drew, which is why it read as an empty day rather than a broken page.
        Found while adding the export bar; the break predates it. -->
   <script src="/public/js/core.js"></script>
-  <script src="/public/js/time-blocks.js?v=time-blocks-1"></script>
-<script src="/public/js/time-block-view.js"></script>
-  <script src="/public/js/itinerary-card.js"></script>
+
   <script src="/public/js/share-export.js"></script>
   <script src="/public/js/public-todo-share.js"></script>
 </body>
