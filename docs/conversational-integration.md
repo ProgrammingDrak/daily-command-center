@@ -1,6 +1,6 @@
-# Account-scoped conversational integration — local candidate
+# Account-scoped conversational integration
 
-This candidate adds a remote MCP endpoint with per-account OAuth consent. It does **not** install a tool in an existing ChatGPT/dot conversation. It is disabled by default, has not been deployed, and has not created real OAuth credentials or grants.
+The deployed application includes a remote MCP endpoint with per-account OAuth consent. Code deployment does **not** install a tool in an existing ChatGPT/dot conversation or establish an account connection. Remote access requires separate approved configuration and consent; see the [connection readiness runbook](chatgpt-connection-readiness.md).
 
 ## Architecture and behavior
 
@@ -9,16 +9,16 @@ This candidate adds a remote MCP endpoint with per-account OAuth consent. It doe
 - `conversation-store.js`: owner/workspace-fenced lookup, account-wide advisory lock, source-event idempotency, optimistic activity revision, canonical completion and existing time-entry writes in one transaction. Committed results include the re-read state. Follow with `dcc_task`/`dcc_current_activity` to confirm the latest state across concurrent clients.
 - Existing `startWork`, `pauseWork`, and `continueWork` callers join the coordinator when enabled, including browser and Slack/guided callers. A partial unique index enforces at most one active task per user even for writers outside that coordinator. Generic stale property updates cannot recreate timers or restore corrected metrics. Both the initiating browser cache and SSE recipients receive affected task IDs/rows.
 - `at` is the explicit event instant supplied by the client, including seconds and timezone offset. `conversation_events.created_at` is receipt/commit-time provenance. Processing at 11:42 does not silently substitute for an explicit 11:39:44 start. A late event older than the current activity state is rejected and needs a correction; it cannot overwrite newer activity.
-- Start pauses the former foreground task and starts the selected canonical task atomically. Task mentions/questions perform reads only. Starting a completed task is refused. No tools create tasks on a search miss. Search includes completed tasks and recurring definitions/instances and supports pagination.
+- Start pauses the former foreground task and starts the selected canonical task atomically. Task mentions/questions perform reads only. Starting a completed task is refused. Search never creates tasks on a miss. Explicit delegated handoffs can separately authorize creation. Search includes completed tasks and recurring definitions/instances and supports pagination.
 - Background-start pauses that task's foreground effort and records processing separately. Background elapsed time earns no focused minutes. It can coexist with another foreground task.
 - Done calls the canonical completion transaction and does not infer actuals from a planned duration. Untimed completion retains an explicit unknown-actual marker. Existing recurrence reconciliation still derives series state from completed instances.
 - Silence after the existing 50-minute check-in allowance (or eight-hour session ceiling) is returned as an unknown interval in the audit event, not added to the task metric. It is not silently credited as focus. This is conservative timing, not passive activity detection.
 - Correction partitions an existing closed time entry exactly into focused-task, existing-calendar-occurrence, and unknown intervals. It preserves total seconds for reallocation; an explicit `correctedWindow` can change mistaken start/end times while retaining the original interval in history. Known allocations that overlap other recorded or active activity are refused. It requires a reason, tombstones the source through the canonical block store, keeps its full prior record in the audit, and reprojects affected task metrics. ISO instants are split into local-day rows using the established timing helper. Planning fields are untouched.
 - Day Review matches corrected meetings by event identity, not by a similar title; unknown time is displayed separately and excluded from known actual totals. Corrected-away work cannot reappear through legacy session fallback.
 
-Tools: `dcc_search_tasks`, `dcc_calendar_events`, `dcc_current_activity`, `dcc_task`, `dcc_activity_history`, `dcc_work`, `dcc_complete_task`, `dcc_correct_time`.
+Tools: `dcc_search_tasks`, `dcc_calendar_events`, `dcc_current_activity`, `dcc_task`, `dcc_activity_history`, `dcc_work`, `dcc_complete_task`, `dcc_correct_time`, `dcc_working_queue`, `dcc_queue`, `dcc_delegate`.
 
-Scopes: `dcc.read`, `dcc.work`, `dcc.correct`, `dcc.complete`. Consent spells out each requested permission. Tokens bind user, owned workspace, client, resource and scopes. Every call checks expiry, revocation and current ownership. New tables have RLS enabled and no browser/Supabase public data policies.
+Scopes: `dcc.read`, `dcc.work`, `dcc.correct`, `dcc.complete`, `dcc.delegate`. Consent spells out each requested permission. Tokens bind user, owned workspace, client, resource and scopes. Every call checks expiry, revocation and current ownership. New tables have RLS enabled and no browser/Supabase public data policies.
 
 ## Synthetic acceptance evidence
 
@@ -30,7 +30,7 @@ The test fixture uses synthetic task/session/event IDs and October 20, not the l
 
 Tests cover real PostgreSQL concurrent writers (one revision winner), rollback after a deliberately interrupted switch, transport replay, changed-payload replay refusal, foreign task/meeting isolation, DST and midnight intervals, long silence, the database uniqueness constraint, PKCE/code reuse, token expiry, refresh replay, insufficient scopes, HTTP consent CSRF, bearer identity versus forged headers, read-after-write, and disconnect.
 
-## Release gates — not executed by this engineering task
+## Remote rollout gates
 
 1. Complete normal repository review, security review of the OAuth server, DB-risk checks. Backups are optional under the [DCC release policy](releases/database-backup-policy.md). Do not bypass release gates or auto-merge.
 2. Deploy additive tables with the feature disabled. Inspect the production duplicate-foreground audit in `migrations/010_conversation_foreground.sql`. Resolve historical conflicts with their owner; do not choose a timer arbitrarily or infer elapsed effort. This task does not authorize changing the live QuickBuy fixture.
@@ -61,7 +61,7 @@ Official platform references checked October 27, 2026:
 
 Local verification uses the existing `test-support/activity-db` harness. `DCC_TEST_DATABASE_URL` must point to localhost; the harness creates and removes an isolated schema. `DCC_PGLITE_MODULE` can instead point to an installed PGlite package. No production environment files were copied into this checkout.
 
-## Local verification result
+## Original implementation verification result (historical)
 
 - Full local suite: 3,154 passed, zero failures; 14 database/environment-dependent tests skipped in that run.
 - Final relevant suite with a disposable real PostgreSQL cluster and loopback HTTP: 266 passed, zero failures, zero skipped.
