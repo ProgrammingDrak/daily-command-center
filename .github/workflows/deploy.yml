@@ -157,7 +157,8 @@ jobs:
           cat <<'NOTE'
 
           BEFORE PROCEEDING:
-            1. Review the database changes and verify their intended data effects.
+            1. Review the database changes, verify the migration is non-destructive,
+               and verify its intended data effects.
             2. Acknowledge the reviewed risk with [db-ok] or [migration-ok] in the
                commit message, or workflow_dispatch with acknowledge_db_risk=true.
 
