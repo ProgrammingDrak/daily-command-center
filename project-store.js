@@ -492,6 +492,7 @@ function createProjectStore(deps = {}) {
       detail: cleanText(input.detail, 5000),
       type: input.type || "task",
       source: input.source || "manual",
+      ...(input.source === "quietshelf-reading" && input.readingSession ? { readingSession: input.readingSession } : {}),
       status: "open",
       priority: ["High", "Medium", "Low"].includes(input.priority) ? input.priority : "Medium",
       stage: input.stage || "Backlog",
