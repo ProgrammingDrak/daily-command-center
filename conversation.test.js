@@ -334,6 +334,8 @@ test("account conversation persistence, race, rollback, corrections and OAuth", 
     });
     const redirect = new URL(await oauth.consent(oauth.validateRequest(request), owner));
     assert.equal(redirect.searchParams.get("state"), "state-123");
+    assert.equal(redirect.searchParams.get("iss"), oauth.baseUrl);
+    assert.equal(oauth.metadata.authorization_response_iss_parameter_supported, true);
     const exchange = {
       grant_type: "authorization_code",
       client_id: "chatgpt",

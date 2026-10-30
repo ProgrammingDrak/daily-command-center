@@ -87,6 +87,7 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   const redirect = new URL(r.headers.get("location"));
   assert.equal(redirect.origin, "https://chatgpt.com");
   assert.equal(redirect.searchParams.get("state"), "synthetic-state");
+  assert.equal(redirect.searchParams.get("iss"), "https://dcc.example");
   r = await call("/oauth/dcc/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },

@@ -369,6 +369,7 @@ module.exports = function mount(app, ctx, config = {}) {
         const u = new URL(request.redirectUri);
         u.searchParams.set("error", "access_denied");
         u.searchParams.set("state", request.state);
+        u.searchParams.set("iss", oauth.baseUrl);
         return res.redirect(u.href);
       }
       res.redirect(await oauth.consent(request, owner(req)));
