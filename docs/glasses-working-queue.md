@@ -103,8 +103,10 @@ lost completion response/reload/retry, viewport layouts and itinerary fallback.
 `glasses-queue-tree.test.js` covers authentication, owner/member separation, foreign
 roots, deleted rows and canonical hierarchy links.
 
+Five mutation checks exercise add-without-timing, navigation-without-timing, pause-before-dismiss, held-input suppression and tree ownership. The standard queue browser regression also passes.
+
 Node 20.20.2: full serial suite **3,332 passed, 4 skipped, zero failures**. Lint
-reports **zero errors and 72 warnings**. The repository has no separate build script;
+reports **zero errors and 71 warnings**. The repository has no separate build script;
 Express serves its static JavaScript directly. The first concurrent full run exposed
 an existing workout test that counts `information_schema.tables` across all active
 schemas (12 versus 3). Serial validation in a separate empty database passed.

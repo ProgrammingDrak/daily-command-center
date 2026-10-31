@@ -50,6 +50,8 @@ try {
  await page.waitForTimeout(100);assert.equal((await current('a')).status,'foreground');
  check('queue selection starts foreground exactly once and displays open and completed subtasks');
  const started=(await current('a')).task.properties.startedAt;
+ await key('Escape');await queued('a').waitFor();await page.waitForTimeout(100);assert.equal((await current('a')).task.properties.startedAt,started);
+ await page.goForward();await ready();
  await page.goBack();await queued('a').waitFor();assert.equal((await current('a')).task.properties.startedAt,started);
  await page.goForward();await ready();assert.equal((await current('a')).task.properties.startedAt,started);
  await key('Enter');await page.waitForFunction(()=>document.querySelector('.gq-task')?.getAttribute('aria-pressed')==='false');
