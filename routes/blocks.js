@@ -36,6 +36,7 @@ const createTaskTiming = require("../lib/task-timing");
 const { planAllocations } = createTaskTiming;
 const MAX_REALLOCATABLE_SEC = 36 * 3600;
 const TaskModel = require("../public/js/task-model");
+const TaskTypes = require("../public/js/task-types");
 const reviewTomorrow = require("../lib/review-tomorrow");
 const timeBlockPlacement = require("../lib/time-block-placement");
 const scheduleSettingsStore = require("../schedule-settings-store");
@@ -139,7 +140,7 @@ module.exports = function mount(app, ctx) {
         pointsAwarded: Number(props.points) || 0,
         estimatedMinutes: Number(props.duration) || null,
         actualMinutes: Number(props.actualMinutes) || null,
-        isPrivate: props.publicVisibility === "private" || ["workout", "meal"].includes(props.type),
+        isPrivate: props.publicVisibility === "private" || TaskTypes.isPrivateRecord(props.type),
         isWorkSourced: isWorkSourcedTask(props),
         titleSnapshot: title,
         itemType: String(props.kind || task.type || "task")

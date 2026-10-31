@@ -117,6 +117,8 @@
       ...(Array.isArray(p.sourceReferences) ? {sourceReferences: p.sourceReferences.map(ref => Object.assign({}, ref))} : {}),
       source_id: p.source_id || "", notes: p.notes || "", untimed: untimed,
       guidedDefinitionId: p.guidedDefinitionId || null,
+      // Stable journal identity only; page content never rides on the task.
+      journalId: p.journalId || null,
       status: p.status || "open",
       allDay: allDay,
       allDayStart: p.all_day_start || (allDay ? block.date : null),

@@ -1018,6 +1018,7 @@ require("./routes/task-attachments")(app, ctx);
 require("./routes/sync")(app, ctx);
 require("./routes/projects")(app, ctx);
 require("./routes/activity")(app, ctx);
+require("./routes/journal")(app, ctx);
 require("./routes/guided")(app, ctx);
 require("./routes/working-queue")(app, ctx);
 require("./routes/work-rotation")(app, ctx);

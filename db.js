@@ -24,6 +24,23 @@ const TimeBlocks = require("./public/js/time-blocks");
 const {edgeOf,planParentChange} = require("./lib/task-hierarchy");
 const { plannedWindowOf } = require("./lib/task-timing");
 
+// Private linked-content types (TaskTypes.privateRecord: workout, meal, guided,
+// journal). They are always private, and a Journal always carries the stable
+// journalId its page is keyed by. stamp() runs on every write; pin() also keeps a
+// stale/generic write from detaching the type or swapping the journal identity.
+const JOURNAL_ID_RE = /^jr_[a-z0-9-]{8,64}$/i;
+function stampPrivateRecord(props) {
+  if (!props || !TaskTypes.isPrivateRecord(props.type)) return;
+  props.publicVisibility = "private";
+  if (props.type === "journal" && !JOURNAL_ID_RE.test(String(props.journalId || ""))) props.journalId = "jr_" + crypto.randomUUID();
+}
+function pinPrivateRecord(existingProps, newProps) {
+  if (!newProps) return;
+  if (TaskTypes.isPrivateRecord(existingProps?.type)) newProps.type = existingProps.type;
+  if (existingProps?.type === "journal" && JOURNAL_ID_RE.test(String(existingProps.journalId || ""))) newProps.journalId = existingProps.journalId;
+  stampPrivateRecord(newProps);
+}
+
 // ── Workspace Bootstrap ──
 
 async function ensureWorkspacesForAllUsers() {
@@ -283,7 +300,7 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
     props.type = activityPlan.taskType;
     props.activityTaskType = activityPlan.taskType;
   }
-  if (["workout", "meal", "guided"].includes(props.type)) props.publicVisibility = "private";
+  stampPrivateRecord(props);
   const requestedTaskType = String(props.type || "").trim().toLowerCase();
   if (requestedTaskType === "shell" || requestedTaskType === "wrap") {
     props.type = "task";
@@ -295,6 +312,14 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
     const {rows}=await q.query("SELECT 1 FROM guided_definitions WHERE id=$1 AND workspace_id=$2 AND owner_user_id=$3",[props.guidedDefinitionId,workspace_id,user_id]);
     if(!rows.length) {const error=new Error("Guided definition not found");error.statusCode=404;throw error;}
     props.publicVisibility="private";
+  }
+  // A copied Journal (repeat snapshot, template, duplicate) gets its own page
+  // rather than sharing another task's. A retried create of the SAME id keeps it.
+  if(props.type==="journal") {
+    const {rows}=await q.query(`SELECT 1 FROM task_journal_pages WHERE journal_id=$1 AND task_id<>$2
+      UNION ALL SELECT 1 FROM blocks WHERE workspace_id IS NOT DISTINCT FROM $3 AND id<>$2 AND properties->>'journalId'=$1 LIMIT 1`,
+    [props.journalId,blockId,workspace_id||null]);
+    if(rows.length) props.journalId="jr_"+crypto.randomUUID();
   }
   if(isTaskRow({type,properties:props}) &&
       (parent_id===blockId || [props.subtaskOf,props.wrapId].filter(Boolean).some(ref=>ref===blockId||ref===props.local_id))){
@@ -1063,9 +1088,8 @@ async function updateBlock(id, fields, client) {
       }
     }
     // Generic/stale block writes cannot silently detach an activity log or expose
-    // a workout/meal in sharing. Detailed records never pass through this path.
-    if (["workout", "meal", "guided"].includes(existingProps.type)) newProps.type = existingProps.type;
-    if (["workout", "meal", "guided"].includes(newProps.type)) newProps.publicVisibility = "private";
+    // a workout/meal/journal in sharing. Detailed records never pass through this path.
+    pinPrivateRecord(existingProps, newProps);
     if (existingProps.guidedDefinitionId) newProps.guidedDefinitionId = existingProps.guidedDefinitionId;
     if(newProps.guidedDefinitionId) newProps.publicVisibility="private";
     if(existingProps.type === "guided" && isCompletedTaskProps(existingProps) !== isCompletedTaskProps(newProps)) {
@@ -2008,8 +2032,7 @@ async function rescheduleBlocks(moves, creates, options = {}) {
       }
       // Moves use a separate writer from updateBlock; retain the same private
       // activity identity even when a stale client sends generic task props.
-      if (["workout", "meal", "guided"].includes(existing.properties?.type)) newProps.type = existing.properties.type;
-      if (["workout", "meal", "guided"].includes(newProps?.type)) newProps.publicVisibility = "private";
+      pinPrivateRecord(existing.properties, newProps);
       if(existing.properties?.guidedDefinitionId) newProps.guidedDefinitionId=existing.properties.guidedDefinitionId;
       if(newProps.guidedDefinitionId) newProps.publicVisibility="private";
       const newDate = m.date !== undefined ? m.date : existing.date;
@@ -2473,10 +2496,12 @@ async function getDccStateCompact(date, workspaceId, client) {
 
 async function purgeSoftDeleted(olderThanDays = 30) {
   const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - olderThanDays);
-  // Activity history, private attachment parents and their parent chains survive
-  // normal tombstone cleanup (task_attachments.block_id deliberately does not cascade).
+  // Activity history, journal pages, private attachment parents and their parent
+  // chains survive normal tombstone cleanup (task_attachments.block_id deliberately
+  // does not cascade).
   const result = await pool.query(`WITH RECURSIVE retained AS (
     SELECT b.id,b.parent_id FROM blocks b JOIN task_activity_records r ON r.task_id=b.id
+    UNION SELECT b.id,b.parent_id FROM blocks b JOIN task_journal_pages j ON j.task_id=b.id
     UNION SELECT b.id,b.parent_id FROM blocks b JOIN task_attachments a ON a.block_id=b.id
     UNION SELECT b.id,b.parent_id FROM blocks b JOIN retained child ON child.parent_id=b.id
   ) DELETE FROM blocks WHERE deleted_at IS NOT NULL AND deleted_at < $1

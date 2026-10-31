@@ -23,6 +23,7 @@
 <link rel="stylesheet" href="/public/css/vault.css?v=vault-b6-1">
 <link rel="stylesheet" href="/public/css/ui-optimization.css?v=dcc-ui-1">
 <link rel="stylesheet" href="/public/css/activity.css?v=movement-cards-1">
+<link rel="stylesheet" href="/public/css/journal-task.css?v=journal-task-1">
 <link rel="stylesheet" href="/public/css/task-sources.css">
 <link rel="stylesheet" href="/public/css/commitments.css">
 <link rel="stylesheet" href="/public/css/device-views/glasses.css">
@@ -756,6 +757,7 @@
       <!-- Read-only details (description lives in Notes below) -->
       <div class="am-det-meta" id="am-details-section" style="display:none"></div>
       <div id="am-activity-entry"></div>
+      <div id="am-journal-entry"></div>
       <div class="am-next"><span>Next step</span><p id="am-next-step" aria-live="polite">Start work on this task.</p></div>
       <div id="am-work-actions" class="am-work-actions" aria-label="Task execution"></div>
       <div id="am-time-summary" aria-label="Planned and actual time"></div>
@@ -2236,6 +2238,9 @@
 <script src="/public/js/workout-planner.js?v=template-save-status-1"></script>
 <script src="/public/js/workout-library.js?v=movement-cards-1"></script>
 <script src="/public/js/activity.js?v=movement-cards-1"></script>
+<script src="/public/js/journal-task/page-store.js?v=journal-task-1"></script>
+<script src="/public/js/journal-task/page-sync.js?v=journal-task-1"></script>
+<script src="/public/js/journal-task/editor.js?v=journal-task-1"></script>
 <script>
 // Feature flags — controls which features use the new BlockStore vs old localStorage.
 // Phase 5: All flags ON — BlockStore is now the primary data store.

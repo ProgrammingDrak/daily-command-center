@@ -40,10 +40,11 @@
     fixedTime: false,
     actualTimeMode: "work_sessions",
     completionTimeMode: "recorded_at",
+    privateRecord: false,    // true -> owns private linked content: forced private, type pinned once set
   };
 
   const TYPES = {
-    guided: { label: "Guided conversation", tagCls: "tag-task", color: "#22d3ee" },
+    guided: { label: "Guided conversation", tagCls: "tag-task", color: "#22d3ee", privateRecord: true },
     task:   { label: "Task",   tagCls: "tag-task" },
     triage: { label: "Triage", tagCls: "tag-triage" },
     focus:  { label: "Focus",  tagCls: "tag-focus", color: "#22d3ee" },
@@ -53,8 +54,11 @@
     // days a same-titled habit was completed (display-only, computed from range
     // state — no schema change).
     habit: { label: "Habit", tagCls: "tag-habit", color: "#34d399" },
-    workout: { label: "Workout", tagCls: "tag-workout", color: "#38bdf8", recordType: "workout" },
-    meal: { label: "Meal", tagCls: "tag-meal", color: "#fbbf24", recordType: "meal" },
+    workout: { label: "Workout", tagCls: "tag-workout", color: "#38bdf8", recordType: "workout", privateRecord: true },
+    meal: { label: "Meal", tagCls: "tag-meal", color: "#fbbf24", recordType: "meal", privateRecord: true },
+    // Handwritten/typed journal page linked by a stable properties.journalId.
+    // Page content lives in task_journal_pages (journal-store.js), never in the block.
+    journal: { label: "Journal", tagCls: "tag-journal", color: "#c084fc", privateRecord: true },
 
     // Calendar-backed blocks. fixedTime keeps them out of the reflow cascade
     // (they hold their slot when tasks around them move); movable:true lets the
@@ -144,5 +148,15 @@
     });
   }
 
-  return { TYPES: TYPES, DEFAULTS: DEFAULTS, get: get, rule: rule, isRollup: isRollup, isFixed: isFixed, pointEligible: pointEligible, nonEarningTypes: nonEarningTypes, hardZeroTypes: hardZeroTypes, fixedTypes: fixedTypes };
+  // Types whose linked content is private: create/edit/move force them private,
+  // the type cannot be detached by a stale write, and share/feed paths hide them.
+  function privateRecordTypes() {
+    return Object.keys(TYPES).filter(function (k) { return TYPES[k].privateRecord === true; });
+  }
+  function isPrivateRecord(evOrType) {
+    const entry = TYPES[normType(evOrType)];
+    return !!(entry && entry.privateRecord === true);
+  }
+
+  return { TYPES: TYPES, DEFAULTS: DEFAULTS, get: get, rule: rule, isRollup: isRollup, isFixed: isFixed, pointEligible: pointEligible, nonEarningTypes: nonEarningTypes, hardZeroTypes: hardZeroTypes, fixedTypes: fixedTypes, privateRecordTypes: privateRecordTypes, isPrivateRecord: isPrivateRecord };
 });
