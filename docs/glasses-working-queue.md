@@ -1,26 +1,117 @@
-# Working Queue on glasses
+# Tasks and active queue on glasses
 
-The existing `/glasses` and `/glasses.html` bookmarks now redirect to `/?device=glasses`. The shared DCC tab controller defaults to Working Queue; explicit `tab=schedule` links still open itinerary. Explicit legacy `task=` links retain the compact task page. Authentication, account binding, data and the email-code sign-in flow are unchanged.
+`/glasses` and `/glasses.html` open the full app at `/?device=glasses`.
+Explicit legacy `task=` links retain their existing compact task page; explicit
+`tab=schedule` links retain the itinerary adapter.
 
-The presentation adapter decorates the canonical Working Queue cards. Foreground stays first, remaining lanes stack vertically, and Up/Down move one visible card without changing queue order or work clocks. Enter opens canonical details. Selected cards expose Bring forward (or Send to background), Complete, and More. More reveals existing secondary actions. App tools contains secondary navigation, including itinerary. Completed stays collapsed by default and uses smaller cards when opened; its disclosure and task focus survive refreshes.
+The glasses home has two horizontal rows:
 
-The same coordinator owns foreground transitions, confirmation, revisions, pending receipts, conflicts and retry. No new task model, mutation endpoint, credential, feature flag or migration is introduced. Shared-overlay inert transitions restore navigation after close. The existing pet viewport fix is retained.
+- **All open tasks:** the complete paginated owner task search, including tasks
+  outside the working queue. Select adds one queue membership. It does not start
+  a timer or change the underlying task's schedule. Tasks already queued say
+  “In queue”; repeated selection cannot duplicate them. Completed tasks and
+  recurring definitions follow the existing queue picker convention and are not
+  offered as open work; no records are deleted.
+- **Active queue:** select a card to bring it forward and open its focused view.
+  This uses DCC's existing `start` command, which starts its timer and moves any
+  prior foreground work to the background. Selecting an already-running task
+  opens it without restarting its timer.
 
-## Reproduce on isolated fixtures
+The focused view shows the task, confirmed timer state, saved time and subtasks
+(including completed steps). Select toggles start/pause. Pausing keeps the view
+open; DCC's canonical queue status becomes paused. Swipe right completes through
+DCC's completion coordinator. Swipe left dismisses from the queue: an active
+session is first paused and saved, then membership is removed. Dismissal never
+completes or deletes the task. If pause is unconfirmed, removal is not attempted.
+If removal fails, the paused task stays visible for retry. If another client starts
+it between those operations, the server rejects removal instead of hiding a
+running timer. A dismissed task can be selected again in All open tasks.
 
-Use supported Node 20. Do not run against live localhost:8090 or production task data.
+Back returns to the two rows and leaves timing untouched. Back and Forward use
+browser history, including after reload. One destination entry is pushed for the
+focused view, never for focus changes, timer toggles or polling. Existing collection
+and task-library URL persistence now preserve the shared history state.
 
+Guided tasks retain their required instruction preview and completion outcome
+review through the existing shared dialog. Ordinary tasks do not get extra dialogs.
+Pending updates, conflicts and failed subtask reads expose recovery only when needed.
+
+## Input contract and hardware boundary
+
+Official Meta documentation checked October 31, 2026:
+[web app input overview](https://developers.meta.com/wearables/web-apps/) and the
+public [Wearables Documentation MCP](https://mcp.developer.meta.com/wearables)
+`search_webapps_docs` results for browser-managed navigation and Back navigation.
+The runtime provides standard arrow/Enter events; native Back traverses browser
+history. The requested middle-finger Back gesture remains the runtime's mapping:
+this app does not recognize fingers or claim a new SDK event.
+
+Left/right traverse each horizontal list. Within focused task selection, ArrowRight
+completes and ArrowLeft dismisses. Enter/Space activate once; default activation and
+held-key repetition are suppressed. Other directional input remains browser-owned
+for scrolling and spatial focus; Tab stays available. Desktop Escape follows the
+same history Back path. No sensor, Neural Band SDK, opt-in pinch-and-drag API, new
+permission or custom gesture recognizer is added.
+
+All current UI evidence is desktop Chromium using synthetic records and keyboard
+input, at 320×600, 375×812, 600×600, 1440×1000 and 200% zoom. Actual Meta glasses,
+Neural Band gestures, additive optics, native spatial navigation and on-device
+login are **not physically tested**.
+
+## Implementation and persistence
+
+`public/js/device-views/glasses-queue.js` owns presentation and navigation only.
+`working-queue.js` continues to own canonical commands, account/workspace-scoped
+retry receipts, revisions and cross-client refresh. Offline gestures are refused.
+An uncertain sent command retains its original receipt for existing automatic or
+manual retry. It cannot be replaced by another gesture. Completion is shown as
+confirmed only after server reconciliation.
+
+A read-only `/api/working-queue/tasks/:id/tree` endpoint uses the same owner check
+and canonical `getSubtree` traversal (local IDs, canonical IDs and parent links).
+It includes completed child tasks, excludes deleted/foreign records, and passes
+rows through `TaskModel.fromBlock` for display. No database migration or new task
+mutation endpoint is introduced.
+
+Building-block check:
+- Matched: One projection, many surfaces; Guard your guards.
+- Reuse: TaskModel projection, canonical task hierarchy, Working Queue coordinator.
+- Invariants: one foreground, no duplicate memberships, receipts before writes,
+  revision-safe commands, account ownership, navigation without work-clock writes.
+- Local choices: two horizontal rows, focused view, left-dismiss/right-complete.
+- Missing mechanic implemented: glasses presentation and gesture-to-command adapter.
+- Proposed catalog additions: none.
+
+## Verification
+
+Use a **disposable local** PostgreSQL database. Neither localhost:8090 nor
+production is a QA fixture.
+
+```sh
+PORT=18459 DCC_WORKING_QUEUE_REVIEW=1 DCC_TEST_DATABASE_URL=<disposable-local-postgres> node scripts/ui-review-server.mjs
+DCC_GLASSES_REVIEW_URL=http://127.0.0.1:18459 node scripts/verify-glasses-working-queue.mjs
+DCC_TEST_DATABASE_URL=<separate-empty-local-postgres> node --test --test-concurrency=1
+npm run lint
 ```
-PORT=18449 DCC_WORKING_QUEUE_REVIEW=1 DCC_TEST_DATABASE_URL=<disposable-local-postgres> node scripts/ui-review-server.mjs
-DCC_GLASSES_REVIEW_URL=http://127.0.0.1:18449 node scripts/verify-glasses-working-queue.mjs
-```
 
-The harness creates a unique synthetic schema. The regression refuses non-loopback servers and requires reviewOnly health. The review-only reset is exclusively for that fixture schema. There is no separate frontend build command; the app serves static Express assets.
+The browser verifier refuses non-loopback endpoints and requires `reviewOnly` health.
+It seeds only fictional tasks in a unique schema. The suite covers pagination,
+add/dedup, one activation per selection, open/completed subtasks, timer toggles,
+Back/Forward/reload, other-client foreground changes, offline input, receipt storage
+failure, subtask-read retry, revision conflict, partial dismissal failure, re-add,
+lost completion response/reload/retry, viewport layouts and itinerary fallback.
+`glasses-queue-tree.test.js` covers authentication, owner/member separation, foreign
+roots, deleted rows and canonical hierarchy links.
 
-Validation: repository tests (3,170 pass, 18 skip), lint (0 errors; existing warnings), new full-app glasses suite (11 groups), existing itinerary suite (19 groups), canonical Working Queue suite, and pet regression (22 layout scenarios). Viewports: 320×600, 375×812, 600×600 and 1440×1000, plus 200% zoom. All browser evidence uses synthetic tasks and desktop Chromium emulation. No physical Meta glasses or Android browser test is claimed. No live foreground, timer or task record was changed for QA.
+Node 20.20.2: full serial suite **3,332 passed, 4 skipped, zero failures**. Lint
+reports **zero errors and 72 warnings**. The repository has no separate build script;
+Express serves its static JavaScript directly. The first concurrent full run exposed
+an existing workout test that counts `information_schema.tables` across all active
+schemas (12 versus 3). Serial validation in a separate empty database passed.
 
 ## Release boundary
 
-Prepared from deployed SHA `2ffa3fa23f2ff584e3aaecc36a9cc791e25a563f`. Ship the redirect, adapter, CSS and shared disclosure preservation together. Before release, reconcile current main and use the existing coordinated release lane and required independent reviews. The historical PR435 backup waiver was scoped to that release; the later [DCC release policy](releases/database-backup-policy.md) makes backups optional for DCC releases. Remote OAuth remains outside scope.
-
-The user’s standing release instruction authorizes ship-it push, PR, merge and deploy after required tests, reviews and release checks. It does not waive required reviews or permit self-approval. The existing production URL is `https://daily-command-center-production-1d04.up.railway.app/glasses.html`. Verify the exact deployed SHA before reporting this change live. Local fixture URLs are not Android-accessible test links.
+Local branch `feat/glasses-simple-focus`, based on `bf1c8c6` (#445). Journal work
+remains in its separate checkout. No remote push, PR, merge, deployment, device
+installation or production task mutation was performed. Release requires the
+applicable authorization, independent reviews and exact-SHA deployment checks.

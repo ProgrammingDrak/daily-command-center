@@ -153,6 +153,7 @@
 
   function adapt() {
     document.body.classList.toggle('glasses-queue-view', !!document.querySelector('#tab-working-queue.active'));
+    bar.hidden = document.body.classList.contains('glasses-queue-view');
     document.querySelectorAll(rowSelector).forEach(row => {
       if (row.matches('.wq-card')) {
         row.draggable = false;

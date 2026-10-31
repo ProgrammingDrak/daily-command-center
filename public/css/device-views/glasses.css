@@ -101,3 +101,33 @@ body.device-glasses{--task-indent-max:64px;--bg:#000;--text:#fff;--text-muted:#c
 .device-glasses .it-list-item.done:not(.glasses-expanded){min-height:44px!important;padding:8px 12px!important}
 .device-glasses .it-list-item.done:not(.glasses-expanded) .ttl{font-size:16px!important}
 .device-glasses .it-list-item.done:not(.glasses-selected):not(.glasses-expanded) :is(.it-list-meta,.it-list-utility){display:none!important}
+/* A single horizontal task row and a focused task, on the existing additive palette. */
+body.device-glasses.glasses-queue-view{padding:20px!important;max-width:100%;box-sizing:border-box}
+.device-glasses.glasses-queue-view :is(.header,.progress-wrap,.glasses-nav,#tab-bar,#mobile-tabbar,.source-row){display:none!important}
+.device-glasses .glasses-nav[hidden]{display:none!important}
+.device-glasses #working-queue-root:has(.gq-list,.gq-detail){max-width:100%;padding:0;margin:0;color:#fff}
+.device-glasses :is(.gq-list,.gq-detail){max-width:100%;font-size:22px;line-height:1.4}
+.device-glasses :is(.gq-list,.gq-detail) h1{font-size:30px;margin:0 0 22px;line-height:1.25;overflow-wrap:anywhere}
+.device-glasses .gq-row{display:flex;gap:18px;overflow-x:auto;scroll-snap-type:x proximity;padding:5px 4px 14px;max-width:100%}
+.device-glasses .gq-task{font:inherit;text-align:left;background:#050a10;color:#fff;border:2px solid #84929f;border-radius:14px;padding:22px;min-height:160px;overflow-wrap:anywhere;cursor:pointer;box-sizing:border-box}
+.device-glasses .gq-row .gq-task{flex:0 0 min(78vw,360px);scroll-snap-align:center}
+.device-glasses .gq-task h2{font-size:27px;line-height:1.25;margin:12px 0}
+.device-glasses .gq-eyebrow{font-size:17px;color:#c5cbd6;display:block;margin:0 0 10px;text-transform:capitalize}
+.device-glasses .gq-detail>.gq-task{width:100%;min-height:130px;border-color:#8effe3}
+.device-glasses .gq-task[aria-disabled=true]{opacity:.65}
+.device-glasses .gq-timer{font-size:22px;color:#8effe3}
+.device-glasses :is(.gq-saved,.gq-hint,.gq-empty){font-size:17px;color:#c5cbd6;margin:16px 0}
+.device-glasses .gq-subtasks{list-style:none;padding:0;margin:12px 0}
+.device-glasses .gq-subtasks li{padding:10px 0 10px calc(var(--depth)*16px);border-bottom:1px solid #526170;overflow-wrap:anywhere}
+.device-glasses .gq-subtasks .gq-done{color:#b8c2cc;text-decoration:line-through}
+.device-glasses .gq-detail h2{font-size:20px;margin:20px 0 8px}
+.device-glasses .gq-status{font-size:17px;color:#8effe3;overflow-wrap:anywhere;min-height:24px}
+.device-glasses :is(.gq-list,.gq-detail)>button:not(.gq-task){font:inherit;min-height:44px;background:#000;color:#fff;border:1px solid #8effe3;border-radius:8px;padding:8px}
+
+.device-glasses .gq-list h1{font-size:24px;margin-bottom:14px}
+.device-glasses .gq-list .gq-task{min-height:130px;padding:16px}
+.device-glasses .gq-list .gq-task h2{font-size:22px;margin:8px 0}
+.device-glasses .gq-source-title{font-size:22px;margin:22px 0 12px}
+.device-glasses .gq-source .gq-task{min-height:120px;border-color:#526170}
+
+.device-glasses.glasses-queue-view .footer{display:none!important}

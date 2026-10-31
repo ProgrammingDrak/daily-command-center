@@ -154,6 +154,12 @@ function createConversationStore(ctx) {
       ...(await state(owner, q))
     };
   }
+  async function taskTree(id, owner) {
+    await authorize(pool, owner);
+    const root = await task(pool, id, owner);
+    const rows = await blockDB.getSubtree([root.id], owner.workspaceId);
+    return { rows: rows.filter(row => row.user_id === owner.userId && blockDB.isTaskRow(row)) };
+  }
   async function completionPreview(id, owner) {
     const q = await pool.connect();
     try {
@@ -687,6 +693,6 @@ function createConversationStore(ctx) {
       await q.query("COMMIT"); return {...review,revision};
     } catch(e) { await q.query("ROLLBACK"); throw e; } finally { q.release(); }
   }
-  return { state, search, get, completionPreview, completionReview, reconciliationReceipt, calendarEvents, execute, history };
+  return { state, search, get, taskTree, completionPreview, completionReview, reconciliationReceipt, calendarEvents, execute, history };
 }
 module.exports = { SCHEMA_SQL, FOREGROUND_INDEX_SQL, createConversationStore, timingFor };
