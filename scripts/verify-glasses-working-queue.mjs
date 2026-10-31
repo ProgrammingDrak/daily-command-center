@@ -130,6 +130,16 @@ try {
  const legacyNote=await api('/api/blocks/glasses-legacy-note');assert.equal(legacyNote.properties.blocks[0].type,'checkbox');assert.equal(legacyNote.properties.blocks[0].checked,true);assert.equal(legacyNote.properties.blocks[1].checked,false);
  await page.goBack();await notes().waitFor({state:'detached'});await page.goBack();await queued('a').waitFor();await select(queued('a'));await ready();
  check('legacy checked and unchecked note blocks survive editing without changing note identity');
+ // An attachment that cannot be displayed on glasses must survive unrelated text edits.
+ const imageNote=await api('/api/working-queue/tasks/glasses-a/notes'),imageSrc='data:image/png;base64,iVBORw0KGgo=';
+ await api('/api/working-queue/tasks/glasses-a/notes',{expectedRevision:imageNote.revision,note:{html:'<p><img src="'+imageSrc+'"></p><p>Note with image</p>',text:'Note with image',blocks:[]}},'PUT');
+ await key('Enter');await notes().getByText('Image retained · view in desktop DCC',{exact:true}).waitFor();await editor().fill('Text edited while image is retained');await notesSaved();
+ const retainedImage=await api('/api/working-queue/tasks/glasses-a/notes');assert.equal(retainedImage.note.blocks.find(b=>b.type==='image').src,imageSrc);assert.ok(retainedImage.note.html.includes(imageSrc));
+ await page.reload();await notes().getByText('Image retained · view in desktop DCC',{exact:true}).waitFor();assert.equal((await api('/api/working-queue/tasks/glasses-a/notes')).note.blocks.find(b=>b.type==='image').src,imageSrc);
+ assert.equal(await page.evaluate(src=>{const host=document.createElement('div'),instance=window.createBlockEditor(host,[{id:'ordinary-image',type:'image',src,content:''}],{});const unchanged=host.querySelector('img')?.getAttribute('src')===src&&instance.getBlocks()[0].src===src&&instance.toHtml().includes(src);instance.destroy();return unchanged;},imageSrc),true);
+ await page.goBack();await notes().waitFor({state:'detached'});await ready();
+ check('editing text preserves unsupported existing image attachments and renders a placeholder');
+
  // Switching tasks while a notes read is outstanding cannot cross-contaminate editors.
  let releaseTaskRead,taskReadHeld=false;const taskReadGate=new Promise(resolve=>{releaseTaskRead=resolve;});
  await page.route('**/api/working-queue/tasks/glasses-a/notes',async route=>{if(route.request().method()==='GET'&&!taskReadHeld){taskReadHeld=true;const response=await route.fetch();await taskReadGate;return route.fulfill({response});}return route.continue();});

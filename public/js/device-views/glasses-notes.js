@@ -77,7 +77,7 @@
   }
   function blocksFor(note){
     const blocks=note.blocks?.length?note.blocks:window.migrateHtmlToBlocks(sanitize(note.html||DCC.esc(note.text||''),true));
-    return blocks.map((b,i)=>({...b,id:'glasses-note-'+i,content:sanitize(b.content),...(b.type==='image'?{src:DCC.TaskSources.safeUrl(b.src)||''}:{})}));
+    return blocks.map((b,i)=>({...b,id:'glasses-note-'+i,content:sanitize(b.content)}));
   }
   function noteFrom(editor){const blocks=editor.getBlocks();return {blocks,html:editor.toHtml(),text:editor.toMarkdown()};}
   function capture(){
@@ -91,7 +91,7 @@
     if(view?.s!==s)return;
     view.observer?.disconnect();view.editor?.destroy();
     const container=view.panel.querySelector('[data-notes-editor]');
-    view.editor=window.createBlockEditor(container,blocksFor(s.note),{accessibleLabel:'Task notes',placeholder:'Add notes…',stableImagesOnly:true,onAttachmentError:message=>{s.error=message;update(s);}});
+    view.editor=window.createBlockEditor(container,blocksFor(s.note),{imageDisplayUrl:src=>DCC.TaskSources.safeUrl(src),accessibleLabel:'Task notes',placeholder:'Add notes…',stableImagesOnly:true,onAttachmentError:message=>{s.error=message;update(s);}});
     view.last=serialize(noteFrom(view.editor));
     // Include block split/merge, formatting, checkbox and slash-menu changes.
     view.observer=new MutationObserver(capture);view.observer.observe(container,{subtree:true,childList:true,characterData:true});
