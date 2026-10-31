@@ -59,7 +59,10 @@
       if (!rec) return "done";
       if (rec.conflict) { paused = "conflict"; status("conflict", { message: "Changed on another device." }); return "done"; }
       if (!rec.dirty) { attempt = 0; status("synced", { revision: rec.baseRevision }); return "done"; }
-      const taskId = resolveTaskId(rec);
+      // An ambiguous or mismatched task binding sends NOTHING and says why.
+      let taskId;
+      try { taskId = resolveTaskId(rec); }
+      catch (e) { paused = "error"; status("error", { message: (e && e.message) || "This page cannot be matched to its task.", fatal: true, code: e && e.code }); return "done"; }
       if (!taskId) { status("error", { message: "This page has no task to save to." }); paused = "error"; return "done"; }
       const sentMutationId = rec.mutationId;
       status("syncing");

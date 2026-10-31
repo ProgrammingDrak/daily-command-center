@@ -58,6 +58,40 @@ module.exports = async function mountJournalReview(app) {
     buildDayResponse: async d => ({ date: d, triage: { open_items: [], suppressed_items: [] },
       schedule: { timeline: [], timeBlocks: [], blocks: [], tasks_couldnt_fit: [], end_time: "17:30" } }) });
   app.get("/api/journal-review-info", (_req, res) => res.json({ synthetic: true, storage: "memory", date }));
+  // Review-only: turn an existing synthetic Journal task into the kind of row a
+  // server from BEFORE journal-id claims could have left: it now carries another
+  // task's journalId and holds no claim. Raw SQL on the synthetic database,
+  // bypassing the block writer on purpose.
+  app.post("/api/review/journal/legacy-duplicate", async (req, res) => {
+    const { taskId, journalId } = req.body || {};
+    if (!/^[-\w]{1,64}$/.test(String(taskId || "")) || !/^jr_[a-z0-9-]{8,64}$/i.test(String(journalId || ""))) return res.status(400).json({ error: "bad synthetic input" });
+    await ctx.pool.query("DELETE FROM task_journal_claims WHERE task_id=$1", [taskId]);
+    const { rowCount } = await ctx.pool.query("UPDATE blocks SET properties = properties || $2::jsonb WHERE id=$1", [taskId, JSON.stringify({ journalId })]);
+    res.json({ ok: rowCount === 1 });
+  });
+  // Review-only: give journalId's claim (and the id itself) to another synthetic
+  // task, so the original task no longer owns it -- the server will now answer
+  // that task's GET/PUT with 409 JOURNAL_AMBIGUOUS while an open tab still has a
+  // valid local page. Used for the delayed-refusal browser check.
+  app.post("/api/review/journal/steal-claim", async (req, res) => {
+    const { journalId, toTaskId } = req.body || {};
+    if (!/^jr_[a-z0-9-]{8,64}$/i.test(String(journalId || "")) || !/^[-\w]{1,64}$/.test(String(toTaskId || ""))) return res.status(400).json({ error: "bad synthetic input" });
+    await ctx.pool.query("DELETE FROM task_journal_claims WHERE task_id=$1", [toTaskId]);
+    await ctx.pool.query("UPDATE task_journal_claims SET task_id=$2 WHERE journal_id=$1", [journalId, toTaskId]);
+    const { rowCount } = await ctx.pool.query("UPDATE blocks SET properties = properties || $2::jsonb WHERE id=$1", [toTaskId, JSON.stringify({ journalId })]);
+    res.json({ ok: rowCount === 1 });
+  });
+  // Review-only: what a server re-mint leaves behind -- the task now carries a
+  // fresh journalId (claimed by it), while a device may still hold writing under
+  // the old one.
+  app.post("/api/review/journal/reassign", async (req, res) => {
+    const { taskId, journalId } = req.body || {};
+    if (!/^jr_[a-z0-9-]{8,64}$/i.test(String(journalId || "")) || !/^[-\w]{1,64}$/.test(String(taskId || ""))) return res.status(400).json({ error: "bad synthetic input" });
+    await ctx.pool.query("DELETE FROM task_journal_claims WHERE task_id=$1", [taskId]);
+    await ctx.pool.query("INSERT INTO task_journal_claims (journal_id, task_id, workspace_id) VALUES ($1,$2,'ws-1')", [journalId, taskId]);
+    const { rowCount } = await ctx.pool.query("UPDATE blocks SET properties = properties || $2::jsonb WHERE id=$1", [taskId, JSON.stringify({ journalId })]);
+    res.json({ ok: rowCount === 1 });
+  });
   // Server-side truth for assertions: raw rows, synthetic database only.
   app.get("/api/review/journal/rows", async (_req, res) => {
     const pages = await ctx.pool.query("SELECT task_id, journal_id, owner_user_id, workspace_id, revision, ink, body FROM task_journal_pages ORDER BY task_id");

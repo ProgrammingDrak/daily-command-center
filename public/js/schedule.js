@@ -1648,7 +1648,7 @@ function addTaskUniversal(barEl){
     case"journal":{
       const journalId=window.JournalPageStore?window.JournalPageStore.newJournalId():null;
       insertTaskNow(title,durMin,{type:"journal",journalId,publicVisibility:"private",onScheduled:r=>{
-        if(r&&window.DCC&&DCC.JournalTask)DCC.JournalTask.open({taskId:r.blockId||r.localId,journalId,title});
+        if(r&&window.DCC&&DCC.JournalTask)DCC.JournalTask.open({taskId:r.blockId||r.localId,localId:r.localId,journalId,title});
       }});
       break;
     }

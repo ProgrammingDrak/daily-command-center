@@ -66,16 +66,30 @@
   }
   function online() { return typeof navigator === "undefined" || navigator.onLine !== false; }
 
-  // The server row for a journal. Quick add knows a new task by its local id
-  // until the block store has the server row; the stable journalId finds it.
-  function serverTaskId(journalId, fallback) {
+  // Every task row this tab knows (all days loaded into the block store).
+  function blockRows() {
     const bs = window.blockStore;
-    try {
-      const b = bs && typeof bs.getByType === "function"
-        ? bs.getByType("block").find(x => x && !x.deleted_at && (x.properties || {}).journalId === journalId) : null;
-      if (b && b.id) return b.id;
-    } catch { /* block store not ready */ }
-    return fallback;
+    try { return bs && typeof bs.getByType === "function" ? bs.getByType("block") : []; }
+    catch { return []; }
+  }
+  // The server row a page may be sent to: the row of the task the page is bound
+  // to, and only if no OTHER row carries the same journalId. Never "the first row
+  // carrying this journalId" (see binding.js). A task not yet in the block store
+  // (created moments ago) is sent under its own id and the server checks it.
+  function bindingError(r) {
+    return Object.assign(new Error(r.state === "ambiguous"
+      ? "Another task carries this journal's identity, so this page is not sent anywhere. It stays on this device."
+      : "This task now has a different journal page, so this page is not sent. It stays on this device."), { code: "JOURNAL_BINDING", state: r.state });
+  }
+  function serverTaskFor(journalId, rec) {
+    const keys = store().boundKeys(rec);
+    const r = window.JournalTaskBinding.resolve(blockRows(), journalId, keys);
+    if (r.state === "ok") {
+      if (!keys.includes(r.taskId)) store().bindKeys(journalId, r.keys).catch(() => {});   // learn local -> server alias
+      return r.taskId;
+    }
+    if (r.state === "pending") return rec.taskId;
+    throw bindingError(r);
   }
 
   // One outbox per page, kept alive after the editor closes until it is clean.
@@ -84,7 +98,7 @@
     if (!s) {
       s = window.JournalPageSync.create({
         store: store(), journalId, fetch: (url, init) => window.fetch(url, init), isOnline: online,
-        resolveTaskId: rec => serverTaskId(journalId, rec.taskId),
+        resolveTaskId: rec => serverTaskFor(journalId, rec),
         isBusy: () => !!(current && current.journalId === journalId && current.penDown()),
         onStatus: st => { if (current && current.journalId === st.journalId) current.showSync(st); },
       });
@@ -162,7 +176,9 @@
   }
 
   function createSession(opts) {
-    const session = { id: ++seq, taskId: opts.taskId, journalId: opts.journalId, alive: true };
+    const session = { id: ++seq, taskId: opts.taskId, journalId: opts.journalId, alive: true,
+      // Every id of THIS task; the page store refuses writes for a page bound elsewhere.
+      taskKeys: (opts.taskKeys && opts.taskKeys.length ? opts.taskKeys : [opts.taskId]).filter(Boolean) };
     const body = buildBody();
     const q = sel => body.querySelector(sel);
     const statusText = q(".jt-status-text"), retryBtn = q(".jt-retry"), banner = q(".jt-banner");
@@ -337,11 +353,13 @@
         if (!failed) { unsaved.delete(session.journalId); if (!session.stale) syncFor(session.journalId).nudge(); }
         else if (!session.alive && !discard) stash(session.journalId, stashed());
         if (wentStale && session.alive && !actionBusy) review();
+        // A late identity refusal was waiting for this writing to be on the device.
+        if (!failed && session.freezePending && session.alive) { const m = session.freezePending; session.freezePending = null; hideBanner(); session.fail(m); }
         settleClose();
       })();
       paint();
     }
-    function content() { return { taskId: session.taskId, ink: ink.getPage(), body: textarea.value }; }
+    function content() { return { taskId: session.taskId, taskKeys: session.taskKeys, ink: ink.getPage(), body: textarea.value }; }
     // What a closed editor still owes the device: its content AND the version it
     // was based on, so a later retry cannot overwrite something it never showed.
     function stashed() { return { content: content(), localRev: session.localRev, draftId: session.draftId }; }
@@ -543,16 +561,51 @@
       statusText.textContent = message; q(".jt-status").dataset.tone = "error"; retryBtn.hidden = true;
       body.dataset.jtState = "open-failed";
     };
+    // A refusal that arrives AFTER the page is open and editable (the server says
+    // this task does not own its journal identity, or knows it under another id)
+    // while the user may be mid-stroke or mid-typing. That input belongs to THIS
+    // task's own device page (the binding check already passed), so it is first
+    // committed and written there -- never dropped -- and only then is the editor
+    // frozen. Nothing is sent: the server refuses this task's saves. If the local
+    // write fails, the editor stays in the not-saved state (close blocked behind
+    // Retry save / Discard) until the writing is on the device.
+    session.freeze = async function (message) {
+      if (!session.alive || session.openFailed || session.freezing) return;
+      if (!ready) { session.fail(message); return; }
+      session.freezing = true;
+      lock(true);                              // no new input while we settle
+      try { await settle(); }
+      catch {
+        // Stay frozen-pending: input stays locked, close stays blocked (failed),
+        // and the FIRST successful local save -- from this Retry or from the close
+        // dialog's Retry -- completes the freeze (see queueSave).
+        session.freezing = false;
+        session.freezePending = message;
+        statusText.textContent = message + " Your latest writing is NOT saved on this device yet.";
+        q(".jt-status").dataset.tone = "error"; body.dataset.jtState = "freeze-pending";
+        showBanner("Your latest writing is not saved on this device yet.", [
+          { id: "retry-save", label: "Retry save", onClick: () => { hideBanner(); queueSave(); } },
+          { id: "discard", label: "Discard and close", onClick: () => { discard = true; hideBanner(); session.handle.close("discard"); } },
+        ]);
+        return;
+      }
+      session.freezing = false;
+      session.fail(message);
+    };
     return session;
   }
 
   // Resolve the stable journal identity for a task without a second source of
   // truth: the task row first, then the server's copy of the block.
-  async function resolveJournalId(taskId, given) {
+  // The task's OWN row is the authority (it reflects a server re-mint), then the
+  // id the caller passed, then the server.
+  async function resolveJournalId(keys, given, taskId) {
+    const own = Array.from(new Set(blockRows()
+      .filter(b => b && window.JournalTaskBinding.idsOf(b).some(k => keys.includes(k)))
+      .map(b => (b.properties || {}).journalId).filter(Boolean)));
+    if (own.length > 1) throw Object.assign(new Error("This task has more than one journal identity on this device, so it cannot be opened."), { code: "JOURNAL_BINDING" });
+    if (own.length === 1) return own[0];
     if (given) return given;
-    const block = window.blockStore && window.blockStore.get && window.blockStore.get(taskId);
-    const fromBlock = block && block.properties && block.properties.journalId;
-    if (fromBlock) return fromBlock;
     const server = await fetchServer(taskId);
     return server.journalId;
   }
@@ -569,36 +622,76 @@
       const closed = await current.requestClose("switch");
       if (!closed) return null;
     }
+    // Every id this task is known by (local id, server id), from the block store.
+    const keys = window.JournalTaskBinding.expand(blockRows(), [o.taskId, o.localId].filter(Boolean));
     let journalId;
-    try { journalId = await resolveJournalId(o.taskId, o.journalId); }
+    try { journalId = await resolveJournalId(keys, o.journalId, o.taskId); }
     catch (e) {
-      if (typeof showToast === "function") showToast(e.status === 401 ? "Sign in to open this journal." : "Couldn't open this journal yet. Try again when you're online.", "error");
+      if (typeof showToast === "function") showToast(e.code === "JOURNAL_BINDING" ? e.message : e.status === 401 ? "Sign in to open this journal." : "Couldn't open this journal yet. Try again when you're online.", "error");
       return null;
     }
     if (current) return null; // another open won the race while we resolved the id
-    const session = createSession({ taskId: o.taskId, journalId, title: o.title || "Journal" });
+    const session = createSession({ taskId: o.taskId, journalId, taskKeys: keys, title: o.title || "Journal" });
     current = session;
+    const refuse = message => { session.fail(message); return session; };
     try {
       await ensureInk();
       const s = store();
+      // Which server row is this task, and does any OTHER task carry this id?
+      const local = window.JournalTaskBinding.resolve(blockRows(), journalId, keys);
+      if (local.state === "mismatch") return refuse(bindingError(local).message);
+      const serverId = local.state === "ok" ? local.taskId : (local.ownTaskId || o.taskId);
       let rec = await s.load(journalId);
-      const openedLocalRev = rec ? rec.localRev || 0 : 0;
-      // Only a response for THIS journal, for this tab's account, is ever seeded.
-      const seedFrom = server => server && server.journalId === journalId ? s.seed(journalId, server) : null;
-      if (!rec && online()) {
-        try { const server = await fetchServer(serverTaskId(journalId, o.taskId)); rec = (await seedFrom(server)) || rec; }
+      // A page bound to another task is never rendered, edited or sent from here.
+      if (rec && !s.belongsTo(rec, keys)) return refuse("This journal page belongs to a different task on this device. Nothing was opened or changed.");
+      // Two rows in this tab carry the id: open only if the server confirms that
+      // THIS task owns it (the server's claim decides; see journal-store.js).
+      let confirmed = null;
+      if (local.state === "ambiguous") {
+        confirmed = await fetchServer(serverId).catch(() => null);
+        if (!confirmed || confirmed.journalId !== journalId || !keys.includes(confirmed.taskId)) {
+          return refuse("Another task carries this journal's identity, so this page cannot be opened here. Nothing was opened or changed.");
+        }
+      }
+      // Only a response for THIS journal, for THIS task, for this tab's account,
+      // is ever seeded.
+      const seedFrom = server => server && server.journalId === journalId && keys.includes(server.taskId) ? s.seed(journalId, server, keys) : null;
+      const serverRefused = e => e && (e.code === "ACCOUNT_CHANGED" || e.code === "JOURNAL_AMBIGUOUS" || e.code === "TASK_MISMATCH");
+      // The server knows THIS task under a different journal id (this tab's cache
+      // is stale, or the id was re-minted): never start a page under the old id.
+      const staleId = server => server && keys.includes(server.taskId) && server.journalId && server.journalId !== journalId;
+      const staleIdMessage = "This task's journal identity changed on the server. Reload DCC to open it. Nothing was opened or changed.";
+      if (!rec && (confirmed || online())) {
+        try {
+          const server = confirmed || await fetchServer(serverId);
+          if (staleId(server)) return refuse(staleIdMessage);
+          rec = (await seedFrom(server)) || rec;
+        }
         catch (e) {
-          if (e.code === "ACCOUNT_CHANGED") { session.fail(e.message); return session; }
+          if (serverRefused(e)) return refuse(e.message);
           if (e.status === 401) session.showSync({ state: "signed-out", message: "Sign in to sync. New strokes save on this device." });
         }
       }
+      // Writing this task saved under an EARLIER journal id (the server gave the
+      // task a fresh id because its first one was already claimed) is kept as a
+      // recovery copy here rather than left unseen.
+      const orphans = await s.boundElsewhere(journalId, keys).catch(() => []);
+      // Copies whatever each source holds NOW (re-read inside adopt); a source that
+      // changes meanwhile stays discoverable and is picked up on the next open.
+      for (const orphan of orphans) await s.adopt(journalId, orphan.journalId, keys).catch(() => {});
+      if (orphans.length) rec = await s.load(journalId);
+      const openedLocalRev = rec ? rec.localRev || 0 : 0;
       if (!session.alive || current !== session) return null;
       session.mount(rec);
       if (session.openFailed) return session;
       if (rec && !rec.dirty && !rec.conflict && online()) {
         // Refresh from the server in the background; never clobber local edits,
         // and never paint into an editor that has closed or been replaced.
-        fetchServer(serverTaskId(journalId, o.taskId)).then(seedFrom).then(next => { if (current === session) session.replaceIfUntouched(next, openedLocalRev); }).catch(() => {});
+        fetchServer(serverId).then(server => {
+          if (staleId(server)) { if (current === session) session.freeze(staleIdMessage); return null; }
+          return seedFrom(server);
+        }).then(next => { if (next && current === session) session.replaceIfUntouched(next, openedLocalRev); })
+          .catch(e => { if (serverRefused(e) && current === session) session.freeze(e.message); });
       }
       syncFor(journalId).flush();
     } catch (e) {
@@ -632,7 +725,7 @@
       if (type !== "journal") {
         if (typeof convertTaskType !== "function" || !(await convertTaskType(task.id, "journal"))) return;
       }
-      open({ taskId: taskId, journalId: task.journalId, title: task.title });
+      open({ taskId: taskId, localId: task.id, journalId: task.journalId, title: task.title });
     };
     host.appendChild(b);
   }
@@ -640,7 +733,7 @@
     if (!task || task.type !== "journal") return;
     const main = rowEl.querySelector(".it-list-main"); if (!main || main.querySelector(".jt-row-open")) return;
     const b = el("button", { type: "button", class: "wp-toggle jt-row-open" }, "Open journal");
-    b.onclick = e => { e.stopPropagation(); open({ taskId: task._blockId || task.id, journalId: task.journalId, title: task.title }); };
+    b.onclick = e => { e.stopPropagation(); open({ taskId: task._blockId || task.id, localId: task.id, journalId: task.journalId, title: task.title }); };
     main.append(b);
   }
 

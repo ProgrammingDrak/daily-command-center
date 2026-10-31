@@ -21,6 +21,27 @@ CREATE TABLE IF NOT EXISTS task_journal_pages (
 );
 CREATE INDEX IF NOT EXISTS idx_journal_pages_owner
   ON task_journal_pages(workspace_id, owner_user_id);
+-- One owner per journal identity, decided atomically by the primary key. A
+-- preflight SELECT followed by INSERT was not atomic: two concurrent creates
+-- with one journalId both passed it. Every path that gives a task a journalId
+-- claims it here first (claimJournalId); a loser gets a fresh id.
+CREATE TABLE IF NOT EXISTS task_journal_claims (
+  journal_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  workspace_id TEXT,
+  claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- Rows written before claims existed: the task that already holds the page wins,
+-- then the earliest-created block. Any later duplicate is left unclaimed and is
+-- refused by the journal routes (JOURNAL_AMBIGUOUS) instead of being mixed.
+INSERT INTO task_journal_claims (journal_id, task_id, workspace_id)
+  SELECT DISTINCT ON (journal_id) journal_id, task_id, workspace_id FROM (
+    SELECT journal_id, task_id, workspace_id, 0 AS rank, created_at AS at FROM task_journal_pages
+    UNION ALL
+    SELECT properties->>'journalId', id, workspace_id, 1, created_at FROM blocks
+      WHERE properties->>'type' = 'journal' AND properties->>'journalId' IS NOT NULL
+  ) existing ORDER BY journal_id, rank, at, task_id
+ON CONFLICT (journal_id) DO NOTHING;
 `;
 const JOURNAL_ID_RE = /^jr_[a-z0-9-]{8,64}$/i;
 const BODY_MAX = 20000;
@@ -28,6 +49,35 @@ const BODY_MAX = 20000;
 function error(message, statusCode = 400, publicCode) {
   return Object.assign(new Error(message), { statusCode }, publicCode ? { publicCode } : {});
 }
+
+// Claim props.journalId for taskId, atomically. Re-claiming by the SAME task
+// (a retried create, a move, a replayed update) keeps the id; a claim held by
+// any other task makes this task take a fresh id. Runs on the caller's client
+// so it shares the caller's transaction (batch creates see each other's claims).
+async function claimJournalId(q, props, taskId, workspaceId, crypto = require("node:crypto")) {
+  if (!props || props.type !== "journal") return props;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (!JOURNAL_ID_RE.test(String(props.journalId || ""))) props.journalId = "jr_" + crypto.randomUUID();
+    const { rows } = await q.query(`INSERT INTO task_journal_claims (journal_id, task_id, workspace_id)
+      VALUES ($1,$2,$3) ON CONFLICT (journal_id) DO NOTHING RETURNING task_id`, [props.journalId, taskId, workspaceId || null]);
+    if (rows.length) return props;
+    const { rows: held } = await q.query("SELECT task_id FROM task_journal_claims WHERE journal_id=$1", [props.journalId]);
+    if (held[0] && held[0].task_id === taskId) return props;
+    props.journalId = "jr_" + crypto.randomUUID();
+  }
+  throw error("Could not assign a journal identity", 500);
+}
+
+// Does this task own its journal identity? A task created before claims existed
+// claims lazily here; a legacy duplicate whose id another task owns does not.
+async function ownsJournalId(q, journalId, taskId, workspaceId) {
+  if (!JOURNAL_ID_RE.test(String(journalId || ""))) return false;
+  await q.query(`INSERT INTO task_journal_claims (journal_id, task_id, workspace_id)
+    VALUES ($1,$2,$3) ON CONFLICT (journal_id) DO NOTHING`, [journalId, taskId, workspaceId || null]);
+  const { rows } = await q.query("SELECT task_id FROM task_journal_claims WHERE journal_id=$1", [journalId]);
+  return !!rows[0] && rows[0].task_id === taskId;
+}
+const ambiguous = () => error("This journal's identity is shared with another task, so it cannot be opened or saved here. Nothing was changed.", 409, "JOURNAL_AMBIGUOUS");
 function revision(v) { if (!Number.isInteger(v) || v < 0) throw error("Expected revision is required"); return v; }
 function validJournalId(id) { return typeof id === "string" && JOURNAL_ID_RE.test(id); }
 
@@ -75,7 +125,11 @@ function createJournalStore({ pool, blockDB, crypto = require("node:crypto") }) 
   }
   async function get(id, owner) {
     const b = await block(pool, id, owner), r = await page(pool, id, owner);
-    if (!r && (b.properties || {}).type !== "journal") throw error("This task is not a journal", 404);
+    const p = b.properties || {};
+    if (!r && p.type !== "journal") throw error("This task is not a journal", 404);
+    // Never hand out a page (or an empty one to start writing on) for an identity
+    // this task does not own: that is how two tasks would come to share content.
+    if (!(await ownsJournalId(pool, r ? r.journal_id : p.journalId, id, b.workspace_id))) throw ambiguous();
     return shape(b, r);
   }
   async function save(id, body, owner) {
@@ -95,6 +149,7 @@ function createJournalStore({ pool, blockDB, crypto = require("node:crypto") }) 
       if (b.deleted_at) throw error("Restore the removed task before editing its journal", 409);
       if (p.type !== "journal") throw error("Only a Journal task can hold a journal page", 409);
       if (p.journalId !== body.journalId || (old && old.journal_id !== body.journalId)) throw error("This page belongs to a different journal", 409);
+      if (!(await ownsJournalId(q, body.journalId, id, b.workspace_id))) throw ambiguous();
       if (!old) {
         const { rows: claimed } = await q.query("SELECT 1 FROM task_journal_pages WHERE journal_id=$1", [body.journalId]);
         if (claimed.length) throw error("This page belongs to a different journal", 409);
@@ -127,6 +182,7 @@ function createJournalStore({ pool, blockDB, crypto = require("node:crypto") }) 
       // Same task guards as save(): no edits to a removed task or a non-journal row.
       if (b.deleted_at) throw error("Restore the removed task before editing its journal", 409);
       if ((b.properties || {}).type !== "journal") throw error("Only a Journal task can hold a journal page", 409);
+      if (!(await ownsJournalId(q, old.journal_id, id, b.workspace_id))) throw ambiguous();
       if (old.revision !== expected) throw error("This journal changed on another device", 409, "JOURNAL_CONFLICT");
       if (!old.previous) throw error("No previous version to restore", 409);
       const { rows } = await q.query(`UPDATE task_journal_pages SET ink=$4,body=$5,previous=$6,revision=revision+1,
@@ -140,4 +196,4 @@ function createJournalStore({ pool, blockDB, crypto = require("node:crypto") }) 
   return { get, save, undo };
 }
 
-module.exports = { SCHEMA_SQL, JOURNAL_ID_RE, BODY_MAX, validJournalId, validate, createJournalStore };
+module.exports = { SCHEMA_SQL, JOURNAL_ID_RE, BODY_MAX, validJournalId, validate, createJournalStore, claimJournalId, ownsJournalId };

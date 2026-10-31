@@ -4,7 +4,199 @@ Branch `feat/journal-handwriting` on base `bf1c8c6`. Committed locally on this
 branch after Codex's read-only review; not pushed, no PR, not deployed. All data
 synthetic. No production, no `localhost:8090`.
 
-## Current state (final review, 2026-10-31)
+## Concurrency review fixes (adoption race, late refusal, retry)
+
+Status: committed locally on `feat/journal-handwriting` after Codex's
+independent review. Not pushed, no PR, not deployed. The limitations below
+(physical Pencil/iPad Safari, production auth/database, separate PostgreSQL
+server, offline cold start) remain unrun.
+
+Two reviewed defects in the concurrency pass, fixed and re-verified. Same
+runtime, env files and log prefix as the section below.
+
+1. **Adoption race (reproduced by review).** The old `adopt()` copied a one-time
+   snapshot, then marked the source `adoptedInto` and clean. A write in between
+   was hidden and never copied. Later old-tab saves and the source's recovery
+   copies were also missed.
+   - Fix (`page-store.js`): adoption is keyed by item content. The destination
+     deduplicates, the source records only the keys it actually copied, and the
+     dirty marker clears only when nothing is uncopied.
+   - Regressions (`journal-task-binding.test.js`):
+     - the reviewer's injected handoff write ("newer synthetic text during
+       adoption" stays dirty and discoverable, and is copied on the next open);
+     - writes after adoption, including a late stale draft;
+     - content, drafts and existing recoveries all carried over, with four
+       repeated opens adding no duplicates;
+     - a failed destination transaction and a failed source transaction, with a
+       retry that adds no duplicates;
+     - reopen and restore through the NEW id, routing only to that task (the old
+       id is `mismatch`; another task can't adopt it);
+     - `bindKeys`/`expand` never join unrelated rows (rows sharing a `local_id`
+       are joined but then refused, never routed).
+   - **19/19 pass** (`concurrency-adoption-tests.log`). Mutation: marking every
+     current source item instead of only the copied ones → the handoff test fails
+     (`concurrency-mutation-adopt-marks-uncopied.log`).
+2. **Late refusal could drop input (control flow found by review).** A refusal
+   after mount called `fail()`, which set `ready=false`. A pending stroke or
+   typing was then refused and close was allowed.
+   - Fix: `session.freeze()` commits the stroke and typing to the task's own
+     device page, then freezes. A failing device write keeps the editor
+     freeze-pending: input locked, close blocked behind Retry save or Discard.
+     Any later successful save completes the freeze.
+   - Browser section 23: a 409 arriving 2.5 s after mount, with typing pending
+     and the pen down → both are on the device and nothing is sent to either
+     task.
+   - Browser section 23b: the same while IndexedDB `put` fails → the close is
+     blocked and the text stays on screen. Retry save writes both, then the
+     editor freezes.
+   - Mutation: the old `fail()` on that path → section 23 fails with "the stroke
+     under the pen was committed before freezing"
+     (`concurrency-browser-run7-mutation-late-refusal.log`).
+3. **Retry test strengthened.** The same-task `createBlock` replay must now
+   succeed and keep the id, both alone and as two concurrent replays, leaving
+   one row and one claim. 10/10 (`concurrency-server-tests-2.log`).
+4. **Browser section 24 (re-mint, end to end):** writing done while saves failed
+   (500) is left under the old id. After a reassign and a reload:
+   - the startup drain sends nothing;
+   - reopening offers the recovery copy, and restoring syncs it to the same task
+     under the new id;
+   - the old record is kept, not deleted.
+
+**Final checks after these fixes:**
+
+| Check | Result | Log (`T`) |
+|---|---|---|
+| Journal, privacy and identity suites (same 16 files) | **183/183**, 0 skipped | `concurrency-final2-journal-and-identity-tests.log` |
+| Lint | **0 errors, 71 warnings** (baseline) | `concurrency-lint-3.log` |
+| Browser, fresh server, final code | **27/27** (run 8) | `concurrency-browser-run8.log`, `journal-concurrency-qa-run8/` |
+| Full suite (once, bounded) | **3364: 3349 pass, 0 fail, 2 cancelled (baseline guided), 13 skipped** | `concurrency-full-suite-2.log` |
+
+Run 6 (27/27) came before the final mutation round. Run 7 was the deliberate
+mutation run. Each run had its own output folder.
+
+## Concurrency pass (journal identity), first round (historical; superseded by the fixes above, committed together)
+
+- **Runtime:** Node 20.20.2, `/opt/homebrew/opt/node@20/bin/node`.
+- **Env files** (in the task folder `T`):
+  - `journal-qa.env`: the PGlite module only;
+  - `journal-review.env`: a disposable server on 8297;
+  - `journal-concurrency-verify.env`: browser output to a fresh
+    `journal-concurrency-qa-runN/` folder per run.
+- **Logs:** `concurrency-*` in `T`.
+- **Not touched:** earlier evidence, screenshots and patches.
+
+### The defect, reproduced, then fixed
+
+- **Server.** `journal-concurrency.test.js` "reviewer repro" uses the real
+  `createActivityDb` PGlite fixture and the real `blockDB.createBlock`. It runs
+  two concurrent creates of `collision-1`/`collision-2` with
+  `journalId: 'jr_concurrency-review'`.
+  - With HEAD's preflight `SELECT` temporarily restored in `createBlock`, it
+    fails with "distinctJournalIds must be 2, got
+    ["jr_concurrency-review","jr_concurrency-review"]". That run had 5 of 9
+    subtests failing (`concurrency-server-tests-with-original-preflight.log`).
+  - The claim was then restored.
+  - With the fix, all 9 subtests pass (`concurrency-server-tests.log`).
+- **Client.** `journal-task-binding.test.js` shows that HEAD's rule ("first block
+  carrying the journalId") resolves task B's page to task A's row. The new
+  binding returns `ambiguous` for both tasks, and never routes to the other row.
+
+### Checks on the final code
+
+| Check | Command | Result | Log (`T`) |
+|---|---|---|---|
+| Journal, privacy and identity suites | `node20 --env-file=T/journal-qa.env --test --test-timeout=60000` with 16 files: journal store, sync, privacy, postgres, concurrency, binding, task-model, task-types, type-growth, commitment-privacy, public-share-status, feed hook, permanent-guest, launcher, vault-notebook-page, ink-library | **177/177 pass**, 0 skipped | `concurrency-final-journal-and-identity-tests.log` |
+| Server concurrency | `… --test journal-concurrency.test.js` | **10/10** (9 subtests) | `concurrency-server-tests.log` |
+| Client binding | `… --test journal-task-binding.test.js` | **13/13** | `concurrency-client-binding-tests-2.log` |
+| Lint | `node20 node_modules/eslint/bin/eslint.js .` | **0 errors, 71 warnings** (same baseline; none in journal files) | `concurrency-lint-2.log` |
+| Browser | server: `node20 --env-file=T/journal-review.env scripts/ui-review-server.mjs`; check: `node20 --env-file=T/journal-concurrency-verify.env scripts/verify-journal-task.mjs http://127.0.0.1:8297` | **24/24**, fresh server (run 5, final code) | `concurrency-browser-run5.log`, `journal-concurrency-qa-run5/` |
+| Full suite (once, bounded) | `node20 --env-file=T/journal-qa.env --test --test-concurrency=4 --test-timeout=60000` | **3358 tests: 3343 pass, 0 fail, 2 cancelled, 13 skipped** | `concurrency-full-suite.log` |
+| Mutations (by hand) | edit → approved test command → restore | **3/3 caught** (below) | `concurrency-mutation-*.log`, `…-with-original-preflight.log` |
+
+The 2 cancellations are the baseline `guided.test.js` PGlite case (see "Earlier
+pass"). They count as not passed. The 13 skips are pre-existing integration
+tests that need other services.
+
+**Mutations, each restored and re-verified:**
+- HEAD's preflight in `createBlock` → 5 server tests fail, including the repro.
+- The store's task-binding check removed → 4 client tests fail.
+- The binding's "another row carries the id" check removed → 2 client tests fail.
+
+**Browser runs on the way, all kept:**
+- Run 1: section 21 asserted one refusal message. B was in fact refused by the
+  device page's task binding, which is also correct. The test now accepts
+  either message and asserts that B never became editable.
+- Runs 2–3 found a real editor bug. When this tab's cache was ambiguous, the
+  server confirmation asked about the task's local id and got a 404, so the
+  owner was refused too. Fix: `binding.resolve` reports the task's own server
+  row (`ownTaskId`) and the confirmation uses it. Run 2's message was
+  diagnosed through the error message added to the test (run 3).
+- Run 4 and run 5 (final code) passed 24/24.
+
+### What the new tests cover
+
+- **Server (`journal-concurrency.test.js`):**
+  - the reviewer's two concurrent creates, and five concurrent creates (all
+    distinct ids, each claimed by its own task);
+  - two creates inside one transaction (a batch);
+  - a retry of the same task keeps its id, while a sequential copy gets a fresh
+    one;
+  - converting into a Journal with a held id re-mints, including concurrently;
+    an unrelated edit keeps the id;
+  - a move carrying a stale conversion re-mints;
+  - a legacy duplicate row (no claim): `get`/`save` give 409 `JOURNAL_AMBIGUOUS`,
+    the owner's page is unchanged, and there is one page row;
+  - backfill gives the claim to the page holder;
+  - over HTTP, the duplicate gets 409 with no content.
+- **Client (`journal-task-binding.test.js`):**
+  - local → server remap resolves to the right row; a task not yet stored is
+    pending;
+  - a client duplicate is ambiguous for both tasks, and each gets its own
+    `ownTaskId` only;
+  - a legacy ambiguous cache; a re-mint mismatch; aliases never joined through a
+    shared id;
+  - a wrong-task write (content and draft) or seed is refused, with both pages
+    byte-identical;
+  - alias learning works, while disjoint ids are refused;
+  - a legacy taskId-only binding is kept;
+  - re-mint adoption makes a recovery copy, is idempotent, deletes nothing and
+    stops the old record syncing;
+  - sync sends nothing for an ambiguous or mismatched binding;
+  - the editor source routes sync through the binding.
+- **Browser (sections 20–22, plus 1–19 unchanged):**
+  - **20:** two concurrent `POST /api/blocks` with one journalId → two distinct
+    ids.
+  - **21:** task B's cached row given A's id before sync:
+    - B is refused before render;
+    - A's device and server pages are unchanged;
+    - A still opens (server-confirmed);
+    - A's new stroke is kept on the device and NOT sent while the tab is
+      ambiguous;
+    - after a reload, the stroke syncs to A only.
+  - **21b:** the same with an id that has no device page → refused before
+    render, and no device page is started under that id.
+  - **22:** a legacy duplicate row (claim removed, A's id) → `GET` 409
+    `JOURNAL_AMBIGUOUS` with no content; the editor refuses it; A opens with its
+    page unchanged.
+  - The local → server remap is also exercised in every quick-add section: it
+    opens by the local id and syncs to the server row.
+
+### Limitations (precise)
+
+- **PGlite serializes queries through one lock.** The race was reproduced
+  because statements interleave between the preflight and the insert. On real
+  PostgreSQL, the primary-key `ON CONFLICT` behaves the same way (a second
+  concurrent inserter waits for the first and then sees the conflict). That was
+  not run against a separate PostgreSQL server here.
+- **A re-minted task's offline writing is not moved automatically.** It appears
+  as a recovery copy for an explicit restore.
+- **While this tab's cache still shows two rows with one id, the owner's new
+  strokes stay on the device.** They are not sent until the cache refreshes (a
+  reload, or the next load of that day).
+- **Not run:** physical Apple Pencil / iPad Safari, production auth and
+  database, and an offline cold start (no service worker). All as before.
+
+## Previous state (final review, 2026-10-31, before the concurrency pass)
 
 Runtime: **Node 20.20.2**, `/opt/homebrew/opt/node@20/bin/node`, inside the
 repo's `>=20 <23` engine range. Environment comes from `--env-file` files in
