@@ -662,11 +662,12 @@ window.createBlockEditor=function(containerEl, initialBlocks, options){
   });
 
   // Close slash menu on click outside
-  document.addEventListener('click',function(e){
+  function closeSlashOnOutsideClick(e){
     if(slashMenu.style.display==='block' && !slashMenu.contains(e.target)){
       closeSlashMenu();
     }
-  });
+  }
+  document.addEventListener('click',closeSlashOnOutsideClick);
 
   // ======== Public API ========
 
@@ -749,6 +750,7 @@ window.createBlockEditor=function(containerEl, initialBlocks, options){
   };
 
   editor.destroy=function(){
+    document.removeEventListener('click',closeSlashOnOutsideClick);
     if(attachmentControls)attachmentControls.destroy();
     container.innerHTML='';
     blocks=[];

@@ -1,4 +1,4 @@
-// Two presentation states over the canonical queue; history contains navigation only.
+// Source list, focused task and notes over the canonical queue; history contains navigation only.
 (function () {
   'use strict';
   if (new URLSearchParams(location.search).get('device') !== 'glasses') return;
@@ -14,7 +14,7 @@
   const itemFor = id => items().find(item => item.task.id === id);
   const focus = () => {
     if (!root || !active() || root.closest('[inert]') || document.querySelector('.dcc-overlay')) return;
-    const target = taskId() ? root.querySelector('[data-glasses-action="toggle"]') :
+    const target = taskId() ? root.querySelector('[data-glasses-action="details"]') :
       root.querySelector('[data-glasses-id="' + CSS.escape(selected || '') + '"]') || root.querySelector('[data-glasses-action="focus"]');
     target?.focus({preventScroll:true});
     target?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
@@ -96,13 +96,13 @@
     const hadFocus = root.contains(document.activeElement), oldAction = document.activeElement?.dataset.glassesAction, oldId = document.activeElement?.dataset.glassesId;
     const scrolls=[...root.querySelectorAll('.gq-row')].map(el=>[el.getAttribute('aria-label'),el.scrollLeft]);
     const id = taskId(), item = itemFor(id);
-    if (id && item?.status === 'completed' && !reviewState) { back(); return; }
+    if (id && item?.status === 'completed' && !reviewState && !history.state?.glassesNotes && !window.DCCGlassesNotes?.isOpen()) { back(); return; }
     const {pending,sending,problem,conflict,state} = snapshot;
     const disabled = busy || sending || !!pending || !navigator.onLine;
     const sync = sending ? 'Saving…' : pending ? 'Update saved on this device; awaiting confirmation.' : problem ? 'Unavailable: '+problem : !navigator.onLine ? 'Offline · changes paused' : '';
     const recovery = (pending?'<button type="button" data-queue-action="retry">Retry saved update</button>':'')+
       (conflict?'<p class="wq-conflict">'+esc(conflict.message)+' Review current work before trying again. <button type="button" data-queue-action="clear-conflict">Dismiss conflict</button></p>':'');
-    const status = '<p class="gq-status" role="status">'+esc(message || sync)+'</p>'+recovery;
+    const status = '<p class="gq-status" role="status">'+esc(window.DCCGlassesNotes?.status(id) || message || sync)+'</p>'+recovery;
     if(id) {
       if(!item) {
         root.innerHTML = '<section class="gq-detail"><h1>Task unavailable</h1><p>Use Back to return to tasks.</p>'+status+'</section>';
@@ -110,7 +110,7 @@
       }
       const task = DCC.TaskModel.fromBlock(item.task), running = item.status === 'foreground';
       const minutes = running ? Math.max(0,Math.floor((Date.now()-Date.parse(item.task.properties.startedAt))/60000)) : 0;
-      root.innerHTML = '<section class="gq-detail" aria-label="Focused task"><p class="gq-eyebrow">'+(running?'Foreground':item.status==='paused'?'Paused':'Timer stopped')+'</p><button type="button" class="gq-task" data-glasses-action="toggle" data-glasses-id="'+esc(id)+'" aria-label="'+esc((running?'Pause timer: ':'Start timer: ')+task.title)+'" aria-pressed="'+running+'" aria-disabled="'+disabled+'"><h1>'+esc(task.title)+'</h1><span class="gq-timer">'+esc(running?'Running · '+minutes+'m this session':'Timer stopped')+'</span></button><p class="gq-saved">'+esc(item.actualMinutes==null?'Saved focused time unknown':item.actualMinutes+'m focused saved')+'</p>'+subtasks(item)+'<p class="gq-hint">Select: '+(running?'pause':'start')+' timer · Swipe right: complete<br>Swipe left: dismiss (stops timer) · Back: tasks</p>'+status+'</section>';
+      root.innerHTML = '<section class="gq-detail" aria-label="Focused task"><p class="gq-eyebrow">'+(running?'Foreground':item.status==='paused'?'Paused':'Timer stopped')+'</p><button type="button" class="gq-task" data-glasses-action="details" data-glasses-id="'+esc(id)+'" aria-label="'+esc('Open details and notes: '+task.title)+'" data-running="'+running+'" aria-disabled="'+busy+'"><h1>'+esc(task.title)+'</h1><span class="gq-timer">'+esc(running?'Running · '+minutes+'m this session':'Timer stopped')+'</span></button><p class="gq-saved">'+esc(item.actualMinutes==null?'Saved focused time unknown':item.actualMinutes+'m focused saved')+'</p>'+subtasks(item)+'<p class="gq-hint">Select: details and notes · Swipe right: complete<br>Swipe left: dismiss (stops timer) · Back: tasks</p>'+status+'</section>';
     } else {
       const all = items().filter(item=>item.status!=='completed');
       const priority = state.queue?.priorityOrder || state.queue?.order || [];
@@ -129,7 +129,17 @@
       if(restored)restored.focus({preventScroll:true});else focus();
     }
   }
+  function openNotes(id,push=true){
+    const item=itemFor(id);
+    if(!item||window.DCCGlassesNotes.isOpen()||reviewState)return;
+    if(push){
+      history.replaceState({...history.state,glassesScroll:{x:window.scrollX,y:window.scrollY}},'');
+      history.pushState({...history.state,glassesNotes:id},'');
+    }
+    window.DCCGlassesNotes.open(id,item.task.properties.title||'Task');
+  }
   async function act(intent,id) {
+    if(intent==='details'){if(!busy&&taskId()===id)openNotes(id);return;}
     if(intent === 'reload-source') {sourceError='';sourceAt=0;draw();return;}
     if(intent==='add'&&itemFor(id))return;
     if(intent === 'reload-tree') {treeError='';tree=null;draw();return;}
@@ -147,7 +157,7 @@
   }
   document.addEventListener('click',event => {
     const button = event.target.closest('[data-glasses-action]');
-    if(!button || !root?.contains(button)) return;
+    if(!button || !root?.contains(button) || button.closest('[inert]') || window.DCCGlassesNotes?.isOpen()) return;
     event.preventDefault();event.stopImmediatePropagation();
     if(performance.now()<suppressClickUntil) return;
     suppressClickUntil=performance.now()+350;
@@ -163,7 +173,7 @@
       }
       return;
     }
-    if(taskId() && ['ArrowLeft','ArrowRight'].includes(event.key) && button?.dataset.glassesAction==='toggle') {
+    if(taskId() && ['ArrowLeft','ArrowRight'].includes(event.key) && button?.dataset.glassesAction==='details') {
       event.preventDefault();event.stopImmediatePropagation();
       if(!event.repeat) act(event.key==='ArrowRight'?'complete':'dismiss',taskId());
       return;
@@ -182,6 +192,12 @@
   document.addEventListener('focusin',event=>{const id=event.target.dataset?.glassesId;if(id)selected=id;});
   window.addEventListener('popstate',()=>{
     backing=false;
+    if(history.state?.glassesNotes&&history.state.glassesNotes===taskId()) {openNotes(taskId(),false);return;}
+    if(window.DCCGlassesNotes.isOpen()){
+      window.DCCGlassesNotes.close();draw();focus();
+      const pos=history.state?.glassesScroll;if(pos)window.scrollTo(pos.x,pos.y);
+      return;
+    }
     // Forward can revisit a canceled review whose dialog no longer exists.
     if(!reviewState && history.state?.glassesReview){history.back();return;}
     if(reviewState && history.state?.glassesReview!==reviewState.token) {
@@ -196,6 +212,6 @@
   window.addEventListener('online',()=>draw());window.addEventListener('offline',()=>draw());
   window.DCCGlassesQueue = {review,render(element,value,action){
     if(snapshot && snapshot.state.queue?.serverNow!==value.state.queue?.serverNow) {treeVersion++;treeRequest=null;tree=null;treeError='';}
-    root=element;snapshot=value;command=action;draw();
+    root=element;snapshot=value;command=action;draw();if(history.state?.glassesNotes===taskId()&&taskId())openNotes(taskId(),false);
   }};
 })();

@@ -1,4 +1,4 @@
-/* global document, DCCWorkingQueue, KeyboardEvent, innerWidth, Storage, window, history */
+/* global localStorage, Event, document, DCCWorkingQueue, KeyboardEvent, innerWidth, Storage, window, history */
 // Real queue APIs with fictional tasks only. Never point this at a live DCC instance.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -20,10 +20,10 @@ page.setDefaultTimeout(12000);page.on('pageerror',e=>errors.push(e.message));
 const check=name=>{checks.push(name);console.log('PASS '+name);};
 const source=id=>page.locator('[data-glasses-action="add"][data-glasses-id="glasses-'+id+'"]');
 const queued=id=>page.locator('[data-glasses-action="focus"][data-glasses-id="glasses-'+id+'"]');
-const detail=()=>page.locator('[data-glasses-action="toggle"]');
+const detail=()=>page.locator('[data-glasses-action="details"]');
 const select=async locator=>{await page.waitForTimeout(380);await locator.click();};
 const key=async value=>{await page.waitForTimeout(380);await detail().focus();await page.keyboard.press(value);};
-const ready=async()=>page.waitForFunction(()=>document.querySelector('[data-glasses-action="toggle"]')?.getAttribute('aria-disabled')==='false');
+const ready=async()=>page.waitForFunction(()=>document.querySelector('[data-glasses-action="details"]')?.getAttribute('aria-disabled')==='false');
 const current=id=>state().then(s=>s.queue.items.find(i=>i.task.id==='glasses-'+id));
 try {
  await api('/api/queue-review/reset',{});
@@ -60,34 +60,113 @@ try {
  await page.goForward();await ready();
  await page.goBack();await queued('a').waitFor();assert.equal((await current('a')).task.properties.startedAt,started);
  await page.goForward();await ready();assert.equal((await current('a')).task.properties.startedAt,started);
- await key('Enter');await page.waitForFunction(()=>document.querySelector('.gq-task')?.getAttribute('aria-pressed')==='false');
- assert.equal((await current('a')).status,'paused');assert.equal((await current('a')).task.properties.startedAt,undefined);
- await page.reload();await ready();assert.equal(await detail().getAttribute('aria-pressed'),'false');
- await key('Enter');await page.waitForFunction(()=>document.querySelector('.gq-task')?.getAttribute('aria-pressed')==='true');
- assert.equal((await current('a')).status,'foreground');
- await page.screenshot({path:path.join(out,'focused-task-subtasks-600.png')});
- check('Back and Forward are navigation only; foreground Select pauses/resumes and reload preserves the stopped timer');
+ const notes=()=>page.locator('.gq-notes'),editor=()=>notes().getByRole('textbox',{name:'Task notes'}).first();
+ const notesSaved=()=>page.waitForFunction(()=>document.querySelector('[data-notes-status]')?.textContent==='Notes saved');
+ await key('Enter');await editor().waitFor();assert.equal((await current('a')).task.properties.startedAt,started);
+ await editor().fill('Capture the decision and next step.');await notesSaved();
+ assert.match((await api('/api/working-queue/tasks/glasses-a/notes')).note.text,/Capture the decision/);
+ await page.screenshot({path:path.join(out,'task-notes-600.png')});
+ const noteRevision=(await state()).revision;await editor().press('ArrowRight');await editor().press('ArrowLeft');await editor().press('Enter');
+ await page.goBack();await notes().waitFor({state:'detached'});await ready();assert.equal((await state()).revision,noteRevision);assert.equal((await current('a')).task.properties.startedAt,started);
+ await page.waitForFunction(()=>document.activeElement?.dataset.glassesAction==='details');assert.equal(await detail().evaluate(el=>el===document.activeElement),true);
+ await page.goBack();await queued('a').waitFor();await page.goForward();await ready();
+ await key('Enter');await editor().waitFor();assert.match(await notes().innerText(),/Capture the decision/);await notesSaved();
+ await page.goBack();await notes().waitFor({state:'detached'});await ready();await page.screenshot({path:path.join(out,'focused-task-subtasks-600.png')});
+ check('foreground Select opens existing notes editor without timer changes; autosave and two-step Back preserve task focus');
+ // Back during a failed save retains a draft; reload recovers it and retry succeeds.
+ await key('Enter');await editor().waitFor();
+ await page.route('**/api/working-queue/tasks/*/notes',route=>route.request().method()==='PUT'?route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Synthetic notes save failure'})}):route.continue());
+ await editor().fill('Retain this draft through Back and reload.');await page.goBack();await notes().waitFor({state:'detached'});await page.waitForFunction(()=>document.querySelector('.gq-status')?.textContent.includes('Notes not saved'));
+ await page.reload();await ready();await key('Enter');await editor().waitFor();assert.match(await editor().innerText(),/Retain this draft/);
+ await notes().getByRole('button',{name:'Retry notes save'}).waitFor();await page.unroute('**/api/working-queue/tasks/*/notes');await notes().getByRole('button',{name:'Retry notes save'}).click();await notesSaved();
+ // Conflict never silently rebases over another client's text.
+ const savedNotes=await api('/api/working-queue/tasks/glasses-a/notes');
+ await api('/api/working-queue/tasks/glasses-a/notes',{expectedRevision:savedNotes.revision,note:{html:'<p>Other client notes</p>',text:'Other client notes',blocks:[]}},'PUT');
+ await editor().fill('My conflicting draft');await notes().getByRole('button',{name:'Replace saved notes with my draft'}).waitFor();
+ assert.equal((await api('/api/working-queue/tasks/glasses-a/notes')).note.text,'Other client notes');assert.match(await editor().innerText(),/My conflicting draft/);
+ await notes().getByRole('button',{name:'Replace saved notes with my draft'}).click();await notesSaved();assert.match((await api('/api/working-queue/tasks/glasses-a/notes')).note.text,/My conflicting draft/);
+ await page.goBack();await notes().waitFor({state:'detached'});await ready();
+ check('notes drafts survive failed saves, Back and reload; concurrent edits require an explicit conflict choice');
+ // A clean cached editor must adopt newer server notes before accepting edits.
+ let fresh=await api('/api/working-queue/tasks/glasses-a/notes');
+ await api('/api/working-queue/tasks/glasses-a/notes',{expectedRevision:fresh.revision,note:{html:'<p>Fresh from another client</p>',text:'Fresh from another client',blocks:[]}},'PUT');
+ await key('Enter');await editor().waitFor();await editor().getByText('Fresh from another client',{exact:true}).waitFor();await page.goBack();await notes().waitFor({state:'detached'});
+ // An obsolete GET from an earlier opening must not replace a later saved edit.
+ let releaseOld,held=false;const gate=new Promise(resolve=>{releaseOld=resolve;});
+ await page.route('**/api/working-queue/tasks/glasses-a/notes',async route=>{if(route.request().method()==='GET'&&!held){held=true;const response=await route.fetch();await gate;return route.fulfill({response});}return route.continue();});
+ await key('Enter');await editor().waitFor();await page.waitForTimeout(80);assert.equal(held,true);await page.goBack();await notes().waitFor({state:'detached'});
+ await key('Enter');await editor().waitFor();await editor().fill('Latest edit after reopening');await notesSaved();releaseOld();await page.waitForTimeout(150);await page.unroute('**/api/working-queue/tasks/glasses-a/notes');
+ await editor().fill('Latest edit after the stale response');await notesSaved();assert.match((await api('/api/working-queue/tasks/glasses-a/notes')).note.text,/after the stale response/);
+ await page.goBack();await notes().waitFor({state:'detached'});await ready();
+ check('newer saved notes refresh a cached editor; obsolete reads cannot overwrite later edits or save revisions');
+ // A separate tab can explicitly recover a stranded local draft, without borrowing account state.
+ await page.route('**/api/working-queue/tasks/*/notes',route=>route.request().method()==='PUT'?route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Synthetic retained draft'})}):route.continue());
+ await key('Enter');await editor().waitFor();await editor().fill('Recover this retained draft in another tab');await notes().getByRole('button',{name:'Retry notes save'}).waitFor();await page.goBack();await notes().waitFor({state:'detached'});
+ await page.evaluate(()=>{const note={html:'<p>Unrelated draft</p>',text:'Unrelated draft',blocks:[]};localStorage.setItem('dcc-glasses-notes:ws-other:1:other:glasses-a',JSON.stringify({taskId:'glasses-a',revision:'other',note}));localStorage.setItem('dcc-glasses-notes:ws-1:1:other:glasses-other',JSON.stringify({taskId:'glasses-other',revision:'other',note}));});
+ const recoveryTab=await context.newPage();await recoveryTab.goto(base+'/?device=glasses');await recoveryTab.locator('[data-glasses-action="focus"][data-glasses-id="glasses-a"]').click();await recoveryTab.locator('[data-glasses-action="details"]').waitFor();await recoveryTab.waitForTimeout(400);await recoveryTab.locator('[data-glasses-action="details"]').click();
+ await recoveryTab.getByRole('button',{name:'Recover retained draft'}).waitFor();assert.equal(await recoveryTab.getByRole('button',{name:'Recover retained draft'}).count(),1);assert.doesNotMatch(await recoveryTab.locator('.gq-notes').innerText(),/Unrelated draft/);await recoveryTab.getByRole('button',{name:'Recover retained draft'}).click();await recoveryTab.waitForFunction(()=>document.querySelector('[data-notes-status]')?.textContent==='Notes saved');assert.match((await api('/api/working-queue/tasks/glasses-a/notes')).note.text,/Recover this retained draft/);await recoveryTab.close();
+ await page.unroute('**/api/working-queue/tasks/*/notes');await key('Enter');await editor().waitFor();await notesSaved();await page.goBack();await notes().waitFor({state:'detached'});
+ check('account/task-scoped drafts remain explicitly recoverable from a separate tab after a failed save');
+ // Acknowledging an older save cannot mark newer typed text clean.
+ let releasePut,putHeld=false;const putGate=new Promise(resolve=>{releasePut=resolve;});
+ await page.route('**/api/working-queue/tasks/glasses-a/notes',async route=>{if(route.request().method()==='PUT'&&!putHeld){putHeld=true;const response=await route.fetch();await putGate;return route.fulfill({response});}return route.continue();});
+ await key('Enter');await editor().waitFor();await editor().fill('First in-flight draft');for(let attempt=0;attempt<100&&!putHeld;attempt++)await page.waitForTimeout(20);assert.equal(putHeld,true);
+ await editor().fill('Newer draft while save is in flight');releasePut();await notesSaved();assert.match((await api('/api/working-queue/tasks/glasses-a/notes')).note.text,/Newer draft/);await page.unroute('**/api/working-queue/tasks/glasses-a/notes');
+ await page.goBack();await notes().waitFor({state:'detached'});await ready();
+ check('an older save acknowledgement cannot clear a newer unsaved edit');
+ // When both storage and networking fail, Back retains text in memory and exit warns.
+ await page.evaluate(()=>{window.notesOriginalSetItem=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.startsWith('dcc-glasses-notes:'))throw new Error('Synthetic notes quota');return window.notesOriginalSetItem.call(this,k,v);};});
+ await page.route('**/api/working-queue/tasks/*/notes',route=>route.request().method()==='PUT'?route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Synthetic offline save'})}):route.continue());
+ await key('Enter');await editor().waitFor();await editor().fill('Keep this text in the open tab');await notes().getByText(/Draft kept in this tab only/).waitFor();
+ assert.equal(await page.evaluate(()=>{const event=new Event('beforeunload',{cancelable:true});window.dispatchEvent(event);return event.defaultPrevented;}),true);
+ await page.goBack();await notes().waitFor({state:'detached'});await key('Enter');await editor().waitFor();assert.match(await editor().innerText(),/Keep this text/);
+ await notes().getByRole('button',{name:'Retry notes save'}).waitFor();await page.evaluate(()=>{Storage.prototype.setItem=window.notesOriginalSetItem;});await page.unroute('**/api/working-queue/tasks/*/notes');await notes().getByRole('button',{name:'Retry notes save'}).click();await notesSaved();
+ await page.goBack();await notes().waitFor({state:'detached'});await ready();
+ check('notes-specific storage and save failures retain text through Back and warn before tab exit');
+ // HTML-backed legacy checkbox notes preserve structure/state through the canonical editor.
+ await api('/api/blocks',[{id:'glasses-legacy-note',type:'block',date,properties:{_sourceTaskId:'glasses-b',html:'<div><input type="checkbox" checked>Checked legacy step</div><div><input type="checkbox">Open legacy step</div>',text:'Legacy steps'}}]);
+ await page.goBack();await queued('b').waitFor();await select(queued('b'));await ready();await key('Enter');await notes().locator('.nb-check').first().waitFor();
+ assert.equal(await notes().locator('.nb-check').count(),2);assert.equal(await notes().locator('.nb-check').first().isChecked(),true);await notes().locator('.nb-content').last().fill('Updated open legacy step');await notesSaved();
+ const legacyNote=await api('/api/blocks/glasses-legacy-note');assert.equal(legacyNote.properties.blocks[0].type,'checkbox');assert.equal(legacyNote.properties.blocks[0].checked,true);assert.equal(legacyNote.properties.blocks[1].checked,false);
+ await page.goBack();await notes().waitFor({state:'detached'});await page.goBack();await queued('a').waitFor();await select(queued('a'));await ready();
+ check('legacy checked and unchecked note blocks survive editing without changing note identity');
+ // Switching tasks while a notes read is outstanding cannot cross-contaminate editors.
+ let releaseTaskRead,taskReadHeld=false;const taskReadGate=new Promise(resolve=>{releaseTaskRead=resolve;});
+ await page.route('**/api/working-queue/tasks/glasses-a/notes',async route=>{if(route.request().method()==='GET'&&!taskReadHeld){taskReadHeld=true;const response=await route.fetch();await taskReadGate;return route.fulfill({response});}return route.continue();});
+ await key('Enter');await editor().waitFor();for(let i=0;i<100&&!taskReadHeld;i++)await page.waitForTimeout(20);assert.equal(taskReadHeld,true);
+ await page.goBack();await notes().waitFor({state:'detached'});await page.goBack();await queued('b').waitFor();await select(queued('b'));await ready();await key('Enter');await editor().waitFor();await editor().fill('Notes belong only to task B');await notesSaved();releaseTaskRead();await page.waitForTimeout(100);
+ assert.match(await editor().innerText(),/only to task B/);assert.doesNotMatch((await api('/api/working-queue/tasks/glasses-a/notes')).note.text,/only to task B/);await page.unroute('**/api/working-queue/tasks/glasses-a/notes');
+ await page.goBack();await notes().waitFor({state:'detached'});await page.goBack();await queued('a').waitFor();await select(queued('a'));await ready();
+ // Keep viewport position as well as task selection on the quick notes round trip.
+ await page.setViewportSize({width:375,height:300});await detail().focus();await page.evaluate(()=>window.scrollTo(0,90));const scrollBefore=await page.evaluate(()=>window.scrollY);assert.ok(scrollBefore>0);
+ await page.waitForTimeout(400);await page.keyboard.press('Enter');await editor().waitFor();await page.goBack();await notes().waitFor({state:'detached'});await page.waitForFunction(()=>document.activeElement?.dataset.glassesAction==='details');
+ assert.equal(await page.evaluate(()=>window.scrollY),scrollBefore);await page.setViewportSize({width:600,height:600});
+ check('delayed reads stay bound to their task; quick notes Back restores foreground selection and scroll');
+
+
+
  await action('start',{taskId:'glasses-b',remindMinutes:null});await page.evaluate(()=>DCCWorkingQueue.refresh());
- assert.equal(await detail().getAttribute('aria-pressed'),'false');assert.equal((await current('a')).status,'background');
- await key('Enter');await ready();assert.equal((await current('a')).status,'foreground');assert.equal((await current('b')).status,'background');
- check('other-client timer changes reconcile; resuming retains the single canonical foreground');
+ assert.equal(await detail().getAttribute('data-running'),'false');assert.equal((await current('a')).status,'background');
+ await key('Enter');await editor().waitFor();assert.equal((await current('a')).status,'background');await page.goBack();await notes().waitFor({state:'detached'});
+ await page.goBack();await queued('a').waitFor();await select(queued('a'));await ready();assert.equal((await current('a')).status,'foreground');assert.equal((await current('b')).status,'background');
+ check('other-client timing reconciles; opening notes does not resume background work; queue selection brings it forward');
  const beforeOffline=(await state()).revision;
- await context.setOffline(true);await key('Enter');assert.equal((await state()).revision,beforeOffline);assert.match(await page.locator('.gq-status').innerText(),/Offline/);
+ await context.setOffline(true);await key('ArrowRight');assert.equal((await state()).revision,beforeOffline);assert.match(await page.locator('.gq-status').innerText(),/Offline/);
  await context.setOffline(false);await page.evaluate(()=>DCCWorkingQueue.refresh());await ready();
- check('offline gestures do not create hidden timer or completion changes');
+ check('offline task gestures do not create hidden timer or completion changes');
  const beforeStorage=(await state()).revision;
  await page.evaluate(()=>{window.glassesOriginalSetItem=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){if(key.endsWith(':pending'))throw new Error('Synthetic local storage full');return window.glassesOriginalSetItem.call(this,key,value);};});
- await key('Enter');await page.waitForFunction(()=>document.querySelector('.gq-status')?.textContent.includes('storage full'));assert.equal((await state()).revision,beforeStorage);
+ await key('ArrowRight');await page.waitForFunction(()=>document.querySelector('.gq-status')?.textContent.includes('storage full'));assert.equal((await state()).revision,beforeStorage);
  await page.evaluate(()=>{Storage.prototype.setItem=window.glassesOriginalSetItem;});await ready();
- check('local receipt storage failure prevents the timer write');
+ check('local receipt storage failure prevents the completion write');
  await page.route('**/api/working-queue/tasks/*/tree',route=>route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Synthetic tree failure'})}));
  await page.goBack();await queued('a').waitFor();await select(queued('a'));await ready();await page.getByRole('button',{name:'Retry subtasks'}).waitFor();
  assert.match(await page.locator('.gq-detail').innerText(),/Subtasks unavailable/);
  await page.unroute('**/api/working-queue/tasks/*/tree');await select(page.getByRole('button',{name:'Retry subtasks'}));await page.locator('.gq-subtasks li').first().waitFor();
  check('subtask read failures are visible and retry restores the current task tree');
- // A stale coordinator revision must fail closed and refresh, never silently toggle new work.
+ // A stale coordinator revision must fail closed and refresh before completion.
  await page.route('**/api/working-queue',route=>route.request().method()==='POST'?route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:'Synthetic stale revision'})}):route.continue());
- const conflictRevision=(await state()).revision;await key('Enter');await page.locator('.wq-conflict').waitFor();assert.equal((await state()).revision,conflictRevision);
+ const conflictRevision=(await state()).revision;await key('ArrowRight');await page.locator('.wq-conflict').waitFor();assert.equal((await state()).revision,conflictRevision);
  await page.unroute('**/api/working-queue');await page.locator('[data-queue-action="clear-conflict"]').click();await ready();
  check('a revision conflict preserves confirmed timing and exposes recovery');
  // Dismiss stops first. A failed removal leaves the open, paused task visible.
@@ -140,7 +219,7 @@ try {
  const beforeGuided=(await state()).revision;
  await select(guidedCard);await guidedPreview();await page.goBack();await settled();assert.equal((await state()).revision,beforeGuided);assert.equal(await page.locator('.gq-list').count(),1);
  await select(guidedCard);await guidedPreview();await modal().getByRole('button',{name:'Cancel',exact:true}).click();await settled();assert.equal((await state()).revision,beforeGuided);assert.equal(await page.evaluate(()=>!!history.state?.glassesReview),false);
- await select(guidedCard);await guidedPreview();await modal().getByRole('button',{name:'Bring forward',exact:true}).click();await settled();await ready();assert.equal(await detail().getAttribute('data-glasses-id'),guided.taskId);assert.equal(await detail().getAttribute('aria-pressed'),'true');
+ await select(guidedCard);await guidedPreview();await modal().getByRole('button',{name:'Bring forward',exact:true}).click();await settled();await ready();assert.equal(await detail().getAttribute('data-glasses-id'),guided.taskId);assert.equal(await detail().getAttribute('data-running'),'true');
  const beforeGuidedDone=(await state()).revision;
  await key('ArrowRight');await guidedPreview();await page.goBack();await settled();await ready();assert.equal(await page.evaluate(()=>history.state?.glassesTask),guided.taskId);assert.equal((await state()).revision,beforeGuidedDone);
  await page.goForward();await page.waitForFunction(()=>!history.state?.glassesReview);await settled();await ready();assert.equal(await page.evaluate(()=>!!history.state?.glassesReview),false,'Forward must skip a canceled review marker');assert.equal(await page.evaluate(()=>history.state?.glassesTask),guided.taskId);
@@ -156,4 +235,4 @@ try {
  assert.equal(guidedWrites.length,2);assert.equal(guidedWrites[0].sourceEventId,guidedWrites[1].sourceEventId);assert.equal((await api('/api/guided/tasks/'+guided.taskId)).session.state,'completed');assert.equal(await page.evaluate(()=>!!history.state?.glassesReview),false);
  check('guided Native Back cancels transient review first; confirmed start, required outcome and same-receipt retry restore navigation');
  assert.deepEqual(errors,[]);await fs.writeFile(path.join(out,'checks.json'),JSON.stringify({checks,errors,synthetic:true,physicalMeta:false},null,2));
-} catch(error){console.log(await page.locator('#working-queue-root').innerText());await page.screenshot({path:path.join(out,'failure.png')});throw error;} finally {await browser.close();}
+} catch(error){console.log(await page.locator('#working-queue-root').innerText());console.log(await page.evaluate(()=>({active:document.activeElement?.outerHTML,inert:document.getElementById('tab-working-queue')?.inert,history:history.state,notes:document.querySelector('.gq-notes')?.innerText})));await page.screenshot({path:path.join(out,'failure.png')});throw error;} finally {await browser.close();}

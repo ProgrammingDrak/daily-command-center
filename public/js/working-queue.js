@@ -117,8 +117,9 @@
     return handle;
   }
   // Glasses use the same receipt, revision and foreground coordinator as every client.
-  // A list activation is 'focus'; only a subsequent detail activation is 'toggle'.
+  // Foreground selection opens notes locally; only explicit queue intents mutate work.
   async function glassesAction(intent,id,revision){
+    if(!['add','focus','complete','dismiss'].includes(intent))throw new Error('Unsupported glasses work action');
     if(!navigator.onLine)throw new Error('Offline. Reconnect before changing work.');
     if(pending||sending)throw new Error('Wait for the saved update to be confirmed.');
     if(revision!==state.revision)throw new Error('Work changed. Review the current task and try again.');
@@ -134,7 +135,7 @@
       return send(envelope('queue-remove',{taskId:id,expectedRevision}));
     }
     if(intent==='focus'&&item.status==='foreground')return {ok:true};
-    const action=intent==='complete'?'done':intent==='toggle'&&item.status==='foreground'?'pause':'start';
+    const action=intent==='complete'?'done':'start';
     if(item.task.properties.guidedDefinitionId&&['start','done'].includes(action)){
       return window.DCCGlassesQueue.review(callbacks=>transition(action,item,callbacks));
     }
