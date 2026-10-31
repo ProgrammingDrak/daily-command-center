@@ -229,6 +229,11 @@ function openConvertToRadial(ev,trig){
 async function convertTaskType(id,newType){
   const ev=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null;
   const R=window.TaskTypes;
+  // Private linked content (activity logs, journal pages) cannot be detached by a
+  // generic type conversion; the server pins these types as well.
+  const _lockedTypeMessage=type=>type==="journal"
+    ?"This journal keeps its private page. Create a separate Task instead."
+    :"This private "+R.get(type).label.toLowerCase()+" keeps its activity type. Create a separate Task to keep the log.";
   if(!ev||!newType||ev.type===newType||ev._typeConversionPending)return false;
   if(!R||!R.TYPES[newType]||R.isFixed(newType)||R.isFixed(ev.type))return false;
   const store=window.blockStore;
@@ -240,10 +245,10 @@ async function convertTaskType(id,newType){
   const currentType=(block.properties||{}).type||ev.type;
   // The server retains private activity types even before the first log. A
   // generic conversion cannot detach that history or claim it became public.
-  if(R.rule(currentType,"recordType")){
+  if(R.rule(currentType,"recordType")||currentType==="journal"){
     ev.type=currentType;ev.publicVisibility="private";
     if(typeof render==="function")render();
-    if(typeof showToast==="function")showToast("This private "+R.get(currentType).label.toLowerCase()+" keeps its activity type. Create a separate Task to keep the log.","info");
+    if(typeof showToast==="function")showToast(_lockedTypeMessage(currentType),"info");
     return false;
   }
   const kids=(typeof childrenOf==="function")?childrenOf(id,scheduled):[];
@@ -252,10 +257,12 @@ async function convertTaskType(id,newType){
   try{
     const saved=await enqueueRowPropsWrite(block.id,current=>{
       const persistedType=current.type||ev.type;
-      if(R.rule(persistedType,"recordType"))throw new Error("This private "+R.get(persistedType).label.toLowerCase()+" keeps its activity type. Create a separate Task to keep the log.");
+      if(R.rule(persistedType,"recordType")||persistedType==="journal")throw new Error(_lockedTypeMessage(persistedType));
       wasRollup=R.isRollup(persistedType);
       return Object.assign({},current,{type:newType,isWrap:!!R.rule(newType,"dragMovesSubtree")},
-        R.rule(newType,"recordType")?{publicVisibility:"private"}:{});
+        R.rule(newType,"privateRecord")?{publicVisibility:"private"}:{},
+        // A Journal's page is keyed by this stable id; mint it with the conversion.
+        newType==="journal"&&!current.journalId&&window.JournalPageStore?{journalId:window.JournalPageStore.newJournalId()}:{});
     },{_reportSaveStatus:true},{rejectOnError:true});
     if(!saved||!saved.properties)throw new Error("Could not save the task type");
     const actualType=saved.properties.type||"task";
@@ -769,6 +776,7 @@ function createTaskListRowRenderer(context){
       onDragOver:!isDoneRow?(e)=>dOver(e,ev.id):null,onDragLeave:!isDoneRow?dLeave:null,onDrop:!isDoneRow?(e)=>dDrop(e,ev.id):null,
       afterRender:(rowEl)=>{
         if(window.DCC&&window.DCC.Workout)window.DCC.Workout.attach(rowEl,ev);
+        if(window.DCC&&window.DCC.JournalTask)window.DCC.JournalTask.attach(rowEl,ev);
         if(typeof wireTriageTaskSourceActions==="function")wireTriageTaskSourceActions(rowEl);
         const stSpan=rowEl.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfSchedulePopover(ev,rowEl,stSpan);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:stSpan,view:"time"});});
         const pf=rowEl.querySelector(".prep-flag");if(pf)pf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev,{defaultTab:"prep"});});
@@ -1337,10 +1345,11 @@ function buildSchedule(){
       const ttlSpan=el.querySelector(".ttl");
       if(ttlSpan){
         ttlSpan.style.cursor="text";
-        ttlSpan.setAttribute("title",ev.type==='workout'?"Open workout plan and tracking":"Click to rename");
+        ttlSpan.setAttribute("title",ev.type==='workout'?"Open workout plan and tracking":ev.type==='journal'?"Open journal page":"Click to rename");
         ttlSpan.addEventListener("click",e=>{
           e.stopPropagation();
           if(ev.type==='workout'&&window.DCC?.Workout){openTaskNotes(ev);return;}
+          if(ev.type==='journal'&&window.DCC?.JournalTask){openTaskNotes(ev);return;}
           const inp=document.createElement("input");
           inp.type="text";
           inp.className="ttl-edit";

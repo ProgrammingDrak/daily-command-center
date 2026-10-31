@@ -128,6 +128,7 @@ function runHook({ result, body, userId = 7, workspaceId = "ws-1" }) {
   const retracted = [];
   const ctx = {
     console: { error() {} },
+    TaskTypes: require("./public/js/task-types"),
     socialStore: {
       async createCompletionPost(arg) { created.push(arg); return { id: 1 }; },
       async retractCompletionPost(owner, taskId) { retracted.push([owner, taskId]); return 1; }
@@ -209,6 +210,7 @@ test("hook: a store failure never propagates into the completion path", async ()
   // checkmark must not turn into a 500 because of it.
   const ctx = {
     console: { error() {} },
+    TaskTypes: require("./public/js/task-types"),
     socialStore: { async createCompletionPost() { throw new Error("db down"); } },
     module: {}
   };

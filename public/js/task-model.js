@@ -118,6 +118,8 @@
       source_id: p.source_id || "", notes: p.notes || "", untimed: untimed,
       ...Object.fromEntries(["completionOutcome","remainingWork","originalGoal","goalId","goalComplete","iteration","nextStepId","previousStepId","completionTimeKnown"].filter(key=>Object.hasOwn(p,key)).map(key=>[key,p[key]])),
       guidedDefinitionId: p.guidedDefinitionId || null,
+      // Stable journal identity only; page content never rides on the task.
+      journalId: p.journalId || null,
       status: p.status || "open",
       allDay: allDay,
       allDayStart: p.all_day_start || (allDay ? block.date : null),

@@ -43,6 +43,7 @@ function persistAddedTask(item,targetDate){
       responsibilityId:item.responsibilityId||null,
       responsibilityTitle:item.responsibilityTitle||null,
       ...(item.activityPlanSourceId?{activityPlanSourceId:item.activityPlanSourceId}:{}),
+      ...(item.type==="journal"&&item.journalId?{journalId:item.journalId}:{}),
       capacityBucket:item.capacityBucket||null,
       responsibilityScore:item.responsibilityScore||null,
       alertKey:item.alertKey||null,
@@ -1585,7 +1586,7 @@ function addTaskUniversal(barEl){
   const inp=barEl.querySelector(".tab-title");
   const dest=barEl.querySelector(".tab-dest").value;
   const activityType=dest==="workout"||dest==="meal";
-  const title=inp.value.trim()||(activityType?(dest==="workout"?"Workout":"Meal"):"");
+  const title=inp.value.trim()||(activityType?(dest==="workout"?"Workout":"Meal"):dest==="journal"?"Journal":"");
   if(!title){_flashBlankTitle(barEl,()=>addTaskUniversal(barEl));return false}
   const durMin=parseInt(barEl.querySelector(".tab-dur").value)||30;
   // Activity creation is a deferred save. Keep the composer draft until the
@@ -1642,6 +1643,15 @@ function addTaskUniversal(barEl){
     // Manually-added meeting: no source_id, so the calendar materializer never
     // touches it. Fixed-time (reflow-exempt) but user-movable, like a synced one.
     case"meeting":insertTaskNow(title,durMin,{type:"meeting"});break;
+    // Journal: a private task whose stable journalId keys its handwritten page.
+    // The page opens right away; strokes save on this device before any sync.
+    case"journal":{
+      const journalId=window.JournalPageStore?window.JournalPageStore.newJournalId():null;
+      insertTaskNow(title,durMin,{type:"journal",journalId,publicVisibility:"private",onScheduled:r=>{
+        if(r&&window.DCC&&DCC.JournalTask)DCC.JournalTask.open({taskId:r.blockId||r.localId,journalId,title});
+      }});
+      break;
+    }
     case"side_project":{
       if(typeof addSideProjectTask==="function")addSideProjectTask(title,durMin);
       break;
@@ -2297,7 +2307,7 @@ const TASK_DESTINATIONS=[
   {value:"habit",   icon:"🔁", label:"Habit"},
   {value:"meeting", icon:"👥", label:"Meeting"}
 ];
-TASK_DESTINATIONS.push({value:"workout",icon:"W",label:"Workout"},{value:"meal",icon:"M",label:"Meal"});
+TASK_DESTINATIONS.push({value:"workout",icon:"W",label:"Workout"},{value:"meal",icon:"M",label:"Meal"},{value:"journal",icon:"✍️",label:"Journal"});
 function _destMeta(value){return TASK_DESTINATIONS.find(d=>d.value===value)||TASK_DESTINATIONS[0]}
 // Blank title isn't a silent dead end: flash the input AND offer, via a toast
 // action, to proceed as an untitled task. onProceed resumes whatever the user
@@ -2349,7 +2359,7 @@ function initDestRadial(bar){
       _hideDestPreview();
       closeRadialMenu();
       const title=inp?inp.value.trim():"";
-      if(!title&&!['workout','meal'].includes(sel.value)){_flashBlankTitle(bar,submitLauncher);return}
+      if(!title&&!['workout','meal','journal'].includes(sel.value)){_flashBlankTitle(bar,submitLauncher);return}
       if(addTaskUniversal(bar)===false)return;
       if(typeof Event==="function"&&typeof bar.dispatchEvent==="function"){
         bar.dispatchEvent(new Event("dcc:launcher-submit-success"));
