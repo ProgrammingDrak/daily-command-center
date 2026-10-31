@@ -107,7 +107,9 @@ try {
  const completedRevision=(await state()).revision;
  await page.reload();await page.getByRole('button',{name:'Retry saved update'}).waitFor();
  const retries=[];page.on('request',r=>{if(r.method()==='POST'&&r.url()===base+'/api/working-queue')retries.push(r.postDataJSON());});
+ const replayResponse=page.waitForResponse(r=>r.url()===base+'/api/working-queue'&&r.request().method()==='POST'&&r.request().postDataJSON().sourceEventId===completionId);
  allowReplay=true;await page.waitForFunction(async()=>{await DCCWorkingQueue.tick();return !document.querySelector('[data-queue-action="retry"]');},null,{polling:100});await page.locator('.gq-list').waitFor();await page.unroute('**/api/working-queue');
+ const replay=await replayResponse;assert.ok(replay.ok(),'saved completion replay must be acknowledged');assert.equal((await replay.json()).duplicate,true);assert.equal(await page.locator('.wq-conflict').count(),0);
  assert.ok(retries.some(r=>r.sourceEventId===completionId));assert.equal((await state()).revision,completedRevision);
  assert.equal(await queued('a').count(),0);assert.equal((await api('/api/blocks/glasses-a')).properties.status,'done');
  assert.equal(new URL(page.url()).searchParams.get('device'),'glasses');
@@ -141,7 +143,7 @@ try {
  await select(guidedCard);await guidedPreview();await modal().getByRole('button',{name:'Bring forward',exact:true}).click();await settled();await ready();assert.equal(await detail().getAttribute('data-glasses-id'),guided.taskId);assert.equal(await detail().getAttribute('aria-pressed'),'true');
  const beforeGuidedDone=(await state()).revision;
  await key('ArrowRight');await guidedPreview();await page.goBack();await settled();await ready();assert.equal(await page.evaluate(()=>history.state?.glassesTask),guided.taskId);assert.equal((await state()).revision,beforeGuidedDone);
- await page.goForward();await settled();await ready();assert.equal(await page.evaluate(()=>!!history.state?.glassesReview),false,'Forward must skip a canceled review marker');assert.equal(await page.evaluate(()=>history.state?.glassesTask),guided.taskId);
+ await page.goForward();await page.waitForFunction(()=>!history.state?.glassesReview);await settled();await ready();assert.equal(await page.evaluate(()=>!!history.state?.glassesReview),false,'Forward must skip a canceled review marker');assert.equal(await page.evaluate(()=>history.state?.glassesTask),guided.taskId);
  await page.goBack();await settled();assert.equal(await page.locator('.gq-list').count(),1,'Back after skipping a canceled review must return to the list');assert.equal((await state()).revision,beforeGuidedDone);
  await page.goForward();await settled();await ready();
  await key('ArrowRight');await guidedPreview();await page.waitForFunction(()=>document.querySelector('[data-completion-time] .wq-effort'));
