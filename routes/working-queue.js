@@ -28,6 +28,13 @@ module.exports = function mount(app, ctx, config = {}) {
     "/api/working-queue/tasks",
     route((req) => store.search(req.query, req.queueOwner))
   );
+  app.get('/api/working-queue/tasks/:id/notes', route(req => store.taskNotes(req.params.id, req.queueOwner)));
+  app.put('/api/working-queue/tasks/:id/notes', route(async req => {
+    const result=await store.taskNotes(req.params.id, req.queueOwner, req.body);
+    ctx.broadcast?.('blocks-changed',{action:'task-notes',blockIds:[...new Set([result.taskId,result.noteBlockId].filter(Boolean))]},req.workspaceId);
+    return result;
+  }));
+  app.get('/api/working-queue/tasks/:id/tree', route(req => store.taskTree(req.params.id, req.queueOwner)));
   app.get('/api/working-queue/tasks/:id/completion-preview', route(req => store.completionPreview(req.params.id, req.queueOwner)));
   app.post(
     "/api/working-queue",

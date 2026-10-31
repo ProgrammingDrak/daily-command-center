@@ -50,7 +50,7 @@ function blockClass(block){
   return cls;
 }
 
-function createBlockEl(block, placeholder){
+function createBlockEl(block, placeholder, imageDisplayUrl){
   if(block.type==='image'){
     const el=document.createElement('div');
     el.className='nb-attachment';
@@ -58,7 +58,8 @@ function createBlockEl(block, placeholder){
     el.dataset.blockType=block.type;
 
     const img=document.createElement('img');
-    img.src=block.src||'';
+    const displaySrc=imageDisplayUrl?imageDisplayUrl(block.src||''):block.src||'';
+    if(displaySrc)img.src=displaySrc;
     img.alt=block.alt||block.name||'Attached image';
     img.loading='lazy';
 
@@ -69,7 +70,7 @@ function createBlockEl(block, placeholder){
     del.setAttribute('aria-label','Remove image');
     del.innerHTML='&times;';
 
-    el.appendChild(img);
+    if(!displaySrc&&block.src){const label=document.createElement('span');label.textContent='Image retained · view in desktop DCC';el.appendChild(label);}else el.appendChild(img);
     el.appendChild(del);
     return el;
   }
@@ -243,7 +244,7 @@ window.createBlockEditor=function(containerEl, initialBlocks, options){
     } else {
       blocks.push(block);
     }
-    const el=createBlockEl(block, placeholder);
+    const el=createBlockEl(block, placeholder, options.imageDisplayUrl);
     if (options.accessibleLabel) {
       const content = el.querySelector('.nb-content');
       if (content) {
@@ -662,11 +663,12 @@ window.createBlockEditor=function(containerEl, initialBlocks, options){
   });
 
   // Close slash menu on click outside
-  document.addEventListener('click',function(e){
+  function closeSlashOnOutsideClick(e){
     if(slashMenu.style.display==='block' && !slashMenu.contains(e.target)){
       closeSlashMenu();
     }
-  });
+  }
+  document.addEventListener('click',closeSlashOnOutsideClick);
 
   // ======== Public API ========
 
@@ -749,6 +751,7 @@ window.createBlockEditor=function(containerEl, initialBlocks, options){
   };
 
   editor.destroy=function(){
+    document.removeEventListener('click',closeSlashOnOutsideClick);
     if(attachmentControls)attachmentControls.destroy();
     container.innerHTML='';
     blocks=[];

@@ -111,12 +111,19 @@ function createConversationStore(ctx) {
     const query = typeof body?.query === "string" ? body.query.trim().slice(0, 200) : "";
     const offset = Number(body?.offset || 0);
     if (!Number.isInteger(offset) || offset < 0) throw M.fail("Invalid search offset");
-    // Includes completed, recurring definitions and instances; never creates on a miss.
+    // Default search preserves history; glasses opt into open task rows before pagination.
     const r = await pool.query(
       `SELECT * FROM blocks WHERE user_id=$1 AND workspace_id=$2 AND deleted_at IS NULL
       AND (dcc_is_task_row(type,properties) OR properties->>'kind'='responsibility_item') AND COALESCE(properties->>'title','') ILIKE $3
+      AND (NOT $5::boolean OR (
+        COALESCE(properties->>'kind','') <> 'responsibility_item'
+        AND COALESCE(properties->>'status','open') NOT IN ('done','deleted','archived')
+        AND COALESCE(properties->'done','false'::jsonb) <> 'true'::jsonb
+        AND COALESCE(properties->'completed','false'::jsonb) <> 'true'::jsonb
+        AND COALESCE(properties->>'completedAt','') = '' AND COALESCE(properties->>'doneAt','') = ''
+      ))
       ORDER BY updated_at DESC,id LIMIT 51 OFFSET $4`,
-      [owner.userId, owner.workspaceId, "%" + query.replace(/[\\%_]/g, "\\$&") + "%", offset]
+      [owner.userId, owner.workspaceId, "%" + query.replace(/[\\%_]/g, "\\$&") + "%", offset, body?.openOnly === 'true' || body?.openOnly === true]
     );
     return {
       tasks: r.rows
@@ -151,6 +158,52 @@ function createConversationStore(ctx) {
         .map((r) => ({ ...r, correctionWindow: entryWindow(r, timeZone) })),
       ...(await state(owner, q))
     };
+  }
+  async function taskTree(id, owner) {
+    await authorize(pool, owner);
+    const root = await task(pool, id, owner);
+    const rows = await blockDB.getSubtree([root.id], owner.workspaceId);
+    return { rows: rows.filter(row => row.user_id === owner.userId && blockDB.isTaskRow(row)) };
+  }
+  async function readTaskNotes(q, row, owner) {
+    let note=row.properties._taskNotes,noteBlockId=null;
+    if(note==null){
+      const aliases=await q.query(`SELECT id FROM blocks WHERE user_id=$1 AND workspace_id=$2 AND deleted_at IS NULL
+        AND date IS NOT DISTINCT FROM $3::date AND properties->>'local_id'=$4 AND dcc_is_task_row(type,properties)`,[owner.userId,owner.workspaceId,row.date,row.properties.local_id||row.id]);
+      const local=aliases.rows.length===1?row.properties.local_id||row.id:null;
+      const legacy=await q.query(`SELECT id,properties FROM blocks WHERE user_id=$1 AND workspace_id=$2 AND deleted_at IS NULL
+        AND (type='note' OR (properties ? 'html' AND properties ? 'text'))
+        AND (properties->>'_sourceTaskId'=$3 OR parent_id=$3 OR
+          (date IS NOT DISTINCT FROM $4::date AND (properties->>'_sourceTaskId'=$5 OR parent_id=$5)))
+        ORDER BY updated_at DESC,id LIMIT 1 FOR UPDATE`,[owner.userId,owner.workspaceId,row.id,row.date,local]);
+      const p=legacy.rows[0]?.properties;noteBlockId=legacy.rows[0]?.id||null;
+      note=p?{html:p.html||'',text:p.text||'',blocks:Array.isArray(p.blocks)?p.blocks:[]}:
+        {html:row.properties.notes||row.properties.detail||row.properties.description||'',text:'',blocks:[]};
+    }
+    return {taskId:row.id,title:row.properties.title||'Task',note,noteBlockId,revision:require('./lib/task-notes').revision(note)};
+  }
+  async function taskNotes(id, owner, body) {
+    const q=await pool.connect();
+    try {
+      await q.query('BEGIN');await authorize(q,owner);
+      let row=await task(q,id,owner);
+      await q.query('SELECT id FROM blocks WHERE id=$1 FOR UPDATE',[row.id]);
+      row=await task(q,row.id,owner);
+      const current=await readTaskNotes(q,row,owner);
+      if(body!==undefined){
+        const N=require('./lib/task-notes'),note=N.validate(body?.note);
+        if(typeof body.expectedRevision!=='string')throw M.fail('The saved notes revision is required');
+        // Exact replay after a lost acknowledgement succeeds without another write.
+        if(N.revision(note)!==current.revision){
+          if(body.expectedRevision!==current.revision)throw M.fail('Notes changed elsewhere. Your draft is retained; review the saved notes before replacing them.',409);
+          if(current.noteBlockId){
+            const existing=await blockDB.getBlock(current.noteBlockId,q);
+            await blockDB.updateBlock(existing.id,{properties:{...existing.properties,...note}},q);
+          }else row=await blockDB.updateBlock(row.id,{properties:{...row.properties,_taskNotes:note}},q);
+        }
+      }
+      const result=body===undefined?current:await readTaskNotes(q,row,owner);await q.query('COMMIT');return result;
+    }catch(error){await q.query('ROLLBACK');throw error;}finally{q.release();}
   }
   async function completionPreview(id, owner) {
     const q = await pool.connect();
@@ -659,6 +712,6 @@ function createConversationStore(ctx) {
       )
     ).rows;
   }
-  return { state, search, get, completionPreview, calendarEvents, execute, history };
+  return { state, search, get, taskTree, taskNotes, completionPreview, calendarEvents, execute, history };
 }
 module.exports = { SCHEMA_SQL, FOREGROUND_INDEX_SQL, createConversationStore, timingFor };

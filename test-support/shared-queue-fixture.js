@@ -3,6 +3,7 @@ const express = require('express');
 const path = require('node:path');
 async function createSharedQueueFixture() {
   const ctx = await require('./activity-db').createActivityDb();
+  const broadcasts=[];
   await ctx.pool.query(require('../conversation-store').FOREGROUND_INDEX_SQL);
   const app = express(); app.use(express.json());
   app.use((req, res, next) => {
@@ -20,7 +21,7 @@ async function createSharedQueueFixture() {
     buildDayResponse: async () => day, filterLegacyGcalBlocks: rows => rows,
     capabilities: require('../capabilities'), route: require('../lib/route-helpers').route,
     slotStore: require('../slot-store'), scoreTaskPoints: require('../slot-scoring').scoreTaskPoints,
-    getRequestOrigin: () => 'synthetic-local', broadcast() {},
+    getRequestOrigin: () => 'synthetic-local', broadcast(...args) { broadcasts.push(args); },
     registerPublicSse: (_ws, _req, res) => res.status(204).end(), closePublicSse() {}
   });
   require('../routes/social-todo')(app, ctx);
@@ -56,7 +57,7 @@ async function createSharedQueueFixture() {
   }
   await ctx.pool.query('INSERT INTO work_rotations(workspace_id,user_id,state) VALUES($1,$2,$3)', ['ws-1', 1, { version: 2, order, items }]);
   await ctx.pool.query("INSERT INTO delegated_work(user_id,workspace_id,task_id,work_key,report) VALUES(1,'ws-1','review','demo',$1)", [{ phase: 'needs-review', at: '2026-10-29T10:01:00Z', summary: 'PRIVATE ASSISTANT REPORT SENTINEL' }]);
-  return { ...ctx, base, date, url, token: share.token, request, setDay(value) { day = value; },
+  return { ...ctx, broadcasts, base, date, url, token: share.token, request, setDay(value) { day = value; },
     async close() { await new Promise(resolve => server.close(resolve)); await ctx.close(); } };
 }
 module.exports = { createSharedQueueFixture };

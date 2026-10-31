@@ -1,0 +1,33 @@
+const test=require('node:test');
+const assert=require('node:assert/strict');
+test('owner task notes preserve storage identity, reject conflicts and never modify timing',{skip:!process.env.DCC_TEST_DATABASE_URL},async t=>{
+ const f=await require('./test-support/shared-queue-fixture').createSharedQueueFixture();t.after(()=>f.close());
+ const url='/api/working-queue/tasks/focus/notes',read=()=>f.request(url,{user:1});
+ assert.equal((await f.request(url)).status,401);assert.equal((await f.request(url,{user:3})).status,403);
+ await f.blockDB.createBlock({id:'foreign-notes-task',type:'block',user_id:2,workspace_id:'ws-2',properties:{type:'task',title:'Foreign'}});
+ assert.equal((await f.request('/api/working-queue/tasks/foreign-notes-task/notes',{user:1})).status,404);
+ const initial=await read(),before=await f.blockDB.getBlock('focus');
+ const note=text=>({text,html:'<p>'+text+'</p>',blocks:[{id:'paragraph',type:'paragraph',content:text}]});
+ const write=(value,expectedRevision=initial.body.revision)=>f.request(url,{user:1,method:'PUT',body:{note:note(value),expectedRevision}});
+ assert.equal((await write('first')).status,200);
+ const first=await read();assert.equal(first.body.note.text,'first');
+ const after=await f.blockDB.getBlock('focus');assert.deepEqual({...after.properties,_taskNotes:undefined},{...before.properties,_taskNotes:undefined});
+ assert.equal((await write('first')).status,200,'lost acknowledgement exact replay succeeds');
+ assert.equal((await write('stale other text')).status,409);assert.equal((await read()).body.note.text,'first');
+ const results=await Promise.all([write('writer one',first.body.revision),write('writer two',first.body.revision)]);assert.deepEqual(results.map(x=>x.status).sort(),[200,409]);
+ const latest=await read();assert.equal((await f.request(url,{user:1,method:'PUT',body:{note:note('')}})).status,400);
+ assert.throws(()=>require('./lib/task-notes').validate(note('x'.repeat(200001))),/200 KB/);
+ assert.equal((await write('',latest.body.revision)).status,200);assert.equal((await read()).body.note.text,'','explicit empty survives');
+ // Existing daily-note identity stays authoritative; the task row is not migrated.
+ await f.blockDB.createBlock({id:'legacy-note',type:'block',user_id:1,workspace_id:'ws-1',date:f.date,properties:{_sourceTaskId:'local-review',html:'<p>Legacy</p>',text:'Legacy'}});
+ const legacyUrl='/api/working-queue/tasks/review/notes',old=await f.request(legacyUrl,{user:1});assert.equal(old.body.noteBlockId,'legacy-note');assert.equal(old.body.note.text,'Legacy');
+ const saved=await f.request(legacyUrl,{user:1,method:'PUT',body:{note:note('Updated legacy'),expectedRevision:old.body.revision}});assert.equal(saved.status,200);
+ assert.equal((await f.blockDB.getBlock('legacy-note')).properties.text,'Updated legacy');assert.equal((await f.blockDB.getBlock('review')).properties._taskNotes,undefined);
+ assert.deepEqual(f.broadcasts.at(-1)[1].blockIds,['review','legacy-note']);
+ for(const id of ['alias-one','alias-two'])await f.blockDB.createBlock({id,type:'block',user_id:1,workspace_id:'ws-1',date:f.date,properties:{type:'task',title:id,local_id:'ambiguous'}});
+ await f.blockDB.createBlock({id:'ambiguous-note',type:'block',user_id:1,workspace_id:'ws-1',date:f.date,properties:{_sourceTaskId:'ambiguous',html:'<p>Ambiguous legacy note</p>',text:'Ambiguous legacy note'}});
+ const ambiguous=await f.request('/api/working-queue/tasks/alias-one/notes',{user:1});assert.equal(ambiguous.body.noteBlockId,null);assert.equal(ambiguous.body.note.html,'');
+ assert.equal((await f.request('/api/working-queue/tasks/alias-one/notes',{user:1,method:'PUT',body:{note:note('One task only'),expectedRevision:ambiguous.body.revision}})).status,200);
+ assert.equal((await f.blockDB.getBlock('ambiguous-note')).properties.text,'Ambiguous legacy note');assert.equal((await f.blockDB.getBlock('alias-two')).properties._taskNotes,undefined);
+ const state=await f.request('/api/working-queue',{user:1});assert.equal(state.body.revision,0);assert.equal(state.body.queue.items.find(i=>i.task.id==='focus').status,'foreground');
+});
