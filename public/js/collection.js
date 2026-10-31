@@ -113,7 +113,7 @@
         const url = new URL(location.href);
         if (state.query) url.searchParams.set(opts.urlKey, state.query);
         else url.searchParams.delete(opts.urlKey);
-        history.replaceState(null, "", url);
+        history.replaceState(history.state, "", url);
       }
     }
 

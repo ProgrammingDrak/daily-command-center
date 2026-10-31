@@ -83,6 +83,18 @@ jobs:
           done
           if [ -z "$ok" ]; then cat glasses-server.log; exit 1; fi
           node scripts/verify-glasses.mjs http://127.0.0.1:3988
+      - name: Verify glasses source, queue and native Back history
+        run: |
+          DCC_WORKING_QUEUE_REVIEW=1 PORT=3989 node scripts/ui-review-server.mjs > glasses-queue-server.log 2>&1 &
+          queue_pid=$!
+          trap 'kill "$queue_pid" 2>/dev/null || true' EXIT
+          ok=""
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3989/api/health >/dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          if [ -z "$ok" ]; then cat glasses-queue-server.log; exit 1; fi
+          DCC_GLASSES_REVIEW_URL=http://127.0.0.1:3989 CHROME_PATH="$(node -e 'process.stdout.write(require("playwright-core").chromium.executablePath())')" node scripts/verify-glasses-working-queue.mjs
       - name: Boot server, wait for health, run smoke
         run: |
           node server.js > server.log 2>&1 &
