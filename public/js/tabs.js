@@ -332,7 +332,7 @@ closeNotesDrawer = function() {
     render();
     return;
   }
-  _origCloseNotesDrawer();
+  return _origCloseNotesDrawer();
 };
 
 // Override add action item to support upcoming store

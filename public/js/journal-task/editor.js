@@ -721,7 +721,7 @@
     const b = el("button", { type: "button", class: "btn btn-sm jt-open", "data-activity-open": type === "journal" ? "" : null },
       type === "journal" ? "Open journal page" : "Use as Journal");
     b.onclick = async () => {
-      if (typeof closeAddModal === "function") closeAddModal();
+      if (typeof closeAddModal === "function" && closeAddModal() === false) return;
       if (type !== "journal") {
         if (typeof convertTaskType !== "function" || !(await convertTaskType(task.id, "journal"))) return;
       }

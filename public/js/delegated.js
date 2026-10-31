@@ -257,7 +257,8 @@
     try {
       const overlay = document.getElementById("add-modal-overlay");
       if (overlay && overlay.classList.contains("open") && typeof closeAddModal === "function") {
-        closeAddModal();
+        // Unsaved notes that could not be queued keep the modal open; do not navigate away.
+        if (closeAddModal() === false) return;
         // Let the close's deferred-render flush actually run BEFORE the day switch.
         // _doRender bails while a modal is open and re-arms on the next animation frame,
         // so switching in the same tick leaves the target day's task array unbuilt.

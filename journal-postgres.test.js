@@ -76,6 +76,44 @@ test("journal task pages: ownership, revisions, pinning, retention and private H
     assert.equal((await store.get("jt-1", owner)).ink.strokes.length, 2);
   });
 
+  await t.test("database API roles cannot read or mutate private journal pages or claims", async () => {
+    const role = "journal_untrusted_" + require("node:crypto").randomUUID().replaceAll("-", "");
+    const tables = ["task_journal_pages", "task_journal_claims"];
+    const q = await ctx.pool.connect();
+    let created = false;
+    try {
+      const schema = (await q.query("SELECT current_schema() AS name")).rows[0].name;
+      await q.query(`CREATE ROLE "${role}" NOLOGIN`); created = true;
+      await q.query(`GRANT USAGE ON SCHEMA "${schema}" TO "${role}"`);
+      // Even accidental row read/write grants must not bypass the server-only RLS boundary.
+      await q.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ${tables.join(",")} TO "${role}"`);
+      await q.query("BEGIN");
+      await q.query(`SET LOCAL ROLE "${role}"`);
+      for (const table of tables) {
+        assert.equal((await q.query(`SELECT * FROM ${table}`)).rows.length, 0, table + " read");
+        assert.equal((await q.query(`UPDATE ${table} SET task_id = task_id RETURNING *`)).rows.length, 0, table + " update");
+        assert.equal((await q.query(`DELETE FROM ${table} RETURNING *`)).rows.length, 0, table + " delete");
+      }
+      await assert.rejects(q.query("INSERT INTO task_journal_claims (journal_id, task_id) VALUES ($1, $2)", ["jr_forged-claim-1", "jt-1"]), { code: "42501" });
+      await q.query("ROLLBACK");
+      await q.query("BEGIN");
+      await q.query(`SET LOCAL ROLE "${role}"`);
+      await assert.rejects(q.query("INSERT INTO task_journal_pages (task_id, journal_id, workspace_id, owner_user_id, body) VALUES ($1, $2, $3, $4, $5)", ["plain-1", "jr_forged-page-1", "ws-1", 1, "forged"]), { code: "42501" });
+      await q.query("ROLLBACK");
+      // The schema-owning server connection keeps full access.
+      assert.equal((await q.query("SELECT body FROM task_journal_pages WHERE task_id = $1", ["jt-1"])).rows.length, 1);
+      assert.ok((await q.query("SELECT count(*)::int AS n FROM task_journal_claims")).rows[0].n >= 1);
+      const enabled = await q.query("SELECT relrowsecurity FROM pg_class WHERE oid IN ('task_journal_pages'::regclass, 'task_journal_claims'::regclass)");
+      assert.equal(enabled.rows.length, 2); assert.ok(enabled.rows.every(r => r.relrowsecurity));
+    } finally {
+      await q.query("ROLLBACK").catch(() => {});
+      if (created) { await q.query(`DROP OWNED BY "${role}"`); await q.query(`DROP ROLE "${role}"`); }
+      q.release();
+    }
+    // Released before using the store: PGlite serializes every query on one connection.
+    assert.equal((await store.get("jt-1", owner)).ink.strokes.length, 2, "server store still reads the page");
+  });
+
   await t.test("stale generic writes and moves cannot detach the type, journal id or privacy", async () => {
     const jid = task.properties.journalId;
     const updated = await blockDB.updateBlock("jt-1", { properties: { title: "Renamed", type: "task", publicVisibility: "public", journalId: "jr_hijack-0001" } });

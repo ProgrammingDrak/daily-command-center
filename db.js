@@ -41,6 +41,88 @@ function pinPrivateRecord(existingProps, newProps) {
   stampPrivateRecord(newProps);
 }
 
+// Task notes live either on the task row (`_taskNotes`) or, for older tasks, on a
+// linked daily note block (html/text/blocks, linked by `_sourceTaskId` or by a task
+// parent row; see isTaskLinkedLegacyNoteRow). Either one changes
+// only through an explicit notes write naming its target and the revision id(s) its
+// editor started from (lib/task-notes). A generic or stale property bag (rename,
+// duration, move, offline replay) keeps the durable note whether it omits it or
+// carries an older copy. A task row with no task note yet still accepts one from a
+// generic write, so copies and pre-upgrade clients keep working.
+const TASK_NOTES_CONFLICT_MESSAGE = "Notes changed elsewhere. Your draft is retained; review the saved notes before replacing them.";
+const LEGACY_NOTE_CONTENT_KEYS = ["html", "text", "blocks"];
+function isTaskLinkedLegacyNote(props) {
+  return !!props && typeof props._sourceTaskId === "string"
+    && typeof props.html === "string" && typeof props.text === "string";
+}
+// Readers (conversation-store readTaskNotes, desktop loadNotes) also treat a note
+// block whose parent row is a task as that task's note. The parent_id foreign key
+// makes it a real row; a carried-over task's local_id alias names its original row,
+// so checking the parent row covers that alias too. Notes under a day root, under
+// another note or under an action item are not task notes and stay freely editable.
+async function isTaskLinkedLegacyNoteRow(q, row) {
+  if (!row) return false;
+  if (isTaskLinkedLegacyNote(row.properties)) return true;
+  const TaskNotes = require("./lib/task-notes");
+  if (!TaskNotes.isLegacyNoteRow(row) || !row.parent_id || isDayRootId(row.parent_id)) return false;
+  const { rows } = await q.query("SELECT type, properties FROM blocks WHERE id = $1", [row.parent_id]);
+  const parent = rows[0];
+  if (!parent || !isTaskRow(parent) || TaskNotes.isLegacyNoteRow(parent)) return false;
+  const tags = (parent.properties && parent.properties.tags) || [];
+  return parent.type !== "action_item" && !(Array.isArray(tags) && tags.includes("action-item"));
+}
+// The legacy note block a task's notes are read from, exactly as readTaskNotes
+// resolves it (including a unique same-day local_id alias), or null.
+async function findTaskLegacyNote(q, row, { userId, workspaceId, lock = false }) {
+  const props = row.properties || {}, date = row.date ?? null;
+  const aliases = await q.query(`SELECT id FROM blocks WHERE user_id=$1 AND workspace_id=$2 AND deleted_at IS NULL
+    AND date IS NOT DISTINCT FROM $3::date AND properties->>'local_id'=$4 AND dcc_is_task_row(type,properties)`,
+  [userId, workspaceId, date, props.local_id || row.id]);
+  const local = aliases.rows.length === 1 ? props.local_id || row.id : null;
+  const legacy = await q.query(`SELECT id,properties FROM blocks WHERE user_id=$1 AND workspace_id=$2 AND deleted_at IS NULL
+    AND (type='note' OR (properties ? 'html' AND properties ? 'text'))
+    AND (properties->>'_sourceTaskId'=$3 OR parent_id=$3 OR
+      (date IS NOT DISTINCT FROM $4::date AND (properties->>'_sourceTaskId'=$5 OR parent_id=$5)))
+    ORDER BY updated_at DESC,id LIMIT 1${lock ? " FOR UPDATE" : ""}`, [userId, workspaceId, row.id, date, local]);
+  return legacy.rows[0] || null;
+}
+function pinTaskNotes(existingProps, newProps, linkedLegacyNote) {
+  if (!newProps || !existingProps) return;
+  if (Object.hasOwn(existingProps, "_taskNotes")) newProps._taskNotes = existingProps._taskNotes;
+  if (linkedLegacyNote) {
+    for (const key of LEGACY_NOTE_CONTENT_KEYS) {
+      if (Object.hasOwn(existingProps, key)) newProps[key] = existingProps[key];
+      else delete newProps[key];
+    }
+  }
+}
+// `linkedLegacyNote`: the row is a task's legacy note (never a task-row target).
+// `shadowsLegacyNote`: the task has no `_taskNotes` yet but readers show a legacy
+// note block, so a first task-row note would hide content its writer never saw.
+function applyTaskNotesWrite(existing, { taskNotes, taskNotesBaseRevisions, taskNotesTarget }, { linkedLegacyNote = false, shadowsLegacyNote = false } = {}) {
+  const N = require("./lib/task-notes");
+  const invalid = message => Object.assign(new Error(message), { statusCode: 400, publicCode: "TASK_NOTES_INVALID" });
+  let note;
+  try { note = N.validate(taskNotes); } catch (error) { throw invalid(error.message); }
+  if (!Array.isArray(taskNotesBaseRevisions) || !taskNotesBaseRevisions.length
+      || taskNotesBaseRevisions.length > N.MAX_BASE_REVISIONS
+      || !taskNotesBaseRevisions.every(base => base === null || (typeof base === "string" && N.REVISION_RE.test(base)))) {
+    throw invalid("taskNotesBaseRevisions must list the note revision ids this edit started from");
+  }
+  if (taskNotesTarget === "legacy" ? !N.isLegacyNoteRow(existing)
+      : taskNotesTarget === "task" ? (!isTaskRow(existing) || linkedLegacyNote) : true) {
+    throw invalid("This row is not a task notes target");
+  }
+  const props = existing.properties || {};
+  const current = N.revisionOrNull(N.storedNote(props, taskNotesTarget));
+  // An exact replay after a lost acknowledgement is a success, not a conflict.
+  if (N.revision(note) === current) return { ...props };
+  if (!taskNotesBaseRevisions.includes(current) || (taskNotesTarget === "task" && current === null && shadowsLegacyNote)) {
+    throw Object.assign(new Error(TASK_NOTES_CONFLICT_MESSAGE), { statusCode: 409, publicCode: "TASK_NOTES_CONFLICT" });
+  }
+  return taskNotesTarget === "legacy" ? { ...props, ...note } : { ...props, _taskNotes: note };
+}
+
 // ── Workspace Bootstrap ──
 
 async function ensureWorkspacesForAllUsers() {
@@ -1003,8 +1085,16 @@ async function setTaskCompletion({
 async function updateBlock(id, fields, client) {
   const {
     properties, sort_order, parent_id, date, completionIntent, taskPriority,
-    completionMutationId, completionBaseRevision,
+    completionMutationId, completionBaseRevision, taskNotes,
   } = fields;
+  // A notes write is field-only like taskPriority. Its full properties snapshot,
+  // if any, is ignored rather than applied over newer row state.
+  if (taskNotes !== undefined && [sort_order, parent_id, date, completionIntent, completionMutationId,
+      completionBaseRevision, taskPriority].some(value => value !== undefined)) {
+    const error = new Error("Task notes writes cannot be combined with other block edits");
+    error.statusCode = 400;
+    throw error;
+  }
   if (taskPriority !== undefined && (!["Low", "Medium", "High"].includes(taskPriority)
       || [properties, sort_order, parent_id, date, completionIntent, completionMutationId, completionBaseRevision].some(value => value !== undefined))) {
     const error = new Error("taskPriority must be Low, Medium, or High and cannot be combined with other block edits");
@@ -1057,7 +1147,16 @@ async function updateBlock(id, fields, client) {
       }
     }
     let newProps = taskPriority !== undefined ? { ...existing.properties, taskPriority } : existing.properties;
-    if (properties !== undefined) {
+    // Resolved once under the row lock: whether this row is a task's legacy note
+    // (pinned against generic writes, never a task-row notes target).
+    const linkedLegacyNote = await isTaskLinkedLegacyNoteRow(q, existing);
+    if (taskNotes !== undefined) {
+      const shadowsLegacyNote = fields.taskNotesTarget === "task" && !linkedLegacyNote
+        && (existing.properties || {})._taskNotes == null
+        && !!(await findTaskLegacyNote(q, { ...existing, date: normalizeDate(existing.date) },
+          { userId: existing.user_id, workspaceId: existing.workspace_id }));
+      newProps = applyTaskNotesWrite(existing, fields, { linkedLegacyNote, shadowsLegacyNote });
+    } else if (properties !== undefined) {
       const parsed = typeof properties === "string" ? JSON.parse(properties) : properties;
       const requestedTaskType = String(parsed && parsed.type || "").trim().toLowerCase();
       const existingTaskType = String(existing.properties && existing.properties.type || "").trim().toLowerCase();
@@ -1096,6 +1195,7 @@ async function updateBlock(id, fields, client) {
     // Generic/stale block writes cannot silently detach an activity log or expose
     // a workout/meal/journal in sharing. Detailed records never pass through this path.
     pinPrivateRecord(existingProps, newProps);
+    if (taskNotes === undefined) pinTaskNotes(existingProps, newProps, linkedLegacyNote);
     // Converting into a Journal (or a stale write naming another id) must claim
     // the id like a create does, inside this transaction.
     if (newProps && newProps.type === "journal" && newProps.journalId !== existingProps.journalId) {
@@ -2044,6 +2144,7 @@ async function rescheduleBlocks(moves, creates, options = {}) {
       // Moves use a separate writer from updateBlock; retain the same private
       // activity identity even when a stale client sends generic task props.
       pinPrivateRecord(existing.properties, newProps);
+      pinTaskNotes(existing.properties, newProps, await isTaskLinkedLegacyNoteRow(client, existing));
       if (newProps && newProps.type === "journal" && newProps.journalId !== existing.properties?.journalId) {
         await require("./journal-store").claimJournalId(client, newProps, m.id, existing.workspace_id);
       }
@@ -2849,7 +2950,7 @@ async function getFutureDatesWithBlocks(fromDate, workspaceId) {
 
 module.exports = {
   pool, BLOCK_SCHEMAS, VALID_TYPES, validateBlock,
-  createBlock, updateBlock, deleteBlock,
+  createBlock, updateBlock, deleteBlock, findTaskLegacyNote,
   // Canonical task model primitives (A1) — no callers yet except the audit endpoint.
   undeleteBlock, updateDeletedBlockProperties, getBlockIncludingDeleted, findByIdempotencyKey, getBlocksByIdempotencyKeys, getRepeatSeriesBlocks, withRepeatSeriesLock, isIdempotencyConflict,
   getCarryoverPool, carryoverSkipTypes, getSubtree, isTaskRow,

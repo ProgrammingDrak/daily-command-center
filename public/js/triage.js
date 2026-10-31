@@ -298,6 +298,7 @@ function openDoneModal(id, title, onConfirm, ev){
   let dmNoteBlocks=typeof noteBlocksForTask === "function" ? noteBlocksForTask(id, noteVal, ev) : null;
   if(window._dmBlockEditor) window._dmBlockEditor.destroy();
   window._dmBlockEditor=createBlockEditor(dmNotesContainer, dmNoteBlocks,window.DCC.TaskSources.editorOptions(dmNotesContainer,ev||{}));
+  if(typeof attachTaskNotesEditor==="function")attachTaskNotesEditor(id,noteVal,dmNotesContainer,window._dmBlockEditor);
   // Pre-populate action items
   document.getElementById("dm-action-input").style.display="none";
   renderDmActions(id);
@@ -394,6 +395,7 @@ function openDoneModal(id, title, onConfirm, ev){
 }
 function closeDoneModal(){
   document.getElementById("done-modal-overlay").classList.remove("open");
+  if(typeof releaseTaskNotesEditor==="function")releaseTaskNotesEditor(_dmId);
   _dmId=null; _dmCallback=null; _dmEv=null; _dmSessions=[];
   if(typeof _flushDeferredRender==='function')_flushDeferredRender();
 }
@@ -405,7 +407,9 @@ function confirmDoneModal(){
     const blocks=window._dmBlockEditor.getBlocks();
     notes[_dmId]=Object.assign({},notes[_dmId],{blocks:blocks, html:window._dmBlockEditor.toHtml(), text:window._dmBlockEditor.toMarkdown()});
   } else { notes[_dmId]=Object.assign({},notes[_dmId],{blocks:[],html:"",text:""}); }
-  saveNotes(notes,{taskId:_dmId});
+  // Notes that could not be queued keep the modal open with its text, and the task is not
+  // completed yet; saveNotes has already shown the storage message.
+  if(saveNotes(notes,{taskId:_dmId})===false)return false;
   const text=notes[_dmId]?notes[_dmId].text:"";
   // Save time sessions
   if(_dmSessions.length){

@@ -42,6 +42,20 @@ INSERT INTO task_journal_claims (journal_id, task_id, workspace_id)
       WHERE properties->>'type' = 'journal' AND properties->>'journalId' IS NOT NULL
   ) existing ORDER BY journal_id, rank, at, task_id
 ON CONFLICT (journal_id) DO NOTHING;
+-- Private page bodies and identity claims are server-only, like guided and
+-- conversation state. No client policies are created; the schema-owning server
+-- connection retains access, while Supabase API roles see nothing even if granted.
+ALTER TABLE task_journal_pages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE task_journal_claims ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON task_journal_pages, task_journal_claims FROM PUBLIC;
+DO $journal_privacy$
+DECLARE client_role TEXT;
+BEGIN
+ FOR client_role IN SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated') LOOP
+  EXECUTE format('REVOKE ALL ON task_journal_pages, task_journal_claims FROM %I', client_role);
+ END LOOP;
+END
+$journal_privacy$;
 `;
 const JOURNAL_ID_RE = /^jr_[a-z0-9-]{8,64}$/i;
 const BODY_MAX = 20000;

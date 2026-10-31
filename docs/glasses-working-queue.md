@@ -65,6 +65,16 @@ editor or a later save. Legacy checkbox state survives canonical HTML migration.
 remain in the saved model; unsupported image display uses a retained-image
 placeholder, so unrelated text edits cannot erase attachments.
 
+Glasses and the desktop editors share one guarded notes write (`db.js`
+`updateBlock` with `taskNotes`, `taskNotesTarget: "task" | "legacy"` and
+`taskNotesBaseRevisions`), validated by `lib/task-notes.validate`. Bases are
+SHA-256 revision ids of the canonical note (`lib/task-notes` on the server,
+`blockStore.taskNotesRevision` in the browser), never note snapshots, at most 20.
+Generic property writes and moves keep `_taskNotes` and task-linked legacy note
+content. A desktop draft rejected live or on replay is kept in
+`blockstore-task-notes-drafts:<account>` (not the capped dead-letter log) until
+the user uses or discards it from the notice shown when those notes reopen.
+
 While notes are open, the foreground view is inert and editing gestures cannot
 complete or dismiss a task. The editor is destroyed and its observers/listeners
 are disconnected on exit. Returning to a background task's notes does not resume
