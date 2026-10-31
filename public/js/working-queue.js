@@ -79,10 +79,10 @@
     if(completedFocused)root.querySelector('.wq-completed > summary')?.focus({preventScroll:true});
     if(focusKey)root.querySelector('[data-queue-action="'+CSS.escape(focusKey)+'"][data-task-id="'+CSS.escape(focusId||'')+'"]')?.focus({preventScroll:true});
   }
-  function modal(title,body,submit,label='Save',onClose){let busy=false;return DCC.overlay.open({kind:'modal',title,body,onClose,canClose:()=>!busy,actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
+  function modal(title,body,submit,label='Save',onClose){let busy=false;return DCC.overlay.open({kind:'modal',title,body,onClose,canClose:reason=>!busy||reason==='glasses-back',actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
   function form(html){const body=document.createElement('div');body.className='wq-form';body.innerHTML=html+'<p role="status"></p>';return body;}
   async function transition(action,item,callbacks={}){
-    const body=form('<p>'+esc(item.task.properties.title||'Task')+'</p>'+(['start','background-start','queue-block'].includes(action)?'<label>Check back on the background task<select data-minutes><option value="">No reminder</option><option value="5">5 minutes</option><option value="15" selected>15 minutes</option><option value="30">30 minutes</option><option value="120">2 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes<input type="number" min="1" max="1440" value="10"></label>':'')+(action==='done'?'<div data-completion-time aria-live="off">Loading recorded time…</div><p>Completing saves the current focused session to this task. The saved total is confirmed after the update succeeds.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome required></textarea></label>':''):''));
+    const body=form('<p>'+esc(item.task.properties.title||'Task')+'</p>'+(['start','background-start','queue-block'].includes(action)?'<label>Check back on the background task<select data-minutes><option value="">No reminder</option><option value="5">5 minutes</option><option value="15" selected>15 minutes</option><option value="30">30 minutes</option><option value="120">2 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes<input type="number" min="1" max="1440" value="10"></label>':'')+(action==='done'?'<div data-completion-time aria-live="off">Loading recorded time…</div><p>Completing saves the current focused session to this task. The saved total is confirmed after the update succeeds.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome maxlength="6000" required></textarea></label>':''):''));
     let guided=null,ready=!item.task.properties.guidedDefinitionId,completion=null,clockOffset=0,command=null;
     const formatSeconds=seconds=>Math.floor(seconds/60)+'m '+String(seconds%60).padStart(2,'0')+'s';
     function updateCompletion(){
@@ -98,7 +98,9 @@
       const minutes=select?(select.value==='custom'?Number(body.querySelector('[data-custom] input').value):select.value?Number(select.value):null):null;
       if(minutes!==null&&(!Number.isInteger(minutes)||minutes<1||minutes>1440))throw new Error('Choose 1–1440 minutes.');
       const payload={taskId:item.task.id,...(select?{remindMinutes:minutes}:{})};
-      if(guided)payload.guided={expectedRevision:guided.revision,expectedDefinitionRevision:guided.definitionRevision,expectedContextVersion:guided.contextVersion,...(action==='done'?{outcome:body.querySelector('[data-outcome]').value,confirmed:true}:{})};
+      const outcome=action==='done'&&guided?body.querySelector('[data-outcome]').value:null;
+      if(outcome!==null&&(!outcome.trim()||outcome.length>6000))throw new Error('Record a confirmed outcome (1–6000 characters) before completing.');
+      if(guided)payload.guided={expectedRevision:guided.revision,expectedDefinitionRevision:guided.definitionRevision,expectedContextVersion:guided.contextVersion,...(action==='done'?{outcome:outcome.trim(),confirmed:true}:{})};
       if(!command||action!=='done')command=envelope(action,{...payload,...(completion?{expectedRevision:completion.revision}:{})});
       updateCompletion();
       try {
@@ -134,7 +136,7 @@
     if(intent==='focus'&&item.status==='foreground')return {ok:true};
     const action=intent==='complete'?'done':intent==='toggle'&&item.status==='foreground'?'pause':'start';
     if(item.task.properties.guidedDefinitionId&&['start','done'].includes(action)){
-      return new Promise(resolve=>transition(action,item,{success:resolve,close:()=>resolve(null)}));
+      return window.DCCGlassesQueue.review(callbacks=>transition(action,item,callbacks));
     }
     let expectedRevision=revision;
     if(action==='done'){

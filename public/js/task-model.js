@@ -913,6 +913,26 @@
     };
   }
 
+  // Project a raw API subtree with canonical/local/date-scoped and parent_id links.
+  // Return the usual projection; canonical IDs are only traversal keys.
+  function fromBlocksTree(blocks) {
+    const rows = _arr(blocks).slice().sort((a,b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER)-(b.sort_order ?? Number.MAX_SAFE_INTEGER) || String(a.created_at||'').localeCompare(String(b.created_at||'')) || String(a.id).localeCompare(String(b.id)));
+    const byId = new Map(rows.map(row=>[row.id,row])), aliases = new Map();
+    const aliasKey = (date,id) => JSON.stringify([date||null,id]);
+    for(const row of rows) {
+      const alias=row.properties?.local_id;if(!alias)continue;
+      const key=aliasKey(row.date,alias);
+      aliases.set(key,aliases.has(key)?null:row.id); // ambiguous legacy IDs never invent a parent
+    }
+    const projected=new Map(rows.map(row=>[row.id,fromBlock(row)]));
+    const pool=rows.map(row=>{
+      const p=row.properties||{}, ref=p.wrapId ?? p.subtaskOf;
+      const parent=ref!=null?(byId.has(ref)?ref:aliases.get(aliasKey(row.date,ref))):row.parent_id;
+      return {...projected.get(row.id),id:row.id,wrapId:p.wrapId!=null?parent:null,subtaskOf:p.wrapId==null?parent:null};
+    });
+    return selectTree(pool,{pool,isCollapsed:()=>false}).map(node=>({...node,ev:projected.get(node.ev.id)}));
+  }
+
   // ── selectTree: render order for a nested list ──
   //
   // Nodes are {ev, depth, rel, hasKids, collapsed}; descendants of a collapsed node
@@ -1031,6 +1051,7 @@
     selectCarryover: selectCarryover,
     selectRoots: selectRoots,
     selectDay: selectDay,
+    fromBlocksTree: fromBlocksTree,
     selectTree: selectTree
   };
 });

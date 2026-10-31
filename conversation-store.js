@@ -111,12 +111,19 @@ function createConversationStore(ctx) {
     const query = typeof body?.query === "string" ? body.query.trim().slice(0, 200) : "";
     const offset = Number(body?.offset || 0);
     if (!Number.isInteger(offset) || offset < 0) throw M.fail("Invalid search offset");
-    // Includes completed, recurring definitions and instances; never creates on a miss.
+    // Default search preserves history; glasses opt into open task rows before pagination.
     const r = await pool.query(
       `SELECT * FROM blocks WHERE user_id=$1 AND workspace_id=$2 AND deleted_at IS NULL
       AND (dcc_is_task_row(type,properties) OR properties->>'kind'='responsibility_item') AND COALESCE(properties->>'title','') ILIKE $3
+      AND (NOT $5::boolean OR (
+        COALESCE(properties->>'kind','') <> 'responsibility_item'
+        AND COALESCE(properties->>'status','open') NOT IN ('done','deleted','archived')
+        AND COALESCE(properties->'done','false'::jsonb) <> 'true'::jsonb
+        AND COALESCE(properties->'completed','false'::jsonb) <> 'true'::jsonb
+        AND COALESCE(properties->>'completedAt','') = '' AND COALESCE(properties->>'doneAt','') = ''
+      ))
       ORDER BY updated_at DESC,id LIMIT 51 OFFSET $4`,
-      [owner.userId, owner.workspaceId, "%" + query.replace(/[\\%_]/g, "\\$&") + "%", offset]
+      [owner.userId, owner.workspaceId, "%" + query.replace(/[\\%_]/g, "\\$&") + "%", offset, body?.openOnly === 'true' || body?.openOnly === true]
     );
     return {
       tasks: r.rows
