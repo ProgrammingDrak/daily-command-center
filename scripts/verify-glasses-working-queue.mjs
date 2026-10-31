@@ -1,4 +1,4 @@
-/* global document, DCCWorkingQueue, KeyboardEvent, innerWidth, Storage, window */
+/* global document, DCCWorkingQueue, KeyboardEvent, innerWidth, Storage, window, history */
 // Real queue APIs with fictional tasks only. Never point this at a live DCC instance.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -9,7 +9,7 @@ assert.ok(['127.0.0.1','localhost'].includes(new URL(base).hostname));
 assert.equal((await fetch(base+'/api/health').then(r=>r.json())).reviewOnly,true);
 const out=process.env.DCC_GLASSES_REVIEW_OUT||'test-results/glasses-working-queue';
 await fs.mkdir(out,{recursive:true});
-const api=async(url,body)=>{const r=await fetch(base+url,{method:body?'POST':'GET',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});assert.ok(r.ok,await r.clone().text());return r.json();};
+const api=async(url,body,method)=>{const r=await fetch(base+url,{method:method||(body?'POST':'GET'),headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});assert.ok(r.ok,await r.clone().text());return r.json();};
 const state=()=>api('/api/working-queue');
 async function action(action,extra={}){const current=await state();return api('/api/working-queue',{action,sourceEventId:crypto.randomUUID(),expectedRevision:current.revision,at:new Date().toISOString(),...extra});}
 const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
@@ -29,14 +29,15 @@ try {
  await api('/api/queue-review/reset',{});
  const date=new Date().toISOString().slice(0,10);
  const make=(id,title,p={},order=0)=>({id:'glasses-'+id,type:'block',date,sort_order:order,properties:{local_id:'glasses-'+id,title,type:'task',status:'open',duration:30,...p}});
- await api('/api/blocks',[make('a','Review the project handoff'),make('b','Research the next approach'),make('c','Prepare tomorrow’s outline'),make('child','Read the proposed changes',{subtaskOf:'glasses-a'},1),make('done-child','Review the background',{subtaskOf:'glasses-a',status:'done'},2),...Array.from({length:51},(_,i)=>make('extra-'+i,'Additional task '+i))]);
+ await api('/api/blocks',[make('a','Review the project handoff'),make('b','Research the next approach'),make('c','Prepare tomorrow’s outline'),make('child','Read the proposed changes',{subtaskOf:'glasses-a'},1),make('done-child','Review the background',{subtaskOf:'glasses-a',status:'done'},2),make('grandchild','Check the supporting detail',{subtaskOf:'glasses-child'},3),...Array.from({length:51},(_,i)=>make('extra-'+i,'Additional task '+i))]);
  await page.goto(base+'/glasses.html');await source('a').waitFor();await source('extra-50').waitFor();
  assert.equal(await queued('a').count(),0);assert.equal(await source('done-child').count(),0);
  assert.equal(await page.locator('.glasses-nav').isVisible(),false);
  const initial=(await state()).revision;
  await select(source('a'));await queued('a').waitFor();
  assert.equal((await current('a')).status,'queued');assert.equal((await current('a')).task.properties.startedAt,undefined);
- await source('a').dispatchEvent('click');assert.equal((await state()).revision,initial+1);assert.equal((await state()).queue.items.length,1);
+ const duplicateRequests=[];const captureDuplicate=r=>{if(r.method()==='POST'&&r.url()===base+'/api/working-queue')duplicateRequests.push(r.postDataJSON());};
+ page.on('request',captureDuplicate);await page.waitForTimeout(400);await source('a').dispatchEvent('click');await page.waitForTimeout(100);page.off('request',captureDuplicate);assert.equal(duplicateRequests.length,0);assert.equal((await state()).revision,initial+1);assert.equal((await state()).queue.items.length,1);
  check('all open tasks paginate beyond 50; adding creates one queue membership and never starts a timer');
  await select(source('b'));await queued('b').waitFor();
  await queued('a').focus();await page.keyboard.press('ArrowRight');assert.equal(await queued('b').evaluate(el=>el===document.activeElement),true);
@@ -44,11 +45,16 @@ try {
  await page.screenshot({path:path.join(out,'task-source-and-queue-600.png')});
  await select(queued('a'));await ready();await page.locator('.gq-subtasks').getByText('Read the proposed changes',{exact:false}).waitFor();
  assert.equal((await current('a')).status,'foreground');assert.ok((await current('a')).task.properties.startedAt);
- assert.equal(await page.locator('.gq-subtasks li').count(),2);
+ assert.deepEqual((await page.locator('.gq-subtasks li').allTextContents()).map(t=>t.slice(2)),['Read the proposed changes','Check the supporting detail','Review the background']);
  await page.waitForTimeout(400);
  await detail().evaluate(el=>{el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',repeat:true,bubbles:true,cancelable:true}));el.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',bubbles:true,cancelable:true}));});
  await page.waitForTimeout(100);assert.equal((await current('a')).status,'foreground');
  check('queue selection starts foreground exactly once and displays open and completed subtasks');
+ const beforeChildEdit=(await state()).revision;
+ const childBefore=await api('/api/blocks/glasses-grandchild');await api('/api/blocks/glasses-grandchild',{properties:{...childBefore.properties,title:'Updated supporting detail'}},'PATCH');
+ assert.equal((await state()).revision,beforeChildEdit);await page.evaluate(()=>DCCWorkingQueue.refresh());
+ await page.locator('.gq-subtasks').getByText('Updated supporting detail',{exact:false}).waitFor();
+ check('nested hierarchy stays grouped and same-revision child edits refresh the subtree');
  const started=(await current('a')).task.properties.startedAt;
  await key('Escape');await queued('a').waitFor();await page.waitForTimeout(100);assert.equal((await current('a')).task.properties.startedAt,started);
  await page.goForward();await ready();
@@ -101,7 +107,7 @@ try {
  const completedRevision=(await state()).revision;
  await page.reload();await page.getByRole('button',{name:'Retry saved update'}).waitFor();
  const retries=[];page.on('request',r=>{if(r.method()==='POST'&&r.url()===base+'/api/working-queue')retries.push(r.postDataJSON());});
- allowReplay=true;await page.evaluate(()=>DCCWorkingQueue.tick());await page.locator('.gq-list').waitFor();await page.unroute('**/api/working-queue');
+ allowReplay=true;await page.waitForFunction(async()=>{await DCCWorkingQueue.tick();return !document.querySelector('[data-queue-action="retry"]');},null,{polling:100});await page.locator('.gq-list').waitFor();await page.unroute('**/api/working-queue');
  assert.ok(retries.some(r=>r.sourceEventId===completionId));assert.equal((await state()).revision,completedRevision);
  assert.equal(await queued('a').count(),0);assert.equal((await api('/api/blocks/glasses-a')).properties.status,'done');
  assert.equal(new URL(page.url()).searchParams.get('device'),'glasses');
@@ -117,5 +123,35 @@ try {
  await key('Escape');await queued('b').waitFor();
  await page.goto(base+'/?device=glasses&tab=schedule');await page.waitForSelector('#tab-schedule.active');assert.equal(await page.locator('.glasses-nav').isVisible(),true);
  check('keyboard Escape uses the same Back path and explicit itinerary links retain their adapter');
+ // An inactive or hidden surface must not trigger a full catalog scan, even past TTL.
+ const sourceRequests=[];const recordSource=r=>{if(r.method()==='GET'&&new URL(r.url()).pathname==='/api/working-queue/tasks')sourceRequests.push(r.url());};page.on('request',recordSource);
+ await page.evaluate(()=>{const now=Date.now;Date.now=()=>now()+120000;DCCWorkingQueue.render();Date.now=now;});await page.waitForTimeout(100);assert.equal(sourceRequests.length,0);
+ await page.goto(base+'/?device=glasses');await source('c').waitFor();await page.waitForTimeout(150);sourceRequests.length=0;
+ await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});const now=Date.now;Date.now=()=>now()+120000;DCCWorkingQueue.render();Date.now=now;});await page.waitForTimeout(100);assert.equal(sourceRequests.length,0);
+ await page.evaluate(()=>{delete document.hidden;});page.off('request',recordSource);
+ check('hidden and inactive glasses views do not scan the task catalog');
+ const definition=await api('/api/guided/definitions',{id:crypto.randomUUID(),expectedRevision:0,definition:{title:'Synthetic guided review',goal:'Review the synthetic fixture',starterPrompt:'Ask for the confirmed outcome.',completionCriteria:'Record a confirmed result.'}});
+ const guided=await api('/api/guided/tasks',{id:crypto.randomUUID(),definitionId:definition.id,date});
+ await page.reload();const guidedSource=page.locator('[data-glasses-action="add"][data-glasses-id="'+guided.taskId+'"]'),guidedCard=page.locator('[data-glasses-action="focus"][data-glasses-id="'+guided.taskId+'"]');await guidedSource.waitFor();await select(guidedSource);await guidedCard.waitFor();
+ const modal=()=>page.getByRole('dialog');const settled=()=>page.waitForFunction(()=>!document.querySelector('.dcc-overlay'));
+ const guidedPreview=()=>page.waitForFunction(()=>document.querySelector('[data-preview]')?.textContent.includes('Ask for the confirmed outcome.'));
+ const beforeGuided=(await state()).revision;
+ await select(guidedCard);await guidedPreview();await page.goBack();await settled();assert.equal((await state()).revision,beforeGuided);assert.equal(await page.locator('.gq-list').count(),1);
+ await select(guidedCard);await guidedPreview();await modal().getByRole('button',{name:'Cancel',exact:true}).click();await settled();assert.equal((await state()).revision,beforeGuided);assert.equal(await page.evaluate(()=>!!history.state?.glassesReview),false);
+ await select(guidedCard);await guidedPreview();await modal().getByRole('button',{name:'Bring forward',exact:true}).click();await settled();await ready();assert.equal(await detail().getAttribute('data-glasses-id'),guided.taskId);assert.equal(await detail().getAttribute('aria-pressed'),'true');
+ const beforeGuidedDone=(await state()).revision;
+ await key('ArrowRight');await guidedPreview();await page.goBack();await settled();await ready();assert.equal(await page.evaluate(()=>history.state?.glassesTask),guided.taskId);assert.equal((await state()).revision,beforeGuidedDone);
+ await page.goForward();await settled();await ready();assert.equal(await page.evaluate(()=>!!history.state?.glassesReview),false,'Forward must skip a canceled review marker');assert.equal(await page.evaluate(()=>history.state?.glassesTask),guided.taskId);
+ await page.goBack();await settled();assert.equal(await page.locator('.gq-list').count(),1,'Back after skipping a canceled review must return to the list');assert.equal((await state()).revision,beforeGuidedDone);
+ await page.goForward();await settled();await ready();
+ await key('ArrowRight');await guidedPreview();await page.waitForFunction(()=>document.querySelector('[data-completion-time] .wq-effort'));
+ const guidedWrites=[];const recordGuided=r=>{if(r.method()==='POST'&&r.url()===base+'/api/working-queue')guidedWrites.push(r.postDataJSON());};page.on('request',recordGuided);
+ await modal().getByRole('button',{name:'Complete',exact:true}).click();await page.waitForTimeout(150);assert.equal(guidedWrites.length,0,'empty outcome must not freeze an invalid retry receipt');
+ await modal().locator('[data-outcome]').fill('Confirmed synthetic review complete.');
+ let failGuided=true;await page.route('**/api/working-queue',route=>{if(route.request().method()==='POST'&&route.request().postDataJSON().action==='done'&&failGuided){failGuided=false;return route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Synthetic guided save failure'})});}return route.continue();});
+ await modal().getByRole('button',{name:'Complete',exact:true}).click();await modal().getByText(/Completion not confirmed/).waitFor();assert.equal((await state()).revision,beforeGuidedDone);
+ await modal().getByRole('button',{name:'Complete',exact:true}).click();await settled();await page.locator('.gq-list').waitFor();page.off('request',recordGuided);await page.unroute('**/api/working-queue');
+ assert.equal(guidedWrites.length,2);assert.equal(guidedWrites[0].sourceEventId,guidedWrites[1].sourceEventId);assert.equal((await api('/api/guided/tasks/'+guided.taskId)).session.state,'completed');assert.equal(await page.evaluate(()=>!!history.state?.glassesReview),false);
+ check('guided Native Back cancels transient review first; confirmed start, required outcome and same-receipt retry restore navigation');
  assert.deepEqual(errors,[]);await fs.writeFile(path.join(out,'checks.json'),JSON.stringify({checks,errors,synthetic:true,physicalMeta:false},null,2));
 } catch(error){console.log(await page.locator('#working-queue-root').innerText());await page.screenshot({path:path.join(out,'failure.png')});throw error;} finally {await browser.close();}

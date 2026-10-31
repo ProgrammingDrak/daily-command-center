@@ -5,15 +5,15 @@
   const DCC = window.DCC;
   let root, snapshot, command, busy = false, message = '', selected = null;
   let tree = null, treeRequest = null, treeError = '', treeVersion = 0;
-  let suppressClickUntil = 0, backing = false;
-  let source = [], sourceLoading = false, sourceError = '', sourceRevision = -1, sourceAt = 0;
+  let suppressClickUntil = 0, backing = false, reviewState = null;
+  let source = [], sourceLoading = false, sourceError = '', sourceAt = 0;
   const taskId = () => history.state?.glassesTask || null;
   const active = () => !!document.querySelector('#tab-working-queue.active');
   const esc = text => DCC.esc(String(text ?? ''));
   const items = () => snapshot?.state.queue?.items || [];
   const itemFor = id => items().find(item => item.task.id === id);
   const focus = () => {
-    if (!active() || root.closest('[inert]') || document.querySelector('.dcc-overlay')) return;
+    if (!root || !active() || root.closest('[inert]') || document.querySelector('.dcc-overlay')) return;
     const target = taskId() ? root.querySelector('[data-glasses-action="toggle"]') :
       root.querySelector('[data-glasses-id="' + CSS.escape(selected || '') + '"]') || root.querySelector('[data-glasses-action="focus"]');
     target?.focus({preventScroll:true});
@@ -26,6 +26,27 @@
     history.pushState({...history.state,glassesTask:id},'');
     treeVersion++;treeRequest=null;tree = null; treeError = ''; message = ''; draw(); focus();
   }
+  // Native Back consumes a transient review before it can leave the task view.
+  // Settle this entry before opening a destination or navigating after completion.
+  function review(openDialog) {
+    return new Promise((resolve,reject)=>{
+      const request={token:crypto.randomUUID(),handle:null,result:null,error:null,closed:false};
+      reviewState=request;
+      request.finish=()=>{
+        if(reviewState!==request)return;
+        reviewState=null;
+        if(request.error)reject(request.error);else resolve(request.result);
+      };
+      history.pushState({...history.state,glassesReview:request.token},'');
+      const close=()=>{
+        request.closed=true;
+        if(history.state?.glassesReview===request.token)history.back();else request.finish();
+      };
+      Promise.resolve().then(()=>openDialog({success:result=>{if(!request.closed)request.result=result;},close}))
+        .then(handle=>{request.handle=handle;if(request.closed)handle?.close('glasses-back');})
+        .catch(error=>{request.error=error;close();});
+    });
+  }
   function loadTree(id,revision) {
     const token = ++treeVersion;
     treeRequest = {id,revision}; treeError = '';
@@ -35,38 +56,39 @@
       .finally(() => { if(token === treeVersion) {treeRequest = null; draw();} });
   }
   async function loadSource() {
-    if(sourceLoading)return;
+    if(sourceLoading || !active() || document.hidden)return;
     sourceLoading=true;sourceError='';
-    const revision=snapshot.state.revision,found=new Map();
+    const found=new Map();
     try {
       let offset=0;
       do {
-        const page=await DCC.api('/api/working-queue/tasks?offset='+offset,{cache:'no-store',signal:AbortSignal.timeout(15000)});
+        const page=await DCC.api('/api/working-queue/tasks?openOnly=true&offset='+offset,{cache:'no-store',signal:AbortSignal.timeout(15000)});
         for(const task of page.tasks)if(task.status!=='done'&&task.type!=='recurring-definition')found.set(task.id,task);
         offset=page.nextOffset;
       } while(offset!=null);
-      source=[...found.values()];sourceRevision=revision;sourceAt=Date.now();
+      source=[...found.values()];sourceAt=Date.now();
     } catch(error) {sourceError='Task list unavailable: '+error.message;}
     finally {sourceLoading=false;draw();}
   }
   function sourceHtml(disabled) {
-    if(!sourceLoading&&!sourceError&&(sourceRevision!==snapshot.state.revision||Date.now()-sourceAt>15000))loadSource();
+    if(!sourceLoading&&!sourceError&&Date.now()-sourceAt>60000)loadSource();
     const queued=new Set(items().map(item=>item.task.id));
     return '<h2 class="gq-source-title">All open tasks</h2><div class="gq-row gq-source" aria-label="All open tasks">'+source.filter(task=>itemFor(task.id)?.status!=='completed').map(task=>
       '<button type="button" class="gq-task" data-glasses-action="add" data-glasses-id="'+esc(task.id)+'" aria-disabled="'+(disabled||queued.has(task.id))+'"><span class="gq-eyebrow">'+(queued.has(task.id)?'In queue':'Select to add')+'</span><h2>'+esc(task.title)+'</h2></button>'
     ).join('')+'</div>'+(sourceLoading?'<p class="gq-hint">Loading tasks…</p>':sourceError?'<p role="status">'+esc(sourceError)+'</p><button type="button" data-glasses-action="reload-source">Retry task list</button>':!source.length?'<p class="gq-hint">No open tasks.</p>':'');
   }
   function subtasks(item) {
-    const id = item.task.id, revision = snapshot.state.revision;
-    if ((!tree || tree.id !== id || tree.revision !== revision) && !treeRequest && !treeError) loadTree(id,revision);
+    const id = item.task.id, revision = snapshot.state.revision+':'+(snapshot.state.queue?.serverNow||'');
+    if(active() && !document.hidden && (!tree || tree.id !== id || tree.revision !== revision) && !treeRequest && !treeError) loadTree(id,revision);
     if (treeError) return '<p role="status">'+esc(treeError)+'</p><button type="button" data-glasses-action="reload-tree">Retry subtasks</button>';
     if (!tree || tree.id !== id || tree.revision !== revision) return '<p>Loading subtasks…</p>';
     // The existing server hierarchy resolves local IDs, canonical IDs and parent_id.
     // Each row is still projected by TaskModel, including completed children.
-    const rows = tree.rows.filter(row => row.id !== id).sort((a,b) => a.sort_order-b.sort_order || String(a.id).localeCompare(String(b.id)));
-    return rows.length ? '<h2>Subtasks</h2><ul class="gq-subtasks">'+rows.map(row => {
-      const task = DCC.TaskModel.fromBlock(row), done = row.properties.status === 'done' || row.properties.done === true;
-      return '<li class="'+(done?'gq-done':'')+'" style="--depth:'+Math.min(4,Math.max(0,(row.depth||1)-1))+'"><span aria-label="'+(done?'Completed':'Open')+'">'+(done?'✓':'○')+'</span> '+esc(task.title)+'</li>';
+    const rows = DCC.TaskModel.fromBlocksTree(tree.rows).filter(node => node.ev._blockId !== id);
+    const byId = new Map(tree.rows.map(row=>[row.id,row]));
+    return rows.length ? '<h2>Subtasks</h2><ul class="gq-subtasks">'+rows.map(node => {
+      const task = node.ev, row = byId.get(task._blockId), done = row.properties.status === 'done' || row.properties.done === true;
+      return '<li class="'+(done?'gq-done':'')+'" style="--depth:'+Math.min(4,Math.max(0,node.depth-1))+'"><span aria-label="'+(done?'Completed':'Open')+'">'+(done?'✓':'○')+'</span> '+esc(task.title)+'</li>';
     }).join('')+'</ul>' : '<p class="gq-empty">No subtasks</p>';
   }
   function draw() {
@@ -74,7 +96,7 @@
     const hadFocus = root.contains(document.activeElement), oldAction = document.activeElement?.dataset.glassesAction, oldId = document.activeElement?.dataset.glassesId;
     const scrolls=[...root.querySelectorAll('.gq-row')].map(el=>[el.getAttribute('aria-label'),el.scrollLeft]);
     const id = taskId(), item = itemFor(id);
-    if (id && item?.status === 'completed') { back(); return; }
+    if (id && item?.status === 'completed' && !reviewState) { back(); return; }
     const {pending,sending,problem,conflict,state} = snapshot;
     const disabled = busy || sending || !!pending || !navigator.onLine;
     const sync = sending ? 'Saving…' : pending ? 'Update saved on this device; awaiting confirmation.' : problem ? 'Unavailable: '+problem : !navigator.onLine ? 'Offline · changes paused' : '';
@@ -108,7 +130,7 @@
     }
   }
   async function act(intent,id) {
-    if(intent === 'reload-source') {sourceError='';sourceRevision=-1;draw();return;}
+    if(intent === 'reload-source') {sourceError='';sourceAt=0;draw();return;}
     if(intent==='add'&&itemFor(id))return;
     if(intent === 'reload-tree') {treeError='';tree=null;draw();return;}
     if(busy || snapshot.sending || snapshot.pending) return;
@@ -158,7 +180,22 @@
     if(active() && root?.contains(event.target) && event.target.closest('[data-glasses-action]') && ['Enter',' '].includes(event.key)) {event.preventDefault();event.stopImmediatePropagation();}
   },true);
   document.addEventListener('focusin',event=>{const id=event.target.dataset?.glassesId;if(id)selected=id;});
-  window.addEventListener('popstate',()=>{backing=false;selected=history.state?.glassesSelected || selected;treeVersion++;treeRequest=null;tree=null;treeError='';message='';draw();focus();});
+  window.addEventListener('popstate',()=>{
+    backing=false;
+    // Forward can revisit a canceled review whose dialog no longer exists.
+    if(!reviewState && history.state?.glassesReview){history.back();return;}
+    if(reviewState && history.state?.glassesReview!==reviewState.token) {
+      const request=reviewState;
+      if(!request.closed)request.result=null;
+      request.closed=true;request.handle?.close('glasses-back');request.finish();
+    }
+    selected=history.state?.glassesSelected || selected;treeVersion++;treeRequest=null;tree=null;treeError='';message='';draw();focus();
+  });
+  // Reloading a transient review cannot leave an invisible extra Back destination.
+  if(history.state?.glassesReview)history.back();
   window.addEventListener('online',()=>draw());window.addEventListener('offline',()=>draw());
-  window.DCCGlassesQueue = {render(element,value,action){root=element;snapshot=value;command=action;draw();}};
+  window.DCCGlassesQueue = {review,render(element,value,action){
+    if(snapshot && snapshot.state.queue?.serverNow!==value.state.queue?.serverNow) {treeVersion++;treeRequest=null;tree=null;treeError='';}
+    root=element;snapshot=value;command=action;draw();
+  }};
 })();
