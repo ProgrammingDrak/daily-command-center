@@ -158,6 +158,29 @@
     function load(journalId) { return backend.read(journalId); }
     function listDirty() { return backend.list().then(rows => rows.filter(r => r && r.dirty)); }
 
+    // ── task binding ────────────────────────────────────────────────────────
+    // A page is bound to ONE task, identified by every id that task is known by
+    // (its local id before the server acknowledges it, its server id after).
+    // Pages are keyed by journalId, so if two tasks ever carried one journalId
+    // (a copy, a concurrent create, a legacy duplicate) this binding is what keeps
+    // one task from reading, writing or syncing the other's page. Ids only ever
+    // join a binding when they overlap it; a disjoint set is a different task.
+    function boundKeys(rec) { return rec ? (Array.isArray(rec.taskKeys) && rec.taskKeys.length ? rec.taskKeys : (rec.taskId ? [rec.taskId] : [])) : []; }
+    function keysFrom(edit) { return (Array.isArray(edit.taskKeys) && edit.taskKeys.length ? edit.taskKeys : (edit.taskId ? [edit.taskId] : [])).filter(Boolean); }
+    function overlaps(a, b) { return a.some(k => b.includes(k)); }
+    function union(a, b) { return Array.from(new Set(a.concat(b))); }
+    function mismatch() { return Object.assign(new Error("This journal page belongs to a different task on this device. Nothing was opened or changed."), { code: "TASK_MISMATCH" }); }
+    function checkBinding(cur, keys) {
+      const bound = boundKeys(cur);
+      if (bound.length && keys.length && !overlaps(bound, keys)) throw mismatch();
+      return union(bound, keys);
+    }
+    function belongsTo(rec, keys) { const bound = boundKeys(rec); return !bound.length || overlaps(bound, keys); }
+    // Learn another id for the SAME task (local -> server remap). Disjoint ids are refused.
+    function bindKeys(journalId, keys) {
+      return backend.update(journalId, cur => cur && Object.assign({}, cur, { taskKeys: checkBinding(cur, keys.filter(Boolean)) }));
+    }
+
     // ── the revision contract ───────────────────────────────────────────────
     // `localRev` is the version of the CONTENT (ink + body) on this device. It
     // changes whenever content changes -- a user edit, a newer server copy, a
@@ -189,18 +212,22 @@
       if (!Number.isInteger(expectLocalRev) || expectLocalRev < 0) return Promise.reject(new Error("A content version is required to save"));
       try { checkPage(edit.ink); } catch (e) { return Promise.reject(e); }
       let stale = false;
+      const keys = keysFrom(edit);
       return backend.update(journalId, cur => {
+        // Another task's page: refuse before writing anything, content OR draft.
+        const taskKeys = checkBinding(cur, keys);
         const base = Object.assign({}, BLANK, cur || {});
+        const taskId = base.taskId || edit.taskId || keys[0] || null;
         const content = { ink: clampInk(edit.ink), body: typeof edit.body === "string" ? edit.body : (base.body || "") };
         if ((base.localRev || 0) !== expectLocalRev) {
           stale = true;
           const id = draftId || makeId();
           const draft = Object.assign({ id, basedOn: expectLocalRev, savedAt: now() }, content);
-          return Object.assign(base, { journalId, taskId: edit.taskId || base.taskId || null,
+          return Object.assign(base, { journalId, taskId, taskKeys,
             drafts: [draft].concat((base.drafts || []).filter(d => d.id !== id)) });
         }
         return Object.assign(base, content, {
-          journalId, taskId: edit.taskId || base.taskId || null,
+          journalId, taskId, taskKeys,
           localRev: (base.localRev || 0) + 1, dirty: true, mutationId: makeId(), updatedAt: now(),
         });
       }).then(record => ({ record, stale }));
@@ -211,14 +238,20 @@
     // the same accepted revision is the same content and changes nothing. A
     // replacement is a new content version, so an editor still showing the older
     // one cannot save over it (its save becomes a draft).
-    function seed(journalId, server) {
+    // `taskKeys` are the ids of the task the caller verified the server copy is
+    // for; the server copy must name one of them, and it must be this page's task.
+    function seed(journalId, server, taskKeys) {
+      const keys = (Array.isArray(taskKeys) && taskKeys.length ? taskKeys : [server.taskId]).filter(Boolean);
+      if (server.journalId != null && server.journalId !== journalId) return Promise.reject(mismatch());
+      if (server.taskId && !keys.includes(server.taskId)) return Promise.reject(mismatch());
       return backend.update(journalId, cur => {
-        if (cur && (cur.dirty || cur.conflict)) return null;
+        const bound = checkBinding(cur, keys);
+        if (cur && (cur.dirty || cur.conflict)) return Object.assign({}, cur, { taskKeys: bound });
         const rev = server.revision || 0;
-        if (cur && (cur.baseRevision || 0) >= rev) return null;
+        if (cur && (cur.baseRevision || 0) >= rev) return Object.assign({}, cur, { taskKeys: bound });
         const base = Object.assign({}, BLANK, cur || {});
         return Object.assign(base, {
-          journalId, taskId: server.taskId || base.taskId || null,
+          journalId, taskId: base.taskId || server.taskId || null, taskKeys: bound,
           ink: clone(server.ink), body: server.body || "", baseRevision: rev,
           localRev: (base.localRev || 0) + 1,
           dirty: false, mutationId: null, conflict: null, updatedAt: server.updatedAt || now(),
@@ -311,7 +344,72 @@
       });
     }
 
-    return { load, listDirty, saveEdit, seed, acknowledge, markConflict, keepLocal, useServer, resolveDraft, restoreRecovery, dismissRecovery };
+    // Pages bound to this task under a DIFFERENT journalId. That happens when the
+    // server gave the task a fresh id because the one it was created with was
+    // already claimed by another task. Their sync is refused (the task no longer
+    // carries that id), so they are surfaced here instead of sitting unseen.
+    //
+    // Discovery is by CONTENT, not by a one-time marker. Every item a source page
+    // holds -- its current content, each draft, each recovery copy -- has a key
+    // derived from that item itself (content version + hash, draft id + hash,
+    // recovery id). A source stays discoverable while ANY of its current item keys
+    // has not been durably copied to the destination. So a write landing during a
+    // handoff, or an old tab saving after it, is a new key and is found again.
+    function digest(item) {
+      const text = JSON.stringify([item && item.ink || null, item && item.body || ""]);
+      let h = 0x811c9dc5;
+      for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+      return h.toString(36) + "." + text.length;
+    }
+    function sourceItems(src) {
+      const items = [];
+      if (hasContent(src)) items.push({ key: src.journalId + "|content:" + (src.localRev || 0) + ":" + digest(src), from: src, reason: "earlier-journal-id" });
+      for (const d of src.drafts || []) items.push({ key: src.journalId + "|draft:" + d.id + ":" + digest(d), from: d, reason: "earlier-journal-id-draft" });
+      for (const r of src.recoveries || []) items.push({ key: src.journalId + "|recovery:" + r.id, from: r, reason: r.reason || "earlier-journal-id-recovery" });
+      return items;
+    }
+    function pendingItems(src) {
+      const done = new Set(src.adoptedKeys || []);
+      return sourceItems(src).filter(i => !done.has(i.key));
+    }
+    function boundElsewhere(journalId, keys) {
+      return backend.list().then(rows => rows.filter(r => r.journalId !== journalId
+        && boundKeys(r).length && overlaps(boundKeys(r), keys) && pendingItems(r).length > 0));
+    }
+    // Copy a source page's pending items into the task's current page as recovery
+    // copies (explicit restore), in two version-safe steps:
+    //   1. destination: add each item not already there (deduplicated by item key),
+    //      in one transaction -- so replays and repeated opens never multiply copies;
+    //   2. source: record ONLY the item keys step 1 copied. Whatever the source holds
+    //      now that was not copied (a write that landed in between, a later draft)
+    //      stays pending: the source stays discoverable and its dirty marker stays.
+    //      The dirty marker clears only when nothing on the source is uncopied.
+    // A failure in either step leaves the source discoverable; nothing is deleted.
+    function adopt(journalId, sourceJournalId, keys) {
+      let items;
+      return backend.read(sourceJournalId).then(src => {
+        if (!src || !overlaps(boundKeys(src), keys)) throw mismatch();
+        items = pendingItems(src);
+        if (!items.length) return null;
+        return backend.update(journalId, cur => {
+          const taskKeys = checkBinding(cur, keys);
+          const base = Object.assign({}, BLANK, cur || {}, { journalId });
+          const have = new Set((base.recoveries || []).map(r => r.fromKey).filter(Boolean));
+          const add = items.filter(i => !have.has(i.key))
+            .map(i => Object.assign(snapshot(i.from, i.reason), { fromJournalId: sourceJournalId, fromKey: i.key }));
+          return Object.assign(base, { taskKeys, taskId: base.taskId || keys[0] || null, recoveries: add.concat(base.recoveries || []) });
+        }).then(() => backend.update(sourceJournalId, cur => {
+          if (!cur || !overlaps(boundKeys(cur), keys)) throw mismatch();
+          const adoptedKeys = union(cur.adoptedKeys || [], items.map(i => i.key));
+          const after = Object.assign({}, cur, { adoptedKeys, adoptedInto: journalId });
+          if (!pendingItems(after).length) after.dirty = false;
+          return after;
+        }));
+      });
+    }
+
+    return { load, listDirty, saveEdit, seed, acknowledge, markConflict, keepLocal, useServer, resolveDraft, restoreRecovery, dismissRecovery,
+      boundKeys, belongsTo, bindKeys, boundElsewhere, adopt };
   }
 
   return { create, dbName, ownerKey, newJournalId, idbBackend, clampInk, checkPage, MAX_PAGE_BYTES };

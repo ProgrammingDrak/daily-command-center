@@ -4,7 +4,7 @@
 // Production block/journal routes + account binding, in-memory PGlite, fresh
 // browser profiles. Refuses non-local or non-synthetic servers.
 // Env: DCC_CHROMIUM_PATH (default: macOS Google Chrome), DCC_QA_OUTPUT.
-/* global window, document, indexedDB, IDBObjectStore, DOMException, PageTransitionEvent, Event, localStorage, DCC, JournalPageStore */
+/* global window, document, indexedDB, IDBObjectStore, DOMException, PageTransitionEvent, Event, localStorage, scheduled, DCC, JournalPageStore */
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -47,7 +47,12 @@ async function reopenFromItinerary(page, title, ready = true) {
   await page.locator('.tab[data-tab="schedule"]').click();
   await page.locator('#tab-schedule .ttl', { hasText: title }).first().click();
   await page.locator('.jt-dialog').waitFor({ timeout: 10000 });
-  await page.locator(ready ? '.jt-dialog .jt-editor[data-jt-ready="true"]' : '.jt-dialog .jt-editor[data-jt-state="open-failed"]').waitFor({ timeout: 10000 });
+  try {
+    await page.locator(ready ? '.jt-dialog .jt-editor[data-jt-ready="true"]' : '.jt-dialog .jt-editor[data-jt-state="open-failed"]').waitFor({ timeout: 10000 });
+  } catch {
+    const shown = await page.locator('.jt-dialog .jt-status-text').textContent().catch(() => null);
+    throw new Error('Journal "' + title + '" did not reach ' + (ready ? 'ready' : 'open-failed') + '; status: ' + shown);
+  }
   await page.waitForTimeout(400);
 }
 async function draw(page, i = 0) {
@@ -511,6 +516,184 @@ try {
   await close(t1);
   mark('Conflict choice while the local write fails: the choice is refused with nothing changed and the text kept on screen; Retry save writes it, the choice is re-offered, and the text is kept as recovery');
   await ctxT.close();
+
+  // ── Concurrency review: one journalId, two tasks ─────────────────────────
+  const ctxC = await browser.newContext();
+  const pc = await boot(ctxC, 1);
+  const pageJSON = async (title) => JSON.stringify((await pageFor(title)).page || null);
+
+  // 20. Two concurrent creates through the real /api/blocks route with one journalId.
+  const created = await pc.evaluate(async (date) => Promise.all([1, 2].map(async i => {
+    const id = crypto.randomUUID();
+    const r = await fetch('/api/blocks', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, type: 'block', date, properties: { title: 'Synthetic concurrent ' + i, type: 'journal', journalId: 'jr_browser-concurrent', local_id: id } }) });
+    return { status: r.status, id };
+  })), info.date);
+  assert.deepEqual(created.map(c => c.status), [200, 200]);
+  const conc = (await rows()).blocks.filter(b => /^Synthetic concurrent /.test(b.properties.title)).map(b => b.properties.journalId);
+  assert.equal(conc.length, 2); assert.equal(new Set(conc).size, 2, 'distinct journal ids: ' + JSON.stringify(conc));
+  mark('Two concurrent creates through POST /api/blocks with one journalId end with two distinct journal ids');
+
+  // 21. A client-side duplicate before server sync: task B's cached row carries A's id.
+  const OA = 'Synthetic owner A', CB = 'Synthetic copy B';
+  await quickAddJournal(pc, OA); await draw(pc, 0); await waitStatus(pc, /Saved and synced/); await close(pc);
+  await quickAddJournal(pc, CB); await close(pc);
+  const { block: blockA2 } = await pageFor(OA), { block: blockB2 } = await pageFor(CB);
+  const jidA2 = blockA2.properties.journalId;
+  const localA = JSON.stringify(await localRecord(pc, jidA2)), serverA = await pageJSON(OA);
+  await pc.evaluate(({ bId, jid }) => {
+    const row = window.blockStore.getByType('block').find(b => b.id === bId); row.properties.journalId = jid;
+    const ev = scheduled.find(e => e._blockId === bId || e.id === row.properties.local_id); if (ev) ev.journalId = jid;
+  }, { bId: blockB2.id, jid: jidA2 });
+  await reopenFromItinerary(pc, CB, false);
+  // Refused either by the device page's task binding (A's page is bound to A) or,
+  // with no device page, by the two-rows-one-id check; both stop before render.
+  const refusal = /Another task carries this journal's identity|belongs to a different task/;
+  assert.match(await status(pc), refusal);
+  console.log('INFO section 21 refusal: ' + await status(pc));
+  assert.equal(await pc.locator('.jt-dialog .jt-editor').getAttribute('data-jt-ready'), null, 'B never became editable');
+  await pc.screenshot({ path: path.join(output, '21-client-duplicate-refused.png') });
+  await close(pc);
+  assert.equal(JSON.stringify(await localRecord(pc, jidA2)), localA, "A's device page untouched");
+  assert.equal(await pageJSON(OA), serverA, "A's server page untouched"); assert.equal((await pageFor(CB)).page, undefined, 'B has no server page');
+  // A still opens: the server confirms A owns its id. Its new stroke is kept on
+  // the device and NOT sent while this tab still sees two rows with the id.
+  await reopenFromItinerary(pc, OA);
+  assert.ok(await darkPixels(pc) > 20, "A's own strokes shown");
+  await draw(pc, 1); await waitStatus(pc, /not sent anywhere/);
+  assert.equal(await pageJSON(OA), serverA, 'nothing sent while ambiguous');
+  await close(pc);
+  await pc.reload(); await pc.locator('#api-loading').waitFor({ state: 'detached', timeout: 30000 });   // cache refreshed from the server
+  await waitClean(pc, jidA2);
+  const rowA2 = (await pageFor(OA)).page;
+  assert.equal(strokes(rowA2), 2, 'after the duplicate cleared, A synced its own page'); assert.equal((await pageFor(CB)).page, undefined);
+  mark('Client duplicate before server sync: B is refused before render and gets nothing; A opens (server-confirmed), its new stroke stays on the device while ambiguous, then syncs to A only');
+
+  // 21b. Same, but the id B's cached row now carries has NO device page (it is
+  // the id of one of the concurrently created tasks): the two-rows check or the
+  // server's stale-id answer must refuse, and no page may be started under it.
+  await pc.evaluate(({ bId, jid }) => {
+    const row = window.blockStore.getByType('block').find(b => b.id === bId); row.properties.journalId = jid;
+    const ev = scheduled.find(e => e._blockId === bId || e.id === row.properties.local_id); if (ev) ev.journalId = jid;
+  }, { bId: blockB2.id, jid: conc[0] });
+  assert.equal(await localRecord(pc, conc[0]), null);
+  await reopenFromItinerary(pc, CB, false);
+  assert.match(await status(pc), /Another task carries this journal's identity|identity changed on the server/);
+  console.log('INFO section 21b refusal: ' + await status(pc));
+  await close(pc);
+  assert.equal(await localRecord(pc, conc[0]), null, 'no device page was started under the other task\'s id');
+  mark('Client duplicate with no device page: refused before render (two-rows check or server stale-id answer); no page started under the other task\'s id');
+  await pc.reload(); await pc.locator('#api-loading').waitFor({ state: 'detached', timeout: 30000 });
+
+  // 22. A legacy duplicate row on the server (no claim) carrying A's id.
+  const LG = 'Synthetic legacy L';
+  await quickAddJournal(pc, LG); await close(pc);
+  const { block: blockL } = await pageFor(LG);
+  const legacyOk = await (await fetch(base + '/api/review/journal/legacy-duplicate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskId: blockL.id, journalId: jidA2 }) })).json();
+  assert.equal(legacyOk.ok, true);
+  await pc.reload(); await pc.locator('#api-loading').waitFor({ state: 'detached', timeout: 30000 });
+  const legacyGet = await pc.evaluate(async id => { const r = await fetch('/api/journal/tasks/' + id); return { status: r.status, body: await r.text() }; }, blockL.id);
+  assert.equal(legacyGet.status, 409); assert.match(legacyGet.body, /JOURNAL_AMBIGUOUS/); assert.doesNotMatch(legacyGet.body, /strokes/);
+  const serverA22 = await pageJSON(OA), localA22 = JSON.stringify(await localRecord(pc, jidA2));
+  await reopenFromItinerary(pc, LG, false);
+  assert.match(await status(pc), refusal);
+  console.log('INFO section 22 refusal: ' + await status(pc));
+  await pc.screenshot({ path: path.join(output, '22-legacy-duplicate-refused.png') });
+  await close(pc);
+  assert.equal(await pageJSON(OA), serverA22); assert.equal(JSON.stringify(await localRecord(pc, jidA2)), localA22);
+  await reopenFromItinerary(pc, OA);
+  assert.ok(await darkPixels(pc) > 20); assert.equal(await pc.locator('.jt-dialog .jt-editor').getAttribute('data-jt-state') === 'open-failed', false);
+  await close(pc);
+  mark('Legacy duplicate row: server answers 409 JOURNAL_AMBIGUOUS with no content; the editor refuses it before render; owner A still opens with its page unchanged');
+
+  const review = async (pathName, body) => (await fetch(base + pathName, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+  // 23. Late identity refusal while typing is pending AND the pen is down.
+  const LR = 'Synthetic late refusal', TH = 'Synthetic claim thief';
+  await quickAddJournal(pc, LR); await draw(pc, 0); await waitStatus(pc, /Saved and synced/); await close(pc);
+  await quickAddJournal(pc, TH); await close(pc);
+  const { block: blockLR, page: serverLR0 } = await pageFor(LR), { block: blockTH } = await pageFor(TH);
+  const jidLR = blockLR.properties.journalId;
+  assert.equal((await review('/api/review/journal/steal-claim', { journalId: jidLR, toTaskId: blockTH.id })).ok, true);
+  await fault({ journalGet: { delayMs: 2500 } });
+  await reopenFromItinerary(pc, LR);                 // local page bound to LR: mounts at once
+  if (await pc.locator('.jt-dialog [data-jt-act="notes"]').getAttribute('aria-expanded') !== 'true') await pc.locator('.jt-dialog [data-jt-act="notes"]').click();
+  await pc.locator('.jt-dialog .jt-notes-input').fill('typed just before the refusal');   // typing timer pending
+  await pc.locator('.jt-dialog .jt-base').scrollIntoViewIfNeeded();
+  const b23 = await pc.locator('.jt-dialog .jt-base').boundingBox();
+  const x23 = b23.x + b23.width * 0.5, y23 = Math.max(b23.y, 0) + 60;
+  await pc.mouse.move(x23, y23); await pc.mouse.down();
+  for (let k = 1; k <= 12; k++) { await pc.mouse.move(x23 + k * 5, y23 + k * 2); await pc.waitForTimeout(250); }   // pen down across the late GET
+  await pc.locator('.jt-dialog .jt-editor[data-jt-state="open-failed"]').waitFor({ timeout: 10000 });
+  await pc.mouse.up();
+  await fault({});
+  assert.match(await status(pc), /identity is shared with another task/);
+  const rec23 = await localRecord(pc, jidLR);
+  assert.equal(rec23.body, 'typed just before the refusal', 'pending typing written to the device before freezing');
+  assert.equal(rec23.ink.strokes.length, 2, 'the stroke under the pen was committed before freezing');
+  await pc.waitForTimeout(2500);
+  assert.equal(JSON.stringify((await pageFor(LR)).page), JSON.stringify(serverLR0), 'nothing sent: the server refuses this task');
+  assert.equal((await pageFor(TH)).page, undefined, 'and nothing reached the task that now holds the id');
+  await pc.screenshot({ path: path.join(output, '23-late-refusal-preserved.png') });
+  await close(pc);
+  mark('Late identity refusal (409 JOURNAL_AMBIGUOUS arriving 2.5 s after mount) with typing pending and the pen down: both are written to the task\'s own device page first, then the editor freezes; nothing is sent to either task');
+
+  // 23b. The same, while the device write is failing: freezing must not drop it.
+  const LF = 'Synthetic late refusal failing';
+  await quickAddJournal(pc, LF); await draw(pc, 0); await waitStatus(pc, /Saved and synced/); await close(pc);
+  const { block: blockLF } = await pageFor(LF);
+  const jidLF = blockLF.properties.journalId;
+  const before23b = JSON.stringify(await localRecord(pc, jidLF));
+  assert.equal((await review('/api/review/journal/steal-claim', { journalId: jidLF, toTaskId: blockTH.id })).ok, true);
+  await fault({ journalGet: { delayMs: 2500 } });
+  await reopenFromItinerary(pc, LF);
+  await pc.evaluate(() => { window.__realPut = window.__realPut || IDBObjectStore.prototype.put; IDBObjectStore.prototype.put = function () { throw new DOMException('Synthetic quota failure', 'QuotaExceededError'); }; });
+  if (await pc.locator('.jt-dialog [data-jt-act="notes"]').getAttribute('aria-expanded') !== 'true') await pc.locator('.jt-dialog [data-jt-act="notes"]').click();
+  await pc.locator('.jt-dialog .jt-notes-input').fill('typed while the device write fails');
+  await pc.locator('.jt-dialog .jt-base').scrollIntoViewIfNeeded();
+  const b23b = await pc.locator('.jt-dialog .jt-base').boundingBox();
+  const x23b = b23b.x + b23b.width * 0.5, y23b = Math.max(b23b.y, 0) + 80;
+  await pc.mouse.move(x23b, y23b); await pc.mouse.down();
+  for (let k = 1; k <= 12; k++) { await pc.mouse.move(x23b + k * 5, y23b + k * 2); await pc.waitForTimeout(250); }
+  await pc.locator('.jt-dialog [data-jt-banner="retry-save"]').waitFor({ timeout: 10000 });
+  await pc.mouse.up();
+  await fault({});
+  assert.equal(await pc.locator('.jt-dialog .jt-notes-input').inputValue(), 'typed while the device write fails', 'text still on screen');
+  assert.equal(JSON.stringify(await localRecord(pc, jidLF)), before23b, 'nothing half-written');
+  await pc.locator('.jt-dialog .dcc-overlay-close').click();
+  await pc.waitForTimeout(500);
+  assert.equal(await pc.locator('.jt-dialog').count(), 1, 'a lossy close stays blocked');
+  await pc.screenshot({ path: path.join(output, '23b-late-refusal-local-failure.png') });
+  await pc.evaluate(() => { IDBObjectStore.prototype.put = window.__realPut; });
+  await pc.locator('.jt-dialog [data-jt-banner="retry-save"]').click();
+  await pc.locator('.jt-dialog .jt-editor[data-jt-state="open-failed"]').waitFor({ timeout: 10000 });
+  const rec23b = await localRecord(pc, jidLF);
+  assert.equal(rec23b.body, 'typed while the device write fails'); assert.equal(rec23b.ink.strokes.length, 2);
+  await close(pc);
+  mark('Late identity refusal while the device write fails: close stays blocked, the text stays on screen, Retry save writes text and stroke, then the editor freezes');
+
+  // 24. Server re-mint: writing left under the old id is recovered through the NEW id.
+  const RM = 'Synthetic remint R';
+  await quickAddJournal(pc, RM); await close(pc);
+  const { block: blockRM } = await pageFor(RM);
+  const oldRM = blockRM.properties.journalId, newRM = 'jr_browser-reminted-01';
+  await fault({ journalPut: { status: 500 } });
+  await reopenFromItinerary(pc, RM); await draw(pc, 2); await waitStatus(pc, /DCC had a problem/); await close(pc);
+  assert.equal((await localRecord(pc, oldRM)).dirty, true);
+  assert.equal((await review('/api/review/journal/reassign', { taskId: blockRM.id, journalId: newRM })).ok, true);
+  await fault({});
+  await pc.reload(); await pc.locator('#api-loading').waitFor({ state: 'detached', timeout: 30000 });
+  await pc.waitForTimeout(3500);                      // startup drain runs: the old id must be refused, not sent
+  assert.equal((await pageFor(RM)).page, undefined, 'old-id writing was not sent anywhere');
+  await reopenFromItinerary(pc, RM);
+  await pc.locator('.jt-dialog [data-jt-banner="restore-recovery"]').waitFor({ timeout: 10000 });
+  await pc.locator('.jt-dialog [data-jt-banner="restore-recovery"]').click();
+  const row24 = await waitServerRev(RM, 1);
+  assert.equal(row24.journal_id, newRM); assert.equal(row24.task_id, blockRM.id); assert.equal(strokes(row24), 1);
+  const old24 = await localRecord(pc, oldRM);
+  assert.equal(old24.dirty, false); assert.equal(old24.ink.strokes.length, 1, 'old record kept, not deleted');
+  await close(pc);
+  mark('Server re-mint: writing left under the old id is never sent under it; reopening the task offers it as a recovery copy, and restoring syncs it to that task under its new id');
+  await ctxC.close();
 
   assert.deepEqual(errors, [], 'no page errors');
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ synthetic: true, base, checks, errors }, null, 2));

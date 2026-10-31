@@ -104,6 +104,61 @@ pages live in DCC Postgres.
   ("Open journal page" / "Use as Journal"); `openAddModal` interception; itinerary
   title click and "Open journal" chip.
 
+## Journal identity under concurrency (added after the release review)
+
+The review reproduced a race on the real block writer. Two concurrent creates of
+different tasks carrying one `journalId` both kept it, because a preflight
+`SELECT` followed by an `INSERT` is not atomic. On the client, pages were keyed
+by `journalId` and sync went to the first block carrying it. So two such tasks
+could share a device page or send to the wrong task.
+
+- **Server (`journal-store.js`, `db.js`):**
+  - A new table `task_journal_claims` has `journal_id` as its PRIMARY KEY.
+    `claimJournalId` inserts with `ON CONFLICT DO NOTHING` on the caller's
+    client:
+    - the first claim wins atomically;
+    - the same task re-claiming keeps its id (retries, moves);
+    - any other task gets a fresh id.
+  - Every path that assigns an id claims first: `createBlock` (single or inside a
+    batch transaction), `updateBlock` (convert into Journal), and
+    `rescheduleBlocks` (a move carrying a conversion).
+  - Rows from before claims existed are backfilled at schema startup. The task
+    already holding the page wins, then the earliest-created block.
+  - The journal routes (`get`, `save`, `undo`) refuse a task that does not own
+    its id: 409 `JOURNAL_AMBIGUOUS`, no content.
+  - This is a local, additive schema change (new table, idempotent backfill). It
+    is not a production migration; the release still needs its own review.
+- **Client:**
+  - **Page store:** every page is bound to its task's id set (local id and
+    server id). A write, draft, seed or alias for a disjoint id set is refused
+    with `TASK_MISMATCH`, and nothing is written.
+  - **Binding (`binding.js`):** decides where a page may be sent. It sends only
+    to the row of the bound task, and only if no other row carries the id. Local
+    → server aliases are joined through one row's own `id`/`local_id`, never
+    through a shared `journalId`.
+  - **Opening:** a page bound to another task is refused before render. If two
+    rows in the tab carry the id, the editor opens only when the server confirms
+    this task owns it. A server copy for another task or another id is never
+    seeded.
+  - **Re-mint:** when the server re-minted a task's id, writing left under the
+    old id is kept as recovery copies of the task's page (explicit restore).
+    That includes the old page's content, its drafts and its existing recovery
+    copies. Adoption is version-safe:
+    - each item is keyed by its own content (content version + hash, draft id +
+      hash, recovery id);
+    - the destination deduplicates by key, so replays and repeated opens never
+      multiply copies;
+    - the old record records only the keys actually copied, so a write landing
+      during the handoff, or an old tab saving later, is a new key that stays
+      discoverable and keeps its dirty marker;
+    - the old record's dirty marker clears only when nothing on it is uncopied;
+    - nothing is deleted, and the old id is never sent.
+  - **Late refusal:** if the server refuses this task's identity AFTER the page
+    is open, the editor first commits the stroke under the pen and pending typing
+    to this task's own device page, then freezes. If that device write fails,
+    close stays blocked behind Retry save or Discard until the writing is on the
+    device.
+
 ## Out of scope
 
 Production migration, deploy, real journal data, OCR, mirroring into the

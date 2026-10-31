@@ -408,7 +408,7 @@ function openAddModal(taskId, taskTitle, options) {
   }
   // A Journal opens straight onto its page; "Task details" stays reachable via generic.
   if (!options?.generic && workoutTask?.type === 'journal' && window.DCC?.JournalTask) {
-    return DCC.JournalTask.open({taskId:workoutAnchor?.blockId || workoutTask._blockId || taskId,journalId:workoutTask.journalId,title:workoutTask.title});
+    return DCC.JournalTask.open({taskId:workoutAnchor?.blockId || workoutTask._blockId || taskId,localId:taskId,journalId:workoutTask.journalId,title:workoutTask.title});
   }
   var taskOverlay = document.getElementById('add-modal-overlay');
   if (!taskOverlay.classList.contains('open')) {

@@ -313,14 +313,12 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
     if(!rows.length) {const error=new Error("Guided definition not found");error.statusCode=404;throw error;}
     props.publicVisibility="private";
   }
-  // A copied Journal (repeat snapshot, template, duplicate) gets its own page
-  // rather than sharing another task's. A retried create of the SAME id keeps it.
-  if(props.type==="journal") {
-    const {rows}=await q.query(`SELECT 1 FROM task_journal_pages WHERE journal_id=$1 AND task_id<>$2
-      UNION ALL SELECT 1 FROM blocks WHERE workspace_id IS NOT DISTINCT FROM $3 AND id<>$2 AND properties->>'journalId'=$1 LIMIT 1`,
-    [props.journalId,blockId,workspace_id||null]);
-    if(rows.length) props.journalId="jr_"+crypto.randomUUID();
-  }
+  // A Journal's id is claimed atomically BEFORE the row is written: a copy
+  // (repeat snapshot, template, duplicate) or a concurrent create carrying an id
+  // another task already holds gets a fresh one; a retried create of the SAME
+  // task keeps its id. (A preflight SELECT here raced: two concurrent creates
+  // both passed it and kept one id.)
+  if(props.type==="journal") await require("./journal-store").claimJournalId(q, props, blockId, workspace_id);
   if(isTaskRow({type,properties:props}) &&
       (parent_id===blockId || [props.subtaskOf,props.wrapId].filter(Boolean).some(ref=>ref===blockId||ref===props.local_id))){
     const error=new Error("A task cannot be its own parent");error.statusCode=409;throw error;
@@ -1090,6 +1088,11 @@ async function updateBlock(id, fields, client) {
     // Generic/stale block writes cannot silently detach an activity log or expose
     // a workout/meal/journal in sharing. Detailed records never pass through this path.
     pinPrivateRecord(existingProps, newProps);
+    // Converting into a Journal (or a stale write naming another id) must claim
+    // the id like a create does, inside this transaction.
+    if (newProps && newProps.type === "journal" && newProps.journalId !== existingProps.journalId) {
+      await require("./journal-store").claimJournalId(q, newProps, id, existing.workspace_id);
+    }
     if (existingProps.guidedDefinitionId) newProps.guidedDefinitionId = existingProps.guidedDefinitionId;
     if(newProps.guidedDefinitionId) newProps.publicVisibility="private";
     if(existingProps.type === "guided" && isCompletedTaskProps(existingProps) !== isCompletedTaskProps(newProps)) {
@@ -2033,6 +2036,9 @@ async function rescheduleBlocks(moves, creates, options = {}) {
       // Moves use a separate writer from updateBlock; retain the same private
       // activity identity even when a stale client sends generic task props.
       pinPrivateRecord(existing.properties, newProps);
+      if (newProps && newProps.type === "journal" && newProps.journalId !== existing.properties?.journalId) {
+        await require("./journal-store").claimJournalId(client, newProps, m.id, existing.workspace_id);
+      }
       if(existing.properties?.guidedDefinitionId) newProps.guidedDefinitionId=existing.properties.guidedDefinitionId;
       if(newProps.guidedDefinitionId) newProps.publicVisibility="private";
       const newDate = m.date !== undefined ? m.date : existing.date;
