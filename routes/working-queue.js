@@ -28,6 +28,7 @@ module.exports = function mount(app, ctx, config = {}) {
     "/api/working-queue/tasks",
     route((req) => store.search(req.query, req.queueOwner))
   );
+  app.get('/api/working-queue/tasks/:id/tree', route(req => store.taskTree(req.params.id, req.queueOwner)));
   app.get('/api/working-queue/tasks/:id/completion-preview', route(req => store.completionPreview(req.params.id, req.queueOwner)));
   app.post(
     "/api/working-queue",

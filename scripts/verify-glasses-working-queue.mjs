@@ -1,5 +1,5 @@
-/* global document, DCCWorkingQueue, KeyboardEvent, innerWidth */
-// Full application with real queue APIs, exclusively on the opt-in disposable review server.
+/* global document, DCCWorkingQueue, KeyboardEvent, innerWidth, Storage, window */
+// Real queue APIs with fictional tasks only. Never point this at a live DCC instance.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -10,108 +10,110 @@ assert.equal((await fetch(base+'/api/health').then(r=>r.json())).reviewOnly,true
 const out=process.env.DCC_GLASSES_REVIEW_OUT||'test-results/glasses-working-queue';
 await fs.mkdir(out,{recursive:true});
 const api=async(url,body)=>{const r=await fetch(base+url,{method:body?'POST':'GET',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});assert.ok(r.ok,await r.clone().text());return r.json();};
-async function action(action,extra={}){const state=await api('/api/working-queue');return api('/api/working-queue',{action,sourceEventId:crypto.randomUUID(),expectedRevision:state.revision,at:new Date().toISOString(),...extra});}
+const state=()=>api('/api/working-queue');
+async function action(action,extra={}){const current=await state();return api('/api/working-queue',{action,sourceEventId:crypto.randomUUID(),expectedRevision:current.revision,at:new Date().toISOString(),...extra});}
 const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
 const context=await browser.newContext({viewport:{width:600,height:600}});
 await context.route('**/*',r=>new URL(r.request().url()).origin===base?r.continue():r.abort());
 const page=await context.newPage(),errors=[],checks=[];
-page.on('pageerror',e=>errors.push(e.message));
+page.setDefaultTimeout(12000);page.on('pageerror',e=>errors.push(e.message));
 const check=name=>{checks.push(name);console.log('PASS '+name);};
-const card=id=>page.locator('[data-queue-id="glasses-'+id+'"]');
-const active=()=>page.evaluate(()=>document.activeElement?.dataset.queueId);
-const settle=()=>page.waitForFunction(()=>!document.querySelector('.dcc-overlay'));
-try{
-  await api('/api/queue-review/reset',{});
-  await api('/api/blocks',['a','b','c','d'].map((id,i)=>({id:'glasses-'+id,type:'block',date:new Date().toISOString().slice(0,10),properties:{local_id:'glasses-'+id,title:['Review the project handoff','Research the next approach','Prepare tomorrow’s outline','Send the finished draft'][i],type:'task',status:'open',duration:30}})));
-  for(const id of ['a','b','c','d'])await action('queue-add',{taskId:'glasses-'+id});
-  await action('start',{taskId:'glasses-b',remindMinutes:null});await action('start',{taskId:'glasses-a',remindMinutes:null});await action('done',{taskId:'glasses-d'});
-  await page.goto(base+'/glasses.html');await page.waitForSelector('.wq-card.glasses-selected');
-  assert.equal(new URL(page.url()).searchParams.get('device'),'glasses');
-  assert.equal(await page.locator('#tab-working-queue').evaluate(e=>e.classList.contains('active')),true);
-  assert.equal(await page.locator('#queue-pill').isVisible(),false);
-  assert.equal(await page.locator('.wq-completed').evaluate(e=>e.open),false);
-  assert.equal(await page.locator('.glasses-position').textContent(),'1 / 3 visible');
-  check('existing glasses bookmark defaults to the shared queue with secondary navigation and collapsed completed tasks');
-  const before=await api('/api/working-queue');
-  await card('a').focus();
-  for(let i=0;i<20;i++){await page.keyboard.press('ArrowDown');assert.equal(await active(),'glasses-c');await page.keyboard.press('ArrowDown');assert.equal(await active(),'glasses-b');await page.keyboard.press('ArrowUp');assert.equal(await active(),'glasses-c');await page.keyboard.press('ArrowUp');assert.equal(await active(),'glasses-a');}
-  assert.equal(await card('a').evaluate(e=>{const k=new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true,cancelable:true});e.dispatchEvent(k);return k.defaultPrevented;}),false);
-  assert.equal((await api('/api/working-queue')).revision,before.revision);
-  await page.evaluate(()=>DCCWorkingQueue.render());await page.waitForFunction(()=>document.activeElement?.dataset.queueId==='glasses-a');
-  assert.equal(await card('a').evaluate(e=>{const k=new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true});e.dispatchEvent(k);return k.defaultPrevented;}),true);
-  await card('a').focus();
-  check('80 repeated arrows move one visible task, skip completed cards, preserve foreground and restore focus across refresh');
-  await page.screenshot({path:path.join(out,'glasses-working-queue-600.png')});
-  await page.keyboard.press('Enter');await page.waitForSelector('#add-modal-overlay.open');
-  await page.locator('#add-modal-close').click();
-  await card('a').focus();
-  assert.equal(await card('a').evaluate(e=>{const k=new KeyboardEvent('keydown',{key:'Enter',repeat:true,bubbles:true,cancelable:true});e.dispatchEvent(k);return k.defaultPrevented;}),true);
-  assert.equal(await page.locator('#add-modal-overlay').evaluate(e=>e.classList.contains('open')),false);
-  assert.equal((await api('/api/working-queue')).revision,before.revision);
-  check('card Enter opens canonical details once; held Enter is consumed without another detail or task mutation');
-  await page.getByRole('button',{name:'Add tasks',exact:true}).click();
-  await page.evaluate(()=>DCCWorkingQueue.render());
-  await page.getByRole('dialog').getByRole('button',{name:'Done',exact:true}).click();await settle();
-  await page.waitForFunction(()=>!document.querySelector('[aria-label="Next visible task"]').disabled);
-  await page.getByRole('button',{name:'Next visible task',exact:true}).click();assert.equal(await active(),'glasses-c');
-  check('modal close restores navigation immediately after an inert queue rerender');
-  await page.locator('.wq-completed>summary').click();await card('d').focus();
-  const doneHeight=await card('d').evaluate(e=>e.getBoundingClientRect().height);
-  assert.ok(doneHeight<await card('a').evaluate(e=>e.getBoundingClientRect().height));
-  await page.evaluate(()=>DCCWorkingQueue.render());await page.waitForFunction(()=>document.activeElement?.dataset.queueId==='glasses-d');
-  assert.equal(await page.locator('.wq-completed').evaluate(e=>e.open),true);
-  await page.screenshot({path:path.join(out,'glasses-completed-600.png')});
-  await page.locator('.wq-completed>summary').click();
-  check('completed cards are compact; disclosure and focused task survive canonical rerenders');
-  await card('b').focus();assert.equal(await card('b').locator('[data-queue-action=focus]').isVisible(),true);
-  await card('b').locator('[data-queue-action=focus]').click();
-  assert.equal(await page.getByRole('dialog').count(),1);
-  await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();await settle();
-  assert.equal((await api('/api/working-queue')).revision,before.revision);
-  await card('b').focus();await card('b').locator('[data-queue-action=focus]').click();
-  await page.getByRole('dialog').getByRole('button',{name:'Bring forward',exact:true}).click();await settle();
-  await page.waitForFunction(()=>document.querySelector('[data-queue-id="glasses-b"]')?.classList.contains('wq-focus'));
-  const switched=await api('/api/working-queue');
-  assert.equal(switched.queue.items.filter(i=>i.status==='foreground').length,1);
-  assert.equal(switched.queue.items.find(i=>i.task.id==='glasses-a').status,'background');
-  check('cancel does not mutate; confirmed foreground switch uses the real coordinator and retains the prior task in background');
-  await card('c').focus();await card('c').locator('.glasses-more').click();assert.equal(await card('c').locator('[data-queue-action=note]').isVisible(),true);
-  await card('c').locator('[data-queue-action=note]').click();
-  const field=page.getByRole('dialog').locator('textarea');await field.fill('Synthetic context retained');
-  assert.equal(await field.evaluate(e=>{const k=new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true});e.dispatchEvent(k);return k.defaultPrevented;}),false);
-  await page.keyboard.press('Escape');await settle();
-  check('More exposes canonical actions; text-field arrows and Escape remain owned by the modal');
-  await context.setOffline(true);await card('c').focus();await card('c').locator('[data-queue-action=focus]').click();
-  await page.getByRole('dialog').getByRole('button',{name:'Bring forward',exact:true}).click();
-  await page.waitForFunction(()=>document.querySelector('.wq-sync')?.textContent.includes('awaiting confirmation'));
-  assert.equal((await api('/api/working-queue')).revision,switched.revision);
-  await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();await settle();
-  await page.screenshot({path:path.join(out,'glasses-offline-600.png')});
-  await context.setOffline(false);await page.evaluate(()=>DCCWorkingQueue.tick());
-  await page.waitForFunction(()=>document.querySelector('[data-queue-id="glasses-c"]')?.classList.contains('wq-focus'));
-  check('offline action is honestly pending, leaves server unchanged and reconciles through the canonical retry receipt');
-  const confirmed=await api('/api/working-queue');
-  await page.route('**/api/working-queue',r=>r.request().method()==='POST'?r.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:'Synthetic stale revision'})}):r.continue());
-  await card('a').focus();await card('a').locator('[data-queue-action=focus]').click();await page.getByRole('dialog').getByRole('button',{name:'Bring forward',exact:true}).click();
-  await page.waitForSelector('.wq-conflict');assert.equal((await api('/api/working-queue')).revision,confirmed.revision);
-  await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();await settle();
-  await page.unroute('**/api/working-queue');
-  await page.locator('[data-queue-action=clear-conflict]').click();
-  check('rejected foreground switch keeps confirmed work and exposes the retained conflict');
-  for(const [width,height] of [[320,600],[375,812],[600,600],[1440,1000]]){
-    await page.setViewportSize({width,height});await card('c').focus();
-    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-    assert.ok(await page.locator('.wq-actions [data-queue-action=complete]:visible').first().evaluate(e=>e.getBoundingClientRect().height>=44));
-    await page.screenshot({path:path.join(out,'glasses-queue-'+width+'.png')});
-  }
-  await page.setViewportSize({width:600,height:600});await page.evaluate(()=>document.documentElement.style.zoom='2');await card('c').focus();
-  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-  await page.evaluate(()=>document.documentElement.style.zoom='');
-  check('320/375/600/1440 viewports and 200 percent zoom retain usable controls without horizontal overflow');
-  await page.getByRole('button',{name:'App tools',exact:true}).click();await page.locator('#tab-bar [data-tab=schedule]').click();
-  assert.equal(await page.locator('#tab-schedule').evaluate(e=>e.classList.contains('active')),true);
-  await page.goBack();await page.waitForSelector('#tab-working-queue.active');
-  check('itinerary remains secondary and browser Back restores the queue');
-  assert.deepEqual(errors,[]);
-  await fs.writeFile(path.join(out,'checks.json'),JSON.stringify({checks,errors,synthetic:true,physicalMeta:false},null,2));
-}catch(error){console.log(await page.evaluate(()=>({focus:document.activeElement?.outerHTML,selected:[...document.querySelectorAll('.glasses-selected')].map(e=>e.dataset.queueId),dialogs:[...document.querySelectorAll('.dcc-overlay')].map(e=>e.outerHTML.slice(0,300))})));await page.screenshot({path:path.join(out,'failure.png')});throw error;}finally{await browser.close();}
+const source=id=>page.locator('[data-glasses-action="add"][data-glasses-id="glasses-'+id+'"]');
+const queued=id=>page.locator('[data-glasses-action="focus"][data-glasses-id="glasses-'+id+'"]');
+const detail=()=>page.locator('[data-glasses-action="toggle"]');
+const select=async locator=>{await page.waitForTimeout(380);await locator.click();};
+const key=async value=>{await page.waitForTimeout(380);await detail().focus();await page.keyboard.press(value);};
+const ready=async()=>page.waitForFunction(()=>document.querySelector('[data-glasses-action="toggle"]')?.getAttribute('aria-disabled')==='false');
+const current=id=>state().then(s=>s.queue.items.find(i=>i.task.id==='glasses-'+id));
+try {
+ await api('/api/queue-review/reset',{});
+ const date=new Date().toISOString().slice(0,10);
+ const make=(id,title,p={},order=0)=>({id:'glasses-'+id,type:'block',date,sort_order:order,properties:{local_id:'glasses-'+id,title,type:'task',status:'open',duration:30,...p}});
+ await api('/api/blocks',[make('a','Review the project handoff'),make('b','Research the next approach'),make('c','Prepare tomorrow’s outline'),make('child','Read the proposed changes',{subtaskOf:'glasses-a'},1),make('done-child','Review the background',{subtaskOf:'glasses-a',status:'done'},2),...Array.from({length:51},(_,i)=>make('extra-'+i,'Additional task '+i))]);
+ await page.goto(base+'/glasses.html');await source('a').waitFor();await source('extra-50').waitFor();
+ assert.equal(await queued('a').count(),0);assert.equal(await source('done-child').count(),0);
+ assert.equal(await page.locator('.glasses-nav').isVisible(),false);
+ const initial=(await state()).revision;
+ await select(source('a'));await queued('a').waitFor();
+ assert.equal((await current('a')).status,'queued');assert.equal((await current('a')).task.properties.startedAt,undefined);
+ await source('a').dispatchEvent('click');assert.equal((await state()).revision,initial+1);assert.equal((await state()).queue.items.length,1);
+ check('all open tasks paginate beyond 50; adding creates one queue membership and never starts a timer');
+ await select(source('b'));await queued('b').waitFor();
+ await queued('a').focus();await page.keyboard.press('ArrowRight');assert.equal(await queued('b').evaluate(el=>el===document.activeElement),true);
+ assert.equal((await current('a')).status,'queued');
+ await page.screenshot({path:path.join(out,'task-source-and-queue-600.png')});
+ await select(queued('a'));await ready();await page.locator('.gq-subtasks').getByText('Read the proposed changes',{exact:false}).waitFor();
+ assert.equal((await current('a')).status,'foreground');assert.ok((await current('a')).task.properties.startedAt);
+ assert.equal(await page.locator('.gq-subtasks li').count(),2);
+ await page.waitForTimeout(400);
+ await detail().evaluate(el=>{el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',repeat:true,bubbles:true,cancelable:true}));el.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',bubbles:true,cancelable:true}));});
+ await page.waitForTimeout(100);assert.equal((await current('a')).status,'foreground');
+ check('queue selection starts foreground exactly once and displays open and completed subtasks');
+ const started=(await current('a')).task.properties.startedAt;
+ await page.goBack();await queued('a').waitFor();assert.equal((await current('a')).task.properties.startedAt,started);
+ await page.goForward();await ready();assert.equal((await current('a')).task.properties.startedAt,started);
+ await key('Enter');await page.waitForFunction(()=>document.querySelector('.gq-task')?.getAttribute('aria-pressed')==='false');
+ assert.equal((await current('a')).status,'paused');assert.equal((await current('a')).task.properties.startedAt,undefined);
+ await page.reload();await ready();assert.equal(await detail().getAttribute('aria-pressed'),'false');
+ await key('Enter');await page.waitForFunction(()=>document.querySelector('.gq-task')?.getAttribute('aria-pressed')==='true');
+ assert.equal((await current('a')).status,'foreground');
+ await page.screenshot({path:path.join(out,'focused-task-subtasks-600.png')});
+ check('Back and Forward are navigation only; foreground Select pauses/resumes and reload preserves the stopped timer');
+ await action('start',{taskId:'glasses-b',remindMinutes:null});await page.evaluate(()=>DCCWorkingQueue.refresh());
+ assert.equal(await detail().getAttribute('aria-pressed'),'false');assert.equal((await current('a')).status,'background');
+ await key('Enter');await ready();assert.equal((await current('a')).status,'foreground');assert.equal((await current('b')).status,'background');
+ check('other-client timer changes reconcile; resuming retains the single canonical foreground');
+ const beforeOffline=(await state()).revision;
+ await context.setOffline(true);await key('Enter');assert.equal((await state()).revision,beforeOffline);assert.match(await page.locator('.gq-status').innerText(),/Offline/);
+ await context.setOffline(false);await page.evaluate(()=>DCCWorkingQueue.refresh());await ready();
+ check('offline gestures do not create hidden timer or completion changes');
+ const beforeStorage=(await state()).revision;
+ await page.evaluate(()=>{window.glassesOriginalSetItem=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){if(key.endsWith(':pending'))throw new Error('Synthetic local storage full');return window.glassesOriginalSetItem.call(this,key,value);};});
+ await key('Enter');await page.waitForFunction(()=>document.querySelector('.gq-status')?.textContent.includes('storage full'));assert.equal((await state()).revision,beforeStorage);
+ await page.evaluate(()=>{Storage.prototype.setItem=window.glassesOriginalSetItem;});await ready();
+ check('local receipt storage failure prevents the timer write');
+ await page.route('**/api/working-queue/tasks/*/tree',route=>route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'Synthetic tree failure'})}));
+ await page.goBack();await queued('a').waitFor();await select(queued('a'));await ready();await page.getByRole('button',{name:'Retry subtasks'}).waitFor();
+ assert.match(await page.locator('.gq-detail').innerText(),/Subtasks unavailable/);
+ await page.unroute('**/api/working-queue/tasks/*/tree');await select(page.getByRole('button',{name:'Retry subtasks'}));await page.locator('.gq-subtasks li').first().waitFor();
+ check('subtask read failures are visible and retry restores the current task tree');
+ // A stale coordinator revision must fail closed and refresh, never silently toggle new work.
+ await page.route('**/api/working-queue',route=>route.request().method()==='POST'?route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:'Synthetic stale revision'})}):route.continue());
+ const conflictRevision=(await state()).revision;await key('Enter');await page.locator('.wq-conflict').waitFor();assert.equal((await state()).revision,conflictRevision);
+ await page.unroute('**/api/working-queue');await page.locator('[data-queue-action="clear-conflict"]').click();await ready();
+ check('a revision conflict preserves confirmed timing and exposes recovery');
+ // Dismiss stops first. A failed removal leaves the open, paused task visible.
+ await page.route('**/api/working-queue',route=>route.request().method()==='POST'&&route.request().postDataJSON().action==='queue-remove'?route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:'Synthetic remove conflict'})}):route.continue());
+ await key('ArrowLeft');await page.locator('.wq-conflict').waitFor();assert.equal((await current('a')).status,'paused');assert.equal((await current('a')).task.properties.startedAt,undefined);assert.notEqual((await current('a')).task.properties.status,'done');
+ assert.equal(await detail().count(),1);
+ await page.unroute('**/api/working-queue');await page.locator('[data-queue-action="clear-conflict"]').click();await ready();
+ await key('ArrowLeft');await page.locator('.gq-list').waitFor();assert.equal(await current('a'),undefined);assert.notEqual((await api('/api/blocks/glasses-a')).properties.status,'done');assert.equal((await api('/api/blocks/glasses-a')).properties.startedAt,undefined);await source('a').waitFor();
+ await select(source('a'));await queued('a').waitFor();assert.equal((await current('a')).status,'paused');
+ check('swipe left pauses before removal; removal failure remains visible; dismiss preserves the task and allows re-adding without a timer');
+ // Completion lost acknowledgement: reuse the saved command, and leave the task list once.
+ await select(queued('a'));await ready();let lost=false,allowReplay=false,completionId;
+ await page.route('**/api/working-queue',async route=>{
+  if(route.request().method()==='POST'&&route.request().postDataJSON().action==='done'&&!lost){lost=true;completionId=route.request().postDataJSON().sourceEventId;await route.fetch();await route.abort();return;}if(lost&&!allowReplay&&route.request().method()==='POST'&&route.request().postDataJSON().action==='done'){await route.abort();return;}await route.continue();
+ });
+ await key('ArrowRight');await page.getByRole('button',{name:'Retry saved update'}).waitFor();assert.equal((await current('a')).status,'completed');
+ const completedRevision=(await state()).revision;
+ await page.reload();await page.getByRole('button',{name:'Retry saved update'}).waitFor();
+ const retries=[];page.on('request',r=>{if(r.method()==='POST'&&r.url()===base+'/api/working-queue')retries.push(r.postDataJSON());});
+ allowReplay=true;await page.evaluate(()=>DCCWorkingQueue.tick());await page.locator('.gq-list').waitFor();await page.unroute('**/api/working-queue');
+ assert.ok(retries.some(r=>r.sourceEventId===completionId));assert.equal((await state()).revision,completedRevision);
+ assert.equal(await queued('a').count(),0);assert.equal((await api('/api/blocks/glasses-a')).properties.status,'done');
+ assert.equal(new URL(page.url()).searchParams.get('device'),'glasses');
+ check('swipe right persists completion; lost-response reload retries the same receipt once and returns to the list');
+ await select(queued('b'));await ready();
+ for(const [width,height] of [[320,600],[375,812],[600,600],[1440,1000]]){
+  await page.setViewportSize({width,height});await detail().focus();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.screenshot({path:path.join(out,'focus-'+width+'.png')});await page.goBack();await queued('b').waitFor();
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:path.join(out,'list-'+width+'.png')});await select(queued('b'));await ready();
+ }
+ await page.setViewportSize({width:600,height:600});await page.evaluate(()=>document.documentElement.style.zoom='2');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.evaluate(()=>document.documentElement.style.zoom='');
+ check('list and detail stay usable at 320/375/600/1440 widths and 200 percent zoom');
+ await key('Escape');await queued('b').waitFor();
+ await page.goto(base+'/?device=glasses&tab=schedule');await page.waitForSelector('#tab-schedule.active');assert.equal(await page.locator('.glasses-nav').isVisible(),true);
+ check('keyboard Escape uses the same Back path and explicit itinerary links retain their adapter');
+ assert.deepEqual(errors,[]);await fs.writeFile(path.join(out,'checks.json'),JSON.stringify({checks,errors,synthetic:true,physicalMeta:false},null,2));
+} catch(error){console.log(await page.locator('#working-queue-root').innerText());await page.screenshot({path:path.join(out,'failure.png')});throw error;} finally {await browser.close();}

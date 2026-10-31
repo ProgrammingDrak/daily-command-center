@@ -1,0 +1,21 @@
+const test=require('node:test');
+const assert=require('node:assert/strict');
+test('glasses tree is owner-scoped, retains open/completed nested tasks and excludes deleted or foreign rows',{skip:!process.env.DCC_TEST_DATABASE_URL},async t=>{
+ const f=await require('./test-support/shared-queue-fixture').createSharedQueueFixture();t.after(()=>f.close());
+ const make=(id,p={},extra={})=>f.blockDB.createBlock({id,type:'block',date:'2099-01-02',user_id:1,workspace_id:'ws-1',properties:{local_id:id,type:'task',title:id,status:'open',...p},...extra});
+ await make('glasses-root',{local_id:'legacy-root'});
+ await make('glasses-child',{subtaskOf:'legacy-root'});
+ await make('glasses-grandchild',{subtaskOf:'glasses-child',status:'done'});
+ await make('glasses-deleted',{subtaskOf:'legacy-root'},{deleted_at:new Date().toISOString()});
+ await make('glasses-foreign',{subtaskOf:'legacy-root'},{user_id:2,workspace_id:'ws-2'});
+ await f.pool.query("UPDATE blocks SET deleted_at=NOW() WHERE id='glasses-deleted'");
+ const url='/api/working-queue/tasks/glasses-root/tree';
+ assert.equal((await f.request(url)).status,401);
+ assert.equal((await f.request(url,{user:3})).status,403);
+ assert.equal((await f.request('/api/working-queue/tasks/glasses-foreign/tree',{user:1})).status,404);
+ const tree=await f.request(url,{user:1});assert.equal(tree.status,200);
+ assert.deepEqual(tree.body.rows.map(r=>r.id).sort(),['glasses-child','glasses-grandchild','glasses-root']);
+ assert.equal(tree.body.rows.find(r=>r.id==='glasses-grandchild').depth,2);
+ assert.equal(tree.body.rows.find(r=>r.id==='glasses-grandchild').properties.status,'done');
+ assert.equal((await f.request('/api/working-queue/tasks/absent/tree',{user:1})).status,404);
+});
