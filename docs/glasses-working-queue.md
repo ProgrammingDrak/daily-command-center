@@ -61,7 +61,9 @@ borrow another task's legacy note. An identical retry after a lost acknowledgeme
 is safe. Conflicts show the saved note and retain the draft, with explicit choices
 to use the saved note or replace it with the draft. New edits during a save remain
 dirty until their own acknowledgement; obsolete reads cannot replace a reopened
-editor or a later save. Legacy checkbox state survives canonical HTML migration.
+editor or a later save. Legacy checkbox state survives canonical HTML migration. Existing image sources
+remain in the saved model; unsupported image display uses a retained-image
+placeholder, so unrelated text edits cannot erase attachments.
 
 While notes are open, the foreground view is inert and editing gestures cannot
 complete or dismiss a task. The editor is destroyed and its observers/listeners
@@ -173,7 +175,7 @@ app glasses browser verifier against its disposable review server.
 Five mutation checks exercise add-without-timing, navigation-without-timing, pause-before-dismiss, held-input suppression and tree ownership. The standard queue browser regression also passes.
 
 Node 20.20.2: full serial suite **3,336 passed, 4 skipped, zero failures**. Lint
-reports **zero errors and 71 warnings**. The glasses browser verifier passes **22 groups**, and the shared queue
+reports **zero errors and 71 warnings**. The glasses browser verifier passes **23 groups**, and the shared queue
 browser regression passes **31 checks**. These are local results, not a claim that
 GitHub CI has run for this branch. The repository has no separate build script;
 Express serves its static JavaScript directly. The first concurrent full run exposed
