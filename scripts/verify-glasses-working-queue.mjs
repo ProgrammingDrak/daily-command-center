@@ -68,7 +68,10 @@ try {
  await page.screenshot({path:path.join(out,'task-notes-600.png')});
  const noteRevision=(await state()).revision;await editor().press('ArrowRight');await editor().press('ArrowLeft');await editor().press('Enter');
  await page.goBack();await notes().waitFor({state:'detached'});await ready();assert.equal((await state()).revision,noteRevision);assert.equal((await current('a')).task.properties.startedAt,started);
- await page.waitForFunction(()=>document.activeElement?.dataset.glassesAction==='details');assert.equal(await detail().evaluate(el=>el===document.activeElement),true);
+ // Polling replaces the task button. Inspect focus and the current DOM in one
+ // browser turn, then explicitly verify that another render preserves it.
+ await page.waitForFunction(()=>document.querySelector('[data-glasses-action="details"]')===document.activeElement);
+ assert.equal(await page.evaluate(()=>{DCCWorkingQueue.render();return document.querySelector('[data-glasses-action="details"]')===document.activeElement;}),true);
  await page.goBack();await queued('a').waitFor();await page.goForward();await ready();
  await key('Enter');await editor().waitFor();assert.match(await notes().innerText(),/Capture the decision/);await notesSaved();
  await page.goBack();await notes().waitFor({state:'detached'});await ready();await page.screenshot({path:path.join(out,'focused-task-subtasks-600.png')});
