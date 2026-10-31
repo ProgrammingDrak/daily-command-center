@@ -65,7 +65,7 @@
     try{
       const url=new URL(location.href);
       url.searchParams.set("tl",btoa(unescape(encodeURIComponent(JSON.stringify(data)))));
-      history.replaceState(null,"",url.pathname+url.search+url.hash);
+      history.replaceState(history.state,"",url.pathname+url.search+url.hash);
     }catch(_){ }
   }
   function restore(){

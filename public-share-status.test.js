@@ -63,6 +63,8 @@ function build({ rootProps = {}, rows = [], tombstoneReadThrows = false } = {}) 
     share: { workspace_id: "ws-1" },
     // A pure filter in production (server.js), so a pass-through is faithful here.
     filterLegacyGcalBlocks: (b) => b,
+    // The private-type predicate reads the shared task-type registry.
+    TaskTypes: require("./public/js/task-types"),
     // ONE store behind both reads, partitioned on `deleted_at` exactly as db.js's two
     // queries differ — so a fixture cannot claim a row exists for the live read and not for
     // the tombstone read (C5a's mock-contradiction lesson).

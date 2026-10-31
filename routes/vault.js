@@ -7,7 +7,7 @@ const fsp = require("fs/promises");
 const crypto = require("crypto");
 const multer = require("multer");
 const matter = require("gray-matter");
-const InkStrokes = require("../public/js/ink/strokes.js");
+const { validateInkBuffer } = require("../lib/ink-page-validation");
 
 // The shared vault parser (.mycelium/lib/parse.js) is the ONE source of truth
 // for the wikilink regex + tag color math (Track A owns it; B/C/D require it,
@@ -314,8 +314,6 @@ const NOTEBOOK_IMAGE_TYPES = new Map([
 ]);
 const NOTEBOOK_OCR_STATUSES = new Set(["pending", "complete", "partial", "failed"]);
 const NOTEBOOK_OCR_SOURCES = new Set(["none", "client", "claude", "vision"]);
-const NOTEBOOK_INK_MAX_BYTES = 2 * 1024 * 1024;
-const NOTEBOOK_INK_MAX_POINTS = 500000;
 
 function notebookVaultSlug(notebookId) {
   const id = String(notebookId || "").trim();
@@ -324,51 +322,8 @@ function notebookVaultSlug(notebookId) {
 }
 
 // Reject hostile or corrupt stroke JSON before it becomes the durable source.
-// The client parser is intentionally forgiving for recovery. The server is not.
-function validateNotebookInk(buffer) {
-  if (!Buffer.isBuffer(buffer) || !buffer.length) throw new Error("ink strokes required");
-  if (buffer.length > NOTEBOOK_INK_MAX_BYTES) throw new Error("ink stroke file is too large");
-  let page;
-  try { page = JSON.parse(buffer.toString("utf8")); }
-  catch { throw new Error("ink must contain valid JSON"); }
-  if (!page || page.v !== 1 || !Number.isFinite(page.w) || !Number.isFinite(page.h)
-      || page.w < 1 || page.h < 1 || page.w > 10000 || page.h > 10000
-      || !Array.isArray(page.strokes)) {
-    throw new Error("ink must match the version 1 stroke format");
-  }
-  if (page.paper != null && (!page.paper || typeof page.paper !== "object"
-      || !InkStrokes.PAPERS.some(p => p.id === page.paper.type)
-      || !Object.prototype.hasOwnProperty.call(InkStrokes.TINTS, page.paper.tint)
-      || !Number.isFinite(page.paper.spacing) || page.paper.spacing < InkStrokes.PAPER_SPACING.min || page.paper.spacing > InkStrokes.PAPER_SPACING.max
-      || typeof page.paper.margin !== "boolean")) {
-    throw new Error("ink contains invalid paper settings");
-  }
-  let points = 0;
-  for (const stroke of page.strokes) {
-    if (!stroke || !Object.prototype.hasOwnProperty.call(InkStrokes.TOOLS, stroke.tool)
-        || !/^#[0-9a-f]{3,8}$/i.test(String(stroke.color || ""))
-        || !Number.isFinite(stroke.size) || stroke.size <= 0 || stroke.size > 200
-        || !Array.isArray(stroke.pts) || stroke.pts.length < 3 || stroke.pts.length % 3 !== 0) {
-      throw new Error("ink contains an invalid stroke");
-    }
-    if (stroke.style != null && (!stroke.style || stroke.style.v !== 2
-        || !Number.isFinite(stroke.style.angle) || stroke.style.angle < InkStrokes.NIB_ANGLE.min || stroke.style.angle > InkStrokes.NIB_ANGLE.max)) {
-      throw new Error("ink contains invalid nib settings");
-    }
-    points += stroke.pts.length / 3;
-    if (points > NOTEBOOK_INK_MAX_POINTS) throw new Error("ink contains too many points");
-    for (let i = 0; i < stroke.pts.length; i += 3) {
-      const x = stroke.pts[i]; const y = stroke.pts[i + 1]; const pressure = stroke.pts[i + 2];
-      if (![x, y, pressure].every(Number.isFinite)
-          || x < -page.w || x > page.w * 2 || y < -page.h || y > page.h * 2
-          || pressure < 0 || pressure > 1) {
-        throw new Error("ink contains an invalid point");
-      }
-    }
-  }
-  return page;
-}
-
+// Shared with private journal task pages through lib/ink-page-validation.js.
+const validateNotebookInk = validateInkBuffer;
 function validNotebookImageBytes(buffer, mime) {
   if (!Buffer.isBuffer(buffer)) return false;
   if (mime === "image/png") return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"));

@@ -406,6 +406,10 @@ function openAddModal(taskId, taskTitle, options) {
   if (!options?.generic && workoutTask?.type === 'workout' && window.DCC?.Workout) {
     return DCC.Workout.open({taskId:workoutAnchor?.blockId || workoutTask._blockId || taskId,title:workoutTask.title,localId:taskId});
   }
+  // A Journal opens straight onto its page; "Task details" stays reachable via generic.
+  if (!options?.generic && workoutTask?.type === 'journal' && window.DCC?.JournalTask) {
+    return DCC.JournalTask.open({taskId:workoutAnchor?.blockId || workoutTask._blockId || taskId,localId:taskId,journalId:workoutTask.journalId,title:workoutTask.title});
+  }
   var taskOverlay = document.getElementById('add-modal-overlay');
   if (!taskOverlay.classList.contains('open')) {
     var activeOpener = document.activeElement;
@@ -424,6 +428,7 @@ function openAddModal(taskId, taskTitle, options) {
   // update never happens. _addModalBlockId short-circuits it.
   _addModalBlockId = (anchor && anchor.blockId) || null;
   if (window.DCC && DCC.Activity) DCC.Activity.taskButton(_addModalBlockId || (taskEntry && taskEntry._blockId) || taskId, taskEntry);
+  if (window.DCC && DCC.JournalTask) DCC.JournalTask.taskButton(_addModalBlockId || (taskEntry && taskEntry._blockId) || taskId, taskEntry);
   _addModalDraftTitle = (taskEntry && taskEntry.title) || taskTitle || '';
   _addModalDraftTags = taskEntry && Array.isArray(taskEntry.tags) ? taskEntry.tags.slice() : [];
   _addModalTagsDirty = false;

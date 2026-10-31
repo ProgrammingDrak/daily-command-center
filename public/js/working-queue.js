@@ -39,6 +39,7 @@
   }
   function render(){
     const root=document.getElementById('working-queue-root');if(!root)return;
+    if(window.DCCGlassesQueue){window.DCCGlassesQueue.render(root,{state,pending,conflict,sending,problem},glassesAction);return;}
     const focused=document.activeElement,focusKey=focused?.dataset.queueAction,focusId=focused?.dataset.taskId;
     const completedOpen=root.querySelector('.wq-completed')?.open;
     const periodFocused=focused?.matches('[data-completed-period]');
@@ -78,10 +79,10 @@
     if(completedFocused)root.querySelector('.wq-completed > summary')?.focus({preventScroll:true});
     if(focusKey)root.querySelector('[data-queue-action="'+CSS.escape(focusKey)+'"][data-task-id="'+CSS.escape(focusId||'')+'"]')?.focus({preventScroll:true});
   }
-  function modal(title,body,submit,label='Save'){let busy=false;return DCC.overlay.open({kind:'modal',title,body,canClose:()=>!busy,actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
+  function modal(title,body,submit,label='Save',onClose){let busy=false;return DCC.overlay.open({kind:'modal',title,body,onClose,canClose:reason=>!busy||reason==='glasses-back',actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
   function form(html){const body=document.createElement('div');body.className='wq-form';body.innerHTML=html+'<p role="status"></p>';return body;}
-  async function transition(action,item){
-    const body=form('<p>'+esc(item.task.properties.title||'Task')+'</p>'+(['start','background-start','queue-block'].includes(action)?'<label>Check back on the background task<select data-minutes><option value="">No reminder</option><option value="5">5 minutes</option><option value="15" selected>15 minutes</option><option value="30">30 minutes</option><option value="120">2 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes<input type="number" min="1" max="1440" value="10"></label>':'')+(action==='done'?'<div data-completion-time aria-live="off">Loading recorded time…</div><p>Completing saves the current focused session to this task. The saved total is confirmed after the update succeeds.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome required></textarea></label>':''):''));
+  async function transition(action,item,callbacks={}){
+    const body=form('<p>'+esc(item.task.properties.title||'Task')+'</p>'+(['start','background-start','queue-block'].includes(action)?'<label>Check back on the background task<select data-minutes><option value="">No reminder</option><option value="5">5 minutes</option><option value="15" selected>15 minutes</option><option value="30">30 minutes</option><option value="120">2 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes<input type="number" min="1" max="1440" value="10"></label>':'')+(action==='done'?'<div data-completion-time aria-live="off">Loading recorded time…</div><p>Completing saves the current focused session to this task. The saved total is confirmed after the update succeeds.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome maxlength="6000" required></textarea></label>':''):''));
     let guided=null,ready=!item.task.properties.guidedDefinitionId,completion=null,clockOffset=0,command=null;
     const formatSeconds=seconds=>Math.floor(seconds/60)+'m '+String(seconds%60).padStart(2,'0')+'s';
     function updateCompletion(){
@@ -97,20 +98,54 @@
       const minutes=select?(select.value==='custom'?Number(body.querySelector('[data-custom] input').value):select.value?Number(select.value):null):null;
       if(minutes!==null&&(!Number.isInteger(minutes)||minutes<1||minutes>1440))throw new Error('Choose 1–1440 minutes.');
       const payload={taskId:item.task.id,...(select?{remindMinutes:minutes}:{})};
-      if(guided)payload.guided={expectedRevision:guided.revision,expectedDefinitionRevision:guided.definitionRevision,expectedContextVersion:guided.contextVersion,...(action==='done'?{outcome:body.querySelector('[data-outcome]').value,confirmed:true}:{})};
+      const outcome=action==='done'&&guided?body.querySelector('[data-outcome]').value:null;
+      if(outcome!==null&&(!outcome.trim()||outcome.length>6000))throw new Error('Record a confirmed outcome (1–6000 characters) before completing.');
+      if(guided)payload.guided={expectedRevision:guided.revision,expectedDefinitionRevision:guided.definitionRevision,expectedContextVersion:guided.contextVersion,...(action==='done'?{outcome:outcome.trim(),confirmed:true}:{})};
       if(!command||action!=='done')command=envelope(action,{...payload,...(completion?{expectedRevision:completion.revision}:{})});
       updateCompletion();
       try {
         const result=await send(command);
+        callbacks.success?.(result);
         if(action==='done')DCC.toast('Task completed · '+(result.task?.properties.actualMinutes==null?'focused time unknown':result.task.properties.actualMinutes+'m recorded'),'success');
       } catch(error) {
         if([400,403,404,409].includes(error.status))throw new Error(error.message+(action==='done'?' Close this dialog and review the current task before completing.':''));
         throw new Error((action==='done'?'Completion not confirmed. Retry uses the same saved update. ':'Update not confirmed. ')+error.message);
       }
-    },action==='start'?'Bring forward':action==='done'?'Complete':'Save');
+    },action==='start'?'Bring forward':action==='done'?'Complete':'Save',callbacks.close);
     if(action==='done'){const timer=setInterval(()=>{if(!body.isConnected){clearInterval(timer);return;}updateCompletion();},1000);}
     if(!ready)DCC.api('/api/guided/tasks/'+encodeURIComponent(item.task.id),{cache:'no-store'}).then(view=>{guided=view;ready=true;body.querySelector('[data-preview]').textContent=view.prompt;}).catch(error=>{body.querySelector('[role=status]').textContent=error.message;});
     return handle;
+  }
+  // Glasses use the same receipt, revision and foreground coordinator as every client.
+  // Foreground selection opens notes locally; only explicit queue intents mutate work.
+  async function glassesAction(intent,id,revision){
+    if(!['add','focus','complete','dismiss'].includes(intent))throw new Error('Unsupported glasses work action');
+    if(!navigator.onLine)throw new Error('Offline. Reconnect before changing work.');
+    if(pending||sending)throw new Error('Wait for the saved update to be confirmed.');
+    if(revision!==state.revision)throw new Error('Work changed. Review the current task and try again.');
+    const item=items().find(i=>i.task.id===id);
+    if(intent==='add') {if(item)return {ok:true};return send(envelope('queue-add',{taskId:id,expectedRevision:revision}));}
+    if(!item||item.status==='completed')throw new Error('This task is no longer open.');
+    if(intent==='dismiss'){
+      let expectedRevision=revision;
+      if(item.status==='foreground'){
+        const paused=await send(envelope('pause',{taskId:id,expectedRevision}));
+        expectedRevision=(paused.currentState||paused.state).revision;
+      }
+      return send(envelope('queue-remove',{taskId:id,expectedRevision}));
+    }
+    if(intent==='focus'&&item.status==='foreground')return {ok:true};
+    const action=intent==='complete'?'done':'start';
+    if(item.task.properties.guidedDefinitionId&&['start','done'].includes(action)){
+      return window.DCCGlassesQueue.review(callbacks=>transition(action,item,callbacks));
+    }
+    let expectedRevision=revision;
+    if(action==='done'){
+      const preview=await DCC.api('/api/working-queue/tasks/'+encodeURIComponent(id)+'/completion-preview',{cache:'no-store',signal:AbortSignal.timeout(15000)});
+      if(preview.revision!==revision) {await refresh();throw new Error('Work changed. Review the timer before completing.');}
+      expectedRevision=preview.revision;
+    }
+    return send(envelope(action,{taskId:id,expectedRevision,...(action==='start'?{remindMinutes:null}:{})}));
   }
   function addTasks(){
     const body=form('<label>Find an existing task<input type="search" data-search placeholder="Search tasks" autofocus></label><div data-results></div><button type="button" data-more hidden>More results</button>');
