@@ -933,7 +933,7 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 /* Let date navigation use the full header width instead of wrapping under the
    title while the space beneath the utilities stays empty. Keep the existing
    DOM order, control handlers, mobile layout and measured sticky-tab offset. */
-@media (min-width: 761px) {
+@media not all and (max-width: 760px) {
   .header {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
