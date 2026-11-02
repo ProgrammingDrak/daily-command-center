@@ -574,7 +574,10 @@ function addSubtask(taskId, text, options){
   // instead of creating an orphaned child row on whichever day is currently open.
   const viewedDate=(typeof viewDate!=="undefined"&&viewDate)
     ?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
-  const date=anchor&&anchor.whenever?null:(options.date||(anchor&&anchor.date)||viewedDate);
+  // null is the canonical Unscheduled pool, not a missing anchor date.
+  // Falling back to the viewed day makes the server reject the child and
+  // leaves its create queued in the WAL while the parent remains undated.
+  const date=anchor&&anchor.whenever?null:(options.date!==undefined?options.date:(anchor?anchor.date:viewedDate));
   const startStr=options.parentStart||(parent&&parent.start)||"00:00";
   // A subtask is a FULL task, shaped by the same serializer as every other task
   // (detail/notionUrl/commute/delegated/tags all defaulted for free), so future
