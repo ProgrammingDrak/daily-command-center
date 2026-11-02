@@ -1690,7 +1690,7 @@ async function getCarryoverPool(workspaceId, beforeDate, opts = {}) {
 // Stops at day_roots in both directions: a day_root is a container, not a task, so
 // walking through one would drag in every unrelated task on that date.
 // Visited IDs terminate cycles without silently truncating legitimate descendants.
-async function getSubtree(rootIds, workspaceId, client) {
+async function getSubtree(rootIds, workspaceId, client, { byRoot = false } = {}) {
   const ids = (Array.isArray(rootIds) ? rootIds : [rootIds]).filter(Boolean);
   if (ids.length === 0) return [];
   const { rows } = await (client || pool).query(
@@ -1714,7 +1714,7 @@ async function getSubtree(rootIds, workspaceId, client) {
           AND c.type <> 'day_root'
           AND NOT c.id = ANY(t.path)
      )
-     SELECT DISTINCT ON (id) * FROM tree ORDER BY id, depth ASC`,
+     SELECT DISTINCT ON (${byRoot ? "path[1], id" : "id"}) * FROM tree ORDER BY ${byRoot ? "path[1], id" : "id"}, depth ASC`,
     [ids, workspaceId || null]
   );
   return rows.map(parseBlock);

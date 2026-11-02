@@ -673,8 +673,7 @@ function createConversationStore(ctx) {
   async function completionReview(body, owner) {
     const q = await pool.connect();
     try {
-      await q.query("BEGIN"); await authorize(q,owner);
-      await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",["dcc-foreground:"+owner.userId]);
+      await q.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"); await authorize(q,owner);
       const review = await R.review(q,owner,ctx,body);
       const revision = (await state(owner,q)).revision;
       await q.query("COMMIT"); return {...review,revision};

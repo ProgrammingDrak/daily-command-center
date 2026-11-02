@@ -112,8 +112,17 @@ test("explicit task reconciliation through the real coordinator and PostgreSQL",
     await act("child", "done", { outcome: "Child done" });
     assert.equal((await read("parent")).properties.status, "open");
     const childBefore = await read("child");
-    await act("parent", "done", { outcome: "All scope now finished" });
+    const parentDecision=await envelope("parent", "done", { outcome: "All scope now finished" });
+    await store.execute(parentDecision,owner);
     assert.deepEqual((await read("child")).properties, childBefore.properties);
+    await act("parent","undo",{undoEventId:parentDecision.sourceEventId});
+    assert.equal((await read("parent")).properties.status,"open");
+    assert.deepEqual((await read("child")).properties,childBefore.properties);
+    const again=await envelope("parent","done",{outcome:"Confirmed whole goal"});
+    await store.execute(again,owner);
+    await ctx.blockDB.updateBlock("child",{properties:{...childBefore.properties,notes:"Later child edit"}});
+    await assert.rejects(act("parent","undo",{undoEventId:again.sourceEventId}),/hierarchy changed/);
+
   });
   await t.test(
     "recurring progress keeps the occurrence/definition open with child iteration and next action",
@@ -280,6 +289,42 @@ test("explicit task reconciliation through the real coordinator and PostgreSQL",
     const retry = await store.execute(b, owner);
     assert.equal(retry.saveStatus, "verified_saved");
     assert.equal(retry.duplicate, true);
+  });
+  await t.test("canonical completion and overlays prevent repeat iterations, and history cannot hide open review tasks", async()=>{
+    for(const key of ["doneAt","completedAt"]){
+      const id="canonical-"+key;await make(id,{[key]:"2026-11-01T11:00:00Z"});
+      await assert.rejects(act(id,"step_done",{outcome:"Do not repeat",completedTitle:"Old iteration",nextStep:{title:"Unwanted duplicate",summary:"Must not create"}}),/Already completed/);
+    }
+    await make("overlay-complete");
+    const rootId=await ctx.blockDB.ensureDayRoot("2026-11-01",1,"ws-1"),root=await read(rootId);
+    await ctx.blockDB.updateBlock(rootId,{properties:{...root.properties,_done:{ids:[...(root.properties._done?.ids||[]),"overlay-complete"]}}});
+    await assert.rejects(act("overlay-complete","step_done",{outcome:"Do not repeat",completedTitle:"Old iteration",nextStep:{title:"Unwanted duplicate",summary:"Must not create"}}),/Already completed/);
+    // Another synthetic owner keeps this page isolated from the preceding cases.
+    await ctx.pool.query(`INSERT INTO blocks(id,type,date,user_id,workspace_id,created_at,updated_at,properties)
+      SELECT 'old-done-'||n,'block','2026-11-01',2,'ws-2',NOW(),NOW(),jsonb_build_object('type','task','title','Old completed','doneAt','2026-11-01T11:00:00Z') FROM generate_series(1,501) n`);
+    await ctx.blockDB.createBlock({id:"old-unscheduled-open",type:"block",user_id:2,workspace_id:"ws-2",date:null,properties:{type:"task",title:"Remaining work"}});
+    const review=await store.completionReview({date:"2026-11-01"},{userId:2,workspaceId:"ws-2"});
+    assert.deepEqual(review.candidates.map(row=>row.taskId),["old-unscheduled-open"]);
+  });
+  await t.test("review pages ineligible parents with batched hierarchy reads and no foreground lock", async()=>{
+    await ctx.pool.query(`INSERT INTO blocks(id,type,date,user_id,workspace_id,created_at,updated_at,properties)
+      SELECT 'aaa-parent-'||n,'block',NULL,2,'ws-2',NOW(),NOW(),jsonb_build_object('type','task','title','Parent') FROM generate_series(1,105) n`);
+    await ctx.pool.query(`INSERT INTO blocks(id,type,date,user_id,workspace_id,created_at,updated_at,properties)
+      SELECT 'zzz-child-'||n,'block',NULL,2,'ws-2',NOW(),NOW(),jsonb_build_object('type','task','title','Future child','subtaskOf','aaa-parent-'||n) FROM generate_series(1,105) n`);
+    let queries=0;
+    const counted={...ctx,blockDB:{...ctx.blockDB,getSubtree:async(...args)=>{queries++;return ctx.blockDB.getSubtree(...args);}}};
+    const locking=await ctx.pool.connect();
+    try{
+      await locking.query("BEGIN");await locking.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",["dcc-foreground:2"]);
+      const deadline=setTimeout(()=>locking.query("ROLLBACK"),1500);
+      try{
+        const start=Date.now();
+        const review=await createConversationStore(counted).completionReview({date:"2026-11-01"},{userId:2,workspaceId:"ws-2"});
+        assert.ok(Date.now()-start<1200,"review must not wait for the foreground mutation lock");
+        assert.ok(review.candidates.some(row=>row.taskId==="old-unscheduled-open"));
+        assert.ok(queries<=3,"hierarchies are batched per page, not one query per task");
+      }finally{clearTimeout(deadline);}
+    }finally{await locking.query("ROLLBACK");locking.release();}
   });
   await t.test("review is deterministic, timezone aware and interrupted choices persist", async () => {
     await make("review-first");
