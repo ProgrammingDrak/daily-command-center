@@ -81,7 +81,7 @@ test("retired pages have no visible route from the top bar, mobile, tutorial or 
   assert.doesNotMatch(read("public/js/onboarding-tour.js"), /Pet Home|Slots support/);
   assert.match(read("public/js/vault-search.js"), /DCC\.nav\.isRetired\("vault"\)\) return;\n\s*if \(\(e\.metaKey/);
   assert.match(read("public/js/vault-tab.js"), /if \(!vaultRetired\(\)\) loadOntology\(\)/);
-  assert.match(read("public/js/meeting-reviews.js"), /isRetired\("meeting-reviews"\)\) return;\n\s*window\.addEventItineraryener\("online", refresh\)/);
+  assert.match(read("public/js/meeting-reviews.js"), /isRetired\("meeting-reviews"\)\) return;\n\s*window\.addEventListener\("online", refresh\)/);
   assert.match(read("public/js/social.js"), /isRetired\?\.\("social"\)\) return;\n\s*\/\/ Silent on failure/);
   // Pet Home still loads: the courier, nudges and task awards read it.
   assert.match(read("public/js/pet-home.js"), /load\(\)\.then\(renderPetHome\)/);
@@ -129,7 +129,7 @@ test("new controls meet the 44px target and the tooltip can be hovered and dismi
   assert.match(css, /\.save-status:focus-visible \.save-status-tooltip \{ opacity: 1; visibility: visible; pointer-events: auto; \}/);
   assert.match(rule(".dcc-cluster .save-status-tooltip::before"), /bottom: 100%;[\s\S]*height: 8px/, "bridge over the gap");
   assert.match(css, /\.save-status:is\(\.tooltip-dismissed, \[aria-expanded="true"\]\) \.save-status-tooltip \{ opacity: 0; visibility: hidden; \}/);
-  assert.match(read("public/js/shell.js"), /document\.activeElement === button \|\| button\.matches\(":hover"\)\) button\.classItinerary\.add\("tooltip-dismissed"\)/);
+  assert.match(read("public/js/shell.js"), /document\.activeElement === button \|\| button\.matches\(":hover"\)\) button\.classList\.add\("tooltip-dismissed"\)/);
 });
 
 // ── The real controller ──
@@ -145,14 +145,14 @@ function element(tag, attrs = {}) {
     tabIndex: 0,
     style: {},
     get id() { return attributes.get("id") || ""; },
-    classItinerary: {
+    classList: {
       add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c),
       toggle: (c, on) => { const want = on === undefined ? !classes.has(c) : !!on; if (want) classes.add(c); else classes.delete(c); return want; }
     },
     getAttribute: (k) => (attributes.has(k) ? attributes.get(k) : null),
     setAttribute: (k, v) => attributes.set(k, String(v)),
     removeAttribute: (k) => attributes.delete(k),
-    addEventItineraryener: (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); },
+    addEventListener: (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); },
     dispatch: (type, event = {}) => (listeners[type] || []).forEach((fn) => fn(Object.assign({ type, preventDefault() {}, target: el }, event))),
     click: () => el.dispatch("click"),
     focus: () => { doc.activeElement = el; },
@@ -186,7 +186,7 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
       "[data-task-view]": views,
       ".task-add-pop .sub-add-input": []
     })[selector] || [],
-    addEventItineraryener: (type, fn) => { (docItineraryeners[type] = docItineraryeners[type] || []).push(fn); },
+    addEventListener: (type, fn) => { (docItineraryeners[type] = docItineraryeners[type] || []).push(fn); },
     dispatchEvent: (event) => { events.push(event); (docItineraryeners[event.type] || []).forEach((fn) => fn(event)); }
   };
   const store = new Map(Object.entries(storage));
@@ -218,7 +218,7 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
   };
   const window = {
     DCC, localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) },
-    addEventItineraryener: (type, fn) => { (winItineraryeners[type] = winItineraryeners[type] || []).push(fn); },
+    addEventListener: (type, fn) => { (winItineraryeners[type] = winItineraryeners[type] || []).push(fn); },
     applyScheduleView: (state, prev) => scheduleViews.push({ state: Object.assign({}, state), prev: prev && Object.assign({}, prev) }),
     fetch: () => { throw new Error("navigation must not call the network"); }
   };
@@ -227,7 +227,7 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
   vm.runInContext(slice(source, "// ======== NAVIGATION ========", "// ======== TASK MENU ACCORDION ========"), context);
   return { DCC, doc, pages, views, toggle, panels, location, history, store, toasts, runs, scheduleViews, events, byId };
 }
-const activePanel = (h) => h.panels.find((p) => p.classItinerary.contains("active")).id;
+const activePanel = (h) => h.panels.find((p) => p.classList.contains("active")).id;
 // Objects built inside the VM have another realm's prototype; compare by value.
 const sameState = (value, expected, message) => assert.deepEqual(JSON.parse(JSON.stringify(value)), expected, message);
 
@@ -382,7 +382,7 @@ test("retired links land on Tasks with a notice and keep deep-link parameters", 
   assert.equal(h.location.search, "?tab=tasks&task=keep&view=queue");
   assert.equal(h.toasts.length, 1);
   assert.match(h.toasts[0], /^Mycelium is no longer in navigation\. Its records are kept\./);
-  assert.equal(h.panels.find((p) => p.id === "tab-vault").classItinerary.contains("active"), false);
+  assert.equal(h.panels.find((p) => p.id === "tab-vault").classList.contains("active"), false);
 });
 
 test("old Itinerary links and a stored legacy Actual view open Itinerary with Actual on", () => {
@@ -453,7 +453,7 @@ test("Day review opens only as an explicit panel under Actual", () => {
 // ── Itinerary Actual presentation ──
 
 function listActualContext(entries, scheduled, nav = { page: "tasks", view: "list", actual: true }) {
-  const strip = { hidden: true, innerHTML: "", querySelector: () => ({ addEventItineraryener() {} }) };
+  const strip = { hidden: true, innerHTML: "", querySelector: () => ({ addEventListener() {} }) };
   const context = vm.createContext({
     window: {}, document: { getElementById: (id) => (id === "actual-summary" ? strip : null) },
     scheduled, viewDate: "2026-11-02", schedView: nav.view,
