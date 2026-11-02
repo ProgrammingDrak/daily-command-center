@@ -155,7 +155,7 @@ try {
   assert.equal((await task('d')).properties.actualMinutes,undefined,'background is not focused effort');
   await button('d','block').click();await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await closed();
   await button('d','unblock').click();
-  await page.waitForFunction(()=>DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='d')?.status==='queued');
+  await page.waitForFunction(()=>{const item=DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='d');return item?.status==='queued'&&!item.blocked;});
   assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),1,'unblock preserves history without claiming running execution');
   await page.reload();await page.waitForSelector('[data-queue-id="b"]');
   assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),1,'setting aside does not start a background worker');
@@ -166,6 +166,7 @@ try {
   await closed();
   assert.equal((await task("a")).properties.startedAt, at);
   await button("b", "focus").click();
+  await page.getByRole("dialog").waitFor();
   await page.keyboard.press("Escape");
   await closed();
   assert.equal((await task("b")).properties.startedAt, undefined);
@@ -362,7 +363,7 @@ try {
       checks: [
         "priority High/Medium/Low ordering and same-priority arrows",
         "schedule-only task stays unstarted",
-        "background start and unblock never return to Priority Queue",
+        "setting aside and unblocking retain inactive work in Priority",
         "new recurrence occurrence and legacy actuals classification",
         "desktop/mobile priority screenshots and overflow",
         "default queue entry",

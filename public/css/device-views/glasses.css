@@ -81,7 +81,8 @@ body.device-glasses{--task-indent-max:64px;--bg:#000;--text:#fff;--text-muted:#c
 .device-glasses .wq-grid{grid-template-columns:1fr;gap:12px}
 .device-glasses .wq-lane{padding:0;border:0;background:#000}
 .device-glasses .wq-lane h2{font-size:16px;margin:8px 0;color:#c5cbd6}
-.device-glasses .wq-lane:has(>.wq-empty):not(.wq-foreground){display:none}
+/* Hide only lanes with no cards. Priority always carries a .wq-empty explanation, even when populated. */
+.device-glasses .wq-lane:not(:has(>.wq-card)):not(.wq-foreground){display:none}
 .device-glasses .wq-card{background:#050a10;color:#fff;border:1px solid #526170;padding:12px;margin-top:8px;scroll-margin:64px 0 130px}
 .device-glasses .wq-card.glasses-selected{outline:3px solid #8effe3;outline-offset:0;background:#101e26}
 .device-glasses .wq-focus{border:2px solid #8effe3}
