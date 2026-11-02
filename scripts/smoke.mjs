@@ -24,7 +24,7 @@ import { measureQueueCapsule } from "./queue-capsule-smoke.mjs";
 const BASE = process.argv[2] || "http://localhost:3987";
 const USER = process.argv[3] || "drake";
 const PASS = process.argv[4] || "clever123";
-const TABS = ["schedule", "pet-home", "budget"];
+const TABS = ["working-queue", "schedule", "pet-home", "budget"];
 // A FRONTEND smoke test guards frontend health: uncaught JS exceptions and
 // failed loads of real static assets. HTTP-status/transport errors on API and
 // SSE endpoints (404s on dead routes, SSE reconnect 401s/ERR_* in a headless
