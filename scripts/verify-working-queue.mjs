@@ -55,12 +55,12 @@ app.get("/fixture/tasks", async (_req, res) =>
 );
 app.get("/", (_req, res) =>
   res.type("html")
-    .send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"></head><body style="padding:20px"><button class="tab" data-tab="schedule">Itinerary</button><button class="tab active" data-tab="working-queue">Working Queue</button><button class="tab" data-tab="budget">Budget</button><div class="tab-content" id="tab-schedule">Itinerary fixture</div><div class="tab-content active" id="tab-working-queue"><div id="working-queue-root"></div></div><div class="tab-content" id="tab-budget">Budget fixture</div><div id="toast-container"></div>
-<script>window.__state={date:"2099-01-02"};window.addActionItem=()=>{};window.closeNotesDrawer=()=>{};window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:'ws-1'};</script><script src="/public/js/core.js"></script><script src="/public/js/core-ui.js"></script><script src="/public/js/task-types.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/tabs.js"></script>
+    .send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"></head><body style="padding:20px"><nav id="tab-bar" aria-label="Pages"><button class="tab active" type="button" data-page="tasks">Tasks</button><button class="tab" type="button" data-page="budget" data-tab="budget">Budget</button></nav><div id="task-view-switch" role="tablist"><button type="button" role="tab" data-task-view="queue">Working Queue</button><button type="button" role="tab" data-task-view="list">List</button><button type="button" role="tab" data-task-view="calendar">Calendar</button></div><button type="button" id="task-actual-toggle" aria-pressed="false" hidden>Actual</button><div class="tab-content" id="tab-schedule">Itinerary fixture</div><div class="tab-content active" id="tab-working-queue"><div id="working-queue-root"></div></div><div class="tab-content" id="tab-budget">Budget fixture</div><div id="toast-container"></div>
+<script>window.__state={date:"2099-01-02"};window.addActionItem=()=>{};window.closeNotesDrawer=()=>{};window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:'ws-1'};</script><script src="/public/js/core.js"></script><script src="/public/js/core-ui.js"></script><script src="/public/js/task-types.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/nav-state.js"></script><script src="/public/js/tabs.js"></script>
 <script>window.scheduled=[];window.backlog=[];window.fixtureRows=[];window.isDone=t=>t.status==='done';window.render=()=>{};
 window.blockStore={get:id=>fixtureRows.find(r=>r.id===id),getByType:()=>fixtureRows,acceptWorkRotation:rows=>{for(const row of rows){const i=fixtureRows.findIndex(r=>r.id===row.id);if(i>=0)fixtureRows[i]=row;else fixtureRows.push(row);}scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));}};
 window.fixtureLoad=async()=>{fixtureRows=await fetch('/fixture/tasks').then(r=>r.json());scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));};window.petDeliveries=[];DCC.PetNudge={deliverWorkCheckIn:async(text,options)=>{petDeliveries.push(text);DCC.toast(text,'info',60000,{label:'Open queue',onClick:options.open});}};
-</script><script src="/public/js/work-checkin-policy.js"></script><script src="/public/js/work-sessions.js"></script><script src="/public/js/work-completion.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/working-queue.js"></script><script>fixtureLoad().then(()=>dispatchEvent(new Event('dcc:data-ready')));</script></body></html>`)
+</script><script src="/public/js/work-checkin-policy.js"></script><script src="/public/js/work-sessions.js"></script><script src="/public/js/work-completion.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/task-priority.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/working-queue.js"></script><script>fixtureLoad().then(()=>dispatchEvent(new Event('dcc:data-ready')));</script></body></html>`)
 );
 const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
@@ -103,14 +103,29 @@ const due = async (id) =>
 try {
   await page.goto(base);
   await page.waitForSelector(".wq-focus");
-  assert.equal(await page.locator('.tab.active').getAttribute('data-tab'),'working-queue');
-  await page.locator('.tab[data-tab="schedule"]').click();await page.locator('.tab[data-tab="budget"]').click();
-  await page.goBack();assert.equal(await page.locator('.tab.active').getAttribute('data-tab'),'schedule');
-  await page.goBack();assert.equal(await page.locator('.tab.active').getAttribute('data-tab'),'working-queue');
-  await page.goForward();assert.equal(await page.locator('.tab.active').getAttribute('data-tab'),'schedule');
-  await page.goto(base+'/?tab=schedule');assert.equal(await page.locator('.tab.active').getAttribute('data-tab'),'schedule');
-  await page.reload();assert.equal(await page.locator('.tab.active').getAttribute('data-tab'),'schedule');
+  const panel=()=>page.locator('.tab-content.active').getAttribute('id');
+  const navState=()=>page.evaluate(()=>window.DCC.nav.get());
+  assert.equal(await panel(),'tab-working-queue');
+  assert.deepEqual(await navState(),{page:'tasks',view:'queue',actual:false});
+  await page.locator('[data-task-view="list"]').click();await page.locator('.tab[data-page="budget"]').click();
+  await page.goBack();assert.equal(await panel(),'tab-schedule');
+  await page.goBack();assert.equal(await panel(),'tab-working-queue');
+  await page.goForward();assert.equal(await panel(),'tab-schedule');
+  // Old Itinerary links still open the list; retired pages land on the queue.
+  await page.goto(base+'/?tab=schedule&task=keep');assert.equal(await panel(),'tab-schedule');
+  assert.equal(new URL(page.url()).searchParams.get('task'),'keep','deep-link parameters survive the rewrite');
+  await page.reload();assert.equal(await panel(),'tab-schedule');
+  await page.goto(base+'/?tab=social');assert.equal(await panel(),'tab-working-queue');
+  assert.equal(new URL(page.url()).searchParams.get('tab'),'tasks');
+  await page.goto(base+'/?tab=tasks&view=calendar&actual=1');
+  assert.deepEqual(await navState(),{page:'tasks',view:'calendar',actual:true});
+  assert.equal(await page.locator('#task-actual-toggle').getAttribute('aria-pressed'),'true');
+  await page.locator('#task-actual-toggle').click();
+  assert.equal(new URL(page.url()).searchParams.get('actual'),'0','explicit Actual off remains in the URL across reload');
+  await page.locator('[data-task-view="queue"]').click();
+  assert.equal(await page.locator('#task-actual-toggle').isHidden(),true,'Actual is not offered on the Working Queue');
   await page.goto(base);await page.waitForSelector('.wq-focus');
+  assert.equal((await task('a')).properties.startedAt,at,'view, page and history navigation never start or change a timer');
   assert.equal((await task('a')).properties.startedAt,at,'default navigation never starts or changes a timer');
   await add(["b", "c"]);
   await add(['d','legacy-pq']);
@@ -120,8 +135,8 @@ try {
     await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await closed();
   };
   await setPriority('c','High');
-  assert.deepEqual(await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId)),['c','b','d']);
-  assert.equal(await page.locator('.wq-background [data-queue-id="legacy-pq"]').count(),1);
+  assert.deepEqual(await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId)),['c','b','legacy-pq','d']);
+  assert.equal(await page.locator('.wq-next [data-queue-id="legacy-pq"]').count(),1,'legacy time is not fresh worker execution');
   assert.equal((await task('b')).properties.start,'09:00','schedule-only task remains unstarted');
   assert.equal((await task('b')).properties.startedAt,undefined);
   assert.equal((await task('a')).properties.startedAt,at,'priority changes preserve current foreground');
@@ -136,14 +151,14 @@ try {
   assert.deepEqual(await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId)),priorityOrder,'arrows cannot silently change priority');
   await button('d','background').click();
   await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await closed();
-  assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),0);
+  assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),1,'setting aside does not start a background worker');
   assert.equal((await task('d')).properties.actualMinutes,undefined,'background is not focused effort');
   await button('d','block').click();await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await closed();
   await button('d','unblock').click();
-  await page.waitForFunction(()=>DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='d')?.status==='paused');
-  assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),0,'unblock preserves start history');
+  await page.waitForFunction(()=>{const item=DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='d');return item?.status==='queued'&&!item.blocked;});
+  assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),1,'unblock preserves history without claiming running execution');
   await page.reload();await page.waitForSelector('[data-queue-id="b"]');
-  assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),0);
+  assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),1,'setting aside does not start a background worker');
   await setPriority('c','Medium');
 
   await button("b", "focus").click();
@@ -151,6 +166,7 @@ try {
   await closed();
   assert.equal((await task("a")).properties.startedAt, at);
   await button("b", "focus").click();
+  await page.getByRole("dialog").waitFor();
   await page.keyboard.press("Escape");
   await closed();
   assert.equal((await task("b")).properties.startedAt, undefined);
@@ -347,7 +363,7 @@ try {
       checks: [
         "priority High/Medium/Low ordering and same-priority arrows",
         "schedule-only task stays unstarted",
-        "background start and unblock never return to Priority Queue",
+        "setting aside and unblocking retain inactive work in Priority",
         "new recurrence occurrence and legacy actuals classification",
         "desktop/mobile priority screenshots and overflow",
         "default queue entry",

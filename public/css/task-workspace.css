@@ -1,0 +1,363 @@
+/* Task workspace navigation: compact header, Tasks head, Actual evidence.
+   Loaded after dashboard.css and ui-optimization.css; glasses.css follows. */
+
+.dcc-visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Header: pages left, clock · cog · sync right ── */
+.header.dcc-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding-block: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+.dcc-pages {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.dcc-pages::-webkit-scrollbar { display: none; }
+.dcc-pages .tab {
+  min-height: var(--target-min);
+  padding: 0 var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-full);
+  color: var(--ink-muted);
+  background: transparent;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.dcc-pages .tab:hover { color: var(--ink-strong); background: var(--surface-hover); }
+.dcc-pages .tab.active {
+  color: var(--ink-strong);
+  border-color: var(--line);
+  background: var(--surface-raised);
+}
+.dcc-pages .tab:focus-visible,
+.task-view-switch [role="tab"]:focus-visible,
+.task-actual-toggle:focus-visible,
+.dcc-cluster button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+.dcc-cluster {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+}
+/* These move into the cog menu on load; never flash in the cluster. */
+.dcc-cluster > :is(.admin-link:not(.dcc-settings-button), .sn-btn, .sync-section) { display: none !important; }
+.dcc-cluster .time-now {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  padding-right: var(--sp-1);
+  line-height: 1.1;
+  text-align: right;
+}
+.dcc-cluster .time-now .clock {
+  color: var(--accent-light);
+  font-size: 1.05rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.dcc-cluster .time-now .tz-label { color: var(--ink-faint); font-size: 0.65rem; }
+
+/* Clock, cog and dot share one centre line; each hit area is 44px and they do not overlap. */
+.dcc-cluster > * { flex: 0 0 auto; }
+.dcc-cluster .dcc-settings-wrap { position: relative; display: inline-flex; align-items: center; }
+.dcc-cluster .dcc-settings-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--target-min);
+  min-width: var(--target-min);
+  height: var(--target-min) !important;
+  min-height: var(--target-min) !important;
+  margin: 0;
+  padding: 0;
+  border-radius: var(--r-full);
+  color: var(--ink-muted);
+}
+.dcc-cluster .dcc-settings-button::after { content: none; }
+.dcc-cluster .dcc-settings-button:hover,
+.dcc-cluster .dcc-settings-button[aria-expanded="true"] { color: var(--ink-strong); background: var(--surface-hover); }
+.dcc-settings-menu .sync-section { padding: var(--sp-2) var(--sp-3); color: var(--ink-muted); font-size: var(--fs-xs); }
+
+/* Sync dot: the state is in the name, the color and a shape. */
+.dcc-cluster .save-status {
+  /* dashboard.css still carries the old fixed top-right badge; undo its insets. */
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  transform: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  width: var(--target-min);
+  min-width: var(--target-min);
+  height: var(--target-min);
+  min-height: var(--target-min);
+  margin: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-full);
+  background: transparent;
+}
+.dcc-cluster .save-status:hover,
+.dcc-cluster .save-status[aria-expanded="true"] { border-color: var(--line); background: var(--surface-raised); }
+.dcc-cluster .save-status-dot {
+  position: static;
+  width: 11px;
+  height: 11px;
+  border-radius: var(--r-full);
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgba(0, 179, 115, 0.18);
+}
+.save-status-glyph { position: absolute; top: 4px; right: 4px; font-size: 10px; font-weight: 800; line-height: 1; }
+.save-status[data-remote-state*="waiting"] .save-status-dot,
+.save-status[data-remote-state*="syncing"] .save-status-dot,
+.save-status[data-remote-state*="checking"] .save-status-dot { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }
+.save-status[data-remote-state*="offline"] .save-status-dot { background: transparent; border: 2px solid var(--warning); box-shadow: none; }
+.save-status[data-remote-state*="attention"] .save-status-dot,
+.save-status[data-remote-state*="failed"] .save-status-dot { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+.save-status[data-remote-state*="attention"] .save-status-glyph::after,
+.save-status[data-remote-state*="failed"] .save-status-glyph::after { content: "!"; color: var(--danger); }
+.save-status[data-remote-state*="waiting"] .save-status-glyph::after { content: "…"; color: var(--warning); }
+.dcc-cluster .save-status-tooltip {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  bottom: auto;
+  left: auto;
+  transform: none;
+  z-index: var(--z-popover);
+  display: block;
+  width: max-content;
+  max-width: min(280px, 80vw);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--ink);
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-1);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+/* A bridge over the 6px gap, so the pointer can travel onto the tooltip. */
+.dcc-cluster .save-status-tooltip::before {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  height: 8px;
+}
+@media (hover: hover) {
+  .dcc-cluster .save-status:hover .save-status-tooltip { opacity: 1; visibility: visible; pointer-events: auto; }
+}
+.dcc-cluster .save-status:focus-visible .save-status-tooltip { opacity: 1; visibility: visible; pointer-events: auto; }
+.dcc-cluster .save-status:is(.tooltip-dismissed, [aria-expanded="true"]) .save-status-tooltip { opacity: 0; visibility: hidden; }
+.dcc-save-queue p,
+.dcc-save-commitments p { margin: 0 0 var(--sp-2); }
+.dcc-save-commitment { display: grid; gap: var(--sp-1); padding-top: var(--sp-2); border-top: 1px solid var(--line-subtle); }
+.dcc-save-commitment span { color: var(--ink-muted); font-size: var(--fs-xs); }
+
+/* ── Tasks head: views, date row with queues, Day Progress ── */
+.task-workspace-head { position: relative; margin-bottom: var(--sp-3); }
+.task-view-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.task-view-switch {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  background: var(--surface-base);
+}
+.task-view-switch [role="tab"] {
+  min-height: var(--target-min);
+  padding: 0 var(--sp-4);
+  border: 0;
+  border-radius: var(--r-full);
+  color: var(--ink-muted);
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.task-view-switch [role="tab"]:hover { color: var(--ink-strong); }
+.task-view-switch [role="tab"][aria-selected="true"] { color: #fff; background: var(--brand); }
+.task-actual-toggle {
+  min-height: var(--target-min);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  color: var(--ink-muted);
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.task-actual-toggle::before { content: "○ "; }
+.task-actual-toggle[aria-pressed="true"] { color: var(--success); border-color: var(--success); background: var(--success-soft); }
+.task-actual-toggle[aria-pressed="true"]::before { content: "● "; }
+.task-actual-toggle[hidden] { display: none; }
+.task-workspace-head .date-nav { margin: 0 0 var(--sp-2); }
+.task-workspace-head .date-picker-drop { top: 100%; left: 0; }
+.task-workspace-head .progress-wrap { margin-bottom: 0; }
+#tab-schedule .source-row { justify-content: flex-end; }
+
+/* Page scoping: Budget has no task controls; Workouts & meals keeps the day. */
+body[data-nav-page="budget"] .task-workspace-head { display: none; }
+body[data-nav-page="activity"] :is(#task-view-bar, .task-workspace-head .progress-wrap, #queue-pill) { display: none !important; }
+
+/* ── Actual evidence ── */
+.actual-summary {
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--success);
+  border-radius: var(--r-lg);
+  background: var(--surface-base);
+}
+.actual-summary[hidden] { display: none; }
+.actual-summary-stats { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); font-size: var(--fs-sm); color: var(--ink-muted); }
+.actual-summary-stats b { color: var(--ink-strong); }
+.actual-stat--unknown b { color: var(--warning); }
+.actual-summary-note { margin: 0; color: var(--ink-faint); font-size: var(--fs-xs); }
+.actual-summary-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.actual-summary-actions button {
+  min-height: var(--target-min);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--ink);
+  background: var(--surface-raised);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+.actual-day-review { margin-bottom: var(--sp-3); }
+.it-actual {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.it-actual--recorded { color: var(--success); background: var(--success-soft); }
+.it-actual--unknown { color: var(--warning); background: var(--warning-soft); }
+.it-actual--none { color: var(--ink-faint); border: 1px dashed var(--line); }
+/* The chip stays compact in the row; an invisible 44px hit area surrounds it. */
+.it-actual-edit {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.it-actual-edit::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, var(--target-min));
+  height: var(--target-min);
+  transform: translate(-50%, -50%);
+}
+.iwc-actual-edit { min-height: var(--target-min); }
+.iwc-actual-seg {
+  position: absolute;
+  right: 1px;
+  z-index: 3;
+  width: 7px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 4px;
+  background: var(--success);
+  cursor: pointer;
+}
+.iwc-actual-seg:disabled { cursor: default; opacity: 0.8; }
+.iwc-actual-seg:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.iwc-shell.actual-on .iwc-event { margin-right: 9px; }
+.iwc-actual-day { color: var(--success); font-size: 10px; font-weight: 600; line-height: 1.3; }
+.iwc-actual { margin: var(--sp-2) 0; }
+.iwc-actual h4 { margin: 0 0 var(--sp-1); }
+.iwc-actual-text { margin: 0 0 var(--sp-2); font-size: var(--fs-sm); }
+.iwc-actual--recorded { color: var(--success); }
+.iwc-actual--unknown { color: var(--warning); }
+.iwc-actual--none { color: var(--ink-muted); }
+
+/* ── Phones: clock, cog and dot on the first row; every page label whole on the second ── */
+@media (max-width: 760px) {
+  .header.dcc-topbar {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    flex-wrap: wrap;
+    gap: var(--sp-1) var(--sp-2);
+    padding: var(--sp-1) var(--sp-3) var(--sp-2);
+  }
+  .header.dcc-topbar > .dcc-cluster { order: 1; display: flex !important; position: relative; inset: auto; width: 100%; }
+  .header.dcc-topbar > .dcc-pages {
+    order: 2;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    overflow: visible;
+  }
+  .dcc-pages .tab {
+    min-height: var(--target-min);
+    padding: 2px var(--sp-1);
+    font-size: var(--fs-xs);
+    line-height: 1.2;
+    white-space: normal;
+    text-align: center;
+  }
+  .dcc-cluster .time-now { display: flex !important; margin-right: auto; align-items: flex-start; text-align: left; }
+  .dcc-cluster .time-now .clock { font-size: 1rem; }
+  .task-view-switch { flex: 1 1 auto; }
+  .task-view-switch [role="tab"] { flex: 1 1 0; min-height: var(--target-min); padding: 0 var(--sp-2); }
+  .task-actual-toggle { min-height: var(--target-min); }
+  .it-list-item .it-list-meta > :is(.it-actual, .it-actual-edit) { display: inline-flex; }
+  .it-list-item .it-list-meta > .it-actual-edit { height: var(--target-min); }
+}

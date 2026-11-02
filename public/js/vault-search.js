@@ -368,8 +368,10 @@
       if (curMode === "orphans" && results && !results.hidden) hideResults(); else showOrphans();
     });
 
-    // Quick-switcher: ⌘K / Ctrl-K opens from ANY tab.
+    // Quick-switcher: ⌘K / Ctrl-K opens from ANY tab. Mycelium is retired from
+    // navigation, so the global shortcut no longer claims the key there.
     document.addEventListener("keydown", (e) => {
+      if (window.DCC && DCC.nav && DCC.nav.isRetired("vault")) return;
       if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "k" || e.key === "K")) {
         e.preventDefault();
         if (switcherOpen()) closeSwitcher(); else openSwitcher();

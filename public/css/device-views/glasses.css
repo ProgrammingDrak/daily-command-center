@@ -2,14 +2,15 @@
 body.device-glasses{--task-indent-max:64px;--bg:#000;--text:#fff;--text-muted:#c5cbd6;background:#000;color:#fff;padding-bottom:120px!important}
 .device-glasses :is(button,a,[tabindex]):focus-visible{outline:3px solid #8effe3!important;outline-offset:3px!important;box-shadow:none!important}
 .device-glasses .header{position:sticky;top:0;z-index:40;background:#000!important;padding:8px 12px!important;border-bottom:1px solid #7b8793}
-.device-glasses .header h1{font-size:16px!important;color:#fff}
-.device-glasses .header .date-nav{gap:6px;margin-top:4px;flex-wrap:wrap}
+.device-glasses:not(.glasses-tools-open) .header{display:none!important}
+.device-glasses .task-workspace-head{padding:8px 12px 0}
+.device-glasses .date-nav{gap:6px;margin-top:4px;flex-wrap:wrap}
 .device-glasses .dn-date{font-size:18px!important;color:#fff}
-.device-glasses .header .date-nav .queue-pill{flex:1 0 100%;width:100%;order:2;border-radius:8px;display:flex}
-.device-glasses .header .date-nav .queue-seg{flex:1 1 0;min-width:0;min-height:48px;flex-direction:column;padding:4px 2px;font-size:15px!important;line-height:1.2;gap:3px;color:#fff!important;background:#090e12!important}
+.device-glasses .date-nav .queue-pill{flex:1 0 100%;width:100%;order:2;border-radius:8px;display:flex}
+.device-glasses .date-nav .queue-seg{flex:1 1 0;min-width:0;min-height:48px;flex-direction:column;padding:4px 2px;font-size:15px!important;line-height:1.2;gap:3px;color:#fff!important;background:#090e12!important}
 .device-glasses .queue-seg-count{font-size:15px!important}
 .device-glasses .header .hdr-sub,.device-glasses #mobile-tabbar,.device-glasses .sched-drag-hint{display:none!important}
-.device-glasses:not(.glasses-tools-open) :is(#tab-bar,.source-row,.header>div:last-child){display:none!important}
+.device-glasses:not(.glasses-tools-open) :is(#tab-bar,.source-row,.header>div:last-child,#task-view-bar,#actual-summary){display:none!important}
 .device-glasses .progress-wrap{padding:6px 12px!important;margin:0!important}
 .device-glasses .progress-box{padding:4px 0!important;background:#000!important;border:0!important}
 .device-glasses .progress-label{font-size:15px!important;margin:0!important;color:#fff}
@@ -37,7 +38,7 @@ body.device-glasses{--task-indent-max:64px;--bg:#000;--text:#fff;--text-muted:#c
 .device-glasses .it-list-item:not(.glasses-selected):not(.glasses-expanded) .glasses-more{display:none!important}
 .device-glasses .it-list-item .wrap-collapse{min-width:40px;min-height:40px;font-size:22px}
 .device-glasses .it-list-item.done .it-list-title-row>.wrap-collapse{display:block!important}
-.device-glasses .glasses-nav{position:fixed;bottom:0;left:0;right:0;z-index:45;display:grid;grid-template-columns:1fr auto 1fr auto;gap:8px;padding:8px 12px;background:#000;border-top:1px solid #7b8793}
+.device-glasses .glasses-nav{position:fixed;bottom:0;left:0;right:0;z-index:45;display:grid;grid-template-columns:1fr auto 1fr auto auto;gap:8px;padding:8px 12px;background:#000;border-top:1px solid #7b8793}
 .device-glasses .glasses-nav button{min-height:46px;border:1px solid #8596a1;border-radius:8px;background:#0a141c;color:#fff;font-size:17px;padding:6px 10px}
 .device-glasses .glasses-nav button:disabled{opacity:.45}
 .device-glasses .glasses-position{align-self:center;color:#d0dce2;font-size:14px}
@@ -53,11 +54,11 @@ body.device-glasses{--task-indent-max:64px;--bg:#000;--text:#fff;--text-muted:#c
 .device-glasses .side-drawer.open{z-index:1000}
 .device-glasses .side-drawer-body{background:#000;color:#fff}
 .device-glasses .side-drawer .it-list-item .ttl{font-size:21px!important}
-@media(min-width:761px){body.device-glasses{max-width:720px;margin:auto!important}.device-glasses .glasses-nav{max-width:696px;margin:auto}.device-glasses .header>div:first-child{display:block!important}}
-@media(max-width:430px){.device-glasses .glasses-nav{grid-template-columns:1fr 1fr 1fr}.device-glasses .glasses-position{display:none}.device-glasses .glasses-nav button{font-size:15px}.device-glasses .header .date-nav .queue-seg{font-size:12px!important}.device-glasses .it-list-item .ttl{font-size:20px!important}}
+@media(min-width:761px){body.device-glasses{max-width:720px;margin:auto!important}.device-glasses .glasses-nav{max-width:696px;margin:auto}}
+@media(max-width:430px){.device-glasses .glasses-nav{grid-template-columns:1fr 1fr 1fr 1fr}.device-glasses .glasses-position{display:none}.device-glasses .glasses-nav :is(button,.glasses-exit){font-size:15px}.device-glasses .date-nav .queue-seg{font-size:12px!important}.device-glasses .it-list-item .ttl{font-size:20px!important}}
 
-.device-glasses .header h1{display:flex;align-items:center;justify-content:space-between}
-.device-glasses .glasses-exit{color:#c5cbd6;font-size:14px;font-weight:500;padding:3px 6px}
+/* Full app exit: a visible, touch-sized control in the glasses bar. */
+.device-glasses .glasses-exit{display:inline-flex;align-items:center;justify-content:center;min-height:46px;border:1px solid #8596a1;border-radius:8px;background:#0a141c;color:#fff;font-size:17px;font-weight:500;padding:6px 10px;text-decoration:none}
 .device-glasses .it-list-controls{margin:4px 0!important;gap:6px!important}
 .device-glasses .it-list-ctrl-btn{padding:4px 8px!important;min-height:34px;font-size:13px!important}
 .device-glasses .it-list-section{padding:3px 0!important;margin:4px 0!important;font-size:14px!important}
@@ -80,7 +81,8 @@ body.device-glasses{--task-indent-max:64px;--bg:#000;--text:#fff;--text-muted:#c
 .device-glasses .wq-grid{grid-template-columns:1fr;gap:12px}
 .device-glasses .wq-lane{padding:0;border:0;background:#000}
 .device-glasses .wq-lane h2{font-size:16px;margin:8px 0;color:#c5cbd6}
-.device-glasses .wq-lane:has(>.wq-empty):not(.wq-foreground){display:none}
+/* Hide only lanes with no cards. Priority always carries a .wq-empty explanation, even when populated. */
+.device-glasses .wq-lane:not(:has(>.wq-card)):not(.wq-foreground){display:none}
 .device-glasses .wq-card{background:#050a10;color:#fff;border:1px solid #526170;padding:12px;margin-top:8px;scroll-margin:64px 0 130px}
 .device-glasses .wq-card.glasses-selected{outline:3px solid #8effe3;outline-offset:0;background:#101e26}
 .device-glasses .wq-focus{border:2px solid #8effe3}

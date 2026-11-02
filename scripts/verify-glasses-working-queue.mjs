@@ -31,10 +31,21 @@ try{
   assert.equal(await page.locator('#queue-pill').isVisible(),false);
   assert.equal(await page.locator('.wq-completed').evaluate(e=>e.open),false);
   assert.equal(await page.locator('.glasses-position').textContent(),'1 / 3 visible');
-  check('existing glasses bookmark defaults to the shared queue with secondary navigation and collapsed completed tasks');
+  // PR448: the displaced foreground task (b) has no worker evidence, so it is
+  // queued in Priority with c, in queue order. Priority always renders its
+  // .wq-empty explanation, so the lane must stay visible while it has cards.
+  assert.equal(await page.locator('.wq-next').isVisible(),true,'populated Priority lane is visible');
   const before=await api('/api/working-queue');
+  // The server's priority order is the authority for the lane's order.
+  const priority=before.queue.priorityOrder;
+  assert.deepEqual([...priority].sort(),['glasses-b','glasses-c']);
+  assert.equal(before.queue.items.find(i=>i.task.id==='glasses-b').status,'queued','displaced foreground without worker evidence is queued');
+  assert.deepEqual(await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId)),priority);
+  assert.equal(await page.locator('.wq-background').isVisible(),false,'empty Background lane is hidden');
+  check('existing glasses bookmark defaults to the shared queue with secondary navigation and collapsed completed tasks');
+  const [first,second]=priority;
   await card('a').focus();
-  for(let i=0;i<20;i++){await page.keyboard.press('ArrowDown');assert.equal(await active(),'glasses-c');await page.keyboard.press('ArrowDown');assert.equal(await active(),'glasses-b');await page.keyboard.press('ArrowUp');assert.equal(await active(),'glasses-c');await page.keyboard.press('ArrowUp');assert.equal(await active(),'glasses-a');}
+  for(let i=0;i<20;i++){await page.keyboard.press('ArrowDown');assert.equal(await active(),first);await page.keyboard.press('ArrowDown');assert.equal(await active(),second);await page.keyboard.press('ArrowUp');assert.equal(await active(),first);await page.keyboard.press('ArrowUp');assert.equal(await active(),'glasses-a');}
   assert.equal(await card('a').evaluate(e=>{const k=new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true,cancelable:true});e.dispatchEvent(k);return k.defaultPrevented;}),false);
   assert.equal((await api('/api/working-queue')).revision,before.revision);
   await page.evaluate(()=>DCCWorkingQueue.render());await page.waitForFunction(()=>document.activeElement?.dataset.queueId==='glasses-a');
@@ -53,7 +64,7 @@ try{
   await page.evaluate(()=>DCCWorkingQueue.render());
   await page.getByRole('dialog').getByRole('button',{name:'Done',exact:true}).click();await settle();
   await page.waitForFunction(()=>!document.querySelector('[aria-label="Next visible task"]').disabled);
-  await page.getByRole('button',{name:'Next visible task',exact:true}).click();assert.equal(await active(),'glasses-c');
+  await page.getByRole('button',{name:'Next visible task',exact:true}).click();assert.equal(await active(),first);
   check('modal close restores navigation immediately after an inert queue rerender');
   await page.locator('.wq-completed>summary').click();await card('d').focus();
   const doneHeight=await card('d').evaluate(e=>e.getBoundingClientRect().height);
@@ -64,7 +75,9 @@ try{
   await page.locator('.wq-completed>summary').click();
   check('completed cards are compact; disclosure and focused task survive canonical rerenders');
   await card('b').focus();assert.equal(await card('b').locator('[data-queue-action=focus]').isVisible(),true);
+  // The switch dialog opens after a fresh queue read, so wait for it.
   await card('b').locator('[data-queue-action=focus]').click();
+  await page.getByRole('dialog').waitFor();
   assert.equal(await page.getByRole('dialog').count(),1);
   await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();await settle();
   assert.equal((await api('/api/working-queue')).revision,before.revision);
@@ -73,15 +86,21 @@ try{
   await page.waitForFunction(()=>document.querySelector('[data-queue-id="glasses-b"]')?.classList.contains('wq-focus'));
   const switched=await api('/api/working-queue');
   assert.equal(switched.queue.items.filter(i=>i.status==='foreground').length,1);
-  assert.equal(switched.queue.items.find(i=>i.task.id==='glasses-a').status,'background');
-  check('cancel does not mutate; confirmed foreground switch uses the real coordinator and retains the prior task in background');
+  // PR448: without worker evidence the displaced task is queued in Priority, not Background.
+  assert.equal(switched.queue.items.find(i=>i.task.id==='glasses-a').status,'queued');
+  await page.waitForFunction(()=>!!document.querySelector('.wq-next [data-queue-id="glasses-a"]'));
+  check('cancel does not mutate; confirmed foreground switch uses the real coordinator and returns the prior task to Priority');
   await card('c').focus();await card('c').locator('.glasses-more').click();assert.equal(await card('c').locator('[data-queue-action=note]').isVisible(),true);
   await card('c').locator('[data-queue-action=note]').click();
   const field=page.getByRole('dialog').locator('textarea');await field.fill('Synthetic context retained');
   assert.equal(await field.evaluate(e=>{const k=new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true});e.dispatchEvent(k);return k.defaultPrevented;}),false);
   await page.keyboard.press('Escape');await settle();
   check('More exposes canonical actions; text-field arrows and Escape remain owned by the modal');
-  await context.setOffline(true);await card('c').focus();await card('c').locator('[data-queue-action=focus]').click();
+  // Opening the switch dialog reads the current queue first, so the device goes
+  // offline once the dialog is open; the confirmed action is what goes pending.
+  await card('c').focus();await card('c').locator('[data-queue-action=focus]').click();
+  await page.getByRole('dialog').waitFor();
+  await context.setOffline(true);
   await page.getByRole('dialog').getByRole('button',{name:'Bring forward',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.wq-sync')?.textContent.includes('awaiting confirmation'));
   assert.equal((await api('/api/working-queue')).revision,switched.revision);
@@ -92,7 +111,7 @@ try{
   check('offline action is honestly pending, leaves server unchanged and reconciles through the canonical retry receipt');
   const confirmed=await api('/api/working-queue');
   await page.route('**/api/working-queue',r=>r.request().method()==='POST'?r.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:'Synthetic stale revision'})}):r.continue());
-  await card('a').focus();await card('a').locator('[data-queue-action=focus]').click();await page.getByRole('dialog').getByRole('button',{name:'Bring forward',exact:true}).click();
+  await card('a').focus();await card('a').locator('[data-queue-action=focus]').click();await page.getByRole('dialog').waitFor();await page.getByRole('dialog').getByRole('button',{name:'Bring forward',exact:true}).click();
   await page.waitForSelector('.wq-conflict');assert.equal((await api('/api/working-queue')).revision,confirmed.revision);
   await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();await settle();
   await page.unroute('**/api/working-queue');
@@ -108,10 +127,14 @@ try{
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.evaluate(()=>document.documentElement.style.zoom='');
   check('320/375/600/1440 viewports and 200 percent zoom retain usable controls without horizontal overflow');
-  await page.getByRole('button',{name:'App tools',exact:true}).click();await page.locator('#tab-bar [data-tab=schedule]').click();
+  const exit=page.locator('.glasses-nav .glasses-exit');
+  assert.equal(await exit.isVisible(),true,'Full app link is visible in the glasses bar');
+  assert.equal(new URL(await exit.getAttribute('href'),base).searchParams.has('device'),false);
+  check('Full app exit stays visible outside the hidden page title');
+  await page.getByRole('button',{name:'App tools',exact:true}).click();await page.locator('#task-view-switch [data-task-view=list]').click();
   assert.equal(await page.locator('#tab-schedule').evaluate(e=>e.classList.contains('active')),true);
   await page.goBack();await page.waitForSelector('#tab-working-queue.active');
-  check('itinerary remains secondary and browser Back restores the queue');
+  check('list remains secondary and browser Back restores the queue');
   assert.deepEqual(errors,[]);
   await fs.writeFile(path.join(out,'checks.json'),JSON.stringify({checks,errors,synthetic:true,physicalMeta:false},null,2));
 }catch(error){console.log(await page.evaluate(()=>({focus:document.activeElement?.outerHTML,selected:[...document.querySelectorAll('.glasses-selected')].map(e=>e.dataset.queueId),dialogs:[...document.querySelectorAll('.dcc-overlay')].map(e=>e.outerHTML.slice(0,300))})));await page.screenshot({path:path.join(out,'failure.png')});throw error;}finally{await browser.close();}

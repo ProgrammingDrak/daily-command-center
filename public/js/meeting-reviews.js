@@ -1,7 +1,8 @@
 (function () {
   const root = document.getElementById("meeting-reviews-root");
-  const badge = document.getElementById("meeting-reviews-badge");
-  if (!root || !badge) return;
+  // The badge left with the tab; DCC.updateBadge-style writes stay null-safe.
+  const badge = document.getElementById("meeting-reviews-badge") || document.createElement("span");
+  if (!root) return;
   const REVIEW_LAYOUT = "split";
   root.dataset.layout = REVIEW_LAYOUT;
 
@@ -139,6 +140,8 @@
   }
 
   async function refresh() {
+    // SSE pushes still call this; a retired, never-shown panel skips the read.
+    if (DCC.nav && DCC.nav.isRetired("meeting-reviews") && !document.getElementById("tab-meeting-reviews")?.classList.contains("active")) return;
     try {
       const result = await request("/api/meetings/reviews");
       items = Array.isArray(result.items) ? result.items : [];
@@ -223,9 +226,12 @@
   window.DCC = window.DCC || {};
   DCC.MeetingReviews = { refresh };
   DCC.tabs.register("meeting-reviews", refresh);
+  // Retired from navigation: no boot or reconnect read for a panel nobody can
+  // open. Meeting records, artifacts and their APIs are unchanged.
+  if (DCC.nav && DCC.nav.isRetired("meeting-reviews")) return;
   window.addEventListener("online", refresh);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && document.querySelector('.tab[data-tab="meeting-reviews"]')?.classList.contains("active")) refresh();
+    if (!document.hidden && document.getElementById("tab-meeting-reviews")?.classList.contains("active")) refresh();
   });
   refresh();
 })();

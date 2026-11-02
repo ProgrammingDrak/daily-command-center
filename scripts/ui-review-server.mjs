@@ -201,6 +201,64 @@ app.get("/api/blocks", (req, res) => {
   }
   res.json(blocks);
 });
+// Synthetic Actual-time fixture for verify-task-workspace-actual.mjs only. The
+// Calendar reads a week through /api/blocks/range; the seed writes in-memory
+// tasks and time entries covering every evidence class. No live data.
+if (process.env.DCC_REVIEW_ACTUAL === "1") {
+  // Synthetic client config, the same shape server.js sends: the fixed review
+  // account (user 1, ws-1) and the app zone. No credentials, no session lookup.
+  // Registered only here, so other review modes keep their own config.
+  app.get("/public/js/app-config.js", (_req, res) => {
+    res.type("application/javascript");
+    res.setHeader("Cache-Control", "no-store");
+    res.send('window.DCC_APP_TIME_ZONE="America/New_York";window.DCC_DELTA_SYNC_ENABLED=false;window.DCC_ACCOUNT_CONTEXT={"userId":1,"workspaceId":"ws-1"};');
+  });
+  app.get("/api/blocks/range", (req, res) => {
+    const start = String(req.query.start || ""), end = String(req.query.end || "");
+    res.json(liveReviewBlocks().filter((block) => block.date && block.date >= start && block.date <= end));
+  });
+  // New York wall clock -> instant, without depending on the server's own zone.
+  const nyInstant = (date, hh, mm) => {
+    const [y, m, d] = date.split("-").map(Number);
+    const guess = Date.UTC(y, m - 1, d, hh, mm);
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false, day: "2-digit" }).formatToParts(new Date(guess));
+    const get = (t) => Number(parts.find((p) => p.type === t).value);
+    const shownMinutes = ((get("day") - d) * 1440) + (get("hour") % 24) * 60 + get("minute");
+    return new Date(guess + ((hh * 60 + mm) - shownMinutes) * 60000).toISOString();
+  };
+  app.post("/api/review/actual/seed", (req, res) => {
+    const today = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.today || "")) ? String(req.body.today) : localDateKey();
+    const prior = new Date(today + "T12:00:00Z"); prior.setUTCDate(prior.getUTCDate() - 1);
+    const yesterday = prior.toISOString().slice(0, 10);
+    for (const id of [...reviewBlocks.keys()]) if (id.startsWith("actual-")) reviewBlocks.delete(id);
+    const now = new Date().toISOString();
+    const put = (id, type, date, properties) => {
+      const root = ensureReviewDayRoot(date);
+      reviewBlocks.set(id, { id, type, parent_id: type === "time_entry" ? root.id : null, date, sort_order: reviewBlocks.size * 1000, properties, created_at: now, updated_at: now, deleted_at: null });
+    };
+    const task = (id, date, title, start, end, extra = {}) => put(id, "block", date, { local_id: id, title, type: "task", source: "manual", status: "open", start, end, duration: 60, priority: "Medium", tags: [], ...extra });
+    task("actual-a", today, "Actual focus", "09:00", "10:00");
+    task("actual-b", today, "Actual unknown", "10:00", "10:30", { actualTimeUnknown: true });
+    task("actual-c", today, "Actual other day", "11:00", "11:30");
+    task("actual-d1", today, "Same title", "12:00", "12:30");
+    task("actual-d2", today, "Same title", "13:00", "13:30");
+    task("actual-e", today, "Actual late", "23:00", "23:59");
+    task("actual-y", yesterday, "Yesterday focus", "08:00", "09:00");
+    // Positioned: an ISO instant, so a device-zone reading would move it.
+    put("actual-te-a", "time_entry", today, { blockId: "actual-a", taskTitle: "Actual focus", startedAt: nyInstant(today, 9, 15), durSec: 1200, source: "work-session" });
+    // Known minutes, no clock time.
+    put("actual-te-a2", "time_entry", today, { blockId: "actual-a", taskTitle: "Actual focus", durSec: 600, source: "manual" });
+    // Recorded on this date, but its instant is the previous evening: never placed.
+    put("actual-te-c", "time_entry", today, { blockId: "actual-c", taskTitle: "Actual other day", startedAt: nyInstant(yesterday, 23, 30), durSec: 900, source: "work-session" });
+    // Explicit identity beats an earlier same-title task.
+    put("actual-te-d", "time_entry", today, { blockId: "actual-d2", taskTitle: "Same title", start: "13:05", durSec: 900, source: "manual" });
+    // Near midnight in New York is the next day in UTC.
+    put("actual-te-e", "time_entry", today, { blockId: "actual-e", taskTitle: "Actual late", startedAt: nyInstant(today, 23, 40), durSec: 600, source: "work-session" });
+    put("actual-te-u", "time_entry", today, { allocationKind: "unknown", taskTitle: "Unknown activity", durSec: 420, source: "conversation-correction" });
+    put("actual-te-y", "time_entry", yesterday, { blockId: "actual-y", taskTitle: "Yesterday focus", startedAt: nyInstant(yesterday, 8, 10), durSec: 1800, source: "work-session" });
+    res.json({ ok: true, today, yesterday });
+  });
+}
 // Synthetic transaction boundary for the subtree Undo browser verifier only.
 if(process.env.DCC_REVIEW_HIERARCHY==='1'){
  let failureStatus=0;

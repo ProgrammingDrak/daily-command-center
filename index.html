@@ -21,10 +21,11 @@
 <link rel="stylesheet" href="/public/css/task-library.css?v=task-library-1">
 <link rel="stylesheet" href="/public/css/calendar-week.css?v=calendar-week-1">
 <link rel="stylesheet" href="/public/css/vault.css?v=vault-b6-1">
-<link rel="stylesheet" href="/public/css/ui-optimization.css?v=dcc-ui-1">
+<link rel="stylesheet" href="/public/css/ui-optimization.css?v=task-workspace-nav-2">
 <link rel="stylesheet" href="/public/css/activity.css?v=movement-cards-1">
 <link rel="stylesheet" href="/public/css/task-sources.css">
 <link rel="stylesheet" href="/public/css/commitments.css">
+<link rel="stylesheet" href="/public/css/task-workspace.css?v=task-workspace-nav-3">
 <link rel="stylesheet" href="/public/css/device-views/glasses.css">
 </head>
 <body>
@@ -114,19 +115,69 @@
   </div>
 </div>
 
-<div class="header">
-  <div>
-    <h1>Daily Command Center</h1>
-    <div class="hdr-sub" style="font-size:11px;color:var(--text-muted);letter-spacing:0.5px;margin-top:2px">powered by The Most Clever Assistant</div>
-    <div class="date-nav" id="date-nav">
-      <button class="dn-arrow" id="dn-prev" onclick="navDate(-1)" title="Previous day">&lsaquo;</button>
-      <button class="dn-date" id="dn-date-btn" onclick="toggleDatePicker()">
-        <span id="date-label">--</span>
-        <span class="dn-badge" id="dn-badge" style="display:none"></span>
-      </button>
-      <button class="dn-arrow" id="dn-next" onclick="navDate(1)" title="Next day">&rsaquo;</button>
-      <button class="dn-quick" id="dn-today-btn" onclick="switchToDate(__todayDate)" style="display:none">Today</button>
-      <button class="dn-quick dn-tomorrow" id="dn-tomorrow-btn" onclick="switchToDate(__tomorrowDate)" style="display:none">Tomorrow</button>
+<header class="header dcc-topbar" id="dcc-topbar">
+  <!-- Branding stays for assistive tech and the document outline only. -->
+  <h1 class="dcc-visually-hidden">Daily Command Center</h1>
+  <nav class="dcc-pages" id="tab-bar" aria-label="Pages">
+    <button class="tab active" type="button" data-page="tasks" id="tasks-page-btn" aria-current="page">Tasks</button>
+    <button class="tab" type="button" data-page="budget" data-tab="budget" id="budget-tab-btn">Budget</button>
+    <button class="tab" type="button" data-page="activity" data-tab="activity" id="activity-tab-btn">Workouts &amp; meals</button>
+  </nav>
+  <div class="dcc-cluster" id="dcc-cluster">
+    <div class="time-now" id="dcc-clock"><time class="clock" id="clock">--:--</time><span class="tz-label" id="tz-label">--</span></div>
+    <a class="admin-link" href="/admin" title="Open admin activity">Admin</a>
+    <button class="admin-link todo-share-open" id="todo-share-open" type="button" title="Share a live to-do view">Share list</button>
+    <button class="admin-link todo-reactions-toggle" id="todo-reactions-toggle" type="button" title="Refresh guest reactions on itinerary tasks">Refresh reactions</button>
+    <div class="dcc-settings-wrap" id="dcc-settings-wrap">
+      <button class="admin-link dcc-settings-button" id="dcc-settings-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="dcc-settings-menu" aria-label="Settings and utilities" title="Settings and utilities"><svg aria-hidden="true" focusable="false" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+      <div class="dcc-settings-menu" id="dcc-settings-menu" role="menu" aria-hidden="true">
+        <button type="button" id="dcc-review-tomorrow" role="menuitem">Review tomorrow</button>
+        <button type="button" id="dcc-day-start" role="menuitem">Scheduling floor</button>
+        <button type="button" id="dcc-schedule-defaults" role="menuitem">Schedule default times</button>
+        <button type="button" id="dcc-setup-integrations" role="menuitem">Setup &amp; integrations</button>
+        <button type="button" id="dcc-replay-tutorial" role="menuitem">Replay tutorial</button>
+        <button type="button" id="dcc-sign-out" role="menuitem">Sign out</button>
+      </div>
+    </div>
+    <button class="sn-btn" id="sn-open-btn" onclick="openStickyNotes()">📌 Notes <span class="sn-badge" id="sn-badge" style="display:none">0</span></button>
+    <div class="sync-section" id="sync-section" style="display:none">
+      <div class="sync-sum" id="sync-sum"></div>
+    </div>
+    <!-- Local durability and remote convergence remain separate facts. The dot's
+         name states both; hover or focus shows them; click opens the detail. -->
+    <button id="save-status" class="save-status save-status--ok" type="button" aria-haspopup="dialog" aria-expanded="false" aria-describedby="save-status-tooltip">
+      <span class="save-status-dot" aria-hidden="true"></span>
+      <span class="save-status-glyph" aria-hidden="true"></span>
+      <span class="save-status-copy dcc-visually-hidden">
+        <strong data-save-local>Saved locally</strong>
+        <span data-save-remote>Checking sync</span>
+      </span>
+      <span class="save-status-tooltip" id="save-status-tooltip" role="tooltip">Saved locally</span>
+    </button>
+    <span class="dcc-visually-hidden" id="save-status-live" role="status" aria-live="polite"></span>
+  </div>
+</header>
+
+<!-- Tasks workspace head: views, then the day (date row with the task queues),
+     then Day Progress. Workouts & meals keeps the date row only; Budget hides it. -->
+<section class="task-workspace-head" id="task-workspace-head" aria-label="Day and task views">
+  <div class="task-view-bar" id="task-view-bar">
+    <div class="task-view-switch" id="task-view-switch" role="tablist" aria-label="Task views">
+      <button type="button" role="tab" id="task-view-queue" data-task-view="queue" aria-controls="tab-working-queue" aria-selected="true">Working Queue</button>
+      <button type="button" role="tab" id="task-view-list" data-task-view="list" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">List</button>
+      <button type="button" role="tab" id="task-view-calendar" data-task-view="calendar" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">Calendar</button>
+    </div>
+    <button type="button" class="task-actual-toggle" id="task-actual-toggle" aria-pressed="false" title="Show recorded actual time on this view" hidden>Actual</button>
+  </div>
+  <div class="date-nav" id="date-nav">
+    <button class="dn-arrow" id="dn-prev" onclick="navDate(-1)" title="Previous day" aria-label="Previous day">&lsaquo;</button>
+    <button class="dn-date" id="dn-date-btn" onclick="toggleDatePicker()">
+      <span id="date-label">--</span>
+      <span class="dn-badge" id="dn-badge" style="display:none"></span>
+    </button>
+    <button class="dn-arrow" id="dn-next" onclick="navDate(1)" title="Next day" aria-label="Next day">&rsaquo;</button>
+    <button class="dn-quick" id="dn-today-btn" onclick="switchToDate(__todayDate)" style="display:none">Today</button>
+    <button class="dn-quick dn-tomorrow" id="dn-tomorrow-btn" onclick="switchToDate(__tomorrowDate)" style="display:none">Tomorrow</button>
       <!-- The task queues, one capsule with five doors, in triage order. whenever.js
            hosts Triage, Unscheduled and Whenever (all work with no time on it);
            catch-up.js owns Loose Ends (hidden while it has nothing to show) and
@@ -148,35 +199,20 @@
           <span data-whenever-label>Whenever</span><span class="queue-seg-count" id="whenever-pill-nav-count" aria-live="polite">0</span>
         </button>
       </div>
-    </div>
-    <div class="date-picker-drop" id="date-picker-drop" style="display:none"></div>
   </div>
-  <div style="display:flex;align-items:center;gap:10px">
-    <a class="admin-link" href="/admin" title="Open admin activity">Admin</a>
-    <button class="admin-link todo-share-open" id="todo-share-open" type="button" title="Share a live to-do view">Share list</button>
-    <button class="admin-link todo-reactions-toggle" id="todo-reactions-toggle" type="button" title="Refresh guest reactions on itinerary tasks">Refresh reactions</button>
-    <div class="dcc-settings-wrap" id="dcc-settings-wrap">
-      <button class="admin-link dcc-settings-button" id="dcc-settings-button" type="button" aria-haspopup="true" aria-expanded="false" title="Open utilities">Utilities</button>
-      <div class="dcc-settings-menu" id="dcc-settings-menu" role="menu" aria-hidden="true">
-        <button type="button" id="dcc-review-tomorrow" role="menuitem">Review tomorrow</button>
-        <button type="button" id="dcc-day-start" role="menuitem">Scheduling floor</button>
-        <button type="button" id="dcc-schedule-defaults" role="menuitem">Schedule default times</button>
-        <button type="button" id="dcc-setup-integrations" role="menuitem">Setup &amp; integrations</button>
-        <button type="button" id="dcc-replay-tutorial" role="menuitem">Replay tutorial</button>
-        <button type="button" id="dcc-sign-out" role="menuitem">Sign out</button>
+  <div class="date-picker-drop" id="date-picker-drop" style="display:none"></div>
+  <div class="progress-wrap">
+    <section class="progress-box" aria-labelledby="day-progress-title">
+      <div class="progress-label"><span id="day-progress-title">Day Progress</span><span id="ppct">--</span></div>
+      <div class="progress-track-shell">
+        <div class="progress-track" id="ptrack"></div>
+        <span class="progress-now" id="pnow" role="img" hidden></span>
       </div>
-    </div>
-    <button class="sn-btn" id="sn-open-btn" onclick="openStickyNotes()">📌 Notes <span class="sn-badge" id="sn-badge" style="display:none">0</span></button>
-    <!-- Second Brain Save/Load Backup buttons removed Phase 6: silently broken
-         in BlockStore-only mode (backed up empty localStorage, restored to keys
-         nothing reads). A real BlockStore backup/restore is a separate feature.
-         The Copy-for-Claude button + activity summary are preserved here. -->
-    <div class="sync-section" id="sync-section" style="display:flex;align-items:center;gap:8px">
-      <div class="sync-sum" id="sync-sum" style="font-size:10px;color:var(--text-muted)"></div>
-    </div>
-    <div class="time-now"><div class="clock" id="clock">--:--</div><div id="tz-label">--</div></div>
+      <div class="progress-rails" id="prails"></div>
+      <div class="progress-axis"><time id="pstart">--</time><time id="pend">--</time></div>
+    </section>
   </div>
-</div>
+</section>
 
 <!-- Sticky Notes Panel -->
 <div class="sn-overlay" id="sn-overlay" onclick="if(event.target===this)closeStickyNotes()">
@@ -219,47 +255,20 @@
   </div>
 </div>
 
-<div class="progress-wrap">
-  <section class="progress-box" aria-labelledby="day-progress-title">
-    <div class="progress-label"><span id="day-progress-title">Day Progress</span><span id="ppct">--</span></div>
-    <div class="progress-track-shell">
-      <div class="progress-track" id="ptrack"></div>
-      <span class="progress-now" id="pnow" role="img" hidden></span>
-    </div>
-    <div class="progress-rails" id="prails"></div>
-    <div class="progress-axis"><time id="pstart">--</time><time id="pend">--</time></div>
-  </section>
-</div>
-
-<div class="tabs" id="tab-bar">
-  <button class="tab" data-tab="schedule">Itinerary</button>
-  <button class="tab active" data-tab="working-queue">Working Queue</button>
-  <button class="tab" data-tab="meeting-reviews">Meeting Reviews <span class="badge" id="meeting-reviews-badge" style="display:none">0</span></button>
-  <button class="tab" data-tab="pet-home" id="pet-home-tab-btn">Pet Home <span class="badge" id="pet-home-badge" style="display:none">0</span></button>
-  <button class="tab" data-tab="budget" id="budget-tab-btn">Budget</button>
-  <button class="tab" data-tab="social" id="social-tab-btn">Social <span class="badge" id="social-badge" style="display:none">0</span></button>
-  <button class="tab" data-tab="vault" id="vault-tab-btn">Mycelium</button>
-  <button class="tab" data-tab="activity" id="activity-tab-btn">Workouts &amp; meals</button>
-</div>
-
-<div class="tab-content active" id="tab-working-queue"><div id="working-queue-root"></div></div>
-<div class="tab-content" id="tab-schedule">
+<div class="tab-content active" id="tab-working-queue" role="tabpanel" aria-labelledby="task-view-queue"><div id="working-queue-root"></div></div>
+<div class="tab-content" id="tab-schedule" role="tabpanel" aria-labelledby="task-view-list">
   <div class="source-row">
-    <span style="margin-left:auto">
-      <span class="sched-view-toggle" id="sched-view-toggle">
-        <button class="svt-btn active" data-view="list">List</button>
-        <button class="svt-btn" data-view="calendar">Calendar</button>
-        <button class="svt-btn" data-view="actual">Actual</button>
-      </span>
-      <span class="sched-drag-hint sched-drag-hint-desktop" style="margin-left:10px">Drag to reorder &middot; left to nest &middot; right for subtask &middot; +/- to adjust time &middot; Check to complete</span>
-      <span class="sched-drag-hint sched-drag-hint-touch" style="margin-left:10px">Press &amp; hold to reorder &middot; left to nest &middot; right for subtask &middot; tap a row for details</span>
-    </span>
+    <span class="sched-drag-hint sched-drag-hint-desktop">Drag to reorder &middot; left to nest &middot; right for subtask &middot; +/- to adjust time &middot; Check to complete</span>
+    <span class="sched-drag-hint sched-drag-hint-touch">Press &amp; hold to reorder &middot; left to nest &middot; right for subtask &middot; tap a row for details</span>
   </div>
+  <!-- Shown only while Actual is on. Day review is an explicit panel, never a
+       replacement for the List or Calendar. -->
+  <section class="actual-summary" id="actual-summary" aria-label="Recorded actual time" hidden></section>
+  <div id="actual-view" class="actual-day-review" style="display:none"></div>
   <!-- The Itinerary add-task bar lives in the bottom-right "+" launcher. -->
   <div class="tl" id="timeline" style="display:none"></div>
   <div id="list-view" class="it-list-view"></div>
   <div id="calendar-view" class="it-calendar-view" style="display:none"></div>
-  <div id="actual-view" style="display:none"></div>
 </div>
 
 <!-- Anytime dock: work with a target, but no set time. Hidden until needed. -->
@@ -1973,7 +1982,7 @@
         </ol>
         <div class="social-share-channels" aria-label="Owner sharing workspaces">
           <div class="social-share-channel"><strong>Public list</strong><p>Guest tasks, comments, sponsorships, and exports.</p><button class="social-btn" data-social-open-share type="button">Manage public list</button></div>
-          <div class="social-share-channel"><strong>Pet Home</strong><p>Public visits and encouragement use a separate token.</p><button class="social-btn" data-social-open-pet type="button">Manage Pet Home</button></div>
+          <div class="social-share-channel"><strong>Pet Home</strong><p>Public visits and encouragement use a separate token.</p></div>
           <div class="social-share-channel"><strong>Guest activity</strong><p>Refresh reactions without changing access grants.</p><button class="social-btn" data-social-refresh-guests type="button">Refresh guest activity</button></div>
         </div>
         <div class="social-grant-add">
@@ -2159,13 +2168,14 @@
 <script src="/public/js/time-reallocate.js?v=time-reallocate-1"></script>
 <script src="/public/js/itinerary-card.js"></script>
 <script src="/public/js/schedule-tab.js"></script>
-<script src="/public/js/itinerary-calendar.js?v=calendar-week-1"></script>
+<script src="/public/js/itinerary-calendar.js?v=calendar-week-actual-2"></script>
 <script src="/public/js/touch-drag.js"></script>
 <script src="/public/js/meeting-automation.js"></script>
 <script src="/public/js/sync.js"></script>
 <script src="/public/js/time-picker.js"></script>
 <script src="/public/js/triage.js"></script>
-<script src="/public/js/tabs.js"></script>
+<script src="/public/js/nav-state.js?v=task-workspace-nav-2"></script>
+<script src="/public/js/tabs.js?v=task-workspace-nav-3"></script>
 <!-- Mycelium vault tab: vendored markdown libs (no build step) load before vault-tab.js -->
 <script src="/public/js/vendor/marked.min.js?v=marked-12.0.2"></script>
 <script src="/public/js/vendor/purify.min.js?v=purify-3.1.7"></script>
@@ -2178,18 +2188,18 @@
 <!-- Canvas (B4b): the focused thread whiteboard. Loads after the timeline (which opens it) and before vault-tab.js (which wires both). -->
 <script src="/public/js/vault-canvas.js?v=vault-b4b-1"></script>
 <!-- Search + saved views + quick-switcher (B5). Loads before vault-tab.js, which wires it. -->
-<script src="/public/js/vault-search.js?v=vault-b5-2"></script>
+<script src="/public/js/vault-search.js?v=vault-b5-3"></script>
 <!-- Resurfacing + weekly review (B6). Loads before vault-tab.js, which wires it. -->
 <script src="/public/js/vault-review.js?v=vault-b6-1"></script>
 <!-- Graph (B7): the global force-directed view. Needs the same vendored d3 above; loads before vault-tab.js, which wires it. -->
 <script src="/public/js/vault-graph.js?v=vault-b7-1"></script>
-<script src="/public/js/vault-tab.js?v=vault-b7-1"></script>
+<script src="/public/js/vault-tab.js?v=vault-b7-2"></script>
 <script src="/public/js/features.js"></script>
 <script src="/public/js/task-reconciliation.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>
 <script src="/public/js/urgency.js"></script>
-<script src="/public/js/responsibilities.js?v=repeat-responsibility-save-2"></script>
+<script src="/public/js/responsibilities.js?v=repeat-responsibility-save-3"></script>
 <script src="/public/js/task-groups.js?v=preset-task-groups-1"></script>
 <script src="/public/js/setup-wizards.js"></script>
 <script src="/public/js/onboarding-tour.js"></script>
@@ -2203,7 +2213,8 @@
 <script src="/public/js/block-store.js"></script>
 <script src="/public/js/task-library.js?v=task-library-1"></script>
 <script src="/public/js/reading-sessions.js?v=1"></script>
-<script src="/public/js/day-review.js"></script>
+<script src="/public/js/day-review.js?v=task-workspace-nav-2"></script>
+<script src="/public/js/actual-projection.js?v=task-workspace-nav-2"></script>
 <script src="/public/js/delegated.js"></script>
 <script src="/public/js/pet-home.js"></script>
 <!-- pet-courier.js: the pet delivers new triage arrivals. Needs PetHome.identity
@@ -2259,16 +2270,7 @@ window.USE_BLOCKSTORE = {
 </script>
 <script src="/public/js/sse.js"></script>
 
-<!-- Local durability and remote convergence remain separate facts. -->
-<button id="save-status" class="save-status save-status--ok" type="button" aria-haspopup="dialog" aria-expanded="false">
-  <span class="save-status-dot"></span>
-  <span class="save-status-copy">
-    <strong data-save-local>Saved locally</strong>
-    <span data-save-remote>Checking sync</span>
-  </span>
-  <span class="save-status-tooltip" id="save-status-tooltip">Saved locally</span>
-</button>
-<script src="/public/js/shell.js?v=dcc-ui-1"></script>
+<script src="/public/js/shell.js?v=task-workspace-nav-3"></script>
 
 <div class="feedback-panel" id="feedback-panel" aria-hidden="true">
   <div class="feedback-panel-head">

@@ -7,7 +7,8 @@ const css = fs.readFileSync(path.join(__dirname, "public/css/dashboard.css"), "u
 
 test("Loose Ends is a door in the queue capsule, not a row of its own", () => {
   const mobileShell = css.slice(css.indexOf("@media (max-width:760px)"));
-  assert.match(mobileShell, /\.header \.date-nav\{[^}]*flex-wrap:wrap/);
+  // The date row moved from the header into the Tasks head; it is no longer header-scoped.
+  assert.match(mobileShell, /\n {2}\.date-nav\{[^}]*flex-wrap:wrap/);
   assert.doesNotMatch(css, /\.loose-ends-pill\{/, "Loose Ends styles as a .queue-seg now");
   const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
   const capsule = html.slice(html.indexOf('id="queue-pill"'), html.indexOf('id="date-picker-drop"'));
@@ -17,8 +18,8 @@ test("Loose Ends is a door in the queue capsule, not a row of its own", () => {
 test("the queue capsule takes one touch-sized row on mobile, every door label over its count", () => {
   const mobileShell = css.slice(css.indexOf("@media (max-width:760px)"));
   // One row for all five doors, so the phone header is no taller than before.
-  assert.match(mobileShell, /\.header \.date-nav \.queue-pill\{[^}]*flex:1 0 100%;[^}]*order:2/);
+  assert.match(mobileShell, /\.date-nav \.queue-pill\{[^}]*flex:1 0 100%;[^}]*order:2/);
   // Grow from the label's width: equal fifths of 375px would cut "Unscheduled" short.
-  assert.match(mobileShell, /\.header \.date-nav \.queue-seg\{[^}]*flex:1 1 auto;[^}]*flex-direction:column;[^}]*min-height:48px/);
+  assert.match(mobileShell, /\.date-nav \.queue-seg\{[^}]*flex:1 1 auto;[^}]*flex-direction:column;[^}]*min-height:48px/);
   assert.doesNotMatch(mobileShell, /\.waiting-pill-nav\{/, "Waiting is a door in the capsule now, not its own pill");
 });

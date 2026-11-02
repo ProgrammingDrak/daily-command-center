@@ -81,10 +81,10 @@ test("only visible blocking overlays defer itinerary rendering", () => {
   assert.equal(vm.runInContext("_anyModalOpen()", modalContext([overlay])), false);
 });
 
-test("render('schedule') marks the three schedule sub-views plus the pill drawer that renders itinerary rows", () => {
+test("render('schedule') marks the schedule sub-views, the Actual summary and the pill drawer that renders itinerary rows", () => {
   const c = ctx();
   vm.runInContext("_markDirty('schedule')", c);
-  assert.deepEqual(dirtyKeys(c), ["actualView", "listView", "scheduleTimeline", "whenever"]);
+  assert.deepEqual(dirtyKeys(c), ["actualSummary", "actualView", "listView", "scheduleTimeline", "whenever"]);
 });
 
 test("no-scope render() marks every registered surface dirty", () => {

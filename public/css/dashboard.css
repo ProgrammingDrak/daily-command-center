@@ -210,7 +210,6 @@
   .view-readonly .sc-card{cursor:default}
 
   /* ── Tomorrow Mode indicator ── */
-  .view-tomorrow .header h1::after{content:" -- Tomorrow";font-size:14px;font-weight:400;color:var(--accent);margin-left:8px}
 
   /* ── Block editor: card-based rows ── */
   .be-card{background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden;transition:border-color 0.15s}
@@ -2381,40 +2380,11 @@
       font-size:14px;
     }
 
-    /* ── Header ───────────────────────────────────────────────────
-       Grid layout: two rows
-         Row 1: app title (col 1) | action buttons (col 2)
-         Row 2: date nav (full width, both cols)
-       display:contents on inner div exposes h1 + date-nav to grid.
-    ────────────────────────────────────────────────────────────── */
-    .header{
-      display:grid;
-      grid-template-columns:1fr auto;
-      grid-template-rows:auto auto;
-      gap:6px 10px;
-      align-items:center;
-      margin-bottom:14px;
-      padding-bottom:12px;
-      border-bottom:1px solid var(--border);
-    }
-    .header>div:first-child{display:contents}
-    .header h1{
-      grid-column:1;grid-row:1;
-      font-size:16px;font-weight:700;letter-spacing:-0.3px;
-      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-      align-self:center;
-    }
-    .header .hdr-sub{display:none}
-    .header .date-nav{
-      grid-column:1/-1;grid-row:2;
+    /* ── Header: pages + clock/cog/sync, laid out in task-workspace.css ── */
+    .date-nav{
       display:flex;align-items:center;gap:4px;
       margin-top:0;
     }
-    .header>div:last-child{
-      grid-column:2;grid-row:1;
-      display:flex;align-items:center;gap:4px;flex-shrink:0;
-    }
-    .time-now{display:none}
 
     /* ── Header action buttons: 44px touch targets ─────────────── */
     .sn-btn{
@@ -4343,37 +4313,18 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
   /* ── Sidecar rail: gone on phones. Tasks reachable via the bottom nav. ── */
   #sidecar-tabs{display:none!important}
 
-  /* ── Header: clean single column (owner buttons move to the More sheet) ── */
-  .header{
-    display:flex!important;
-    flex-direction:column;
-    align-items:stretch;
-    grid-template-columns:none!important;
-    grid-template-rows:none!important;
-    gap:8px;
-    margin-bottom:14px;
-    padding-bottom:12px;
-  }
-  .header>div:first-child{display:block!important}
-  .header h1{
-    grid-column:auto;grid-row:auto;
-    font-size:18px;font-weight:700;letter-spacing:-0.3px;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  }
-  .header .hdr-sub{display:none}
-  .header .date-nav{
-    grid-column:auto;grid-row:auto;
+  /* ── Header: one compact row (pages + clock/cog/sync). task-workspace.css ── */
+  .date-nav{
     display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:4px;
   }
   /* Keep all five queues together with full labels above their counts. Wrap at
      spaces first, with balanced word wrapping as a fallback for narrow phones
      or wider font metrics. Keep every door touch-sized instead of ellipsizing. */
-  .header .date-nav .queue-pill{flex:1 0 100%;order:2;min-width:0}
-  .header .date-nav .queue-seg{flex:1 1 auto;flex-direction:column;gap:3px;width:min-content;min-width:44px;min-height:48px;padding:5px 3px}
-  .header .date-nav .queue-seg:first-child{padding-left:5px}
-  .header .date-nav .queue-seg:last-child{padding-right:5px}
-  .header .date-nav .queue-seg>span:first-child{max-width:100%;white-space:normal;overflow-wrap:break-word;text-wrap:balance}
-  .header>div:last-child{display:none!important}  /* owner buttons + clock → More sheet */
+  .date-nav .queue-pill{flex:1 0 100%;order:2;min-width:0}
+  .date-nav .queue-seg{flex:1 1 auto;flex-direction:column;gap:3px;width:min-content;min-width:44px;min-height:48px;padding:5px 3px}
+  .date-nav .queue-seg:first-child{padding-left:5px}
+  .date-nav .queue-seg:last-child{padding-right:5px}
+  .date-nav .queue-seg>span:first-child{max-width:100%;white-space:normal;overflow-wrap:break-word;text-wrap:balance}
 
   /* ── Progress: tighter ── */
   .progress-box{padding:10px 12px}

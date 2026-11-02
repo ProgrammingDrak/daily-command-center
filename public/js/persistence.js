@@ -13,7 +13,7 @@ function updateSaveStatus(state, text) {
   } else if (blockStatus?.unboundLegacyEntries) {
     state = "error"; message = "Older pending task changes have no account binding. Export them for manual recovery.";
   } else if (commitmentStatus?.attention) {
-    state = "error"; message = "A commitment change needs review. Open Commitments to recover or retry it.";
+    state = "error"; message = "A commitment change needs review. Open the sync status to retry, export or discard it.";
   } else if (commitmentStatus?.remoteError) {
     state = "error"; message = "Commitments offline; local work is safe.";
   }
@@ -671,22 +671,22 @@ async function switchToDate(dateStr) {
   // Toggle tomorrow indicator
   document.body.classList.toggle("view-tomorrow", viewMode === "tomorrow");
 
-  // Default to Actual tab for archives, List otherwise (Blocks view removed 2026-07)
-  let preferredView="list";
-  try{preferredView=localStorage.getItem("dcc-itinerary-view")||"list";}catch(e){}
-  const targetView = (viewMode === "archive") ? "actual" : (["list","calendar","actual"].includes(preferredView)?preferredView:"list");
-  const toggleBtns = document.querySelectorAll("#sched-view-toggle .svt-btn");
-  toggleBtns.forEach(b => {
-    b.classList.toggle("active", b.dataset.view === targetView);
-  });
-  schedView = targetView;
+  // The base view (List or Calendar) belongs to DCC.nav and survives day switches.
+  // Past days default the Actual toggle on unless the person chose; that never
+  // changes the base view or the saved preference (nav-state.js).
+  const nav = window.DCC && window.DCC.nav;
+  if (nav) nav.setArchive(viewMode === "archive");
+  const navState = nav ? nav.get() : null;
+  if (navState && (navState.view === "list" || navState.view === "calendar")) schedView = navState.view;
+  else if (schedView !== "list" && schedView !== "calendar") {
+    const prefs = window.DCC && window.DCC.NavState ? window.DCC.NavState.readPrefs(localStorage, { write: false }) : { baseView: "list" };
+    schedView = prefs.baseView;
+  }
   const timelineEl = document.getElementById("timeline");
   const listViewEl = document.getElementById("list-view");
-  const actualViewEl = document.getElementById("actual-view");
   const calendarViewEl = document.getElementById("calendar-view");
-  if (timelineEl) timelineEl.style.display = schedView === "plan" ? "block" : "none";
+  if (timelineEl) timelineEl.style.display = "none";
   if (listViewEl) listViewEl.style.display = schedView === "list" ? "flex" : "none";
-  if (actualViewEl) actualViewEl.style.display = schedView === "actual" ? "block" : "none";
   if (calendarViewEl) calendarViewEl.style.display = schedView === "calendar" ? "block" : "none";
 
   // Update date nav display
@@ -696,9 +696,10 @@ async function switchToDate(dateStr) {
   if (typeof migrateLegacySubtasks === "function") migrateLegacySubtasks();
   // Re-render all tabs
   if (typeof buildSchedule === "function") buildSchedule();
-  if (schedView === "actual") { if (typeof buildDayReview === "function") buildDayReview(viewDate); else if (typeof buildActualView === "function") buildActualView(); }
-  else if (schedView === "list" && typeof buildListView === "function") buildListView();
+  if (schedView === "list" && typeof buildListView === "function") buildListView();
   else if (schedView === "calendar" && typeof buildItineraryCalendar === "function") buildItineraryCalendar();
+  if (typeof renderActualSummary === "function") renderActualSummary();
+  if (nav && nav.reviewOpen() && typeof buildDayReview === "function") buildDayReview(viewDate);
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();
   window.dispatchEvent(new CustomEvent("dcc:view-date-changed", { detail: { date: viewDate } }));
