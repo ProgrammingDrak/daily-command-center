@@ -170,7 +170,7 @@ test(
       assert.equal(result.task.properties.startedAt, undefined);
       assert.equal(result.task.properties.actualMinutes, undefined);
       assert.equal(result.task.date, null);
-      assert.equal(result.state.queue.items[0].status, "background");
+      assert.equal(result.state.queue.items[0].status, "queued");
       assert.equal((await store.execute(registration, owner)).duplicate, true);
       await send("delegated-register", registration.delegation);
       assert.equal((await ctx.pool.query("SELECT count(*)::int AS n FROM delegated_work")).rows[0].n, 1);

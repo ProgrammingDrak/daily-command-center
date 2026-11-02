@@ -106,7 +106,7 @@ test(
       await assert.rejects(send("queue-dismiss", active, { generation: first.generation }), { statusCode: 409 });
       await send("queue-dismiss", active, { generation: snoozed.generation });
       assert.equal((await entry(active)).dueAt, null);
-      assert.equal((await entry(active)).status, "background");
+      assert.equal((await entry(active)).status, "queued");
       await send("background-start", active, { remindMinutes: 1 });
       const old = await entry(active);
       await send("done", active);
@@ -119,7 +119,7 @@ test(
         userId: 1,
         workspaceId: "ws-1"
       });
-      assert.equal((await entry(active)).status, "paused");
+      assert.equal((await entry(active)).status, "queued");
       await assert.rejects(send("queue-claim", active, { generation: old.generation }), { statusCode: 409 });
       await send("background-start", active, { remindMinutes: 1 });
       await ctx.blockDB.deleteBlock(active);
@@ -133,9 +133,10 @@ test(
       const paused = await send("queue-block", "c", { remindMinutes: 30 });
       assert.equal((await row("c")).properties.actualMinutes, 51);
       assert.equal(paused.uncertainIntervals.length, 1);
-      assert.equal((await entry("c")).status, "blocked");
+      assert.equal((await entry("c")).status, "queued");
+      assert.equal((await entry("c")).blocked, true);
       await send("queue-unblock", "c");
-      assert.equal((await entry("c")).status, "paused");
+      assert.equal((await entry("c")).status, "queued");
       assert.equal((await entry("c")).dueAt, null);
       await send("done", "unknown");
       assert.equal((await entry("unknown")).actualMinutes, null);
@@ -166,7 +167,7 @@ test(
         }
       ]);
       const adopted = await store.state(qowner);
-      assert.equal(adopted.queue.items[0].status, "background");
+      assert.equal(adopted.queue.items[0].status, "queued");
       assert.equal(adopted.queue.items[0].needsYou, true);
       await store.execute(
         {

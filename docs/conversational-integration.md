@@ -72,3 +72,7 @@ Local verification uses the existing `test-support/activity-db` harness. `DCC_TE
 Validation artifacts are in the task workspace's `conversation-evidence/` directory, outside the repository. An independent five-lane code review and separate verification pass have been completed; see `docs/conversational-integration-review.md`. No production or actual ChatGPT connection canary has been performed. This is not a third-party penetration-test certification.
 
 Write-only OAuth grants receive a minimal acknowledgement (event ID, canonical task ID when applicable, revision and replay status). Full state, task rows and private reports require `dcc.read`, including successful write replays.
+
+## Explicit completion, progress iterations and reviews
+
+The [DCC integration runbook](dcc-integration-runbook.md) is the current contract for explicit chat outcomes and morning/evening review choices. It documents `dcc_completion_review`, `dcc_reconcile_task`, `dcc_reconciliation_receipt` and the version/outcome requirements for `dcc_complete_task`. Progress can close a meaningful work iteration atomically with a linked next step, while preserving the broader goal. The new `dcc.reconcile` scope requires fresh consent and is not added to existing grants. Local implementation and tests do not imply deployment or a connected account.

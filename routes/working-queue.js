@@ -21,6 +21,14 @@ module.exports = function mount(app, ctx, config = {}) {
     }
   });
   app.get(
+    "/api/working-queue/completion-review",
+    route((req) => store.completionReview(req.query, req.queueOwner))
+  );
+  app.get(
+    "/api/working-queue/task/:id",
+    route((req) => store.get(req.params.id, req.queueOwner))
+  );
+  app.get(
     "/api/working-queue",
     route((req) => store.state(req.queueOwner))
   );
@@ -28,14 +36,25 @@ module.exports = function mount(app, ctx, config = {}) {
     "/api/working-queue/tasks",
     route((req) => store.search(req.query, req.queueOwner))
   );
-  app.get('/api/working-queue/tasks/:id/completion-preview', route(req => store.completionPreview(req.params.id, req.queueOwner)));
+  app.get(
+    "/api/working-queue/tasks/:id/completion-preview",
+    route((req) => store.completionPreview(req.params.id, req.queueOwner))
+  );
   app.post(
     "/api/working-queue",
     route(async (req) => {
       const result = await store.execute(req.body, req.queueOwner);
       ctx.broadcast?.(
         "blocks-changed",
-        { action: "working-queue", blockIds: (result.affectedTasks || []).map((row) => row.id) },
+        {
+          action: "working-queue",
+          blockIds: [
+            ...new Set([
+              ...(result.affectedTasks || []).map((row) => row.id),
+              ...(result.reconciliation?.afterRows || []).map((row) => row.id)
+            ])
+          ]
+        },
         req.workspaceId
       );
       return result;

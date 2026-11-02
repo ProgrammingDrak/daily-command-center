@@ -55,7 +55,7 @@ async function createSharedQueueFixture() {
     if (status) { order.push(id); items[id] = { status, hasActivity: !['queued'].includes(status), note: 'PRIVATE QUEUE NOTE SENTINEL' }; }
   }
   await ctx.pool.query('INSERT INTO work_rotations(workspace_id,user_id,state) VALUES($1,$2,$3)', ['ws-1', 1, { version: 2, order, items }]);
-  await ctx.pool.query("INSERT INTO delegated_work(user_id,workspace_id,task_id,work_key,report) VALUES(1,'ws-1','review','demo',$1)", [{ phase: 'needs-review', at: '2026-10-29T10:01:00Z', summary: 'PRIVATE ASSISTANT REPORT SENTINEL' }]);
+  await ctx.pool.query("INSERT INTO delegated_work(user_id,workspace_id,task_id,work_key,report) VALUES(1,'ws-1','review','demo',$1)", [{ phase: 'needs-review', reviewActions: ['Review the draft'], at: '2026-10-29T10:01:00Z', summary: 'PRIVATE ASSISTANT REPORT SENTINEL' }]);
   return { ...ctx, base, date, url, token: share.token, request, setDay(value) { day = value; },
     async close() { await new Promise(resolve => server.close(resolve)); await ctx.close(); } };
 }

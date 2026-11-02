@@ -1,5 +1,6 @@
 const M = require("./lib/conversation-model");
 const Q = require("./lib/working-queue");
+const R = require("./lib/task-reconciliation");
 const { checkInState } = require("./public/js/work-checkin-policy");
 const meetingIdentity = require("./meeting-identity");
 const createTiming = require("./lib/task-timing");
@@ -94,7 +95,7 @@ function createConversationStore(ctx) {
       `SELECT id,workspace_id,properties->>'title' AS title,properties->>'startedAt' AS started_at FROM blocks WHERE user_id=$1 AND deleted_at IS NULL AND properties->>'startedAt' IS NOT NULL AND dcc_is_task_row(type,properties)`,
       [owner.userId]
     );
-    const queue = await Q.snapshot(q, owner, blockDB);
+    const queue = await Q.snapshot(q, owner, blockDB, (ctx.now || Date.now)());
     return {
       revision: s.rows[0]?.revision || 0,
       foreground: active.rows.filter((r) => r.workspace_id === owner.workspaceId),
@@ -142,6 +143,7 @@ function createConversationStore(ctx) {
     const b = await task(q, id, owner);
     return {
       task: b,
+      reconciliationVersion: R.version(b),
       delegated:(await q.query('SELECT report FROM delegated_work WHERE user_id=$1 AND workspace_id=$2 AND task_id=$3',[owner.userId,owner.workspaceId,b.id])).rows.map(row=>row.report),
       ...(b.properties.guidedDefinitionId
         ? { guided: await require("./guided-store").createGuidedStore(ctx).get(b.id, owner, q) }
@@ -409,24 +411,25 @@ function createConversationStore(ctx) {
           // A crash after commit can be recovered by the same idempotent retry.
           for (const transition of prior.rows[0].result.responsibilityTransitions || []) await blockDB.propagateResponsibilityDone(transition);
         }
-        return { ...prior.rows[0].result, duplicate: true, claimed: false, affectedTasks, currentState };
+        const replay = { ...prior.rows[0].result, duplicate: true, claimed: false, affectedTasks, currentState };
+        return replay.reconciliation && !transactionClient ? R.verify(replay, owner, ctx) : replay;
       }
       await q.query("INSERT INTO conversation_state(user_id) VALUES($1) ON CONFLICT DO NOTHING", [owner.userId]);
       const before = await state(owner, q);
       if (!legacy && before.revision !== b.expectedRevision)
         throw M.fail("Activity changed; read current state before retrying", 409);
       const s = (await q.query("SELECT * FROM conversation_state WHERE user_id=$1 FOR UPDATE", [owner.userId])).rows[0];
-      const clockAction = (!b.action.startsWith("queue-") && !b.action.startsWith("delegated-")) || b.action === "queue-block";
+      const clockAction = b.action !== "reconcile" && (!b.action.startsWith("queue-") && !b.action.startsWith("delegated-")) || b.action === "queue-block";
       if (clockAction && b.action !== "correct" && s.changed_at && M.instant(b.at) < new Date(s.changed_at).getTime())
         throw M.fail("Stale activity event; use a correction", 409);
       // New child registration follows the hierarchy-before-row lock order used by creation.
-      if (b.action === "delegated-register" && b.delegation.parentTaskId)
+      if (b.action === "reconcile" || b.action === "delegated-register" && b.delegation.parentTaskId)
         await q.query("SELECT pg_advisory_xact_lock(hashtext('dcc-task-hierarchy'), hashtext($1))", [String(owner.workspaceId)]);
       // Lock owned rows in a stable order before read/modify/write, also excluding parallel completion.
       await q.query(
         `SELECT id FROM blocks WHERE user_id=$1 AND deleted_at IS NULL AND dcc_is_task_row(type,properties)
          AND ($2 OR id=$3 OR properties->>'local_id'=$3 OR properties->>'startedAt' IS NOT NULL) ORDER BY id FOR UPDATE`,
-        [owner.userId, ["correct", "done"].includes(b.action), b.taskId || null]
+        [owner.userId, ["correct", "done", "reconcile"].includes(b.action), b.taskId || null]
       );
       const queue = await Q.load(q, owner);
       await Q.reconcile(q, owner, queue, blockDB, b.at);
@@ -485,10 +488,11 @@ function createConversationStore(ctx) {
           });
         }
       }
-      if (b.action === "correct") detail = await correct(q, b, owner, owner.userId + ":" + b.sourceEventId);
+      if (b.action === "reconcile") detail = await R.apply(q, owner, queue, b, ctx);
+      else if (b.action === "correct") detail = await correct(q, b, owner, owner.userId + ":" + b.sourceEventId);
       else if (b.action.startsWith("delegated-")) detail = await require('./lib/delegated-work').apply(q,owner,queue,b,ctx,task);
       else if (b.action.startsWith("queue-") && b.action !== "queue-block") {
-        detail = await Q.metadata(q, owner, queue, b, b.taskId ? await task(q, b.taskId, owner) : null, blockDB);
+        detail = await Q.metadata(q, owner, queue, b, b.taskId ? await task(q, b.taskId, owner) : null, blockDB, (ctx.now || Date.now)());
       } else {
         const target = await task(q, b.taskId, owner);
         before.task = structuredClone(target);
@@ -642,7 +646,8 @@ function createConversationStore(ctx) {
         releaseOwned();
         for (const transition of result.responsibilityTransitions || []) await blockDB.propagateResponsibilityDone(transition);
       }
-      return { ...result, currentState: result.state };
+      const response = { ...result, currentState: result.state };
+      return result.reconciliation && !transactionClient ? R.verify(response, owner, ctx) : response;
     } catch (e) {
       if (!transactionClient && !released) await q.query("ROLLBACK");
       throw e;
@@ -659,6 +664,22 @@ function createConversationStore(ctx) {
       )
     ).rows;
   }
-  return { state, search, get, completionPreview, calendarEvents, execute, history };
+  async function reconciliationReceipt(sourceEventId,owner){
+    await authorize(pool,owner);
+    const result=(await pool.query("SELECT result FROM conversation_events WHERE user_id=$1 AND workspace_id=$2 AND source_event_id=$3",[owner.userId,owner.workspaceId,M.text(sourceEventId,"sourceEventId")])).rows[0]?.result;
+    if(!result?.reconciliation) return {saveStatus:"not_found",sourceEventId};
+    return R.verify(result,owner,ctx);
+  }
+  async function completionReview(body, owner) {
+    const q = await pool.connect();
+    try {
+      await q.query("BEGIN"); await authorize(q,owner);
+      await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",["dcc-foreground:"+owner.userId]);
+      const review = await R.review(q,owner,ctx,body);
+      const revision = (await state(owner,q)).revision;
+      await q.query("COMMIT"); return {...review,revision};
+    } catch(e) { await q.query("ROLLBACK"); throw e; } finally { q.release(); }
+  }
+  return { state, search, get, completionPreview, completionReview, reconciliationReceipt, calendarEvents, execute, history };
 }
 module.exports = { SCHEMA_SQL, FOREGROUND_INDEX_SQL, createConversationStore, timingFor };

@@ -144,6 +144,7 @@
     // Build detail panel content — owner only. Guests never see notes/links/subtasks.
     var detailParts=[];
     if(!guest){
+      if(window.DCC?.TaskReconciliation)detailParts.push(DCC.TaskReconciliation.summaryHtml(ev));
       if(ev.detail)detailParts.push('<div class="detail-summary">'+ev.detail.replace(/\n/g,'<br>')+'</div>');
       var dLinks=[];
       if(ev.notionUrl)dLinks.push('<a href="'+ev.notionUrl+'" target="_blank" onclick="event.stopPropagation()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h6v6H4z"/><path d="M14 4h6v6h-6z"/><path d="M4 14h6v6H4z"/><path d="M14 14h6v6h-6z"/></svg>Open in Notion</a>');

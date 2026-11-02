@@ -618,7 +618,7 @@ function collectCompletionSubtreeIds(rows, parent) {
 async function setTaskCompletion({
   taskRef, completed, completedAt = null, taskDate = null, mutationId,
   expectedRevision = null, userId = null, workspaceId = null, companionUpdates = [],
-  transactionLockKey = null, transactionClient = null, guidedCompletionTaskId = null,
+  transactionLockKey = null, transactionClient = null, guidedCompletionTaskId = null, includeDescendants = true,
 }) {
   validateTaskCompletionInput({ taskRef, completed, completedAt, taskDate, mutationId, expectedRevision });
   if (!Array.isArray(companionUpdates)) throw new Error("companionUpdates must be an array");
@@ -793,7 +793,7 @@ async function setTaskCompletion({
     }
     if (sameMutation) {
       let duplicateAffected = [target];
-      if (completed) {
+      if (completed && includeDescendants) {
         const { rows } = await q.query(
           `SELECT * FROM blocks
             WHERE deleted_at IS NULL AND workspace_id IS NOT DISTINCT FROM $1
@@ -822,7 +822,7 @@ async function setTaskCompletion({
     }
 
     let rowsToWrite = [target];
-    if (completed) {
+    if (completed && includeDescendants) {
       const { rows } = await q.query(
         `SELECT * FROM blocks
           WHERE deleted_at IS NULL AND workspace_id IS NOT DISTINCT FROM $1
@@ -1049,6 +1049,14 @@ async function updateBlock(id, fields, client) {
         isTaskRow({ type: existing.type, properties: existing.properties }), completionMutationId);
     }
     const existingProps = existing.properties || {};
+    // Reconciliation lineage belongs to its audited transaction. An old offline
+    // property bag must not erase outcomes, links or review decisions.
+    if (!fields[require("./lib/conversation-model").RECONCILIATION_WRITE]) {
+      for (const key of require("./lib/task-reconciliation").ownedFields) {
+        if (Object.hasOwn(existingProps,key)) newProps[key] = existingProps[key];
+        else delete newProps[key];
+      }
+    }
     // Explicit field-only writes own priority. Full-property saves/replays cannot
     // erase or roll back a choice made in another tab.
     if (taskPriority === undefined) {

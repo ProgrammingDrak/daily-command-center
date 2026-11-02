@@ -37,7 +37,7 @@ test('shared queue actual routes preserve privacy and viewer permissions', { ski
       assert.equal(response.headers.get('cache-control'), 'private, no-store');
       assert.ok(!JSON.stringify(data).includes('SENTINEL')); assert.equal(data.blocks, undefined);
       assert.equal(data.tasks.find(t => t.blockId === 'review').queue.lane, 'needs-you');
-      assert.equal(data.tasks.find(t => t.blockId === 'paused').queue.lane, 'background');
+      assert.equal(data.tasks.find(t => t.blockId === 'paused').queue.lane, 'priority');
       assert.equal(data.viewer.capabilities.place_bounty, !!user); original = data;
     }
   });
