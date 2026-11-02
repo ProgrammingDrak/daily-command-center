@@ -5,6 +5,7 @@
   const DCC = (window.DCC = window.DCC || {});
   const modes = new Map([
     ["schedule", "dashboard"],
+    ["working-queue", "dashboard"],
     ["pet-home", "dashboard"],
     ["budget", "full-width"],
     ["activity", "full-width"],
@@ -65,17 +66,112 @@
     return next;
   }
 
+  // Working Queue keeps its own saved-but-unconfirmed update and conflict in
+  // account-keyed storage. The dot only reports them; it never resolves them.
+  function queueSync() {
+    const value = window.DCCWorkingQueue && typeof window.DCCWorkingQueue.syncState === "function"
+      ? window.DCCWorkingQueue.syncState() : null;
+    return { pending: !!(value && value.pending), conflict: value && value.conflict ? value.conflict : null };
+  }
+
+  let lastAnnounced = "";
   function renderSaveStatus(detail) {
     saveDetail = normalizeSaveDetail(detail);
     const button = document.getElementById("save-status");
     if (!button) return;
+    const queue = queueSync();
     const local = button.querySelector("[data-save-local]");
     const remote = button.querySelector("[data-save-remote]");
     if (local) local.textContent = saveDetail.local;
     if (remote) remote.textContent = saveDetail.remote;
-    button.dataset.remoteState = String(saveDetail.remote || "").toLowerCase().replace(/\s+/g, "-");
-    button.setAttribute("aria-label", saveDetail.local + ". " + saveDetail.remote + ".");
-    button.title = saveDetail.message || "";
+    let state = String(saveDetail.remote || "").toLowerCase().replace(/\s+/g, "-");
+    const extra = [];
+    if (queue.conflict) { state = "needs-attention"; extra.push("Queue update needs review"); }
+    else if (queue.pending && state === "synced") { state = "waiting-to-sync"; extra.push("Queue update waiting"); }
+    button.dataset.remoteState = state;
+    const summary = saveDetail.local + ". " + saveDetail.remote + "." + (extra.length ? " " + extra.join(". ") + "." : "");
+    button.setAttribute("aria-label", "Sync status: " + summary);
+    button.removeAttribute("title");
+    const tooltip = document.getElementById("save-status-tooltip");
+    if (tooltip) tooltip.textContent = summary + (saveDetail.pending ? " " + saveDetail.pending + " waiting." : "") + " Select for details.";
+    // Announce only moves into trouble, not every routine save.
+    const trouble = /attention|offline|failed/.test(state) ? summary : "";
+    const live = document.getElementById("save-status-live");
+    if (live && trouble && trouble !== lastAnnounced) live.textContent = trouble;
+    lastAnnounced = trouble;
+  }
+
+  function queueRecoveryRows(wrap, close) {
+    const queue = queueSync();
+    if (!queue.pending && !queue.conflict) return;
+    const row = document.createElement("div");
+    row.className = "dcc-save-repair dcc-save-queue";
+    const text = document.createElement("p");
+    text.textContent = queue.conflict
+      ? "A Working Queue change was not applied: " + (queue.conflict.message || "it conflicted with newer work") + ". Your attempted change is kept for review."
+      : "A Working Queue update is saved on this device and waiting for confirmation.";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.textContent = queue.conflict ? "Review queue update" : "Open Working Queue";
+    open.addEventListener("click", () => {
+      close("queue-review");
+      if (DCC.nav) DCC.nav.go({ page: "tasks", view: "queue" });
+      if (queue.conflict) setTimeout(() => document.querySelector('[data-queue-action="conflict"]')?.click(), 0);
+    });
+    row.append(text, open);
+    wrap.append(row);
+  }
+
+  // Commitment changes used to be recoverable only inside Social. The same
+  // retry, export and discard actions stay reachable here; discard asks first.
+  async function commitmentRecoveryRows(wrap, close) {
+    const sync = window.DCCCommitmentSync;
+    if (!sync || typeof sync.pending !== "function") return;
+    let pending = [];
+    try { pending = await sync.pending() || []; } catch (_) { return; }
+    if (!pending.length) return;
+    const section = document.createElement("div");
+    section.className = "dcc-save-repair dcc-save-commitments";
+    const head = document.createElement("p");
+    head.textContent = pending.length + " commitment change" + (pending.length === 1 ? " is" : "s are") + " saved on this device. Export before discarding anything you need.";
+    section.append(head);
+    pending.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "dcc-save-commitment";
+      const label = document.createElement("p");
+      label.textContent = (item.body && (item.body.kind || item.body.title)) || "Commitment change";
+      const status = document.createElement("span");
+      status.textContent = item.error || "Waiting to sync";
+      row.append(label, status);
+      if (item.error && typeof sync.retry === "function") {
+        const retry = document.createElement("button");
+        retry.type = "button"; retry.textContent = "Retry same change";
+        retry.addEventListener("click", async () => {
+          retry.disabled = true;
+          try { await sync.retry(item.actionId); close("commitment-retry"); }
+          catch (error) { DCC.toast(error.message, "error"); retry.disabled = false; }
+        });
+        row.append(retry);
+      }
+      if (typeof sync.discard === "function") {
+        const discard = document.createElement("button");
+        discard.type = "button"; discard.textContent = "Discard…";
+        discard.addEventListener("click", () => {
+          if (discard.dataset.confirm !== "1") {
+            discard.dataset.confirm = "1";
+            discard.textContent = "Confirm discard";
+            status.textContent = "This removes the saved change from this device. Export first if you need it.";
+            return;
+          }
+          discard.disabled = true;
+          Promise.resolve(sync.discard(item.actionId)).then(() => close("commitment-discard"))
+            .catch((error) => { DCC.toast(error.message, "error"); discard.disabled = false; });
+        });
+        row.append(discard);
+      }
+      section.append(row);
+    });
+    wrap.append(section);
   }
 
   function saveStatusBody(onRepaired) {
@@ -129,10 +225,13 @@
   function wireSaveStatus() {
     const button = document.getElementById("save-status");
     if (!button) return;
-    const headerActions = document.querySelector(".header > div:last-child");
-    if (headerActions && button.parentElement !== headerActions) headerActions.insertBefore(button, headerActions.firstChild);
+    const cluster = document.getElementById("dcc-cluster");
+    if (cluster && button.parentElement !== cluster) cluster.appendChild(button);
     button.addEventListener("click", () => {
       const details = saveStatusBody(() => statusOverlay.close("repaired"));
+      const close = (reason) => statusOverlay.close(reason);
+      queueRecoveryRows(details, close);
+      commitmentRecoveryRows(details, close);
       const statusOverlay = DCC.overlay.open({
         kind: "popover",
         title: "Save status",
@@ -165,6 +264,16 @@
       });
     });
     document.addEventListener("dcc:save-status", (event) => renderSaveStatus(event.detail));
+    document.addEventListener("dcc:working-queue-sync", () => renderSaveStatus(saveDetail));
+    window.addEventListener("storage", (event) => { if (String(event.key || "").startsWith("dcc-working-queue:")) renderSaveStatus(saveDetail); });
+    // Escape hides the tooltip without moving focus, whether it is showing for
+    // focus or for a pointer resting on the dot or on the tooltip itself.
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || button.getAttribute("aria-expanded") === "true") return;
+      if (document.activeElement === button || button.matches(":hover")) button.classList.add("tooltip-dismissed");
+    });
+    button.addEventListener("blur", () => button.classList.remove("tooltip-dismissed"));
+    button.addEventListener("mouseleave", () => button.classList.remove("tooltip-dismissed"));
     renderSaveStatus(saveDetail);
   }
 
@@ -172,8 +281,7 @@
     const button = document.getElementById("dcc-settings-button");
     const menu = document.getElementById("dcc-settings-menu");
     if (!button || !menu) return;
-    button.textContent = "Utilities";
-    button.title = "Open utilities";
+    // The cog keeps its icon and accessible name; every utility moves into its menu.
     const items = [
       document.querySelector(".admin-link[href='/admin']"),
       document.getElementById("todo-share-open"),
@@ -198,27 +306,21 @@
     feedback.textContent = "Send feedback";
     feedback.addEventListener("click", () => typeof window.dccOpenFeedback === "function" && window.dccOpenFeedback());
     [work, loose, feedback].forEach((item) => menu.appendChild(item));
+    // The day's activity summary (sync.js) rides at the bottom of the menu.
+    const summary = document.getElementById("sync-section");
+    if (summary) menu.appendChild(summary);
   }
 
+  // DCC.nav announces every page/view change; the shell only follows it with
+  // its layout mode and per-panel scroll. It never owns navigation state.
   function wireTabs() {
-    const bar = document.getElementById("tab-bar");
-    if (!bar) return;
-    bar.addEventListener("click", (event) => {
-      const tab = event.target.closest(".tab[data-tab]");
-      if (!tab) return;
-      scrollPositions.set(activeSurface, window.scrollY);
+    document.addEventListener("dcc:nav-changed", (event) => {
+      const detail = event.detail || {};
+      if (!detail.panel || detail.panel === detail.prevPanel) return;
+      if (detail.prevPanel) scrollPositions.set(detail.prevPanel, window.scrollY);
       persistScrollPositions();
-      const target = tab.dataset.tab;
-      setTimeout(() => {
-        activate(target);
-        window.scrollTo({ top: scrollPositions.get(target) || 0, behavior: "auto" });
-      }, 0);
-    }, true);
-    document.querySelectorAll(".svt-btn[data-view]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const full = button.dataset.view === "calendar" || button.dataset.view === "actual";
-        document.body.classList.toggle("dcc-schedule-full", full);
-      });
+      activate(detail.panel);
+      if (detail.source !== "code") window.scrollTo({ top: scrollPositions.get(detail.panel) || 0, behavior: "auto" });
     });
   }
 
@@ -278,8 +380,8 @@
     wireScrollCollapse();
     wireStickyOffsets();
     watchLegacyOverlays();
-    const current = document.querySelector(".tab.active[data-tab]");
-    activate(current ? current.dataset.tab : "schedule");
+    const nav = DCC.nav && DCC.nav.get();
+    activate(nav && DCC.NavState ? DCC.NavState.panelFor(nav) : "working-queue");
   }
 
   DCC.shell = { activate, register, modes, get activeSurface() { return activeSurface; } };

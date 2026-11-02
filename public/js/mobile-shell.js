@@ -33,10 +33,15 @@
     else { if(typeof window.openTasksDrawer === "function") window.openTasksDrawer(); }
   }
 
-  // Reuse the existing top-tab click path so all per-tab init in tabs.js runs.
+  // One navigation API (tabs.js DCC.nav); the old panel names go through its adapter.
   function activateTab(name){
-    const btn = document.querySelector('.tab[data-tab="' + name + '"]');
-    if(btn) btn.click();
+    if(window.DCC && DCC.tabs && typeof DCC.tabs.select === "function") DCC.tabs.select(name);
+  }
+  function navKey(){
+    const nav = window.DCC && DCC.nav ? DCC.nav.get() : null;
+    if(!nav) return null;
+    if(nav.page === "tasks") return nav.view === "queue" ? "working-queue" : "schedule";
+    return nav.page;
   }
 
   // ---- bottom navigation bar -------------------------------------------------
@@ -73,9 +78,7 @@
   // Overflow content tabs (not surfaced directly in the bottom bar).
   const MORE_TABS = [
     { label:"Budget", tab:"budget" },
-    { label:"Workouts & meals", tab:"activity" },
-    { label:"Delegated", tab:"delegated", badge:"delegated-count" },
-    { label:"Pet Home",  tab:"pet-home", badge:"pet-home-badge" }
+    { label:"Workouts & meals", tab:"activity" }
   ];
 
   // Owner actions: each row triggers the existing header element's own handler,
@@ -160,9 +163,8 @@
   // ---- active-state + badge sync --------------------------------------------
 
   function syncActiveNav(){
-    const active = document.querySelector(".tab.active");
-    const key = active ? active.dataset.tab : null;
-    const overflow = ["delegated", "pet-home", "activity"];
+    const key = navKey();
+    const overflow = ["budget", "activity"];
     document.querySelectorAll("#mobile-tabbar .mtab").forEach(b => {
       const navKey = b.dataset.navKey;
       let on = false;
@@ -266,6 +268,7 @@
     else if(typeof mq.addListener === "function") mq.addListener(onChange);
 
     window.addEventListener("dcc:data-ready", () => { syncBadges(); syncActiveNav(); });
+    document.addEventListener("dcc:nav-changed", () => { closeMoreSheet(); syncActiveNav(); });
 
     syncActiveNav();
     syncBadges();

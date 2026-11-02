@@ -108,10 +108,14 @@ try{
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.evaluate(()=>document.documentElement.style.zoom='');
   check('320/375/600/1440 viewports and 200 percent zoom retain usable controls without horizontal overflow');
-  await page.getByRole('button',{name:'App tools',exact:true}).click();await page.locator('#tab-bar [data-tab=schedule]').click();
+  const exit=page.locator('.glasses-nav .glasses-exit');
+  assert.equal(await exit.isVisible(),true,'Full app link is visible in the glasses bar');
+  assert.equal(new URL(await exit.getAttribute('href'),base).searchParams.has('device'),false);
+  check('Full app exit stays visible outside the hidden page title');
+  await page.getByRole('button',{name:'App tools',exact:true}).click();await page.locator('#task-view-switch [data-task-view=list]').click();
   assert.equal(await page.locator('#tab-schedule').evaluate(e=>e.classList.contains('active')),true);
   await page.goBack();await page.waitForSelector('#tab-working-queue.active');
-  check('itinerary remains secondary and browser Back restores the queue');
+  check('list remains secondary and browser Back restores the queue');
   assert.deepEqual(errors,[]);
   await fs.writeFile(path.join(out,'checks.json'),JSON.stringify({checks,errors,synthetic:true,physicalMeta:false},null,2));
 }catch(error){console.log(await page.evaluate(()=>({focus:document.activeElement?.outerHTML,selected:[...document.querySelectorAll('.glasses-selected')].map(e=>e.dataset.queueId),dialogs:[...document.querySelectorAll('.dcc-overlay')].map(e=>e.outerHTML.slice(0,300))})));await page.screenshot({path:path.join(out,'failure.png')});throw error;}finally{await browser.close();}

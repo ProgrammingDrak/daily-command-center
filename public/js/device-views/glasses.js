@@ -58,16 +58,16 @@
   const tools = button('App tools', () => {
     const open = document.body.classList.toggle('glasses-tools-open');
     tools.setAttribute('aria-expanded', String(open));
-    if (open) document.querySelector('#tab-bar .tab.active')?.scrollIntoView({ block: 'center' });
+    if (open) document.querySelector('#task-view-switch [aria-selected="true"]')?.scrollIntoView({ block: 'center' });
   });
   tools.setAttribute('aria-expanded', 'false');
-  bar.append(prev, position, next, tools, status);
-  document.body.append(bar);
+  // The page title is visually hidden now, so the exit lives in this bar.
   const exit = document.createElement('a');
   const normalUrl = new URL(location.href); normalUrl.searchParams.delete('device');
   exit.href = normalUrl.pathname + normalUrl.search + normalUrl.hash;
   exit.textContent = 'Full app'; exit.className = 'glasses-exit';
-  document.querySelector('.header h1')?.append(exit);
+  bar.append(prev, position, next, tools, exit, status);
+  document.body.append(bar);
 
   const dialog = document.createElement('dialog');
   dialog.className = 'glasses-confirm';

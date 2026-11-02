@@ -306,7 +306,7 @@
         window.DCCTimeReallocate.open({
           entry,
           taskTitle: (entry.properties || {}).taskTitle,
-          onSaved: () => buildDayReview(dateStr)
+          onSaved: () => { buildDayReview(dateStr); document.dispatchEvent(new CustomEvent("dcc:actual-time-saved", { detail: { date: dateStr } })); }
         });
       });
     });
@@ -472,6 +472,8 @@
     for (const te of existing) { if (!kept.has(te.id)) ops.push(bs.deleteBlock(te.id)); }
     await Promise.all(ops);
     if (typeof showToast === "function") showToast("Actual time saved", "ok");
+    // The List and Calendar Actual toggle re-read their evidence on this.
+    document.dispatchEvent(new CustomEvent("dcc:actual-time-saved", { detail: { date: dateStr, blockId } }));
   }
 
   // expose
@@ -479,5 +481,7 @@
   if (typeof window !== "undefined") {
     window.buildDayReview = buildDayReview;
     window.editTimeEntries = editTimeEntries;
+    // The List and Calendar Actual toggle (actual-projection.js) reuses this rule.
+    window.DCCDayReviewModel = { entryMatchesEvent, actualSegmentsFor, knownActualMinutes };
   }
 })();

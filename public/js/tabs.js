@@ -36,27 +36,192 @@ DCC.tabs.register("tasks", () => {
 // later Just Works.
 DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && buildCalendar());
 
-// Navigation only: changing views never invokes a work-clock command.
+// ======== NAVIGATION ========
+// One controller for pages (Tasks, Budget, Workouts & meals), Tasks views
+// (Working Queue, List, Calendar) and the Actual toggle. State rules live in
+// nav-state.js. Navigation only: it never starts, stops or resets a work clock,
+// never changes the viewed date and never writes task data.
 (function(){
-  const find=name=>Array.from(document.querySelectorAll('.tab')).find(t=>t.dataset.tab===name&&document.getElementById('tab-'+name));
-  function select(name,remember=false){
-    const tab=find(name);if(!tab)return false;
-    const previous=document.querySelector('.tab.active')?.dataset.tab;
-    if(typeof window.clearSlotCoinEffects==='function')window.clearSlotCoinEffects();
-    document.querySelectorAll('.tab,.tab-content').forEach(t=>t.classList.remove('active'));
-    tab.classList.add('active');document.getElementById('tab-'+name).classList.add('active');
-    if(remember&&previous!==name){const url=new URL(location.href);url.searchParams.set('tab',name);history.pushState({...history.state,dccTab:name},'',url);}
-    DCC.tabs.run(name);return true;
+  const NS=DCC.NavState;
+  if(!NS)return;
+  const storage=(()=>{try{return window.localStorage;}catch(_e){return null;}})();
+  let prefs=NS.readPrefs(storage);
+  let state=null;
+  let explicitActual=false; // the URL or the person chose Actual on or off
+  let archiveDefault=false; // Actual forced on for a past day, not a choice
+  let archiveMode=false;    // the viewed day is a past (archive) day
+  let reviewOpen=false;     // explicit Day review panel inside List/Calendar
+  const byId=id=>document.getElementById(id);
+
+  function retiredNotice(name){
+    const label=NS.retiredLabel(name);if(!label)return;
+    const show=()=>{if(DCC.toast)DCC.toast(label+" is no longer in navigation. Its records are kept. Showing Tasks.","info",8000);};
+    if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",()=>setTimeout(show,0));else show();
   }
-  function destination(){
-    const explicit=new URLSearchParams(location.search).get('tab');
-    return find(explicit)?explicit:find(history.state?.dccTab)?history.state.dccTab:'working-queue';
+
+  // Every entry records the full workspace (view and Actual) and whether Actual
+  // was chosen, so Budget, Workouts & meals, reload and Back all keep them.
+  function historyEntry(){
+    // A past-day default is not a choice; record the preference instead.
+    const saved=Object.assign({},state,archiveDefault?{actual:!!prefs.actual}:{});
+    const entry=Object.assign({},history.state,{dccNav:saved,dccActualExplicit:explicitActual});
+    delete entry.dccTab;
+    return entry;
   }
-  document.querySelectorAll('.tab').forEach(tab=>tab.addEventListener('click',()=>select(tab.dataset.tab,true)));
-  const initial=destination();select(initial);history.replaceState({...history.state,dccTab:initial},'');
-  window.addEventListener('popstate',()=>select(destination()));
+  function writeUrl(mode){
+    if(!mode){history.replaceState(historyEntry(),"");return;}
+    const url=new URL(location.href);
+    url.search=NS.toSearch(state,location.search,{explicitActual});
+    if(mode==="push")history.pushState(historyEntry(),"",url);else history.replaceState(historyEntry(),"",url);
+  }
+
+  function paint(){
+    const panel=NS.panelFor(state);
+    document.querySelectorAll(".tab-content").forEach(el=>el.classList.toggle("active",el.id==="tab-"+panel));
+    document.querySelectorAll("#tab-bar .tab[data-page]").forEach(btn=>{
+      const on=btn.dataset.page===state.page;
+      btn.classList.toggle("active",on);
+      if(on)btn.setAttribute("aria-current","page");else btn.removeAttribute("aria-current");
+    });
+    document.querySelectorAll("[data-task-view]").forEach(btn=>{
+      const on=btn.dataset.taskView===state.view;
+      btn.classList.toggle("active",on);
+      btn.setAttribute("aria-selected",String(on));
+      btn.tabIndex=on?0:-1;
+    });
+    const schedule=byId("tab-schedule");
+    if(schedule&&state.view!=="queue")schedule.setAttribute("aria-labelledby","task-view-"+state.view);
+    const toggle=byId("task-actual-toggle");
+    if(toggle){
+      toggle.hidden=!(state.page==="tasks"&&state.view!=="queue");
+      toggle.setAttribute("aria-pressed",String(!!state.actual));
+      toggle.classList.toggle("active",!!state.actual);
+    }
+    const body=document.body;
+    body.dataset.navPage=state.page;
+    body.dataset.navView=state.view;
+    body.dataset.navActual=state.actual?"on":"off";
+    body.classList.toggle("dcc-schedule-full",state.page==="tasks"&&state.view==="calendar");
+  }
+
+  // A view renderer failing must never strand navigation itself.
+  function runScheduleView(next,prev){
+    if(typeof window.applyScheduleView!=="function")return;
+    try{window.applyScheduleView(next,prev);}catch(e){console.error("[nav:schedule-view]",e);}
+  }
+
+  function apply(next,opts){
+    const o=opts||{};
+    const prev=state;
+    state=NS.normalize(next,prefs);
+    if(NS.same(prev,state)&&!o.force){writeUrl(o.url);return state;}
+    const prevPanel=prev?NS.panelFor(prev):null,panel=NS.panelFor(state);
+    if(typeof window.clearSlotCoinEffects==="function")window.clearSlotCoinEffects();
+    paint();
+    writeUrl(o.url);
+    // At boot the renderers and day data are not loaded yet; DOMContentLoaded
+    // builds the active view, exactly as the old tab controller did.
+    if(o.source!=="boot"){
+      if(panel!==prevPanel)DCC.tabs.run(panel);
+      if(panel==="schedule")runScheduleView(state,prev);
+    }
+    document.dispatchEvent(new CustomEvent("dcc:nav-changed",{detail:{state:Object.assign({},state),prev:prev&&Object.assign({},prev),panel,prevPanel,source:o.source||"code"}}));
+    return state;
+  }
+
+  // Merge a partial change. Switching to Tasks keeps its last view.
+  function go(partial,opts){
+    const p=partial||{};
+    const next=Object.assign({},state,p);
+    if(p.view==="list"||p.view==="calendar"){NS.saveBaseView(storage,p.view);prefs.baseView=p.view;}
+    return apply(next,Object.assign({url:"push"},opts));
+  }
+  function setActual(on,opts){
+    explicitActual=true;archiveDefault=false;
+    NS.saveActual(storage,!!on);prefs.actual=!!on;
+    return apply(Object.assign({},state,{actual:!!on}),Object.assign({url:"replace",source:"user"},opts));
+  }
+
+  // Compatibility adapter for the old panel names used by click-driven callers.
+  function select(name){
+    if(NS.isRetired(name)){retiredNotice(name);return go({page:"tasks",view:"queue"});}
+    const mapped=NS.fromLegacyTab(name,prefs);
+    if(!mapped)return null;
+    return go(name==="budget"||name==="activity"?{page:name}:{page:"tasks",view:mapped.view});
+  }
+
+  // Past days open with Actual on unless someone chose. Leaving the past day
+  // restores the saved preference. Never persisted, never touches the base view.
+  function setArchive(archive){
+    archiveMode=!!archive;
+    if(archive&&!explicitActual&&!state.actual){archiveDefault=true;return apply(Object.assign({},state,{actual:true}),{source:"archive"});}
+    if(!archive&&archiveDefault){archiveDefault=false;return apply(Object.assign({},state,{actual:!!prefs.actual}),{source:"archive"});}
+    return state;
+  }
+
+  function setReviewOpen(open){
+    reviewOpen=!!open;
+    if(NS.panelFor(state)==="schedule")runScheduleView(state,state);
+    return reviewOpen;
+  }
+
+  // A focused editor, or a task-add popover holding text, is a draft that a
+  // rebuild of its container would destroy.
+  function hasDraftIn(container){
+    const active=document.activeElement;
+    if(container&&active&&container.contains(active)&&(active.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)))return true;
+    return Array.from(document.querySelectorAll(".task-add-pop .sub-add-input")).some(input=>input.value.trim());
+  }
+
+  DCC.nav={
+    get:()=>Object.assign({},state),
+    go,setActual,select,setArchive,setReviewOpen,hasDraftIn,
+    isRetired:NS.isRetired,
+    reviewOpen:()=>reviewOpen&&state.actual&&state.page==="tasks"&&state.view!=="queue",
+    prefs:()=>Object.assign({},prefs)
+  };
+  DCC.tabs.select=select;
+
+  // Wiring.
+  document.querySelectorAll("#tab-bar .tab[data-page]").forEach(btn=>btn.addEventListener("click",()=>go({page:btn.dataset.page},{source:"user"})));
+  const views=Array.from(document.querySelectorAll("[data-task-view]"));
+  views.forEach(btn=>{
+    btn.addEventListener("click",()=>go({page:"tasks",view:btn.dataset.taskView},{source:"user"}));
+    btn.addEventListener("keydown",event=>{
+      const at=views.indexOf(btn);let to=null;
+      if(event.key==="ArrowRight"||event.key==="ArrowDown")to=(at+1)%views.length;
+      else if(event.key==="ArrowLeft"||event.key==="ArrowUp")to=(at-1+views.length)%views.length;
+      else if(event.key==="Home")to=0;else if(event.key==="End")to=views.length-1;
+      if(to===null)return;
+      event.preventDefault();views[to].focus();views[to].click();
+    });
+  });
+  const toggle=byId("task-actual-toggle");
+  if(toggle)toggle.addEventListener("click",()=>setActual(!state.actual));
+
+  const parsed=NS.parse(location.search,history.state,prefs);
+  explicitActual=parsed.explicitActual;
+  if(parsed.legacy&&parsed.legacy.retired)retiredNotice(parsed.legacy.from);
+  // A bare URL stays bare; a legacy or partial one is rewritten canonically.
+  const hasTab=new URLSearchParams(location.search).has("tab");
+  apply(parsed.state,{force:true,source:"boot",url:(parsed.legacy||(hasTab&&!parsed.canonical))?"replace":null});
+  history.replaceState(historyEntry(),"");
+  window.addEventListener("popstate",()=>{
+    // The entry's saved workspace wins; the current state covers entries without one.
+    const back=NS.parse(location.search,history.state,prefs,state);
+    explicitActual=back.explicitActual||explicitActual;
+    // History stores the preference, not a past-day default, so re-derive the
+    // default for the day still on screen. An explicit choice always wins.
+    const restored=NS.withArchiveDefault(back.state,{archive:archiveMode,explicitActual});
+    archiveDefault=archiveMode&&!explicitActual&&restored.actual&&!back.state.actual;
+    apply(restored,{source:"history"});
+  });
   // Render after all tab modules register, without overriding intervening navigation.
-  document.addEventListener('DOMContentLoaded',()=>DCC.tabs.run(document.querySelector('.tab.active')?.dataset.tab));
+  document.addEventListener("DOMContentLoaded",()=>{
+    const panel=NS.panelFor(state);
+    DCC.tabs.run(panel);
+    if(panel==="schedule")runScheduleView(state,null);
+  });
 })();
 
 // ======== TASK MENU ACCORDION ========

@@ -649,7 +649,8 @@
         return;
       }
       if (e.target.closest("[data-social-open-share]")) return document.getElementById("todo-share-open")?.click();
-      if (e.target.closest("[data-social-open-pet]")) return document.getElementById("pet-home-tab-btn")?.click();
+      // Pet Home left navigation; the adapter shows the retirement notice.
+      if (e.target.closest("[data-social-open-pet]")) return window.DCC?.tabs?.select?.("pet-home");
       if (e.target.closest("[data-social-refresh-guests]")) return document.getElementById("todo-reactions-toggle")?.click();
       const revokeBtn = e.target.closest("[data-revoke]");
       if (revokeBtn) return revokeGrant(revokeBtn.dataset.revoke);
@@ -680,6 +681,9 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     bind();
+    // Social is retired from navigation, so its badge has no home. Skip the
+    // boot read instead of fetching counts nothing shows.
+    if (window.DCC?.nav?.isRetired?.("social")) return;
     // Silent on failure: an unreachable social read must not break the dashboard.
     loadBadge().catch(() => {});
   });

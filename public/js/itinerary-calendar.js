@@ -119,7 +119,62 @@
     const start=state.anchor,end=addDays(start,6);
     const result=await root.blockStore.loadDateRange(start,end);
     state.loaded=projectedBlocks(result.blocks||[]);
+    // Recorded actual time for the same week, read once with the plan.
+    state.entries=(result.blocks||[]).filter(b=>b&&b.type==="time_entry"&&!b.deleted_at);
     return state.loaded;
+  }
+
+  // ── Actual layer ──
+  // Recorded segments only, drawn as their own bar inside each day column. A
+  // segment is never placed at its task's planned time; minutes without a
+  // trustworthy clock time are totalled in the day header instead.
+  function actualOn(){const nav=root.DCC&&root.DCC.nav&&root.DCC.nav.get();return !!(nav&&nav.page==="tasks"&&nav.view==="calendar"&&nav.actual);}
+  function dayProjection(ds){
+    const A=root.DCC&&root.DCC.ActualProjection;
+    if(!A)return null;
+    const events=state.loaded.filter(ev=>ev._block.date===ds).map(ev=>({id:ev.id,_blockId:ev._blockId,title:ev.title,meetingBlockId:ev.meetingBlockId||null,source_id:ev.source_id||null,gcal_event_id:ev.gcal_event_id||null,actualTimeUnknown:ev.actualTimeUnknown===true,actualMinutesFrom:ev.actualMinutesFrom||null}));
+    const entries=(state.entries||[]).filter(e=>String(e.date||"").slice(0,10)===ds);
+    return A.projectDay(events,entries,{date:ds,timeZone:A.appTimeZone()});
+  }
+  function paintActual(){
+    const el=root.document&&root.document.getElementById("calendar-view");
+    if(!el)return;
+    el.querySelectorAll(".iwc-actual-seg,.iwc-actual-day").forEach(n=>n.remove());
+    const shell=el.querySelector(".iwc-shell");
+    if(shell)shell.classList.toggle("actual-on",actualOn());
+    if(!shell||!actualOn())return;
+    const A=root.DCC.ActualProjection;
+    el.querySelectorAll(".iwc-day-col[data-day]").forEach(col=>{
+      const ds=col.dataset.day,day=dayProjection(ds);if(!day)return;
+      const layer=A.calendarLayer(day);
+      layer.segments.forEach(seg=>{
+        const ev=state.loaded.find(x=>x.id===seg.taskId);
+        if(ev&&state.hidden.has(ev.sourceKey))return;
+        const bar=root.document.createElement("button");
+        bar.type="button";bar.className="iwc-actual-seg";
+        bar.style.top=(seg.startMin/60*HOUR_PX)+"px";
+        bar.style.height=Math.max(4,seg.durMin/60*HOUR_PX)+"px";
+        const label="Recorded "+A.minutes(seg.durMin)+" at "+A.clock(seg.startMin)+(ev?" on "+(ev.title||"task"):"");
+        bar.setAttribute("aria-label",label+(seg.entryId?". Move or split":""));
+        bar.title=label;
+        if(seg.entry&&root.DCCTimeReallocate)bar.addEventListener("click",e=>{e.stopPropagation();root.DCCTimeReallocate.open({entry:seg.entry,taskTitle:(seg.entry.properties||{}).taskTitle,onSaved:()=>build({keepScroll:true})});});
+        else bar.disabled=true;
+        col.appendChild(bar);
+      });
+      const head=el.querySelector('.iwc-all-day[data-day="'+ds+'"]');
+      const notes=[];
+      if(layer.unplacedMin>0)notes.push(A.minutes(layer.unplacedMin)+" without a clock time");
+      if(layer.unplannedMin>0)notes.push(A.minutes(layer.unplannedMin)+" unplanned");
+      if(layer.unknownMin>0)notes.push(A.minutes(layer.unknownMin)+" unknown");
+      if(head&&notes.length){const tag=root.document.createElement("div");tag.className="iwc-actual-day";tag.textContent=notes.join(" · ");head.prepend(tag);}
+    });
+  }
+  function inspectorActualHtml(ev){
+    const A=root.DCC&&root.DCC.ActualProjection;
+    if(!A||!actualOn())return "";
+    const day=dayProjection(ev._block.date),task=day&&day.byId.get(ev.id);
+    const said=A.describeTask(task);
+    return '<section class="iwc-actual"><h4>Actual</h4><p class="iwc-actual-text iwc-actual--'+said.tone+'">'+escapeHtml(said.text)+'</p><button type="button" class="iwc-actual-edit">Add or edit actual time</button></section>';
   }
 
   function sourceMap(items){
@@ -260,6 +315,7 @@
       (ev.location?'<div class="iwc-detail-row">'+icon("pin")+' '+escapeHtml(ev.location)+'</div>':'')+
       (ev.rsvp_status?'<div class="iwc-detail-row">RSVP · '+escapeHtml(ev.rsvp_status)+'</div>':'')+
       '<div class="iwc-actions">'+actions+'<button type="button" class="iwc-complete" '+(past?'disabled':'')+'>'+(isComplete(ev)?'Mark open':'Complete')+'</button></div>'+
+      inspectorActualHtml(ev)+
       inspectorField("Notes","notes",ev.notes||ev.detail||"",{type:"textarea",readonly:past})+
       (sourceUrl?'<a class="iwc-source-link" href="'+escapeHtml(sourceUrl)+'" target="_blank" rel="noopener">Open source '+icon("external")+'</a>':'')+
       '<section class="iwc-children"><h4>Children · '+kids.length+'</h4>'+(kids.length?kids.map(c=>'<div class="iwc-child">'+(isComplete(c)?'✓ ':'○ ')+escapeHtml(c.title||"Untitled")+'</div>').join(""):'<p class="iwc-empty">No nested work.</p>')+'</section>';
@@ -267,6 +323,7 @@
     panel.querySelector(".iwc-close").onclick=()=>{panel.hidden=true;state.selectedId=null;};
     panel.querySelector(".iwc-complete").onclick=()=>toggleComplete(ev,!isComplete(ev));
     const prep=panel.querySelector(".iwc-prep");if(prep)prep.onclick=()=>{if(root.openMeetingPanel)root.openMeetingPanel(ev,{defaultTab:ev.recapStatus?"recap":"prep"});};
+    const actualEdit=panel.querySelector(".iwc-actual-edit");if(actualEdit)actualEdit.onclick=()=>{if(root.editTimeEntries)root.editTimeEntries(ev.id,ev.title,ev._block.date,actualEdit);};
     panel.querySelectorAll("input,select,textarea").forEach(input=>input.addEventListener("change",async()=>{
       if(input.readOnly||input.disabled)return;
       if(["date","start","end","allDayEnd"].includes(input.name)){
@@ -343,7 +400,7 @@
     });
     rootEl.querySelectorAll(".iwc-day-col").forEach(col=>{
       let draft=null;
-      col.onpointerdown=e=>{if(e.button!==0||e.target.closest(".iwc-event")||!editableDate(col.dataset.day))return;const rect=col.getBoundingClientRect(),m=snap((e.clientY-rect.top)/HOUR_PX*60);draft={start:m,end:m+30,y:e.clientY};col.setPointerCapture(e.pointerId);};
+      col.onpointerdown=e=>{if(e.button!==0||e.target.closest(".iwc-event,.iwc-actual-seg")||!editableDate(col.dataset.day))return;const rect=col.getBoundingClientRect(),m=snap((e.clientY-rect.top)/HOUR_PX*60);draft={start:m,end:m+30,y:e.clientY};col.setPointerCapture(e.pointerId);};
       col.onpointermove=e=>{if(!draft)return;const rect=col.getBoundingClientRect(),m=snap((e.clientY-rect.top)/HOUR_PX*60);draft.end=Math.max(draft.start+15,m);};
       col.onpointerup=e=>{if(!draft)return;const d=draft;draft=null;createDraft(col.dataset.day,d.start,Math.min(1439,d.end));};
     });
@@ -380,11 +437,25 @@
     const scrollTop=opts&&opts.keepScroll&&prior?prior.scrollTop:null,scrollLeft=opts&&opts.keepScroll&&prior?prior.scrollLeft:null;
     el.innerHTML='<div class="iwc-loading">Loading week…</div>';
     const items=await readWeek();if(token!==renderToken)return;
-    el.innerHTML=renderShell(items);bind(el);
+    el.innerHTML=renderShell(items);bind(el);paintActual();
     const scroller=el.querySelector(".iwc-week-scroll");
     if(scrollTop!=null){scroller.scrollTop=scrollTop;scroller.scrollLeft=scrollLeft||0;}
     else if(state.initialScroll){const now=easternNow(),inWeek=now.date>=state.anchor&&now.date<=addDays(state.anchor,6);scroller.scrollTop=Math.max(0,((inWeek?now.minute/60:8)*HOUR_PX)-140);if(root.innerWidth<=760&&inWeek)scroller.scrollLeft=Math.max(0,(parseDate(now.date).getDay()*132)-50);state.initialScroll=false;}
   }
 
-  return {build,packOverlaps,weekStart,addDays,dateString,minuteOf,clock,snap,spansDate,rootItems,safeColor,safeExternalUrl,_resetForTests:function(){state={anchor:null,syncedViewDate:null,hidden:new Set(),colors:{},railCollapsed:false,openSource:null,selectedId:null,loaded:[],initialScroll:true};}};
+  // The Actual toggle repaints the layer and refreshes an open inspector's Actual
+  // section without rebuilding the inspector's editable fields.
+  function setActualLayer(){
+    paintActual();
+    const panel=root&&root.document&&root.document.querySelector("#calendar-view .iwc-inspector");
+    if(!panel||panel.hidden||!state.selectedId)return;
+    const ev=findEvent(state.selectedId);
+    const current=panel.querySelector(".iwc-actual");
+    const html=ev?inspectorActualHtml(ev):"";
+    if(current){if(html)current.outerHTML=html;else current.remove();}
+    else if(html){const notes=panel.querySelector('[name="notes"]');const anchor=notes&&notes.closest(".iwc-field");if(anchor)anchor.insertAdjacentHTML("beforebegin",html);}
+    const edit=panel.querySelector(".iwc-actual-edit");if(edit&&ev)edit.onclick=()=>{if(root.editTimeEntries)root.editTimeEntries(ev.id,ev.title,ev._block.date,edit);};
+  }
+
+  return {build,paintActual:setActualLayer,packOverlaps,weekStart,addDays,dateString,minuteOf,clock,snap,spansDate,rootItems,safeColor,safeExternalUrl,_resetForTests:function(){state={anchor:null,syncedViewDate:null,hidden:new Set(),colors:{},railCollapsed:false,openSource:null,selectedId:null,loaded:[],entries:[],initialScroll:true};}};
 });

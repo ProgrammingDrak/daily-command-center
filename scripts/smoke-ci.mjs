@@ -22,7 +22,9 @@ import { measureQueueCapsule } from "./queue-capsule-smoke.mjs";
 const BASE = process.argv[2] || "http://localhost:3987";
 const USER = process.argv[3] || "drake";
 const PASS = process.argv[4] || "clever123";
-const TABS = ["working-queue", "schedule", "pet-home", "budget"];
+// Panels reached through the navigation adapter (Tasks views, then pages).
+const TABS = ["working-queue", "schedule", "budget"];
+const RETIRED = ["meeting-reviews", "pet-home", "social", "vault"];
 // Count an error only if it names a real /public/ asset OR looks like a JS
 // exception. HTTP-status/SSE transport errors (the two known pre-existing 404s
 // on /api/brain/recent) are backend concerns, out of scope.
@@ -98,8 +100,17 @@ check("DCC core present", core === true, String(core));
 
 // every tab activates + renders, no horizontal overflow @375
 await page.setViewportSize({ width: 375, height: 812 });
+check("top navigation is Tasks, Budget, Workouts & meals", (await page.evaluate(() =>
+  [...document.querySelectorAll("#tab-bar .tab[data-page]")].map((b) => b.dataset.page).join())) === "tasks,budget,activity");
+check("retired pages have no visible route", (await page.evaluate((names) =>
+  names.every((n) => !document.querySelector(`[data-tab="${n}"]`) && !document.getElementById(`tab-${n}`)?.classList.contains("active")), RETIRED)) === true);
+check("branding is visually hidden, clock/cog/dot visible", (await page.evaluate(() => {
+  const h1 = document.querySelector(".header h1");
+  const shown = (id) => { const el = document.getElementById(id); return !!el && el.getClientRects().length > 0; };
+  return !!h1 && h1.getBoundingClientRect().width <= 1 && shown("clock") && shown("dcc-settings-button") && shown("save-status");
+})) === true);
 for (const tab of TABS) {
-  await page.evaluate((t) => { document.querySelector(`[data-tab="${t}"]`)?.click?.(); }, tab);
+  await page.evaluate((t) => { window.DCC.tabs.select(t); }, tab);
   const active = await page.evaluate(
     (t) => (document.getElementById(`tab-${t}`)?.classList.contains("active") ? "active" : "inactive"),
     tab
@@ -116,7 +127,20 @@ for (const tab of TABS) {
 
 // Measure the full five-door state with real and representative badge counts.
 // Wait for the shipped font so a fallback font cannot hide a width regression.
-await page.evaluate(() => { document.querySelector('[data-tab="schedule"]')?.click?.(); });
+await page.evaluate(() => { window.DCC.nav.go({ page: "tasks", view: "list" }); });
+check("date row sits directly above Day Progress inside Tasks", (await page.evaluate(() => {
+  const head = document.getElementById("task-workspace-head");
+  const nav = document.getElementById("date-nav"), progress = head && head.querySelector(".progress-wrap");
+  return !!head && head.contains(nav) && nav.contains(document.getElementById("queue-pill")) &&
+    nav.nextElementSibling?.id === "date-picker-drop" && document.getElementById("date-picker-drop").nextElementSibling === progress;
+})) === true);
+await page.evaluate(() => window.DCC.nav.setActual(true));
+check("Actual keeps the List and adds evidence", (await page.evaluate(() =>
+  document.getElementById("list-view").style.display !== "none" && !document.getElementById("actual-summary").hidden &&
+  document.getElementById("actual-view").style.display === "none")) === true);
+await page.evaluate(() => window.DCC.nav.go({ view: "calendar" }));
+check("Actual keeps the Calendar", (await page.evaluate(() => document.getElementById("calendar-view").style.display === "block")) === true);
+await page.evaluate(() => { window.DCC.nav.setActual(false); window.DCC.nav.go({ view: "list" }); });
 await page.evaluate(() => document.fonts.ready);
 for (const width of [320, 375, 390, 760, 1280, 1600]) {
   await page.setViewportSize({ width, height: 900 });

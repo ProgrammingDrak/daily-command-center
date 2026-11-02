@@ -24,7 +24,8 @@ import { measureQueueCapsule } from "./queue-capsule-smoke.mjs";
 const BASE = process.argv[2] || "http://localhost:3987";
 const USER = process.argv[3] || "drake";
 const PASS = process.argv[4] || "clever123";
-const TABS = ["working-queue", "schedule", "pet-home", "budget"];
+// Panels reached through the navigation adapter (Tasks views, then pages).
+const TABS = ["working-queue", "schedule", "budget"];
 // A FRONTEND smoke test guards frontend health: uncaught JS exceptions and
 // failed loads of real static assets. HTTP-status/transport errors on API and
 // SSE endpoints (404s on dead routes, SSE reconnect 401s/ERR_* in a headless
@@ -67,7 +68,7 @@ check("DCC core present", core === "true", core);
 // every tab activates + renders
 br("viewport", "375x812");
 for (const tab of TABS) {
-  js(`(document.querySelector('[data-tab="${tab}"]')||{}).click?.();'x'`);
+  js(`window.DCC.tabs.select('${tab}');'x'`);
   const active = js(
     `(()=>{const c=document.getElementById('tab-${tab}');` +
     `return c && c.classList.contains('active') ? 'active' : 'inactive';})()`
@@ -80,7 +81,8 @@ for (const tab of TABS) {
 }
 
 // Keep the same capsule geometry gates as the CI browser runner.
-js("document.querySelector('[data-tab=schedule]')?.click();'x'");
+js("window.DCC.nav.go({page:'tasks',view:'list'});'x'");
+check("retired pages have no visible route", js("['meeting-reviews','pet-home','social','vault'].every(n=>!document.querySelector('[data-tab=\"'+n+'\"]'))") === "true");
 js("document.fonts.ready.then(()=>'ready')");
 for (const width of [320, 375, 390, 760, 1280, 1600]) {
   br("viewport", `${width}x900`);

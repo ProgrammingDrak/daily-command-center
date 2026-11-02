@@ -1663,14 +1663,17 @@ const SURFACES = {
   snBadge:         {build:()=>{if(typeof updateSnBadge==="function")updateSnBadge();},          isVisible:()=>true},
   taskMenusBadge:  {build:()=>{if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();},isVisible:()=>true},
   listView:        {build:()=>{if(typeof buildListView==="function")buildListView();},          isVisible:()=>_tabActive("schedule")&&schedView==="list"},
-  actualView:      {build:()=>{if(typeof buildActualView==="function")buildActualView();},      isVisible:()=>_tabActive("schedule")&&schedView==="actual"},
+  // Day review is an explicit panel under the Actual toggle; its summary strip
+  // rides along so day totals stay current with the rows.
+  actualView:      {build:()=>{if(typeof buildActualView==="function")buildActualView();},      isVisible:()=>_tabActive("schedule")&&!!(window.DCC&&DCC.nav&&DCC.nav.reviewOpen())},
+  actualSummary:   {build:()=>{if(typeof renderActualSummary==="function")renderActualSummary();},isVisible:()=>_tabActive("schedule")},
 };
 
 // Named scopes let a hot call site mark only the surfaces it can actually change.
 // "whenever" rides along because the header pill's drawer renders the same itinerary rows
 // (the Triage and Unscheduled halves), whose chevron and work-session buttons call
 // render("schedule").
-const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView","whenever"] };
+const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView","actualSummary","whenever"] };
 
 const _dirty = {};
 function _markDirty(scope){

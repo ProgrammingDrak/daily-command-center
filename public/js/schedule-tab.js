@@ -1,30 +1,112 @@
-// ======== PLAN / ACTUAL TOGGLE ========
-document.querySelectorAll(".svt-btn").forEach(btn=>{
-  btn.addEventListener("click",()=>{
-    schedView=btn.dataset.view;
-    try{localStorage.setItem("dcc-itinerary-view",schedView);}catch(e){}
-    document.querySelectorAll(".svt-btn").forEach(b=>b.classList.toggle("active",b.dataset.view===schedView));
-    document.getElementById("timeline").style.display=schedView==="plan"?"block":"none";
-    const listView=document.getElementById("list-view");
-    if(listView)listView.style.display=schedView==="list"?"flex":"none";
-    const calendarView=document.getElementById("calendar-view");
-    if(calendarView)calendarView.style.display=schedView==="calendar"?"block":"none";
-    document.getElementById("actual-view").style.display=schedView==="actual"?"block":"none";
+// ======== LIST / CALENDAR + ACTUAL ========
+// DCC.nav (tabs.js) owns which view is showing. This applies it to #tab-schedule:
+// List or Calendar is the view; Actual adds recorded evidence to that view, and
+// Day review is an explicit panel above it. Nothing here replaces a view.
+function _schedViewDate(){return (typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state&&__state.date)||null);}
+// Rebuild a container unless it holds a draft; then wait for focus to leave it.
+function _buildUnlessDraft(container,build){
+  if(!container||typeof build!=="function")return;
+  const nav=window.DCC&&DCC.nav;
+  if(nav&&nav.hasDraftIn(container)){
+    if(container._draftDeferred)return;
+    container._draftDeferred=true;
+    const retry=()=>{
+      if(nav.hasDraftIn(container))return;
+      document.removeEventListener("focusout",retry,true);document.removeEventListener("click",retry,true);
+      container._draftDeferred=false;
+      setTimeout(build,0);
+    };
+    document.addEventListener("focusout",retry,true);document.addEventListener("click",retry,true);
+    return;
+  }
+  build();
+}
+function applyScheduleView(navState,prev){
+  const nav=navState||(window.DCC&&DCC.nav?DCC.nav.get():{view:"list",actual:false});
+  if(nav.view!=="list"&&nav.view!=="calendar")return;
+  schedView=nav.view;
+  const timeline=document.getElementById("timeline");if(timeline)timeline.style.display="none";
+  const listView=document.getElementById("list-view");
+  const calendarView=document.getElementById("calendar-view");
+  if(listView)listView.style.display=schedView==="list"?"flex":"none";
+  if(calendarView)calendarView.style.display=schedView==="calendar"?"block":"none";
+  const review=document.getElementById("actual-view");
+  const reviewOpen=!!(window.DCC&&DCC.nav&&DCC.nav.reviewOpen());
+  if(review){review.style.display=reviewOpen?"block":"none";review.hidden=!reviewOpen;}
+  const viewChanged=!prev||prev.view!==nav.view||prev.page!==nav.page;
+  const actualChanged=!prev||prev.actual!==nav.actual;
+  if(viewChanged){
     if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
     if(typeof buildScheduleTriage==="function")buildScheduleTriage();
-    if(schedView==="list")buildListView();
-    if(schedView==="calendar"&&typeof buildItineraryCalendar==="function")buildItineraryCalendar();
-    if(schedView==="actual"){if(typeof buildDayReview==="function")buildDayReview(typeof viewDate!=="undefined"?viewDate:null);else buildActualView();}
-  });
-});
-// The "Actual" tab is rendered by buildDayReview (day-review.js): one
-// blockStore-backed scheduled-vs-actual view that also supports past days and
-// time_entry editing. This shim keeps the legacy entry point working for the
-// callers that still invoke buildActualView() directly (features._doRender,
-// responsibilities refresh) so every path funnels through the one renderer
-// instead of the old scheduled[]-based duplicate that lived here.
+  }
+  renderActualSummary();
+  if(schedView==="list"&&(viewChanged||actualChanged))_buildUnlessDraft(listView,buildListView);
+  if(schedView==="calendar"&&typeof buildItineraryCalendar==="function"){
+    // The Actual toggle repaints the layer only, so an open inspector keeps its fields.
+    if(viewChanged)_buildUnlessDraft(calendarView,()=>buildItineraryCalendar());
+    else if(actualChanged&&window.ItineraryCalendar&&ItineraryCalendar.paintActual)ItineraryCalendar.paintActual();
+  }
+  if(reviewOpen&&typeof buildDayReview==="function")buildDayReview(_schedViewDate());
+}
+window.applyScheduleView=applyScheduleView;
+// Day review stays the planned-vs-actual chart with time_entry editing. It is
+// reached from the Actual summary, never shown in place of List or Calendar.
 function buildActualView(dateStr){
   if(typeof buildDayReview==="function") buildDayReview(dateStr);
+}
+document.addEventListener("dcc:actual-time-saved",()=>{
+  if(!_actualOn())return;
+  renderActualSummary();
+  if(schedView==="list"&&typeof render==="function")render("schedule");
+  if(schedView==="calendar"&&window.ItineraryCalendar&&ItineraryCalendar.build)ItineraryCalendar.build({keepScroll:true});
+});
+
+// ── Actual evidence for the List view ──
+// The planned rows of the viewed day, shaped the way actual-projection.js and
+// Day Review's matcher read them.
+function _actualEvents(){
+  const pool=(typeof scheduled!=="undefined"&&Array.isArray(scheduled))?scheduled:[];
+  return pool.filter(ev=>ev&&!(typeof isDeleted==="function"&&isDeleted(ev))).map(ev=>({
+    id:ev.id,_blockId:ev._blockId||null,title:ev.title||"",start:ev.start||null,end:ev.end||null,
+    meetingBlockId:ev.meetingBlockId||ev.block_id||null,source_id:ev.source_id||null,gcal_event_id:ev.gcal_event_id||null,
+    actualTimeUnknown:ev.actualTimeUnknown===true,actualMinutesFrom:ev.actualMinutesFrom||null
+  }));
+}
+function actualDayProjection(){
+  const A=window.DCC&&DCC.ActualProjection;
+  if(!A)return null;
+  const date=_schedViewDate();
+  const entries=(window.blockStore&&typeof blockStore.getTimeEntries==="function")?blockStore.getTimeEntries(date):[];
+  const sessions=(typeof loadSessions==="function")?(loadSessions()||{}):{};
+  // Same application time zone as the Calendar layer, never the device zone.
+  return A.projectDay(_actualEvents(),entries,{date,sessions,timeZone:A.appTimeZone()});
+}
+function _actualOn(){const nav=window.DCC&&DCC.nav&&DCC.nav.get();return !!(nav&&nav.page==="tasks"&&nav.view!=="queue"&&nav.actual);}
+// Summary strip: day totals, completion review and the explicit Day review panel.
+function renderActualSummary(){
+  const strip=document.getElementById("actual-summary");
+  if(!strip)return;
+  const A=window.DCC&&DCC.ActualProjection;
+  if(!_actualOn()||!A){strip.hidden=true;strip.innerHTML="";return;}
+  const date=_schedViewDate();
+  const day=actualDayProjection();
+  const items=A.describeDay(day);
+  const open=!!(DCC.nav&&DCC.nav.reviewOpen());
+  strip.hidden=false;
+  strip.innerHTML='<div class="actual-summary-stats">'+items.map(item=>'<span class="actual-stat actual-stat--'+item.key+'"><b>'+escHtml(item.value)+'</b> '+escHtml(item.label)+'</span>').join("")+'</div>'+
+    '<p class="actual-summary-note">Actual comes from recorded time entries. Waiting time is not focused effort.'+(schedView==="calendar"?' Bars show recorded segments; minutes without a clock time are listed per day.':'')+'</p>'+
+    '<div class="actual-summary-actions"><button type="button" data-completion-review data-review-date="'+escHtml(date||"")+'">Did these happen?</button>'+
+    '<button type="button" class="actual-review-toggle" aria-expanded="'+open+'" aria-controls="actual-view">'+(open?'Hide day review':'Day review')+'</button></div>';
+  strip.querySelector(".actual-review-toggle").addEventListener("click",()=>{if(DCC.nav)DCC.nav.setReviewOpen(!DCC.nav.reviewOpen());});
+}
+window.renderActualSummary=renderActualSummary;
+window.actualDayProjection=actualDayProjection;
+function _actualRowHtml(ev,projection){
+  const A=window.DCC&&DCC.ActualProjection;
+  if(!A||!projection||!projection.byId.has(ev.id))return "";
+  const said=A.describeTask(projection.byId.get(ev.id));
+  return '<span class="it-actual it-actual--'+said.tone+'" title="Recorded actual time">'+escHtml(said.text)+'</span>'+
+    '<button type="button" class="it-actual-edit" data-actual-edit="'+escHtml(ev.id)+'" aria-label="Add or edit actual time for '+escHtml(ev.title||"task")+'">+ time</button>';
 }
 
 // Subtask row helpers (subtaskMoveState / moveSubtaskSibling / startSubtaskTitleEdit /
@@ -741,7 +823,9 @@ function createTaskListRowRenderer(context){
       (typeof triageTaskSourceActionsHtml==="function"?triageTaskSourceActionsHtml(ev):"")+
       (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
       (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
-      (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'');
+      (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'')+
+      // Actual toggle: evidence only, from the List view's day projection.
+      (context.actual&&!isUnfRow?_actualRowHtml(ev,context.actual):'');
     const el=renderItineraryListRow(ev,{
       done:isDoneRow,
       draggable:movable,
@@ -774,6 +858,7 @@ function createTaskListRowRenderer(context){
         const pf=rowEl.querySelector(".prep-flag");if(pf)pf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev,{defaultTab:"prep"});});
         const rf=rowEl.querySelector(".recap-flag");if(rf)rf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev,{defaultTab:"recap"});});
         const bb=rowEl.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
+        const ae=rowEl.querySelector("[data-actual-edit]");if(ae)ae.addEventListener("click",e=>{e.stopPropagation();if(typeof window.editTimeEntries==="function")window.editTimeEntries(ev.id,ev.title,_schedViewDate(),ae);});
       }
     });
     return el;
@@ -956,7 +1041,8 @@ function buildListView(){
     wrap.appendChild(el);
   }
 
-  const row=createTaskListRowRenderer({pool:unfPool,isTodayView});
+  const row=createTaskListRowRenderer({pool:unfPool,isTodayView,actual:_actualOn()?actualDayProjection():null});
+  if(_actualOn())renderActualSummary();
   function emitNode(node,idx,mode){return row(node.ev,_isSubRow(node)?0:idx,mode,node);}
   // Idle-gap marker between two spaced-out timed rows (fixed tiny height; see
   // .it-list-gap CSS). Label via ms() -> "45m" / "1h 30m".

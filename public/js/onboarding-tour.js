@@ -25,9 +25,9 @@
       selector: ".progress-wrap"
     },
     {
-      title: "Work The Itinerary",
-      body: "The itinerary is the main operating view. Complete tasks, adjust timing, add notes, or push work when the day changes shape.",
-      selector: "#tab-schedule"
+      title: "Work Your Tasks",
+      body: "Tasks has three views: Working Queue for what you are doing now, List for the day in order, and Calendar for the week. Turn on Actual in List or Calendar to see recorded time.",
+      selector: "#task-view-bar"
     },
     {
       title: "Add And Organize Tasks",
@@ -45,8 +45,8 @@
       selector: "#active-work-dock"
     },
     {
-      title: "Use The Supporting Tabs",
-      body: "Brief lives inside Save status. Delegated, Pet Home, and Slots support daily work.",
+      title: "Move Between Pages",
+      body: "Tasks, Budget, and Workouts & meals live at the top. The dot beside the settings cog shows sync status; select it for details and the Daily Brief.",
       selector: "#tab-bar"
     },
     {

@@ -691,7 +691,11 @@
   // Mycelium tab active, drop out of canvas + into the explorer reading surface,
   // then select + load. loadDetail fetches the node directly, so it works even
   // before the tab's node list finishes reloading.
+  // Mycelium is retired from navigation. Note-opening bridges stay inert there
+  // instead of switching the page; the vault, its APIs and journals remain.
+  const vaultRetired = () => !!(window.DCC && DCC.nav && DCC.nav.isRetired("vault"));
   function openSlug(slug) {
+    if (vaultRetired()) return;
     const btn = document.getElementById("vault-tab-btn");
     if (btn && !vaultTabActive()) btn.click();
     if (inCanvas()) teardownCanvas();
@@ -710,7 +714,7 @@
   // switch to the view's surface. setView renders the surface (explorer filters by
   // activeType; the timeline shows the whole axis).
   function applyView(view) {
-    if (!view) return;
+    if (!view || vaultRetired()) return;
     const btn = document.getElementById("vault-tab-btn");
     if (btn && !vaultTabActive()) btn.click();
     if (inCanvas()) teardownCanvas();
@@ -993,6 +997,7 @@
     });
 
     document.addEventListener("vault-changed", () => {
+      if (vaultRetired()) return;
       loadStatus();
       loadList();
       if (selectedSlug) loadDetail(selectedSlug);
@@ -1009,7 +1014,7 @@
       if (p.get("vault_share") === "ok") {
         window.DCC.toast("Shared to your vault inbox");
         const btn = document.getElementById("vault-tab-btn");
-        if (btn) btn.click();
+        if (btn && !vaultRetired()) btn.click();
         history.replaceState(null, "", location.pathname);
       } else if (p.get("vault_share") === "err") {
         window.DCC.toast("Share failed to save", "error");
@@ -1017,6 +1022,7 @@
       }
     } catch {}
 
-    loadOntology().then(loadStatus).then(loadList);
+    // No boot read for a retired, never-shown panel.
+    if (!vaultRetired()) loadOntology().then(loadStatus).then(loadList);
   });
 })();

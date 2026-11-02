@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
-/* global window, document, getComputedStyle */
+/* global window, document, getComputedStyle, location */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -15,7 +15,9 @@ const user = process.argv[3] || "drake";
 const pass = process.argv[4] || "clever123";
 const snapshotDir = path.join(root, "test-results", "ui-review");
 const widths = [320, 480, 760, 1024, 1440];
-const tabs = ["schedule", "pet-home", "budget", "social", "vault"];
+// Panels reached through the navigation adapter. Retired pages are checked separately.
+const tabs = ["working-queue", "schedule", "budget", "activity"];
+const selectTab = (page, tab) => page.evaluate((name) => window.DCC.tabs.select(name), tab);
 const candidates = [
   process.env.CHROME_PATH,
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
@@ -113,7 +115,7 @@ if (await login(page)) {
     await page.setViewportSize({ width, height: width <= 480 ? 900 : 1000 });
     check(`closed Task Manager stays hidden at ${width}`, await page.locator("#tasks-drawer .side-drawer-body").evaluate((node) => getComputedStyle(node).visibility === "hidden" || node.getBoundingClientRect().left >= window.innerWidth || node.getBoundingClientRect().top >= window.innerHeight));
     for (const tab of tabs) {
-      await page.locator(`[data-tab="${tab}"]`).click();
+      await selectTab(page, tab);
       await page.waitForTimeout(80);
       check(`${tab} activates at ${width}`, await page.locator(`#tab-${tab}`).evaluate((node) => node.classList.contains("active")));
       await noPageOverflow(page, `${tab} at ${width}`);
@@ -127,7 +129,7 @@ if (await login(page)) {
   }
 
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.locator('[data-tab="schedule"]').click();
+  await selectTab(page, "schedule");
 
   const utilityButton = page.locator("#dcc-settings-button");
   await utilityButton.focus();
@@ -264,10 +266,15 @@ if (await login(page)) {
     }
   }
 
-  for (const view of ["list", "calendar", "actual"]) {
-    await page.locator(`[data-view="${view}"]`).first().click();
-    check(`${view} schedule view activates`, await page.locator(`[data-view="${view}"]`).first().evaluate((node) => node.classList.contains("active")));
+  for (const view of ["queue", "list", "calendar"]) {
+    await page.locator(`[data-task-view="${view}"]`).click();
+    check(`${view} task view activates`, await page.locator(`[data-task-view="${view}"]`).getAttribute("aria-selected") === "true");
   }
+  await page.locator("#task-actual-toggle").click();
+  check("Actual is a toggle on the Calendar", await page.locator("#task-actual-toggle").getAttribute("aria-pressed") === "true" && await page.locator("#calendar-view").isVisible());
+  await page.locator('[data-task-view="list"]').click();
+  check("Actual stays on for the List", await page.locator("#list-view").isVisible() && await page.locator("#actual-summary").isVisible());
+  await page.locator("#task-actual-toggle").click();
 
   await page.locator('[data-tab="budget"]').click();
   check("Budget exposes five interactive financial cards", await page.locator(".bt-finance-card").count() === 5);
@@ -340,7 +347,7 @@ if (await login(page)) {
   await page.waitForTimeout(80);
   const rewardLayers = await page.evaluate(() => ({
     drawer: Number.parseInt(getComputedStyle(document.querySelector(".rv-backdrop")).zIndex, 10),
-    tabs: Number.parseInt(getComputedStyle(document.querySelector(".tabs")).zIndex, 10),
+    tabs: Number.parseInt(getComputedStyle(document.querySelector("#tab-bar")).zIndex, 10) || 0,
     header: Number.parseInt(getComputedStyle(document.querySelector(".header")).zIndex, 10),
     blur: getComputedStyle(document.querySelector(".rv-backdrop")).backdropFilter,
     legacyOpen: document.body.classList.contains("dcc-legacy-overlay-open"),
@@ -350,21 +357,19 @@ if (await login(page)) {
   check("Reward Vault registers as a blocking legacy overlay", rewardLayers.legacyOpen, JSON.stringify(rewardLayers));
   await page.locator('[data-act="vault-close"]').click();
 
-  await page.locator('[data-tab="social"]').click();
-  for (const section of ["publish", "inbox", "friends", "feed", "access"]) {
-    await page.locator(`[data-social-tab="${section}"]`).click();
-    check(`Social ${section} opens`, await page.locator(".social-grid").evaluate((node, value) => node.dataset.socialActive === value, section));
+  // Retired pages: no visible route; old links land on Tasks with a notice.
+  for (const retired of ["meeting-reviews", "pet-home", "social", "vault"]) {
+    check(`${retired} has no navigation button`, await page.locator(`[data-tab="${retired}"]`).count() === 0);
+    await page.goto(`${base}/?tab=${retired}`, { waitUntil: "load" });
+    await page.waitForFunction(() => Boolean(window.DCC?.nav));
+    check(`${retired} link routes to Tasks`, await page.evaluate(() => document.getElementById("tab-working-queue").classList.contains("active") && new URL(location.href).searchParams.get("tab") === "tasks"));
   }
-
-  await page.locator('[data-tab="vault"]').click();
-  for (const view of ["explorer", "timeline", "graph"]) {
-    await page.locator(`#vault-viewtoggle [data-view="${view}"]`).click();
-    check(`Mycelium ${view} opens`, await page.locator(`#vault-viewtoggle [data-view="${view}"]`).evaluate((node) => node.classList.contains("active")));
-  }
+  await page.goto(`${base}/`, { waitUntil: "load" });
+  await page.waitForFunction(() => Boolean(window.DCC?.overlay));
 
   for (const kind of ["popover", "modal", "drawer", "sheet"]) {
     await page.evaluate((overlayKind) => {
-      window.__uiReviewTrigger = document.getElementById("vault-tab-btn");
+      window.__uiReviewTrigger = document.getElementById("tasks-page-btn");
       window.__uiReviewTrigger.focus();
       window.__uiReviewOverlay = window.DCC.overlay.open({ kind: overlayKind, title: `${overlayKind} review`, body: "Deterministic review content", anchor: window.__uiReviewTrigger, actions: [{ label: "Close", kind: "primary" }] });
     }, kind);
@@ -372,11 +377,11 @@ if (await login(page)) {
     await page.keyboard.press("Escape");
     await page.waitForFunction((overlayKind) => !document.querySelector(`[data-overlay-kind="${overlayKind}"]`), kind);
     check(`${kind} closes`, await page.locator(`[data-overlay-kind="${kind}"]`).count() === 0);
-    check(`${kind} restores focus`, await page.evaluate(() => document.activeElement?.id === "vault-tab-btn"));
+    check(`${kind} restores focus`, await page.evaluate(() => document.activeElement?.id === "tasks-page-btn"));
   }
 
   await page.evaluate(() => {
-    const trigger = document.getElementById("vault-tab-btn");
+    const trigger = document.getElementById("tasks-page-btn");
     window.__uiReviewFirst = window.DCC.overlay.open({ kind: "modal", title: "First", body: "First overlay", anchor: trigger });
     window.__uiReviewSecond = window.DCC.overlay.open({ kind: "drawer", title: "Second", body: "Replacement overlay", anchor: trigger });
   });
@@ -386,19 +391,21 @@ if (await login(page)) {
   check("replacement overlay cleanup restores the page", await page.evaluate(() => !window.DCC.overlay.activeBlocking && !document.querySelector(".header")?.inert));
 
   await page.setViewportSize({ width: 320, height: 900 });
-  await page.locator('[data-tab="schedule"]').click();
-  const mobileSticky = await page.evaluate(async () => {
+  await selectTab(page, "schedule");
+  const mobileHeader = await page.evaluate(async () => {
     const pill = document.getElementById("loose-ends-pill");
     pill.hidden = false;
     await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
     const header = document.querySelector(".header").getBoundingClientRect();
-    const tabs = document.querySelector(".tabs").getBoundingClientRect();
+    const head = document.getElementById("task-workspace-head").getBoundingClientRect();
+    const shown = (id) => document.getElementById(id).getClientRects().length > 0;
     pill.hidden = true;
-    return { headerBottom: header.bottom, tabsTop: tabs.top };
+    return { headerBottom: header.bottom, headTop: head.top, clock: shown("clock"), cog: shown("dcc-settings-button"), dot: shown("save-status") };
   });
-  check("mobile sticky tabs clear a wrapped header", mobileSticky.tabsTop >= mobileSticky.headerBottom - 1, JSON.stringify(mobileSticky));
+  check("mobile Tasks head clears the compact header", mobileHeader.headTop >= mobileHeader.headerBottom - 1, JSON.stringify(mobileHeader));
+  check("mobile keeps the clock, cog and sync dot", mobileHeader.clock && mobileHeader.cog && mobileHeader.dot, JSON.stringify(mobileHeader));
 
-  await page.locator('[data-tab="schedule"]').click();
+  await selectTab(page, "schedule");
 }
 
 for (const route of ["/login", "/admin", "/public-todo.html?token=review-invalid", "/public-pet.html?token=review-invalid"]) {
