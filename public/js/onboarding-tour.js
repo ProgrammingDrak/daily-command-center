@@ -26,7 +26,7 @@
     },
     {
       title: "Work Your Tasks",
-      body: "Tasks has three views: Working Queue for what you are doing now, List for the day in order, and Calendar for the week. Turn on Actual in List or Calendar to see recorded time.",
+      body: "Tasks has three views: Working Queue for what you are doing now, Itinerary for the day in order, and Calendar for the week. Turn on Actual in Itinerary or Calendar to see recorded time.",
       selector: "#task-view-bar"
     },
     {
