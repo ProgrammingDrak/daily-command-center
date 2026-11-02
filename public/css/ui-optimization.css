@@ -932,24 +932,24 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 
 /* Let date navigation use the full header width instead of wrapping under the
    title while the space beneath the utilities stays empty. Keep the existing
-   DOM order, control handlers, mobile layout and measured sticky-tab offset. */
+   DOM order, control handlers, mobile/glasses layouts and measured sticky-tab offset. */
 @media not all and (max-width: 760px) {
-  .header {
+  body:not(.device-glasses) .header {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     column-gap: var(--sp-4);
     row-gap: 0;
   }
-  .header > div:first-child { display: contents; }
-  .header h1 { grid-column: 1; grid-row: 1; }
-  .header .hdr-sub { grid-column: 1; grid-row: 2; }
-  .header .date-nav {
+  body:not(.device-glasses) .header > div:first-child { display: contents; }
+  body:not(.device-glasses) .header h1 { grid-column: 1; grid-row: 1; }
+  body:not(.device-glasses) .header .hdr-sub { grid-column: 1; grid-row: 2; }
+  body:not(.device-glasses) .header .date-nav {
     grid-column: 1 / -1;
     grid-row: 3;
     margin-top: var(--sp-2);
   }
-  .header .date-picker-drop { top: 100%; left: var(--sp-4); }
-  .header > div:last-child {
+  body:not(.device-glasses) .header .date-picker-drop { top: 100%; left: var(--sp-4); }
+  body:not(.device-glasses) .header > div:last-child {
     grid-column: 2;
     grid-row: 1 / 3;
     align-self: center;
