@@ -4,13 +4,35 @@ Code deployment, public protocol ingress, account consent, and host lifecycle re
 
 ## What exists
 
-The baseline account-scoped OAuth/MCP implementation and Working Queue coordinator were observed deployed. The new completion/reconciliation and queue-policy extension is implemented locally; verify the deployed revision before assuming these tools or behaviors are available. `dcc_delegate` can link or explicitly create a canonical task and report meaningful progress once an authorized host calls it. The transport-neutral adapter in `lib/delegated-work-adapter.js` preserves exact pending events in a connection-scoped durable journal. It does not install an assistant hook, watch worktrees, or acquire credentials. See [delegated work reporting](delegated-work.md).
+The baseline account-scoped OAuth/MCP implementation and Working Queue coordinator were observed deployed. The completion/reconciliation and queue-policy extension shipped in PR448. Verify the deployed revision before assuming these tools or behaviors are available. `dcc_delegate` can link or explicitly create a canonical task and report meaningful progress once an authorized host calls it. The transport-neutral adapter in `lib/delegated-work-adapter.js` preserves exact pending events in a connection-scoped durable journal. It does not install an assistant hook, watch worktrees, or acquire credentials. See [delegated work reporting](delegated-work.md).
 
 Remote access can remain disabled independently of the local queue coordinator. Disabled machine endpoints return HTTP 503 with `conversation_remote_disabled`; they must not masquerade as a login HTML page. While the entire remote surface is off, its connection-management page is unavailable too. Turning the surface off is not the same as revoking stored grants.
 
 ## Read-only ingress check
 
 Run `node scripts/check-conversation-readiness.js https://your-dcc-origin.example` against the approved canonical origin. It sends no credentials, refuses redirects, checks health, resource/authorization metadata and the unauthenticated MCP challenge, and exits nonzero when setup is required. `ingress_ready` only means those protocol checks passed. Account connection and lifecycle-hook fields deliberately remain `not_verified`.
+
+## Current pairing prerequisite
+
+A browser review found that a consent page with `form-action 'self'` blocks the
+external OAuth callback after its form POST redirects. The prepared fix permits
+only the origin of the already validated, exact registered callback on that
+consent page. Connection-management forms retain self-only submission. Deploy
+and verify that fix before pairing; exact redirect allowlisting, PKCE S256,
+CSRF, resource binding and scope enforcement remain required.
+
+The current ChatGPT custom MCP form was verified to expose a user-defined public
+OAuth client, token endpoint authentication `none`, and explicit default/base
+scope controls. An unsaved form can display its callback before registration.
+Copy that current value at activation time; do not persist a transient draft
+callback in shared documentation or assume another account uses the same one.
+No client identifier is configured or created merely by inspecting this form.
+
+The production coordinator and remote gate are independent. Observed deployment
+flags were coordinator enabled and remote disabled; no conversation origin or
+client allowlist appeared in the service variable list. Recheck current settings
+before an approved change, without revealing unrelated secret values. Browser
+operator access can work while a separate CLI session remains unauthenticated.
 
 ## Operator setup, requiring specific approval
 

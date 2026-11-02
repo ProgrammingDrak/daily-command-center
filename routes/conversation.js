@@ -375,10 +375,13 @@ module.exports = function mount(app, ctx, config = {}) {
     )
       throw M.fail("Invalid consent request", 403);
   }
-  function page(res, title, body) {
+  function page(res, title, body, validatedRedirectUri) {
+    // The browser applies form-action to the post-consent redirect too. Only
+    // the exact registered request's origin is allowed on this consent page.
+    const callbackOrigin = validatedRedirectUri ? " " + new URL(validatedRedirectUri).origin : "";
     res.set(
       "Content-Security-Policy",
-      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'" + callbackOrigin + "; frame-ancestors 'none'; base-uri 'none'"
     );
     res.set("Referrer-Policy", "same-origin");
     res
@@ -428,7 +431,8 @@ module.exports = function mount(app, ctx, config = {}) {
       page(
         res,
         "Connect " + request.clientName,
-        `<p>Signed in as <strong>${escape(req.session.username || "DCC account " + req.session.userId)}</strong>, workspace <strong>${escape(req.session.workspaceId)}</strong>.</p><p>This client requests:</p><ul>${request.scopes.map((s) => "<li>" + escape(descriptions[s]) + "</li>").join("")}</ul><p>You can disconnect at any time from Conversational connections. This consent does not change existing tasks.</p><form method="post" action="/oauth/dcc/authorize"><input type="hidden" name="csrf" value="${escape(req.session.conversationCsrf)}"><button name="decision" value="allow">Allow access</button><button name="decision" value="deny">Cancel</button></form>`
+        `<p>Signed in as <strong>${escape(req.session.username || "DCC account " + req.session.userId)}</strong>, workspace <strong>${escape(req.session.workspaceId)}</strong>.</p><p>This client requests:</p><ul>${request.scopes.map((s) => "<li>" + escape(descriptions[s]) + "</li>").join("")}</ul><p>You can disconnect at any time from Conversational connections. This consent does not change existing tasks.</p><form method="post" action="/oauth/dcc/authorize"><input type="hidden" name="csrf" value="${escape(req.session.conversationCsrf)}"><button name="decision" value="allow">Allow access</button><button name="decision" value="deny">Cancel</button></form>`,
+        request.redirectUri
       );
     })
   );
