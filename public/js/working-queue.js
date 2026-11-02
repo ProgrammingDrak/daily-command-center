@@ -32,6 +32,53 @@
   function send(body){return navigator.locks?.request?navigator.locks.request(key+':write',()=>sendUnlocked(body)):sendUnlocked(body);}
   const warn=error=>DCC.toast(error.message||'Queue update failed','error');
   function activate(id){if(DCC.nav)DCC.nav.go({page:'tasks',view:'queue'});else document.querySelector('.tab[data-tab="working-queue"]')?.click();render();if(id)document.querySelector('[data-queue-id="'+CSS.escape(id)+'"]')?.scrollIntoView({block:'nearest',behavior:DCC.reducedMotion?.()?'auto':'smooth'});}
+  // Independent columns: each lane sizes to its own content. Stacked keeps the
+  // DOM (and focus) order Foreground, Needs You, Priority, Background.
+  const narrow=window.matchMedia('(max-width: 700px)');
+  const LANES={stacked:[['wq-foreground','wq-needs'],['wq-next','wq-background']],columns:[['wq-foreground','wq-next'],['wq-needs','wq-background']]};
+  function layout(){return LANES[narrow.matches||document.body.classList.contains('device-glasses')||new URLSearchParams(location.search).get('device')==='glasses'?'stacked':'columns'];}
+  // Breakpoint change: move the existing lane nodes (no re-render), then
+  // return focus to the control that moving the lane may have blurred.
+  function arrange(){
+    const root=document.getElementById('working-queue-root'),cols=root?.querySelectorAll('.wq-grid > .wq-col');if(!cols||cols.length!==2)return;
+    const focused=document.activeElement,inside=focused&&root.contains(focused);let moved=false;
+    layout().forEach((names,i)=>names.forEach((name,j)=>{const lane=root.querySelector('.wq-grid .wq-lane.'+name);if(lane&&cols[i].children[j]!==lane){cols[i].insertBefore(lane,cols[i].children[j]||null);moved=true;}}));
+    if(moved&&inside&&document.activeElement!==focused)focused.focus({preventScroll:true});
+  }
+  narrow.addEventListener('change',arrange);
+  const appZone=()=>window.DCCCompletedQueueFilter.select([],'today',Date.now(),state.timeZone).timeZone;
+  function when(ms,timeZone){return new Intl.DateTimeFormat(undefined,{timeZone,weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}).format(ms);}
+  // Why Return to Priority is unavailable, or '' when it is allowed.
+  function returnHold(item){
+    if(item.execution?.state==='running')return 'Stop the worker and record its stopped state before returning to Priority.';
+    if(item.snoozed)return 'Snoozed requests wait in Background until their check-back time. Dismiss the snooze'+(item.needsReview?' and resolve the '+(item.blocked?'block':'review request'):'')+' before returning to Priority.';
+    if(item.needsReview)return (item.blocked?'Unblock this task':'Resolve the review request')+' before returning to Priority.';
+    if(item.needsYou)return 'Resolve the review request or due check-back before returning to Priority.';
+    return '';
+  }
+  // Snooze is waiting only: it never starts a worker or focused time. One
+  // command per dialog, so a transport retry resends the exact same envelope.
+  function snooze(item){
+    const zone=appZone();
+    const body=form('<p>'+esc(item.task.properties.title||'Task')+'</p><label>Snooze for<select data-minutes><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="240">4 hours</option><option value="1440">24 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes (1–1440)<input type="number" min="1" max="1440" value="45"></label><p class="wq-time" data-snooze-preview></p><p class="wq-time">It waits in Background, then returns to Needs You. Snoozing does not start or stop workers and adds no focused time. The original reason and details stay attached. If the app is closed then, it appears on your next visit; no closed-browser notification is sent.</p>');
+    const select=body.querySelector('[data-minutes]'),custom=body.querySelector('[data-custom] input');
+    const minutes=()=>select.value==='custom'?Number(custom.value):Number(select.value);
+    let command=null;
+    function preview(){const m=minutes(),ok=Number.isInteger(m)&&m>=1&&m<=1440,from=command?Date.parse(command.at):Date.now();body.querySelector('[data-snooze-preview]').textContent=ok?'Snoozed until '+when(from+m*60000,zone):'Choose 1–1440 minutes.';}
+    select.addEventListener('change',()=>{body.querySelector('[data-custom]').hidden=select.value!=='custom';preview();});custom.addEventListener('input',preview);preview();
+    return modal(item.snoozed?'Snooze again':'Snooze',body,async()=>{
+      if(!command){
+        const m=minutes();if(!Number.isInteger(m)||m<1||m>1440)throw new Error('Choose 1–1440 minutes.');
+        command=envelope('queue-snooze',{taskId:item.task.id,remindMinutes:m,...(item.generation?{generation:item.generation}:{})});
+        body.querySelectorAll('select,input').forEach(el=>{el.disabled=true;});preview();
+      }
+      try {await send(command);}
+      catch(error){
+        if([400,403,404,409].includes(error.status))throw new Error(error.message+' Close this dialog and review the current task before snoozing again.');
+        throw new Error('Snooze not confirmed. Retry uses the same saved update. '+error.message);
+      }
+    },'Snooze');
+  }
   function button(action,label,id,extra=''){return '<button type="button" data-queue-action="'+action+'" data-task-id="'+esc(id||'')+'" '+extra+'>'+label+'</button>';}
   function pathFor(task,index){const parts=[],seen=new Set();let t=task;while(t&&!seen.has(t.id)){seen.add(t.id);parts.unshift(t.title||'Task');t=index.get(DCC.TaskModel.parentIdOf(t));}return parts.join(' › ');}
   function brief(value, limit=150){const text=String(value||'').replace(/\s+/g,' ').trim(), sentence=text.match(/^.{1,150}?[.!?](?:\s|$)/)?.[0]?.trim()||text;return sentence.length>limit?sentence.slice(0,limit-1).trimEnd()+'…':sentence;}
@@ -58,23 +105,28 @@
     function card(item){
       const row=item.task,task=DCC.TaskModel.fromBlock(row),foreground=item.status==='foreground',completed=item.status==='completed';
       const elapsed=item.backgroundSince?Math.max(0,Math.floor((Date.now()-Date.parse(item.backgroundSince))/60000)):0;
-      const reminder=item.dueAt?(Date.parse(item.dueAt)<=Date.now()?'Check back now':'Check back in '+Math.max(1,Math.ceil((Date.parse(item.dueAt)-Date.now())/60000))+'m'):'';
+      const reminder=item.snoozed?'':item.dueAt?(Date.parse(item.dueAt)<=Date.now()?'Check back now':'Check back in '+Math.max(1,Math.ceil((Date.parse(item.dueAt)-Date.now())/60000))+'m'):'';
       const actual=item.actualMinutes==null?'Focused actuals unknown':item.actualMinutes+'m focused saved';
       const activeMinutes=foreground?Math.max(0,Math.floor((Date.now()-Date.parse(row.properties.startedAt))/60000)):0;
       let controls=completed?button('remove','Remove',row.id):foreground?button('background','Set aside / check back',row.id)+button('pause','Pause',row.id)+button('complete','Complete',row.id):button('focus','Bring forward',row.id)+button('complete','Complete',row.id);
       if(!completed){if(!foreground&&!['background','blocked'].includes(item.status))controls+=button('background','Set aside / check back',row.id);controls+=button('priority','Priority: '+esc(item.taskPriority||'Medium'),row.id)+button('note','Context',row.id);if(!foreground)controls+=button('up','↑',row.id,'aria-label="Move up" title="Move within this lane and priority"')+button('down','↓',row.id,'aria-label="Move down" title="Move within this lane and priority"')+button(item.blocked?'unblock':'block',item.blocked?'Unblock':'Blocked',row.id)+button('remove','Remove',row.id);}
-      if(!completed&&!foreground)controls+=button('return','Return to Priority',row.id,item.execution?.state==='running'||item.needsYou?'disabled aria-describedby="queue-return-'+esc(row.id)+'"':'');
-      if(item.dueAt)controls+=button('snooze','Snooze 5m',row.id)+button('dismiss','Dismiss check-back',row.id);
+      const held=!completed&&!foreground&&returnHold(item);
+      if(!completed&&!foreground)controls+=button('return','Return to Priority',row.id,held?'disabled aria-describedby="queue-return-'+esc(row.id)+'"':'');
+      // Every Needs You item can be snoozed; a snoozed item can be snoozed again.
+      if(!completed&&!foreground&&(item.needsYou||item.snoozed||item.dueAt))controls+=button('snooze',item.snoozed?'Snooze again…':'Snooze…',row.id,'aria-haspopup="dialog"');
+      if(item.dueAt)controls+=button('dismiss',item.snoozed?'Dismiss snooze':'Dismiss check-back',row.id);
       else if(['background','blocked'].includes(item.status))controls+=button('remind','Set check-back',row.id);
+      const snoozedHtml=item.snoozed?'<p class="wq-attention"><time datetime="'+esc(item.snoozedUntil)+'">Snoozed until '+esc(when(Date.parse(item.snoozedUntil),completionView.timeZone))+'</time></p><p class="wq-time">Attention snoozed · not focused time. Returns to Needs You then'+(item.needsReview?' · still '+(item.blocked?'blocked':'awaiting your review'):'')+'.'+(item.execution?.state==='running'?' A worker still reports running; snoozing does not stop it.':'')+'</p>':'';
       controls+=button('details','Open task',row.id);
       const finished=item.status==='completed'?(Number.isFinite(item.completedAt)?'<p class="wq-time"><time datetime="'+new Date(item.completedAt).toISOString()+'">Completed '+esc(new Intl.DateTimeFormat(undefined,{timeZone:completionView.timeZone,dateStyle:'medium',timeStyle:'short'}).format(item.completedAt))+'</time></p>':'<p class="wq-time">Completion time unavailable</p>'):'';
       const readingUrl=DCC.safeUrlAttr?.(row.properties?.readingSession?.url||'');
       if(readingUrl)controls+='<a href="'+readingUrl+'" rel="noreferrer">Open book in QuietShelf</a>';
-      return '<article class="wq-card '+(foreground?'wq-focus':'')+'" data-queue-id="'+esc(row.id)+'" tabindex="0" draggable="'+(!foreground&&!completed)+'"><div class="wq-card-top"><h3>'+esc(pathFor(task,index))+'</h3><span class="wq-status">'+esc(item.needsYou?'Needs you':item.status==='queued'?'Priority':item.status)+'</span></div><p class="wq-time">'+esc(foreground?activeMinutes+'m this session · '+actual:actual+(item.backgroundSince?' · '+elapsed+'m waiting':''))+'</p>'+(reminder?'<p class="wq-attention">'+esc(reminder)+'</p>':'')+finished+((!completed&&!foreground&&(item.execution?.state==='running'||item.needsYou))?'<p class="wq-time" id="queue-return-'+esc(row.id)+'">'+esc(item.execution?.state==='running'?'Stop the worker and record its stopped state before returning to Priority.':'Resolve the review request or due check-back before returning to Priority.')+'</p>':'')+contextHtml(item)+'<div class="wq-actions">'+controls+'</div>'+(foreground&&window.DCCWorkSessions?.checkInHtml?window.DCCWorkSessions.checkInHtml(task,Date.now()):'')+'</article>';
+      return '<article class="wq-card '+(foreground?'wq-focus':'')+'" data-queue-id="'+esc(row.id)+'" tabindex="0" draggable="'+(!foreground&&!completed)+'"><div class="wq-card-top"><h3>'+esc(pathFor(task,index))+'</h3><span class="wq-status">'+esc(item.needsYou?'Needs you':item.snoozed?'Snoozed':item.status==='queued'?'Priority':item.status)+'</span></div><p class="wq-time">'+esc(foreground?activeMinutes+'m this session · '+actual:actual+(item.backgroundSince?' · '+elapsed+'m waiting':''))+'</p>'+(reminder?'<p class="wq-attention">'+esc(reminder)+'</p>':'')+snoozedHtml+finished+(held?'<p class="wq-time" id="queue-return-'+esc(row.id)+'">'+esc(held)+'</p>':'')+contextHtml(item)+'<div class="wq-actions">'+controls+'</div>'+(foreground&&window.DCCWorkSessions?.checkInHtml?window.DCCWorkSessions.checkInHtml(task,Date.now()):'')+'</article>';
     }
     function lane(title,rows,empty,cls='',policy='') {return '<section class="wq-lane '+cls+'"><div class="wq-heading"><h2>'+title+' <small>'+rows.length+'</small></h2><details class="wq-help" data-queue-help="'+policy+'"><summary aria-label="About '+title+'">ⓘ</summary><p>'+esc(window.DCCQueuePolicy.tips[policy])+'</p></details></div>'+(cls==='wq-next'?'<p class="wq-empty">High → Medium → Low. Move tasks within a priority; change Priority to move between levels.</p>':'')+(rows.length?rows.map(card).join(''):'<p class="wq-empty">'+empty+'</p>')+'</section>';}
     const fg=all.filter(i=>i.status==='foreground'),needs=all.filter(i=>i.needsYou&&i.status!=='foreground'),background=all.filter(i=>i.status==='background'&&!i.needsYou),upNext=DCC.TaskPriority.group(all.filter(i=>i.status==='queued'&&!i.needsYou).map(i=>({id:i.task.id,taskPriority:i.taskPriority,item:i}))).flatMap(group=>group.tasks.map(row=>row.item));
-    root.innerHTML='<header class="wq-header"><div><h1>Working Queue</h1><p>One foreground task. Active workers in Background; inactive work in Priority. List and Calendar plan when.</p></div>'+button('add','Add tasks')+'</header><p class="wq-sync" role="status">'+esc(sending?'Saving…':pending?'Update saved on this device; awaiting confirmation.':problem?'Offline or unavailable: '+problem:'Synced · waiting time is not focused effort')+'</p>'+(pending?button('retry','Retry saved update'):'')+(conflict?'<p class="wq-conflict">'+esc(conflict.message)+' Your attempted change is retained. Review current work before trying again. '+button('conflict','Review attempted change')+button('clear-conflict','Dismiss conflict')+'</p>':'')+(state.otherWorkspaceForeground?'<p class="wq-conflict">Work is active in another workspace. Pause it there before bringing a task forward here.</p>':'')+'<div class="wq-grid">'+lane('Foreground',fg,'Choose a task below to begin focused work.','wq-foreground','foreground')+lane('Needs You',needs,'No reported review actions or manual check-backs due.','wq-needs','needs')+lane('Priority Queue',upNext,'No inactive tasks in your queue. Add existing tasks to prioritize them.','wq-next','priority')+lane('Background',background,'No workers currently report active execution.','wq-background','background')+'</div>'+completedHtml();
+    const lanes={'wq-foreground':lane('Foreground',fg,'Choose a task below to begin focused work.','wq-foreground','foreground'),'wq-needs':lane('Needs You',needs,'No reported review actions or manual check-backs due.','wq-needs','needs'),'wq-next':lane('Priority Queue',upNext,'No inactive tasks in your queue. Add existing tasks to prioritize them.','wq-next','priority'),'wq-background':lane('Background',background,'No active workers or snoozed requests.','wq-background','background')};
+    root.innerHTML='<header class="wq-header"><div><h1>Working Queue</h1><p>One foreground task. Active workers and snoozed requests in Background; inactive work in Priority. List and Calendar plan when.</p></div>'+button('add','Add tasks')+'</header><p class="wq-sync" role="status">'+esc(sending?'Saving…':pending?'Update saved on this device; awaiting confirmation.':problem?'Offline or unavailable: '+problem:'Synced · waiting time is not focused effort')+'</p>'+(pending?button('retry','Retry saved update'):'')+(conflict?'<p class="wq-conflict">'+esc(conflict.message)+' Your attempted change is retained. Review current work before trying again. '+button('conflict','Review attempted change')+button('clear-conflict','Dismiss conflict')+'</p>':'')+(state.otherWorkspaceForeground?'<p class="wq-conflict">Work is active in another workspace. Pause it there before bringing a task forward here.</p>':'')+'<div class="wq-grid">'+layout().map(names=>'<div class="wq-col">'+names.map(name=>lanes[name]).join('')+'</div>').join('')+'</div>'+completedHtml();
     function completedHtml(){
       const help=completedPeriod==='today'?'Calendar day · '+completionView.timeZone:completedPeriod==='latest'?'Most recent known completion':completedPeriod==='all'?'All retained queue history':'Rolling last '+periodLabel.toLowerCase();
       return '<details class="wq-completed"><summary>Completed · '+esc(periodLabel)+' · '+completionView.rows.length+'</summary><div class="wq-completed-controls"><label>Completed timeframe<select data-completed-period aria-describedby="wq-completed-help">'+window.DCCCompletedQueueFilter.options.map(([value,label])=>'<option value="'+value+'"'+(value===completedPeriod?' selected':'')+'>'+label+'</option>').join('')+'</select></label><p class="wq-time" id="wq-completed-help">'+esc(help)+'</p></div><p class="wq-time" role="status">'+completionView.rows.length+' of '+completionView.total+' retained completed tasks'+(completionView.unknown?' · '+completionView.unknown+' without a completion time'+(completedPeriod==='all'?'':' (shown in All time)'):'')+'</p>'+(completionView.rows.length?completionView.rows.map(card).join(''):'<p class="wq-empty">No completed tasks in this time range.</p>')+'</details>';
@@ -177,8 +229,9 @@
     }
     if(action==='note'){const body=form('<label>Where you left off<textarea maxlength="4000">'+esc(item.note||'')+'</textarea></label>');modal('Task context',body,()=>send(envelope('queue-note',{taskId:item.task.id,note:body.querySelector('textarea').value})));return;}
     if(action==='up'||action==='down'){reorder(item.task.id,action==='up'?-1:1)?.catch(warn);return;}
-    const map={return:'queue-return',pause:'pause',remove:'queue-remove',unblock:'queue-unblock',snooze:'queue-snooze',dismiss:'queue-dismiss'};
-    if(map[action])send(envelope(map[action],{taskId:item.task.id,...(['snooze','dismiss'].includes(action)?{generation:item.generation}:{}),...(action==='snooze'?{remindMinutes:5}:{})})).catch(warn);
+    if(action==='snooze'){snooze(item);return;}
+    const map={return:'queue-return',pause:'pause',remove:'queue-remove',unblock:'queue-unblock',dismiss:'queue-dismiss'};
+    if(map[action])send(envelope(map[action],{taskId:item.task.id,...(action==='dismiss'?{generation:item.generation}:{})})).catch(warn);
   });
   let dragging=null;
   document.addEventListener('dragstart',event=>{const row=event.target.closest?.('[data-queue-id][draggable=true]');if(row){dragging=row.dataset.queueId;event.dataTransfer.setData('text/plain',dragging);}});

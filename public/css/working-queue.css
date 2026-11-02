@@ -20,6 +20,14 @@
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   gap: 18px;
+  align-items: start;
+}
+/* Each column stacks its own lanes, so a tall lane never stretches or pushes the other column. */
+.wq-col {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
 }
 .wq-lane {
   min-width: 0;

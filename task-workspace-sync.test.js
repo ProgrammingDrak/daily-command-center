@@ -32,6 +32,7 @@ function workingQueue() {
     },
     addEventListener() {},
     setInterval() {},
+    matchMedia: () => ({matches:false, addEventListener() {}}),
     navigator: { onLine: true },
     crypto: { randomUUID: () => "uuid-" + posts.length },
     CSS: { escape: String },

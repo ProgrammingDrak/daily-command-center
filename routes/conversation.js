@@ -150,7 +150,7 @@ const tools = [
   {
     name: "dcc_queue",
     description:
-      "Control DCC Working Queue only on explicit instruction: add/remove/reorder existing tasks, keep context, bring forward (start), send background, pause/block/unblock, snooze or dismiss check-backs. Return idle work to Priority with queue-return, preserving identity, order and history; do not remove/re-add. The command cannot stop a worker or dismiss pending review. Queue order never changes itinerary scheduling. Background time is not focused effort. Read dcc_task for guided preview and dcc_working_queue for revision; exact retries keep sourceEventId and at. Completion uses dcc_complete_task.",
+      "Control DCC Working Queue only on explicit instruction: add/remove/reorder existing tasks, keep context, bring forward (start), send background, pause/block/unblock, snooze or dismiss check-backs. queue-snooze defers any Needs You item for remindMinutes (1-1440); send generation only when the item has one. A snoozed item waits in Background (attention snoozed, no focused time; snooze does not start or stop workers) and returns to Needs You at expiry with its review/blocked reason intact; dismissing the snooze reveals that reason now. Return idle work to Priority with queue-return, preserving identity, order and history; do not remove/re-add. queue-return is refused while review is pending or the item is snoozed. The command cannot stop a worker or dismiss pending review. Queue order never changes itinerary scheduling. Background time is not focused effort. Read dcc_task for guided preview and dcc_working_queue for revision; exact retries keep sourceEventId and at. Completion uses dcc_complete_task.",
     inputSchema: {
       type: "object",
       properties: {
