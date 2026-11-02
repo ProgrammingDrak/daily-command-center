@@ -186,5 +186,32 @@ test(
     await assert.rejects(send("queue-return", "c"), /Pause foreground/);
     assert.equal((await entry("a")).status, "queued");
     assert.equal((await ctx.blockDB.getBlock("b")).properties.notes, "Keep notes");
+    await t.test("legacy Background adoption and paused return retain IDs, notes, history and reminders", async () => {
+      const legacyOwner = { userId: 2, workspaceId: "ws-2" };
+      const preserved = [];
+      for (const id of ["legacy-rotation", "legacy-table"]) preserved.push(await ctx.blockDB.createBlock({
+        id, type: "block", user_id: 2, workspace_id: "ws-2", date: null,
+        properties: { title: id, type: "task", notes: "Original context", actualMinutes: 12, status: "paused" }
+      }));
+      const reminder = { backgroundSince: new Date(clock-60000).toISOString(), dueAt: new Date(clock+600000).toISOString(), generation: "legacy-generation", pausedOperationId: null, completionRevision: null };
+      await ctx.pool.query("INSERT INTO work_rotations(user_id,workspace_id,state) VALUES(2,'ws-2',$1)", [{ version: 1, background: { "legacy-rotation": reminder }, history: { archived: true } }]);
+      await ctx.pool.query("INSERT INTO conversation_background(user_id,workspace_id,task_id,started_at) VALUES(2,'ws-2','legacy-table',$1)", [new Date(clock-60000).toISOString()]);
+      const before = await store.state(legacyOwner);
+      assert.deepEqual(before.queue.items.map(item=>item.status), ["queued", "queued"]);
+      for (const id of ["legacy-rotation", "legacy-table"]) await store.execute({ action: "queue-return", taskId: id, sourceEventId: "adopt:"+id, expectedRevision: (await store.state(legacyOwner)).revision, at: new Date(clock).toISOString() }, legacyOwner);
+      const saved = (await ctx.pool.query("SELECT state FROM work_rotations WHERE user_id=2")).rows[0].state;
+      assert.deepEqual(saved.order, before.queue.order);
+      assert.deepEqual(saved.history, { archived: true });
+      for (const [key,value] of Object.entries(reminder)) assert.equal(saved.items['legacy-rotation'][key],value);
+      for (const row of preserved) assert.deepEqual(await ctx.blockDB.getBlock(row.id),row);
+    });
   }
 );
+
+test("foreground expectation is an optional start-only canonical identity guard", () => {
+  const b={action:"start",taskId:"next",sourceEventId:"guard",expectedRevision:0,at:new Date(now).toISOString()};
+  assert.equal(M.command({...b,expectedForegroundTaskId:null},now).expectedForegroundTaskId,null);
+  assert.equal(M.command({...b,expectedForegroundTaskId:"old"},now).expectedForegroundTaskId,"old");
+  assert.throws(()=>M.command({...b,expectedForegroundTaskId:42},now));
+  assert.throws(()=>M.command({...b,action:"pause",expectedForegroundTaskId:"old"},now));
+});

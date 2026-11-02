@@ -509,6 +509,14 @@ function createConversationStore(ctx) {
             b.action === "start" ? active.filter((r) => r.id !== target.id) : active.filter((r) => r.id === target.id);
           if (closing.some((r) => r.workspace_id !== owner.workspaceId))
             throw M.fail("Pause work in the other workspace before switching", 409);
+          // Pin the old task shown in the switch dialog as well as the activity
+          // revision: out-of-band completion/deletion need not advance that revision.
+          if (b.action === "start" && Object.hasOwn(b, "expectedForegroundTaskId")) {
+            const matches = b.expectedForegroundTaskId === null ? closing.length === 0
+              : closing.length === 1 && closing[0].id === b.expectedForegroundTaskId
+                && !isBlockDone(closing[0]);
+            if (!matches) throw M.fail("Foreground changed; review the queue before switching", 409);
+          }
           for (const row of closing)
             await closeForeground(
               row,

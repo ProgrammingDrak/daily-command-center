@@ -5,7 +5,7 @@
   const DCC=window.DCC, account=window.DCC_ACCOUNT_CONTEXT;
   if(!DCC || !account?.userId || !account.workspaceId)return;
   const key='dcc-working-queue:'+account.workspaceId+':'+account.userId;
-  let state={revision:0,foreground:[],queue:{items:[],order:[]}},pending=null,conflict=null,loading=null,sending=false,ticking=false,problem='';
+  let state={revision:0,foreground:[],queue:{items:[],order:[]}},pending=null,conflict=null,loading=null,sending=false,ticking=false,problem='',startOpening=false;
   try {state=JSON.parse(localStorage.getItem(key))||state;pending=JSON.parse(localStorage.getItem(key+':pending'));conflict=JSON.parse(localStorage.getItem(key+':conflict'));}catch(_e){}
   const esc=DCC.esc,items=()=>(state.queue?.items||[]).map(item=>window.DCCQueuePolicy.presentation(item));
   let completedPeriod='today'; // Per-view choice only; each new page starts on Today.
@@ -84,10 +84,31 @@
     if(completedFocused)root.querySelector('.wq-completed > summary')?.focus({preventScroll:true});
     if(focusKey)root.querySelector('[data-queue-action="'+CSS.escape(focusKey)+'"][data-task-id="'+CSS.escape(focusId||'')+'"]')?.focus({preventScroll:true});
   }
-  function modal(title,body,submit,label='Save'){let busy=false;return DCC.overlay.open({kind:'modal',title,body,canClose:()=>!busy,actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
+  function modal(title,body,submit,label='Save',onClose){let busy=false;return DCC.overlay.open({kind:'modal',title,body,onClose,canClose:()=>!busy,actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
   function form(html){const body=document.createElement('div');body.className='wq-form';body.innerHTML=html+'<p role="status"></p>';return body;}
   async function transition(action,item){
-    const body=form('<p>'+esc(item.task.properties.title||'Task')+'</p>'+(action==='background-start'?'<p>This sets the task aside and optionally sets a check-back. It does not start a worker. Without fresh execution evidence, the task stays in Priority.</p>':'')+(['start','background-start','queue-block'].includes(action)?'<label>Check back on the background task<select data-minutes><option value="">No reminder</option><option value="5">5 minutes</option><option value="15" selected>15 minutes</option><option value="30">30 minutes</option><option value="120">2 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes<input type="number" min="1" max="1440" value="10"></label>':'')+(action==='done'?'<div data-completion-time aria-live="off">Loading recorded time…</div><p>Completing saves the current focused session to this task. The saved total is confirmed after the update succeeds.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome required></textarea></label>':''):''));
+    let displaced=null,startRevision=null;
+    if(action==='start'){
+      if(startOpening)return;
+      startOpening=true;
+      try {
+        await refresh();
+        item=items().find(row=>row.task.id===item.task.id);
+        if(!item||item.status==='completed')throw new Error('This task is no longer open. Review the current queue.');
+        if(state.otherWorkspaceForeground)throw new Error('Pause work in the other workspace before switching.');
+        if(item.status==='foreground'){startOpening=false;return;}
+        displaced=items().find(row=>row.status==='foreground'&&row.task.id!==item.task.id)||null;
+        startRevision=state.revision;
+        if(!displaced&&!item.task.properties.guidedDefinitionId){
+          await send(envelope('start',{taskId:item.task.id,expectedRevision:startRevision,expectedForegroundTaskId:null}));
+          startOpening=false;return;
+        }
+      } catch(error){startOpening=false;warn(error);return;}
+    }
+    const timerNeeded=action==='start'?!!displaced:['background-start','queue-block'].includes(action);
+    const timer=timerNeeded?'<label>'+esc(action==='start'?'Wait before notifying about the old foreground task':'Check back on the background task')+'<select data-minutes><option value="">No reminder</option><option value="5">5 minutes</option><option value="15" selected>15 minutes</option><option value="30">30 minutes</option><option value="120">2 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes<input type="number" min="1" max="1440" value="10"></label>':'';
+    const heading=action==='start'?(displaced?'<p><strong>Old foreground task:</strong> '+esc(displaced.task.properties.title||'Task')+'</p>':''):'<p>'+esc(item.task.properties.title||'Task')+'</p>';
+    const body=form(heading+(action==='background-start'?'<p>This sets the task aside and optionally sets a check-back. It does not start a worker. Without fresh execution evidence, the task stays in Priority.</p>':'')+timer+(action==='start'?'<p><strong>New foreground task:</strong> '+esc(item.task.properties.title||'Task')+'</p>':'')+(action==='done'?'<div data-completion-time aria-live="off">Loading recorded time…</div><p>Completing saves the current focused session to this task. The saved total is confirmed after the update succeeds.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome required></textarea></label>':''):''));
     let guided=null,ready=!item.task.properties.guidedDefinitionId,completion=null,clockOffset=0,command=null;
     const formatSeconds=seconds=>Math.floor(seconds/60)+'m '+String(seconds%60).padStart(2,'0')+'s';
     function updateCompletion(){
@@ -100,20 +121,23 @@
     const handle=modal(action==='start'?'Bring forward':action==='done'?'Complete task':'Set task aside',body,async()=>{
       if(!ready)throw new Error('Wait for current guided instructions.');
       if(action==='done'&&!completion)throw new Error('Wait for the recorded-time summary, or reopen this dialog to retry.');
+      if(action==='start'&&!command&&state.revision!==startRevision)throw new Error('Current work changed. Close this dialog and review the queue before switching.');
       const minutes=select?(select.value==='custom'?Number(body.querySelector('[data-custom] input').value):select.value?Number(select.value):null):null;
       if(minutes!==null&&(!Number.isInteger(minutes)||minutes<1||minutes>1440))throw new Error('Choose 1–1440 minutes.');
-      const payload={taskId:item.task.id,...(select?{remindMinutes:minutes}:{})};
+      const payload={taskId:item.task.id,...(action==='start'?{expectedForegroundTaskId:displaced?.task.id||null}:{}),...(select?{remindMinutes:minutes}:{})};
       if(guided)payload.guided={expectedRevision:guided.revision,expectedDefinitionRevision:guided.definitionRevision,expectedContextVersion:guided.contextVersion,...(action==='done'?{outcome:body.querySelector('[data-outcome]').value,confirmed:true}:{})};
-      if(!command||action!=='done')command=envelope(action,{...payload,...(completion?{expectedRevision:completion.revision}:{})});
+      if(!command||!['start','done'].includes(action))command=envelope(action,{...payload,...(action==='start'?{expectedRevision:startRevision}:completion?{expectedRevision:completion.revision}:{})});
+      if(action==='start')body.querySelectorAll('[data-minutes],[data-custom] input').forEach(el=>{el.disabled=true;});
       updateCompletion();
       try {
         const result=await send(command);
         if(action==='done')DCC.toast('Task completed · '+(result.task?.properties.actualMinutes==null?'focused time unknown':result.task.properties.actualMinutes+'m recorded'),'success');
       } catch(error) {
-        if([400,403,404,409].includes(error.status))throw new Error(error.message+(action==='done'?' Close this dialog and review the current task before completing.':''));
-        throw new Error((action==='done'?'Completion not confirmed. Retry uses the same saved update. ':'Update not confirmed. ')+error.message);
+        if([400,403,404,409].includes(error.status))throw new Error(error.message+(['start','done'].includes(action)?' Close this dialog and review the current task before retrying.':''));
+        throw new Error((action==='done'?'Completion not confirmed. Retry uses the same saved update. ':action==='start'?'Update not confirmed. Retry uses the same saved update. ':'Update not confirmed. ')+error.message);
       }
-    },action==='start'?'Bring forward':action==='done'?'Complete':'Save');
+    },action==='start'?'Bring forward':action==='done'?'Complete':'Save',()=>{if(action==='start')startOpening=false;});
+    if(action==='start'&&!body.isConnected)startOpening=false;
     if(action==='done'){const timer=setInterval(()=>{if(!body.isConnected){clearInterval(timer);return;}updateCompletion();},1000);}
     if(!ready)DCC.api('/api/guided/tasks/'+encodeURIComponent(item.task.id),{cache:'no-store'}).then(view=>{guided=view;ready=true;body.querySelector('[data-preview]').textContent=view.prompt;}).catch(error=>{body.querySelector('[role=status]').textContent=error.message;});
     return handle;

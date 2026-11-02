@@ -66,6 +66,8 @@ test(
           ]
         }
       };
+    state.queue.order.push("d");
+    state.queue.items.push({ task: { id: "d", properties: { type: "task", title: "Executing worker" } }, status: "background", delegated: [{ work: { source: "codex", id: "live-job" }, phase: "working", at: new Date(now).toISOString(), note: "Observed running", reviewActions: [], execution: { state: "running", observedAt: new Date(now).toISOString(), validUntil: new Date(now+600000).toISOString() } }] });
     app.use("/public", express.static(path.join(__dirname, "public")));
     app.post("/api/working-queue", (req, res) => {
       writes.push(req.body);
@@ -95,7 +97,7 @@ test(
       await page.locator(".wq-next [data-queue-id]").evaluateAll((rows) => rows.map((row) => row.dataset.queueId)),
       ["b", "a"]
     );
-    assert.equal(await page.locator(".wq-background [data-queue-id]").count(), 0);
+    assert.equal(await page.locator(".wq-background [data-queue-id]").count(), 1);
     assert.equal(await page.locator(".wq-needs [data-queue-id=c]").count(), 1);
     for (const label of ["Foreground", "Needs You", "Priority Queue", "Background"]) {
       const summary = page.getByLabel("About " + label, { exact: true });
@@ -114,6 +116,7 @@ test(
     }
     assert.equal(await page.locator("[data-queue-id=b] [data-queue-action=return]").isEnabled(), true);
     assert.equal(await page.locator("[data-queue-id=c] [data-queue-action=return]").isDisabled(), true);
+    assert.equal(await page.locator("[data-queue-id=d] [data-queue-action=return]").isDisabled(), true);
     const saved = page.waitForResponse(
       (response) => response.url().endsWith("/api/working-queue") && response.request().method() === "POST"
     );

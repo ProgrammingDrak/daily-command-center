@@ -212,6 +212,16 @@ These rules apply to the existing queue and morning/evening review entry points.
 
 Each main lane has a native disclosure info tip usable by keyboard and touch. Open tips and keyboard focus survive normal redraw. Cached rendering independently expires worker evidence so offline data does not keep describing a stale worker as running. No read path rewrites task status, queue membership, order, Context, Notes, recurrence or effort just to classify a lane.
 
+### Bringing a task forward
+
+The queue refreshes before switching. Choosing the current foreground task is a no-op. With no current foreground task, an ordinary task starts without a background timer prompt; guided tasks can still show their instructions. Only a real displacement displays **Old foreground task: [title]**, the wait-before-notification selector, and **New foreground task: [title]**. That check-back belongs to the old task and brings it to Needs You when due; it does not change the new foreground task.
+
+The start command pins both `expectedRevision` and optional `expectedForegroundTaskId` (canonical old task ID, or `null` for empty foreground). The server rejects changed identity, including out-of-band completion/deletion, before switching. Cancel/Escape write nothing; repeated clicks coalesce; uncertain saves retry the same source event and frozen timer choice. A conflict retains the attempted change and requires reviewing current work. Never clear a retained conflict or pending edit simply to get another action through.
+
+Regression coverage includes empty/current/completed/removed foreground, explicit escaped labels, cancellation, repeated submission, unknown-save replay, guided instructions, stale revisions and identity, and reminder expiry on the old task. Tests use isolated tasks and database schemas, never live user tasks.
+
+The Working Queue **Complete** preview reads recorded task effort and the current running session. With no running session or recorded effort it remains Unknown; scheduled windows and legacy planned-session rows are preserved and do not become actual effort. The older itinerary completion dialog may prepopulate a Planned row in its editable sessions list. Do not remove that row or submit a retained edit as a workaround for an access denial. Preserve pending edits/conflicts, verify canonical identity, and obtain any needed authorization before changing the live workflow. The isolated `work-completion.test.js` regression verifies the queue completion contract preserves the planned row and scheduled window while creating no effort entry.
+
 ### Worker evidence contract
 
 `dcc_delegate` retains its existing stable `delegation.work` identity and increasing `sequence`. Its optional `delegation.execution` is an observation supplied by the worker's host, not an inference from an open task:
