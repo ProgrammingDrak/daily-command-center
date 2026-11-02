@@ -173,7 +173,7 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
   const views = ["queue", "list", "calendar"].map((v) => add(element("button", { role: "tab", "data-task-view": v, id: "task-view-" + v })));
   const toggle = add(element("button", { id: "task-actual-toggle", hidden: true }));
   const panels = ["working-queue", "schedule", "budget", "activity", "social", "vault"].map((p) => add(element("div", { class: "tab-content" + (p === "working-queue" ? " active" : ""), id: "tab-" + p })));
-  const docItineraryeners = {};
+  const docListeners = {};
   const events = [];
   doc = {
     readyState: "complete",
@@ -186,8 +186,8 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
       "[data-task-view]": views,
       ".task-add-pop .sub-add-input": []
     })[selector] || [],
-    addEventListener: (type, fn) => { (docItineraryeners[type] = docItineraryeners[type] || []).push(fn); },
-    dispatchEvent: (event) => { events.push(event); (docItineraryeners[event.type] || []).forEach((fn) => fn(event)); }
+    addEventListener: (type, fn) => { (docListeners[type] = docListeners[type] || []).push(fn); },
+    dispatchEvent: (event) => { events.push(event); (docListeners[event.type] || []).forEach((fn) => fn(event)); }
   };
   const store = new Map(Object.entries(storage));
   const location = { href: "https://dcc.test/" + search, search };
@@ -198,7 +198,7 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
     at += delta;
     const u = new URL(entries[at].href);
     location.href = u.href; location.search = u.search;
-    winItineraryeners.popstate.forEach((fn) => fn({}));
+    winListeners.popstate.forEach((fn) => fn({}));
   };
   const history = {
     get state() { return entries[at].state === undefined ? null : JSON.parse(JSON.stringify(entries[at].state)); },
@@ -208,7 +208,7 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
     back() { go(-1); },
     forward() { go(1); }
   };
-  const winItineraryeners = { popstate: [] };
+  const winListeners = { popstate: [] };
   const toasts = [], runs = [], scheduleViews = [];
   class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } }
   const DCC = {
@@ -218,7 +218,7 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
   };
   const window = {
     DCC, localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) },
-    addEventListener: (type, fn) => { (winItineraryeners[type] = winItineraryeners[type] || []).push(fn); },
+    addEventListener: (type, fn) => { (winListeners[type] = winListeners[type] || []).push(fn); },
     applyScheduleView: (state, prev) => scheduleViews.push({ state: Object.assign({}, state), prev: prev && Object.assign({}, prev) }),
     fetch: () => { throw new Error("navigation must not call the network"); }
   };
