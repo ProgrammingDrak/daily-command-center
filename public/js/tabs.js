@@ -574,7 +574,10 @@ function addSubtask(taskId, text, options){
   // instead of creating an orphaned child row on whichever day is currently open.
   const viewedDate=(typeof viewDate!=="undefined"&&viewDate)
     ?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
-  const date=anchor&&anchor.whenever?null:(options.date||(anchor&&anchor.date)||viewedDate);
+  // null is the canonical Unscheduled pool, not a missing anchor date.
+  // Falling back to the viewed day makes the server reject the child and
+  // leaves its create queued in the WAL while the parent remains undated.
+  const date=anchor&&anchor.whenever?null:(options.date!==undefined?options.date:(anchor?anchor.date:viewedDate));
   const startStr=options.parentStart||(parent&&parent.start)||"00:00";
   // A subtask is a FULL task, shaped by the same serializer as every other task
   // (detail/notionUrl/commute/delegated/tags all defaulted for free), so future
@@ -587,6 +590,7 @@ function addSubtask(taskId, text, options){
     :{title:text,source:"manual",priority:"Medium",meta:"",detail:"",tags:[]};
   const task=Object.assign({id:id,type:"task",subtaskOf:taskId,start:startStr,end:startStr,
     publicVisibility:inheritedVisibility,added_at:new Date().toISOString()},common);
+  if(date===null)Object.assign(task,{_dateless:true,untimed:true});
   // Only today's plan gets the in-memory row. A subtask of a CARRYOVER belongs to the
   // origin day, so pushing it into scheduled[] would render it as a standalone task on
   // today (its parent is not in this array, so the nesting walk cannot find it) while the
