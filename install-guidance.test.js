@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-function fixture(nav = {}, standalone = false) {
+function fixture(nav = {}, standalone = false, fullscreen = false) {
   const listeners = {};
   const elements = new Map();
   for (const id of ["dcc-install", "dcc-settings-wrap", "dcc-settings-button", "dcc-settings-menu"]) {
@@ -13,7 +13,7 @@ function fixture(nav = {}, standalone = false) {
   const media = [];
   const window = {
     addEventListener(name, fn) { listeners[name] = fn; },
-    matchMedia() { const mode = { matches: standalone, addEventListener(name, fn) { this[name] = fn; } }; media.push(mode); return mode; },
+    matchMedia(query) { const mode = { matches: standalone || (fullscreen && query.includes("fullscreen")), addEventListener(name, fn) { this[name] = fn; } }; media.push(mode); return mode; },
     DCC: { overlay: { open(view) { views.push(view); return { close(reason) { views.push(reason); view.onClose(); }, update(next) { views.push(next); } }; } } }
   };
   vm.runInNewContext(fs.readFileSync("public/js/install-guidance.js", "utf8"), {
@@ -91,4 +91,14 @@ test("installed events and display modes show installed state; back closes witho
   assert.equal(f.views[1].title, "DCC is installed");
   f.listeners.popstate();
   assert.equal(f.views[2], "navigation");
+});
+
+
+test("ordinary browser fullscreen is not reported as an installed app", async () => {
+  const f = fixture({}, false, true);
+  await f.button.click();
+  assert.notEqual(f.views[0].title, "DCC is installed");
+  f.media[0].matches = true;
+  f.media[0].change();
+  assert.equal(f.button.textContent, "DCC is installed");
 });

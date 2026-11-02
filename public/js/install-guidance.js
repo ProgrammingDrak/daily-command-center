@@ -5,7 +5,7 @@
   let installed = false;
   let prompting = false;
   let dialog = null;
-  const displayModes = ["standalone", "minimal-ui", "fullscreen"].map((mode) =>
+  const displayModes = ["standalone", "minimal-ui"].map((mode) =>
     window.matchMedia("(display-mode: " + mode + ")"));
 
   function isInstalled() {
