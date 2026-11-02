@@ -618,7 +618,7 @@ function collectCompletionSubtreeIds(rows, parent) {
 async function setTaskCompletion({
   taskRef, completed, completedAt = null, taskDate = null, mutationId,
   expectedRevision = null, userId = null, workspaceId = null, companionUpdates = [],
-  transactionLockKey = null, transactionClient = null, guidedCompletionTaskId = null,
+  transactionLockKey = null, transactionClient = null, guidedCompletionTaskId = null, includeDescendants = true,
 }) {
   validateTaskCompletionInput({ taskRef, completed, completedAt, taskDate, mutationId, expectedRevision });
   if (!Array.isArray(companionUpdates)) throw new Error("companionUpdates must be an array");
@@ -793,7 +793,7 @@ async function setTaskCompletion({
     }
     if (sameMutation) {
       let duplicateAffected = [target];
-      if (completed) {
+      if (completed && includeDescendants) {
         const { rows } = await q.query(
           `SELECT * FROM blocks
             WHERE deleted_at IS NULL AND workspace_id IS NOT DISTINCT FROM $1
@@ -822,7 +822,7 @@ async function setTaskCompletion({
     }
 
     let rowsToWrite = [target];
-    if (completed) {
+    if (completed && includeDescendants) {
       const { rows } = await q.query(
         `SELECT * FROM blocks
           WHERE deleted_at IS NULL AND workspace_id IS NOT DISTINCT FROM $1
@@ -1049,6 +1049,14 @@ async function updateBlock(id, fields, client) {
         isTaskRow({ type: existing.type, properties: existing.properties }), completionMutationId);
     }
     const existingProps = existing.properties || {};
+    // Reconciliation lineage belongs to its audited transaction. An old offline
+    // property bag must not erase outcomes, links or review decisions.
+    if (!fields[require("./lib/conversation-model").RECONCILIATION_WRITE]) {
+      for (const key of require("./lib/task-reconciliation").ownedFields) {
+        if (Object.hasOwn(existingProps,key)) newProps[key] = existingProps[key];
+        else delete newProps[key];
+      }
+    }
     // Explicit field-only writes own priority. Full-property saves/replays cannot
     // erase or roll back a choice made in another tab.
     if (taskPriority === undefined) {
@@ -1682,7 +1690,7 @@ async function getCarryoverPool(workspaceId, beforeDate, opts = {}) {
 // Stops at day_roots in both directions: a day_root is a container, not a task, so
 // walking through one would drag in every unrelated task on that date.
 // Visited IDs terminate cycles without silently truncating legitimate descendants.
-async function getSubtree(rootIds, workspaceId, client) {
+async function getSubtree(rootIds, workspaceId, client, { byRoot = false } = {}) {
   const ids = (Array.isArray(rootIds) ? rootIds : [rootIds]).filter(Boolean);
   if (ids.length === 0) return [];
   const { rows } = await (client || pool).query(
@@ -1706,7 +1714,7 @@ async function getSubtree(rootIds, workspaceId, client) {
           AND c.type <> 'day_root'
           AND NOT c.id = ANY(t.path)
      )
-     SELECT DISTINCT ON (id) * FROM tree ORDER BY id, depth ASC`,
+     SELECT DISTINCT ON (${byRoot ? "path[1], id" : "id"}) * FROM tree ORDER BY ${byRoot ? "path[1], id" : "id"}, depth ASC`,
     [ids, workspaceId || null]
   );
   return rows.map(parseBlock);

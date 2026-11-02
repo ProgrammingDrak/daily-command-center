@@ -67,10 +67,15 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
     body: JSON.stringify({ userId: 1 })
   });
   const cookie = r.headers.get("set-cookie").split(";")[0];
+  const readConsent = await call("/oauth/dcc/authorize?" + new URLSearchParams({...auth,scope:"dcc.read"}), {headers:{cookie}});
+  assert.doesNotMatch(await readConsent.text(), /Manage Working Queue membership|Start and pause foreground timers/);
+  assert.equal((await ctx.pool.query("SELECT count(*)::int AS n FROM conversation_grants")).rows[0].n,0,"viewing consent never grants access");
   r = await call(url, { headers: { cookie } });
   const html = await r.text();
   assert.match(html, /Allow access/);
   assert.match(html, /Synthetic 1/);
+  for(const permission of [/Manage Working Queue membership/, /add or remove without deleting tasks/, /order, priority, context, blockers and check-back reminders/, /Return to Priority/, /Start and pause foreground timers/, /Does not start or stop external workers/]) assert.match(html, permission);
+  assert.doesNotMatch(html, /undo a review choice/, "unrequested reconciliation authority is not advertised as granted");
   assert.match(r.headers.get("content-security-policy"), /frame-ancestors 'none'/);
   assert.equal(r.headers.get("referrer-policy"), "same-origin");
   const csrf = /name="csrf" value="([^"]+)"/.exec(html)[1];
@@ -238,6 +243,9 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   r = await call("/connections/conversation", { headers: { cookie } });
   const connections = await r.text();
   assert.match(connections, /Disconnect/);
+  assert.match(connections, /Manage Working Queue membership/);
+  assert.match(connections, /Start and pause foreground timers/);
+  assert.match(connections, /Does not start or stop external workers/);
   const revokeCsrf = /name="csrf" value="([^"]+)"/.exec(connections)[1],
     grantId = /name="grantId" value="([^"]+)"/.exec(connections)[1];
   r = await call("/connections/conversation/revoke", {

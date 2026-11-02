@@ -4,7 +4,7 @@ Code deployment, public protocol ingress, account consent, and host lifecycle re
 
 ## What exists
 
-The account-scoped OAuth/MCP implementation and Working Queue coordinator are deployed in the app. `dcc_delegate` can link or explicitly create a canonical task and report meaningful progress once an authorized host calls it. The transport-neutral adapter in `lib/delegated-work-adapter.js` preserves exact pending events in a connection-scoped durable journal. It does not install an assistant hook, watch worktrees, or acquire credentials. See [delegated work reporting](delegated-work.md).
+The baseline account-scoped OAuth/MCP implementation and Working Queue coordinator were observed deployed. The new completion/reconciliation and queue-policy extension is implemented locally; verify the deployed revision before assuming these tools or behaviors are available. `dcc_delegate` can link or explicitly create a canonical task and report meaningful progress once an authorized host calls it. The transport-neutral adapter in `lib/delegated-work-adapter.js` preserves exact pending events in a connection-scoped durable journal. It does not install an assistant hook, watch worktrees, or acquire credentials. See [delegated work reporting](delegated-work.md).
 
 Remote access can remain disabled independently of the local queue coordinator. Disabled machine endpoints return HTTP 503 with `conversation_remote_disabled`; they must not masquerade as a login HTML page. While the entire remote surface is off, its connection-management page is unavailable too. Turning the surface off is not the same as revoking stored grants.
 
@@ -23,7 +23,11 @@ Run `node scripts/check-conversation-readiness.js https://your-dcc-origin.exampl
 
 Install and enable the resulting plugin. Start Connect, sign into the intended DCC account, and check the account/workspace and every requested permission on the consent page. The MVP supports workspace owners. Every new account follows this same consent flow; it does not reuse another account's grant. Account eligibility and workspace administrator approval may constrain installation.
 
-Begin with read access. Background handoff reporting requires `dcc.delegate` as well as `dcc.read` for lookup and confirmation. Ask for only those scopes if the selected ChatGPT flow permits it; stop for review if the actual consent asks for additional permissions. Focus switching (`dcc.work`), corrections (`dcc.correct`), and completion (`dcc.complete`) are separately approved capabilities. Existing grants do not silently gain new scopes.
+Begin with `dcc.read` for connection verification. The minimum for explicit completion, review choices, progress plus a linked next iteration, reversible drop/undo and receipts is **`dcc.read` + `dcc.reconcile`**. Done is supported by `dcc_reconcile_task`, so the separate `dcc.complete` scope is optional unless the client uses `dcc_complete_task`.
+
+Add `dcc.delegate` only for delegated handoff/progress/execution reporting. Add `dcc.work` only when queue changes or timer controls are wanted: it permits queue membership, ordering, priority, context, blockers and check-backs as well as foreground start/pause. There is no queue-return-only scope. `dcc.correct` changes historical time allocations and is not needed for this feature. Ask for only the selected scopes if the client permits it; stop for review if actual consent asks for more. Existing grants do not silently gain scopes; consent creates a separate account/workspace grant, and refresh cannot expand it.
+
+`dcc.read` covers owned task details (including private notes), queue context, delegated reports, recorded sessions, existing calendar occurrences stored in DCC, review/receipt data and activity audit history. It is not restricted to one task or a public title. See the [maintained runbook](dcc-integration-runbook.md#connection-and-minimum-permissions) for the contract and [host-adapter design](dcc-host-adapter-design.md) for runtime setup boundaries.
 
 Approve the displayed account consent only after reviewing it. Confirm the tools actually appear in the intended chat. Merely creating the plugin or receiving a successful OAuth redirect is insufficient evidence.
 
@@ -31,12 +35,12 @@ Approve the displayed account consent only after reviewing it. Confirm the tools
 
 1. Read current activity and Working Queue, then find/read the existing canonical task chosen for the canary. Record its ID, current revision, and the existing foreground. No writes yet.
 2. With explicit canary approval, register one stable delegated work identity against that existing task. Omit `createIfMissing`, title and parent changes. Use a source-event ID stable for this instruction, the read revision and an explicit timezone-bearing event instant. Preserve the exact envelope before dispatch.
-3. Read back the task/queue. Verify exactly one binding and appropriate background/review state, with no changed foreground timer, plan, actuals or unrelated tasks. Retry the exact saved envelope to verify replay without duplicate task or activity creation. Never substitute a new event ID after an uncertain outcome.
+3. Read back the task/queue. Verify exactly one binding and appropriate queue state (Priority without fresh execution evidence, Background with valid running evidence, Needs You for explicit review actions), with no changed foreground timer, plan, actuals or unrelated tasks. Retry the exact saved envelope to verify replay without duplicate task or activity creation. Never substitute a new event ID after an uncertain outcome.
 4. Report `needs-review` using an increased sequence and a new event ID when the deliverable needs human action. Read back again. Do not report completed or call task completion merely because implementation work paused.
 5. Test cross-account isolation only with a separately approved disposable account/fixture. Test focus switching, corrections and completion only on an explicitly approved synthetic fixture with no real foreground, not on the user's current task or historical records.
 6. Disconnect through DCC's Conversational connections page while remote routes are available, verify the grant is shown disconnected, and verify the former connection cannot read. Do not retain or log raw tokens. Reconnect only with fresh consent.
 
-Until an approved host hook exists, the parent assistant must explicitly call `dcc_delegate` after authorized handoffs and meaningful milestones. Questions, mentions, retrieval, and hypothetical work do not register tasks. A host hook would need its own connection-bound journal, stable work identity, and restart/retry handling; this runbook does not claim one is installed.
+Until an approved host hook exists, the parent assistant must explicitly call `dcc_delegate` after authorized handoffs and meaningful milestones or actual execution-state observations. Phase `working` alone does not prove execution, and no automatic observer is installed. Questions, mentions, retrieval, and hypothetical work do not register tasks. A host hook would need its own connection-bound journal, stable work identity, and restart/retry handling; this runbook does not claim one is installed.
 
 ## Platform references
 

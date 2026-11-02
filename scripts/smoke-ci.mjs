@@ -22,7 +22,7 @@ import { measureQueueCapsule } from "./queue-capsule-smoke.mjs";
 const BASE = process.argv[2] || "http://localhost:3987";
 const USER = process.argv[3] || "drake";
 const PASS = process.argv[4] || "clever123";
-const TABS = ["schedule", "pet-home", "budget"];
+const TABS = ["working-queue", "schedule", "pet-home", "budget"];
 // Count an error only if it names a real /public/ asset OR looks like a JS
 // exception. HTTP-status/SSE transport errors (the two known pre-existing 404s
 // on /api/brain/recent) are backend concerns, out of scope.
@@ -35,7 +35,7 @@ function check(name, cond, detail = "") {
 }
 
 console.log(`SMOKE(ci): ${BASE}`);
-const browser = await chromium.launch();
+const browser = await chromium.launch(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {});
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 const page = await context.newPage();
 

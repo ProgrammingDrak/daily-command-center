@@ -150,3 +150,17 @@
   .dcc-drawer,
   .dcc-sheet { transition: none; }
 }
+
+/* Explicit outcome review, using the existing modal and product tokens. */
+.completion-review-item { padding: 12px 0; border-bottom: 1px solid var(--border, #454153); }
+.completion-review-item h3 { margin: 0 0 6px; }
+.completion-review-item button { margin: 4px 4px 4px 0; }
+.completion-review form { margin-top: 18px; }
+.completion-review label { display: grid; gap: 6px; margin: 12px 0; }
+.completion-review input, .completion-review textarea { width: 100%; box-sizing: border-box; color: inherit; background: var(--bg-card, #252232); padding: 9px; border: 1px solid var(--border, #454153); border-radius: 6px; }
+.completion-review textarea { min-height: 70px; }
+.task-iteration-summary { font-size: 12px; line-height: 1.5; }
+
+.completion-review button { color: var(--text, #eee); background: var(--bg-card, #292537); border: 1px solid var(--border, #554c69); border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+.completion-review button:disabled { opacity: .5; cursor: default; }
+.completion-review button:focus-visible { outline: 2px solid var(--accent, #b99afb); outline-offset: 2px; }

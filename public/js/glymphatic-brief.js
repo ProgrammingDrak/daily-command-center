@@ -778,7 +778,8 @@
               '<p>'+gbEsc(current.summary || "")+'</p>'+
             '</div>'+
             '<div class="gb-hero-side">'+
-              '<button class="gb-refresh-btn" data-gb-refresh '+(gbRefreshing?'disabled':'')+' title="Refresh DCC brief">'+(gbRefreshing?'Refreshing':'Refresh')+'</button>'+
+              '<button class="gb-refresh-btn" data-completion-review>Did these happen?</button>'+
+            '<button class="gb-refresh-btn" data-gb-refresh '+(gbRefreshing?'disabled':'')+' title="Refresh DCC brief">'+(gbRefreshing?'Refreshing':'Refresh')+'</button>'+
             '</div>'+
           '</header>'+
           '<div class="gb-pagenav-row" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">'+
@@ -800,6 +801,7 @@
             '<p>'+gbEsc(current.summary || "")+'</p>'+
           '</div>'+
           '<div class="gb-hero-side">'+
+            '<button class="gb-refresh-btn" data-completion-review>Did these happen?</button>'+
             '<button class="gb-refresh-btn" data-gb-refresh '+(gbRefreshing?'disabled':'')+' title="Refresh DCC brief">'+(gbRefreshing?'Refreshing':'Refresh')+'</button>'+
             '<div class="gb-now">'+
               '<span>Next fit</span>'+

@@ -339,7 +339,7 @@
       catch (e) { return model.dateStr; }
     })();
     hud.innerHTML =
-      '<div class="dr-hud-date">' + dispDate + '</div>' +
+      '<div class="dr-hud-date">' + dispDate + '</div><button data-completion-review data-review-date="' + esc(model.dateStr) + '">Did these happen?</button>' +
       '<div class="dr-hud-stats">' +
         statCard(fmtDur(plannedMin), 'planned time', 'muted') +
         statCard(fmtDur(actualMin), 'known actual time', 'green') +

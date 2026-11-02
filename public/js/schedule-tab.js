@@ -1512,7 +1512,7 @@ function buildUnscheduledSuggestions(){
     const stageClass=t.stage==="Backlog"?"stage-backlog":t.stage==="Next Sprint"?"stage-next":t.stage==="Tasks for Today"?"stage-today":"stage-scheduled";
     const tSrcTag=srcTag(t.source);
     const dParts=[];
-    if(t.detail)dParts.push('<div class="detail-summary">'+t.detail+'</div>');
+    if(t.detail)dParts.push('<div class="detail-summary">'+escHtml(t.detail).replace(/\n/g,'<br>')+'</div>');
     const dLinks=[];
     if(t.notionUrl)dLinks.push('<a href="'+t.notionUrl+'" target="_blank" onclick="event.stopPropagation()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h6v6H4z"/><path d="M14 4h6v6h-6z"/><path d="M4 14h6v6H4z"/><path d="M14 14h6v6h-6z"/></svg>Open in Notion</a>');
     if(dLinks.length)dParts.push('<div class="detail-links">'+dLinks.join('')+'</div>');
@@ -1527,7 +1527,7 @@ function buildUnscheduledSuggestions(){
     el.innerHTML=
       '<div class="bar" style="background:'+c.color+'"></div>'+
       '<div class="body">'+
-        '<div class="title-row"><span class="ttl">'+t.title+'</span>'+tSrcTag+'</div>'+
+        '<div class="title-row"><span class="ttl">'+escHtml(t.title)+'</span>'+tSrcTag+'</div>'+
         '<div class="meta">'+
           '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
           (t.stage&&t.stage!=="Priority"?'<span class="stage-badge '+stageClass+'">'+t.stage+'</span>':'')+
@@ -1564,7 +1564,7 @@ function buildBacklog(){
 
     // Expandable detail content (description + links + meta line) + delegate state for the chip below.
     const detailParts=[];
-    if(t.detail)detailParts.push('<div class="detail-summary">'+t.detail+'</div>');
+    if(t.detail)detailParts.push('<div class="detail-summary">'+escHtml(t.detail).replace(/\n/g,'<br>')+'</div>');
     const links=[];
     if(t.notionUrl)links.push('<a href="'+t.notionUrl+'" target="_blank" onclick="event.stopPropagation()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h6v6H4z"/><path d="M14 4h6v6h-6z"/><path d="M4 14h6v6H4z"/><path d="M14 14h6v6h-6z"/></svg>Open in Notion</a>');
     if(links.length)detailParts.push('<div class="detail-links">'+links.join('')+'</div>');
@@ -1594,7 +1594,7 @@ function buildBacklog(){
     el.innerHTML=
       '<div class="bc-row">'+
         '<div class="bar" style="background:'+c.color+'"></div>'+
-        '<div class="bc-title" title="'+t.title.replace(/"/g,'&quot;')+'">'+t.title+dependencyChip+'</div>'+
+        '<div class="bc-title" title="'+escHtml(t.title)+'">'+escHtml(t.title)+dependencyChip+'</div>'+
         '<span class="bc-dur">'+ms(t.durMin)+'</span>'+
         '<svg class="bc-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>'+
       '</div>'+
@@ -1608,7 +1608,7 @@ function buildBacklog(){
           '<button class="bc-act bc-act-blocked" data-id="'+t.id+'" title="Choose the task that must finish first">Blocked by task</button>'+
           notesButton({id: t.id, title: t.title})+
           ((window.DCCWorkSessions&&window.DCCWorkSessions.actionButtonHtml)?window.DCCWorkSessions.actionButtonHtml(t,false):'')+
-          '<button class="delegate-btn bc-act-icon" data-id="'+t.id+'" data-title="'+t.title.replace(/"/g,'&quot;')+'" title="'+(isDelegated?'Edit delegated item linked to this task':'Delegate this task')+'">'+(isDelegated?'\u2713':'\u2191')+'</button>'+
+          '<button class="delegate-btn bc-act-icon" data-id="'+t.id+'" data-title="'+escHtml(t.title)+'" title="'+(isDelegated?'Edit delegated item linked to this task':'Delegate this task')+'">'+(isDelegated?'\u2713':'\u2191')+'</button>'+
           '<button class="task-bank-icon-btn bank-edit-btn" data-id="'+t.id+'" title="Edit task"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>'+
           '<button class="task-bank-icon-btn danger bank-delete-btn" data-id="'+t.id+'" title="Delete task"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>'+
         '</div>'+

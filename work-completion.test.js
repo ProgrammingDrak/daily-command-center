@@ -58,6 +58,20 @@ test('owner completion preview matches atomic completion and preserves legacy hi
   const roundedDone=await f.request('/api/working-queue',{user:1,body:{action:'done',taskId:'low',expectedRevision:roundedPreview.revision,sourceEventId:'done-rounded',at:'2026-10-29T11:42:30.000Z'}});
   assert.equal(roundedDone.status,200);assert.equal(roundedDone.body.task.properties.actualMinutes,2,'round the sum once');
 
+  // A scheduled window and a preserved legacy planned-session row are not actual effort.
+  const planned={start:'09:00',durationMin:30,isPlanned:true};
+  await f.blockDB.createBlock({id:'planned-only',type:'block',date:f.date,user_id:1,workspace_id:'ws-1',properties:{type:'task',title:'Synthetic planned task',start:'09:00',end:'09:30',duration:30,status:'open'}});
+  await f.blockDB.createBlock({id:'planned-history',type:'day_root',date:f.date,user_id:1,workspace_id:'ws-1',properties:{_sessions:{'planned-only':[planned]}}});
+  const plannedHistory=await f.blockDB.getBlock('planned-history');
+  const unknown=(await f.request('/api/working-queue/tasks/planned-only/completion-preview',{user:1})).body;
+  assert.equal(unknown.history.savedMinutes,null);assert.equal(unknown.startedMs,null);
+  const unknownDone=await f.request('/api/working-queue',{user:1,body:{action:'done',taskId:'planned-only',expectedRevision:unknown.revision,sourceEventId:'planned-without-actual',at:'2026-10-29T11:42:45.000Z'}});
+  assert.equal(unknownDone.status,200,JSON.stringify(unknownDone.body));
+  assert.equal(unknownDone.body.task.properties.actualMinutes??null,null);
+  assert.equal(unknownDone.body.task.properties.start,'09:00');assert.equal(unknownDone.body.task.properties.end,'09:30');
+  assert.deepEqual(await f.blockDB.getBlock('planned-history'),plannedHistory);
+  assert.equal((await f.blockDB.getTaskTimeEntries('planned-only','ws-1')).length,0);
+
   const owner={userId:1,workspaceId:'ws-1'},gs=require('./guided-store').createGuidedStore(f);
   const definition=await gs.saveDefinition({id:'completion-guided-definition',expectedRevision:0,definition:require('./lib/guided-model').definition({title:'Guided review',goal:'Review synthetic work',starterPrompt:'Review the supplied material.',completionCriteria:'Confirm the outcome.',checklist:[]})},owner);
   let guided=await gs.createTask({id:'completion-guided-task',definitionId:definition.id,date:f.date},owner);

@@ -106,7 +106,7 @@ test(
       await assert.rejects(send("queue-dismiss", active, { generation: first.generation }), { statusCode: 409 });
       await send("queue-dismiss", active, { generation: snoozed.generation });
       assert.equal((await entry(active)).dueAt, null);
-      assert.equal((await entry(active)).status, "background");
+      assert.equal((await entry(active)).status, "queued");
       await send("background-start", active, { remindMinutes: 1 });
       const old = await entry(active);
       await send("done", active);
@@ -119,7 +119,7 @@ test(
         userId: 1,
         workspaceId: "ws-1"
       });
-      assert.equal((await entry(active)).status, "paused");
+      assert.equal((await entry(active)).status, "queued");
       await assert.rejects(send("queue-claim", active, { generation: old.generation }), { statusCode: 409 });
       await send("background-start", active, { remindMinutes: 1 });
       await ctx.blockDB.deleteBlock(active);
@@ -133,9 +133,10 @@ test(
       const paused = await send("queue-block", "c", { remindMinutes: 30 });
       assert.equal((await row("c")).properties.actualMinutes, 51);
       assert.equal(paused.uncertainIntervals.length, 1);
-      assert.equal((await entry("c")).status, "blocked");
+      assert.equal((await entry("c")).status, "queued");
+      assert.equal((await entry("c")).blocked, true);
       await send("queue-unblock", "c");
-      assert.equal((await entry("c")).status, "paused");
+      assert.equal((await entry("c")).status, "queued");
       assert.equal((await entry("c")).dueAt, null);
       await send("done", "unknown");
       assert.equal((await entry("unknown")).actualMinutes, null);
@@ -166,7 +167,7 @@ test(
         }
       ]);
       const adopted = await store.state(qowner);
-      assert.equal(adopted.queue.items[0].status, "background");
+      assert.equal(adopted.queue.items[0].status, "queued");
       assert.equal(adopted.queue.items[0].needsYou, true);
       await store.execute(
         {
@@ -272,5 +273,40 @@ test(
       assert.equal(propagated,2);assert.equal(leased,0);assert.equal((await row('release-def')).properties.lastCompletedTaskId,'release-slot');
     });
 
+    await t.test("switch reminders belong only to the displaced task and expire into its Needs You", async () => {
+      now += 60000;
+      await make("switch-old");
+      await make("switch-new");
+      await send("start", "switch-old");
+      now += 60000;
+      const change = await body("start", "switch-new", { remindMinutes: 5 });
+      await store.execute(change, owner);
+      const old = await entry("switch-old"), next = await entry("switch-new");
+      assert.equal(old.dueAt, new Date(now + 300000).toISOString());
+      assert.equal(next.dueAt, null);
+      assert.equal(next.status, "foreground");
+      assert.equal((await store.execute(change, owner)).duplicate, true);
+      now += 300001;
+      assert.equal((await entry("switch-old")).needsYou, true);
+      assert.equal((await entry("switch-new")).needsYou, false);
+      const claim = await send("queue-claim", "switch-old", { generation: old.generation });
+      assert.equal(claim.claimed, true);
+      assert.equal((await entry("switch-new")).status, "foreground");
+      await send("queue-dismiss", "switch-old", { generation: old.generation });
+      await send("pause", "switch-new");
+    });
+    await t.test("reviewed foreground identity rejects out-of-band removal and an unexpected active task", async () => {
+      now += 60000;
+      await make("guard-old"); await make("guard-new");
+      await send("start", "guard-old"); now += 60000;
+      const command = await body("start", "guard-new", { expectedForegroundTaskId: "guard-old", remindMinutes: 5 });
+      await ctx.blockDB.deleteBlock("guard-old");
+      await assert.rejects(store.execute(command, owner), { statusCode: 409 });
+      assert.equal((await row("guard-new")).properties.startedAt, undefined);
+      await send("start", "guard-new", { expectedForegroundTaskId: null }); now += 60000;
+      await assert.rejects(send("start", "switch-new", { expectedForegroundTaskId: null }), /Foreground changed/);
+      assert.equal((await store.state(owner)).foreground[0].id, "guard-new");
+      await send("pause", "guard-new");
+    });
   }
 );

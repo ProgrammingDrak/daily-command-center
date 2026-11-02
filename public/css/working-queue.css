@@ -191,3 +191,10 @@
 .wq-completed-controls label { display: grid; gap: 6px; font-size: 13px; color: var(--text-muted); }
 .wq-completed-controls select { min-height: 44px; max-width: 100%; font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
 .wq-completed-controls select:focus-visible { outline: 2px solid var(--cyan, #22d3ee); outline-offset: 2px; }
+
+.wq-heading { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+.wq-help { position: relative; font-size: .85rem; max-width: 100%; }
+.wq-help summary { cursor: pointer; padding: .35rem .6rem; border-radius: .4rem; }
+.wq-help summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.wq-help p { margin: .3rem 0 .8rem; max-width: 34rem; line-height: 1.5; }
+.wq-actions button:disabled { opacity: .55; cursor: not-allowed; }

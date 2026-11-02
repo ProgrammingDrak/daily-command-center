@@ -8,8 +8,11 @@ const escape = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const descriptions = {
   "dcc.read": "Find current, completed, and recurring tasks; read timing and audit history.",
-  "dcc.work": "Start and pause focused work; track background processing separately.",
+  "dcc.work":
+    "Manage Working Queue membership (add or remove without deleting tasks), order, priority, context, blockers and check-back reminders, including Return to Priority. Start and pause foreground timers and change DCC background bookkeeping. Does not start or stop external workers.",
   "dcc.correct": "Correct time allocation, including existing calendar meetings and unknown intervals.",
+  "dcc.reconcile":
+    "Review explicit task outcomes, reversibly drop one occurrence, undo a review choice, and close a work iteration with a linked next-action task. Does not complete an entire recurring series.",
   "dcc.complete": "Mark an explicitly selected task complete.",
   "dcc.delegate":
     "Link or create explicitly delegated tasks and report background progress or human review needs; never start focus or send external messages."
@@ -24,9 +27,77 @@ const envelope = {
 };
 const tools = [
   {
+    name: "dcc_reconciliation_receipt",
+    description:
+      "Read back one source-message decision, including dropped occurrences and both iteration records. not_found is no recorded commit; an in-flight request may still finish. verified_saved confirms the stored result; stale_conflict means a later edit superseded it. Retry the exact original envelope after transport uncertainty.",
+    inputSchema: {
+      type: "object",
+      properties: { sourceEventId: { type: "string" } },
+      required: ["sourceEventId"],
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: true }
+  },
+  {
+    name: "dcc_completion_review",
+    description:
+      "At the existing morning/evening review, offer up to five unfinished tasks with Done, Still working, Drop it, or Progress made → next iteration. These are questions, never inferred completions. Preserve unanswered choices; do not add a notification schedule. A calendar event or timer ending is not evidence. Use returned canonical ID and version for each explicit answer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        date: { type: "string", description: "Local review date YYYY-MM-DD; defaults to account timezone today." }
+      },
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: true }
+  },
+  {
+    name: "dcc_reconcile_task",
+    description:
+      "Act on the user's explicit outcome: Done, Still working, reversible Drop it, Progress made → next iteration, or Undo. Read/search first; ask a narrow choice for ambiguous titles or remaining scope. Meaningful progress can close an iteration: summarize what got done and create/link a specific successor with remaining work; never claim the broader goal is accomplished. Do not fragment tiny updates automatically. Select the concrete subtask or recurring occurrence. The server refuses parent cascades and active timers. Preserve this exact source-message envelope on retry. Report pending until saveStatus is verified_saved; save_uncertain requires exact retry/readback, stale_conflict requires review. Undo references the earlier sourceEventId and refuses later edits. New dcc.reconcile consent is required; existing grants are not expanded.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...envelope,
+        taskId: { type: "string" },
+        reconciliation: {
+          type: "object",
+          properties: {
+            choice: { enum: ["done", "still_working", "drop", "step_done", "undo"] },
+            expectedTaskVersion: { type: "string" },
+            outcome: { type: "string", description: "Concise accomplishment summary; required for done or step_done." },
+            completedTitle: { type: "string", description: "Readable title for this completed iteration." },
+            nextStep: {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                summary: { type: "string", description: "Concise remaining work." },
+                taskId: { type: "string" },
+                expectedTaskVersion: { type: "string" }
+              },
+              additionalProperties: false
+            },
+            reviewDate: { type: "string" },
+            undoEventId: { type: "string" },
+            completedAt: {
+              type: "string",
+              description:
+                "Only an explicitly known completion instant. Otherwise at is report time, actual completion time remains unknown."
+            }
+          },
+          required: ["choice", "expectedTaskVersion"],
+          additionalProperties: false
+        }
+      },
+      required: ["sourceEventId", "expectedRevision", "at", "taskId", "reconciliation"],
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }
+  },
+  {
     name: "dcc_delegate",
     description:
-      "Register or update an explicit delegated work handoff (coding, email draft, research, small job). Never register hypothetical discussion, status questions or artifact retrieval. Reuse stable source+work ID; resolve/link an existing canonical task before allowing creation. Working/reporting never credits foreground effort. Deliverables requiring review/send/approval/deploy use needs-review or blocked with concise reviewActions. Completed is accepted only after the canonical task was explicitly completed with dcc_complete_task. No external message is sent and review status grants no permission. Preserve exact sourceEventId, at and envelope on transport retry; sequence increases only on meaningful progress.",
+      "Register or update an explicit delegated work handoff (coding, email draft, research, small job). Never register hypothetical discussion, status questions or artifact retrieval. Reuse stable source+work ID; resolve/link an existing canonical task before allowing creation. Working/reporting never credits foreground effort. Deliverables requiring review/send/approval/deploy use needs-review or blocked with concise reviewActions. Completed is accepted only after the canonical task was explicitly completed with dcc_complete_task. No external message is sent and review status grants no permission. Preserve exact sourceEventId, at and envelope on transport retry; sequence increases on meaningful progress or a newly observed execution-state check. Background requires explicit execution state running with observedAt and validUntil (at most 15 minutes); phase working alone is not proof of liveness. Report stopped/unknown honestly, and use needs-review or blocked with reviewActions for human attention. No polling or notifications are created automatically.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -54,6 +125,7 @@ const tools = [
             sequence: { type: "integer", minimum: 1 },
             phase: { enum: ["working", "paused", "blocked", "needs-review", "completed"] },
             note: { type: "string", maxLength: 1000 },
+            execution: {type:"object",description:"Explicit host observation; never infer from open chat/task status. Omit when unverified.",properties:{state:{enum:["running","stopped","unknown"]},observedAt:{type:"string"},validUntil:{type:"string",description:"Required only for running; expires within 15 minutes of observedAt."}},required:["state","observedAt"],additionalProperties:false},
             reviewActions: { type: "array", maxItems: 5, items: { type: "string", maxLength: 240 } },
             intent: { enum: ["explicit-work-handoff"] },
             createIfMissing: { type: "boolean" },
@@ -71,14 +143,14 @@ const tools = [
   {
     name: "dcc_working_queue",
     description:
-      "Read the same Working Queue as DCC: one foreground, ordered tasks, retained context, paused/blocked/background status and manual Needs You check-backs. Read revision before commands.",
+      "Read the same Working Queue as DCC: one human foreground task, ordered inactive Priority tasks, fresh worker execution in Background, and explicit review/blockers or due manual check-backs in Needs You. Retains context and history. Read revision before commands.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true }
   },
   {
     name: "dcc_queue",
     description:
-      "Control DCC Working Queue only on explicit instruction: add/remove/reorder existing tasks, keep context, bring forward (start), send background, pause/block/unblock, snooze or dismiss check-backs. Queue order never changes itinerary scheduling. Background time is not focused effort. Read dcc_task for guided preview and dcc_working_queue for revision; exact retries keep sourceEventId and at. Completion uses dcc_complete_task.",
+      "Control DCC Working Queue only on explicit instruction: add/remove/reorder existing tasks, keep context, bring forward (start), send background, pause/block/unblock, snooze or dismiss check-backs. Return idle work to Priority with queue-return, preserving identity, order and history; do not remove/re-add. The command cannot stop a worker or dismiss pending review. Queue order never changes itinerary scheduling. Background time is not focused effort. Read dcc_task for guided preview and dcc_working_queue for revision; exact retries keep sourceEventId and at. Completion uses dcc_complete_task.",
     inputSchema: {
       type: "object",
       properties: {
@@ -87,6 +159,7 @@ const tools = [
           enum: [
             "queue-add",
             "queue-remove",
+            "queue-return",
             "queue-reorder",
             "queue-note",
             "queue-priority",
@@ -163,7 +236,7 @@ const tools = [
   {
     name: "dcc_work",
     description:
-      "Only after an explicit user instruction: start atomically pauses previous foreground; pause; background-start pauses focused effort for that task; background-stop ends processing. Task mentions, questions, and assistant processing never imply start. Read after writing; resolve conflicts by rereading, never silently replace expectedRevision.",
+      "Only after an explicit user instruction: start atomically pauses previous foreground; pause; background-start pauses focused effort for that task; background-stop clears DCC processing bookkeeping; it does not stop an external worker. Background placement requires fresh delegated execution evidence. Task mentions, questions, and assistant processing never imply start. Read after writing; resolve conflicts by rereading, never silently replace expectedRevision.",
     inputSchema: {
       type: "object",
       properties: {
@@ -179,11 +252,17 @@ const tools = [
   {
     name: "dcc_complete_task",
     description:
-      "Complete an explicitly selected task only when the user says done. Does not infer actual effort from planned duration.",
+      "When the user explicitly reports finished work, read the canonical task, resolve ambiguity, then complete that exact scope. Supply the read reconciliationVersion and a concise outcome. Parent completion with unfinished children is refused. Use dcc_reconcile_task for progress plus a next iteration, drop or undo. at is report time; do not invent exact completion time or effort. Only saveStatus verified_saved confirms persistence; preserve the exact source message envelope on retry.",
     inputSchema: {
       type: "object",
-      properties: { ...envelope, taskId: { type: "string" }, guided: { type: "object" } },
-      required: ["sourceEventId", "expectedRevision", "at", "taskId"],
+      properties: {
+        ...envelope,
+        taskId: { type: "string" },
+        expectedTaskVersion: { type: "string" },
+        outcome: { type: "string" },
+        completedAt: { type: "string" }
+      },
+      required: ["sourceEventId", "expectedRevision", "at", "taskId", "expectedTaskVersion", "outcome"],
       additionalProperties: false
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
@@ -231,15 +310,17 @@ const tools = [
   }
 ];
 const scopeFor = (name) =>
-  name === "dcc_delegate"
-    ? "dcc.delegate"
-    : name === "dcc_work" || name === "dcc_queue"
-      ? "dcc.work"
-      : name === "dcc_correct_time"
-        ? "dcc.correct"
-        : name === "dcc_complete_task"
-          ? "dcc.complete"
-          : "dcc.read";
+  name === "dcc_reconcile_task"
+    ? "dcc.reconcile"
+    : name === "dcc_delegate"
+      ? "dcc.delegate"
+      : name === "dcc_work" || name === "dcc_queue"
+        ? "dcc.work"
+        : name === "dcc_correct_time"
+          ? "dcc.correct"
+          : name === "dcc_complete_task"
+            ? "dcc.complete"
+            : "dcc.read";
 module.exports = function mount(app, ctx, config = {}) {
   const enabled =
     config.enabled ??
@@ -443,7 +524,7 @@ module.exports = function mount(app, ctx, config = {}) {
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: "dcc-account", version: "0.1.0" },
           instructions:
-            "Resolve existing tasks before acting. Only explicit user start/pause/done/correction instructions authorize activity changes. Preserve unknown time and plan versus actual. Confirm writes using dcc_task or dcc_current_activity."
+            "Resolve existing tasks before acting. Only explicit user start/pause/done/correction instructions authorize activity changes. Preserve unknown time and plan versus actual. For explicit completion use dcc_complete_task after reading the canonical task/version. For meaningful progress, summarize accomplishments and remaining scope with dcc_reconcile_task step_done, keeping the goal open. At existing morning/evening reviews call dcc_completion_review and offer its choices without inferring completion. Confirm reconciliation with dcc_reconciliation_receipt; only verified_saved means saved."
         });
       if (b.method === "ping") return reply({});
       if (b.method === "tools/list")
@@ -461,6 +542,9 @@ module.exports = function mount(app, ctx, config = {}) {
       identity = await oauth.verify(raw.slice(7), scopeFor(name));
       try {
         let result;
+        if (name === "dcc_reconciliation_receipt")
+          result = await store.reconciliationReceipt(args.sourceEventId, identity);
+        if (name === "dcc_completion_review") result = await store.completionReview(args, identity);
         if (name === "dcc_search_tasks") result = await store.search(args, identity);
         if (name === "dcc_current_activity" || name === "dcc_working_queue") result = await store.state(identity);
         if (name === "dcc_calendar_events") result = await store.calendarEvents(args, identity);
@@ -473,6 +557,7 @@ module.exports = function mount(app, ctx, config = {}) {
           ![
             "queue-add",
             "queue-remove",
+            "queue-return",
             "queue-reorder",
             "queue-note",
             "queue-priority",
@@ -488,15 +573,39 @@ module.exports = function mount(app, ctx, config = {}) {
           throw M.fail("Unsupported queue action");
         if (name === "dcc_delegate" && !["delegated-register", "delegated-update"].includes(args.action))
           throw M.fail("Unsupported delegated work action");
-        if (["dcc_delegate", "dcc_queue", "dcc_work", "dcc_complete_task", "dcc_correct_time"].includes(name)) {
+        if (
+          [
+            "dcc_reconcile_task",
+            "dcc_delegate",
+            "dcc_queue",
+            "dcc_work",
+            "dcc_complete_task",
+            "dcc_correct_time"
+          ].includes(name)
+        ) {
           result = await store.execute(
             {
-              ...args,
               ...(name === "dcc_complete_task"
-                ? { action: "done" }
-                : name === "dcc_correct_time"
-                  ? { action: "correct" }
-                  : {})
+                ? {
+                    sourceEventId: args.sourceEventId,
+                    expectedRevision: args.expectedRevision,
+                    at: args.at,
+                    taskId: args.taskId,
+                    reconciliation: {
+                      choice: "done",
+                      expectedTaskVersion: args.expectedTaskVersion,
+                      outcome: args.outcome,
+                      ...(args.completedAt ? { completedAt: args.completedAt } : {})
+                    }
+                  }
+                : args),
+              ...(name === "dcc_reconcile_task"
+                ? { action: "reconcile" }
+                : name === "dcc_complete_task"
+                  ? { action: "reconcile" }
+                  : name === "dcc_correct_time"
+                    ? { action: "correct" }
+                    : {})
             },
             identity
           );
@@ -507,6 +616,7 @@ module.exports = function mount(app, ctx, config = {}) {
               sourceEventId: args.sourceEventId,
               blockIds: [
                 ...(result.affectedTasks || []).map((r) => r.id),
+                ...(result.reconciliation?.afterRows || []).map((r) => r.id),
                 ...(result.entries || []).map((r) => r.id),
                 ...(result.sourceEntry ? [result.sourceEntry.id] : [])
               ]
@@ -518,6 +628,7 @@ module.exports = function mount(app, ctx, config = {}) {
           if (!identity.scopes.includes("dcc.read"))
             result = {
               ok: result.ok,
+              ...(result.saveStatus ? { saveStatus: result.saveStatus } : {}),
               sourceEventId: result.sourceEventId,
               ...(result.task?.id ? { taskId: result.task.id } : {}),
               revision: (result.currentState || result.state).revision,

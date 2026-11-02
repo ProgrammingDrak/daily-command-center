@@ -391,7 +391,7 @@ function _amBuildDetails(ev){
     ? window.waitingOriginChipHtml(ev,'detail-action-link','Open origin task')
     : '';
   if(originChip)meta.push(originChip);
-  return meta.join('');
+  return meta.join('')+(window.DCC?.TaskReconciliation?.summaryHtml(ev)||'');
 }
 
 // C4: opens on a carryover row too. `taskAnchorById` looks in BOTH pools, so the modal
