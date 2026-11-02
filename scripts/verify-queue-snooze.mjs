@@ -1,4 +1,4 @@
-/* global document, DCCWorkingQueue, petDeliveries */
+/* global document, getComputedStyle, DCCWorkingQueue, petDeliveries */
 // Needs You snooze regression: isolated PostgreSQL + the real queue API and UI.
 // No .env, auth, live tasks, shared browser profile or external notifications.
 import assert from "node:assert/strict";
@@ -142,6 +142,7 @@ try {
   await dialog().locator("[data-custom] input").fill("45");
   const preview = await dialog().locator("[data-snooze-preview]").textContent();
   assert.match(preview, /^Snoozed until .*(EST|EDT)/, "preview uses the app timezone: " + preview);
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".dcc-overlay")).opacity === "1");
   await page.screenshot({path:path.join(screenshotDir,"snooze-dialog-synthetic.png")});
   let dropped = 0;
   await page.route("**/api/working-queue", (r) =>
