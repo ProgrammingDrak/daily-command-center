@@ -79,6 +79,7 @@ body.device-glasses{--task-indent-max:64px;--bg:#000;--text:#fff;--text-muted:#c
 .device-glasses .wq-header p{display:none}
 .device-glasses .wq-sync{font-size:14px;margin:8px 0}
 .device-glasses .wq-grid{grid-template-columns:1fr;gap:12px}
+.device-glasses .wq-col{gap:12px}
 .device-glasses .wq-lane{padding:0;border:0;background:#000}
 .device-glasses .wq-lane h2{font-size:16px;margin:8px 0;color:#c5cbd6}
 /* Hide only lanes with no cards. Priority always carries a .wq-empty explanation, even when populated. */

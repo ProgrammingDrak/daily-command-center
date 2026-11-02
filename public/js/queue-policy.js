@@ -11,7 +11,7 @@
     foreground: 'The one task you are actively working on now. Starting another task switches foreground; there is never more than one active foreground task.',
     needs: 'Tasks explicitly brought to your attention by a notification, a check-back timer you set, or a worker asking for review or an unblock. This is not a general backlog.',
     priority: 'Work that needs doing but is not currently being worked on by you or a background worker. Ordered High, Medium, then Low; your order is preserved within each priority.',
-    background: 'Work currently executing in Claude or another task/process, supported by a fresh worker report. Open, paused, stopped or unverified work belongs in Priority. Requests for your input belong in Needs You.',
+    background: 'Work currently executing in Claude or another task/process, supported by a fresh worker report. Open, paused, stopped or unverified work belongs in Priority. Requests for your input belong in Needs You. Explicitly snoozed requests also wait here until their check-back time; snoozing is not worker execution.',
     completed: 'Verified completed tasks and work iterations. A completed iteration can have a linked next step; it does not mean the broader goal is finished.'
   };
   function execution(reports = [], now = Date.now()) {
@@ -32,9 +32,12 @@
       Array.isArray(report.reviewActions) && report.reviewActions.some(action=>typeof action==='string' && !!action.trim()));
   }
   function presentation(item, now = Date.now()) {
-    if (['completed','foreground'].includes(item.status)) return item;
+    if (item.status==null||['completed','foreground'].includes(item.status)) return item;
     const evidence = execution(item.delegated || [],now);
-    return {...item,status:evidence.state==='running'?'background':'queued',execution:evidence};
+    const due=Date.parse(item.dueAt), until=Date.parse(item.snoozedUntil);
+    const snoozed=Number.isFinite(until)&&until===due&&until>now;
+    return {...item,status:snoozed||evidence.state==='running'?'background':'queued',execution:evidence,
+      snoozed,needsYou:!snoozed&&(!!item.needsReview||(Number.isFinite(due)&&due<=now))};
   }
   return {MAX_LEASE_MS,tips,execution,reviewRequested,presentation};
 });

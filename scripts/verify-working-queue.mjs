@@ -94,6 +94,20 @@ const add = async (ids) => {
   await page.getByRole("dialog").getByRole("button", { name: "Done", exact: true }).click();
   await closed();
 };
+// Snooze goes through the delay chooser, then waits in Background.
+const snoozeVia = async (id) => {
+  await button(id, "snooze").click();
+  await page.getByRole("dialog").locator("[data-minutes]").selectOption("5");
+  await page.getByRole("dialog").getByRole("button", { name: "Snooze", exact: true }).click();
+  await closed();
+  await page.waitForFunction(
+    (id) => {
+      const el = document.querySelector('[data-queue-id="' + id + '"]');
+      return el?.closest(".wq-background") && el.textContent.includes("Snoozed until");
+    },
+    id
+  );
+};
 const task = (id) => ctx.blockDB.getBlock(id);
 const due = async (id) =>
   ctx.pool.query(
@@ -207,10 +221,7 @@ try {
   await page.waitForTimeout(250);
   assert.ok(gets < 6, "storage writes do not ping-pong");
   await second.close();
-  await button("a", "snooze").click();
-  await page.waitForFunction(() =>
-    document.querySelector('[data-queue-id="a"]').textContent.includes("Check back in 5m")
-  );
+  await snoozeVia("a");
   // A late claim cannot present after a new snooze generation or completion.
   await due("a");
   let fetched, release;
@@ -230,10 +241,7 @@ try {
   });
   await fetchedPromise;
   await page.evaluate(() => DCCWorkingQueue.refresh());
-  await button("a", "snooze").click();
-  await page.waitForFunction(() =>
-    document.querySelector('[data-queue-id="a"]').textContent.includes("Check back in 5m")
-  );
+  await snoozeVia("a");
   release();
   await page.evaluate(() => window.fixtureTick);
   assert.equal(await page.evaluate(() => petDeliveries.length), 0);
