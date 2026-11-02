@@ -15,6 +15,9 @@ test('cached snoozes expire by absolute time, retaining review and honest execut
   assert.equal(waiting.needsReview, true);
   assert.equal(waiting.blocked, true);
   assert.equal(waiting.execution.state, 'unknown');
+  const worker={phase:'working',work:{source:'test',id:'worker'},execution:{state:'running',observedAt:new Date(epoch).toISOString(),validUntil:new Date(epoch+60000).toISOString()}};
+  const dual=Policy.presentation({...item,delegated:[worker]},epoch);
+  assert.equal(dual.snoozed,true);assert.equal(dual.needsYou,false);assert.equal(dual.execution.state,'running','snoozing attention does not stop an independently running worker');
   const resumed = Policy.presentation(JSON.parse(JSON.stringify(waiting)), epoch + 30 * 60000);
   assert.equal(resumed.snoozed, false);
   assert.equal(resumed.needsYou, true);

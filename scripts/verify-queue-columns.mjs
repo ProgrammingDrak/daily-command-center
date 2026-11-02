@@ -1,4 +1,4 @@
-/* global window, document */
+/* global window, document, localStorage */
 // Working Queue column layout regression. Synthetic in-memory queue only: no
 // database, no .env, no auth, no real tasks. Any write request fails the run.
 import assert from "node:assert/strict";
@@ -56,7 +56,7 @@ app.get("/api/working-queue", (_req, res) =>
 app.all("/api/*", (_req, res) => res.status(500).json({ error: "Synthetic layout fixture is read-only" }));
 const page = (glasses) =>
   `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"><link rel="stylesheet" href="/public/css/device-views/glasses.css"></head><body${glasses ? ' class="device-glasses"' : ""} style="padding:20px"><div class="tab-content active" id="tab-working-queue"><div id="working-queue-root"></div></div><div id="toast-container"></div>
-<script>window.__state={date:"2099-01-02"};window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:'layout-fixture'};</script><script src="/public/js/core.js"></script><script src="/public/js/core-ui.js"></script><script src="/public/js/task-types.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/nav-state.js"></script><script src="/public/js/tabs.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/task-priority.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/working-queue.js"></script><script>dispatchEvent(new Event('dcc:data-ready'));</script></body></html>`;
+<script>window.closeNotesDrawer=()=>{};window.addActionItem=()=>{};window.__state={date:"2099-01-02"};window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:'layout-fixture'};</script><script src="/public/js/core.js"></script><script src="/public/js/core-ui.js"></script><script src="/public/js/task-types.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/nav-state.js"></script><script src="/public/js/tabs.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/task-priority.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/working-queue.js"></script><script>dispatchEvent(new Event('dcc:data-ready'));</script></body></html>`;
 app.get("/", (req, res) => res.type("html").send(page(req.query.device === "glasses")));
 const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
@@ -211,6 +211,15 @@ try {
   assert.deepEqual(await domOrder(), stackedOrder, "glasses order survives breakpoint changes");
   await tab.screenshot({path:path.join(screenshotDir,"independent-columns-glasses-synthetic.png")});
   check("glasses stays single column");
+
+  await tab.setViewportSize({ width: 1280, height: 900 });
+  const deadline=iso(Date.now()+30*60000);
+  await load([fg("f0"),{...needs("s0"),dueAt:deadline,snoozedUntil:deadline,delegated:running("s0")},queued("p0")]);
+  const waiting=tab.locator('.wq-background [data-queue-id="s0"]');
+  assert.match(await waiting.innerText(),/Attention snoozed/);
+  assert.match(await waiting.innerText(),/A worker still reports running; snoozing does not stop it/);
+  assert.doesNotMatch(await waiting.innerText(),/not executing/);
+  check("snoozed attention retains fresh running-worker evidence honestly");
 
   assert.deepEqual(writes, [], "layout fixture saw no write requests");
   assert.deepEqual(errors, [], "no page errors");
