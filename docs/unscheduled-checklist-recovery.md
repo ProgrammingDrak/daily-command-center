@@ -14,6 +14,10 @@ task this replaced `null` with the viewed day. The server correctly rejected
 the mismatched child, and BlockStore retained its original create in the WAL.
 Repeated sync of the same invalid payload cannot fix its placement.
 
+The day view also folds undated Library rows into `scheduled[]` with `_dateless`.
+The shared anchor now retains that null placement, and new children keep the
+dateless/untimed projection so they do not enter day totals.
+
 The fix preserves an existing anchor's explicit null date. Dated carryover and
 the explicit placement of a newly scheduled future parent retain their existing
 behavior. No parent date, history, notes, effort or server validation is changed.
@@ -49,7 +53,8 @@ Source: `public/js/shell.js` Save status controls; `block-store.js`
 ## Isolated verification
 
 `unscheduled-subtask.test.js` reproduces the null-date regression and exercises
-the actual browser anchor, checklist creator, BlockStore and PostgreSQL. It
+the actual browser anchor, checklist creator, BlockStore and PostgreSQL, through
+both the carryover projection and the day view’s dateless projection. It
 checks saved placement, unchanged parent content/history, no pending WAL,
 idempotent retry, and the shipped preview/apply recovery for an older invalid
 create. The database case requires a localhost `DCC_TEST_DATABASE_URL` and is

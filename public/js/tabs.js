@@ -590,6 +590,7 @@ function addSubtask(taskId, text, options){
     :{title:text,source:"manual",priority:"Medium",meta:"",detail:"",tags:[]};
   const task=Object.assign({id:id,type:"task",subtaskOf:taskId,start:startStr,end:startStr,
     publicVisibility:inheritedVisibility,added_at:new Date().toISOString()},common);
+  if(date===null)Object.assign(task,{_dateless:true,untimed:true});
   // Only today's plan gets the in-memory row. A subtask of a CARRYOVER belongs to the
   // origin day, so pushing it into scheduled[] would render it as a standalone task on
   // today (its parent is not in this array, so the nesting walk cannot find it) while the

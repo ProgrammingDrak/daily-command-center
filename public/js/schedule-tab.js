@@ -457,7 +457,9 @@ function taskAnchorById(id){
   const ev=(typeof scheduled!=="undefined"&&Array.isArray(scheduled))?scheduled.find(e=>e.id===id):null;
   if(ev){
     const day=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
-    return {ev:ev,date:day,blockId:ev._blockId||null,carryover:false};
+    // Undated Library rows are folded into scheduled[] for the Unscheduled view.
+    // Their displayed day is not their canonical task pool.
+    return {ev:ev,date:ev._dateless?null:day,blockId:ev._blockId||null,carryover:false};
   }
   const poolEv=(typeof backlog!=="undefined"&&Array.isArray(backlog))?backlog.find(task=>task.id===id&&task.stage==="Whenever"):null;
   if(poolEv){

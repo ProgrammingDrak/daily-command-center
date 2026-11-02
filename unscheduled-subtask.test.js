@@ -11,14 +11,14 @@ const fn = (name, file) => {
   return match[0];
 };
 const plain = value => JSON.parse(JSON.stringify(value));
-function browser(parent, create, realStore = false) {
+function browser(parent, create, realStore = false, projected = false) {
   const writes = [], storage = new Map();
   const event = TM.fromBlock(parent);
   event.__unf = { sourceId: parent.id, sourceDate: parent.date, sourceBlock: parent };
   const context = {
     console, crypto, Date, Promise, Map, Set,
-    viewDate: '2026-11-02', scheduled: [], backlog: [],
-    _unfinishedCache: { rows: [event] },
+    viewDate: '2026-11-02', scheduled: projected ? [event] : [], backlog: [],
+    _unfinishedCache: { rows: projected ? [] : [event] },
     render() {}, _recollectCarryover() {},
     setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
     addEventListener() {}, removeEventListener() {},
@@ -57,6 +57,17 @@ for (const date of [null, '2026-10-30']) test('checklist child retains canonical
   assert.deepEqual(parent, before);
 });
 
+for (const date of [null, '2026-11-02']) test('day-projected parent retains its canonical placement: ' + date, async () => {
+  const parent = parentRow(date), before = plain(parent), b = browser(parent, null, false, true);
+  const child = b.context.addSubtask('parent-local', 'Pack notebook');
+  await child._persisted;
+  assert.equal(b.writes[0].date, date);
+  assert.equal(b.context.scheduled.length, 2);
+  assert.equal(child._dateless === true, date === null, 'pool children stay out of day totals');
+  if (date === null) assert.equal(child.untimed, true);
+  assert.deepEqual(parent, before);
+});
+
 test('a newly scheduled future parent retains its explicit placement context', async () => {
   const b = browser(parentRow(null));
   await b.context.addSubtask('new-parent', 'Prepare supplies', { date: '2026-11-09', parentStart: '14:00' })._persisted;
@@ -65,14 +76,17 @@ test('a newly scheduled future parent retains its explicit placement context', a
   assert.equal(b.context.scheduled.length, 0);
 });
 
-test('unscheduled checklist persists through real BlockStore and PostgreSQL without WAL retry or parent changes',
+test('unscheduled checklist persists through real BlockStore and PostgreSQL in both projections',
   { skip: !process.env.DCC_TEST_DATABASE_URL }, async t => {
     const fixture = await require('./test-support/activity-db').createActivityDb();
     t.after(() => fixture.close());
-    const parent = await fixture.blockDB.createBlock({ ...parentRow(null), user_id: 1, workspace_id: 'ws-1' });
+    for (const projected of [false, true]) await t.test('day projection=' + projected, async () => {
+    const parentData = parentRow(null);
+    parentData.id += '-' + projected; parentData.properties.local_id += '-' + projected;
+    const parent = await fixture.blockDB.createBlock({ ...parentData, user_id: 1, workspace_id: 'ws-1' });
     const create = payload => fixture.blockDB.createBlock({ ...payload, user_id: 1, workspace_id: 'ws-1' });
-    const b = browser(parent, create, true);
-    const task = b.context.addSubtask('parent-local', 'Pack notebook');
+    const b = browser(parent, create, true, projected);
+    const task = b.context.addSubtask(parent.properties.local_id, 'Pack notebook');
     const saved = await task._persisted;
     assert.equal(b.writes.length, 1);
     assert.equal(saved.date, null);
@@ -87,9 +101,18 @@ test('unscheduled checklist persists through real BlockStore and PostgreSQL with
     assert.deepEqual(reread, saved);
     assert.equal((await create(b.writes[0])).id, saved.id, 'lost acknowledgement retry retains identity');
     assert.equal((await fixture.pool.query('SELECT COUNT(*)::int AS n FROM blocks WHERE parent_id=$1', [parent.id])).rows[0].n, 1);
+    if (projected) {
+      const grandchild = b.context.addSubtask(task.id, 'Pack pencil before reloading');
+      const nested = await grandchild._persisted;
+      assert.equal(nested.date, null);
+      assert.equal(nested.parent_id, saved.id);
+      assert.equal(grandchild._dateless, true);
+      assert.equal(grandchild.untimed, true);
+      assert.equal(b.context.blockStore.hasPendingWrites(), false);
+    }
     // Exercise the shipped recovery path for a create retained by an older tab.
-    const retained = { ...b.writes[0], id: 'pending-child', date: '2026-11-02',
-      properties: { ...b.writes[0].properties, local_id: 'pending-local', title: 'Pack charger', detail: 'Keep this checklist context' } };
+    const retained = { ...b.writes[0], id: 'pending-child-' + projected, date: '2026-11-02',
+      properties: { ...b.writes[0].properties, local_id: 'pending-local-' + projected, title: 'Pack charger', detail: 'Keep this checklist context' } };
     await assert.rejects(create(retained), /same task pool or day/);
     const repair = require('./lib/pending-create-repair')({ pool: fixture.pool, blockDB: fixture.blockDB });
     const request = { original: retained, userId: 1, workspaceId: 'ws-1' };
@@ -102,4 +125,5 @@ test('unscheduled checklist persists through real BlockStore and PostgreSQL with
     for (const [key, value] of Object.entries(retained.properties)) assert.deepEqual(repaired.block.properties[key], value);
     assert.equal((await repair({ ...request, expected: preview.expected, apply: true })).created, false);
     assert.deepEqual(await fixture.blockDB.getBlock(parent.id), parent);
+      });
   });
