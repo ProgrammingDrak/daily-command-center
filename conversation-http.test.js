@@ -77,6 +77,8 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   for(const permission of [/Manage Working Queue membership/, /add or remove without deleting tasks/, /order, priority, context, blockers and check-back reminders/, /Return to Priority/, /Start and pause foreground timers/, /Does not start or stop external workers/]) assert.match(html, permission);
   assert.doesNotMatch(html, /undo a review choice/, "unrequested reconciliation authority is not advertised as granted");
   assert.match(r.headers.get("content-security-policy"), /frame-ancestors 'none'/);
+  assert.match(r.headers.get("content-security-policy"), /form-action 'self' https:\/\/chatgpt\.com;/);
+  assert.doesNotMatch(r.headers.get("content-security-policy"), /form-action[^;]*\*/);
   assert.equal(r.headers.get("referrer-policy"), "same-origin");
   const csrf = /name="csrf" value="([^"]+)"/.exec(html)[1];
   const consent = (token, origin = "https://dcc.example") =>
@@ -261,4 +263,19 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
     "2026-10-20T13:00:44.000Z",
     "disconnect does not discard recorded work"
   );
+  const management = await call("/connections/conversation", { headers: { cookie } });
+  assert.match(management.headers.get("content-security-policy"), /form-action 'self';/);
+  r = await call(url, { headers: { cookie } });
+  assert.match(r.headers.get("content-security-policy"), /form-action 'self' https:\/\/chatgpt\.com;/);
+  const denyCsrf = /name="csrf" value="([^"]+)"/.exec(await r.text())[1];
+  const countBeforeDeny = (await ctx.pool.query("SELECT count(*)::int AS n FROM conversation_grants")).rows[0].n;
+  r = await call("/oauth/dcc/authorize", {
+    method: "POST", headers: { cookie, origin: "https://dcc.example", "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ csrf: denyCsrf, decision: "deny" })
+  });
+  const denied = new URL(r.headers.get("location"));
+  assert.equal(denied.origin, "https://chatgpt.com");
+  assert.equal(denied.searchParams.get("error"), "access_denied");
+  assert.equal(denied.searchParams.get("state"), auth.state);
+  assert.equal((await ctx.pool.query("SELECT count(*)::int AS n FROM conversation_grants")).rows[0].n, countBeforeDeny);
 });
