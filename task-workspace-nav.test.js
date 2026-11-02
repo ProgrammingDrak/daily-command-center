@@ -55,10 +55,11 @@ test("Tasks head orders views, the date row with queues, then Day Progress", () 
   for (const door of ["triage-pill-nav", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav", "loose-ends-pill"]) assert.match(head, new RegExp('id="' + door + '"'));
   assert.match(head, /role="tablist" aria-label="Task views"/);
   assert.match(head, /data-task-view="queue"[^>]*aria-controls="tab-working-queue"/);
+  assert.match(head, /id="task-view-list"[^>]*data-task-view="list"[^>]*>Itinerary<\/button>/);
   assert.match(head, /id="task-actual-toggle" aria-pressed="false"[^>]*hidden>Actual</);
 });
 
-test("Actual is not a view: no Actual view button, List and Calendar keep their containers", () => {
+test("Actual is not a view: no Actual view button, Itinerary and Calendar keep their containers", () => {
   assert.doesNotMatch(html, /class="svt-btn[^"]*" data-view="actual"/);
   assert.doesNotMatch(html, /id="sched-view-toggle"/);
   const schedule = slice(html, 'id="tab-schedule"', "<!-- Anytime dock");
@@ -80,7 +81,7 @@ test("retired pages have no visible route from the top bar, mobile, tutorial or 
   assert.doesNotMatch(read("public/js/onboarding-tour.js"), /Pet Home|Slots support/);
   assert.match(read("public/js/vault-search.js"), /DCC\.nav\.isRetired\("vault"\)\) return;\n\s*if \(\(e\.metaKey/);
   assert.match(read("public/js/vault-tab.js"), /if \(!vaultRetired\(\)\) loadOntology\(\)/);
-  assert.match(read("public/js/meeting-reviews.js"), /isRetired\("meeting-reviews"\)\) return;\n\s*window\.addEventListener\("online", refresh\)/);
+  assert.match(read("public/js/meeting-reviews.js"), /isRetired\("meeting-reviews"\)\) return;\n\s*window\.addEventItineraryener\("online", refresh\)/);
   assert.match(read("public/js/social.js"), /isRetired\?\.\("social"\)\) return;\n\s*\/\/ Silent on failure/);
   // Pet Home still loads: the courier, nudges and task awards read it.
   assert.match(read("public/js/pet-home.js"), /load\(\)\.then\(renderPetHome\)/);
@@ -128,7 +129,7 @@ test("new controls meet the 44px target and the tooltip can be hovered and dismi
   assert.match(css, /\.save-status:focus-visible \.save-status-tooltip \{ opacity: 1; visibility: visible; pointer-events: auto; \}/);
   assert.match(rule(".dcc-cluster .save-status-tooltip::before"), /bottom: 100%;[\s\S]*height: 8px/, "bridge over the gap");
   assert.match(css, /\.save-status:is\(\.tooltip-dismissed, \[aria-expanded="true"\]\) \.save-status-tooltip \{ opacity: 0; visibility: hidden; \}/);
-  assert.match(read("public/js/shell.js"), /document\.activeElement === button \|\| button\.matches\(":hover"\)\) button\.classList\.add\("tooltip-dismissed"\)/);
+  assert.match(read("public/js/shell.js"), /document\.activeElement === button \|\| button\.matches\(":hover"\)\) button\.classItinerary\.add\("tooltip-dismissed"\)/);
 });
 
 // ── The real controller ──
@@ -144,14 +145,14 @@ function element(tag, attrs = {}) {
     tabIndex: 0,
     style: {},
     get id() { return attributes.get("id") || ""; },
-    classList: {
+    classItinerary: {
       add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c),
       toggle: (c, on) => { const want = on === undefined ? !classes.has(c) : !!on; if (want) classes.add(c); else classes.delete(c); return want; }
     },
     getAttribute: (k) => (attributes.has(k) ? attributes.get(k) : null),
     setAttribute: (k, v) => attributes.set(k, String(v)),
     removeAttribute: (k) => attributes.delete(k),
-    addEventListener: (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); },
+    addEventItineraryener: (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); },
     dispatch: (type, event = {}) => (listeners[type] || []).forEach((fn) => fn(Object.assign({ type, preventDefault() {}, target: el }, event))),
     click: () => el.dispatch("click"),
     focus: () => { doc.activeElement = el; },
@@ -172,7 +173,7 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
   const views = ["queue", "list", "calendar"].map((v) => add(element("button", { role: "tab", "data-task-view": v, id: "task-view-" + v })));
   const toggle = add(element("button", { id: "task-actual-toggle", hidden: true }));
   const panels = ["working-queue", "schedule", "budget", "activity", "social", "vault"].map((p) => add(element("div", { class: "tab-content" + (p === "working-queue" ? " active" : ""), id: "tab-" + p })));
-  const docListeners = {};
+  const docItineraryeners = {};
   const events = [];
   doc = {
     readyState: "complete",
@@ -185,8 +186,8 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
       "[data-task-view]": views,
       ".task-add-pop .sub-add-input": []
     })[selector] || [],
-    addEventListener: (type, fn) => { (docListeners[type] = docListeners[type] || []).push(fn); },
-    dispatchEvent: (event) => { events.push(event); (docListeners[event.type] || []).forEach((fn) => fn(event)); }
+    addEventItineraryener: (type, fn) => { (docItineraryeners[type] = docItineraryeners[type] || []).push(fn); },
+    dispatchEvent: (event) => { events.push(event); (docItineraryeners[event.type] || []).forEach((fn) => fn(event)); }
   };
   const store = new Map(Object.entries(storage));
   const location = { href: "https://dcc.test/" + search, search };
@@ -197,7 +198,7 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
     at += delta;
     const u = new URL(entries[at].href);
     location.href = u.href; location.search = u.search;
-    winListeners.popstate.forEach((fn) => fn({}));
+    winItineraryeners.popstate.forEach((fn) => fn({}));
   };
   const history = {
     get state() { return entries[at].state === undefined ? null : JSON.parse(JSON.stringify(entries[at].state)); },
@@ -207,7 +208,7 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
     back() { go(-1); },
     forward() { go(1); }
   };
-  const winListeners = { popstate: [] };
+  const winItineraryeners = { popstate: [] };
   const toasts = [], runs = [], scheduleViews = [];
   class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } }
   const DCC = {
@@ -217,7 +218,7 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
   };
   const window = {
     DCC, localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) },
-    addEventListener: (type, fn) => { (winListeners[type] = winListeners[type] || []).push(fn); },
+    addEventItineraryener: (type, fn) => { (winItineraryeners[type] = winItineraryeners[type] || []).push(fn); },
     applyScheduleView: (state, prev) => scheduleViews.push({ state: Object.assign({}, state), prev: prev && Object.assign({}, prev) }),
     fetch: () => { throw new Error("navigation must not call the network"); }
   };
@@ -226,7 +227,7 @@ function harness({ search = "", storage = {}, historyState = null } = {}) {
   vm.runInContext(slice(source, "// ======== NAVIGATION ========", "// ======== TASK MENU ACCORDION ========"), context);
   return { DCC, doc, pages, views, toggle, panels, location, history, store, toasts, runs, scheduleViews, events, byId };
 }
-const activePanel = (h) => h.panels.find((p) => p.classList.contains("active")).id;
+const activePanel = (h) => h.panels.find((p) => p.classItinerary.contains("active")).id;
 // Objects built inside the VM have another realm's prototype; compare by value.
 const sameState = (value, expected, message) => assert.deepEqual(JSON.parse(JSON.stringify(value)), expected, message);
 
@@ -276,9 +277,9 @@ test("views, pages, Actual and Back follow one state and keep other parameters",
 // A reload keeps the URL, the entry's history state and storage.
 const reload = (h) => harness({ search: h.location.search, storage: Object.fromEntries(h.store), historyState: h.history.state });
 
-test("queue, List, Actual, Calendar, Budget, Tasks, Back, Back, Forward, Tasks keeps Calendar", () => {
+test("queue, Itinerary, Actual, Calendar, Budget, Tasks, Back, Back, Forward, Tasks keeps Calendar", () => {
   const h = harness();
-  h.views[1].click();          // List
+  h.views[1].click();          // Itinerary
   h.toggle.click();            // Actual on
   h.views[2].click();          // Calendar
   h.pages[1].click();          // Budget
@@ -316,7 +317,7 @@ test("explicit Actual off survives reload and Back on a past day", () => {
   sameState(r.DCC.nav.get(), { page: "tasks", view: "list", actual: false });
 });
 
-test("on a past day, List -> Calendar -> Back/Forward keeps the Actual default; returning to today restores the preference", () => {
+test("on a past day, Itinerary -> Calendar -> Back/Forward keeps the Actual default; returning to today restores the preference", () => {
   const h = harness({ search: "?tab=tasks&view=list&date=2026-10-01" });
   h.DCC.nav.setArchive(true);
   sameState(h.DCC.nav.get(), { page: "tasks", view: "list", actual: true });
@@ -335,7 +336,7 @@ test("on a past day, List -> Calendar -> Back/Forward keeps the Actual default; 
   sameState(h.DCC.nav.get(), { page: "tasks", view: "list", actual: false }, "no default once back on today");
 });
 
-test("on a past day, explicit Actual off survives List -> Calendar -> Back/Forward", () => {
+test("on a past day, explicit Actual off survives Itinerary -> Calendar -> Back/Forward", () => {
   const h = harness({ search: "?tab=tasks&view=list&actual=0&date=2026-10-01" });
   h.DCC.nav.setArchive(true);
   assert.equal(h.DCC.nav.get().actual, false);
@@ -381,10 +382,10 @@ test("retired links land on Tasks with a notice and keep deep-link parameters", 
   assert.equal(h.location.search, "?tab=tasks&task=keep&view=queue");
   assert.equal(h.toasts.length, 1);
   assert.match(h.toasts[0], /^Mycelium is no longer in navigation\. Its records are kept\./);
-  assert.equal(h.panels.find((p) => p.id === "tab-vault").classList.contains("active"), false);
+  assert.equal(h.panels.find((p) => p.id === "tab-vault").classItinerary.contains("active"), false);
 });
 
-test("old Itinerary links and a stored legacy Actual view open List with Actual on", () => {
+test("old Itinerary links and a stored legacy Actual view open Itinerary with Actual on", () => {
   const h = harness({ search: "?tab=schedule", storage: { [NavState.VIEW_KEY]: "actual" } });
   sameState(h.DCC.nav.get(), { page: "tasks", view: "list", actual: true });
   assert.equal(h.location.search, "?tab=tasks&view=list", "a migrated preference is not written into the URL as a choice");
@@ -449,10 +450,10 @@ test("Day review opens only as an explicit panel under Actual", () => {
   assert.equal(h.DCC.nav.reviewOpen(), false);
 });
 
-// ── List Actual presentation ──
+// ── Itinerary Actual presentation ──
 
 function listActualContext(entries, scheduled, nav = { page: "tasks", view: "list", actual: true }) {
-  const strip = { hidden: true, innerHTML: "", querySelector: () => ({ addEventListener() {} }) };
+  const strip = { hidden: true, innerHTML: "", querySelector: () => ({ addEventItineraryener() {} }) };
   const context = vm.createContext({
     window: {}, document: { getElementById: (id) => (id === "actual-summary" ? strip : null) },
     scheduled, viewDate: "2026-11-02", schedView: nav.view,
@@ -468,7 +469,7 @@ function listActualContext(entries, scheduled, nav = { page: "tasks", view: "lis
   return { context, strip };
 }
 
-test("List Actual adds evidence chips and an edit entry point to each row", () => {
+test("Itinerary Actual adds evidence chips and an edit entry point to each row", () => {
   const scheduled = [
     { id: "a", title: "Write brief", start: "09:00", end: "10:00" },
     { id: "b", title: "Call vendor", start: "10:00", end: "10:30", actualTimeUnknown: true },
@@ -484,7 +485,7 @@ test("List Actual adds evidence chips and an edit entry point to each row", () =
   assert.match(row("c"), /data-actual-edit="c" aria-label="Add or edit actual time for Plan &lt;Q1&gt;">\+ time</);
 });
 
-test("List Actual summary keeps the completion review and Day review entry points", () => {
+test("Itinerary Actual summary keeps the completion review and Day review entry points", () => {
   const entries = [
     { id: "t1", type: "time_entry", date: "2026-11-02", properties: { blockId: "a", durSec: 600 } },
     { id: "t2", type: "time_entry", date: "2026-11-02", properties: { allocationKind: "unknown", durSec: 300 } }
@@ -529,6 +530,6 @@ test("the sync dot reports queue conflicts without resolving them", () => {
   assert.doesNotMatch(shell, /persist\(':conflict'|removeItem\("dcc-working-queue/);
   const queue = read("public/js/working-queue.js");
   assert.match(queue, /function syncState\(\)\{return \{pending:!!pending,conflict:/);
-  assert.match(queue, /List and Calendar plan when\./);
+  assert.match(queue, /Itinerary and Calendar plan when\./);
   assert.match(queue, /function activate\(id\)\{if\(DCC\.nav\)DCC\.nav\.go\(\{page:'tasks',view:'queue'\}\)/);
 });
