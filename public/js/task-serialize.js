@@ -136,6 +136,8 @@
       // Only a reference travels through ordinary task persistence; the server
       // copies the owner's saved plan and never accepts actuals here.
       ...(src.activityPlanSourceId ? { activityPlanSourceId: src.activityPlanSourceId, type: src.type, publicVisibility: "private" } : {}),
+      // A Journal carries only its stable page identity; strokes stay in the journal store.
+      ...(src.type === "journal" && src.journalId ? { journalId: src.journalId, type: "journal", publicVisibility: "private" } : {}),
       tags: Array.isArray(src.tags) ? src.tags : [],
       ...(src.stage ? {stage:src.stage} : {}),
       ...(src.dependencyWaitingItemId ? {dependencyWaitingItemId:src.dependencyWaitingItemId} : {}),

@@ -9,6 +9,7 @@ module.exports = function mount(app, ctx) {
 // download in public/js/public-todo-share.js). Pure + UMD, so requiring the
 // browser file here is deliberate, not a layering accident.
 const shareExport = require("../public/js/share-export.js");
+const TaskTypes = require("../public/js/task-types");
 
 // ── Live Todo Share API ──
 function makeShareToken() {
@@ -526,7 +527,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
     const p = block.properties || {};
     const aliases = aliasesOf(block);
     // A stale materialized timeline twin cannot make a private row public.
-    if (p.publicVisibility === "private" || p.guidedDefinitionId || ["workout", "meal", "guided"].includes(p.type)) aliases.forEach(id => hiddenIds.add(id));
+    if (p.publicVisibility === "private" || p.guidedDefinitionId || p.journalId || TaskTypes.isPrivateRecord(p.type)) aliases.forEach(id => hiddenIds.add(id));
     // Row-carried completion, the canonical one as of C5b.
     if (p.status === "done" || p.done === true || p.completedAt) aliases.forEach(id => doneIds.add(id));
     if (aliases.some(id => doneIds.has(id))) aliases.forEach(id => doneIds.add(id));

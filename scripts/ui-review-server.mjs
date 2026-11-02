@@ -28,6 +28,10 @@ if (process.env.DCC_ACTIVITY_REVIEW === "1") {
   const { default: mountActivityReview } = await import("./activity-review-backend.js");
   await mountActivityReview(app);
 }
+if (process.env.DCC_JOURNAL_REVIEW === "1") {
+  const { default: mountJournalReview } = await import("./journal-review-backend.js");
+  await mountJournalReview(app);
+}
 if (process.env.DCC_REVIEW_GLASSES_DEVICE === '1' || process.env.DCC_REVIEW_TASK_DETAILS === '1' || process.env.DCC_REVIEW_HIERARCHY === '1') app.use((_req,res,next) => {
   res.setHeader('Content-Security-Policy', "connect-src 'self'; form-action 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'");
   next();

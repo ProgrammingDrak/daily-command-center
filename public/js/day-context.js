@@ -300,7 +300,7 @@
   // invalidate() calls at each write site. The wrapped set below is the COMPLETE
   // list of blockStore write methods (a matching pointer note in block-store.js
   // reminds a maintainer to add any new mutator here too):
-  //   - createBlock/updateBlock/setTaskCompletion/workAction/reallocateTimeEntry/deleteBlock/rescheduleBlock/batchOp/undeleteBlock:
+  //   - createBlock/createBlockQueued/updateBlock/setTaskCompletion/workAction/reallocateTimeEntry/deleteBlock/rescheduleBlock/batchOp/undeleteBlock:
   //     every local write (push, reschedule, restore, commit, quick-add, unschedule,
   //     drag, clone, tombstone, batch, undelete) clears the affected date(s) after it
   //     settles.
@@ -334,6 +334,7 @@
     // block), clear all (invalidateDayContext(undefined) === clear all).
     _wrapWrite(bs, "repairPendingSubtask", () => null);
     _wrapWrite(bs, "createBlock", (a) => (a[2] && a[2].date ? [a[2].date] : null));
+    _wrapWrite(bs, "createBlockQueued", (a) => (a[2] && a[2].date ? [a[2].date] : null), () => true);
     _wrapWrite(bs, "rescheduleBlock", (a) => {
       const ds = [];
       if (a[1]) ds.push(a[1]); // targetDate
@@ -348,7 +349,7 @@
       const ds = _dateOfBlock(bs, a[0]) || [];
       if (a[2] && a[2].date) ds.push(a[2].date);
       return ds.length ? ds : null;
-    });
+    }, (a) => !!(a[2] && a[2].taskNotes !== undefined));
     _wrapWrite(bs, "setTaskCompletion", (a) => {
       const ds = _dateOfBlock(bs, a[0]) || [];
       if (a[2] && a[2].taskDate) ds.push(a[2].taskDate);
@@ -376,15 +377,22 @@
     const b = typeof bs.get === "function" ? bs.get(id) : null;
     return b && b.date ? [b.date] : null;
   }
-  function _wrapWrite(bs, name, dateOf) {
+  // `syncEnqueue(args)` marks calls whose contract is "a synchronous throw means nothing
+  // was queued" (task notes writes, createBlockQueued). Those throws must reach the caller
+  // synchronously, or a notes editor would close on text that was never saved. Every
+  // other call keeps the original async wrapper, where any throw becomes a rejection.
+  function _wrapWrite(bs, name, dateOf, syncEnqueue) {
     if (typeof bs[name] !== "function") return;
     const orig = bs[name].bind(bs);
-    bs[name] = async function () {
+    bs[name] = function () {
       const dates = dateOf(arguments); // capture before the write settles
-      const r = await orig.apply(bs, arguments);
-      if (dates && dates.length) dates.forEach((d) => invalidateDayContext(d));
-      else invalidateDayContext();
-      return r;
+      const settle = (r) => {
+        if (dates && dates.length) dates.forEach((d) => invalidateDayContext(d));
+        else invalidateDayContext();
+        return r;
+      };
+      if (syncEnqueue && syncEnqueue(arguments)) return Promise.resolve(orig.apply(bs, arguments)).then(settle);
+      return (async () => settle(await orig.apply(bs, arguments)))();
     };
   }
 

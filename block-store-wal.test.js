@@ -1309,3 +1309,288 @@ test('a second tab edit arriving during repair is retained and last-entry succes
   assert.ok(events.some(e => e.type === 'blockstore-wal-drained'));
   assert.equal(statuses.at(-1)?.status, 'ok');
 });
+
+// ── Task notes: the guarded notes write through the real store.updateBlock ──
+const TaskNotes = require("./lib/task-notes");
+const TN_DRAFTS_KEY = "blockstore-task-notes-drafts:1:ws-1";
+const tnDrafts = (storage) => JSON.parse(storage.get(TN_DRAFTS_KEY) || "[]");
+const tnNote = (text) => ({ html: "<p>" + text + "</p>", text, blocks: [{ id: "p1", type: "paragraph", content: text }] });
+const tnRow = (note, extra = {}) => ({ id: "t1", type: "block", date: "2026-07-08",
+  properties: { title: "Task", ...(note ? { _taskNotes: note } : {}), ...extra } });
+const tnOk = (body) => ({ ok: true, status: 200, json: async () => body });
+const tnConflict = () => ({ ok: false, status: 409, statusText: "conflict", json: async () => ({
+  error: "Notes changed elsewhere. Your draft is retained; review the saved notes before replacing them.", code: "TASK_NOTES_CONFLICT" }) });
+const tnIsPatch = (init) => !!init && init.method === "PATCH";
+const tnPlain = (value) => JSON.parse(JSON.stringify(value));
+const tnSettle = async (rounds = 10) => { for (let i = 0; i < rounds; i++) await new Promise(resolve => setImmediate(resolve)); };
+function tnCaptureEvents(h) {
+  const events = [];
+  h.context.CustomEvent = function(type, options) { this.type = type; this.detail = options?.detail; };
+  h.context.dispatchEvent = event => events.push(event);
+  return events;
+}
+
+test("task notes revision ids in the browser store match lib/task-notes byte for byte", () => {
+  const { store } = makeStore();
+  const samples = [
+    tnNote("plain"),
+    { text: "Café ☕ 𝄞 – “quotes” 日本語", blocks: [{ type: "checkbox", content: "x", id: "b", checked: true }], html: "<p>é</p>" },
+    { html: "", text: "", blocks: [] },
+    { html: "lone \ud800 surrogate", text: "\udfff", blocks: [] },
+    tnNote("x".repeat(70000)),
+  ];
+  for (const note of samples) assert.equal(store.taskNotesRevision(note), TaskNotes.revision(note));
+  // Every SHA-256 padding boundary for short inputs.
+  for (let n = 0; n < 140; n++) {
+    const note = { html: "", text: "a".repeat(n), blocks: [] };
+    assert.equal(store.taskNotesRevision(note), TaskNotes.revision(note), "length " + n);
+  }
+  assert.equal(store.taskNotesRevision(null), null);
+  assert.equal(store.taskNotesRevision({ b: 1, a: { d: 2, c: 3 } }), TaskNotes.revision({ a: { c: 3, d: 2 }, b: 1 }), "key order never changes the id");
+  assert.match(store.taskNotesRevision(tnNote("x")), TaskNotes.REVISION_RE);
+});
+
+test("a notes write requires its base revision and queues nothing without it", async () => {
+  const { store, storage } = makeStore({ fetchImpl: async () => tnOk(tnRow(tnNote("opened"))) });
+  await store.handleBlocksChanged({ blockIds: ["t1"] });
+  assert.throws(() => store.updateBlock("t1", null, { taskNotes: tnNote("draft"), taskNotesTarget: "task" }), /taskNotesBaseRevision/);
+  assert.equal(wal(storage).length, 0);
+  assert.equal(store.get("t1").properties._taskNotes.text, "opened");
+});
+
+test("an offline notes write and a later ordinary edit stay distinct WAL entries and both replay after reload", async () => {
+  const storage = new Map(), opened = tnNote("opened"), draft = tnNote("draft");
+  const first = makeStore({ storage, fetchImpl: async (_url, init) => {
+    if (!tnIsPatch(init)) return tnOk(tnRow(opened));
+    throw new TypeError("network down");
+  } });
+  await first.store.handleBlocksChanged({ blockIds: ["t1"] });
+  const base = first.store.taskNotesRevision(opened);
+  const pending = await first.store.updateBlock("t1", null, { taskNotes: draft, taskNotesTarget: "task", taskNotesBaseRevision: base });
+  assert.equal(pending.properties._taskNotes.text, "draft", "a transient failure keeps the optimistic draft");
+  await first.store.updateBlock("t1", { ...first.store.get("t1").properties, title: "Renamed" });
+  const entries = wal(storage);
+  assert.equal(entries.length, 2, "the ordinary edit did not supersede the buffered note");
+  const notesEntry = entries.find(e => e.data.taskNotes), ordinary = entries.find(e => !e.data.taskNotes);
+  assert.deepEqual(Object.keys(notesEntry.data).sort(), ["taskNotes", "taskNotesBaseRevisions", "taskNotesTarget"],
+    "only the note, its target and revision ids are buffered");
+  assert.deepEqual(notesEntry.data.taskNotesBaseRevisions, [base]);
+  assert.deepEqual(notesEntry.data.taskNotes, draft);
+  assert.equal(ordinary.data.properties.title, "Renamed");
+  assert.equal(first.store.get("t1").properties._taskNotes.text, "draft");
+
+  // Reload with the network back: both writes replay, notes first, then the rename.
+  const sent = [];
+  const second = makeStore({ storage, fetchImpl: async (_url, init) => {
+    if (!tnIsPatch(init)) return tnOk(tnRow(draft, { title: "Renamed" }));
+    const body = JSON.parse(init.body); sent.push(body);
+    return tnOk(tnRow(draft, { title: body.properties?.title || "Task" }));
+  } });
+  await second.store.replayWAL();
+  assert.equal(wal(storage).length, 0);
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[0].taskNotes, draft);assert.equal(sent[0].properties, undefined, "a notes replay never carries a properties bag");
+  assert.deepEqual(sent[0].taskNotesBaseRevisions, [base]);
+  assert.equal(sent[1].properties.title, "Renamed");
+  assert.equal(tnDrafts(storage).length, 0);
+});
+
+test("a newer buffered note inherits the pending base ids, and an older ack never replaces the newer draft", async () => {
+  const opened = tnNote("opened"), bodies = [];
+  let releaseFirst;
+  const { store, storage } = makeStore({ fetchImpl: async (_url, init) => {
+    if (!tnIsPatch(init)) return tnOk(tnRow(opened));
+    const body = JSON.parse(init.body); bodies.push(body);
+    if (bodies.length === 1) await new Promise(resolve => { releaseFirst = resolve; });
+    return tnOk(tnRow(body.taskNotes));
+  } });
+  await store.handleBlocksChanged({ blockIds: ["t1"] });
+  const base = store.taskNotesRevision(opened), oneRevision = store.taskNotesRevision(tnNote("one"));
+  const one = store.updateBlock("t1", null, { taskNotes: tnNote("one"), taskNotesTarget: "task", taskNotesBaseRevision: base });
+  await tnSettle();
+  assert.equal(bodies.length, 1, "the first write is in flight");
+  const two = store.updateBlock("t1", null, { taskNotes: tnNote("two"), taskNotesTarget: "task", taskNotesBaseRevision: oneRevision });
+  const buffered = wal(storage);
+  assert.equal(buffered.length, 1, "the newer note supersedes the older buffered note");
+  assert.deepEqual(buffered[0].data.taskNotesBaseRevisions, [oneRevision, base],
+    "either the landed or the unlanded predecessor is an acceptable starting point");
+  assert.ok(buffered[0].data.taskNotesBaseRevisions.every(id => TaskNotes.REVISION_RE.test(id)), "bases are bounded ids, not note snapshots");
+  releaseFirst(); await one;
+  assert.equal(store.get("t1").properties._taskNotes.text, "two", "the older ack does not replace the newer draft");
+  await two;
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(bodies[1].taskNotesBaseRevisions, [oneRevision, base]);
+  assert.equal(wal(storage).length, 0);
+  assert.equal(store.get("t1").properties._taskNotes.text, "two");
+});
+
+test("superseded drafts keep at most 20 base ids, newest first", async () => {
+  const { store, storage } = makeStore({ fetchImpl: async (_url, init) => {
+    if (!tnIsPatch(init)) return tnOk(tnRow(tnNote("opened")));
+    throw new TypeError("network down");
+  } });
+  await store.handleBlocksChanged({ blockIds: ["t1"] });
+  let base = store.taskNotesRevision(tnNote("opened"));
+  for (let i = 0; i < 25; i++) {
+    await store.updateBlock("t1", null, { taskNotes: tnNote("draft " + i), taskNotesTarget: "task", taskNotesBaseRevision: base });
+    base = store.taskNotesRevision(tnNote("draft " + i));
+  }
+  const entries = wal(storage);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].data.taskNotesBaseRevisions.length, 20);
+  assert.equal(entries[0].data.taskNotesBaseRevisions[0], store.taskNotesRevision(tnNote("draft 23")));
+  assert.ok(JSON.stringify(entries[0]).length < 4000, "the buffered entry stays small");
+});
+
+test("a live notes conflict keeps the exact draft outside the dead-letter log and shows the server's newer note", async () => {
+  const opened = tnNote("opened"), newer = tnNote("glasses newer"), draft = tnNote("desktop draft");
+  let served = opened;
+  const h = makeStore({ fetchImpl: async (_url, init) => tnIsPatch(init) ? tnConflict() : tnOk(tnRow(served)) });
+  const events = tnCaptureEvents(h);
+  await h.store.handleBlocksChanged({ blockIds: ["t1"] });
+  served = newer; // glasses saved while the desktop editor was open
+  await assert.rejects(
+    h.store.updateBlock("t1", null, { taskNotes: draft, taskNotesTarget: "task", taskNotesBaseRevision: h.store.taskNotesRevision(opened) }),
+    { status: 409, code: "TASK_NOTES_CONFLICT" });
+  assert.equal(wal(h.storage).length, 0);
+  assert.equal(dead(h.storage).length, 0, "a user draft is not a capped diagnostic");
+  const kept = tnDrafts(h.storage);
+  assert.equal(kept.length, 1);
+  assert.deepEqual(kept[0].note, draft, "the exact draft is retained");
+  assert.equal(kept[0].id, "t1");assert.equal(kept[0].target, "task");
+  assert.deepEqual(tnPlain(h.store.taskNotesDrafts()), kept);
+  assert.equal(h.store.get("t1").properties._taskNotes.text, "glasses newer", "the cache shows the server's newer note");
+  assert.deepEqual(events.filter(e => e.type === "task-notes-draft-retained").map(e => e.detail.id), ["t1"]);
+});
+
+test("a replayed notes conflict after reload keeps the exact draft and refreshes to the newer note", async () => {
+  const storage = new Map(), opened = tnNote("opened"), newer = tnNote("remote newer"), draft = tnNote("offline draft");
+  seedWal(storage, [{ op: "update", id: "t1", _walId: "notes-1", timestamp: minsAgo(30),
+    data: { taskNotes: draft, taskNotesTarget: "task", taskNotesBaseRevisions: [TaskNotes.revision(opened)] } }]);
+  const h = makeStore({ storage, fetchImpl: async (_url, init) => tnIsPatch(init) ? tnConflict() : tnOk(tnRow(newer)) });
+  const events = tnCaptureEvents(h);
+  await h.store.replayWAL();
+  assert.equal(wal(storage).length, 0);
+  assert.equal(dead(storage).length, 0);
+  assert.deepEqual(tnDrafts(storage).map(d => [d.draftId, d.id, d.note]), [["notes-1", "t1", draft]]);
+  assert.equal(h.store.get("t1").properties._taskNotes.text, "remote newer");
+  assert.ok(events.some(e => e.type === "task-notes-draft-retained"));
+});
+
+test("retained notes drafts are never evicted by the capped dead-letter log; only an explicit discard removes them", async () => {
+  const storage = new Map(), draft = tnNote("keep me");
+  seedWal(storage, [
+    { op: "update", id: "t1", _walId: "notes-keep", timestamp: minsAgo(1),
+      data: { taskNotes: draft, taskNotesTarget: "task", taskNotesBaseRevisions: [null] } },
+    ...Array.from({ length: 60 }, (_, i) => ({ op: "update", id: "gone-" + i, _walId: "gone-" + i, timestamp: minsAgo(1),
+      data: { properties: { title: "Gone " + i } } })),
+  ]);
+  const h = makeStore({ storage, fetchImpl: async (url, init) => {
+    if (!tnIsPatch(init)) return tnOk(tnRow(tnNote("server")));
+    if (String(url).endsWith("/t1")) return tnConflict();
+    return { ok: false, status: 404, statusText: "gone", json: async () => ({ error: "Block not found" }) };
+  } });
+  await h.store.replayWAL();
+  assert.equal(wal(storage).length, 0);
+  assert.equal(dead(storage).length, 50, "generic diagnostics stay capped");
+  assert.deepEqual(tnDrafts(storage).map(d => d.note), [draft], "the draft survived 60 later dead letters");
+  assert.equal(h.store.discardTaskNotesDraft("missing"), false);
+  assert.equal(h.store.discardTaskNotesDraft("notes-keep"), true);
+  assert.equal(tnDrafts(storage).length, 0);
+});
+
+test("if the draft cannot be stored, the rejected notes write stays queued instead of being dropped", async () => {
+  const storage = new Map(), draft = tnNote("unsaved");
+  seedWal(storage, [{ op: "update", id: "t1", _walId: "notes-full", timestamp: minsAgo(1),
+    data: { taskNotes: draft, taskNotesTarget: "task", taskNotesBaseRevisions: [null] } }]);
+  const h = makeStore({ storage, fetchImpl: async (_url, init) => tnIsPatch(init) ? tnConflict() : tnOk(tnRow(tnNote("server"))) });
+  const setItem = h.context.localStorage.setItem;
+  h.context.localStorage.setItem = (key, value) => { if (key === TN_DRAFTS_KEY) throw new Error("quota"); return setItem(key, value); };
+  await h.store.replayWAL();
+  assert.deepEqual(wal(storage).map(e => e._walId), ["notes-full"]);
+  assert.equal(tnDrafts(storage).length, 0);
+  assert.equal(dead(storage).length, 0);
+});
+
+test("a legacy daily note write keeps the note block identity and only changes its content", async () => {
+  const legacy = { id: "n1", type: "block", date: "2026-07-08", parent_id: "day-root-2026-07-08",
+    properties: { _sourceTaskId: "t1", html: "<p>Old</p>", text: "Old", pinned: true } };
+  const { store, storage } = makeStore({ fetchImpl: async (_url, init) => {
+    if (!tnIsPatch(init)) return tnOk(legacy);
+    throw new TypeError("network down");
+  } });
+  await store.handleBlocksChanged({ blockIds: ["n1"] });
+  const base = store.taskNotesRevision(TaskNotes.legacyNote(legacy.properties));
+  const draft = tnNote("New legacy text");
+  await store.updateBlock("n1", null, { taskNotes: draft, taskNotesTarget: "legacy", taskNotesBaseRevision: base });
+  const cached = store.get("n1").properties;
+  assert.deepEqual({ ...tnPlain(cached) }, { _sourceTaskId: "t1", pinned: true, ...draft });
+  assert.equal(cached._taskNotes, undefined, "a legacy note is never moved onto a task-owned field");
+  const [entry] = wal(storage);
+  assert.equal(entry.id, "n1");assert.equal(entry.data.taskNotesTarget, "legacy");assert.deepEqual(entry.data.taskNotesBaseRevisions, [base]);
+});
+
+test("a notes write that cannot be persisted changes nothing and sends nothing; the same draft saves once storage recovers", async () => {
+  const opened = tnNote("opened"), draft = tnNote("draft"), patches = [];
+  const h = makeStore({ fetchImpl: async (_url, init) => {
+    if (!tnIsPatch(init)) return tnOk(tnRow(opened));
+    const body = JSON.parse(init.body); patches.push(body);
+    return tnOk(tnRow(body.taskNotes));
+  } });
+  await h.store.handleBlocksChanged({ blockIds: ["t1"] });
+  const setItem = h.context.localStorage.setItem;
+  let storageFull = true;
+  h.context.localStorage.setItem = (key, value) => {
+    if (storageFull && key === WAL_KEY) throw new Error("QuotaExceededError");
+    return setItem(key, value);
+  };
+  const write = () => h.store.updateBlock("t1", null,
+    { taskNotes: draft, taskNotesTarget: "task", taskNotesBaseRevision: h.store.taskNotesRevision(opened) });
+  assert.throws(write, /not been queued/, "the failure is synchronous: nothing was queued");
+  await tnSettle();
+  assert.equal(patches.length, 0, "no request is sent before the draft is persisted");
+  assert.equal(wal(h.storage).length, 0);
+  assert.equal(h.store.get("t1").properties._taskNotes.text, "opened", "the cache never claims the unsaved draft");
+  assert.equal(tnDrafts(h.storage).length, 0);
+
+  storageFull = false;
+  const saved = await write();
+  assert.equal(patches.length, 1, "retrying the same draft really sends it");
+  assert.deepEqual(patches[0].taskNotes, draft);
+  assert.deepEqual(patches[0].taskNotesBaseRevisions, [h.store.taskNotesRevision(opened)]);
+  assert.equal(saved.properties._taskNotes.text, "draft");
+  assert.equal(h.store.get("t1").properties._taskNotes.text, "draft");
+  assert.equal(wal(h.storage).length, 0);
+});
+
+test("a queued create that cannot be persisted throws synchronously, caches nothing and sends nothing; a retry creates it", async () => {
+  const posts = [];
+  const h = makeStore({ fetchImpl: async (url, init) => {
+    if (init && init.method === "POST") { const body = JSON.parse(init.body); posts.push(body); return tnOk({ ...body, created_at: "x", updated_at: "x" }); }
+    return tnOk({});
+  } });
+  const setItem = h.context.localStorage.setItem;
+  let storageFull = true;
+  h.context.localStorage.setItem = (key, value) => {
+    if (storageFull && key === WAL_KEY) throw new Error("QuotaExceededError");
+    return setItem(key, value);
+  };
+  const props = { html: "<p>Meeting note</p>", text: "Meeting note", _sourceTaskId: "cal-1" };
+  let thrown = null;
+  try { h.store.createBlockQueued("block", props, { parentId: "day-root-2026-07-08", date: "2026-07-08" }); }
+  catch (error) { thrown = error; }
+  assert.match(String(thrown && thrown.message), /not been queued/, "the failure is synchronous");
+  await tnSettle();
+  assert.equal(posts.length, 0, "no request before the create is persisted");
+  assert.equal(wal(h.storage).length, 0);
+  assert.equal(h.store.getByType("block").filter(b => b.properties && b.properties._sourceTaskId === "cal-1").length, 0,
+    "no optimistic note claims a save that never happened");
+  // The long-standing createBlock contract still rejects instead of throwing.
+  const rejected = h.store.createBlock("block", props, { date: "2026-07-08" });
+  await assert.rejects(rejected, /not been queued/);
+  storageFull = false;
+  const created = await h.store.createBlockQueued("block", props, { parentId: "day-root-2026-07-08", date: "2026-07-08" });
+  assert.equal(posts.length, 1);assert.equal(posts[0].properties.text, "Meeting note");
+  assert.equal(created.id, posts[0].id);
+  assert.equal(wal(h.storage).length, 0);
+});

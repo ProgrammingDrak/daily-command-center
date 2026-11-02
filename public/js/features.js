@@ -401,10 +401,18 @@ function _amBuildDetails(ev){
 // Those two failures together are why the row's open-space click was disabled on
 // carryovers: it looked like a working affordance and saved to the wrong place.
 function openAddModal(taskId, taskTitle, options) {
+  // Opening while the modal is already open (switching tasks, or another surface reopening
+  // it) rebuilds the notes editor. Queue its unsaved text first; if that fails, stay on the
+  // current editor so the text is not destroyed. Returns false in that case.
+  if (_addModalNotesUnsaved() && _writeAddModalNotes() === false) return false;
   var workoutAnchor = typeof taskAnchorById === 'function' ? taskAnchorById(taskId) : null;
   var workoutTask = workoutAnchor ? workoutAnchor.ev : (typeof scheduled !== 'undefined' ? scheduled.find(ev => ev.id === taskId) : null);
   if (!options?.generic && workoutTask?.type === 'workout' && window.DCC?.Workout) {
     return DCC.Workout.open({taskId:workoutAnchor?.blockId || workoutTask._blockId || taskId,title:workoutTask.title,localId:taskId});
+  }
+  // A Journal opens straight onto its page; "Task details" stays reachable via generic.
+  if (!options?.generic && workoutTask?.type === 'journal' && window.DCC?.JournalTask) {
+    return DCC.JournalTask.open({taskId:workoutAnchor?.blockId || workoutTask._blockId || taskId,localId:taskId,journalId:workoutTask.journalId,title:workoutTask.title});
   }
   var taskOverlay = document.getElementById('add-modal-overlay');
   if (!taskOverlay.classList.contains('open')) {
@@ -424,6 +432,7 @@ function openAddModal(taskId, taskTitle, options) {
   // update never happens. _addModalBlockId short-circuits it.
   _addModalBlockId = (anchor && anchor.blockId) || null;
   if (window.DCC && DCC.Activity) DCC.Activity.taskButton(_addModalBlockId || (taskEntry && taskEntry._blockId) || taskId, taskEntry);
+  if (window.DCC && DCC.JournalTask) DCC.JournalTask.taskButton(_addModalBlockId || (taskEntry && taskEntry._blockId) || taskId, taskEntry);
   _addModalDraftTitle = (taskEntry && taskEntry.title) || taskTitle || '';
   _addModalDraftTags = taskEntry && Array.isArray(taskEntry.tags) ? taskEntry.tags.slice() : [];
   _addModalTagsDirty = false;
@@ -528,6 +537,7 @@ function openAddModal(taskId, taskTitle, options) {
   if(window._amBlockEditor) window._amBlockEditor.destroy();
   var taskFileControls=window.DCC.TaskAttachments.mount(document.getElementById('am-notes-block-editor'),_addModalBlockId);
   window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks, { onAttachmentFile: function(file){taskFileControls.add(file);}, accessibleLabel: 'Task notes', stableImagesOnly: true, onAttachmentError: function(message){ document.getElementById('am-source-status').textContent=message; } });
+  if (typeof attachTaskNotesEditor === 'function') attachTaskNotesEditor(taskId, noteVal, document.getElementById('am-notes-block-editor'), window._amBlockEditor);
   _addModalNotesSnapshot = _addModalNotesFingerprint();
 
   // Render combined items list
@@ -617,7 +627,9 @@ function saveAddModalEdits() {
   if (recordingReview && recordingReview.style.display !== 'none') {
     _persistMeetingFlag(_addModalTaskId, 'recording_review', _addModalDraftRecordingReview);
   }
-  persistAddModalEdits();
+  // Notes that could not be queued keep the modal in edit mode with the text in place;
+  // saveNotes has already shown the storage message, so do not claim submission.
+  if (persistAddModalEdits() === false) return;
   setAddModalMode(false);
   // BlockStore may buffer a write for retry. Submission is not acknowledgment.
   if (typeof showToast === 'function') showToast('Changes submitted', 'info');
@@ -628,6 +640,8 @@ function cancelAddModalEdits() {
   if (!_addModalTaskId) return;
   var taskId = _addModalTaskId;
   var fallbackTitle = taskForRepeatResponsibility(taskId, _addModalDraftTitle).title;
+  // Cancel is an explicit discard: mark the editor clean so reopening does not save it.
+  _addModalNotesSnapshot = _addModalNotesFingerprint();
   openAddModal(taskId, fallbackTitle, {generic:true});
   // openAddModal now opens in edit mode, so Cancel has to step back out of it
   // explicitly -- otherwise discarding the drafts would leave the fields hot.
@@ -717,17 +731,20 @@ function _amSetupTitle(taskId, taskEntry, fallbackTitle) {
   });
 }
 
+// Returns false, leaving the modal and its editor open, when typed notes could not be
+// queued on this device. Callers that go on to open something else must stop then.
 function closeAddModal() {
   var overlay = document.getElementById('add-modal-overlay');
-  if (window.DCCWorkSessions && typeof window.DCCWorkSessions.cancelHistory === 'function') window.DCCWorkSessions.cancelHistory();
   // The modal now opens in edit mode, so the X, Escape, and the backdrop are ordinary exits
   // from a LIVE edit session rather than from a read view. Flush typed notes before the
   // editor is torn down. Commute deliberately stays on the Save path only: persisting it on
   // every close is the {to:0,back:0} carryover wipe documented in state.js setTaskCommuteTimes.
-  var notesNow = _addModalNotesFingerprint();
-  if (notesNow !== null && notesNow !== _addModalNotesSnapshot) _writeAddModalNotes();
+  // A failed flush keeps everything open: closing would destroy text that exists nowhere else.
+  if (_addModalNotesUnsaved() && _writeAddModalNotes() === false) return false;
+  if (window.DCCWorkSessions && typeof window.DCCWorkSessions.cancelHistory === 'function') window.DCCWorkSessions.cancelHistory();
   var returnFocus = _addModalOpener;
   var returnTaskId = _addModalTaskId;
+  if (typeof releaseTaskNotesEditor === 'function') releaseTaskNotesEditor(returnTaskId);
   overlay.classList.remove('open');
   overlay.setAttribute('aria-hidden', 'true');
   _setAddModalPageInert(overlay, false);
@@ -754,6 +771,7 @@ function closeAddModal() {
     fallback = fallback || document.querySelector('.tab.active');
     if (fallback && typeof fallback.focus === 'function') fallback.focus({ preventScroll: true });
   });
+  return true;
 }
 
 function renderModalItems(taskId) {
@@ -925,7 +943,7 @@ document.addEventListener('DOMContentLoaded', function() {
     e.stopPropagation();
     if (!_addModalTaskId || typeof openRepeatResponsibilityFromTask !== 'function') return;
     var task = taskForRepeatResponsibility(_addModalTaskId);
-    closeAddModal();
+    if (closeAddModal() === false) return;
     setTimeout(function() { openRepeatResponsibilityFromTask(task); }, 0);
   });
   var delegatedBtn = document.getElementById('add-modal-delegated');
@@ -934,7 +952,7 @@ document.addEventListener('DOMContentLoaded', function() {
     e.stopPropagation();
     if (!_addModalTaskId || typeof openDelegatedFromTask !== 'function') return;
     var task = taskForRepeatResponsibility(_addModalTaskId);
-    closeAddModal();
+    if (closeAddModal() === false) return;
     setTimeout(function() { openDelegatedFromTask({ title: (task && (task.title || task.text)) || '', durMin: (task && task.durMin) || 30, sourceTaskId: (task && task.id) || _addModalTaskId }); }, 0);
   });
   document.getElementById('add-modal-overlay').addEventListener('click', function(e) {
@@ -1467,10 +1485,20 @@ function _addModalNotesFingerprint() {
   try { return JSON.stringify(window._amBlockEditor.getBlocks()); } catch (e) { return null; }
 }
 
+// True when the open modal's notes editor holds text that is not yet queued.
+function _addModalNotesUnsaved() {
+  var overlay = document.getElementById('add-modal-overlay');
+  if (!_addModalTaskId || !overlay || !overlay.classList.contains('open')) return false;
+  var notesNow = _addModalNotesFingerprint();
+  return notesNow !== null && notesNow !== _addModalNotesSnapshot;
+}
+
 // Write the notes editor into storage for the open task. Shared by the Save path and by
-// closeAddModal's dismissal flush, so the two can never drift.
+// closeAddModal's dismissal flush, so the two can never drift. Returns false when the
+// notes could not be queued on this device (saveNotes has already said so): the snapshot
+// stays put and callers keep the editor open, so the text is neither lost nor marked saved.
 function _writeAddModalNotes() {
-  if (!_addModalTaskId || !window._amBlockEditor) return;
+  if (!_addModalTaskId || !window._amBlockEditor) return true;
   var notes = loadNotes();
   var previous = notes[_addModalTaskId];
   if (!window._amBlockEditor.isEmpty()) {
@@ -1479,13 +1507,15 @@ function _writeAddModalNotes() {
   } else {
     notes[_addModalTaskId] = Object.assign({}, previous, { blocks: [], html: "", text: "" });
   }
-  saveNotes(notes, { taskId: _addModalTaskId, previous: previous });
+  if (saveNotes(notes, { taskId: _addModalTaskId, previous: previous }) === false) return false;
   _addModalNotesSnapshot = _addModalNotesFingerprint();
+  return true;
 }
 
+// Returns false when the notes could not be queued; callers must keep the modal open.
 function persistAddModalEdits() {
   persistAddModalCommute();
-  _writeAddModalNotes();
+  return _writeAddModalNotes();
 }
 window.persistAddModalEdits = persistAddModalEdits;
 

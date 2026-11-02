@@ -114,7 +114,15 @@ test("clicking a task opens the details modal already in edit mode", () => {
 
   // The X, Escape, and the backdrop now exit a live edit session, so notes flush on close.
   const close = fnBody("closeAddModal");
-  assert.match(close, /notesNow !== _addModalNotesSnapshot\) _writeAddModalNotes\(\)/);
+  assert.match(close, /if \(_addModalNotesUnsaved\(\) && _writeAddModalNotes\(\) === false\) return false;/);
+  // A notes flush that could not be queued keeps the modal (and its editor) open.
+  assert.ok(close.indexOf("_writeAddModalNotes() === false) return false") < close.indexOf("overlay.classList.remove('open')"));
+  // Switching tasks rebuilds the editor, so openAddModal honors the same failure first.
+  assert.match(open, /if \(_addModalNotesUnsaved\(\) && _writeAddModalNotes\(\) === false\) return false;/);
+  assert.ok(open.indexOf("_writeAddModalNotes() === false) return false") < open.indexOf("_addModalTaskId = taskId;"),
+    "the flush check runs before the modal is pointed at the next task");
+  assert.match(save, /if \(persistAddModalEdits\(\) === false\) return;\s*setAddModalMode\(false\);/);
+  assert.match(cancel, /_addModalNotesSnapshot = _addModalNotesFingerprint\(\);\s*openAddModal\(taskId, fallbackTitle, \{generic:true\}\);/);
   // Commute stays on the Save path only: persisting it on close is the state.js carryover wipe.
   assert.doesNotMatch(close, /persistAddModalCommute|persistAddModalEdits/);
 });

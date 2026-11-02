@@ -368,3 +368,39 @@ test("findSlot: an early-ending Time Block does not shorten placement", () => {
   assert.deepEqual(findSlot({ duration: 60 }, ctx, OFF), { start: "10:00", end: "11:00", duration: 60 });
   assert.deepEqual(findSlot({ duration: 90 }, ctx, OFF), { start: "10:00", end: "11:30", duration: 90 });
 });
+
+// The write wrappers must not turn a "nothing was queued" throw into a rejection for the
+// calls whose contract is synchronous (task notes writes and createBlockQueued): a notes
+// editor relies on it to stay open instead of closing on text that was never saved.
+test("day-context write wrappers keep a failed notes enqueue synchronous and other failures async", async () => {
+  const fs = require("node:fs"), vm = require("node:vm");
+  const notQueued = () => { throw new Error("Local save failed. This change has not been queued."); };
+  const store = {
+    CLIENT_ID: "c1", get: () => null,
+    updateBlock: notQueued, createBlockQueued: notQueued, createBlock: notQueued,
+  };
+  const context = { blockStore: store, fetch: async () => ({ json: async () => [] }), console };
+  context.self = context;
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(require.resolve("./public/js/day-context.js"), "utf8"), context);
+  await context.DCC.getDayContext(null); // installs the hooks
+  assert.notEqual(store.updateBlock, notQueued, "updateBlock is wrapped");
+  assert.throws(() => store.updateBlock("t1", null, { taskNotes: { html: "", text: "", blocks: [] }, taskNotesTarget: "task", taskNotesBaseRevision: null }),
+    /not been queued/, "a notes write that was not queued throws synchronously");
+  assert.throws(() => store.createBlockQueued("block", {}, { date: "2026-07-15" }), /not been queued/);
+  // Every other write keeps the original async contract: the throw becomes a rejection.
+  let ordinary;
+  assert.doesNotThrow(() => { ordinary = store.updateBlock("t1", { title: "x" }); });
+  await assert.rejects(ordinary, /not been queued/);
+  let created;
+  assert.doesNotThrow(() => { created = store.createBlock("block", {}, {}); });
+  await assert.rejects(created, /not been queued/);
+  // A queued notes write still resolves through the wrapper.
+  const okStore = { CLIENT_ID: "c2", get: () => null, updateBlock: () => Promise.resolve({ id: "t1" }) };
+  const okContext = { blockStore: okStore, fetch: async () => ({ json: async () => [] }), console };
+  okContext.self = okContext;
+  vm.createContext(okContext);
+  vm.runInContext(fs.readFileSync(require.resolve("./public/js/day-context.js"), "utf8"), okContext);
+  await okContext.DCC.getDayContext(null);
+  assert.deepEqual(await okStore.updateBlock("t1", null, { taskNotes: { html: "", text: "", blocks: [] } }), { id: "t1" });
+});

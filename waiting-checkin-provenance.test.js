@@ -243,6 +243,20 @@ test("the origin chip closes, switches days, waits for the row, then opens -- in
   })({ dataset: { originOpen: "task-77" } });
   assert.deepEqual(calls, ["open:task-77"], "a dateless origin opens on the viewed day, no switch");
 
+  // The modal refused to close because its typed notes could not be queued on this device:
+  // the chip must not switch days or rebuild the editor, or the text would be destroyed.
+  calls = [];
+  await openChip({
+    document: { getElementById: () => overlayOpen },
+    closeAddModal: () => { calls.push("close"); return false; },
+    viewDate: "2026-08-18",
+    switchToDate: async d => calls.push("switch:" + d),
+    taskAnchorById: () => ({ ev: {}, blockId: "blk-77" }),
+    openAddModal: id => calls.push("open:" + id),
+    toast: m => calls.push("toast:" + m),
+  })({ dataset: { originOpen: "task-77", originDate: "2026-08-14" } });
+  assert.deepEqual(calls, ["close"], "a refused close stops the navigation");
+
   // Never resolves: the jump STILL opens. A hard bail here was tried and reverted --
   // closing the modal defers the render that builds the day's task array, so the miss is
   // routine on the modal path and the bail refused the jump outright. Waiting a bounded

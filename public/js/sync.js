@@ -36,7 +36,11 @@ function loadNotes() {
   }
   try { return JSON.parse(localStorage.getItem(NOTES_KEY) || "{}"); } catch(e) { return {}; }
 }
+// Returns false when a note could not be queued on this device (for example, browser
+// storage is full); the failure toast has already been shown. Callers must then keep
+// their editor open with the text in place: nothing else holds it.
 function saveNotes(data, options) {
+  let queued = true;
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.notes && window.blockStore) {
     // A detail editor owns one task's note. Preserve its block identity, and
     // persist an explicit clear rather than letting old text reappear on reopen.
@@ -46,27 +50,171 @@ function saveNotes(data, options) {
       if (!val) continue;
       const html = typeof val === "string" ? val : (val.html || "");
       const text = typeof val === "string" ? val : (val.text || "");
-      const anchor=typeof taskAnchorById==='function'?taskAnchorById(taskId):null;
-      const row=anchor&&anchor.blockId&&window.blockStore.get(anchor.blockId);
-      if(row&&(anchor.whenever||(row.properties||{})._taskNotes)){
+      // An existing note (task-owned or a legacy daily note block) saves through the
+      // guarded notes write the glasses use, against the note this editor opened with.
+      const target=_taskNotesTarget(taskId,val);
+      if(target){
         const note={html,text,blocks:Array.isArray(val.blocks)?val.blocks:[]};
-        if(typeof enqueueRowPropsWrite==='function')enqueueRowPropsWrite(row.id,props=>({...props,_taskNotes:note})).catch(()=>{if(typeof showToast==='function')showToast('Could not save task notes','error');});
-        else window.blockStore.updateBlockDebounced(row.id,{...row.properties,_taskNotes:note});
+        const opened=_taskNotesBases.get(taskId);
+        // An editor that never registered falls back to the row as cached now.
+        const base=opened?opened.revision:target.revision;
+        const revision=_taskNoteRevision(note);
+        const recovering=opened&&opened.recovering;
+        // Closing an unchanged editor is not an edit; it must not race a newer note.
+        if(revision===target.revision||revision===base||(opened&&!recovering&&_taskNotesUnchanged(opened,note))){
+          if(recovering)window.blockStore.discardTaskNotesDraft(recovering);
+          continue;
+        }
+        let write;
+        try{
+          write=window.blockStore.updateBlock(target.id,null,{taskNotes:note,taskNotesTarget:target.kind,taskNotesBaseRevision:base});
+        }catch(error){
+          // A synchronous throw means nothing was queued. The editor's starting point and any
+          // recovered draft stay as they were, so saving the same text again really retries.
+          _notesNotQueuedToast();
+          queued=false;
+          continue;
+        }
+        // Durably queued: only now does the editor move its starting point to this draft.
+        _taskNotesBases.set(taskId,{id:target.id,revision,fingerprint:JSON.stringify(note.blocks),empty:_emptyTaskNote(note),recovering:null});
+        // If the queued draft is rejected later, the store retains it again.
+        if(recovering)window.blockStore.discardTaskNotesDraft(recovering);
+        Promise.resolve(write).catch(error=>{
+          // A conflict is announced by the task-notes-draft-retained listener below.
+          if(error&&error.code==='TASK_NOTES_CONFLICT')return;
+          if(typeof showToast==='function')showToast('Could not save task notes','error');
+        });
         continue;
       }
-      if (val._blockId) {
-        window.blockStore.updateBlockDebounced(val._blockId, { html, text, _sourceTaskId: taskId });
-      } else {
-        // Create new note block
-        window.blockStore.createBlock("block", { html, text, _sourceTaskId: taskId }, {
-          parentId: window.blockStore.getDayRootId(),
-          date: window.blockStore.getCurrentDate()
-        }).then(block => { val._blockId = block.id; });
+      // No task row behind this editor id (for example a calendar or triage item, which
+      // the glasses cannot open) and no note yet: create a daily note block for it.
+      // createBlockQueued throws synchronously when the create could not be queued.
+      const createOptions={parentId:window.blockStore.getDayRootId(),date:window.blockStore.getCurrentDate()};
+      let created;
+      try{
+        created=typeof window.blockStore.createBlockQueued==='function'
+          ?window.blockStore.createBlockQueued("block",{html,text,_sourceTaskId:taskId},createOptions)
+          :window.blockStore.createBlock("block",{html,text,_sourceTaskId:taskId},createOptions);
+      }catch(error){
+        _notesNotQueuedToast();
+        queued=false;
+        continue;
       }
+      if (created && typeof created.then === "function") created.then(block => { if (block) val._blockId = block.id; });
     }
-    return;
+    return queued;
   }
-  localStorage.setItem(NOTES_KEY, JSON.stringify(data)); scheduleIDBSave();
+  try { localStorage.setItem(NOTES_KEY, JSON.stringify(data)); }
+  catch (error) { _notesNotQueuedToast(); return false; }
+  scheduleIDBSave();
+  return true;
+}
+
+// Task notes save against the note revision each editor opened with (the shared
+// lib/task-notes contract), so a note saved elsewhere meanwhile (glasses, another
+// tab) is a conflict with a retained draft instead of a silent overwrite.
+// Keyed by editor task id: {id, revision, fingerprint, empty, recovering}.
+var _taskNotesBases=new Map();
+function _notesNotQueuedToast(){
+  if(typeof showToast==='function')showToast('These notes were not saved on this device. Free up browser storage, then save again.','error');
+}
+// Called once an editor has closed for good, so the map holds only open editors.
+function releaseTaskNotesEditor(taskId){if(taskId!=null)_taskNotesBases.delete(taskId);}
+// The canonical task row behind an editor id. `row` is null when the task resolves
+// but is not in this tab's cache.
+function _taskNotesRow(taskId){
+  const anchor=typeof taskAnchorById==='function'?taskAnchorById(taskId):null;
+  const blockId=anchor&&anchor.blockId;
+  if(!blockId)return null;
+  const row=window.blockStore&&typeof window.blockStore.get==='function'?window.blockStore.get(blockId):null;
+  return {anchor,blockId,row:row||null};
+}
+function _taskNoteRevision(note){return note==null?null:window.blockStore.taskNotesRevision(note);}
+function _legacyTaskNote(p){return {html:p.html||'',text:p.text||'',blocks:Array.isArray(p.blocks)?p.blocks:[]};}
+function _emptyTaskNote(note){return !note||(!note.html&&!note.text&&!(note.blocks||[]).length);}
+function _taskNotesUnchanged(opened,note){
+  if(opened.empty&&_emptyTaskNote(note))return true;
+  return opened.fingerprint!=null&&opened.fingerprint===JSON.stringify(note.blocks);
+}
+// Where this task's note is saved: the task row when it already has a task note,
+// else its existing legacy daily note block (identity preserved), else the task
+// row for a first note. null only when the editor id names no task row at all.
+function _taskNotesTarget(taskId,val){
+  const found=_taskNotesRow(taskId),row=found&&found.row;
+  const stored=row?(row.properties||{})._taskNotes:null;
+  if(stored!=null)return {id:row.id,kind:'task',revision:_taskNoteRevision(stored)};
+  const blockId=val&&typeof val==='object'?val._blockId:null;
+  if(blockId){
+    const legacy=window.blockStore.get&&window.blockStore.get(blockId);
+    // Uncached: the starting point is unknown, so the server treats any saved note as newer.
+    return {id:blockId,kind:'legacy',revision:legacy&&legacy.properties?_taskNoteRevision(_legacyTaskNote(legacy.properties)):null};
+  }
+  // A first note on a resolvable task goes on the task row with no base note. A first
+  // save made elsewhere meanwhile (glasses or another desktop) then conflicts and the
+  // draft is retained, instead of landing in a separate note block hidden behind it.
+  // The server also refuses it if a legacy note this tab has not loaded already exists.
+  if(found)return {id:found.blockId,kind:'task',revision:null};
+  return null;
+}
+function rememberTaskNotesBase(taskId,val){
+  if(val===undefined&&typeof loadNotes==='function')val=loadNotes()[taskId];
+  const target=_taskNotesTarget(taskId,val);
+  _taskNotesBases.set(taskId,{id:target?target.id:null,revision:target?target.revision:null,fingerprint:null,empty:false,recovering:null});
+}
+// Every notes editor calls this right after it is created: it records the
+// starting note and editor content, and offers any retained draft for recovery.
+function attachTaskNotesEditor(taskId,val,container,editor){
+  rememberTaskNotesBase(taskId,val);
+  const opened=_taskNotesBases.get(taskId);
+  if(editor&&typeof editor.getBlocks==='function'){
+    try{opened.fingerprint=JSON.stringify(editor.getBlocks());}catch(e){opened.fingerprint=null;}
+    opened.empty=typeof editor.isEmpty==='function'&&!!editor.isEmpty();
+  }
+  renderTaskNotesDraftRecovery(taskId,val,container,editor);
+}
+function _taskNotesDraftsFor(taskId,val){
+  if(!window.blockStore||typeof window.blockStore.taskNotesDrafts!=='function')return [];
+  const ids=new Set(),found=_taskNotesRow(taskId);
+  if(found)ids.add(found.blockId);
+  if(val&&typeof val==='object'&&val._blockId)ids.add(val._blockId);
+  return window.blockStore.taskNotesDrafts().filter(draft=>ids.has(draft.id));
+}
+// Drafts stay until the user uses or discards them here; nothing evicts them.
+function renderTaskNotesDraftRecovery(taskId,val,container,editor){
+  if(!container||!container.parentNode||typeof document==='undefined')return;
+  const parent=container.parentNode;
+  const prior=typeof parent.querySelector==='function'&&parent.querySelector('.notes-draft-recovery');
+  if(prior)prior.remove();
+  const drafts=_taskNotesDraftsFor(taskId,val);
+  if(!drafts.length)return;
+  const draft=drafts[drafts.length-1],note=draft.note||{};
+  const box=document.createElement('div');box.className='notes-draft-recovery';box.setAttribute('role','status');
+  const message=document.createElement('p');
+  message.textContent='These notes changed somewhere else, so your earlier draft was kept'+(drafts.length>1?' ('+drafts.length+' drafts)':'')
+    +'. Retained draft: '+(String(note.text||'').trim().slice(0,280)||'(formatted notes)');
+  box.appendChild(message);
+  const button=(label,onClick)=>{const b=document.createElement('button');b.type='button';b.textContent=label;b.onclick=onClick;box.appendChild(b);return b;};
+  button('Use retained draft',()=>{
+    const blocks=Array.isArray(note.blocks)&&note.blocks.length?note.blocks:(typeof migrateHtmlToBlocks==='function'?migrateHtmlToBlocks(note.html||''):[]);
+    if(editor&&typeof editor.setBlocks==='function')editor.setBlocks(JSON.parse(JSON.stringify(blocks)));
+    // Saving now deliberately replaces the saved note shown at open; the draft is
+    // discarded only once that replacement is queued.
+    const opened=_taskNotesBases.get(taskId);if(opened)opened.recovering=draft.draftId;
+    box.remove();
+  });
+  button('Discard draft',()=>{
+    if(typeof window.confirm==='function'&&!window.confirm('Discard this retained notes draft? This cannot be undone.'))return;
+    window.blockStore.discardTaskNotesDraft(draft.draftId);
+    renderTaskNotesDraftRecovery(taskId,val,container,editor);
+  });
+  parent.insertBefore(box,container);
+}
+// One message for live and replayed rejections; block-store.js dispatches it once
+// the exact draft is safely stored.
+if(typeof window!=='undefined'&&window&&typeof window.addEventListener==='function'){
+  window.addEventListener('task-notes-draft-retained',()=>{
+    if(typeof showToast==='function')showToast('Notes changed elsewhere. Your draft is kept; reopen these notes to recover it.','error');
+  });
 }
 
 function seedNoteForTask(taskId, ev) {
@@ -220,6 +368,10 @@ function notesCheckboxChanged(){}
 window._notesBlockEditor=null;
 
 function openNotesDrawer(taskId, taskTitle) {
+  // Reopening while the drawer is open rebuilds its editor: queue the current text first,
+  // and stay on it if that fails so nothing typed is destroyed.
+  const drawer = document.getElementById("notes-drawer-overlay");
+  if (drawer && drawer.classList.contains("open") && !window._upcomingNotesMode && !_saveNotesDrawer()) return false;
   currentNotesTaskId = taskId;
   document.getElementById("notes-drawer-task-title").textContent = taskTitle || "Notes";
   const notes = loadNotes();
@@ -232,6 +384,7 @@ function openNotesDrawer(taskId, taskTitle) {
   if(window._notesBlockEditor) window._notesBlockEditor.destroy();
   const sourceAnchor=typeof taskAnchorById==='function'?taskAnchorById(taskId):null;
   window._notesBlockEditor=createBlockEditor(container, initialBlocks,window.DCC.TaskSources.editorOptions(container,sourceAnchor?sourceAnchor.ev:{}));
+  attachTaskNotesEditor(taskId, val, container, window._notesBlockEditor);
 
   renderActionItems(taskId);
   document.getElementById("notes-action-input").style.display = "none";
@@ -244,21 +397,27 @@ function openNotesDrawer(taskId, taskTitle) {
   document.getElementById("notes-drawer-overlay").classList.add("open");
   window._notesBlockEditor.focus();
 }
+// Queue the drawer editor's text. False when it could not be queued on this device.
+function _saveNotesDrawer() {
+  if (!currentNotesTaskId || !window._notesBlockEditor) return true;
+  const notes = loadNotes();
+  const blocks=window._notesBlockEditor.getBlocks();
+  notes[currentNotesTaskId] = Object.assign({},notes[currentNotesTaskId],{
+    blocks: blocks,
+    html: window._notesBlockEditor.toHtml(),
+    text: window._notesBlockEditor.toMarkdown()
+  });
+  return saveNotes(notes,{taskId:currentNotesTaskId}) !== false;
+}
+// Returns false, leaving the drawer and its text open, when the notes could not be queued.
 function closeNotesDrawer() {
-  if (currentNotesTaskId && window._notesBlockEditor) {
-    const notes = loadNotes();
-    const blocks=window._notesBlockEditor.getBlocks();
-    notes[currentNotesTaskId] = Object.assign({},notes[currentNotesTaskId],{
-      blocks: blocks,
-      html: window._notesBlockEditor.toHtml(),
-      text: window._notesBlockEditor.toMarkdown()
-    });
-    saveNotes(notes,{taskId:currentNotesTaskId});
-  }
+  if (!_saveNotesDrawer()) return false;
   document.getElementById("notes-drawer-overlay").classList.remove("open");
+  releaseTaskNotesEditor(currentNotesTaskId);
   currentNotesTaskId = null;
   if(typeof _flushDeferredRender==='function')_flushDeferredRender();
   else render();
+  return true;
 }
 function renderActionItems(taskId) {
   const actions = loadActions();

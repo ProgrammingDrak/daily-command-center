@@ -15,6 +15,10 @@
     ? String(ACCOUNT.userId) + ":" + ACCOUNT.workspaceId : "unverified";
   const WAL_KEY = "blockstore-wal:" + ACCOUNT_SCOPE;
   const WAL_DEAD_LETTER_KEY = "blockstore-wal-dead-letter:" + ACCOUNT_SCOPE;
+  // Rejected task-notes drafts. Unlike the dead-letter log (diagnostics, capped at
+  // 50), these are user content kept until the user recovers or discards them.
+  const TASK_NOTES_DRAFTS_KEY = "blockstore-task-notes-drafts:" + ACCOUNT_SCOPE;
+  const TASK_NOTES_MAX_BASE_REVISIONS = 20; // lib/task-notes MAX_BASE_REVISIONS
   let _localSaveError = null;
   const WAL_LEGACY_SESSION_KEY = "blockstore-wal"; // same name, older sessionStorage home
   const _completionMetrics = { acknowledged: 0, queued: 0, replayed: 0, rejected: 0 };
@@ -193,8 +197,10 @@
       // one segment. The stale one carries a different actionId, so the server does not
       // see a duplicate, and it is APPLIED if its pieces still fit the now-shorter
       // source: a second, unrequested re-attribution of time already moved.
+      // A task-notes write is a separate field-only intent: it supersedes only an
+      // older notes write, and an ordinary edit never discards a buffered note.
       if (entry && (entry.op === "update" || entry.op === "completion" || entry.op === "reschedule" || entry.op === "realloc") && entry.id) {
-        wal = wal.filter(e => !(e && e.op === entry.op && e.id === entry.id));
+        wal = wal.filter(e => !(e && e.op === entry.op && e.id === entry.id && isTaskNotesEntry(e) === isTaskNotesEntry(entry)));
       }
       wal.push({ ...entry, accountScope: ACCOUNT_SCOPE, _walId: entryId, timestamp: new Date().toISOString() });
       localStorage.setItem(WAL_KEY, JSON.stringify(wal));
@@ -267,6 +273,188 @@
       _completionState: "pending",
       _completionMutationId: data.mutationId || null,
     };
+  }
+
+  function isTaskNotesEntry(entry) {
+    return !!(entry && entry.op === "update" && entry.data && entry.data.taskNotes !== undefined);
+  }
+
+  function walPendingTaskNotes(id) {
+    const entries = walGet().filter(e => isTaskNotesEntry(e) && e.id === id);
+    return entries.length ? entries[entries.length - 1] : null;
+  }
+
+  // ── Task notes revisions ──
+  // Same id as lib/task-notes revision(): SHA-256 (hex) of the UTF-8 bytes of a
+  // key-sorted JSON encoding. Synchronous, so a notes write is WAL-buffered before
+  // anything awaits, and dependency-free (crypto.subtle is async and needs HTTPS).
+  const SHA256_K = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  ];
+  // Node encodes an unpaired surrogate as U+FFFD; so does this.
+  function utf8Bytes(str) {
+    const out = [];
+    for (let i = 0; i < str.length; i++) {
+      let c = str.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length) {
+        const d = str.charCodeAt(i + 1);
+        if (d >= 0xdc00 && d <= 0xdfff) { c = 0x10000 + ((c - 0xd800) << 10) + (d - 0xdc00); i++; }
+        else c = 0xfffd;
+      } else if (c >= 0xd800 && c <= 0xdfff) c = 0xfffd;
+      if (c < 0x80) out.push(c);
+      else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+      else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+      else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    }
+    return out;
+  }
+  function sha256Hex(str) {
+    const bytes = utf8Bytes(str);
+    const bitHi = Math.floor(bytes.length / 0x20000000), bitLo = (bytes.length * 8) >>> 0;
+    bytes.push(0x80);
+    while (bytes.length % 64 !== 56) bytes.push(0);
+    bytes.push(bitHi >>> 24, (bitHi >>> 16) & 255, (bitHi >>> 8) & 255, bitHi & 255,
+      bitLo >>> 24, (bitLo >>> 16) & 255, (bitLo >>> 8) & 255, bitLo & 255);
+    const H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    const w = new Array(64);
+    for (let off = 0; off < bytes.length; off += 64) {
+      for (let t = 0; t < 16; t++) {
+        const p = off + t * 4;
+        w[t] = (bytes[p] << 24) | (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3];
+      }
+      for (let t = 16; t < 64; t++) {
+        const x = w[t - 15], y = w[t - 2];
+        const s0 = ((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3);
+        const s1 = ((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10);
+        w[t] = (w[t - 16] + s0 + w[t - 7] + s1) | 0;
+      }
+      let a = H[0], b = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+      for (let t = 0; t < 64; t++) {
+        const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+        const t1 = (h + S1 + ((e & f) ^ (~e & g)) + SHA256_K[t] + w[t]) | 0;
+        const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+        const t2 = (S0 + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+        h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      H[0] = (H[0] + a) | 0; H[1] = (H[1] + b) | 0; H[2] = (H[2] + c) | 0; H[3] = (H[3] + d) | 0;
+      H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
+    }
+    return H.map(x => (x >>> 0).toString(16).padStart(8, "0")).join("");
+  }
+  function stableJson(value) {
+    return JSON.stringify(value, (_, v) => v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+  }
+  function taskNotesRevision(note) {
+    return note == null ? null : sha256Hex(stableJson(note));
+  }
+
+  // ── Retained task-notes drafts ──
+  function taskNotesDrafts() {
+    try { return JSON.parse(localStorage.getItem(TASK_NOTES_DRAFTS_KEY) || "[]"); } catch { return []; }
+  }
+  // Moves a rejected notes write out of the WAL only once the draft is safely
+  // stored; if storage fails the write stays queued rather than being dropped.
+  function retainTaskNotesDraft(entry, reason) {
+    if (!entry) return false;
+    try {
+      const drafts = taskNotesDrafts().filter(draft => draft.draftId !== entry._walId);
+      drafts.push({
+        draftId: entry._walId, id: entry.id, target: entry.data.taskNotesTarget,
+        note: entry.data.taskNotes, baseRevisions: entry.data.taskNotesBaseRevisions,
+        reason: reason || "conflict", retainedAt: new Date().toISOString(), accountScope: ACCOUNT_SCOPE,
+      });
+      localStorage.setItem(TASK_NOTES_DRAFTS_KEY, JSON.stringify(drafts));
+    } catch (e) {
+      _localSaveError = "Could not preserve a rejected notes draft. It remains queued for recovery.";
+      setError(_localSaveError);
+      return false;
+    }
+    walRemove(entry._walId);
+    if (typeof CustomEvent === "function" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(new CustomEvent("task-notes-draft-retained", { detail: { draftId: entry._walId, id: entry.id } }));
+    }
+    return true;
+  }
+  function discardTaskNotesDraft(draftId) {
+    try {
+      const drafts = taskNotesDrafts();
+      const next = drafts.filter(draft => draft.draftId !== draftId);
+      if (next.length === drafts.length) return false;
+      if (next.length) localStorage.setItem(TASK_NOTES_DRAFTS_KEY, JSON.stringify(next));
+      else localStorage.removeItem(TASK_NOTES_DRAFTS_KEY);
+      return true;
+    } catch { return false; }
+  }
+  async function refreshAfterTaskNotesRejection(id) {
+    try {
+      const latest = await apiGet("/api/blocks/" + id);
+      if (latest && latest.id && !walGet().some(entry => entry.op === "update" && entry.id === id)) cacheSet(latest);
+    } catch {}
+  }
+
+  // Explicit task-notes write (db.js applyTaskNotesWrite), for a task row
+  // (`taskNotesTarget: "task"`) or a legacy note block ("legacy"). Only the note,
+  // its target and base revision ids travel, so a stale properties bag never rides
+  // along. A rejection keeps the exact draft in the drafts store and rejects, the
+  // glasses contract: the newer saved note is never overwritten.
+  //
+  // Contract for callers: a synchronous throw means nothing was queued and nothing
+  // changed (for example, browser storage is full), so the same draft can simply be
+  // saved again. A returned promise means the draft is durably queued; it rejects
+  // only with TASK_NOTES_CONFLICT, after the draft has been retained.
+  function writeTaskNotes(id, extra, reportSaveStatus) {
+    if (!Object.prototype.hasOwnProperty.call(extra, "taskNotesBaseRevision")) {
+      throw new Error("taskNotesBaseRevision is required for a task notes write");
+    }
+    const bases = [extra.taskNotesBaseRevision];
+    // A superseded buffered draft may or may not have reached the server (a lost
+    // ack), so its bases stay acceptable. Each id is either the server note this
+    // chain started from or one of this device's own drafts; a remote edit made
+    // since is in neither, so it still conflicts instead of being overwritten.
+    const pending = walPendingTaskNotes(id);
+    for (const base of (pending && pending.data.taskNotesBaseRevisions) || []) {
+      if (!bases.includes(base)) bases.push(base);
+    }
+    const data = {
+      taskNotes: extra.taskNotes, taskNotesTarget: extra.taskNotesTarget,
+      taskNotesBaseRevisions: bases.slice(0, TASK_NOTES_MAX_BASE_REVISIONS),
+    };
+    // Persist first: if this throws, the cache must not claim an unsaved draft.
+    const walId = walPush({ op: "update", id, data });
+    const existing = cacheGet(id);
+    if (existing) {
+      const props = existing.properties || {};
+      cacheSet({ ...existing, updated_at: new Date().toISOString(),
+        properties: extra.taskNotesTarget === "legacy" ? { ...props, ...extra.taskNotes } : { ...props, _taskNotes: extra.taskNotes } });
+    }
+    return queueUpdateRequest(id, async () => {
+      try {
+        const block = await apiPatch("/api/blocks/" + id, data);
+        // A newer draft may already own the optimistic note; this older ack must not replace it.
+        if (!walGet().some(entry => entry.op === "update" && entry.id === id && entry._walId !== walId)) cacheSet(block);
+        walRemove(walId);
+        setSaved();
+        return block;
+      } catch (e) {
+        if (e && e.status === 409 && e.code === "TASK_NOTES_CONFLICT") {
+          retainTaskNotesDraft(walGet().find(entry => entry._walId === walId), "TASK_NOTES_CONFLICT");
+          await refreshAfterTaskNotesRejection(id);
+          setError(e.message || "Notes changed elsewhere. Your draft is retained.");
+          throw e;
+        }
+        setError("Save failed — buffered for retry");
+        const current = cacheGet(id);
+        return reportSaveStatus ? { ...(current || {}), _savePending: true } : current;
+      }
+    });
   }
 
   function walPendingCompletionTransition(id) {
@@ -791,6 +979,15 @@
         walRemove(entry._walId);
         succeeded++;
       } catch (e) {
+        // A rejected notes draft is user content, not diagnostics: keep it in the
+        // uncapped drafts store for recovery instead of the capped dead-letter log.
+        if (isTaskNotesEntry(entry) && isPermanentReplayFailure(entry, e)) {
+          if (retainTaskNotesDraft(entry, e.code || `${e.status || "error"} ${e.message || ""}`.trim())) {
+            await refreshAfterTaskNotesRejection(entry.id);
+            dropped++;
+          } else failed++;
+          continue;
+        }
         if (isPermanentReplayFailure(entry, e)) {
           walMoveToDeadLetter(entry, `${e.status || "error"} ${e.message || ""}`.trim());
           // `undelete` is the first op where dropping the entry leaves the CLIENT ahead of
@@ -862,86 +1059,110 @@
   }
 
   // ── Main BlockStore API ──
+  // Synchronous half of a create: mint the id, persist to the WAL, then cache the
+  // optimistic row. Throws (nothing cached, nothing sent) if the WAL cannot store it.
+  function queueCreate(type, properties, { parentId, date, sortOrder } = {}) {
+    setSaving();
+    // MINT THE ROW ID HERE. This is what makes a create idempotent, and it is the
+    // whole point of B2: db.createBlock's `ON CONFLICT (id) DO NOTHING` (A3) absorbs
+    // a replay of this same payload and hands back the row it already has, instead
+    // of inserting a second one.
+    //
+    // Before this, the server minted the id. A create the server COMMITTED but whose
+    // ack was lost stayed in the WAL (walRemove only runs on ack), replayed on the
+    // next reconnect, and the server minted a FRESH uuid for the replay — nothing
+    // linked the two rows, so one lost ack produced two tasks with the same
+    // local_id. That is the live duplicate generator behind a real share of the
+    // "clogged up" itinerary, and a caller-controlled id is what closes it.
+    // Guarded exactly as walPush guards its own id, and for the same reason: the two
+    // must not have different failure modes. crypto.randomUUID needs a secure context
+    // and we only ever run on https or localhost, but if it were ever missing, walPush
+    // would keep working while this threw. `blocks.id` is TEXT, not uuid, so the
+    // fallback is a legal primary key rather than a deferred constraint violation.
+    const id = (crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : ("c-" + Date.now() + "-" + Math.random().toString(36).slice(2));
+    const payload = {
+      id,
+      type,
+      parent_id: parentId || null,
+      date: date !== undefined ? date : _currentDate,
+      properties
+    };
+    // C6c: `sort_order` is OMITTED from the payload when the caller gave none, so db.createBlock's
+    // `== null` branch computes the day's real next slot against EVERY row -- including ones this
+    // client never loaded. Putting the local guess in the payload instead would have bypassed the
+    // server entirely (schemas.js keeps the field), which is how every dateless create ended up
+    // stamped 1000. The guess belongs on the OPTIMISTIC cache entry only, below.
+    if (sortOrder != null) payload.sort_order = sortOrder;
+    // Pre-write to WAL so the mutation survives a mid-flight reload / close. This comes
+    // before the optimistic cache entry: a create that could not be stored must not appear saved.
+    const walId = walPush({ op: "create", data: payload });
+    // Optimistic cache update BEFORE API call — so reads (e.g. loadNotes) are instant
+    // and don't race with the async API response. Same pattern as updateBlock().
+    // The id is final from the start now, so there is no placeholder entry to swap out
+    // afterwards and no window where the cache holds an id nothing else can resolve.
+    const optimistic = {
+      ...payload,
+      // Optimistic only: what the server will most likely assign, so the row renders at the end of
+      // its day for the in-flight window (and the whole offline WAL window) instead of the top.
+      sort_order: sortOrder != null ? sortOrder : _nextLocalSortOrder(date !== undefined ? date : _currentDate),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      deleted_at: null
+    };
+    cacheSet(optimistic);
+    return { payload, optimistic, walId };
+  }
+
+  async function sendQueuedCreate({ payload, optimistic, walId }) {
+    try {
+      const block = await apiPost("/api/blocks", payload);
+      // A tombstone can come back here: the id collided with a row this client
+      // created earlier and then deleted, and db.createBlock's fallback is
+      // tombstone-inclusive on purpose. cacheSet would file a deleted row back into
+      // the day cache and resurrect the task — the same trap B1 hit caching a delete
+      // op's { id, deleted_at } stub.
+      if (block && block.deleted_at) cacheDelete(block.id);
+      else if (block) cacheSet(block);
+      walRemove(walId);
+      setSaved();
+      return block;
+    } catch (e) {
+      setError("Save failed — buffered for retry");
+      // Entry stays in WAL; optimistic entry is already in cache.
+      return optimistic;
+    }
+  }
+
   const blockStore = {
 
     CLIENT_ID,
 
-    // NOTE: day-context.js wraps these mutators at runtime (createBlock,
+    // NOTE: day-context.js wraps these mutators at runtime (createBlock, createBlockQueued,
     // updateBlock, deleteBlock, rescheduleBlock, batchOp, undeleteBlock,
     // reallocateTimeEntry) to
     // invalidate its per-day slot cache after each write. If you add a new
     // server-mutating method here, add it to that wrap list too or its day can go
     // stale. cancelBufferedWrite is deliberately NOT wrapped: it abandons a write
     // that never landed, so no day's data changed.
-    // Create a new block
-    async createBlock(type, properties, { parentId, date, sortOrder } = {}) {
-      setSaving();
-      // MINT THE ROW ID HERE. This is what makes a create idempotent, and it is the
-      // whole point of B2: db.createBlock's `ON CONFLICT (id) DO NOTHING` (A3) absorbs
-      // a replay of this same payload and hands back the row it already has, instead
-      // of inserting a second one.
-      //
-      // Before this, the server minted the id. A create the server COMMITTED but whose
-      // ack was lost stayed in the WAL (walRemove only runs on ack), replayed on the
-      // next reconnect, and the server minted a FRESH uuid for the replay — nothing
-      // linked the two rows, so one lost ack produced two tasks with the same
-      // local_id. That is the live duplicate generator behind a real share of the
-      // "clogged up" itinerary, and a caller-controlled id is what closes it.
-      // Guarded exactly as walPush guards its own id, and for the same reason: the two
-      // must not have different failure modes. crypto.randomUUID needs a secure context
-      // and we only ever run on https or localhost, but if it were ever missing, walPush
-      // would keep working while this threw. `blocks.id` is TEXT, not uuid, so the
-      // fallback is a legal primary key rather than a deferred constraint violation.
-      const id = (crypto && crypto.randomUUID)
-        ? crypto.randomUUID()
-        : ("c-" + Date.now() + "-" + Math.random().toString(36).slice(2));
-      const payload = {
-        id,
-        type,
-        parent_id: parentId || null,
-        date: date !== undefined ? date : _currentDate,
-        properties
-      };
-      // C6c: `sort_order` is OMITTED from the payload when the caller gave none, so db.createBlock's
-      // `== null` branch computes the day's real next slot against EVERY row -- including ones this
-      // client never loaded. Putting the local guess in the payload instead would have bypassed the
-      // server entirely (schemas.js keeps the field), which is how every dateless create ended up
-      // stamped 1000. The guess belongs on the OPTIMISTIC cache entry only, below.
-      if (sortOrder != null) payload.sort_order = sortOrder;
-      // Optimistic cache update BEFORE API call — so reads (e.g. loadNotes) are instant
-      // and don't race with the async API response. Same pattern as updateBlock().
-      // The id is final from the start now, so there is no placeholder entry to swap out
-      // afterwards and no window where the cache holds an id nothing else can resolve.
-      const optimistic = {
-        ...payload,
-        // Optimistic only: what the server will most likely assign, so the row renders at the end of
-        // its day for the in-flight window (and the whole offline WAL window) instead of the top.
-        sort_order: sortOrder != null ? sortOrder : _nextLocalSortOrder(date !== undefined ? date : _currentDate),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        deleted_at: null
-      };
-      cacheSet(optimistic);
-      // Pre-write to WAL so the mutation survives a mid-flight reload / close.
-      const walId = walPush({ op: "create", data: payload });
-      try {
-        const block = await apiPost("/api/blocks", payload);
-        // A tombstone can come back here: the id collided with a row this client
-        // created earlier and then deleted, and db.createBlock's fallback is
-        // tombstone-inclusive on purpose. cacheSet would file a deleted row back into
-        // the day cache and resurrect the task — the same trap B1 hit caching a delete
-        // op's { id, deleted_at } stub.
-        if (block && block.deleted_at) cacheDelete(block.id);
-        else if (block) cacheSet(block);
-        walRemove(walId);
-        setSaved();
-        return block;
-      } catch (e) {
-        setError("Save failed — buffered for retry");
-        // Entry stays in WAL; optimistic entry is already in cache.
-        return optimistic;
-      }
+    // Create a new block. A failed local enqueue rejects (the long-standing contract).
+    async createBlock(type, properties, options) {
+      return sendQueuedCreate(queueCreate(type, properties, options));
     },
+
+    // Same create for a notes editor that must keep its text when nothing was queued:
+    // a failed local enqueue throws synchronously, with nothing cached and no request.
+    // A returned promise means the create is durably queued.
+    createBlockQueued(type, properties, options) {
+      return sendQueuedCreate(queueCreate(type, properties, options));
+    },
+
+    // Task notes contract shared with the server (lib/task-notes): revision ids,
+    // and the retained drafts a rejected notes write leaves for the user.
+    taskNotesRevision,
+    taskNotesDrafts,
+    discardTaskNotesDraft,
 
     // Update a block (full properties replacement)
     updateBlock(id, properties, extra) {
@@ -957,6 +1178,9 @@
       // leaking the client-only row into the HTTP body.
       const suppliedBaseBlock = extra._completionBaseBlock || null;
       delete extra._completionBaseBlock;
+      // `taskNotes` is a field-only intent; `properties` is neither sent nor cached
+      // with it (the optimistic note is composed from the cached row instead).
+      if (extra.taskNotes !== undefined) return writeTaskNotes(id, extra, reportSaveStatus);
       // Optimistic cache update BEFORE API call, and the base revision for an
       // explicit transition. A replay from another device is rejected if this
       // revision no longer matches the durable row.
