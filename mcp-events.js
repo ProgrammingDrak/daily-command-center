@@ -1,6 +1,6 @@
 // Native MCP Events for manual Working Queue check-backs. The callback supplied
 // by ChatGPT identifies the subscribed conversation; DCC never guesses a thread.
-const crypto = require("node:crypto");
+const { createSecretBox } = require("./lib/secret-box");
 const Q = require("./lib/working-queue");
 const M = require("./lib/conversation-model");
 const Webhook = require("./lib/mcp-event-webhook");
@@ -62,19 +62,8 @@ function cipher(keyText) {
   const key = Buffer.from(keyText || "", "base64");
   if (key.length !== 32 || key.toString("base64") !== keyText)
     throw new Error("DCC_EVENTS_ENCRYPTION_KEY must be a base64 32-byte key");
-  return {
-    seal(value) {
-      const iv = crypto.randomBytes(12),
-        c = crypto.createCipheriv("aes-256-gcm", key, iv);
-      return Buffer.concat([iv, c.update(JSON.stringify(value)), c.final(), c.getAuthTag()]).toString("base64");
-    },
-    open(value) {
-      const data = Buffer.from(value, "base64"),
-        c = crypto.createDecipheriv("aes-256-gcm", key, data.subarray(0, 12));
-      c.setAuthTag(data.subarray(-16));
-      return JSON.parse(Buffer.concat([c.update(data.subarray(12, -16)), c.final()]).toString());
-    }
-  };
+  const box = createSecretBox(keyText, "DCC events");
+  return { seal: box.sealJson, open: box.openJson };
 }
 function subscriptionId(identity, params) {
   return (
@@ -188,6 +177,27 @@ function createEvents({
         throw error("Choose an open task in this account working queue");
       const timestamp = now(),
         expires = new Date(timestamp + Math.min(p.ttlMs ?? 86400000, 7 * 86400000)).toISOString();
+      // Expiry, revocation and callback retirement release account capacity.
+      // Keep the matching row until refresh so its short key-rotation window can
+      // survive a retry, but count it as a new slot when reactivating it.
+      await q.query(
+        `DELETE FROM dcc_event_subscriptions s WHERE s.user_id=$1 AND s.id<>$2 AND
+        (s.disabled OR s.expires_at<=$3 OR NOT EXISTS (
+          SELECT 1 FROM conversation_grants g JOIN workspace_members m
+          ON m.user_id=g.user_id AND m.workspace_id=g.workspace_id AND m.role='owner'
+          WHERE g.id=s.grant_id AND g.revoked_at IS NULL
+          AND g.scopes ? 'dcc.read' AND g.scopes ? 'dcc.events'))`,
+        [identity.userId, id, new Date(timestamp).toISOString()]
+      );
+      if (
+        (
+          await q.query("SELECT count(*)::int AS n FROM dcc_event_subscriptions WHERE user_id=$1 AND id<>$2", [
+            identity.userId,
+            id
+          ])
+        ).rows[0].n >= 100
+      )
+        throw error("Account subscription limit reached");
       const previous = prior ? encryption.open(prior.secrets) : null;
       // Verify every new callback/secret and at least every hour on refresh.
       const verifyNeeded =
@@ -215,12 +225,6 @@ function createEvents({
         prior && !prior.disabled && Date.parse(prior.expires_at) > timestamp
           ? prior.activated_at
           : new Date(timestamp).toISOString();
-      if (
-        !prior &&
-        (await q.query("SELECT count(*)::int AS n FROM dcc_event_subscriptions WHERE user_id=$1", [identity.userId]))
-          .rows[0].n >= 100
-      )
-        throw error("Account subscription limit reached");
       await q.query(
         `INSERT INTO dcc_event_subscriptions(id,grant_id,user_id,workspace_id,task_id,callback_url,secrets,activated_at,verified_at,expires_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET secrets=EXCLUDED.secrets,
@@ -264,6 +268,24 @@ function createEvents({
           s.id,
           new Date(now()).toISOString()
         ]);
+        // Most subscriptions are idle. Read just their reminder metadata before
+        // loading the full canonical task/session/report projection. Legacy queue
+        // formats still take the canonical adoption path; actual due deliveries
+        // always use a fresh full projection under this same account lock.
+        const rotation = (
+          await q.query("SELECT state FROM work_rotations WHERE user_id=$1 AND workspace_id=$2", [
+            identity.userId,
+            identity.workspaceId
+          ])
+        ).rows[0]?.state;
+        const deadline = Date.parse(rotation?.items?.[s.task_id]?.dueAt);
+        if (rotation?.version === 2 && (!Number.isFinite(deadline) || deadline > now())) {
+          await q.query(
+            "UPDATE dcc_event_deliveries SET status='cancelled' WHERE subscription_id=$1 AND status='pending'",
+            [s.id]
+          );
+          return;
+        }
         const queue = await snapshot(q, identity, blockDB, now());
         const event = dueEvent(
           s,

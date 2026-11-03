@@ -39,20 +39,25 @@ receipt means the host accepted the event, not that investigation finished.
   no access. Subscription identities include grant, account, workspace, task and
   callback; only the host chooses the destination conversation through its callback.
 - Private tables use RLS with public/anon/authenticated grants revoked. Signing
-  keys are encrypted with AES-256-GCM under a separate server key, never logged.
+  keys use the shared versioned `lib/secret-box.js` AES-256-GCM envelope under a
+  separate server key, never logged. No live subscriptions predate this format.
 - HTTPS port 443, public-address checks for every connection, DNS pinning, no
   redirects, bounded DNS/transfer time and response sizes protect callback delivery.
   Signed, single-use challenge verification precedes application data. Refresh
   re-verifies at least hourly or on secret change; rotation signs with both secrets
   for five minutes. Subscription lifetime defaults to one day, capped at seven
-  days, including requests for indefinite lifetime. There are at most 100 stored
-  subscriptions per account. Unsubscribe deletes its callback, secrets and deliveries.
+  days, including requests for indefinite lifetime. Subscription creation cleans up
+  expired, disabled and unauthorized historical rows before enforcing 100 active
+  slots per account. Reactivation cannot bypass the cap; an active refresh keeps
+  its slot. Unsubscribe deletes its callback, secrets and deliveries.
 - A server deadline scan runs every 15 seconds (20 subscriptions per batch),
   independent of browser visibility. This is local timer dispatch; the host
   receives native events and does not poll DCC. A continuously running DCC server
   is required for timely dispatch. A suspended server catches up on current due
   deadlines while the subscription remains valid; expired subscriptions do not
-  replay historical deadlines on reactivation.
+  replay historical deadlines on reactivation. Idle version-2 reminders use a
+  lightweight metadata read; actual due attempts always load the full canonical
+  projection. Legacy queue adoption retains the existing projection path.
 - Generation/deadline-derived event IDs survive retries and restarts. Account
   locks and durable acknowledgements serialize replicas. Transient network, 408,
   429 and 5xx failures retry at most eight times, starting at 15 seconds with

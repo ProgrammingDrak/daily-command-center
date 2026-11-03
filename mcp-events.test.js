@@ -131,14 +131,110 @@ test("Standard Webhooks signature uses exact bytes and challenge echo is require
   await assert.rejects(denied.verify(sub), /verification failed/);
   for (const s of ["whsec_abc", "whsec_!!", secret + "x"]) assert.throws(() => W.signingKey(s));
 });
+test("callback DNS and transfer deadlines reject and clear their timers", async () => {
+  const jobs = new Map();
+  const setTimer = (callback, ms) => {
+    const id = Symbol();
+    jobs.set(id, { callback, ms });
+    return id;
+  };
+  const cancelTimer = (id) => jobs.delete(id);
+  const dnsPending = W.post(
+    "https://callback.example",
+    "{}",
+    {},
+    { lookup: () => new Promise(() => {}), setTimer, cancelTimer }
+  );
+  const dnsRejected = assert.rejects(dnsPending, /DNS timeout/);
+  assert.equal(jobs.size, 1);
+  assert.equal([...jobs.values()][0].ms, 3000);
+  [...jobs.values()][0].callback();
+  await dnsRejected;
+  assert.equal(jobs.size, 0);
+  let destroyed = 0;
+  const transferPending = W.post(
+    "https://callback.example",
+    "{}",
+    {},
+    {
+      lookup: async () => [{ address: "8.8.8.8", family: 4 }],
+      setTimer,
+      cancelTimer,
+      request: () => {
+        const req = new EventEmitter();
+        req.end = () => {};
+        req.destroy = (err) => {
+          destroyed++;
+          req.emit("error", err);
+          req.emit("close");
+        };
+        return req;
+      }
+    }
+  );
+  const transferRejected = assert.rejects(transferPending, /Callback timeout/);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(jobs.size, 1);
+  assert.equal([...jobs.values()][0].ms, 10000);
+  [...jobs.values()][0].callback();
+  await transferRejected;
+  assert.equal(destroyed, 1);
+  assert.equal(jobs.size, 0);
+});
+test("callback response byte limit destroys oversized responses and cleans timers", async () => {
+  for (const bytes of [8192, 8193]) {
+    const jobs = new Set();
+    let destroyed = 0;
+    const promise = W.post(
+      "https://callback.example",
+      "{}",
+      {},
+      {
+        lookup: async () => [{ address: "8.8.8.8", family: 4 }],
+        setTimer: (callback) => {
+          jobs.add(callback);
+          return callback;
+        },
+        cancelTimer: (id) => jobs.delete(id),
+        request: (_url, _options, respond) => {
+          const req = new EventEmitter();
+          req.end = () => {
+            const res = new EventEmitter();
+            res.statusCode = 200;
+            res.destroy = (err) => {
+              destroyed++;
+              res.emit("error", err);
+              req.emit("close");
+            };
+            respond(res);
+            res.emit("data", Buffer.alloc(bytes, 65));
+            res.emit("end");
+            req.emit("close");
+          };
+          return req;
+        }
+      }
+    );
+    if (bytes === 8192) {
+      assert.equal((await promise).body.length, 8192);
+      assert.equal(destroyed, 0);
+    } else {
+      await assert.rejects(promise, /too large/);
+      assert.equal(destroyed, 1);
+    }
+    assert.equal(jobs.size, 0);
+  }
+});
 test("stored callback secrets are authenticated ciphertext", () => {
   const cipher = E.cipher(key),
     encrypted = cipher.seal({ secret });
   assert.ok(!encrypted.includes(secret));
   assert.deepEqual(cipher.open(encrypted), { secret });
-  const damaged = Buffer.from(encrypted, "base64");
-  damaged[15] ^= 1;
-  assert.throws(() => cipher.open(damaged.toString("base64")));
+  assert.ok(encrypted.startsWith("v1."), "uses the shared secret-box envelope");
+  const damaged = encrypted.split(".");
+  damaged[2] = (damaged[2][0] === "x" ? "y" : "x") + damaged[2].slice(1);
+  assert.throws(() => cipher.open(damaged.join(".")));
+  assert.throws(() => E.cipher(Buffer.alloc(32, 8).toString("base64")).open(encrypted));
   assert.throws(() => E.cipher("invalid"));
 });
 test("only the live subscribed task deadline produces a minimal attention event", () => {
@@ -223,7 +319,17 @@ test(
         return { status };
       }
     };
-    const options = { ...ctx, key, now: () => now, transport };
+    let snapshotCalls = 0;
+    const options = {
+      ...ctx,
+      key,
+      now: () => now,
+      transport,
+      snapshot: async (...args) => {
+        snapshotCalls++;
+        return require("./lib/working-queue").snapshot(...args);
+      }
+    };
     let events = E.createEvents(options);
     const params = {
       name: E.NAME,
@@ -265,11 +371,14 @@ test(
       "unverified subscription is not persisted"
     );
     await command("background-start", "a", { remindMinutes: 1 });
+    snapshotCalls = 0;
     await events.tick();
     assert.equal(sent.length, 0, "future timer does not wake chat");
+    assert.equal(snapshotCalls, 0, "idle subscriptions skip the full canonical task/session/report projection");
     now += 61000;
     await events.tick();
     assert.equal(sent.length, 1);
+    assert.equal(snapshotCalls, 1, "actual due delivery revalidates the canonical projection");
     const first = sent[0].event;
     assert.equal(first.data.prompt, "Sitrep?");
     await events.tick();
@@ -437,6 +546,66 @@ test(
       (await ctx.pool.query("SELECT * FROM dcc_event_deliveries")).rows.length,
       0,
       "unsubscribe erases callback and pending events"
+    );
+    await ctx.blockDB.createBlock({
+      id: "quota-task",
+      type: "block",
+      user_id: 1,
+      workspace_id: "ws-1",
+      properties: { local_id: "quota-task", type: "task", title: "Synthetic quota fixture", status: "open" }
+    });
+    await command("queue-add", "quota-task");
+    const quotaParams = { ...params, arguments: { task_id: "quota-task" } };
+    const quotaSub = await events.subscribe(owner, quotaParams);
+    await ctx.pool.query(
+      `INSERT INTO dcc_event_subscriptions
+      (id,grant_id,user_id,workspace_id,task_id,callback_url,secrets,activated_at,verified_at,expires_at)
+      SELECT 'quota-'||n,grant_id,user_id,workspace_id,task_id,callback_url,secrets,activated_at,verified_at,expires_at
+      FROM dcc_event_subscriptions CROSS JOIN generate_series(1,99) AS n WHERE id=$1`,
+      [quotaSub.id]
+    );
+    const nextParams = (label) => ({
+      ...quotaParams,
+      delivery: { ...quotaParams.delivery, url: "https://callback.example/" + label }
+    });
+    await assert.rejects(events.subscribe(owner, nextParams("full")), /limit reached/);
+    await ctx.pool.query("UPDATE dcc_event_subscriptions SET expires_at=$1 WHERE id='quota-1'", [
+      new Date(now - 1).toISOString()
+    ]);
+    await events.subscribe(owner, nextParams("after-expiry"));
+    await ctx.pool.query("UPDATE dcc_event_subscriptions SET disabled=TRUE WHERE id='quota-2'");
+    await events.subscribe(owner, nextParams("after-disable"));
+    await ctx.pool.query(`INSERT INTO conversation_grants(id,user_id,workspace_id,client_id,scopes,revoked_at)
+      VALUES('retired-grant',1,'ws-1','synthetic','["dcc.read","dcc.events"]',NOW())`);
+    await ctx.pool.query("UPDATE dcc_event_subscriptions SET grant_id='retired-grant' WHERE id='quota-3'");
+    await events.subscribe(owner, nextParams("after-revoke"));
+    assert.equal(
+      (await ctx.pool.query("SELECT count(*)::int AS n FROM dcc_event_subscriptions")).rows[0].n,
+      100,
+      "retired subscriptions are removed before capacity is enforced"
+    );
+    // A matching inactive row is not a free bypass of the active-account limit.
+    await ctx.pool.query("UPDATE dcc_event_subscriptions SET disabled=TRUE WHERE id=$1", [quotaSub.id]);
+    await ctx.pool.query(
+      `INSERT INTO dcc_event_subscriptions
+      (id,grant_id,user_id,workspace_id,task_id,callback_url,secrets,activated_at,verified_at,expires_at)
+      SELECT 'quota-extra',grant_id,user_id,workspace_id,task_id,callback_url,secrets,activated_at,verified_at,expires_at
+      FROM dcc_event_subscriptions WHERE id=$1`,
+      [quotaSub.id]
+    );
+    await assert.rejects(events.subscribe(owner, quotaParams), /limit reached/);
+    const activeRefresh = nextParams("after-revoke");
+    await events.subscribe(owner, activeRefresh);
+    assert.equal(
+      (await ctx.pool.query("SELECT count(*)::int AS n FROM dcc_event_subscriptions WHERE disabled=FALSE")).rows[0].n,
+      100
+    );
+    await ctx.pool.query("UPDATE dcc_event_subscriptions SET expires_at=$1", [new Date(now - 1).toISOString()]);
+    await events.subscribe(owner, quotaParams);
+    assert.equal(
+      (await ctx.pool.query("SELECT count(*)::int AS n FROM dcc_event_subscriptions")).rows[0].n,
+      1,
+      "expired history cannot permanently exhaust the account"
     );
   }
 );

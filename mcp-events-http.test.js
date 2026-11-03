@@ -99,10 +99,24 @@ test("HTTP MCP Events discovery, consent scopes, subscribe and unsubscribe", { s
   // Default-off servers do not advertise an event capability or accept subscriptions.
   const off = express();
   off.use(express.json());
+  let disabledVerifications = 0;
+  const validEventOptions = {
+    eventsKey: key,
+    eventWorker: false,
+    eventOptions: {
+      transport: {
+        verify: async () => {
+          disabledVerifications++;
+        },
+        deliver: async () => ({ status: 200 })
+      }
+    }
+  };
   const disabled = mount(off, ctx, {
     enabled: true,
     baseUrl: "https://dcc.example",
     clients: {},
+    ...validEventOptions,
     eventsEnabled: false
   });
   const offServer = await new Promise((resolve) => {
@@ -116,6 +130,29 @@ test("HTTP MCP Events discovery, consent scopes, subscribe and unsubscribe", { s
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" })
   });
   assert.equal((await response.json()).result.capabilities.events, undefined);
+  const offSubscribe = await fetch("http://127.0.0.1:" + offServer.address().port + "/mcp/dcc", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer http-grant" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "events/subscribe", params })
+  });
+  assert.equal((await offSubscribe.json()).error.code, -32601);
+  assert.equal(disabledVerifications, 0);
+  assert.equal((await ctx.pool.query("SELECT count(*)::int AS n FROM dcc_event_subscriptions")).rows[0].n, 0);
+  const previousFlag = process.env.DCC_EVENTS_ENABLED;
+  try {
+    delete process.env.DCC_EVENTS_ENABLED;
+    const defaultOff = mount(express(), ctx, {
+      enabled: true,
+      baseUrl: "https://dcc.example",
+      clients: {},
+      ...validEventOptions
+    });
+    assert.equal(defaultOff.events, null, "absence of the flag is independently default-off with a valid key");
+    defaultOff.close();
+  } finally {
+    if (previousFlag === undefined) delete process.env.DCC_EVENTS_ENABLED;
+    else process.env.DCC_EVENTS_ENABLED = previousFlag;
+  }
   const invalid = mount(express(), ctx, {
     enabled: true,
     baseUrl: "https://dcc.example",
