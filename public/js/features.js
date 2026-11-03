@@ -526,7 +526,7 @@ function openAddModal(taskId, taskTitle, options) {
 
   // Load notes into block editor
   var notes = loadNotes();
-  var noteVal = anchor?.queue ? anchor.noteValue : notes[taskId];
+  var noteVal = anchor?.queue && Object.hasOwn(anchor,'noteValue') ? anchor.noteValue : (notes[anchor?.blockId] ?? notes[taskId]);
   var initialBlocks=typeof noteBlocksForTask === 'function' ? noteBlocksForTask(taskId, noteVal, taskEntry) : null;
   if(window._amBlockEditor) window._amBlockEditor.destroy();
   var taskFileControls=window.DCC.TaskAttachments.mount(document.getElementById('am-notes-block-editor'),_addModalBlockId);

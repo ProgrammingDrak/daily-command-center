@@ -192,18 +192,15 @@ try {
   assert.equal((await task('c')).properties.taskPriority,'High','touch tap opens choices without cycling');
   await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();await closed();
 
-  await page.locator('.wq-style-options > summary').press('Enter');
-  assert.equal(await page.locator('.wq-style-samples [data-priority-level]').count(),15);
-  await page.getByRole('button',{name:'2 · Tinted',exact:true}).click();
-  assert.equal(await page.locator('#working-queue-root').getAttribute('data-priority-style'),'tinted');
-  await page.locator('.wq-style-options > summary').press('Enter');
+  assert.equal(await page.locator('.wq-style-options').count(),0,'comparison UI is not shipped');
+  assert.equal(await page.locator('#working-queue-root').getAttribute('data-priority-style'),'outline');
   await page.dragAndDrop('[data-queue-id="c"]','.wq-foreground');
   await page.getByRole('dialog').getByText('Moving to Background',{exact:true}).waitFor();
   await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();await closed();
   assert.equal((await task('a')).properties.startedAt,at,'cancelled drop preserves current timer');
 
-  assert.deepEqual(await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId)),['c','b','d']);
-  assert.equal(await page.locator('.wq-background [data-queue-id="legacy-pq"]').count(),1);
+  assert.deepEqual(await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId)),['c','b','legacy-pq','d']);
+  assert.equal(await page.locator('.wq-next [data-queue-id="legacy-pq"]').count(),1);
   assert.equal((await task('b')).properties.start,'09:00','schedule-only task remains unstarted');
   assert.equal((await task('b')).properties.startedAt,undefined);
   assert.equal((await task('a')).properties.startedAt,at,'priority changes preserve current foreground');
@@ -216,20 +213,15 @@ try {
   const priorityOrder=await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId));
   await button('b','up').click();
   assert.deepEqual(await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId)),priorityOrder,'arrows cannot silently change priority');
-  await button('d','background').click();
+  await card('d').locator('.btn-schedule').click();
+  await page.getByRole('button',{name:'Blocked / Waiting…',exact:true}).click();
   await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await closed();
-  assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),1,'setting aside does not start a background worker');
-  assert.equal((await task('d')).properties.actualMinutes,undefined,'background is not focused effort');
-  await button('d','block').click();await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await closed();
-  await button('d','unblock').click();
+  await page.waitForFunction(()=>{const item=DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='d');return item?.blocked&&item.snoozed;});
+  assert.equal((await task('d')).properties.actualMinutes,undefined,'blocking and Snooze add no focused effort');
+  await card('d').locator('.btn-schedule').click();await page.getByRole('button',{name:'Unblock task',exact:true}).click();
   await page.waitForFunction(()=>{const item=DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='d');return item?.status==='queued'&&!item.blocked;});
   assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),1,'unblock preserves history without claiming running execution');
-  await card('d').locator('.btn-schedule').click();await page.getByRole('button',{name:'Blocked / Waiting…',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await closed();
-  await card('d').locator('.btn-schedule').click();await page.getByRole('button',{name:'Unblock task',exact:true}).click();
-  await page.waitForFunction(()=>DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='d')?.status==='paused');
-  assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),0,'unblock preserves start history');
   await page.reload();await page.waitForSelector('[data-queue-id="b"]');
-  assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),1,'setting aside does not start a background worker');
   await setPriority('c','Medium');
 
   await button("b", "focus").click();
@@ -285,9 +277,9 @@ try {
   await snoozeVia("a");
   await button("a", "snooze").click();
   await page.getByRole("dialog").getByLabel("Snooze duration",{exact:true}).selectOption("30");
-  await page.getByRole("dialog").getByRole("button",{name:"Save",exact:true}).click();await closed();
+  await page.getByRole("dialog").getByRole("button",{name:"Snooze",exact:true}).click();await closed();
   await page.waitForFunction(() =>
-    document.querySelector('[data-queue-id="a"]').textContent.includes("Check back in 30m")
+    Date.parse(DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='a')?.dueAt)-Date.now()>29*60000
   );
   // A late claim cannot present after a new snooze generation or completion.
   await due("a");
@@ -311,9 +303,9 @@ try {
   await snoozeVia("a");
   await button("a", "snooze").click();
   await page.getByRole("dialog").getByLabel("Snooze duration",{exact:true}).selectOption("30");
-  await page.getByRole("dialog").getByRole("button",{name:"Save",exact:true}).click();await closed();
+  await page.getByRole("dialog").getByRole("button",{name:"Snooze",exact:true}).click();await closed();
   await page.waitForFunction(() =>
-    document.querySelector('[data-queue-id="a"]').textContent.includes("Check back in 30m")
+    Date.parse(DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='a')?.dueAt)-Date.now()>29*60000
   );
   release();
   await page.evaluate(() => window.fixtureTick);

@@ -28,4 +28,25 @@ test('Snooze preserves blocked state and timing; cross-day scheduling removes me
  await send('start','same');const active=await ctx.blockDB.getBlock('same');
  await assert.rejects(ctx.blockDB.rescheduleBlocks([{id:'same',date:'2026-11-04'}],[],opts),/Pause foreground/);
  assert.deepEqual((await ctx.blockDB.getBlock('same')).properties,active.properties);assert.equal((await ctx.blockDB.getBlock('same')).date,'2026-11-03');
+ const Q=require('./lib/working-queue'),retained=await Q.load(ctx.pool,owner);
+ for(let i=0;i<100;i++){const id='retained-'+i;await ctx.blockDB.createBlock({id,type:'block',date:'2026-11-03',user_id:1,workspace_id:'ws-1',properties:{title:id,type:'task',status:'done',completedAt:new Date().toISOString()}});retained.items[id]={status:'completed'};retained.order.push(id);}
+ await Q.save(ctx.pool,owner,retained);
+ const current=await store.state(owner),order=current.queue.items.filter(item=>item.status!=='completed').map(item=>item.task.id).reverse();
+ await send('queue-reorder',undefined,{order});
+ const after=await store.state(owner);assert.equal(after.queue.items.filter(item=>item.status==='completed').length,100);
+ assert.deepEqual(after.queue.items.filter(item=>item.status!=='completed').map(item=>item.task.id),order);
+ assert.equal((await ctx.blockDB.getBlock('same')).properties.startedAt,active.properties.startedAt);
+
+});
+test('retained completions do not exhaust active queue capacity and explicit Snooze is validated',()=>{
+ const Q=require('./lib/working-queue'),M=require('./lib/conversation-model');
+ const completed=Object.fromEntries(Array.from({length:100},(_,i)=>['done-'+i,{status:'completed'}]));
+ const data={items:completed,order:Object.keys(completed)};Q.ensure(data,'new',new Date().toISOString());assert.ok(data.items.new);assert.equal(data.order.length,101);
+ const full={items:Object.fromEntries(Array.from({length:100},(_,i)=>[String(i),{status:'queued'}])),order:[]};
+ assert.throws(()=>Q.ensure(full,'extra',new Date().toISOString()),/100 active/);
+ const at=new Date().toISOString(),base={action:'queue-block',taskId:'t',sourceEventId:'test-snooze',expectedRevision:0,at,remindMinutes:30,attentionMode:'snooze'};
+ assert.equal(M.command(base).attentionMode,'snooze');
+ assert.throws(()=>M.command({...base,remindMinutes:null}));assert.throws(()=>M.command({...base,action:'queue-priority',taskPriority:'High'}));
+ const state={items:{},order:[]},row={id:'t',properties:{}};Q.setStatus(state,row,'blocked',base);assert.equal(state.items.t.snoozedUntil,state.items.t.dueAt);
+ const legacy={items:{},order:[]};Q.setStatus(legacy,row,'blocked',{...base,attentionMode:undefined});assert.equal(legacy.items.t.snoozedUntil,undefined,'generic reminder preserves main semantics');
 });

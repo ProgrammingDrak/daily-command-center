@@ -24,7 +24,7 @@ async function hold(id,action){const target=button(id,action);await target.scrol
 async function closeDetails(){await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('#add-modal-overlay.open'));}
 try{
  await api('/api/queue-review/reset',{});
- for(const id of ['a','b','c']){await make(id,({a:'Review design proposal',b:'Compare launch options',c:'Prepare release notes'})[id]);await command('queue-add',id);}
+ for(const id of ['a','b','c']){await make(id,({a:'Review design proposal',b:'Compare launch options',c:'Prepare release notes'})[id],id==='b'?{start:'09:00',end:'09:30',_taskNotes:{text:'Saved canonical itinerary notes',html:'<p>Saved canonical itinerary notes</p>'}}:{});await command('queue-add',id);}
  await make('old','Previous occurrence',{local_id:'repeat-alias'},past);await make('today','Current occurrence',{local_id:'repeat-alias'});
  await make('old-note','',{_sourceTaskId:'repeat-alias',html:'<p>Earlier occurrence notes</p>',text:'Earlier occurrence notes'},past,'old', 'note');
  await make('today-note','',{_sourceTaskId:'repeat-alias',html:'<p>Current occurrence notes</p>',text:'Current occurrence notes'},date,'today','note');
@@ -35,6 +35,21 @@ try{
  await command('queue-add','old');
  await page.goto(base,{waitUntil:'domcontentloaded'});await page.waitForFunction(()=>window.DCCWorkingQueue);await refresh();
  assert.deepEqual(await order(),['a','b','c','old']);
+ await page.evaluate(()=>{window.copyLog=[];Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>window.copyLog.push(text)}});});
+ const copiedBefore=commands.length;
+ await card('b').getByRole('button',{name:'Copy task title: Compare launch options',exact:true}).click();
+ await page.waitForFunction(()=>window.copyLog?.[0]==='Compare launch options');
+ assert.equal(commands.length,copiedBefore,'copy never mutates task state');
+ assert.equal(await page.locator('#add-modal-overlay.open,.done-modal-overlay.open,.dcc-overlay').count(),0,'copy never opens details or completion');
+ await page.evaluate(()=>{navigator.clipboard.writeText=async()=>{throw new Error('Clipboard denied');};document.execCommand=()=>false;});
+ await card('b').getByRole('button',{name:'Copy task title: Compare launch options',exact:true}).press('Enter');
+ await page.getByText('Could not copy title. Select the title and copy it manually.',{exact:true}).waitFor();
+ await page.evaluate(()=>{Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined});document.execCommand=()=>{window.fallbackTitle=document.activeElement.value;return true;};});
+ await card('b').getByRole('button',{name:'Copy task title: Compare launch options',exact:true}).click();
+ await page.waitForFunction(()=>window.fallbackTitle==='Compare launch options');
+ assert.equal(await card('b').getByRole('button',{name:'Copy task title: Compare launch options',exact:true}).evaluate(el=>el===document.activeElement),true,'clipboard fallback restores keyboard focus');
+ assert.equal(commands.length,copiedBefore);
+ assert.equal(await page.locator('.wq-style-options').count(),0);
  let before=count();await button('c','up').click();await waitOrder(['a','c','b','old']);assert.equal(count(),before+1);
  before=count();await hold('b','up');await waitOrder(['b','a','c','old']);await page.waitForTimeout(150);assert.equal(count(),before+1);
  before=count();await hold('c','down');await waitOrder(['c','b','a','old']);assert.equal(count(),before+1,'down hold also jumps top');
@@ -50,6 +65,13 @@ try{
   await page.waitForTimeout(620);await target.dispatchEvent('pointerup',{pointerId:77,button:0});assert.equal(count(),before,kind+' cancels hold');
  }
  assert.equal(await page.locator('#add-modal-overlay.open,.done-modal-overlay.open').count(),0,'ordering never opens details or completion');
+ // Opening an itinerary task with an inferred queue anchor retains its saved notes.
+ await page.locator('[data-task-view="list"]').click();
+ await page.getByRole('button',{name:'Open task details: Compare launch options',exact:true}).click();
+ await page.waitForFunction(()=>window._amBlockEditor?.toMarkdown().includes('Saved canonical itinerary notes'));
+ await closeDetails();
+ assert.equal((await api('/api/blocks/b')).properties._taskNotes.text,'Saved canonical itinerary notes');
+ await page.locator('[data-task-view="queue"]').click();await refresh();
  // Date-scoped legacy notes: same local_id, different canonical rows and days.
  await card('old').locator('.ttl').click();await page.waitForFunction(()=>window._amBlockEditor?.toMarkdown().includes('Earlier occurrence notes'));
  assert.match(await page.locator('#am-items-list').innerText(),/Earlier occurrence child/);
@@ -87,23 +109,23 @@ try{
  await card('a').getByRole('button',{name:'Schedule',exact:true}).click();await page.locator('.resched-popover').getByText('Tomorrow',{exact:true}).click();
  await page.locator('#sched-picker-overlay.open').waitFor();await page.screenshot({path:out+'/schedule-desktop.png'});
  await page.getByRole('button',{name:'⚡ Earliest free',exact:true}).click();
- await page.waitForFunction(()=>window.DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='a')?.task.date!==new Date().toISOString().slice(0,10));
+ await page.waitForFunction(()=>!window.DCCWorkingQueue.getState().queue.items.some(i=>i.task.id==='a'));
  const moved=await api('/api/blocks/a');assert.notEqual(moved.date,date);assert.ok(moved.properties.start);assert.equal(moved.properties.startedAt,undefined);
  await command('start','a');await refresh();const running=(await api('/api/blocks/a')).properties.startedAt;
  await card('a').getByRole('button',{name:'Schedule',exact:true}).click();await page.getByRole('button',{name:'Blocked / Waiting…',exact:true}).click();
- await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await page.waitForFunction(()=>window.DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='a')?.status==='blocked');
+ await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await page.waitForFunction(()=>window.DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='a')?.blocked===true);
  await page.waitForFunction(()=>!document.querySelector('.dcc-overlay'));
  const blocked=await api('/api/blocks/a');assert.ok(running);assert.ok(!blocked.properties.startedAt);assert.ok(blocked.properties.actualMinutes>=0);assert.notEqual(blocked.properties.status,'done');
  await page.evaluate(()=>window.scrollTo({top:0,behavior:'instant'}));
  await page.waitForFunction(()=>!document.body.classList.contains('dcc-shell-scrolled'));
- await card('a').getByRole('button',{name:'Schedule',exact:true}).click();await page.getByRole('button',{name:'Unblock task',exact:true}).click();await page.waitForFunction(()=>window.DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='a')?.status!=='blocked');
+ await card('a').getByRole('button',{name:'Schedule',exact:true}).click();await page.getByRole('button',{name:'Unblock task',exact:true}).click();await page.waitForFunction(()=>window.DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='a')?.blocked===false);
  // Same alias on different dates cannot redirect Schedule's blocked action.
  await make('block-old','Earlier check-in',{local_id:'block-alias'},past);await command('queue-add','block-old');await command('queue-block','block-old',{remindMinutes:null});
  await make('block-current','Current check-in',{local_id:'block-alias'});await command('start','block-current');await refresh();
  await card('block-current').getByRole('button',{name:'Schedule',exact:true}).click();
  assert.equal(await page.getByRole('button',{name:'Unblock task',exact:true}).count(),0);
  await page.getByRole('button',{name:'Blocked / Waiting…',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();
- await page.waitForFunction(()=>window.DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='block-current')?.status==='blocked');
+ await page.waitForFunction(()=>window.DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='block-current')?.blocked===true);
  assert.equal(commands.filter(c=>c.action==='queue-block').at(-1).taskId,'block-current');assert.ok(!(await api('/api/blocks/block-current')).properties.startedAt);
  await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>window.DCCWorkingQueue);await refresh();
  for(const width of [1280,375,320]){

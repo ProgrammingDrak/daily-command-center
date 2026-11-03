@@ -87,10 +87,11 @@
     return [...rows.values()].filter(row=>!row.deleted_at);
   }
   function taskPool(anchor){
-    const rows=anchor.sourceRows||[];
+    const rows=anchor.sourceRows||[],parents=new Map();
+    for(const row of rows)for(const id of new Set([row.id,row.properties?.local_id].filter(Boolean))){if(!parents.has(id))parents.set(id,[]);parents.get(id).push(row);}
     return rows.filter(r=>r.type==='block').map(row=>{
       const ev=DCC.TaskModel.fromBlock(row);ev.id=row.id;ev.__unf={sourceId:row.id,sourceDate:row.date,sourceBlock:row};
-      for(const key of ['subtaskOf','wrapParent']){const parent=rows.filter(p=>p.id===ev[key]||p.properties?.local_id===ev[key]);if(parent.length===1)ev[key]=parent[0].id;}
+      for(const key of ['subtaskOf','wrapParent']){const parent=parents.get(ev[key])||[];if(parent.length===1)ev[key]=parent[0].id;}
       return ev;
     });
   }
@@ -99,7 +100,6 @@
     await window.loadTaskNotesForAnchor(anchor);
     if(typeof window.renderModalItems==='function')window.renderModalItems(taskId);
   }
-  let priorityStyle='outline';
   async function addTask(task){
     const row=window.DCCWorkSessions?.blockFor(task);
     if(!row)throw new Error('Task is not synced yet. Wait for it to save, then try again.');
@@ -122,7 +122,6 @@
   function render(){
     const root=document.getElementById('working-queue-root');if(!root)return;
     const focused=document.activeElement,focusKey=focused?.dataset.queueAction,focusId=focused?.dataset.taskId;
-    const stylesOpen=root.querySelector('.wq-style-options')?.open;
     const completedOpen=root.querySelector('.wq-completed')?.open;
     const periodFocused=focused?.matches('[data-completed-period]');
     const completionView=window.DCCCompletedQueueFilter.select(items(),completedPeriod,Date.now(),state.timeZone);
@@ -168,6 +167,15 @@
         const utility=node.querySelector('.it-list-utility');
         utility.insertAdjacentHTML('beforeend',button('priority','<span aria-hidden="true">'+({'Very low':'⇊',Low:'↓',Medium:'=',High:'↑','Very high':'⇈'})[priority]+'</span>',row.id,'class="wq-priority-symbol" data-priority-level="'+levels.indexOf(priority)+'" aria-haspopup="dialog" aria-label="'+label+'" title="'+label+'"'));
       }
+      const title=node.querySelector('.ttl'),titleGroup=document.createElement('span'),copy=document.createElement('button');
+      titleGroup.className='wq-title-with-copy';title.replaceWith(titleGroup);titleGroup.appendChild(title);
+      const exactTitle=String(row.properties.title??task.title??'');
+      copy.type='button';copy.className='wq-copy-title';copy.dataset.queueAction='copy-title';copy.dataset.taskId=row.id;
+      copy.setAttribute('aria-label','Copy task title: '+exactTitle);copy.title='Copy task title';copy.draggable=false;
+      copy.innerHTML='<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg>';
+      copy.addEventListener('pointerdown',event=>event.stopPropagation());
+      copy.addEventListener('click',async event=>{event.preventDefault();event.stopPropagation();const hadFocus=document.activeElement===copy;copy.disabled=true;try{const ok=await DCC.copyText(exactTitle);DCC.toast(ok?'Title copied':'Could not copy title. Select the title and copy it manually.',ok?'success':'error');}finally{copy.disabled=false;if(hadFocus&&document.activeElement===document.body){const current=document.querySelector('[data-queue-id="'+CSS.escape(row.id)+'"] .wq-copy-title');current?.focus({preventScroll:true});}}});
+      titleGroup.appendChild(copy);
       node.tabIndex=0;node.draggable=!completed;
       const actions=document.createElement('div');actions.className='wq-actions';actions.innerHTML=controls;
       const schedule=node.querySelector('.btn-schedule');if(schedule)actions.prepend(schedule);
@@ -184,13 +192,11 @@
       node.querySelectorAll('[data-queue-action="up"],[data-queue-action="down"]').forEach(control=>DCC.bindHoldAction(control,()=>reorder(row.id,control.dataset.queueAction==='up'?-1:1)?.catch(warn),()=>reorder(row.id,'top')?.catch(warn)));
       cards.push(node);return '<div data-wq-card="'+(cards.length-1)+'"></div>';
     }
-    function lane(title,rows,empty,cls='',policy='') {return '<section class="wq-lane '+cls+'"><div class="wq-heading"><h2>'+title+' <small>'+rows.length+'</small></h2><details class="wq-help" data-queue-help="'+policy+'"><summary aria-label="About '+title+'">ⓘ</summary><p>'+esc(window.DCCQueuePolicy.tips[policy])+'</p></details></div>'+(cls==='wq-next'?'<p class="wq-empty">Very high → High → Medium → Low → Very low. Move tasks within a priority; change Priority to move between levels.</p>':'')+(rows.length?rows.map(card).join(''):'<p class="wq-empty">'+empty+'</p>')+'</section>';}
+    function lane(title,rows,empty,cls='',policy='') {return '<section class="wq-lane '+cls+'" data-queue-lane="'+cls+'"><div class="wq-heading"><h2>'+title+' <small>'+rows.length+'</small></h2><details class="wq-help" data-queue-help="'+policy+'"><summary aria-label="About '+title+'">ⓘ</summary><p>'+esc(window.DCCQueuePolicy.tips[policy])+'</p></details></div>'+(cls==='wq-next'?'<p class="wq-empty">Very high → High → Medium → Low → Very low. Move tasks within a priority; change Priority to move between levels.</p>':'')+(rows.length?rows.map(card).join(''):'<p class="wq-empty">'+empty+'</p>')+'</section>';}
     const fg=all.filter(i=>i.status==='foreground'),needs=all.filter(i=>i.needsYou&&i.status!=='foreground'),background=all.filter(i=>i.status==='background'&&!i.needsYou),upNext=DCC.TaskPriority.group(all.filter(i=>i.status==='queued'&&!i.needsYou).map(i=>({id:i.task.id,taskPriority:i.taskPriority,item:i}))).flatMap(group=>group.tasks.map(row=>row.item));
     const lanes={'wq-foreground':lane('Foreground',fg,'Choose a task below to begin focused work.','wq-foreground','foreground'),'wq-needs':lane('Needs You',needs,'No reported review actions or manual check-backs due.','wq-needs','needs'),'wq-next':lane('Priority Queue',upNext,'No inactive tasks in your queue. Add existing tasks to prioritize them.','wq-next','priority'),'wq-background':lane('Background',background,'No active workers or snoozed requests.','wq-background','background')};
-    const styleNames={outline:'1 · Outline',tinted:'2 · Tinted',signal:'3 · Signal'};
-    const styleOptions='<details class="wq-style-options"><summary>Compare priority styles</summary><p>Five saved levels, from Very low to Very high. Choose a preview style below.</p>'+Object.entries(styleNames).map(([style,label])=>'<button type="button" data-queue-action="priority-style" data-style="'+style+'" aria-pressed="'+(style===priorityStyle)+'">'+label+'</button><div class="wq-style-samples" data-priority-style="'+style+'">'+DCC.TaskPriority.levels.map((level,i)=>'<span class="wq-priority-symbol" data-priority-level="'+i+'"><span aria-hidden="true">'+['⇊','↓','=','↑','⇈'][i]+'</span><small>'+level+'</small></span>').join('')+'</div>').join('')+'</details>';
-    root.dataset.priorityStyle=priorityStyle;
-    root.innerHTML='<p id="wq-order-help" class="wq-order-help">Order: click ↑ or ↓ for one step; hold either arrow or press Shift+Enter to jump to the top of its group.</p><header class="wq-header"><div><h1>Working Queue</h1><p>One foreground task. Active workers and snoozed requests in Background; inactive work in Priority. Itinerary and Calendar plan when.</p></div>'+button('add','Add tasks')+'</header><p class="wq-sync" role="status">'+esc(sending?'Saving…':pending?'Update saved on this device; awaiting confirmation.':problem?'Offline or unavailable: '+problem:'Synced · waiting time is not focused effort')+'</p>'+(pending?button('retry','Retry saved update'):'')+(conflict?'<p class="wq-conflict">'+esc(conflict.message)+' Your attempted change is retained. Review current work before trying again. '+button('conflict','Review attempted change')+button('clear-conflict','Dismiss conflict')+'</p>':'')+(state.otherWorkspaceForeground?'<p class="wq-conflict">Work is active in another workspace. Pause it there before bringing a task forward here.</p>':'')+styleOptions+'<div class="wq-grid">'+layout().map(names=>'<div class="wq-col">'+names.map(name=>lanes[name]).join('')+'</div>').join('')+'</div>'+completedHtml();
+    root.dataset.priorityStyle='outline';
+    root.innerHTML='<p id="wq-order-help" class="wq-order-help">Order: click ↑ or ↓ for one step; hold either arrow or press Shift+Enter to jump to the top of its group.</p><header class="wq-header"><div><h1>Working Queue</h1><p>One foreground task. Active workers and snoozed requests in Background; inactive work in Priority. Itinerary and Calendar plan when.</p></div>'+button('add','Add tasks')+'</header><p class="wq-sync" role="status">'+esc(sending?'Saving…':pending?'Update saved on this device; awaiting confirmation.':problem?'Offline or unavailable: '+problem:'Synced · waiting time is not focused effort')+'</p>'+(pending?button('retry','Retry saved update'):'')+(conflict?'<p class="wq-conflict">'+esc(conflict.message)+' Your attempted change is retained. Review current work before trying again. '+button('conflict','Review attempted change')+button('clear-conflict','Dismiss conflict')+'</p>':'')+(state.otherWorkspaceForeground?'<p class="wq-conflict">Work is active in another workspace. Pause it there before bringing a task forward here.</p>':'')+'<div class="wq-grid">'+layout().map(names=>'<div class="wq-col">'+names.map(name=>lanes[name]).join('')+'</div>').join('')+'</div>'+completedHtml();
     function completedHtml(){
       const help=completedPeriod==='today'?'Calendar day · '+completionView.timeZone:completedPeriod==='latest'?'Most recent known completion':completedPeriod==='all'?'All retained queue history':'Rolling last '+periodLabel.toLowerCase();
       return '<details class="wq-completed"><summary>Completed · '+esc(periodLabel)+' · '+completionView.rows.length+'</summary><div class="wq-completed-controls"><label>Completed timeframe<select data-completed-period aria-describedby="wq-completed-help">'+window.DCCCompletedQueueFilter.options.map(([value,label])=>'<option value="'+value+'"'+(value===completedPeriod?' selected':'')+'>'+label+'</option>').join('')+'</select></label><p class="wq-time" id="wq-completed-help">'+esc(help)+'</p></div><p class="wq-time" role="status">'+completionView.rows.length+' of '+completionView.total+' retained completed tasks'+(completionView.unknown?' · '+completionView.unknown+' without a completion time'+(completedPeriod==='all'?'':' (shown in All time)'):'')+'</p>'+(completionView.rows.length?completionView.rows.map(card).join(''):'<p class="wq-empty">No completed tasks in this time range.</p>')+'</details>';
@@ -200,8 +206,6 @@
     if(contextFocused)root.querySelector('[data-queue-id="'+CSS.escape(contextFocused)+'"] .wq-context > summary')?.focus({preventScroll:true});
     for(const id of helpOpen)root.querySelector('[data-queue-help="'+CSS.escape(id)+'"]')?.setAttribute('open','');
     if(helpFocused)root.querySelector('[data-queue-help="'+CSS.escape(helpFocused)+'"] > summary')?.focus({preventScroll:true});
-    if(stylesOpen)root.querySelector('.wq-style-options').open=true;
-    if(focused?.dataset.style)root.querySelector('[data-style="'+CSS.escape(focused.dataset.style)+'"]')?.focus({preventScroll:true});
     if(completedOpen)root.querySelector('.wq-completed')?.setAttribute('open','');
     if(periodFocused)root.querySelector('[data-completed-period]')?.focus({preventScroll:true});
     if(completedFocused)root.querySelector('.wq-completed > summary')?.focus({preventScroll:true});
@@ -252,11 +256,11 @@
     const aliases=items().filter(i=>i.task.properties.local_id===task.id);
     return aliases.length===1?aliases[0]:null;
   }
-  function isBlocked(task){return itemForTask(task)?.status==='blocked';}
+  function isBlocked(task){return !!itemForTask(task)?.blocked;}
   async function openBlocked(task){
     await refresh();let item=itemForTask(task);
     if(!item){const row=await DCC.api('/api/blocks/'+encodeURIComponent(task._blockId||task.id));item={task:row,status:'queued'};}
-    if(item.status==='blocked')return send(envelope('queue-unblock',{taskId:item.task.id}));
+    if(item.blocked)return send(envelope('queue-unblock',{taskId:item.task.id}));
     return transition('queue-block',item);
   }
   function modal(title,body,submit,label='Save',onClose){let busy=false;return DCC.overlay.open({kind:'modal',title,body,onClose,canClose:()=>!busy,actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
@@ -283,7 +287,7 @@
     let completionNote;
     if(action==='done'){const anchor=await prepareTask(item.task.id);completionNote=await window.loadTaskNotesForAnchor(anchor);item=items().find(row=>row.task.id===item.task.id)||item;}
     const timerNeeded=action==='start'?!!displaced:['background-start','queue-block'].includes(action);
-    const timer=timerNeeded?'<label>'+'Snooze'+'<select data-minutes aria-label="Snooze duration"><option value="">No reminder</option><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="240">4 hours</option><option value="1440">24 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes<input type="number" min="1" max="1440" value="10"></label>':'';
+    const timer=timerNeeded?'<label>'+'Snooze'+'<select data-minutes aria-label="Snooze duration">'+(action==='queue-block'?'<option value="">Needs You now</option>':'')+'<option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="240">4 hours</option><option value="1440">24 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes<input type="number" min="1" max="1440" value="10"></label>':'';
     const heading=action==='start'?(displaced?'<div class="wq-switch-old"><div><strong>Moving to Background</strong><p>'+esc(displaced.task.properties.title||'Task')+'</p></div>'+timer+'</div><div class="wq-switch-new"><strong>Moving to Foreground</strong><p>'+esc(item.task.properties.title||'Task')+'</p></div>':'<p>'+esc(item.task.properties.title||'Task')+'</p>'):'<p>'+esc(item.task.properties.title||'Task')+'</p>';
     const body=form(heading+(action==='background-start'?'<p>This sets the task aside and optionally sets a check-back. It does not start a worker. A selected Snooze waits in Background; without one, inactive work returns to Priority.</p>':'')+(action==='start'?'':timer)+(action==='done'?'<div data-completion-time aria-live="off">Loading recorded time…</div><p>Completing saves the current focused session to this task. The saved total is confirmed after the update succeeds.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome required></textarea></label>':''):''));
     let guided=null,ready=!item.task.properties.guidedDefinitionId,completion=null,clockOffset=0,command=null;
@@ -300,7 +304,7 @@
       if(action==='done'&&!completion)throw new Error('Wait for the recorded-time summary, or reopen this dialog to retry.');
       const minutes=select?(select.value==='custom'?Number(body.querySelector('[data-custom] input').value):select.value?Number(select.value):null):null;
       if(minutes!==null&&(!Number.isInteger(minutes)||minutes<1||minutes>1440))throw new Error('Choose 1–1440 minutes.');
-      const payload={taskId:item.task.id,...(select?{remindMinutes:minutes}:{}),...(action==='start'?{expectedForegroundTaskId:displaced?.task.id||null}:{})};
+      const payload={taskId:item.task.id,...(select?{remindMinutes:minutes}:{}),...(select&&minutes!==null?{attentionMode:'snooze'}:{}),...(action==='start'?{expectedForegroundTaskId:displaced?.task.id||null}:{})};
       if(guided)payload.guided={expectedRevision:guided.revision,expectedDefinitionRevision:guided.definitionRevision,expectedContextVersion:guided.contextVersion,...(action==='done'?{outcome:body.querySelector('[data-outcome]').value,confirmed:true}:{})};
       if(!command||!['start','done'].includes(action))command=envelope(action,{...payload,...(action==='start'?{expectedRevision:startRevision}:completion?{expectedRevision:completion.revision}:{})});
       if(action==='start')body.querySelectorAll('[data-minutes],[data-custom] input').forEach(el=>{el.disabled=true;});
@@ -334,13 +338,13 @@
     const peers=items().filter(i=>i.status===item.status&&!!i.needsYou===!!item.needsYou&&(item.status!=='queued'||i.taskPriority===item.taskPriority)).map(i=>i.task.id);
     const peerIndex=peers.indexOf(id),targetId=target==='top'?peers[0]:typeof target==='number'?peers[peerIndex+target]:target;
     if(!targetId||!peers.includes(targetId)||id===targetId)return;
-    const order=state.queue.order.slice(),from=order.indexOf(id),to=order.indexOf(targetId);
+    const activeIds=new Set(items().filter(item=>item.status!=='completed').map(item=>item.task.id));
+    const order=state.queue.order.filter(id=>activeIds.has(id)),from=order.indexOf(id),to=order.indexOf(targetId);
     order.splice(from,1);order.splice(to,0,id);return send(envelope('queue-reorder',{order}));
   }
   document.addEventListener('change',event=>{if(event.target.matches('[data-completed-period]')){completedPeriod=event.target.value;render();}});
   document.addEventListener('click',event=>{
     const button=event.target.closest?.('[data-queue-action]');if(!button)return;const action=button.dataset.queueAction,item=items().find(i=>i.task.id===button.dataset.taskId);
-    if(action==='priority-style'){priorityStyle=button.dataset.style;render();return;}
     if(action==='add'){addTasks();return;}if(action==='retry'&&pending){send(pending).catch(warn);return;}
     if(action==='clear-conflict'){setConflict(null);render();return;}
     if(action==='conflict'){const body=form('<p>'+esc(conflict?.message)+'</p><pre>'+esc(JSON.stringify(conflict?.body,null,2))+'</pre>');DCC.overlay.open({kind:'modal',title:'Attempted change',body,actions:[{label:'Close'}]});return;}

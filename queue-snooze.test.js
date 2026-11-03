@@ -76,7 +76,11 @@ test('durable Needs You snooze preserves reasons and clocks, serializes retries 
     const replay=await store.execute(cmd,owner);assert.equal(replay.duplicate,true);
     assert.equal((await entry('blocked')).generation,current.generation);
     await assert.rejects(send('queue-return','blocked'),/Resolve the review/);
-    await assert.rejects(send('queue-snooze','idle',{remindMinutes:5}),{statusCode:409});
+    const idleBefore=await ctx.blockDB.getBlock('idle');
+    await send('queue-snooze','idle',{remindMinutes:5});
+    assert.equal((await entry('idle')).snoozed,true);
+    assert.deepEqual((await ctx.blockDB.getBlock('idle')).properties,idleBefore.properties);
+    assert.deepEqual((await ctx.blockDB.getBlock('focus')).properties,focusBefore.properties);
     await assert.rejects(send('queue-snooze','focus',{remindMinutes:5}),{statusCode:409});
   });
   await t.test('resnooze invalidates old callbacks and concurrent stale writes',async()=>{
