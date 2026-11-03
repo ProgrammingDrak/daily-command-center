@@ -1,5 +1,5 @@
 // Real server/session/browser integration. Run only against a disposable local DB.
-/* global window, document, localStorage */
+/* global window, document, localStorage, setTimeout */
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 const base = process.env.DCC_AUTH_QA_URL || "http://localhost:8462";
@@ -54,6 +54,21 @@ try {
   const key = "dcc-pomodoro:" + owner.workspaceId + ":" + owner.userId;
   const makeForeground = async (title) =>
     page.evaluate(async (title) => {
+      for (let attempt = 0; window.blockStore?.hasPendingWrites() && attempt < 150; attempt++) {
+        window.blockStore.flushPending();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (window.blockStore?.hasPendingWrites()) throw new Error("Fixture startup writes did not settle");
+      const before = await window.DCCWorkingQueue.refresh();
+      const foreground = before.queue.items.find((item) => item.status === "foreground");
+      if (foreground)
+        await window.DCCWorkingQueue.send({
+          action: "pause",
+          taskId: foreground.task.id,
+          expectedRevision: before.revision,
+          sourceEventId: "qa-pause:" + crypto.randomUUID(),
+          at: new Date().toISOString()
+        });
       const result = await window.DCC.api("/api/blocks", {
         method: "POST",
         body: {

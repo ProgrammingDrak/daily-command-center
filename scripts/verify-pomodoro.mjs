@@ -2,6 +2,9 @@
 import assert from "node:assert/strict";
 import express from "express";
 import path from "node:path";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url),
+  queueBrowserComponents = require("../test-support/queue-browser-components");
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
@@ -30,7 +33,7 @@ app.get("/", (_req, res) =>
   res
     .type("html")
     .send(
-      `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/tokens.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"></head><body><main><div id="working-queue-root"></div><button id="outside">Outside</button></main><div id="toast-container"></div><script>window.DCC_ACCOUNT_CONTEXT={userId:Number(new URLSearchParams(location.search).get('user')||1),workspaceId:new URLSearchParams(location.search).get('workspace')||'test'};</script><script src="/public/js/core.js"></script><script src="/public/js/core-ui.js"></script><script src="/public/js/pomodoro-model.js"></script><script src="/public/js/pomodoro.js"></script><script src="/public/js/task-types.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/task-priority.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/working-queue.js"></script><script>DCCWorkingQueue.refresh();</script></body></html>`
+      `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/tokens.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"></head><body><main><div id="working-queue-root"></div><button id="outside">Outside</button></main><div id="toast-container"></div><script>window.DCC_ACCOUNT_CONTEXT={userId:Number(new URLSearchParams(location.search).get('user')||1),workspaceId:new URLSearchParams(location.search).get('workspace')||'test'};</script><script src="/public/js/core.js"></script><script src="/public/js/core-ui.js"></script><script src="/public/js/pomodoro-model.js"></script><script src="/public/js/pomodoro.js"></script><script src="/public/js/task-types.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/task-priority.js"></script><script src="/public/js/queue-policy.js"></script>${queueBrowserComponents()}<script src="/public/js/working-queue.js"></script><script>DCCWorkingQueue.refresh();</script></body></html>`
     )
 );
 const server = app.listen(0, "127.0.0.1");
