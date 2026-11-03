@@ -1,4 +1,4 @@
-/* global document, localStorage, innerWidth, Storage, window, navigator */
+/* global document, localStorage, innerWidth, Storage, window, navigator, StorageEvent */
 import assert from "node:assert/strict";
 import express from "express";
 import path from "node:path";
@@ -148,15 +148,26 @@ try {
     "one stale tab must report the conflict"
   );
   await lockPage.close();
+  // The race has been asserted; reload to drain the old document and overlay lifecycle
+  // before testing a separate sleep/expiry interruption.
+  await page.reload();
   // Expire in storage to model a deadline passing during device sleep. No task API is involved.
   await page.evaluate((k) => {
     const p = JSON.parse(localStorage.getItem(k));
     p.deadline = Date.now() - 1;
     localStorage.setItem(k, JSON.stringify(p));
   }, key);
-  await page.keyboard.press("Escape");
   await page.locator("[data-queue-action=pomodoro]").click();
   await page.getByText("Section 1 timer finished", { exact: true }).waitFor();
+  // A late notification for an already-loaded record must not disable this view.
+  await page.evaluate(
+    (k) =>
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: k, newValue: localStorage.getItem(k), storageArea: localStorage })
+      ),
+    key
+  );
+  assert.equal(await page.getByRole("button", { name: "Save objectives", exact: true }).isEnabled(), true);
   await page.getByRole("textbox", { name: "Section 1 objective" }).fill("");
   await page.getByRole("button", { name: "Save objectives", exact: true }).click();
   await page.getByText("Could not save: Keep an objective for the running section.").waitFor();
@@ -185,6 +196,7 @@ try {
     properties: { type: "task", title: "Replacement task", startedAt: new Date().toISOString() }
   };
   await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({ state: "detached" });
   await page.reload();
   await page.locator("[data-queue-action=pomodoro]").click();
   await page.getByText("Write a draft", { exact: true }).waitFor();
@@ -193,6 +205,7 @@ try {
   const replacement = queue.queue.items;
   queue.queue.items = [];
   await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({ state: "detached" });
   await page.reload();
   await page.locator("[data-queue-action=pomodoro]").click();
   await dialog.getByText("Write a draft", { exact: true }).waitFor();
@@ -210,6 +223,7 @@ try {
       localStorage.setItem(k, JSON.stringify(p));
     }, key);
     await page.keyboard.press("Escape");
+    await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.locator("[data-queue-action=pomodoro]").click();
     await page.getByText("Section " + (section + 1) + " timer finished", { exact: true }).waitFor();
     await page
@@ -221,6 +235,7 @@ try {
   }
   assert.equal((await read()).status, "complete");
   await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({ state: "detached" });
   await page.locator("[data-queue-action=pomodoro]").click();
   await dialog.getByText("Replacement task", { exact: true }).waitFor();
   await page.getByText("End this plan early", { exact: true }).click();
@@ -232,6 +247,7 @@ try {
   assert.equal((await read()).status, "cancelled");
   // A failed disk write must leave the last saved timer untouched and report failure.
   await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({ state: "detached" });
   await page.locator("[data-queue-action=pomodoro]").click();
   const before = await read();
   await page.evaluate(() => {

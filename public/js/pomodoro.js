@@ -132,6 +132,13 @@
     });
     function storage(event) {
       if (event.key !== key && event.key !== null) return;
+      // Storage events can be queued before this dialog opens. Only invalidate
+      // when the actual durable record differs from the one this dialog read.
+      try {
+        if (JSON.stringify(read()) === JSON.stringify(saved)) return;
+      } catch (_e) {
+        /* A corrupt or unreadable record also invalidates this view. */
+      }
       stale = true;
       error.textContent =
         "Focus plan changed in another tab. Close and reopen to load it. Unsaved objectives remain here.";
