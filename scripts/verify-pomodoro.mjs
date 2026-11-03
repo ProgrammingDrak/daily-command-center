@@ -146,6 +146,7 @@ try {
   await dialog.getByText("Write a draft", { exact: true }).waitFor();
   assert.equal((await read()).taskId, "task");
   queue.queue.items = replacement;
+  await page.evaluate(()=>window.DCCWorkingQueue.refresh());
   // Complete the remaining timers explicitly; no section starts itself.
   for (let section = 1; section < 4; section++) {
     await page.getByRole("textbox", { name: "Section " + (section + 1) + " objective" }).fill("Goal " + section);
