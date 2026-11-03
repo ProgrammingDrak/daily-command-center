@@ -73,6 +73,8 @@ test("webhook transport rejects non-public destinations and pins validated DNS",
       request: (url, options, respond) => {
         requests++;
         assert.equal(url.hostname, "callback.example", "TLS retains hostname");
+        assert.equal(options.autoSelectFamily, false, "pinned lookup uses the single-address Node contract");
+        assert.equal(options.family, 4);
         options.lookup("callback.example", {}, (_e, address) => {
           pinned = address;
         });
