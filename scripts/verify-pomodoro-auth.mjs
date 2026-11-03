@@ -1,5 +1,5 @@
 // Real server/session/browser integration. Run only against a disposable local DB.
-/* global window, document, localStorage, setTimeout */
+/* global window, document, localStorage */
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 const base = process.env.DCC_AUTH_QA_URL || "http://localhost:8462";
