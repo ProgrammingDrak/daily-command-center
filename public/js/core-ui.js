@@ -168,7 +168,10 @@
       if (blocking) setPageInert(overlay, false);
       if (activeBlocking === handle) activeBlocking = null;
       document.body.classList.toggle("dcc-overlay-open", !!activeBlocking);
-      if (reason !== "replaced" && opener && opener.isConnected && typeof opener.focus === "function") opener.focus({ preventScroll: true });
+      // Views can replace the opener while a dialog is open. Resolve its current
+      // counterpart only after background inertness has been removed.
+      const focusTarget = opener?.isConnected ? opener : (typeof opts.returnFocus === "function" ? opts.returnFocus() : null);
+      if (reason !== "replaced" && focusTarget?.isConnected && typeof focusTarget.focus === "function") focusTarget.focus({ preventScroll: true });
     }
 
     function close(reason) {
