@@ -168,7 +168,6 @@
       <button type="button" role="tab" id="task-view-list" data-task-view="list" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">Itinerary</button>
       <button type="button" role="tab" id="task-view-calendar" data-task-view="calendar" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">Calendar</button>
     </div>
-    <button type="button" class="task-actual-toggle" id="task-actual-toggle" aria-pressed="false" title="Show recorded actual time on this view" hidden>Actual</button>
   </div>
   <div class="date-nav" id="date-nav">
     <button class="dn-arrow" id="dn-prev" onclick="navDate(-1)" title="Previous day" aria-label="Previous day">&lsaquo;</button>
@@ -205,11 +204,15 @@
   <div class="progress-wrap">
     <section class="progress-box" aria-labelledby="day-progress-title">
       <div class="progress-label"><span id="day-progress-title">Day Progress</span><span id="ppct">--</span></div>
+      <div class="progress-row-label" id="plan-progress-label">Plan / itinerary</div>
       <div class="progress-track-shell">
         <div class="progress-track" id="ptrack"></div>
         <span class="progress-now" id="pnow" role="img" hidden></span>
       </div>
       <div class="progress-rails" id="prails"></div>
+      <div class="progress-row-label"><span id="actual-progress-label">Actual activity</span><button type="button" id="progress-day-review">Day review</button></div>
+      <div id="pactual" class="progress-actual" role="group" aria-labelledby="actual-progress-label"></div>
+      <p id="pactual-note" class="progress-actual-note"></p>
       <div class="progress-axis"><time id="pstart">--</time><time id="pend">--</time></div>
     </section>
   </div>
@@ -2216,6 +2219,7 @@
 <script src="/public/js/reading-sessions.js?v=1"></script>
 <script src="/public/js/day-review.js?v=task-workspace-nav-2"></script>
 <script src="/public/js/actual-projection.js?v=task-workspace-nav-2"></script>
+<script src="/public/js/progress-actual.js"></script>
 <script src="/public/js/delegated.js"></script>
 <script src="/public/js/pet-home.js"></script>
 <!-- pet-courier.js: the pet delivers new triage arrivals. Needs PetHome.identity

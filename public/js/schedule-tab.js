@@ -55,6 +55,7 @@ function buildActualView(dateStr){
   if(typeof buildDayReview==="function") buildDayReview(dateStr);
 }
 document.addEventListener("dcc:actual-time-saved",()=>{
+  buildProgress();
   if(!_actualOn())return;
   renderActualSummary();
   if(schedView==="list"&&typeof render==="function")render("schedule");
@@ -1764,6 +1765,55 @@ function _scheduleTaskHasDelegate(taskId){
     .some(b=>(b.properties||{}).kind==="delegated_item" && (b.properties||{}).linkedBlockId===taskId);
 }
 
+function progressActualModel(){
+  const P=window.DCC&&DCC.ProgressActual,A=window.DCC&&DCC.ActualProjection;
+  if(!P||!A)return null;
+  const date=_schedViewDate(),bs=window.blockStore;
+  const entries=bs&&bs.getTimeEntries?bs.getTimeEntries(date):[];
+  const active=window.DCCWorkSessions?DCCWorkSessions.activeTasks():[];
+  const model=P.model(entries,active,{date,zone:A.appTimeZone(),projection:A,policy:window.DCCWorkCheckInPolicy});
+  const day=actualDayProjection();
+  // Legacy sessions are minutes only. They never acquire a made-up clock slot.
+  if(day)for(const task of day.byId.values())for(const seg of task.unpositioned)if(seg.source==="legacy")model.unplacedMin+=seg.durMin;
+  return model;
+}
+function buildProgressActual(model,start,total){
+  const track=document.getElementById("pactual"),note=document.getElementById("pactual-note");
+  if(!track||!note)return;
+  track.replaceChildren();
+  if(!model){note.textContent="Activity is loading…";return;}
+  const A=DCC.ActualProjection;
+  track.style.height=(model.lanes*20-2)+"px";
+  model.segments.forEach(seg=>{
+    const task=(typeof scheduled!=="undefined"?scheduled:[]).find(t=>t.id===seg.taskId||t._blockId===seg.taskId);
+    const block=window.blockStore&&blockStore.get(seg.taskId);
+    const p=block&&block.properties||{};
+    const ev=task||{id:seg.taskId,title:seg.title,type:p.type||"task",tags:p.tags||[]};
+    const button=document.createElement("button");
+    button.type="button";button.className="progress-actual-segment"+(seg.live?" live":"");
+    button.dataset.entryId=seg.id;
+    const color=typeof taskTagColor==="function"&&taskTagColor(ev)||cfg(ev.type).color;
+    button.style.cssText="left:"+((seg.startMin-start)/total*100)+"%;width:"+((seg.endMin-seg.startMin)/total*100)+"%;top:"+(seg.lane*20)+"px;background:"+color;
+    const timing=A.clock(seg.startMin)+" – "+A.clock(seg.endMin)+" · "+A.minutes(seg.endMin-seg.startMin)+(seg.live?" · Ongoing":" · Recorded");
+    button.setAttribute("aria-label",seg.title+" · "+timing);
+    _bindProgressTooltip(button,{title:seg.title},timing);
+    button.addEventListener("click",()=>{if(block&&typeof openAddModal==="function")openAddModal(p.local_id||block.id,seg.title);else openProgressDayReview();});
+    track.appendChild(button);
+  });
+  const notes=[];
+  if(!model.segments.length)notes.push("No timed activity recorded for this day.");
+  if(model.segments.some(s=>s.live))notes.push("Dashed segments are ongoing work.");
+  if(model.unplacedMin)notes.push(A.minutes(model.unplacedMin)+" recorded without a reliable clock time.");
+  if(model.unknownMin)notes.push(A.minutes(model.unknownMin)+" unknown time (not focused work).");
+  note.textContent=notes.join(" ");note.hidden=!notes.length;
+}
+function openProgressDayReview(){
+  if(window.DCC&&DCC.nav){DCC.nav.setActual(true);DCC.nav.setReviewOpen(true);}
+}
+document.getElementById("progress-day-review")?.addEventListener("click",openProgressDayReview);
+window.addEventListener("dcc:work-session-changed",()=>buildProgress());
+
+
 // ======== PROGRESS ========
 const DAY_PROGRESS_VARIANT="quiet-axis";
 
@@ -1785,13 +1835,14 @@ function _progressRange(dayItems,state){
 function _progressLocalDateKey(value){
   const date=value instanceof Date?value:new Date(value);
   if(Number.isNaN(date.getTime()))return "";
+  if(typeof window!=="undefined"&&window.DCC?.ProgressActual)return DCC.ProgressActual.parts(date,DCC.ActualProjection.appTimeZone()).date;
   return date.getFullYear()+"-"+String(date.getMonth()+1).padStart(2,"0")+"-"+String(date.getDate()).padStart(2,"0");
 }
 
 function _progressNowPercent(dateKey,nowValue,start,end){
   const nowDate=nowValue instanceof Date?nowValue:new Date(nowValue);
   if(Number.isNaN(nowDate.getTime())||dateKey!==_progressLocalDateKey(nowDate)||end<=start)return null;
-  const nowMinutes=nowDate.getHours()*60+nowDate.getMinutes();
+  const nowMinutes=typeof window!=="undefined"&&window.DCC?.ProgressActual?DCC.ProgressActual.parts(nowDate,DCC.ActualProjection.appTimeZone()).minute:nowDate.getHours()*60+nowDate.getMinutes();
   if(nowMinutes<start||nowMinutes>end)return null;
   return Math.max(0,Math.min(100,((nowMinutes-start)/(end-start))*100));
 }
@@ -1805,7 +1856,7 @@ function updateProgressNow(nowValue){
   marker.hidden=pct===null;
   if(pct===null)return;
   marker.style.left=pct+"%";
-  const label="Current time "+f12(fmt(nowDate.getHours()*60+nowDate.getMinutes()));
+  const label="Current time "+f12(fmt(DCC.ProgressActual.parts(nowDate,DCC.ActualProjection.appTimeZone()).minute));
   marker.title=label;
   marker.setAttribute("aria-label",label);
 }
@@ -1815,7 +1866,9 @@ function buildProgress(){
   if(!track)return;
   if(_progressTooltipClose)_progressTooltipClose();
   const dayItems=DCC.TaskModel.selectDayScoped(scheduled); // Unscheduled-everywhere rows aren't today's plan
-  const range=_progressRange(dayItems,typeof __state!=="undefined"?__state:null);
+  const activity=progressActualModel();
+  const rangeItems=dayItems.concat(activity?activity.segments.map(s=>({start:fmt(s.startMin),end:s.endMin===1440?"24:00":fmt(s.endMin)})):[]);
+  const range=_progressRange(rangeItems,typeof __state!=="undefined"?__state:null);
   const ds=range.start,de=range.end,tot=range.total;
   const stateDate=(typeof __state!=="undefined"&&__state&&__state.date)||"";
   const viewKey=(typeof viewDate!=="undefined"&&viewDate)||stateDate;
@@ -1845,6 +1898,7 @@ function buildProgress(){
   });
   if(cursor<de)addPS(track,cursor,de,"Free","rgba(255,255,255,0.08)",false,tot);
   buildShellRails(dayItems,ds,tot);
+  buildProgressActual(activity,ds,tot);
   // Shells are wrappers, not tasks — they don't count toward the day's done tally.
   const counted=dayItems.filter(ev=>!_isShellEv(ev));
   const dc=DCC.TaskModel.selectDone(counted).length;
@@ -1957,8 +2011,8 @@ function addPS(track,s,e,title,color,done,tot,ev){
   const seg=document.createElement(ev?"button":"span");
   seg.className="pseg";
   if(ev)seg.type="button";
-  // Shrink proportionally to leave room for track gaps, including the last task.
-  seg.style.cssText="flex:0 1 "+w+"%;background:"+color+";opacity:"+(done?0.45:1);
+  // Both rows share exact coordinates; borders separate adjacent tasks.
+  seg.style.cssText="position:absolute;left:"+((s-Number(track.dataset?.startMin||0))/tot*100)+"%;width:"+w+"%;background:"+color+";opacity:"+(done?0.45:1);
   const time=(ev?f12(ev.start)+" - "+f12(ev.end)+" · "+ms(pt(ev.end)-pt(ev.start)):ms(e-s))+(done?" · Done":"");
   const detail=title+" · "+time;
   if(ev){

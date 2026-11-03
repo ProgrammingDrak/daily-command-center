@@ -143,8 +143,8 @@
       } else loadEl.remove();
     }
   })().catch(error => console.warn('[API Boot] Supporting data failed', error));
-  // Keep the current-time marker aligned without rebuilding the segments.
-  setInterval(() => { if(typeof updateProgressNow === 'function') updateProgressNow(); }, 60000);
+  // Refresh ongoing activity and the shared current-time axis once a minute.
+  setInterval(() => { if(typeof buildProgress === 'function') buildProgress(); }, 60000);
 })();
 
 updateClock();
