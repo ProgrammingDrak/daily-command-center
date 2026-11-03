@@ -53,6 +53,7 @@ test("webhook transport rejects non-public destinations and pins validated DNS",
         ],
         request: () => {
           requests++;
+          throw new Error("Unexpected unsafe callback connection");
         }
       }
     ),
@@ -116,10 +117,15 @@ test("Standard Webhooks signature uses exact bytes and challenge echo is require
     .digest("base64");
   assert.equal(request.headers["webhook-signature"], "v1," + expected);
   assert.equal(request.headers["X-MCP-Subscription-Id"], "sub");
-  const bad = W.createTransport({ send: async (_url, body) => {
-    const challenge = JSON.parse(body).challenge;
-    return {status:200,body:JSON.stringify({challenge:(challenge[0] === 'x' ? 'y' : 'x') + challenge.slice(1)})};
-  } });
+  const bad = W.createTransport({
+    send: async (_url, body) => {
+      const challenge = JSON.parse(body).challenge;
+      return {
+        status: 200,
+        body: JSON.stringify({ challenge: (challenge[0] === "x" ? "y" : "x") + challenge.slice(1) })
+      };
+    }
+  });
   await assert.rejects(bad.verify(sub), /verification failed/);
   const denied = W.createTransport({ send: async (_url, body) => ({ status: 302, body }) });
   await assert.rejects(denied.verify(sub), /verification failed/);
