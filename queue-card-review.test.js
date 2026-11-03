@@ -7,9 +7,9 @@ test('Snooze preserves blocked state and timing; cross-day scheduling removes me
  const make=async(id,date='2026-11-03')=>ctx.blockDB.createBlock({id,type:'block',date,user_id:1,workspace_id:'ws-1',properties:{local_id:'repeat-alias',title:id,type:'task',status:'open'}});
  await make('blocked');await send('queue-add','blocked');await send('queue-block','blocked');
  const original=await ctx.blockDB.getBlock('blocked');
- await send('queue-remind','blocked',{remindMinutes:30});
+ await send('queue-snooze','blocked',{remindMinutes:30});
  let state=await store.state(owner),item=state.queue.items.find(i=>i.task.id==='blocked');
- assert.equal(item.status,'blocked');assert.equal(Date.parse(item.dueAt)-Date.parse(item.changedAt)>=29*60000,true);
+ assert.equal(item.status,'background');assert.equal(item.blocked,true);assert.equal(Date.parse(item.dueAt)-Date.parse(item.changedAt)>=29*60000,true);
  assert.deepEqual((await ctx.blockDB.getBlock('blocked')).properties,original.properties);
  const firstGen=item.generation;await send('queue-snooze','blocked',{generation:firstGen,remindMinutes:120});
  item=(await store.state(owner)).queue.items.find(i=>i.task.id==='blocked');assert.notEqual(item.generation,firstGen);
