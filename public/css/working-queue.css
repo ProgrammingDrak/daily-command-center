@@ -265,3 +265,13 @@
 .wq-title-with-copy .ttl { min-width:0; }
 .wq-card .wq-copy-title { flex:0 0 44px; width:44px; height:44px; display:inline-flex; align-items:center; justify-content:center; padding:0; border:1px solid var(--border); border-radius:8px; background:transparent; color:var(--text); cursor:pointer; }
 .wq-card .wq-copy-title:disabled { opacity:.6; cursor:progress; }
+
+.dcc-pomodoro label { display: block; margin: 12px 0; }
+.dcc-pomodoro textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font: inherit; }
+.pomodoro-clock { font-size: 2rem; font-variant-numeric: tabular-nums; margin: 12px 0; }
+.pomodoro-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.pomodoro-actions button { min-height: 44px; }
+
+.pomodoro-actions button, .wq-heading [data-queue-action="pomodoro"] { color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; cursor: pointer; }
+.pomodoro-actions button:disabled { opacity: .5; cursor: default; }
+.dcc-pomodoro [data-error] { color: var(--red); }
