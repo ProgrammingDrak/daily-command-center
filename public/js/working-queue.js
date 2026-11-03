@@ -59,17 +59,17 @@
   // Snooze is waiting only: it never starts a worker or focused time. One
   // command per dialog, so a transport retry resends the exact same envelope.
   function snooze(item){
-    const zone=appZone();
-    const body=form('<p>'+esc(item.task.properties.title||'Task')+'</p><label>Snooze<select data-minutes aria-label="Snooze duration"><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="240">4 hours</option><option value="1440">24 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes (1–1440)<input type="number" min="1" max="1440" value="45"></label><p class="wq-time" data-snooze-preview></p><p class="wq-time">It waits in Background, then returns to Needs You. Snoozing does not start or stop workers and adds no focused time. The original reason and details stay attached. If the app is closed then, it appears on your next visit; no closed-browser notification is sent.</p>');
+    const zone=appZone(),expectedRevision=state.revision;
+    const body=form('<p>'+esc(item.task.properties.title||'Task')+'</p><label>Snooze<select data-minutes aria-label="Snooze duration"><option value="0">Now · Needs You</option><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="240">4 hours</option><option value="1440">24 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes (1–1440)<input type="number" min="1" max="1440" value="45"></label><p class="wq-time" data-snooze-preview></p><p class="wq-time">Choose Now to move to Needs You, or a delay to wait in Background first. Snoozing does not start or stop workers and adds no focused time. The original reason and details stay attached. If the app is closed then, it appears on your next visit; no closed-browser notification is sent.</p>');
     const select=body.querySelector('[data-minutes]'),custom=body.querySelector('[data-custom] input');
     const minutes=()=>select.value==='custom'?Number(custom.value):Number(select.value);
     let command=null;
-    function preview(){const m=minutes(),ok=Number.isInteger(m)&&m>=1&&m<=1440,from=command?Date.parse(command.at):Date.now();body.querySelector('[data-snooze-preview]').textContent=ok?'Snoozed until '+when(from+m*60000,zone):'Choose 1–1440 minutes.';}
+    function preview(){const m=minutes(),ok=Number.isInteger(m)&&m>=0&&m<=1440,from=command?Date.parse(command.at):Date.now();body.querySelector('[data-snooze-preview]').textContent=ok?(m===0?'Moves to Needs You now.':'Snoozed until '+when(from+m*60000,zone)):'Choose Now or 1–1440 minutes.';}
     select.addEventListener('change',()=>{body.querySelector('[data-custom]').hidden=select.value!=='custom';preview();});custom.addEventListener('input',preview);preview();
     return modal('Snooze',body,async()=>{
       if(!command){
-        const m=minutes();if(!Number.isInteger(m)||m<1||m>1440)throw new Error('Choose 1–1440 minutes.');
-        command=envelope('queue-snooze',{taskId:item.task.id,remindMinutes:m,...(item.generation?{generation:item.generation}:{})});
+        const m=minutes();if(!Number.isInteger(m)||m<0||m>1440)throw new Error('Choose Now or 1–1440 minutes.');
+        command=m===0?envelope('pause',{taskId:item.task.id,attentionMode:'needs-you',expectedRevision}):envelope('queue-snooze',{taskId:item.task.id,expectedRevision,remindMinutes:m,...(item.generation?{generation:item.generation}:{})});
         body.querySelectorAll('select,input').forEach(el=>{el.disabled=true;});preview();
       }
       try {await send(command);}
@@ -82,8 +82,8 @@
   let detailRows=[];
   function rememberTaskContext(rows){detailRows=rows;}
   function contextRows(){
-    const dates=new Set(detailRows.map(r=>r.date)),rows=new Map(detailRows.map(row=>[row.id,window.blockStore?.get?.(row.id)||row]));
-    for(const type of ['block','action_item'])for(const row of window.blockStore?.getByType?.(type)||[])if(dates.has(row.date))rows.set(row.id,row);
+    const dates=new Set([...detailRows.map(r=>r.date),...items().map(item=>item.task.date)]),rows=new Map(detailRows.map(row=>[row.id,window.blockStore?.get?.(row.id)||row]));
+    for(const type of ['block','action_item','note'])for(const row of window.blockStore?.getByType?.(type)||[])if(dates.has(row.date))rows.set(row.id,row);
     return [...rows.values()].filter(row=>!row.deleted_at);
   }
   function taskPool(anchor){
@@ -243,6 +243,11 @@
   }
   async function openSchedule(item,anchorEl){
     const anchor=await prepareTask(item.task.id),task=anchor.ev;
+    if(!anchor.date){
+      return window.openSchedulePopover({mode:'pick',id:task.id,task,anchorEl,view:'date',header:'Add “'+task.title+'” to itinerary',actionLabel:'Add',onPick:async date=>{
+        const result=await window.blockStore.rescheduleBlock(anchor.blockId,date,{placement:{kind:'pool_date'}});await refresh();return result;
+      }});
+    }
     window.openSchedulePopover({mode:'reschedule',id:task.id,task,anchorEl,view:'date',onMove:async(date,time)=>{
       const duration=Math.max(1,Number(task.durMin||task.duration)||30);
       const slot=time?{start:time,end:window.fmt(window.pt(time)+duration)}:null;
@@ -374,8 +379,7 @@
       const held=returnHold(item);if(held){DCC.toast(held);return;}
       send(envelope(item.status==='foreground'?'pause':'queue-return',{taskId:id})).catch(warn);
     }else if(dest==='wq-needs'){
-      DCC.toast('Needs You shows due reminders and review requests. Use Snooze to choose when this task needs attention.');
-      snooze(item);
+      send(envelope('pause',{taskId:id,attentionMode:'needs-you'})).catch(warn);
     }
   });
   document.addEventListener('dragend',()=>{dragging=null;});

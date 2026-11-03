@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {spawn} from 'node:child_process';
 import {chromium} from 'playwright-core';
-/* global window, document, DCCWorkingQueue, innerWidth */
+/* global window, document, navigator, DCCWorkingQueue, innerWidth */
 const port=process.env.QUEUE_CARD_REVIEW_PORT||'8192',base='http://127.0.0.1:'+port;
 const server=spawn(process.execPath,['scripts/ui-review-server.mjs'],{env:{...process.env,PORT:port,DCC_WORKING_QUEUE_REVIEW:'1'},stdio:['ignore','pipe','inherit']});
 await new Promise((resolve,reject)=>{server.once('error',reject);server.once('exit',code=>reject(new Error('Preview exited '+code)));server.stdout.on('data',b=>{if(String(b).includes('UI review server:'))resolve();});});
@@ -25,6 +25,8 @@ async function closeDetails(){await page.keyboard.press('Escape');await page.wai
 try{
  await api('/api/queue-review/reset',{});
  for(const id of ['a','b','c']){await make(id,({a:'Review design proposal',b:'Compare launch options',c:'Prepare release notes'})[id],id==='b'?{start:'09:00',end:'09:30',_taskNotes:{text:'Saved canonical itinerary notes',html:'<p>Saved canonical itinerary notes</p>'}}:{});await command('queue-add',id);}
+ await make('b-child','Cached current-day child',{subtaskOf:'b'});
+ await make('b-action','',{_sourceTaskId:'b',text:'Cached current-day action',tags:['action-item']},date,'b');
  await make('old','Previous occurrence',{local_id:'repeat-alias'},past);await make('today','Current occurrence',{local_id:'repeat-alias'});
  await make('old-note','',{_sourceTaskId:'repeat-alias',html:'<p>Earlier occurrence notes</p>',text:'Earlier occurrence notes'},past,'old', 'note');
  await make('today-note','',{_sourceTaskId:'repeat-alias',html:'<p>Current occurrence notes</p>',text:'Current occurrence notes'},date,'today','note');
@@ -69,6 +71,8 @@ try{
  await page.locator('[data-task-view="list"]').click();
  await page.getByRole('button',{name:'Open task details: Compare launch options',exact:true}).click();
  await page.waitForFunction(()=>window._amBlockEditor?.toMarkdown().includes('Saved canonical itinerary notes'));
+ await page.locator('#am-items-list').getByText('Cached current-day child',{exact:true}).waitFor();
+ await page.locator('#am-items-list').getByText('Cached current-day action',{exact:true}).waitFor();
  await closeDetails();
  assert.equal((await api('/api/blocks/b')).properties._taskNotes.text,'Saved canonical itinerary notes');
  await page.locator('[data-task-view="queue"]').click();await refresh();
@@ -128,6 +132,24 @@ try{
  await page.waitForFunction(()=>window.DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='block-current')?.blocked===true);
  assert.equal(commands.filter(c=>c.action==='queue-block').at(-1).taskId,'block-current');assert.ok(!(await api('/api/blocks/block-current')).properties.startedAt);
  await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>window.DCCWorkingQueue);await refresh();
+ // Undated queue tasks use the task library's canonical date-only assignment.
+ await make('undated-schedule','Undated scheduling task',{},null);await command('queue-add','undated-schedule');await refresh();
+ await card('undated-schedule').getByRole('button',{name:'Schedule',exact:true}).click();
+ await page.locator('.resched-popover').getByText('Tomorrow',{exact:true}).click();
+ await page.waitForFunction(()=>!window.DCCWorkingQueue.getState().queue.items.some(i=>i.task.id==='undated-schedule'));
+ assert.notEqual((await api('/api/blocks/undated-schedule')).date,null);
+ // Direct attention drops close only this foreground timer and show Needs You.
+ await make('attention-drop','Attention drop task');await command('start','attention-drop');await refresh();
+ await page.dragAndDrop('[data-queue-id="attention-drop"]','.wq-needs');
+ await page.waitForFunction(()=>window.DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='attention-drop')?.needsYou===true);
+ assert.ok(!(await api('/api/blocks/attention-drop')).properties.startedAt);
+ assert.equal(await page.locator('.wq-needs [data-queue-id="attention-drop"]').count(),1);
+ // Scheduling active work away records its timer and removes membership atomically.
+ await make('schedule-active','Schedule active task',{actualMinutes:40});await command('start','schedule-active');await refresh();
+ await card('schedule-active').getByRole('button',{name:'Schedule',exact:true}).click();await page.locator('.resched-popover').getByText('Tomorrow',{exact:true}).click();
+ await page.locator('#sched-picker-overlay.open').waitFor();await page.getByRole('button',{name:'⚡ Earliest free',exact:true}).click();
+ await page.waitForFunction(()=>!window.DCCWorkingQueue.getState().queue.items.some(i=>i.task.id==='schedule-active'));
+ const scheduledActive=await api('/api/blocks/schedule-active');assert.ok(!scheduledActive.properties.startedAt);assert.ok(scheduledActive.properties.actualMinutes>=40);assert.notEqual(scheduledActive.date,date);
  for(const width of [1280,375,320]){
   await page.setViewportSize({width,height:1100});await page.evaluate(()=>window.scrollTo(0,0));
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));

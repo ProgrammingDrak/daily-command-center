@@ -62,7 +62,7 @@ function openSchedulePopover(cfg){
   const anchorEl=cfg.anchorEl;
   if(!anchorEl)return;
 
-  let ev=null;
+  let ev=cfg.task||null;
   if(mode==="reschedule"){
     ev=cfg.task||scheduled.find(e=>e.id===cfg.id);
     if(!ev)return;
@@ -285,7 +285,7 @@ function openSchedulePopover(cfg){
 
   // The same queue block/unblock operation is available from every task's Schedule menu.
   // It pauses active work atomically and retains the task, history and current schedule.
-  if(mode==='reschedule'&&showDate&&window.DCCWorkingQueue?.openBlocked){
+  if(ev&&showDate&&window.DCCWorkingQueue?.openBlocked){
     const blocked=window.DCCWorkingQueue.isBlocked(ev);
     const control=document.createElement('button');control.type='button';control.className='resched-btn resched-blocked';
     control.textContent=blocked?'Unblock task':'Blocked / Waiting…';

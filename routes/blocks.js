@@ -1737,6 +1737,10 @@ module.exports = function mount(app, ctx) {
   // Kept as an explicit handler (not routed through route()) on purpose: this is
   // the atomic-delegation reference pattern — bespoke HH:MM validation + the
   // load-bearing subtree move should not be churned by the P8 extraction.
+  function queueRescheduleOptions(req,base={}){
+    const owner={userId:req.session.userId,workspaceId:req.workspaceId};
+    return {...base,queueToday:getTodayStr(),queueOwner:owner,pauseActive:(row,client,at)=>require('../conversation-store').pauseForSchedule(ctx,client,owner,row,{at,sourceEventId:'schedule:'+crypto.randomUUID()})};
+  }
   app.post("/api/blocks/:id/reschedule", async (req, res) => {
     try {
       const { targetDate, parentStart, parentEnd, placement, userSetStart, _clientId } = req.body || {};
@@ -1760,7 +1764,7 @@ module.exports = function mount(app, ctx) {
           if(existing){assertBlockOwnership(existing,req.workspaceId);moves.push({id:existing.id,date:existing.date,properties,expectedDate:existing.date,expectedUpdatedAt:existing.updated_at});}
           else creates.push({type:'block',date:parent.date,user_id:parent.user_id||req.session.userId||null,workspace_id:parent.workspace_id||req.workspaceId||null,properties});
         }
-        const result = await blockDB.rescheduleBlocks(moves,creates);
+        const result = await blockDB.rescheduleBlocks(moves,creates,queueRescheduleOptions(req));
         broadcast("blocks-changed",{action:"reschedule",blockIds:result.blocks.map(row=>row.id),clientId:_clientId},req.workspaceId);
         return res.json({moved:planned.ids,blocks:result.blocks.slice(0,planned.moves.length),created:result.blocks.slice(planned.moves.length),parentId:parent.id,fromDate:parent.date,targetDate,count:planned.ids.length});
       }
@@ -1989,7 +1993,7 @@ module.exports = function mount(app, ctx) {
           await reviewTomorrow.validateMove(ctx, req, freshParent, members, place, req.body.reviewGuard, client);
         },
       } : undefined;
-      const result = await blockDB.rescheduleBlocks(moves, creates, {...reviewOptions, queueToday:getTodayStr(), queueOwner:{userId:req.session.userId,workspaceId:req.workspaceId}});
+      const result = await blockDB.rescheduleBlocks(moves, creates, queueRescheduleOptions(req,reviewOptions));
       const movedIds = subtreeIds;
       const created = result.blocks.slice(moves.length); // tombstone(s) appended after moves
       broadcast("blocks-changed", { action: "reschedule", blockIds: result.blocks.map(b => b.id), clientId: _clientId }, req.workspaceId);

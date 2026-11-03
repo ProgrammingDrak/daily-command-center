@@ -30,6 +30,25 @@ DO $privacy$ DECLARE r TEXT; BEGIN
  END LOOP;
 END $privacy$;
 `;
+// Shared pause dispatch: both callers retain their own queue and audit updates.
+async function pauseForeground(ctx,q,owner,row,{at,sourceEventId,actor,operationPrefix='queue',guidedEligible=true,recordAutoPauseReason=false,timing}) {
+  if(row.user_id!==owner.userId||row.workspace_id!==owner.workspaceId)throw M.fail('Task is not in this workspace',403);
+  const atMs=M.instant(at);
+  if(atMs<=Date.parse(row.properties.startedAt))throw M.fail('Transition must follow the active start',409);
+  const safety=checkInState(row.properties,atMs),cutoff=Math.min(atMs,safety.autoPauseAtMs);
+  let paused;
+  if(row.properties.guidedDefinitionId&&guidedEligible){
+    const guided=require('./guided-store').createGuidedStore(ctx),view=await guided.get(row.id,owner,q);
+    if(view.session){const result=await guided.act(row.id,{action:'pause',operationId:operationPrefix+':'+M.digest(sourceEventId+row.id).slice(0,40),expectedRevision:view.revision},owner,q,cutoff,true);paused={changed:true,entries:result.entries||[]};}
+  }
+  if(!paused)paused=await (timing||timingFor(ctx,q,owner)).pauseWork({block:row,atMs:cutoff,transitionAtMs:atMs,actor:actor||'conversation:'+owner.userId,actionId:sourceEventId,pauseReason:recordAutoPauseReason&&cutoff<atMs?'No recent work check-in':null});
+  if(!paused.changed)throw M.fail(paused.reason||'Foreground session could not be closed',409);
+  return {paused,cutoff};
+}
+// The rescheduler holds the account lock and rolls this pause back on failure.
+async function pauseForSchedule(ctx,q,owner,row,command) {
+  return (await pauseForeground(ctx,q,owner,row,{...command,actor:'schedule:'+owner.userId,operationPrefix:'schedule',recordAutoPauseReason:true})).paused;
+}
 function timingFor(ctx, q, owner) {
   const db = ctx.blockDB;
   return createTiming({
@@ -439,37 +458,7 @@ function createConversationStore(ctx) {
         timing = timingFor(ctx, q, owner),
         actor = "conversation:" + owner.userId;
       async function closeForeground(row, status = "paused") {
-        if (atMs <= Date.parse(row.properties.startedAt)) throw M.fail("Transition must follow the active start", 409);
-        const safety = checkInState(row.properties, atMs);
-        const cutoff = Math.min(atMs, safety.autoPauseAtMs);
-        let paused;
-        if (row.properties.guidedDefinitionId && !legacy && b.action !== "done") {
-          const guided = require("./guided-store").createGuidedStore(ctx),
-            view = await guided.get(row.id, owner, q);
-          if (view.session) {
-            const pause = await guided.act(
-              row.id,
-              {
-                action: "pause",
-                operationId: "queue:" + M.digest(b.sourceEventId + row.id).slice(0, 40),
-                expectedRevision: view.revision
-              },
-              owner,
-              q,
-              cutoff,
-              true
-            );
-            paused = { changed: true, entries: pause.entries || [] };
-          }
-        }
-        if (!paused)
-          paused = await timing.pauseWork({
-            block: row,
-            atMs: cutoff,
-            transitionAtMs: atMs,
-            actor,
-            actionId: b.sourceEventId
-          });
+        const {paused,cutoff}=await pauseForeground(ctx,q,owner,row,{at:b.at,sourceEventId:b.sourceEventId,actor,timing,guidedEligible:!legacy&&b.action!=='done'});
         Q.setStatus(queue, await task(q, row.id, owner), status, b);
         if (status === "background") queue.order = queue.order.filter((id) => id !== row.id).concat(row.id);
         changedIds.add(row.id);
@@ -689,4 +678,4 @@ function createConversationStore(ctx) {
   }
   return { state, search, get, completionPreview, completionReview, reconciliationReceipt, calendarEvents, execute, history };
 }
-module.exports = { SCHEMA_SQL, FOREGROUND_INDEX_SQL, createConversationStore, timingFor };
+module.exports = { SCHEMA_SQL, FOREGROUND_INDEX_SQL, createConversationStore, timingFor, pauseForSchedule };

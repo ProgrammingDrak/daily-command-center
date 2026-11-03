@@ -4,7 +4,7 @@ test('Snooze preserves blocked state and timing; cross-day scheduling removes me
  const {createConversationStore,FOREGROUND_INDEX_SQL}=require('./conversation-store');await ctx.pool.query(FOREGROUND_INDEX_SQL);
  const owner={userId:1,workspaceId:'ws-1'},store=createConversationStore(ctx);
  const send=async(action,id,extra={})=>store.execute({action,taskId:id,expectedRevision:(await store.state(owner)).revision,sourceEventId:crypto.randomUUID(),at:new Date().toISOString(),...extra},owner);
- const make=async(id,date='2026-11-03')=>ctx.blockDB.createBlock({id,type:'block',date,user_id:1,workspace_id:'ws-1',properties:{local_id:'repeat-alias',title:id,type:'task',status:'open'}});
+ const make=async(id,date='2026-11-03',props={})=>ctx.blockDB.createBlock({id,type:'block',date,user_id:1,workspace_id:'ws-1',properties:{local_id:'repeat-alias',title:id,type:'task',status:'open',...props}});
  await make('blocked');await send('queue-add','blocked');await send('queue-block','blocked');
  const original=await ctx.blockDB.getBlock('blocked');
  await send('queue-snooze','blocked',{remindMinutes:30});
@@ -36,6 +36,27 @@ test('Snooze preserves blocked state and timing; cross-day scheduling removes me
  const after=await store.state(owner);assert.equal(after.queue.items.filter(item=>item.status==='completed').length,100);
  assert.deepEqual(after.queue.items.filter(item=>item.status!=='completed').map(item=>item.task.id),order);
  assert.equal((await ctx.blockDB.getBlock('same')).properties.startedAt,active.properties.startedAt);
+ await send('pause','same',{attentionMode:'needs-you'});
+ const attention=(await store.state(owner)).queue.items.find(item=>item.task.id==='same');assert.equal(attention.needsYou,true);assert.equal(attention.task.properties.startedAt,undefined);
+ assert.equal((await ctx.blockDB.getTaskTimeEntries('same','ws-1')).length,1);
+ const fixedAt=Math.floor(Date.now()/1000)*1000;
+ await make('schedule-live','2026-11-03',{actualMinutes:40,startedAt:new Date(fixedAt-120000).toISOString(),activeWorkSessionId:'fixed-schedule-session'});await send('queue-add','schedule-live');
+ const live=await ctx.blockDB.getBlock('schedule-live'),entriesBefore=await ctx.blockDB.getTaskTimeEntries('schedule-live','ws-1');
+ const atomic={...opts,pauseActive:(row,client,at)=>require('./conversation-store').pauseForSchedule(ctx,client,owner,row,{at:new Date(fixedAt).toISOString(),sourceEventId:'schedule:'+crypto.randomUUID()})};
+ await assert.rejects(ctx.blockDB.rescheduleBlocks([{id:'schedule-live',date:'2026-11-04',properties:{...live.properties,start:'10:00',end:'10:30'}},{id:'missing-second',date:'2026-11-04'}],[],atomic));
+ assert.equal((await ctx.blockDB.getBlock('schedule-live')).properties.startedAt,live.properties.startedAt);
+ assert.equal((await ctx.blockDB.getTaskTimeEntries('schedule-live','ws-1')).length,entriesBefore.length);
+ await ctx.blockDB.rescheduleBlocks([{id:'schedule-live',date:'2026-11-04',properties:{...live.properties,start:'10:00',end:'10:30'}}],[],atomic);
+ const scheduled=await ctx.blockDB.getBlock('schedule-live');assert.equal(scheduled.date,'2026-11-04');assert.equal(scheduled.properties.startedAt,undefined);assert.equal(scheduled.properties.activeWorkSessionId,undefined);
+ assert.equal((await ctx.blockDB.getTaskTimeEntries('schedule-live','ws-1')).length,1);
+ assert.equal((await ctx.blockDB.getTaskTimeEntries('schedule-live','ws-1'))[0].properties.durSec,120);assert.equal(scheduled.properties.actualMinutes,42);
+ assert.equal((await store.state(owner)).queue.items.some(item=>item.task.id==='schedule-live'),false);
+ await make('schedule-cutoff','2026-11-03',{actualMinutes:10,startedAt:new Date(fixedAt-3600000).toISOString(),activeWorkSessionId:'fixed-cutoff-session'});await send('queue-add','schedule-cutoff');
+ await ctx.blockDB.rescheduleBlocks([{id:'schedule-cutoff',date:'2026-11-04'}],[],atomic);
+ const cutoffTask=await ctx.blockDB.getBlock('schedule-cutoff'),cutoffEntries=await ctx.blockDB.getTaskTimeEntries('schedule-cutoff','ws-1');
+ assert.equal(cutoffEntries.reduce((sum,entry)=>sum+entry.properties.durSec,0),3000);assert.equal(cutoffTask.properties.actualMinutes,60);assert.equal(cutoffTask.properties.workAutoPauseReason,'No recent work check-in');
+
+
 
 });
 test('retained completions do not exhaust active queue capacity and explicit Snooze is validated',()=>{
