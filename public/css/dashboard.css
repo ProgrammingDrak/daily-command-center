@@ -5869,3 +5869,11 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .progress-actual-segment:focus-visible{top:0;height:100%;outline:2px solid #93c5fd;outline-offset:-2px;z-index:2}
 .progress-actual-note{font-size:11px;color:var(--text-muted);margin:3px 0 0;overflow-wrap:anywhere}
 .device-glasses:not(.glasses-tools-open) :is(.progress-row-label,.progress-actual,.progress-actual-note){display:none!important}
+
+@media(max-width:480px){
+  .progress-label{font-size:11px;gap:6px}
+  .progress-label #day-progress-title{white-space:nowrap}
+  .progress-heading-actions{gap:4px}
+  .progress-label #ppct{font-size:10px}
+  .progress-heading-actions button{font-size:10px;white-space:nowrap}
+}

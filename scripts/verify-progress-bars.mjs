@@ -47,6 +47,8 @@ try{
  assert.equal(await page.locator('#pactual .live').count(),2);
  const compactMeasurements=[];
  const assertCompact=async(width)=>{
+  // Match the reference screenshot tally so narrow-header coverage is realistic.
+  await page.locator("#ppct").evaluate(el=>{el.textContent="8 / 25 done · 32%";});
   const m=await page.evaluate(()=>{
    const plan=document.querySelector('#ptrack').getBoundingClientRect(),actual=document.querySelector('#pactual').getBoundingClientRect(),heading=document.querySelector('.progress-label').getBoundingClientRect(),button=document.querySelector('#progress-day-review').getBoundingClientRect();
    return {plan:plan.height,actual:actual.height,gap:actual.top-plan.bottom,heading:heading.height,reviewHeight:button.height,reviewInHeading:button.top>=heading.top&&button.bottom<=heading.bottom+1,segments:[...document.querySelectorAll('#pactual button')].map(b=>{const r=b.getBoundingClientRect();return {height:r.height,inside:r.top>=actual.top-.1&&r.bottom<=actual.bottom+.1,label:b.getAttribute('aria-label')};})};
