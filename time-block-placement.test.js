@@ -50,3 +50,23 @@ test("quick tasks use their configured estimatedMinutes without inventing a dura
   const parent = task("quick", { estimatedMinutes: 45 }); delete parent.properties.duration;
   assert.equal(plan({ parent }).end, "09:45");
 });
+
+
+test("zero-length checklist entries do not block unrelated moves from Loose Ends", () => {
+  const rows = [task("coffee", { start: "06:00", end: "06:00", duration: 0 }), task("point", { start: "11:30", end: "11:30" }), task("work", { start: "09:00", end: "10:00", duration: 60 })];
+  const state = { schedule: { timeline: [{ id: "breakfast", type: "task", start: "06:00", end: "06:00" }, { id: "checkpoint", type: "task", start: "11:45", end: "11:45" }] } };
+  const before = JSON.stringify({ rows, state });
+  assert.deepEqual(plan({ rows, state }), { kind: "timed", start: "10:00", end: "10:30" });
+  assert.equal(JSON.stringify({ rows, state }), before, "occupancy planning never repairs or rewrites unrelated tasks");
+  assert.throws(() => plan({ rows: [...rows, task("full", { start: "10:00", end: "12:00" })], state }), /Not enough space/);
+});
+
+test("malformed, reversed and invalid fixed intervals still refuse placement", () => {
+  for (const entry of [
+    { start: "bad", end: "10:00" }, { start: "09:00" }, { start: "10:00", end: "09:00" },
+    { type: "meeting", start: "09:00", end: "09:00" },
+  ]) {
+    assert.throws(() => plan({ rows: [task("invalid", entry)] }), /invalid timing/);
+    assert.throws(() => plan({ state: { schedule: { timeline: [{ id: "invalid", ...entry }] } } }), /invalid timing/);
+  }
+});

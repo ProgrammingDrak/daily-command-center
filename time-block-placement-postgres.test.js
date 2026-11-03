@@ -11,6 +11,17 @@ test("time-block placement uses production HTTP and PostgreSQL persistence", { s
   await f.block("already", { start: "09:00", end: "09:45" });
   await f.block("meeting", { type: "meeting", start: "09:45", end: "10:00" });
   await f.block("moving", { elapsedSeconds: 19, occurrenceKey: "2099-11-01T09:00", repeatMode: "scheduled" });
+  await t.test("Loose Ends move ignores zero-length destination work without rewriting it", async () => {
+    const point = await f.block("zero-minute-checklist", { start: "06:00", end: "06:00", duration: 0 });
+    await f.block("loose-end", { elapsedSeconds: 17 }, "block", "2099-11-01");
+    const response = await send("loose-end", choice());
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    const row = await f.ctx.blockDB.getBlock("loose-end");
+    assert.equal(row.date, f.date); assert.equal(row.properties.start, "10:00"); assert.equal(row.properties.end, "10:30");
+    assert.equal(row.properties.elapsedSeconds, 17);
+    assert.deepEqual(await f.ctx.blockDB.getBlock(point.id), point);
+    await f.ctx.blockDB.deleteBlock("loose-end"); await f.ctx.blockDB.deleteBlock(point.id);
+  });
   await t.test("same-day untimed task becomes durably timed and preserves identity/actual/occurrence", async () => {
     const request = choice(); request.placement.title = "Edited title";
     const response = await send("moving", request); assert.equal(response.status, 200, JSON.stringify(response.body));
