@@ -5,8 +5,11 @@
   if(root){root.DCC=root.DCC||{};root.DCC.ProgressActual=api;}
 })(typeof window!=="undefined"?window:null,function(){
   "use strict";
+  const formatters=new Map();
   function parts(value,zone){
-    const p=new Intl.DateTimeFormat("en-CA",{timeZone:zone,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(value));
+    let formatter=formatters.get(zone);
+    if(!formatter){formatter=new Intl.DateTimeFormat("en-CA",{timeZone:zone,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"});formatters.set(zone,formatter);}
+    const p=formatter.formatToParts(new Date(value));
     const get=k=>p.find(x=>x.type===k).value;
     return {date:get("year")+"-"+get("month")+"-"+get("day"),minute:Number(get("hour"))*60+Number(get("minute"))};
   }
