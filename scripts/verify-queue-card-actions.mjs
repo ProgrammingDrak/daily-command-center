@@ -144,7 +144,7 @@ try{
  await page.waitForFunction(()=>window.DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='attention-drop')?.needsYou===true);
  assert.ok(!(await api('/api/blocks/attention-drop')).properties.startedAt);
  assert.equal(await page.locator('.wq-needs [data-queue-id="attention-drop"]').count(),1);
- assert.equal(await card('attention-drop').locator('.wq-status').innerText(),'Needs You');
+ assert.equal(await card('attention-drop').locator('.wq-status').textContent(),'Needs You');
  // Scheduling active work away records its timer and removes membership atomically.
  await make('schedule-active','Schedule active task',{actualMinutes:40});await command('start','schedule-active');await refresh();
  await card('schedule-active').getByRole('button',{name:'Schedule',exact:true}).click();await page.locator('.resched-popover').getByText('Tomorrow',{exact:true}).click();
