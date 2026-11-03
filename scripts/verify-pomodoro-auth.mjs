@@ -59,10 +59,12 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       if (window.blockStore?.hasPendingWrites()) throw new Error("Fixture startup writes did not settle");
+      // Seed through canonical server commands, then exercise the production UI below.
+      const command = (body) => window.DCC.api("/api/working-queue", { method: "POST", body });
       const before = await window.DCCWorkingQueue.refresh();
       const foreground = before.queue.items.find((item) => item.status === "foreground");
       if (foreground)
-        await window.DCCWorkingQueue.send({
+        await command({
           action: "pause",
           taskId: foreground.task.id,
           expectedRevision: before.revision,
@@ -79,7 +81,7 @@ try {
       });
       const row = Array.isArray(result) ? result[0] : result;
       const state = await window.DCCWorkingQueue.refresh();
-      await window.DCCWorkingQueue.send({
+      await command({
         action: "start",
         taskId: row.id,
         expectedRevision: state.revision,
@@ -87,6 +89,7 @@ try {
         sourceEventId: "qa:" + crypto.randomUUID(),
         at: new Date().toISOString()
       });
+      await window.DCCWorkingQueue.refresh();
       return row.id;
     }, title);
   const originalTask = await makeForeground("Authenticated focus task");

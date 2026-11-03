@@ -170,7 +170,26 @@ try {
   assert.equal(await page.getByRole("button", { name: "Save objectives", exact: true }).isEnabled(), true);
   await page.getByRole("textbox", { name: "Section 1 objective" }).fill("");
   await page.getByRole("button", { name: "Save objectives", exact: true }).click();
-  await page.getByText("Could not save: Keep an objective for the running section.").waitFor();
+  try {
+    await page.getByText("Could not save: Keep an objective for the running section.").waitFor({ timeout: 5000 });
+  } catch (e) {
+    console.log(
+      "EXPIRED_VALIDATION_DIAGNOSTIC",
+      await page.evaluate(
+        (k) => ({
+          error: document.querySelector("[data-error]")?.textContent,
+          phase: document.querySelector("[data-phase]")?.textContent,
+          button: document.querySelector('[data-focus-action="save"]')?.outerHTML,
+          values: [...document.querySelectorAll(".dcc-pomodoro textarea")].map((i) => i.value),
+          stored: localStorage.getItem(k)
+        }),
+        key
+      ),
+      errors
+    );
+    throw e;
+  }
+
   assert.equal((await read()).objectives[0], "Draft introduction");
   await page.getByRole("textbox", { name: "Section 1 objective" }).fill("Draft introduction");
   await page.getByRole("button", { name: "Prepare next section", exact: true }).dblclick();
