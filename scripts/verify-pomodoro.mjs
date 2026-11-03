@@ -1,4 +1,4 @@
-/* global document, localStorage, innerWidth, Storage, DCCWorkingQueue */
+/* global document, localStorage, innerWidth, Storage, window, navigator */
 import assert from "node:assert/strict";
 import express from "express";
 import path from "node:path";
@@ -30,7 +30,7 @@ app.get("/", (_req, res) =>
   res
     .type("html")
     .send(
-      `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/tokens.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"></head><body><main><div id="working-queue-root"></div><button id="outside">Outside</button></main><div id="toast-container"></div><script>window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:new URLSearchParams(location.search).get('workspace')||'test'};</script><script src="/public/js/core.js"></script><script src="/public/js/core-ui.js"></script><script src="/public/js/pomodoro-model.js"></script><script src="/public/js/pomodoro.js"></script><script src="/public/js/task-types.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/task-priority.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/working-queue.js"></script><script>DCCWorkingQueue.refresh();</script></body></html>`
+      `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/tokens.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"></head><body><main><div id="working-queue-root"></div><button id="outside">Outside</button></main><div id="toast-container"></div><script>window.DCC_ACCOUNT_CONTEXT={userId:Number(new URLSearchParams(location.search).get('user')||1),workspaceId:new URLSearchParams(location.search).get('workspace')||'test'};</script><script src="/public/js/core.js"></script><script src="/public/js/core-ui.js"></script><script src="/public/js/pomodoro-model.js"></script><script src="/public/js/pomodoro.js"></script><script src="/public/js/task-types.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/task-priority.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/working-queue.js"></script><script>DCCWorkingQueue.refresh();</script></body></html>`
     )
 );
 const server = app.listen(0, "127.0.0.1");
@@ -74,6 +74,7 @@ try {
       JSON.parse(localStorage.getItem(k)).revision === 2 && JSON.parse(localStorage.getItem(k)).deadline === d,
     [key, deadline]
   );
+  await page.evaluate(() => window.DCCWorkingQueue.render());
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "detached" });
   assert.equal(await page.evaluate(() => document.activeElement.dataset.queueAction), "pomodoro");
@@ -104,6 +105,11 @@ try {
   await page.keyboard.press("Escape");
   await page.locator("[data-queue-action=pomodoro]").click();
   await page.getByText("Section 1 timer finished", { exact: true }).waitFor();
+  await page.getByRole("textbox", { name: "Section 1 objective" }).fill("");
+  await page.getByRole("button", { name: "Save objectives", exact: true }).click();
+  await page.getByText("Could not save: Keep an objective for the running section.").waitFor();
+  assert.equal((await read()).objectives[0], "Draft introduction");
+  await page.getByRole("textbox", { name: "Section 1 objective" }).fill("Draft introduction");
   await page.getByRole("button", { name: "Prepare next section", exact: true }).dblclick();
   await page.getByText("Section 2 of 4 · ready").waitFor();
   assert.equal((await read()).section, 1);
@@ -131,6 +137,15 @@ try {
   await page.locator("[data-queue-action=pomodoro]").click();
   await page.getByText("Write a draft", { exact: true }).waitFor();
   assert.equal((await read()).taskId, "task");
+  // A deleted task retains its snapshot focus plan without producing task writes.
+  const replacement = queue.queue.items;
+  queue.queue.items = [];
+  await page.keyboard.press("Escape");
+  await page.reload();
+  await page.locator("[data-queue-action=pomodoro]").click();
+  await dialog.getByText("Write a draft", { exact: true }).waitFor();
+  assert.equal((await read()).taskId, "task");
+  queue.queue.items = replacement;
   // Complete the remaining timers explicitly; no section starts itself.
   for (let section = 1; section < 4; section++) {
     await page.getByRole("textbox", { name: "Section " + (section + 1) + " objective" }).fill("Goal " + section);
@@ -175,6 +190,19 @@ try {
   await page.getByRole("button", { name: "Save objectives", exact: true }).click();
   await page.getByText("Could not save: Quota exceeded").waitFor();
   assert.deepEqual(await read(), before);
+  // A different user in the same workspace never sees the first user's saved plan.
+  const userPage = await context.newPage();
+  await userPage.goto(url + "/?user=2");
+  await userPage.locator("[data-queue-action=pomodoro]").click();
+  assert.equal(await userPage.getByRole("textbox", { name: "Section 1 objective" }).inputValue(), "");
+  // Without Web Locks, refuse mutation and preserve storage instead of racing tabs.
+  await userPage.evaluate(() => Object.defineProperty(navigator, "locks", { value: undefined }));
+  await userPage.getByRole("textbox", { name: "Section 1 objective" }).fill("No lock goal");
+  await userPage.getByRole("button", { name: "Start section 1", exact: true }).click();
+  await userPage
+    .getByText("Could not save: This browser cannot safely coordinate focus timers across tabs. Use a current browser.")
+    .waitFor();
+  assert.equal(await userPage.evaluate(() => localStorage.getItem("dcc-pomodoro:test:2")), null);
   // Invalid stored data is preserved and produces an actionable error, not silent reset.
   await other.evaluate((k) => localStorage.setItem(k, "invalid-json"), key);
   await other.keyboard.press("Escape");

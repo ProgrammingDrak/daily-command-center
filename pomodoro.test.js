@@ -63,3 +63,13 @@ test("ending early preserves the task identity without pretending all sections e
   assert.ok(M.valid(ended));
   assert.throws(() => M.change(ended, "start", ended.objectives, 300), /complete/);
 });
+
+test("expired section cannot persist a blank current objective", () => {
+  const p = M.change(make(), "start", ["First", "", "", ""], 100);
+  for (const action of ["save", "next", "end"]) {
+    assert.throws(() => M.change(p, action, ["", "Next", "", ""], 1200100), /Keep an objective/);
+    assert.ok(M.valid(p));
+  }
+  const next = M.change(p, "next", p.objectives, 1200100);
+  assert.ok(M.valid(next));
+});

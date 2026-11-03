@@ -145,6 +145,7 @@
       title: "🍅 Pomodoro",
       body,
       canClose: () => !busy,
+      returnFocus: () => document.querySelector('[data-queue-action="pomodoro"]'),
       onClose: () => {
         clearInterval(timer);
         window.removeEventListener("storage", storage);

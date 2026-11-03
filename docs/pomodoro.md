@@ -20,6 +20,8 @@ from the saved deadline, so repeated ticks never advance a section or send a cue
 twice. System-clock changes affect the displayed remaining time. There are no
 background alarms or closed-browser notifications. Changing foreground does not
 retarget the plan: its dialog continues to name the originally selected task.
+Deleting that task likewise retains the plan as an independent title/id snapshot;
+timer actions never recreate the deleted task.
 The Foreground tomato shows current section, remaining time, pause or expiry.
 Timer expiry is not measured work. This feature never writes task activity,
 status, focused actuals, snoozes, or worker state.

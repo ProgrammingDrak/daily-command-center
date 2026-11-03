@@ -57,7 +57,7 @@
       n.objectives = objectives.map((x, i) => (i < p.section ? p.objectives[i] : x.trim()));
     }
     if (["complete", "cancelled"].includes(p.status)) throw new Error("This plan is complete.");
-    if (p.status === "running" && !elapsed(p, now) && !n.objectives[p.section])
+    if (p.status === "running" && !n.objectives[p.section])
       throw new Error("Keep an objective for the running section.");
     if (action === "end") {
       n.status = "cancelled";
