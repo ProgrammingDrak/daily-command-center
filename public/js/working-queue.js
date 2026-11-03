@@ -157,7 +157,7 @@
         onCompleteWithNotes:completed?null:()=>transition('done',item).catch(warn),
         onOpen:()=>openDetails(row.id).catch(warn),
         onSchedule:completed?null:anchor=>openSchedule(item,anchor).catch(warn),scheduleLabel:'Schedule',
-        titleExtrasHtml:'<span class="wq-status">'+esc(item.status==='queued'?'Priority':item.status)+'</span>',
+        titleExtrasHtml:'<span class="wq-status">'+esc(item.needsYou?'Needs You':item.snoozed?'Snoozed':item.status==='queued'?'Priority':item.status)+'</span>',
         metaHtml:'<p class="wq-time">'+esc(foreground?activeMinutes+'m this session · '+actual:actual+(item.backgroundSince?' · '+elapsed+'m waiting':''))+'</p>'+(reminder?'<p class="wq-attention">'+esc(reminder)+'</p>':'')+snoozedHtml+finished+(held?'<p class="wq-time" id="queue-return-'+esc(row.id)+'">'+esc(held)+'</p>':'')+contextHtml(item)
       });
       if(!completed){
