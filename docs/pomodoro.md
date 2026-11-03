@@ -35,3 +35,12 @@ Verification:
 
 No database or production migration is required. This does not cache the full app
 for reopening offline or provide cross-device plan synchronization.
+
+Authenticated integration QA uses `scripts/verify-pomodoro-auth.mjs` against the
+real server and a disposable localhost database named `dcc_pomodoro_review_*`.
+It requires `DCC_POMODORO_AUTH_QA=1`, `DCC_TEST_DATABASE_URL`, and optionally
+`DCC_AUTH_QA_URL` (default localhost:8462), `SEED_USERNAME`, and `SEED_PASSWORD`.
+Apply the existing schema and reviewed foreground index to that disposable DB
+before starting the real server. The script uses real sessions, task/queue APIs,
+and temporary local accounts to check script order/cache headers, task rendering,
+320px overlay controls, account/workspace changes, and signed-out/shared views.

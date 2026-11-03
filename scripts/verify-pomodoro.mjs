@@ -88,6 +88,15 @@ try {
   const other = await context.newPage();
   await other.goto(url);
   await other.locator("[data-queue-action=pomodoro]").click();
+  for (const tab of [page, other])
+    await tab.evaluate((k) => {
+      window.__focusWrites = 0;
+      const set = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (name, value) {
+        if (name === k) window.__focusWrites++;
+        return set.call(this, name, value);
+      };
+    }, key);
   // Hold the shared lock so both handlers definitely enqueue before either can save.
   const lockPage = await context.newPage();
   await lockPage.goto(url);
@@ -110,6 +119,18 @@ try {
   );
   await lockPage.evaluate(() => window.__releaseFocusLock());
   await page.waitForFunction((k) => JSON.parse(localStorage.getItem(k)).revision === 4, key);
+  await lockPage.waitForFunction(async (k) => {
+    const locks = await navigator.locks.query();
+    return ![...locks.held, ...locks.pending].some((lock) => lock.name === k);
+  }, key);
+  assert.equal(
+    (await Promise.all([page, other].map((tab) => tab.evaluate(() => window.__focusWrites)))).reduce(
+      (a, b) => a + b,
+      0
+    ),
+    1,
+    "only one queued resume may commit"
+  );
   p = await read();
   assert.equal(p.revision, 4);
   assert.equal(p.remaining, paused);
