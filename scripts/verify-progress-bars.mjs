@@ -73,6 +73,8 @@ try{
   buildProgress();
  });
  assert.equal(await page.locator('#pactual .live').count(),3);
+ const liveLanes=await page.locator('#pactual .live').evaluateAll(nodes=>nodes.map(el=>{const r=el.getBoundingClientRect();return {top:r.top,bottom:r.bottom};}).sort((a,b)=>a.top-b.top));
+ assert.ok(liveLanes.slice(1).every((lane,i)=>liveLanes[i].bottom<=lane.top+.1),'concurrent portions occupy distinct visible bands');
  await assertCompact(320);
  await page.locator('#pactual .live').last().focus();
  assert.ok(await page.locator('#day-progress-tooltip').isVisible());
