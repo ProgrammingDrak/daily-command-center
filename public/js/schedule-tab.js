@@ -1787,7 +1787,7 @@ function buildProgressActual(model,start,total){
   track.replaceChildren();
   if(!model){note.textContent="Activity is loading…";return;}
   const A=DCC.ActualProjection;
-  track.style.height=(model.lanes*20-2)+"px";
+  const laneCount=Math.max(1,model.lanes);
   model.segments.forEach(seg=>{
     const task=(typeof scheduled!=="undefined"?scheduled:[]).find(t=>t.id===seg.taskId||t._blockId===seg.taskId);
     const block=window.blockStore&&blockStore.get(seg.taskId);
@@ -1797,7 +1797,7 @@ function buildProgressActual(model,start,total){
     button.type="button";button.className="progress-actual-segment"+(seg.live?" live":"");
     button.dataset.entryId=seg.id;
     const color=typeof taskTagColor==="function"&&taskTagColor(ev)||cfg(ev.type).color;
-    button.style.cssText="left:"+((seg.startMin-start)/total*100)+"%;width:"+((seg.endMin-seg.startMin)/total*100)+"%;top:"+(seg.lane*20)+"px;background:"+color;
+    button.style.cssText="left:"+((seg.startMin-start)/total*100)+"%;width:"+((seg.endMin-seg.startMin)/total*100)+"%;--lane-top:"+(seg.lane/laneCount*100)+"%;--lane-height:"+(100/laneCount)+"%;background:"+color;
     const timing=(seg.clockLabel||A.clock(seg.startMin)+" – "+A.clock(seg.endMin))+" · "+A.minutes(seg.endMin-seg.startMin)+(seg.live?" · Ongoing":" · Recorded");
     button.setAttribute("aria-label",seg.title+" · "+timing);
     _bindProgressTooltip(button,{title:seg.title},timing);

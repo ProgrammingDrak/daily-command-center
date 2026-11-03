@@ -45,14 +45,39 @@ try{
   buildProgress();
  });
  assert.equal(await page.locator('#pactual .live').count(),2);
- assert.ok(await page.locator('#pactual').evaluate(el=>el.getBoundingClientRect().height>=38));
+ const compactMeasurements=[];
+ const assertCompact=async(width)=>{
+  const m=await page.evaluate(()=>{
+   const plan=document.querySelector('#ptrack').getBoundingClientRect(),actual=document.querySelector('#pactual').getBoundingClientRect(),heading=document.querySelector('.progress-label').getBoundingClientRect(),button=document.querySelector('#progress-day-review').getBoundingClientRect();
+   return {plan:plan.height,actual:actual.height,gap:actual.top-plan.bottom,heading:heading.height,reviewHeight:button.height,reviewInHeading:button.top>=heading.top&&button.bottom<=heading.bottom+1,segments:[...document.querySelectorAll('#pactual button')].map(b=>{const r=b.getBoundingClientRect();return {height:r.height,inside:r.top>=actual.top-.1&&r.bottom<=actual.bottom+.1,label:b.getAttribute('aria-label')};})};
+  });
+  assert.equal(m.actual,m.plan,'equal total track height at '+width);
+  assert.equal(m.plan,width<=760?14:18);
+  assert.ok(m.gap<=21,'compact inter-bar gap at '+width+': '+m.gap);
+  assert.ok(m.heading<=24&&m.reviewHeight>=24&&m.reviewInHeading,'compact accessible review header');
+  assert.ok(m.segments.every(s=>s.height>0&&s.inside&&s.label),'all activity portions visible and labeled');
+  compactMeasurements.push({width,...m});
+ };
+ await assertCompact(1440);
  await page.locator('.progress-box').screenshot({path:out+'/ongoing-desktop.png'});
  for(const width of [375,320]){
   await page.setViewportSize({width,height:900});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'no page overflow at '+width);
   await assertAxisVisible();
+  await assertCompact(width);
   await page.locator('.progress-box').screenshot({path:out+'/ongoing-'+width+'.png'});
  }
+ // Three simultaneous sessions must remain distinct within the fixed track.
+ await page.evaluate(()=>{
+  window.DCCWorkSessions.activeTasks=()=>[1,2,3].map(n=>({id:'dense-'+n,title:'Concurrent task '+n,startedAt:new Date(Date.now()-600000).toISOString()}));
+  buildProgress();
+ });
+ assert.equal(await page.locator('#pactual .live').count(),3);
+ await assertCompact(320);
+ await page.locator('#pactual .live').last().focus();
+ assert.ok(await page.locator('#day-progress-tooltip').isVisible());
+ assert.equal(await page.locator('#pactual .live').last().evaluate(el=>el.getBoundingClientRect().height),14,'focused portion expands within fixed-height track');
+ await page.locator('.progress-box').screenshot({path:out+'/focused-overlap-320.png'});
  await page.locator('#pactual button').first().focus();
  assert.ok(await page.locator('#day-progress-tooltip').isVisible());
  await page.keyboard.press('Escape');
@@ -121,6 +146,6 @@ try{
  }
  // No application script exceptions; intentionally blocked external fonts are transport noise.
  assert.deepEqual(errors,[]);
- await fs.writeFile(out+'/results.json',JSON.stringify({checks:['recorded evidence','unplaced and unknown minutes','same pixel axis','two ongoing overlapping sessions','mobile 320/375','keyboard tooltip and focus survives refresh','independent review open-close-reload','queue review and Back','legacy URL and saved preference dismissal','day review preserves itinerary','empty past date'],aligned,errors},null,2));
+ await fs.writeFile(out+'/results.json',JSON.stringify({checks:['equal total height desktop/mobile','compact spacing and header','three overlaps retained and focusable','recorded evidence','unplaced and unknown minutes','same pixel axis','two ongoing overlapping sessions','mobile 320/375','keyboard tooltip and focus survives refresh','independent review open-close-reload','queue review and Back','legacy URL and saved preference dismissal','day review preserves itinerary','empty past date'],aligned,compactMeasurements,errors},null,2));
  console.log('PASS progress bars: recorded, empty, ongoing, overlap, timezone, alignment, mobile, keyboard, day review');
 }finally{await browser.close();}

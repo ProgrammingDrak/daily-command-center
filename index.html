@@ -203,14 +203,14 @@
   <div class="date-picker-drop" id="date-picker-drop" style="display:none"></div>
   <div class="progress-wrap">
     <section class="progress-box" aria-labelledby="day-progress-title">
-      <div class="progress-label"><span id="day-progress-title">Day Progress</span><span id="ppct">--</span></div>
+      <div class="progress-label"><span id="day-progress-title">Day Progress</span><span class="progress-heading-actions"><span id="ppct">--</span><button type="button" id="progress-day-review" aria-controls="actual-view" aria-expanded="false">Day review</button></span></div>
       <div class="progress-row-label" id="plan-progress-label">Plan / itinerary</div>
       <div class="progress-track-shell">
         <div class="progress-track" id="ptrack"></div>
         <span class="progress-now" id="pnow" role="img" hidden></span>
       </div>
       <div class="progress-rails" id="prails"></div>
-      <div class="progress-row-label"><span id="actual-progress-label">Actual activity</span><button type="button" id="progress-day-review" aria-controls="actual-view" aria-expanded="false">Day review</button></div>
+      <div class="progress-row-label" id="actual-progress-label">Actual activity</div>
       <div id="pactual" class="progress-actual" role="group" aria-labelledby="actual-progress-label"></div>
       <p id="pactual-note" class="progress-actual-note"></p>
       <div class="progress-axis"><time id="pstart">--</time><time id="pend">--</time></div>
