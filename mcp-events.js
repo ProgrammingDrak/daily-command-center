@@ -78,6 +78,9 @@ function subscriptionId(identity, params) {
     })
   );
 }
+function eventIdFor(subscription, task, generation, due) {
+  return "dccevt_" + M.digest({ subscription: subscription.id, task, generation, due });
+}
 function dueEvent(subscription, item, now) {
   const due = Date.parse(item?.dueAt);
   if (
@@ -92,9 +95,7 @@ function dueEvent(subscription, item, now) {
     !item.needsYou
   )
     return null;
-  const eventId =
-    "dccevt_" +
-    M.digest({ subscription: subscription.id, task: item.task.id, generation: item.generation, due: item.dueAt });
+  const eventId = eventIdFor(subscription, item.task.id, item.generation, item.dueAt);
   return {
     eventId,
     name: NAME,
@@ -278,13 +279,29 @@ function createEvents({
             identity.workspaceId
           ])
         ).rows[0]?.state;
-        const deadline = Date.parse(rotation?.items?.[s.task_id]?.dueAt);
+        const reminder = rotation?.items?.[s.task_id];
+        const deadline = Date.parse(reminder?.dueAt);
         if (rotation?.version === 2 && (!Number.isFinite(deadline) || deadline > now())) {
           await q.query(
             "UPDATE dcc_event_deliveries SET status='cancelled' WHERE subscription_id=$1 AND status='pending'",
             [s.id]
           );
           return;
+        }
+        if (rotation?.version === 2 && reminder?.generation) {
+          const candidateId = eventIdFor(s, s.task_id, reminder.generation, reminder.dueAt);
+          const priorDelivery = (
+            await q.query(
+              `SELECT status,next_attempt_at FROM dcc_event_deliveries
+            WHERE subscription_id=$1 AND event_id=$2`,
+              [s.id, candidateId]
+            )
+          ).rows[0];
+          if (
+            priorDelivery &&
+            (priorDelivery.status !== "pending" || Date.parse(priorDelivery.next_attempt_at) > now())
+          )
+            return;
         }
         const queue = await snapshot(q, identity, blockDB, now());
         const event = dueEvent(

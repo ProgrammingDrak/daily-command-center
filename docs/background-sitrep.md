@@ -57,7 +57,8 @@ receipt means the host accepted the event, not that investigation finished.
   deadlines while the subscription remains valid; expired subscriptions do not
   replay historical deadlines on reactivation. Idle version-2 reminders use a
   lightweight metadata read; actual due attempts always load the full canonical
-  projection. Legacy queue adoption retains the existing projection path.
+  projection. Acknowledged/terminal generations and retry backoff also skip the
+  full projection. Legacy queue adoption retains the existing projection path.
 - Generation/deadline-derived event IDs survive retries and restarts. Account
   locks and durable acknowledgements serialize replicas. Transient network, 408,
   429 and 5xx failures retry at most eight times, starting at 15 seconds with

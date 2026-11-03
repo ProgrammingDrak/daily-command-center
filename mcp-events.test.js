@@ -381,17 +381,29 @@ test(
     assert.equal(snapshotCalls, 1, "actual due delivery revalidates the canonical projection");
     const first = sent[0].event;
     assert.equal(first.data.prompt, "Sitrep?");
+    await ctx.pool.query("UPDATE dcc_event_subscriptions SET last_checked_at=$2 WHERE id=$1", [
+      sub.id,
+      new Date(now - 16000).toISOString()
+    ]);
+    const beforeBackoffSnapshot = snapshotCalls;
     await events.tick();
     assert.equal(sent.length, 1, "backoff suppresses immediate retry");
+    assert.equal(snapshotCalls, beforeBackoffSnapshot, "backoff-delayed generations skip the full projection");
     events = E.createEvents(options);
     now += 16000;
     status = 200;
     await events.tick();
     assert.equal(sent.length, 2, "restart resumes durable delivery");
     assert.equal(sent[1].event.eventId, first.eventId, "retry preserves event identity");
+    const afterAcknowledgementSnapshot = snapshotCalls;
     now += 16000;
     await events.tick();
     assert.equal(sent.length, 2, "successful generation is not sent twice");
+    assert.equal(
+      snapshotCalls,
+      afterAcknowledgementSnapshot,
+      "acknowledged overdue generations skip the full projection"
+    );
     await command("background-start", "b", { remindMinutes: 1 });
     const bParams = {
       ...params,
