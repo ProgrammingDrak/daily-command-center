@@ -370,13 +370,18 @@ module.exports = function mount(app, ctx, config = {}) {
   const store = createConversationStore(ctx);
   // Disabled by default: publishing code never silently enables outbound access.
   const eventsEnabled = config.eventsEnabled ?? process.env.DCC_EVENTS_ENABLED === "true";
-  const events = eventsEnabled
-    ? require("../mcp-events").createEvents({
+  let events = null;
+  if (eventsEnabled) {
+    try {
+      events = require("../mcp-events").createEvents({
         ...ctx,
         key: config.eventsKey || process.env.DCC_EVENTS_ENCRYPTION_KEY,
         ...config.eventOptions
-      })
-    : null;
+      });
+    } catch {
+      console.error("[dcc-events] Events disabled: encryption configuration unavailable");
+    }
+  }
   const eventTimer =
     events && config.eventWorker !== false
       ? setInterval(() => {

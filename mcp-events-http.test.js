@@ -116,4 +116,13 @@ test("HTTP MCP Events discovery, consent scopes, subscribe and unsubscribe", { s
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" })
   });
   assert.equal((await response.json()).result.capabilities.events, undefined);
+  const invalid = mount(express(), ctx, {
+    enabled: true,
+    baseUrl: "https://dcc.example",
+    clients: {},
+    eventsEnabled: true,
+    eventsKey: "invalid"
+  });
+  assert.equal(invalid.events, null, "bad event configuration cannot bring down existing DCC tools");
+  invalid.close();
 });
