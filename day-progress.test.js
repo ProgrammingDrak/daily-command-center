@@ -64,6 +64,7 @@ test("a task segment opens that task's details modal", () => {
       createElement: (tagName) => ({
         tagName,
         style: {},
+        dataset: {},
         listeners: {},
         setAttribute(name, value) { this[name] = value; },
         addEventListener(name, handler) { this.listeners[name] = handler; },

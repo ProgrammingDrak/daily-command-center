@@ -97,6 +97,8 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
       toggle.setAttribute("aria-pressed",String(!!state.actual));
       toggle.classList.toggle("active",!!state.actual);
     }
+    const reviewButton=byId("progress-day-review");
+    if(reviewButton){const open=reviewOpen&&state.page==="tasks"&&state.view!=="queue";reviewButton.setAttribute("aria-expanded",String(open));reviewButton.textContent=open?"Close day review":"Day review";}
     const body=document.body;
     body.dataset.navPage=state.page;
     body.dataset.navView=state.view;
@@ -177,7 +179,7 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
     get:()=>Object.assign({},state),
     go,setActual,select,setArchive,setReviewOpen,hasDraftIn,
     isRetired:NS.isRetired,
-    reviewOpen:()=>reviewOpen&&state.actual&&state.page==="tasks"&&state.view!=="queue",
+    reviewOpen:()=>reviewOpen&&state.page==="tasks"&&state.view!=="queue",
     prefs:()=>Object.assign({},prefs)
   };
   DCC.tabs.select=select;

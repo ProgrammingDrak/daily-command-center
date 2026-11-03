@@ -1,4 +1,4 @@
-/* global window, document, buildProgress, switchToDate */
+/* global window, document, buildProgress, switchToDate, localStorage */
 // Disposable review server only; no account data or external requests.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -56,18 +56,71 @@ try{
  await page.locator('#pactual button').first().focus();
  assert.ok(await page.locator('#day-progress-tooltip').isVisible());
  await page.keyboard.press('Escape');
+ const focusKey=await page.locator('#pactual button').first().getAttribute('data-entry-id');
+ await page.evaluate(()=>buildProgress());
+ assert.equal(await page.evaluate(()=>document.activeElement.dataset.entryId),focusKey,'actual focus survives refresh');
+ await page.locator('#ptrack button').first().focus();
+ const planFocus=await page.evaluate(()=>document.activeElement.dataset.progressKey);
+ await page.evaluate(()=>buildProgress());
+ assert.equal(await page.evaluate(()=>document.activeElement.dataset.progressKey),planFocus,'plan focus survives refresh');
+ const savedActual=await page.evaluate(()=>localStorage.getItem('dcc-itinerary-actual'));
  await page.locator('#progress-day-review').click();
  await page.waitForSelector('#actual-view .dr-root');
  assert.equal(await page.locator('#list-view').isVisible(),true);
+ assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false);
+ assert.equal(await page.evaluate(()=>localStorage.getItem('dcc-itinerary-actual')),savedActual);
+ await page.locator('#progress-day-review').click();
+ assert.equal(await page.locator('#actual-view').isHidden(),true);
+ await page.reload();
+ await page.waitForFunction(()=>!!window.DCC?.nav);
+ assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false,'review never persists the overlay');
+ assert.equal(await page.locator('#actual-view').isHidden(),true,'review panel is ephemeral');
+ await page.goto(base+'/?tab=tasks&view=queue');
+ await page.waitForFunction(()=>!!window.DCC?.ProgressActual);
+ await page.locator('#progress-day-review').click();
+ await page.waitForSelector('#actual-view .dr-root');
+ assert.equal(await page.locator('#list-view').isVisible(),true,'queue review opens itinerary');
+ await page.goBack();
+ await page.waitForFunction(()=>window.DCC.nav.get().view==='queue');
+ assert.equal(await page.locator('#progress-day-review').getAttribute('aria-expanded'),'false');
+ await page.goto(base+'/?tab=tasks&view=list&actual=1');
+ await page.waitForSelector('.actual-details-dismiss');
+ await page.locator('.actual-details-dismiss').click();
+ assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false);
+ await page.reload();
+ await page.waitForFunction(()=>!!window.DCC?.nav);
+ assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false,'legacy overlay dismissal survives reload');
+ await page.evaluate(()=>localStorage.setItem('dcc-itinerary-actual','1'));
+ await page.goto(base+'/?tab=tasks&view=calendar');
+ await page.waitForSelector('.actual-details-dismiss');
+ await page.locator('.actual-details-dismiss').click();
+ assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false,'legacy saved preference can be dismissed');
+ await page.goto(base+'/?tab=tasks&view=actual');
+ await page.waitForSelector('.actual-details-dismiss');
+ await page.locator('.actual-details-dismiss').click();
+ assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false,'legacy Actual view link can be dismissed');
+ await page.goto(base+'/?tab=tasks&view=list&actual=0');
+ await page.waitForFunction(()=>!!window.DCC?.ProgressActual);
+
  await page.evaluate(async()=>{
-  window.DCCWorkSessions.activeTasks=window._reviewActive;
+  if(typeof window._reviewActive==="function")window.DCCWorkSessions.activeTasks=window._reviewActive;
   await switchToDate('2026-01-04');buildProgress();
  });
  await page.waitForFunction(()=>document.querySelector('#pactual-note').textContent.includes('No timed activity'));
  assert.equal(await page.locator('#pactual button').count(),0);
  await page.locator('.progress-box').screenshot({path:out+'/empty-mobile.png'});
+ for(const fixture of [{date:'2026-11-01',startedAt:'2026-11-01T05:50:00Z',label:/1:50 AM EDT.*1:10 AM EST/},{date:'2026-03-08',startedAt:'2026-03-08T06:50:00Z',label:/1:50 AM EST.*3:10 AM EDT/},{date:'2026-02-03',start:'23:50',label:/11:50 PM/}]){
+  await fetch(base+'/api/blocks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:'clock-review-'+fixture.date,type:'time_entry',date:fixture.date,properties:{taskTitle:'Clock transition review',startedAt:fixture.startedAt,start:fixture.start,durSec:1200}})});
+  await page.evaluate(async date=>{await switchToDate(date);buildProgress();},fixture.date);
+  await page.waitForSelector('#pactual button');
+  const segments=page.locator('#pactual button');
+  assert.equal(await segments.count(),fixture.start?1:2);
+  assert.match(await segments.first().getAttribute('aria-label'),fixture.label);
+  if(fixture.start){assert.equal(await page.locator('#ptrack').getAttribute('data-end-min'),'1440');assert.match(await page.locator('#pend').innerText(),/next day|1 day/);}
+  await page.locator('.progress-box').screenshot({path:out+'/clock-'+fixture.date+'.png'});
+ }
  // No application script exceptions; intentionally blocked external fonts are transport noise.
  assert.deepEqual(errors,[]);
- await fs.writeFile(out+'/results.json',JSON.stringify({checks:['recorded evidence','unplaced and unknown minutes','same pixel axis','two ongoing overlapping sessions','mobile 320/375','keyboard tooltip','day review preserves itinerary','empty past date'],aligned,errors},null,2));
+ await fs.writeFile(out+'/results.json',JSON.stringify({checks:['recorded evidence','unplaced and unknown minutes','same pixel axis','two ongoing overlapping sessions','mobile 320/375','keyboard tooltip and focus survives refresh','independent review open-close-reload','queue review and Back','legacy URL and saved preference dismissal','day review preserves itinerary','empty past date'],aligned,errors},null,2));
  console.log('PASS progress bars: recorded, empty, ongoing, overlap, timezone, alignment, mobile, keyboard, day review');
 }finally{await browser.close();}

@@ -33,3 +33,28 @@ test('DST date boundaries use the application day rather than a fixed 24 hours',
  assert.equal(P.boundary('2026-11-01',opts.zone,true)-P.boundary('2026-11-01',opts.zone,false),25*3600000);
  assert.equal(P.boundary('2026-03-08',opts.zone,true)-P.boundary('2026-03-08',opts.zone,false),23*3600000);
 });
+
+test('fall-back recorded and live intervals split without losing or inventing minutes',()=>{
+ const o={...opts,date:'2026-11-01',now:Date.parse('2026-11-01T06:10:00Z')};
+ const p={startedAt:'2026-11-01T05:50:00Z',durSec:1200};
+ for(const m of [P.model([{id:'dst',date:o.date,properties:p}],[],o),P.model([],[{id:'dst',startedAt:p.startedAt}],o)]){
+  assert.deepEqual(m.segments.map(s=>[s.startMin,s.endMin]),[[60,70],[110,120]]);
+  assert.equal(m.segments.reduce((n,s)=>n+s.endMin-s.startMin,0),20);
+  for(const seg of m.segments)assert.match(seg.clockLabel,/1:50 AM EDT.*1:10 AM EST.*20m session/);
+ }
+});
+test('spring-forward recorded and live intervals leave nonexistent clock times empty',()=>{
+ const o={...opts,date:'2026-03-08',now:Date.parse('2026-03-08T07:10:00Z')};
+ const p={startedAt:'2026-03-08T06:50:00Z',durSec:1200};
+ for(const m of [P.model([{id:'dst',date:o.date,properties:p}],[],o),P.model([],[{id:'dst',startedAt:p.startedAt}],o)]){
+  assert.deepEqual(m.segments.map(s=>[s.startMin,s.endMin]),[[110,120],[180,190]]);
+  assert.equal(m.segments.reduce((n,s)=>n+s.endMin-s.startMin,0),20);
+  for(const seg of m.segments)assert.match(seg.clockLabel,/1:50 AM EST.*3:10 AM EDT/);
+ }
+});
+test('repeated clock portions use separate lanes and clock-only transition dates remain unpositioned',()=>{
+ const o={...opts,date:'2026-11-01'};
+ const m=P.model([{id:'two-hours',date:o.date,properties:{startedAt:'2026-11-01T05:00:00Z',durSec:7200}},{id:'ambiguous',date:o.date,properties:{start:'01:30',durSec:600}}],[],o);
+ assert.deepEqual(m.segments.map(s=>[s.startMin,s.endMin,s.lane]),[[60,120,0],[60,120,1]]);
+ assert.equal(m.unplacedMin,10);
+});

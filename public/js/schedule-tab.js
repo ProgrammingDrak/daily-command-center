@@ -33,6 +33,8 @@ function applyScheduleView(navState,prev){
   const review=document.getElementById("actual-view");
   const reviewOpen=!!(window.DCC&&DCC.nav&&DCC.nav.reviewOpen());
   if(review){review.style.display=reviewOpen?"block":"none";review.hidden=!reviewOpen;}
+  const reviewButton=document.getElementById("progress-day-review");
+  if(reviewButton){reviewButton.setAttribute("aria-expanded",String(reviewOpen));reviewButton.textContent=reviewOpen?"Close day review":"Day review";}
   const viewChanged=!prev||prev.view!==nav.view||prev.page!==nav.page;
   const actualChanged=!prev||prev.actual!==nav.actual;
   if(viewChanged){
@@ -97,7 +99,9 @@ function renderActualSummary(){
   strip.innerHTML='<div class="actual-summary-stats">'+items.map(item=>'<span class="actual-stat actual-stat--'+item.key+'"><b>'+escHtml(item.value)+'</b> '+escHtml(item.label)+'</span>').join("")+'</div>'+
     '<p class="actual-summary-note">Actual comes from recorded time entries. Waiting time is not focused effort.'+(schedView==="calendar"?' Bars show recorded segments; minutes without a clock time are listed per day.':'')+'</p>'+
     '<div class="actual-summary-actions"><button type="button" data-completion-review data-review-date="'+escHtml(date||"")+'">Did these happen?</button>'+
-    '<button type="button" class="actual-review-toggle" aria-expanded="'+open+'" aria-controls="actual-view">'+(open?'Hide day review':'Day review')+'</button></div>';
+    '<button type="button" class="actual-review-toggle" aria-expanded="'+open+'" aria-controls="actual-view">'+(open?'Hide day review':'Day review')+'</button><button type="button" class="actual-details-dismiss">Hide actual details</button></div>';
+  // Legacy preferences/links still expose details, with a visible way to dismiss them.
+  strip.querySelector(".actual-details-dismiss").addEventListener("click",()=>DCC.nav.setActual(false));
   strip.querySelector(".actual-review-toggle").addEventListener("click",()=>{if(DCC.nav)DCC.nav.setReviewOpen(!DCC.nav.reviewOpen());});
 }
 window.renderActualSummary=renderActualSummary;
@@ -1794,21 +1798,26 @@ function buildProgressActual(model,start,total){
     button.dataset.entryId=seg.id;
     const color=typeof taskTagColor==="function"&&taskTagColor(ev)||cfg(ev.type).color;
     button.style.cssText="left:"+((seg.startMin-start)/total*100)+"%;width:"+((seg.endMin-seg.startMin)/total*100)+"%;top:"+(seg.lane*20)+"px;background:"+color;
-    const timing=A.clock(seg.startMin)+" – "+A.clock(seg.endMin)+" · "+A.minutes(seg.endMin-seg.startMin)+(seg.live?" · Ongoing":" · Recorded");
+    const timing=(seg.clockLabel||A.clock(seg.startMin)+" – "+A.clock(seg.endMin))+" · "+A.minutes(seg.endMin-seg.startMin)+(seg.live?" · Ongoing":" · Recorded");
     button.setAttribute("aria-label",seg.title+" · "+timing);
     _bindProgressTooltip(button,{title:seg.title},timing);
-    button.addEventListener("click",()=>{if(block&&typeof openAddModal==="function")openAddModal(p.local_id||block.id,seg.title);else openProgressDayReview();});
+    button.addEventListener("click",()=>{if(block&&typeof openAddModal==="function")openAddModal(p.local_id||block.id,seg.title);else openProgressDayReview(true);});
     track.appendChild(button);
   });
   const notes=[];
   if(!model.segments.length)notes.push("No timed activity recorded for this day.");
   if(model.segments.some(s=>s.live))notes.push("Dashed segments are ongoing work.");
   if(model.unplacedMin)notes.push(A.minutes(model.unplacedMin)+" recorded without a reliable clock time.");
+  if(model.clockChange)notes.push("Clock changes: segments split at the offset change; repeated clock times use separate lanes. Tooltips include the time zone. Clock-only entries on this day remain unpositioned.");
   if(model.unknownMin)notes.push(A.minutes(model.unknownMin)+" unknown time (not focused work).");
   note.textContent=notes.join(" ");note.hidden=!notes.length;
 }
-function openProgressDayReview(){
-  if(window.DCC&&DCC.nav){DCC.nav.setActual(true);DCC.nav.setReviewOpen(true);}
+function openProgressDayReview(forceOpen){
+  if(window.DCC&&DCC.nav){
+    const open=forceOpen===true||!DCC.nav.reviewOpen();
+    if(DCC.nav.get().view==="queue")DCC.nav.go({page:"tasks",view:"list"});
+    DCC.nav.setReviewOpen(open);
+  }
 }
 document.getElementById("progress-day-review")?.addEventListener("click",openProgressDayReview);
 window.addEventListener("dcc:work-session-changed",()=>buildProgress());
@@ -1864,10 +1873,13 @@ function updateProgressNow(nowValue){
 function buildProgress(){
   const track=document.getElementById("ptrack");
   if(!track)return;
+  const focused=document.activeElement;
+  const focusTrack=focused?.closest?.("#ptrack, #pactual");
+  const focusKey=focusTrack?(focused.dataset.progressKey||focused.dataset.entryId):null;
   if(_progressTooltipClose)_progressTooltipClose();
   const dayItems=DCC.TaskModel.selectDayScoped(scheduled); // Unscheduled-everywhere rows aren't today's plan
   const activity=progressActualModel();
-  const rangeItems=dayItems.concat(activity?activity.segments.map(s=>({start:fmt(s.startMin),end:s.endMin===1440?"24:00":fmt(s.endMin)})):[]);
+  const rangeItems=dayItems.concat(activity?activity.segments.map(s=>({start:s.startMin,end:s.endMin})):[]);
   const range=_progressRange(rangeItems,typeof __state!=="undefined"?__state:null);
   const ds=range.start,de=range.end,tot=range.total;
   const stateDate=(typeof __state!=="undefined"&&__state&&__state.date)||"";
@@ -1880,7 +1892,7 @@ function buildProgress(){
   track.setAttribute("aria-label","Schedule from "+f12(fmt(ds))+" to "+f12(fmt(de))+". Select a task segment for details.");
   const startLabel=document.getElementById("pstart"),endLabel=document.getElementById("pend");
   if(startLabel){startLabel.textContent=f12(fmt(ds));startLabel.dateTime=fmt(ds);}
-  if(endLabel){endLabel.textContent=f12(fmt(de));endLabel.dateTime=fmt(de);}
+  if(endLabel){endLabel.textContent=de===1440?"12:00 AM (+1 day)":f12(fmt(de));endLabel.dateTime=fmt(de%1440);}
   track.innerHTML="";
   let cursor=ds;
   dayItems.slice().sort((a,b)=>pt(a.start)-pt(b.start)||pt(a.end)-pt(b.end)).forEach(ev=>{
@@ -1904,6 +1916,10 @@ function buildProgress(){
   const dc=DCC.TaskModel.selectDone(counted).length;
   document.getElementById("ppct").textContent=dc+" / "+counted.length+" done · "+Math.round(dc/(counted.length||1)*100)+"%";
   updateProgressNow();
+  if(focusTrack&&focusKey){
+    const replacement=Array.from(document.getElementById(focusTrack.id).querySelectorAll("button")).find(b=>(b.dataset.progressKey||b.dataset.entryId)===focusKey);
+    (replacement||document.getElementById("progress-day-review"))?.focus({preventScroll:true});
+  }
 }
 function _isShellEv(ev){
   return (window.TaskTypes&&window.TaskTypes.isRollup(ev))||String(ev.type||"").toLowerCase()==="shell";
@@ -2010,7 +2026,7 @@ function addPS(track,s,e,title,color,done,tot,ev){
   if(w<=0)return;
   const seg=document.createElement(ev?"button":"span");
   seg.className="pseg";
-  if(ev)seg.type="button";
+  if(ev){seg.type="button";seg.dataset.progressKey=String(ev.id);}
   // Both rows share exact coordinates; borders separate adjacent tasks.
   seg.style.cssText="position:absolute;left:"+((s-Number(track.dataset?.startMin||0))/tot*100)+"%;width:"+w+"%;background:"+color+";opacity:"+(done?0.45:1);
   const time=(ev?f12(ev.start)+" - "+f12(ev.end)+" · "+ms(pt(ev.end)-pt(ev.start)):ms(e-s))+(done?" · Done":"");

@@ -440,13 +440,13 @@ test("a focused editor inside a view counts as a draft", () => {
   assert.equal(h.DCC.nav.hasDraftIn(list), true);
 });
 
-test("Day review opens only as an explicit panel under Actual", () => {
+test("Day review is independent of Actual details", () => {
   const h = harness({ search: "?tab=tasks&view=list&actual=1" });
   assert.equal(h.DCC.nav.reviewOpen(), false);
   h.DCC.nav.setReviewOpen(true);
   assert.equal(h.DCC.nav.reviewOpen(), true);
   h.DCC.nav.setActual(false);
-  assert.equal(h.DCC.nav.reviewOpen(), false, "turning Actual off hides it");
+  assert.equal(h.DCC.nav.reviewOpen(), true, "turning Actual off does not hide the independent review");
   h.DCC.nav.go({ view: "queue" });
   assert.equal(h.DCC.nav.reviewOpen(), false);
 });
