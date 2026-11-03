@@ -714,7 +714,7 @@
 
 <!-- Unified completion modal (schedule + triage) -->
 <div class="done-modal-overlay" id="done-modal-overlay">
-  <div class="done-modal">
+  <div class="done-modal" role="dialog" aria-modal="true" aria-labelledby="done-modal-title">
     <div class="done-modal-hdr">
       <h3 id="done-modal-title">Mark Complete</h3>
       <button class="pvb-close" id="done-modal-close">&times;</button>
@@ -2171,12 +2171,14 @@
 <script src="/public/js/work-sessions.js?v=work-sessions-3"></script>
 <script src="/public/js/time-reallocate.js?v=time-reallocate-1"></script>
 <script src="/public/js/itinerary-card.js"></script>
+<script src="/public/js/hold-action.js"></script>
 <script src="/public/js/schedule-tab.js"></script>
 <script src="/public/js/itinerary-calendar.js?v=calendar-week-actual-2"></script>
 <script src="/public/js/touch-drag.js"></script>
 <script src="/public/js/meeting-automation.js"></script>
 <script src="/public/js/sync.js"></script>
 <script src="/public/js/time-picker.js"></script>
+<script src="/public/js/completion-modal.js"></script>
 <script src="/public/js/triage.js"></script>
 <script src="/public/js/nav-state.js?v=task-workspace-nav-2"></script>
 <script src="/public/js/tabs.js?v=task-workspace-nav-3"></script>

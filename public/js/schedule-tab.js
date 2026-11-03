@@ -200,50 +200,12 @@ function openMeetingPanel(ev,opts){
   if(typeof openPrepModal==="function"){ openPrepModal(ev,opts); return; }
   if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(ev.meetingBlockId||ev.id);
 }
-function openTaskNotes(ev){
-  if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);
+function openTaskNotes(ev,options){
+  if(typeof openAddModal==="function")openAddModal(options?.anchor?.blockId||ev.id,ev.title,options);
   else if(typeof openNotesDrawer==="function")openNotesDrawer(ev.id,ev.title);
 }
-const QUICK_COMPLETE_HOLD_MS=550;
 function bindQuickCompleteControl(button,onQuick,onWithNotes){
-  if(!button)return;
-  let holdTimer=null;
-  let suppressClick=false;
-  const clearPress=()=>{
-    if(holdTimer){clearTimeout(holdTimer);holdTimer=null;}
-    button.classList.remove("is-holding");
-  };
-  button.addEventListener("pointerdown",event=>{
-    if(event.button!=null&&event.button!==0)return;
-    event.stopPropagation();
-    suppressClick=false;
-    button.classList.add("is-holding");
-    try{button.setPointerCapture(event.pointerId);}catch(_err){}
-    holdTimer=setTimeout(()=>{
-      holdTimer=null;
-      suppressClick=true;
-      button.classList.remove("is-holding");
-      if(typeof onWithNotes==="function")onWithNotes();
-    },QUICK_COMPLETE_HOLD_MS);
-  });
-  button.addEventListener("pointerup",clearPress);
-  button.addEventListener("pointercancel",clearPress);
-  button.addEventListener("click",event=>{
-    event.preventDefault();
-    event.stopPropagation();
-    clearPress();
-    if(suppressClick){suppressClick=false;return;}
-    button.classList.add("flash");
-    if(typeof onQuick==="function")onQuick();
-  });
-  button.addEventListener("keydown",event=>{
-    if(!event.shiftKey||!(event.key==="Enter"||event.key===" "))return;
-    event.preventDefault();
-    event.stopPropagation();
-    clearPress();
-    if(typeof onWithNotes==="function")onWithNotes();
-  });
-  button.addEventListener("contextmenu",event=>event.preventDefault());
+  return window.DCC.bindHoldAction(button,onQuick,onWithNotes);
 }
 // Task-bar controls own duration, add, details, delete and work-session actions.
 // The radial contains only contextual changes; calendar blocks keep Prep/Recap.
@@ -263,6 +225,8 @@ function buildTaskChangeItems(ev,trig){
   const items=[
     {icon:"🪜", label:"Subtask…",  onPick:()=>{if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(ev.id,trig);}}
   ];
+  if(window.DCCWorkingQueue?.addTask && !(typeof isDone==='function'&&isDone(ev)))
+    items.push({icon:'≡',label:'Move to Priority Queue',onPick:()=>window.DCCWorkingQueue.addTask(ev).catch(error=>DCC.toast(error.message||'Could not add task to queue','error'))});
   // Promote: pull a nested subtask/ride-along out to a standalone top-level task.
   // Same action as dragging it out to the timeline — here for discoverability + touch.
   if(typeof isNested==="function"&&isNested(ev))
@@ -459,6 +423,8 @@ function _unfRecById(id){
 // caller that resolves by local_id silently writes nothing. With the row id there is
 // nothing to search for.
 function taskAnchorById(id){
+  const queueAnchor=window.DCCWorkingQueue?.taskAnchor?.(id);
+  if(queueAnchor?.blockId===id)return queueAnchor;
   const ev=(typeof scheduled!=="undefined"&&Array.isArray(scheduled))?scheduled.find(e=>e.id===id):null;
   if(ev){
     const day=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
@@ -477,7 +443,7 @@ function taskAnchorById(id){
     const u=unf.__unf||{};
     return {ev:unf,date:u.sourceDate||null,blockId:u.sourceId||null,carryover:true};
   }
-  return null;
+  return window.DCCWorkingQueue?.taskAnchor?.(id)||null;
 }
 window.taskAnchorById=taskAnchorById;
 // Reorder within the Unscheduled section. Works across both id spaces (untimed

@@ -14,11 +14,12 @@ function mount(rows, writer){
   const handlers={}, writes=[], broadcasts=[], pools=[];
   const app={get(){},post(url,handler){handlers[url]=handler;},patch(){},put(){},delete(){}};
   require('./routes/blocks')(app,{
+    getTodayStr:()=> '2026-10-07',
     isValidDate:value=>/^\d{4}-\d{2}-\d{2}$/.test(value||''),
     blockDB:{
       getBlockIncludingDeleted:async id=>rows.find(item=>item.id===id),
       getRescheduleSubtreePool:async(...args)=>{pools.push(args);return rows;},
-      rescheduleBlocks:async(moves,creates)=>{if(writer)await writer(moves);writes.push({moves,creates});return {blocks:moves};},
+      rescheduleBlocks:async(moves,creates,options)=>{assert.equal(options.queueToday,'2026-10-07');assert.deepEqual(options.queueOwner,{userId:1,workspaceId:'mine'});assert.equal(typeof options.pauseActive,'function');if(writer)await writer(moves);writes.push({moves,creates});return {blocks:moves};},
     },broadcast:(...args)=>broadcasts.push(args),
   });
   return {writes,broadcasts,pools,async call(id,body){

@@ -206,3 +206,62 @@
 .wq-help summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .wq-help p { margin: .3rem 0 .8rem; max-width: 34rem; line-height: 1.5; }
 .wq-actions button:disabled { opacity: .55; cursor: not-allowed; }
+/* Shared itinerary rows, with queue-specific state and actions beneath the title. */
+.wq-card.it-list-item { display:grid; grid-template-columns:44px minmax(0,1fr); gap:8px; padding:12px; cursor:pointer; }
+.wq-card > .bar, .wq-card .it-list-nav, .wq-card > .it-list-actions { display:none; }
+.wq-card .it-list-utility { display:block; }
+.wq-card .it-list-main { min-width:0; }
+.wq-card .it-list-title-row { display:flex; justify-content:space-between; align-items:start; gap:8px; }
+.wq-card .ttl { white-space:normal; overflow-wrap:anywhere; font-weight:650; }
+.wq-card .it-list-meta { display:block; }
+.wq-card .it-list-meta p { margin:5px 0; }
+.wq-card .quick-complete-control,.wq-card .btn-schedule,.wq-card .wq-actions button { min-width:44px; min-height:44px; }
+.wq-card .btn-schedule { display:inline-flex; gap:6px; align-items:center; padding:6px 10px; margin:6px 0; color:var(--text); }
+.wq-card .quick-complete-control svg { width:20px; height:20px; }
+.wq-card .wq-actions { margin-top:5px; }
+.wq-order-help { font-size:12px; color:var(--text-muted); }
+.wq-card .is-holding { outline:2px solid var(--cyan); }
+.wq-card .ttl:focus-visible,.wq-card button:focus-visible { outline:2px solid var(--cyan); outline-offset:3px; }
+.resched-blocked { width:100%; margin-top:8px; min-height:44px; }
+.wq-task-context { margin:12px 0; overflow-wrap:anywhere; }
+#dm-queue-section { margin-bottom:16px; }
+#dm-queue-section [role=status] { color:var(--red,#f87171); }
+
+.wq-card .wq-actions .btn-schedule { opacity:1; border:1px solid var(--border); border-radius:8px; background:var(--card); margin:0; font:inherit; font-size:12px; }
+
+/* Retain completion context in the queue rather than itinerary's collapsed done row. */
+.wq-card.it-list-item.done:not(.sub) .it-list-meta { display:block; }
+.wq-card.it-list-item.done:not(.sub) .it-list-title-row > * { display:initial; }
+.wq-card.it-list-item.done:not(.sub) .ttl { white-space:normal; font-size:inherit; }
+
+.wq-card.it-list-item .btn-schedule { width:auto; flex:0 0 auto; }
+.wq-card.it-list-item .quick-complete-control { width:44px; height:44px; min-width:44px; min-height:44px; }
+/* Queue context and effort stay readable on phones; itinerary chips can hide. */
+.wq-card.it-list-item .it-list-main .it-list-meta > * { display:block; }
+/* The queue has no itinerary side toolbar; reserve the whole remainder for context. */
+.wq-card.it-list-item { grid-template-columns:44px minmax(0,1fr) !important; }
+.wq-card.it-list-item > .it-list-actions { display:none !important; }
+
+/* Priority stays directly beneath completion in the shared row utility column. */
+.wq-card .wq-priority-symbol { display:flex; align-items:center; justify-content:center; width:44px; height:44px; margin-top:6px; padding:0; border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--text); font-family:inherit; font-weight:700; cursor:pointer; }
+.wq-card .wq-priority-symbol span { font-size:24px; line-height:1; }
+.wq-card.it-list-item .it-list-utility { display:flex !important; flex-direction:column; align-items:center; width:44px !important; min-width:44px; }
+.wq-card.it-list-item .it-list-check-col { width:44px; }
+
+.wq-switch-old { display:flex; align-items:start; flex-wrap:wrap; gap:12px; padding-bottom:12px; border-bottom:1px solid var(--border); }
+.wq-switch-old > div { flex:1 1 180px; min-width:0; overflow-wrap:anywhere; }
+.wq-switch-old > label { flex:0 1 180px; margin:0; }
+.wq-switch-new { margin-top:12px; overflow-wrap:anywhere; }
+
+/* Chosen Outline treatment: distinct symbols and high-contrast colors. */
+#working-queue-root { --p0:#9db5ce; --p1:#67d5ed; --p2:#f2db74; --p3:#ffb276; --p4:#ff94b1; }
+[data-priority-level="0"] { --priority-color:var(--p0); }
+[data-priority-level="1"] { --priority-color:var(--p1); }
+[data-priority-level="2"] { --priority-color:var(--p2); }
+[data-priority-level="3"] { --priority-color:var(--p3); }
+[data-priority-level="4"] { --priority-color:var(--p4); }
+.wq-card .wq-priority-symbol { color:var(--priority-color); border:2px solid var(--priority-color); background:#172236; }
+.wq-title-with-copy { display:flex; align-items:start; gap:4px; min-width:0; flex:1; }
+.wq-title-with-copy .ttl { min-width:0; }
+.wq-card .wq-copy-title { flex:0 0 44px; width:44px; height:44px; display:inline-flex; align-items:center; justify-content:center; padding:0; border:1px solid var(--border); border-radius:8px; background:transparent; color:var(--text); cursor:pointer; }
+.wq-card .wq-copy-title:disabled { opacity:.6; cursor:progress; }

@@ -286,149 +286,6 @@ function notesButton(ev) {
 // ======== TRIAGE DISMISS ========
 let currentDismissId = null;
 // ======== UNIFIED DONE MODAL ========
-let _dmCallback=null, _dmId=null, _dmEv=null, _dmSessions=[];
-
-function openDoneModal(id, title, onConfirm, ev){
-  _dmId=id; _dmCallback=onConfirm; _dmEv=ev||null;
-  document.getElementById("done-modal-title").textContent="Complete: "+title;
-  // Pre-populate notes via block editor
-  const notes=loadNotes();
-  const noteVal=notes[id];
-  const dmNotesContainer=document.getElementById("dm-notes-editor");
-  let dmNoteBlocks=typeof noteBlocksForTask === "function" ? noteBlocksForTask(id, noteVal, ev) : null;
-  if(window._dmBlockEditor) window._dmBlockEditor.destroy();
-  window._dmBlockEditor=createBlockEditor(dmNotesContainer, dmNoteBlocks,window.DCC.TaskSources.editorOptions(dmNotesContainer,ev||{}));
-  // Pre-populate action items
-  document.getElementById("dm-action-input").style.display="none";
-  renderDmActions(id);
-  // Time sessions section
-  const timeSection=document.getElementById("dm-time-section");
-  if(ev && ev.start && ev.end){
-    timeSection.style.display="";
-    const sessions=loadSessions();
-    if(sessions[id] && sessions[id].length){
-      _dmSessions=sessions[id].map(s=>({...s}));
-    } else {
-      _dmSessions=[{start:ev.start, durationMin:dur(ev), isPlanned:true}];
-    }
-    renderDmSessions();
-  } else {
-    timeSection.style.display="none";
-    _dmSessions=[];
-  }
-  const incomplete=getIncompleteSubtasks(id);
-  const stSection=document.getElementById("dm-subtask-section");
-  if(incomplete.length){
-    const listHtml=incomplete.map((st,i)=>{
-      const sid=st.id||('sub-'+i);
-      return '<label class="st-subtask-row" data-sub-id="'+sid+'">'+
-        '<input type="checkbox" class="st-subtask-chk" data-sub-id="'+sid+'" checked>'+
-        '<span class="st-subtask-text">'+st.text+'</span>'+
-      '</label>';
-    }).join('');
-    stSection.innerHTML=
-      '<div class="st-resolve-section blocking">'+
-        '<div class="st-resolve-title" id="st-resolve-title">⚠ Resolve '+incomplete.length+' unfinished subtask'+(incomplete.length>1?'s':'')+' before completing</div>'+
-        '<div class="st-subtask-list" id="st-subtask-list">'+listHtml+'</div>'+
-        '<div class="st-action-row">'+
-          '<button class="st-act-btn primary" data-act="complete" title="Mark checked subtasks complete">Mark selected complete</button>'+
-          '<button class="st-act-btn" data-act="spinoff" title="Create standalone tasks from checked subtasks">Spin selected into tasks</button>'+
-        '</div>'+
-        '<div class="st-hint">Unchecked subtasks stay unresolved. Finish this list or cancel parent completion.</div>'+
-      '</div>';
-    stSection.style.display="";
-
-    function getCheckedIds(){
-      return [...stSection.querySelectorAll('.st-subtask-chk:checked')].map(el=>el.dataset.subId);
-    }
-    function removeRows(subIds){
-      subIds.forEach(sid=>{
-        const row=stSection.querySelector('.st-subtask-row[data-sub-id="'+sid+'"]');
-        if(row)row.remove();
-      });
-      const rem=stSection.querySelectorAll('.st-subtask-chk').length;
-        if(!rem){stSection.innerHTML='';stSection.style.display='none';}
-        else{
-          const titleEl=document.getElementById('st-resolve-title');
-          if(titleEl)titleEl.textContent='⚠ Resolve '+rem+' unfinished subtask'+(rem>1?'s':'')+' before completing';
-        }
-      }
-    stSection.querySelectorAll('.st-act-btn').forEach(btn=>{
-      btn.addEventListener('click',()=>{
-        const act=btn.dataset.act;
-        if(act==='move'){
-          const mr=document.getElementById('st-move-row');
-          if(mr)mr.style.display=mr.style.display==='none'?'':'none';
-          return;
-        }
-        const ids=getCheckedIds();
-        if(!ids.length){if(typeof showToast==='function')showToast('Check at least one subtask first.');return;}
-        executeSubtaskResolution(id,act,ids);
-        removeRows(ids);
-      });
-    });
-  } else {
-    stSection.innerHTML="";stSection.style.display="none";
-  }
-  // Parent task linking (for triage items — no ev means this is a triage completion)
-  const parentSection = document.getElementById("dm-parent-section");
-  if (!ev) {
-    parentSection.style.display = "";
-    const sel = document.getElementById("dm-parent-select");
-    const triageParents = loadTriageParents();
-    sel.innerHTML = '<option value="">No link \u2014 standalone item</option>' +
-      DCC.TaskModel.selectOpen(scheduled).filter(e => !isMeeting(e) && e.type !== "ooo").map(e =>
-        // DCC.esc, matching every other builder in this file. Titles here are not all
-        // owner-authored: data.js takes them from the server timeline (calendar summaries,
-        // Slack/Notion items, quick-task payloads, guest public-share submissions, which
-        // routes/social-todo.js only trims and truncates). Assigning innerHTML on a <select>
-        // drops <img>/<svg>, but an <option> start tag IS honoured there, so an unescaped
-        // title could inject a live inline handler, and e.id could break out of value="".
-        '<option value="' + DCC.esc(String(e.id)) + '"' + (triageParents[id] === e.id ? ' selected' : '') + '>' + DCC.esc(e.title || '') + ' (' + f12(e.start) + ')</option>'
-      ).join('');
-  } else {
-    parentSection.style.display = "none";
-  }
-  document.getElementById("done-modal-overlay").classList.add("open");
-  setTimeout(()=>{if(window._dmBlockEditor)window._dmBlockEditor.focus()},80);
-}
-function closeDoneModal(){
-  document.getElementById("done-modal-overlay").classList.remove("open");
-  _dmId=null; _dmCallback=null; _dmEv=null; _dmSessions=[];
-  if(typeof _flushDeferredRender==='function')_flushDeferredRender();
-}
-function confirmDoneModal(){
-  if(!_dmId)return;
-  // Capture notes from block editor
-  const notes=loadNotes();
-  if(window._dmBlockEditor && !window._dmBlockEditor.isEmpty()){
-    const blocks=window._dmBlockEditor.getBlocks();
-    notes[_dmId]=Object.assign({},notes[_dmId],{blocks:blocks, html:window._dmBlockEditor.toHtml(), text:window._dmBlockEditor.toMarkdown()});
-  } else { notes[_dmId]=Object.assign({},notes[_dmId],{blocks:[],html:"",text:""}); }
-  saveNotes(notes,{taskId:_dmId});
-  const text=notes[_dmId]?notes[_dmId].text:"";
-  // Save time sessions
-  if(_dmSessions.length){
-    const sessions=loadSessions();
-    sessions[_dmId]=_dmSessions;
-    saveSessions(sessions);
-  }
-  // Save parent task link (triage items only)
-  const parentSel=document.getElementById("dm-parent-select");
-  if(parentSel && document.getElementById("dm-parent-section").style.display !== "none"){
-    const parentId=parentSel.value;
-    const triageParents=loadTriageParents();
-    if(parentId){triageParents[_dmId]=parentId;}else{delete triageParents[_dmId];}
-    saveTriageParents(triageParents);
-  }
-  const remainingRows=document.querySelectorAll('#dm-subtask-section .st-subtask-row');
-  if(remainingRows.length){
-    if(typeof showToast==='function')showToast('Resolve unfinished subtasks before completing the parent task.','error');
-    return;
-  }
-  if(_dmCallback)_dmCallback(text);
-  closeDoneModal();
-}
 function renderDmSessions(){
   const list=document.getElementById("dm-sessions-list");
   if(!_dmSessions.length){list.innerHTML='<div style="font-size:11px;color:var(--text-muted);padding:4px 0">No sessions.</div>';return}
@@ -540,7 +397,7 @@ function openClockPicker(idx,anchor,callback){
 }
 
 function renderDmActions(id){
-  const actions=loadActions(), items=(actions[id]||[]);
+  const actions=loadActions(id), items=(actions[id]||[]);
   document.getElementById("dm-ai-count").textContent="("+items.length+")";
   const list=document.getElementById("dm-ai-list");
   if(!items.length){list.innerHTML='<div style="font-size:11px;color:var(--text-muted);padding:4px 0">No action items yet.</div>';return;}
@@ -564,22 +421,22 @@ function addDmAction(){
   const text=document.getElementById("dm-action-text").value.trim();
   if(!text||!_dmId)return;
   const priority="Medium";
-  const actions=loadActions();
+  const actions=loadActions(_dmId);
   if(!actions[_dmId])actions[_dmId]=[];
   actions[_dmId].push({text,priority,done:false,created:new Date().toISOString()});
-  saveActions(actions);
+  saveActions(actions,{taskId:_dmId});
   document.getElementById("dm-action-text").value="";
   document.getElementById("dm-action-input").style.display="none";
   renderDmActions(_dmId);
   buildActionItemsTab();
 }
 function toggleDmAction(id,idx){
-  const actions=loadActions();
-  if(actions[id]&&actions[id][idx]){actions[id][idx].done=!actions[id][idx].done;saveActions(actions);renderDmActions(id);}
+  const actions=loadActions(id);
+  if(actions[id]&&actions[id][idx]){actions[id][idx].done=!actions[id][idx].done;saveActions(actions,{taskId:id});renderDmActions(id);}
 }
 function deleteDmAction(id,idx){
-  const actions=loadActions();
-  if(actions[id]){actions[id].splice(idx,1);saveActions(actions);renderDmActions(id);}
+  const actions=loadActions(id);
+  if(actions[id]){actions[id].splice(idx,1);saveActions(actions,{taskId:id});renderDmActions(id);}
 }
 
 function openDismissModal(triageId, title) {

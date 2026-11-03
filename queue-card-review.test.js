@@ -1,0 +1,73 @@
+const test=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto');
+test('Snooze preserves blocked state and timing; cross-day scheduling removes membership atomically', {skip:!process.env.DCC_TEST_DATABASE_URL}, async t=>{
+ const ctx=await require('./test-support/activity-db').createActivityDb();t.after(()=>ctx.close());
+ const {createConversationStore,FOREGROUND_INDEX_SQL}=require('./conversation-store');await ctx.pool.query(FOREGROUND_INDEX_SQL);
+ const owner={userId:1,workspaceId:'ws-1'},store=createConversationStore(ctx);
+ const send=async(action,id,extra={})=>store.execute({action,taskId:id,expectedRevision:(await store.state(owner)).revision,sourceEventId:crypto.randomUUID(),at:new Date().toISOString(),...extra},owner);
+ const make=async(id,date='2026-11-03',props={})=>ctx.blockDB.createBlock({id,type:'block',date,user_id:1,workspace_id:'ws-1',properties:{local_id:'repeat-alias',title:id,type:'task',status:'open',...props}});
+ await make('blocked');await send('queue-add','blocked');await send('queue-block','blocked');
+ const original=await ctx.blockDB.getBlock('blocked');
+ await send('queue-snooze','blocked',{remindMinutes:30});
+ let state=await store.state(owner),item=state.queue.items.find(i=>i.task.id==='blocked');
+ assert.equal(item.status,'background');assert.equal(item.blocked,true);assert.equal(Date.parse(item.dueAt)-Date.parse(item.changedAt)>=29*60000,true);
+ assert.deepEqual((await ctx.blockDB.getBlock('blocked')).properties,original.properties);
+ const firstGen=item.generation;await send('queue-snooze','blocked',{generation:firstGen,remindMinutes:120});
+ item=(await store.state(owner)).queue.items.find(i=>i.task.id==='blocked');assert.notEqual(item.generation,firstGen);
+ await assert.rejects(send('queue-snooze','blocked',{generation:firstGen,remindMinutes:5}));
+ const opts={queueToday:'2026-11-03',queueOwner:owner};
+ await ctx.blockDB.rescheduleBlocks([{id:'blocked',date:'2026-11-04'}],[],opts);
+ assert.equal((await store.state(owner)).queue.items.some(i=>i.task.id==='blocked'),false);
+ assert.equal((await ctx.blockDB.getBlock('blocked')).date,'2026-11-04');
+ await make('same');await send('queue-add','same');await ctx.blockDB.rescheduleBlocks([{id:'same',date:'2026-11-03'}],[],opts);
+ assert.ok((await store.state(owner)).queue.items.some(i=>i.task.id==='same'));
+ await make('past');await send('queue-add','past');await ctx.blockDB.rescheduleBlocks([{id:'past',date:'2026-11-02'}],[],opts);
+ assert.ok(!(await store.state(owner)).queue.items.some(i=>i.task.id==='past'));
+ assert.ok((await store.state(owner)).queue.items.some(i=>i.task.id==='same'),'same-alias occurrence unaffected');
+ await assert.rejects(ctx.blockDB.rescheduleBlocks([{id:'same',date:'2026-11-04'},{id:'missing',date:'2026-11-04'}],[],opts));
+ assert.equal((await ctx.blockDB.getBlock('same')).date,'2026-11-03');assert.ok((await store.state(owner)).queue.items.some(i=>i.task.id==='same'));
+ await send('start','same');const active=await ctx.blockDB.getBlock('same');
+ await assert.rejects(ctx.blockDB.rescheduleBlocks([{id:'same',date:'2026-11-04'}],[],opts),/Pause foreground/);
+ assert.deepEqual((await ctx.blockDB.getBlock('same')).properties,active.properties);assert.equal((await ctx.blockDB.getBlock('same')).date,'2026-11-03');
+ const Q=require('./lib/working-queue'),retained=await Q.load(ctx.pool,owner);
+ for(let i=0;i<100;i++){const id='retained-'+i;await ctx.blockDB.createBlock({id,type:'block',date:'2026-11-03',user_id:1,workspace_id:'ws-1',properties:{title:id,type:'task',status:'done',completedAt:new Date().toISOString()}});retained.items[id]={status:'completed'};retained.order.push(id);}
+ await Q.save(ctx.pool,owner,retained);
+ const current=await store.state(owner),order=current.queue.items.filter(item=>item.status!=='completed').map(item=>item.task.id).reverse();
+ await send('queue-reorder',undefined,{order});
+ const after=await store.state(owner);assert.equal(after.queue.items.filter(item=>item.status==='completed').length,100);
+ assert.deepEqual(after.queue.items.filter(item=>item.status!=='completed').map(item=>item.task.id),order);
+ assert.equal((await ctx.blockDB.getBlock('same')).properties.startedAt,active.properties.startedAt);
+ await send('pause','same',{attentionMode:'needs-you'});
+ const attention=(await store.state(owner)).queue.items.find(item=>item.task.id==='same');assert.equal(attention.needsYou,true);assert.equal(attention.task.properties.startedAt,undefined);
+ assert.equal((await ctx.blockDB.getTaskTimeEntries('same','ws-1')).length,1);
+ const fixedAt=Math.floor(Date.now()/1000)*1000;
+ await make('schedule-live','2026-11-03',{actualMinutes:40,startedAt:new Date(fixedAt-120000).toISOString(),activeWorkSessionId:'fixed-schedule-session'});await send('queue-add','schedule-live');
+ const live=await ctx.blockDB.getBlock('schedule-live'),entriesBefore=await ctx.blockDB.getTaskTimeEntries('schedule-live','ws-1');
+ const atomic={...opts,pauseActive:(row,client,at)=>require('./conversation-store').pauseForSchedule(ctx,client,owner,row,{at:new Date(fixedAt).toISOString(),sourceEventId:'schedule:'+crypto.randomUUID()})};
+ await assert.rejects(ctx.blockDB.rescheduleBlocks([{id:'schedule-live',date:'2026-11-04',properties:{...live.properties,start:'10:00',end:'10:30'}},{id:'missing-second',date:'2026-11-04'}],[],atomic));
+ assert.equal((await ctx.blockDB.getBlock('schedule-live')).properties.startedAt,live.properties.startedAt);
+ assert.equal((await ctx.blockDB.getTaskTimeEntries('schedule-live','ws-1')).length,entriesBefore.length);
+ await ctx.blockDB.rescheduleBlocks([{id:'schedule-live',date:'2026-11-04',properties:{...live.properties,start:'10:00',end:'10:30'}}],[],atomic);
+ const scheduled=await ctx.blockDB.getBlock('schedule-live');assert.equal(scheduled.date,'2026-11-04');assert.equal(scheduled.properties.startedAt,undefined);assert.equal(scheduled.properties.activeWorkSessionId,undefined);
+ assert.equal((await ctx.blockDB.getTaskTimeEntries('schedule-live','ws-1')).length,1);
+ assert.equal((await ctx.blockDB.getTaskTimeEntries('schedule-live','ws-1'))[0].properties.durSec,120);assert.equal(scheduled.properties.actualMinutes,42);
+ assert.equal((await store.state(owner)).queue.items.some(item=>item.task.id==='schedule-live'),false);
+ await make('schedule-cutoff','2026-11-03',{actualMinutes:10,startedAt:new Date(fixedAt-3600000).toISOString(),activeWorkSessionId:'fixed-cutoff-session'});await send('queue-add','schedule-cutoff');
+ await ctx.blockDB.rescheduleBlocks([{id:'schedule-cutoff',date:'2026-11-04'}],[],atomic);
+ const cutoffTask=await ctx.blockDB.getBlock('schedule-cutoff'),cutoffEntries=await ctx.blockDB.getTaskTimeEntries('schedule-cutoff','ws-1');
+ assert.equal(cutoffEntries.reduce((sum,entry)=>sum+entry.properties.durSec,0),3000);assert.equal(cutoffTask.properties.actualMinutes,60);assert.equal(cutoffTask.properties.workAutoPauseReason,'No recent work check-in');
+
+
+
+});
+test('retained completions do not exhaust active queue capacity and explicit Snooze is validated',()=>{
+ const Q=require('./lib/working-queue'),M=require('./lib/conversation-model');
+ const completed=Object.fromEntries(Array.from({length:100},(_,i)=>['done-'+i,{status:'completed'}]));
+ const data={items:completed,order:Object.keys(completed)};Q.ensure(data,'new',new Date().toISOString());assert.ok(data.items.new);assert.equal(data.order.length,101);
+ const full={items:Object.fromEntries(Array.from({length:100},(_,i)=>[String(i),{status:'queued'}])),order:[]};
+ assert.throws(()=>Q.ensure(full,'extra',new Date().toISOString()),/100 active/);
+ const at=new Date().toISOString(),base={action:'queue-block',taskId:'t',sourceEventId:'test-snooze',expectedRevision:0,at,remindMinutes:30,attentionMode:'snooze'};
+ assert.equal(M.command(base).attentionMode,'snooze');
+ assert.throws(()=>M.command({...base,remindMinutes:null}));assert.throws(()=>M.command({...base,action:'queue-priority',taskPriority:'High'}));
+ const state={items:{},order:[]},row={id:'t',properties:{}};Q.setStatus(state,row,'blocked',base);assert.equal(state.items.t.snoozedUntil,state.items.t.dueAt);
+ const legacy={items:{},order:[]};Q.setStatus(legacy,row,'blocked',{...base,attentionMode:undefined});assert.equal(legacy.items.t.snoozedUntil,undefined,'generic reminder preserves main semantics');
+});

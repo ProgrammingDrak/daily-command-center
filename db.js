@@ -982,9 +982,9 @@ async function updateBlock(id, fields, client) {
     properties, sort_order, parent_id, date, completionIntent, taskPriority,
     completionMutationId, completionBaseRevision,
   } = fields;
-  if (taskPriority !== undefined && (!["Low", "Medium", "High"].includes(taskPriority)
+  if (taskPriority !== undefined && (!["Very low", "Low", "Medium", "High", "Very high"].includes(taskPriority)
       || [properties, sort_order, parent_id, date, completionIntent, completionMutationId, completionBaseRevision].some(value => value !== undefined))) {
-    const error = new Error("taskPriority must be Low, Medium, or High and cannot be combined with other block edits");
+    const error = new Error("taskPriority must be Very low, Low, Medium, High, or Very high and cannot be combined with other block edits");
     error.statusCode = 400;
     throw error;
   }
@@ -1976,13 +1976,21 @@ async function rescheduleBlocks(moves, creates, options = {}) {
   const results = [];
   try {
     await client.query("BEGIN");
+    const queueOwner=options.queueOwner;
+    let movedQueue=null,queueChanged=false,clockSettled=false;
+    if(queueOwner){
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",['dcc-foreground:'+queueOwner.userId]);
+      await client.query('INSERT INTO conversation_state(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING',[queueOwner.userId]);
+      await client.query('SELECT user_id FROM conversation_state WHERE user_id=$1 FOR UPDATE',[queueOwner.userId]);
+      movedQueue=await require('./lib/working-queue').load(client,queueOwner);
+    }
     if (options.beforeApply) {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [options.lockKey]);
       await options.beforeApply(client);
     }
     for (const m of moves) {
       const { rows } = await client.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [m.id]);
-      const existing = rows[0];
+      let existing = rows[0];
       if (!existing) throw new Error(`Block not found: ${m.id}`);
       if (existing.deleted_at) throw new Error(`Block is deleted: ${m.id}`);
       // The route discovers the subtree before entering this transaction. Another
@@ -2003,12 +2011,27 @@ async function rescheduleBlocks(moves, creates, options = {}) {
         err.code = "RESCHEDULE_STALE";
         throw err;
       }
+      const settledKeys=new Set();
+      if(queueOwner&&existing.user_id===queueOwner.userId&&existing.workspace_id===queueOwner.workspaceId&&options.queueToday&&m.date&&normalizeDate(m.date)!==options.queueToday){
+        if(existing.properties.startedAt&&options.pauseActive){
+          const before=structuredClone(existing.properties);
+          await options.pauseActive(existing,client,now);
+          existing=(await client.query('SELECT * FROM blocks WHERE id=$1 FOR UPDATE',[m.id])).rows[0];
+          for(const key of new Set([...Object.keys(before),...Object.keys(existing.properties)]))if(JSON.stringify(before[key])!==JSON.stringify(existing.properties[key]))settledKeys.add(key);
+          clockSettled=true;queueChanged=true;
+        }
+        if(movedQueue.items[existing.id]){
+          await require('./lib/working-queue').metadata(client,queueOwner,movedQueue,{action:'queue-remove',taskId:existing.id,at:now},existing,module.exports);
+          queueChanged=true;
+        }
+      }
       let newProps = existing.properties;
       if (m.properties !== undefined) {
         const parsed = typeof m.properties === "string" ? JSON.parse(m.properties) : m.properties;
         validateBlock(existing.type, parsed);
         newProps = parsed;
       }
+      for(const key of settledKeys){if(existing.properties[key]===undefined)delete newProps[key];else newProps[key]=existing.properties[key];}
       if (Object.hasOwn(existing.properties || {}, 'taskPriority')) newProps.taskPriority = existing.properties.taskPriority;
       else delete newProps.taskPriority;
       for (const key of ['everStarted', 'lastWorkedAt']) {
@@ -2042,6 +2065,10 @@ async function rescheduleBlocks(moves, creates, options = {}) {
     }
     for (const c of (creates || [])) {
       results.push(await createBlock(c, client));
+    }
+    if(queueChanged){
+      await require('./lib/working-queue').save(client,queueOwner,movedQueue);
+      await client.query('UPDATE conversation_state SET revision=revision+1,changed_at=CASE WHEN $2 THEN GREATEST(changed_at,$3::timestamptz) ELSE changed_at END WHERE user_id=$1',[queueOwner.userId,clockSettled,now]);
     }
     await client.query("COMMIT");
   } catch (err) {

@@ -349,7 +349,7 @@
       ? '<button class="chk it-list-check on" title="Uncheck">'+ckSvg+'</button>'
       : '<button class="it-list-check quick-complete-control'+(opts.completionBlocked?' chk-blocked':'')+'" title="'+escHtml(quickTitle)+'" aria-label="'+escHtml(quickTitle)+'"><span aria-hidden="true">'+_boltSvg+'</span></button>');
     var scheduleButton=typeof opts.onSchedule==="function"
-      ? '<button class="btn-schedule" data-schedule-id="'+escHtml(ev.id||"")+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>' : '';
+      ? '<button class="btn-schedule" data-schedule-id="'+escHtml(ev.id||"")+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+(opts.scheduleLabel?'<span>'+escHtml(opts.scheduleLabel)+'</span>':'')+'</button>' : '';
     var radialButton=typeof opts.onRadial==="function"
       ? '<button class="btn-task-radial" data-radial-id="'+escHtml(ev.id||"")+'" data-tooltip="'+escHtml(opts.radialTitle||"Task actions…")+'" aria-label="'+escHtml(opts.radialLabel||"Task actions")+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>' : '';
     var deleteButton=typeof opts.onDelete==="function"
@@ -401,7 +401,7 @@
     var add=el.querySelector(".row-add-menu");
     if(add)add.addEventListener("click",function(e){e.stopPropagation();opts.onAdd(add,e,ev);});
     if(typeof opts.onOpen==="function")el.addEventListener("click",function(e){
-      if(e.target.closest("button,a,input,textarea,.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag,.recap-flag"))return;
+      if(e.target.closest("button,a,input,textarea,select,summary,details,[contenteditable],.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag,.recap-flag"))return;
       opts.onOpen(e,ev);
     });
     if(typeof opts.afterRender==="function")opts.afterRender(el,ev);

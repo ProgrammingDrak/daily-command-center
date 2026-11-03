@@ -45,8 +45,8 @@ test('pool deletion uses the same subtree resolver for child and grandchild ids'
  assert.deepEqual([...ctx._subtreeIdsOf('parent',items)],['parent','sub','nested','deep']);
 });
 function mount(rows){
- const handlers={},writes=[],poolCalls=[],createsLog=[];const ctx={isValidDate:d=>/^\d{4}-\d{2}-\d{2}$/.test(d||''),broadcast(){},blockDB:{getBlockIncludingDeleted:async id=>rows.find(r=>r.id===id),getRescheduleSubtreePool:async(...args)=>{poolCalls.push(args);return rows;},getRescheduleTombstone:async()=>null,rescheduleBlocks:async(moves,creates)=>{writes.push(moves);createsLog.push(creates);return {blocks:[...moves,...creates]};}}};
- const app={get(){},post(path,handler){handlers[path]=handler;},patch(){},delete(){},put(){}};require('./routes/blocks')(app,ctx);
+ const handlers={},writes=[],poolCalls=[],createsLog=[];const ctx={isValidDate:d=>/^\d{4}-\d{2}-\d{2}$/.test(d||''),broadcast(){},blockDB:{getBlockIncludingDeleted:async id=>rows.find(r=>r.id===id),getRescheduleSubtreePool:async(...args)=>{poolCalls.push(args);return rows;},getRescheduleTombstone:async()=>null,rescheduleBlocks:async(moves,creates,options)=>{assert.equal(options.queueToday,'2026-10-07');assert.deepEqual(options.queueOwner,{userId:1,workspaceId:'mine'});assert.equal(typeof options.pauseActive,'function');writes.push(moves);createsLog.push(creates);return {blocks:[...moves,...creates]};}}};
+ const app={get(){},post(path,handler){handlers[path]=handler;},patch(){},delete(){},put(){}};ctx.getTodayStr=()=> '2026-10-07';require('./routes/blocks')(app,ctx);
  return {writes,poolCalls,createsLog,call:async(body)=>{let status=200,result;await handlers['/api/blocks/:id/reschedule']({params:{id:rows[0].id},body,workspaceId:'mine',session:{userId:1}},{status(code){status=code;return this;},json(value){result=value;return this;}});return {status,result};}};
 }
 test('HTTP mover delegates the whole tree once and refuses a foreign descendant before any write',async()=>{
