@@ -5851,3 +5851,15 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .work-switch-form [hidden]{display:none}
 .work-switch-form [data-switch-error]{color:var(--text-muted);font-size:12px}
 .work-switch-pending{font-size:12px}
+
+/* Aligned plan and recorded activity share one clock axis. */
+.progress-track{position:relative;display:block;gap:0}
+.progress-track .pseg{box-sizing:border-box;min-width:0;border-right:1px solid var(--card)}
+.progress-row-label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:7px 0 4px;color:var(--text-muted);font-size:11px}
+.progress-row-label button{font:inherit;color:var(--accent-light);background:transparent;border:0;text-decoration:underline;cursor:pointer;padding:4px}
+.progress-actual{position:relative;min-height:18px;border-radius:9px;background:rgba(255,255,255,.05)}
+.progress-actual-segment{position:absolute;height:18px;min-height:0;min-width:0;padding:0;border:1px solid var(--card);border-radius:3px;cursor:pointer;box-sizing:border-box}
+.progress-actual-segment.live{border:1px dashed #e2e8f0}
+.progress-actual-segment:focus-visible{outline:2px solid #93c5fd;outline-offset:1px;z-index:2}
+.progress-actual-note{font-size:11px;color:var(--text-muted);margin:5px 0 0;overflow-wrap:anywhere}
+.device-glasses:not(.glasses-tools-open) :is(.progress-row-label,.progress-actual,.progress-actual-note){display:none!important}

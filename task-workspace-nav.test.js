@@ -49,14 +49,15 @@ test("the header is pages plus one clock, cog and sync dot cluster; branding is 
 
 test("Tasks head orders views, the date row with queues, then Day Progress", () => {
   const head = slice(html, '<section class="task-workspace-head"', "</section>\n");
-  const order = ["task-view-switch", "task-actual-toggle", "date-nav", "dn-prev", "date-label", "dn-next", "queue-pill", "date-picker-drop", "day-progress-title"].map((id) => head.indexOf('id="' + id + '"'));
+  const order = ["task-view-switch", "date-nav", "dn-prev", "date-label", "dn-next", "queue-pill", "date-picker-drop", "day-progress-title"].map((id) => head.indexOf('id="' + id + '"'));
   assert.ok(order.every((at) => at >= 0), JSON.stringify(order));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
   for (const door of ["triage-pill-nav", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav", "loose-ends-pill"]) assert.match(head, new RegExp('id="' + door + '"'));
   assert.match(head, /role="tablist" aria-label="Task views"/);
   assert.match(head, /data-task-view="queue"[^>]*aria-controls="tab-working-queue"/);
   assert.match(head, /id="task-view-list"[^>]*data-task-view="list"[^>]*>Itinerary<\/button>/);
-  assert.match(head, /id="task-actual-toggle" aria-pressed="false"[^>]*hidden>Actual</);
+  assert.doesNotMatch(head, /id="task-actual-toggle"/);
+  assert.match(head, /id="pactual"/);
 });
 
 test("Actual is not a view: no Actual view button, Itinerary and Calendar keep their containers", () => {
@@ -439,13 +440,13 @@ test("a focused editor inside a view counts as a draft", () => {
   assert.equal(h.DCC.nav.hasDraftIn(list), true);
 });
 
-test("Day review opens only as an explicit panel under Actual", () => {
+test("Day review is independent of Actual details", () => {
   const h = harness({ search: "?tab=tasks&view=list&actual=1" });
   assert.equal(h.DCC.nav.reviewOpen(), false);
   h.DCC.nav.setReviewOpen(true);
   assert.equal(h.DCC.nav.reviewOpen(), true);
   h.DCC.nav.setActual(false);
-  assert.equal(h.DCC.nav.reviewOpen(), false, "turning Actual off hides it");
+  assert.equal(h.DCC.nav.reviewOpen(), true, "turning Actual off does not hide the independent review");
   h.DCC.nav.go({ view: "queue" });
   assert.equal(h.DCC.nav.reviewOpen(), false);
 });
