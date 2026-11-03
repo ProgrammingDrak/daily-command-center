@@ -60,7 +60,7 @@ app.get("/", (_req, res) =>
 <script>window.scheduled=[];window.backlog=[];window.fixtureRows=[];window.isDone=t=>t.status==='done';window.render=()=>{};
 window.blockStore={get:id=>fixtureRows.find(r=>r.id===id),getByType:()=>fixtureRows,acceptWorkRotation:rows=>{for(const row of rows){const i=fixtureRows.findIndex(r=>r.id===row.id);if(i>=0)fixtureRows[i]=row;else fixtureRows.push(row);}scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));}};
 window.fixtureLoad=async()=>{fixtureRows=await fetch('/fixture/tasks').then(r=>r.json());scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));};window.petDeliveries=[];DCC.PetNudge={deliverWorkCheckIn:async(text,options)=>{petDeliveries.push(text);DCC.toast(text,'info',60000,{label:'Open queue',onClick:options.open});}};
-</script><script src="/public/js/work-checkin-policy.js"></script><script src="/public/js/work-sessions.js"></script><script src="/public/js/work-completion.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/task-priority.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/working-queue.js"></script><script>fixtureLoad().then(()=>dispatchEvent(new Event('dcc:data-ready')));</script></body></html>`)
+</script>${require("../test-support/queue-browser-components")()}<script src="/public/js/work-checkin-policy.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/work-sessions.js"></script><script src="/public/js/work-completion.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/working-queue.js"></script><script>fixtureLoad().then(()=>dispatchEvent(new Event('dcc:data-ready')));</script></body></html>`)
 );
 const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
@@ -75,15 +75,32 @@ const context = await browser.newContext({ viewport: { width: 1280, height: 950 
 page.on("pageerror", (e) => errors.push(e.message));
 const card = (id) => page.locator('[data-queue-id="' + id + '"]'),
   button = (id, action) => card(id).locator('[data-queue-action="' + action + '"]');
-const closed = () => page.waitForFunction(() => !document.querySelector("[role=dialog]"));
+const closed = () => page.waitForFunction(() => !Array.from(document.querySelectorAll("[role=dialog]")).some(el=>el.getClientRects().length));
+let switchCancelChecked=false;
 const focus = async (id) => {
+  const previous=await page.evaluate(()=>DCCWorkingQueue.getState().foreground.filter(row=>row.id));
   await button(id, "focus").click();
-  await page.getByRole("dialog").getByRole("button", { name: "Bring forward", exact: true }).click();
+  if(previous.some(row=>row.id!==id)){
+    const dialog=page.getByRole('dialog');
+    await dialog.getByText('Moving to Background',{exact:true}).waitFor();
+    for(const row of previous)await dialog.getByText(row.title,{exact:true}).waitFor();
+    await dialog.getByText('Moving to Foreground',{exact:true}).waitFor();
+    assert.equal(await dialog.getByLabel('Snooze duration',{exact:true}).count(),1);
+    const layout=await page.locator('.wq-switch-old').evaluate(el=>{const title=el.querySelector('div').getBoundingClientRect(),select=el.querySelector('select').getBoundingClientRect();return {title,select};});
+    assert.ok(layout.select.left>=layout.title.right,'reminder inline with outgoing task');
+    if(!switchCancelChecked){
+      const revision=await page.evaluate(()=>DCCWorkingQueue.getState().revision);
+      await dialog.getByRole('button',{name:'Cancel',exact:true}).click();await closed();
+      assert.equal(await page.evaluate(()=>DCCWorkingQueue.getState().revision),revision,'cancel sends no mutation');
+      assert.deepEqual(await page.evaluate(()=>DCCWorkingQueue.getState().foreground.map(row=>row.id)),previous.map(row=>row.id));
+      await button(id,'focus').click();switchCancelChecked=true;
+    }
+    await page.getByRole('dialog').getByRole('button',{name:'Bring forward',exact:true}).press('Enter');
+  }
   await closed();
-  await page.waitForFunction(
-    (id) => document.querySelector('[data-queue-id="' + id + '"]')?.classList.contains("wq-focus"),
-    id
-  );
+  try{await page.waitForFunction(
+    (id) => document.querySelector('[data-queue-id="' + id + '"]')?.classList.contains("wq-focus"),id,{timeout:5000});}
+  catch(error){console.error('FOCUS DEBUG',await page.locator('body').innerText(),await page.evaluate(()=>DCCWorkingQueue.getState()));throw error;}
 };
 const add = async (ids) => {
   await page.getByRole("button", { name: "Add tasks", exact: true }).click();
@@ -144,13 +161,49 @@ try {
   await add(["b", "c"]);
   await add(['d','legacy-pq']);
   const setPriority=async(id,value)=>{
-    await button(id,'priority').click();
-    await page.getByRole('dialog').locator('[data-priority]').selectOption(value);
-    await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await closed();
+    for(let attempt=0;attempt<5;attempt++){
+      if((await task(id)).properties.taskPriority===value)return;
+      const before=(await task(id)).properties.taskPriority||'Medium';
+      const levels=['Very low','Low','Medium','High','Very high'],next=levels[(levels.indexOf(before)+1)%5];
+      await button(id,'priority').click();
+      await page.waitForFunction(({id,next})=>DCCWorkingQueue.getState().queue.items.find(i=>i.task.id===id)?.taskPriority===next&&!localStorage.getItem('dcc-working-queue:ws-1:1:pending'),{id,next});
+    }
+    assert.equal((await task(id)).properties.taskPriority,value);
   };
   await setPriority('c','High');
   assert.deepEqual(await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId)),['c','b','legacy-pq','d']);
   assert.equal(await page.locator('.wq-next [data-queue-id="legacy-pq"]').count(),1,'legacy time is not fresh worker execution');
+  await button('c','priority').press('Shift+Enter');
+  await page.getByRole('dialog').getByLabel('Priority',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('dialog').locator('option').count(),5);
+  await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();await closed();
+  assert.equal((await task('c')).properties.taskPriority,'High','opening/cancelling chooser never cycles');
+  await button('c','priority').dispatchEvent('pointerdown',{pointerId:66,button:0,pointerType:'mouse',clientX:0,clientY:0});
+  await page.waitForTimeout(600);
+  await button('c','priority').dispatchEvent('pointerup',{pointerId:66,button:0,pointerType:'mouse'});
+  await button('c','priority').dispatchEvent('click',{detail:1,pointerId:66});
+  await page.getByRole('dialog').getByLabel('Priority',{exact:true}).waitFor();
+  assert.equal((await task('c')).properties.taskPriority,'High','hold release does not also cycle');
+  await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();await closed();
+  await button('c','priority').dispatchEvent('pointerdown',{pointerId:67,button:0,pointerType:'touch',clientX:0,clientY:0});
+  await button('c','priority').dispatchEvent('pointerup',{pointerId:67,button:0,pointerType:'touch'});
+  await button('c','priority').dispatchEvent('click',{detail:1,pointerId:67});
+  await page.getByRole('dialog').getByLabel('Priority',{exact:true}).waitFor();
+  assert.equal((await task('c')).properties.taskPriority,'High','touch tap opens choices without cycling');
+  await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();await closed();
+
+  await page.locator('.wq-style-options > summary').press('Enter');
+  assert.equal(await page.locator('.wq-style-samples [data-priority-level]').count(),15);
+  await page.getByRole('button',{name:'2 · Tinted',exact:true}).click();
+  assert.equal(await page.locator('#working-queue-root').getAttribute('data-priority-style'),'tinted');
+  await page.locator('.wq-style-options > summary').press('Enter');
+  await page.dragAndDrop('[data-queue-id="c"]','.wq-foreground');
+  await page.getByRole('dialog').getByText('Moving to Background',{exact:true}).waitFor();
+  await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();await closed();
+  assert.equal((await task('a')).properties.startedAt,at,'cancelled drop preserves current timer');
+
+  assert.deepEqual(await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId)),['c','b','d']);
+  assert.equal(await page.locator('.wq-background [data-queue-id="legacy-pq"]').count(),1);
   assert.equal((await task('b')).properties.start,'09:00','schedule-only task remains unstarted');
   assert.equal((await task('b')).properties.startedAt,undefined);
   assert.equal((await task('a')).properties.startedAt,at,'priority changes preserve current foreground');
@@ -171,6 +224,10 @@ try {
   await button('d','unblock').click();
   await page.waitForFunction(()=>{const item=DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='d');return item?.status==='queued'&&!item.blocked;});
   assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),1,'unblock preserves history without claiming running execution');
+  await card('d').locator('.btn-schedule').click();await page.getByRole('button',{name:'Blocked / Waiting…',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await closed();
+  await card('d').locator('.btn-schedule').click();await page.getByRole('button',{name:'Unblock task',exact:true}).click();
+  await page.waitForFunction(()=>DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='d')?.status==='paused');
+  assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),0,'unblock preserves start history');
   await page.reload();await page.waitForSelector('[data-queue-id="b"]');
   assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),1,'setting aside does not start a background worker');
   await setPriority('c','Medium');
@@ -181,12 +238,16 @@ try {
   assert.equal((await task("a")).properties.startedAt, at);
   await button("b", "focus").click();
   await page.getByRole("dialog").waitFor();
+  await page.getByRole("dialog").getByRole("button",{name:"Cancel",exact:true}).waitFor();
   await page.keyboard.press("Escape");
   await closed();
   assert.equal((await task("b")).properties.startedAt, undefined);
-  await button("b", "note").click();
+  await card("b").locator(".ttl").click();
+  await page.getByRole("dialog").getByText("Queue context",{exact:true}).click();
   await page.getByRole("dialog").locator("textarea").fill("Next: compare the two sources");
-  await page.getByRole("dialog").getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Save context", exact: true }).click();
+  await page.getByText("Context saved.",{exact:true}).waitFor();
+  await page.getByRole("button",{name:"Close",exact:true}).last().click();
   await closed();
   await card("c").focus();
   await page.keyboard.press("Alt+ArrowUp");
@@ -222,6 +283,12 @@ try {
   assert.ok(gets < 6, "storage writes do not ping-pong");
   await second.close();
   await snoozeVia("a");
+  await button("a", "snooze").click();
+  await page.getByRole("dialog").getByLabel("Snooze duration",{exact:true}).selectOption("30");
+  await page.getByRole("dialog").getByRole("button",{name:"Save",exact:true}).click();await closed();
+  await page.waitForFunction(() =>
+    document.querySelector('[data-queue-id="a"]').textContent.includes("Check back in 30m")
+  );
   // A late claim cannot present after a new snooze generation or completion.
   await due("a");
   let fetched, release;
@@ -242,6 +309,12 @@ try {
   await fetchedPromise;
   await page.evaluate(() => DCCWorkingQueue.refresh());
   await snoozeVia("a");
+  await button("a", "snooze").click();
+  await page.getByRole("dialog").getByLabel("Snooze duration",{exact:true}).selectOption("30");
+  await page.getByRole("dialog").getByRole("button",{name:"Save",exact:true}).click();await closed();
+  await page.waitForFunction(() =>
+    document.querySelector('[data-queue-id="a"]').textContent.includes("Check back in 30m")
+  );
   release();
   await page.evaluate(() => window.fixtureTick);
   assert.equal(await page.evaluate(() => petDeliveries.length), 0);
@@ -327,14 +400,10 @@ try {
     "completed"
   );
   await page.unroute("**/api/working-queue");
-  await button("b", "details").click();
-  await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).last().click();
-  await closed();
-  await page.evaluate(()=>{window.DCCTaskWorkspace={preview:task=>{window.fixturePreview=task.id;},open:()=>{throw new Error('Details must not start focus');}};});
-  await button('b','details').click();
-  assert.equal(await page.evaluate(()=>window.fixturePreview),'b');
-  assert.equal((await task('b')).properties.startedAt,undefined,'workspace details do not start a clock');
-  await page.evaluate(()=>{delete window.DCCTaskWorkspace;});
+  await card('b').locator('.ttl').click();
+  await page.waitForFunction(()=>window.fixtureDetails==='b');
+  await page.getByRole('dialog').getByRole('button',{name:'Close',exact:true}).last().click();await closed();
+  assert.equal((await task('b')).properties.startedAt,undefined,'shared task details do not start a clock');
   const coordinator=require('../conversation-store').createConversationStore(ctx),owner={userId:1,workspaceId:'ws-1'};
   await coordinator.execute({action:'delegated-register',taskId:'b',sourceEventId:'fixture-review',expectedRevision:(await coordinator.state(owner)).revision,at:new Date().toISOString(),delegation:{work:{source:'codex',id:'fixture-draft',kind:'email-draft'},sequence:1,phase:'needs-review',note:'Draft ready; not sent',reviewActions:['Review and send the draft'],intent:'explicit-work-handoff'}},owner);
   await page.evaluate(()=>DCCWorkingQueue.refresh());

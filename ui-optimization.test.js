@@ -141,7 +141,7 @@ test("List itinerary rows use one hold-aware lightning completion control", () =
   const schedule = read("public/js/schedule-tab.js");
   const css = read("public/css/ui-optimization.css");
   assert.match(schedule, /function bindQuickCompleteControl/);
-  assert.match(schedule, /QUICK_COMPLETE_HOLD_MS=550/);
+  assert.match(read("public/js/hold-action.js"), /},550\)/);
   assert.match(schedule, /quick-complete-control/);
   assert.match(schedule, /openDoneModal\(ev\.id,ev\.title,completeNow,ev\)/);
   assert.doesNotMatch(schedule, /label:"Complete without notes"/);

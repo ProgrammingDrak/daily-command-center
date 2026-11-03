@@ -982,9 +982,9 @@ async function updateBlock(id, fields, client) {
     properties, sort_order, parent_id, date, completionIntent, taskPriority,
     completionMutationId, completionBaseRevision,
   } = fields;
-  if (taskPriority !== undefined && (!["Low", "Medium", "High"].includes(taskPriority)
+  if (taskPriority !== undefined && (!["Very low", "Low", "Medium", "High", "Very high"].includes(taskPriority)
       || [properties, sort_order, parent_id, date, completionIntent, completionMutationId, completionBaseRevision].some(value => value !== undefined))) {
-    const error = new Error("taskPriority must be Low, Medium, or High and cannot be combined with other block edits");
+    const error = new Error("taskPriority must be Very low, Low, Medium, High, or Very high and cannot be combined with other block edits");
     error.statusCode = 400;
     throw error;
   }
@@ -1976,6 +1976,13 @@ async function rescheduleBlocks(moves, creates, options = {}) {
   const results = [];
   try {
     await client.query("BEGIN");
+    const queueOwner=options.queueOwner;
+    let movedQueue=null,queueChanged=false;
+    if(queueOwner){
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",['dcc-foreground:'+queueOwner.userId]);
+      await client.query('SELECT user_id FROM conversation_state WHERE user_id=$1 FOR UPDATE',[queueOwner.userId]);
+      movedQueue=await require('./lib/working-queue').load(client,queueOwner);
+    }
     if (options.beforeApply) {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [options.lockKey]);
       await options.beforeApply(client);
@@ -2002,6 +2009,12 @@ async function rescheduleBlocks(moves, creates, options = {}) {
         err.statusCode = 409;
         err.code = "RESCHEDULE_STALE";
         throw err;
+      }
+      if(queueOwner && existing.user_id===queueOwner.userId && existing.workspace_id===queueOwner.workspaceId && options.queueToday && m.date && normalizeDate(m.date)!==options.queueToday && movedQueue.items[existing.id]){
+        // One transaction: failed placement keeps membership. Active work must be
+        // explicitly paused before changing day, so its timer cannot be hidden.
+        await require('./lib/working-queue').metadata(client,queueOwner,movedQueue,{action:'queue-remove',taskId:existing.id,at:now},existing,module.exports);
+        queueChanged=true;
       }
       let newProps = existing.properties;
       if (m.properties !== undefined) {
@@ -2042,6 +2055,10 @@ async function rescheduleBlocks(moves, creates, options = {}) {
     }
     for (const c of (creates || [])) {
       results.push(await createBlock(c, client));
+    }
+    if(queueChanged){
+      await require('./lib/working-queue').save(client,queueOwner,movedQueue);
+      await client.query('UPDATE conversation_state SET revision=revision+1 WHERE user_id=$1',[queueOwner.userId]);
     }
     await client.query("COMMIT");
   } catch (err) {

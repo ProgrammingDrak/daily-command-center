@@ -850,6 +850,10 @@ function openMakeSubtaskOf(childId, anchorEl){
 function toggleSubtask(taskId, stId){
   const anchor=typeof taskAnchorById==='function'?taskAnchorById(stId):null;
   if(anchor&&anchor.whenever&&window.DCC.Whenever)return window.DCC.Whenever.markDone(stId);
+  if(anchor?.queue){
+    return _persistDone(stId,anchor.ev.status!=='done',{ev:anchor.ev,dateStr:anchor.date,completedAt:new Date().toISOString()})
+      .then(()=>window.DCCWorkingQueue.refreshTaskContext(taskId)).catch(error=>showToast(error.message,'error'));
+  }
   if(typeof manualDone==="undefined")return;
   const nowDone=!manualDone.has(stId);
   const at=new Date();
@@ -860,6 +864,11 @@ function toggleSubtask(taskId, stId){
   render();
 }
 function deleteSubtask(taskId, stId){
+  const anchor=typeof taskAnchorById==='function'?taskAnchorById(stId):null;
+  if(anchor?.queue){
+    const pool=window.DCCWorkingQueue.taskPool(anchor),child=pool.find(t=>t.id===stId);
+    if(child)return window.DCC.Carryover.drop(child,pool).then(()=>window.DCCWorkingQueue.refreshTaskContext(taskId));
+  }
   if(typeof openDeleteConfirm==="function"){openDeleteConfirm(stId);return;}
   if(typeof scheduled!=="undefined"){const i=scheduled.findIndex(e=>e.id===stId);if(i>=0)scheduled.splice(i,1);}
   // Rebalance the parent's remaining slices after a subtask is removed.

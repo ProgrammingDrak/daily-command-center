@@ -61,7 +61,7 @@ app.get("/", (_req, res) =>
 <script>window.scheduled=[];window.backlog=[];window.fixtureRows=[];window.isDone=t=>t.status==='done';window.render=()=>{};
 window.blockStore={get:id=>fixtureRows.find(r=>r.id===id),getByType:()=>fixtureRows,acceptWorkRotation:rows=>{for(const row of rows){const i=fixtureRows.findIndex(r=>r.id===row.id);if(i>=0)fixtureRows[i]=row;else fixtureRows.push(row);}scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));}};
 window.fixtureLoad=async()=>{fixtureRows=await fetch('/fixture/tasks').then(r=>r.json());scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));};window.petDeliveries=[];DCC.PetNudge={deliverWorkCheckIn:async(text,options)=>{petDeliveries.push(text);DCC.toast(text,'info',60000,{label:'Open queue',onClick:options.open});}};
-</script><script src="/public/js/work-checkin-policy.js"></script><script src="/public/js/work-sessions.js"></script><script src="/public/js/work-completion.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/task-priority.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/working-queue.js"></script><script>fixtureLoad().then(()=>dispatchEvent(new Event('dcc:data-ready')));</script></body></html>`)
+</script>${require("../test-support/queue-browser-components")()}<script src="/public/js/work-checkin-policy.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/work-sessions.js"></script><script src="/public/js/work-completion.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/working-queue.js"></script><script>fixtureLoad().then(()=>dispatchEvent(new Event('dcc:data-ready')));</script></body></html>`)
 );
 const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
@@ -76,7 +76,7 @@ const context = await browser.newContext({ viewport: { width: 1280, height: 950 
 page.on("pageerror", (e) => errors.push(e.message));
 const card = (id) => page.locator('[data-queue-id="' + id + '"]'),
   button = (id, action) => card(id).locator('[data-queue-action="' + action + '"]');
-const closed = () => page.waitForFunction(() => !document.querySelector("[role=dialog]"));
+const closed = () => page.waitForFunction(() => !document.querySelector(".done-modal-overlay.open"));
 const task = (id) => ctx.blockDB.getBlock(id);
 
 try {
@@ -95,7 +95,7 @@ try {
     await page.getByRole('dialog').getByText('Previously recorded',{exact:true}).waitFor();
     assert.match(await page.getByRole('dialog').innerText(),/90m/);assert.match(await page.getByRole('dialog').innerText(),/After completion \(estimated\)/);
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-    await page.waitForFunction(()=>getComputedStyle(document.querySelector('.dcc-overlay')).opacity==='1');
+    await page.locator('.done-modal-overlay.open').waitFor();
     await page.screenshot({path:path.join(output,width===375?'owner-completion-mobile.png':'owner-completion-desktop.png'),fullPage:false});
     await page.getByRole('button',{name:'Cancel',exact:true}).click();await closed();
     assert.equal((await task('a')).properties.startedAt,at);assert.equal((await task('a')).properties.actualMinutes,90);
@@ -111,10 +111,10 @@ try {
     return route.continue();
   });
   await button('a','complete').click();await page.getByRole('dialog').getByText('Previously recorded',{exact:true}).waitFor();
-  await page.getByRole('dialog').getByRole('button',{name:'Complete',exact:true}).evaluate(el=>{el.click();el.click();});
+  await page.getByRole('dialog').getByRole('button',{name:'Mark Complete',exact:true}).evaluate(el=>{el.click();el.click();});
   await page.getByRole('dialog').getByRole('status').filter({hasText:'Completion not confirmed'}).waitFor();
   assert.equal(posts,1);assert.equal(await page.getByText(/^Task completed ·/).count(),0);
-  await page.getByRole('dialog').getByRole('button',{name:'Complete',exact:true}).click();await closed();
+  await page.getByRole('dialog').getByRole('button',{name:'Mark Complete',exact:true}).click();await closed();
   assert.equal(posts,2);assert.deepEqual(bodies[1],first);
   const expectedMinutes=90+Math.max(1,Math.round((Date.parse(first.at)-Date.parse(at))/60000));
   assert.equal((await task('a')).properties.actualMinutes,expectedMinutes);assert.equal((await ctx.blockDB.getTaskTimeEntries('a','ws-1')).length,1);

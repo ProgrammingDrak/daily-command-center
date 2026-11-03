@@ -1989,7 +1989,7 @@ module.exports = function mount(app, ctx) {
           await reviewTomorrow.validateMove(ctx, req, freshParent, members, place, req.body.reviewGuard, client);
         },
       } : undefined;
-      const result = await blockDB.rescheduleBlocks(moves, creates, reviewOptions);
+      const result = await blockDB.rescheduleBlocks(moves, creates, {...reviewOptions, queueToday:getTodayStr(), queueOwner:{userId:req.session.userId,workspaceId:req.workspaceId}});
       const movedIds = subtreeIds;
       const created = result.blocks.slice(moves.length); // tombstone(s) appended after moves
       broadcast("blocks-changed", { action: "reschedule", blockIds: result.blocks.map(b => b.id), clientId: _clientId }, req.workspaceId);

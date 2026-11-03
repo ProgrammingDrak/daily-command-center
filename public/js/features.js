@@ -210,6 +210,7 @@ const _addModalControlState = new WeakMap();
 // getByType/cacheGet search below misses it and the write is silently dropped. With the
 // row id there is nothing to search for. `_amWriteRowProps` is the one helper that uses it.
 let _addModalBlockId = null;
+let _addModalAnchor = null;
 
 function _setAddModalPageInert(overlay, on) {
   Array.from(document.body.children).forEach(function(node) {
@@ -401,7 +402,8 @@ function _amBuildDetails(ev){
 // Those two failures together are why the row's open-space click was disabled on
 // carryovers: it looked like a working affordance and saved to the wrong place.
 function openAddModal(taskId, taskTitle, options) {
-  var workoutAnchor = typeof taskAnchorById === 'function' ? taskAnchorById(taskId) : null;
+  document.querySelector("#add-modal-overlay .wq-task-context")?.remove();
+  var workoutAnchor = options?.anchor || (typeof taskAnchorById === 'function' ? taskAnchorById(taskId) : null);
   var workoutTask = workoutAnchor ? workoutAnchor.ev : (typeof scheduled !== 'undefined' ? scheduled.find(ev => ev.id === taskId) : null);
   if (!options?.generic && workoutTask?.type === 'workout' && window.DCC?.Workout) {
     return DCC.Workout.open({taskId:workoutAnchor?.blockId || workoutTask._blockId || taskId,title:workoutTask.title,localId:taskId});
@@ -416,7 +418,8 @@ function openAddModal(taskId, taskTitle, options) {
   _addModalTaskId = taskId;
   var saveStatus = document.getElementById('am-save-status');
   if (saveStatus) saveStatus.textContent = '';
-  var anchor = (typeof taskAnchorById === 'function') ? taskAnchorById(taskId) : null;
+  var anchor = options?.anchor || ((typeof taskAnchorById === 'function') ? taskAnchorById(taskId) : null);
+  _addModalAnchor = anchor;
   var taskEntry = anchor ? anchor.ev
     : ((typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null);
   // The row id, when we have one. Every helper below searches the day/global caches by
@@ -523,7 +526,7 @@ function openAddModal(taskId, taskTitle, options) {
 
   // Load notes into block editor
   var notes = loadNotes();
-  var noteVal = notes[taskId];
+  var noteVal = anchor?.queue ? anchor.noteValue : notes[taskId];
   var initialBlocks=typeof noteBlocksForTask === 'function' ? noteBlocksForTask(taskId, noteVal, taskEntry) : null;
   if(window._amBlockEditor) window._amBlockEditor.destroy();
   var taskFileControls=window.DCC.TaskAttachments.mount(document.getElementById('am-notes-block-editor'),_addModalBlockId);
@@ -738,6 +741,7 @@ function closeAddModal() {
   // tag/flag writes at the previous row — a cross-task write, and the kind of stale
   // module state that only shows up on the second open.
   _addModalBlockId = null;
+  _addModalAnchor = null;
   // Flush any deferred renders now that modal is closed
   _flushDeferredRender();
   if (typeof render === 'function') render();
@@ -750,7 +754,7 @@ function closeAddModal() {
     var escaped = window.CSS && typeof window.CSS.escape === 'function' ? window.CSS.escape(String(returnTaskId || '')) : String(returnTaskId || '').replace(/"/g, '\\"');
     var row = document.querySelector('.it-list-item[data-id="' + escaped + '"], .card[data-id="' + escaped + '"]');
     var fallback = row && (row.querySelector('button:not([disabled]), [href], input:not([disabled])') || row);
-    if (fallback === row && !row.hasAttribute('tabindex')) row.setAttribute('tabindex', '-1');
+    if (row && fallback === row && !row.hasAttribute('tabindex')) row.setAttribute('tabindex', '-1');
     fallback = fallback || document.querySelector('.tab.active');
     if (fallback && typeof fallback.focus === 'function') fallback.focus({ preventScroll: true });
   });
@@ -765,9 +769,9 @@ function renderModalItems(taskId) {
 
   // Subtasks (real tasks in the unified tree: subtaskOf === taskId)
   var itemAnchor=typeof taskAnchorById==='function'?taskAnchorById(taskId):null;
-  var itemPool=itemAnchor&&itemAnchor.whenever?(typeof backlog!=='undefined'?backlog:[]):(typeof scheduled!=='undefined'?scheduled:[]);
+  var itemPool=itemAnchor&&itemAnchor.queue?window.DCCWorkingQueue.taskPool(itemAnchor):itemAnchor&&itemAnchor.whenever?(typeof backlog!=='undefined'?backlog:[]):(typeof scheduled!=='undefined'?scheduled:[]);
   var subs = DCC.TaskModel.subtasksOf(taskId,itemPool)
-    .map(function(t){return { id:t.id, text:t.title, done:(typeof isDone==='function'&&isDone(t)), created:'2000-01-01' };});
+    .map(function(t){return { id:t.id, text:t.title, done:t.status==='done'||(typeof isDone==='function'&&isDone(t)), created:'2000-01-01' };});
   subs.forEach(function(st) {
     items.push({ type: 'subtask', id: st.id, text: st.text, done: !!st.done, created: st.created || '2000-01-01' });
   });
@@ -779,7 +783,7 @@ function renderModalItems(taskId) {
   });
 
   // Action items
-  var actions = loadActions();
+  var actions = loadActions(taskId);
   var taskActions = actions[taskId] || [];
   taskActions.forEach(function(a, i) {
     items.push({ type: 'action', id: 'action-' + i, idx: i, text: a.text, done: !!a.done, priority: a.priority, created: a.created || '2000-01-01' });
@@ -874,8 +878,8 @@ function renderModalItems(taskId) {
       else if (type === 'trivial') { toggleTrivialTask(id); }
       else if (type === 'action') {
         var idx = parseInt(id.replace('action-', ''));
-        var acts = loadActions();
-        if (acts[taskId] && acts[taskId][idx]) { acts[taskId][idx].done = !acts[taskId][idx].done; saveActions(acts); }
+        var acts = loadActions(taskId);
+        if (acts[taskId] && acts[taskId][idx]) { acts[taskId][idx].done = !acts[taskId][idx].done; saveActions(acts,{taskId:taskId}); }
       }
       renderModalItems(taskId);
     });
@@ -885,8 +889,8 @@ function renderModalItems(taskId) {
       else if (type === 'trivial') { unlinkTrivialFromSchedule(id); }
       else if (type === 'action') {
         var idx = parseInt(id.replace('action-', ''));
-        var acts = loadActions();
-        if (acts[taskId]) { acts[taskId].splice(idx, 1); saveActions(acts); }
+        var acts = loadActions(taskId);
+        if (acts[taskId]) { acts[taskId].splice(idx, 1); saveActions(acts,{taskId:taskId}); }
       }
       renderModalItems(taskId);
     });
@@ -966,10 +970,10 @@ document.addEventListener('DOMContentLoaded', function() {
       // Longer delay for async BlockStore write
       setTimeout(function() { renderModalItems(_addModalTaskId); }, 300);
     } else if (type === 'action') {
-      var acts = loadActions();
+      var acts = loadActions(_addModalTaskId);
       if (!acts[_addModalTaskId]) acts[_addModalTaskId] = [];
       acts[_addModalTaskId].push({ text: text, priority: 'Medium', done: false, created: new Date().toISOString() });
-      saveActions(acts);
+      saveActions(acts,{taskId:_addModalTaskId});
     }
 
     inp.value = '';
@@ -1479,7 +1483,7 @@ function _writeAddModalNotes() {
   } else {
     notes[_addModalTaskId] = Object.assign({}, previous, { blocks: [], html: "", text: "" });
   }
-  saveNotes(notes, { taskId: _addModalTaskId, previous: previous });
+  saveNotes(notes, { taskId: _addModalTaskId, previous: previous, anchor: _addModalAnchor });
   _addModalNotesSnapshot = _addModalNotesFingerprint();
 }
 
