@@ -88,14 +88,42 @@ try {
   const other = await context.newPage();
   await other.goto(url);
   await other.locator("[data-queue-action=pomodoro]").click();
+  // Hold the shared lock so both handlers definitely enqueue before either can save.
+  const lockPage = await context.newPage();
+  await lockPage.goto(url);
+  await lockPage.evaluate((k) => {
+    navigator.locks.request(k, async () => {
+      window.__focusLockHeld = true;
+      await new Promise((resolve) => {
+        window.__releaseFocusLock = resolve;
+      });
+    });
+  }, key);
+  await lockPage.waitForFunction(() => window.__focusLockHeld);
   await Promise.all([
     page.getByRole("button", { name: "Resume section", exact: true }).click(),
     other.getByRole("button", { name: "Resume section", exact: true }).click()
   ]);
+  await lockPage.waitForFunction(
+    async (k) => (await navigator.locks.query()).pending.filter((lock) => lock.name === k).length === 2,
+    key
+  );
+  await lockPage.evaluate(() => window.__releaseFocusLock());
   await page.waitForFunction((k) => JSON.parse(localStorage.getItem(k)).revision === 4, key);
   p = await read();
   assert.equal(p.revision, 4);
   assert.equal(p.remaining, paused);
+  await Promise.any(
+    [page, other].map((tab) =>
+      tab.waitForFunction(() => document.querySelector("[data-error]")?.textContent.includes("another tab"))
+    )
+  );
+  const loserErrors = await Promise.all([page, other].map((tab) => tab.locator("[data-error]").textContent()));
+  assert.ok(
+    loserErrors.some((text) => text.includes("another tab")),
+    "one stale tab must report the conflict"
+  );
+  await lockPage.close();
   // Expire in storage to model a deadline passing during device sleep. No task API is involved.
   await page.evaluate((k) => {
     const p = JSON.parse(localStorage.getItem(k));
@@ -146,7 +174,7 @@ try {
   await dialog.getByText("Write a draft", { exact: true }).waitFor();
   assert.equal((await read()).taskId, "task");
   queue.queue.items = replacement;
-  await page.evaluate(()=>window.DCCWorkingQueue.refresh());
+  await page.evaluate(() => window.DCCWorkingQueue.refresh());
   // Complete the remaining timers explicitly; no section starts itself.
   for (let section = 1; section < 4; section++) {
     await page.getByRole("textbox", { name: "Section " + (section + 1) + " objective" }).fill("Goal " + section);
