@@ -395,9 +395,41 @@ test(
     await events.subscribe(owner, bParams);
     await command("background-start", "b", { remindMinutes: 1 });
     now += 61000;
+    status = 503;
+    const beforeRetries = sent.length;
+    for (let attempt = 1; attempt <= 8; attempt++) {
+      await events.tick();
+      now += 15000 * 2 ** (attempt - 1) + 16000;
+    }
+    await events.tick();
+    assert.equal(sent.length, beforeRetries + 8, "transient retries are bounded");
+    assert.equal(
+      (await ctx.pool.query("SELECT status FROM dcc_event_deliveries WHERE event_id=$1", [sent.at(-1).event.eventId]))
+        .rows[0].status,
+      "failed"
+    );
+    await command("background-start", "b", { remindMinutes: 1 });
+    now += 61000;
+    status = 410;
+    await events.tick();
+    assert.equal(
+      (
+        await ctx.pool.query("SELECT disabled FROM dcc_event_subscriptions WHERE id=$1", [
+          E.subscriptionId(owner, bParams)
+        ])
+      ).rows[0].disabled,
+      true
+    );
+    const beforeDeleted = sent.length;
+    now += 16000;
+    await events.tick();
+    assert.equal(sent.length, beforeDeleted, "410 stops subscription delivery");
+    await events.subscribe(owner, bParams);
+    await command("background-start", "b", { remindMinutes: 1 });
+    now += 61000;
     await ctx.blockDB.deleteBlock("b");
     await events.tick();
-    assert.equal(sent.length, beforeRevoke, "deleted task cannot deliver");
+    assert.equal(sent.length, beforeDeleted, "deleted task cannot deliver");
     await events.unsubscribe(owner, bParams);
     await events.unsubscribe(owner, bParams);
     assert.equal((await ctx.pool.query("SELECT * FROM dcc_event_subscriptions")).rows.length, 0);
