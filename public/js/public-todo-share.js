@@ -1,7 +1,6 @@
 (function(){
   const token = location.pathname.split("/").filter(Boolean).pop();
   let current = null;
-  let loadPromise = null;
   // Adapted from PR421's composer lifecycle: scoped page-memory drafts and
   // pending actions survive filtering/refresh, without its unmerged reward model.
   const cardDrafts = new Map(), pendingActions = new Set();
@@ -22,7 +21,8 @@
     if (saved) saved.values = saved.values.filter(([cls]) => !classes.includes(cls));
     for (const input of cardFor(id)?.querySelectorAll('input') || []) if (classes.includes(input.className)) input.value = '';
   }
-  async function reloadAfterMutation() { if (loadPromise) await loadPromise; return load(); }
+  // Social writes re-read through the live coordinator (single-flight, trailing).
+  function reloadAfterMutation() { return load(); }
 
   const filters = {
     types: new Set(["task", "repeat", "calendar", "time"]),
@@ -57,7 +57,7 @@
     const data = contentType.includes("application/json")
       ? await res.json().catch(() => ({}))
       : { error: cleanError(await res.text().catch(() => "")) };
-    if (!res.ok) throw new Error(data.error || data.message || "Request failed");
+    if (!res.ok) { const error = new Error(data.error || data.message || "Request failed"); error.status = res.status; throw error; }
     return data;
   }
 
@@ -198,27 +198,92 @@
     return '<div class="todo-public-comments">' + list + form + '</div>';
   }
 
+  // Viewer lanes. Needs You and snoozes are the owner's inbox, so they read as Up next.
   const LANES = [
-    ["foreground", "Foreground", "Current focus"],
-    ["needs-you", "Needs You", "Waiting for attention"],
-    ["priority", "Priority Queue", "Selected work that has never started"],
-    ["background", "Background", "Started, paused or blocked work"],
-    ["completed", "Completed", "Finished queue tasks"]
+    ["now", "Now", "The one task in focus right now.", "Not sharing a focus right now."],
+    ["running", "Running in background", "Work an assistant or process is actively running, confirmed in the last 15 minutes.", "Nothing running in the background."],
+    ["next", "Up next", "Queued work, in priority order.", "Nothing queued up next."],
+    ["later", "Later today", "Scheduled for later today.", "Nothing else scheduled today."],
+    ["done", "Done today", "Finished today.", "Nothing finished yet today."]
   ];
+  // Mirrors working-queue.js: two independent columns, stacked on narrow screens.
+  const narrow = window.matchMedia("(max-width: 700px)");
+  // Same two-column shape as the owner Working Queue (queue-layout.js moves lanes
+  // on a breakpoint change). Under 700px the grid is one column, so stacked order
+  // reads Now, Running, Up next, Later today.
+  const LAYOUT = { columns: [["now", "next"], ["running", "later"]], stacked: [["now", "running"], ["next", "later"]] };
+  const layout = () => LAYOUT[narrow.matches ? "stacked" : "columns"];
+  function arrangeLanes(){
+    const list = document.getElementById("todo-public-list");
+    if (list) window.DCCQueueLayout.arrange(list, layout(), name => list.querySelector('.wq-grid [data-shared-lane="' + name + '"]'));
+  }
+  const V1_LANES = { foreground: "now", background: "running", "needs-you": "next", priority: "next", completed: "done" };
+  function laneOf(task){ return task.activity?.lane || V1_LANES[task.queue?.lane] || "next"; }
+  function orderOf(task){ return task.activity?.order ?? task.queue?.order ?? 0; }
+
+  function clockLabel(hhmm){
+    const m = /^(\d{1,2}):(\d{2})/.exec(String(hhmm || ""));
+    if (!m) return "";
+    const h = Number(m[1]), suffix = h >= 12 ? "PM" : "AM";
+    return ((h % 12) || 12) + ":" + m[2] + " " + suffix;
+  }
+  function instantLabel(iso){
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return "";
+    try { return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", timeZone: current?.timeZone || undefined }).format(ms); }
+    catch { return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }
+  }
+  function sinceLabel(iso){
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return "";
+    const min = Math.max(0, Math.floor((Date.now() - ms) / 60000));
+    if (min < 1) return "just now";
+    if (min < 60) return min + "m";
+    if (min < 24 * 60) return Math.floor(min / 60) + "h " + (min % 60) + "m";
+    return Math.floor(min / 1440) + "d";
+  }
+  // Text that ages in place, so the clock ticks without rebuilding cards.
+  function liveText(kind, iso){
+    return '<span data-age-kind="' + kind + '" data-age-from="' + esc(iso) + '">' + esc(ageText(kind, iso)) + '</span>';
+  }
+  function ageText(kind, iso){
+    const since = sinceLabel(iso);
+    if (kind === "started") return "Started " + instantLabel(iso) + (since ? " · " + since : "");
+    return "Confirmed " + (since === "just now" ? since : since + " ago");
+  }
+  function cardMeta(task, lane){
+    const a = task.activity || {};
+    const range = task.start ? clockLabel(task.start) + (task.end ? " – " + clockLabel(task.end) : "") : "";
+    if (lane === "now") return a.onBreak ? "On a break · Work timer paused" : a.startedAt ? liveText("started", a.startedAt) : "In focus";
+    if (lane === "running") return a.confirmedAt ? liveText("confirmed", a.confirmedAt) : "Running";
+    if (lane === "next") return [a.priority ? a.priority + " priority" : "", range].filter(Boolean).map(esc).join(" · ");
+    if (lane === "later") return esc([range, itemType(task) !== "task" ? itemTypeLabel(task) : ""].filter(Boolean).join(" · "));
+    if (lane === "done") return a.completedAt ? esc("Completed " + instantLabel(a.completedAt)) : "Done";
+    return "";
+  }
+  const CHIPS = { now: "Now", running: "Running", next: "Up next", later: "Planned", done: "Done" };
+  // The owner's Working Queue row (itinerary-card.js), read-only: no callbacks are
+  // passed, so no complete, schedule, open, drag or priority control renders. The
+  // title is the task's own (never a parent path). The share-only social footer
+  // (reactions, bounty, reward, discussion) is appended under the row.
   function renderGuestCard(task){
-    const el = document.createElement("article");
-    el.className = "shared-queue-card";
-    el.dataset.sharedTask = task.id;
-    const q = task.queue || {};
-    const state = q.lane === "foreground" && q.status === "paused" ? "On a break · Work timer paused" : q.lane === "priority" ? (q.priority || "medium") + " priority" : q.lane === "needs-you" ? "Needs attention" : q.status;
+    const lane = laneOf(task);
     const context = (task.tags || []).slice(0, 2).map(t => t.name).filter(Boolean).join(" · ");
-    el.innerHTML = '<div class="shared-card-heading"><h3>' + esc(task.title) + '</h3>' +
-      '<span class="shared-card-state">' + esc(state || "") + '</span></div>' +
-      (context ? '<p class="shared-card-context">' + esc(context) + '</p>' : '') +
+    const meta = cardMeta(task, lane);
+    const el = window.renderItineraryListRow({ id: task.id, title: task.title }, {
+      escHtml: esc,
+      done: lane === "done",
+      extraClass: "wq-card shared-queue-card shared-card-" + lane + (lane === "now" ? " wq-focus" : "") + (task.activity?.onBreak ? " wq-on-break" : ""),
+      dataset: { sharedTask: task.id },
+      titleExtrasHtml: '<span class="wq-status">' + esc(task.activity?.onBreak ? "On a break" : CHIPS[lane]) + '</span>',
+      metaHtml: (meta ? '<p class="wq-time shared-card-meta">' + meta + '</p>' : '') +
+        (context ? '<p class="wq-time shared-card-context">' + esc(context) + '</p>' : '')
+    });
+    el.querySelector(".it-list-main").insertAdjacentHTML("beforeend",
       '<div class="shared-card-social">' + reactionBar(task) +
-        (q.lane !== "completed" ? '<div class="todo-guest-actions">' + bountyButtonHtml(task) + rewardButtonHtml(task) + '</div>' : '') + '</div>' +
+        (lane !== "done" ? '<div class="todo-guest-actions">' + bountyButtonHtml(task) + rewardButtonHtml(task) + '</div>' : '') + '</div>' +
       sponsorChips(task) + rewardFormHtml(task) +
-      '<details class="shared-card-details"><summary>Discussion' + ((task.comments || []).length ? ' (' + task.comments.length + ')' : '') + '</summary>' + commentsHtml(task) + '</details>';
+      '<details class="shared-card-details"><summary>Discussion' + ((task.comments || []).length ? ' (' + task.comments.length + ')' : '') + '</summary>' + commentsHtml(task) + '</details>');
     return el;
   }
 
@@ -234,8 +299,8 @@
       return true;
     });
     items.sort((a, b) => {
-      const rank = task => LANES.findIndex(lane => lane[0] === task.queue?.lane);
-      return rank(a) - rank(b) || (a.queue?.order || 0) - (b.queue?.order || 0);
+      const rank = task => LANES.findIndex(lane => lane[0] === laneOf(task));
+      return rank(a) - rank(b) || orderOf(a) - orderOf(b);
     });
     return items;
   }
@@ -251,7 +316,7 @@
     const list = document.getElementById("todo-public-list");
     if (!list) return;
     // Preserve disclosure and draft state across polling and social mutations.
-    const completedOpen = !!list.querySelector('.shared-queue-completed')?.open;
+    const completedOpen = !!list.querySelector('.shared-queue-done')?.open;
     const disclosures = new Map(Array.from(list.querySelectorAll('[data-shared-task]')).map(card =>
       [card.dataset.sharedTask, { open: card.querySelector('details')?.open,
         rewardOpen: !card.querySelector('.todo-reward-form')?.hidden,
@@ -264,15 +329,21 @@
     const visible = visibleTasks(tasks);
     updateStats(tasks);
     list.innerHTML = "";
-    for (const [key, title, description] of LANES) {
-      const rows = visible.filter(task => task.queue?.lane === key);
-      const section = document.createElement(key === 'completed' ? 'details' : 'section');
-      section.className = 'shared-queue-lane shared-queue-' + key;
-      if (key === 'completed') section.open = completedOpen;
-      section.innerHTML = '<' + (key === 'completed' ? 'summary' : 'h2') + '>' + title + ' <span>' + rows.length + '</span></' + (key === 'completed' ? 'summary' : 'h2') + '><p>' + description + '</p>';
+    const sections = {};
+    for (const [key, title, description, emptyText] of LANES) {
+      const rows = visible.filter(task => laneOf(task) === key);
+      const done = key === 'done';
+      // Owner Working Queue lane markup (.wq-lane / .wq-completed), viewer copy.
+      const section = document.createElement(done ? 'details' : 'section');
+      section.className = (done ? 'wq-completed' : 'wq-lane') + ' shared-queue-lane shared-queue-' + key;
+      section.dataset.sharedLane = key;
+      if (done) section.open = completedOpen;
+      section.innerHTML = done
+        ? '<summary>' + esc(title) + ' · ' + rows.length + '</summary><p class="wq-time">' + esc(description) + '</p>'
+        : '<div class="wq-heading"><h2>' + esc(title) + ' <small>' + rows.length + '</small></h2></div><p class="wq-time shared-lane-help">' + esc(description) + '</p>';
       if (!rows.length) {
-        const empty = document.createElement('p'); empty.className = 'shared-queue-empty';
-        empty.textContent = key === 'foreground' ? 'No shared foreground task.' : 'No shared tasks in this section.';
+        const empty = document.createElement('p'); empty.className = 'wq-empty shared-queue-empty';
+        empty.textContent = emptyText;
         section.appendChild(empty);
       }
       for (const task of rows) {
@@ -287,8 +358,17 @@
         }
         section.appendChild(card);
       }
-      list.appendChild(section);
+      sections[key] = section;
     }
+    const grid = document.createElement('div');
+    grid.className = 'wq-grid';
+    for (const names of layout()) {
+      const col = document.createElement('div'); col.className = 'wq-col';
+      names.forEach(name => col.appendChild(sections[name]));
+      grid.appendChild(col);
+    }
+    list.appendChild(grid);
+    list.appendChild(sections.done);
     if (focusTask) {
       const card = Array.from(list.querySelectorAll('[data-shared-task]')).find(el => el.dataset.sharedTask === focusTask);
       const target = card && Array.from(card.querySelectorAll('button,input,summary')).find(el => focusEmoji ? el.dataset.reactionEmoji === focusEmoji : el.className === focusClass);
@@ -313,7 +393,7 @@
     const status = document.getElementById("todo-public-status");
     if (status) status.hidden = true;
     document.getElementById("todo-public-title").textContent = data.workspaceName || "Shared Todo List";
-    document.getElementById("todo-public-subtitle").textContent = data.ownerUsername ? "Activity queue for " + data.ownerUsername : "Shared activity queue";
+    document.getElementById("todo-public-subtitle").textContent = (data.ownerUsername ? data.ownerUsername + "'s" : "Shared") + " focus, background work and plan for the day.";
     document.getElementById("todo-public-date").textContent = data.date || "Today";
     // Printed copies carry the live URL (see the @media print block): a sheet of
     // paper with no way back to the list is a dead end.
@@ -345,18 +425,81 @@
     });
   }
 
-  async function load(){
-    if (!token) return showError("Missing share token.");
-    if (loadPromise) return loadPromise;
-    loadPromise = (async function(){
-      try {
-        render(await api("/api/public/todo-share/" + encodeURIComponent(token)));
-      } catch (e) {
-        showError(e.message);
-      }
-    })().finally(function(){loadPromise=null;});
-    return loadPromise;
+  // ── Live updates ──
+  // live-channel.js owns the EventSource (pings, heartbeat watchdog, capacity,
+  // revoke, reconnect) and the pill state; it is used only by this page for now
+  // (the owner app's sse.js keeps its own stream). refresh-coordinator.js is
+  // shared with the owner app and owns single-flight reads, a trailing
+  // re-read for pings that land mid-read, the 30s safety poll, retry backoff and
+  // the timed re-read when a worker lease is known to lapse.
+  const POLL_MS = 30000, TICK_MS = 20000;
+  let lastOk = 0, liveState = "connecting", lastStatus = null;
+  function setLive(state){
+    liveState = state;
+    const pill = document.getElementById("todo-public-live");
+    if (!pill) return;
+    const updated = lastOk ? new Date(lastOk).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+    pill.dataset.state = state;
+    pill.textContent = { live: "Live", polling: "Live (polling)", reconnecting: "Reconnecting…",
+      offline: "Offline" + (updated ? " · updated " + updated : ""), revoked: "Link no longer active", connecting: "Connecting…" }[state] || "Live";
   }
+  function showRevoked(){
+    coordinator.stop();
+    // Invalidate in-flight social actions so their completion never touches the cleared page.
+    viewerEpoch++;
+    current = null; cardDrafts.clear(); pendingActions.clear(); viewerScope = "";
+    document.getElementById("todo-public-list")?.replaceChildren();
+    setLive("revoked");
+    showError("This shared link is no longer active.");
+  }
+  const coordinator = window.DCCRefreshCoordinator.createTaskRefreshCoordinator({
+    intervalMs: POLL_MS,
+    trailing: true,
+    refreshOnVisible: true,
+    retryDelaysMs: [5000, 10000, 20000, 40000, 60000],
+    isVisible: () => document.visibilityState === "visible",
+    canRefresh: () => liveState !== "revoked",
+    getDate: () => token,
+    isLoaded: data => !!data && typeof data === "object",
+    loadDay: () => api("/api/public/todo-share/" + encodeURIComponent(token)),
+    apply: (_token, _reason, data) => {
+      lastOk = Date.now(); lastStatus = 200;
+      render(data);
+      const at = Date.parse(data.nextChangeAt), serverNow = Date.parse(data.serverNow);
+      // Re-read just after a shown worker lease lapses (clock skew corrected, jittered, capped).
+      if (Number.isFinite(at)) coordinator.runAt(Math.min(at + (Number.isFinite(serverNow) ? Date.now() - serverNow : 0) + 500 + Math.random() * 1000, Date.now() + 15 * 60000), "lease");
+      channel.report(200);
+    },
+    onError: error => {
+      lastStatus = error.status || 0;
+      channel.report(lastStatus);
+      if (!current && liveState !== "revoked") showError(error.message);
+    },
+    setIntervalFn: (fn, ms) => setInterval(fn, ms),
+    clearIntervalFn: id => clearInterval(id),
+    addVisibilityListener: fn => document.addEventListener("visibilitychange", fn),
+    removeVisibilityListener: fn => document.removeEventListener("visibilitychange", fn)
+  });
+  const channel = window.DCCLiveChannel.createLiveChannel({
+    url: "/api/public/todo-share/" + encodeURIComponent(token) + "/events",
+    isVisible: () => document.visibilityState === "visible",
+    // Spread viewers so one ping, or every stream reconnecting after a deploy,
+    // does not land all full-day reads on the server at the same instant.
+    onPing: reason => setTimeout(() => coordinator.refresh(reason), Math.random() * (reason === "reconnect" ? 2000 : 500)),
+    onState: state => { if (state === "revoked") showRevoked(); else setLive(state); },
+    // The stream closed and EventSource cannot say why: one feed read can.
+    probe: async () => { lastStatus = null; await coordinator.refresh("probe"); return lastStatus ?? 200; }
+  });
+  function load(){
+    if (!token) { showError("Missing share token."); return Promise.resolve(false); }
+    return coordinator.refresh("manual");
+  }
+  function tickAges(){
+    document.querySelectorAll("[data-age-kind]").forEach(el => { el.textContent = ageText(el.dataset.ageKind, el.dataset.ageFrom); });
+    if (liveState === "offline") setLive("offline");
+  }
+  // Test and support hook: no data beyond what the page already shows.
+  window.DCCShareLive = { refresh: reason => coordinator.refresh(reason || "manual"), state: () => liveState };
 
   async function submitCreateTask(){
     const status = document.getElementById("todo-create-status");
@@ -739,10 +882,9 @@
 
   bindControls();
   bindExport();
-  load();
-  if(token&&typeof EventSource!=="undefined"){
-    const events=new EventSource("/api/public/todo-share/"+encodeURIComponent(token)+"/events");
-    events.onmessage=function(event){if(event.data==="changed")load();};
-  }
-  setInterval(load, 5*60*1000);
+  if (token) { load(); channel.open(); coordinator.start(); } else load();
+  setInterval(tickAges, TICK_MS);
+  document.addEventListener("visibilitychange", function(){ if (document.visibilityState === "visible") channel.resume(); });
+  window.addEventListener("online", function(){ channel.resume(); coordinator.refresh("online"); });
+  narrow.addEventListener?.("change", arrangeLanes);
 })();

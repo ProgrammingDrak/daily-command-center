@@ -1,15 +1,79 @@
 # Shared activity queue
 
-The existing `/todo/:token` page shows Foreground, Needs You, Priority Queue,
-Background & paused, and Completed. Priority Queue means never-started work.
-Canonical queue status controls the lane and public completion label.
+The existing `/todo/:token` page shows what the owner is doing now, what is
+running in the background, and what is planned, laid out like Working Queue.
+
+## Viewer lanes (activity v2)
+
+`lib/public-working-queue.js` `projectPublicActivity` places each shared task in
+exactly one lane:
+
+| Lane | Rule |
+|---|---|
+| Now | Queue foreground task |
+| Running in background | Live worker lease (`DCCQueuePolicy.execution` = running, at most 15 min) |
+| Up next | Priority order; paused, blocked, snoozed and Needs You items also land here |
+| Later today | Shared timed tasks on this day not in the queue; past meetings/breaks/OOO drop off |
+| Done today | Completed queue tasks and done shared-day tasks |
+
+Needs You and snoozes are the owner's inbox, so viewers never see them. Hidden
+focus (private, another date or workspace) looks exactly like no focus. Cards
+carry an explicit field allowlist (`PUBLIC_TASK_FIELDS`) plus `activity`
+(`lane`, `order`, minute-rounded `startedAt`/`confirmedAt`/`completedAt`,
+`priority`). Notes, worker source/id, report text, review actions, reminders,
+generations and actuals never leave the projection. A `queue.lane` field is kept
+for pages loaded before this release, without a `needs-you` value.
+
+`DCC_SHARE_ACTIVITY_V2=false` restores the PR #444 payload (`view:"working-queue"`).
+
+## Shared code with the owner Working Queue
+
+The shared page re-uses the owner's code; it never re-derives queue policy.
+
+| Concern | Shared entrypoint |
+|---|---|
+| Lanes | `DCCQueuePolicy.lanes(items, TaskPriority.group)` (`public/js/queue-policy.js`) |
+| Worker lease, 15-min cap, check-in time | `DCCQueuePolicy.execution()` → `execution.{state, validUntil, observedAt}` |
+| Priority order | `TaskPriority.group` |
+| Done today | `DCCCompletedQueueFilter.select(items, 'today', now, timeZone)` |
+| Fixed-time types | `lib/public-feed-type.js` `TIME_ONLY_FEED_TYPES` (parity with `TaskTypes.fixedTypes()`) |
+| Card row | `renderItineraryListRow` (`itinerary-card.js`), called with no callbacks |
+| Lane and card styles | `public/css/working-queue.css` (`.wq-*`) |
+| Lane layout on resize | `DCCQueueLayout.arrange` (`public/js/queue-layout.js`) |
+| Read lifecycle | `DCCRefreshCoordinator` (`public/js/refresh-coordinator.js`, also used by `sse.js`) |
+| Stream lifecycle | `DCCLiveChannel` (`public/js/live-channel.js`), share page only for now; owner `sse.js` keeps its own stream |
+
+The only viewer-specific mapping is `VIEWER_LANE` in `lib/public-working-queue.js`.
+`queue-lanes-parity.test.js` fails if either surface re-implements any of these,
+if lanes drift from the owner policy, or if a private field reaches the payload.
+
+## Live updates
+
+- Owner writes ping `/api/public/todo-share/:token/events` (`lib/public-sse.js`).
+  Pings coalesce per workspace (750 ms trailing) and carry an `id`. The stream
+  sends `retry: 3000` and a named `heartbeat` event every 25 s.
+- Browser EventSource cannot read HTTP status or comment frames, so the server
+  speaks in readable events: `capacity` (over the 100 total / 20 per workspace
+  cap; the browser retries after 60 s and the page polls) and `revoked` (sent
+  before a revoke or rotate closes the stream).
+- `live-channel.js`: `connected` and `changed` trigger a re-read; no heartbeat
+  for 2.5 intervals reopens the stream; a closed stream is explained by one feed
+  read (404 = revoked, success = polling with 30 s / 60 s / 5 min reopen, network
+  failure = offline).
+- `refresh-coordinator.js`: one read at a time, one trailing read for pings that
+  land mid-read, a 30 s poll only when nothing fresher arrived, a timed read at
+  `nextChangeAt`, retry backoff to 60 s, and a read on return to the tab.
+- The feed records `last_viewed_at` at most once per 5 minutes.
+- The status pill reads Live, Live (polling), Reconnecting, Offline, or Link no
+  longer active.
 
 ## Access boundary
 
-The feed is the intersection of the existing public day-task projection and
-canonical Working Queue membership. A queue item never grants sharing access.
-Private/redacted/guided tasks, backlog, other dates, nonqueued tasks, owner notes,
-and delegated reports are excluded. Hidden priority rows cannot be inferred from
+The feed is the existing public day-task projection, ordered and labelled by
+canonical Working Queue state. A queue item never grants sharing access.
+Private/redacted/guided tasks, backlog, other dates, untimed nonqueued tasks,
+subtasks, owner notes and delegated reports are excluded. Timed nonqueued tasks
+appear in Later today; the same viewers could already export them. Hidden priority rows cannot be inferred from
 rank gaps. Existing recipients, tokens and task visibility are unchanged.
 The existing share model has active/revoked state, without link expiry.
 
@@ -46,7 +110,7 @@ No unrelated commits from either PR are merged here.
 
 ## Verification
 
-`npm test`, `npm run test:postgres`, `scripts/verify-shared-queue.cjs`,
+`npm test` (including `public-sse.test.js`), `npm run test:postgres`, `scripts/verify-shared-queue.cjs` (now also live pings, worker lease, revoke-while-open),
 `scripts/verify-work-completion.mjs`, and `scripts/verify-working-queue.mjs` cover
 projection/privacy, owner/viewer/anonymous modes, revoked links, task hiding,
 existing social mutations, account-switch races, completion cutoff/rounding,

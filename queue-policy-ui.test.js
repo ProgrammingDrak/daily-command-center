@@ -77,7 +77,7 @@ test(
     app.get("/api/working-queue", (_req, res) => res.json(state));
     app.get("/", (_req, res) =>
       res.send(
-        '<html><head><link rel="stylesheet" href="/public/css/working-queue.css"></head><body style="background:#171522;color:#eee;font:16px system-ui;margin:20px"><main id="working-queue-root"></main><script>window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:"ws-1"};</script><script src="/public/js/core.js"></script><script src="/public/js/task-priority.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/working-queue.js"></script><script>window.DCCWorkingQueue.refresh()</script></body></html>'
+        '<html><head><link rel="stylesheet" href="/public/css/working-queue.css"></head><body style="background:#171522;color:#eee;font:16px system-ui;margin:20px"><main id="working-queue-root"></main><script>window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:"ws-1"};</script><script src="/public/js/core.js"></script><script src="/public/js/task-priority.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/hold-action.js"></script><script src="/public/js/itinerary-card.js"></script><script src="/public/js/queue-layout.js"></script><script src="/public/js/working-queue.js"></script><script>window.DCCWorkingQueue.refresh()</script></body></html>'
       )
     );
     const server = app.listen(0, "127.0.0.1");

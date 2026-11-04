@@ -45,54 +45,8 @@
     if(indicator){ indicator.style.opacity = "0"; setTimeout(() => { if(indicator) indicator.remove(); indicator = null; }, 300); }
   }
 
-  // One bounded consistency loop for task rows. SSE remains the immediate update path;
-  // this catches missed broadcasts and suspended connections without retaining snapshots
-  // or starting one timer per task. Dependencies are injected so timing, visibility and
-  // overlap behavior stay directly testable.
-  function createTaskRefreshCoordinator(opts){
-    opts=opts||{};
-    const intervalMs=opts.intervalMs||TASK_REFRESH_INTERVAL_MS;
-    const now=opts.now||(()=>Date.now());
-    let lastSuccessAt=now();
-    let inFlight=null;
-    let timer=null;
-    let listening=false;
-
-    async function refresh(reason){
-      if(!opts.isVisible()||!opts.canRefresh())return false;
-      if(inFlight)return inFlight;
-      const date=opts.getDate();
-      if(!date)return false;
-      const mutationGeneration=opts.getMutationGeneration?opts.getMutationGeneration():null;
-      inFlight=(async()=>{
-        const loaded=await opts.loadDay(date);
-        if(!Array.isArray(loaded)||opts.getDate()!==date||!opts.canRefresh())return false;
-        if(opts.getMutationGeneration&&opts.getMutationGeneration()!==mutationGeneration)return false;
-        await opts.apply(date,reason||"timer");
-        lastSuccessAt=now();
-        return true;
-      })().catch(e=>{
-        if(opts.onError)opts.onError(e);
-        return false;
-      }).finally(()=>{inFlight=null;});
-      return inFlight;
-    }
-
-    function tick(){
-      if(now()-lastSuccessAt>=intervalMs)refresh("timer");
-    }
-
-    function onVisibilityChange(){
-      if(opts.isVisible()&&now()-lastSuccessAt>=intervalMs)refresh("visible");
-    }
-
-    function start(){
-      if(timer==null)timer=opts.setIntervalFn(tick,intervalMs);
-      if(!listening){opts.addVisibilityListener(onVisibilityChange);listening=true;}
-    }
-
-    return {refresh,start,tick,onVisibilityChange,isInFlight:()=>!!inFlight,lastSuccessAt:()=>lastSuccessAt};
-  }
+  // Shared with the shared-link activity page (public/js/refresh-coordinator.js).
+  const createTaskRefreshCoordinator=window.DCCRefreshCoordinator.createTaskRefreshCoordinator;
   window.createTaskRefreshCoordinator=createTaskRefreshCoordinator;
 
   function taskRefreshSafe(){

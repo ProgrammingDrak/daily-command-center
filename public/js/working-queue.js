@@ -37,15 +37,9 @@
   const narrow=window.matchMedia('(max-width: 700px)');
   const LANES={stacked:[['wq-foreground','wq-needs'],['wq-next','wq-background']],columns:[['wq-foreground','wq-next'],['wq-needs','wq-background']]};
   function layout(){return LANES[narrow.matches||document.body.classList.contains('device-glasses')||new URLSearchParams(location.search).get('device')==='glasses'?'stacked':'columns'];}
-  // Breakpoint change: move the existing lane nodes (no re-render), then
-  // return focus to the control that moving the lane may have blurred.
-  function arrange(){
-    const root=document.getElementById('working-queue-root'),cols=root?.querySelectorAll('.wq-grid > .wq-col');if(!cols||cols.length!==2)return;
-    const focused=document.activeElement,inside=focused&&root.contains(focused);let moved=false;
-    layout().forEach((names,i)=>names.forEach((name,j)=>{const lane=root.querySelector('.wq-grid .wq-lane.'+name);if(lane&&cols[i].children[j]!==lane){cols[i].insertBefore(lane,cols[i].children[j]||null);moved=true;}}));
-    if(moved&&inside&&document.activeElement!==focused)focused.focus({preventScroll:true});
-  }
-  narrow.addEventListener('change',arrange);
+  // Breakpoint change: move the existing lane nodes (shared with the shared-link page).
+  const arrangeLanes=()=>{const root=document.getElementById('working-queue-root');window.DCCQueueLayout.arrange(root,layout(),name=>root.querySelector('.wq-grid .wq-lane.'+name));};
+  narrow.addEventListener('change',arrangeLanes);
   const appZone=()=>window.DCCCompletedQueueFilter.select([],'today',Date.now(),state.timeZone).timeZone;
   function when(ms,timeZone){return new Intl.DateTimeFormat(undefined,{timeZone,weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}).format(ms);}
   // Why Return to Priority is unavailable, or '' when it is allowed.
@@ -208,7 +202,7 @@
       cards.push(node);return '<div data-wq-card="'+(cards.length-1)+'"></div>';
     }
     function lane(title,rows,empty,cls='',policy='') {return '<section class="wq-lane '+cls+'" data-queue-lane="'+cls+'"><div class="wq-heading"><h2>'+title+' <small>'+rows.length+'</small></h2>'+(policy==='needs'?button('snooze-all',sending?'Saving…':'Snooze all',null,'aria-haspopup="dialog" aria-label="Snooze all '+rows.length+' Needs You items" '+(!rows.length||sending||pending||conflict?'disabled':'')):'')+(policy==='foreground'?button('pomodoro',window.DCCPomodoro?.label()||'🍅',null,'aria-label="Create or open Pomodoro focus plan" aria-haspopup="dialog"'):'')+'<details class="wq-help" data-queue-help="'+policy+'"><summary aria-label="About '+title+'">ⓘ</summary><p>'+esc(window.DCCQueuePolicy.tips[policy])+'</p></details></div>'+(cls==='wq-next'?'<p class="wq-empty">Very high → High → Medium → Low → Very low. Move tasks within a priority; change Priority to move between levels.</p>':'')+(rows.length?rows.map(card).join(''):'<p class="wq-empty">'+empty+'</p>')+'</section>';}
-    const fg=all.filter(i=>i.status==='foreground'),needs=all.filter(i=>i.needsYou&&i.status!=='foreground'),background=all.filter(i=>i.status==='background'&&!i.needsYou),upNext=DCC.TaskPriority.group(all.filter(i=>i.status==='queued'&&!i.needsYou).map(i=>({id:i.task.id,taskPriority:i.taskPriority,item:i}))).flatMap(group=>group.tasks.map(row=>row.item));
+    const {foreground:fg,needs,background,priority:upNext}=window.DCCQueuePolicy.lanes(all,DCC.TaskPriority.group);
     const lanes={'wq-foreground':lane('Foreground',fg,'Choose a task below to begin focused work.','wq-foreground','foreground'),'wq-needs':lane('Needs You',needs,'No reported review actions or manual check-backs due.','wq-needs','needs'),'wq-next':lane('Priority Queue',upNext,'No inactive tasks in your queue. Add existing tasks to prioritize them.','wq-next','priority'),'wq-background':lane('Background',background,'No active workers or snoozed requests.','wq-background','background')};
     root.dataset.priorityStyle='outline';
     root.innerHTML='<p id="wq-order-help" class="wq-order-help">Order: click ↑ or ↓ for one step; hold either arrow or press Shift+Enter to jump to the top of its group.</p><header class="wq-header"><div><h1>Working Queue</h1><p>One foreground task. Active workers and snoozed requests in Background; inactive work in Priority. Itinerary and Calendar plan when.</p></div>'+button('add','Add tasks')+'</header><p class="wq-sync" role="status">'+esc(sending?'Saving…':pending?'Update saved on this device; awaiting confirmation.':problem?'Offline or unavailable: '+problem:'Synced · waiting time is not focused effort')+'</p>'+(pending?button('retry','Retry saved update'):'')+(conflict?'<p class="wq-conflict">'+esc(conflict.message)+' Your attempted change is retained. Review current work before trying again. '+button('conflict','Review attempted change')+button('clear-conflict','Dismiss conflict')+'</p>':'')+(state.otherWorkspaceForeground?'<p class="wq-conflict">Another workspace holds Foreground. Open it, pause if needed, then choose Return to Priority before bringing a task forward here.</p>':'')+'<div class="wq-grid">'+layout().map(names=>'<div class="wq-col">'+names.map(name=>lanes[name]).join('')+'</div>').join('')+'</div>'+completedHtml();

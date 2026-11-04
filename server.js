@@ -406,10 +406,12 @@ app.get("/vendor/drake-auth/browser.js", (req, res) => res.sendFile(require.reso
 
 // ── SSE ──
 const sseClients = new Map();
-const publicSseClients = new Map();
+// Shared-link viewers: capped, coalesced, heartbeated (lib/public-sse.js).
 const MAX_PUBLIC_SSE_CLIENTS = 100;
 const MAX_PUBLIC_SSE_PER_WORKSPACE = 20;
-let publicSseClientCount = 0;
+const publicSse = require("./lib/public-sse").createPublicSseHub({
+  maxClients: MAX_PUBLIC_SSE_CLIENTS, maxPerWorkspace: MAX_PUBLIC_SSE_PER_WORKSPACE
+});
 app.get("/api/events", (req, res) => {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   res.write("data: connected\n\n");
@@ -426,36 +428,16 @@ function broadcast(eventType, data, workspaceId) {
   else { targets = new Set(); for (const s of sseClients.values()) s.forEach(c => targets.add(c)); }
   for (const client of targets) { client.write(`data: ${payload}\n\n`); }
   if (workspaceId && ["blocks-changed", "dcc-state-changed", "todo-share-changed", "slot-changed"].includes(eventType)) {
-    for (const client of publicSseClients.get(workspaceId) || []) {
-      client.write("data: changed\n\n");
-    }
+    publicSse.ping(workspaceId);
   }
 }
 
 function registerPublicSse(workspaceId, req, res) {
-  const workspaceClients = publicSseClients.get(workspaceId) || new Set();
-  if (publicSseClientCount >= MAX_PUBLIC_SSE_CLIENTS || workspaceClients.size >= MAX_PUBLIC_SSE_PER_WORKSPACE) {
-    return res.status(429).end();
-  }
-  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-  res.write("data: connected\n\n");
-  if (!publicSseClients.has(workspaceId)) publicSseClients.set(workspaceId, workspaceClients);
-  workspaceClients.add(res);
-  publicSseClientCount += 1;
-  let registered = true;
-  req.on("close", () => {
-    if (!registered) return;
-    registered = false;
-    const clients = publicSseClients.get(workspaceId);
-    if (!clients) return;
-    clients.delete(res);
-    publicSseClientCount = Math.max(0, publicSseClientCount - 1);
-    if (!clients.size) publicSseClients.delete(workspaceId);
-  });
+  return publicSse.register(workspaceId, req, res);
 }
 
 function closePublicSse(workspaceId) {
-  for (const client of publicSseClients.get(workspaceId) || []) client.end();
+  publicSse.close(workspaceId);
 }
 
 // ── File Watching ──
