@@ -59,17 +59,21 @@
   // Snooze is waiting only: it never starts a worker or focused time. One
   // command per dialog, so a transport retry resends the exact same envelope.
   function snooze(item){
+    const targets=item?null:items().filter(row=>row.needsYou&&row.status!=='foreground').map(row=>({taskId:row.task.id,generation:row.generation||null}));
+    if(targets&&!targets.length)return;
+    if(sending||pending||conflict){warn(new Error('Resolve the current queue update first.'));return;}
     const zone=appZone(),expectedRevision=state.revision;
-    const body=form('<p>'+esc(item.task.properties.title||'Task')+'</p><label>Snooze<select data-minutes aria-label="Snooze duration"><option value="0">Now · Needs You</option><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="240">4 hours</option><option value="1440">24 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes (1–1440)<input type="number" min="1" max="1440" value="45"></label><p class="wq-time" data-snooze-preview></p><p class="wq-time">Choose Now to move to Needs You, or a delay to wait in Background first. Snoozing does not start or stop workers and adds no focused time. The original reason and details stay attached. If the app is closed then, it appears on your next visit; no closed-browser notification is sent.</p>');
+    const body=form('<p>'+(targets?'Snooze all '+targets.length+' Needs You '+(targets.length===1?'item':'items')+'.':esc(item.task.properties.title||'Task'))+'</p>'+(targets?'<p>Only these attention items are included. If the queue changes, nothing is snoozed; reopen to review it.</p>':'')+'<label>Snooze<select data-minutes aria-label="Snooze duration"><option value="0">Now · Needs You</option><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="240">4 hours</option><option value="1440">24 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes (1–1440)<input type="number" min="1" max="1440" value="45"></label><p class="wq-time" data-snooze-preview></p><p class="wq-time">'+(targets?'The selected items wait in Background until the check-back time.':'Choose Now to move to Needs You, or a delay to wait in Background first.')+' Snoozing does not start or stop workers and adds no focused time. The original reason and details stay attached. If the app is closed then, it appears on your next visit; no closed-browser notification is sent.</p>');
     const select=body.querySelector('[data-minutes]'),custom=body.querySelector('[data-custom] input');
+    if(targets)select.querySelector('option[value="0"]').remove();
     const minutes=()=>select.value==='custom'?Number(custom.value):Number(select.value);
     let command=null;
-    function preview(){const m=minutes(),ok=Number.isInteger(m)&&m>=0&&m<=1440,from=command?Date.parse(command.at):Date.now();body.querySelector('[data-snooze-preview]').textContent=ok?(m===0?'Moves to Needs You now.':'Snoozed until '+when(from+m*60000,zone)):'Choose Now or 1–1440 minutes.';}
+    function preview(){const m=minutes(),ok=Number.isInteger(m)&&m>=(targets?1:0)&&m<=1440,from=command?Date.parse(command.at):Date.now();body.querySelector('[data-snooze-preview]').textContent=ok?(m===0?'Moves to Needs You now.':'Snoozed until '+when(from+m*60000,zone)):(targets?'Choose 1–1440 minutes.':'Choose Now or 1–1440 minutes.');}
     select.addEventListener('change',()=>{body.querySelector('[data-custom]').hidden=select.value!=='custom';preview();});custom.addEventListener('input',preview);preview();
-    return modal('Snooze',body,async()=>{
+    return modal(targets?'Snooze all':'Snooze',body,async()=>{
       if(!command){
-        const m=minutes();if(!Number.isInteger(m)||m<0||m>1440)throw new Error('Choose Now or 1–1440 minutes.');
-        command=m===0?envelope('pause',{taskId:item.task.id,attentionMode:'needs-you',expectedRevision}):envelope('queue-snooze',{taskId:item.task.id,expectedRevision,remindMinutes:m,...(item.generation?{generation:item.generation}:{})});
+        const m=minutes();if(!Number.isInteger(m)||m<(targets?1:0)||m>1440)throw new Error((targets?'Choose 1–1440 minutes.':'Choose Now or 1–1440 minutes.'));
+        command=targets?envelope('queue-snooze-all',{targets,expectedRevision,remindMinutes:m}):m===0?envelope('pause',{taskId:item.task.id,attentionMode:'needs-you',expectedRevision}):envelope('queue-snooze',{taskId:item.task.id,expectedRevision,remindMinutes:m,...(item.generation?{generation:item.generation}:{})});
         body.querySelectorAll('select,input').forEach(el=>{el.disabled=true;});preview();
       }
       try {await send(command);}
@@ -77,7 +81,7 @@
         if([400,403,404,409].includes(error.status))throw new Error(error.message+' Close this dialog and review the current task before snoozing again.');
         throw new Error('Snooze not confirmed. Retry uses the same saved update. '+error.message);
       }
-    },'Snooze');
+    },targets?'Snooze '+targets.length+' '+(targets.length===1?'item':'items'):'Snooze',undefined,targets?()=>document.querySelector('[data-queue-action="snooze-all"]:not(:disabled)')||document.querySelector('[data-queue-action="clear-conflict"]')||document.querySelector('[data-queue-action="retry"]')||document.querySelector('[data-queue-action="add"]'):undefined);
   }
   let detailRows=[];
   function rememberTaskContext(rows){detailRows=rows;}
@@ -192,7 +196,7 @@
       node.querySelectorAll('[data-queue-action="up"],[data-queue-action="down"]').forEach(control=>DCC.bindHoldAction(control,()=>reorder(row.id,control.dataset.queueAction==='up'?-1:1)?.catch(warn),()=>reorder(row.id,'top')?.catch(warn)));
       cards.push(node);return '<div data-wq-card="'+(cards.length-1)+'"></div>';
     }
-    function lane(title,rows,empty,cls='',policy='') {return '<section class="wq-lane '+cls+'" data-queue-lane="'+cls+'"><div class="wq-heading"><h2>'+title+' <small>'+rows.length+'</small></h2>'+(policy==='foreground'?button('pomodoro',window.DCCPomodoro?.label()||'🍅',null,'aria-label="Create or open Pomodoro focus plan" aria-haspopup="dialog"'):'')+'<details class="wq-help" data-queue-help="'+policy+'"><summary aria-label="About '+title+'">ⓘ</summary><p>'+esc(window.DCCQueuePolicy.tips[policy])+'</p></details></div>'+(cls==='wq-next'?'<p class="wq-empty">Very high → High → Medium → Low → Very low. Move tasks within a priority; change Priority to move between levels.</p>':'')+(rows.length?rows.map(card).join(''):'<p class="wq-empty">'+empty+'</p>')+'</section>';}
+    function lane(title,rows,empty,cls='',policy='') {return '<section class="wq-lane '+cls+'" data-queue-lane="'+cls+'"><div class="wq-heading"><h2>'+title+' <small>'+rows.length+'</small></h2>'+(policy==='needs'?button('snooze-all',sending?'Saving…':'Snooze all',null,'aria-haspopup="dialog" aria-label="Snooze all '+rows.length+' Needs You items" '+(!rows.length||sending||pending||conflict?'disabled':'')):'')+(policy==='foreground'?button('pomodoro',window.DCCPomodoro?.label()||'🍅',null,'aria-label="Create or open Pomodoro focus plan" aria-haspopup="dialog"'):'')+'<details class="wq-help" data-queue-help="'+policy+'"><summary aria-label="About '+title+'">ⓘ</summary><p>'+esc(window.DCCQueuePolicy.tips[policy])+'</p></details></div>'+(cls==='wq-next'?'<p class="wq-empty">Very high → High → Medium → Low → Very low. Move tasks within a priority; change Priority to move between levels.</p>':'')+(rows.length?rows.map(card).join(''):'<p class="wq-empty">'+empty+'</p>')+'</section>';}
     const fg=all.filter(i=>i.status==='foreground'),needs=all.filter(i=>i.needsYou&&i.status!=='foreground'),background=all.filter(i=>i.status==='background'&&!i.needsYou),upNext=DCC.TaskPriority.group(all.filter(i=>i.status==='queued'&&!i.needsYou).map(i=>({id:i.task.id,taskPriority:i.taskPriority,item:i}))).flatMap(group=>group.tasks.map(row=>row.item));
     const lanes={'wq-foreground':lane('Foreground',fg,'Choose a task below to begin focused work.','wq-foreground','foreground'),'wq-needs':lane('Needs You',needs,'No reported review actions or manual check-backs due.','wq-needs','needs'),'wq-next':lane('Priority Queue',upNext,'No inactive tasks in your queue. Add existing tasks to prioritize them.','wq-next','priority'),'wq-background':lane('Background',background,'No active workers or snoozed requests.','wq-background','background')};
     root.dataset.priorityStyle='outline';
@@ -268,7 +272,7 @@
     if(item.blocked)return send(envelope('queue-unblock',{taskId:item.task.id}));
     return transition('queue-block',item);
   }
-  function modal(title,body,submit,label='Save',onClose){let busy=false;return DCC.overlay.open({kind:'modal',title,body,onClose,canClose:()=>!busy,actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
+  function modal(title,body,submit,label='Save',onClose,returnFocus){let busy=false;return DCC.overlay.open({kind:'modal',title,body,onClose,returnFocus,canClose:()=>!busy,actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
   function form(html){const body=document.createElement('div');body.className='wq-form';body.innerHTML=html+'<p role="status"></p>';return body;}
   async function transition(action,item){
     let displaced=null,startRevision=null;
@@ -351,6 +355,7 @@
   document.addEventListener('click',event=>{
     const button=event.target.closest?.('[data-queue-action]');if(!button)return;const action=button.dataset.queueAction,item=items().find(i=>i.task.id===button.dataset.taskId);
     if(action==='add'){addTasks();return;}if(action==='retry'&&pending){send(pending).catch(warn);return;}
+    if(action==='snooze-all'){snooze(null);return;}
     if(action==='pomodoro'){window.DCCPomodoro?.open(items().find(i=>i.status==='foreground')?.task);return;}
     if(action==='clear-conflict'){setConflict(null);render();return;}
     if(action==='conflict'){const body=form('<p>'+esc(conflict?.message)+'</p><pre>'+esc(JSON.stringify(conflict?.body,null,2))+'</pre>');DCC.overlay.open({kind:'modal',title:'Attempted change',body,actions:[{label:'Close'}]});return;}
