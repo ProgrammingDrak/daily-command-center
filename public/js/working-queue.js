@@ -142,8 +142,8 @@
       const elapsed=item.backgroundSince?Math.max(0,Math.floor((Date.now()-Date.parse(item.backgroundSince))/60000)):0;
       const reminder=item.snoozed?'':item.dueAt?(Date.parse(item.dueAt)<=Date.now()?'Check back now':'Check back in '+Math.max(1,Math.ceil((Date.parse(item.dueAt)-Date.now())/60000))+'m'):'';
       const actual=item.actualMinutes==null?'Focused actuals unknown':item.actualMinutes+'m focused saved';
-      const activeMinutes=foreground?Math.max(0,Math.floor((Date.now()-Date.parse(row.properties.startedAt))/60000)):0;
-      let controls=completed?'':foreground?button('background','Send to background',row.id)+button('pause','Pause',row.id):button('focus','Bring forward',row.id);
+      const activeMinutes=foreground&&!item.onBreak?Math.max(0,Math.floor((Date.now()-Date.parse(row.properties.startedAt))/60000)):0;
+      let controls=completed?'':foreground?button('background','Send to background',row.id)+(item.onBreak?button('return','Return to Priority',row.id):button('pause','Pause',row.id)):button('focus','Bring forward',row.id);
       if(!completed){if(!foreground)controls+=button('up','↑',row.id,'aria-label="Move up" title="Move up one position. Hold or Shift+Enter to move to the top of this group." aria-describedby="wq-order-help"')+button('down','↓',row.id,'aria-label="Move down" title="Move down one position. Hold or Shift+Enter to move to the top of this group." aria-describedby="wq-order-help"');}
       const held=!completed&&!foreground&&returnHold(item);
       if(!completed&&!foreground)controls+=button('return','Return to Priority',row.id,held?'disabled aria-describedby="queue-return-'+esc(row.id)+'"':'')+button('snooze','Snooze',row.id,'aria-haspopup="dialog"');
@@ -155,14 +155,14 @@
       const readingUrl=DCC.safeUrlAttr?.(row.properties?.readingSession?.url||'');
       if(readingUrl)controls+='<a href="'+readingUrl+'" rel="noreferrer">Open book in QuietShelf</a>';
       const node=window.renderItineraryListRow({...task,title:pathFor(task,index)},{
-        extraClass:'wq-card'+(foreground?' wq-focus':''),dataset:{queueId:row.id},
+        extraClass:'wq-card'+(foreground?' wq-focus':'')+(item.onBreak?' wq-on-break':''),dataset:{queueId:row.id},
         done:completed, completionTitle:'Complete task: '+task.title,
         onComplete:completed?null:()=>transition('done',item).catch(warn),
         onCompleteWithNotes:completed?null:()=>transition('done',item).catch(warn),
         onOpen:()=>openDetails(row.id).catch(warn),
         onSchedule:completed?null:anchor=>openSchedule(item,anchor).catch(warn),scheduleLabel:'Schedule',
-        titleExtrasHtml:'<span class="wq-status">'+esc(item.needsYou?'Needs You':item.snoozed?'Snoozed':item.status==='queued'?'Priority':item.status)+'</span>',
-        metaHtml:'<p class="wq-time">'+esc(foreground?activeMinutes+'m this session · '+actual:actual+(item.backgroundSince?' · '+elapsed+'m waiting':''))+'</p>'+(reminder?'<p class="wq-attention">'+esc(reminder)+'</p>':'')+snoozedHtml+finished+(held?'<p class="wq-time" id="queue-return-'+esc(row.id)+'">'+esc(held)+'</p>':'')+contextHtml(item)
+        titleExtrasHtml:'<span class="wq-status">'+esc(item.onBreak?'On a break':item.needsYou?'Needs You':item.snoozed?'Snoozed':item.status==='queued'?'Priority':item.status)+'</span>',
+        metaHtml:'<p class="wq-time">'+esc(item.onBreak?'Work timer paused · '+actual:foreground?activeMinutes+'m this session · '+actual:actual+(item.backgroundSince?' · '+elapsed+'m waiting':''))+'</p>'+(reminder?'<p class="wq-attention">'+esc(reminder)+'</p>':'')+snoozedHtml+finished+(held?'<p class="wq-time" id="queue-return-'+esc(row.id)+'">'+esc(held)+'</p>':'')+contextHtml(item)
       });
       if(!completed){
         const levels=DCC.TaskPriority.levels,priority=levels.includes(item.taskPriority)?item.taskPriority:'Medium';
@@ -184,7 +184,13 @@
       const actions=document.createElement('div');actions.className='wq-actions';actions.innerHTML=controls;
       const schedule=node.querySelector('.btn-schedule');if(schedule)actions.prepend(schedule);
       node.querySelector('.it-list-main').appendChild(actions);
-      if(foreground&&window.DCCWorkSessions?.checkInHtml)node.insertAdjacentHTML('beforeend',window.DCCWorkSessions.checkInHtml(task,Date.now()));
+      if(foreground&&!item.onBreak&&window.DCCWorkSessions?.checkInHtml)node.insertAdjacentHTML('beforeend',window.DCCWorkSessions.checkInHtml(task,Date.now()));
+      if(item.onBreak){
+        const main=node.querySelector('.it-list-main'),veil=document.createElement('div');
+        veil.className='wq-break-veil';
+        veil.innerHTML='<span class="wq-break-symbol" aria-hidden="true">Ⅱ</span><strong>I’m on a break</strong><p><span data-break-clock data-break-since="'+esc(item.breakStartedAt)+'"></span> on break · Work timer paused</p>'+button('focus','▶ Resume task',row.id);
+        main.appendChild(veil);
+      }
       const completionButton=node.querySelector('.quick-complete-control');if(completionButton){completionButton.dataset.queueAction='complete';completionButton.dataset.taskId=row.id;}
       const priorityButton=node.querySelector('[data-queue-action="priority"]');
       if(priorityButton){
@@ -213,7 +219,9 @@
     if(completedOpen)root.querySelector('.wq-completed')?.setAttribute('open','');
     if(periodFocused)root.querySelector('[data-completed-period]')?.focus({preventScroll:true});
     if(completedFocused)root.querySelector('.wq-completed > summary')?.focus({preventScroll:true});
-    if(focusKey)root.querySelector('[data-queue-action="'+CSS.escape(focusKey)+'"][data-task-id="'+CSS.escape(focusId||'')+'"]')?.focus({preventScroll:true});
+    updateBreakClocks();
+    if(focusKey==='focus'&&items().some(i=>i.task.id===focusId&&!i.onBreak))root.querySelector('[data-queue-action="pause"][data-task-id="'+CSS.escape(focusId||'')+'"]')?.focus({preventScroll:true});
+    if(focusKey)root.querySelector('[data-queue-action="'+CSS.escape(focusKey==='pause'&&items().some(i=>i.task.id===focusId&&i.onBreak)?'focus':focusKey)+'"][data-task-id="'+CSS.escape(focusId||'')+'"]')?.focus({preventScroll:true});
   }
   function choosePriority(item){
     const body=form('<label>Priority<select data-priority aria-label="Priority" size="5">'+DCC.TaskPriority.levels.map((level,i)=>'<option value="'+level+'"'+(level===(item.taskPriority||'Medium')?' selected':'')+'>'+['⇊','↓','=','↑','⇈'][i]+' '+level+'</option>').join('')+'</select></label>');
@@ -284,7 +292,7 @@
         item=items().find(row=>row.task.id===item.task.id);
         if(!item||item.status==='completed')throw new Error('This task is no longer open. Review the current queue.');
         if(state.otherWorkspaceForeground)throw new Error('Pause work in the other workspace before switching.');
-        if(item.status==='foreground'){startOpening=false;return;}
+        if(item.status==='foreground'&&!item.onBreak){startOpening=false;return;}
         displaced=items().find(row=>row.status==='foreground'&&row.task.id!==item.task.id)||null;
         startRevision=state.revision;
         if(!displaced&&!item.task.properties.guidedDefinitionId){
@@ -297,7 +305,7 @@
     if(action==='done'){const anchor=await prepareTask(item.task.id);completionNote=await window.loadTaskNotesForAnchor(anchor);item=items().find(row=>row.task.id===item.task.id)||item;}
     const timerNeeded=action==='start'?!!displaced:['background-start','queue-block'].includes(action);
     const timer=timerNeeded?'<label>'+'Snooze'+'<select data-minutes aria-label="Snooze duration">'+(action==='queue-block'?'<option value="">Needs You now</option>':'')+'<option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="240">4 hours</option><option value="1440">24 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes<input type="number" min="1" max="1440" value="10"></label>':'';
-    const heading=action==='start'?(displaced?'<div class="wq-switch-old"><div><strong>Moving to Background</strong><p>'+esc(displaced.task.properties.title||'Task')+'</p></div>'+timer+'</div><div class="wq-switch-new"><strong>Moving to Foreground</strong><p>'+esc(item.task.properties.title||'Task')+'</p></div>':'<p>'+esc(item.task.properties.title||'Task')+'</p>'):'<p>'+esc(item.task.properties.title||'Task')+'</p>';
+    const heading=action==='start'?(displaced?'<div class="wq-switch-old"><div><strong>'+ (displaced?.onBreak?'Returning to Priority':'Moving to Background') +'</strong><p>'+esc(displaced.task.properties.title||'Task')+'</p></div>'+timer+'</div><div class="wq-switch-new"><strong>Moving to Foreground</strong><p>'+esc(item.task.properties.title||'Task')+'</p></div>':'<p>'+esc(item.task.properties.title||'Task')+'</p>'):'<p>'+esc(item.task.properties.title||'Task')+'</p>';
     const body=form(heading+(action==='background-start'?'<p>This sets the task aside and optionally sets a check-back. It does not start a worker. A selected Snooze waits in Background; without one, inactive work returns to Priority.</p>':'')+(action==='start'?'':timer)+(action==='done'?'<div data-completion-time aria-live="off">Loading recorded time…</div><p>Completing saves the current focused session to this task. The saved total is confirmed after the update succeeds.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome required></textarea></label>':''):''));
     let guided=null,ready=!item.task.properties.guidedDefinitionId,completion=null,clockOffset=0,command=null;
     const formatSeconds=seconds=>Math.floor(seconds/60)+'m '+String(seconds%60).padStart(2,'0')+'s';
@@ -383,13 +391,20 @@
     else if(dest==='wq-background'){if(item.status==='foreground')transition('background-start',item).catch(warn);else snooze(item);}
     else if(dest==='wq-next'){
       const held=returnHold(item);if(held){DCC.toast(held);return;}
-      send(envelope(item.status==='foreground'?'pause':'queue-return',{taskId:id})).catch(warn);
+      send(envelope(item.status==='foreground'&&!item.onBreak?'pause':'queue-return',{taskId:id,...(item.status==='foreground'&&!item.onBreak?{attentionMode:'priority'}:{})})).catch(warn);
     }else if(dest==='wq-needs'){
       send(envelope('pause',{taskId:id,attentionMode:'needs-you'})).catch(warn);
     }
   });
   document.addEventListener('dragend',()=>{dragging=null;});
   document.addEventListener('keydown',event=>{if(event.target.closest?.('[data-queue-id]')===event.target&&['Enter',' '].includes(event.key)){event.preventDefault();openDetails(event.target.dataset.queueId).catch(warn);return;}const row=event.target.closest?.('[data-queue-id]');if(row&&event.altKey&&['ArrowUp','ArrowDown'].includes(event.key)){event.preventDefault();reorder(row.dataset.queueId,event.key==='ArrowUp'?-1:1)?.catch(warn);}});
+  function updateBreakClocks(){
+    document.querySelectorAll('[data-break-clock]').forEach(el=>{
+      const seconds=Math.max(0,Math.floor((Date.now()-Date.parse(el.dataset.breakSince))/1000));
+      el.textContent=Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');
+    });
+  }
+  setInterval(updateBreakClocks,1000);
   async function tick(){render();if(document.hidden||ticking||sending)return;ticking=true;try{
     if(pending&&navigator.onLine){await send(pending);return;}await refresh();if(pending||DCC.busyElsewhere?.())return;
     const due=items().find(i=>i.dueAt&&Date.parse(i.dueAt)<=Date.now()&&i.needsYou&&!i.notifiedAt);if(!due)return;

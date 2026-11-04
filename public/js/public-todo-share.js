@@ -210,7 +210,7 @@
     el.className = "shared-queue-card";
     el.dataset.sharedTask = task.id;
     const q = task.queue || {};
-    const state = q.lane === "priority" ? (q.priority || "medium") + " priority" : q.lane === "needs-you" ? "Needs attention" : q.status;
+    const state = q.lane === "foreground" && q.status === "paused" ? "On a break · Work timer paused" : q.lane === "priority" ? (q.priority || "medium") + " priority" : q.lane === "needs-you" ? "Needs attention" : q.status;
     const context = (task.tags || []).slice(0, 2).map(t => t.name).filter(Boolean).join(" · ");
     el.innerHTML = '<div class="shared-card-heading"><h3>' + esc(task.title) + '</h3>' +
       '<span class="shared-card-state">' + esc(state || "") + '</span></div>' +
