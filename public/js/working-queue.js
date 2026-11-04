@@ -343,11 +343,47 @@
   }
   function addTasks(){
     const body=form('<label>Find an existing task<input type="search" data-search placeholder="Search tasks" autofocus></label><div data-results></div><button type="button" data-more hidden>More results</button>');
-    const handle=DCC.overlay.open({kind:'modal',title:'Add tasks to your queue',body,actions:[{label:'Done'}]});
-    let sequence=0,offset=0,query='',timer,adding=false;
-    async function search(append=false){const token=++sequence;query=body.querySelector('[data-search]').value;if(!append)offset=0;try{const result=await DCC.api('/api/working-queue/tasks?query='+encodeURIComponent(query)+'&offset='+offset,{cache:'no-store'});if(token!==sequence)return;const rows=result.tasks.filter(t=>t.status!=='done'&&t.type!=='recurring-definition');const html=rows.map(t=>'<button type="button" data-add-id="'+esc(t.id)+'" '+(items().some(i=>i.task.id===t.id)?'disabled':'')+'>'+esc(t.title)+' <small>'+esc(t.date||'Unscheduled')+'</small></button>').join('');if(append)body.querySelector('[data-results]').insertAdjacentHTML('beforeend',html);else body.querySelector('[data-results]').innerHTML=html||'<p>No matching open tasks. Search an existing occurrence for recurring work.</p>';offset=result.nextOffset;body.querySelector('[data-more]').hidden=offset==null;}catch(error){body.querySelector('[role=status]').textContent=error.message;}}
-    body.querySelector('[data-search]').addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(()=>search(),180);});body.querySelector('[data-more]').addEventListener('click',()=>search(true));
-    body.addEventListener('click',async event=>{const button=event.target.closest('[data-add-id]');if(!button||adding)return;adding=true;body.querySelectorAll('[data-add-id]').forEach(b=>b.disabled=true);try{await send(envelope('queue-add',{taskId:button.dataset.addId}));body.querySelector('[role=status]').textContent='Added to queue.';}catch(error){body.querySelector('[role=status]').textContent=error.message;}finally{adding=false;body.querySelectorAll('[data-add-id]').forEach(b=>b.disabled=items().some(i=>i.task.id===b.dataset.addId));}});search();return handle;
+    const input=body.querySelector('[data-search]'),results=body.querySelector('[data-results]'),more=body.querySelector('[data-more]'),status=body.querySelector('[role=status]');
+    let sequence=0,offset=null,query='',timer,adding=false,loading=false,closed=false,controller;
+    const seen=new Set();
+    const handle=DCC.overlay.open({kind:'modal',title:'Add tasks to your queue',body,actions:[{label:'Done'}],onClose:()=>{
+      closed=true;++sequence;clearTimeout(timer);controller?.abort();document.removeEventListener('dcc:nav-changed',navigate);
+    }});
+    function navigate(){handle.close('navigation');}
+    document.addEventListener('dcc:nav-changed',navigate);
+    function syncButtons(){body.querySelectorAll('[data-add-id]').forEach(button=>{button.disabled=adding||items().some(item=>item.task.id===button.dataset.addId);});}
+    async function search(append=false){
+      if(closed||(append&&(loading||offset==null||input.value!==query)))return;
+      controller?.abort();controller=new AbortController();
+      const token=++sequence,requestedQuery=input.value,requestedOffset=append?offset:0;
+      query=requestedQuery;loading=true;more.disabled=true;status.textContent='Searching…';
+      if(!append){seen.clear();results.replaceChildren();offset=null;more.hidden=true;}
+      try{
+        const result=await DCC.api('/api/working-queue/tasks?query='+encodeURIComponent(requestedQuery)+'&offset='+requestedOffset,{cache:'no-store',signal:controller.signal});
+        if(closed||token!==sequence||input.value!==requestedQuery)return;
+        for(const task of result.tasks){
+          if(seen.has(task.id))continue;seen.add(task.id);
+          const button=document.createElement('button');button.type='button';button.dataset.addId=task.id;
+          button.append(document.createTextNode(task.title+' '));const date=document.createElement('small');date.textContent=task.date||'Unscheduled';button.append(date);results.append(button);
+        }
+        if(!seen.size){const empty=document.createElement('p');empty.textContent='No matching open tasks. Search an existing occurrence for recurring work.';results.append(empty);}
+        offset=result.nextOffset;more.hidden=offset==null;status.textContent='';syncButtons();
+      }catch(error){if(!closed&&token===sequence&&error.name!=='AbortError')status.textContent=error.message;}
+      finally{if(!closed&&token===sequence){loading=false;more.disabled=false;}}
+    }
+    input.addEventListener('input',()=>{
+      ++sequence;controller?.abort();clearTimeout(timer);offset=null;more.hidden=true;results.replaceChildren();status.textContent='Searching…';
+      timer=setTimeout(()=>search(),180);
+    });
+    more.addEventListener('click',()=>search(true));
+    body.addEventListener('click',async event=>{
+      const button=event.target.closest('[data-add-id]');if(!button||button.disabled||adding||closed)return;
+      adding=true;syncButtons();
+      try{await send(envelope('queue-add',{taskId:button.dataset.addId}));if(!closed)status.textContent='Added to queue.';}
+      catch(error){if(!closed)status.textContent=error.message;}
+      finally{adding=false;if(!closed)syncButtons();}
+    });
+    search();return handle;
   }
   function openBreakOptions(item,anchor){
       const body=form('<p>'+esc(item.task.properties.title||'Paused task')+'</p><div class="wq-break-option-actions">'+button('return','Return to Priority',item.task.id)+button('background','Send to background',item.task.id)+button('complete','Complete task',item.task.id)+button('details','Task details',item.task.id)+'</div>');
