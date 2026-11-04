@@ -6,11 +6,11 @@ body.device-glasses{--task-indent-max:64px;--bg:#000;--text:#fff;--text-muted:#c
 .device-glasses .task-workspace-head{padding:8px 12px 0}
 .device-glasses .date-nav{gap:6px;margin-top:4px;flex-wrap:wrap}
 .device-glasses .dn-date{font-size:18px!important;color:#fff}
-.device-glasses .date-nav .queue-pill{flex:1 0 100%;width:100%;order:2;border-radius:8px;display:flex}
-.device-glasses .date-nav .queue-seg{flex:1 1 0;min-width:0;min-height:48px;flex-direction:column;padding:4px 2px;font-size:15px!important;line-height:1.2;gap:3px;color:#fff!important;background:#090e12!important}
+.device-glasses .task-view-bar .queue-pill{flex:1 0 100%;width:100%;order:2;border-radius:8px;display:flex}
+.device-glasses .task-view-bar .queue-seg{flex:1 1 0;min-width:0;min-height:48px;flex-direction:column;padding:4px 2px;font-size:15px!important;line-height:1.2;gap:3px;color:#fff!important;background:#090e12!important}
 .device-glasses .queue-seg-count{font-size:15px!important}
 .device-glasses .header .hdr-sub,.device-glasses #mobile-tabbar,.device-glasses .sched-drag-hint{display:none!important}
-.device-glasses:not(.glasses-tools-open) :is(#tab-bar,.source-row,.header>div:last-child,#task-view-bar,#actual-summary){display:none!important}
+.device-glasses:not(.glasses-tools-open) :is(#tab-bar,.source-row,.header>div:last-child,#task-view-switch,#actual-summary){display:none!important}
 .device-glasses .progress-wrap{padding:6px 12px!important;margin:0!important}
 .device-glasses .progress-box{padding:4px 0!important;background:#000!important;border:0!important}
 .device-glasses .progress-label{font-size:15px!important;margin:0!important;color:#fff}
@@ -55,7 +55,7 @@ body.device-glasses{--task-indent-max:64px;--bg:#000;--text:#fff;--text-muted:#c
 .device-glasses .side-drawer-body{background:#000;color:#fff}
 .device-glasses .side-drawer .it-list-item .ttl{font-size:21px!important}
 @media(min-width:761px){body.device-glasses{max-width:720px;margin:auto!important}.device-glasses .glasses-nav{max-width:696px;margin:auto}}
-@media(max-width:430px){.device-glasses .glasses-nav{grid-template-columns:1fr 1fr 1fr 1fr}.device-glasses .glasses-position{display:none}.device-glasses .glasses-nav :is(button,.glasses-exit){font-size:15px}.device-glasses .date-nav .queue-seg{font-size:12px!important}.device-glasses .it-list-item .ttl{font-size:20px!important}}
+@media(max-width:430px){.device-glasses .glasses-nav{grid-template-columns:1fr 1fr 1fr 1fr}.device-glasses .glasses-position{display:none}.device-glasses .glasses-nav :is(button,.glasses-exit){font-size:15px}.device-glasses .task-view-bar .queue-seg{font-size:12px!important}.device-glasses .it-list-item .ttl{font-size:20px!important}}
 
 /* Full app exit: a visible, touch-sized control in the glasses bar. */
 .device-glasses .glasses-exit{display:inline-flex;align-items:center;justify-content:center;min-height:46px;border:1px solid #8596a1;border-radius:8px;background:#0a141c;color:#fff;font-size:17px;font-weight:500;padding:6px 10px;text-decoration:none}
@@ -104,3 +104,8 @@ body.device-glasses{--task-indent-max:64px;--bg:#000;--text:#fff;--text-muted:#c
 .device-glasses .it-list-item.done:not(.glasses-expanded){min-height:44px!important;padding:8px 12px!important}
 .device-glasses .it-list-item.done:not(.glasses-expanded) .ttl{font-size:16px!important}
 .device-glasses .it-list-item.done:not(.glasses-selected):not(.glasses-expanded) :is(.it-list-meta,.it-list-utility){display:none!important}
+
+.device-glasses .task-view-bar { padding-right:0; }
+.device-glasses.glasses-queue-view:not(.glasses-tools-open) #task-view-bar { display:none!important; }
+.device-glasses .progress-header { display:flex; flex-wrap:wrap; }
+.device-glasses .progress-date-controls { flex:1 0 100%; order:2; }

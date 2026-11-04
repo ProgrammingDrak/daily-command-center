@@ -197,7 +197,7 @@ test("a pool item with no resolvable row refuses instead of pretending to save",
 
 test("the header is ONE capsule with five doors in triage order: Triage, Loose Ends, Waiting, Unscheduled, Whenever", () => {
   const html = fs.readFileSync(require.resolve("./index.html"), "utf8");
-  const header = html.slice(html.indexOf('id="date-nav"'), html.indexOf('id="date-picker-drop"'));
+  const header = html.slice(html.indexOf('id="task-view-bar"'), html.indexOf('class="progress-wrap"'));
   const capsule = header.slice(header.indexOf('id="queue-pill"'));
   const doors = [...capsule.matchAll(/<button class="queue-seg[^"]*" id="([^"]+)"/g)].map(m => m[1]);
   assert.deepEqual(doors, ["triage-pill-nav", "loose-ends-pill", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav"]);

@@ -1,4 +1,4 @@
-/* global window, document, buildProgress, switchToDate, localStorage */
+/* global window, document, buildProgress, switchToDate, localStorage, sessionStorage, initCatchUp */
 // Disposable review server only; no account data or external requests.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -56,7 +56,7 @@ try{
   assert.equal(m.actual,m.plan,'equal total track height at '+width);
   assert.equal(m.plan,width<=760?14:18);
   assert.ok(m.gap<=21,'compact inter-bar gap at '+width+': '+m.gap);
-  assert.ok(m.heading<=24&&m.reviewHeight>=24&&m.reviewInHeading,'compact accessible review header');
+  assert.ok(m.heading<=(width<=760?80:24)&&m.reviewHeight>=24&&m.reviewInHeading,'compact accessible review header');
   assert.ok(m.segments.every(s=>s.height>0&&s.inside&&s.label),'all activity portions visible and labeled');
   compactMeasurements.push({width,...m});
  };
@@ -105,7 +105,7 @@ try{
  assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false,'review never persists the overlay');
  assert.equal(await page.locator('#actual-view').isHidden(),true,'review panel is ephemeral');
  await page.goto(base+'/?tab=tasks&view=queue');
- await page.waitForFunction(()=>!!window.DCC?.ProgressActual);
+ await page.waitForFunction(()=>!!document.querySelector('#ptrack').dataset.date);
  await page.locator('#progress-day-review').click();
  await page.waitForSelector('#actual-view .dr-root');
  assert.equal(await page.locator('#list-view').isVisible(),true,'queue review opens itinerary');
@@ -128,8 +128,15 @@ try{
  await page.waitForSelector('.actual-details-dismiss');
  await page.locator('.actual-details-dismiss').click();
  assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false,'legacy Actual view link can be dismissed');
+ // Isolate clock/empty fixtures from legacy-overlay review preferences and
+ // metadata saves accumulated by the preceding navigation walkthrough.
+ await page.evaluate(()=>{localStorage.clear();sessionStorage.clear();});
  await page.goto(base+'/?tab=tasks&view=list&actual=0');
- await page.waitForFunction(()=>!!window.DCC?.ProgressActual);
+ await page.waitForFunction(()=>!!document.querySelector('#ptrack').dataset.date);
+ // Finish the unrelated boot recap's day-root metadata save before navigating.
+ // The block cache intentionally rejects hydration while a save is in flight.
+ await page.evaluate(()=>initCatchUp());
+ await page.waitForFunction(()=>!window.blockStore.hasPendingWrites());
 
  await page.evaluate(async()=>{
   if(typeof window._reviewActive==="function")window.DCCWorkSessions.activeTasks=window._reviewActive;

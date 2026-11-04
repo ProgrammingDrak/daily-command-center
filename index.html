@@ -159,8 +159,8 @@
   </div>
 </header>
 
-<!-- Tasks workspace head: views, then the day (date row with the task queues),
-     then Day Progress. Workouts & meals keeps the date row only; Budget hides it. -->
+<!-- Task controls share one row. The selected day lives in Day Progress.
+     Workouts & meals keeps date navigation; Budget hides the task head. -->
 <section class="task-workspace-head" id="task-workspace-head" aria-label="Day and task views">
   <div class="task-view-bar" id="task-view-bar">
     <div class="task-view-switch" id="task-view-switch" role="tablist" aria-label="Task views">
@@ -168,16 +168,6 @@
       <button type="button" role="tab" id="task-view-list" data-task-view="list" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">Itinerary</button>
       <button type="button" role="tab" id="task-view-calendar" data-task-view="calendar" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">Calendar</button>
     </div>
-  </div>
-  <div class="date-nav" id="date-nav">
-    <button class="dn-arrow" id="dn-prev" onclick="navDate(-1)" title="Previous day" aria-label="Previous day">&lsaquo;</button>
-    <button class="dn-date" id="dn-date-btn" onclick="toggleDatePicker()">
-      <span id="date-label">--</span>
-      <span class="dn-badge" id="dn-badge" style="display:none"></span>
-    </button>
-    <button class="dn-arrow" id="dn-next" onclick="navDate(1)" title="Next day" aria-label="Next day">&rsaquo;</button>
-    <button class="dn-quick" id="dn-today-btn" onclick="switchToDate(__todayDate)" style="display:none">Today</button>
-    <button class="dn-quick dn-tomorrow" id="dn-tomorrow-btn" onclick="switchToDate(__tomorrowDate)" style="display:none">Tomorrow</button>
       <!-- The task queues, one capsule with five doors, in triage order. whenever.js
            hosts Triage, Unscheduled and Whenever (all work with no time on it);
            catch-up.js owns Loose Ends (hidden while it has nothing to show) and
@@ -200,20 +190,35 @@
         </button>
       </div>
   </div>
-  <div class="date-picker-drop" id="date-picker-drop" style="display:none"></div>
   <div class="progress-wrap">
     <section class="progress-box" aria-labelledby="day-progress-title">
-      <div class="progress-label"><span id="day-progress-title">Day Progress</span><span class="progress-heading-actions"><span id="ppct">--</span><button type="button" id="progress-day-review" aria-controls="actual-view" aria-expanded="false">Day review</button></span></div>
+      <div class="progress-label progress-header">
+        <span id="day-progress-title">Day Progress</span>
+        <div class="progress-date-controls">
+          <div class="date-nav" id="date-nav">
+            <button class="dn-arrow" id="dn-prev" onclick="navDate(-1)" title="Previous day" aria-label="Previous day">&lsaquo;</button>
+            <button class="dn-date" id="dn-date-btn" onclick="toggleDatePicker()">
+              <span id="date-label">--</span>
+              <span class="dn-badge" id="dn-badge" style="display:none"></span>
+            </button>
+            <button class="dn-arrow" id="dn-next" onclick="navDate(1)" title="Next day" aria-label="Next day">&rsaquo;</button>
+            <button class="dn-quick" id="dn-today-btn" onclick="switchToDate(__todayDate)" style="display:none">Today</button>
+            <button class="dn-quick dn-tomorrow" id="dn-tomorrow-btn" onclick="switchToDate(__tomorrowDate)" style="display:none">Tomorrow</button>
+          </div>
+          <div class="date-picker-drop" id="date-picker-drop" style="display:none"></div>
+        </div>
+        <span class="progress-heading-actions"><span id="ppct">Loading…</span><button type="button" id="progress-day-review" aria-controls="actual-view" aria-expanded="false" disabled>Day review</button></span>
+      </div>
       <div class="progress-row-label" id="plan-progress-label">Plan / itinerary</div>
       <div class="progress-track-shell">
-        <div class="progress-track" id="ptrack"></div>
+        <div class="progress-track" id="ptrack" aria-busy="true"></div>
         <span class="progress-now" id="pnow" role="img" hidden></span>
       </div>
       <div class="progress-rails" id="prails"></div>
       <div class="progress-row-label" id="actual-progress-label">Actual activity</div>
-      <div id="pactual" class="progress-actual" role="group" aria-labelledby="actual-progress-label"></div>
-      <p id="pactual-note" class="progress-actual-note"></p>
-      <div class="progress-axis"><time id="pstart">--</time><time id="pend">--</time></div>
+      <div id="pactual" class="progress-actual" role="group" aria-labelledby="actual-progress-label" aria-busy="true"></div>
+      <p id="pactual-note" class="progress-actual-note" role="status">Loading day activity…</p>
+      <div class="progress-axis"><time id="pstart"></time><time id="pend"></time></div>
     </section>
   </div>
 </section>

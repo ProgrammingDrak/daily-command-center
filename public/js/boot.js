@@ -104,6 +104,10 @@
     }
   }, 60000);
 
+  // Day Progress is shared with Working Queue. Publish core readiness before
+  // unrelated supporting surfaces (or a modal-deferred render) can delay it.
+  window.dispatchEvent(new CustomEvent('dcc:day-data-ready', { detail: { date: viewDate, available: !window.__DCC_BOOT_FAILED__ } }));
+
   // Trigger initial render with the loaded data
   if (typeof render === 'function') render();
   if (typeof buildTriage === 'function') buildTriage();

@@ -649,7 +649,7 @@ async function switchToDate(dateStr) {
   if (window.blockStore) {
     try {
       dayBlocksLoaded = Array.isArray(await window.blockStore.loadDay(dateStr));
-    } catch(e) { console.warn("[BlockStore] loadDay failed for", dateStr, e); }
+    } catch(e) { dayBlocksLoaded = false; console.warn("[BlockStore] loadDay failed for", dateStr, e); }
   }
 
   // (Phase 6 cleanup) Removed legacy localStorage seeding from Express /
@@ -702,7 +702,7 @@ async function switchToDate(dateStr) {
   if (nav && nav.reviewOpen() && typeof buildDayReview === "function") buildDayReview(viewDate);
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();
-  window.dispatchEvent(new CustomEvent("dcc:view-date-changed", { detail: { date: viewDate } }));
+  window.dispatchEvent(new CustomEvent("dcc:view-date-changed", { detail: { date: viewDate, blocksLoaded: dayBlocksLoaded } }));
 }
 
 setTimeout(checkServerHealthForSaveStatus, 1000);

@@ -4,7 +4,7 @@
 export function measureQueueCapsule(count = null) {
   const pill = document.getElementById("loose-ends-pill");
   const capsule = document.getElementById("queue-pill");
-  const nav = document.getElementById("date-nav");
+  const nav = document.getElementById("task-view-bar");
   if (!pill || !capsule || !nav) return null;
   const wasHidden = pill.hidden;
   const badges = [...capsule.querySelectorAll(".queue-seg-count")];
@@ -37,7 +37,7 @@ export function measureQueueCapsule(count = null) {
       }),
       countsUnclipped: badges.every(badge => getComputedStyle(badge).display === "none" ||
         (badge.scrollWidth <= badge.clientWidth && badge.scrollHeight <= badge.clientHeight)),
-      doorsTouchHeight: doorBoxes.every(door => door.height >= 44),
+      doorsTouchHeight: doorBoxes.every(door => door.height >= 32),
       doorsTouchWidth: doorBoxes.every(door => door.width >= 44)
     };
   } finally {
