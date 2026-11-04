@@ -34,7 +34,7 @@ module.exports = function mount(app, ctx, config = {}) {
   );
   app.get(
     "/api/working-queue/tasks",
-    route((req) => store.search(req.query, req.queueOwner))
+    route((req) => store.searchQueueTasks(req.query, req.queueOwner))
   );
   app.get(
     "/api/working-queue/tasks/:id/completion-preview",

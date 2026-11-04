@@ -174,6 +174,20 @@ function createConversationStore(ctx) {
       nextOffset: r.rows.length > 50 ? offset + 50 : null
     };
   }
+  async function searchQueueTasks(body, owner) {
+    await authorize(pool, owner);
+    const query = typeof body?.query === "string" ? body.query.trim().slice(0, 200) : "";
+    const offset = Number(body?.offset || 0);
+    if (!Number.isInteger(offset) || offset < 0) throw M.fail("Invalid search offset");
+    const result = await pool.query(`SELECT b.* FROM blocks b WHERE b.user_id=$1 AND b.workspace_id=$2
+      AND ${require("./lib/queue-eligibility").sql()}
+      AND b.properties->>'title' ILIKE $3 ORDER BY b.updated_at DESC,b.id LIMIT 51 OFFSET $4`,
+      [owner.userId, owner.workspaceId, "%" + query.replace(/[\\%_]/g, "\\$&") + "%", offset]);
+    return { tasks: result.rows.slice(0, 50).map(blockDB.parseBlock).map(b => ({
+      id: b.id, title: b.properties.title, date: b.date, status: b.properties.status || "open",
+      type: b.properties.type || b.type
+    })), nextOffset: result.rows.length > 50 ? offset + 50 : null };
+  }
   async function get(id, owner, q = pool) {
     await authorize(q, owner);
     const b = await task(q, id, owner);
@@ -708,6 +722,6 @@ function createConversationStore(ctx) {
       await q.query("COMMIT"); return {...review,revision};
     } catch(e) { await q.query("ROLLBACK"); throw e; } finally { q.release(); }
   }
-  return { state, search, get, completionPreview, completionReview, reconciliationReceipt, calendarEvents, execute, history };
+  return { state, search, searchQueueTasks, get, completionPreview, completionReview, reconciliationReceipt, calendarEvents, execute, history };
 }
 module.exports = { SCHEMA_SQL, FOREGROUND_INDEX_SQL, createConversationStore, timingFor, pauseForSchedule };
