@@ -1069,7 +1069,7 @@ function persistTaskDuration(ev,minutes){
   if(!row||typeof enqueueRowPropsWrite!=="function")return null;
   return enqueueRowPropsWrite(row.id,props=>{
     const next={...props,duration:minutes,durMin:minutes};
-    if(props.start)next.end=fmt(pt(props.start)+minutes);
+    if(props.start)next.end=fmt(Math.min(1439,pt(props.start)+minutes));
     return next;
   });
 }
@@ -1091,7 +1091,7 @@ function setDurAbsolute(id,newMin){
   }
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
   const n=Math.max(1,Math.round(newMin));
-  const c=dur(ev);if(n===c)return;
+  const c=dur(ev);if(n===c){persistTaskDuration(ev,n);return;}
   const s=pt(ev.start);ev.end=fmt(s+n);
   if(ev.meta)ev.meta=ev.meta.replace(/·\s*\d+h?\s*\d*m?/,"· "+ms(n));
   durChanges[id]={original:origDur(id)||c,current:n};log("duration",id,c+"->"+n);

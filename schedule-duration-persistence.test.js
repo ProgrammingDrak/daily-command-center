@@ -12,8 +12,8 @@ function slice(source,start,end){
 }
 for(const minutes of [5,15,60])test('Working Queue custom placement preserves '+minutes+' minutes',async()=>{
   const row={id:'row',date:'2026-11-04',properties:{title:'Synthetic task',duration:minutes,start:'00:00',end:fmt(minutes)}};
-  const ev=TaskModel.fromBlock(row);let pop,slot;
-  const context={prepareTask:async()=>({ev,date:row.date,blockId:row.id}),refresh:async()=>{},DCC:{Carryover:{moveTo:async(_task,_date,opts)=>{slot=opts.slot;}}},window:{dur:task=>pt(task.end)-pt(task.start),pt,fmt,openSchedulePopover:cfg=>{pop=cfg;}}};
+  const ev=TaskModel.fromBlock(row);ev.__unf={sourceBlock:row};let pop,slot;
+  const context={prepareTask:async()=>({ev,date:row.date,blockId:row.id}),refresh:async()=>{},DCC:{Carryover:{moveTo:async(_task,_date,opts)=>{slot=opts.slot;}}},window:{_positiveDuration:(candidate,fallback)=>candidate>0?candidate:fallback,dur:task=>pt(task.end)-pt(task.start),pt,fmt,openSchedulePopover:cfg=>{pop=cfg;}}};
   vm.createContext(context);vm.runInContext(slice(read('working-queue.js'),'  async function openSchedule(','  function itemForTask('),context);
   await context.openSchedule({task:row},{});await pop.onMove(row.date,'12:10');
   assert.equal(slot.start,'12:10');assert.equal(slot.end,fmt(pt('12:10')+minutes));
@@ -33,4 +33,25 @@ test('stepper persists the snapped duration through the same row writer',()=>{
   const context={scheduled:[ev],dur:e=>pt(e.end)-pt(e.start),pt,fmt,stepDuration:()=>60,origDur:()=>50,durChanges:{},log:()=>{},recalcTimes:()=>{},saveDurChanges:()=>{},render:()=>{},_findTaskBlockForDate:()=>({id:'row'}),enqueueRowPropsWrite:(_id,merge)=>{saved=merge({start:'12:10',actualMinutes:3});}};
   vm.createContext(context);vm.runInContext(slice(read('schedule.js'),'function persistTaskDuration(','// ======== START TIME ADJUSTMENT'),context);context.adjustDur('task',15);
   assert.equal(saved.duration,60);assert.equal(saved.end,'13:10');assert.equal(saved.actualMinutes,3);
+});
+
+test('reselecting an overlay duration repairs the stale canonical end',()=>{
+  let saved;const ev={id:'task',start:'12:10',end:'12:25'};
+  const context={scheduled:[ev],dur:e=>pt(e.end)-pt(e.start),pt,fmt,_findTaskBlockForDate:()=>({id:'row'}),enqueueRowPropsWrite:(_id,merge)=>{saved=merge({duration:15,start:'12:10',end:'12:40'});}};
+  vm.createContext(context);vm.runInContext(slice(read('schedule.js'),'function persistTaskDuration(','// ======== START TIME ADJUSTMENT'),context);context.setDurAbsolute('task',15);
+  assert.equal(saved.duration,15);assert.equal(saved.end,'12:25');
+});
+test('late duration edits retain the estimate and a valid canonical end',()=>{
+  let saved;const context={pt,fmt,_findTaskBlockForDate:()=>({id:'row'}),enqueueRowPropsWrite:(_id,merge)=>{saved=merge({start:'23:00'});}};
+  vm.createContext(context);vm.runInContext(slice(read('schedule.js'),'function persistTaskDuration(','function adjustDur('),context);context.persistTaskDuration({id:'task'},90);
+  assert.equal(saved.duration,90);assert.equal(saved.end,'23:59');
+});
+for(const end of ['24:30','00:30'])test('overnight queue task uses the canonical positive estimate: '+end,async()=>{
+  const row={id:'row',date:'2026-11-04',properties:{duration:90,start:'23:00',end}};
+  const ev=TaskModel.fromBlock(row);ev.__unf={sourceBlock:row};let pop,slot;
+  const context={prepareTask:async()=>({ev,date:row.date}),refresh:async()=>{},DCC:{Carryover:{moveTo:async(_task,_date,opts)=>{slot=opts.slot;}}},window:{pt,fmt,openSchedulePopover:cfg=>{pop=cfg;}}};
+  vm.createContext(context);vm.runInContext(slice(read('state.js'),'function pt(','function ms(')+slice(read('state.js'),'function _positiveDuration(','// ======== MOVE-TO MENU'),context);
+  context.window.dur=task=>context.pt(task.end)-context.pt(task.start);context.window._positiveDuration=context._positiveDuration;
+  vm.runInContext(slice(read('working-queue.js'),'  async function openSchedule(','  function itemForTask('),context);
+  await context.openSchedule({task:row},{});await pop.onMove(row.date,'12:10');assert.equal(slot.end,'13:40');
 });

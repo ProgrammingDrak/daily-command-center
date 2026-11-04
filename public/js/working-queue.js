@@ -260,7 +260,7 @@
       }});
     }
     window.openSchedulePopover({mode:'reschedule',id:task.id,task,anchorEl,view:'date',onMove:async(date,time)=>{
-      const duration=Math.max(1,Number(window.dur(task))||30);
+      const duration=window._positiveDuration(window.dur(task),task.__unf.sourceBlock.properties.duration);
       const slot=time?{start:time,end:window.fmt(window.pt(time)+duration)}:null;
       const result=await DCC.Carryover.moveTo(task,date,{slot});await refresh();return result;
     }});
