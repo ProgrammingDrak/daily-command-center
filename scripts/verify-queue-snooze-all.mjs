@@ -1,4 +1,4 @@
-/* global document, getComputedStyle, DCCWorkingQueue, petDeliveries */
+/* global document, getComputedStyle, innerWidth, DCCWorkingQueue, petDeliveries */
 // Needs You snooze regression: isolated PostgreSQL + the real queue API and UI.
 // No .env, auth, live tasks, shared browser profile or external notifications.
 import assert from "node:assert/strict";
@@ -99,8 +99,7 @@ page.on("request", (r) => {
   if (r.method() !== "GET" && r.url().includes("/api/")) writes.push(r.postDataJSON?.() || {});
 });
 const userWrites = () => writes.filter((w) => w.action !== "queue-claim");
-const card = (id) => page.locator('[data-queue-id="' + id + '"]'),
-  button = (id, action) => card(id).locator('[data-queue-action="' + action + '"]');
+
 const dialog = () => page.getByRole("dialog");
 const closed = () => page.waitForFunction(() => !document.querySelector(".dcc-overlay [role=dialog]"));
 const inLane = (id, lane) =>
