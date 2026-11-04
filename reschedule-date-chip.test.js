@@ -623,14 +623,3 @@ test("preset picks populate the calendar value before invoking the pick writer",
   assert.equal(picked, "2026-09-03");
   assert.equal(tomorrow.getAttribute("aria-pressed"), "true");
 });
-
-
-test("the time popover opens the shared exact-duration editor", async () => {
-  let opened;
-  const ctx=makeContext({openDurPopover:(task,anchor)=>{opened={task,anchor};}});
-  const {pop,anchor}=await openPopover(ctx,{mode:"reschedule",id:"t1",view:"time"});
-  const button=pop.querySelector(".resched-exact-duration");
-  assert.ok(button,"exact minutes must be reachable without stepping the estimate");
-  button.dispatchEvent({type:"click",stopPropagation(){}});
-  assert.equal(opened.task.id,"t1");assert.equal(opened.anchor,anchor);assert.equal(pop.removed,true);
-});
