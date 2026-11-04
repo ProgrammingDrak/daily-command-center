@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { chromium } from 'playwright-core';
-const base='http://127.0.0.1:18781';
+const base=process.env.DCC_PROGRESS_REVIEW_URL||'http://127.0.0.1:18781';
+assert.match(base,/^http:\/\/(127\.0\.0\.1|localhost):\d+$/);
 assert.equal((await fetch(base+'/api/health').then(r=>r.json())).reviewOnly,true);
 const out=process.env.DCC_PROGRESS_REVIEW_OUT||'test-results/progress-bars';
 await fs.mkdir(out,{recursive:true});

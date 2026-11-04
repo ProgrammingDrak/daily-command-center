@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import {chromium} from 'playwright-core';
 import {measureQueueCapsule} from './queue-capsule-smoke.mjs';
-const base='http://127.0.0.1:18781';
+const base=process.env.DCC_PROGRESS_REVIEW_URL||'http://127.0.0.1:18781';
+assert.match(base,/^http:\/\/(127\.0\.0\.1|localhost):\d+$/);
 assert.equal((await fetch(base+'/api/health').then(r=>r.json())).reviewOnly,true);
 const fixtureToday=(await fetch(base+'/api/state/day').then(r=>r.json())).date;
 const nextDay=new Date(fixtureToday+'T12:00:00Z');nextDay.setUTCDate(nextDay.getUTCDate()+1);
@@ -73,7 +74,7 @@ try {
     const capsule=await page.evaluate(measureQueueCapsule,999);
     assert.ok(Object.values(capsule).every(Boolean),JSON.stringify({width,capsule}));
     const layout=await page.evaluate(()=>{
-     const rect=id=>document.querySelector(id).getBoundingClientRect(),date=rect('#date-nav'),header=rect('.progress-label'),plan=rect('#ptrack'),actual=rect('#pactual'),bar=rect('#task-view-bar'),pill=rect('#queue-pill'),sw=rect('#task-view-switch');
+     const rect=id=>document.querySelector(id).getBoundingClientRect(),date=rect('#date-nav'),header=rect('.progress-label'),plan=rect('#ptrack'),actual=rect('#pactual'),pill=rect('#queue-pill'),sw=rect('#task-view-switch');
      const dateTargets=[...document.querySelectorAll('#date-nav button')].filter(b=>getComputedStyle(b).display!=='none').map(b=>({box:b.getBoundingClientRect(),width:b.clientWidth,scroll:b.scrollWidth}));
      const targetsFit=dateTargets.every(({box,width,scroll})=>box.left>=header.left&&box.right<=header.right+1&&scroll<=width+1&&box.height>=24);
      const targetsSeparate=dateTargets.every((a,i)=>dateTargets.slice(i+1).every(b=>a.box.right<=b.box.left+1||b.box.right<=a.box.left+1||a.box.bottom<=b.box.top+1||b.box.bottom<=a.box.top+1));
