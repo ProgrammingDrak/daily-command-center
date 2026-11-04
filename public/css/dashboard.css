@@ -557,8 +557,8 @@
   /* Reserve the desktop sidecar tabs; the mobile rule below resets this padding. */
   .progress-box{--progress-track-height:18px;background:var(--card);border:1px solid var(--border);border-radius:9px;padding:14px;padding-right:calc(14px + var(--target-min,44px))}
   .progress-label{display:flex;justify-content:space-between;gap:12px;margin-bottom:8px;font-size:12px}
-  .progress-label span:first-child{font-weight:600}
-  .progress-label span:last-child{color:var(--text-muted);font-variant-numeric:tabular-nums}
+  .progress-label > span:first-child{font-weight:600}
+  .progress-label > span:last-child{color:var(--text-muted);font-variant-numeric:tabular-nums}
   .progress-track-shell{position:relative}
   .progress-track{height:18px;background:rgba(255,255,255,0.05);border-radius:9px;overflow:hidden;display:flex;gap:1px}
   .pseg{appearance:none;height:100%;min-width:1px;margin:0;padding:0;border:0;border-radius:2px;position:relative;cursor:default}
@@ -575,6 +575,7 @@
   .prail-seg .tip{display:none;position:absolute;bottom:calc(100%+5px);left:50%;transform:translateX(-50%);background:#1a1a2e;color:var(--text);padding:4px 8px;border-radius:4px;font-size:10px;white-space:nowrap;z-index:10;pointer-events:none}
   .prail-seg:hover .tip{display:block}
   .progress-rails{position:relative;height:4px;margin-top:2px}
+  .progress-rails:empty{display:none}
   .prail-seg{position:absolute;top:0;height:3px;border-radius:2px;background:rgba(226,232,240,0.55)}
   .prail-seg.done{opacity:0.35}
 

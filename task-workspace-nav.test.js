@@ -47,9 +47,9 @@ test("the header is pages plus one clock, cog and sync dot cluster; branding is 
   assert.equal((html.match(/id="save-status"/g) || []).length, 1, "one sync control");
 });
 
-test("Tasks head orders views, the date row with queues, then Day Progress", () => {
+test("Tasks head combines views and queues above the day navigation in Day Progress", () => {
   const head = slice(html, '<section class="task-workspace-head"', "</section>\n");
-  const order = ["task-view-switch", "date-nav", "dn-prev", "date-label", "dn-next", "queue-pill", "date-picker-drop", "day-progress-title"].map((id) => head.indexOf('id="' + id + '"'));
+  const order = ["task-view-switch", "queue-pill", "day-progress-title", "date-nav", "dn-prev", "date-label", "dn-next", "date-picker-drop"].map((id) => head.indexOf('id="' + id + '"'));
   assert.ok(order.every((at) => at >= 0), JSON.stringify(order));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
   for (const door of ["triage-pill-nav", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav", "loose-ends-pill"]) assert.match(head, new RegExp('id="' + door + '"'));
@@ -95,7 +95,7 @@ test("glasses keeps a visible Full app exit and task navigation", () => {
   assert.match(glasses, /bar\.append\(prev, position, next, tools, exit, status\)/);
   const css = read("public/css/device-views/glasses.css");
   assert.match(css, /\.device-glasses \.glasses-exit\{display:inline-flex;[^}]*min-height:46px/);
-  assert.match(css, /:not\(\.glasses-tools-open\) :is\(#tab-bar,\.source-row,\.header>div:last-child,#task-view-bar,#actual-summary\)/);
+  assert.match(css, /:not\(\.glasses-tools-open\) :is\(#tab-bar,\.source-row,\.header>div:last-child,#task-view-switch,#actual-summary\)/);
 });
 
 test("phones keep the clock, cog and dot, and show every page label whole", () => {
@@ -114,7 +114,7 @@ test("phones keep the clock, cog and dot, and show every page label whole", () =
   assert.doesNotMatch(read("public/css/ui-optimization.css"), /\.header > div:last-child > :not\(#save-status\) \{ display: none/);
 });
 
-test("new controls meet the 44px target and the tooltip can be hovered and dismissed", () => {
+test("utility controls keep full targets; compact task controls remain accessible and tooltips dismiss", () => {
   const css = read("public/css/task-workspace.css");
   const rule = (selector) => {
     const at = css.indexOf(selector + " {");
@@ -124,7 +124,8 @@ test("new controls meet the 44px target and the tooltip can be hovered and dismi
   for (const selector of [".dcc-pages .tab", ".task-view-switch [role=\"tab\"]", ".task-actual-toggle", ".actual-summary-actions button"]) {
     assert.match(rule(selector), /min-height: var\(--target-min\)/, selector);
   }
-  assert.doesNotMatch(css, /min-height: (3\d|40)px/, "no sub-44 minimums left in the new stylesheet");
+  assert.match(css, /\.task-view-bar \.queue-seg \{ min-height: 32px/);
+  assert.match(css, /\.progress-date-controls :is\(\.dn-arrow, \.dn-date, \.dn-quick\) \{ min-height: 24px/);
   assert.match(rule(".it-actual-edit::after"), /height: var\(--target-min\)/, "compact chip, full hit area");
   assert.match(css, /\.save-status:hover \.save-status-tooltip \{ opacity: 1; visibility: visible; pointer-events: auto; \}/);
   assert.match(css, /\.save-status:focus-visible \.save-status-tooltip \{ opacity: 1; visibility: visible; pointer-events: auto; \}/);

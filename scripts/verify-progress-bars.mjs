@@ -1,9 +1,10 @@
-/* global window, document, buildProgress, switchToDate, localStorage */
+/* global window, document, buildProgress, switchToDate, localStorage, sessionStorage, initCatchUp */
 // Disposable review server only; no account data or external requests.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { chromium } from 'playwright-core';
-const base='http://127.0.0.1:18781';
+const base=process.env.DCC_PROGRESS_REVIEW_URL||'http://127.0.0.1:18781';
+assert.match(base,/^http:\/\/(127\.0\.0\.1|localhost):\d+$/);
 assert.equal((await fetch(base+'/api/health').then(r=>r.json())).reviewOnly,true);
 const out=process.env.DCC_PROGRESS_REVIEW_OUT||'test-results/progress-bars';
 await fs.mkdir(out,{recursive:true});
@@ -14,8 +15,11 @@ const page=await context.newPage(),errors=[];
 page.on('pageerror',e=>errors.push(e.message));
 try{
  await page.goto(base+'/?tab=tasks&view=list');
- await page.waitForFunction(()=>!!window.DCC?.ProgressActual&&!!window.DCC?.nav);
+ await page.waitForFunction(()=>!!window.DCC?.ProgressActual&&!!window.DCC?.nav&&!!document.querySelector('#ptrack').dataset.date);
  const today=await page.evaluate(()=>window.DCC.dates.todayKey());
+ // The fixture server may run in UTC while the app projects New York dates.
+ // Anchor ongoing sessions inside the selected fixture day without pausing timers.
+ await page.clock.setFixedTime(new Date(today+'T17:00:00Z'));
  await fetch(base+'/api/review/actual/seed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({today})});
  await page.reload();
  await page.waitForSelector('#pactual [data-entry-id="actual-te-a"]');
@@ -56,7 +60,7 @@ try{
   assert.equal(m.actual,m.plan,'equal total track height at '+width);
   assert.equal(m.plan,width<=760?14:18);
   assert.ok(m.gap<=21,'compact inter-bar gap at '+width+': '+m.gap);
-  assert.ok(m.heading<=24&&m.reviewHeight>=24&&m.reviewInHeading,'compact accessible review header');
+  assert.ok(m.heading<=(width<=760?80:24)&&m.reviewHeight>=24&&m.reviewInHeading,'compact accessible review header');
   assert.ok(m.segments.every(s=>s.height>0&&s.inside&&s.label),'all activity portions visible and labeled');
   compactMeasurements.push({width,...m});
  };
@@ -105,7 +109,7 @@ try{
  assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false,'review never persists the overlay');
  assert.equal(await page.locator('#actual-view').isHidden(),true,'review panel is ephemeral');
  await page.goto(base+'/?tab=tasks&view=queue');
- await page.waitForFunction(()=>!!window.DCC?.ProgressActual);
+ await page.waitForFunction(()=>!!document.querySelector('#ptrack').dataset.date);
  await page.locator('#progress-day-review').click();
  await page.waitForSelector('#actual-view .dr-root');
  assert.equal(await page.locator('#list-view').isVisible(),true,'queue review opens itinerary');
@@ -128,8 +132,15 @@ try{
  await page.waitForSelector('.actual-details-dismiss');
  await page.locator('.actual-details-dismiss').click();
  assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false,'legacy Actual view link can be dismissed');
+ // Isolate clock/empty fixtures from legacy-overlay review preferences and
+ // metadata saves accumulated by the preceding navigation walkthrough.
+ await page.evaluate(()=>{localStorage.clear();sessionStorage.clear();});
  await page.goto(base+'/?tab=tasks&view=list&actual=0');
- await page.waitForFunction(()=>!!window.DCC?.ProgressActual);
+ await page.waitForFunction(()=>!!document.querySelector('#ptrack').dataset.date);
+ // Finish the unrelated boot recap's day-root metadata save before navigating.
+ // The block cache intentionally rejects hydration while a save is in flight.
+ await page.evaluate(()=>initCatchUp());
+ await page.waitForFunction(()=>!window.blockStore.hasPendingWrites());
 
  await page.evaluate(async()=>{
   if(typeof window._reviewActive==="function")window.DCCWorkSessions.activeTasks=window._reviewActive;

@@ -70,6 +70,22 @@ jobs:
           node scripts/verify-shared-queue.cjs
           CHROME_PATH="$(node -e 'process.stdout.write(require("playwright-core").chromium.executablePath())')" node scripts/verify-work-completion.mjs
           CHROME_PATH="$(node -e 'process.stdout.write(require("playwright-core").chromium.executablePath())')" node scripts/verify-completed-queue.mjs
+      - name: Verify Day Progress and combined task header
+        run: |
+          DCC_REVIEW_ACTUAL=1 PORT=3989 node scripts/ui-review-server.mjs > progress-server.log 2>&1 &
+          progress_pid=$!
+          trap 'kill "$progress_pid" 2>/dev/null || true' EXIT
+          ok=""
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3989/api/health >/dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          if [ -z "$ok" ]; then cat progress-server.log; exit 1; fi
+          export DCC_PROGRESS_REVIEW_URL=http://127.0.0.1:3989
+          export CHROME_PATH="$(node -e 'process.stdout.write(require("playwright-core").chromium.executablePath())')"
+          node scripts/verify-day-progress-loading.mjs
+          node scripts/verify-progress-bars.mjs
+          node scripts/verify-combined-task-header.mjs
       - name: Verify synthetic login return paths
         run: node scripts/verify-login-return.mjs
       - name: Verify glasses with production account binding

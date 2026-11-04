@@ -1677,7 +1677,7 @@ const SURFACES = {
 // "whenever" rides along because the header pill's drawer renders the same itinerary rows
 // (the Triage and Unscheduled halves), whose chevron and work-session buttons call
 // render("schedule").
-const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView","actualSummary","whenever"] };
+const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView","actualSummary","whenever","progress"] };
 
 const _dirty = {};
 function _markDirty(scope){

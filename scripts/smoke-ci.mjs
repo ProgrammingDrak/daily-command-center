@@ -17,7 +17,7 @@ import { measureQueueCapsule } from "./queue-capsule-smoke.mjs";
 /* Browser-context globals referenced inside page.evaluate() callbacks (they run
    in Chromium, not Node). smoke.mjs escapes this by passing browser code as
    strings; here it is real code, so declare the globals for the linter. */
-/* global window, document, DCC, KeyboardEvent, getComputedStyle */
+/* global window, document, DCC, KeyboardEvent, getComputedStyle, Node */
 
 const BASE = process.argv[2] || "http://localhost:3987";
 const USER = process.argv[3] || "drake";
@@ -128,11 +128,17 @@ for (const tab of TABS) {
 // Measure the full five-door state with real and representative badge counts.
 // Wait for the shipped font so a fallback font cannot hide a width regression.
 await page.evaluate(() => { window.DCC.nav.go({ page: "tasks", view: "list" }); });
-check("date row sits directly above Day Progress inside Tasks", (await page.evaluate(() => {
-  const head = document.getElementById("task-workspace-head");
-  const nav = document.getElementById("date-nav"), progress = head && head.querySelector(".progress-wrap");
-  return !!head && head.contains(nav) && nav.contains(document.getElementById("queue-pill")) &&
-    nav.nextElementSibling?.id === "date-picker-drop" && document.getElementById("date-picker-drop").nextElementSibling === progress;
+check("date navigation is centered inside Day Progress, with views and queues above", (await page.evaluate(() => {
+  const head = document.getElementById("task-workspace-head"), nav = document.getElementById("date-nav");
+  const progress = head?.querySelector(".progress-wrap"), header = progress?.querySelector(".progress-header");
+  const views = document.getElementById("task-view-bar"), pill = document.getElementById("queue-pill");
+  if (!head || !nav || !progress || !header || !views || !pill) return false;
+  const n = nav.getBoundingClientRect(), h = header.getBoundingClientRect();
+  return header.contains(nav) && views.contains(pill) && views.contains(document.getElementById("task-view-switch")) &&
+    !!(views.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+    nav.nextElementSibling?.id === "date-picker-drop" &&
+    n.left >= h.left - 1 && n.right <= h.right + 1 && n.top >= h.top - 1 && n.bottom <= h.bottom + 1 &&
+    Math.abs((n.left + n.right - h.left - h.right) / 2) <= 1;
 })) === true);
 await page.evaluate(() => window.DCC.nav.setActual(true));
 check("Actual keeps the List and adds evidence", (await page.evaluate(() =>

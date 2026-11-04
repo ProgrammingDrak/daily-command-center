@@ -1735,6 +1735,16 @@ function _scheduleTaskHasDelegate(taskId){
     .some(b=>(b.properties||{}).kind==="delegated_item" && (b.properties||{}).linkedBlockId===taskId);
 }
 
+// The shared header has its own lifecycle: Working Queue can be usable before
+// the day snapshot arrives, and scoped view renders must not strand the header.
+let _dayProgressStatus="loading";
+function refreshDayProgress(status){
+  if(status)_dayProgressStatus=status;
+  buildProgress();
+}
+window.addEventListener("dcc:day-data-ready",event=>refreshDayProgress(event.detail?.available===false?"error":"ready"));
+window.addEventListener("dcc:view-date-changed",event=>refreshDayProgress(event.detail?.blocksLoaded===false?"error":"ready"));
+
 function progressActualModel(){
   const P=window.DCC&&DCC.ProgressActual,A=window.DCC&&DCC.ActualProjection;
   if(!P||!A)return null;
@@ -1776,7 +1786,9 @@ function buildProgressActual(model,start,total){
   if(model.unplacedMin)notes.push(A.minutes(model.unplacedMin)+" recorded without a reliable clock time.");
   if(model.clockChange)notes.push("Clock changes: segments split at the offset change; repeated clock times use separate lanes. Tooltips include the time zone. Clock-only entries on this day remain unpositioned.");
   if(model.unknownMin)notes.push(A.minutes(model.unknownMin)+" unknown time (not focused work).");
-  note.textContent=notes.join(" ");note.hidden=!notes.length;
+  const message=notes.join(" ");
+  if(note.textContent!==message)note.textContent=message;
+  note.hidden=!notes.length;
 }
 function openProgressDayReview(forceOpen){
   if(window.DCC&&DCC.nav){
@@ -1839,6 +1851,24 @@ function updateProgressNow(nowValue){
 function buildProgress(){
   const track=document.getElementById("ptrack");
   if(!track)return;
+  const ready=_dayProgressStatus==="ready";
+  const actualTrack=document.getElementById("pactual"),reviewButton=document.getElementById("progress-day-review");
+  track.setAttribute("aria-busy",String(_dayProgressStatus==="loading"));
+  if(actualTrack)actualTrack.setAttribute("aria-busy",String(_dayProgressStatus==="loading"));
+  if(reviewButton)reviewButton.disabled=!ready;
+  if(!ready){
+    if(_progressTooltipClose)_progressTooltipClose();
+    track.replaceChildren();if(actualTrack)actualTrack.replaceChildren();
+    delete track.dataset.date;delete track.dataset.startMin;delete track.dataset.endMin;
+    track.setAttribute("aria-label",_dayProgressStatus==="error"?"Day plan unavailable":"Day plan loading");
+    const rails=document.getElementById("prails");if(rails){rails.replaceChildren();rails.style.display="none";}
+    const marker=document.getElementById("pnow");if(marker)marker.hidden=true;
+    for(const id of ["pstart","pend"]){const label=document.getElementById(id);if(label){label.textContent="";label.removeAttribute("datetime");}}
+    document.getElementById("ppct").textContent=_dayProgressStatus==="error"?"Unavailable":"Loading…";
+    const note=document.getElementById("pactual-note");
+    if(note){const message=_dayProgressStatus==="error"?"Day activity unavailable. Reload to try again.":"Loading day activity…";if(note.textContent!==message)note.textContent=message;note.hidden=false;}
+    return;
+  }
   const focused=document.activeElement;
   const focusTrack=focused?.closest?.("#ptrack, #pactual");
   const focusKey=focusTrack?(focused.dataset.progressKey||focused.dataset.entryId):null;

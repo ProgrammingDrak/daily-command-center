@@ -46,3 +46,20 @@ test('already parsed document hydrates immediately without waiting for a past DO
   assert.deepEqual(h.renders[0],['synthetic-boot-task']);
   assert.equal(h.events.filter(x=>x==='dcc:data-ready').length,1);
 });
+
+test('shared Day Progress readiness is published after core hydration and before unrelated builders',async()=>{
+  const h=harness('complete');h.dependencies();
+  let published=false;
+  h.ctx.dispatchEvent=event=>{h.events.push(event.type);if(event.type==='dcc:day-data-ready'){
+    published=true;assert.equal(event.detail.available,true);assert.equal(event.detail.date,'2026-10-26');
+    assert.equal(h.ctx.scheduled[0].id,'synthetic-boot-task');
+  }};
+  h.ctx.buildTriage=()=>assert.equal(published,true);
+  h.run();await settle();assert.equal(published,true);
+});
+test('failed core hydration publishes unavailable rather than a valid empty day',async()=>{
+  const h=harness('complete',false);h.dependencies();
+  h.ctx.fetch=async()=>({ok:false,status:503});
+  let available;h.ctx.dispatchEvent=event=>{if(event.type==='dcc:day-data-ready')available=event.detail.available;};
+  h.run();await settle();assert.equal(available,false);
+});

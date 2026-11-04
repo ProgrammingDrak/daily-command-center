@@ -143,7 +143,7 @@
       const reminder=item.snoozed?'':item.dueAt?(Date.parse(item.dueAt)<=Date.now()?'Check back now':'Check back in '+Math.max(1,Math.ceil((Date.parse(item.dueAt)-Date.now())/60000))+'m'):'';
       const actual=item.actualMinutes==null?'Focused actuals unknown':item.actualMinutes+'m focused saved';
       const activeMinutes=foreground&&!item.onBreak?Math.max(0,Math.floor((Date.now()-Date.parse(row.properties.startedAt))/60000)):0;
-      let controls=completed?'':foreground?button('background','Send to background',row.id)+(item.onBreak?button('return','Return to Priority',row.id):button('pause','Pause',row.id)):button('focus','Bring forward',row.id);
+      let controls=completed?'':foreground?button('background','Send to background',row.id)+button('pause','Pause',row.id):button('focus','Bring forward',row.id);
       if(!completed){if(!foreground)controls+=button('up','↑',row.id,'aria-label="Move up" title="Move up one position. Hold or Shift+Enter to move to the top of this group." aria-describedby="wq-order-help"')+button('down','↓',row.id,'aria-label="Move down" title="Move down one position. Hold or Shift+Enter to move to the top of this group." aria-describedby="wq-order-help"');}
       const held=!completed&&!foreground&&returnHold(item);
       if(!completed&&!foreground)controls+=button('return','Return to Priority',row.id,held?'disabled aria-describedby="queue-return-'+esc(row.id)+'"':'')+button('snooze','Snooze',row.id,'aria-haspopup="dialog"');
@@ -161,8 +161,8 @@
         onCompleteWithNotes:completed?null:()=>transition('done',item).catch(warn),
         onOpen:()=>openDetails(row.id).catch(warn),
         onSchedule:completed?null:anchor=>openSchedule(item,anchor).catch(warn),scheduleLabel:'Schedule',
-        titleExtrasHtml:'<span class="wq-status">'+esc(item.onBreak?'On a break':item.needsYou?'Needs You':item.snoozed?'Snoozed':item.status==='queued'?'Priority':item.status)+'</span>',
-        metaHtml:'<p class="wq-time">'+esc(item.onBreak?'Work timer paused · '+actual:foreground?activeMinutes+'m this session · '+actual:actual+(item.backgroundSince?' · '+elapsed+'m waiting':''))+'</p>'+(reminder?'<p class="wq-attention">'+esc(reminder)+'</p>':'')+snoozedHtml+finished+(held?'<p class="wq-time" id="queue-return-'+esc(row.id)+'">'+esc(held)+'</p>':'')+contextHtml(item)
+        titleExtrasHtml:'<span class="wq-status">'+esc(item.needsYou?'Needs You':item.snoozed?'Snoozed':item.status==='queued'?'Priority':item.status)+'</span>',
+        metaHtml:'<p class="wq-time">'+esc(foreground?activeMinutes+'m this session · '+actual:actual+(item.backgroundSince?' · '+elapsed+'m waiting':''))+'</p>'+(reminder?'<p class="wq-attention">'+esc(reminder)+'</p>':'')+snoozedHtml+finished+(held?'<p class="wq-time" id="queue-return-'+esc(row.id)+'">'+esc(held)+'</p>':'')+contextHtml(item)
       });
       if(!completed){
         const levels=DCC.TaskPriority.levels,priority=levels.includes(item.taskPriority)?item.taskPriority:'Medium';
@@ -186,10 +186,15 @@
       node.querySelector('.it-list-main').appendChild(actions);
       if(foreground&&!item.onBreak&&window.DCCWorkSessions?.checkInHtml)node.insertAdjacentHTML('beforeend',window.DCCWorkSessions.checkInHtml(task,Date.now()));
       if(item.onBreak){
-        const main=node.querySelector('.it-list-main'),veil=document.createElement('div');
-        veil.className='wq-break-veil';
-        veil.innerHTML='<span class="wq-break-symbol" aria-hidden="true">Ⅱ</span><strong role="status">I’m on a break</strong><p><span data-break-clock data-break-since="'+esc(item.breakStartedAt)+'"></span> on break · Work timer paused</p>'+button('focus','▶ Resume task',row.id);
-        main.appendChild(veil);
+        // Cover the whole shared card, including its utility gutter. Keep the
+        // underlying layout intact, but remove every covered control from use.
+        for(const child of node.children){child.inert=true;child.setAttribute('aria-hidden','true');}
+        node.tabIndex=-1;node.draggable=false;node.setAttribute('role','group');
+        node.setAttribute('aria-label','Paused task: '+task.title);
+        const veil=document.createElement('div');veil.className='wq-break-veil';
+        veil.innerHTML='<div class="wq-break-header"><span class="wq-break-title">'+esc(pathFor(task,index))+'</span><span class="wq-break-badge">On a break</span>'+button('break-options','⋯',row.id,'aria-label="Task options" aria-haspopup="dialog"')+'</div><div class="wq-break-body"><div class="wq-break-copy"><strong role="status"><span class="wq-break-symbol" aria-hidden="true">Ⅱ</span> I’m on a break</strong><p><span data-break-clock data-break-since="'+esc(item.breakStartedAt)+'"></span> on break<span class="wq-break-timer-note">Work timer paused</span></p></div>'+button('focus','▶ Resume task',row.id)+'</div>';
+        veil.addEventListener('click',event=>{if(!event.target.closest('[data-queue-action]'))event.stopPropagation();});
+        node.appendChild(veil);
       }
       const completionButton=node.querySelector('.quick-complete-control');if(completionButton){completionButton.dataset.queueAction='complete';completionButton.dataset.taskId=row.id;}
       const priorityButton=node.querySelector('[data-queue-action="priority"]');
@@ -350,6 +355,12 @@
     body.querySelector('[data-search]').addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(()=>search(),180);});body.querySelector('[data-more]').addEventListener('click',()=>search(true));
     body.addEventListener('click',async event=>{const button=event.target.closest('[data-add-id]');if(!button||adding)return;adding=true;body.querySelectorAll('[data-add-id]').forEach(b=>b.disabled=true);try{await send(envelope('queue-add',{taskId:button.dataset.addId}));body.querySelector('[role=status]').textContent='Added to queue.';}catch(error){body.querySelector('[role=status]').textContent=error.message;}finally{adding=false;body.querySelectorAll('[data-add-id]').forEach(b=>b.disabled=items().some(i=>i.task.id===b.dataset.addId));}});search();return handle;
   }
+  function openBreakOptions(item,anchor){
+      const body=form('<p>'+esc(item.task.properties.title||'Paused task')+'</p><div class="wq-break-option-actions">'+button('return','Return to Priority',item.task.id)+button('background','Send to background',item.task.id)+button('complete','Complete task',item.task.id)+button('details','Task details',item.task.id)+'</div>');
+      const handle=DCC.overlay.open({kind:'modal',title:'Paused task options',body,anchor,returnFocus:()=>document.querySelector('[data-queue-id="'+CSS.escape(item.task.id)+'"] [data-queue-action="break-options"]')||document.querySelector('[data-queue-id="'+CSS.escape(item.task.id)+'"] [data-queue-action="focus"]'),actions:[{label:'Close'}]});
+      body.addEventListener('click',event=>{if(event.target.closest('[data-queue-action]'))handle.close('action');});
+  }
+
   function reorder(id,target){
     const item=items().find(i=>i.task.id===id);if(!item)return;
     const peers=items().filter(i=>i.status===item.status&&!!i.needsYou===!!item.needsYou&&(item.status!=='queued'||i.taskPriority===item.taskPriority)).map(i=>i.task.id);
@@ -371,6 +382,7 @@
     if(action==='details'){const task=DCC.TaskModel.fromBlock(item.task);if(window.DCCTaskWorkspace?.preview)window.DCCTaskWorkspace.preview(task);else if(typeof window.openAddModal==='function')window.openAddModal(task.id,task.title);else {const body=form('<h3>'+esc(task.title)+'</h3><p>'+esc(task.detail||'No task details yet.')+'</p>');DCC.overlay.open({kind:'modal',title:'Task details',body,actions:[{label:'Close'}]});}return;}
     if(['snooze','remind'].includes(action)){snooze(item);return;}
     if(['focus','background','complete','block'].includes(action)){transition(action==='focus'?'start':action==='complete'?'done':action==='block'?'queue-block':'background-start',item).catch(warn);return;}
+    if(action==='break-options'){openBreakOptions(item,button);return;}
     if(action==='priority')return; // Shared hold controller owns click and hold.
     if(action==='note'){const body=form('<label>Where you left off<textarea maxlength="4000">'+esc(item.note||'')+'</textarea></label>');modal('Task context',body,()=>send(envelope('queue-note',{taskId:item.task.id,note:body.querySelector('textarea').value})));return;}
     if(['up','down','complete'].includes(action))return; // Shared row/hold controls own these events.
