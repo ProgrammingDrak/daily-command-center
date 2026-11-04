@@ -12,6 +12,7 @@ async function createSharedQueueFixture() {
     if (req.path.startsWith('/api/') && !req.path.startsWith('/api/public/') && !req.session) return res.status(401).json({ error: 'Sign in' });
     next();
   });
+  const publicSse = require('../lib/public-sse').createPublicSseHub({ debounceMs: 50 });
   const date = '2026-10-29';
   let day = { schedule: { timeline: [] }, triage: { open_items: [] } };
   Object.assign(ctx, {
@@ -20,8 +21,12 @@ async function createSharedQueueFixture() {
     buildDayResponse: async () => day, filterLegacyGcalBlocks: rows => rows,
     capabilities: require('../capabilities'), route: require('../lib/route-helpers').route,
     slotStore: require('../slot-store'), scoreTaskPoints: require('../slot-scoring').scoreTaskPoints,
-    getRequestOrigin: () => 'synthetic-local', broadcast() {},
-    registerPublicSse: (_ws, _req, res) => res.status(204).end(), closePublicSse() {}
+    getRequestOrigin: () => 'synthetic-local',
+    // Real shared-link stream with a short debounce, so browser QA sees live pings.
+    broadcast(type, _data, workspaceId) {
+      if (workspaceId && ['blocks-changed', 'dcc-state-changed', 'todo-share-changed', 'slot-changed'].includes(type)) publicSse.ping(workspaceId);
+    },
+    registerPublicSse: (ws, req, res) => publicSse.register(ws, req, res), closePublicSse: ws => publicSse.close(ws)
   });
   require('../routes/social-todo')(app, ctx);
   require('../routes/working-queue')(app, ctx, { enabled: true });

@@ -57,7 +57,7 @@
     const data = contentType.includes("application/json")
       ? await res.json().catch(() => ({}))
       : { error: cleanError(await res.text().catch(() => "")) };
-    if (!res.ok) throw new Error(data.error || data.message || "Request failed");
+    if (!res.ok) { const error = new Error(data.error || data.message || "Request failed"); error.status = res.status; throw error; }
     return data;
   }
 
@@ -198,25 +198,76 @@
     return '<div class="todo-public-comments">' + list + form + '</div>';
   }
 
+  // Viewer lanes. Needs You and snoozes are the owner's inbox, so they read as Up next.
   const LANES = [
-    ["foreground", "Foreground", "Current focus"],
-    ["needs-you", "Needs You", "Waiting for attention"],
-    ["priority", "Priority Queue", "Selected work that has never started"],
-    ["background", "Background", "Started, paused or blocked work"],
-    ["completed", "Completed", "Finished queue tasks"]
+    ["now", "Now", "The one task in focus right now.", "Not sharing a focus right now."],
+    ["running", "Running in background", "Work an assistant or process is actively running, confirmed in the last 15 minutes.", "Nothing running in the background."],
+    ["next", "Up next", "Queued work, in priority order.", "Nothing queued up next."],
+    ["later", "Later today", "Scheduled for later today.", "Nothing else scheduled today."],
+    ["done", "Done today", "Finished today.", "Nothing finished yet today."]
   ];
+  // Mirrors working-queue.js: two independent columns, stacked on narrow screens.
+  const narrow = window.matchMedia("(max-width: 700px)");
+  const LAYOUT = { columns: [["now", "next"], ["running", "later"]], stacked: [["now", "running", "next", "later"]] };
+  const V1_LANES = { foreground: "now", background: "running", "needs-you": "next", priority: "next", completed: "done" };
+  function laneOf(task){ return task.activity?.lane || V1_LANES[task.queue?.lane] || "next"; }
+  function orderOf(task){ return task.activity?.order ?? task.queue?.order ?? 0; }
+
+  function clockLabel(hhmm){
+    const m = /^(\d{1,2}):(\d{2})/.exec(String(hhmm || ""));
+    if (!m) return "";
+    const h = Number(m[1]), suffix = h >= 12 ? "PM" : "AM";
+    return ((h % 12) || 12) + ":" + m[2] + " " + suffix;
+  }
+  function instantLabel(iso){
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return "";
+    try { return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", timeZone: current?.timeZone || undefined }).format(ms); }
+    catch { return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }
+  }
+  function sinceLabel(iso){
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return "";
+    const min = Math.max(0, Math.floor((Date.now() - ms) / 60000));
+    if (min < 1) return "just now";
+    if (min < 60) return min + "m";
+    if (min < 24 * 60) return Math.floor(min / 60) + "h " + (min % 60) + "m";
+    return Math.floor(min / 1440) + "d";
+  }
+  // Text that ages in place, so the clock ticks without rebuilding cards.
+  function liveText(kind, iso){
+    return '<span data-age-kind="' + kind + '" data-age-from="' + esc(iso) + '">' + esc(ageText(kind, iso)) + '</span>';
+  }
+  function ageText(kind, iso){
+    const since = sinceLabel(iso);
+    if (kind === "started") return "Started " + instantLabel(iso) + (since ? " · " + since : "");
+    return "Confirmed " + (since === "just now" ? since : since + " ago");
+  }
+  function cardMeta(task, lane){
+    const a = task.activity || {};
+    const range = task.start ? clockLabel(task.start) + (task.end ? " – " + clockLabel(task.end) : "") : "";
+    if (lane === "now") return a.startedAt ? liveText("started", a.startedAt) : "In focus";
+    if (lane === "running") return a.confirmedAt ? liveText("confirmed", a.confirmedAt) : "Running";
+    if (lane === "next") return [a.priority ? a.priority + " priority" : "", range].filter(Boolean).map(esc).join(" · ");
+    if (lane === "later") return esc([range, itemType(task) !== "task" ? itemTypeLabel(task) : ""].filter(Boolean).join(" · "));
+    if (lane === "done") return a.completedAt ? esc("Completed " + instantLabel(a.completedAt)) : "Done";
+    return "";
+  }
+  const CHIPS = { now: "Now", running: "Running", next: "Up next", later: "Planned", done: "Done" };
   function renderGuestCard(task){
     const el = document.createElement("article");
-    el.className = "shared-queue-card";
+    const lane = laneOf(task);
+    el.className = "shared-queue-card shared-card-" + lane;
     el.dataset.sharedTask = task.id;
-    const q = task.queue || {};
-    const state = q.lane === "foreground" && q.status === "paused" ? "On a break · Work timer paused" : q.lane === "priority" ? (q.priority || "medium") + " priority" : q.lane === "needs-you" ? "Needs attention" : q.status;
     const context = (task.tags || []).slice(0, 2).map(t => t.name).filter(Boolean).join(" · ");
-    el.innerHTML = '<div class="shared-card-heading"><h3>' + esc(task.title) + '</h3>' +
-      '<span class="shared-card-state">' + esc(state || "") + '</span></div>' +
+    const meta = cardMeta(task, lane);
+    el.innerHTML = '<div class="shared-card-heading"><span class="shared-card-state">' +
+        (lane === "running" ? '<i class="shared-pulse" aria-hidden="true"></i>' : '') + esc(CHIPS[lane]) + '</span>' +
+        '<h3>' + esc(task.title) + '</h3></div>' +
+      (meta ? '<p class="shared-card-meta">' + meta + '</p>' : '') +
       (context ? '<p class="shared-card-context">' + esc(context) + '</p>' : '') +
       '<div class="shared-card-social">' + reactionBar(task) +
-        (q.lane !== "completed" ? '<div class="todo-guest-actions">' + bountyButtonHtml(task) + rewardButtonHtml(task) + '</div>' : '') + '</div>' +
+        (lane !== "done" ? '<div class="todo-guest-actions">' + bountyButtonHtml(task) + rewardButtonHtml(task) + '</div>' : '') + '</div>' +
       sponsorChips(task) + rewardFormHtml(task) +
       '<details class="shared-card-details"><summary>Discussion' + ((task.comments || []).length ? ' (' + task.comments.length + ')' : '') + '</summary>' + commentsHtml(task) + '</details>';
     return el;
@@ -234,8 +285,8 @@
       return true;
     });
     items.sort((a, b) => {
-      const rank = task => LANES.findIndex(lane => lane[0] === task.queue?.lane);
-      return rank(a) - rank(b) || (a.queue?.order || 0) - (b.queue?.order || 0);
+      const rank = task => LANES.findIndex(lane => lane[0] === laneOf(task));
+      return rank(a) - rank(b) || orderOf(a) - orderOf(b);
     });
     return items;
   }
@@ -251,7 +302,7 @@
     const list = document.getElementById("todo-public-list");
     if (!list) return;
     // Preserve disclosure and draft state across polling and social mutations.
-    const completedOpen = !!list.querySelector('.shared-queue-completed')?.open;
+    const completedOpen = !!list.querySelector('.shared-queue-done')?.open;
     const disclosures = new Map(Array.from(list.querySelectorAll('[data-shared-task]')).map(card =>
       [card.dataset.sharedTask, { open: card.querySelector('details')?.open,
         rewardOpen: !card.querySelector('.todo-reward-form')?.hidden,
@@ -264,15 +315,19 @@
     const visible = visibleTasks(tasks);
     updateStats(tasks);
     list.innerHTML = "";
-    for (const [key, title, description] of LANES) {
-      const rows = visible.filter(task => task.queue?.lane === key);
-      const section = document.createElement(key === 'completed' ? 'details' : 'section');
+    const sections = {};
+    for (const [key, title, description, emptyText] of LANES) {
+      const rows = visible.filter(task => laneOf(task) === key);
+      const done = key === 'done';
+      const section = document.createElement(done ? 'details' : 'section');
       section.className = 'shared-queue-lane shared-queue-' + key;
-      if (key === 'completed') section.open = completedOpen;
-      section.innerHTML = '<' + (key === 'completed' ? 'summary' : 'h2') + '>' + title + ' <span>' + rows.length + '</span></' + (key === 'completed' ? 'summary' : 'h2') + '><p>' + description + '</p>';
+      section.dataset.sharedLane = key;
+      if (done) section.open = completedOpen;
+      const head = done ? 'summary' : 'h2';
+      section.innerHTML = '<' + head + ' class="shared-lane-head">' + esc(title) + ' <span>' + rows.length + '</span></' + head + '><p class="shared-lane-help">' + esc(description) + '</p>';
       if (!rows.length) {
         const empty = document.createElement('p'); empty.className = 'shared-queue-empty';
-        empty.textContent = key === 'foreground' ? 'No shared foreground task.' : 'No shared tasks in this section.';
+        empty.textContent = emptyText;
         section.appendChild(empty);
       }
       for (const task of rows) {
@@ -287,8 +342,17 @@
         }
         section.appendChild(card);
       }
-      list.appendChild(section);
+      sections[key] = section;
     }
+    const grid = document.createElement('div');
+    grid.className = 'shared-queue-grid';
+    for (const names of LAYOUT[narrow.matches ? 'stacked' : 'columns']) {
+      const col = document.createElement('div'); col.className = 'shared-queue-col';
+      names.forEach(name => col.appendChild(sections[name]));
+      grid.appendChild(col);
+    }
+    list.appendChild(grid);
+    list.appendChild(sections.done);
     if (focusTask) {
       const card = Array.from(list.querySelectorAll('[data-shared-task]')).find(el => el.dataset.sharedTask === focusTask);
       const target = card && Array.from(card.querySelectorAll('button,input,summary')).find(el => focusEmoji ? el.dataset.reactionEmoji === focusEmoji : el.className === focusClass);
@@ -313,7 +377,7 @@
     const status = document.getElementById("todo-public-status");
     if (status) status.hidden = true;
     document.getElementById("todo-public-title").textContent = data.workspaceName || "Shared Todo List";
-    document.getElementById("todo-public-subtitle").textContent = data.ownerUsername ? "Activity queue for " + data.ownerUsername : "Shared activity queue";
+    document.getElementById("todo-public-subtitle").textContent = (data.ownerUsername ? data.ownerUsername + "'s" : "Shared") + " focus, background work and plan for the day.";
     document.getElementById("todo-public-date").textContent = data.date || "Today";
     // Printed copies carry the live URL (see the @media print block): a sheet of
     // paper with no way back to the list is a dead end.
@@ -345,17 +409,85 @@
     });
   }
 
+  // ── Live updates ──
+  // SSE pings say "something changed"; the page re-reads the projection. Every
+  // reconnect, return to the tab, network recovery and known lease expiry also
+  // re-reads, and a visible tab polls every 30s in case pings are lost.
+  const POLL_MS = 30000, TICK_MS = 20000;
+  let events = null, revoked = false, queued = null, failures = 0, retryTimer = null, changeTimer = null, lastOk = 0, liveState = "connecting";
+  function setLive(state){
+    liveState = state;
+    const pill = document.getElementById("todo-public-live");
+    if (!pill) return;
+    const updated = lastOk ? new Date(lastOk).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+    pill.dataset.state = state;
+    pill.textContent = { live: "Live", polling: "Live (checking every 30s)", reconnecting: "Reconnecting…",
+      offline: "Offline" + (updated ? " · updated " + updated : ""), revoked: "Link no longer active", connecting: "Connecting…" }[state] || "Live";
+  }
+  function showRevoked(){
+    revoked = true;
+    events?.close(); events = null;
+    clearTimeout(retryTimer); clearTimeout(changeTimer);
+    current = null; cardDrafts.clear(); pendingActions.clear(); viewerScope = "";
+    document.getElementById("todo-public-list")?.replaceChildren();
+    setLive("revoked");
+    showError("This shared link is no longer active.");
+  }
+  function scheduleChange(data){
+    clearTimeout(changeTimer);
+    const at = Date.parse(data.nextChangeAt), serverNow = Date.parse(data.serverNow);
+    if (!Number.isFinite(at)) return;
+    const skew = Number.isFinite(serverNow) ? Date.now() - serverNow : 0;
+    const wait = Math.min(Math.max(at + skew - Date.now(), 0) + 500 + Math.random() * 1000, 15 * 60 * 1000);
+    changeTimer = setTimeout(() => load(), wait);
+  }
   async function load(){
     if (!token) return showError("Missing share token.");
-    if (loadPromise) return loadPromise;
+    if (revoked) return;
+    // A call during a read waits for a fresh read that starts after this one,
+    // so a ping never lands on a response that was already in flight.
+    if (loadPromise) return queued || (queued = loadPromise.then(() => { queued = null; return load(); }));
     loadPromise = (async function(){
       try {
-        render(await api("/api/public/todo-share/" + encodeURIComponent(token)));
+        const data = await api("/api/public/todo-share/" + encodeURIComponent(token));
+        failures = 0; lastOk = Date.now();
+        render(data);
+        scheduleChange(data);
+        if (liveState === "offline" || liveState === "connecting") setLive(events && events.readyState === 1 ? "live" : "polling");
+        else setLive(liveState);
       } catch (e) {
-        showError(e.message);
+        if (e.status === 404) return showRevoked();
+        if (!current) showError(e.message);
+        failures += 1;
+        setLive("offline");
+        clearTimeout(retryTimer);
+        retryTimer = setTimeout(() => load(), Math.min(60000, 5000 * 2 ** (failures - 1)));
       }
-    })().finally(function(){loadPromise=null;});
+    })().finally(function(){ loadPromise = null; });
     return loadPromise;
+  }
+  let lastErrorLoad = 0;
+  function connect(){
+    if (revoked || !token || typeof EventSource === "undefined") { if (!revoked) setLive("polling"); return; }
+    events?.close();
+    events = new EventSource("/api/public/todo-share/" + encodeURIComponent(token) + "/events");
+    events.onmessage = function(event){
+      if (event.data === "connected") { setLive("live"); load(); }
+      else if (event.data === "changed") load();
+    };
+    events.onerror = function(){
+      if (revoked) return;
+      // A closed stream means 404 (revoked) or 429 (viewer cap): fall back to
+      // polling and let the next read tell which. Otherwise the browser retries.
+      const closed = events && events.readyState === 2;
+      setLive(closed ? "polling" : "reconnecting");
+      if (Date.now() - lastErrorLoad > 5000) { lastErrorLoad = Date.now(); load(); }
+      if (closed) { events = null; setTimeout(() => { if (!revoked && document.visibilityState === "visible") connect(); }, 60000); }
+    };
+  }
+  function tickAges(){
+    document.querySelectorAll("[data-age-kind]").forEach(el => { el.textContent = ageText(el.dataset.ageKind, el.dataset.ageFrom); });
+    if (liveState === "offline") setLive("offline");
   }
 
   async function submitCreateTask(){
@@ -740,9 +872,14 @@
   bindControls();
   bindExport();
   load();
-  if(token&&typeof EventSource!=="undefined"){
-    const events=new EventSource("/api/public/todo-share/"+encodeURIComponent(token)+"/events");
-    events.onmessage=function(event){if(event.data==="changed")load();};
-  }
-  setInterval(load, 5*60*1000);
+  connect();
+  setInterval(function(){ return document.visibilityState === "visible" ? load() : undefined; }, POLL_MS);
+  setInterval(tickAges, TICK_MS);
+  document.addEventListener("visibilitychange", function(){
+    if (document.visibilityState !== "visible" || revoked) return;
+    load();
+    if (!events) connect();
+  });
+  window.addEventListener("online", function(){ if (!revoked) { load(); if (!events) connect(); } });
+  narrow.addEventListener?.("change", function(){ if (current) renderTasks(current.tasks || []); });
 })();

@@ -34,3 +34,35 @@
 .shared-feed-controls > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-size: 13px; }
 .shared-feed-controls > summary::before { content: "▸"; margin-right: 8px; }
 .shared-feed-controls[open] > summary::before { content: "▾"; }
+
+/* Activity v2: Working Queue lanes for viewers (mirrors working-queue.css). */
+.shared-queue-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.shared-queue-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.shared-queue-grid .shared-queue-lane { margin: 0; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); min-width: 0; }
+.shared-queue-lane > .shared-lane-head { font-size: 15px; }
+.shared-queue-lane > .shared-lane-help { margin: 4px 0 0; font-size: 12px; }
+.shared-queue-grid .shared-queue-card { padding: 14px; margin: 10px 0 0; border-radius: 10px; }
+.shared-queue-now .shared-queue-card { border-color: var(--brand); border-left-width: 4px; }
+.shared-queue-running .shared-queue-card { border-left: 4px solid var(--success); }
+.shared-queue-later .shared-queue-card, .shared-queue-done .shared-queue-card { background: transparent; }
+.shared-queue-done { margin: 18px 0; padding: 0 16px; border: 1px solid var(--border); border-radius: 14px; }
+.shared-queue-done > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.shared-queue-done[open] { padding-bottom: 16px; }
+.shared-card-heading { flex-direction: column; gap: 4px; }
+.shared-card-state { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; }
+.shared-card-now .shared-card-state { color: var(--brand); }
+.shared-card-running .shared-card-state { color: var(--success); }
+.shared-card-meta { margin: 6px 0 0; font-size: 13px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.shared-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--success); animation: shared-pulse 1.6s ease-in-out infinite; }
+@keyframes shared-pulse { 50% { opacity: .35; } }
+.shared-live-pill { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; padding: 2px 8px; border-radius: var(--r-full); border: 1px solid var(--line); font-size: 11px; }
+.shared-live-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint); }
+.shared-live-pill[data-state="live"]::before, .shared-live-pill[data-state="polling"]::before { background: var(--success); }
+.shared-live-pill[data-state="reconnecting"]::before, .shared-live-pill[data-state="connecting"]::before { background: var(--warning); }
+.shared-live-pill[data-state="offline"]::before, .shared-live-pill[data-state="revoked"]::before { background: var(--danger); }
+@media (prefers-reduced-motion: reduce) { .shared-pulse { animation: none; } }
+@media (max-width: 700px) {
+  .shared-queue-grid { grid-template-columns: minmax(0, 1fr); }
+  .shared-queue-grid .shared-queue-lane { padding: 12px; }
+  .shared-live-pill { margin: 6px 0 0; }
+}

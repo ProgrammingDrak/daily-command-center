@@ -49,6 +49,11 @@ function localHHMMFromDate(date = new Date()) {
 }
 
 
+function minutesOfDay(hhmm) {
+  const [h, m] = String(hhmm).split(":").map(Number);
+  return h * 60 + m;
+}
+
 function nextQuarterHHMM() {
   const [h, m] = localHHMMFromDate().split(":").map(Number);
   const rounded = Math.min(Math.ceil((h * 60 + m) / 15) * 15, 23 * 60 + 45);
@@ -438,7 +443,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
   // ONE day read, split locally. `getBlocksByDateIncludingDeleted` is a strict superset of
   // `getBlocksByDate` (same table, same date, same order; only the `deleted_at IS NULL`
   // predicate differs), and this handler is genuinely hot: public-todo-share.js polls
-  // `GET /api/public/todo-share/:token` every 15s per open viewer, on a day that can hold
+  // `GET /api/public/todo-share/:token` on every live ping and every 30s per visible viewer, on a day that can hold
   // ~2000 blocks, against a pool capped at 10. Two full-day scans per poll for a superset
   // relationship is pure waste.
   //
@@ -1395,12 +1400,28 @@ app.get("/api/public/todo-share/:token", async (req, res) => {
     // to backlog, other dates, guided/private tasks, notes or delegated reports.
     const snapshot = await require("../lib/working-queue").snapshot(pool,
       { userId: share.owner_id, workspaceId: share.workspace_id }, blockDB);
-    view.tasks = require("../lib/public-working-queue").projectPublicQueue(view.tasks, snapshot);
+    const projector = require("../lib/public-working-queue");
+    if (process.env.DCC_SHARE_ACTIVITY_V2 === "false") {
+      // Rollback path: the PR #444 payload, unchanged.
+      view.tasks = projector.projectPublicQueue(view.tasks, snapshot);
+      view.view = "working-queue";
+    } else {
+      // Now / Running in background / Up next / Later today / Done today.
+      // Needs You, snoozes, notes and worker reports never leave the projection.
+      const now = Date.now();
+      const activity = projector.projectPublicActivity(view.tasks, snapshot, {
+        now, localMinutes: view.date === getTodayStr() ? minutesOfDay(localHHMMFromDate(new Date(now))) : null
+      });
+      view.tasks = activity.tasks;
+      view.nextChangeAt = activity.nextChangeAt;
+      view.serverNow = new Date(now).toISOString();
+      view.timeZone = APP_TIME_ZONE;
+      view.view = "activity-v2";
+    }
     view.sponsorships = view.sponsorships.filter(s => view.tasks.some(t => String(t.id) === String(s.task_id)));
     view.stats = { total: view.tasks.length, done: view.tasks.filter(t => t.queue.lane === "completed").length,
       open: view.tasks.filter(t => t.queue.lane !== "completed").length,
       sponsored: view.tasks.filter(t => t.sponsorships?.some(s => s.status !== "dismissed")).length };
-    view.view = "working-queue";
     // Schedule sections are no longer rendered on this surface.
     delete view.blocks;
     delete view.calendars;
@@ -1409,7 +1430,7 @@ app.get("/api/public/todo-share/:token", async (req, res) => {
     // Same convention as the sibling POST below, and C5b is what gave this route a real
     // failure path: `buildPublicTodoShare` calls `buildDayResponse`, which now THROWS on an
     // unreadable day where it used to return a skeleton. This endpoint is ANONYMOUS and
-    // polled every 15s, so a DB blip would otherwise hand a guest
+    // re-read on every live ping and every 30s while a viewer's tab is visible, so a DB blip would otherwise hand a guest
     // "Day state unavailable for <date>: Postgres read failed and no file mirror exists".
     //
     // Failing closed here while the owner's own /api/state/day degrades to an empty day is

@@ -17,7 +17,7 @@
     <section class="todo-public-hero">
       <div>
         <h1 id="todo-public-title">Shared Activity Queue</h1>
-        <p id="todo-public-subtitle">Current focus and shared work in progress.</p>
+        <p id="todo-public-subtitle">Focus, background work and plan for the day.</p>
       </div>
       <div class="todo-public-actions">
         <a class="todo-public-login" href="/login">Sign in</a>
@@ -34,6 +34,7 @@
           <div>
             <strong id="todo-public-date">Today</strong>
             <span id="todo-public-updated">Live</span>
+            <span id="todo-public-live" class="shared-live-pill" data-state="connecting" role="status" aria-live="polite">Connecting…</span>
           </div>
           <div class="todo-public-stats">
             <span><b id="todo-stat-open">0</b> open</span>
@@ -124,7 +125,7 @@
           </div>
         </div>
 
-        <p class="shared-queue-scope">Only tasks already visible on this shared day appear here. Queue notes and assistant reports stay private.</p>
+        <p class="shared-queue-scope">Only tasks already visible on this shared day appear here. Queue notes, reminders and assistant reports stay private.</p>
         <p id="todo-action-status" role="status" aria-live="polite"></p>
         <p id="todo-encourage-auth-note"></p>
         <div id="todo-public-list" class="todo-public-list"></div>
