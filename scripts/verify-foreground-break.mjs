@@ -1,4 +1,4 @@
-/* global document, DCCWorkingQueue, innerWidth, getComputedStyle, window */
+/* global document, DCCWorkingQueue, innerWidth, getComputedStyle */
 // Isolated PostgreSQL + real API/UI; no .env, live tasks, or shared browser profile.
 import assert from "node:assert/strict";
 import express from "express";
@@ -147,5 +147,5 @@ try {
   await page.getByText(/Another workspace holds Foreground/).waitFor();
   await button('c','focus').click();await page.locator('#toast-container').getByText(/choose Return to Priority before switching/).waitFor();
   await page.unroute('**/api/working-queue');assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({passed:true,checks:['keyboard pause/resume focus','retained foreground','frozen work actuals','separate break clock','refresh','1280/375/358px','frosted veil','44px resume','double click','lost response replay','explicit Priority move','multi-tab refresh','switch preserves snooze'],screenshots:output}));
+  console.log(JSON.stringify({passed:true,testUrl:base,checks:['keyboard pause/resume focus','retained foreground','frozen work actuals','separate break clock','refresh','1280/375/358px','frosted veil','44px resume','double click','lost response replay','explicit Priority move','multi-tab refresh','switch preserves snooze'],screenshots:output}));
 } catch(error){console.error(error);console.error(await page.locator('body').innerText());throw error;} finally {await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await ctx.close();}
