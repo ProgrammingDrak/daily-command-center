@@ -2,6 +2,7 @@
 // public/js/refresh-coordinator.js. Fake EventSource and timers, no network.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { setImmediate } = require('node:timers');
 const { createLiveChannel } = require('./public/js/live-channel');
 const { createTaskRefreshCoordinator } = require('./public/js/refresh-coordinator');
 
