@@ -42,9 +42,9 @@ function corpus(seed, size = 40) {
 }
 
 test('Policy.lanes is a byte-for-byte no-op of the owner split it replaced (ae3b8e7)', () => {
-  const source = execFileSync('git', ['show', 'ae3b8e7495f8009edb2463ce5a4b020aaeb2fc86:public/js/working-queue.js'], { encoding: 'utf8' });
-  const line = source.split('\n').find(l => l.includes('const fg=all.filter('));
-  assert.ok(line && line.includes('upNext=DCC.TaskPriority.group('), 'the old inline split must be sliced verbatim');
+  // Verbatim from ae3b8e7:public/js/working-queue.js (unchanged through 14bacc2), the
+  // inline split Policy.lanes replaced. Embedded so shallow CI clones can run it.
+  const line = "const fg=all.filter(i=>i.status==='foreground'),needs=all.filter(i=>i.needsYou&&i.status!=='foreground'),background=all.filter(i=>i.status==='background'&&!i.needsYou),upNext=DCC.TaskPriority.group(all.filter(i=>i.status==='queued'&&!i.needsYou).map(i=>({id:i.task.id,taskPriority:i.taskPriority,item:i}))).flatMap(group=>group.tasks.map(row=>row.item));";
   const old = new Function('all', 'DCC', line + '\nreturn {fg,needs,background,upNext};');
   for (let seed = 1; seed <= 200; seed++) {
     const all = corpus(seed);

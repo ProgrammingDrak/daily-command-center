@@ -426,9 +426,10 @@
   }
 
   // ── Live updates ──
-  // Shared lifecycle modules (also used by the owner app): live-channel.js owns
-  // the EventSource (pings, heartbeat watchdog, capacity, revoke, reconnect) and
-  // the pill state; refresh-coordinator.js owns single-flight reads, a trailing
+  // live-channel.js owns the EventSource (pings, heartbeat watchdog, capacity,
+  // revoke, reconnect) and the pill state; it is used only by this page for now
+  // (the owner app's sse.js keeps its own stream). refresh-coordinator.js is
+  // shared with the owner app and owns single-flight reads, a trailing
   // re-read for pings that land mid-read, the 30s safety poll, retry backoff and
   // the timed re-read when a worker lease is known to lapse.
   const POLL_MS = 30000, TICK_MS = 20000;
@@ -444,6 +445,8 @@
   }
   function showRevoked(){
     coordinator.stop();
+    // Invalidate in-flight social actions so their completion never touches the cleared page.
+    viewerEpoch++;
     current = null; cardDrafts.clear(); pendingActions.clear(); viewerScope = "";
     document.getElementById("todo-public-list")?.replaceChildren();
     setLive("revoked");
@@ -480,7 +483,9 @@
   const channel = window.DCCLiveChannel.createLiveChannel({
     url: "/api/public/todo-share/" + encodeURIComponent(token) + "/events",
     isVisible: () => document.visibilityState === "visible",
-    onPing: reason => coordinator.refresh(reason),
+    // Spread viewers so one ping, or every stream reconnecting after a deploy,
+    // does not land all full-day reads on the server at the same instant.
+    onPing: reason => setTimeout(() => coordinator.refresh(reason), Math.random() * (reason === "reconnect" ? 2000 : 500)),
     onState: state => { if (state === "revoked") showRevoked(); else setLive(state); },
     // The stream closed and EventSource cannot say why: one feed read can.
     probe: async () => { lastStatus = null; await coordinator.refresh("probe"); return lastStatus ?? 200; }

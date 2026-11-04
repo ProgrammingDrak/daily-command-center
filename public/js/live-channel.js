@@ -62,7 +62,9 @@
         else if (event.data === "changed") { set("live"); opts.onPing("changed"); }
       };
       es.addEventListener("heartbeat", () => { armWatchdog(); if (state === "reconnecting" || state === "offline") set("live"); });
-      es.addEventListener("capacity", () => set("polling"));
+      // Over capacity: the browser reconnects after the server's `retry`; the
+      // watchdog must not reopen early on top of it.
+      es.addEventListener("capacity", () => { clearWatchdog(); set("polling"); });
       es.addEventListener("revoked", () => revoke());
       es.onerror = () => {
         if (closed || es !== source) return;

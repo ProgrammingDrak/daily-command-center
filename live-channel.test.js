@@ -81,10 +81,11 @@ test('a network failure during the probe shows offline', async () => {
   assert.equal(states.at(-1), 'offline');
 });
 
-test('capacity event shows polling without probing', async () => {
-  const { made, states, probes } = setup();
+test('capacity event shows polling without probing, and the watchdog defers to the browser retry', async () => {
+  const { made, states, probes, c } = setup();
   made[0].emit('capacity'); made[0].fail(0); await flush();
   assert.equal(states.at(-1), 'polling'); assert.equal(probes(), 0);
+  c.advance(10000); assert.equal(made.length, 1, 'no early reopen while the server asked us to wait');
 });
 
 test('revoked event clears the channel at once', () => {
@@ -160,6 +161,12 @@ test('retry backoff after failures, reset by success; stop clears every timer', 
   h.c.advance(5000); await flush(); assert.equal(h.loads(), 2);
   h.c.advance(9999); await flush(); assert.equal(h.loads(), 2);
   h.c.advance(1); await flush(); assert.equal(h.loads(), 3);
+  // A success resets the schedule: the next failure retries after the first delay again.
+  h.setFail(false); h.c.advance(10000); await flush(); h.release(); await flush(); await flush();
+  assert.equal(h.loads(), 4);
+  h.setFail(true); await h.co.refresh('y'); const n = h.loads();
+  h.c.advance(4999); await flush(); assert.equal(h.loads(), n);
+  h.c.advance(1); await flush(); assert.equal(h.loads(), n + 1, 'back to the first delay after a success');
   h.co.runAt(1e9); h.co.stop(); assert.equal(h.c.pending(), 0);
   assert.equal(await h.co.refresh('after-stop'), false);
 });

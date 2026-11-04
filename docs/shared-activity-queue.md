@@ -41,7 +41,7 @@ The shared page re-uses the owner's code; it never re-derives queue policy.
 | Lane and card styles | `public/css/working-queue.css` (`.wq-*`) |
 | Lane layout on resize | `DCCQueueLayout.arrange` (`public/js/queue-layout.js`) |
 | Read lifecycle | `DCCRefreshCoordinator` (`public/js/refresh-coordinator.js`, also used by `sse.js`) |
-| Stream lifecycle | `DCCLiveChannel` (`public/js/live-channel.js`) |
+| Stream lifecycle | `DCCLiveChannel` (`public/js/live-channel.js`), share page only for now; owner `sse.js` keeps its own stream |
 
 The only viewer-specific mapping is `VIEWER_LANE` in `lib/public-working-queue.js`.
 `queue-lanes-parity.test.js` fails if either surface re-implements any of these,
