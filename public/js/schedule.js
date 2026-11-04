@@ -1061,13 +1061,31 @@ function toggleDone(id,opts){
   const _today=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   return commitDoneOnDate(id,_today,{ev:scheduled.find(e=>e.id===id),silent:!!opts.silent});
 }
+// Persist the estimate on the task row as well as the legacy day overlay.
+// Merge inside the shared row queue so notes and concurrent edits survive.
+function taskDurationFitsDay(start,minutes){
+  if(pt(start)+minutes<=1439)return true;
+  if(typeof showToast==="function")showToast("This duration extends past the end of the day. Move the task earlier or choose a shorter duration.","error");
+  return false;
+}
+function persistTaskDuration(ev,minutes){
+  ev.duration=minutes;ev.durMin=minutes;
+  const row=_findTaskBlockForDate(ev.id,typeof viewDate!=="undefined"?viewDate:null,ev);
+  if(!row||typeof enqueueRowPropsWrite!=="function")return null;
+  return enqueueRowPropsWrite(row.id,props=>{
+    if(props.start&&!taskDurationFitsDay(props.start,minutes))return null;
+    const next={...props,duration:minutes,durMin:minutes};
+    if(props.start)next.end=fmt(pt(props.start)+minutes);
+    return next;
+  });
+}
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
-  const c=dur(ev),n=stepDuration(c,delta);if(n===c)return;
+  const c=dur(ev),n=stepDuration(c,delta);if(n===c||!taskDurationFitsDay(ev.start,n))return;
   const s=pt(ev.start);ev.end=String(Math.floor((s+n)/60)).padStart(2,"0")+":"+String((s+n)%60).padStart(2,"0");
   if(ev.meta)ev.meta=ev.meta.replace(/·\s*\d+h?\s*\d*m?/,"· "+ms(n));
   durChanges[id]={original:origDur(id)||c,current:n};log("duration",id,c+"->"+n);
-  recalcTimes();saveDurChanges();render()
+  persistTaskDuration(ev,n);recalcTimes();saveDurChanges();render()
 }
 function setDurAbsolute(id,newMin){
   const anchor=typeof taskAnchorById==='function'?taskAnchorById(id):null;
@@ -1079,11 +1097,12 @@ function setDurAbsolute(id,newMin){
   }
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
   const n=Math.max(1,Math.round(newMin));
-  const c=dur(ev);if(n===c)return;
+  const c=dur(ev);if(!taskDurationFitsDay(ev.start,n))return;
+  if(n===c){persistTaskDuration(ev,n);return;}
   const s=pt(ev.start);ev.end=fmt(s+n);
   if(ev.meta)ev.meta=ev.meta.replace(/·\s*\d+h?\s*\d*m?/,"· "+ms(n));
   durChanges[id]={original:origDur(id)||c,current:n};log("duration",id,c+"->"+n);
-  recalcTimes();saveDurChanges();render()
+  persistTaskDuration(ev,n);recalcTimes();saveDurChanges();render()
 }
 // ======== START TIME ADJUSTMENT ========
 function openStartTimePicker(id, anchorEl){

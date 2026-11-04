@@ -1883,6 +1883,9 @@ module.exports = function mount(app, ctx) {
           if (dateChanged) properties.rescheduledFrom = { date: fromDate, at: now };
           if (place && place.kind === "timed") {
             properties.start = place.start; properties.end = place.end; properties._pinnedStart = place.start;
+            // Keep the estimate read by queues/connectors aligned with the saved slot.
+            properties.duration = toMin(place.end) - toMin(place.start);
+            properties.durMin = properties.duration;
             if (blockChoice) {
               properties.timeBlockPlacement = { requestId: placement.requestId, blockId: placement.blockId, fromDate, start: place.start, end: place.end };
               if (typeof placement.title === "string" && placement.title.trim()) properties.title = placement.title.trim().slice(0, 1000);
