@@ -89,7 +89,7 @@ try {
   // wrapped task path, action row and production fonts. The frost adds no flow height.
   await page.evaluate(()=>document.fonts.ready);
   const geometry=[];
-  const themeStyle=await page.addStyleTag({content:''});
+  const themeStyle=await page.addStyleTag({content:'/* theme fixture */'});
   for(const theme of ['dark','light']){
     await themeStyle.evaluate((el,mode)=>{el.textContent=mode==='light'?':root{--bg:#f5f7fb;--card:#fff;--card-hover:#f0f3f8;--border:#cbd5e1;--text:#182030;--text-muted:#526177}':'';},theme);
     for(const width of [1280,435,375,358]){
@@ -102,18 +102,22 @@ try {
         const rect=node=>{const r=node.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
         const veil=el.querySelector('.wq-break-veil'),title=veil.querySelector('.wq-break-title'),header=veil.querySelector('.wq-break-header'),body=veil.querySelector('.wq-break-body');
         const controls=[...veil.querySelectorAll('button')];
-        return{card:rect(el),veil:rect(veil),title:rect(title),header:rect(header),body:rect(body),controls:controls.map(rect),titleReadable:title.scrollHeight<=title.clientHeight,overflow:veil.scrollHeight>veil.clientHeight||veil.scrollWidth>veil.clientWidth,underlyingInert:[...el.children].filter(n=>n!==veil).every(n=>n.inert&&n.getAttribute('aria-hidden')==='true'),mainPadding:getComputedStyle(el.querySelector('.it-list-main')).paddingBottom};
+        return{card:rect(el),veil:rect(veil),title:rect(title),header:rect(header),body:rect(body),controls:controls.map(rect),headerChildren:[...header.children].map(rect),bodyChildren:[...body.children].map(rect),titleReadable:title.scrollHeight<=title.clientHeight,overflow:veil.scrollHeight>veil.clientHeight||veil.scrollWidth>veil.clientWidth,underlyingInert:[...el.children].filter(n=>n!==veil).every(n=>n.inert&&n.getAttribute('aria-hidden')==='true'),mainPadding:getComputedStyle(el.querySelector('.it-list-main')).paddingBottom};
       });
       const within=(inner,outer)=>inner.x>=outer.x-1&&inner.y>=outer.y-1&&inner.right<=outer.right+1&&inner.bottom<=outer.bottom+1;
       assert.ok(Math.abs(measured.card.width-measured.veil.width)<=2&&Math.abs(measured.card.height-measured.veil.height)<=2,'veil fits full card including gutter');
-      assert.ok(measured.card.height<=before.height+2,'pause adds no card height');
+      assert.ok(Math.abs(measured.card.height-before.height)<=2,'pause preserves card height');
+      for(const edge of ['x','y','right','bottom'])assert.ok(Math.abs(measured.card[edge]-measured.veil[edge])<=1.1,'veil matches card edge '+edge);
       assert.equal(measured.mainPadding,'0px','no blank spacer');
       assert.equal(measured.overflow,false,'overlay contents fit');assert.equal(measured.titleReadable,true);
       assert.equal(measured.underlyingInert,true,'covered controls are inert and hidden from accessibility tree');
       assert.ok(measured.header.bottom<=measured.body.y+1,'heading and body do not overlap');
-      for(const box of [measured.title,measured.header,measured.body,...measured.controls])assert.ok(within(box,measured.veil),'all content stays inside frost');
+      for(const box of [measured.title,measured.header,measured.body,...measured.controls,...measured.headerChildren,...measured.bodyChildren])assert.ok(within(box,measured.veil),'all content stays inside frost');
+      for(const boxes of [measured.headerChildren,measured.bodyChildren])for(let i=1;i<boxes.length;i++)assert.ok(boxes[i-1].right<=boxes[i].x+1,'sibling content does not overlap');
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-      for(const control of card('a').locator('.wq-break-veil button').all?await card('a').locator('.wq-break-veil button').all():[]){await control.focus();assert.equal(await control.evaluate(el=>el===document.activeElement),true);}
+      for(const control of await card('a').locator('.wq-break-veil button').all()){await control.focus();assert.equal(await control.evaluate(el=>el===document.activeElement),true);}
+      await button('a','break-options').focus();await page.keyboard.press('Tab');assert.equal(await button('a','focus').evaluate(el=>el===document.activeElement),true);
+      await page.keyboard.press('Shift+Tab');assert.equal(await button('a','break-options').evaluate(el=>el===document.activeElement),true);
       await card('a').locator('.it-list-main [data-queue-action=pause]').evaluate(el=>el.focus());
       assert.equal(await card('a').locator('.it-list-main [data-queue-action=pause]').evaluate(el=>el===document.activeElement),false,'underlying control cannot receive focus');
       await card('a').screenshot({path:path.join(output,'fitted-break-'+theme+'-'+width+'.png')});
@@ -161,17 +165,20 @@ try {
   await button('a','focus').evaluate(el=>{el.click();el.click();});
   await page.getByRole('button',{name:'Retry saved update',exact:true}).waitFor();
   assert.equal(attempts,1);await page.getByRole('button',{name:'Retry saved update',exact:true}).click();
-  await card('a').locator('[data-queue-action=pause]').waitFor();
+  await card('a').locator('.wq-break-veil').waitFor({state:'detached'});
   assert.equal(attempts,2);assert.equal((await task('a')).properties.actualMinutes,actual);
   assert.equal((await state()).queue.items.find(i=>i.task.id==='a').onBreak,false);
   await page.unroute('**/api/working-queue');
   await button('a','pause').click();await card('a').locator('.wq-break-veil').waitFor();
+  await button('a','break-options').focus();await page.keyboard.press('Enter');await page.getByRole('dialog',{name:'Paused task options'}).waitFor();
+  await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'Paused task options'}).waitFor({state:'detached'});
+  assert.equal(await button('a','break-options').evaluate(el=>el===document.activeElement),true,'options dismissal restores focus');
   await button('a','break-options').click();await page.getByRole('dialog',{name:'Paused task options'}).waitFor();
   await page.getByRole('dialog').getByRole('button',{name:'Return to Priority',exact:true}).click();
   await page.waitForFunction(()=>DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='a')?.status==='queued');
   assert.equal((await state()).foreground.length,0);assert.equal((await task('a')).properties.startedAt,undefined);
   // Other tabs observe the durable pause; stale updates cannot resume an old task.
-  await button('a','focus').click();await card('a').locator('[data-queue-action=pause]').waitFor();
+  await button('a','focus').click();await card('a').locator('.wq-break-veil').waitFor({state:'detached'});
   const second=await context.newPage();await second.goto(base);await second.waitForSelector('.wq-focus');
   await button('a','pause').click();await card('a').locator('.wq-break-veil').waitFor();
   await second.evaluate(()=>DCCWorkingQueue.refresh());await second.locator('.wq-break-veil').waitFor();
