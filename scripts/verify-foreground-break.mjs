@@ -28,8 +28,8 @@ const make = (id, title, p = {}) =>
     properties: { local_id: id, title, type: "task", duration: 30, status: "open", ...p }
   });
 const at = new Date(Date.now() - 120000).toISOString();
-await make("parent", "Launch project");
-await make("a", "Review copy", {
+await make("parent", "Journey planning");
+await make("a", "Plan Japan airport transfers and intercity travel", {
   subtaskOf: "parent",
   startedAt: at,
   workStateChangedAt: at,
@@ -85,6 +85,44 @@ try {
   const post=async(action,id,extra={})=>store.execute({action,taskId:id,sourceEventId:ctx.crypto.randomUUID(),expectedRevision:(await state()).revision,at:new Date().toISOString(),...extra},owner);
   for(const id of ['b','c'])await post('queue-add',id);
   await page.evaluate(()=>DCCWorkingQueue.refresh());
+  // Measure the real shared card before and after pause, with its icon gutter,
+  // wrapped task path, action row and production fonts. The frost adds no flow height.
+  await page.evaluate(()=>document.fonts.ready);
+  const geometry=[];
+  const themeStyle=await page.addStyleTag({content:''});
+  for(const theme of ['dark','light']){
+    await themeStyle.evaluate((el,mode)=>{el.textContent=mode==='light'?':root{--bg:#f5f7fb;--card:#fff;--card-hover:#f0f3f8;--border:#cbd5e1;--text:#182030;--text-muted:#526177}':'';},theme);
+    for(const width of [1280,435,375,358]){
+      await page.setViewportSize({width,height:1000});
+      await page.evaluate((w)=>{document.querySelector('.wq-grid').style.gridTemplateColumns=w===1280?'435px minmax(0,1fr)':'';},width);
+      const before=await card('a').boundingBox();
+      await button('a','pause').click();await card('a').locator('.wq-break-veil').waitFor();
+      await page.evaluate((w)=>{document.querySelector('.wq-grid').style.gridTemplateColumns=w===1280?'435px minmax(0,1fr)':'';},width);
+      const measured=await card('a').evaluate(el=>{
+        const rect=node=>{const r=node.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
+        const veil=el.querySelector('.wq-break-veil'),title=veil.querySelector('.wq-break-title'),header=veil.querySelector('.wq-break-header'),body=veil.querySelector('.wq-break-body');
+        const controls=[...veil.querySelectorAll('button')];
+        return{card:rect(el),veil:rect(veil),title:rect(title),header:rect(header),body:rect(body),controls:controls.map(rect),titleReadable:title.scrollHeight<=title.clientHeight,overflow:veil.scrollHeight>veil.clientHeight||veil.scrollWidth>veil.clientWidth,underlyingInert:[...el.children].filter(n=>n!==veil).every(n=>n.inert&&n.getAttribute('aria-hidden')==='true'),mainPadding:getComputedStyle(el.querySelector('.it-list-main')).paddingBottom};
+      });
+      const within=(inner,outer)=>inner.x>=outer.x-1&&inner.y>=outer.y-1&&inner.right<=outer.right+1&&inner.bottom<=outer.bottom+1;
+      assert.ok(Math.abs(measured.card.width-measured.veil.width)<=2&&Math.abs(measured.card.height-measured.veil.height)<=2,'veil fits full card including gutter');
+      assert.ok(measured.card.height<=before.height+2,'pause adds no card height');
+      assert.equal(measured.mainPadding,'0px','no blank spacer');
+      assert.equal(measured.overflow,false,'overlay contents fit');assert.equal(measured.titleReadable,true);
+      assert.equal(measured.underlyingInert,true,'covered controls are inert and hidden from accessibility tree');
+      assert.ok(measured.header.bottom<=measured.body.y+1,'heading and body do not overlap');
+      for(const box of [measured.title,measured.header,measured.body,...measured.controls])assert.ok(within(box,measured.veil),'all content stays inside frost');
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+      for(const control of card('a').locator('.wq-break-veil button').all?await card('a').locator('.wq-break-veil button').all():[]){await control.focus();assert.equal(await control.evaluate(el=>el===document.activeElement),true);}
+      await card('a').locator('.it-list-main [data-queue-action=pause]').evaluate(el=>el.focus());
+      assert.equal(await card('a').locator('.it-list-main [data-queue-action=pause]').evaluate(el=>el===document.activeElement),false,'underlying control cannot receive focus');
+      await card('a').screenshot({path:path.join(output,'fitted-break-'+theme+'-'+width+'.png')});
+      geometry.push({theme,width,beforeHeight:before.height,...measured});
+      await button('a','focus').click();await page.waitForFunction(()=>!document.querySelector('.wq-break-veil'));
+    }
+  }
+  await (await import('node:fs/promises')).writeFile(path.join(output,'geometry.json'),JSON.stringify(geometry,null,2));
+  await themeStyle.evaluate(el=>{el.textContent='';});await page.setViewportSize({width:1280,height:950});await page.evaluate(()=>DCCWorkingQueue.render());
   const initial=await state(),originalOrder=initial.queue.order;
   const pause=button('a','pause');await pause.focus();await page.keyboard.press('Enter');
   await card('a').locator('.wq-break-veil').waitFor();
@@ -102,8 +140,8 @@ try {
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no mobile overflow');
     const veil=card('a').locator('.wq-break-veil');
     assert.ok(await veil.isVisible());assert.ok(await card('a').getByText('On a break',{exact:true}).isVisible());
-    assert.ok(await card('a').locator('.ttl').isVisible());
-    assert.equal(await card('a').locator('.ttl').evaluate(el=>el.scrollHeight<=el.clientHeight),true,'task title remains fully readable');
+    assert.ok(await card('a').locator('.wq-break-title').isVisible());
+    assert.equal(await card('a').locator('.wq-break-title').evaluate(el=>el.scrollHeight<=el.clientHeight),true,'task title remains fully readable');
     assert.notEqual(await veil.evaluate(el=>getComputedStyle(el).backdropFilter),'none');
     const resume=button('a','focus'),box=await resume.boundingBox();assert.ok(box.height>=44);
     await card('a').screenshot({path:path.join(output,'foreground-break-'+width+'.png')});
@@ -128,7 +166,8 @@ try {
   assert.equal((await state()).queue.items.find(i=>i.task.id==='a').onBreak,false);
   await page.unroute('**/api/working-queue');
   await button('a','pause').click();await card('a').locator('.wq-break-veil').waitFor();
-  await button('a','return').click();
+  await button('a','break-options').click();await page.getByRole('dialog',{name:'Paused task options'}).waitFor();
+  await page.getByRole('dialog').getByRole('button',{name:'Return to Priority',exact:true}).click();
   await page.waitForFunction(()=>DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='a')?.status==='queued');
   assert.equal((await state()).foreground.length,0);assert.equal((await task('a')).properties.startedAt,undefined);
   // Other tabs observe the durable pause; stale updates cannot resume an old task.
@@ -147,5 +186,5 @@ try {
   await page.getByText(/Another workspace holds Foreground/).waitFor();
   await button('c','focus').click();await page.locator('#toast-container').getByText(/choose Return to Priority before switching/).waitFor();
   await page.unroute('**/api/working-queue');assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({passed:true,testUrl:base,checks:['keyboard pause/resume focus','retained foreground','frozen work actuals','separate break clock','refresh','1280/375/358px','frosted veil','44px resume','double click','lost response replay','explicit Priority move','multi-tab refresh','switch preserves snooze'],screenshots:output}));
+  console.log(JSON.stringify({passed:true,testUrl:base,checks:['keyboard pause/resume focus','retained foreground','frozen work actuals','separate break clock','refresh','1280/375/358px','card-bounded frost','zero pause-height growth','no overlap/overflow','inert underlay','long title','dark/light semantic tokens','435px lane','44px resume','double click','lost response replay','explicit Priority move','multi-tab refresh','switch preserves snooze'],screenshots:output}));
 } catch(error){console.error(error);console.error(await page.locator('body').innerText());throw error;} finally {await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await ctx.close();}
