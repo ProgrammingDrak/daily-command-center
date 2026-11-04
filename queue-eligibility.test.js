@@ -6,6 +6,7 @@ const cases = [
   ['older', {title:'Finish earlier work'}, true],
   ['date-title', {title:'2026-10-01',type:'task'}, true],
   ['task-notes', {title:'Subtask with notes',type:'task',html:'<p>Details</p>',text:'Details',_taskNotes:{text:'Keep me'}}, true],
+  ...[...Object.keys(require('./public/js/task-types').TYPES),'shell','wrap','responsibility_task','anytime_task'].map(type=>['rich-'+type,{title:'Rich-note '+type,type,html:'<p>Preserve rich details</p>',text:'Preserve rich details'},true]),
   ['note', {title:'Note heading',type:'note'}, false],
   ['saved-note', {html:'<p>Keep this note</p>',text:'Keep this note',_sourceTaskId:'ordinary'}, false],
   ['titled-saved-note', {title:'Note heading',html:'<p>Keep</p>',text:'Keep',_sourceTaskId:'ordinary'}, false],
@@ -26,7 +27,7 @@ const cases = [
 ];
 const root={_done:{ids:['overlay-local',123,'second-root'],at:{'overlay-at':'2026-11-04T12:00:00Z'}}};
 const canonical = row => row.type!=='day_root' && row.type!=='time_entry' && row.properties.kind!=='responsibility_item';
-function row(id,properties){return {id,type:'block',parent_id:['task-notes','generic-child-note'].includes(id)?'ordinary':null,properties};}
+function row(id,properties){return {id,type:'block',parent_id:(id.startsWith('rich-')||['task-notes','generic-child-note'].includes(id))?'ordinary':null,properties};}
 test('picker policy excludes notes and closed aliases without mutating legitimate work',()=>{
   for(const [id,properties,wanted] of cases){const task=row(id,properties),before=structuredClone(task);assert.equal(eligible(task,root,canonical),wanted,id);assert.deepEqual(task,before,id+' is read-only');}
 });
@@ -70,6 +71,6 @@ test('picker SQL, paginated store, HTTP and coordinator enforce one policy with 
     assert.ok([404,409].includes(result.status),id+' direct route rejected');
     assert.equal((await store.state(owner)).revision,prior.revision);assert.equal((await store.history(owner)).length,events,'no audit event for rejected add');
   }
-  for(const id of ['ordinary','older','occurrence','task-notes'])await store.execute({action:'queue-add',taskId:id,sourceEventId:'valid-'+id,expectedRevision:(await store.state(owner)).revision,at:new Date().toISOString()},owner);
+  for(const id of ['ordinary','older','occurrence','task-notes',...cases.filter(([id])=>id.startsWith('rich-')).map(([id])=>id)])await store.execute({action:'queue-add',taskId:id,sourceEventId:'valid-'+id,expectedRevision:(await store.state(owner)).revision,at:new Date().toISOString()},owner);
   assert.deepEqual((await ctx.pool.query('SELECT id,properties FROM blocks ORDER BY id')).rows,before,'all note/task data retained exactly');
 });
