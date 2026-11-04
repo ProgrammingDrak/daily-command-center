@@ -1,4 +1,4 @@
-/* global window, document, innerWidth */
+/* global window, document, innerWidth, requestAnimationFrame */
 // Isolated PostgreSQL + real API/UI; no .env, live tasks, or shared browser profile.
 import assert from "node:assert/strict";
 import express from "express";
@@ -49,7 +49,7 @@ app.get("/fixture/tasks", async (_req, res) =>
 );
 app.get("/", (_req, res) =>
   res.type("html")
-    .send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"></head><body style="padding:20px"><nav id="tab-bar" aria-label="Pages"><button class="tab active" type="button" data-page="tasks">Tasks</button><button class="tab" type="button" data-page="budget" data-tab="budget">Budget</button></nav><div id="task-view-switch" role="tablist"><button type="button" role="tab" data-task-view="queue">Working Queue</button><button type="button" role="tab" data-task-view="list">Itinerary</button><button type="button" role="tab" data-task-view="calendar">Calendar</button></div><button type="button" id="task-actual-toggle" aria-pressed="false" hidden>Actual</button><div class="tab-content" id="tab-schedule">Itinerary fixture</div><div class="tab-content active" id="tab-working-queue"><div id="working-queue-root"></div></div><div class="tab-content" id="tab-budget">Budget fixture</div><div id="toast-container"></div>
+    .send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/tokens.css"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"></head><body style="padding:20px"><nav id="tab-bar" aria-label="Pages"><button class="tab active" type="button" data-page="tasks">Tasks</button><button class="tab" type="button" data-page="budget" data-tab="budget">Budget</button></nav><div id="task-view-switch" role="tablist"><button type="button" role="tab" data-task-view="queue">Working Queue</button><button type="button" role="tab" data-task-view="list">Itinerary</button><button type="button" role="tab" data-task-view="calendar">Calendar</button></div><button type="button" id="task-actual-toggle" aria-pressed="false" hidden>Actual</button><div class="tab-content" id="tab-schedule">Itinerary fixture</div><div class="tab-content active" id="tab-working-queue"><div id="working-queue-root"></div></div><div class="tab-content" id="tab-budget">Budget fixture</div><div id="toast-container"></div>
 <script>window.__state={date:"2099-01-02"};window.addActionItem=()=>{};window.closeNotesDrawer=()=>{};window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:'ws-1'};</script><script src="/public/js/core.js"></script><script src="/public/js/core-ui.js"></script><script src="/public/js/task-types.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/nav-state.js"></script><script src="/public/js/tabs.js"></script>
 <script>window.scheduled=[];window.backlog=[];window.fixtureRows=[];window.isDone=t=>t.status==='done';window.render=()=>{};
 window.blockStore={get:id=>fixtureRows.find(r=>r.id===id),getByType:()=>fixtureRows,acceptWorkRotation:rows=>{for(const row of rows){const i=fixtureRows.findIndex(r=>r.id===row.id);if(i>=0)fixtureRows[i]=row;else fixtureRows.push(row);}scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));}};
@@ -87,10 +87,10 @@ try {
     await input().fill('earlier');await page.locator('[data-add-id="older"]').waitFor();
     assert.equal(await page.locator('[data-add-id]').count(),1);
     // A delayed older query cannot replace a newer query, including its error status.
-    let unblock,started;const slowStarted=new Promise(resolve=>{started=resolve;});const slowGate=new Promise(resolve=>{unblock=resolve;});
-    await page.route('**/api/working-queue/tasks?**',async route=>{if(new URL(route.request().url()).searchParams.get('query')!=='slow'){await route.continue();return;}started();await slowGate;await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'STALE ERROR'})}).catch(()=>{});});
+    let unblock,started,finished;const slowFinished=new Promise(resolve=>{finished=resolve;});const slowStarted=new Promise(resolve=>{started=resolve;});const slowGate=new Promise(resolve=>{unblock=resolve;});
+    await page.route('**/api/working-queue/tasks?**',async route=>{if(new URL(route.request().url()).searchParams.get('query')!=='slow'){await route.continue();return;}started();await slowGate;await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'STALE ERROR'})}).catch(()=>{});finished();});
     await input().fill('slow');await slowStarted;await input().fill('Eligible task 01');
-    await page.locator('[data-add-id="valid-01"]').waitFor();unblock();
+    await page.locator('[data-add-id="valid-01"]').waitFor();unblock();await slowFinished;await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     assert.equal(await page.locator('[data-add-id]').count(),1);assert.ok(!(await page.getByRole('dialog').innerText()).includes('STALE ERROR'));
     await page.unroute('**/api/working-queue/tasks?**');
     await input().fill('Eligible task '+(width===1440?'01':'02'));
@@ -99,13 +99,14 @@ try {
     await add.evaluate(el=>{el.click();el.click();});await page.getByText('Added to queue.',{exact:true}).waitFor();assert.equal(writes,1);assert.equal(await add.isDisabled(),true);
     await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'detached'});
     await open();await page.locator('[data-add-id]').first().waitFor();
+    await page.locator('.dcc-overlay.open').waitFor();await page.locator('.dcc-overlay.open').evaluate(el=>Promise.all(el.getAnimations({subtree:true}).map(animation=>animation.finished)));
     await page.screenshot({path:'/tmp/dcc-picker-'+width+'-synthetic.png'});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     // Closing while a query is in flight invalidates it; a new picker owns a new search.
-    let release,signal;const pending=new Promise(resolve=>{signal=resolve;}),gate=new Promise(resolve=>{release=resolve;});
-    await page.route('**/api/working-queue/tasks?**',async route=>{if(new URL(route.request().url()).searchParams.get('query')!=='closing'){await route.continue();return;}signal();await gate;await route.fulfill({json:{tasks:[{id:'stale',title:'STALE CLOSED'}],nextOffset:null}}).catch(()=>{});});
+    let release,signal,closedFinished;const closedDone=new Promise(resolve=>{closedFinished=resolve;});const pending=new Promise(resolve=>{signal=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+    await page.route('**/api/working-queue/tasks?**',async route=>{if(new URL(route.request().url()).searchParams.get('query')!=='closing'){await route.continue();return;}signal();await gate;await route.fulfill({json:{tasks:[{id:'stale',title:'STALE CLOSED'}],nextOffset:null}}).catch(()=>{});closedFinished();});
     await input().fill('closing');await pending;await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'detached'});
-    await open();await page.locator('[data-add-id]').first().waitFor();release();assert.equal(await page.getByText('STALE CLOSED').count(),0);
+    await open();await page.locator('[data-add-id]').first().waitFor();release();await closedDone;await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));assert.equal(await page.getByText('STALE CLOSED').count(),0);
     await page.evaluate(()=>window.DCC.nav.go({page:'budget'}));await page.getByRole('dialog').waitFor({state:'detached'});
     await page.close();console.log('PASS picker desktop/mobile '+width+': prefiltered pages, More, older/unscheduled/notes, empty/search, duplicate clicks, stale errors, close/reopen, navigation');
   }
