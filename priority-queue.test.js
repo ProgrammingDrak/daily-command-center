@@ -61,7 +61,8 @@ test('Priority Queue coordinator lifecycle and legacy evidence', {skip:!process.
   await ctx.blockDB.rescheduleBlocks([{id:'scheduled',date:'2026-10-20',properties:{...original,title:'Move with stale properties'}}],[]);
   assert.equal((await ctx.blockDB.getBlock('scheduled')).properties.taskPriority,'High');
   await send('start','scheduled');assert.equal((await entry('scheduled')).status,'foreground');
-  await send('pause','scheduled');assert.equal((await entry('scheduled')).status,'queued');
+  await send('pause','scheduled');assert.equal((await entry('scheduled')).status,'foreground');assert.equal((await entry('scheduled')).onBreak,true);
+  await send('queue-return','scheduled');assert.equal((await entry('scheduled')).status,'queued');
   await send('queue-block','scheduled');await send('queue-unblock','scheduled');assert.equal((await entry('scheduled')).status,'queued');
   await send('background-start','background');
   assert.equal((await entry('background')).status,'queued');

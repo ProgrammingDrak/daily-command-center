@@ -8,7 +8,7 @@
   'use strict';
   const MAX_LEASE_MS = 15 * 60 * 1000;
   const tips = {
-    foreground: 'The one task you are actively working on now. Starting another task switches foreground; there is never more than one active foreground task.',
+    foreground: 'Your current task, including a paused break. Pause holds its place and freezes work time. Resume continues it; starting another task switches foreground.',
     needs: 'Tasks explicitly brought to your attention by a notification, a check-back timer you set, or a worker asking for review or an unblock. This is not a general backlog.',
     priority: 'Work that needs doing but is not currently being worked on by you or a background worker. Ordered Very high, High, Medium, Low, then Very low; your order is preserved within each priority.',
     background: 'Work currently executing in Claude or another task/process, supported by a fresh worker report. Open, paused, stopped or unverified work belongs in Priority. Requests for your input belong in Needs You. Explicitly snoozed requests also wait here until their check-back time; snoozing is not worker execution.',

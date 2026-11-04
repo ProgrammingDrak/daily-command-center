@@ -115,10 +115,27 @@ function createConversationStore(ctx) {
       [owner.userId]
     );
     const queue = await Q.snapshot(q, owner, blockDB, (ctx.now || Date.now)());
+    // Inspect only retained-break candidates, reusing the same classification as this queue.
+    const otherBreakRows = (await q.query(`SELECT b.*, item.value AS queue_item, day.properties AS day_root_properties
+      FROM work_rotations w CROSS JOIN LATERAL jsonb_each(COALESCE(w.state->'items','{}'::jsonb)) item
+      JOIN blocks b ON b.id=item.key AND b.user_id=w.user_id AND b.workspace_id=w.workspace_id
+      LEFT JOIN blocks day ON day.type='day_root' AND day.user_id=b.user_id
+        AND day.workspace_id=b.workspace_id AND day.date=b.date AND day.deleted_at IS NULL
+      WHERE w.user_id=$1 AND w.workspace_id<>$2 AND b.deleted_at IS NULL
+        AND item.value->>'status'='foreground' AND item.value ? 'breakStartedAt'`,
+      [owner.userId, owner.workspaceId])).rows;
+    const otherBreak = otherBreakRows.some(row => {
+      const task = blockDB.parseBlock(row);
+      return blockDB.isTaskRow(task) && require('./lib/queue-classification').classify(task, row.queue_item, {dayRoot: row.day_root_properties}) === 'foreground';
+    });
     return {
       revision: s.rows[0]?.revision || 0,
-      foreground: active.rows.filter((r) => r.workspace_id === owner.workspaceId),
-      otherWorkspaceForeground: active.rows.some((r) => r.workspace_id !== owner.workspaceId),
+      foreground: queue.items.filter(item => item.status === "foreground").map(item => ({
+        id: item.task.id, workspace_id: owner.workspaceId, title: item.task.properties.title,
+        started_at: item.task.properties.startedAt || null, onBreak: item.onBreak
+      })),
+      otherWorkspaceForeground: active.rows.some((r) => r.workspace_id !== owner.workspaceId) ||
+        otherBreak,
       background: queue.items
         .filter((r) => ["background", "blocked"].includes(r.status))
         .map((r) => ({ task_id: r.task.id, started_at: r.backgroundSince })),
@@ -485,6 +502,9 @@ function createConversationStore(ctx) {
       } else {
         const target = await task(q, b.taskId, owner);
         before.task = structuredClone(target);
+        const retainedBreak = before.queue.items.find(item => item.task.id === target.id)?.onBreak;
+        if (b.action === "start" && before.otherWorkspaceForeground)
+          throw M.fail("Release foreground work in the other workspace before switching", 409);
         if (["start", "background-start", "queue-block"].includes(b.action) && isBlockDone(target))
           throw M.fail("Completed tasks must be explicitly reopened", 409);
         if (["start", "pause", "done", "background-start", "queue-block"].includes(b.action)) {
@@ -501,9 +521,9 @@ function createConversationStore(ctx) {
           // Pin the old task shown in the switch dialog as well as the activity
           // revision: out-of-band completion/deletion need not advance that revision.
           if (b.action === "start" && Object.hasOwn(b, "expectedForegroundTaskId")) {
-            const matches = b.expectedForegroundTaskId === null ? closing.length === 0
-              : closing.length === 1 && closing[0].id === b.expectedForegroundTaskId
-                && !isBlockDone(closing[0]);
+            const displaced = before.foreground.filter(row => row.id !== target.id);
+            const matches = b.expectedForegroundTaskId === null ? displaced.length === 0
+              : displaced.length === 1 && displaced[0].id === b.expectedForegroundTaskId;
             if (!matches) throw M.fail("Foreground changed; review the queue before switching", 409);
           }
           for (const row of closing)
@@ -517,6 +537,8 @@ function createConversationStore(ctx) {
             );
         }
         if (b.action === "start") {
+          for (const item of before.queue.items.filter(item => item.onBreak && item.task.id !== target.id))
+            Q.setStatus(queue, item.task, "background", b);
           if (target.properties.guidedDefinitionId && !legacy) {
             const guided = require("./guided-store").createGuidedStore(ctx),
               view = await guided.get(target.id, owner, q);
@@ -610,8 +632,18 @@ function createConversationStore(ctx) {
           await blockDB.updateBlock(target.id, { properties: { ...(await task(q, target.id, owner)).properties, everStarted: true }, [M.TIMING_WRITE]: true }, q);
         if (b.action === "background-start" || b.action === "queue-block")
           Q.setStatus(queue, await task(q, target.id, owner), b.action === "queue-block" ? "blocked" : "background", b);
-        if (b.action === "background-stop" || b.action === "pause")
-          Q.setStatus(queue, await task(q, target.id, owner), "paused", b);
+        if (b.action === "background-stop" || b.action === "pause") {
+          const current = await task(q, target.id, owner);
+          const hold = b.action === "pause" && !b.attentionMode && !isBlockDone(current) &&
+            (target.properties.startedAt || retainedBreak);
+          const previousBreak = queue.items[target.id]?.breakStartedAt;
+          const item = Q.setStatus(queue, current, hold ? "foreground" : "paused", b);
+          if (hold) {
+            item.breakStartedAt = previousBreak || b.at;
+            item.breakOperationId = current.properties.workStateOperationId || null;
+            item.breakCompletionRevision = current.properties._completionRevision || null;
+          }
+        }
         detail.task = await task(q, target.id, owner);
       }
       await Q.save(q, owner, queue);
