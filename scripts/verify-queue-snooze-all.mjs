@@ -115,6 +115,7 @@ try {
   // Keyboard opener, focus trap, Escape and explicit Cancel never write.
   const before=userWrites().length;
   await bulk().focus();await page.keyboard.press('Enter');await dialog().waitFor();
+  await page.waitForFunction(()=>getComputedStyle(document.querySelector('.dcc-overlay')).opacity==='1');
   assert.match(await dialog().textContent(),/Snooze all 3 Needs You items/);
   assert.equal(await dialog().locator('[data-minutes] option[value="0"]').count(),0);
   for(let i=0;i<8;i++){await page.keyboard.press('Tab');assert.ok(await dialog().evaluate(el=>el.contains(document.activeElement)));}
@@ -123,6 +124,11 @@ try {
   assert.equal(await bulk().evaluate(el=>el===document.activeElement),true);
   await bulk().click();await dialog().getByRole('button',{name:'Cancel',exact:true}).click();await closed();
   assert.equal(userWrites().length,before);
+  // Virtual activation can open a button without moving DOM focus to it.
+  await page.evaluate(()=>{document.activeElement.blur();document.querySelector('[data-queue-action="snooze-all"]').click();});
+  await dialog().waitFor();await page.waitForFunction(()=>getComputedStyle(document.querySelector('.dcc-overlay')).opacity==='1');await page.evaluate(()=>DCCWorkingQueue.refresh());
+  await page.keyboard.press('Escape');await closed();
+  assert.equal(await bulk().evaluate(el=>el===document.activeElement),true,'virtual activation restores the intended opener');
   check('keyboard open, focus trap, Escape, Cancel and focus restoration');
   for(const width of [358,375,1280]){
     await page.setViewportSize({width,height:950});
@@ -184,4 +190,4 @@ try {
   check('reload durability, expiry, one notification per item and no foreground or actuals changes');
   assert.deepEqual(errors,[]);
   for(const name of passed)console.log('ok - '+name);
-} catch(error) {console.error('Page errors:',errors);console.error((await page.locator('body').textContent()).slice(0,2000));throw error;} finally {await browser.close();server.close();await ctx.close();}
+} catch(error) {console.error('Page errors:',errors);console.error('Focus:',await page.evaluate(()=>({active:document.activeElement.outerHTML,inert:[...document.querySelectorAll('[inert]')].map(el=>[el.tagName,el.id]),overlay:document.querySelector('.dcc-overlay')?.outerHTML})));console.error((await page.locator('body').textContent()).slice(0,2000));throw error;} finally {await browser.close();server.close();await ctx.close();}

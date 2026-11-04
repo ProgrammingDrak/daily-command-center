@@ -272,7 +272,7 @@
     if(item.blocked)return send(envelope('queue-unblock',{taskId:item.task.id}));
     return transition('queue-block',item);
   }
-  function modal(title,body,submit,label='Save',onClose,returnFocus){let busy=false;return DCC.overlay.open({kind:'modal',title,body,onClose,returnFocus,canClose:()=>!busy,actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
+  function modal(title,body,submit,label='Save',onClose,returnFocus){let busy=false;return DCC.overlay.open({kind:'modal',title,body,onClose,anchor:returnFocus?.(),returnFocus,canClose:()=>!busy,actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
   function form(html){const body=document.createElement('div');body.className='wq-form';body.innerHTML=html+'<p role="status"></p>';return body;}
   async function transition(action,item){
     let displaced=null,startRevision=null;
