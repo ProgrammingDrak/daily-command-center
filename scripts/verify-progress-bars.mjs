@@ -15,8 +15,11 @@ const page=await context.newPage(),errors=[];
 page.on('pageerror',e=>errors.push(e.message));
 try{
  await page.goto(base+'/?tab=tasks&view=list');
- await page.waitForFunction(()=>!!window.DCC?.ProgressActual&&!!window.DCC?.nav);
+ await page.waitForFunction(()=>!!window.DCC?.ProgressActual&&!!window.DCC?.nav&&!!document.querySelector('#ptrack').dataset.date);
  const today=await page.evaluate(()=>window.DCC.dates.todayKey());
+ // The fixture server may run in UTC while the app projects New York dates.
+ // Anchor ongoing sessions inside the selected fixture day without pausing timers.
+ await page.clock.setFixedTime(new Date(today+'T17:00:00Z'));
  await fetch(base+'/api/review/actual/seed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({today})});
  await page.reload();
  await page.waitForSelector('#pactual [data-entry-id="actual-te-a"]');

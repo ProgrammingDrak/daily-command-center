@@ -8,6 +8,7 @@ const require=createRequire(import.meta.url),base=process.env.DCC_PROGRESS_REVIE
 assert.match(base,/^http:\/\/(127\.0\.0\.1|localhost):\d+$/);
 assert.equal((await fetch(base+'/api/health').then(r=>r.json())).reviewOnly,true);
 const date=(await fetch(base+'/api/state/day').then(r=>r.json())).date;
+assert.equal((await fetch(base+'/api/review/actual/seed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({today:date})})).ok,true);
 const next=new Date(date+'T12:00:00Z');next.setUTCDate(next.getUTCDate()+1);const tomorrow=next.toISOString().slice(0,10);
 const out=process.env.DCC_COMBINED_REVIEW_OUT||'test-results/combined-task-header';await fs.mkdir(out,{recursive:true});
 const ctx=await require('../test-support/activity-db').createActivityDb();
@@ -31,6 +32,7 @@ try{
   const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(base+'/?tab=tasks&view=queue');await page.waitForSelector('[data-queue-id="combined-focus"]');
   await page.waitForFunction(()=>!!document.querySelector('#ptrack').dataset.date);
+  await page.waitForSelector('#ptrack button');await page.waitForSelector('#pactual button');
   await page.evaluate(()=>document.fonts.ready);
   const card=page.locator('[data-queue-id="combined-focus"]'),before=await card.boundingBox();
   snapshot=paused;await page.evaluate(()=>DCCWorkingQueue.refresh());await card.locator('.wq-break-veil').waitFor();
