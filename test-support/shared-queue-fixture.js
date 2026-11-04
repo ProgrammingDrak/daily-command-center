@@ -13,7 +13,8 @@ async function createSharedQueueFixture() {
     next();
   });
   const publicSse = require('../lib/public-sse').createPublicSseHub({ debounceMs: 50 });
-  const date = '2026-10-29';
+  // Today in the fixture's UTC app zone, so "Done today" and "Later today" use the real clock.
+  const date = new Date().toISOString().slice(0, 10);
   let day = { schedule: { timeline: [] }, triage: { open_items: [] } };
   Object.assign(ctx, {
     APP_TIME_ZONE: 'UTC', getTodayStr: () => date, isValidDate: value => /^\d{4}-\d{2}-\d{2}$/.test(value || ''),
@@ -51,12 +52,12 @@ async function createSharedQueueFixture() {
   ];
   const items = {}, order = [];
   for (const [id, title, status] of entries) {
-    await ctx.blockDB.createBlock({ id, type: 'block', user_id: 1, workspace_id: 'ws-1', date: id === 'older' ? '2026-10-28' : date,
+    await ctx.blockDB.createBlock({ id, type: 'block', user_id: 1, workspace_id: 'ws-1', date: id === 'older' ? new Date(Date.parse(date) - 86400000).toISOString().slice(0, 10) : date,
       properties: { title, kind: id === 'backlog' ? 'backlog' : 'task', type: id === 'guided' ? 'guided' : 'task',
         local_id: 'local-' + id, publicVisibility: id === 'private' ? 'private' : 'public',
         taskPriority: id === 'high' ? 'High' : id === 'low' ? 'Low' : 'Medium',
-        ...(status === 'foreground' ? { startedAt: '2026-10-29T10:00:00.000Z' } : {}),
-        ...(status === 'completed' ? { doneAt: '2026-10-29T09:00:00.000Z' } : {}) } });
+        ...(status === 'foreground' ? { startedAt: date + 'T00:00:00.000Z' } : {}),
+        ...(status === 'completed' ? { doneAt: date + 'T00:00:00.000Z' } : {}) } });
     if (status) { order.push(id); items[id] = { status, hasActivity: !['queued'].includes(status), note: 'PRIVATE QUEUE NOTE SENTINEL' }; }
   }
   await ctx.pool.query('INSERT INTO work_rotations(workspace_id,user_id,state) VALUES($1,$2,$3)', ['ws-1', 1, { version: 2, order, items }]);

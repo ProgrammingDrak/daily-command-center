@@ -16,17 +16,20 @@ const { chromium } = require('playwright-core');
     for (const width of [1440, 375]) {
       await fixture.pool.query("DELETE FROM todo_task_reactions; DELETE FROM todo_task_comments; DELETE FROM todo_sponsorships");
       const context = await browser.newContext({ viewport: { width, height: 1000 } });
-      // Capture polling callback to drive the real refresh without time delays.
-      await context.addInitScript(() => { const original = window.setInterval; window.setInterval = (fn, ms, ...args) => { if (ms === 30000) window.refreshShareForTest = fn; return original(fn, ms, ...args); }; });
       const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
       page.on('dialog', dialog => dialog.accept());
       await page.goto(fixture.base + '/todo/' + fixture.token);
       await page.locator('.shared-queue-card').first().waitFor();
       assert.equal(await page.locator('.shared-queue-card').count(), 8);
-      assert.equal(await page.locator('.shared-queue-next h3').first().innerText(), 'Prepare the release checklist');
+      assert.equal(await page.locator('.shared-queue-next .ttl').first().innerText(), 'Prepare the release checklist');
       assert.ok(!(await page.locator('body').innerText()).includes('SENTINEL'));
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       assert.equal(await page.getByRole('button', { name: 'Bring forward' }).count(), 0);
+      // Owner row renderer, read-only: no complete, schedule, priority, drag or open controls.
+      assert.equal(await page.locator('.shared-queue-card.wq-card.it-list-item').count(), 8);
+      assert.equal(await page.locator('.shared-queue-card :is(.it-list-check,.btn-schedule,.wq-priority-symbol,.btn-task-radial,.btn-del-task,[draggable=true],.ttl[role=button])').count(), 0);
+      assert.ok(!(await page.locator('.shared-queue-card .ttl').allInnerTexts()).some(t => t.includes('›')), 'no parent paths');
+      assert.equal(await page.locator('#todo-public-list .wq-grid > .wq-col').count(), 2);
       const focus = page.locator('[data-shared-task="local-focus"]');
       assert.equal(await focus.locator('.todo-bounty-btn').isDisabled(), true);
       assert.equal(await focus.locator('.todo-reward-form').isVisible(), false);
@@ -35,7 +38,7 @@ const { chromium } = require('playwright-core');
       await focus.getByRole('textbox', { name: 'Reward offered' }).fill('Coffee together');
       await focus.getByRole('textbox', { name: 'Your name', exact: true }).fill('Casey');
       await focus.getByRole('textbox', { name: 'Reward offered' }).evaluate(el=>{el.focus();el.setSelectionRange(2,5);});
-      await page.evaluate(() => window.refreshShareForTest());
+      await page.evaluate(() => window.DCCShareLive.refresh('test'));
       assert.deepEqual(await focus.getByRole('textbox', { name: 'Reward offered' }).evaluate(el=>[el.selectionStart,el.selectionEnd]),[2,5]);
       assert.equal(await focus.getByRole('textbox', { name: 'Reward offered' }).inputValue(), 'Coffee together');
       assert.ok(await focus.getByRole('textbox', { name: 'Reward offered' }).isVisible());
@@ -55,7 +58,7 @@ const { chromium } = require('playwright-core');
       assert.equal(await focus.getByRole('button', { name: 'React 🔥', exact: true }).isDisabled(), false);
       await page.unroute('**/reactions');
       await page.locator('.shared-queue-done > summary').click();
-      await page.evaluate(() => window.refreshShareForTest());
+      await page.evaluate(() => window.DCCShareLive.refresh('test'));
       assert.equal(await page.locator('.shared-queue-done').evaluate(el => el.open), true);
       await focus.locator('summary').click();
       await page.locator('.shared-queue-done > summary').click();
@@ -66,7 +69,6 @@ const { chromium } = require('playwright-core');
     }
     // A -> B -> A: an old A response must not clear the new A draft or busy state.
     const abaContext=await browser.newContext();
-    await abaContext.addInitScript(()=>{const original=window.setInterval;window.setInterval=(fn,ms,...args)=>{if(ms===30000)window.refreshShareForTest=fn;return original(fn,ms,...args);};});
     const aba=await abaContext.newPage();let viewer='A', commentRequests=0,releaseOld,releaseNew,oldFetched,newFetched;
     const oldReady=new Promise(resolve=>oldFetched=resolve),newReady=new Promise(resolve=>newFetched=resolve);
     const oldGate=new Promise(resolve=>releaseOld=resolve),newGate=new Promise(resolve=>releaseNew=resolve);
@@ -78,7 +80,7 @@ const { chromium } = require('playwright-core');
     await aba.goto(fixture.base+'/todo/'+fixture.token);
     const card=aba.locator('[data-shared-task="local-focus"]');await card.waitFor();await card.locator('summary').click();
     await card.getByRole('textbox',{name:'Comment',exact:true}).fill('Old A comment');await card.locator('.todo-public-comment-form button').click();await oldReady;
-    viewer='B';await aba.evaluate(()=>window.refreshShareForTest());viewer='A';await aba.evaluate(()=>window.refreshShareForTest());
+    viewer='B';await aba.evaluate(()=>window.DCCShareLive.refresh('test'));viewer='A';await aba.evaluate(()=>window.DCCShareLive.refresh('test'));
     await card.locator('summary').click();await card.getByRole('textbox',{name:'Comment',exact:true}).fill('New A comment');await card.locator('.todo-public-comment-form button').click();await newReady;
     releaseOld();await aba.waitForTimeout(100);
     assert.equal(await card.getByRole('textbox',{name:'Comment',exact:true}).inputValue(),'New A comment');

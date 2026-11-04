@@ -26,20 +26,46 @@ for pages loaded before this release, without a `needs-you` value.
 
 `DCC_SHARE_ACTIVITY_V2=false` restores the PR #444 payload (`view:"working-queue"`).
 
+## Shared code with the owner Working Queue
+
+The shared page re-uses the owner's code; it never re-derives queue policy.
+
+| Concern | Shared entrypoint |
+|---|---|
+| Lanes | `DCCQueuePolicy.lanes(items, TaskPriority.group)` (`public/js/queue-policy.js`) |
+| Worker lease, 15-min cap, check-in time | `DCCQueuePolicy.execution()` → `execution.{state, validUntil, observedAt}` |
+| Priority order | `TaskPriority.group` |
+| Done today | `DCCCompletedQueueFilter.select(items, 'today', now, timeZone)` |
+| Fixed-time types | `lib/public-feed-type.js` `TIME_ONLY_FEED_TYPES` (parity with `TaskTypes.fixedTypes()`) |
+| Card row | `renderItineraryListRow` (`itinerary-card.js`), called with no callbacks |
+| Lane and card styles | `public/css/working-queue.css` (`.wq-*`) |
+| Lane layout on resize | `DCCQueueLayout.arrange` (`public/js/queue-layout.js`) |
+| Read lifecycle | `DCCRefreshCoordinator` (`public/js/refresh-coordinator.js`, also used by `sse.js`) |
+| Stream lifecycle | `DCCLiveChannel` (`public/js/live-channel.js`) |
+
+The only viewer-specific mapping is `VIEWER_LANE` in `lib/public-working-queue.js`.
+`queue-lanes-parity.test.js` fails if either surface re-implements any of these,
+if lanes drift from the owner policy, or if a private field reaches the payload.
+
 ## Live updates
 
 - Owner writes ping `/api/public/todo-share/:token/events` (`lib/public-sse.js`).
-  Pings coalesce per workspace (750 ms trailing), carry an `id`, and the stream
-  sends `retry: 3000` plus a heartbeat comment every 25 s. Caps stay 100 total and
-  20 per workspace.
-- The page re-reads on every ping, on `connected` (so each reconnect catches up),
-  on returning to the tab, on `online`, and at `nextChangeAt` (the earliest
-  visible worker lease expiry). A visible tab also polls every 30 s.
-- A read during a read waits for a fresh read. A 404 clears the page and shows
-  "This shared link is no longer active". Other failures keep the last content,
-  show Offline with the last update time, and retry with backoff to 60 s.
-- The status pill reads Live, Live (checking every 30s), Reconnecting, Offline,
-  or Link no longer active.
+  Pings coalesce per workspace (750 ms trailing) and carry an `id`. The stream
+  sends `retry: 3000` and a named `heartbeat` event every 25 s.
+- Browser EventSource cannot read HTTP status or comment frames, so the server
+  speaks in readable events: `capacity` (over the 100 total / 20 per workspace
+  cap; the browser retries after 60 s and the page polls) and `revoked` (sent
+  before a revoke or rotate closes the stream).
+- `live-channel.js`: `connected` and `changed` trigger a re-read; no heartbeat
+  for 2.5 intervals reopens the stream; a closed stream is explained by one feed
+  read (404 = revoked, success = polling with 30 s / 60 s / 5 min reopen, network
+  failure = offline).
+- `refresh-coordinator.js`: one read at a time, one trailing read for pings that
+  land mid-read, a 30 s poll only when nothing fresher arrived, a timed read at
+  `nextChangeAt`, retry backoff to 60 s, and a read on return to the tab.
+- The feed records `last_viewed_at` at most once per 5 minutes.
+- The status pill reads Live, Live (polling), Reconnecting, Offline, or Link no
+  longer active.
 
 ## Access boundary
 

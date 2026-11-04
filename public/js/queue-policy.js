@@ -22,7 +22,9 @@
         typeof report.work?.id === 'string' && !!report.work.id && e?.state === 'running' &&
         Number.isFinite(observed) && observed <= now && until > now && until > observed && until - observed <= MAX_LEASE_MS;
     });
-    if (live.length) return {state:'running',validUntil:new Date(Math.max(...live.map(r=>Date.parse(r.execution.validUntil)))).toISOString(),workers:live.map(r=>r.work)};
+    // observedAt: the newest check-in among the same live reports (never a rejected one).
+    if (live.length) return {state:'running',validUntil:new Date(Math.max(...live.map(r=>Date.parse(r.execution.validUntil)))).toISOString(),
+      observedAt:new Date(Math.max(...live.map(r=>Date.parse(r.execution.observedAt)))).toISOString(),workers:live.map(r=>r.work)};
     if (reports.some(r=>r.execution?.state==='running')) return {state:'stale',validUntil:null,workers:[]};
     if (reports.some(r=>r.execution?.state==='stopped' || r.phase==='paused')) return {state:'stopped',validUntil:null,workers:[]};
     return {state:'unknown',validUntil:null,workers:[]};
@@ -39,5 +41,20 @@
     return {...item,status:snoozed||evidence.state==='running'?'background':'queued',execution:evidence,
       snoozed,needsYou:!snoozed&&(!!item.needsReview||(Number.isFinite(due)&&due<=now))};
   }
-  return {MAX_LEASE_MS,tips,execution,reviewRequested,presentation};
+  // The Working Queue lane split, shared by the owner page and the shared-link
+  // projection so a task can never sit in different lanes on the two surfaces.
+  // `group` is TaskPriority.group (browser: DCC.TaskPriority.group; Node:
+  // require('./task-priority').group); Priority keeps its level order.
+  function lanes(items, group) {
+    if (typeof group !== 'function') throw new TypeError('lanes() needs TaskPriority.group');
+    const all = items || [];
+    return {
+      foreground: all.filter(i=>i.status==='foreground'),
+      needs: all.filter(i=>i.needsYou&&i.status!=='foreground'),
+      priority: group(all.filter(i=>i.status==='queued'&&!i.needsYou).map(i=>({id:i.task.id,taskPriority:i.taskPriority,item:i}))).flatMap(g=>g.tasks.map(row=>row.item)),
+      background: all.filter(i=>i.status==='background'&&!i.needsYou),
+      completed: all.filter(i=>i.status==='completed')
+    };
+  }
+  return {MAX_LEASE_MS,tips,execution,reviewRequested,presentation,lanes};
 });

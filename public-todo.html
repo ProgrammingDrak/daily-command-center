@@ -10,6 +10,8 @@
   <link rel="stylesheet" href="/public/css/tokens.css">
   <link rel="stylesheet" href="/public/css/dashboard.css">
   <link rel="stylesheet" href="/public/css/ui-optimization.css">
+  <!-- Owner Working Queue lanes and cards; shared-queue.css adds only share-only parts. -->
+  <link rel="stylesheet" href="/public/css/working-queue.css">
   <link rel="stylesheet" href="/public/css/shared-queue.css">
 </head>
 <body class="todo-public-body guest-mode">
@@ -140,6 +142,11 @@
        Found while adding the export bar; the break predates it. -->
   <script src="/public/js/core.js"></script>
 
+  <!-- Shared with the owner app: card row, lane layout, live lifecycle. -->
+  <script src="/public/js/itinerary-card.js"></script>
+  <script src="/public/js/queue-layout.js"></script>
+  <script src="/public/js/refresh-coordinator.js"></script>
+  <script src="/public/js/live-channel.js"></script>
   <script src="/public/js/share-export.js"></script>
   <script src="/public/js/public-todo-share.js"></script>
 </body>

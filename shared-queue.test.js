@@ -171,7 +171,8 @@ test('hidden focus is indistinguishable from no focus', () => {
 });
 
 test('Up next keeps canonical order without gaps from hidden rows', () => {
-  const items = ['x', 'b', 'secret', 'a'].map(id => snapItem(id, 'queued'));
+  // Snapshot order is the canonical order (priorityOrder is derived from it).
+  const items = ['b', 'secret', 'a', 'x'].map(id => snapItem(id, 'queued'));
   const { tasks } = projectPublicActivity(['a', 'b', 'x'].map(id => pub(id)), { items, priorityOrder: ['b', 'secret', 'a', 'x'] }, { now: NOW });
   assert.deepEqual(tasks.map(t => [t.blockId, t.activity.order]), [['b', 0], ['a', 1], ['x', 2]]);
 });

@@ -1,4 +1,6 @@
 const { collectSubtreeBlockIds } = require("../lib/reschedule");
+const { publicFeedType, publicFeedTypeLabel } = require("../lib/public-feed-type");
+const { minutesOfDay } = require("../lib/public-working-queue");
 // Extracted from server.js — mounted via routes/index pattern: module.exports(app, ctx).
 // ctx carries shared server-scope helpers/stores; see server.js where ctx is built.
 
@@ -48,11 +50,6 @@ function localHHMMFromDate(date = new Date()) {
   return `${parts.hour || "09"}:${parts.minute || "00"}`;
 }
 
-
-function minutesOfDay(hhmm) {
-  const [h, m] = String(hhmm).split(":").map(Number);
-  return h * 60 + m;
-}
 
 function nextQuarterHHMM() {
   const [h, m] = localHHMMFromDate().split(":").map(Number);
@@ -316,25 +313,6 @@ function publicTaskStatus(task, doneIds) {
   if (!m) return "open";
   const endMin = Number(m[1]) * 60 + Number(m[2]);
   return nowMin > endMin ? "overdue" : "open";
-}
-
-function publicFeedType(input) {
-  const kind = String(input.kind || input.type || "task").toLowerCase();
-  const source = String(input.source || "").toLowerCase();
-  if (source === "calendar" || source === "gcal" || input.gcal_event_id || input.gcal_calendar_id || ["meeting", "oneone"].includes(kind)) return "calendar";
-  if (["responsibility_trigger", "repeat_responsibility", "repeat", "recurring"].includes(kind) || input.is_recurring || input.recurring) return "repeat";
-  if (["break", "free_time"].includes(kind)) return "break";
-  if (kind === "ooo") return "ooo";
-  return "task";
-}
-
-function publicFeedTypeLabel(feedType, kind) {
-  if (feedType === "calendar") return kind === "oneone" ? "1:1" : "Calendar";
-  if (feedType === "repeat") return "Repeat";
-  if (feedType === "break") return "Break";
-  if (feedType === "ooo") return "OOO";
-  if (kind === "public_task") return "Public";
-  return "Task";
 }
 
 async function getPublicCalendarMap() {
@@ -1394,12 +1372,15 @@ app.get("/api/public/todo-share/:token", async (req, res) => {
   try {
     const share = await findTodoShareByToken(req.params.token);
     if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
-    await pool.query("UPDATE todo_shares SET last_viewed_at = NOW() WHERE id = $1", [share.id]);
+    // Viewers re-read on every live ping and poll, so record a view at most every 5 minutes.
+    await pool.query("UPDATE todo_shares SET last_viewed_at = NOW() WHERE id = $1 AND (last_viewed_at IS NULL OR last_viewed_at < NOW() - INTERVAL '5 minutes')", [share.id]);
     const view = await buildPublicTodoShare(share, req.query.date, req);
     // Keep the existing shared-day allowlist. Queue membership cannot grant access
     // to backlog, other dates, guided/private tasks, notes or delegated reports.
+    // One instant for the snapshot's lease checks and the projection.
+    const now = Date.now();
     const snapshot = await require("../lib/working-queue").snapshot(pool,
-      { userId: share.owner_id, workspaceId: share.workspace_id }, blockDB);
+      { userId: share.owner_id, workspaceId: share.workspace_id }, blockDB, now);
     const projector = require("../lib/public-working-queue");
     if (process.env.DCC_SHARE_ACTIVITY_V2 === "false") {
       // Rollback path: the PR #444 payload, unchanged.
@@ -1408,9 +1389,9 @@ app.get("/api/public/todo-share/:token", async (req, res) => {
     } else {
       // Now / Running in background / Up next / Later today / Done today.
       // Needs You, snoozes, notes and worker reports never leave the projection.
-      const now = Date.now();
+      const today = view.date === getTodayStr();
       const activity = projector.projectPublicActivity(view.tasks, snapshot, {
-        now, localMinutes: view.date === getTodayStr() ? minutesOfDay(localHHMMFromDate(new Date(now))) : null
+        now, timeZone: APP_TIME_ZONE, today, localMinutes: today ? minutesOfDay(localHHMMFromDate(new Date(now))) : null
       });
       view.tasks = activity.tasks;
       view.nextChangeAt = activity.nextChangeAt;
@@ -1419,8 +1400,9 @@ app.get("/api/public/todo-share/:token", async (req, res) => {
       view.view = "activity-v2";
     }
     view.sponsorships = view.sponsorships.filter(s => view.tasks.some(t => String(t.id) === String(s.task_id)));
-    view.stats = { total: view.tasks.length, done: view.tasks.filter(t => t.queue.lane === "completed").length,
-      open: view.tasks.filter(t => t.queue.lane !== "completed").length,
+    const isDone = t => (t.activity ? t.activity.lane === "done" : t.queue.lane === "completed");
+    view.stats = { total: view.tasks.length, done: view.tasks.filter(isDone).length,
+      open: view.tasks.filter(t => !isDone(t)).length,
       sponsored: view.tasks.filter(t => t.sponsorships?.some(s => s.status !== "dismissed")).length };
     // Schedule sections are no longer rendered on this surface.
     delete view.blocks;
