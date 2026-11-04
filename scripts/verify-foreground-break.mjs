@@ -92,7 +92,7 @@ try {
   const themeStyle=await page.addStyleTag({content:'/* theme fixture */'});
   for(const theme of ['dark','light']){
     await themeStyle.evaluate((el,mode)=>{el.textContent=mode==='light'?':root{--bg:#f5f7fb;--card:#fff;--card-hover:#f0f3f8;--border:#cbd5e1;--text:#182030;--text-muted:#526177}':'';},theme);
-    for(const width of [1280,435,375,358]){
+    for(const width of [1440,1280,435,375,358]){
       await page.setViewportSize({width,height:1000});
       await page.evaluate((w)=>{document.querySelector('.wq-grid').style.gridTemplateColumns=w===1280?'435px minmax(0,1fr)':'';},width);
       const before=await card('a').boundingBox();
@@ -192,6 +192,25 @@ try {
   await page.evaluate(()=>DCCWorkingQueue.refresh());
   await page.getByText(/Another workspace holds Foreground/).waitFor();
   await button('c','focus').click();await page.locator('#toast-container').getByText(/choose Return to Priority before switching/).waitFor();
-  await page.unroute('**/api/working-queue');assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({passed:true,testUrl:base,checks:['keyboard pause/resume focus','retained foreground','frozen work actuals','separate break clock','refresh','1280/375/358px','card-bounded frost','zero pause-height growth','no overlap/overflow','inert underlay','long title','dark/light semantic tokens','435px lane','44px resume','double click','lost response replay','explicit Priority move','multi-tab refresh','switch preserves snooze'],screenshots:output}));
+  await page.unroute('**/api/working-queue');
+  await post('start','a',{remindMinutes:30,attentionMode:'snooze'});await page.evaluate(()=>DCCWorkingQueue.refresh());
+  await button('a','pause').click();await card('a').locator('.wq-break-veil').waitFor();
+  await button('a','break-options').click();await page.getByRole('dialog').getByRole('button',{name:'Task details',exact:true}).click();
+  await page.getByRole('dialog',{name:'Task details'}).waitFor();await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'detached'});
+  assert.equal((await state()).queue.items.find(i=>i.task.id==='a').onBreak,true);
+  await button('a','break-options').click();await page.getByRole('dialog').getByRole('button',{name:'Send to background',exact:true}).click();
+  await page.getByRole('dialog',{name:'Set task aside'}).waitFor();await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();
+  await page.getByRole('dialog').waitFor({state:'detached'});assert.equal((await state()).queue.items.find(i=>i.task.id==='a').snoozed,true);
+  await button('a','focus').click();await page.waitForFunction(()=>DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='a')?.status==='foreground');
+  await button('a','pause').click();await card('a').locator('.wq-break-veil').waitFor();
+  await button('a','break-options').click();await page.getByRole('dialog').getByRole('button',{name:'Complete task',exact:true}).click();
+  await page.getByRole('dialog').getByText('Previously recorded',{exact:true}).waitFor();
+  await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();await page.getByRole('dialog').waitFor({state:'detached'});
+  assert.equal((await state()).queue.items.find(i=>i.task.id==='a').onBreak,true,'cancel keeps the retained break');
+  await button('a','break-options').click();await page.getByRole('dialog').getByRole('button',{name:'Complete task',exact:true}).click();
+  await page.getByRole('dialog').getByText('Previously recorded',{exact:true}).waitFor();
+  await page.getByRole('dialog').getByRole('button',{name:'Mark Complete',exact:true}).click();await page.getByRole('dialog').waitFor({state:'detached'});
+  assert.equal((await state()).queue.items.find(i=>i.task.id==='a').status,'completed');assert.equal((await task('a')).properties.actualMinutes,actual);
+  assert.deepEqual(errors,[]);
+  console.log(JSON.stringify({passed:true,testUrl:base,checks:['keyboard pause/resume focus','retained foreground','frozen work actuals','separate break clock','refresh','1280/375/358px','card-bounded frost','zero pause-height growth','no overlap/overflow','inert underlay','long title','dark/light semantic tokens','435px lane','44px resume','double click','lost response replay','explicit Priority move','multi-tab refresh','switch preserves snooze','Task options details/background/completion/cancel'],screenshots:output}));
 } catch(error){console.error(error);console.error(await page.locator('body').innerText());throw error;} finally {await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await ctx.close();}
