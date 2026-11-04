@@ -254,7 +254,7 @@
   function cardMeta(task, lane){
     const a = task.activity || {};
     const range = task.start ? clockLabel(task.start) + (task.end ? " – " + clockLabel(task.end) : "") : "";
-    if (lane === "now") return a.startedAt ? liveText("started", a.startedAt) : "In focus";
+    if (lane === "now") return a.onBreak ? "On a break · Work timer paused" : a.startedAt ? liveText("started", a.startedAt) : "In focus";
     if (lane === "running") return a.confirmedAt ? liveText("confirmed", a.confirmedAt) : "Running";
     if (lane === "next") return [a.priority ? a.priority + " priority" : "", range].filter(Boolean).map(esc).join(" · ");
     if (lane === "later") return esc([range, itemType(task) !== "task" ? itemTypeLabel(task) : ""].filter(Boolean).join(" · "));
@@ -273,9 +273,9 @@
     const el = window.renderItineraryListRow({ id: task.id, title: task.title }, {
       escHtml: esc,
       done: lane === "done",
-      extraClass: "wq-card shared-queue-card shared-card-" + lane + (lane === "now" ? " wq-focus" : ""),
+      extraClass: "wq-card shared-queue-card shared-card-" + lane + (lane === "now" ? " wq-focus" : "") + (task.activity?.onBreak ? " wq-on-break" : ""),
       dataset: { sharedTask: task.id },
-      titleExtrasHtml: '<span class="wq-status">' + esc(CHIPS[lane]) + '</span>',
+      titleExtrasHtml: '<span class="wq-status">' + esc(task.activity?.onBreak ? "On a break" : CHIPS[lane]) + '</span>',
       metaHtml: (meta ? '<p class="wq-time shared-card-meta">' + meta + '</p>' : '') +
         (context ? '<p class="wq-time shared-card-context">' + esc(context) + '</p>' : '')
     });

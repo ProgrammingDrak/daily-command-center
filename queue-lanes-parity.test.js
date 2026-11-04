@@ -102,6 +102,12 @@ test('Running means exactly the owner lease rule, including the 15-minute cap', 
   }
 });
 
+test('a foreground break stays in Now and reads as a break, as on the owner page', () => {
+  const item = Policy.presentation({ task: { id: 'f', properties: {} }, status: 'foreground', onBreak: true, delegated: [] }, NOW);
+  const { tasks } = projectPublicActivity([{ id: 'f', blockId: 'f', title: 'f' }], { items: [item], priorityOrder: [] }, { now: NOW });
+  assert.deepEqual([tasks[0].activity.lane, tasks[0].activity.onBreak, tasks[0].activity.startedAt], ['now', true, null]);
+});
+
 test('Up next keeps TaskPriority grouping across folded Needs You and snoozed rows', () => {
   const mk = (id, status, taskPriority, extra = {}) => Policy.presentation({ task: { id, properties: {} }, status, taskPriority, delegated: [], ...extra }, NOW);
   const due = new Date(NOW + 600000).toISOString();

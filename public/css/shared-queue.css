@@ -33,6 +33,8 @@
 .shared-queue-card.wq-card.it-list-item { grid-template-columns: minmax(0, 1fr) !important; cursor: auto; }
 .shared-queue-card.wq-card > .it-list-utility { display: none; }
 .shared-queue-card .shared-card-social { margin-top: 8px; }
+/* Break chip color from the owner; viewers get no break veil or Resume control, so no reserved space. */
+.shared-queue-card.wq-on-break .it-list-main { padding-bottom: 0; }
 .shared-live-pill { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; padding: 2px 8px; border-radius: var(--r-full); border: 1px solid var(--line); font-size: 11px; }
 .shared-live-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint); }
 .shared-live-pill[data-state="live"]::before, .shared-live-pill[data-state="polling"]::before { background: var(--success); }
