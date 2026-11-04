@@ -126,7 +126,8 @@ function openSchedulePopover(cfg){
       '<div class="resched-time">'+
         '<input type="time" class="resched-time-input" />'+
       '</div>'+
-    '</div>'):'');
+    '</div>'):'')+
+    ((showTime&&mode==="reschedule")?'<button type="button" class="resched-exact-duration">Set exact duration…</button>':'');
 
 
   function closePop(){
@@ -158,6 +159,11 @@ function openSchedulePopover(cfg){
   function onKey(e){if(e.key==="Escape"&&!_pickerLayerOpen())closePop()}
 
   const timeInput=pop.querySelector(".resched-time-input");
+  const exactDuration=pop.querySelector(".resched-exact-duration");
+  if(exactDuration)exactDuration.addEventListener("click",e=>{
+    e.stopPropagation();closePop();
+    openDurPopover(ev,anchorEl);
+  });
 
   // Resolve a picked day per mode. Reschedule advances to the shared placement
   // step; create commits the new task; pick hands the date to the caller.
