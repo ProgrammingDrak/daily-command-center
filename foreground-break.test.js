@@ -46,11 +46,21 @@ test('foreground break is durable, coordinated and never charged as work', {skip
   assert.equal((await item('focus')).onBreak,false);assert.equal((await row('focus')).properties.actualMinutes,5);
   now+=2*60000;await send('pause','focus');assert.equal((await row('focus')).properties.actualMinutes,7);
   const snapshot=await store.state(owner);
+  const guided=require('./guided-store').createGuidedStore({...ctx,APP_TIME_ZONE:'UTC'});
+  const definition=await guided.saveDefinition({id:randomUUID(),expectedRevision:0,definition:{title:'Review',goal:'Confirm sources',starterPrompt:'Read source',completionCriteria:'Confirmed outcome',checklist:[]}},owner);
+  await make('guided-invalid',{guidedDefinitionId:definition.id});
+  await send('queue-add','guided-invalid');
+  const beforeFailed=await store.state(owner);
+  await assert.rejects(send('start','guided-invalid',{expectedForegroundTaskId:'focus'}));
+  assert.deepEqual((await store.state(owner)).foreground,beforeFailed.foreground);
+  assert.equal((await item('focus')).breakStartedAt,beforeFailed.queue.items.find(x=>x.task.id==='focus').breakStartedAt);
+  assert.equal((await row('focus')).properties.actualMinutes,7);
   // An interrupted switch rolls back without releasing the retained foreground.
   await assert.rejects(send('start','priority',{expectedForegroundTaskId:'wrong'}),{statusCode:409});
   assert.deepEqual((await store.state(owner)).foreground,snapshot.foreground);
-  now+=60000;await send('start','priority',{expectedForegroundTaskId:'focus'});
-  assert.equal((await item('focus')).status,'queued');assert.equal((await item('focus')).onBreak,false);
+  now+=60000;await send('start','priority',{expectedForegroundTaskId:'focus',remindMinutes:15,attentionMode:'snooze'});
+  assert.equal((await item('focus')).snoozed,true);assert.equal((await item('focus')).status,'background');
+  assert.equal((await item('focus')).status,'background');assert.equal((await item('focus')).onBreak,false);
   assert.equal((await row('focus')).properties.actualMinutes,7);
   now+=60000;await send('pause','priority');await send('done','priority');
   assert.equal((await item('priority')).status,'completed');assert.equal((await item('priority')).onBreak,false);
@@ -65,4 +75,23 @@ test('foreground break is durable, coordinated and never charged as work', {skip
   assert.equal((await row('focus')).properties.notes,'Preserve context');assert.equal((await row('focus')).properties.subtaskOf,'parent');
   assert.equal((await item('background')).snoozed,true);
   assert.equal((await ctx.blockDB.getTaskTimeEntries('focus','ws-1')).length,4);
+  await ctx.pool.query("INSERT INTO workspaces(id,name,slug,owner_id,created_at,updated_at) VALUES('ws-extra','Extra','extra',1,NOW(),NOW()); INSERT INTO workspace_members(workspace_id,user_id,role,created_at) VALUES('ws-extra',1,'owner',NOW())");
+  await ctx.blockDB.createBlock({id:'extra',type:'block',user_id:1,workspace_id:'ws-extra',properties:{type:'task',title:'Extra',status:'open'}});
+  const other={userId:1,workspaceId:'ws-extra'};
+  const startOther=async()=>store.execute({action:'start',taskId:'extra',sourceEventId:randomUUID(),expectedRevision:(await store.state(other)).revision,at:new Date(now).toISOString()},other);
+  now+=60000;await send('start','focus');now+=60000;await send('pause','focus');
+  assert.equal((await store.state(other)).otherWorkspaceForeground,true);
+  await assert.rejects(startOther(),{statusCode:409});
+  await send('queue-return','focus');assert.equal((await store.state(other)).otherWorkspaceForeground,false);
+  now+=60000;await startOther();now+=60000;
+  await store.execute({action:'pause',attentionMode:'priority',taskId:'extra',sourceEventId:randomUUID(),expectedRevision:(await store.state(other)).revision,at:new Date(now).toISOString()},other);
+  now+=60000;await send('start','focus');now+=60000;await send('pause','focus');
+  await send('done','focus');assert.equal((await store.state(other)).otherWorkspaceForeground,false);
+  await make('deleted-break');now+=60000;await send('start','deleted-break');now+=60000;await send('pause','deleted-break');
+  await ctx.blockDB.deleteBlock('deleted-break');assert.equal((await store.state(other)).otherWorkspaceForeground,false);
+  // Completion revision invalidates a retained break after out-of-band completion/reopen.
+  await make('changed-break');now+=60000;await send('start','changed-break');now+=60000;await send('pause','changed-break');
+  await ctx.pool.query("UPDATE blocks SET properties=properties || '{\"_completionRevision\":\"external\"}'::jsonb WHERE id='changed-break'");
+  assert.equal((await item('changed-break')).onBreak,false);
+  assert.equal((await store.state(other)).otherWorkspaceForeground,false);
 });

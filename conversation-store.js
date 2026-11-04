@@ -115,12 +115,17 @@ function createConversationStore(ctx) {
       [owner.userId]
     );
     const queue = await Q.snapshot(q, owner, blockDB, (ctx.now || Date.now)());
-    const otherQueues = (await q.query("SELECT workspace_id FROM work_rotations WHERE user_id=$1 AND workspace_id<>$2", [owner.userId, owner.workspaceId])).rows;
-    let otherBreak = false;
-    for (const row of otherQueues) {
-      const other = await Q.snapshot(q, {...owner, workspaceId: row.workspace_id}, blockDB, (ctx.now || Date.now)());
-      if (other.items.some(item => item.onBreak)) otherBreak = true;
-    }
+    // Inspect only retained-break candidates, reusing the same classification as this queue.
+    const otherBreakRows = (await q.query(`SELECT b.*, item.value AS queue_item
+      FROM work_rotations w CROSS JOIN LATERAL jsonb_each(COALESCE(w.state->'items','{}'::jsonb)) item
+      JOIN blocks b ON b.id=item.key AND b.user_id=w.user_id AND b.workspace_id=w.workspace_id
+      WHERE w.user_id=$1 AND w.workspace_id<>$2 AND b.deleted_at IS NULL
+        AND item.value->>'status'='foreground' AND item.value ? 'breakStartedAt'`,
+      [owner.userId, owner.workspaceId])).rows;
+    const otherBreak = otherBreakRows.some(row => {
+      const task = blockDB.parseBlock(row);
+      return blockDB.isTaskRow(task) && require('./lib/queue-classification').classify(task, row.queue_item) === 'foreground';
+    });
     return {
       revision: s.rows[0]?.revision || 0,
       foreground: queue.items.filter(item => item.status === "foreground").map(item => ({
@@ -531,7 +536,7 @@ function createConversationStore(ctx) {
         }
         if (b.action === "start") {
           for (const item of before.queue.items.filter(item => item.onBreak && item.task.id !== target.id))
-            Q.setStatus(queue, item.task, "paused", b);
+            Q.setStatus(queue, item.task, "background", b);
           if (target.properties.guidedDefinitionId && !legacy) {
             const guided = require("./guided-store").createGuidedStore(ctx),
               view = await guided.get(target.id, owner, q);

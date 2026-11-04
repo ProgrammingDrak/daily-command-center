@@ -287,3 +287,5 @@
 .wq-break-symbol{color:#b89aff;font-size:1.6rem;font-weight:800}
 .wq-break-veil button{background:#af8aef;color:#180f30;border:1px solid #c8adff;font-weight:700;min-height:44px;padding:10px 20px;border-radius:8px}
 .wq-break-veil button:focus-visible{outline:3px solid #f4d892;outline-offset:3px}
+
+.wq-on-break .it-list-title-row .ttl{display:block;-webkit-line-clamp:unset;overflow:visible;text-overflow:clip}
