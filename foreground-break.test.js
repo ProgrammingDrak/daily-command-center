@@ -89,6 +89,11 @@ test('foreground break is durable, coordinated and never charged as work', {skip
   await send('done','focus');assert.equal((await store.state(other)).otherWorkspaceForeground,false);
   await make('deleted-break');now+=60000;await send('start','deleted-break');now+=60000;await send('pause','deleted-break');
   await ctx.blockDB.deleteBlock('deleted-break');assert.equal((await store.state(other)).otherWorkspaceForeground,false);
+  await make('overlay-break');now+=60000;await send('start','overlay-break');now+=60000;await send('pause','overlay-break');
+  const root=await ctx.blockDB.ensureDayRoot('2026-11-04',1,'ws-1');
+  await ctx.blockDB.updateBlock(root,{properties:{_done:{ids:['overlay-break']}}});
+  assert.equal((await item('overlay-break')).status,'completed');
+  assert.equal((await store.state(other)).otherWorkspaceForeground,false);
   // Completion revision invalidates a retained break after out-of-band completion/reopen.
   await make('changed-break');now+=60000;await send('start','changed-break');now+=60000;await send('pause','changed-break');
   await ctx.pool.query("UPDATE blocks SET properties=properties || '{\"_completionRevision\":\"external\"}'::jsonb WHERE id='changed-break'");

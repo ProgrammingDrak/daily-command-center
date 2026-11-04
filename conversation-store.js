@@ -116,15 +116,17 @@ function createConversationStore(ctx) {
     );
     const queue = await Q.snapshot(q, owner, blockDB, (ctx.now || Date.now)());
     // Inspect only retained-break candidates, reusing the same classification as this queue.
-    const otherBreakRows = (await q.query(`SELECT b.*, item.value AS queue_item
+    const otherBreakRows = (await q.query(`SELECT b.*, item.value AS queue_item, day.properties AS day_root_properties
       FROM work_rotations w CROSS JOIN LATERAL jsonb_each(COALESCE(w.state->'items','{}'::jsonb)) item
       JOIN blocks b ON b.id=item.key AND b.user_id=w.user_id AND b.workspace_id=w.workspace_id
+      LEFT JOIN blocks day ON day.type='day_root' AND day.user_id=b.user_id
+        AND day.workspace_id=b.workspace_id AND day.date=b.date AND day.deleted_at IS NULL
       WHERE w.user_id=$1 AND w.workspace_id<>$2 AND b.deleted_at IS NULL
         AND item.value->>'status'='foreground' AND item.value ? 'breakStartedAt'`,
       [owner.userId, owner.workspaceId])).rows;
     const otherBreak = otherBreakRows.some(row => {
       const task = blockDB.parseBlock(row);
-      return blockDB.isTaskRow(task) && require('./lib/queue-classification').classify(task, row.queue_item) === 'foreground';
+      return blockDB.isTaskRow(task) && require('./lib/queue-classification').classify(task, row.queue_item, {dayRoot: row.day_root_properties}) === 'foreground';
     });
     return {
       revision: s.rows[0]?.revision || 0,
