@@ -448,7 +448,7 @@ function createConversationStore(ctx) {
       await q.query(
         `SELECT id FROM blocks WHERE user_id=$1 AND deleted_at IS NULL AND dcc_is_task_row(type,properties)
          AND ($2 OR id=$3 OR properties->>'local_id'=$3 OR properties->>'startedAt' IS NOT NULL) ORDER BY id FOR UPDATE`,
-        [owner.userId, ["correct", "done", "reconcile"].includes(b.action), b.taskId || null]
+        [owner.userId, ["correct", "done", "reconcile", "queue-snooze-all"].includes(b.action), b.taskId || null]
       );
       const queue = await Q.load(q, owner);
       await Q.reconcile(q, owner, queue, blockDB, b.at);

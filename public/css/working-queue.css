@@ -275,3 +275,6 @@
 .pomodoro-actions button, .wq-heading [data-queue-action="pomodoro"] { color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; cursor: pointer; }
 .pomodoro-actions button:disabled { opacity: .5; cursor: default; }
 .dcc-pomodoro [data-error] { color: var(--red); }
+
+.wq-heading [data-queue-action="snooze-all"] { color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; cursor: pointer; }
+.wq-heading [data-queue-action="snooze-all"]:disabled { opacity: .5; cursor: default; }
