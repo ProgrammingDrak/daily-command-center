@@ -11,7 +11,7 @@ function slice(source,start,end){
   assert.ok(a>=0&&b>a);return source.slice(a,b);
 }
 for(const minutes of [5,15,60])test('Working Queue custom placement preserves '+minutes+' minutes',async()=>{
-  const row={id:'row',date:'2026-11-04',properties:{title:'Synthetic task',duration:minutes,start:'00:00',end:fmt(minutes)}};
+  const row={id:'row',date:'2026-11-04',properties:{title:'Synthetic task',duration:minutes,start:'00:00',end:fmt(30)}};
   const ev=TaskModel.fromBlock(row);ev.__unf={sourceBlock:row};let pop,slot;
   const context={prepareTask:async()=>({ev,date:row.date,blockId:row.id}),refresh:async()=>{},DCC:{Carryover:{moveTo:async(_task,_date,opts)=>{slot=opts.slot;}}},window:{_positiveDuration:(candidate,fallback)=>candidate>0?candidate:fallback,dur:task=>pt(task.end)-pt(task.start),pt,fmt,openSchedulePopover:cfg=>{pop=cfg;}}};
   vm.createContext(context);vm.runInContext(slice(read('working-queue.js'),'  async function openSchedule(','  function itemForTask('),context);
@@ -46,7 +46,7 @@ test('late duration edits retain the estimate and a valid canonical end',()=>{
   vm.createContext(context);vm.runInContext(slice(read('schedule.js'),'function persistTaskDuration(','function adjustDur('),context);context.persistTaskDuration({id:'task'},90);
   assert.equal(saved.duration,90);assert.equal(saved.end,'23:59');
 });
-for(const end of ['24:30','00:30'])test('overnight queue task uses the canonical positive estimate: '+end,async()=>{
+for(const end of ['24:30','00:30','23:59'])test('overnight queue task uses the canonical positive estimate: '+end,async()=>{
   const row={id:'row',date:'2026-11-04',properties:{duration:90,start:'23:00',end}};
   const ev=TaskModel.fromBlock(row);ev.__unf={sourceBlock:row};let pop,slot;
   const context={prepareTask:async()=>({ev,date:row.date}),refresh:async()=>{},DCC:{Carryover:{moveTo:async(_task,_date,opts)=>{slot=opts.slot;}}},window:{pt,fmt,openSchedulePopover:cfg=>{pop=cfg;}}};
