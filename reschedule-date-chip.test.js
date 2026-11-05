@@ -191,6 +191,27 @@ async function openPopover(ctx, cfg) {
   return { pop, anchor };
 }
 
+test("Whenever follows Blocked / Waiting and moves the selected task", async () => {
+  const moved = [];
+  const ctx = makeContext({ moveTaskToWhenever: async id => moved.push(id) });
+  ctx.window.DCCWorkingQueue = { isBlocked: () => false, openBlocked: async () => {} };
+  const { pop } = await openPopover(ctx, { mode: "reschedule", id: "t1", view: "date" });
+  const buttons = pop.children;
+  assert.equal(buttons.at(-2).textContent, "Blocked / Waiting…");
+  assert.equal(buttons.at(-1).textContent, "Whenever");
+  await buttons.at(-1)._listeners.click[0]({ stopPropagation() {} });
+  assert.deepEqual(moved, ["t1"]);
+  assert.equal(pop.removed, true);
+});
+
+test("Whenever is absent from time-only and new-task pickers", async () => {
+  const ctx = makeContext({ moveTaskToWhenever() {} });
+  for (const cfg of [{ mode: "reschedule", id: "t1", view: "time" }, { mode: "pick" }, { mode: "create", title: "New task" }]) {
+    const { pop } = await openPopover(ctx, cfg);
+    assert.equal(pop.children.some(child => child.className.includes("resched-whenever")), false);
+  }
+});
+
 // ── the shared guard ────────────────────────────────────────────────────────
 test("eventInLayerAbove treats only a marked layer as not-outside", () => {
   const ctx = makeContext();
