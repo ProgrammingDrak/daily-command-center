@@ -33,9 +33,9 @@
   const warn=error=>DCC.toast(error.message||'Queue update failed','error');
   function activate(id){if(DCC.nav)DCC.nav.go({page:'tasks',view:'queue'});else document.querySelector('.tab[data-tab="working-queue"]')?.click();render();if(id)document.querySelector('[data-queue-id="'+CSS.escape(id)+'"]')?.scrollIntoView({block:'nearest',behavior:DCC.reducedMotion?.()?'auto':'smooth'});}
   // Independent columns: each lane sizes to its own content. Stacked keeps the
-  // DOM (and focus) order Foreground, Needs You, Priority, Background.
+  // DOM (and focus) order Foreground, Needs You, Background, Priority Queue.
   const narrow=window.matchMedia('(max-width: 700px)');
-  const LANES={stacked:[['wq-foreground','wq-needs'],['wq-next','wq-background']],columns:[['wq-foreground','wq-next'],['wq-needs','wq-background']]};
+  const LANES={stacked:[['wq-foreground','wq-needs'],['wq-background','wq-next']],columns:[['wq-foreground','wq-background'],['wq-needs','wq-next']]};
   function layout(){return LANES[narrow.matches||document.body.classList.contains('device-glasses')||new URLSearchParams(location.search).get('device')==='glasses'?'stacked':'columns'];}
   // Breakpoint change: move the existing lane nodes (shared with the shared-link page).
   const arrangeLanes=()=>{const root=document.getElementById('working-queue-root');window.DCCQueueLayout.arrange(root,layout(),name=>root.querySelector('.wq-grid .wq-lane.'+name));};
