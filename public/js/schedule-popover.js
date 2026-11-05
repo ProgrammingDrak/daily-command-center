@@ -293,6 +293,16 @@ function openSchedulePopover(cfg){
     control.addEventListener('click',event=>{event.stopPropagation();closePop();window.DCCWorkingQueue.openBlocked(ev).catch(error=>showToast(error.message,'error'));});
     pop.appendChild(control);
   }
+  if(ev&&showDate&&mode==="reschedule"&&typeof moveTaskToWhenever==="function"){
+    const control=document.createElement('button');control.type='button';control.className='resched-btn resched-whenever';
+    control.textContent=window.DCC?.Whenever?.LABEL||'Whenever';
+    control.title='Move this task to the Whenever list';
+    control.addEventListener('click',async event=>{
+      event.stopPropagation();closePop();
+      try{await moveTaskToWhenever(ev.id);}catch(error){if(typeof showToast==='function')showToast(error.message,'error');}
+    });
+    pop.appendChild(control);
+  }
   _positionPopoverNear(anchorEl,pop);
   setTimeout(()=>document.addEventListener("click",onOutside,true),0);
   document.addEventListener("keydown",onKey,true);
