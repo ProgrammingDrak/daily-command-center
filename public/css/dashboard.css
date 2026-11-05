@@ -2705,6 +2705,7 @@ span.waiting-pill{cursor:default}
   .whenever-check,.whenever-release{width:40px;height:40px}
   .whenever-now{min-height:40px;padding:4px 12px}
 }
+.resched-popover .resched-whenever{display:block;width:100%;margin-top:6px}
 /* Convert-to-Delegated affordance inside the reschedule popover. */
 .resched-popover .resched-adjust{margin-top:8px;padding-top:8px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px}
 .resched-popover .resched-dur{display:flex;align-items:center;gap:6px}
