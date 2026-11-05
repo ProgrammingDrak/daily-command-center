@@ -117,6 +117,8 @@ function createOAuth({ pool, baseUrl, clients = {} }) {
       const redirect = new URL(v.redirectUri);
       redirect.searchParams.set("code", code);
       redirect.searchParams.set("state", v.state);
+      // RFC 9207 lets ChatGPT use its one stable callback for every account.
+      redirect.searchParams.set("iss", baseUrl);
       return redirect.href;
     });
   }
@@ -239,6 +241,7 @@ function createOAuth({ pool, baseUrl, clients = {} }) {
       grant_types_supported: ["authorization_code", "refresh_token"],
       token_endpoint_auth_methods_supported: ["none"],
       code_challenge_methods_supported: ["S256"],
+      authorization_response_iss_parameter_supported: true,
       scopes_supported: SCOPES
     }
   };
