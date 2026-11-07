@@ -42,7 +42,8 @@
   window.mountItineraryLocation = (card, task, openDetails) => {
     const title = card.querySelector(".it-list-title-row > .ttl");
     if (!title || !task._blockId || !window.DCC_ACCOUNT_CONTEXT?.userId) return;
-    const location = task.taskLocation;
+    const cached = window.blockStore.get(task._blockId);
+    const location = cached ? cached.properties.taskLocation : task.taskLocation;
     const destination = destinationOf(location);
     const control = document.createElement(destination ? "a" : "button");
     control.className = "it-location-pin";
@@ -423,6 +424,7 @@
         }));
         status.textContent = result?._savePending ? "Saved locally. Waiting to sync." : label || street ? "Location saved." : "Location cleared.";
         if (form.isConnected) refresh(window.blockStore.get(blockId).properties);
+        if (typeof buildListView === "function") buildListView();
       } catch (error) {
         status.textContent = error.message || "Could not save location.";
       } finally {
