@@ -1016,7 +1016,11 @@ function buildListView(){
 
   const row=createTaskListRowRenderer({pool:unfPool,isTodayView,actual:_actualOn()?actualDayProjection():null});
   if(_actualOn())renderActualSummary();
-  function emitNode(node,idx,mode){return row(node.ev,_isSubRow(node)?0:idx,mode,node);}
+  function emitNode(node,idx,mode){
+    const taskRow=row(node.ev,_isSubRow(node)?0:idx,mode,node);
+    if(!node.depth&&_rowIsTimed(node.ev))window.mountItineraryCommute(taskRow,node.ev);
+    return taskRow;
+  }
   // Idle-gap marker between two spaced-out timed rows (fixed tiny height; see
   // .it-list-gap CSS). Label via ms() -> "45m" / "1h 30m".
   function gapEl(mins){
@@ -1100,9 +1104,7 @@ function buildListView(){
     let prevEnd=null;
     nodes.forEach(node=>{
       if(block.timed&&!node.depth&&_rowIsTimed(node.ev)){const gap=_gapMarkerMins(prevEnd,pt(node.ev.start));if(gap!=null)wrap.appendChild(gapEl(gap));prevEnd=pt(node.ev.end);}
-      const taskRow=emitNode(node,_isSubRow(node)?0:rank++,isDone(node.ev)?"done":"open");
-      if(!node.depth&&_rowIsTimed(node.ev))window.mountItineraryCommute(taskRow,node.ev);
-      wrap.appendChild(taskRow);
+      wrap.appendChild(emitNode(node,_isSubRow(node)?0:rank++,isDone(node.ev)?"done":"open"));
     });
   });
   // Past-day unfinished work belongs in Loose Ends. Do not duplicate that queue
