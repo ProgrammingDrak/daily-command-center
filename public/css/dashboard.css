@@ -1295,7 +1295,7 @@
   .it-list-item.done:not(.sub) .it-list-check{width:14px;height:14px;min-width:14px}
   /* single struck-through line: drop the source/privacy/tag chips, keep .ttl */
   .it-list-item.done:not(.sub) .it-list-title-row{gap:0}
-  .it-list-item.done:not(.sub) .it-list-title-row > *:not(.ttl){display:none}
+  .it-list-item.done:not(.sub) .it-list-title-row > *:not(.ttl, .it-location-pin){display:none}
   .it-list-item.done:not(.sub) .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;font-weight:500}
   .it-list-utility{width:50px;display:grid;grid-template-columns:18px 28px;gap:4px;align-items:center;box-sizing:border-box}
   .it-list-nav{min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;align-self:stretch;border-right:1px solid rgba(148,163,184,0.14)}
@@ -5879,40 +5879,100 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
   .progress-label #ppct{font-size:10px}
   .progress-heading-actions button{font-size:10px;white-space:nowrap}
 }
-.it-commute {
-  margin: 2px 12px 2px 20px;
-  border-inline-start: 2px solid color-mix(in srgb, currentColor 22%, transparent);
-  padding-inline-start: 12px;
+.it-commute, .it-commute-topper {
+  --commute-blue: #0075eb;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: 10px;
   min-width: 0;
   overflow-wrap: anywhere;
+  font-size: .85rem;
 }
-.it-commute > summary {
-  padding: 6px 8px;
+.it-commute { margin-block: 8px; }
+.it-commute summary { cursor: pointer; font-weight: 600; padding: 10px 12px; }
+.it-commute-panel { padding: 0 12px 12px; }
+.it-commute-cards, .it-commute-legs { display: grid; gap: 6px; }
+.it-commute-cards { flex-basis: 100%; grid-template-columns: repeat(auto-fit, minmax(min(100%, 155px), 1fr)); align-items: start; }
+.it-commute-leg {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 8px;
   background: color-mix(in srgb, currentColor 5%, transparent);
-  border-radius: 4px;
-  font-size: 0.85rem;
 }
-.it-commute summary { cursor: pointer; }
-.it-commute-leg { margin: 8px 0; padding-inline-start: 8px; }
-.it-commute form:not([hidden]) { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin: 8px 0; }
-.it-commute input, .it-commute select { max-width: 100%; }
-.it-commute input[type="number"] { width: 6em; }
+.it-commute-leg > summary { cursor: pointer; padding: 8px 10px; font-weight: 600; }
+.it-commute-leg > summary:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+.it-commute-leg > :not(summary) { margin-inline: 10px; }
+.it-commute-card-body { display: grid; gap: 5px; padding-bottom: 8px; }
+.it-commute-card-body p { margin: 0; white-space: pre-wrap; }
+.it-commute-card-body a { color: inherit; text-decoration: underline; }
+.it-task-location { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin: 10px 0; }
+.it-task-location > strong, .it-task-location > [role="status"] { width: 100%; }
+.it-task-location > [role="status"] { margin: 0; }
+.it-task-location > [role="status"]:empty { display: none; }
+.it-commute form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin: 10px 0; }
+:is(.it-commute, .it-task-location) label:not([hidden]) { display: grid; gap: 4px; min-width: 0; max-width: 100%; }
+:is(.it-commute, .it-task-location) :is(input, select, textarea, button) {
+  color: inherit;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+  border-radius: 7px;
+  padding: 7px 9px;
+  font: inherit;
+  max-width: 100%;
+}
+.it-commute select option { color: CanvasText; background: Canvas; }
+.it-commute input[type="number"] { width: 7em; }
+:is(.it-commute, .it-task-location) button { cursor: pointer; }
+.it-commute-add button { color: white; background: #0067ce; border-color: #0067ce; font-weight: 600; }
 .it-commute [role="status"]:empty { display: none; }
-.it-list-item > .it-commute {
+.it-commute-topper {
   grid-column: 1 / -1;
-  margin: 0;
-  cursor: default;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  padding: 6px 10px;
+  border-inline-start: 3px solid var(--commute-blue);
+  background: color-mix(in srgb, var(--commute-blue) 9%, transparent);
 }
-.it-commute-legs:not(:empty) {
-  border-inline-start: 1px solid color-mix(in srgb, currentColor 30%, transparent);
-  margin-inline-start: 8px;
-  padding-inline-start: 10px;
+.it-commute-time {
+  margin-inline-start: auto;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
 }
-.it-commute-leg > summary { list-style: none; position: relative; }
-.it-commute-leg > summary::before {
-  content: "○";
-  position: absolute;
-  inset-inline-start: -24px;
+.it-commute-preview {
+  width: min(720px, calc(100vw - 24px));
+  max-height: 90vh;
+  padding: 18px;
+  border: 1px solid #527091;
+  border-radius: 12px;
+  background: #17263a;
+  color: #eef6ff;
+  overflow-wrap: anywhere;
 }
-.it-commute-leg[open] > summary::before { content: "●"; }
+.it-commute-preview::backdrop { background: #08121cbb; }
+.it-commute-preview a { color: #a9d7ff; margin-inline-start: 10px; }
+.it-commute-preview img, .it-commute-preview iframe { display: block; width: 100%; margin-block-start: 12px; }
+.it-commute-preview img { max-height: 65vh; object-fit: contain; }
+.it-commute-preview iframe { height: 65vh; border: 0; }
+.it-commute-preview pre { white-space: pre-wrap; }
 .it-arrival-links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+
+.it-location-pin {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #8494a8);
+  cursor: pointer;
+}
+.it-location-pin[data-known] { color: var(--accent, #3289ea); }
+.it-location-pin:hover { background: var(--card-hover); }
+.it-location-pin:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+.it-location-pin svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.it-location-pin[data-known] path { stroke-width: 2.5; }

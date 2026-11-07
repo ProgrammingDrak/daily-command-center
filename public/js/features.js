@@ -526,6 +526,8 @@ function openAddModal(taskId, taskTitle, options) {
     document.getElementById('am-source-status').textContent='Attach stable links to originals. Private links open at their provider. Use private file controls for uploads.';
   }
 
+  window.mountTaskCommute?.(document.getElementById('am-commute'), _addModalBlockId);
+
   // Load notes into block editor
   var notes = loadNotes();
   var noteVal = anchor?.queue && Object.hasOwn(anchor,'noteValue') ? anchor.noteValue : (notes[anchor?.blockId] ?? notes[taskId]);

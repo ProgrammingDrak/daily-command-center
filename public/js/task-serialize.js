@@ -163,6 +163,9 @@
       retiredContainerHidden: src.retiredContainerHidden === true,
       occurrenceAnchor: src.occurrenceAnchor === true,
       point_multiplier: src.point_multiplier == null ? undefined : Number(src.point_multiplier),
+      ...(src.taskLocation ? {taskLocation: src.taskLocation} : {}),
+      ...(src.commuteEndpoints ? {commuteEndpoints: src.commuteEndpoints} : {}),
+      ...(Array.isArray(src.incomingCommute) ? {incomingCommute: src.incomingCommute} : {}),
       commuteMinutes: commuteMinutes,
       commuteToMinutes: src.commuteToMinutes || src.commute_to_minutes || commuteMinutes || null,
       commuteBackMinutes: src.commuteBackMinutes || src.commute_back_minutes || src.commuteReturnMinutes || src.commute_return_minutes || null
