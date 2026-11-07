@@ -229,7 +229,7 @@ function _setAddModalControlsEditable(modal, editing) {
   var body = modal && modal.querySelector('.add-modal-body');
   if (!body) return;
   body.querySelectorAll('input, textarea, select, button, [contenteditable]').forEach(function(control) {
-    if (control.matches('[data-am-tab], [data-activity-open]')) return;
+    if (control.matches('[data-am-tab], [data-activity-open]') || control.closest('#am-panel-photos')) return;
     var saved = _addModalControlState.get(control);
     if (!saved) {
       saved = {
@@ -547,7 +547,8 @@ function openAddModal(taskId, taskTitle, options) {
   taskOverlay.classList.add('open');
   taskOverlay.setAttribute('aria-hidden', 'false');
   _setAddModalPageInert(taskOverlay, true);
-  selectAddModalTab('subtasks');
+  resetAddModalPhotos();
+  selectAddModalTab(options?.tab || 'subtasks');
   if(window.DCCWorkSessions&&typeof window.DCCWorkSessions.renderHistory==='function')window.DCCWorkSessions.renderHistory(_addModalBlockId);
   // Clicking a task IS the edit gesture: the modal opens ready to type, so nobody
   // has to find an "Edit" button first. Read mode still exists -- Save and Cancel
@@ -558,6 +559,8 @@ function openAddModal(taskId, taskTitle, options) {
   // ungated click away on an archive day, and its row handler opens this modal.
   var archived = typeof viewMode !== 'undefined' && viewMode === 'archive';
   setAddModalMode(!archived);
+  if (options?.tab === 'photos') document.getElementById('am-tab-photos').focus();
+  if (options?.pickPhoto) document.getElementById('am-photos-anchor')._taskPhotos?.pick();
   setTimeout(function() {
     if (_addModalTaskId !== taskId || !taskOverlay.classList.contains('open')) return;
     // Do not steal focus from a field the user has already reached while the
@@ -566,9 +569,22 @@ function openAddModal(taskId, taskTitle, options) {
   }, 80);
 }
 
+function resetAddModalPhotos() {
+  var host = document.getElementById('am-photos-anchor');
+  host._taskPhotos?.destroy();
+  delete host._taskPhotos;
+}
+
 function selectAddModalTab(tabId) {
   var modal = document.querySelector('#add-modal-overlay .add-modal');
   if (!modal) return;
+  if (tabId === 'photos') {
+    var photoHost = document.getElementById('am-photos-anchor');
+    photoHost._taskPhotos ||= window.DCC.CompletionMemories.mountTaskPhotos(
+      photoHost, _addModalBlockId, document.getElementById('add-modal-title').textContent,
+      typeof viewMode !== 'undefined' && viewMode === 'archive'
+    );
+  }
   if (tabId === 'overview') tabId = 'subtasks';
   modal.querySelectorAll('[data-am-tab]').forEach(function(btn) {
     var active = btn.dataset.amTab === tabId;
@@ -725,6 +741,7 @@ function _amSetupTitle(taskId, taskEntry, fallbackTitle) {
 }
 
 function closeAddModal() {
+  resetAddModalPhotos();
   var overlay = document.getElementById('add-modal-overlay');
   if (window.DCCWorkSessions && typeof window.DCCWorkSessions.cancelHistory === 'function') window.DCCWorkSessions.cancelHistory();
   // The modal now opens in edit mode, so the X, Escape, and the backdrop are ordinary exits

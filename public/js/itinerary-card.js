@@ -57,6 +57,18 @@
     return '<span class="sub-share'+(done?' earned':'')+'" title="'+(done?'Earned ':'Worth ')+share+' pts of the parent’s pie">'+share+' pts</span>';
   }
 
+  var photoButton = '<button type="button" class="task-photo-button" title="Add task photos" aria-label="Add task photos"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7h4l2-3h6l2 3h4v13H3z"/><circle cx="12" cy="13" r="4"/></svg></button>';
+  function bindPhotoButton(card, task) {
+    card.querySelector('.task-photo-button')?.addEventListener('click', function (event) {
+      event.stopPropagation();
+      if (typeof openAddModal === 'function') {
+        var anchor = typeof taskAnchorById === 'function'
+          ? taskAnchorById(task._blockId) || taskAnchorById(task.id) : null;
+        openAddModal(task.id, task.title, { anchor: anchor, generic: true, tab: 'photos', pickPhoto: true });
+      }
+    });
+  }
+
   function renderItineraryCard(ev, opts){
     opts = opts || {};
     var guest = !!opts.guest;
@@ -274,7 +286,7 @@
           (inProgress?'<span class="task-progress-ring" aria-hidden="true"></span>':'')+
           reactionHtml+
           (guest?'':'<div class="grip" title="Drag to reorder">'+gripSvg+'</div>')+
-          (guest?'':'<button class="chk-quick quick-complete-control'+(chkBlocked?' chk-blocked':'')+'" title="Click to quick complete. Hold for completion notes. Shift+Enter also opens notes." aria-label="Click to quick complete. Hold for completion notes. Shift+Enter also opens notes."><span aria-hidden="true">'+_boltSvg+'</span></button>')+
+          (guest?'':'<div class="task-completion-stack"><button class="chk-quick quick-complete-control'+(chkBlocked?' chk-blocked':'')+'" title="Click to quick complete. Hold for completion notes. Shift+Enter also opens notes." aria-label="Click to quick complete. Hold for completion notes. Shift+Enter also opens notes."><span aria-hidden="true">'+_boltSvg+'</span></button>'+((typeof isDone==='function' && isDone(ev))?'':photoButton)+'</div>')+
           '<div class="bar" style="background:'+(waitChip?'var(--waiting,#7c3aed)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
           '<div class="body">'+
             '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+dependencyChip+waitChip+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+tinlineHtml+(guest||isMeeting(ev)||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>')+(isMeeting(ev)?'<button class="btn-mtg-tags" title="Tags — mark this meeting for Recording Review" style="border:none;background:none;cursor:pointer;font-size:13px;line-height:1;padding:2px 6px;opacity:.65" onclick="event.stopPropagation();openAddModal('+escHtml(JSON.stringify(ev.id))+','+escHtml(JSON.stringify(ev.title))+')">🏷</button>':'')+(guest||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
@@ -313,6 +325,7 @@
         (hasFu?'<div class="edge-panel edge-panel-fu" data-panel="fu"><div class="edge-panel-inner"><div class="edge-items">'+fuHtml+'</div></div></div>':'')+
       '</div>';
 
+    bindPhotoButton(el, ev);
     return el;
   }
 
@@ -362,7 +375,7 @@
       (inProgress?'<span class="task-progress-ring" aria-hidden="true"></span>':'')+
       '<div class="it-list-utility">'+
         '<div class="it-list-nav"><div class="grip it-list-grip" title="'+escHtml(opts.gripTitle||"Fixed item")+'">'+gripSvg+'</div></div>'+
-        '<div class="it-list-check-col">'+completionControl+'</div>'+
+        '<div class="it-list-check-col">'+completionControl+(!done && completionControl ? photoButton : '')+'</div>'+
       '</div>'+
       '<div class="bar" style="background:'+(opts.barColor||"")+'"></div>'+
       '<div class="it-list-main">'+
@@ -371,6 +384,7 @@
       '</div>'+
       '<div class="it-list-actions">'+(opts.actionsBeforeHtml||"")+radialButton+deleteButton+'</div>';
 
+    bindPhotoButton(el, ev);
     var completionButton=el.querySelector(".it-list-check");
     if(completionButton&&typeof opts.onComplete==="function"){
       if(done)completionButton.addEventListener("click",function(e){e.stopPropagation();opts.onComplete(e,ev);});

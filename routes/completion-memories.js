@@ -58,6 +58,9 @@ function mount(app, { pool }) {
         typeof photo.deviceName !== "string" || !photo.deviceName.trim() || photo.deviceName.length > 80)) throw fail("Invalid photo details");
     if (remove !== undefined && (typeof remove !== "string" || !UUID.test(remove))) throw fail("Invalid photo identity");
 
+    const taskPhotos = revision === "task-photos";
+    if (taskPhotos && reflection !== undefined) throw fail("Invalid task photo update");
+
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -73,8 +76,8 @@ function mount(app, { pool }) {
         SELECT * FROM completion_memories WHERE workspace_id=$1 AND user_id=$2 AND block_id=$3 AND revision=$4`, keys);
       if (!entry) {
         const p = block.properties || {};
-        if (!(p.done || p.status === "done" || p.completedAt) ||
-            revision !== (p._completionRevision || p.completedAt || "original")) throw fail("Completion unavailable", 409);
+        if (!taskPhotos && (!(p.done || p.status === "done" || p.completedAt) ||
+            revision !== (p._completionRevision || p.completedAt || "original"))) throw fail("Completion unavailable", 409);
         const date = String(p.completedAt || "").slice(0, 10);
         ({ rows: [entry] } = await client.query(`
           INSERT INTO completion_memories(workspace_id,user_id,block_id,revision,title,completed_on)
@@ -82,7 +85,7 @@ function mount(app, { pool }) {
         [...keys, String(p.title || "Completed task"), /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null, block.date]));
       }
       if (photo && !entry.photos.some(item => item.id === photo.id)) {
-        if (entry.photos.length >= 10) throw fail("A completion can hold up to 10 photos", 409);
+        if (entry.photos.length >= 10) throw fail("This photo collection can hold up to 10 photos", 409);
         entry.photos.push({ id: photo.id, deviceId: photo.deviceId, deviceName: photo.deviceName.trim() });
       }
       if (remove) entry.photos = entry.photos.filter(item => item.id !== remove);
