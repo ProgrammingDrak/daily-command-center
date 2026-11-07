@@ -834,6 +834,7 @@ function createTaskListRowRenderer(context){
         const ae=rowEl.querySelector("[data-actual-edit]");if(ae)ae.addEventListener("click",e=>{e.stopPropagation();if(typeof window.editTimeEntries==="function")window.editTimeEntries(ev.id,ev.title,_schedViewDate(),ae);});
       }
     });
+    if(context.showCommute&&!node?.depth&&_rowIsTimed(ev))window.mountItineraryCommute?.(el,ev);
     return el;
   }
 
@@ -1014,7 +1015,7 @@ function buildListView(){
     wrap.appendChild(el);
   }
 
-  const row=createTaskListRowRenderer({pool:unfPool,isTodayView,actual:_actualOn()?actualDayProjection():null});
+  const row=createTaskListRowRenderer({pool:unfPool,isTodayView,showCommute:true,actual:_actualOn()?actualDayProjection():null});
   if(_actualOn())renderActualSummary();
   function emitNode(node,idx,mode){return row(node.ev,_isSubRow(node)?0:idx,mode,node);}
   // Idle-gap marker between two spaced-out timed rows (fixed tiny height; see

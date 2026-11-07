@@ -5879,3 +5879,40 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
   .progress-label #ppct{font-size:10px}
   .progress-heading-actions button{font-size:10px;white-space:nowrap}
 }
+.it-commute {
+  margin: 2px 12px 2px 20px;
+  border-inline-start: 2px solid color-mix(in srgb, currentColor 22%, transparent);
+  padding-inline-start: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.it-commute > summary {
+  padding: 6px 8px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+.it-commute summary { cursor: pointer; }
+.it-commute-leg { margin: 8px 0; padding-inline-start: 8px; }
+.it-commute form:not([hidden]) { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin: 8px 0; }
+.it-commute input, .it-commute select { max-width: 100%; }
+.it-commute input[type="number"] { width: 6em; }
+.it-commute [role="status"]:empty { display: none; }
+.it-list-item > .it-commute {
+  grid-column: 1 / -1;
+  margin: 0;
+  cursor: default;
+}
+.it-commute-legs:not(:empty) {
+  border-inline-start: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  margin-inline-start: 8px;
+  padding-inline-start: 10px;
+}
+.it-commute-leg > summary { list-style: none; position: relative; }
+.it-commute-leg > summary::before {
+  content: "○";
+  position: absolute;
+  inset-inline-start: -24px;
+}
+.it-commute-leg[open] > summary::before { content: "●"; }
+.it-arrival-links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
