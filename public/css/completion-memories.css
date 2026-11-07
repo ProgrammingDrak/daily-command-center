@@ -1,0 +1,81 @@
+.memory-dialog {
+  box-sizing: border-box;
+  width: min(36rem, calc(100% - var(--sp-6)));
+  max-height: 90dvh;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  padding: var(--sp-5);
+  background: var(--surface-overlay);
+  color: var(--ink);
+  box-shadow: var(--shadow-2);
+  font-family: var(--font-sans);
+}
+.memory-dialog::backdrop { background: var(--surface-scrim); }
+.memory-sheet { margin-bottom: 0; border-radius: var(--r-xl) var(--r-xl) 0 0; }
+.memory-dialog header, .memory-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+.memory-dialog header {
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+.memory-dialog h2, .memory-dialog h3 { margin: 0; color: var(--ink-strong); line-height: var(--leading-tight); }
+.memory-dialog h2 { font-size: var(--fs-xl); }
+.memory-dialog h3 { font-size: var(--fs-base); }
+.memory-body { display: grid; gap: var(--sp-3); margin-top: var(--sp-4); }
+.memory-body p { margin: 0; }
+.memory-actions { flex-wrap: wrap; }
+.memory-actions button { flex: 1 0 auto; }
+.memory-dialog button, .memory-dialog input, .memory-dialog textarea,
+#completion-photo-gallery, #am-completion-memories button {
+  box-sizing: border-box;
+  min-height: var(--target-min);
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+}
+.memory-dialog button, #completion-photo-gallery, #am-completion-memories button { cursor: pointer; }
+.memory-dialog button:hover:not(:disabled), #completion-photo-gallery:hover, #am-completion-memories button:hover {
+  background: var(--surface-hover);
+  color: var(--ink-strong);
+}
+.memory-dialog :is(button, input, textarea):focus-visible,
+#completion-photo-gallery:focus-visible, #am-completion-memories button:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 2px;
+}
+.memory-dialog button:disabled { opacity: .6; cursor: default; }
+.memory-dialog button.memory-primary { background: var(--brand); border-color: var(--brand); color: white; }
+.memory-dialog button.memory-primary:hover:not(:disabled) { background: var(--brand-hover); }
+.memory-dialog label { display: grid; gap: var(--sp-1); }
+.memory-dialog textarea { min-height: 6rem; resize: vertical; }
+.memory-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
+.memory-gallery { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.memory-dialog img { display: block; width: 100%; max-height: 55dvh; object-fit: contain; border-radius: var(--r-md); }
+.memory-dialog button.memory-tile {
+  display: grid;
+  place-items: center;
+  min-height: 5rem;
+  padding: var(--sp-1);
+  overflow-wrap: anywhere;
+  font-size: var(--fs-xs);
+}
+.memory-tile img, .memory-preview img { aspect-ratio: 1; object-fit: cover; }
+.memory-preview { display: grid; gap: var(--sp-1); }
+.memory-completed { color: var(--success); font-size: var(--fs-sm); }
+.memory-status { margin: var(--sp-3) 0 0; color: var(--ink-muted); }
+.memory-status:empty { display: none; }
+#completion-photo-gallery { font-size: var(--fs-xs); flex-shrink: 0; }
+#am-completion-memories:empty { display: none; }
+
+@media (max-width: 480px) {
+  .memory-dialog { padding: var(--sp-4); }
+  .memory-sheet { width: 100%; }
+  .memory-gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
