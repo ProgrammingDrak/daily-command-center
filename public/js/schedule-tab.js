@@ -799,6 +799,7 @@ function createTaskListRowRenderer(context){
       (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'')+
       // Actual toggle: evidence only, from the List view's day projection.
       (context.actual&&!isUnfRow?_actualRowHtml(ev,context.actual):'');
+    const openDetails=()=>{if(context.onOpen){context.onOpen(ev);return;}if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);};
     const el=renderItineraryListRow(ev,{
       done:isDoneRow,
       draggable:movable,
@@ -821,7 +822,7 @@ function createTaskListRowRenderer(context){
       onDelete:!isDoneRow?()=>{if(isUnfRow){_unfDrop(ev,el);return;}openDeleteConfirm(ev.id);}:null,
       onAdd:!isDoneRow?(am)=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}:null,
       onCollapse:()=>{if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render("schedule");}},
-      onOpen:()=>{if(context.onOpen){context.onOpen(ev);return;}if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);},
+      onOpen:()=>openDetails(),
       onDragStart:(e)=>dStart(e,ev.id),onDragEnd:dEnd,
       onDragOver:!isDoneRow?(e)=>dOver(e,ev.id):null,onDragLeave:!isDoneRow?dLeave:null,onDrop:!isDoneRow?(e)=>dDrop(e,ev.id):null,
       afterRender:(rowEl)=>{
@@ -834,6 +835,7 @@ function createTaskListRowRenderer(context){
         const ae=rowEl.querySelector("[data-actual-edit]");if(ae)ae.addEventListener("click",e=>{e.stopPropagation();if(typeof window.editTimeEntries==="function")window.editTimeEntries(ev.id,ev.title,_schedViewDate(),ae);});
       }
     });
+    if(context.showCommute)window.mountItineraryLocation?.(el,ev,openDetails);
     if(context.showCommute&&!node?.depth&&_rowIsTimed(ev))window.mountItineraryCommute?.(el,ev);
     return el;
   }
@@ -884,6 +886,19 @@ window.createTaskListRowRenderer=createTaskListRowRenderer;
 // `day.unscheduled` is the Unscheduled SUBTREE, `day.timed` is the work list with done
 // rows inline, `day.folded` are the done rows that render inside a still-visible
 // parent, and `day.carryover` is yesterday's leftovers — empty unless this IS today.
+function suggestedCommuteOrigin(blockId){
+  const stops=_itineraryListModel().groups.flatMap(group=>group.nodes)
+    .filter(node=>!node.depth&&_rowIsTimed(node.ev)&&!node.ev.allDay)
+    .sort((a,b)=>pt(a.ev.start)-pt(b.ev.start));
+  let previous="";
+  for(const {ev} of stops){
+    if(ev._blockId===blockId)return previous;
+    const location=ev._blockId && window.blockStore.get(ev._blockId)?.properties?.taskLocation;
+    if(location)previous=location.address||location.label||previous;
+  }
+  return "";
+}
+
 function _itineraryListModel(){
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   // isActive() is time-of-day only (no date), so the "Now" chip must be gated to
