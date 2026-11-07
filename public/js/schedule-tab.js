@@ -1100,7 +1100,9 @@ function buildListView(){
     let prevEnd=null;
     nodes.forEach(node=>{
       if(block.timed&&!node.depth&&_rowIsTimed(node.ev)){const gap=_gapMarkerMins(prevEnd,pt(node.ev.start));if(gap!=null)wrap.appendChild(gapEl(gap));prevEnd=pt(node.ev.end);}
-      wrap.appendChild(emitNode(node,_isSubRow(node)?0:rank++,isDone(node.ev)?"done":"open"));
+      const taskRow=emitNode(node,_isSubRow(node)?0:rank++,isDone(node.ev)?"done":"open");
+      if(!node.depth&&_rowIsTimed(node.ev))window.mountItineraryCommute(taskRow,node.ev);
+      wrap.appendChild(taskRow);
     });
   });
   // Past-day unfinished work belongs in Loose Ends. Do not duplicate that queue
