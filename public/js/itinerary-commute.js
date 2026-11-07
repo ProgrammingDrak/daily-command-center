@@ -118,15 +118,22 @@
     const status = append(dialog, "p", asset.id ? "Loading attachment…" : "Open this link at its original provider.");
     status.setAttribute("role", "status");
     const original = append(dialog, "a", asset.id ? "Download original" : "Open original link");
-    original.href = href;
-    original.target = "_blank";
-    original.rel = "noopener noreferrer";
+    if (asset.id) {
+      original.hidden = true;
+      original.download = asset.filename || "attachment";
+    } else {
+      original.href = href;
+      original.target = "_blank";
+      original.rel = "noopener noreferrer";
+    }
     const request = new AbortController();
     const accountId = window.DCC_ACCOUNT_CONTEXT?.userId;
     let objectUrl;
+    let downloadUrl;
     dialog.addEventListener("close", () => {
       request.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (downloadUrl) URL.revokeObjectURL(downloadUrl);
       dialog.remove();
     }, { once: true });
     dialog.showModal();
@@ -136,6 +143,9 @@
       if (!response.ok) throw new Error("Attachment preview could not be loaded.");
       const blob = await response.blob();
       if (!dialog.open || accountId !== window.DCC_ACCOUNT_CONTEXT?.userId) return;
+      downloadUrl = URL.createObjectURL(blob);
+      original.href = downloadUrl;
+      original.hidden = false;
       const extension = asset.filename?.split(".").pop().toLowerCase();
       const imageTypes = new Map([["png", "image/png"], ["jpg", "image/jpeg"], ["jpeg", "image/jpeg"], ["gif", "image/gif"], ["webp", "image/webp"]]);
       const imageType = imageTypes.get(extension);
@@ -237,6 +247,7 @@
     }
 
     function updateSummary() {
+      clearButton.hidden = !legs.length;
       if (saveRoute) saveRoute.hidden = !legs.length;
       addButton.textContent = legs.length ? "Add leg" : "Save commute";
       summary.textContent = legs.length ? "Commute · " + legs.length + (legs.length === 1 ? " leg" : " legs") : "Add commute";
@@ -264,6 +275,10 @@
         status.textContent = result?._savePending ? "Saved locally. Waiting to sync." : "";
         updateSummary();
         drawLegs();
+        for (const card of document.querySelectorAll('[data-commute-task="' + CSS.escape(blockId) + '"]')) {
+          updateTopper(card, blockId, legs);
+        }
+        if (typeof refoldTaskStateFromBlockCache === "function") refoldTaskStateFromBlockCache();
         return true;
       } catch (error) {
         status.textContent = error.message || "Could not save the commute.";
@@ -368,6 +383,11 @@
     duration.max = "1440";
     duration.placeholder = "Optional";
     const addButton = append(add, "button", legs.length ? "Add leg" : "Save commute");
+    addButton.type = "submit";
+    const clearButton = button(add, "Clear commute", async () => {
+      if (!window.confirm("Clear all commute legs and unlink their attachments? Uploaded files will remain in task files.")) return;
+      if (await save([])) mode.focus();
+    });
     add.addEventListener("submit", async event => {
       event.preventDefault();
       const endpoints = draft?.open ? draftEndpoints() : undefined;
@@ -434,33 +454,43 @@
     refresh(block.properties);
   };
 
+  function updateTopper(card, blockId, legs) {
+    const previous = card.querySelector(":scope > .it-commute-topper");
+    if (!legs.length) {
+      previous?.remove();
+      return;
+    }
+    const topper = document.createElement("details");
+    topper.className = "it-commute-topper";
+    const minutes = legs.reduce((total, leg) => total + (leg.minutes || 0), 0);
+    const label = legs.some(leg => leg.minutes == null)
+      ? "Commute · Time pending"
+      : minutes + " Minute commute";
+    append(topper, "summary", label).className = "it-commute-handle";
+    const route = append(topper, "div");
+    route.className = "it-commute-cards";
+    const attachmentBase = "/api/tasks/" + encodeURIComponent(blockId) + "/attachments";
+    legs.forEach((leg, index) => {
+      const section = append(route, "details");
+      section.className = "it-commute-leg";
+      append(section, "summary", legTitle(leg, index));
+      const body = append(section, "div");
+      body.className = "it-commute-card-body";
+      if (leg.notes) append(body, "p", leg.notes);
+      for (const asset of legAssets(leg)) appendAsset(body, asset, attachmentBase);
+      if (!body.childElementCount) append(body, "p", "No notes or attachments yet.");
+    });
+    topper.addEventListener("click", event => event.stopPropagation());
+    topper.addEventListener("dragstart", event => event.preventDefault());
+    topper.open = previous?.open || false;
+    if (previous) previous.replaceWith(topper);
+    else card.prepend(topper);
+  }
+
   window.mountItineraryCommute = (card, task) => {
     if (!task._blockId || !window.DCC_ACCOUNT_CONTEXT?.userId) return;
-    const legs = task.incomingCommute || [];
-    if (legs.length) {
-      const topper = document.createElement("div");
-      topper.className = "it-commute-topper";
-      append(topper, "strong", "Getting there");
-      append(topper, "span", legs.map(leg => leg.mode).join(" → "));
-      const minutes = legs.reduce((total, leg) => total + (leg.minutes || 0), 0);
-      append(topper, "span", legs.some(leg => leg.minutes == null) ? "Time pending" : minutes + " min").className = "it-commute-time";
-      const route = append(topper, "div");
-      route.className = "it-commute-cards";
-      const attachmentBase = "/api/tasks/" + encodeURIComponent(task._blockId) + "/attachments";
-      legs.forEach((leg, index) => {
-        const section = append(route, "details");
-        section.className = "it-commute-leg";
-        append(section, "summary", legTitle(leg, index));
-        const body = append(section, "div");
-        body.className = "it-commute-card-body";
-        if (leg.notes) append(body, "p", leg.notes);
-        for (const asset of legAssets(leg)) appendAsset(body, asset, attachmentBase);
-        if (!body.childElementCount) append(body, "p", "No notes or attachments yet.");
-      });
-      topper.addEventListener("click", event => event.stopPropagation());
-      topper.addEventListener("dragstart", event => event.preventDefault());
-      card.prepend(topper);
-    }
+    card.dataset.commuteTask = task._blockId;
+    updateTopper(card, task._blockId, task.incomingCommute || []);
     const links = append(card.querySelector(".it-list-main") || card, "div");
     links.className = "it-arrival-links";
     for (const entry of task.arrivalLinks || []) {
