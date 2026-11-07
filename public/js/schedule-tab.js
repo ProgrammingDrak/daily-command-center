@@ -822,7 +822,7 @@ function createTaskListRowRenderer(context){
       onDelete:!isDoneRow?()=>{if(isUnfRow){_unfDrop(ev,el);return;}openDeleteConfirm(ev.id);}:null,
       onAdd:!isDoneRow?(am)=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}:null,
       onCollapse:()=>{if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render("schedule");}},
-      onOpen:openDetails,
+      onOpen:()=>openDetails(),
       onDragStart:(e)=>dStart(e,ev.id),onDragEnd:dEnd,
       onDragOver:!isDoneRow?(e)=>dOver(e,ev.id):null,onDragLeave:!isDoneRow?dLeave:null,onDrop:!isDoneRow?(e)=>dDrop(e,ev.id):null,
       afterRender:(rowEl)=>{
