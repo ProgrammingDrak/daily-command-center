@@ -34,7 +34,6 @@
 }
 .task-photo-button:hover { background: var(--surface-raised); }
 .task-photo-button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.task-photo-preview { width: 100%; max-height: 240px; object-fit: contain; object-position: left; }
 @media (pointer: coarse) {
   .task-photo-button { width: 44px; height: 44px; }
 }

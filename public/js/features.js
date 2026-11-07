@@ -547,7 +547,7 @@ function openAddModal(taskId, taskTitle, options) {
   taskOverlay.classList.add('open');
   taskOverlay.setAttribute('aria-hidden', 'false');
   _setAddModalPageInert(taskOverlay, true);
-  document.getElementById('am-photos-anchor')._taskAttachments?.destroy();
+  resetAddModalPhotos();
   selectAddModalTab(options?.tab || 'subtasks');
   if(window.DCCWorkSessions&&typeof window.DCCWorkSessions.renderHistory==='function')window.DCCWorkSessions.renderHistory(_addModalBlockId);
   // Clicking a task IS the edit gesture: the modal opens ready to type, so nobody
@@ -560,7 +560,7 @@ function openAddModal(taskId, taskTitle, options) {
   var archived = typeof viewMode !== 'undefined' && viewMode === 'archive';
   setAddModalMode(!archived);
   if (options?.tab === 'photos') document.getElementById('am-tab-photos').focus();
-  if (options?.pickPhoto) document.getElementById('am-photos-anchor')._taskAttachments?.pick();
+  if (options?.pickPhoto) document.getElementById('am-photos-anchor')._taskPhotos?.pick();
   setTimeout(function() {
     if (_addModalTaskId !== taskId || !taskOverlay.classList.contains('open')) return;
     // Do not steal focus from a field the user has already reached while the
@@ -569,17 +569,21 @@ function openAddModal(taskId, taskTitle, options) {
   }, 80);
 }
 
+function resetAddModalPhotos() {
+  var host = document.getElementById('am-photos-anchor');
+  host._taskPhotos?.destroy();
+  delete host._taskPhotos;
+}
+
 function selectAddModalTab(tabId) {
   var modal = document.querySelector('#add-modal-overlay .add-modal');
   if (!modal) return;
   if (tabId === 'photos') {
     var photoHost = document.getElementById('am-photos-anchor');
-    if (!photoHost._taskAttachments) {
-      window.DCC.TaskAttachments.mount(photoHost, _addModalBlockId, {
-        photos: true,
-        readOnly: typeof viewMode !== 'undefined' && viewMode === 'archive'
-      });
-    }
+    photoHost._taskPhotos ||= window.DCC.CompletionMemories.mountTaskPhotos(
+      photoHost, _addModalBlockId, document.getElementById('add-modal-title').textContent,
+      typeof viewMode !== 'undefined' && viewMode === 'archive'
+    );
   }
   if (tabId === 'overview') tabId = 'subtasks';
   modal.querySelectorAll('[data-am-tab]').forEach(function(btn) {
@@ -737,7 +741,7 @@ function _amSetupTitle(taskId, taskEntry, fallbackTitle) {
 }
 
 function closeAddModal() {
-  document.getElementById('am-photos-anchor')._taskAttachments?.destroy();
+  resetAddModalPhotos();
   var overlay = document.getElementById('add-modal-overlay');
   if (window.DCCWorkSessions && typeof window.DCCWorkSessions.cancelHistory === 'function') window.DCCWorkSessions.cancelHistory();
   // The modal now opens in edit mode, so the X, Escape, and the backdrop are ordinary exits

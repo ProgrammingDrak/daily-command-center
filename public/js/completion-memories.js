@@ -199,7 +199,7 @@
         const notices = [];
         if (files.length !== images.length) notices.push("Choose image files.");
         if (images.length !== allowed.length) notices.push("Choose photos under 25 MB.");
-        if (allowed.length > slots) notices.push("Up to 10 photos per completion.");
+        if (allowed.length > slots) notices.push("Up to 10 photos per collection.");
         view.status.textContent = notices.join(" ");
         render();
       };
@@ -213,14 +213,14 @@
     const copy = await localStore("readonly", store => store.get(photo.id)).catch(() => null);
     const label = photo.deviceId === localStorage.getItem(deviceKey)
       ? "Photo no longer available"
-      : "Image unavailable on this device. Available on " + photo.deviceName + ".";
+      : "Photo not available on this device. Available on " + photo.deviceName + ".";
     const control = button(copy ? "" : label, () => onSelect(copy));
     control.className = "memory-tile";
     if (copy) control.append(view.image(copy.thumb, "View photo"));
     return control;
   }
 
-  function photoViewer(entry, photo, copy, afterRemove) {
+  function photoViewer(entry, photo, copy, afterRemove, fromPhotosTab = false) {
     const view = dialog(entry.title);
     const remove = button("Remove photo", async () => {
       remove.disabled = true;
@@ -236,10 +236,12 @@
     });
     view.body.append(
       copy ? view.image(copy.image, "Task photo") : node("p", photo.deviceId === localStorage.getItem(deviceKey)
-        ? "Photo no longer available" : "Image unavailable on this device. Available on " + photo.deviceName + "."),
-      node("p", String(entry.completed_on).slice(0, 10)),
-      button("View task", () => { view.element.close(); detail(entry); }),
+        ? "Photo no longer available" : "Photo not available on this device. Available on " + photo.deviceName + "."),
       remove
+    );
+    if (!fromPhotosTab) view.body.append(
+      node("p", String(entry.completed_on).slice(0, 10)),
+      button("View task", () => { view.element.close(); detail(entry); })
     );
   }
 
@@ -294,7 +296,7 @@
         view.clear(view.body);
         let month;
         let grid;
-        for (const entry of entries.filter(row => row.photos.length)) {
+        for (const entry of entries.filter(row => row.revision !== "task-photos" && row.photos.length)) {
           const key = String(entry.completed_on).slice(0, 7);
           if (key !== month) {
             month = key;
@@ -323,7 +325,65 @@
     };
   }
 
+  function mountTaskPhotos(host, blockId, title, readOnly) {
+    const taskEntry = { block_id: blockId, revision: "task-photos", title, photos: [] };
+    const grid = node("div", "", "memory-grid");
+    const status = node("p", "", "memory-status");
+    status.setAttribute("role", "status");
+    const urls = new Set();
+    let live = true;
+    let entries = [];
+    const add = button("Add photos", () => upload(entries.find(row => row.revision === taskEntry.revision) || taskEntry, refresh));
+    add.hidden = readOnly;
+    host.replaceChildren(grid, status, add);
+    const clear = () => {
+      urls.forEach(url => URL.revokeObjectURL(url));
+      urls.clear();
+      grid.replaceChildren();
+    };
+    const view = { image(blob, alt) {
+      const img = node("img");
+      img.src = URL.createObjectURL(blob);
+      urls.add(img.src);
+      img.alt = alt;
+      return img;
+    } };
+    async function refresh() {
+      if (!live || !blockId) return;
+      add.disabled = true;
+      status.textContent = "Loading photos…";
+      try {
+        entries = (await list()).filter(row => row.block_id === blockId);
+        if (!live) return;
+        clear();
+        for (const entry of entries) {
+          for (const photo of entry.photos) {
+            const control = await tile(view, photo, copy => {
+              if (readOnly) {
+                const preview = dialog(title);
+                preview.body.append(copy ? preview.image(copy.image, "Task photo") : node("p", control.textContent));
+              } else photoViewer(entry, photo, copy, refresh, true);
+            });
+            if (!live) { clear(); return; }
+            grid.append(control);
+          }
+        }
+        status.textContent = grid.childElementCount ? "" : "No photos yet.";
+        add.disabled = false;
+      } catch (error) {
+        if (live) status.textContent = error.message;
+      }
+    }
+    if (!blockId) { add.disabled = true; status.textContent = "Save this task before adding photos."; }
+    const refreshDone = refresh();
+    return {
+      pick() { if (!readOnly && blockId) refreshDone.then(() => { if (live && !add.disabled) add.click(); }); },
+      destroy() { live = false; clear(); host.replaceChildren(); },
+    };
+  }
+
   DCC.CompletionMemories = {
+    mountTaskPhotos,
     bindTask(target, task, blockId) {
       const entry = task && blockId && fromTask({
         id: blockId, date: task.date,
