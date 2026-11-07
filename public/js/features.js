@@ -425,7 +425,7 @@ function openAddModal(taskId, taskTitle, options) {
   // The row id, when we have one. Every helper below searches the day/global caches by
   // local_id, and a carryover row is in _rangeCache only — so the search misses and the
   // update never happens. _addModalBlockId short-circuits it.
-  _addModalBlockId = (anchor && anchor.blockId) || taskEntry?._blockId || null;
+  _addModalBlockId = (anchor && anchor.blockId) || null;
   const memories = document.getElementById("am-completion-memories");
   if (memories) window.DCC?.CompletionMemories?.bindTask(memories, taskEntry, _addModalBlockId || taskEntry?._blockId);
   if (window.DCC && DCC.Activity) DCC.Activity.taskButton(_addModalBlockId || (taskEntry && taskEntry._blockId) || taskId, taskEntry);
