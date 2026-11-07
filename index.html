@@ -25,6 +25,7 @@
 <link rel="stylesheet" href="/public/css/activity.css?v=movement-cards-1">
 <link rel="stylesheet" href="/public/css/task-sources.css">
 <link rel="stylesheet" href="/public/css/commitments.css">
+<link rel="stylesheet" href="/public/css/completion-memories.css">
 <link rel="stylesheet" href="/public/css/task-workspace.css?v=task-workspace-nav-3">
 <link rel="stylesheet" href="/public/css/device-views/glasses.css">
 </head>
@@ -163,6 +164,7 @@
      Workouts & meals keeps date navigation; Budget hides the task head. -->
 <section class="task-workspace-head" id="task-workspace-head" aria-label="Day and task views">
   <div class="task-view-bar" id="task-view-bar">
+    <button type="button" id="completion-photo-gallery">All Photos</button>
     <div class="task-view-switch" id="task-view-switch" role="tablist" aria-label="Task views">
       <button type="button" role="tab" id="task-view-queue" data-task-view="queue" aria-controls="tab-working-queue" aria-selected="true">Working Queue</button>
       <button type="button" role="tab" id="task-view-list" data-task-view="list" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">Itinerary</button>
@@ -773,6 +775,7 @@
       <p id="am-task-status" class="am-task-status" aria-live="polite"></p>
       <!-- Read-only details (description lives in Notes below) -->
       <div class="am-det-meta" id="am-details-section" style="display:none"></div>
+      <div id="am-completion-memories"></div>
       <div id="am-activity-entry"></div>
       <div class="am-next"><span>Next step</span><p id="am-next-step" aria-live="polite">Start work on this task.</p></div>
       <div id="am-work-actions" class="am-work-actions" aria-label="Task execution"></div>
@@ -2141,6 +2144,7 @@
 <script src="/public/js/task-types.js?v=task-types-1"></script>
 <!-- task-serialize.js: the one task-property serializer (window.DCC.taskBlockProps/taskCommonProps); must load before state.js/schedule.js/unfinished-tasks.js consume it -->
 <script src="/public/js/task-attachments.js"></script>
+<script src="/public/js/completion-memories.js"></script>
 <script src="/public/js/task-sources.js"></script>
 <script src="/public/js/task-serialize.js?v=task-serialize-1"></script>
 <!-- task-model.js: the one block -> ev projection (window.DCC.TaskModel.fromBlock); must load before data.js/persistence.js/state.js and the carryover lane consume it -->

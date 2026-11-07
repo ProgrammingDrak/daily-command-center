@@ -128,6 +128,7 @@
       sourceLabel: sourceLabel,
       startedAt: p.startedAt || null,
       completedAt: p.completedAt || null,
+      ...(p._completionRevision ? { completionRevision: p._completionRevision } : {}),
       actualMinutes: p.actualMinutes == null ? null : Number(p.actualMinutes),
       actualMinutesFrom: p.actualMinutesFrom || null,
       actualTimeUnknown: p.actualTimeUnknown === true,
