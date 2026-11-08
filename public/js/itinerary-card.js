@@ -64,7 +64,7 @@
       if (typeof openAddModal === 'function') {
         var anchor = typeof taskAnchorById === 'function'
           ? taskAnchorById(task._blockId) || taskAnchorById(task.id) : null;
-        openAddModal(task.id, task.title, { anchor: anchor, generic: true, tab: 'photos', pickPhoto: true });
+        openAddModal(task.id, task.title, { anchor: anchor, generic: true, tab: 'photos' });
       }
     });
   }
@@ -379,7 +379,7 @@
       '</div>'+
       '<div class="bar" style="background:'+(opts.barColor||"")+'"></div>'+
       '<div class="it-list-main">'+
-        '<div class="it-list-title-row">'+(opts.collapseHtml||"")+'<span class="ttl" title="'+escHtml(ev.title||"")+'">'+escHtml(ev.title||"")+'</span>'+(opts.titleExtrasHtml||"")+addButton+'</div>'+
+        '<div class="it-list-title-row">'+(opts.collapseHtml||"")+'<span class="ttl" title="'+escHtml(ev.title||"")+'">'+escHtml(ev.title||"")+'</span>'+(opts.titleExtrasHtml||"")+(done && completionControl ? photoButton : "")+addButton+'</div>'+
         '<div class="it-list-meta">'+(opts.metaHtml||"")+(ev.sourceContext?'<span class="task-source-context">'+escHtml(ev.sourceContext)+'</span>':'')+scheduleButton+durationButton+'</div>'+
       '</div>'+
       '<div class="it-list-actions">'+(opts.actionsBeforeHtml||"")+radialButton+deleteButton+'</div>';

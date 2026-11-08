@@ -73,6 +73,7 @@ test("realtime modal refresh reads the updated block without replacing the notes
   assert.ok(details && refresh);
   const elements = {
     "add-modal-overlay": { classList: { contains: () => true } },
+    "am-scheduled-time": { textContent: "", hidden: true },
     "am-details-section": { innerHTML: "", style: {} },
   };
   const freshBlock = {
@@ -97,6 +98,6 @@ test("realtime modal refresh reads the updated block without replacing the notes
   vm.runInContext(details[1] + "\n" + refresh[1], ctx);
   vm.runInContext("refreshOpenAddModalDetails({fromBlockStore:true})", ctx);
   assert.match(elements["am-details-section"].innerHTML, /20m/);
-  assert.match(elements["am-details-section"].innerHTML, /11:30 - 11:50/);
-  assert.doesNotMatch(elements["am-details-section"].innerHTML, /15:55/);
+  assert.equal(elements["am-scheduled-time"].textContent, "11:30 – 11:50");
+  assert.equal(elements["am-scheduled-time"].hidden, false);
 });

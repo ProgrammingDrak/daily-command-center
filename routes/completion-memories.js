@@ -48,18 +48,25 @@ function mount(app, { pool }) {
   }));
 
   app.post(base, route(async (req, res, actor) => {
-    const { blockId, revision, reflection, photo, remove } = req.body || {};
+    const { blockId, revision, reflection, photo, remove, moment } = req.body || {};
     if (typeof blockId !== "string" || blockId.length > 255 ||
         typeof revision !== "string" || revision.length > 64 ||
-        [reflection, photo, remove].filter(value => value !== undefined).length !== 1) throw fail("Invalid memory update");
+        [reflection, photo, remove, moment].filter(value => value !== undefined).length !== 1) throw fail("Invalid memory update");
     if (reflection !== undefined && (typeof reflection !== "string" || reflection.length > 10000)) throw fail("Reflection is too long");
     if (photo !== undefined && (!photo || typeof photo.id !== "string" || !UUID.test(photo.id) ||
         typeof photo.deviceId !== "string" || !UUID.test(photo.deviceId) ||
         typeof photo.deviceName !== "string" || !photo.deviceName.trim() || photo.deviceName.length > 80)) throw fail("Invalid photo details");
     if (remove !== undefined && (typeof remove !== "string" || !UUID.test(remove))) throw fail("Invalid photo identity");
 
+    if (moment !== undefined && (!moment || typeof moment.id !== "string" || !UUID.test(moment.id) ||
+        typeof moment.title !== "string" || moment.title.length > 120 ||
+        typeof moment.note !== "string" || moment.note.length > 2000 ||
+        typeof moment.location !== "string" || moment.location.length > 120 ||
+        typeof moment.time !== "string" || (moment.time && !/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(moment.time)))) {
+      throw fail("Invalid moment details");
+    }
+
     const taskPhotos = revision === "task-photos";
-    if (taskPhotos && reflection !== undefined) throw fail("Invalid task photo update");
 
     const client = await pool.connect();
     try {
@@ -86,7 +93,13 @@ function mount(app, { pool }) {
       }
       if (photo && !entry.photos.some(item => item.id === photo.id)) {
         if (entry.photos.length >= 10) throw fail("This photo collection can hold up to 10 photos", 409);
-        entry.photos.push({ id: photo.id, deviceId: photo.deviceId, deviceName: photo.deviceName.trim() });
+        entry.photos.push({ id: photo.id, deviceId: photo.deviceId, deviceName: photo.deviceName.trim(), addedAt: new Date().toISOString() });
+      }
+      if (moment) {
+        const existing = entry.photos.find(item => item.id === moment.id);
+        if (!existing) throw fail("Photo unavailable", 404);
+        const { title, note, location, time } = moment;
+        existing.moment = { title: title.trim(), note: note.trim(), location: location.trim(), time };
       }
       if (remove) entry.photos = entry.photos.filter(item => item.id !== remove);
       const { rows: [saved] } = await client.query(`

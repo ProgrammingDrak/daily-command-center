@@ -1295,7 +1295,8 @@
   .it-list-item.done:not(.sub) .it-list-check{width:14px;height:14px;min-width:14px}
   /* single struck-through line: drop the source/privacy/tag chips, keep .ttl */
   .it-list-item.done:not(.sub) .it-list-title-row{gap:0}
-  .it-list-item.done:not(.sub) .it-list-title-row > *:not(.ttl, .it-location-pin){display:none}
+  .it-list-item.done:not(.sub) .it-list-title-row > *:not(.ttl, .it-location-pin, .task-photo-button){display:none}
+  .it-list-item.done .it-list-title-row > .task-photo-button{margin-inline-start:8px;flex-shrink:0}
   .it-list-item.done:not(.sub) .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;font-weight:500}
   .it-list-utility{width:50px;display:grid;grid-template-columns:18px 28px;gap:4px;align-items:center;box-sizing:border-box}
   .it-list-nav{min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;align-self:stretch;border-right:1px solid rgba(148,163,184,0.14)}
@@ -5860,6 +5861,10 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .progress-row-label{margin:4px 0 3px;color:var(--text-muted);font-size:11px;line-height:13px}
 .progress-box{padding-block:8px}
 .progress-label{align-items:center;margin-bottom:2px}
+#day-progress-title{min-height:24px;min-width:24px;font:inherit;line-height:16px;color:inherit;background:none;border:0;padding:4px 0;cursor:pointer}
+#day-progress-title span{display:inline-block;margin-inline-start:4px}
+#day-progress-title[aria-expanded="true"] span{transform:rotate(180deg)}
+#day-progress-title:focus-visible{outline:2px solid var(--accent-light);outline-offset:2px}
 .progress-heading-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px}
 .progress-label #ppct{font-weight:400;white-space:nowrap}
 .progress-heading-actions button{font:inherit;font-size:11px;min-height:24px;min-width:24px;line-height:16px;padding:4px;color:var(--accent-light);background:transparent;border:0;text-decoration:underline;cursor:pointer}

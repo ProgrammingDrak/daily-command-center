@@ -141,8 +141,8 @@ check("date navigation is centered inside Day Progress, with views and queues ab
     Math.abs((n.left + n.right - h.left - h.right) / 2) <= 1;
 })) === true);
 await page.evaluate(() => window.DCC.nav.setActual(true));
-check("Actual keeps the List and adds evidence", (await page.evaluate(() =>
-  document.getElementById("list-view").style.display !== "none" && !document.getElementById("actual-summary").hidden &&
+check("Actual keeps the List and exposes evidence controls in Day Progress", (await page.evaluate(() =>
+  document.getElementById("list-view").style.display !== "none" && !document.getElementById("progress-hide-actual-details").hidden &&
   document.getElementById("actual-view").style.display === "none")) === true);
 await page.evaluate(() => window.DCC.nav.go({ view: "calendar" }));
 check("Actual keeps the Calendar", (await page.evaluate(() => document.getElementById("calendar-view").style.display === "block")) === true);

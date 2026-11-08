@@ -32,6 +32,7 @@ try {
   });
   await page.goto(base+'/?tab=tasks&view=queue');
   await page.waitForSelector('#working-queue-root h1');
+  await page.locator('#day-progress-title').click();
   const measure=()=>({date:typeof viewDate!=='undefined'?viewDate:null,axisDate:document.querySelector('#ptrack').dataset.date,tally:document.querySelector('#ppct').textContent,start:document.querySelector('#pstart').textContent,gap:document.querySelector('#pactual').getBoundingClientRect().top-document.querySelector('#ptrack').getBoundingClientRect().bottom,busy:document.querySelector('#ptrack').getAttribute('aria-busy'),reviewDisabled:document.querySelector('#progress-day-review').disabled,note:document.querySelector('#pactual-note').textContent});
   if(mode==='pending') {
    await frames(page);const m=await page.evaluate(measure);results.push({mode,...m});

@@ -10,7 +10,7 @@ body.device-glasses{--task-indent-max:64px;--bg:#000;--text:#fff;--text-muted:#c
 .device-glasses .task-view-bar .queue-seg{flex:1 1 0;min-width:0;min-height:48px;flex-direction:column;padding:4px 2px;font-size:15px!important;line-height:1.2;gap:3px;color:#fff!important;background:#090e12!important}
 .device-glasses .queue-seg-count{font-size:15px!important}
 .device-glasses .header .hdr-sub,.device-glasses #mobile-tabbar,.device-glasses .sched-drag-hint{display:none!important}
-.device-glasses:not(.glasses-tools-open) :is(#tab-bar,.source-row,.header>div:last-child,#task-view-switch,#actual-summary){display:none!important}
+.device-glasses:not(.glasses-tools-open) :is(#tab-bar,.source-row,.header>div:last-child,#task-view-switch){display:none!important}
 .device-glasses .progress-wrap{padding:6px 12px!important;margin:0!important}
 .device-glasses .progress-box{padding:4px 0!important;background:#000!important;border:0!important}
 .device-glasses .progress-label{font-size:15px!important;margin:0!important;color:#fff}

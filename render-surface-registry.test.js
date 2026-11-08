@@ -84,7 +84,7 @@ test("only visible blocking overlays defer itinerary rendering", () => {
 test("render('schedule') marks the schedule sub-views, the Actual summary and the pill drawer that renders itinerary rows", () => {
   const c = ctx();
   vm.runInContext("_markDirty('schedule')", c);
-  assert.deepEqual(dirtyKeys(c), ["actualSummary", "actualView", "listView", "progress", "scheduleTimeline", "whenever"]);
+  assert.deepEqual(dirtyKeys(c), ["actualView", "listView", "progress", "scheduleTimeline", "whenever"]);
 });
 
 test("no-scope render() marks every registered surface dirty", () => {

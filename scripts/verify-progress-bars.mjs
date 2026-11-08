@@ -22,6 +22,8 @@ try{
  await page.clock.setFixedTime(new Date(today+'T17:00:00Z'));
  await fetch(base+'/api/review/actual/seed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({today})});
  await page.reload();
+ assert.equal(await page.locator('#day-progress-bars').isVisible(),false);
+ await page.locator('#day-progress-title').click();
  await page.waitForSelector('#pactual [data-entry-id="actual-te-a"]');
  assert.equal(await page.locator('#task-actual-toggle').count(),0);
  assert.equal(await page.locator('#list-view').isVisible(),true);
@@ -82,6 +84,7 @@ try{
  const liveLanes=await page.locator('#pactual .live').evaluateAll(nodes=>nodes.map(el=>{const r=el.getBoundingClientRect();return {top:r.top,bottom:r.bottom};}).sort((a,b)=>a.top-b.top));
  assert.ok(liveLanes.slice(1).every((lane,i)=>liveLanes[i].bottom<=lane.top+.1),'concurrent portions occupy distinct visible bands');
  await assertCompact(320);
+ await page.keyboard.press('Tab');
  await page.locator('#pactual .live').last().focus();
  assert.ok(await page.locator('#day-progress-tooltip').isVisible());
  assert.equal(await page.locator('#pactual .live').last().evaluate(el=>el.getBoundingClientRect().height),14,'focused portion expands within fixed-height track');
@@ -117,6 +120,7 @@ try{
  await page.waitForFunction(()=>window.DCC.nav.get().view==='queue');
  assert.equal(await page.locator('#progress-day-review').getAttribute('aria-expanded'),'false');
  await page.goto(base+'/?tab=tasks&view=list&actual=1');
+ await page.locator('#day-progress-title').click();
  await page.waitForSelector('.actual-details-dismiss');
  await page.locator('.actual-details-dismiss').click();
  assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false);
@@ -125,10 +129,12 @@ try{
  assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false,'legacy overlay dismissal survives reload');
  await page.evaluate(()=>localStorage.setItem('dcc-itinerary-actual','1'));
  await page.goto(base+'/?tab=tasks&view=calendar');
+ await page.locator('#day-progress-title').click();
  await page.waitForSelector('.actual-details-dismiss');
  await page.locator('.actual-details-dismiss').click();
  assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false,'legacy saved preference can be dismissed');
  await page.goto(base+'/?tab=tasks&view=actual');
+ await page.locator('#day-progress-title').click();
  await page.waitForSelector('.actual-details-dismiss');
  await page.locator('.actual-details-dismiss').click();
  assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false,'legacy Actual view link can be dismissed');
@@ -136,6 +142,7 @@ try{
  // metadata saves accumulated by the preceding navigation walkthrough.
  await page.evaluate(()=>{localStorage.clear();sessionStorage.clear();});
  await page.goto(base+'/?tab=tasks&view=list&actual=0');
+ await page.locator('#day-progress-title').click();
  await page.waitForFunction(()=>!!document.querySelector('#ptrack').dataset.date);
  // Finish the unrelated boot recap's day-root metadata save before navigating.
  // The block cache intentionally rejects hydration while a save is in flight.

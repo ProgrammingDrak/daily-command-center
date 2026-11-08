@@ -16,7 +16,7 @@
 <link rel="stylesheet" href="/public/css/tokens.css?v=tokens-1">
 <link rel="stylesheet" href="/public/css/core-ui.css?v=core-ui-1">
 <link rel="stylesheet" href="/public/css/review-tomorrow.css?v=review-tomorrow-1">
-<link rel="stylesheet" href="/public/css/dashboard.css">
+<link rel="stylesheet" href="/public/css/dashboard.css?v=progress-collapse-1">
 <link rel="stylesheet" href="/public/css/meeting-reviews.css">
 <link rel="stylesheet" href="/public/css/task-library.css?v=task-library-1">
 <link rel="stylesheet" href="/public/css/calendar-week.css?v=calendar-week-1">
@@ -25,7 +25,7 @@
 <link rel="stylesheet" href="/public/css/activity.css?v=movement-cards-1">
 <link rel="stylesheet" href="/public/css/task-sources.css">
 <link rel="stylesheet" href="/public/css/commitments.css">
-<link rel="stylesheet" href="/public/css/completion-memories.css">
+<link rel="stylesheet" href="/public/css/completion-memories.css?v=shared-journal-1">
 <link rel="stylesheet" href="/public/css/task-workspace.css?v=task-workspace-nav-3">
 <link rel="stylesheet" href="/public/css/device-views/glasses.css">
 </head>
@@ -195,7 +195,7 @@
   <div class="progress-wrap">
     <section class="progress-box" aria-labelledby="day-progress-title">
       <div class="progress-label progress-header">
-        <span id="day-progress-title">Day Progress</span>
+        <button type="button" id="day-progress-title" aria-expanded="false" aria-controls="day-progress-bars">Day Progress <span aria-hidden="true">&#9662;</span></button>
         <div class="progress-date-controls">
           <div class="date-nav" id="date-nav">
             <button class="dn-arrow" id="dn-prev" onclick="navDate(-1)" title="Previous day" aria-label="Previous day">&lsaquo;</button>
@@ -211,16 +211,19 @@
         </div>
         <span class="progress-heading-actions"><span id="ppct">Loading…</span><button type="button" id="progress-day-review" aria-controls="actual-view" aria-expanded="false" disabled>Day review</button></span>
       </div>
-      <div class="progress-row-label" id="plan-progress-label">Plan / itinerary</div>
-      <div class="progress-track-shell">
-        <div class="progress-track" id="ptrack" aria-busy="true"></div>
-        <span class="progress-now" id="pnow" role="img" hidden></span>
+      <div id="day-progress-bars" hidden>
+        <div class="progress-row-label" id="plan-progress-label">Plan / itinerary</div>
+        <div class="progress-track-shell">
+          <div class="progress-track" id="ptrack" aria-busy="true"></div>
+          <span class="progress-now" id="pnow" role="img" hidden></span>
+        </div>
+        <div class="progress-rails" id="prails"></div>
+        <div class="progress-row-label" id="actual-progress-label">Actual activity</div>
+        <div id="pactual" class="progress-actual" role="group" aria-labelledby="actual-progress-label" aria-busy="true"></div>
+        <p id="pactual-note" class="progress-actual-note" role="status">Loading day activity…</p>
+        <button type="button" class="actual-details-dismiss" id="progress-hide-actual-details" hidden>Hide actual details</button>
+        <div class="progress-axis"><time id="pstart"></time><time id="pend"></time></div>
       </div>
-      <div class="progress-rails" id="prails"></div>
-      <div class="progress-row-label" id="actual-progress-label">Actual activity</div>
-      <div id="pactual" class="progress-actual" role="group" aria-labelledby="actual-progress-label" aria-busy="true"></div>
-      <p id="pactual-note" class="progress-actual-note" role="status">Loading day activity…</p>
-      <div class="progress-axis"><time id="pstart"></time><time id="pend"></time></div>
     </section>
   </div>
 </section>
@@ -274,7 +277,6 @@
   </div>
   <!-- Shown only while Actual is on. Day review is an explicit panel, never a
        replacement for the List or Calendar. -->
-  <section class="actual-summary" id="actual-summary" aria-label="Recorded actual time" hidden></section>
   <div id="actual-view" class="actual-day-review" style="display:none"></div>
   <!-- The Itinerary add-task bar lives in the bottom-right "+" launcher. -->
   <div class="tl" id="timeline" style="display:none"></div>
@@ -772,6 +774,17 @@
       <button class="pvb-close" id="add-modal-close" type="button" aria-label="Close task details">&times;</button>
     </div>
     <div class="add-modal-body dcc-task-detail-flow">
+      <div id="am-scheduled-time" class="am-det-meta" hidden></div>
+      <div class="am-detail-tabs" role="tablist" aria-label="Task detail sections">
+        <button type="button" id="am-tab-photos" role="tab" data-am-tab="photos" aria-controls="am-panel-photos" aria-selected="false" tabindex="-1">Journal</button>
+        <button type="button" id="am-tab-actions" role="tab" data-am-tab="actions" aria-controls="am-panel-actions" aria-selected="false" tabindex="-1">Task actions</button>
+        <button type="button" id="am-tab-subtasks" role="tab" data-am-tab="subtasks" aria-controls="am-panel-subtasks" aria-selected="false" tabindex="-1">Items</button>
+        <button type="button" id="am-tab-notes" role="tab" data-am-tab="notes" aria-controls="am-panel-notes" aria-selected="false" tabindex="-1">Notes & sources</button>
+        <button type="button" id="am-tab-settings" role="tab" data-am-tab="settings" aria-controls="am-panel-settings" aria-selected="false" tabindex="-1">Task settings</button>
+        <button type="button" id="am-tab-history" role="tab" data-am-tab="history" aria-controls="am-panel-history" aria-selected="false" tabindex="-1">Time and history</button>
+        <button type="button" id="am-tab-automation" role="tab" data-am-tab="automation" aria-controls="am-panel-automation" aria-selected="false" tabindex="-1">Repeat and waiting</button>
+      </div>
+      <div id="am-panel-actions" class="am-detail-panel" role="tabpanel" aria-labelledby="am-tab-actions" data-am-panel="actions" tabindex="0" hidden>
       <p id="am-task-status" class="am-task-status" aria-live="polite"></p>
       <!-- Read-only details (description lives in Notes below) -->
       <div class="am-det-meta" id="am-details-section" style="display:none"></div>
@@ -781,13 +794,6 @@
       <div id="am-work-actions" class="am-work-actions" aria-label="Task execution"></div>
       <div id="am-time-summary" aria-label="Planned and actual time"></div>
       <div id="am-commute"></div>
-      <div class="am-detail-tabs" role="tablist" aria-label="Task detail sections">
-        <button type="button" id="am-tab-subtasks" role="tab" data-am-tab="subtasks" aria-controls="am-panel-subtasks" aria-selected="false" tabindex="-1">Items</button>
-        <button type="button" id="am-tab-notes" role="tab" data-am-tab="notes" aria-controls="am-panel-notes" aria-selected="false" tabindex="-1">Notes & sources</button>
-        <button type="button" id="am-tab-photos" role="tab" data-am-tab="photos" aria-controls="am-panel-photos" aria-selected="false" tabindex="-1">Photos</button>
-        <button type="button" id="am-tab-settings" role="tab" data-am-tab="settings" aria-controls="am-panel-settings" aria-selected="false" tabindex="-1">Task settings</button>
-        <button type="button" id="am-tab-history" role="tab" data-am-tab="history" aria-controls="am-panel-history" aria-selected="false" tabindex="-1">Time and history</button>
-        <button type="button" id="am-tab-automation" role="tab" data-am-tab="automation" aria-controls="am-panel-automation" aria-selected="false" tabindex="-1">Repeat and waiting</button>
       </div>
       <div id="am-panel-subtasks" class="am-detail-panel" role="tabpanel" aria-labelledby="am-tab-subtasks" data-am-panel="subtasks" tabindex="0" hidden>
       <!-- Combined items list -->
@@ -2149,7 +2155,7 @@
 <script src="/public/js/task-types.js?v=task-types-1"></script>
 <!-- task-serialize.js: the one task-property serializer (window.DCC.taskBlockProps/taskCommonProps); must load before state.js/schedule.js/unfinished-tasks.js consume it -->
 <script src="/public/js/task-attachments.js"></script>
-<script src="/public/js/completion-memories.js"></script>
+<script src="/public/js/completion-memories.js?v=photo-toolbar-1"></script>
 <script src="/public/js/task-sources.js"></script>
 <script src="/public/js/task-serialize.js?v=task-serialize-1"></script>
 <!-- task-model.js: the one block -> ev projection (window.DCC.TaskModel.fromBlock); must load before data.js/persistence.js/state.js and the carryover lane consume it -->
@@ -2168,13 +2174,13 @@
 <script src="/public/js/block-editor.js"></script>
 <script src="/public/js/data.js"></script>
 <script src="/public/js/persistence.js"></script>
-<script src="/public/js/state.js"></script>
+<script src="/public/js/state.js?v=original-time-1"></script>
 <script src="/public/js/schedule-popover.js"></script>
 <script src="/public/js/points.js"></script>
 <script src="/public/js/point-plan.js"></script>
 <script src="/public/js/celebrate.js"></script>
 <script src="/public/js/radial-menu.js"></script>
-<script src="/public/js/schedule.js"></script>
+<script src="/public/js/schedule.js?v=original-time-1"></script>
 <script src="/public/js/drag.js"></script>
 <script src="/public/js/clock.js"></script>
 <script src="/public/js/meeting-alerts.js"></script>
@@ -2184,10 +2190,10 @@
 <script src="/public/js/work-checkin-policy.js"></script>
 <script src="/public/js/work-sessions.js?v=work-sessions-3"></script>
 <script src="/public/js/time-reallocate.js?v=time-reallocate-1"></script>
-<script src="/public/js/itinerary-card.js"></script>
+<script src="/public/js/itinerary-card.js?v=inline-journal-1"></script>
 <script src="/public/js/hold-action.js"></script>
 <script src="/public/js/itinerary-commute.js"></script>
-<script src="/public/js/schedule-tab.js"></script>
+<script src="/public/js/schedule-tab.js?v=progress-collapse-1"></script>
 <script src="/public/js/itinerary-calendar.js?v=calendar-week-actual-2"></script>
 <script src="/public/js/touch-drag.js"></script>
 <script src="/public/js/meeting-automation.js"></script>
@@ -2203,7 +2209,7 @@
 <script src="/public/js/meeting-reviews.js"></script>
 <!-- d3 v7 (vendored UMD, pinned; powers the B4a timeline's scale/zoom) -->
 <script src="/public/js/vendor/d3.v7.9.0.min.js?v=d3-7.9.0"></script>
-<script src="/public/js/vault-editor.js?v=vault-b6-1"></script>
+<script src="/public/js/vault-editor.js?v=shared-journal-1"></script>
 <script src="/public/js/vault-journal-workspace.js?v=vault-journal-workspace-1"></script>
 <script src="/public/js/vault-timeline.js?v=vault-b4b-1"></script>
 <!-- Canvas (B4b): the focused thread whiteboard. Loads after the timeline (which opens it) and before vault-tab.js (which wires both). -->
@@ -2214,8 +2220,8 @@
 <script src="/public/js/vault-review.js?v=vault-b6-1"></script>
 <!-- Graph (B7): the global force-directed view. Needs the same vendored d3 above; loads before vault-tab.js, which wires it. -->
 <script src="/public/js/vault-graph.js?v=vault-b7-1"></script>
-<script src="/public/js/vault-tab.js?v=vault-b7-2"></script>
-<script src="/public/js/features.js"></script>
+<script src="/public/js/vault-tab.js?v=journal-cards-1"></script>
+<script src="/public/js/features.js?v=inline-moments-1"></script>
 <script src="/public/js/task-reconciliation.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>
