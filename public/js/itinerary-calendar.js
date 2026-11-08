@@ -24,8 +24,20 @@
   function dateString(date){
     return date.getFullYear()+"-"+String(date.getMonth()+1).padStart(2,"0")+"-"+String(date.getDate()).padStart(2,"0");
   }
-  function easternNow(date){
-    const parts=new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).formatToParts(date||new Date());
+  const zoneApi = root && root.DCCScheduleZones;
+  const zoneKey = "dcc-calendar-viewing-zone";
+  let zonePrefs = {};
+  let lastRenderedZone;
+  if (zoneApi) {
+    try { zonePrefs = JSON.parse(root.localStorage.getItem(zoneKey)) || {}; } catch {}
+  }
+  function scheduleZone() { return root?.DCC_APP_TIME_ZONE || "America/New_York"; }
+  function activeZone() {
+    return zoneApi ? zoneApi.viewingZone(zonePrefs, scheduleZone(), () => Intl.DateTimeFormat().resolvedOptions().timeZone) : scheduleZone();
+  }
+  function previewMode() { return activeZone() !== scheduleZone() || !!zonePrefs.showHome; }
+  function viewingNow(date){
+    const parts=new Intl.DateTimeFormat("en-US",{timeZone:activeZone(),year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).formatToParts(date||new Date());
     const get=type=>Number((parts.find(p=>p.type===type)||{}).value||0);
     let hour=get("hour");if(hour===24)hour=0;
     return {date:String(get("year")).padStart(4,"0")+"-"+String(get("month")).padStart(2,"0")+"-"+String(get("day")).padStart(2,"0"),minute:hour*60+get("minute")};
@@ -111,13 +123,16 @@
   }
   function rootItems(items){return items.filter(ev=>!ev.subtaskOf&&!ev.wrapId);}
   function childrenOf(ev,items){return items.filter(c=>c.subtaskOf===ev.id||c.wrapId===ev.id||c._block.parent_id===ev._blockId);}
-  function editableDate(ds){return ds>=easternNow().date;}
+  function editableDate(ds){return ds>=viewingNow().date;}
   function movable(ev,ds){return editableDate(ds)&&!isComplete(ev)&&!importedMeeting(ev);}
   function resizable(ev,ds){return movable(ev,ds)&&!(ev.type==="shell"&&childrenOf(ev,state.loaded).length);}
 
-  async function readWeek(){
+  async function readWeek(zone){
     const start=state.anchor,end=addDays(start,6);
-    const result=await root.blockStore.loadDateRange(start,end);
+    const preview = zone !== scheduleZone() || !!zonePrefs.showHome;
+    const result = preview
+      ? await root.blockStore.loadViewingDateRange(start, end, zone)
+      : await root.blockStore.loadDateRange(start, end);
     state.loaded=projectedBlocks(result.blocks||[]);
     // Recorded actual time for the same week, read once with the plan.
     state.entries=(result.blocks||[]).filter(b=>b&&b.type==="time_entry"&&!b.deleted_at);
@@ -211,7 +226,7 @@
     return '<article class="iwc-event '+(meeting?'meeting ':'task ')+(done?'done ':'')+(readonly?'readonly':'')+'" data-event-id="'+escapeHtml(ev._blockId)+'" draggable="'+(!readonly)+'" style="'+style+'" tabindex="0" aria-label="'+escapeHtml(ev.title||"Untitled")+'">'+(meeting?icon("calendar"):'<input class="iwc-event-check" type="checkbox" '+(done?'checked':'')+' aria-label="Complete task">')+'<div class="iwc-event-title">'+escapeHtml(ev.title||"Untitled")+'</div><div class="iwc-event-meta">'+escapeHtml(ev.start)+' · '+Math.max(15,end-start)+'m '+(childCount?' · '+childCount+' child'+(childCount===1?'':'ren'):'')+' '+indicators+'</div>'+(resizable(ev,day)?'<span class="iwc-resize" aria-label="Resize"></span>':'')+'</article>';
   }
   function renderWeek(items){
-    const eastern=easternNow(),today=eastern.date;
+    const now=viewingNow(),today=now.date;
     const days=Array.from({length:7},(_,i)=>addDays(state.anchor,i));
     let html='<div class="iwc-week-scroll"><div class="iwc-week"><div class="iwc-corner"></div>';
     days.forEach((ds,i)=>{html+='<div class="iwc-day-head '+(ds===today?'today':'')+'"><span>'+SHORT_DAYS[i]+'</span><strong>'+parseDate(ds).getDate()+'</strong></div>';});
@@ -227,14 +242,64 @@
       const dayItems=rootItems(items).filter(ev=>!ev.allDay&&ev._block.date===ds&&!ev.untimed&&!state.hidden.has(ev.sourceKey)).map(ev=>({...ev,startMinute:minuteOf(ev.start),endMinute:Math.max(minuteOf(ev.start)+15,minuteOf(ev.end))}));
       const packed=packOverlaps(dayItems);
       html+='<div class="iwc-day-col '+(!editableDate(ds)?'past':'')+'" data-day="'+ds+'">'+packed.map(p=>eventMarkup(p,ds,p)).join("");
-      if(ds===today)html+='<div class="iwc-now" style="top:'+(eastern.minute/60*HOUR_PX)+'px"></div>';
+      if(ds===today)html+='<div class="iwc-now" style="top:'+(now.minute/60*HOUR_PX)+'px"></div>';
       html+='</div>';
     });
     return html+'</div></div>';
   }
+  function zoneSettings() {
+    if (!zoneApi) return "";
+    const options = ["UTC", ...(Intl.supportedValuesOf?.("timeZone") || [])]
+      .map(zone => '<option value="' + escapeHtml(zone) + '"></option>').join("");
+    return '<details class="iwc-zone-settings"><summary>' + escapeHtml(activeZone()) +
+      '</summary><form><label>Viewing zone <select name="mode">' +
+      [["schedule","Use scheduling zone"],["device","Follow device"],["manual","Choose manually"]]
+        .map(([value,label]) => '<option value="' + value + '"' + ((zonePrefs.mode || "schedule") === value ? " selected" : "") + '>' + label + '</option>').join("") +
+      '</select></label><label>Manual zone <input name="zone" list="iwc-zone-list" value="' + escapeHtml(zonePrefs.zone || "") +
+      '"></label><label>Home zone <input name="home" list="iwc-zone-list" value="' + escapeHtml(zonePrefs.home || scheduleZone()) +
+      '" required></label><datalist id="iwc-zone-list">' + options + '</datalist><label><input type="checkbox" name="showHome"' +
+      (zonePrefs.showHome ? " checked" : "") + '> Show home time</label><button type="submit">Apply</button></form></details>';
+  }
+
+  function renderZoneAgenda(items) {
+    const zone = activeZone(), home = zoneApi.validZone(zonePrefs.home) ? zonePrefs.home : scheduleZone();
+    const timed = [];
+    const review = [];
+    const end = addDays(state.anchor, 6);
+    for (const ev of rootItems(items)) {
+      if (ev.allDay || ev.untimed || state.hidden.has(ev.sourceKey)) continue;
+      const result = zoneApi.inspect(ev._block, scheduleZone());
+      if (result.status !== "legacy-schedule" && result.status !== "fixed") {
+        if (ev._block.date >= state.anchor && ev._block.date <= end) review.push(ev);
+        continue;
+      }
+      const local = zoneApi.civil(result.instant, zone);
+      const secondary = zonePrefs.showHome ? zoneApi.civil(result.instant, home) : null;
+      timed.push({ ev, local, secondary, instant: result.instant });
+    }
+    timed.sort((a,b) => a.instant-b.instant);
+    return '<div class="iwc-week-scroll iwc-zone-agenda"><p>Time-zone preview. Edit appointments in the scheduling-zone calendar.</p>' +
+      Array.from({length:7}, (_,i) => {
+        const date = addDays(state.anchor,i);
+        const allDay = rootItems(items).filter(ev => spansDate(ev,date) && !state.hidden.has(ev.sourceKey));
+        const dateOnly = rootItems(items).filter(ev => ev.untimed && ev._block.date === date && !state.hidden.has(ev.sourceKey));
+        const rows = allDay.map(ev => '<li>All day · ' + escapeHtml(ev.title) + '</li>');
+        rows.push(...dateOnly.map(ev => '<li>Untimed · ' + escapeHtml(ev.title) + '</li>'));
+        const window = zoneApi.dayWindow(date, zone);
+        for (const {ev, local, secondary} of timed.filter(row => row.instant >= window.start && row.instant < window.end)) {
+          const homeLabel = secondary ? ' · ' + (secondary.date === date ? '' : secondary.date + ' ') + secondary.time + ' ' + home : '';
+          rows.push('<li>' + escapeHtml(local.time + homeLabel + ' · ' + ev.title) + '</li>');
+        }
+        return '<section><h3>' + date + '</h3><ul>' + rows.join("") + '</ul></section>';
+      }).join("") +
+      (review.length ? '<h3>Scheduling time needs review</h3><ul>' + review.map(ev =>
+        '<li>' + escapeHtml(ev._block.date + ' ' + ev.start + ' · ' + ev.title) + '</li>').join("") + '</ul>' : '') +
+      '</div>';
+  }
+
   function renderShell(items){
     const end=addDays(state.anchor,6);
-    return '<div class="iwc-shell '+(state.railCollapsed?'rail-collapsed':'')+'">'+renderRail(items)+'<main class="iwc-main"><header class="iwc-toolbar"><button class="iwc-icon-btn iwc-mobile-sources" type="button" aria-label="Sources">'+icon("menu")+'</button><button class="iwc-today" type="button">Today</button><button class="iwc-icon-btn iwc-prev" type="button" aria-label="Previous week">'+icon("chevleft")+'</button><button class="iwc-icon-btn iwc-next" type="button" aria-label="Next week">'+icon("chevright")+'</button><strong class="iwc-range-title">'+escapeHtml(formatRange(state.anchor,end))+'</strong><input class="iwc-date-jump" type="date" value="'+state.anchor+'" aria-label="Jump to date"><span class="iwc-toolbar-spacer"></span><span class="iwc-legend">15-minute snap · Eastern time</span></header>'+renderWeek(items)+'</main><aside class="iwc-inspector" hidden></aside></div>';
+    return '<div class="iwc-shell '+(state.railCollapsed?'rail-collapsed':'')+'">'+renderRail(items)+'<main class="iwc-main"><header class="iwc-toolbar"><button class="iwc-icon-btn iwc-mobile-sources" type="button" aria-label="Sources">'+icon("menu")+'</button><button class="iwc-today" type="button">Today</button><button class="iwc-icon-btn iwc-prev" type="button" aria-label="Previous week">'+icon("chevleft")+'</button><button class="iwc-icon-btn iwc-next" type="button" aria-label="Next week">'+icon("chevright")+'</button><strong class="iwc-range-title">'+escapeHtml(formatRange(state.anchor,end))+'</strong><input class="iwc-date-jump" type="date" value="'+state.anchor+'" aria-label="Jump to date"><span class="iwc-toolbar-spacer"></span>'+zoneSettings()+'</header>'+ (previewMode() ? renderZoneAgenda(items) : renderWeek(items))+'</main><aside class="iwc-inspector" hidden></aside></div>';
   }
 
   function findEvent(id){return state.loaded.find(ev=>String(ev._blockId)===String(id)||String(ev.id)===String(id));}
@@ -359,7 +424,7 @@
     const shell=rootEl.querySelector(".iwc-shell");
     rootEl.querySelector(".iwc-rail-toggle").onclick=()=>{state.railCollapsed=!state.railCollapsed;savePrefs();build({keepScroll:true});};
     rootEl.querySelector(".iwc-mobile-sources").onclick=()=>shell.classList.toggle("rail-open-mobile");
-    rootEl.querySelector(".iwc-today").onclick=()=>{state.anchor=weekStart(easternNow().date);state.initialScroll=true;build();};
+    rootEl.querySelector(".iwc-today").onclick=()=>{state.anchor=weekStart(viewingNow().date);state.initialScroll=true;build();};
     rootEl.querySelector(".iwc-prev").onclick=()=>{state.anchor=addDays(state.anchor,-7);build();};
     rootEl.querySelector(".iwc-next").onclick=()=>{state.anchor=addDays(state.anchor,7);build();};
     rootEl.querySelector(".iwc-date-jump").onchange=e=>{if(e.target.value){state.anchor=weekStart(e.target.value);state.initialScroll=true;build();}};
@@ -423,24 +488,60 @@
         handle.addEventListener("pointerup",up);
       };
     });
-    if(state.selectedId)openInspector(state.selectedId);
+    if(state.selectedId && !previewMode())openInspector(state.selectedId);
+    const settings = rootEl.querySelector(".iwc-zone-settings form");
+    if (settings) settings.onsubmit = event => {
+      event.preventDefault();
+      const {mode, zone, home, showHome} = settings.elements;
+      const manualZone = zone.value.trim(), homeZone = home.value.trim();
+      if (mode.value === "manual" && !zoneApi.validZone(manualZone)) {
+        toast("Choose a valid IANA viewing zone.", "error");
+        return;
+      }
+      if (!zoneApi.validZone(homeZone)) {
+        toast("Choose a valid IANA home zone.", "error");
+        return;
+      }
+      zonePrefs = { mode: mode.value, zone: manualZone, home: homeZone, showHome: showHome.checked };
+      try { root.localStorage.setItem(zoneKey, JSON.stringify(zonePrefs)); } catch {}
+      build({keepScroll:true});
+    };
   }
 
   async function build(opts){
     if(!root||!root.document||!root.blockStore)return;
     const el=root.document.getElementById("calendar-view");if(!el)return;
     const currentViewDate=typeof root.viewDate==="string"?root.viewDate:null;
-    if(!state.anchor){loadPrefs();state.syncedViewDate=currentViewDate;state.anchor=weekStart(currentViewDate||easternNow().date);}
+    if(!state.anchor){loadPrefs();state.syncedViewDate=currentViewDate;state.anchor=weekStart(currentViewDate||viewingNow().date);}
     else if(currentViewDate&&currentViewDate!==state.syncedViewDate){state.syncedViewDate=currentViewDate;state.anchor=weekStart(currentViewDate);state.initialScroll=true;}
     const token=++renderToken;
     const prior=el.querySelector(".iwc-week-scroll");
     const scrollTop=opts&&opts.keepScroll&&prior?prior.scrollTop:null,scrollLeft=opts&&opts.keepScroll&&prior?prior.scrollLeft:null;
     el.innerHTML='<div class="iwc-loading">Loading week…</div>';
-    const items=await readWeek();if(token!==renderToken)return;
+    const requestedZone = activeZone();
+    let items;
+    try { items = await readWeek(requestedZone); }
+    catch {
+      if (token !== renderToken) return;
+      el.innerHTML = '<p>Could not load this calendar week.</p><button type="button">Retry</button>';
+      el.querySelector("button").onclick = () => build(opts);
+      return;
+    }
+    if(token!==renderToken)return;
+    if (requestedZone !== activeZone()) return build(opts);
+    lastRenderedZone = requestedZone;
     el.innerHTML=renderShell(items);bind(el);paintActual();
     const scroller=el.querySelector(".iwc-week-scroll");
     if(scrollTop!=null){scroller.scrollTop=scrollTop;scroller.scrollLeft=scrollLeft||0;}
-    else if(state.initialScroll){const now=easternNow(),inWeek=now.date>=state.anchor&&now.date<=addDays(state.anchor,6);scroller.scrollTop=Math.max(0,((inWeek?now.minute/60:8)*HOUR_PX)-140);if(root.innerWidth<=760&&inWeek)scroller.scrollLeft=Math.max(0,(parseDate(now.date).getDay()*132)-50);state.initialScroll=false;}
+    else if(state.initialScroll){const now=viewingNow(),inWeek=now.date>=state.anchor&&now.date<=addDays(state.anchor,6);scroller.scrollTop=Math.max(0,((inWeek?now.minute/60:8)*HOUR_PX)-140);if(root.innerWidth<=760&&inWeek)scroller.scrollLeft=Math.max(0,(parseDate(now.date).getDay()*132)-50);state.initialScroll=false;}
+  }
+
+  if (zoneApi) {
+    const refreshZone = () => {
+      if (!root.document.hidden && lastRenderedZone && lastRenderedZone !== activeZone()) build({keepScroll:true});
+    };
+    root.addEventListener("focus", refreshZone);
+    root.document.addEventListener("visibilitychange", refreshZone);
   }
 
   // The Actual toggle repaints the layer and refreshes an open inspector's Actual

@@ -1706,6 +1706,13 @@
     // ── Range Loading (for Calendar View) ──
     _rangeCache: new Map(), // dateStr -> { blocks: [], dccState: null }
 
+    async loadViewingDateRange(startDate, endDate, viewingZone) {
+      const query = new URLSearchParams({ start: startDate, end: endDate, viewingZone });
+      // Viewing-zone rows keep their scheduling dates. Never put this filtered
+      // response in the legacy date cache used by editors and history.
+      return { blocks: await apiGet("/api/blocks/range?" + query) };
+    },
+
     async loadDateRange(startDate, endDate) {
       try {
         // dcc-state is nice-to-have here; blocks are what the range consumers
