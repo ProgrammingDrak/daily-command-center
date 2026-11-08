@@ -5,6 +5,7 @@ const path = require("node:path");
 
 const {
   BUILTIN_VIEWS,
+  createProjectStore,
   isLibraryTask,
   normalizeFacet,
   normalizeView,
@@ -19,10 +20,46 @@ const deterministicCrypto = (() => {
 
 test("the Task Library has useful backlog replacement views", () => {
   assert.deepEqual(BUILTIN_VIEWS.map(view => view.id), [
-    "all-open", "unscheduled", "scheduled", "solo", "waiting", "completed",
+    "all-open", "unscheduled", "someday", "scheduled", "solo", "waiting", "completed",
   ]);
   assert.equal(BUILTIN_VIEWS.find(view => view.id === "solo").query.projectId, "solo");
   assert.equal(BUILTIN_VIEWS.find(view => view.id === "waiting").query.readiness, "blocked");
+});
+
+test("Someday ideas stay undated and retain their fields when planned and returned", async () => {
+  const store = createProjectStore({
+    pool: {},
+    blockDB: { createBlock: async row => row },
+    crypto: deterministicCrypto,
+  });
+  const owner = { userId: "user", workspaceId: "workspace" };
+  const idea = await store.createTask({
+    title: "Try the dumpling spot", date: "2026-11-09", someday: true,
+    tags: ["With Fae", "With Fae"], location: "Downtown",
+    sourceUrl: "https://example.com/dumplings", detail: "Order the wontons",
+  }, owner);
+  assert.equal(idea.date, null);
+  assert.deepEqual(idea.properties.tags, ["With Fae"]);
+  assert.equal(idea.properties.location, "Downtown");
+  assert.equal(idea.properties.sourceReferences[0].url, "https://example.com/dumplings");
+  const { plan } = require("./lib/whenever-placement");
+  const TaskModel = require("./public/js/task-model");
+  assert.deepEqual(TaskModel.selectUnscheduled([idea]), []);
+  const [scheduled] = plan(idea, [idea], {
+    targetDate: "2026-11-09", placement: { kind: "pool_date" },
+  }).moves;
+  assert.equal(scheduled.id, idea.id);
+  assert.equal(scheduled.date, "2026-11-09");
+  const datedIdea = { ...idea, date: scheduled.date, properties: scheduled.properties };
+  const [returned] = plan(datedIdea, [datedIdea], {
+    targetDate: null, placement: { kind: "whenever", stage: "Backlog" },
+  }).moves;
+  assert.equal(returned.id, idea.id);
+  assert.equal(returned.date, null);
+  for (const key of ["someday", "tags", "location", "sourceReferences", "detail"]) {
+    assert.deepEqual(returned.properties[key], idea.properties[key]);
+  }
+  await assert.rejects(store.createTask({ title: "Bad link", someday: true, sourceUrl: "javascript:alert(1)" }, owner), { statusCode: 400 });
 });
 
 test("custom categories preserve stable values and archive removed values", () => {

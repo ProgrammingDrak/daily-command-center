@@ -122,6 +122,30 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   assert.ok(result.body.result.tools.some((t) => t.name === "dcc_work"));
   assert.ok(!result.body.result.tools.some((t) => t.name === "dcc_correct_time"));
   assert.ok(result.body.result.tools.some((t) => t.name === "dcc_delegate"));
+  const capture = {
+    name: "dcc_save_someday_idea",
+    arguments: {
+      sourceEventId: "capture-dumplings", title: "Try the dumpling spot",
+      tags: ["With Fae"], location: "Downtown", sourceUrl: "https://example.com/dumplings",
+      detail: "Order the wontons"
+    }
+  };
+  assert.ok(!result.body.result.tools.some((t) => t.name === capture.name));
+  assert.equal((await rpc("tools/call", capture)).status, 403);
+  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.capture"])]);
+  result = await rpc("tools/list");
+  assert.deepEqual(result.body.result.tools.map(tool => tool.name), [capture.name]);
+  const saved = (await rpc("tools/call", capture, { "x-workspace-id": "ws-2" })).body.result.structuredContent;
+  assert.equal(saved.ok, true);
+  assert.equal(saved.duplicate, false);
+  const idea = await ctx.blockDB.getBlockIncludingDeleted(saved.taskId);
+  assert.equal(idea.workspace_id, "ws-1");
+  assert.equal(idea.date, null);
+  assert.equal(idea.properties.someday, true);
+  assert.deepEqual(idea.properties.tags, ["With Fae"]);
+  assert.equal(idea.properties.location, "Downtown");
+  assert.equal(idea.properties.sourceReferences[0].url, capture.arguments.sourceUrl);
+  assert.deepEqual((await rpc("tools/call", capture)).body.result.structuredContent, { ...saved, duplicate: true });
   // An already-issued read/work grant does not acquire delegated creation power.
   await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.read", "dcc.work"])]);
   result = await rpc("tools/list");

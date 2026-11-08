@@ -1,4 +1,5 @@
 const nodeCrypto = require("node:crypto");
+const TaskSources = require("./public/js/task-sources");
 
 const ORGANIZATION_KINDS = new Set(["project", "task_facet", "task_view"]);
 const FACET_CARDINALITIES = new Set(["single", "multi"]);
@@ -7,6 +8,7 @@ const FACET_SCOPES = new Set(["workspace", "project"]);
 const BUILTIN_VIEWS = Object.freeze([
   { id: "all-open", name: "All open", system: true, query: { scope: "open" }, sort: { key: "project", dir: "asc" } },
   { id: "unscheduled", name: "Unscheduled", system: true, query: { scope: "open", scheduled: "no" }, sort: { key: "projectOrder", dir: "asc" } },
+  { id: "someday", name: "Someday", system: true, query: { scope: "someday" }, sort: { key: "createdAt", dir: "desc" } },
   { id: "scheduled", name: "Scheduled", system: true, query: { scope: "open", scheduled: "yes" }, sort: { key: "date", dir: "asc" } },
   { id: "solo", name: "Solo", system: true, query: { scope: "open", projectId: "solo" }, sort: { key: "title", dir: "asc" } },
   { id: "waiting", name: "Waiting", system: true, query: { scope: "open", readiness: "blocked" }, sort: { key: "title", dir: "asc" } },
@@ -15,6 +17,22 @@ const BUILTIN_VIEWS = Object.freeze([
 
 function cleanText(value, max = 300) {
   return String(value == null ? "" : value).trim().replace(/\s+/g, " ").slice(0, max);
+}
+
+function ideaMetadata(input) {
+  const fields = {};
+  if (Array.isArray(input.tags)) fields.tags = [...new Set(input.tags.map(tag => cleanText(tag, 100)).filter(Boolean))].slice(0, 50);
+  if (input.location !== undefined) fields.location = cleanText(input.location, 300);
+  if (input.sourceUrl !== undefined) {
+    const url = String(input.sourceUrl || "").trim();
+    const sources = Array.isArray(input.previousSources) ? input.previousSources : [];
+    try {
+      fields.sourceReferences = TaskSources.validate(url ? [{ kind: "link", name: "Idea source", url }, ...sources] : sources);
+    } catch (error) {
+      throw clientError(error.message);
+    }
+  }
+  return fields;
 }
 
 function slugify(value) {
@@ -116,7 +134,7 @@ function normalizeView(input, current) {
     columns,
     query: cleanText(input.query !== undefined ? input.query : current.query, 500),
     density: input.density === "compact" ? "compact" : (current.density || "comfortable"),
-    scope: ["open", "completed", "all"].includes(input.scope) ? input.scope : (current.scope || "open"),
+    scope: ["open", "completed", "all", "someday"].includes(input.scope) ? input.scope : (current.scope || "open"),
   };
 }
 
@@ -490,6 +508,8 @@ function createProjectStore(deps = {}) {
       local_id: input.local_id || `library-${cryptoImpl.randomUUID()}`,
       title,
       detail: cleanText(input.detail, 5000),
+      ...ideaMetadata({ ...input, previousSources: [] }),
+      ...(input.someday === true ? { someday: true } : {}),
       type: input.type || "task",
       source: input.source || "manual",
       ...(input.source === "quietshelf-reading" && input.readingSession ? { readingSession: input.readingSession } : {}),
@@ -511,7 +531,7 @@ function createProjectStore(deps = {}) {
     };
     return blockDB.createBlock({
       id: input.id || cryptoImpl.randomUUID(), type: "block", parent_id: null,
-      date: input.date || null, sort_order: input.sort_order == null ? null : input.sort_order,
+      date: input.someday === true ? null : input.date || null, sort_order: input.sort_order == null ? null : input.sort_order,
       properties, user_id: owner.userId, workspace_id: owner.workspaceId,
     }, client);
   }
@@ -543,6 +563,8 @@ function createProjectStore(deps = {}) {
       props.title = cleanText(input.title, 300);
       if (!props.title) throw clientError("Task title is required");
     }
+    const previousSources = (props.sourceReferences || []).filter(ref => ref.kind !== "link" || ref.name !== "Idea source");
+    Object.assign(props, ideaMetadata({ ...input, previousSources }));
     if (input.detail !== undefined) props.detail = cleanText(input.detail, 5000);
     if (input.priority !== undefined && ["High", "Medium", "Low"].includes(input.priority)) props.priority = input.priority;
     if (input.duration !== undefined) {

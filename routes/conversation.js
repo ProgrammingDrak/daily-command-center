@@ -4,9 +4,11 @@ const crypto = require("node:crypto");
 const { createOAuth, SCOPES } = require("../conversation-oauth");
 const { createConversationStore } = require("../conversation-store");
 const M = require("../lib/conversation-model");
+const { createProjectStore } = require("../project-store");
 const escape = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const descriptions = {
+  "dcc.capture": "Save explicitly requested, undated Someday ideas.",
   "dcc.read": "Find current, completed, and recurring tasks; read timing and audit history.",
   "dcc.work":
     "Manage Working Queue membership (add or remove without deleting tasks), order, priority, context, blockers and check-back reminders, including Return to Priority. Start and pause foreground timers and change DCC background bookkeeping. Does not start or stop external workers.",
@@ -26,6 +28,25 @@ const envelope = {
   at: { type: "string", description: "User-confirmed instant with explicit timezone offset." }
 };
 const tools = [
+  {
+    name: "dcc_save_someday_idea",
+    description: "Save a task to DCC Someday on explicit request. Given a link or location, look up the idea when possible, give it an actionable title, retain the original link, and add a verified venue/neighborhood and a short planning note when available. Leave unknown details blank; ask if an ambiguous place materially changes the idea. Use existing user-provided tags such as With Fae when requested. Do not assign a date. Reuse sourceEventId on retry.",
+    inputSchema: {
+      type: "object",
+      required: ["title", "sourceEventId"],
+      additionalProperties: false,
+      properties: {
+        title: { type: "string", maxLength: 300 },
+        sourceEventId: envelope.sourceEventId,
+        detail: { type: "string", maxLength: 5000 },
+        sourceUrl: { type: "string" },
+        location: { type: "string" },
+        tags: { type: "array", items: { type: "string" } },
+        duration: { type: "integer", minimum: 1, maximum: 1440 }
+      }
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+  },
   {
     name: "dcc_reconciliation_receipt",
     description:
@@ -310,6 +331,7 @@ const tools = [
   }
 ];
 const scopeFor = (name) =>
+  name === "dcc_save_someday_idea" ? "dcc.capture" :
   name === "dcc_reconcile_task"
     ? "dcc.reconcile"
     : name === "dcc_delegate"
@@ -546,6 +568,18 @@ module.exports = function mount(app, ctx, config = {}) {
       identity = await oauth.verify(raw.slice(7), scopeFor(name));
       try {
         let result;
+        if (name === "dcc_save_someday_idea") {
+          const sourceEventId = M.text(args.sourceEventId, "sourceEventId", 200);
+          const id = "someday-" + M.digest(JSON.stringify([identity.workspaceId, identity.userId, sourceEventId]));
+          const idea = await createProjectStore(ctx).createTask({
+            id, title: M.text(args.title, "title", 300), detail: args.detail, tags: args.tags,
+            location: args.location, sourceUrl: args.sourceUrl, duration: args.duration,
+            someday: true, source: "conversation"
+          }, identity);
+          if (idea.deleted_at) throw M.fail("This idea was deleted", 409);
+          if (!idea._resolvedExisting) ctx.broadcast?.("blocks-changed", { action: "someday-capture", blockIds: [idea.id] }, identity.workspaceId);
+          result = { ok: true, taskId: idea.id, duplicate: idea._resolvedExisting === true };
+        }
         if (name === "dcc_reconciliation_receipt")
           result = await store.reconciliationReceipt(args.sourceEventId, identity);
         if (name === "dcc_completion_review") result = await store.completionReview(args, identity);

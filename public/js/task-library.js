@@ -4,7 +4,7 @@
   const STORAGE_KEY = "dcc.task-library.state.v1";
   const DATE_RE = /^\d{4}-\d{2}-\d{2}/;
   const DEFAULT_COLUMNS = ["select","title","project","schedule","readiness","duration"];
-  const BUILTIN_IDS = new Set(["all-open","unscheduled","scheduled","solo","waiting","completed"]);
+  const BUILTIN_IDS = new Set(["all-open","someday","unscheduled","scheduled","solo","waiting","completed"]);
   const state = {
     activeViewId: "all-open", query: "", filters: [], groupBy: "none",
     sort: { key: "project", dir: "asc" }, columns: DEFAULT_COLUMNS.slice(), density: "comfortable",
@@ -82,6 +82,11 @@
     state.selected=new Set();
   }
 
+  function ideaValues(rows, key){
+    return [...new Set(rows.flatMap(row=>row[key] || []))].sort((a,b)=>a.localeCompare(b))
+      .map(value=>({id:value,name:value}));
+  }
+
   function inferSchema(rows){
     const system=[
       {key:"title",label:"Task",kind:"text"},
@@ -89,6 +94,8 @@
       {key:"schedule",label:"Schedule",kind:"enum",values:[{id:"scheduled",name:"Scheduled"},{id:"unscheduled",name:"Unscheduled"}]},
       {key:"status",label:"Status",kind:"enum",values:[{id:"open",name:"Open"},{id:"waiting",name:"Waiting"},{id:"done",name:"Completed"}]},
       {key:"readiness",label:"Readiness",kind:"enum",values:[{id:"ready",name:"Ready"},{id:"blocked",name:"Blocked"}]},
+      {key:"tags",label:"Tags",kind:"enum",values:ideaValues(rows,"tags")},
+      {key:"location",label:"Location",kind:"enum",values:ideaValues(rows,"location")},
       {key:"duration",label:"Duration",kind:"number"},
       {key:"createdAt",label:"Created",kind:"date"},
       {key:"date",label:"Scheduled date",kind:"date"},
@@ -117,6 +124,7 @@
       priority:p.priority||"Medium",duration:Number(p.duration||p.durMin||30),createdAt:(row.created_at||p.createdAt||"").slice(0,10),
       date:row.date||null,completedAt:p.completedAt?String(p.completedAt).slice(0,10):null,
       projectOrder:Number.isFinite(Number(p.projectOrder))?Number(p.projectOrder):Number(row.sort_order||0),
+      tags:Array.isArray(p.tags)?p.tags.filter(tag=>typeof tag==="string"):[],location:p.location||"",
       detail:p.detail||"",facetValues:p.facetValues||{},blockers:readiness.blockers||[],dependencyTotal:readiness.total||0,
       dependencySatisfied:readiness.satisfied||0,projectRole:p.projectRole||"leaf",
     };
@@ -134,10 +142,11 @@
     const view=currentView();
     const scope=(view&&((view.query&&view.query.scope)||view.scope))||"open";
     if(scope==="open"&&item.status==="done")return false;
+    if(scope==="someday"&&(item.status==="done"||item.date||props(item.raw).someday!==true))return false;
     if(scope==="completed"&&item.status!=="done")return false;
     const q=view&&view.query||{};
     if(q.scheduled==="yes"&&item.schedule!=="scheduled")return false;
-    if(q.scheduled==="no"&&item.schedule!=="unscheduled")return false;
+    if(q.scheduled==="no"&&(item.schedule!=="unscheduled"||props(item.raw).someday===true))return false;
     if(q.projectId&&item.project!==q.projectId)return false;
     if(q.readiness&&item.readiness!==q.readiness)return false;
     return true;
@@ -176,7 +185,7 @@
     const query=state.query.trim().toLowerCase();
     if(query)rows=rows.filter(item=>{
       const facetText=Object.entries(item.facetValues).flatMap(([facetId,ids])=>[facetName(facetId),...ids.map(id=>facetValue(facetId,id))]).join(" ");
-      return [item.title,item.detail,projectName(item.project==="solo"?null:item.project),facetText].join(" ").toLowerCase().includes(query);
+      return [item.title,item.detail,item.location,...item.tags,projectName(item.project==="solo"?null:item.project),facetText].join(" ").toLowerCase().includes(query);
     });
     rows=rows.filter(item=>state.filters.every(filter=>matchesFilter(item,filter)));
     const key=state.sort&&state.sort.key||"title",dir=state.sort&&state.sort.dir==="desc"?-1:1;
@@ -223,6 +232,23 @@
       '<button type="button" class="tlb-view-tab '+(state.activeViewId===view.id?'active':'')+'" data-view-id="'+esc(view.id)+'">'+esc(view.name)+'</button>').join('')+'</div>';
   }
 
+  function somedayView(){
+    const view=currentView();
+    return view?.query?.scope==="someday"||view?.scope==="someday";
+  }
+  function somedayPills(){
+    if(!somedayView())return "";
+    const ideas=(payload.tasks||[]).map(flattenTask).filter(baseScope);
+    return [["tags","Tags"],["location","Location"]].map(([key,label])=>{
+      const values=ideaValues(ideas,key);
+      const active=state.filters.find(filter=>filter.key===key && filter.op==="in")?.value||[];
+      if(!values.length)return "";
+      return '<div class="tlb-project-strip"><span class="tlb-strip-label">'+label+'</span>'+
+        values.map(value=>'<button type="button" class="tlb-project-chip '+(active.includes(value.id)?'active':'')+
+          '" aria-pressed="'+active.includes(value.id)+'" data-idea-key="'+key+'" data-idea-value="'+esc(value.id)+'">'+esc(value.name)+'</button>').join("")+'</div>';
+    }).join("");
+  }
+
   function toolbar(schema,rows){
     const filters=state.filters.map((filter,index)=>'<span class="tlb-filter-chip"><button data-edit-filter="'+index+'">'+esc(formatFilter(filter))+'</button><button data-remove-filter="'+index+'" aria-label="Remove filter">×</button></span>').join('');
     const groupOptions=[{key:"none",label:"No grouping"},{key:"project",label:"Project"},{key:"status",label:"Status"},{key:"schedule",label:"Schedule"}].concat(schema.filter(field=>field.facetId).map(field=>({key:field.key,label:field.label})));
@@ -236,6 +262,14 @@
 
   function cell(item,key){
     if(key==="select")return '<input type="checkbox" class="tlb-row-select" data-task-id="'+esc(item.id)+'"'+(state.selected.has(item.id)?' checked':'')+' aria-label="Select '+esc(item.title)+'">';
+    if(key==="title"&&props(item.raw).someday){
+      const source=props(item.raw).sourceReferences?.find(ref=>ref.kind==="link"&&ref.name==="Idea source");
+      const href=source&&window.DCC?.TaskSources?.safeUrl(source.url);
+      const metadata=[item.location,...item.tags].filter(Boolean).join(" · ");
+      return '<button class="tlb-title-btn" data-edit-task="'+esc(item.id)+'">'+esc(item.title)+'</button>'+
+        (metadata?'<div class="tlb-muted">'+esc(metadata)+'</div>':'')+
+        (href?'<a href="'+esc(href)+'" target="_blank" rel="noopener noreferrer">Open source</a>':'');
+    }
     if(key==="title")return '<button class="tlb-title-btn" data-edit-task="'+esc(item.id)+'">'+esc(item.title)+'</button>'+(item.projectRole==='parent'?'<span class="tlb-parent-pill">Parent</span>':'');
     if(key==="project")return '<button class="tlb-data-chip" data-project-filter="'+esc(item.project)+'">'+esc(projectName(item.project==='solo'?null:item.project))+'</button>';
     if(key==="schedule")return item.date?'<button class="tlb-date-btn" data-schedule-task="'+esc(item.id)+'">'+esc(formatDate(item.date))+'</button>':'<span class="tlb-muted">Unscheduled</span>';
@@ -272,7 +306,7 @@
         body+='<tr class="tlb-group-row"><td colspan="'+(cols.length+1)+'"><span>'+esc(label)+'</span><b>'+items.length+'</b></td></tr>';
       }
       body+=items.map(item=>'<tr data-task-row="'+esc(item.id)+'" class="'+(state.selected.has(item.id)?'selected ':'')+(item.status==='done'?'completed':'')+'">'+cols.map(key=>'<td data-field="'+esc(key)+'">'+cell(item,key)+'</td>').join('')+
-        '<td class="tlb-row-actions"><button data-schedule-task="'+esc(item.id)+'">'+(item.date?'Move':'Itinerary')+'</button><button data-edit-task="'+esc(item.id)+'">Edit</button></td></tr>').join('');
+        '<td class="tlb-row-actions"><button data-schedule-task="'+esc(item.id)+'">'+(item.date?'Move':props(item.raw).someday?'Plan':'Itinerary')+'</button><button data-edit-task="'+esc(item.id)+'">Edit</button>'+ (item.date&&props(item.raw).someday&&item.status!=='done'?'<button data-return-idea="'+esc(item.id)+'">Back to Someday</button>':'')+'</td></tr>').join('');
     });
     if(!rows.length)body='<tr><td class="tlb-empty" colspan="'+(cols.length+1)+'"><strong>No tasks match this view.</strong><span>Clear filters or add a task in the current context.</span></td></tr>';
     return '<div class="tlb-table-scroll"><table class="tlb-table '+(state.density==='compact'?'compact':'')+'">'+head+'<tbody>'+body+'</tbody></table></div>';
@@ -310,8 +344,8 @@
     const badge=document.getElementById("task-library-count");if(badge){badge.textContent=all.filter(item=>item.status!=='done').length;badge.style.display='';}
     root.innerHTML='<div class="task-library-shell">'+
       '<div class="tlb-head"><div><h2>Task Library</h2><p>Every task, organized your way. Unassigned work lives in Solo.</p></div><div class="tlb-head-actions">'+
-      '<button class="tlb-btn secondary" data-reading-session>Reading time</button><button class="tlb-btn secondary" id="tlb-import">Import</button><button class="tlb-btn secondary" id="tlb-manage-facets">Categories</button><button class="tlb-btn secondary" id="tlb-manage-projects">Projects</button><button class="tlb-btn primary" id="tlb-add-task">+ Task</button></div></div>'+
-      summary(all)+viewTabs()+projectChips(all)+toolbar(schema,rows)+
+      '<button class="tlb-btn secondary" data-reading-session>Reading time</button><button class="tlb-btn secondary" id="tlb-import">Import</button><button class="tlb-btn secondary" id="tlb-manage-facets">Categories</button><button class="tlb-btn secondary" id="tlb-manage-projects">Projects</button><button class="tlb-btn primary" id="tlb-add-task">'+(somedayView()?'+ Idea':'+ Task')+'</button></div></div>'+
+      summary(all)+viewTabs()+projectChips(all)+somedayPills()+toolbar(schema,rows)+
       '<div class="tlb-mode-row"><button class="'+(state.mode==='table'?'active':'')+'" data-mode="table">Table</button><button class="'+(state.mode==='matrix'?'active':'')+'" data-mode="matrix">Matrix</button>'+
       (stateProjectId()?'<button class="tlb-continue" id="tlb-continue">Continue '+esc(projectName(stateProjectId()))+'</button>':'')+
       '<div class="tlb-bulk" '+(state.selected.size?'':'hidden')+'><b>'+state.selected.size+' selected</b><button id="tlb-bulk-project">Change project</button><button id="tlb-bulk-schedule">Add to itinerary</button><button id="tlb-clear-selection">Clear</button></div></div>'+
@@ -346,11 +380,11 @@
 
   function setProjectFilter(projectId){
     state.filters=state.filters.filter(filter=>filter.key!=='project');
-    state.filters.push({key:'project',op:'in',value:[projectId]});state.activeViewId='all-open';render();
+    state.filters.push({key:'project',op:'in',value:[projectId]});if(!somedayView())state.activeViewId='all-open';render();
   }
   function setFacetFilter(facetId,valueId){
     state.filters=state.filters.filter(filter=>filter.key!=='facet:'+facetId);
-    state.filters.push({key:'facet:'+facetId,op:'in',value:[valueId]});state.activeViewId='all-open';render();
+    state.filters.push({key:'facet:'+facetId,op:'in',value:[valueId]});if(!somedayView())state.activeViewId='all-open';render();
   }
 
   function popup(anchor,html,className){
@@ -427,11 +461,14 @@
   function taskEditor(taskId,defaults){
     const row=taskId&&(payload.tasks||[]).find(item=>item.id===taskId),p=row?props(row):{},projectId=defaults&&defaults.projectId!==undefined?defaults.projectId:(p.projectId||''),facets=(payload.facets||[]).filter(facet=>!props(facet).archived&&(props(facet).scope==='workspace'||props(facet).projectId===projectId));
     const facetFields=facets.map(facet=>{const fp=props(facet),selected=(p.facetValues&&p.facetValues[facet.id])||[];if(fp.cardinality==='multi')return '<fieldset class="tlb-facet-field"><legend>'+esc(fp.name)+'</legend>'+(fp.values||[]).filter(v=>!v.archived).map(value=>'<label><input type="checkbox" data-facet="'+esc(facet.id)+'" value="'+esc(value.id)+'"'+(selected.includes(value.id)?' checked':'')+'>'+esc(value.name)+'</label>').join('')+'</fieldset>';return '<label class="tlb-field"><span>'+esc(fp.name)+'</span><select data-facet="'+esc(facet.id)+'"><option value="">Unassigned</option>'+(fp.values||[]).filter(v=>!v.archived).map(value=>'<option value="'+esc(value.id)+'"'+(selected.includes(value.id)?' selected':'')+'>'+esc(value.name)+'</option>').join('')+'</select></label>';}).join('');
-    const body='<form id="tlb-task-form"><label class="tlb-field"><span>Task</span><input id="tlb-task-title" required value="'+esc(row?taskTitle(row):'')+'"></label><label class="tlb-field"><span>Project</span><select id="tlb-task-project"><option value="">Solo</option>'+(payload.projects||[]).filter(project=>props(project).status!=='archived').map(project=>'<option value="'+esc(project.id)+'"'+(project.id===projectId?' selected':'')+'>'+esc(props(project).name)+'</option>').join('')+'</select></label><div class="tlb-form-grid"><label class="tlb-field"><span>Duration</span><input id="tlb-task-duration" type="number" min="1" max="1440" value="'+esc(p.duration||p.durMin||30)+'"></label></div><label class="tlb-field"><span>Details</span><textarea id="tlb-task-detail">'+esc(p.detail||'')+'</textarea></label><div id="tlb-task-facets">'+facetFields+'</div><div class="tlb-modal-actions">'+(row?'<button type="button" id="tlb-task-dependencies">Dependencies</button>':'')+'<button type="button" data-cancel>Cancel</button><button class="primary" type="submit">Save task</button></div></form>';
-    const m=modal(row?'Edit task':'New task',body);m.overlay.querySelector('[data-cancel]').onclick=m.close;
+    const idea=p.someday===true||(!row&&somedayView());
+    const source=p.sourceReferences?.find(ref=>ref.kind==='link'&&ref.name==='Idea source');
+    const ideaFields=idea?'<div class="tlb-form-grid"><label class="tlb-field"><span>Tags</span><input name="ideaTags" placeholder="With Fae" value="'+esc((Array.isArray(p.tags)?p.tags:[]).join(', '))+'"></label><label class="tlb-field"><span>Location</span><input name="ideaLocation" placeholder="Downtown" value="'+esc(p.location||'')+'"></label></div><label class="tlb-field"><span>Source link</span><input name="ideaLink" type="url" value="'+esc(source?.url||'')+'"></label>':'';
+    const body='<form id="tlb-task-form"><label class="tlb-field"><span>Task</span><input id="tlb-task-title" required value="'+esc(row?taskTitle(row):'')+'"></label><label class="tlb-field"><span>Project</span><select id="tlb-task-project"><option value="">Solo</option>'+(payload.projects||[]).filter(project=>props(project).status!=='archived').map(project=>'<option value="'+esc(project.id)+'"'+(project.id===projectId?' selected':'')+'>'+esc(props(project).name)+'</option>').join('')+'</select></label><div class="tlb-form-grid"><label class="tlb-field"><span>Duration</span><input id="tlb-task-duration" type="number" min="1" max="1440" value="'+esc(p.duration||p.durMin||30)+'"></label></div><label class="tlb-field"><span>Details</span><textarea id="tlb-task-detail">'+esc(p.detail||'')+'</textarea></label>'+ideaFields+'<div id="tlb-task-facets">'+facetFields+'</div><div class="tlb-modal-actions">'+(row?'<button type="button" id="tlb-task-dependencies">Dependencies</button>':'')+'<button type="button" data-cancel>Cancel</button><button class="primary" type="submit">Save task</button></div></form>';
+    const m=modal(row?'Edit task':idea?'Save an idea for Someday':'New task',body);m.overlay.querySelector('[data-cancel]').onclick=m.close;
     m.overlay.querySelector('#tlb-task-project').onchange=()=>{const draft={projectId:m.overlay.querySelector('#tlb-task-project').value};m.close();taskEditor(taskId,draft);};
     const dep=m.overlay.querySelector('#tlb-task-dependencies');if(dep)dep.onclick=()=>{m.close();if(typeof openTaskDependencyModal==='function')openTaskDependencyModal(row.id);};
-    m.overlay.querySelector('form').onsubmit=async event=>{event.preventDefault();const facetValues={};m.overlay.querySelectorAll('[data-facet]').forEach(input=>{if((input.type==='checkbox'&&!input.checked)||!input.value)return;(facetValues[input.dataset.facet]||(facetValues[input.dataset.facet]=[])).push(input.value);});const body={title:m.overlay.querySelector('#tlb-task-title').value,projectId:m.overlay.querySelector('#tlb-task-project').value||null,duration:Number(m.overlay.querySelector('#tlb-task-duration').value),detail:m.overlay.querySelector('#tlb-task-detail').value,facetValues};try{await api(row?'/api/task-library/tasks/'+row.id:'/api/task-library/tasks',{method:row?'PATCH':'POST',body:JSON.stringify(body)});m.close();await refresh();notify(row?'Task updated':'Task added');}catch(error){notify(error.message,'error');}};
+    m.overlay.querySelector('form').onsubmit=async event=>{event.preventDefault();const facetValues={};m.overlay.querySelectorAll('[data-facet]').forEach(input=>{if((input.type==='checkbox'&&!input.checked)||!input.value)return;(facetValues[input.dataset.facet]||(facetValues[input.dataset.facet]=[])).push(input.value);});const body={title:m.overlay.querySelector('#tlb-task-title').value,projectId:m.overlay.querySelector('#tlb-task-project').value||null,duration:Number(m.overlay.querySelector('#tlb-task-duration').value),detail:m.overlay.querySelector('#tlb-task-detail').value,facetValues};if(idea){const fields=new FormData(event.currentTarget);Object.assign(body,{someday:true,tags:fields.get('ideaTags').split(','),location:fields.get('ideaLocation'),sourceUrl:fields.get('ideaLink')});}const submit=event.currentTarget.querySelector('[type=submit]');submit.disabled=true;try{await api(row?'/api/task-library/tasks/'+row.id:'/api/task-library/tasks',{method:row?'PATCH':'POST',body:JSON.stringify(body)});m.close();await refresh();notify(row?'Task updated':idea?'Saved to Someday':'Task added');}catch(error){notify(error.message,'error');submit.disabled=false;}};
   }
 
   function importProject(){
@@ -466,7 +503,22 @@
     document.querySelectorAll('[data-view-id]').forEach(button=>button.onclick=()=>activateView(button.dataset.viewId));
     document.querySelectorAll('[data-project-filter]').forEach(button=>button.onclick=event=>{event.stopPropagation();setProjectFilter(button.dataset.projectFilter);});
     document.querySelectorAll('[data-facet-filter]').forEach(button=>button.onclick=event=>{event.stopPropagation();setFacetFilter(button.dataset.facetFilter,button.dataset.valueFilter);});
-    const search=document.getElementById('tlb-search');if(search)search.oninput=()=>{state.query=search.value;state.activeViewId='all-open';render();};
+    document.querySelectorAll('[data-idea-key]').forEach(button=>button.onclick=()=>{
+      const {ideaKey:key,ideaValue:value}=button.dataset;
+      const selected=state.filters.find(filter=>filter.key===key&&filter.op==='in')?.value||[];
+      const next=selected.includes(value)?selected.filter(item=>item!==value):selected.concat(value);
+      state.filters=state.filters.filter(filter=>filter.key!==key);
+      if(next.length)state.filters.push({key,op:'in',value:next});
+      render();
+    });
+    document.querySelectorAll('[data-return-idea]').forEach(button=>button.onclick=async()=>{
+      button.disabled=true;
+      try{
+        await window.blockStore.rescheduleBlock(button.dataset.returnIdea,null,{placement:{kind:'whenever',stage:'Backlog'}});
+        notify('Returned to Someday');await refresh();
+      }catch(error){notify(error.message,'error');button.disabled=false;}
+    });
+    const search=document.getElementById('tlb-search');if(search)search.oninput=()=>{state.query=search.value;if(!somedayView())state.activeViewId='all-open';render();};
     document.getElementById('tlb-add-filter')?.addEventListener('click',event=>openFilterPicker(event.currentTarget,null));
     document.querySelectorAll('[data-remove-filter]').forEach(button=>button.onclick=()=>{state.filters.splice(Number(button.dataset.removeFilter),1);render();});
     document.querySelectorAll('[data-edit-filter]').forEach(button=>button.onclick=event=>openFilterPicker(event.currentTarget,Number(button.dataset.editFilter)));
