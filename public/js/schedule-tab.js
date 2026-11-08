@@ -37,11 +37,12 @@ function applyScheduleView(navState,prev){
   if(reviewButton){reviewButton.setAttribute("aria-expanded",String(reviewOpen));reviewButton.textContent=reviewOpen?"Close day review":"Day review";}
   const viewChanged=!prev||prev.view!==nav.view||prev.page!==nav.page;
   const actualChanged=!prev||prev.actual!==nav.actual;
+  const dismiss=document.getElementById("progress-hide-actual-details");
+  if(dismiss)dismiss.hidden=!_actualOn();
   if(viewChanged){
     if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
     if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   }
-  renderActualSummary();
   if(schedView==="list"&&(viewChanged||actualChanged))_buildUnlessDraft(listView,buildListView);
   if(schedView==="calendar"&&typeof buildItineraryCalendar==="function"){
     // The Actual toggle repaints the layer only, so an open inspector keeps its fields.
@@ -52,14 +53,13 @@ function applyScheduleView(navState,prev){
 }
 window.applyScheduleView=applyScheduleView;
 // Day review stays the planned-vs-actual chart with time_entry editing. It is
-// reached from the Actual summary, never shown in place of List or Calendar.
+// opened from the progress header above the Planned and Actual bars.
 function buildActualView(dateStr){
   if(typeof buildDayReview==="function") buildDayReview(dateStr);
 }
 document.addEventListener("dcc:actual-time-saved",()=>{
   buildProgress();
   if(!_actualOn())return;
-  renderActualSummary();
   if(schedView==="list"&&typeof render==="function")render("schedule");
   if(schedView==="calendar"&&window.ItineraryCalendar&&ItineraryCalendar.build)ItineraryCalendar.build({keepScroll:true});
 });
@@ -85,26 +85,6 @@ function actualDayProjection(){
   return A.projectDay(_actualEvents(),entries,{date,sessions,timeZone:A.appTimeZone()});
 }
 function _actualOn(){const nav=window.DCC&&DCC.nav&&DCC.nav.get();return !!(nav&&nav.page==="tasks"&&nav.view!=="queue"&&nav.actual);}
-// Summary strip: day totals, completion review and the explicit Day review panel.
-function renderActualSummary(){
-  const strip=document.getElementById("actual-summary");
-  if(!strip)return;
-  const A=window.DCC&&DCC.ActualProjection;
-  if(!_actualOn()||!A){strip.hidden=true;strip.innerHTML="";return;}
-  const date=_schedViewDate();
-  const day=actualDayProjection();
-  const items=A.describeDay(day);
-  const open=!!(DCC.nav&&DCC.nav.reviewOpen());
-  strip.hidden=false;
-  strip.innerHTML='<div class="actual-summary-stats">'+items.map(item=>'<span class="actual-stat actual-stat--'+item.key+'"><b>'+escHtml(item.value)+'</b> '+escHtml(item.label)+'</span>').join("")+'</div>'+
-    '<p class="actual-summary-note">Actual comes from recorded time entries. Waiting time is not focused effort.'+(schedView==="calendar"?' Bars show recorded segments; minutes without a clock time are listed per day.':'')+'</p>'+
-    '<div class="actual-summary-actions"><button type="button" data-completion-review data-review-date="'+escHtml(date||"")+'">Did these happen?</button>'+
-    '<button type="button" class="actual-review-toggle" aria-expanded="'+open+'" aria-controls="actual-view">'+(open?'Hide day review':'Day review')+'</button><button type="button" class="actual-details-dismiss">Hide actual details</button></div>';
-  // Legacy preferences/links still expose details, with a visible way to dismiss them.
-  strip.querySelector(".actual-details-dismiss").addEventListener("click",()=>DCC.nav.setActual(false));
-  strip.querySelector(".actual-review-toggle").addEventListener("click",()=>{if(DCC.nav)DCC.nav.setReviewOpen(!DCC.nav.reviewOpen());});
-}
-window.renderActualSummary=renderActualSummary;
 window.actualDayProjection=actualDayProjection;
 function _actualRowHtml(ev,projection){
   const A=window.DCC&&DCC.ActualProjection;
@@ -1028,10 +1008,10 @@ function buildListView(){
       e.stopPropagation();_setSectionSort(sortKey,b.dataset.mode);buildListView();
     }));
     wrap.appendChild(el);
+    return el;
   }
 
   const row=createTaskListRowRenderer({pool:unfPool,isTodayView,showCommute:true,actual:_actualOn()?actualDayProjection():null});
-  if(_actualOn())renderActualSummary();
   function emitNode(node,idx,mode){return row(node.ev,_isSubRow(node)?0:idx,mode,node);}
   // Idle-gap marker between two spaced-out timed rows (fixed tiny height; see
   // .it-list-gap CSS). Label via ms() -> "45m" / "1h 30m".
@@ -1100,7 +1080,17 @@ function buildListView(){
   // fold widened from `subtaskOf` to either parent edge (so a done RIDE-ALONG folds
   // too) and gated on the subtree being finished (so a done step with open steps under
   // it stays visible with its children nested, instead of hiding live work).
-  section("Work list",[...activeIds].filter(id=>!queuedIds.has(id)).length);
+  const workListHeader=section("Work list",[...activeIds].filter(id=>!queuedIds.has(id)).length);
+  const journalButton=document.createElement("button");
+  journalButton.type="button";
+  journalButton.className="it-list-ctrl-btn";
+  journalButton.textContent="Journal";
+  journalButton.addEventListener("click",async()=>{
+    journalButton.disabled=true;
+    try{await DCC.openDayJournal(viewDate);}
+    finally{journalButton.disabled=false;}
+  });
+  workListHeader.appendChild(journalButton);
   let rank=0;
   const now=new Date(),nowMin=now.getHours()*60+now.getMinutes();
   groups.forEach(({block,nodes})=>{
@@ -1769,6 +1759,8 @@ function progressActualModel(){
   const active=window.DCCWorkSessions?DCCWorkSessions.activeTasks():[];
   const model=P.model(entries,active,{date,zone:A.appTimeZone(),projection:A,policy:window.DCCWorkCheckInPolicy});
   const day=actualDayProjection();
+  model.knownMin=day?.knownMin||0;
+  model.unplannedMin=day?.unmatchedMin||0;
   // Legacy sessions are minutes only. They never acquire a made-up clock slot.
   if(day)for(const task of day.byId.values())for(const seg of task.unpositioned)if(seg.source==="legacy")model.unplacedMin+=seg.durMin;
   return model;
@@ -1796,7 +1788,8 @@ function buildProgressActual(model,start,total){
     button.addEventListener("click",()=>{if(block&&typeof openAddModal==="function")openAddModal(p.local_id||block.id,seg.title);else openProgressDayReview(true);});
     track.appendChild(button);
   });
-  const notes=[];
+  const notes=[A.minutes(model.knownMin||0)+" recorded actual."];
+  if(model.unplannedMin)notes.push(A.minutes(model.unplannedMin)+" unplanned activity.");
   if(!model.segments.length)notes.push("No timed activity recorded for this day.");
   if(model.segments.some(s=>s.live))notes.push("Dashed segments are ongoing work.");
   if(model.unplacedMin)notes.push(A.minutes(model.unplacedMin)+" recorded without a reliable clock time.");
@@ -1814,6 +1807,13 @@ function openProgressDayReview(forceOpen){
   }
 }
 document.getElementById("progress-day-review")?.addEventListener("click",openProgressDayReview);
+document.getElementById("progress-hide-actual-details")?.addEventListener("click",()=>DCC.nav.setActual(false));
+document.getElementById("day-progress-title")?.addEventListener("click",event=>{
+  const toggle=event.currentTarget,bars=document.getElementById("day-progress-bars");
+  const expanded=bars.hidden;
+  bars.hidden=!expanded;
+  toggle.setAttribute("aria-expanded",String(expanded));
+});
 window.addEventListener("dcc:work-session-changed",()=>buildProgress());
 
 

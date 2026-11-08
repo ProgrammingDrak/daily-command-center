@@ -32,6 +32,7 @@ try{
   const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(base+'/?tab=tasks&view=queue');await page.waitForSelector('[data-queue-id="combined-focus"]');
   await page.waitForFunction(()=>!!document.querySelector('#ptrack').dataset.date);
+  await page.locator('#day-progress-title').click();
   await page.waitForSelector('#ptrack button');await page.waitForSelector('#pactual button');
   await page.evaluate(()=>document.fonts.ready);
   const card=page.locator('[data-queue-id="combined-focus"]'),before=await card.boundingBox();

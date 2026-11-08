@@ -243,34 +243,6 @@ body[data-nav-page="activity"] .progress-header > :not(.progress-date-controls) 
 body[data-nav-page="activity"] .progress-header { display: flex; justify-content: center; }
 
 /* ── Actual evidence ── */
-.actual-summary {
-  display: grid;
-  gap: var(--sp-2);
-  margin: 0 0 var(--sp-3);
-  padding: var(--sp-3);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--success);
-  border-radius: var(--r-lg);
-  background: var(--surface-base);
-}
-.actual-summary[hidden] { display: none; }
-.actual-summary-stats { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); font-size: var(--fs-sm); color: var(--ink-muted); }
-.actual-summary-stats b { color: var(--ink-strong); }
-.actual-stat--unknown b { color: var(--warning); }
-.actual-summary-note { margin: 0; color: var(--ink-faint); font-size: var(--fs-xs); }
-.actual-summary-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
-.actual-summary-actions button {
-  min-height: var(--target-min);
-  padding: 0 var(--sp-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  color: var(--ink);
-  background: var(--surface-raised);
-  font: inherit;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  cursor: pointer;
-}
 .actual-day-review { margin-bottom: var(--sp-3); }
 .it-actual {
   display: inline-flex;

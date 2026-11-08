@@ -862,15 +862,24 @@
     refreshTimeline();
   }
 
-  async function openDaily() {
+  async function openDaily(date) {
     try {
-      const r = await fetch("/api/vault/daily", { method: "POST" });
+      const options = { method: "POST" };
+      if (date) {
+        options.headers = { "Content-Type": "application/json" };
+        options.body = JSON.stringify({ date });
+      }
+      const r = await fetch("/api/vault/daily", options);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "daily note failed");
-      await afterWrite(d.slug);
-      window.DCC.toast(d.created ? "Created today's journal" : "Opened today's journal");
+      if (date) window.VaultEditor.openEdit(d.node);
+      else await afterWrite(d.slug);
+      const day = date || "today";
+      window.DCC.toast(d.created ? `Created journal for ${day}` : `Opened journal for ${day}`);
     } catch (e) { window.DCC.toast(e.message, "error"); }
   }
+
+  window.DCC.openDayJournal = openDaily;
 
   const vaultTabActive = () => { const t = document.getElementById("tab-vault"); return t && t.classList.contains("active"); };
 
@@ -976,7 +985,7 @@
     const newBtn = document.getElementById("vault-new-btn");
     if (newBtn) newBtn.addEventListener("click", () => window.VaultEditor && window.VaultEditor.openNew());
     const dailyBtn = document.getElementById("vault-daily-btn");
-    if (dailyBtn) dailyBtn.addEventListener("click", openDaily);
+    if (dailyBtn) dailyBtn.addEventListener("click", () => openDaily());
 
     const refreshBtn = document.getElementById("vault-refresh-btn");
     if (refreshBtn) refreshBtn.addEventListener("click", refreshAll);

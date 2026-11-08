@@ -698,7 +698,6 @@ async function switchToDate(dateStr) {
   if (typeof buildSchedule === "function") buildSchedule();
   if (schedView === "list" && typeof buildListView === "function") buildListView();
   else if (schedView === "calendar" && typeof buildItineraryCalendar === "function") buildItineraryCalendar();
-  if (typeof renderActualSummary === "function") renderActualSummary();
   if (nav && nav.reviewOpen() && typeof buildDayReview === "function") buildDayReview(viewDate);
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();

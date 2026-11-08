@@ -53,7 +53,11 @@
   }
   function inner() { return overlay.querySelector(".vault-ed-inner"); }
   function open() { ensureOverlay().classList.add("open"); }
-  function close() { if (overlay) overlay.classList.remove("open"); st = null; }
+  function close() {
+    if (overlay) overlay.classList.remove("open");
+    st?.clearDayStory?.();
+    st = null;
+  }
 
   // ── Capture (fleeting) ──
   function openCapture() {
@@ -137,6 +141,7 @@
 
   // ── The form ──
   function buildForm(s) {
+    st?.clearDayStory?.();
     st = s;
     st.tags = Array.isArray(st.frontmatter.tags) ? st.frontmatter.tags.slice() : (st.frontmatter.tags ? [st.frontmatter.tags] : []);
     st.people = normalizePeople(st.frontmatter.people);
@@ -144,27 +149,41 @@
     const title = st.frontmatter.title || "";
     const date = st.frontmatter.date || st.frontmatter.created || "";
     const sensitiveType = !!(schemaCache && typeDef(schemaCache, st.type) && typeDef(schemaCache, st.type).sensitive);
-    inner().innerHTML = `
-      <div class="vault-ed-head">
-        <span class="vault-ed-title">${st.mode === "edit" ? "Edit" : "New"} <span class="vault-ed-type-badge">${sensitiveType ? "🔒 " : ""}${esc(st.type)}</span></span>
-        <button class="vault-ed-x" type="button" aria-label="Close">×</button>
-      </div>
+    const journal = st.type === "journal";
+    const metadata = `
       ${st.mode === "edit" ? `<div class="vault-ed-slug">${esc(st.slug)}.md</div>` : ""}
       <div class="vault-ed-row"><input class="vault-ed-input" id="ed-title" placeholder="Title" value="${esc(title)}" autocomplete="off"></div>
       <div class="vault-ed-row two">
         <label class="vault-ed-field"><span>Date</span><input class="vault-ed-input" id="ed-date" type="date" value="${esc(String(date).slice(0, 10))}"></label>
       </div>
       <div class="vault-ed-row"><span class="vault-ed-lbl">Tags</span><div id="ed-tags" class="vault-ed-tags"></div></div>
-      <div class="vault-ed-row"><span class="vault-ed-lbl">People</span><div id="ed-people" class="vault-ed-tags"></div></div>
-      <div class="vault-ed-bodybar">
-        <button class="vault-ed-tab-btn active" id="ed-write" type="button">Write</button>
-        <button class="vault-ed-tab-btn" id="ed-preview" type="button">Preview</button>
+      <div class="vault-ed-row"><span class="vault-ed-lbl">People</span><div id="ed-people" class="vault-ed-tags"></div></div>`;
+    inner().innerHTML = `
+      <div class="vault-ed-head">
+        <span class="vault-ed-title">${st.mode === "edit" ? "Edit" : "New"} <span class="vault-ed-type-badge">${sensitiveType ? "🔒 " : ""}${esc(st.type)}</span></span>
+        <button class="vault-ed-x" type="button" aria-label="Close">×</button>
+      </div>
+      ${journal ? `<div class="vault-ed-bodybar">
+        <button type="button" class="vault-ed-tab-btn active" data-journal-tab="entry" aria-pressed="true">Entry</button>
+        <button type="button" class="vault-ed-tab-btn" data-journal-tab="metadata" aria-pressed="false">Metadata</button>
+        <button type="button" class="vault-ed-tab-btn" data-journal-tab="tasks" aria-pressed="false">Tasks from this day</button>
+      </div>` : metadata}
+      <div data-journal-panel="entry">
+      ${journal ? '<div id="ed-day-cover" class="memory-story-cover"></div>' : ""}
+      <div class="vault-ed-bodybar${journal ? " vault-ed-formatbar" : ""}" role="group" aria-label="Editing tools">
+        ${journal ? "" : '<button class="vault-ed-tab-btn active" id="ed-write" type="button">Write</button><button class="vault-ed-tab-btn" id="ed-preview" type="button">Preview</button>'}
+        ${journal ? '<span id="ed-format-tools" class="vault-ed-format-tools"></span>' : ""}
         <span class="vault-ed-spacer"></span>
-        <button class="vault-ed-attach" id="ed-attach" type="button" title="Attach image (paste or drop works too)">📎 Attach</button>
+        ${journal ? '<button class="vault-ed-tab-btn" id="ed-link-photo" type="button">Day photos</button><button class="vault-ed-tab-btn" id="ed-add-file" type="button">File</button><input type="file" id="ed-document" hidden>' : ""}
+        <button class="vault-ed-tab-btn" id="ed-attach" type="button" title="Attach image (paste or drop works too)">${journal ? "Photo" : "📎 Attach"}</button>
         <input type="file" id="ed-file" accept="image/*" hidden>
       </div>
-      <textarea class="vault-ed-body" id="ed-body" rows="12" placeholder="Write in Markdown. Type [[ to link a note.">${esc(st.body)}</textarea>
-      <div class="vault-ed-preview" id="ed-prev" hidden></div>
+      <textarea class="vault-ed-body" id="ed-body" rows="12" ${journal ? "hidden" : ""} placeholder="Write in Markdown. Type [[ to link a note.">${esc(st.body)}</textarea>
+      ${journal ? '<div class="vault-ed-preview memory-inline-story vault-ed-journal-surface" id="ed-prev" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Journal entry" data-placeholder="Write your journal entry…"></div>' : '<div class="vault-ed-preview" id="ed-prev" hidden></div>'}
+      </div>
+      ${journal ? `<div data-journal-panel="metadata" hidden>${metadata}
+        ${st.slug ? '<button type="button" class="vault-ed-btn ghost" id="ed-copy-journal">Copy journal card</button>' : ""}
+      </div><div data-journal-panel="tasks" hidden></div>` : ""}
       <div class="vault-ed-foot">
         <span class="vault-ed-status" id="ed-status"></span>
         <button class="vault-ed-btn ghost" id="ed-cancel" type="button">Cancel</button>
@@ -172,7 +191,7 @@
       </div>`;
     open();
     wireForm();
-    setTimeout(() => inner().querySelector("#ed-title").focus(), 30);
+    if (!journal) setTimeout(() => inner().querySelector("#ed-title")?.focus(), 30);
   }
 
   function normalizePeople(v) {
@@ -184,6 +203,30 @@
     });
   }
 
+  function wireJournalTabs() {
+    const form = inner();
+    const tabs = form.querySelectorAll("[data-journal-tab]");
+    const panels = form.querySelectorAll("[data-journal-panel]");
+    const tasks = form.querySelector('[data-journal-panel="tasks"]');
+    for (const tab of tabs) tab.onclick = () => {
+      const target = tab.dataset.journalTab;
+      for (const control of tabs) {
+        const active = control === tab;
+        control.classList.toggle("active", active);
+        control.setAttribute("aria-pressed", String(active));
+      }
+      for (const panel of panels) panel.hidden = panel.dataset.journalPanel !== target;
+      if (target === "tasks") DCC.CompletionMemories.showDayTasks(tasks, form.querySelector("#ed-date").value, markdown => {
+        form.querySelector('[data-journal-tab="entry"]').click();
+        st.insertJournalMarkdown(markdown);
+      });
+    };
+    const copy = form.querySelector("#ed-copy-journal");
+    if (copy) copy.onclick = () => DCC.CompletionMemories.copyCard(
+      form.querySelector("#ed-title").value || "Journal", "journal", st.slug
+    );
+  }
+
   function wireForm() {
     const q = (sel) => inner().querySelector(sel);
     q(".vault-ed-x").onclick = close;
@@ -191,11 +234,32 @@
 
     renderTagPicker();
     renderPeoplePicker();
+    wireJournalTabs();
 
     // Body tabs: write / preview
     const body = q("#ed-body"), prev = q("#ed-prev");
-    q("#ed-write").onclick = () => { q("#ed-write").classList.add("active"); q("#ed-preview").classList.remove("active"); body.hidden = false; prev.hidden = true; };
-    q("#ed-preview").onclick = () => {
+    const write = q("#ed-write");
+    if (write) write.onclick = () => { write.classList.add("active"); q("#ed-preview").classList.remove("active"); body.hidden = false; prev.hidden = true; };
+    const cover = q("#ed-day-cover");
+    const state = st;
+    const entry = cover ? DCC.CompletionMemories.mountJournalEntry(cover, prev, body.value, { onAttachment: uploadAttachment }) : null;
+    if (entry) {
+      state.clearDayStory = entry.destroy;
+      state.readJournal = entry.read;
+    }
+    let dayRequest = 0;
+    const loadPhotos = async () => {
+      const request = ++dayRequest;
+      try {
+        const photos = await DCC.CompletionMemories.loadDayPhotos(q("#ed-date").value);
+        if (state !== st || request !== dayRequest) return;
+        entry.setPhotos(photos);
+      } catch (error) {
+        if (state === st && request === dayRequest) toast(error.message, "error");
+      }
+    };
+    const preview = q("#ed-preview");
+    if (preview) preview.onclick = () => {
       q("#ed-preview").classList.add("active"); q("#ed-write").classList.remove("active");
       body.hidden = true; prev.hidden = false;
       let html = "";
@@ -204,10 +268,36 @@
       prev.innerHTML = html;
     };
 
+    if (cover) {
+      state.insertJournalMarkdown = markdown => entry.insert(markdown);
+      entry.mountFormatting(q("#ed-format-tools"));
+      loadPhotos();
+      q("#ed-date").addEventListener("change", loadPhotos);
+    }
+
     // Attach: button, paste, drop
+    const linkPhoto = q("#ed-link-photo");
+    if (linkPhoto) linkPhoto.onclick = () => {
+      const date = q("#ed-date").value;
+      if (!date) return toast("Set a journal date first", "error");
+      window.DCC.CompletionMemories.pickDayPhoto(date, id => {
+        if (!body.isConnected || !overlay.classList.contains("open")) return;
+        state.insertJournalMarkdown(`[Day photo](#dcc-photo-${id})`);
+      });
+    };
     q("#ed-attach").onclick = () => q("#ed-file").click();
     q("#ed-file").onchange = (e) => { const f = e.target.files && e.target.files[0]; if (f) uploadAttachment(f); e.target.value = ""; };
-    body.addEventListener("paste", (e) => {
+    const filePicker = q("#ed-document");
+    if (filePicker) {
+      q("#ed-add-file").onclick = () => filePicker.click();
+      filePicker.onchange = () => {
+        if (filePicker.files[0]) uploadAttachment(filePicker.files[0]);
+        filePicker.value = "";
+      };
+    }
+    if (!cover) body.addEventListener("paste", (e) => {
+      const file = e.clipboardData?.files[0];
+      if (file) { e.preventDefault(); uploadAttachment(file); return; }
       const items = (e.clipboardData && e.clipboardData.items) || [];
       for (const it of items) { if (it.kind === "file") { const f = it.getAsFile(); if (f) { e.preventDefault(); uploadAttachment(f); return; } } }
     });
@@ -220,7 +310,7 @@
       if (f) uploadAttachment(f);
     });
 
-    wireWikilinkAutocomplete(body);
+    if (!cover) wireWikilinkAutocomplete(body);
     q("#ed-save").onclick = save;
   }
 
@@ -343,6 +433,13 @@
 
   // ── Attachments ──
   async function uploadAttachment(file) {
+    const state = st;
+    if (!state || state.attaching) return;
+    state.attaching = true;
+    const saveButton = inner().querySelector("#ed-save");
+    saveButton.disabled = true;
+    const body = inner().querySelector("#ed-body");
+    const start = body.selectionStart, end = body.selectionEnd, original = body.value;
     const statusEl = inner().querySelector("#ed-status");
     if (statusEl) statusEl.textContent = "Uploading " + (file.name || "attachment") + "…";
     const fd = new FormData();
@@ -352,16 +449,30 @@
       const r = await fetch("/api/vault/attach", { method: "POST", body: fd });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "attach failed");
-      insertAtCaret(inner().querySelector("#ed-body"), `\n![${(d.filename || "image").replace(/[[\]]/g, "")}](${d.ref})\n`);
+      if (st !== state) return;
+      const label = (d.filename || file.name || "Attachment").replace(/[\\[\]\r\n]/g, " ");
+      const image = (d.mime || file.type).startsWith("image/");
+      const markdown = image || state.type !== "journal"
+        ? `![${label}](${d.ref})`
+        : `[${label}](/api/vault/media/${encodeURIComponent(d.hash)}?variant=original)`;
+      if (state.insertJournalMarkdown) state.insertJournalMarkdown(markdown);
+      else {
+        inner().querySelector("#ed-write")?.click();
+        if (body.value === original) body.setSelectionRange(start, end);
+        insertAtCaret(body, `\n${markdown}\n`);
+      }
       if (statusEl) statusEl.textContent = d.band === "lfs" ? "Attached (LFS)" : "Attached";
       setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 2500);
     } catch (e) {
       if (statusEl) statusEl.textContent = "";
       toast(e.message, "error");
+    } finally {
+      state.attaching = false;
+      if (st === state) saveButton.disabled = false;
     }
   }
   function insertAtCaret(ta, text) {
-    const s = ta.selectionStart || ta.value.length, e = ta.selectionEnd || ta.value.length;
+    const s = ta.selectionStart ?? ta.value.length, e = ta.selectionEnd ?? ta.value.length;
     ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
     const pos = s + text.length; ta.focus(); ta.setSelectionRange(pos, pos);
   }
@@ -371,7 +482,7 @@
     const q = (sel) => inner().querySelector(sel);
     const title = q("#ed-title").value.trim();
     const date = q("#ed-date").value.trim();
-    const bodyText = q("#ed-body").value;
+    const bodyText = st.readJournal ? st.readJournal() : q("#ed-body").value;
     const saveBtn = q("#ed-save"); saveBtn.disabled = true;
 
     const fm = Object.assign({}, st.frontmatter);

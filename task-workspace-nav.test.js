@@ -64,7 +64,7 @@ test("Actual is not a view: no Actual view button, Itinerary and Calendar keep t
   assert.doesNotMatch(html, /class="svt-btn[^"]*" data-view="actual"/);
   assert.doesNotMatch(html, /id="sched-view-toggle"/);
   const schedule = slice(html, 'id="tab-schedule"', "<!-- Anytime dock");
-  for (const id of ["actual-summary", "actual-view", "list-view", "calendar-view"]) assert.match(schedule, new RegExp('id="' + id + '"'));
+  for (const id of ["actual-view", "list-view", "calendar-view"]) assert.match(schedule, new RegExp('id="' + id + '"'));
   const tab = read("public/js/schedule-tab.js");
   assert.doesNotMatch(tab, /schedView\s*=\s*["']actual["']/);
   assert.doesNotMatch(read("public/js/persistence.js"), /"actual"\s*:\s*\(/);
@@ -95,7 +95,7 @@ test("glasses keeps a visible Full app exit and task navigation", () => {
   assert.match(glasses, /bar\.append\(prev, position, next, tools, exit, status\)/);
   const css = read("public/css/device-views/glasses.css");
   assert.match(css, /\.device-glasses \.glasses-exit\{display:inline-flex;[^}]*min-height:46px/);
-  assert.match(css, /:not\(\.glasses-tools-open\) :is\(#tab-bar,\.source-row,\.header>div:last-child,#task-view-switch,#actual-summary\)/);
+  assert.match(css, /:not\(\.glasses-tools-open\) :is\(#tab-bar,\.source-row,\.header>div:last-child,#task-view-switch\)/);
 });
 
 test("phones keep the clock, cog and dot, and show every page label whole", () => {
@@ -121,7 +121,7 @@ test("utility controls keep full targets; compact task controls remain accessibl
     assert.ok(at >= 0, selector);
     return css.slice(at, css.indexOf("}", at));
   };
-  for (const selector of [".dcc-pages .tab", ".task-view-switch [role=\"tab\"]", ".task-actual-toggle", ".actual-summary-actions button"]) {
+  for (const selector of [".dcc-pages .tab", ".task-view-switch [role=\"tab\"]", ".task-actual-toggle"]) {
     assert.match(rule(selector), /min-height: var\(--target-min\)/, selector);
   }
   assert.match(css, /\.task-view-bar \.queue-seg \{ min-height: 32px/);
@@ -455,9 +455,8 @@ test("Day review is independent of Actual details", () => {
 // ── Itinerary Actual presentation ──
 
 function listActualContext(entries, scheduled, nav = { page: "tasks", view: "list", actual: true }) {
-  const strip = { hidden: true, innerHTML: "", querySelector: () => ({ addEventListener() {} }) };
   const context = vm.createContext({
-    window: {}, document: { getElementById: (id) => (id === "actual-summary" ? strip : null) },
+    window: {},
     scheduled, viewDate: "2026-11-02", schedView: nav.view,
     blockStore: { getTimeEntries: () => entries }, loadSessions: () => ({}),
     isDeleted: () => false,
@@ -468,7 +467,7 @@ function listActualContext(entries, scheduled, nav = { page: "tasks", view: "lis
   const source = read("public/js/schedule-tab.js");
   vm.runInContext(slice(source, "function _schedViewDate()", "function _buildUnlessDraft(") +
     slice(source, "// ── Actual evidence for the List view ──", "// Subtask row helpers"), context);
-  return { context, strip };
+  return { context };
 }
 
 test("Itinerary Actual adds evidence chips and an edit entry point to each row", () => {
@@ -487,30 +486,13 @@ test("Itinerary Actual adds evidence chips and an edit entry point to each row",
   assert.match(row("c"), /data-actual-edit="c" aria-label="Add or edit actual time for Plan &lt;Q1&gt;">\+ time</);
 });
 
-test("Itinerary Actual summary keeps the completion review and Day review entry points", () => {
-  const entries = [
-    { id: "t1", type: "time_entry", date: "2026-11-02", properties: { blockId: "a", durSec: 600 } },
-    { id: "t2", type: "time_entry", date: "2026-11-02", properties: { allocationKind: "unknown", durSec: 300 } }
-  ];
-  const { context, strip } = listActualContext(entries, [{ id: "a", title: "A", start: "09:00", end: "10:00" }]);
-  vm.runInContext("renderActualSummary()", context);
-  assert.equal(strip.hidden, false);
-  assert.match(strip.innerHTML, /<b>10m<\/b> Known actual/);
-  assert.match(strip.innerHTML, /<b>10m<\/b> Without a clock time/);
-  assert.match(strip.innerHTML, /<b>5m<\/b> Unknown time \(not focused\)/);
-  assert.match(strip.innerHTML, /data-completion-review data-review-date="2026-11-02">Did these happen\?/);
-  assert.match(strip.innerHTML, /class="actual-review-toggle" aria-expanded="false" aria-controls="actual-view">Day review</);
-  assert.match(strip.innerHTML, /Waiting time is not focused effort/);
-});
-
-test("the summary stays hidden when Actual is off or on the queue", () => {
-  for (const nav of [{ page: "tasks", view: "list", actual: false }, { page: "tasks", view: "queue", actual: true }]) {
-    const { context, strip } = listActualContext([], [], nav);
-    strip.hidden = false; strip.innerHTML = "stale";
-    vm.runInContext("renderActualSummary()", context);
-    assert.equal(strip.hidden, true);
-    assert.equal(strip.innerHTML, "");
-  }
+test("the progress header owns actual totals and Day review", () => {
+  const html = read("index.html");
+  const schedule = read("public/js/schedule-tab.js");
+  assert.doesNotMatch(html, /id="actual-summary"/);
+  assert.match(html, /id="progress-day-review"/);
+  assert.match(schedule, /model\.knownMin=day\?\.knownMin/);
+  assert.match(schedule, /A\.minutes\(model\.knownMin\|\|0\)/);
 });
 
 test("the calendar layer repaints without rebuilding and never plots plan times", () => {

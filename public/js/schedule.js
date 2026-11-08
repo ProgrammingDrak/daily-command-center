@@ -1770,7 +1770,7 @@ function openPlacementPicker(cfg){
   if(!overlay){if(onPlace)onPlace(cfg.day||_resolvedTodayDate(),null);return}
   _schedPickerTitle=cfg.title||"";
   _schedPickerDur=cfg.durMin||30;
-  _schedPickerOptions={onBlockPlace:cfg.onBlockPlace};
+  _schedPickerOptions={onBlockPlace:cfg.onBlockPlace,originalStart:cfg.originalStart};
   _schedPickerDate="";
   _schedPickerOnPlace=onPlace;
   _schedPickerVerb=cfg.verb||"Move";
@@ -1843,6 +1843,15 @@ async function _renderSchedAfterStep(dateStr){
     efb.type="button";efb.className="sched-chip sched-chip-earliest";efb.textContent="⚡ Earliest free";
     efb.addEventListener("click",()=>_schedCommit(dateStr,null));
     chipWrap.appendChild(efb);
+    const originalStart=_schedPickerOptions.originalStart;
+    if(_schedPickerOnPlace&&/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(originalStart||"")){
+      const original=document.createElement("button");
+      original.type="button";original.className="sched-chip";
+      original.textContent="Original Time";
+      original.title="Keep "+_schedTimeLabel(originalStart);
+      original.addEventListener("click",()=>_schedCommit(dateStr,originalStart));
+      chipWrap.appendChild(original);
+    }
     if(_schedPickerOptions.onBlockPlace){
       const list=document.createElement("div");list.className="sched-block-list";list.textContent="Loading time blocks…";chipWrap.appendChild(list);
       fetch("/api/time-block-placement?date="+encodeURIComponent(dateStr),{cache:"no-store"}).then(async response=>{

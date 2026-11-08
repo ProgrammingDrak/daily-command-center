@@ -368,7 +368,6 @@ function _amBuildDetails(ev){
   var esc=(window.DCC&&typeof window.DCC.esc==='function')?window.DCC.esc:function(v){return String(v==null?'':v);};
   var meta=[];
   if(typeof dur==='function') meta.push('<span>'+(typeof ms==='function'?ms(dur(ev)):dur(ev)+'m')+'</span>');
-  if(ev.start&&ev.end&&typeof f12==='function') meta.push('<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>');
   if(ev.source&&typeof srcTag==='function'&&srcTag(ev.source)) meta.push('<span class="am-det-src">Source:</span>'+srcTag(ev.source));
   if(ev.notionUrl){
     try{
@@ -435,13 +434,7 @@ function openAddModal(taskId, taskTitle, options) {
   _addModalDraftRecordingReview = !!(taskEntry && taskEntry.recordingReview);
   _amSetupTitle(taskId, taskEntry, taskTitle);
 
-  // Read-only details (priority / duration / time / source / link)
-  var detEl = document.getElementById('am-details-section');
-  if (detEl) {
-    var detHtml = _amBuildDetails(taskEntry);
-    detEl.innerHTML = detHtml;
-    detEl.style.display = detHtml ? '' : 'none';
-  }
+  _amRenderDetails(taskEntry);
 
   // Initialize tag picker
   var tagContainer = document.getElementById('am-tag-picker');
@@ -548,7 +541,7 @@ function openAddModal(taskId, taskTitle, options) {
   taskOverlay.setAttribute('aria-hidden', 'false');
   _setAddModalPageInert(taskOverlay, true);
   resetAddModalPhotos();
-  selectAddModalTab(options?.tab || 'subtasks');
+  selectAddModalTab(options?.tab || 'photos');
   if(window.DCCWorkSessions&&typeof window.DCCWorkSessions.renderHistory==='function')window.DCCWorkSessions.renderHistory(_addModalBlockId);
   // Clicking a task IS the edit gesture: the modal opens ready to type, so nobody
   // has to find an "Edit" button first. Read mode still exists -- Save and Cancel
@@ -560,7 +553,6 @@ function openAddModal(taskId, taskTitle, options) {
   var archived = typeof viewMode !== 'undefined' && viewMode === 'archive';
   setAddModalMode(!archived);
   if (options?.tab === 'photos') document.getElementById('am-tab-photos').focus();
-  if (options?.pickPhoto) document.getElementById('am-photos-anchor')._taskPhotos?.pick();
   setTimeout(function() {
     if (_addModalTaskId !== taskId || !taskOverlay.classList.contains('open')) return;
     // Do not steal focus from a field the user has already reached while the
@@ -673,12 +665,22 @@ function refreshOpenAddModalDetails(opts) {
   }
   taskEntry=taskEntry||(anchor ? anchor.ev
     : ((typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === _addModalTaskId; }) : null));
+  _amRenderDetails(taskEntry);
+  _amRenderExecutionContext(taskEntry);
+}
+
+function _amRenderDetails(taskEntry) {
+  var time = document.getElementById('am-scheduled-time');
+  if (time) {
+    time.textContent = taskEntry && !taskEntry.untimed && taskEntry.start && taskEntry.end && typeof f12 === 'function'
+      ? f12(taskEntry.start) + ' – ' + f12(taskEntry.end) : '';
+    time.hidden = !time.textContent;
+  }
   var detEl = document.getElementById('am-details-section');
   if (!detEl) return;
   var detHtml = _amBuildDetails(taskEntry);
   detEl.innerHTML = detHtml;
   detEl.style.display = detHtml ? '' : 'none';
-  _amRenderExecutionContext(taskEntry);
 }
 
 function _amRenderExecutionContext(taskEntry) {
@@ -1691,14 +1693,13 @@ const SURFACES = {
   // Day review is an explicit panel under the Actual toggle; its summary strip
   // rides along so day totals stay current with the rows.
   actualView:      {build:()=>{if(typeof buildActualView==="function")buildActualView();},      isVisible:()=>_tabActive("schedule")&&!!(window.DCC&&DCC.nav&&DCC.nav.reviewOpen())},
-  actualSummary:   {build:()=>{if(typeof renderActualSummary==="function")renderActualSummary();},isVisible:()=>_tabActive("schedule")},
 };
 
 // Named scopes let a hot call site mark only the surfaces it can actually change.
 // "whenever" rides along because the header pill's drawer renders the same itinerary rows
 // (the Triage and Unscheduled halves), whose chevron and work-session buttons call
 // render("schedule").
-const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView","actualSummary","whenever","progress"] };
+const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView","whenever","progress"] };
 
 const _dirty = {};
 function _markDirty(scope){
