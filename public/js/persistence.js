@@ -392,7 +392,7 @@ function reloadPersistedEdits() {
       const isFoldableTask=b=>{
         if(typeof waitingParkedIds!=="undefined"&&waitingParkedIds.has(String(b.id)))return false;
         const p=b.properties||{};
-        if(!TM.foldsIntoItinerary(b))return false;
+        if(!TM.foldsIntoItinerary(b)||(!b.date&&p.someday===true))return false;
         // A Whenever pool row lives in the header pill, not in today's Unplanned list.
         // typeof-guarded like the rest of this fold: a stale cached task-model.js must
         // degrade to "shows in Unplanned", never to an empty itinerary.

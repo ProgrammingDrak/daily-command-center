@@ -465,6 +465,7 @@
       // included), but the code it replaces handled it explicitly, so narrowing it
       // silently is how a latent path becomes a bug report.
       if (!foldsIntoItinerary(b) && p.kind !== "backlog") continue;
+      if (!b.date && p.someday === true) continue;
       // Closed work is not unscheduled work. `done` is in this list where the fold
       // admits it, because the fold seeds a done registry from the row and this
       // selector feeds a to-do list. A dateless done row has no day to be done ON,
