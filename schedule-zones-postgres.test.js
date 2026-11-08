@@ -16,9 +16,9 @@ test("PostgreSQL schedule migration preserves legacy data and isolates rollback"
     deleted_at timestamptz, updated_at timestamptz
   )`);
   await client.query(`INSERT INTO blocks VALUES
-    ('breakfast', 'a', 'block', '2026-11-08', '{"start":"18:30","duration":45,"notes":"Original"}', NULL, '2026-10-10Z'),
-    ('ambiguous', 'a', 'block', '2026-11-01', '{"start":"01:30"}', NULL, '2026-10-10Z'),
-    ('foreign', 'b', 'block', '2026-11-08', '{"start":"18:30"}', NULL, '2026-10-10Z')`);
+    ('breakfast', 'a', 'block', '2026-11-08', '{"start":"18:30","duration":45,"notes":"Original"}', NULL, '2026-10-10T00:00:00Z'),
+    ('ambiguous', 'a', 'block', '2026-11-01', '{"start":"01:30"}', NULL, '2026-10-10T00:00:00Z'),
+    ('foreign', 'b', 'block', '2026-11-08', '{"start":"18:30"}', NULL, '2026-10-10T00:00:00Z')`);
   const read = async () => (await client.query("SELECT * FROM blocks ORDER BY id")).rows;
   const original = await read();
   const options = { workspace: "a", zone: "America/New_York", approved: ["breakfast", "ambiguous", "foreign"] };
