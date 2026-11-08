@@ -60,6 +60,9 @@
     status.setAttribute("role", "status");
     const urls = new Set();
     element.append(header, body, status);
+    element.addEventListener("keydown", event => {
+      if (event.key === "Escape") event.stopPropagation();
+    });
     document.body.append(element);
     element.addEventListener("close", () => {
       urls.forEach(url => URL.revokeObjectURL(url));
