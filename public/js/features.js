@@ -261,6 +261,7 @@ function _setAddModalControlsEditable(modal, editing) {
 function _handleAddModalKeydown(event) {
   var overlay = document.getElementById('add-modal-overlay');
   if (!overlay || !overlay.classList.contains('open')) return;
+  if (event.target?.closest?.('dialog[open]')) return;
   if (event.key === 'Escape') {
     if (event.target && event.target.classList && event.target.classList.contains('am-title-edit')) return;
     event.preventDefault();
