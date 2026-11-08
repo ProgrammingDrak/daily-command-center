@@ -79,6 +79,7 @@ CREATE INDEX IF NOT EXISTS idx_blocks_time_entry_task
 
 ${require("./task-attachment-store").SCHEMA_SQL}
 ${require("./routes/completion-memories").SCHEMA_SQL}
+${require("./routes/itinerary-shares").SCHEMA_SQL}
 
 -- ── Workspace Members ──
 CREATE TABLE IF NOT EXISTS workspace_members (

@@ -284,8 +284,6 @@
     // The cog keeps its icon and accessible name; every utility moves into its menu.
     const items = [
       document.querySelector(".admin-link[href='/admin']"),
-      document.getElementById("todo-share-open"),
-      document.getElementById("todo-reactions-toggle"),
       document.getElementById("sn-open-btn")
     ].filter(Boolean);
     items.reverse().forEach((item) => {
@@ -297,15 +295,11 @@
     work.type = "button";
     work.textContent = "Start work";
     work.addEventListener("click", () => window.DCCWorkSessions && window.DCCWorkSessions.openPicker());
-    const loose = document.createElement("button");
-    loose.type = "button";
-    loose.textContent = "Open Loose Ends";
-    loose.addEventListener("click", () => window.DCC.CatchUp && window.DCC.CatchUp.open());
     const feedback = document.createElement("button");
     feedback.type = "button";
     feedback.textContent = "Send feedback";
     feedback.addEventListener("click", () => typeof window.dccOpenFeedback === "function" && window.dccOpenFeedback());
-    [work, loose, feedback].forEach((item) => menu.appendChild(item));
+    [work, feedback].forEach((item) => menu.appendChild(item));
     // The day's activity summary (sync.js) rides at the bottom of the menu.
     const summary = document.getElementById("sync-section");
     if (summary) menu.appendChild(summary);

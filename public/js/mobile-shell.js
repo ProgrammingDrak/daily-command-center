@@ -85,12 +85,9 @@
   // so there is no duplicated logic. `find` returns the live source element.
   const MORE_ACTIONS = [
     { label:"Admin",            icon:"⚙", find(){ return document.querySelector('a.admin-link[href="/admin"]'); } },
-    { label:"Share list",       icon:"🔗", find(){ return byId("todo-share-open"); } },
-    { label:"Refresh reactions",icon:"🔄", find(){ return byId("todo-reactions-toggle"); } },
     { label:"Sticky Notes",     icon:"📌", find(){ return byId("sn-open-btn"); } },
     { label:"Anytime",          icon:"💧", find(){ return byId("anytime-dock"); } },
     { label:"Review tomorrow", icon:"🌙", find(){ return byId("dcc-review-tomorrow"); } },
-    { label:"Start of day",     icon:"🌅", find(){ return byId("dcc-day-start"); } },
     { label:"Replay tutorial",  icon:"🎓", find(){ return byId("dcc-replay-tutorial"); } },
     { label:"Sign out",         icon:"⏻", find(){ return byId("dcc-sign-out"); } }
   ];
@@ -157,6 +154,15 @@
       }));
     });
 
+    const settings = document.createElement("details");
+    settings.className = "dcc-general-settings";
+    const summary = document.createElement("summary");
+    summary.textContent = "General settings";
+    settings.append(summary);
+    byId("dcc-general-settings")?.querySelectorAll("button").forEach(item => {
+      settings.append(makeMoreRow(item.textContent, "", () => item.click()));
+    });
+    sheet.appendChild(settings);
     document.body.appendChild(sheet);
   }
 
