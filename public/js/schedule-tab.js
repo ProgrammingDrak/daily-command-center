@@ -1091,6 +1091,16 @@ function buildListView(){
     finally{journalButton.disabled=false;}
   });
   workListHeader.appendChild(journalButton);
+  if (DCC.ItineraryShare) {
+    const shareButton = document.createElement("button");
+    shareButton.type = "button";
+    shareButton.className = "it-list-ctrl-btn";
+    shareButton.textContent = "Share Itinerary";
+    shareButton.title = "Copy a link to the public tasks on this day";
+    shareButton.addEventListener("click", () => DCC.ItineraryShare.copy(viewDate,shareButton));
+    workListHeader.appendChild(shareButton);
+    DCC.ItineraryShare.openDay(viewDate);
+  }
   let rank=0;
   const now=new Date(),nowMin=now.getHours()*60+now.getMinutes();
   groups.forEach(({block,nodes})=>{
@@ -1167,7 +1177,6 @@ function buildSchedule(){
   if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
   if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
-  if(typeof window.ensureTodoShareReactionsForDate==="function")window.ensureTodoShareReactionsForDate(viewDate);
   // Separate done vs active vs deleted vs side-project-marked.
   // C6a: one derivation, same as buildListView. `day.done` is the compact Done
   // section with the fold widened to either parent edge, so a done RIDE-ALONG now
@@ -1242,7 +1251,6 @@ function buildSchedule(){
         evSrcTag+
         petPrivacyChip(ev),
       timeRange:f12(ev.start)+' - '+f12(ev.end),
-      trailingHtml:(window.todoShareCompactFeedbackHtml?window.todoShareCompactFeedbackHtml(ev):''),
       onCheck:()=>toggleDone(ev.id),
       afterRender:el=>{const rb=el.querySelector(".review-badge");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();openReviewPopover(rb)});}
     });

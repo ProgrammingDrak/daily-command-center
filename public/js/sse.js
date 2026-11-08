@@ -355,9 +355,6 @@
             break;
 
           case 'todo-share-changed':
-            if (typeof window.reloadTodoShareReactions === 'function') {
-              window.reloadTodoShareReactions().catch(() => {});
-            }
             document.dispatchEvent(new CustomEvent(msg.type, { detail: msg }));
             break;
         }

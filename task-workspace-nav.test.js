@@ -41,7 +41,7 @@ test("the header is pages plus one clock, cog and sync dot cluster; branding is 
   assert.match(cluster, /id="save-status"[^>]*aria-describedby="save-status-tooltip"/);
   assert.match(cluster, /id="save-status-tooltip" role="tooltip"/);
   assert.match(cluster, /id="save-status-live" role="status" aria-live="polite"/);
-  for (const id of ["dcc-review-tomorrow", "dcc-day-start", "dcc-schedule-defaults", "dcc-setup-integrations", "dcc-replay-tutorial", "dcc-sign-out", "todo-share-open", "todo-reactions-toggle", "sn-open-btn"]) {
+  for (const id of ["dcc-review-tomorrow", "dcc-day-start", "dcc-schedule-defaults", "dcc-setup-integrations", "dcc-replay-tutorial", "dcc-sign-out", "dcc-general-settings", "sn-open-btn"]) {
     assert.match(cluster, new RegExp('id="' + id + '"'), "utility kept: " + id);
   }
   assert.equal((html.match(/id="save-status"/g) || []).length, 1, "one sync control");

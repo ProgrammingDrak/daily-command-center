@@ -127,15 +127,16 @@
   <div class="dcc-cluster" id="dcc-cluster">
     <div class="time-now" id="dcc-clock"><time class="clock" id="clock">--:--</time><span class="tz-label" id="tz-label">--</span></div>
     <a class="admin-link" href="/admin" title="Open admin activity">Admin</a>
-    <button class="admin-link todo-share-open" id="todo-share-open" type="button" title="Share a live to-do view">Share list</button>
-    <button class="admin-link todo-reactions-toggle" id="todo-reactions-toggle" type="button" title="Refresh guest reactions on itinerary tasks">Refresh reactions</button>
     <div class="dcc-settings-wrap" id="dcc-settings-wrap">
       <button class="admin-link dcc-settings-button" id="dcc-settings-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="dcc-settings-menu" aria-label="Settings and utilities" title="Settings and utilities"><svg aria-hidden="true" focusable="false" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
       <div class="dcc-settings-menu" id="dcc-settings-menu" role="menu" aria-hidden="true">
         <button type="button" id="dcc-install" role="menuitem" aria-haspopup="dialog">Install DCC</button>
         <button type="button" id="dcc-review-tomorrow" role="menuitem">Review tomorrow</button>
-        <button type="button" id="dcc-day-start" role="menuitem">Scheduling floor</button>
-        <button type="button" id="dcc-schedule-defaults" role="menuitem">Schedule default times</button>
+        <details class="dcc-general-settings" id="dcc-general-settings">
+          <summary>General settings</summary>
+          <button type="button" id="dcc-day-start" role="menuitem">Scheduling floor</button>
+          <button type="button" id="dcc-schedule-defaults" role="menuitem">Schedule default times</button>
+        </details>
         <button type="button" id="dcc-setup-integrations" role="menuitem">Setup &amp; integrations</button>
         <button type="button" id="dcc-replay-tutorial" role="menuitem">Replay tutorial</button>
         <button type="button" id="dcc-sign-out" role="menuitem">Sign out</button>
@@ -2004,9 +2005,7 @@
           <li><strong>Manager</strong><br>Coach plus task editing and deletion</li>
         </ol>
         <div class="social-share-channels" aria-label="Owner sharing workspaces">
-          <div class="social-share-channel"><strong>Public list</strong><p>Guest tasks, comments, sponsorships, and exports.</p><button class="social-btn" data-social-open-share type="button">Manage public list</button></div>
           <div class="social-share-channel"><strong>Pet Home</strong><p>Public visits and encouragement use a separate token.</p></div>
-          <div class="social-share-channel"><strong>Guest activity</strong><p>Refresh reactions without changing access grants.</p><button class="social-btn" data-social-refresh-guests type="button">Refresh guest activity</button></div>
         </div>
         <div class="social-grant-add">
           <input id="social-grant-username" type="text" maxlength="120" placeholder="Username or email" autocomplete="off">
@@ -2156,6 +2155,7 @@
 <!-- task-serialize.js: the one task-property serializer (window.DCC.taskBlockProps/taskCommonProps); must load before state.js/schedule.js/unfinished-tasks.js consume it -->
 <script src="/public/js/task-attachments.js"></script>
 <script src="/public/js/completion-memories.js?v=photo-toolbar-1"></script>
+<script src="/public/js/itinerary-sharing.js"></script>
 <script src="/public/js/task-sources.js"></script>
 <script src="/public/js/task-serialize.js?v=task-serialize-1"></script>
 <!-- task-model.js: the one block -> ev projection (window.DCC.TaskModel.fromBlock); must load before data.js/persistence.js/state.js and the carryover lane consume it -->
@@ -2250,7 +2250,6 @@
      (above) and DCC.CatchUp (catch-up.js) at CALL time, not parse time; sse.js
      loads later and calls window.notifyTriageArrivals. -->
 <script src="/public/js/pet-courier.js"></script>
-<script src="/public/js/todo-share.js"></script>
 <script src="/public/js/social.js"></script>
 <script src="/public/js/commitment-sync.js"></script>
 <script src="/public/js/commitments.js"></script>

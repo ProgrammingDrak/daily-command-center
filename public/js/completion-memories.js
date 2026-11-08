@@ -628,7 +628,7 @@
           tools.hidden = readOnly;
           saveJournal.disabled = readOnly;
         }
-        const loaded = await loadJournalPhotos(entries, readOnly, refresh);
+        const loaded = [...await loadJournalPhotos(entries, readOnly, refresh), ...await loadSharedJournalPhotos(null, blockId)];
         if (!live) return;
         moments = loaded;
         editor.setPhotos(moments);
@@ -656,7 +656,24 @@
 
   async function loadDayPhotos(date) {
     const entries = await list();
-    return loadJournalPhotos(entries.filter(entry => String(entry.completed_on).slice(0, 10) === date), true);
+    return [...await loadJournalPhotos(entries.filter(entry => String(entry.completed_on).slice(0, 10) === date), true), ...await loadSharedJournalPhotos(date)];
+  }
+
+  async function loadSharedJournalPhotos(date, blockId) {
+    const photos = await DCC.loadItineraryJournalPhotos?.(date, blockId).catch(() => []) || [];
+    return photos.map(photo => ({
+      id: photo.id,
+      label: [photo.caption, "Photo by " + photo.author].filter(Boolean).join(" · "),
+      src: photo.src,
+      open() {
+        const view = dialog("Photo by " + photo.author);
+        const image = node("img");
+        image.src = photo.src;
+        image.alt = photo.caption || "Guest journal photo";
+        view.body.append(image);
+        if (photo.caption) view.body.append(node("p", photo.caption));
+      },
+    }));
   }
 
   function loadJournalPhotos(entries, readOnly, refresh) {
