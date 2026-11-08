@@ -441,8 +441,8 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .dcc-task-detail-tab { border: 0; color: var(--ink-muted); background: transparent; }
 .dcc-task-detail-tab.active { color: var(--ink-strong); box-shadow: inset 0 -2px var(--brand); }
 .add-modal-body [data-am-panel][hidden] { display: none !important; }
-.add-modal.dcc-task-readonly :is(input,select,textarea,[contenteditable="true"],.am-add-section,.tag-picker-list) { pointer-events: none; }
-.add-modal.dcc-task-readonly :is(input,select,textarea,[contenteditable="true"]) { opacity: 0.72; }
+.add-modal.dcc-task-readonly :is(input,select,textarea,[contenteditable="true"],.am-add-section,.tag-picker-list):not(#am-panel-photos *) { pointer-events: none; }
+.add-modal.dcc-task-readonly :is(input,select,textarea,[contenteditable="true"]):not(#am-panel-photos *) { opacity: 0.72; }
 .add-modal.dcc-task-readonly .am-add-section { display: none; }
 .add-modal.dcc-task-readonly .am-title-editable { cursor: default; }
 .add-modal-hdr h3.am-title-editable {
