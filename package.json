@@ -14,7 +14,7 @@
     "sweep:check": "node scripts/sweep-suite-check.js",
     "ship": "node scripts/ship-pr.js",
     "test": "node --test",
-    "test:postgres": "node --test unscheduled-subtask.test.js task-reconciliation.test.js task-reconciliation-http.test.js queue-policy.test.js shared-queue.test.js work-completion.test.js completed-queue-filter.test.js priority-queue.test.js delegated-work.test.js conversation.test.js conversation-http.test.js conversation-review.test.js meeting-citation-migration.test.js proposal-postgres.test.js activity-postgres.test.js commitment-postgres.test.js sponsorship-postgres.test.js task-attachment-postgres.test.js work-rotation.test.js queue-snooze.test.js foreground-break.test.js queue-eligibility.test.js",
+    "test:postgres": "node --test schedule-zones-postgres.test.js unscheduled-subtask.test.js task-reconciliation.test.js task-reconciliation-http.test.js queue-policy.test.js shared-queue.test.js work-completion.test.js completed-queue-filter.test.js priority-queue.test.js delegated-work.test.js conversation.test.js conversation-http.test.js conversation-review.test.js meeting-citation-migration.test.js proposal-postgres.test.js activity-postgres.test.js commitment-postgres.test.js sponsorship-postgres.test.js task-attachment-postgres.test.js work-rotation.test.js queue-snooze.test.js foreground-break.test.js queue-eligibility.test.js",
     "lint": "eslint .",
     "format": "prettier --write .",
     "start": "npm run check:db && node pg-schema.js && node server.js",
