@@ -823,7 +823,7 @@
         const journal = entries.some(memory => memory.reflection?.trim());
         const card = node("article", "", "journal-task-card");
         card.append(
-          button(entry.title, () => openCard("task", row.id, entry.title)),
+          button(entry.title, () => openCard("task", row.id, entry.title, { editTask: true })),
           node("p", [photos && "Photos", journal && "Journal"].filter(Boolean).join(" · ") || "Completed"),
           button("Copy card", () => copyCard(entry.title, "task", row.id))
         );
@@ -836,14 +836,14 @@
     }
   }
 
-  async function openCard(kind, id, title) {
+  async function openCard(kind, id, title, { editTask = false } = {}) {
     const view = dialog(title);
     try {
       if (kind === "task") {
         const task = await DCC.api("/api/blocks/" + encodeURIComponent(id));
         if (!view.element.open) return;
         if (!DCC.TaskModel.isTaskRow(task)) throw new Error("Task unavailable");
-        const photos = mountTaskPhotos(view.body, task.id, task.properties.title || title, true);
+        const photos = mountTaskPhotos(view.body, task.id, task.properties.title || title, !editTask);
         view.element.addEventListener("close", photos.destroy, { once: true });
         return;
       }

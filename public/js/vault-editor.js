@@ -176,7 +176,7 @@
         <span class="vault-ed-spacer"></span>
         ${journal ? '<button class="vault-ed-tab-btn" id="ed-link-photo" type="button">Day photos</button><button class="vault-ed-tab-btn" id="ed-add-file" type="button">File</button><input type="file" id="ed-document" hidden>' : ""}
         <button class="vault-ed-tab-btn" id="ed-attach" type="button" title="Attach image (paste or drop works too)">${journal ? "Photo" : "📎 Attach"}</button>
-        <input type="file" id="ed-file" accept="image/*" hidden>
+        <input type="file" id="ed-file" accept="image/*" multiple hidden>
       </div>
       <textarea class="vault-ed-body" id="ed-body" rows="12" ${journal ? "hidden" : ""} placeholder="Write in Markdown. Type [[ to link a note.">${esc(st.body)}</textarea>
       ${journal ? '<div class="vault-ed-preview memory-inline-story vault-ed-journal-surface" id="ed-prev" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Journal entry" data-placeholder="Write your journal entry…"></div>' : '<div class="vault-ed-preview" id="ed-prev" hidden></div>'}
@@ -286,7 +286,11 @@
       });
     };
     q("#ed-attach").onclick = () => q("#ed-file").click();
-    q("#ed-file").onchange = (e) => { const f = e.target.files && e.target.files[0]; if (f) uploadAttachment(f); e.target.value = ""; };
+    q("#ed-file").onchange = (e) => {
+      const files = Array.from(e.target.files);
+      e.target.value = "";
+      if (files.length) uploadAttachments(files);
+    };
     const filePicker = q("#ed-document");
     if (filePicker) {
       q("#ed-add-file").onclick = () => filePicker.click();
@@ -432,43 +436,59 @@
   }
 
   // ── Attachments ──
-  async function uploadAttachment(file) {
+  function uploadAttachment(file) {
+    return uploadAttachments([file]);
+  }
+
+  async function uploadAttachments(files) {
     const state = st;
     if (!state || state.attaching) return;
     state.attaching = true;
     const saveButton = inner().querySelector("#ed-save");
     saveButton.disabled = true;
     const body = inner().querySelector("#ed-body");
-    const start = body.selectionStart, end = body.selectionEnd, original = body.value;
+    let start = body.selectionStart, end = body.selectionEnd, original = body.value;
     const statusEl = inner().querySelector("#ed-status");
-    if (statusEl) statusEl.textContent = "Uploading " + (file.name || "attachment") + "…";
-    const fd = new FormData();
-    fd.append("file", file, file.name || "attachment");
-    if (st && st.slug) fd.append("slug", st.slug); // sensitive routing when editing a sensitive node
     try {
-      const r = await fetch("/api/vault/attach", { method: "POST", body: fd });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || "attach failed");
-      if (st !== state) return;
-      const label = (d.filename || file.name || "Attachment").replace(/[\\[\]\r\n]/g, " ");
-      const image = (d.mime || file.type).startsWith("image/");
-      const markdown = image || state.type !== "journal"
-        ? `![${label}](${d.ref})`
-        : `[${label}](/api/vault/media/${encodeURIComponent(d.hash)}?variant=original)`;
-      if (state.insertJournalMarkdown) state.insertJournalMarkdown(markdown);
-      else {
-        inner().querySelector("#ed-write")?.click();
-        if (body.value === original) body.setSelectionRange(start, end);
-        insertAtCaret(body, `\n${markdown}\n`);
+      for (const file of files) {
+        if (st !== state) return;
+        if (statusEl) statusEl.textContent = "Uploading " + (file.name || "attachment") + "…";
+        const fd = new FormData();
+        fd.append("file", file, file.name || "attachment");
+        if (state.slug) fd.append("slug", state.slug); // sensitive routing when editing a sensitive node
+        try {
+          const r = await fetch("/api/vault/attach", { method: "POST", body: fd });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error || "attach failed");
+          if (st !== state) return;
+          const label = (d.filename || file.name || "Attachment").replace(/[\\[\]\r\n]/g, " ");
+          const image = (d.mime || file.type).startsWith("image/");
+          const markdown = image || state.type !== "journal"
+            ? `![${label}](${d.ref})`
+            : `[${label}](/api/vault/media/${encodeURIComponent(d.hash)}?variant=original)`;
+          if (state.insertJournalMarkdown) state.insertJournalMarkdown(markdown);
+          else {
+            inner().querySelector("#ed-write")?.click();
+            if (body.value === original) body.setSelectionRange(start, end);
+            insertAtCaret(body, `\n${markdown}\n`);
+            start = end = body.selectionEnd;
+            original = body.value;
+          }
+          if (statusEl) statusEl.textContent = d.band === "lfs" ? "Attached (LFS)" : "Attached";
+        } catch (e) {
+          if (statusEl) statusEl.textContent = "";
+          toast((file.name ? file.name + ": " : "") + e.message, "error");
+        }
       }
-      if (statusEl) statusEl.textContent = d.band === "lfs" ? "Attached (LFS)" : "Attached";
-      setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 2500);
-    } catch (e) {
-      if (statusEl) statusEl.textContent = "";
-      toast(e.message, "error");
     } finally {
       state.attaching = false;
-      if (st === state) saveButton.disabled = false;
+      if (st === state) {
+        saveButton.disabled = false;
+        const message = statusEl?.textContent;
+        if (message) setTimeout(() => {
+          if (!state.attaching && statusEl.textContent === message) statusEl.textContent = "";
+        }, 2500);
+      }
     }
   }
   function insertAtCaret(ta, text) {

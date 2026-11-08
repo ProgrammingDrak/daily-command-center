@@ -426,6 +426,7 @@ function openAddModal(taskId, taskTitle, options) {
   // local_id, and a carryover row is in _rangeCache only — so the search misses and the
   // update never happens. _addModalBlockId short-circuits it.
   _addModalBlockId = (anchor && anchor.blockId) || null;
+  _addModalBlockId ||= taskEntry?._blockId || null;
   const memories = document.getElementById("am-completion-memories");
   if (memories) window.DCC?.CompletionMemories?.bindTask(memories, taskEntry, _addModalBlockId || taskEntry?._blockId);
   if (window.DCC && DCC.Activity) DCC.Activity.taskButton(_addModalBlockId || (taskEntry && taskEntry._blockId) || taskId, taskEntry);
@@ -573,9 +574,12 @@ function selectAddModalTab(tabId) {
   if (!modal) return;
   if (tabId === 'photos') {
     var photoHost = document.getElementById('am-photos-anchor');
+    var task = _addModalAnchor?.ev;
+    var completed = task?.done || task?.status === 'done' || task?.completedAt ||
+      (task && typeof isDone === 'function' && isDone(task));
     photoHost._taskPhotos ||= window.DCC.CompletionMemories.mountTaskPhotos(
       photoHost, _addModalBlockId, document.getElementById('add-modal-title').textContent,
-      typeof viewMode !== 'undefined' && viewMode === 'archive'
+      typeof viewMode !== 'undefined' && viewMode === 'archive' && !completed
     );
   }
   if (tabId === 'overview') tabId = 'subtasks';
