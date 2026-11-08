@@ -29,6 +29,8 @@ function validateSourceProps(props) {
 }
 const validate = require("../middleware/validate");
 const schemas = require("../middleware/schemas");
+const { validZone, shiftDate, validDate: validViewingDate } = require("../public/js/schedule-zones");
+const { selectViewingRange } = require("../lib/viewing-date-range");
 const { collectSubtreeBlockIds, unplannedProperties } = require("../lib/reschedule");
 const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 const { route } = require("../lib/route-helpers");
@@ -1590,6 +1592,17 @@ module.exports = function mount(app, ctx) {
   app.get("/api/blocks/range", route(async (req, res) => {
     const { start, end } = req.query;
     if (!start || !end || !isValidDate(start) || !isValidDate(end)) { res.status(400).json({ error: "Provide ?start=&end=" }); return; }
+    if (req.query.viewingZone !== undefined) {
+      const { viewingZone } = req.query;
+      if (!validZone(viewingZone) || !validViewingDate(start) || !validViewingDate(end) || end < start || end > shiftDate(start, 62)) {
+        return res.status(400).json({ error: "Provide an IANA viewing zone and a range of at most 63 days" });
+      }
+      if (!req.workspaceId) return res.status(403).json({ error: "Workspace required" });
+      const rows = filterLegacyGcalBlocks(await blockDB.getBlocksByDateRange(
+        shiftDate(start, -2), shiftDate(end, 2), req.workspaceId,
+      ));
+      return selectViewingRange(rows, start, end, viewingZone, APP_TIME_ZONE);
+    }
     // Reconciled here too, not just on the day read: block-store's getTimeEntries
     // serves the CURRENT date from the day cache but every OTHER date from the
     // range cache, so Day Review's planned-vs-actual for a past day comes through
