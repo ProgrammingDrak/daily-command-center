@@ -22,6 +22,56 @@
     }));
   }
 
+  async function readPhoto(id) {
+    const record = await localStore("readonly", store => store.get(id)).catch(() => null);
+    if (!record?.handle) return record;
+    const image = await record.handle.getFile().catch(() => null);
+    return { handle: record.handle, image, thumb: image };
+  }
+
+  function viewerImage(view, record, description, unavailable) {
+    if (!record?.handle) return record?.image ? view.image(record.image, description) : node("p", unavailable);
+    const details = node("div");
+    const filename = record.handle.name;
+    const open = node("a", "Open original file");
+    open.target = "_blank";
+    open.rel = "noopener";
+    open.hidden = true;
+    function showOriginal(image) {
+      const preview = view.image(image, description);
+      open.href = preview.src;
+      // Only open known raster types inline. A selected SVG or mislabeled file
+      // must not become an active document on the DCC origin.
+      if (!/^image\/(jpeg|png|webp|gif|bmp|avif|heic|heif)$/i.test(image.type)) {
+        open.download = filename;
+        open.removeAttribute("target");
+        open.textContent = "Download original file";
+      }
+      open.hidden = false;
+      return preview;
+    }
+    const reopen = button("Open original", async () => {
+      reopen.disabled = true;
+      try {
+        if (await record.handle.requestPermission({ mode: "read" }) !== "granted") {
+          view.status.textContent = "Allow access to open the original photo.";
+          return;
+        }
+        const image = await record.handle.getFile();
+        if (!view.element.open) return;
+        reopen.replaceWith(showOriginal(image));
+        view.status.textContent = "";
+      } catch {
+        view.status.textContent = "Could not open the original. Check that the file is still available.";
+      } finally {
+        reopen.disabled = false;
+      }
+    });
+    details.append(record.image ? showOriginal(record.image) : reopen,
+      node("p", "Original on this device · " + filename), open);
+    return details;
+  }
+
   async function resize(image, edge) {
     const scale = Math.min(1, edge / Math.max(image.width, image.height));
     const canvas = document.createElement("canvas");
@@ -139,6 +189,7 @@
           pending.splice(pending.indexOf(item), 1);
           render();
         }));
+        if (item.handle) tile.append(node("p", "Linked original"));
         previews.append(tile);
       }
       submit.textContent = pending.length === 1 ? "Add 1 photo" : pending.length ? "Add " + pending.length + " photos" : "Add photos";
@@ -162,13 +213,17 @@
         for (const item of [...pending]) {
           view.status.textContent = "Saving photo…";
           if (!item.stored) {
-            const bitmap = await createImageBitmap(item.file);
-            try {
-              const image = await resize(bitmap, 2048);
-              const thumb = await resize(bitmap, 384);
-              await localStore("readwrite", store => store.put({ image, thumb }, item.id));
-              item.stored = true;
-            } finally { bitmap.close(); }
+            let record = { handle: item.handle };
+            if (!item.handle) {
+              const bitmap = await createImageBitmap(item.file);
+              try {
+                const image = await resize(bitmap, 2048);
+                const thumb = await resize(bitmap, 384);
+                record = { image, thumb };
+              } finally { bitmap.close(); }
+            }
+            await localStore("readwrite", store => store.put(record, item.id));
+            item.stored = true;
           }
           latest = await save(getEntry(), { photo: { id: item.id, deviceId, deviceName } });
           pending.shift();
@@ -194,11 +249,12 @@
       input.multiple = source !== "camera";
       if (source === "camera") input.setAttribute("capture", "environment");
       input.hidden = true;
+      const isImage = file => file.type.startsWith("image/") ||
+        (!file.type && /\.(jpe?g|png|webp|gif|bmp|avif|heic|heif)$/i.test(file.name));
       input.onchange = () => {
         const files = [...input.files];
         const slots = Math.max(0, 10 - (getEntry().photos?.length || 0) - pending.length);
-        const images = files.filter(file => file.type.startsWith("image/") ||
-          (!file.type && /\.(jpe?g|png|webp|gif|bmp|avif|heic|heif)$/i.test(file.name)));
+        const images = files.filter(isImage);
         const allowed = images.filter(file => file.size <= 25 * 1024 * 1024);
         for (const file of allowed.slice(0, slots)) pending.push({ id: crypto.randomUUID(), file });
         input.value = "";
@@ -209,21 +265,49 @@
         view.status.textContent = notices.join(" ");
         render();
       };
-      pickerRow.append(button(label, () => input.click()), input);
+      const pick = async () => {
+        if (source !== "files" || typeof window.showOpenFilePicker !== "function") {
+          input.click();
+          return;
+        }
+        try {
+          const handles = await window.showOpenFilePicker({
+            multiple: true,
+            types: [{ description: "Photos", accept: { "image/*": [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif", ".heic", ".heif"] } }],
+          });
+          const items = await Promise.allSettled(handles.map(async handle => ({
+            id: crypto.randomUUID(), file: await handle.getFile(), handle,
+          })));
+          if (disposed) return;
+          const slots = Math.max(0, 10 - (getEntry().photos?.length || 0) - pending.length);
+          const linked = items.filter(item => item.status === "fulfilled" && isImage(item.value.file));
+          pending.push(...linked.slice(0, slots).map(item => item.value));
+          const notices = [];
+          if (linked.length !== items.length) notices.push("Some originals could not be linked. Use Photo library to save a local copy.");
+          if (linked.length > slots) notices.push("Up to 10 photos per collection.");
+          view.status.textContent = notices.join(" ");
+          render();
+        } catch (error) {
+          if (!disposed && error.name !== "AbortError") {
+            view.status.textContent = "File linking is unavailable. Use Photo library to save a local copy.";
+          }
+        }
+      };
+      pickerRow.append(button(label, pick), input);
     }
-    view.body.append(node("p", "Photos stay in this browser on this device."), deviceLabel, previews, pickerRow, submit);
+    view.body.append(node("p", "Photos stay on this device. Browse files links to originals when supported. Camera and Photo library save compressed copies."), deviceLabel, previews, pickerRow, submit);
     render();
     return () => { disposed = true; view.clear(previews); };
   }
 
   async function tile(view, photo, onSelect) {
-    const copy = await localStore("readonly", store => store.get(photo.id)).catch(() => null);
+    const copy = await readPhoto(photo.id);
     const label = photo.deviceId === localStorage.getItem(deviceKey)
       ? "Photo no longer available"
       : "Photo not available on this device. Available on " + photo.deviceName + ".";
-    const control = button(copy ? "" : label, () => onSelect(copy));
+    const control = button(copy?.thumb ? "" : copy?.handle ? "Open original" : label, () => onSelect(copy));
     control.className = "memory-tile";
-    if (copy) control.append(view.image(copy.thumb, "View photo"));
+    if (copy?.thumb) control.append(view.image(copy.thumb, "View photo"));
     return control;
   }
 
@@ -242,7 +326,7 @@
       }
     });
     view.body.append(
-      copy ? view.image(copy.image, "Task photo") : node("p", photo.deviceId === localStorage.getItem(deviceKey)
+      viewerImage(view, copy, "Task photo", photo.deviceId === localStorage.getItem(deviceKey)
         ? "Photo no longer available" : "Photo not available on this device. Available on " + photo.deviceName + "."),
       remove
     );
@@ -343,7 +427,7 @@
     const view = dialog(details.title || title);
     view.element.classList.add("memory-moment-card");
     view.body.append(
-      copy ? view.image(copy.image, details.title || "Task photo") : node("p", "Photo unavailable here. Check " + photo.deviceName + "."),
+      viewerImage(view, copy, details.title || "Task photo", "Photo unavailable here. Check " + photo.deviceName + "."),
       node("p", momentTime(photo) + " · " + String(entry.completed_on || "").slice(0, 10), "memory-moment-meta"),
       node("p", details.note || "No moment notes yet.", "memory-moment-note"),
       node("p", [details.location, "Stored on " + photo.deviceName].filter(Boolean).join(" · "), "memory-moment-meta")
@@ -565,7 +649,7 @@
           editor.insert(`[Photo](#dcc-photo-${moment.id})`);
         });
         choice.className = "memory-tile";
-        if (moment.copy) choice.prepend(view.image(moment.copy.thumb, ""));
+        if (moment.copy?.thumb) choice.prepend(view.image(moment.copy.thumb, ""));
         grid.append(choice);
       }
       view.body.append(grid);
@@ -680,7 +764,7 @@
     return Promise.all(entries.flatMap(entry => entry.photos.map(async photo => ({
       id: photo.id,
       label: momentTime(photo) + " – " + (photo.moment?.title || entry.title),
-      copy: await localStore("readonly", store => store.get(photo.id)).catch(() => null),
+      copy: await readPhoto(photo.id),
       open(copy) { openMoment(entry, photo, copy, entry.title, readOnly, refresh); },
     }))));
   }
@@ -710,14 +794,14 @@
       const tile = button("", action || (() => photo.open(photo.copy)));
       tile.className = "memory-tile";
       tile.setAttribute("aria-label", photo.label);
-      if (photo.copy && imageView) tile.append(imageView.image(photo.copy.thumb, ""));
-      else if (photo.copy || photo.src) {
+      if (photo.copy?.thumb && imageView) tile.append(imageView.image(photo.copy.thumb, ""));
+      else if (photo.copy?.thumb || photo.src) {
         const image = node("img");
         image.alt = "";
         image.src = photo.src || URL.createObjectURL(photo.copy.thumb);
         if (!photo.src) urls.push(image.src);
         tile.append(image);
-      } else tile.append(node("span", "Photo on another device"));
+      } else tile.append(node("span", photo.copy?.handle ? "Open original" : "Photo on another device"));
       tile.append(node("span", photo.label, "memory-photo-overlay"));
       return tile;
     }
@@ -792,9 +876,9 @@
     try {
       const entry = (await list()).find(row => row.photos.some(photo => photo.id === id));
       const photo = entry?.photos.find(item => item.id === id);
-      const copy = photo && await localStore("readonly", store => store.get(id));
+      const copy = photo && await readPhoto(id);
       if (!view.element.open) return;
-      if (copy) view.body.append(view.image(copy.image, "Day photo"));
+      if (copy) view.body.append(viewerImage(view, copy, "Day photo", "This photo is no longer available."));
       view.status.textContent = copy ? "" : photo
         ? "Photo unavailable here. Check " + photo.deviceName + "."
         : "This photo is no longer available.";
