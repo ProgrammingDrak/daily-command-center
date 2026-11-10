@@ -48,8 +48,11 @@ try {
   await page.keyboard.press('ArrowUp');
   assert.equal(await selected(), initial);
   check('Jump moves five rows, Select moves one, eleven complete rows and five-row range render');
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(out, 'glasses-select-600.png') });
   await input('tap-fore'); await level('task');
   assert.ok(await page.locator('.glasses-focus').isVisible());
+  await page.screenshot({ path: path.join(out, 'glasses-task-focus-600.png') });
   assert.equal(await page.locator('.glasses-direction[data-action]').count(), 4);
   const touch = await context.newCDPSession(page);
   const focusBox = await page.locator('.glasses-focus').boundingBox();
