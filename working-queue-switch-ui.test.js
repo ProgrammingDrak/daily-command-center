@@ -33,7 +33,7 @@ test('foreground switch preview, cancellation, stale state and exact retry', { s
     return res.json({ currentState: state });
   });
   app.use('/public', require('express').static(path.join(__dirname,'public')));
-  app.get('/', (_req,res) => res.send('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/tokens.css"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"></head><body><main id="working-queue-root"></main><script>window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:"switch-fixture"};</script>'+['core','core-ui','task-priority','task-model','completed-queue-filter','queue-policy','working-queue'].map(name=>'<script src="/public/js/'+name+'.js"></script>').join('')+'<script>DCCWorkingQueue.refresh()</script></body></html>'));
+  app.get('/', (_req,res) => res.send('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/tokens.css"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"></head><body><main id="working-queue-root"></main><script>window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:"switch-fixture"};</script>'+['core','core-ui','task-priority','task-model','hold-action','itinerary-card','completed-queue-filter','queue-policy','queue-layout','working-queue'].map(name=>'<script src="/public/js/'+name+'.js"></script>').join('')+'<script>DCCWorkingQueue.refresh()</script></body></html>'));
   const server = app.listen(0,'127.0.0.1'); await new Promise(resolve=>server.once('listening',resolve));
   t.after(()=>new Promise(resolve=>server.close(resolve)));
   const browser = await require('playwright-core').chromium.launch({ executablePath: process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true });
@@ -68,10 +68,10 @@ test('foreground switch preview, cancellation, stale state and exact retry', { s
     reset('foreground'); await refresh();
     await page.evaluate(()=>{const b=document.querySelector('[data-queue-id=new] [data-queue-action=focus]');b.click();b.click();});
     await dialog().waitFor(); assert.equal(await dialog().count(),1);
-    assert.match(await dialog().innerText(),/Old foreground task: Review <draft>/);
-    assert.match(await dialog().innerText(),/New foreground task: Write next step/);
+    assert.match(await dialog().innerText(),/Moving to Background[\s\S]*Review <draft>/);
+    assert.match(await dialog().innerText(),/Moving to Foreground[\s\S]*Write next step/);
     assert.equal(await dialog().locator('draft').count(),0);
-    assert.match(await dialog().innerText(),/Old foreground task:[\s\S]*Wait before notifying[\s\S]*New foreground task:/);
+    assert.match(await dialog().innerText(),/Moving to Background[\s\S]*Snooze[\s\S]*Moving to Foreground/);
     await dialog().getByRole('button',{name:'Cancel',exact:true}).click();
     assert.equal(writes.length,0);
     await focus(); await dialog().waitFor(); await page.keyboard.press('Escape');
@@ -84,7 +84,7 @@ test('foreground switch preview, cancellation, stale state and exact retry', { s
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
     await page.screenshot({path:path.join(__dirname,'../foreground-switch-review.png'),fullPage:true});
     await dialog().getByRole('button',{name:'Bring forward',exact:true}).evaluate(b=>{b.click();b.click();});
-    await dialog().getByRole('status').filter({hasText:'Retry uses the same saved update'}).waitFor();
+    await dialog().getByRole('status').filter({hasText:'Update not confirmed'}).waitFor();
     assert.equal(writes.length,1);
     assert.equal(await dialog().locator('[data-minutes]').isDisabled(),true);
     await submit(); await started(); await dialog().waitFor({state:'hidden'});
@@ -94,7 +94,7 @@ test('foreground switch preview, cancellation, stale state and exact retry', { s
   await t.test('a newer revision while reviewing cannot silently switch a different foreground', async()=>{
     reset('foreground'); await refresh(); await focus(); await dialog().waitFor();
     const reviewed=state.revision; state.revision=++revision;
-    await submit(); await dialog().getByRole('status').filter({hasText:'review the current task'}).waitFor();
+    await submit(); await dialog().getByRole('status').filter({hasText:'Activity changed'}).waitFor();
     assert.equal(writes.length,1); assert.equal(writes[0].expectedRevision,reviewed);
     assert.equal(state.foreground[0].id,'old');
     await dialog().getByRole('button',{name:'Cancel',exact:true}).click();

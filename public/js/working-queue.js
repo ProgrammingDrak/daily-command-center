@@ -17,15 +17,16 @@
   function newer(value){return value && (value.revision>state.revision || (value.revision===state.revision && (value.queue?.serverNow||'')>=(state.queue?.serverNow||'')));}
   function accept(value){if(!newer(value))return;state=value;persist('',state);render();}
   function apply(result){window.blockStore?.acceptWorkRotation?.(result.affectedTasks||[]);accept(result.currentState||result.state);window.DCCWorkSessions?.refresh();}
-  async function refresh(){if(loading)return loading;loading=DCC.api('/api/working-queue',{cache:'no-store',signal:AbortSignal.timeout(15000)}).then(value=>{problem='';accept(value);return value;}).catch(error=>{problem=error.message;render();throw error;}).finally(()=>{loading=null;});return loading;}
+  async function refresh(){if(loading)return loading;loading=DCC.api('/api/working-queue',{cache:'no-store',signal:AbortSignal.timeout(15000)}).then(value=>{assertActionAccount();problem='';accept(value);return value;}).catch(error=>{problem=error.message;render();throw error;}).finally(()=>{loading=null;});return loading;}
   function envelope(action,extra={}){return {action,sourceEventId:'queue:'+crypto.randomUUID(),expectedRevision:state.revision,at:new Date().toISOString(),...extra};}
   async function sendUnlocked(body){
+    assertActionAccount();
     pending=JSON.parse(localStorage.getItem(key+':pending')||'null');
     if(sending)throw new Error('A queue update is still being saved.');
     if(pending && pending.sourceEventId!==body.sourceEventId)throw new Error('Resolve the pending update first.');
     if(window.blockStore?.hasPendingWrites?.()){window.blockStore.flushPending();throw new Error('Wait for your task edits to sync first.');}
     sending=true;setPending(body);render();
-    try {const result=await DCC.api('/api/working-queue',{method:'POST',body,signal:AbortSignal.timeout(15000)});setPending(null);apply(result);return result;}
+    try {const result=await DCC.api('/api/working-queue',{method:'POST',body,signal:AbortSignal.timeout(15000)});assertActionAccount();setPending(null);apply(result);return result;}
     catch(error){if([400,403,404,409].includes(error.status)){setConflict({body,message:error.message});setPending(null);await refresh().catch(()=>{});}throw error;}
     finally{sending=false;render();}
   }
@@ -461,7 +462,85 @@
   window.addEventListener('dcc:data-ready',tick);window.addEventListener('dcc:work-session-changed',()=>refresh().catch(()=>{}));window.addEventListener('online',tick);document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick();});setInterval(tick,15000);
   DCC.tabs?.register('working-queue',()=>{render();refresh().catch(()=>{});});
   function syncState(){return {pending:!!pending,conflict:conflict?{message:conflict.message||''}:null};}
-  window.DCCWorkingQueue={syncState,addTask,render,refresh,tick,activate,send,taskAnchor,taskPool,refreshTaskContext,rememberTaskContext,openBlocked,isBlocked,getState:()=>state};
+  const actionAccount={userId:account.userId,workspaceId:account.workspaceId};
+  function assertActionAccount(){
+    const current=window.DCC_ACCOUNT_CONTEXT;
+    if(!current||current.userId!==actionAccount.userId||current.workspaceId!==actionAccount.workspaceId)throw new Error('Account changed. Reload before updating tasks.');
+  }
+  function assertActionReady(){
+    assertActionAccount();
+    if(navigator.onLine===false)throw new Error('You are offline. Reconnect before updating tasks.');
+    if(sending||pending||conflict)throw new Error('Resolve the current queue update before changing this task.');
+  }
+  async function performTaskAction(action,taskId,descriptor={}){
+    assertActionReady();
+    if(descriptor.kind&&descriptor.kind!=='task')throw new Error('Open this '+(descriptor.kind==='waiting'?'Waiting check-in':'triage item')+' in More to use its existing outcome flow.');
+    const map={complete:'done',foreground:'start',background:'background-start',remove:'queue-remove'};
+    if(!map[action])throw new Error('Unsupported task action.');
+    const expectedRevision=state.revision;
+    // Never silently replace the revision the user actually saw.
+    const snapshot=await refresh();assertActionReady();
+    if(snapshot.revision!==expectedRevision)throw new Error('Queue changed. Review it and try again.');
+    let item=items().find(row=>row.task.id===taskId);
+    if(!item){
+      if(action==='remove')throw new Error('This task is not in Priority Queue.');
+      const value=await DCC.api('/api/working-queue/task/'+encodeURIComponent(taskId),{cache:'no-store'});
+      assertActionReady();
+      item={task:value.task||value};
+    }
+    if(!item.task?.id)throw new Error('Task is not synced. Refresh and try again.');
+    const props=item.task.properties||{};
+    if(DCC.Waiting?.isCheckInTask?.(DCC.TaskModel.fromBlock(item.task)))throw new Error('Open this Waiting check-in in More to record its outcome.');
+    if(item.task.properties?.guidedDefinitionId||item.task.properties?.type==='guided')throw new Error('Open this guided task to review its instructions and outcome.');
+    if(item.status==='completed')throw new Error('This task is already completed.');
+    if(action==='remove'&&item.status!=='queued')throw new Error('Only Priority Queue tasks can be removed here.');
+    const displaced=(state.foreground||[]).filter(row=>row.id!==taskId);
+    const command=envelope(map[action],{taskId,expectedRevision,...(action==='background'?{attentionMode:'snooze',remindMinutes:30}:{}),...(action==='foreground'?{expectedForegroundTaskId:displaced[0]?.id||null}:{})});
+    const result=await send(command);assertActionAccount();
+    if(result.undo)result.undo={...result.undo,expiresAt:Math.min(result.undo.expiresAt,Date.now()+5000),account:{...actionAccount}};
+    return result;
+  }
+  async function openTaskOutcome(taskId,descriptor={}){
+    assertActionReady();
+    const actionId=descriptor.actionId||taskId;
+    if(descriptor.kind==='waiting'){
+      const open=DCC.Waiting?.open||window.openWaitingItem;
+      if(!open||await open(actionId)===false)throw new Error('This Waiting item is unavailable. Refresh and try again.');
+      return {opened:true,completed:false,owner:'waiting'};
+    }
+    if(descriptor.kind==='triage'){
+      if(!DCC.CatchUp?.open||!await DCC.CatchUp.open())throw new Error('This Loose End is no longer available. Refresh and try again.');
+      return {opened:true,completed:false,owner:'triage'};
+    }
+    await refresh();assertActionReady();
+    let item=items().find(row=>row.task.id===actionId);
+    if(!item){
+      const value=await DCC.api('/api/working-queue/task/'+encodeURIComponent(actionId),{cache:'no-store'});
+      assertActionReady();item={task:value.task};
+      if(item.task)rememberTaskContext([...detailRows.filter(row=>row.id!==item.task.id),item.task]);
+    }
+    if(!item.task?.id)throw new Error('Task is not available. Refresh and try again.');
+    const props=item.task.properties||{},ev=DCC.TaskModel.fromBlock(item.task);
+    if(DCC.Waiting?.isCheckInTask?.(ev)){
+      const waitingId=props.delegatedItemId||ev.delegatedItemId||/^waiting-checkin-task:(.+)$/.exec(props.local_id||ev.id||'')?.[1];
+      if(!waitingId||!DCC.Waiting.open||await DCC.Waiting.open(waitingId)===false)throw new Error('This check-in’s Waiting item is unavailable. Refresh and try again.');
+      return {opened:true,completed:false,owner:'waiting'};
+    }
+    if(item.status==='completed'||props.done||props.status==='done')throw new Error('This task is already completed.');
+    if(document.getElementById('done-modal-overlay')?.classList.contains('open'))throw new Error('Finish or close the current task outcome first.');
+    await transition('done',item);
+    if(!document.getElementById('done-modal-overlay')?.classList.contains('open'))throw new Error('The task outcome flow could not open. Refresh and try again.');
+    return {opened:true,completed:false,owner:'task'};
+  }
+  async function undoCompletion(receipt){
+    assertActionReady();
+    if(!receipt||receipt.account?.userId!==actionAccount.userId||receipt.account?.workspaceId!==actionAccount.workspaceId)throw new Error('This completion belongs to a different account.');
+    if(Date.now()>receipt.expiresAt)throw new Error('Undo expired. Reopen the task from its details.');
+    if(receipt.expectedRevision!==state.revision)throw new Error('Queue changed. Review the task before reopening.');
+    const result=await send(envelope('undo-completion',{taskId:receipt.taskId,expectedRevision:receipt.expectedRevision,undoEventId:receipt.sourceEventId}));
+    assertActionAccount();return result;
+  }
+  window.DCCWorkingQueue={performTaskAction,openTaskOutcome,undoCompletion,syncState,addTask,render,refresh,tick,activate,send,taskAnchor,taskPool,refreshTaskContext,rememberTaskContext,openBlocked,isBlocked,getState:()=>state};
   // Keep the former rotation navigation entry point. Floating workspace focus()
   // must be migrated to the shared coordinator when that separate feature lands.
   notifySync();

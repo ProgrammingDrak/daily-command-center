@@ -49,7 +49,7 @@
   function api(url,options){
     return fetch(url,{headers:{"Content-Type":"application/json"},...(options||{})}).then(async response=>{
       const body=await response.json().catch(()=>({}));
-      if(!response.ok) throw new Error(body.error||`Request failed (${response.status})`);
+      if(!response.ok) throw Object.assign(new Error(body.error||`Request failed (${response.status})`),{status:response.status});
       return body;
     });
   }
@@ -354,9 +354,26 @@
     persist();
   }
 
+  // Full server-owned task universe, shared by library and compact projections.
+  // Deliberately do not substitute blockStore's partially hydrated day cache.
+  function loadLibrary(){ return api('/api/task-library'); }
+  async function glassesCollections(){
+    const library=await loadLibrary();
+    if(!Array.isArray(library.tasks))throw new Error('Task Library did not return a complete task collection');
+    const describe=row=>({kind:'task',id:row.id,actionId:row.id,row,
+      ev:window.DCC.TaskModel.fromBlock(row),title:taskTitle(row)});
+    const open=library.tasks.filter(row=>!row.deleted_at&&!done(row));
+    const projects=new Map((library.projects||[]).map(row=>[row.id,props(row).name||props(row).title||'Project']));
+    const name=row=>props(row).projectId?(projects.get(props(row).projectId)||'Unknown project'):'Solo';
+    const allTasks=open.slice().sort((a,b)=>name(a).localeCompare(name(b),undefined,{numeric:true,sensitivity:'base'})).map(describe);
+    const someday=open.filter(row=>!row.date&&props(row).someday===true)
+      .sort((a,b)=>String(b.created_at||props(b).createdAt||'').slice(0,10).localeCompare(String(a.created_at||props(a).createdAt||'').slice(0,10))).map(describe);
+    return {allTasks,someday};
+  }
+
   async function refresh(){
     if(loading)return;loading=true;render();
-    try{payload=await api('/api/task-library');reconcile();}
+    try{payload=await loadLibrary();reconcile();}
     catch(error){console.error('[task-library]',error);notify(error.message,'error');}
     finally{loading=false;render();}
   }
@@ -549,7 +566,7 @@
   }
 
   restore();
-  window.DCCTaskLibrary={refresh,open:function(){if(typeof openTasksToSection==='function')openTasksToSection('tm-task-library-section',{solo:true});else refresh();}};
+  window.DCCTaskLibrary={refresh,glassesCollections,open:function(){if(typeof openTasksToSection==='function')openTasksToSection('tm-task-library-section',{solo:true});else refresh();}};
   window.addEventListener('blocks-changed',()=>setTimeout(refresh,80));
   window.addEventListener('dcc:data-ready',()=>refresh());
   document.addEventListener('DOMContentLoaded',()=>{document.getElementById('tm-task-library-section')&&refresh();});

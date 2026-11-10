@@ -277,11 +277,11 @@ test("newest origin day first", async () => {
 
 test("no archive, or no TaskModel, degrades to an empty lane", async () => {
   const empty = await load({}, []).CO.collect();
-  assert.deepEqual(plain(empty), { rows: [], total: 0, scanned: 0, truncated: false });
+  assert.deepEqual(plain(empty), { rows: [], total: 0, scanned: 0, truncated: false, failed: false });
   const d = ymd(1);
   const noModel = load({ [d]: [dayRoot(), blk("t", d, {})] }, [d]);
   noModel.ctx.window.DCC.TaskModel = null;
-  assert.deepEqual(plain(await noModel.CO.collect()), { rows: [], total: 0, scanned: 0, truncated: false });
+  assert.deepEqual(plain(await noModel.CO.collect()), { rows: [], total: 0, scanned: 0, truncated: false, failed: true });
 });
 
 // C2 replaced "the store is missing" with "the fetch failed" as the degradation path,
@@ -293,7 +293,7 @@ test("a failed fetch degrades to an empty lane, never a stale one", async () => 
   const boom = load({ [d]: [dayRoot(), blk("t", d, {})] }, [d]);
   assert.equal((await boom.CO.collect()).rows.length, 1, "control: the fixture does produce a row");
   boom.ctx.window.DCC.api = async () => { throw new Error("Request failed"); };
-  assert.deepEqual(plain(await boom.CO.collect()), { rows: [], total: 0, scanned: 0, truncated: false });
+  assert.deepEqual(plain(await boom.CO.collect()), { rows: [], total: 0, scanned: 0, truncated: false, failed: true });
 });
 
 // `scanned` renders in the modal footer and changed source in C2 (the client counted

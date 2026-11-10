@@ -120,6 +120,10 @@
   function treeItems(){
     return TaskModel?TaskModel.selectNotDeleted(pool(),{isDeleted:ev=>typeof deletedSet!=='undefined'&&deletedSet.has(ev.id)}):pool();
   }
+  function glassesTasks(){
+    const items=selectWhenever(treeItems());
+    return TaskModel?TaskModel.selectTree(items,{isCollapsed:()=>false}).map(node=>node.ev):items;
+  }
   function rootItem(id){return TaskModel?TaskModel.hierarchyRoot(id,treeItems()):findItem(id);}
   const collapsed=new Set();
   function findItem(id) { return pool().find(t => t.id === id && isWhenever(t)) || null; }
@@ -578,7 +582,7 @@
 
   return {
     STAGE, LABEL, PILL_STYLE, UNSCHEDULED_LABEL, UNSCHEDULED_STYLE, TRIAGE_LABEL, TRIAGE_STYLE,
-    isWhenever, durationOf, selectWhenever, pickIndex,
+    isWhenever, durationOf, selectWhenever, pickIndex, glassesTasks,
     build, add, doNow, scheduleTree, markDone, release, open
   };
 });

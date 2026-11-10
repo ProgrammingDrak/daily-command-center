@@ -723,7 +723,7 @@
     const CO = window.DCC && window.DCC.Carryover;
     if (!CO) return null;
     const results = await Promise.allSettled([CO.collect()]);
-    const failed = results.some(result => result.status === "rejected");
+    const failed = results.some(result => result.status === "rejected" || result.value?.failed === true);
     const waiting = typeof window.getAttentionWaitingItems === "function" ? window.getAttentionWaitingItems() : [];
     const waitingIds = new Set(waiting.map(item => String(item.id)));
     const allTriage = activeTriage();
@@ -738,6 +738,29 @@
     _lastSnapshot = snapshot;
     setIndicatorCount(snapshotCount(snapshot));
     return snapshot;
+  }
+
+  // Read-only owner projection. Waiting reminders and source triage are not
+  // ordinary task completions: retain their kind and their owner's action ID.
+  async function glassesTasks() {
+    const snapshot=await collectSnapshot();
+    if(!snapshot||snapshot.failed)throw new Error('Loose Ends could not be refreshed');
+    const describe=(kind,actionId,ev,row,extra={})=>({kind,id:kind+':'+actionId,actionId,ev,row,title:ev.title,...extra});
+    const tasks=rootsOf(snapshot.res.rows).map(ev=>describe('task',ev.__unf?.sourceId||ev._blockId||ev.id,ev,ev.__unf?.sourceBlock||null,{pool:snapshot.res.rows}));
+    const drafts=new Map(snapshot.waitingTriage.map(row=>[String(row.waiting_item_id||''),row]));
+    const waiting=snapshot.waiting.map(row=>{
+      const ev=window.DCC.TaskModel.fromBlock(row);
+      ev.title=row.properties?.myTask||row.properties?.title||'Waiting task';
+      return describe('waiting',row.id,ev,row,{draft:drafts.get(String(row.id))||null});
+    });
+    const triage=['slack','gmail','other'].flatMap(lane=>snapshot.triage.filter(row=>triageLane(row)===lane))
+      .map(row=>describe('triage',row.id,window.DCC.TaskModel.fromTriageItem(row),row));
+    const rows=tasks.concat(waiting,triage);
+    // Preserve the owner's bounded-lookback metadata instead of implying that
+    // the current Loose Ends scan is the entire historical task universe.
+    rows.truncated=!!snapshot.res.truncated;
+    rows.total=snapshot.res.total;
+    return rows;
   }
 
   async function refreshReminder(opts) {
@@ -823,6 +846,7 @@
   window.initCatchUp = initCatchUp;
   const DCC = (window.DCC = window.DCC || {});
   DCC.CatchUp = {
+    glassesTasks,
     open: openReminder,
     refresh: refreshReminder,
     syncIndicator: syncIndicator,
