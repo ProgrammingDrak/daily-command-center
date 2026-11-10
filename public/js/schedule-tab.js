@@ -879,7 +879,7 @@ function suggestedCommuteOrigin(blockId){
   return "";
 }
 
-function _itineraryListModel(){
+function _itineraryListModel(options={}){
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   // isActive() is time-of-day only (no date), so the "Now" chip must be gated to
   // today or it would light up on a past/future day whose times overlap the clock.
@@ -891,7 +891,7 @@ function _itineraryListModel(){
   const day=DCC.TaskModel.selectDay(scheduled,viewDate,{today:actualToday,carryoverPool:unfPool,waitingRows:window.blockStore ? window.blockStore.getByType("block") : []});
   const visible=day.visible;
   const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
-  const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible}),timeBlocks);
+  const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible,...(options.expandAll?{isCollapsed:()=>false}:{})}),timeBlocks);
   const unscheduledGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.UNPLANNED_BLOCK.id)||{nodes:[]};
   const triageGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.TRIAGE_BLOCK.id)||{nodes:[]};
   _fileDoneUntimedOnTheDay(groups,triageGroup,timeBlocks);
@@ -950,6 +950,15 @@ function renderUnscheduledInto(listEl,model){
 }
 window.renderUnscheduledInto=renderUnscheduledInto;
 window.itineraryListModel=_itineraryListModel;
+window.glassesItineraryTasks=function(){
+  const model=_itineraryListModel({expandAll:true});
+  return model.groups.filter(group=>group!==model.unscheduledGroup&&group!==model.triageGroup)
+    .flatMap(group=>group.nodes.filter(node=>!isDone(node.ev)).map(node=>node.ev));
+};
+window.glassesUnscheduledTasks=function(){
+  const model=_itineraryListModel({expandAll:true});
+  return _orderUnscheduledNodes(model.unscheduledGroup.nodes).filter(node=>!isDone(node.ev)).map(node=>node.ev);
+};
 // Triage rows are created by triage.js (buildScheduleTriage) from inbox and repeat
 // sources, so the panel also carries that loader's status, with Retry on a failure.
 function renderTriageInto(listEl,model){

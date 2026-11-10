@@ -92,10 +92,14 @@ test("retired pages have no visible route from the top bar, mobile, tutorial or 
 test("glasses keeps a visible Full app exit and task navigation", () => {
   const glasses = read("public/js/device-views/glasses.js");
   assert.doesNotMatch(glasses, /\.header h1'\)\?\.append\(exit\)/);
-  assert.match(glasses, /bar\.append\(prev, position, next, tools, exit, status\)/);
+  assert.match(glasses, /header\.append\(mode, position, refresh, exit\)/);
+  assert.match(glasses, /root\.append\(header, collection, content, footer, status\)/);
+  assert.match(glasses, /url\.searchParams\.delete\('device'\)/);
+  assert.match(html, /device-views\/glasses-navigation-model\.js/);
   const css = read("public/css/device-views/glasses.css");
-  assert.match(css, /\.device-glasses \.glasses-exit\{display:inline-flex;[^}]*min-height:46px/);
-  assert.match(css, /:not\(\.glasses-tools-open\) :is\(#tab-bar,\.source-row,\.header>div:last-child,#task-view-switch\)/);
+  assert.match(css, /:not\(#glasses-app\)/);
+  assert.match(css, /\.glasses-exit\{/);
+  assert.match(css, /\.glasses-list\{[^}]*grid-template-columns:minmax\(0,1fr\)/);
 });
 
 test("phones keep the clock, cog and dot, and show every page label whole", () => {

@@ -11,7 +11,7 @@
     'Unscheduled', 'Whenever', 'Someday', 'Waiting'
   ]);
   const LANES = Object.freeze(['Foreground', 'Needs You', 'Background', 'Priority Queue']);
-  const LEVELS = Object.freeze(['jump', 'select', 'task', 'details']);
+  const LEVELS = Object.freeze(['jump', 'select', 'task', 'details', 'more']);
   function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
   function viewport(length, selected, size = 11) {
     const start = clamp(selected - Math.floor(size / 2), 0, Math.max(0, length - size));
@@ -20,10 +20,12 @@
   function create(initial = {}) {
     let collection = clamp(Number(initial.collection) || 0, 0, COLLECTIONS.length - 1);
     let level = clamp(Number(initial.level) || 0, 0, LEVELS.length - 1);
+    let moreIndex = 0;
     const positions = COLLECTIONS.map(() => 0);
     const ids = COLLECTIONS.map(() => null);
     let lists = COLLECTIONS.map(() => []);
     function setLists(next) {
+      const previous = ids[collection];
       lists = COLLECTIONS.map((_, index) => {
         const rows = next[index] || [];
         const seen = new Set();
@@ -37,6 +39,7 @@
         positions[index] = found >= 0 ? found : clamp(position, 0, Math.max(0, lists[index].length - 1));
         ids[index] = lists[index][positions[index]]?.id || null;
       });
+      if (level >= 2 && previous !== ids[collection]) level = 1;
       return snapshot();
     }
     function select(index) {
@@ -44,10 +47,13 @@
       ids[collection] = lists[collection][positions[collection]]?.id || null;
     }
     function input(action) {
-      if (action === 'home') { collection = 0; level = 0; select(0); return snapshot(); }
-      if (action === 'back') { level = Math.max(0, level - 1); return snapshot(); }
+      if (action === 'home') { collection = 0; level = 0; return snapshot(); }
+      if (action === 'back') { level = level >= 3 ? 2 : Math.max(0, level - 1); return snapshot(); }
+      if (action === 'select-view') { level = 1; return snapshot(); }
+      if (action === 'more' && level === 2) { level = 4; moreIndex = 0; return snapshot(); }
       if (action === 'hold-fore' && level === 2) { level = 3; return snapshot(); }
       if (action === 'tap-fore' && level < 2 && lists[collection].length) { level++; return snapshot(); }
+      if (level === 4 && (action === 'up' || action === 'down')) { moreIndex = clamp(moreIndex + (action === 'up' ? -1 : 1), 0, 3); return snapshot(); }
       if (level === 0 && (action === 'left' || action === 'right')) {
         collection = clamp(collection + (action === 'left' ? 1 : -1), 0, COLLECTIONS.length - 1);
       } else if (level < 2 && (action === 'up' || action === 'down')) {
@@ -59,13 +65,41 @@
     function snapshot() {
       const rows = lists[collection], index = positions[collection];
       return Object.freeze({
-        collection, collectionName: COLLECTIONS[collection], level: LEVELS[level],
+        moreIndex, collection, collectionName: COLLECTIONS[collection], level: LEVELS[level],
         index, count: rows.length, selected: rows[index] || null,
         window: viewport(rows.length, index),
+        range: viewport(rows.length, index, 5),
         rows: rows.slice(viewport(rows.length, index).start, viewport(rows.length, index).end)
       });
     }
     return Object.freeze({ input, setLists, snapshot });
   }
-  return Object.freeze({ COLLECTIONS, LANES, LEVELS, viewport, create });
+  // One recognizer for keyboard, pointer and simulator inputs. Native browser
+  // Back/Forward is intentionally not a gesture here. Cancel never emits a tap.
+  function createInput(emit, timers = {}) {
+    const later = timers.setTimeout || setTimeout, cancel = timers.clearTimeout || clearTimeout;
+    let pressed = null, holdTimer = null, middleTimer = null;
+    function stopPress() { if (holdTimer != null) cancel(holdTimer); holdTimer = null; pressed = null; }
+    function middleTap() {
+      if (middleTimer != null) { cancel(middleTimer); middleTimer = null; emit('double-middle'); }
+      else middleTimer = later(() => { middleTimer = null; emit('tap-middle'); }, 320);
+    }
+    function down(finger) {
+      if (pressed || !['fore', 'middle'].includes(finger)) return;
+      pressed = { finger, held: false };
+      holdTimer = later(() => {
+        if (!pressed) return;
+        pressed.held = true;
+        if (finger === 'fore') emit('hold-fore');
+      }, 550);
+    }
+    function up(finger) {
+      if (!pressed || pressed.finger !== finger) return;
+      const held = pressed.held; stopPress();
+      if (!held) { if (finger === 'middle') middleTap(); else emit('tap-fore'); }
+    }
+    function reset() { stopPress(); if (middleTimer != null) cancel(middleTimer); middleTimer = null; }
+    return Object.freeze({ down, up, cancel: stopPress, reset });
+  }
+  return Object.freeze({ COLLECTIONS, LANES, LEVELS, viewport, create, createInput });
 });

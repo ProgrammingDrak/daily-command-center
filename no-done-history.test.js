@@ -185,7 +185,7 @@ test("a done Triage task lands on its day too, and Outside still sits after the 
 });
 
 test("the list model files done work out of BOTH drawer halves", () => {
-  const model = slice(TAB, /function _itineraryListModel\(\)\{[\s\S]*?\n\}/, "_itineraryListModel");
+  const model = slice(TAB, /function _itineraryListModel\(options=\{\}\)\{[\s\S]*?\n\}/, "_itineraryListModel");
   assert.match(model, /_fileDoneUntimedOnTheDay\(groups,triageGroup,timeBlocks\);/);
   assert.match(model, /_fileDoneUntimedOnTheDay\(groups,unscheduledGroup,timeBlocks\);/);
   assert.match(model, /return \{[^}]*unscheduledGroup,triageGroup\}/);

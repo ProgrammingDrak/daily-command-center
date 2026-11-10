@@ -479,7 +479,7 @@ function createConversationStore(ctx) {
       await q.query(
         `SELECT id FROM blocks WHERE user_id=$1 AND deleted_at IS NULL AND dcc_is_task_row(type,properties)
          AND ($2 OR id=$3 OR properties->>'local_id'=$3 OR properties->>'startedAt' IS NOT NULL) ORDER BY id FOR UPDATE`,
-        [owner.userId, ["correct", "done", "reconcile", "queue-snooze-all"].includes(b.action), b.taskId || null]
+        [owner.userId, ["correct", "done", "undo-completion", "reconcile", "queue-snooze-all"].includes(b.action), b.taskId || null]
       );
       const queue = await Q.load(q, owner);
       await Q.reconcile(q, owner, queue, blockDB, b.at);
@@ -508,7 +508,8 @@ function createConversationStore(ctx) {
           });
         }
       }
-      if (b.action === "reconcile") detail = await R.apply(q, owner, queue, b, ctx);
+      if (b.action === "undo-completion") detail = await require("./lib/queue-completion-undo").undo(q, owner, queue, b, ctx, task);
+      else if (b.action === "reconcile") detail = await R.apply(q, owner, queue, b, ctx);
       else if (b.action === "correct") detail = await correct(q, b, owner, owner.userId + ":" + b.sourceEventId);
       else if (b.action.startsWith("delegated-")) detail = await require('./lib/delegated-work').apply(q,owner,queue,b,ctx,task);
       else if (b.action.startsWith("queue-") && b.action !== "queue-block") {
@@ -680,6 +681,7 @@ function createConversationStore(ctx) {
         affectedTasks,
         state: await state(owner, q)
       };
+      if (b.action === "done" && !b.guided) result.undo = require("./lib/queue-completion-undo").receipt(result, b, (ctx.now || Date.now)());
       await q.query(
         "INSERT INTO conversation_events(user_id,workspace_id,source_event_id,request_hash,command,before_state,result) VALUES($1,$2,$3,$4,$5,$6,$7)",
         [owner.userId, owner.workspaceId, b.sourceEventId, hash, b, before, result]

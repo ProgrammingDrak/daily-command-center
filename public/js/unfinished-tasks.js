@@ -81,13 +81,13 @@
   // One shape for every return path -- callers destructure `truncated` without having
   // to know which branch produced the payload.
   let collectedRows = [];
-  const EMPTY = () => { collectedRows = []; return { rows: [], total: 0, scanned: 0, truncated: false }; };
+  const EMPTY = (failed = false) => { collectedRows = []; return { rows: [], total: 0, scanned: 0, truncated: false, failed }; };
   async function collectUnfinished(opts) {
     opts = opts || {};
     const days = (opts.days === null) ? null : (opts.days || SCAN_DAYS);
     const TaskModel = window.DCC && window.DCC.TaskModel;
     const api = window.DCC && window.DCC.api;
-    if (!TaskModel || typeof api !== "function") return EMPTY();
+    if (!TaskModel || typeof api !== "function") return EMPTY(true);
 
     const today = todayStr();
     let payload;
@@ -103,9 +103,10 @@
     } catch (e) {
       // An empty lane, never a stale one. Every consumer is built for this shape —
       // it is what the old collector returned when the store was missing.
-      return EMPTY();
+      return EMPTY(true);
     }
-    const blocks = Array.isArray(payload && payload.rows) ? payload.rows : [];
+    if (!payload || !Array.isArray(payload.rows)) return EMPTY(true);
+    const blocks = payload.rows;
     const overlays = (payload && payload.overlays) || {};
 
     const rows = [];
@@ -182,7 +183,7 @@
     // clipped the raw pool, which makes `total` a floor rather than an exact count.
     collectedRows = rows; // Keep the full server-bounded pool: slicing can sever a deep tree.
     return {
-      rows: collectedRows, total,
+      rows: collectedRows, total, failed: false,
       scanned: Number(payload.scanned) || 0,
       truncated: !!(payload && payload.truncated)
     };

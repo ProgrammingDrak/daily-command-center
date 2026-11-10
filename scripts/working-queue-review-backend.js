@@ -16,6 +16,7 @@ module.exports = async function mount(app) {
   app.use((req, _res, next) => { req.session = { userId: 1 }; req.workspaceId = "ws-1"; next(); });
   require("../routes/working-queue")(app, ctx);
   require("../routes/blocks")(app, ctx);
+  require("../routes/projects")(app, ctx);
   app.get("/api/tasks/:id/attachments", (_req,res)=>res.json({files:[]}));
   app.post("/api/queue-review/seed", require("../lib/route-helpers").route(async req => {
     const properties={...req.body.properties}, startedAt=properties.startedAt;

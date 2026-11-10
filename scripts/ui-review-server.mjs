@@ -639,6 +639,12 @@ app.get("/api/task-library", (_req,res)=>res.json({
   tasks:liveReviewBlocks().filter(row=>row.type==='block'&&((row.properties||{}).local_id||['task','backlog'].includes((row.properties||{}).kind))),
   projects:[],facets:[],views:[],readiness:{}
 }));
+if (process.env.DCC_REVIEW_GLASSES_DEVICE === '1') {
+  app.get('/api/tasks/open', (req, res) => res.json({
+    rows: liveReviewBlocks().filter(row => row.type === 'block' && row.date && row.date < String(req.query.before || localDateKey())),
+    overlays: {}, truncated: false
+  }));
+}
 app.get("/api/*", (req, res) => {
   if (req.path.includes("social/feed/publishable") || req.path.includes("social/friends") || req.path.includes("social/rewards/queue") || req.path.includes("access/grants") || req.path.includes("access/granted-to-me")) return res.json([]);
   if (req.path.includes("responsibilities")) return res.json([]);
