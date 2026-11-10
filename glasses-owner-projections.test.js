@@ -44,13 +44,18 @@ test('Loose Ends retains source action identity, owner ordering, and Waiting dra
   assert.equal(rows.truncated,true);assert.equal(rows.total,4);
 });
 test('failed and malformed real carryover reads remain errors through the glasses projection',async()=>{
-  for(const api of [async()=>{throw new Error('Offline');},async()=>({}),async()=>({rows:[]})]){
+  for(const {api,failed} of [
+    {api:async()=>{throw new Error('Offline');},failed:true},
+    {api:async()=>({}),failed:true},
+    {api:async()=>({rows:[]}),failed:false}
+  ]){
     const ctx=context({__todayDate:'2026-11-10'});
     ctx.window.DCC.api=api;
     vm.runInContext(source('unfinished-tasks'),ctx);
     const result=await ctx.window.DCC.Carryover.collect();
     vm.runInContext(source('catch-up'),ctx);
-    if(result.failed){
+    assert.equal(result.failed,failed);
+    if(failed){
       assert.equal(result.rows.length,0);
       await assert.rejects(ctx.window.DCC.CatchUp.glassesTasks(),/could not be refreshed/);
     }else{

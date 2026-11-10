@@ -113,6 +113,32 @@ try {
   await page.unroute('**/api/working-queue');
   assert.notEqual((await queueItem('glasses-d'))?.status, 'completed');
   check('double-middle performs actual server-backed completion undo within five seconds with navigation live during delayed undo');
+  await choose('glasses-d');
+  let releaseLibrary, libraryArrived, holdLibrary = true;
+  const libraryGate = new Promise(resolve => { releaseLibrary = resolve; });
+  const librarySeen = new Promise(resolve => { libraryArrived = resolve; });
+  await page.route('**/api/task-library', async route => {
+    if (!holdLibrary) return route.continue();
+    holdLibrary = false;
+    // Capture the completed version before undo, then deliver that stale snapshot late.
+    const response = await route.fetch();
+    libraryArrived(); await libraryGate; await route.fulfill({ response });
+  });
+  await page.evaluate(() => { window.__glassesSlowRefreshCompletion = window.DCCGlasses.input('left'); });
+  await librarySeen;
+  await waitStatus('glasses-d', 'completed');
+  assert.equal(await page.locator('#glasses-undo').isVisible(), true);
+  const undoPosted = page.waitForRequest(request => request.method() === 'POST' && request.url().endsWith('/api/working-queue') && request.postDataJSON()?.action === 'undo-completion', { timeout: 4000 });
+  await page.evaluate(() => { window.__glassesSlowRefreshUndo = window.DCCGlasses.input('double-middle'); });
+  try {
+    await undoPosted;
+    for (let i = 0; i < 80 && (await queueItem('glasses-d'))?.status === 'completed'; i++) await page.waitForTimeout(25);
+    assert.notEqual((await queueItem('glasses-d'))?.status, 'completed');
+  } finally { releaseLibrary(); }
+  await page.evaluate(() => Promise.all([window.__glassesSlowRefreshCompletion, window.__glassesSlowRefreshUndo]));
+  await page.unroute('**/api/task-library');
+  await page.waitForFunction(() => window.DCCGlasses.snapshot().rows.some(row => row.id === 'glasses-d'));
+  check('acknowledged completion can undo while source refresh is held; late completed snapshot cannot hide reopened task');
   await choose('glasses-e');
   await input('left'); await waitStatus('glasses-e', 'completed');
   await page.waitForTimeout(5200);

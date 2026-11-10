@@ -57,9 +57,9 @@
     }
     render();
   }
-  async function refreshSources() {
+  async function refreshSources(force = false) {
     if (!signedIn()) { reconcile(); return; }
-    if (refreshPromise) return refreshPromise;
+    if (refreshPromise) return force ? refreshPromise.then(() => refreshSources()) : refreshPromise;
     const generation = ++refreshGeneration;
     loading = true;
     refreshPromise = (async () => {
@@ -157,18 +157,24 @@
         undo = result.undo || null;
         announce(undo ? 'Completed ' + item.title + '. Double middle tap to undo.' : 'Completed ' + item.title + '.');
       } else announce(action === 'remove' ? 'Removed from Priority Queue. Task retained.' : 'Task moved to ' + (action === 'background' ? 'Background for 30 minutes' : 'Foreground') + '.');
-      await refreshSources();
-    } catch (error) { if (sameAccount()) announce('Not confirmed: ' + error.message); }
-    finally { pending = false; reconcile(); }
+      // Mutation ownership ends at acknowledgement, not after unrelated reads.
+      pending = false; ++refreshGeneration; updateUndo();
+      await refreshSources(true);
+    } catch (error) { if (sameAccount() && operation === revision) announce('Not confirmed: ' + error.message); }
+    finally { if (operation === revision) pending = false; reconcile(); }
   }
   async function undoCompletion() {
     updateUndo(); const receipt = undo;
     if (!receipt || pending || !signedIn()) return;
     if (!navigator.onLine) { announce('Offline. Undo was not submitted.'); return; }
-    pending = true; undo = null; updateUndo(); announce('Undoing completion… awaiting DCC confirmation.');
-    try { await window.DCCWorkingQueue.undoCompletion(receipt); if (sameAccount()) { announce('Completion undone.'); await refreshSources(); } }
-    catch (error) { if (sameAccount()) announce('Undo not confirmed: ' + error.message); }
-    finally { pending = false; reconcile(); }
+    pending = true; const operation = ++revision; undo = null; updateUndo(); announce('Undoing completion… awaiting DCC confirmation.');
+    try {
+      await window.DCCWorkingQueue.undoCompletion(receipt);
+      if (sameAccount() && operation === revision) {
+        pending = false; ++refreshGeneration; announce('Completion undone.'); await refreshSources(true);
+      }
+    } catch (error) { if (sameAccount() && operation === revision) announce('Undo not confirmed: ' + error.message); }
+    finally { if (operation === revision) pending = false; reconcile(); }
   }
   async function input(action) {
     if (!signedIn()) { reconcile(); return; }

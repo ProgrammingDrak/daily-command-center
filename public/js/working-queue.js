@@ -490,7 +490,7 @@
     }
     if(!item.task?.id)throw new Error('Task is not synced. Refresh and try again.');
     const props=item.task.properties||{};
-    if(String(props.source||'').replace(/_/g,'-')==='waiting-checkin'||/^waiting-checkin-task:/.test(props.local_id||item.task.id))throw new Error('Open this Waiting check-in in More to record its outcome.');
+    if(DCC.Waiting?.isCheckInTask?.(DCC.TaskModel.fromBlock(item.task)))throw new Error('Open this Waiting check-in in More to record its outcome.');
     if(item.task.properties?.guidedDefinitionId||item.task.properties?.type==='guided')throw new Error('Open this guided task to review its instructions and outcome.');
     if(item.status==='completed')throw new Error('This task is already completed.');
     if(action==='remove'&&item.status!=='queued')throw new Error('Only Priority Queue tasks can be removed here.');
