@@ -28,6 +28,17 @@ function openDoneModal(id, title, onConfirm, ev, options){
   if(window._dmBlockEditor) window._dmBlockEditor.destroy();
   window._dmBlockEditor=createBlockEditor(dmNotesContainer, dmNoteBlocks,window.DCC.TaskSources.editorOptions(dmNotesContainer,ev||{}));
   if(_dmOptions)_dmOptions.noteSnapshot=JSON.stringify(window._dmBlockEditor.getBlocks());
+  if(options?.loadNotes){
+    dmNotesContainer.inert=true;
+    void options.loadNotes().then(value=>{
+      if(_dmOptions!==options)return;
+      window._dmBlockEditor.setBlocks(noteBlocksForTask(id,value,ev));
+      options.noteSnapshot=JSON.stringify(window._dmBlockEditor.getBlocks());
+      dmNotesContainer.inert=false;
+    }).catch(error=>{
+      if(_dmOptions===options)options.body.querySelector('[role=status]').textContent=error.message;
+    });
+  }else dmNotesContainer.inert=false;
   // Pre-populate action items
   document.getElementById("dm-action-input").style.display="none";
   renderDmActions(id);
@@ -146,10 +157,10 @@ async function confirmDoneModal(){
     _dmBusy=true;body.inert=true;confirm.disabled=true;
     try{
       if(!_dmOptions.completionAcknowledged){
-        await _dmCallback(note.text);
+        await _dmCallback(_dmOptions.queueCompletion ? (JSON.stringify(note.blocks)!==_dmOptions.noteSnapshot ? note : null) : note.text);
         _dmOptions.completionAcknowledged=true;
       }
-      if(JSON.stringify(note.blocks)!==_dmOptions.noteSnapshot)await _dmOptions.saveNotes(note);
+      if(!_dmOptions.queueCompletion&&JSON.stringify(note.blocks)!==_dmOptions.noteSnapshot)await _dmOptions.saveNotes(note);
       _dmBusy=false;closeDoneModal();
     }catch(error){
       const completed=_dmOptions.completionAcknowledged;

@@ -1,3 +1,4 @@
+const { performance } = require("node:perf_hooks");
 const { route } = require("../lib/route-helpers");
 const { createConversationStore } = require("../conversation-store");
 module.exports = function mount(app, ctx, config = {}) {
@@ -42,8 +43,10 @@ module.exports = function mount(app, ctx, config = {}) {
   );
   app.post(
     "/api/working-queue",
-    route(async (req) => {
+    route(async (req, res) => {
+      const start = performance.now();
       const result = await store.execute(req.body, req.queueOwner);
+      res.setHeader("Server-Timing", "queue-command;dur=" + (performance.now() - start).toFixed(1));
       ctx.broadcast?.(
         "blocks-changed",
         {

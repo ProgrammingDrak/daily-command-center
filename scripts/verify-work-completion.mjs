@@ -112,9 +112,11 @@ try {
   });
   await button('a','complete').click();await page.getByRole('dialog').getByText('Previously recorded',{exact:true}).waitFor();
   await page.getByRole('dialog').getByRole('button',{name:'Mark Complete',exact:true}).evaluate(el=>{el.click();el.click();});
-  await page.getByRole('dialog').getByRole('status').filter({hasText:'Completion not confirmed'}).waitFor();
+  await closed();
+  await page.getByText('Completion saved on this device. Waiting to sync.',{exact:true}).first().waitFor();
   assert.equal(posts,1);assert.equal(await page.getByText(/^Task completed ·/).count(),0);
-  await page.getByRole('dialog').getByRole('button',{name:'Mark Complete',exact:true}).click();await closed();
+  await page.getByRole('button',{name:'Retry saved update',exact:true}).click();
+  await page.waitForFunction(()=>!window.DCCWorkingQueue.syncState().pending);
   assert.equal(posts,2);assert.deepEqual(bodies[1],first);
   const expectedMinutes=90+Math.max(1,Math.round((Date.parse(first.at)-Date.parse(at))/60000));
   assert.equal((await task('a')).properties.actualMinutes,expectedMinutes);assert.equal((await ctx.blockDB.getTaskTimeEntries('a','ws-1')).length,1);

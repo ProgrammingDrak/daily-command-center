@@ -330,6 +330,8 @@
       closeSettingsMenu();
       // DCC and Clerk own separate sessions. Clear both before the login page
       // loads, or Clerk immediately recreates the DCC session.
+      window.__DCC_SIGNING_OUT__ = true;
+      try { localStorage.removeItem("dcc-today-snapshot"); } catch (_error) {}
       var dccLogout = fetch("/api/auth/logout", { method: "POST" });
       var clerkLogout = import("/vendor/drake-auth/browser.js")
         .then(function(auth){ return auth.clerkSignOut(); });

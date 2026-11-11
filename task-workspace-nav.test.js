@@ -517,6 +517,6 @@ test("the sync dot reports queue conflicts without resolving them", () => {
   assert.match(shell, /discard\.textContent = "Confirm discard"/, "discard asks first");
   assert.doesNotMatch(shell, /persist\(':conflict'|removeItem\("dcc-working-queue/);
   const queue = read("public/js/working-queue.js");
-  assert.match(queue, /function syncState\(\)\{return \{pending:!!pending,conflict:/);
+  assert.match(queue, /function syncState\(\)\{return \{pending:!!pending\|\|completionEntries\(\).length>0,conflict:/);
   assert.match(queue, /function activate\(id\)\{if\(DCC\.nav\)DCC\.nav\.go\(\{page:'tasks',view:'queue'\}\)/);
 });

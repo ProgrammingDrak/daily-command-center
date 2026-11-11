@@ -214,7 +214,7 @@ function createConversationStore(ctx) {
       const sessions = (await blockDB.getTaskTimeEntries(b.id, owner.workspaceId, {}, q)).filter(row => row.user_id === owner.userId);
       const revision = (await q.query('SELECT revision FROM conversation_state WHERE user_id=$1', [owner.userId])).rows[0]?.revision || 0;
       const serverNow = Date.now(), safety = checkInState(b.properties, serverNow);
-      const value = { taskId: b.id, revision, serverNow,
+      const value = { taskId: b.id, revision, serverNow, taskVersion: b.updated_at,
         history: require('./public/js/work-completion').history(b.properties, sessions),
         startedMs: safety.active ? Date.parse(b.properties.startedAt) : null,
         creditUntilMs: safety.active ? safety.autoPauseAtMs : null };
