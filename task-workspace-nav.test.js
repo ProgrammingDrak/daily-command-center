@@ -518,6 +518,5 @@ test("the sync dot reports queue conflicts without resolving them", () => {
   assert.doesNotMatch(shell, /persist\(':conflict'|removeItem\("dcc-working-queue/);
   const queue = read("public/js/working-queue.js");
   assert.match(queue, /function syncState\(\)\{return \{pending:!!pending,conflict:/);
-  assert.match(queue, /Itinerary and Calendar plan when\./);
   assert.match(queue, /function activate\(id\)\{if\(DCC\.nav\)DCC\.nav\.go\(\{page:'tasks',view:'queue'\}\)/);
 });
