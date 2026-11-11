@@ -195,12 +195,12 @@ test("a pool item with no resolvable row refuses instead of pretending to save",
 
 // ── wiring contracts ──
 
-test("the header is ONE capsule with five doors in triage order: Triage, Loose Ends, Waiting, Unscheduled, Whenever", () => {
+test("the header is one capsule with Someday immediately after Whenever", () => {
   const html = fs.readFileSync(require.resolve("./index.html"), "utf8");
   const header = html.slice(html.indexOf('id="task-view-bar"'), html.indexOf('class="progress-wrap"'));
   const capsule = header.slice(header.indexOf('id="queue-pill"'));
   const doors = [...capsule.matchAll(/<button class="queue-seg[^"]*" id="([^"]+)"/g)].map(m => m[1]);
-  assert.deepEqual(doors, ["triage-pill-nav", "loose-ends-pill", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav"]);
+  assert.deepEqual(doors, ["triage-pill-nav", "loose-ends-pill", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav", "someday-pill-nav"]);
   assert.equal((header.match(/class="(waiting-pill-nav|loose-ends-pill)/g) || []).length, 0, "no door is a pill of its own anymore");
   // Loose Ends keeps its blue and its count gate (catch-up.js unhides it); Waiting reads
   // the app-wide Waiting family, so its door matches every other Waiting surface.
@@ -214,7 +214,9 @@ test("the header is ONE capsule with five doors in triage order: Triage, Loose E
   assert.match(header, /id="unscheduled-pill-nav"[^>]*aria-controls="tasks-drawer"[^>]*data-placement="unplanned"/,
     "the Unscheduled segment is the drop target the itinerary's Unplanned zone used to be");
   assert.match(header, /id="whenever-pill-nav"[^>]*aria-controls="tasks-drawer"/);
+  assert.match(header, /id="someday-pill-nav"[^>]*aria-controls="tasks-drawer"/);
   for (const id of ["triage-pill-nav-count", "waiting-pill-nav-count", "unscheduled-pill-nav-count", "whenever-pill-nav-count",
+    "someday-pill-nav-count",
     "untimed-count", "triage-queue-count", "unscheduled-count", "whenever-count", "triage-queue-list", "unscheduled-list",
     "whenever-list", "whenever-add", "whenever-pick", "triage-queue-tip", "unscheduled-tip", "whenever-tip"]) {
     assert.ok(html.includes('id="' + id + '"'), "missing #" + id);

@@ -55,6 +55,10 @@ function isTaskDependency(itemOrProps) {
   return props.blockerType === "task" && !!props.blockerBlockId && !!props.linkedBlockId;
 }
 
+function isParkedInWaiting(props) {
+  return !!(props.dependencyWaitingItemId || props.dependencyWaitingItemIds?.length);
+}
+
 function inferReason(props) {
   if (["blocked", "delegated", "both"].includes(props.waitingReason)) return props.waitingReason;
   if ((props.delegatee && props.delegatee.name) || props.source === "slack-delegate") return "delegated";
@@ -296,6 +300,7 @@ module.exports = {
   inferReason,
   internalDraft,
   isOpen,
+  isParkedInWaiting,
   isTaskDependency,
   mergeTriage,
   normalizeProperties,

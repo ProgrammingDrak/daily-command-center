@@ -12,6 +12,7 @@
   };
   let payload = null;
   let loading = false;
+  let openSomedayOnLoad = false;
   let lastTrigger = null;
 
   function esc(value){
@@ -20,6 +21,7 @@
   function text(value){ return String(value == null ? "" : value).trim(); }
   function props(row){ return row && row.properties || {}; }
   function done(row){ const p=props(row); return p.status==="done" || p.done===true || !!p.completedAt; }
+  function isSomedayIdea(row){ return !row.deleted_at && !row.date && props(row).someday===true && !done(row); }
   function taskTitle(row){ const p=props(row); return p.title || p.text || "Untitled task"; }
   function projectName(id){
     if(!id) return "Solo";
@@ -142,7 +144,7 @@
     const view=currentView();
     const scope=(view&&((view.query&&view.query.scope)||view.scope))||"open";
     if(scope==="open"&&item.status==="done")return false;
-    if(scope==="someday"&&(item.status==="done"||item.date||props(item.raw).someday!==true))return false;
+    if(scope==="someday"&&!isSomedayIdea(item.raw))return false;
     if(scope==="completed"&&item.status!=="done")return false;
     const q=view&&view.query||{};
     if(q.scheduled==="yes"&&item.schedule!=="scheduled")return false;
@@ -342,6 +344,7 @@
     if(!payload){root.innerHTML='<div class="tlb-error">Task Library could not load. <button id="tlb-retry">Try again</button></div>';root.querySelector('#tlb-retry').onclick=refresh;return;}
     const all=(payload.tasks||[]).map(flattenTask),rows=filteredRows(),schema=inferSchema(all);
     const badge=document.getElementById("task-library-count");if(badge){badge.textContent=all.filter(item=>item.status!=='done').length;badge.style.display='';}
+    updateSomedayBadge(all.filter(item=>isSomedayIdea(item.raw)).length);
     root.innerHTML='<div class="task-library-shell">'+
       '<div class="tlb-head"><div><h2>Task Library</h2><p>Every task, organized your way. Unassigned work lives in Solo.</p></div><div class="tlb-head-actions">'+
       '<button class="tlb-btn secondary" data-reading-session>Reading time</button><button class="tlb-btn secondary" id="tlb-import">Import</button><button class="tlb-btn secondary" id="tlb-manage-facets">Categories</button><button class="tlb-btn secondary" id="tlb-manage-projects">Projects</button><button class="tlb-btn primary" id="tlb-add-task">'+(somedayView()?'+ Idea':'+ Task')+'</button></div></div>'+
@@ -352,6 +355,13 @@
       (state.mode==='matrix'?matrix(rows,schema):table(rows,schema))+'</div>';
     bind(schema,rows);
     persist();
+  }
+
+  function updateSomedayBadge(count){
+    const badge=document.getElementById("someday-pill-nav-count");
+    if(!badge)return;
+    badge.textContent=count;
+    badge.parentElement.setAttribute("aria-label","Open Someday ideas, "+count+" open");
   }
 
   // Full server-owned task universe, shared by library and compact projections.
@@ -366,7 +376,7 @@
     const projects=new Map((library.projects||[]).map(row=>[row.id,props(row).name||props(row).title||'Project']));
     const name=row=>props(row).projectId?(projects.get(props(row).projectId)||'Unknown project'):'Solo';
     const allTasks=open.slice().sort((a,b)=>name(a).localeCompare(name(b),undefined,{numeric:true,sensitivity:'base'})).map(describe);
-    const someday=open.filter(row=>!row.date&&props(row).someday===true)
+    const someday=open.filter(isSomedayIdea)
       .sort((a,b)=>String(b.created_at||props(b).createdAt||'').slice(0,10).localeCompare(String(a.created_at||props(a).createdAt||'').slice(0,10))).map(describe);
     return {allTasks,someday};
   }
@@ -375,7 +385,13 @@
     if(loading)return;loading=true;render();
     try{payload=await loadLibrary();reconcile();}
     catch(error){console.error('[task-library]',error);notify(error.message,'error');}
-    finally{loading=false;render();}
+    finally{
+      loading=false;
+      if(payload&&openSomedayOnLoad){
+        openSomedayOnLoad=false;
+        activateView("someday");
+      }else render();
+    }
   }
   function reconcile(){
     const schema=inferSchema((payload.tasks||[]).map(flattenTask));const valid=new Set(schema.map(field=>field.key));
@@ -566,7 +582,16 @@
   }
 
   restore();
-  window.DCCTaskLibrary={refresh,glassesCollections,open:function(){if(typeof openTasksToSection==='function')openTasksToSection('tm-task-library-section',{solo:true});else refresh();}};
+  function open(){
+    if(typeof openTasksToSection==='function')openTasksToSection('tm-task-library-section',{solo:true});
+    else refresh();
+  }
+  window.DCCTaskLibrary={refresh,glassesCollections,open};
+  document.getElementById("someday-pill-nav")?.addEventListener("click",()=>{
+    if(payload)activateView("someday");
+    else openSomedayOnLoad=true;
+    open();
+  });
   window.addEventListener('blocks-changed',()=>setTimeout(refresh,80));
   window.addEventListener('dcc:data-ready',()=>refresh());
   document.addEventListener('DOMContentLoaded',()=>{document.getElementById('tm-task-library-section')&&refresh();});

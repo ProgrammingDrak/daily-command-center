@@ -26,7 +26,7 @@
 <link rel="stylesheet" href="/public/css/task-sources.css">
 <link rel="stylesheet" href="/public/css/commitments.css">
 <link rel="stylesheet" href="/public/css/completion-memories.css?v=shared-journal-1">
-<link rel="stylesheet" href="/public/css/task-workspace.css?v=task-workspace-nav-3">
+<link rel="stylesheet" href="/public/css/task-workspace.css?v=task-workspace-nav-5">
 <link rel="stylesheet" href="/public/css/device-views/glasses.css">
 </head>
 <body>
@@ -171,10 +171,10 @@
       <button type="button" role="tab" id="task-view-list" data-task-view="list" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">Itinerary</button>
       <button type="button" role="tab" id="task-view-calendar" data-task-view="calendar" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">Calendar</button>
     </div>
-      <!-- The task queues, one capsule with five doors, in triage order. whenever.js
+      <!-- The task queues, one capsule in triage order. whenever.js
            hosts Triage, Unscheduled and Whenever (all work with no time on it);
            catch-up.js owns Loose Ends (hidden while it has nothing to show) and
-           delegated.js owns Waiting. -->
+           delegated.js owns Waiting and task-library.js opens Someday. -->
       <div class="queue-pill" id="queue-pill" role="group" aria-label="Task queues">
         <button class="queue-seg queue-theme--crimson" id="triage-pill-nav" type="button" aria-label="Open Triage tasks" aria-controls="tasks-drawer" aria-haspopup="dialog" title="Triage: tasks discovered while reviewing incoming messages and meetings.">
           <span data-triage-label>Triage</span><span class="queue-seg-count" id="triage-pill-nav-count" aria-live="polite">0</span>
@@ -190,6 +190,9 @@
         </button>
         <button class="queue-seg queue-theme--sage" id="whenever-pill-nav" type="button" aria-label="Open Whenever tasks" aria-controls="tasks-drawer" aria-haspopup="dialog" title="Whenever: no set time. Knock one out when you have a free minute.">
           <span data-whenever-label>Whenever</span><span class="queue-seg-count" id="whenever-pill-nav-count" aria-live="polite">0</span>
+        </button>
+        <button class="queue-seg queue-theme--slate" id="someday-pill-nav" type="button" aria-label="Open Someday ideas" aria-controls="tasks-drawer" aria-haspopup="dialog" title="Ideas saved for later">
+          <span>Someday</span><span class="queue-seg-count" id="someday-pill-nav-count" aria-live="polite">0</span>
         </button>
       </div>
   </div>
@@ -2175,7 +2178,7 @@
 <script src="/public/js/data.js"></script>
 <script src="/public/js/persistence.js?v=someday-1"></script>
 <script src="/public/js/state.js?v=original-time-1"></script>
-<script src="/public/js/schedule-popover.js"></script>
+<script src="/public/js/schedule-popover.js?v=move-to-waiting-1"></script>
 <script src="/public/js/points.js"></script>
 <script src="/public/js/point-plan.js"></script>
 <script src="/public/js/celebrate.js"></script>
@@ -2239,12 +2242,12 @@
 <script src="/public/js/catch-up.js"></script>
 <script src="/public/js/boot.js"></script>
 <script src="/public/js/block-store.js?v=viewing-range-1"></script>
-<script src="/public/js/task-library.js?v=someday-1"></script>
+<script src="/public/js/task-library.js?v=someday-pill-1"></script>
 <script src="/public/js/reading-sessions.js?v=1"></script>
 <script src="/public/js/day-review.js?v=task-workspace-nav-2"></script>
 <script src="/public/js/actual-projection.js?v=task-workspace-nav-2"></script>
 <script src="/public/js/progress-actual.js"></script>
-<script src="/public/js/delegated.js"></script>
+<script src="/public/js/delegated.js?v=move-to-waiting-1"></script>
 <script src="/public/js/pet-home.js"></script>
 <!-- pet-courier.js: the pet delivers new triage arrivals. Needs PetHome.identity
      (above) and DCC.CatchUp (catch-up.js) at CALL time, not parse time; sse.js

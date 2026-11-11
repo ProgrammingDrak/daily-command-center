@@ -357,12 +357,15 @@ body[data-nav-page="activity"] .progress-header { display: flex; justify-content
 .progress-date-controls .dn-quick { padding: 2px 5px; font-size: 10px; }
 .progress-date-controls .dn-badge { font-size: 9px; }
 .task-workspace-head .progress-date-controls .date-picker-drop { top: 100%; left: 50%; transform: translateX(-50%); width: 280px; min-width: 0; max-width: calc(100vw - 24px); text-transform: none; letter-spacing: normal; }
+@media (max-width: 1000px) {
+  .task-view-bar .queue-seg { flex: 1 1 auto; min-width: 44px; flex-direction: column; gap: 2px; padding: 4px 2px; font-size: 10px; }
+  .task-view-bar .queue-seg > span:first-child { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-wrap: balance; }
+}
 @media (max-width: 760px) {
   .task-view-bar { padding-right: 0; }
   .task-view-switch { flex: 1 1 100%; }
   .task-view-switch [role="tab"] { min-height: 32px; padding: 0 6px; }
   .task-view-bar .queue-pill { display: flex; flex: 1 1 100%; width: 100%; }
-  .task-view-bar .queue-seg { flex: 1 1 0; min-width: 0; flex-direction: column; gap: 2px; padding: 4px 2px; font-size: 10px; }
   .progress-header { grid-template-columns: minmax(0, 1fr) auto; row-gap: 3px; }
   .progress-header > .progress-date-controls { grid-row: 2; grid-column: 1 / -1; justify-self: center; }
   .progress-header > .progress-heading-actions { grid-column: 2; grid-row: 1; }

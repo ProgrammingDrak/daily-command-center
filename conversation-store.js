@@ -522,6 +522,8 @@ function createConversationStore(ctx) {
           throw M.fail("Release foreground work in the other workspace before switching", 409);
         if (["start", "background-start", "queue-block"].includes(b.action) && isBlockDone(target))
           throw M.fail("Completed tasks must be explicitly reopened", 409);
+        if (["start", "background-start", "queue-block"].includes(b.action) && require("./waiting-items").isParkedInWaiting(target.properties))
+          throw M.fail("Unblock this task in Waiting before working on it", 409);
         if (["start", "pause", "done", "background-start", "queue-block"].includes(b.action)) {
           const active = (
             await q.query(
