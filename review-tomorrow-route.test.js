@@ -3,7 +3,7 @@ const test = require("node:test"), assert = require("node:assert/strict");
 const FROM = "2026-10-05", TO = "2026-10-06", WS = "ws-1";
 const row = (id, props = {}, date = FROM) => ({ id, type: "block", date, workspace_id: WS, updated_at: "2026-10-05T15:00Z", properties: { kind: "task", type: "task", local_id: id, title: id, duration: 30, ...props } });
 const state = { schedule: { working_hours: { start: "09:00", end: "17:00" }, timeline: [] } };
-function mount(rows, { target = [], roots = [], beforeApply = () => {}, materializeFails = false } = {}) {
+function mount(rows, { target = [], roots = [], beforeApply = () => {}, materializeFails = false, persistMoves = false } = {}) {
  const handlers = {}, calls = { moves: [], options: [], prepared: [], scopes: [] };
  const ctx = {
   APP_TIME_ZONE: "America/New_York", getTodayStr: () => FROM, isValidDate: d => /^\d{4}-\d{2}-\d{2}$/.test(d), getScheduleBlocks: async () => [], broadcast: () => {}, filterLegacyGcalBlocks: x => x, buildDayResponse: async () => state,
@@ -12,9 +12,9 @@ function mount(rows, { target = [], roots = [], beforeApply = () => {}, material
    getBlockIncludingDeleted: async id => rows.find(r => r.id === id), getBlock: async id => rows.find(r => r.id === id),
    ensureDayRoot: async date => calls.prepared.push(date), getResponsibilityBlocks: async () => { if (materializeFails) throw new Error("materialization unavailable"); return []; },
    getCarryoverPool: async (ws, _date, opts) => { calls.scopes.push({ ws, opts }); return { rows, dayRoots: roots, overlays: {} }; },
-   getBlocksByDate: async date => date === TO ? target : [...rows, ...roots],
+   getBlocksByDate: async date => date === TO ? target : [...rows, ...roots].filter(r => r.date === date),
    getRescheduleSubtreePool: async () => rows, getRescheduleTombstone: async () => null,
-   rescheduleBlocks: async (moves, creates, options) => { if (options) { beforeApply(); await options.beforeApply({ fakeTransaction: true }); } calls.moves.push(moves); calls.options.push(options); return { blocks: [...moves, ...creates] }; },
+   rescheduleBlocks: async (moves, creates, options) => { if (options) { beforeApply(); await options.beforeApply({ fakeTransaction: true }); } calls.moves.push(moves); calls.options.push(options); if (persistMoves) moves.forEach(m => Object.assign(rows.find(r => r.id === m.id), m)); return { blocks: [...moves, ...creates] }; },
   },
  };
  const app = { get: (path, fn) => { handlers['GET ' + path] = fn; }, post: (path, fn) => { handlers['POST ' + path] = fn; }, patch: () => {}, delete: () => {}, put: () => {} };
@@ -28,6 +28,26 @@ function mount(rows, { target = [], roots = [], beforeApply = () => {}, material
 }
 const preview = f => f.call("/api/review-tomorrow/preview");
 const move = (f, item) => f.call("/api/blocks/:id/reschedule", { id: item.id, targetDate: TO, placement: item.placement, reviewGuard: item.reviewGuard, userSetStart: false });
+test("Today accepts a carryover into a calendar-safe slot once and refresh excludes it", async t => {
+ t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-05T13:05:00Z") });
+ const original = row("carryover", {}, "2026-10-04");
+ const meeting = row("meeting", { type: "meeting", source: "calendar", start: "09:00", end: "10:00" });
+ const f = mount([original, meeting], { persistMoves: true });
+ const load = () => f.call("/api/brief/today", {}, "GET");
+ const first = await load();
+ assert.equal(first.status, 200);
+ assert.equal(first.body.date, FROM);
+ const [task] = first.body.tasks;
+ assert.equal(task.id, original.id);
+ assert.equal(task.placement.start, "10:00");
+ const accept = () => f.call("/api/blocks/:id/reschedule", { id: task.id, targetDate: FROM, placement: task.placement, reviewGuard: task.reviewGuard });
+ assert.equal((await accept()).status, 200);
+ assert.equal((await accept()).status, 409);
+ assert.equal(f.calls.moves.length, 1);
+ assert.deepEqual((await load()).body.tasks, []);
+ assert.equal(original.date, FROM);
+ assert.equal(original.properties.start, "10:00");
+});
 test("preview includes untimed dated tasks, uses New York, and does not move anything", async () => {
  const f = mount([row("a")]); const p = await preview(f);
  assert.equal(p.status, 200); assert.equal(p.body.targetDate, TO); assert.equal(p.body.timeZone, "America/New_York"); assert.equal(p.body.items[0].included, true);

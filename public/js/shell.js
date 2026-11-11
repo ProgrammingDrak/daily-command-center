@@ -186,7 +186,7 @@
       '<time>' + DCC.esc(exact) + '</time>' +
       '<div class="dcc-save-actions"><button type="button" data-sync-now>Sync now</button><button type="button" data-export-pending>Export pending changes</button></div>' +
       '<div class="dcc-save-brief">' +
-        '<div><strong>Daily Brief</strong><span>Review today’s generated packet.</span></div>' +
+        '<div><strong>Daily Brief</strong><span>Review today’s calendar and suggested tasks.</span></div>' +
         '<button type="button" data-open-brief>Open Brief</button>' +
       '</div>';
     const pending = window.blockStore?.pendingSubtaskCreates?.() || [];

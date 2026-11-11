@@ -1738,6 +1738,12 @@ module.exports = function mount(app, ctx) {
   });
   app.get("/api/review-tomorrow", previewTomorrow);
   app.post("/api/review-tomorrow/preview", previewTomorrow);
+  app.get("/api/brief/today", route(async (req, res) => {
+    await ctx.prepareScheduledDay(getTodayStr(), req.session.userId, req.workspaceId);
+    const plan = await reviewTomorrow.loadPlan(ctx, req, null, 14, { today: true });
+    return { date: plan.targetDate, truncated: plan.truncated, tasks: plan.items
+      .filter(item => item.placement?.kind === "timed").slice(0, 3) };
+  }));
 
   app.get("/api/time-block-placement", route(async (req, res) => {
     if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date" });
