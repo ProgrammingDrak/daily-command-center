@@ -210,6 +210,7 @@ try {
   await button('a','break-options').click();await page.getByRole('dialog').getByRole('button',{name:'Complete task',exact:true}).click();
   await page.getByRole('dialog').getByText('Previously recorded',{exact:true}).waitFor();
   await page.getByRole('dialog').getByRole('button',{name:'Mark Complete',exact:true}).click();await page.getByRole('dialog').waitFor({state:'detached'});
+  await page.waitForFunction(()=>!DCCWorkingQueue.syncState().pending);
   assert.equal((await state()).queue.items.find(i=>i.task.id==='a').status,'completed');assert.equal((await task('a')).properties.actualMinutes,actual);
   assert.deepEqual(errors,[]);
   console.log(JSON.stringify({passed:true,testUrl:base,checks:['keyboard pause/resume focus','retained foreground','frozen work actuals','separate break clock','refresh','1280/375/358px','card-bounded frost','zero pause-height growth','no overlap/overflow','inert underlay','long title','dark/light semantic tokens','435px lane','44px resume','double click','lost response replay','explicit Priority move','multi-tab refresh','switch preserves snooze','Task options details/background/completion/cancel'],screenshots:output}));

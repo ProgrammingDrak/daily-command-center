@@ -7,6 +7,102 @@
   const key='dcc-working-queue:'+account.workspaceId+':'+account.userId;
   let state={revision:0,foreground:[],queue:{items:[],order:[]}},pending=null,conflict=null,loading=null,sending=false,ticking=false,problem='',startOpening=false;
   try {state=JSON.parse(localStorage.getItem(key))||state;pending=JSON.parse(localStorage.getItem(key+':pending'));conflict=JSON.parse(localStorage.getItem(key+':conflict'));}catch(_e){}
+  const completionPrefix=key+':completion:';
+  let draining=false;
+  function completionEntries(){
+    const entries=[];
+    for(let i=0;i<localStorage.length;i++){
+      const storageKey=localStorage.key(i);
+      if(!storageKey?.startsWith(completionPrefix))continue;
+      try {
+        const entry=JSON.parse(localStorage.getItem(storageKey));
+        if(entry?.body)entries.push(entry);
+      } catch(_error){}
+    }
+    return entries.sort((a,b)=>a.body.at.localeCompare(b.body.at)||a.body.sourceEventId.localeCompare(b.body.sourceEventId));
+  }
+  const completionKey=entry=>completionPrefix+entry.body.sourceEventId;
+  const saveCompletion=entry=>localStorage.setItem(completionKey(entry),JSON.stringify(entry));
+  const previewFor=id=>DCC.api('/api/working-queue/tasks/'+encodeURIComponent(id)+'/completion-preview',{cache:'no-store'});
+  const previewVersion=preview=>JSON.stringify([preview.taskVersion,preview.history,preview.startedMs,preview.creditUntilMs]);
+  function displayedItems(){
+    const entries=new Map(completionEntries().map(entry=>[entry.body.taskId,entry]));
+    return items().map(item=>{
+      const entry=entries.get(item.task.id);
+      if(!entry||item.status==='completed')return item;
+      return {...item,status:'completed',needsYou:false,snoozed:false,dueAt:null,onBreak:false,completedAt:Date.parse(entry.body.at),savingCompletion:true};
+    });
+  }
+  function enqueueCompletion(body,preview,note){
+    assertActionAccount();
+    if(conflict)throw new Error('Review the current queue conflict before completing another task.');
+    if(completionEntries().some(entry=>entry.body.taskId===body.taskId))throw new Error('This task is already marked done and syncing.');
+    saveCompletion({body,preview,note});
+    const checkbox=[...document.querySelectorAll('[data-queue-id]')].find(row=>row.dataset.queueId===body.taskId)
+      ?.querySelector('.quick-complete-control');
+    const rect=checkbox?.getBoundingClientRect();
+    render();
+    if(typeof _finishCompletionCelebration==='function')_finishCompletionCelebration({rect},body.taskId);
+    window.performance?.mark('dcc-completion-rendered');
+    notifySync();
+    void drainCompletions();
+  }
+  async function drainCompletions(){
+    if(draining||navigator.onLine===false||conflict)return;
+    draining=true;
+    const drain=async()=>{
+      if(localStorage.getItem(key+':conflict'))return;
+      for(let entry=completionEntries()[0];entry;entry=completionEntries()[0]){
+        assertActionAccount();
+        pending=JSON.parse(localStorage.getItem(key+':pending')||'null');
+        if(pending&&pending.sourceEventId!==entry.body.sourceEventId)return;
+        if(window.blockStore?.hasPendingWrites?.()){window.blockStore.flushPending();return;}
+        try{
+          if(!entry.sent){
+            if(state.revision!==entry.body.expectedRevision){
+              const current=await previewFor(entry.body.taskId);
+              if(previewVersion(current)!==previewVersion(entry.preview)){
+                const error=new Error('Task or recorded time changed. Review this completion before retrying.');
+                error.status=409;
+                throw error;
+              }
+              entry.body.expectedRevision=current.revision;
+            }
+            // Freeze the envelope before its first network attempt. Retries use it verbatim.
+            entry.sent=true;
+            saveCompletion(entry);
+          }
+          if(!entry.acknowledged){
+            const result=await sendUnlocked(entry.body);
+            problem='';
+            entry.acknowledged=true;
+            saveCompletion(entry);
+            window.performance?.mark('dcc-completion-acknowledged');
+            DCC.toast('Task completed · '+(result.task?.properties.actualMinutes==null?'focused time unknown':result.task.properties.actualMinutes+'m recorded'),'success');
+          }
+          if(entry.note)await window.saveTaskNotes(entry.body.taskId,entry.note);
+          localStorage.removeItem(completionKey(entry));
+        }catch(error){
+          if(![400,401,403,404,409].includes(error.status))throw error;
+          setConflict({body:entry.body,note:entry.note,message:error.message});
+          localStorage.removeItem(completionKey(entry));
+          warn(error);
+          return;
+        }
+      }
+    };
+    try {
+      if(navigator.locks?.request)await navigator.locks.request(key+':write',drain);
+      else await drain();
+    } catch(error){
+      if(problem!=='Completion saved on this device. Waiting to sync.')DCC.toast('Completion saved on this device. Waiting to sync.','info');
+      problem='Completion saved on this device. Waiting to sync.';
+    } finally {
+      draining=false;
+      render();
+      notifySync();
+    }
+  }
   const esc=DCC.esc,items=()=>(state.queue?.items||[]).map(item=>window.DCCQueuePolicy.presentation(item));
   let completedPeriod='today'; // Per-view choice only; each new page starts on Today.
   function persist(name,value){if(value==null)localStorage.removeItem(key+name);else localStorage.setItem(key+name,JSON.stringify(value));}
@@ -27,7 +123,7 @@
     if(window.blockStore?.hasPendingWrites?.()){window.blockStore.flushPending();throw new Error('Wait for your task edits to sync first.');}
     sending=true;setPending(body);render();
     try {const result=await DCC.api('/api/working-queue',{method:'POST',body,signal:AbortSignal.timeout(15000)});assertActionAccount();setPending(null);apply(result);return result;}
-    catch(error){if([400,403,404,409].includes(error.status)){setConflict({body,message:error.message});setPending(null);await refresh().catch(()=>{});}throw error;}
+    catch(error){if([400,401,403,404,409].includes(error.status)){setConflict({body,message:error.message});setPending(null);await refresh().catch(()=>{});}throw error;}
     finally{sending=false;render();}
   }
   function send(body){return navigator.locks?.request?navigator.locks.request(key+':write',()=>sendUnlocked(body)):sendUnlocked(body);}
@@ -123,14 +219,15 @@
     const focused=document.activeElement,focusKey=focused?.dataset.queueAction,focusId=focused?.dataset.taskId;
     const completedOpen=root.querySelector('.wq-completed')?.open;
     const periodFocused=focused?.matches('[data-completed-period]');
-    const completionView=window.DCCCompletedQueueFilter.select(items(),completedPeriod,Date.now(),state.timeZone);
+    const all=displayedItems();
+    const completionView=window.DCCCompletedQueueFilter.select(all,completedPeriod,Date.now(),state.timeZone);
     const periodLabel=window.DCCCompletedQueueFilter.options.find(([value])=>value===completedPeriod)[1];
     const helpOpen=new Set(Array.from(root.querySelectorAll('.wq-help[open]')).map(el=>el.dataset.queueHelp));
     const helpFocused=focused?.closest('.wq-help')?.dataset.queueHelp;
     const contextOpen=new Set(Array.from(root.querySelectorAll('.wq-context[open]')).map(el=>el.closest('[data-queue-id]').dataset.queueId));
     const contextFocused=focused?.matches('.wq-context > summary')?focused.closest('[data-queue-id]').dataset.queueId:null;
     const completedFocused=focused?.matches('.wq-completed > summary');
-    const all=items(),index=new Map((window.DCCWorkSessions?.availableTasks()||[]).map(t=>[t.id,t]));all.forEach(i=>{const t=DCC.TaskModel.fromBlock(i.task);index.set(t.id,t);});
+    const index=new Map((window.DCCWorkSessions?.availableTasks()||[]).map(t=>[t.id,t]));all.forEach(i=>{const t=DCC.TaskModel.fromBlock(i.task);index.set(t.id,t);});
     const cards=[];
     function card(item){
       const row=item.task,task=DCC.TaskModel.fromBlock(row),foreground=item.status==='foreground',completed=item.status==='completed';
@@ -146,7 +243,7 @@
       const snoozedHtml=item.snoozed?'<p class="wq-attention">Snoozed until '+esc(when(Date.parse(item.snoozedUntil),completionView.timeZone))+'</p><p class="wq-time">Attention snoozed; worker state and focused time are unchanged.</p>':'';
 
 
-      const finished=item.status==='completed'?(Number.isFinite(item.completedAt)?'<p class="wq-time"><time datetime="'+new Date(item.completedAt).toISOString()+'">Completed '+esc(new Intl.DateTimeFormat(undefined,{timeZone:completionView.timeZone,dateStyle:'medium',timeStyle:'short'}).format(item.completedAt))+'</time></p>':'<p class="wq-time">Completion time unavailable</p>'):'';
+      const finished=item.savingCompletion?'<p class="wq-time">Done &middot; saving&hellip;</p>':item.status==='completed'?(Number.isFinite(item.completedAt)?'<p class="wq-time"><time datetime="'+new Date(item.completedAt).toISOString()+'">Completed '+esc(new Intl.DateTimeFormat(undefined,{timeZone:completionView.timeZone,dateStyle:'medium',timeStyle:'short'}).format(item.completedAt))+'</time></p>':'<p class="wq-time">Completion time unavailable</p>'):'';
       const readingUrl=DCC.safeUrlAttr?.(row.properties?.readingSession?.url||'');
       if(readingUrl)controls+='<a href="'+readingUrl+'" rel="noreferrer">Open book in QuietShelf</a>';
       const node=window.renderItineraryListRow({...task,title:pathFor(task,index)},{
@@ -206,10 +303,10 @@
     const {foreground:fg,needs,background,priority:upNext}=window.DCCQueuePolicy.lanes(all,DCC.TaskPriority.group);
     const lanes={'wq-foreground':lane('Foreground',fg,'Choose a task below to begin focused work.','wq-foreground','foreground'),'wq-needs':lane('Needs You',needs,'No reported review actions or manual check-backs due.','wq-needs','needs'),'wq-next':lane('Priority Queue',upNext,'No inactive tasks in your queue. Add existing tasks to prioritize them.','wq-next','priority'),'wq-background':lane('Background',background,'No active workers or snoozed requests.','wq-background','background')};
     root.dataset.priorityStyle='outline';
-    const syncMessage=sending?'Saving…':pending?'Update awaiting confirmation.':problem?'Offline or unavailable: '+problem:'';
+    const syncMessage=sending?'Saving…':problem||((pending||completionEntries().length)?'Update awaiting confirmation.':'');
     root.innerHTML='<header class="wq-header">'+button('add','Add tasks')+'</header>'+
       (syncMessage?'<p class="wq-sync" role="status">'+esc(syncMessage)+'</p>':'')+
-      (pending?button('retry','Retry saved update'):'')+
+      ((pending||completionEntries().length)&&!conflict?button('retry','Retry saved update'):'')+
       (conflict?'<div class="wq-conflict wq-actions"><span>Update conflict.</span>'+button('conflict','Review change')+button('clear-conflict','Dismiss conflict')+'</div>':'')+
       (state.otherWorkspaceForeground?'<p class="wq-conflict">Another workspace holds Foreground. Open it, pause if needed, then choose Return to Priority before bringing a task forward here.</p>':'')+
       '<div class="wq-grid">'+layout().map(names=>'<div class="wq-col">'+names.map(name=>lanes[name]).join('')+'</div>').join('')+'</div>'+completedHtml();
@@ -307,23 +404,33 @@
         }
       } catch(error){startOpening=false;warn(error);return;}
     }
-    let completionNote;
-    if(action==='done'){const anchor=await prepareTask(item.task.id);completionNote=await window.loadTaskNotesForAnchor(anchor);item=items().find(row=>row.task.id===item.task.id)||item;}
+    const completionAnchor=action==='done'?taskAnchor(item.task.id):null;
+    if(action==='done'){
+      assertActionAccount();
+      if(!completionAnchor||item.status==='completed'||completionEntries().some(entry=>entry.body.taskId===item.task.id)
+          ||document.getElementById('done-modal-overlay')?.classList.contains('open'))return;
+      window.performance?.mark('dcc-completion-open-start');
+    }
+    let notesReady=action!=='done';
     const timerNeeded=action==='start'?!!displaced:['background-start','queue-block'].includes(action);
     const timer=timerNeeded?'<label>'+'Snooze'+'<select data-minutes aria-label="Snooze duration">'+(action==='queue-block'?'<option value="">Needs You now</option>':'')+'<option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="240">4 hours</option><option value="1440">24 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes<input type="number" min="1" max="1440" value="10"></label>':'';
     const heading=action==='start'?(displaced?'<div class="wq-switch-old"><div><strong>Moving to Background</strong><p>'+esc(displaced.task.properties.title||'Task')+'</p></div>'+timer+'</div><div class="wq-switch-new"><strong>Moving to Foreground</strong><p>'+esc(item.task.properties.title||'Task')+'</p></div>':'<p>'+esc(item.task.properties.title||'Task')+'</p>'):'<p>'+esc(item.task.properties.title||'Task')+'</p>';
     const body=form(heading+(action==='background-start'?'<p>This sets the task aside and optionally sets a check-back. It does not start a worker. A selected Snooze waits in Background; without one, inactive work returns to Priority.</p>':'')+(action==='start'?'':timer)+(action==='done'?'<div data-completion-time aria-live="off">Loading recorded time…</div><p>Completing saves the current focused session to this task. The saved total is confirmed after the update succeeds.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome required></textarea></label>':''):''));
     let guided=null,ready=!item.task.properties.guidedDefinitionId,completion=null,clockOffset=0,command=null;
+    function updateConfirm(){
+      if(action==='done'&&body.isConnected)document.getElementById('done-modal-confirm').disabled=!(ready&&completion&&notesReady);
+    }
     const formatSeconds=seconds=>Math.floor(seconds/60)+'m '+String(seconds%60).padStart(2,'0')+'s';
     function updateCompletion(){
       const el=body.querySelector('[data-completion-time]');if(!el||!completion)return;
       const value=window.DCCWorkCompletion.project(completion,command?Date.parse(command.at):Date.now()+clockOffset);
       el.innerHTML='<dl class="wq-effort"><div><dt>Previously recorded'+(completion.history.estimated?' (estimated)':'')+'</dt><dd>'+esc(completion.history.savedMinutes==null?'Unknown':completion.history.savedMinutes+'m')+'</dd></div><div><dt>Current timer</dt><dd>'+esc(value.active?formatSeconds(value.elapsedSeconds):'Not running')+'</dd></div><div><dt>After completion'+(value.active?' (estimated)':'')+'</dt><dd>'+esc(value.projectedMinutes==null?'Unknown':value.projectedMinutes+'m')+'</dd></div></dl>'+(value.active?'<p class="wq-time">'+esc(formatSeconds(value.creditSeconds)+' of this session will be recorded.'+(value.capped?' Time after the missed check-in cutoff stays unknown.':' Totals round once after adding recorded seconds.'))+'</p>':'<p class="wq-time">No running session to add. Recorded time stays as saved.</p>')+(completion.history.carryMinutes?'<p class="wq-time">Includes '+esc(completion.history.carryMinutes)+'m saved before or outside the session ledger.</p>':'');
     }
-    if(action==='done')DCC.api('/api/working-queue/tasks/'+encodeURIComponent(item.task.id)+'/completion-preview',{cache:'no-store'}).then(view=>{completion=view;clockOffset=view.serverNow-Date.now();updateCompletion();}).catch(error=>{body.querySelector('[role=status]').textContent='Time summary unavailable: '+error.message;});
+    if(action==='done')previewFor(item.task.id).then(view=>{completion=view;clockOffset=view.serverNow-Date.now();updateCompletion();updateConfirm();}).catch(error=>{body.querySelector('[role=status]').textContent='Time summary unavailable: '+error.message;});
     const select=body.querySelector('[data-minutes]');select?.addEventListener('change',()=>{body.querySelector('[data-custom]').hidden=select.value!=='custom';});
-    const submit=async()=>{
+    const submit=async(note)=>{
       if(!ready)throw new Error('Wait for current guided instructions.');
+      if(action==='done'&&!notesReady)throw new Error('Wait for task notes, or reopen this dialog to retry.');
       if(action==='done'&&!completion)throw new Error('Wait for the recorded-time summary, or reopen this dialog to retry.');
       const minutes=select?(select.value==='custom'?Number(body.querySelector('[data-custom] input').value):select.value?Number(select.value):null):null;
       if(minutes!==null&&(!Number.isInteger(minutes)||minutes<1||minutes>1440))throw new Error('Choose 1–1440 minutes.');
@@ -332,20 +439,21 @@
       if(!command||!['start','done'].includes(action))command=envelope(action,{...payload,...(action==='start'?{expectedRevision:startRevision}:completion?{expectedRevision:completion.revision}:{})});
       if(action==='start')body.querySelectorAll('[data-minutes],[data-custom] input').forEach(el=>{el.disabled=true;});
       updateCompletion();
+      if(action==='done'){enqueueCompletion(command,completion,note);return;}
       try {
-        const result=await send(command);
-        if(action==='done')DCC.toast('Task completed · '+(result.task?.properties.actualMinutes==null?'focused time unknown':result.task.properties.actualMinutes+'m recorded'),'success');
+        await send(command);
       } catch(error) {
         if([400,403,404,409].includes(error.status))throw new Error(error.message+(action==='done'?' Close this dialog and review the current task before completing.':''));
         throw new Error((action==='done'?'Completion not confirmed. Retry uses the same saved update. ':'Update not confirmed. ')+error.message);
       }
     };
     const handle=action==='done'
-      ?window.openDoneModal(item.task.id,item.task.properties.title,submit,DCC.TaskModel.fromBlock(item.task),{body,noteValue:completionNote,authoritativeTime:true,awaitConfirmation:true,saveNotes:note=>window.saveTaskNotes(item.task.id,note)})
+      ?window.openDoneModal(item.task.id,item.task.properties.title,submit,DCC.TaskModel.fromBlock(item.task),{body,noteValue:undefined,authoritativeTime:true,awaitConfirmation:true,queueCompletion:true,loadNotes:()=>window.loadTaskNotesForAnchor(completionAnchor),onNotesReady:()=>{notesReady=true;updateConfirm();}})
       :modal(action==='start'?(displaced?'Switch foreground task':'Guided instructions'):action==='queue-block'?'Blocked / Waiting':['queue-snooze','queue-remind'].includes(action)?'Snooze':'Set task aside',body,submit,action==='start'?'Bring forward':'Save',()=>{if(action==='start')startOpening=false;});
     if(action==='start'&&!body.isConnected)startOpening=false;
+    if(action==='done')window.performance?.mark('dcc-completion-dialog-open');
     if(action==='done'){const timer=setInterval(()=>{if(!body.isConnected){clearInterval(timer);return;}updateCompletion();},1000);}
-    if(!ready)DCC.api('/api/guided/tasks/'+encodeURIComponent(item.task.id),{cache:'no-store'}).then(view=>{guided=view;ready=true;body.querySelector('[data-preview]').textContent=view.prompt;}).catch(error=>{body.querySelector('[role=status]').textContent=error.message;});
+    if(!ready)DCC.api('/api/guided/tasks/'+encodeURIComponent(item.task.id),{cache:'no-store'}).then(view=>{guided=view;ready=true;body.querySelector('[data-preview]').textContent=view.prompt;updateConfirm();}).catch(error=>{body.querySelector('[role=status]').textContent=error.message;});
     return handle;
   }
   function addTasks(){
@@ -410,11 +518,11 @@
   document.addEventListener('change',event=>{if(event.target.matches('[data-completed-period]')){completedPeriod=event.target.value;render();}});
   document.addEventListener('click',event=>{
     const button=event.target.closest?.('[data-queue-action]');if(!button)return;const action=button.dataset.queueAction,item=items().find(i=>i.task.id===button.dataset.taskId);
-    if(action==='add'){addTasks();return;}if(action==='retry'&&pending){send(pending).catch(warn);return;}
+    if(action==='add'){addTasks();return;}if(action==='retry'){if(pending&&!completionEntries().some(entry=>entry.body.sourceEventId===pending.sourceEventId))send(pending).catch(warn);else void drainCompletions();return;}
     if(action==='snooze-all'){snooze(null);return;}
     if(action==='pomodoro'){window.DCCPomodoro?.open(items().find(i=>i.status==='foreground')?.task);return;}
-    if(action==='clear-conflict'){setConflict(null);render();return;}
-    if(action==='conflict'){const body=form('<p>'+esc(conflict?.message)+'</p><pre>'+esc(JSON.stringify(conflict?.body,null,2))+'</pre>');DCC.overlay.open({kind:'modal',title:'Attempted change',body,actions:[{label:'Close'}]});return;}
+    if(action==='clear-conflict'){setConflict(null);render();void drainCompletions();return;}
+    if(action==='conflict'){const body=form('<p>'+esc(conflict?.message)+'</p><pre>'+esc(JSON.stringify(conflict?.note ? {command:conflict.body,notes:conflict.note.text} : conflict?.body,null,2))+'</pre>');DCC.overlay.open({kind:'modal',title:'Attempted change',body,actions:[{label:'Close'}]});return;}
     if(!item)return;
     if(action==='details'){const task=DCC.TaskModel.fromBlock(item.task);if(window.DCCTaskWorkspace?.preview)window.DCCTaskWorkspace.preview(task);else if(typeof window.openAddModal==='function')window.openAddModal(task.id,task.title);else {const body=form('<h3>'+esc(task.title)+'</h3><p>'+esc(task.detail||'No task details yet.')+'</p>');DCC.overlay.open({kind:'modal',title:'Task details',body,actions:[{label:'Close'}]});}return;}
     if(['snooze','remind'].includes(action)){snooze(item);return;}
@@ -455,6 +563,7 @@
   }
   setInterval(updateBreakClocks,1000);
   async function tick(){render();if(document.hidden||ticking||sending)return;ticking=true;try{
+    if(completionEntries().length&&(!pending||completionEntries().some(entry=>entry.body.sourceEventId===pending.sourceEventId))){await drainCompletions();return;}
     if(pending&&navigator.onLine){await send(pending);return;}await refresh();if(pending||DCC.busyElsewhere?.())return;
     const due=items().find(i=>i.dueAt&&Date.parse(i.dueAt)<=Date.now()&&i.needsYou&&!i.notifiedAt);if(!due)return;
     const body=envelope('queue-claim',{taskId:due.task.id,generation:due.generation});
@@ -464,14 +573,14 @@
     const text='Time to check back on '+(due.task.properties.title||'your background task')+'.';
     if(DCC.PetNudge?.deliverWorkCheckIn)await DCC.PetNudge.deliverWorkCheckIn(text,{open:()=>activate(due.task.id)});else DCC.toast(text,'info',60000,{label:'Open queue',onClick:()=>activate(due.task.id)});
   }catch(_error){}finally{ticking=false;}}
-  window.addEventListener('storage',event=>{try{if(event.key===key){const value=JSON.parse(event.newValue);if(newer(value)){state=value;render();}}if(event.key===key+':conflict'){conflict=JSON.parse(event.newValue);render();}if(event.key===key+':pending'){pending=JSON.parse(event.newValue);render();}}catch(_e){}});
+  window.addEventListener('storage',event=>{try{if(event.key===key){const value=JSON.parse(event.newValue);if(newer(value)){state=value;render();}}if(event.key===key+':conflict'){conflict=JSON.parse(event.newValue);render();}if(event.key===key+':pending'){pending=JSON.parse(event.newValue);render();}if(event.key?.startsWith(completionPrefix)){render();notifySync();}}catch(_e){}});
   window.addEventListener('dcc:data-ready',tick);window.addEventListener('dcc:work-session-changed',()=>refresh().catch(()=>{}));window.addEventListener('online',tick);document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick();});setInterval(tick,15000);
   DCC.tabs?.register('working-queue',()=>{render();refresh().catch(()=>{});});
-  function syncState(){return {pending:!!pending,conflict:conflict?{message:conflict.message||''}:null};}
+  function syncState(){return {pending:!!pending||completionEntries().length>0,conflict:conflict?{message:conflict.message||''}:null};}
   const actionAccount={userId:account.userId,workspaceId:account.workspaceId};
   function assertActionAccount(){
     const current=window.DCC_ACCOUNT_CONTEXT;
-    if(!current||current.userId!==actionAccount.userId||current.workspaceId!==actionAccount.workspaceId)throw new Error('Account changed. Reload before updating tasks.');
+    if(window.__DCC_SIGNING_OUT__||!current||current.userId!==actionAccount.userId||current.workspaceId!==actionAccount.workspaceId)throw new Error('Account changed. Reload before updating tasks.');
   }
   function assertActionReady(){
     assertActionAccount();
@@ -518,13 +627,14 @@
       if(!DCC.CatchUp?.open||!await DCC.CatchUp.open())throw new Error('This Loose End is no longer available. Refresh and try again.');
       return {opened:true,completed:false,owner:'triage'};
     }
-    await refresh();assertActionReady();
     let item=items().find(row=>row.task.id===actionId);
+    const cachedTask=window.blockStore?.get?.(actionId);
+    if(!item&&cachedTask)item={task:cachedTask};
     if(!item){
       const value=await DCC.api('/api/working-queue/task/'+encodeURIComponent(actionId),{cache:'no-store'});
       assertActionReady();item={task:value.task};
-      if(item.task)rememberTaskContext([...detailRows.filter(row=>row.id!==item.task.id),item.task]);
     }
+    if(item.task&&!items().some(row=>row.task.id===item.task.id))rememberTaskContext([...detailRows.filter(row=>row.id!==item.task.id),item.task]);
     if(!item.task?.id)throw new Error('Task is not available. Refresh and try again.');
     const props=item.task.properties||{},ev=DCC.TaskModel.fromBlock(item.task);
     if(DCC.Waiting?.isCheckInTask?.(ev)){

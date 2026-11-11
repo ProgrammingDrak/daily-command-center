@@ -7,7 +7,7 @@ module.exports=function queueBrowserComponents(){
   return modal+`<script>
 window.escHtml=DCC.esc;window.showToast=DCC.toast;window.loadNotes=()=>({});window.loadTaskNotesForAnchor=async()=>undefined;window.saveTaskNotes=async()=>{};window.saveNotes=()=>{};
 window.noteBlocksForTask=()=>[];window.renderDmActions=()=>{};window.DCC.TaskSources={editorOptions:()=>({})};
-window.createBlockEditor=()=>({destroy(){},focus(){},getBlocks:()=>[],toHtml:()=>'',toMarkdown:()=>'',isEmpty:()=>true});
+window.createBlockEditor=()=>({destroy(){},focus(){},setBlocks(){},getBlocks:()=>[],toHtml:()=>'',toMarkdown:()=>'',isEmpty:()=>true});
 window.openTaskNotes=task=>{const body=document.createElement('div');body.className='add-modal-body';const holder=document.createElement('div');holder.id='add-modal-overlay';body.textContent=task.title;holder.appendChild(body);window.fixtureDetails=task.id;DCC.overlay.open({kind:'modal',title:'Task details',body:holder,actions:[{label:'Close'}]});};
 window.bindQuickCompleteControl=(button,quick,notes)=>DCC.bindHoldAction(button,quick,notes);
 </script><script src="/public/js/task-priority.js"></script><script src="/public/js/hold-action.js"></script><script src="/public/js/itinerary-card.js"></script><script src="/public/js/queue-layout.js"></script><script src="/public/js/completion-modal.js"></script><script src="/public/js/schedule-popover.js"></script><script>

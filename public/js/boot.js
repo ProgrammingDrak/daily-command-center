@@ -11,6 +11,25 @@
   loadEl.textContent = 'Loading data from API...';
   document.body.prepend(loadEl);
 
+  const account = window.DCC_ACCOUNT_CONTEXT;
+  const cacheKey = account?.userId && account.workspaceId ? 'dcc-today-snapshot' : null;
+  const zone = window.DCC_APP_TIME_ZONE || 'America/New_York';
+  const dateParts = new Intl.DateTimeFormat('en', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(new Date());
+  const datePart = type => dateParts.find(part => part.type === type).value;
+  const today = [datePart('year'), datePart('month'), datePart('day')].join('-');
+  let cached = null;
+  if (cacheKey && window.DCC_DELTA_SYNC_ENABLED) {
+    try {
+      const entry = JSON.parse(localStorage.getItem(cacheKey));
+      if (entry?.userId === account.userId && entry.snapshot.workspaceId === account.workspaceId
+          && entry.snapshot.date === today && entry.snapshot.dayState?.date === today
+          && Array.isArray(entry.snapshot.blocks) && Array.isArray(entry.snapshot.globals)
+          && Number.isSafeInteger(entry.snapshot.cursor)) cached = entry.snapshot;
+      else if (entry) localStorage.removeItem(cacheKey);
+    } catch (error) { console.warn('[API Boot] Could not read saved Today', error); }
+  }
+
   try {
     // Only today's authoritative state gates the first usable task render. Prep,
     // archives and tomorrow can be much slower and must not hold today's work hostage.
@@ -19,8 +38,8 @@
       if (!response.ok) throw new Error('Task data request failed (' + response.status + ')');
       return response.json();
     }
-    let syncBootstrap = null;
-    if (window.DCC_DELTA_SYNC_ENABLED) {
+    let syncBootstrap = cached;
+    if (!cached && window.DCC_DELTA_SYNC_ENABLED) {
       try { syncBootstrap = await readCore('/api/sync/bootstrap'); }
       catch (error) { console.warn('[API Boot] Bootstrap unavailable; trying day state', error); }
     }
@@ -55,8 +74,8 @@
     }
 
     console.log('[API Boot] Today loaded from API', { date: dayState.date });
-    loadEl.textContent = 'Today loaded; loading supporting data…';
-    loadEl.style.background = 'var(--green)';
+    if (cached) loadEl.textContent = 'Showing saved Today · refreshing…';
+    else loadEl.remove();
 
   } catch (e) {
     console.error('[API Boot] Failed to load data:', e);
@@ -70,6 +89,7 @@
     try {
       if (window.DCC_DELTA_SYNC_ENABLED && window.__DCC_SYNC_BOOTSTRAP__) {
         window.blockStore.hydrateSyncSnapshot(window.__DCC_SYNC_BOOTSTRAP__);
+        if (!cached) window.blockStore.saveTodaySnapshot?.(window.__DCC_STATE__, today);
       } else {
         const loaded = await Promise.all([window.blockStore.loadDay(viewDate), window.blockStore.loadGlobals()]);
         if (loaded.some(value => !Array.isArray(value))) throw new Error("Task blocks unavailable");
@@ -120,6 +140,21 @@
   if (typeof updateDateNav === 'function') updateDateNav();
   if (typeof initCatchUp === 'function') initCatchUp();
   window.dispatchEvent(new CustomEvent('dcc:data-ready', { detail: { date: viewDate } }));
+  window.performance?.mark('dcc-today-rendered', { detail: { cached: !!cached, available: !window.__DCC_BOOT_FAILED__ } });
+  if (cacheKey) window.addEventListener('dcc-sync-day-state', event => {
+    if (event.detail?.date !== today) return;
+    window.blockStore?.saveTodaySnapshot?.(event.detail, today);
+    if (cached) loadEl.remove();
+  });
+  if (cached) {
+    void window.blockStore.refreshSavedToday(today).then(refreshed => {
+      if (refreshed) loadEl.remove();
+      else loadEl.textContent = 'Showing saved Today · waiting to sync';
+    }).catch(error => {
+      console.warn('[API Boot] Saved Today refresh failed', error);
+      loadEl.textContent = 'Showing saved Today · refresh unavailable';
+    });
+  }
   // Hydrate supporting surfaces without resetting task arrays or applying an old
   // today snapshot after the user has already edited or navigated to another day.
   void (async function loadSupportingData() {
@@ -140,12 +175,7 @@
     });
     if (typeof render === 'function') render(['upcoming', 'actionItems']);
     if (typeof updateDateNav === 'function') updateDateNav();
-    if (!window.__DCC_BOOT_FAILED__) {
-      if (results.some(result => result.status === 'rejected')) {
-        loadEl.textContent = 'Tasks loaded; some supporting data is unavailable';
-        loadEl.style.background = 'var(--red)';
-      } else loadEl.remove();
-    }
+
   })().catch(error => console.warn('[API Boot] Supporting data failed', error));
   // Refresh ongoing activity and the shared current-time axis once a minute.
   setInterval(() => { if(typeof buildProgress === 'function') buildProgress(); }, 60000);

@@ -533,6 +533,7 @@ async function commitDoneOnDate(id,dateStr,opts){
     manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
     if(opts.cascade!==false)optimisticSubtasks=_optimisticallyCompleteSubtasks(id,completedAt);
     render();
+    if(celebration)_finishCompletionCelebration(celebration,id);
   }
   try{
     const result=await _persistDone(id,true,{ev:ev,dateStr:dateStr,completedAt:completedIso});
@@ -547,7 +548,6 @@ async function commitDoneOnDate(id,dateStr,opts){
     if(currentDate===dateStr&&opts.cascade!==false)_onParentCompleted(id);
     log("checked-on",id,"Marked done on "+dateStr);
     render();
-    if(celebration)_finishCompletionCelebration(celebration,id);
     awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{
       sourceDate:dateStr,completedAt:completedIso,awardPoints:award,
       sourceKey:"completion:"+((result&&result.mutationId)||id),silent:!!opts.silent

@@ -1,3 +1,4 @@
+const { performance } = require("node:perf_hooks");
 const { slackTarget } = require("../lib/slack-status");
 // Extracted from server.js — mounted via routes/index pattern: module.exports(app, ctx).
 // ctx carries shared server-scope helpers/stores; see server.js where ctx is built.
@@ -796,6 +797,7 @@ module.exports = function mount(app, ctx) {
   app.post("/api/tasks/:taskRef/completion", async (req, res) => {
     const requestId = crypto.randomUUID();
     const startedAt = Date.now();
+    const started = performance.now();
     res.setHeader("X-Request-Id", requestId);
     const body = req.body || {};
     try {
@@ -810,6 +812,7 @@ module.exports = function mount(app, ctx) {
         userId,
         workspaceId,
       });
+      const persisted = performance.now();
       const recordedMs = Number.isFinite(Date.parse(body.completedAt || ""))
         ? Date.parse(body.completedAt)
         : Date.now();
@@ -841,7 +844,12 @@ module.exports = function mount(app, ctx) {
           mutationId: body.mutationId, dependencyTransitions: result.dependencyTransitions || [],
         }, workspaceId);
       }
+      const followUp = performance.now();
       for (const row of result.affectedTasks || []) await syncSlack(row);
+      res.setHeader("Server-Timing", [
+        ["persist", persisted - started], ["follow-up", followUp - persisted],
+        ["slack", performance.now() - followUp],
+      ].map(([name, ms]) => name + ";dur=" + ms.toFixed(1)).join(", "));
       logCompletion(req, {
         requestId, mutationId: body.mutationId || null, taskRef: req.params.taskRef,
         resolvedTaskId: result.task && result.task.id || null, taskDate: body.taskDate || null,

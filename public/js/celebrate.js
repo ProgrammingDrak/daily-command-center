@@ -15,9 +15,9 @@
   var canvas = null, ctx = null, dpr = 1;
   var particles = [];
   var rafId = null, lastTs = 0;
-  // Tracks the in-flight "flow into the points" swarm so its onArrive callback
-  // fires exactly once when the bulk of the confetti has reached the target.
-  var flow = null;
+  // Each burst owns its callback, even when several tasks finish on the same frame.
+  var flows = new Set();
+  var MAX_PARTICLES = 420;
 
   function reducedMotion(){
     try { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }
@@ -54,9 +54,22 @@
     opts = opts || {};
     var x = opts.x != null ? opts.x : window.innerWidth / 2;
     var y = opts.y != null ? opts.y : window.innerHeight / 3;
-    var count = opts.count != null ? opts.count : 90;
+    var count = Math.min(MAX_PARTICLES, opts.count != null ? opts.count : 90);
     var colors = opts.colors || COLORS;
     var flowTo = opts.flowTo || null;
+    var flow = flowTo ? {
+      onArrive: typeof opts.onArrive === "function" ? opts.onArrive : null,
+      total: count,
+      arrived: 0,
+      startedAt: now()
+    } : null;
+    if(flow) flows.add(flow);
+    var excess = particles.length + count - MAX_PARTICLES;
+    if(excess > 0){
+      particles.splice(0, excess).forEach(function(p){
+        if(p.flow && p.life > 0) p.flow.arrived++;
+      });
+    }
 
     for(var i = 0; i < count; i++){
       var angle = rand(0, Math.PI * 2);
@@ -74,7 +87,7 @@
         decay: rand(0.008, 0.016),
         shape: Math.random() < 0.25 ? "circle" : "rect",
         // Flow ("whirlwind into the points") fields:
-        flow: !!flowTo,
+        flow: flow,
         tx: flowTo ? flowTo.x : 0,
         ty: flowTo ? flowTo.y : 0,
         spin: Math.random() < 0.82 ? 1 : -1,   // mostly one direction -> a coherent whirlwind
@@ -85,27 +98,14 @@
       });
     }
 
-    if(flowTo){
-      flow = {
-        onArrive: typeof opts.onArrive === "function" ? opts.onArrive : null,
-        fired: false,
-        total: count,
-        arrived: 0,
-        startedAt: now()
-      };
-    }
   }
 
-  function maybeFireArrive(){
-    if(!flow || flow.fired) return;
-    var elapsed = now() - flow.startedAt;
-    // Fire when the bulk of the swarm has reached the target, or as a safety
-    // net once enough time has passed so the points always update.
-    if(flow.arrived >= flow.total * 0.45 || elapsed > 1100){
-      flow.fired = true;
-      var cb = flow.onArrive;
-      if(cb){ try { cb(); } catch(e){} }
-    }
+  function finishFlows(force){
+    flows.forEach(function(flow){
+      if(!force && flow.arrived < flow.total * 0.45 && now() - flow.startedAt <= 1100) return;
+      flows.delete(flow);
+      if(flow.onArrive){ try { flow.onArrive(); } catch(e){} }
+    });
   }
 
   function stepFlow(p, dt){
@@ -134,12 +134,12 @@
       p.w *= 0.88; p.h *= 0.88;
       if(p.life <= 0 || p.w < 1){
         p.life = 0;
-        if(flow) flow.arrived++;
+        p.flow.arrived++;
       }
     } else if(p.age > 2600){
       // Hard stop so a stray particle can't keep the loop alive.
       p.life = 0;
-      if(flow) flow.arrived++;
+      p.flow.arrived++;
     }
   }
 
@@ -182,18 +182,15 @@
       ctx.restore();
     }
 
-    maybeFireArrive();
+    finishFlows(alive === 0);
 
     if(alive > 0){
       rafId = window.requestAnimationFrame(frame);
     } else {
-      // Make sure a callback fires even if everything expired at once.
-      if(flow && !flow.fired){ flow.fired = true; if(flow.onArrive){ try{ flow.onArrive(); }catch(e){} } }
       particles.length = 0;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       rafId = null;
       lastTs = 0;
-      flow = null;
     }
   }
 

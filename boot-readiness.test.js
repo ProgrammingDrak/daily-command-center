@@ -63,3 +63,23 @@ test('failed core hydration publishes unavailable rather than a valid empty day'
   let available;h.ctx.dispatchEvent=event=>{if(event.type==='dcc:day-data-ready')available=event.detail.available;};
   h.run();await settle();assert.equal(available,false);
 });
+
+test('signed-in repeat startup renders saved Today before starting its refresh', async()=>{
+  const h=harness('complete');h.dependencies();
+  const date=new Intl.DateTimeFormat('sv-SE',{timeZone:'America/New_York'}).format();
+  h.ctx.DCC_ACCOUNT_CONTEXT={userId:7,workspaceId:'ws-7'};
+  h.ctx.localStorage={getItem:()=>JSON.stringify({userId:7,snapshot:{
+    date,workspaceId:'ws-7',cursor:5,dayState:{date},blocks:[{id:'saved'}],globals:[],
+  }})};
+  h.ctx.addEventListener=()=>{};
+  h.ctx.blockStore.refreshSavedToday=async today=>{
+    assert.equal(today,date);
+    assert.deepEqual(h.renders[0],['saved']);
+    return true;
+  };
+  h.run();await settle();
+  assert.deepEqual(h.renders[0],['saved']);
+  assert.equal(h.reads.includes('/api/sync/bootstrap'),false);
+  assert.equal(h.removed(),true);
+  assert.deepEqual(h.errors,[]);
+});
