@@ -3,6 +3,87 @@
   var LOCAL_PREFIX = "dcc-glymphatic-brief:";
   var gbRefreshing = false;
   var gbActivePage = null;
+  var gbToday = null;
+  var gbAccepting = false;
+
+  function gbTodayDate(){
+    return typeof __todayDate === "string" && __todayDate ? __todayDate : gbDate();
+  }
+
+  async function gbLoadToday(){
+    var date = gbTodayDate();
+    var snapshot = {date: date, loading: true};
+    gbToday = snapshot;
+    buildGlymphaticBrief();
+    try {
+      var dcc = window.DCC;
+      var [plan, blocks] = await Promise.all([
+        dcc.api("/api/brief/today"),
+        dcc.api("/api/blocks?date=" + encodeURIComponent(date))
+      ]);
+      if(plan.date !== date || !Array.isArray(plan.tasks) || !Array.isArray(blocks))
+        throw new Error("Could not load today's tasks and calendar.");
+      snapshot.tasks = plan.tasks;
+      snapshot.truncated = plan.truncated;
+      snapshot.meetings = blocks.filter(function(block){
+        var props = block.properties || {};
+        return !block.deleted_at && (props.source === "calendar" || props.source === "gcal" ||
+          props.calendar_id || props.gcal_calendar_id);
+      }).map(function(block){ return block.properties; }).sort(function(a, b){
+        return String(a.start || "").localeCompare(String(b.start || ""));
+      });
+    } catch(e) {
+      snapshot.error = e.message || "Could not load today's Brief.";
+    } finally {
+      snapshot.loading = false;
+      if(gbToday === snapshot)buildGlymphaticBrief();
+    }
+  }
+
+  function gbPageToday(){
+    if(!gbToday || gbToday.loading)return '<p class="gb-empty" role="status">Loading today…</p>';
+    if(gbToday.error)return '<p class="gb-empty" role="alert">'+gbEsc(gbToday.error)+'</p>';
+    var meetings = gbToday.meetings.map(function(meeting){
+      return '<div class="gb-row">'+gbEsc([meeting.start, meeting.title].filter(Boolean).join(" · "))+'</div>';
+    });
+    var tasks = gbToday.tasks.map(function(task){
+      return '<article class="gb-task-card"><strong>'+gbEsc(task.title)+'</strong>'+
+        '<p>Unfinished from '+gbEsc(task.sourceDate)+' · '+gbEsc(task.placement.start)+'–'+gbEsc(task.placement.end)+'</p>'+
+        '<button class="gb-refresh-btn" data-gb-accept-today="'+gbEsc(task.id)+'" '+
+        (gbAccepting ? 'disabled' : '')+'>Accept</button></article>';
+    });
+    return '<section><div class="gb-section-title">Calendar</div>'+
+      (meetings.join("") || '<p class="gb-empty">No synced calendar events for today.</p>')+'</section>'+
+      '<section><div class="gb-section-title">Suggested carryovers</div>'+
+      (tasks.join("") || '<p class="gb-empty">No carryovers fit the available time.</p>')+
+      (gbToday.truncated ? '<p class="gb-empty">Some older tasks were outside the scan limit.</p>' : '')+'</section>';
+  }
+
+  async function gbAcceptToday(id){
+    if(gbAccepting || !gbToday || gbToday.date !== gbTodayDate())return;
+    var task = (gbToday.tasks || []).find(function(row){ return row.id === id; });
+    if(!task)return;
+    gbAccepting = true;
+    buildGlymphaticBrief();
+    try {
+      var dcc = window.DCC;
+      var date = gbToday.date;
+      await window.blockStore.rescheduleBlock(task.id, date, {
+        fromDate: task.sourceDate,
+        placement: task.placement,
+        reviewGuard: task.reviewGuard
+      });
+      if(typeof showToast === "function")showToast("Added to today's itinerary.", "success");
+      window.blockStore.invalidateRangeCache(task.sourceDate);
+      var viewedDate = typeof viewDate === "string" && viewDate ? viewDate : date;
+      await dcc.Carryover.refoldViewedDay(viewedDate);
+    } catch(e) {
+      if(typeof showToast === "function")showToast(e.message || "Could not add task to today's itinerary.", "error");
+    } finally {
+      gbAccepting = false;
+      await gbLoadToday();
+    }
+  }
 
   function gbDate(){
     return (__state && __state.date) || new Date().toISOString().slice(0,10);
@@ -91,7 +172,7 @@
       console.error("[Glymphatic Brief] refresh failed:", e);
     }finally{
       gbRefreshing = false;
-      buildGlymphaticBrief();
+      await gbLoadToday();
     }
   }
 
@@ -745,6 +826,7 @@
   }
 
   function gbRenderPage(page, current, ui){
+    if(page.id==="today")return gbPageToday();
     if(page.id==="triage")return gbPageTriage(page, current);
     if(page.id==="canvas")return gbPageCanvas(page);
     if(page.id==="front")return gbPageFront(page, current, ui);
@@ -765,8 +847,9 @@
     var tasks = current.suggested_tasks || [];
     var plan = gbPlanTasks(tasks, ui);
     var nextTask = plan.find(function(item){ return !gbIsPushed(item.task, ui); });
-    var pages = gbPages(current);
-    if(pages){
+    var publishedPages = gbPages(current);
+    var pages = [{id:"today", label:"Today"}].concat(publishedPages || [{id:"review", label:"Review"}]);
+    if(gbActivePage !== "review" || publishedPages){
       if(!gbActivePage || !pages.some(function(p){ return p.id===gbActivePage; }))gbActivePage = pages[0].id;
       var active = pages.filter(function(p){ return p.id===gbActivePage; })[0] || pages[0];
       root.innerHTML =
@@ -794,6 +877,7 @@
 
     root.innerHTML =
       '<div class="gb-shell">'+
+        gbPageNav(pages, "review")+
         '<header class="gb-hero">'+
           '<div>'+
             '<div class="gb-kicker">Glymphatic Brief</div>'+
@@ -828,6 +912,10 @@
   }
 
   document.addEventListener("click", function(e){
+    var openBrief = e.target.closest("[data-itinerary-brief]");
+    if(openBrief){ gbOpenBrief(openBrief); return; }
+    var acceptToday = e.target.closest("[data-gb-accept-today]");
+    if(acceptToday){ gbAcceptToday(acceptToday.dataset.gbAcceptToday); return; }
     var pageBtn = e.target.closest("[data-gb-page]");
     if(pageBtn){ gbActivePage = pageBtn.dataset.gbPage; buildGlymphaticBrief(); return; }
     var refresh = e.target.closest("[data-gb-refresh]");
@@ -895,7 +983,8 @@
     });
     gbBriefOverlay.overlay.classList.add("dcc-brief-overlay");
     gbBriefOverlay.el.classList.add("dcc-brief-reader");
-    buildGlymphaticBrief();
+    gbActivePage = "today";
+    gbLoadToday();
     return gbBriefOverlay;
   }
 
