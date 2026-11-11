@@ -37,6 +37,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const POPOVER_SRC = fs.readFileSync(require.resolve("./public/js/schedule-popover.js"), "utf8");
+const WAITING_SRC = fs.readFileSync(require.resolve("./public/js/delegated.js"), "utf8");
 const CORE_UI_SRC = fs.readFileSync(require.resolve("./public/js/core-ui.js"), "utf8");
 const PICKER_SRC = fs.readFileSync(require.resolve("./public/js/time-picker.js"), "utf8");
 const SLOTS_SRC = fs.readFileSync(require.resolve("./public/js/slots.js"), "utf8");
@@ -194,13 +195,34 @@ async function openPopover(ctx, cfg) {
 test("Whenever follows Blocked / Waiting and moves the selected task", async () => {
   const moved = [];
   const ctx = makeContext({ moveTaskToWhenever: async id => moved.push(id) });
-  ctx.window.DCCWorkingQueue = { isBlocked: () => false, openBlocked: async () => {} };
+  ctx.window.DCC.Waiting = { moveTask: async () => {} };
   const { pop } = await openPopover(ctx, { mode: "reschedule", id: "t1", view: "date" });
   const buttons = pop.children;
-  assert.equal(buttons.at(-2).textContent, "Blocked / Waiting…");
+  assert.equal(buttons.at(-2).textContent, "Blocked / Waiting");
   assert.equal(buttons.at(-1).textContent, "Whenever");
   await buttons.at(-1)._listeners.click[0]({ stopPropagation() {} });
   assert.deepEqual(moved, ["t1"]);
+  assert.equal(pop.removed, true);
+});
+
+test("Blocked / Waiting parks the original carryover task without creating a check-in", async () => {
+  const requests = [];
+  const ctx = makeContext({ toast() {}, afterWaitingAction: async () => {} });
+  ctx.window.DCC.api = async (path, options) => requests.push(JSON.parse(JSON.stringify({ path, ...options })));
+  ctx.window.DCCWorkingQueue = { openBlocked() { assert.fail("Called Working Queue block"); } };
+  const move = mustSlice(WAITING_SRC, /^ {2}async function moveTaskToWaiting\(task\) \{[\s\S]*?\n {2}\}/m, "moveTaskToWaiting");
+  vm.runInContext(move + "\nwindow.DCC.Waiting={moveTask:moveTaskToWaiting};", ctx);
+  const task = { id: "carryover-id", title: "Follow up on packet", __unf: { sourceId: "original-block" } };
+  const { pop } = await openPopover(ctx, { mode: "reschedule", task, id: task.id, view: "date" });
+  const button = pop.children.find(child => child.className.includes("resched-blocked"));
+  await button._listeners.click[0]({ stopPropagation() {} });
+  assert.deepEqual(requests, [{
+    path: "/api/waiting-items", method: "POST",
+    body: {
+      convertTaskId: "original-block",
+      properties: { myTask: task.title, waitingReason: "blocked", checkInMode: "date", checkInRepeat: false }
+    }
+  }]);
   assert.equal(pop.removed, true);
 });
 

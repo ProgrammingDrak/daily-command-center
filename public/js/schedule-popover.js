@@ -283,14 +283,19 @@ function openSchedulePopover(cfg){
     // silently saves a click.
   }
 
-  // The same queue block/unblock operation is available from every task's Schedule menu.
-  // It pauses active work atomically and retains the task, history and current schedule.
-  if(ev&&showDate&&window.DCCWorkingQueue?.openBlocked){
-    const blocked=window.DCCWorkingQueue.isBlocked(ev);
+  const waiting=window.DCC?.Waiting;
+  if(ev&&showDate&&waiting?.moveTask&&!waiting.isCheckInTask?.(ev)){
     const control=document.createElement('button');control.type='button';control.className='resched-btn resched-blocked';
-    control.textContent=blocked?'Unblock task':'Blocked / Waiting…';
-    control.title=blocked?'Return to the queue without starting a timer':'Pause this task in the Working Queue and optionally set a check-back';
-    control.addEventListener('click',event=>{event.stopPropagation();closePop();window.DCCWorkingQueue.openBlocked(ev).catch(error=>showToast(error.message,'error'));});
+    control.textContent='Blocked / Waiting';
+    control.title='Move this task to Waiting';
+    control.addEventListener('click',async event=>{
+      event.stopPropagation();
+      if(control.disabled)return;
+      control.disabled=true;
+      try{await waiting.moveTask(ev);closePop();}
+      catch(error){if(typeof showToast==='function')showToast(error.message,'error');}
+      finally{control.disabled=false;}
+    });
     pop.appendChild(control);
   }
   if(ev&&showDate&&mode==="reschedule"&&typeof moveTaskToWhenever==="function"){

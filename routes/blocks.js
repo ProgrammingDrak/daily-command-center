@@ -2701,15 +2701,29 @@ module.exports = function mount(app, ctx) {
       let affected;
       try {
         await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["dcc-foreground:" + userId]);
         const task = await blockDB.findUniqueLiveBlockByReference(convertTaskId, workspaceId, client, true);
         if (!task || task.deleted_at || !blockDB.isTaskRow(task)) throw clientError("Selected task is no longer available", 409);
         assertBlockOwnership(task, workspaceId);
         if (isCompleted(task)) throw clientError("A completed task cannot move to Waiting", 409);
         const subtree = await blockDB.getSubtree([task.id], workspaceId, client);
         const rows = subtree.length ? subtree : [task];
-        if (rows.some(row => (row.properties || {}).dependencyWaitingItemId ||
-          ((row.properties || {}).dependencyWaitingItemIds || []).length)) {
+        if (rows.some(row => waitingItems.isParkedInWaiting(row.properties || {}))) {
           throw clientError("Selected task is already waiting on another item", 409);
+        }
+        const active = rows.find(row => (row.properties || {}).startedAt);
+        if (active) {
+          const at = new Date().toISOString();
+          await require("../conversation-store").pauseForSchedule(ctx, client, { userId, workspaceId }, active, {
+            at, sourceEventId: "waiting:" + crypto.randomUUID()
+          });
+          rows[rows.indexOf(active)] = await blockDB.findUniqueLiveBlockByReference(active.id, workspaceId, client, true);
+          await client.query(
+            `INSERT INTO conversation_state(user_id, revision, changed_at) VALUES($1, 1, $2::timestamptz)
+             ON CONFLICT(user_id) DO UPDATE SET revision=conversation_state.revision+1,
+             changed_at=GREATEST(conversation_state.changed_at,EXCLUDED.changed_at)`,
+            [userId, at]
+          );
         }
         props.linkedBlockId = task.id;
         props.myTask = String((task.properties || {}).title || props.myTask).slice(0, 300);

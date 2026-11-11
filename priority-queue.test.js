@@ -20,6 +20,8 @@ test('Priority Queue keeps inactive historical work alongside planned work witho
   assert.equal(classify(task({responsibilityId:'r',occurrenceDate:'2099-01-01'})), 'queued');
   assert.equal(classify(task({responsibilityId:'r',everStarted:true})), 'queued');
   assert.equal(classify(planned,{status:'queued',hasActivity:true}), 'queued');
+  assert.equal(classify(task({dependencyWaitingItemId:'waiting-1'}),{status:'blocked'}), null);
+  assert.equal(classify(task({dependencyWaitingItemIds:['waiting-1']})), null);
   assert.equal(JSON.stringify(planned), before);
 });
 test('priority is stable High/Medium/Low, never legacy urgency or scheduled time', () => {
