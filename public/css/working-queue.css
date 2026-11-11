@@ -1,15 +1,8 @@
 .wq-header {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin: 16px 0;
+  justify-content: flex-end;
+  margin: 8px 0;
 }
-.wq-header h1 {
-  font-size: 24px;
-  margin: 0 0 6px;
-}
-.wq-header p,
 .wq-sync,
 .wq-time,
 .wq-empty {
@@ -111,6 +104,10 @@
   color: var(--cyan, #22d3ee);
   font-size: 13px;
 }
+.wq-conflict.wq-actions {
+  align-items: center;
+  margin-bottom: 8px;
+}
 .wq-completed {
   margin: 18px 0;
 }
@@ -163,12 +160,6 @@
   .wq-grid {
     grid-template-columns: 1fr;
   }
-  .wq-header {
-    align-items: flex-start;
-  }
-  .wq-header h1 {
-    font-size: 21px;
-  }
   .wq-lane {
     padding: 12px;
   }
@@ -219,7 +210,6 @@
 .wq-card .btn-schedule { display:inline-flex; gap:6px; align-items:center; padding:6px 10px; margin:6px 0; color:var(--text); }
 .wq-card .quick-complete-control svg { width:20px; height:20px; }
 .wq-card .wq-actions { margin-top:5px; }
-.wq-order-help { font-size:12px; color:var(--text-muted); }
 .wq-card .is-holding { outline:2px solid var(--cyan); }
 .wq-card .ttl:focus-visible,.wq-card button:focus-visible { outline:2px solid var(--cyan); outline-offset:3px; }
 .resched-blocked { width:100%; margin-top:8px; min-height:44px; }
