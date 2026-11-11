@@ -417,13 +417,16 @@
     const heading=action==='start'?(displaced?'<div class="wq-switch-old"><div><strong>Moving to Background</strong><p>'+esc(displaced.task.properties.title||'Task')+'</p></div>'+timer+'</div><div class="wq-switch-new"><strong>Moving to Foreground</strong><p>'+esc(item.task.properties.title||'Task')+'</p></div>':'<p>'+esc(item.task.properties.title||'Task')+'</p>'):'<p>'+esc(item.task.properties.title||'Task')+'</p>';
     const body=form(heading+(action==='background-start'?'<p>This sets the task aside and optionally sets a check-back. It does not start a worker. A selected Snooze waits in Background; without one, inactive work returns to Priority.</p>':'')+(action==='start'?'':timer)+(action==='done'?'<div data-completion-time aria-live="off">Loading recorded time…</div><p>Completing saves the current focused session to this task. The saved total is confirmed after the update succeeds.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome required></textarea></label>':''):''));
     let guided=null,ready=!item.task.properties.guidedDefinitionId,completion=null,clockOffset=0,command=null;
+    function updateConfirm(){
+      if(action==='done'&&body.isConnected)document.getElementById('done-modal-confirm').disabled=!(ready&&completion&&notesReady);
+    }
     const formatSeconds=seconds=>Math.floor(seconds/60)+'m '+String(seconds%60).padStart(2,'0')+'s';
     function updateCompletion(){
       const el=body.querySelector('[data-completion-time]');if(!el||!completion)return;
       const value=window.DCCWorkCompletion.project(completion,command?Date.parse(command.at):Date.now()+clockOffset);
       el.innerHTML='<dl class="wq-effort"><div><dt>Previously recorded'+(completion.history.estimated?' (estimated)':'')+'</dt><dd>'+esc(completion.history.savedMinutes==null?'Unknown':completion.history.savedMinutes+'m')+'</dd></div><div><dt>Current timer</dt><dd>'+esc(value.active?formatSeconds(value.elapsedSeconds):'Not running')+'</dd></div><div><dt>After completion'+(value.active?' (estimated)':'')+'</dt><dd>'+esc(value.projectedMinutes==null?'Unknown':value.projectedMinutes+'m')+'</dd></div></dl>'+(value.active?'<p class="wq-time">'+esc(formatSeconds(value.creditSeconds)+' of this session will be recorded.'+(value.capped?' Time after the missed check-in cutoff stays unknown.':' Totals round once after adding recorded seconds.'))+'</p>':'<p class="wq-time">No running session to add. Recorded time stays as saved.</p>')+(completion.history.carryMinutes?'<p class="wq-time">Includes '+esc(completion.history.carryMinutes)+'m saved before or outside the session ledger.</p>':'');
     }
-    if(action==='done')previewFor(item.task.id).then(view=>{completion=view;clockOffset=view.serverNow-Date.now();updateCompletion();}).catch(error=>{body.querySelector('[role=status]').textContent='Time summary unavailable: '+error.message;});
+    if(action==='done')previewFor(item.task.id).then(view=>{completion=view;clockOffset=view.serverNow-Date.now();updateCompletion();updateConfirm();}).catch(error=>{body.querySelector('[role=status]').textContent='Time summary unavailable: '+error.message;});
     const select=body.querySelector('[data-minutes]');select?.addEventListener('change',()=>{body.querySelector('[data-custom]').hidden=select.value!=='custom';});
     const submit=async(note)=>{
       if(!ready)throw new Error('Wait for current guided instructions.');
@@ -445,12 +448,12 @@
       }
     };
     const handle=action==='done'
-      ?window.openDoneModal(item.task.id,item.task.properties.title,submit,DCC.TaskModel.fromBlock(item.task),{body,noteValue:undefined,authoritativeTime:true,awaitConfirmation:true,queueCompletion:true,loadNotes:()=>window.loadTaskNotesForAnchor(completionAnchor).then(value=>{notesReady=true;return value;})})
+      ?window.openDoneModal(item.task.id,item.task.properties.title,submit,DCC.TaskModel.fromBlock(item.task),{body,noteValue:undefined,authoritativeTime:true,awaitConfirmation:true,queueCompletion:true,loadNotes:()=>window.loadTaskNotesForAnchor(completionAnchor),onNotesReady:()=>{notesReady=true;updateConfirm();}})
       :modal(action==='start'?(displaced?'Switch foreground task':'Guided instructions'):action==='queue-block'?'Blocked / Waiting':['queue-snooze','queue-remind'].includes(action)?'Snooze':'Set task aside',body,submit,action==='start'?'Bring forward':'Save',()=>{if(action==='start')startOpening=false;});
     if(action==='start'&&!body.isConnected)startOpening=false;
     if(action==='done')window.performance?.mark('dcc-completion-dialog-open');
     if(action==='done'){const timer=setInterval(()=>{if(!body.isConnected){clearInterval(timer);return;}updateCompletion();},1000);}
-    if(!ready)DCC.api('/api/guided/tasks/'+encodeURIComponent(item.task.id),{cache:'no-store'}).then(view=>{guided=view;ready=true;body.querySelector('[data-preview]').textContent=view.prompt;}).catch(error=>{body.querySelector('[role=status]').textContent=error.message;});
+    if(!ready)DCC.api('/api/guided/tasks/'+encodeURIComponent(item.task.id),{cache:'no-store'}).then(view=>{guided=view;ready=true;body.querySelector('[data-preview]').textContent=view.prompt;updateConfirm();}).catch(error=>{body.querySelector('[role=status]').textContent=error.message;});
     return handle;
   }
   function addTasks(){

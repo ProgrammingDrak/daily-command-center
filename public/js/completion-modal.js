@@ -4,7 +4,9 @@ let _dmCallback=null, _dmId=null, _dmEv=null, _dmSessions=[], _dmOptions=null, _
 function openDoneModal(id, title, onConfirm, ev, options){
   if(_dmBusy)return;
   _dmOptions=options||null;_dmOpener=document.activeElement;
-  document.getElementById("done-modal-confirm").textContent="Mark Complete";
+  const confirm = document.getElementById("done-modal-confirm");
+  confirm.textContent="Mark Complete";
+  confirm.disabled=!!options?.queueCompletion;
   const overlay=document.getElementById('done-modal-overlay');
   if(!overlay.dataset.keyboardBound){
     overlay.dataset.keyboardBound='true';overlay.addEventListener('keydown',event=>{
@@ -35,6 +37,8 @@ function openDoneModal(id, title, onConfirm, ev, options){
       window._dmBlockEditor.setBlocks(noteBlocksForTask(id,value,ev));
       options.noteSnapshot=JSON.stringify(window._dmBlockEditor.getBlocks());
       dmNotesContainer.inert=false;
+      renderDmActions(id);
+      options.onNotesReady?.();
     }).catch(error=>{
       if(_dmOptions===options)options.body.querySelector('[role=status]').textContent=error.message;
     });
