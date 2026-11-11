@@ -621,6 +621,9 @@
     ].filter(Boolean).join(" ");
 
     const noFollowUp = p.checkInRepeat === false && !p.checkInDate;
+    const followUpLabel = p.checkInDate || (noFollowUp
+      ? (p.lastCheckedAt ? 'Complete' : 'No follow-up set')
+      : 'From repeat cadence');
     const badge = '<div class="waiting-state ' + cls + '">' +
       (done ? 'Complete' : esc(dueLabel(item))) + '</div>';
 
@@ -647,7 +650,7 @@
         badge +
         '<div class="delegated-card-title">' + esc(headline) + linkChip + sourceLink + '</div>' +
         '<dl class="waiting-facts"><div><dt>Waiting for</dt><dd>' + sub + '</dd></div>' +
-          '<div><dt>Follow-up</dt><dd>' + esc(p.checkInDate || (followUpComplete ? 'Complete' : 'From repeat cadence')) + '</dd></div></dl>' +
+          '<div><dt>Follow-up</dt><dd>' + esc(followUpLabel) + '</dd></div></dl>' +
         (note ? '<div class="delegated-card-note">' + esc(note) + '</div>' : '') +
       '</div>' +
       '<div class="delegated-card-actions">' + actionButtons + '</div>' +
