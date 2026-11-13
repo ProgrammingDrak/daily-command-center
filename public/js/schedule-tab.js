@@ -982,6 +982,12 @@ window.renderTriageInto=renderTriageInto;
 function buildListView(){
   const wrap=document.getElementById("list-view");
   if(!wrap)return;
+  const preserve=window.DCC?.ItineraryCosts?.preserveDrafts;
+  if(preserve) return preserve(wrap,()=>renderItineraryList(wrap));
+  renderItineraryList(wrap);
+}
+
+function renderItineraryList(wrap){
   wrap.innerHTML="";
   const model=_itineraryListModel();
   const {viewDate,isTodayView,unfPool,day}=model;

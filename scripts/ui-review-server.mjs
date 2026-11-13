@@ -12,6 +12,7 @@ import seedTaskDetailReview from "./task-detail-review-fixtures.cjs";
 import seedGlassesDeviceReview from "./glasses-device-review-fixtures.cjs";
 import seedHierarchyReview from "./hierarchy-review-fixtures.cjs";
 import hierarchy from "../lib/task-hierarchy.js";
+import TaskCosts from "../public/js/task-costs.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -378,6 +379,15 @@ app.get('/api/blocks/:id', (req,res) => {
 app.patch("/api/blocks/:id", (req, res) => {
   const block = reviewBlocks.get(req.params.id);
   if (!block || block.deleted_at) return res.status(404).json({ error: "Block not found" });
+  if (Object.hasOwn(req.body || {}, "taskCostsChange")) {
+    try {
+      const taskCosts = TaskCosts.applyChange(block.properties.taskCosts, req.body.taskCostsChange);
+      if (taskCosts === undefined) return res.json(block);
+      const saved = { ...block, properties: { ...block.properties, taskCosts }, updated_at: new Date().toISOString() };
+      reviewBlocks.set(saved.id, saved);
+      return res.json(saved);
+    } catch (error) { return res.status(error.statusCode || 400).json({error:error.message,code:error.publicCode}); }
+  }
   const next = {
     ...block,
     ...(Object.hasOwn(req.body || {}, "date") ? { date: req.body.date } : {}),

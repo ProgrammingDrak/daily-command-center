@@ -1116,6 +1116,12 @@ module.exports = function mount(app, ctx) {
       res.status(409).json({ error: "Update task dependencies through the Waiting API" });
       return;
     }
+    if (Object.hasOwn(req.body || {}, "taskCostsChange")) {
+      if (existing.deleted_at || !TaskModel.isTaskRow(existing)) throw clientError("Task not found", 404);
+      const result = await blockDB.updateBlock(req.params.id, { taskCostsChange: req.body.taskCostsChange });
+      broadcast("blocks-changed", { action: "update", blockIds: [result.id], clientId: req.body._clientId }, req.workspaceId);
+      return result;
+    }
     // Compatibility window for already-open clients and their old WAL entries.
     // Ignore the stale full properties snapshot and delegate only the completion
     // intent to the same narrow transaction as the dedicated endpoint.

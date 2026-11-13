@@ -48,3 +48,10 @@ test("amounts use exact currency minor units and retain zero", () => {
   assert.throws(() => costs.parseAmount("1.25", "JPY"));
   assert.throws(() => costs.parseAmount("-2", "USD"));
 });
+
+test("ledger changes reject competing snapshots and safely replay acknowledgements", () => {
+  const change = { before: [gas], after: [gas, meal] };
+  assert.deepEqual(costs.applyChange([gas], change), [gas, meal]);
+  assert.equal(costs.applyChange([gas, meal], change), undefined);
+  assert.throws(() => costs.applyChange([{ ...gas, amountMinor: 1300 }], change), { statusCode: 409 });
+});

@@ -1,5 +1,6 @@
 (function () {
   const Costs = window.DCC.TaskCosts;
+  let rebuildingDrafts;
 
   function append(parent, tag, text, className) {
     const node = document.createElement(tag);
@@ -242,12 +243,14 @@
     }
     function closeEditor() {
       editing = false;
+      delete section.dataset.editing;
       openedId = editingId;
       editor.replaceChildren();
       render(true);
     }
     function edit(entry) {
       editing = true;
+      section.dataset.editing = "true";
       editingId = entry?.id;
       openedId = editingId;
       status.textContent = "";
@@ -262,7 +265,10 @@
         closeEditor();
       }, closeEditor);
     }
-    render();
+    title.textContent = heading(entries);
+    section.addEventListener("toggle", () => {
+      if (section.open && !list.childElementCount) render();
+    });
     return section;
   }
 
@@ -277,13 +283,7 @@
 
   function writer(blockId, refresh) {
     return async (next, saved) => {
-      const baseline = JSON.stringify(saved);
-      const result = await enqueueRowPropsWrite(blockId, props => {
-        if (JSON.stringify(readCosts(props.taskCosts)) !== baseline) {
-          throw new Error("The saved transactions changed. Reopen the ledger before editing.");
-        }
-        return { ...props, taskCosts: next };
-      }, { _reportSaveStatus: true }, { rejectOnError: true });
+      const result = await window.blockStore.updateTaskCosts(blockId, saved, next);
       refresh?.(next);
       return result;
     };
@@ -301,6 +301,18 @@
     }), block?.date);
   };
 
+  window.DCC.ItineraryCosts.preserveDrafts = (wrap, rebuild) => {
+    const focused = document.activeElement;
+    rebuildingDrafts = new Map([...wrap.querySelectorAll(".it-cost-preview[data-editing]")].map(section => [
+      section.dataset.taskId, section
+    ]));
+    try { return rebuild(); }
+    finally {
+      rebuildingDrafts = undefined;
+      if (focused?.isConnected && focused.closest(".it-cost-preview[data-editing]")) focused.focus({ preventScroll: true });
+    }
+  };
+
   window.mountItineraryCosts = (card, task) => {
     const blockId = task._blockId;
     if (!blockId || !window.DCC_ACCOUNT_CONTEXT?.userId) return;
@@ -308,7 +320,14 @@
     const entries = readCosts(cached ? cached.properties.taskCosts : task.taskCosts);
     const archived = typeof viewMode !== "undefined" && viewMode === "archive";
     if (archived && !entries.length) return;
+    const retained = !archived && rebuildingDrafts?.get(blockId);
+    if (retained && retained.dataset.viewDate === String(typeof viewDate === "undefined" ? "" : viewDate)) {
+      card.append(retained);
+      return;
+    }
     const detail = mountEditor(card, entries, !archived && writer(blockId), cached?.date);
+    detail.dataset.taskId = blockId;
+    detail.dataset.viewDate = String(typeof viewDate === "undefined" ? "" : viewDate);
     detail.classList.add("it-cost-preview");
     detail.addEventListener("click", event => event.stopPropagation());
     detail.addEventListener("dragstart", event => event.preventDefault());

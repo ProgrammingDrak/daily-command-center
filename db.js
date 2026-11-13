@@ -20,6 +20,7 @@ const recurrence = require("./lib/recurrence");
 // derives its fixed-time skip set from isFixed() so the server and the carryover lane
 // cannot drift apart on which types are never carried over.
 const TaskTypes = require("./public/js/task-types");
+const TaskCosts = require("./public/js/task-costs");
 const TimeBlocks = require("./public/js/time-blocks");
 const {edgeOf,planParentChange} = require("./lib/task-hierarchy");
 const { plannedWindowOf } = require("./lib/task-timing");
@@ -83,6 +84,10 @@ function validateBlock(type, properties) {
   if (!VALID_TYPES.has(type)) throw new Error(`Unknown block type: ${type}`);
   if (properties && Object.prototype.hasOwnProperty.call(properties, "sourceReferences")) {
     try { require("./public/js/task-sources").validate(properties.sourceReferences); }
+    catch (error) { error.statusCode = 400; throw error; }
+  }
+  if (properties && Object.hasOwn(properties, "taskCosts")) {
+    try { TaskCosts.validate(properties.taskCosts); }
     catch (error) { error.statusCode = 400; throw error; }
   }
   const size = JSON.stringify(properties).length;
@@ -1049,6 +1054,26 @@ async function updateBlock(id, fields, client) {
         isTaskRow({ type: existing.type, properties: existing.properties }), completionMutationId);
     }
     const existingProps = existing.properties || {};
+    if (fields.taskCostsChange !== undefined) {
+      if (!isTaskRow(existing) || [properties, sort_order, parent_id, date, taskPriority, completionIntent].some(value => value !== undefined)) {
+        const error = new Error("Transaction changes require a standalone task edit");
+        error.statusCode = 400;
+        throw error;
+      }
+      let costs;
+      try { costs = TaskCosts.applyChange(existingProps.taskCosts, fields.taskCostsChange); }
+      catch (error) { error.statusCode ||= 400; throw error; }
+      if (costs === undefined) {
+        if (ownsTransaction) await q.query("COMMIT");
+        return parseBlock(existing);
+      }
+      newProps = { ...existingProps, taskCosts: costs };
+      validateBlock(existing.type, newProps);
+    } else if (properties !== undefined) {
+      // Older full-row snapshots must never roll back a ledger edit.
+      if (Object.hasOwn(existingProps, "taskCosts")) newProps.taskCosts = existingProps.taskCosts;
+      else delete newProps.taskCosts;
+    }
     // Reconciliation lineage belongs to its audited transaction. An old offline
     // property bag must not erase outcomes, links or review decisions.
     if (!fields[require("./lib/conversation-model").RECONCILIATION_WRITE]) {

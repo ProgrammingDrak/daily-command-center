@@ -148,6 +148,24 @@
     });
   }
 
+  function applyChange(current, change) {
+    if (!change || !Array.isArray(change.before) || !Array.isArray(change.after)) {
+      throw new Error("Invalid transaction change.");
+    }
+    const before = JSON.stringify(validate(change.before));
+    const after = validate(change.after);
+    const latest = transactions(current);
+    const snapshot = JSON.stringify(latest);
+    if (snapshot === JSON.stringify(after)) return undefined;
+    if (snapshot !== before) {
+      const error = new Error("Transactions changed elsewhere. Reload the itinerary before editing.");
+      error.statusCode = 409;
+      error.publicCode = "TASK_COSTS_CONFLICT";
+      throw error;
+    }
+    return after;
+  }
+
   function summary(entries) {
     const amounts = new Map();
     for (const { currency, amountMinor } of entries) {
@@ -156,5 +174,5 @@
     return [...amounts].map(([currency, amount]) => format(amount, currency)).join(" + ");
   }
 
-  return { categories, currencies, maxItems, maxTransactions, digits, parseAmount, validate, transactions, format, summary };
+  return { categories, currencies, maxItems, maxTransactions, digits, parseAmount, validate, transactions, applyChange, format, summary };
 });
