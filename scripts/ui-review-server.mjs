@@ -78,6 +78,10 @@ function liveReviewBlocks() {
   return [...reviewBlocks.values()].filter((block) => !block.deleted_at);
 }
 if (process.env.DCC_REVIEW_GLASSES_DEVICE === '1') {
+  app.get('/public/js/app-config.js', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.type('js').send('window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:"ws-1"};');
+  });
   seedGlassesDeviceReview(reviewBlocks, localDateKey(new Date()));
   app.post('/api/review/glasses-device/reset', (_req,res) => {
     reviewBlocks.clear(); seedGlassesDeviceReview(reviewBlocks,localDateKey(new Date())); res.json({ok:true});

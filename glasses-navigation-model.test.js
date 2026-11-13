@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {create, viewport, COLLECTIONS, LANES} = require('./public/js/device-views/glasses-navigation-model');
+const {create, viewport, taskHierarchy, COLLECTIONS, LANES} = require('./public/js/device-views/glasses-navigation-model');
+const taskModel = require('./public/js/task-model');
 const rows = count => Array.from({length:count}, (_,i)=>({id:'task-'+i,title:'Task '+i}));
 test('collection order and working queue lanes are fixed',()=>{
  assert.deepEqual(COLLECTIONS,['All Tasks','Working Queue','Itinerary','Loose Ends','Unscheduled','Whenever','Someday','Waiting']);
@@ -10,6 +11,26 @@ test('11-row viewport remains full near boundaries',()=>{
  assert.deepEqual(viewport(20,0),{start:0,end:11,selectedSlot:0});
  assert.deepEqual(viewport(20,10),{start:5,end:16,selectedSlot:5});
  assert.deepEqual(viewport(20,19),{start:9,end:20,selectedSlot:10});
+});
+test('hierarchy resolves row IDs and same-day aliases without changing action targets', () => {
+ const describe = (id, date, properties) => {
+   const row = { id, date, properties };
+   return { id, actionId: id, kind: 'task', row, ev: taskModel.fromBlock(row) };
+ };
+ const parent = describe('parent', '2026-11-13', { local_id: 'legacy-parent' });
+ const otherDay = describe('other-day', '2026-11-12', { local_id: 'legacy-parent' });
+ const child = describe('child', parent.row.date, { subtaskOf: 'legacy-parent' });
+ const nested = describe('nested', parent.row.date, { wrapId: 'child' });
+ const orphan = describe('orphan', parent.row.date, { subtaskOf: 'missing' });
+ const items = [nested, otherDay, child, parent, orphan];
+ const formatted = taskHierarchy(items, taskModel);
+ assert.deepEqual(formatted.map(item => [item.actionId, item.depth, item.relation]), [
+   ['other-day', 0, null], ['parent', 0, null], ['child', 1, 'subtask'],
+   ['nested', 2, 'ride-along'], ['orphan', 0, null]
+ ]);
+ assert.equal(formatted[2].ev, child.ev);
+ assert.deepEqual(taskHierarchy(items, taskModel, { preserveOrder: true }).map(item => item.id),
+   items.map(item => item.id));
 });
 test('jump moves five, select moves one and back preserves selection',()=>{
  const m=create();m.setLists(COLLECTIONS.map(()=>rows(20)));

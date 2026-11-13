@@ -12,6 +12,35 @@
   ]);
   const LANES = Object.freeze(['Foreground', 'Needs You', 'Background', 'Priority Queue']);
   const LEVELS = Object.freeze(['jump', 'select', 'task', 'details', 'more']);
+  function taskHierarchy(items, taskModel, { preserveOrder = false } = {}) {
+    const byId = new Map(), byAlias = new Map();
+    const tasks = items.filter(item => item?.kind === 'task');
+    const aliasKey = (item, id) => JSON.stringify([item.row?.date || item.ev?.__unf?.sourceDate || null, id]);
+    for (const item of tasks) {
+      byId.set(item.actionId, item);
+      const alias = item.ev?.id;
+      if (!alias) continue;
+      const key = aliasKey(item, alias);
+      if (!byAlias.has(key)) byAlias.set(key, item);
+      else if (byAlias.get(key) !== item) byAlias.set(key, null);
+    }
+    // The tree uses stable action IDs internally. Keep the original event and
+    // action descriptor for navigation, selection and writes.
+    const events = tasks.map(item => {
+      const rel = taskModel.relOf(item.ev);
+      const ref = taskModel.parentIdOf(item.ev) || item.row?.parent_id;
+      const parent = byId.get(ref) || byAlias.get(aliasKey(item, ref));
+      return { id: item.actionId, start: item.ev?.start,
+        wrapId: rel === 'ride-along' ? parent?.actionId : null,
+        subtaskOf: rel !== 'ride-along' ? parent?.actionId : null };
+    });
+    const tree = taskModel.selectTree(events, { isCollapsed: () => false });
+    const formatted = new Map(tree.map(({ ev, depth, rel }) => [
+      ev.id, { ...byId.get(ev.id), depth, relation: depth ? rel : null }
+    ]));
+    if (preserveOrder) return items.map(item => formatted.get(item?.actionId) || item);
+    return [...formatted.values(), ...items.filter(item => item && item.kind !== 'task')];
+  }
   function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
   function viewport(length, selected, size = 11) {
     const start = clamp(selected - Math.floor(size / 2), 0, Math.max(0, length - size));
@@ -101,5 +130,5 @@
     function reset() { stopPress(); if (middleTimer != null) cancel(middleTimer); middleTimer = null; }
     return Object.freeze({ down, up, cancel: stopPress, reset });
   }
-  return Object.freeze({ COLLECTIONS, LANES, LEVELS, viewport, create, createInput });
+  return Object.freeze({ COLLECTIONS, LANES, LEVELS, viewport, taskHierarchy, create, createInput });
 });
