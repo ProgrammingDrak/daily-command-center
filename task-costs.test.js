@@ -55,3 +55,10 @@ test("ledger changes reject competing snapshots and safely replay acknowledgemen
   assert.equal(costs.applyChange([gas, meal], change), undefined);
   assert.throws(() => costs.applyChange([{ ...gas, amountMinor: 1300 }], change), { statusCode: 409 });
 });
+
+test("the first ledger edit accepts an equivalent legacy cost snapshot", () => {
+  const legacy = { task: { currency: "USD", amountMinor: 100 } };
+  const before = costs.transactions(legacy);
+  const after = costs.validate([...before, gas]);
+  assert.deepEqual(costs.applyChange(legacy, { before, after }), after);
+});

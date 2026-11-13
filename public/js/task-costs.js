@@ -154,7 +154,7 @@
     }
     const before = JSON.stringify(validate(change.before));
     const after = validate(change.after);
-    const latest = transactions(current);
+    const latest = validate(transactions(current));
     const snapshot = JSON.stringify(latest);
     if (snapshot === JSON.stringify(after)) return undefined;
     if (snapshot !== before) {

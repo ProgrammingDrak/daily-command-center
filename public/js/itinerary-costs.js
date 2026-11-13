@@ -1,6 +1,5 @@
 (function () {
   const Costs = window.DCC.TaskCosts;
-  let rebuildingDrafts;
 
   function append(parent, tag, text, className) {
     const node = document.createElement(tag);
@@ -301,16 +300,20 @@
     }), block?.date);
   };
 
-  window.DCC.ItineraryCosts.preserveDrafts = (wrap, rebuild) => {
+  window.DCC.ItineraryCosts.captureDrafts = wrap => {
+    const drafts = [...wrap.querySelectorAll(".it-cost-preview[data-editing]")];
+    if (!drafts.length) return;
     const focused = document.activeElement;
-    rebuildingDrafts = new Map([...wrap.querySelectorAll(".it-cost-preview[data-editing]")].map(section => [
-      section.dataset.taskId, section
-    ]));
-    try { return rebuild(); }
-    finally {
-      rebuildingDrafts = undefined;
+    return () => {
+      const replacements = new Map([...wrap.querySelectorAll(".it-cost-preview[data-editable]")].map(section => [
+        section.dataset.taskId, section
+      ]));
+      for (const draft of drafts) {
+        const replacement = replacements.get(draft.dataset.taskId);
+        if (replacement?.dataset.viewDate === draft.dataset.viewDate) replacement.replaceWith(draft);
+      }
       if (focused?.isConnected && focused.closest(".it-cost-preview[data-editing]")) focused.focus({ preventScroll: true });
-    }
+    };
   };
 
   window.mountItineraryCosts = (card, task) => {
@@ -320,12 +323,8 @@
     const entries = readCosts(cached ? cached.properties.taskCosts : task.taskCosts);
     const archived = typeof viewMode !== "undefined" && viewMode === "archive";
     if (archived && !entries.length) return;
-    const retained = !archived && rebuildingDrafts?.get(blockId);
-    if (retained && retained.dataset.viewDate === String(typeof viewDate === "undefined" ? "" : viewDate)) {
-      card.append(retained);
-      return;
-    }
     const detail = mountEditor(card, entries, !archived && writer(blockId), cached?.date);
+    if (!archived) detail.dataset.editable = "true";
     detail.dataset.taskId = blockId;
     detail.dataset.viewDate = String(typeof viewDate === "undefined" ? "" : viewDate);
     detail.classList.add("it-cost-preview");
