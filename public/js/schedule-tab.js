@@ -815,7 +815,10 @@ function createTaskListRowRenderer(context){
         const ae=rowEl.querySelector("[data-actual-edit]");if(ae)ae.addEventListener("click",e=>{e.stopPropagation();if(typeof window.editTimeEntries==="function")window.editTimeEntries(ev.id,ev.title,_schedViewDate(),ae);});
       }
     });
-    if(context.showCommute)window.mountItineraryLocation?.(el,ev,openDetails);
+    if(context.showCommute){
+      window.mountItineraryLocation?.(el,ev,openDetails);
+      window.mountItineraryCosts?.(el,ev);
+    }
     if(context.showCommute&&!node?.depth&&_rowIsTimed(ev))window.mountItineraryCommute?.(el,ev);
     return el;
   }
@@ -979,6 +982,7 @@ window.renderTriageInto=renderTriageInto;
 function buildListView(){
   const wrap=document.getElementById("list-view");
   if(!wrap)return;
+  const restoreDrafts=window.DCC?.ItineraryCosts?.captureDrafts(wrap);
   wrap.innerHTML="";
   const model=_itineraryListModel();
   const {viewDate,isTodayView,unfPool,day}=model;
@@ -1168,6 +1172,7 @@ function buildListView(){
   }
 
 
+  restoreDrafts?.();
 }
 
 // ======== SCHEDULE TAB ========

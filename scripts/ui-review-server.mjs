@@ -12,6 +12,7 @@ import seedTaskDetailReview from "./task-detail-review-fixtures.cjs";
 import seedGlassesDeviceReview from "./glasses-device-review-fixtures.cjs";
 import seedHierarchyReview from "./hierarchy-review-fixtures.cjs";
 import hierarchy from "../lib/task-hierarchy.js";
+import TaskCosts from "../public/js/task-costs.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -205,18 +206,16 @@ app.get("/api/blocks", (req, res) => {
   }
   res.json(blocks);
 });
-// Synthetic Actual-time fixture for verify-task-workspace-actual.mjs only. The
-// Calendar reads a week through /api/blocks/range; the seed writes in-memory
-// tasks and time entries covering every evidence class. No live data.
-if (process.env.DCC_REVIEW_ACTUAL === "1") {
-  // Synthetic client config, the same shape server.js sends: the fixed review
-  // account (user 1, ws-1) and the app zone. No credentials, no session lookup.
-  // Registered only here, so other review modes keep their own config.
+// Enable owner-scoped controls with a fixed review account and an in-memory store.
+if (process.env.DCC_REVIEW_ACTUAL === "1" || process.env.DCC_REVIEW_TASK_DETAILS === "1") {
   app.get("/public/js/app-config.js", (_req, res) => {
     res.type("application/javascript");
     res.setHeader("Cache-Control", "no-store");
     res.send('window.DCC_APP_TIME_ZONE="America/New_York";window.DCC_DELTA_SYNC_ENABLED=false;window.DCC_ACCOUNT_CONTEXT={"userId":1,"workspaceId":"ws-1"};');
   });
+}
+// Synthetic Actual-time fixture for verify-task-workspace-actual.mjs only.
+if (process.env.DCC_REVIEW_ACTUAL === "1") {
   app.get("/api/blocks/range", (req, res) => {
     const start = String(req.query.start || ""), end = String(req.query.end || "");
     res.json(liveReviewBlocks().filter((block) => block.date && block.date >= start && block.date <= end));
@@ -380,6 +379,15 @@ app.get('/api/blocks/:id', (req,res) => {
 app.patch("/api/blocks/:id", (req, res) => {
   const block = reviewBlocks.get(req.params.id);
   if (!block || block.deleted_at) return res.status(404).json({ error: "Block not found" });
+  if (Object.hasOwn(req.body || {}, "taskCostsChange")) {
+    try {
+      const taskCosts = TaskCosts.applyChange(block.properties.taskCosts, req.body.taskCostsChange);
+      if (taskCosts === undefined) return res.json(block);
+      const saved = { ...block, properties: { ...block.properties, taskCosts }, updated_at: new Date().toISOString() };
+      reviewBlocks.set(saved.id, saved);
+      return res.json(saved);
+    } catch (error) { return res.status(error.statusCode || 400).json({error:error.message,code:error.publicCode}); }
+  }
   const next = {
     ...block,
     ...(Object.hasOwn(req.body || {}, "date") ? { date: req.body.date } : {}),

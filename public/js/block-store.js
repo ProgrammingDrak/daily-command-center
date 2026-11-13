@@ -542,6 +542,10 @@
 
   function cacheSet(block) {
     block = overlayPendingCompletion(block);
+    const pendingCosts = walGet().filter(entry => entry?.op === "task-costs" && entry.id === block.id);
+    if (pendingCosts.length) {
+      block = { ...block, properties: { ...block.properties, taskCosts: pendingCosts.at(-1).data.taskCostsChange.after } };
+    }
     // Remove any prior entry in either cache so a block can migrate between
     // global and day partitions without leaving a stale duplicate behind.
     _dayCache.delete(block.id);
@@ -647,6 +651,7 @@
     // source calendar owns placement. That authority will not change on retry.
     if ((entry.op === "undelete" || entry.op === "reschedule" || (entry.op === "batch" && entry.data?.operations?.some(op => op.op === "undelete"))) && err.status === 409) return true;
     if ((entry.op === "update" || entry.op === "completion") && err.status === 409) return true;
+    if (entry.op === "task-costs" && [400, 404, 409].includes(err.status)) return true;
     if ((entry.op === "work" || entry.op === "realloc") && err.status === 409) return true;
     return false;
   }
@@ -735,6 +740,15 @@
           case "create":
             await apiPost("/api/blocks", entry.data);
             break;
+          case "task-costs": {
+            await queueUpdateRequest(entry.id, async () => {
+              if (!walGet().some(e => e && e._walId === entry._walId)) return;
+              const block = await apiPatch("/api/blocks/" + encodeURIComponent(entry.id), entry.data);
+              walRemove(entry._walId);
+              cacheSet(block);
+            });
+            break;
+          }
           case "update":
             await queueUpdateRequest(entry.id, async () => {
               // The replay loop snapshots the WAL before awaiting. A newer live
@@ -851,6 +865,11 @@
             if (current && current.type !== "legacy_task") cacheSet(current);
             else cacheDelete(entry.id);
             setError("Completion rejected" + (e.requestId ? " (request " + e.requestId + ")" : ""));
+          }
+          if (entry.op === "task-costs") {
+            try { cacheSet(await apiGet("/api/blocks/" + encodeURIComponent(entry.id))); }
+            catch (_) { cacheDelete(entry.id); }
+            if (typeof showToast === "function") showToast("A queued transaction could not be saved. " + e.message, "error");
           }
           if(entry.op==="reschedule"&&entry.data?.placement?.kind==="unplanned"&&typeof showToast==="function")showToast("Move to "+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled")+" rejected: "+e.message,"error");
           dropped++;
@@ -975,6 +994,33 @@
         // Entry stays in WAL; optimistic entry is already in cache.
         return optimistic;
       }
+    },
+
+    updateTaskCosts(id, before, after) {
+      const data = { taskCostsChange: { before, after } };
+      setSaving();
+      const existing = cacheGet(id);
+      const walId = walPush({ op: "task-costs", id, data });
+      if (existing) cacheSet(existing);
+      return queueUpdateRequest(id, async () => {
+        try {
+          const block = await apiPatch("/api/blocks/" + encodeURIComponent(id), data);
+          walRemove(walId);
+          cacheSet(block);
+          setSaved();
+          return block;
+        } catch (error) {
+          if (isPermanentReplayFailure({ op: "task-costs" }, error)) {
+            walRemove(walId);
+            try { cacheSet(await apiGet("/api/blocks/" + encodeURIComponent(id))); }
+            catch (_) { if (error.status === 404) cacheDelete(id); else if (existing) cacheSet(existing); }
+            setError(error.message);
+            throw error;
+          }
+          setError("Save failed. Buffered for retry.");
+          return { _savePending: true };
+        }
+      });
     },
 
     // Update a block (full properties replacement)
