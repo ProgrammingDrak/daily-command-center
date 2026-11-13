@@ -36,7 +36,6 @@ body.device-glasses>.side-drawer.open{display:block!important}
   --glasses-indent: clamp(9px, 3vw, 18px);
   --glasses-subtask: #5eead4;
   --glasses-nested: #a5b4fc;
-  --glasses-waiting: #c4b5fd;
 }
 .glasses-task-row[data-relation="subtask"] { --glasses-relation-color: var(--glasses-subtask); }
 .glasses-task-row[data-relation="ride-along"] { --glasses-relation-color: var(--glasses-nested); }

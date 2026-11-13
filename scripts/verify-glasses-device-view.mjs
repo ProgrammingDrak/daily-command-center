@@ -33,6 +33,8 @@ try {
   assert.equal(await page.evaluate(() => window.DCCGlasses.snapshot().count), canonical.length);
   assert.ok(!canonical.includes('glasses-done'));
   assert.equal(new Set(ids).size, ids.length);
+  const parentIndex = ids.indexOf('review-detail-task');
+  assert.deepEqual(ids.slice(parentIndex, parentIndex + 3), ['review-detail-task', 'review-detail-step', 'glasses-review-nested']);
   const taskRow = id => page.locator('.glasses-task-row[data-task-id="' + id + '"]');
   const titleX = async id => (await taskRow(id).locator('.glasses-title').boundingBox()).x;
   for (const width of [600, 320]) {

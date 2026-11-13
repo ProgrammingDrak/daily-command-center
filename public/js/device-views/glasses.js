@@ -30,6 +30,7 @@
   header.append(mode, position, refresh, exit); footer.append(back, undoStatus, details);
   root.append(header, collection, content, footer, status); document.body.append(root); document.body.classList.add('device-glasses');
   function announce(message) { status.textContent = message; }
+  const hierarchy = (items, options) => Navigation.taskHierarchy(items, DCC.TaskModel, options);
   function descriptor(value, section) {
     if (value?.kind && value.actionId) return { ...value, section: section || value.section || '' };
     const row = value?.task || (value?.properties ? value : null);
@@ -38,7 +39,6 @@
     return id ? { id: String(id), actionId: String(id), kind: 'task', row, ev, title: ev?.title || row?.properties?.title || 'Task', section: section || '', queue: value?.task ? value : null } : null;
   }
   function lists() {
-    const hierarchy = (items, options) => Navigation.taskHierarchy(items, DCC.TaskModel, options);
     const queue = (window.DCCWorkingQueue?.getState().queue?.items || []).map(item => window.DCCQueuePolicy.presentation(item));
     const lanes = window.DCCQueuePolicy.lanes(queue, DCC.TaskPriority.group);
     const working = ['foreground', 'needs', 'background', 'priority'].flatMap((key, i) =>
@@ -48,9 +48,9 @@
     const whenever = (DCC.Whenever?.glassesTasks?.() || []).map(ev => descriptor(ev));
     const waitingRules = DCC.TaskQueues.waitingRules({ today: DCC.dates.todayKey(), scoreClass: score => window.urgency.scoreClass(score) });
     const waiting = (DCC.Waiting?.all?.() || []).filter(waitingRules.isOpenDelegated).map(row => ({ id: 'waiting:' + row.id, actionId: row.id, kind: 'waiting', row, title: row.properties?.myTask || row.properties?.title || 'Waiting', ev: DCC.TaskModel.fromBlock(row) }));
-    return [hierarchy(library.allTasks), working, hierarchy(itinerary), looseEnds,
+    return [library.allTasks, working, hierarchy(itinerary), looseEnds,
       hierarchy(unscheduled), hierarchy(whenever),
-      hierarchy(library.someday), waiting];
+      library.someday, waiting];
   }
   function reconcile() {
     if (!signedIn()) {
@@ -73,7 +73,8 @@
           window.DCCWorkingQueue?.refresh()
         ]);
         if (!sameAccount() || generation !== refreshGeneration) return;
-        library = nextLibrary; looseEnds = nextLoose; problem = ''; loaded = true;
+        library = { allTasks: hierarchy(nextLibrary.allTasks), someday: hierarchy(nextLibrary.someday) };
+        looseEnds = nextLoose; problem = ''; loaded = true;
       } catch (error) {
         if ([401, 403].includes(error.status)) { sessionInvalid = true; ++revision; }
         if (sameAccount()) problem = 'Refresh unavailable: ' + error.message;
@@ -89,8 +90,9 @@
   }
   function appearance(item) {
     const relation = item.relation === 'subtask' ? 'Subtask' : item.relation === 'ride-along' ? 'Nested task' : '';
-    if (item.kind === 'waiting') return { relation, label: 'Waiting', color: 'var(--glasses-waiting)' };
-    const type = window.TaskTypes.get(item.kind === 'triage' || item.ev?.triageBlock ? 'triage' : item.ev);
+    if (item.kind === 'waiting') return { relation, label: 'Waiting', color: 'var(--waiting-ink)' };
+    const sourceReview = item.ev?.type === 'task' && DCC.TimeBlocks.isSourceReviewTask(item.ev);
+    const type = window.TaskTypes.get(item.kind === 'triage' || sourceReview ? 'triage' : item.ev);
     return { relation, label: type.label, color: type.color };
   }
   function direction(symbol, label, action, className) {
