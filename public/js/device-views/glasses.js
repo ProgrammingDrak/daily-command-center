@@ -30,6 +30,7 @@
   header.append(mode, position, refresh, exit); footer.append(back, undoStatus, details);
   root.append(header, collection, content, footer, status); document.body.append(root); document.body.classList.add('device-glasses');
   function announce(message) { status.textContent = message; }
+  const hierarchy = (items, options) => Navigation.taskHierarchy(items, DCC.TaskModel, options);
   function descriptor(value, section) {
     if (value?.kind && value.actionId) return { ...value, section: section || value.section || '' };
     const row = value?.task || (value?.properties ? value : null);
@@ -40,13 +41,16 @@
   function lists() {
     const queue = (window.DCCWorkingQueue?.getState().queue?.items || []).map(item => window.DCCQueuePolicy.presentation(item));
     const lanes = window.DCCQueuePolicy.lanes(queue, DCC.TaskPriority.group);
-    const working = ['foreground', 'needs', 'background', 'priority'].flatMap((key, i) => (lanes[key] || []).map(item => descriptor(item, Navigation.LANES[i])));
+    const working = ['foreground', 'needs', 'background', 'priority'].flatMap((key, i) =>
+      hierarchy((lanes[key] || []).map(item => descriptor(item, Navigation.LANES[i])), { preserveOrder: true }));
     const itinerary = (window.glassesItineraryTasks?.() || []).map(ev => descriptor(ev));
     const unscheduled = (window.glassesUnscheduledTasks?.() || []).map(ev => descriptor(ev));
     const whenever = (DCC.Whenever?.glassesTasks?.() || []).map(ev => descriptor(ev));
     const waitingRules = DCC.TaskQueues.waitingRules({ today: DCC.dates.todayKey(), scoreClass: score => window.urgency.scoreClass(score) });
     const waiting = (DCC.Waiting?.all?.() || []).filter(waitingRules.isOpenDelegated).map(row => ({ id: 'waiting:' + row.id, actionId: row.id, kind: 'waiting', row, title: row.properties?.myTask || row.properties?.title || 'Waiting', ev: DCC.TaskModel.fromBlock(row) }));
-    return [library.allTasks, working, itinerary, looseEnds, unscheduled, whenever, library.someday, waiting];
+    return [library.allTasks, working, hierarchy(itinerary), looseEnds,
+      hierarchy(unscheduled), hierarchy(whenever),
+      library.someday, waiting];
   }
   function reconcile() {
     if (!signedIn()) {
@@ -69,7 +73,8 @@
           window.DCCWorkingQueue?.refresh()
         ]);
         if (!sameAccount() || generation !== refreshGeneration) return;
-        library = nextLibrary; looseEnds = nextLoose; problem = ''; loaded = true;
+        library = { allTasks: hierarchy(nextLibrary.allTasks), someday: hierarchy(nextLibrary.someday) };
+        looseEnds = nextLoose; problem = ''; loaded = true;
       } catch (error) {
         if ([401, 403].includes(error.status)) { sessionInvalid = true; ++revision; }
         if (sameAccount()) problem = 'Refresh unavailable: ' + error.message;
@@ -82,6 +87,13 @@
     const ev = item.ev || {}, p = item.row?.properties || {};
     const state = (window.DCCWorkingQueue?.getState().queue?.items || []).find(entry => entry.task.id === item.actionId);
     return [state?.status === 'foreground' ? 'Foreground' : item.section || '', ev.start || '', ev.duration ? ev.duration + ' min' : '', p.priorityLabel || ''].filter(Boolean).join(' · ') || (item.kind === 'waiting' ? 'Waiting for a response' : 'Ready when you are');
+  }
+  function appearance(item) {
+    const relation = item.relation === 'subtask' ? 'Subtask' : item.relation === 'ride-along' ? 'Nested task' : '';
+    if (item.kind === 'waiting') return { relation, label: 'Waiting', color: 'var(--waiting-ink)' };
+    const sourceReview = item.ev?.type === 'task' && DCC.TimeBlocks.isSourceReviewTask(item.ev);
+    const type = window.TaskTypes.get(item.kind === 'triage' || sourceReview ? 'triage' : item.ev);
+    return { relation, label: type.label, color: type.color };
   }
   function direction(symbol, label, action, className) {
     const el = button('', () => input(action), 'glasses-direction ' + className); el.dataset.action = action; el.setAttribute('aria-label', label);
@@ -102,19 +114,33 @@
       let section = null;
       state.rows.forEach((item, slot) => {
         const index = state.window.start + slot, selected = index === state.index;
+        const { relation, label: type, color } = appearance(item);
         const row = node('div', 'glasses-task-row'); row.dataset.taskId = item.id; row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(selected));
+        row.setAttribute('aria-label', [item.section, item.title, relation, type === 'Task' && relation ? '' : type].filter(Boolean).join(', '));
+        row.style.setProperty('--glasses-type-color', color);
+        if (relation) {
+          row.dataset.relation = item.relation;
+          row.style.setProperty('--glasses-depth', String(item.depth));
+        }
         if (state.level === 'jump' && index >= state.range.start && index < state.range.end) row.classList.add('glasses-range');
         if (selected) row.classList.add('glasses-selected');
         row.append(node('span', 'glasses-number', index + 1)); const label = node('span', 'glasses-row-label');
         if (item.section && item.section !== section) label.append(node('small', 'glasses-section', item.section));
-        section = item.section; label.append(node('span', 'glasses-title', item.title)); row.append(label); list.append(row);
+        section = item.section;
+        label.append(node('span', 'glasses-title', item.title));
+        row.append(label, node('span', type === 'Task' ? 'glasses-type glasses-relation' : 'glasses-type',
+          type === 'Task' ? relation : type));
+        list.append(row);
       });
       content.append(list);
     } else if (state.level === 'task') {
       const item = state.selected, view = node('div', 'glasses-task-view');
+      const { relation, label: type, color } = appearance(item);
       const foreground = window.DCCWorkingQueue?.getState().queue?.items?.some(entry => entry.task.id === item.actionId && entry.status === 'foreground');
       const focus = button('', () => input('tap-fore'), 'glasses-focus'); focus.setAttribute('aria-label', 'Complete ' + item.title);
-      focus.append(node('strong', '', item.title), node('span', 'glasses-task-meta', meta(item)), node('small', '', pending ? 'Saving…' : '◎ Tap to complete'));
+      const category = node('span', 'glasses-focus-type', [relation, type === 'Task' && relation ? '' : type].filter(Boolean).join(' · '));
+      category.style.setProperty('--glasses-type-color', color);
+      focus.append(category, node('strong', '', item.title), node('span', 'glasses-task-meta', meta(item)), node('small', '', pending ? 'Saving…' : '◎ Tap to complete'));
       bindFinger(focus, 'fore');
       view.append(direction('↑', foreground ? 'Background · 30m' : 'Foreground', 'up', 'glasses-up'), direction('✓', 'Complete', 'left', 'glasses-left'), focus, direction('⊖', 'Remove priority', 'right', 'glasses-right'), direction('•••', 'More actions', 'down', 'glasses-down'));
       content.append(view);

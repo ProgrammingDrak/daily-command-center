@@ -30,3 +30,34 @@ body.device-glasses> :not(#glasses-app):not(#toast-container):not(dialog):not(.d
 /* Existing owner dialogs remain available for source-specific outcome flows. */
 body.device-glasses>.side-drawer.open{display:block!important}
 .glasses-exit{display:inline-flex;align-items:center;min-height:44px}.glasses-refresh{min-height:44px;min-width:44px}
+
+/* Type and hierarchy accents are independent of Jump and Select highlighting. */
+.glasses-app {
+  --glasses-indent: clamp(9px, 3vw, 18px);
+  --glasses-subtask: #5eead4;
+  --glasses-nested: #a5b4fc;
+}
+.glasses-task-row[data-relation="subtask"] { --glasses-relation-color: var(--glasses-subtask); }
+.glasses-task-row[data-relation="ride-along"] { --glasses-relation-color: var(--glasses-nested); }
+.glasses-task-row[data-relation] .glasses-row-label {
+  margin-inline-start: min(20%, calc(var(--glasses-depth) * var(--glasses-indent)));
+  padding-inline-start: 7px;
+  border-inline-start: 2px solid var(--glasses-relation-color);
+}
+.glasses-type {
+  flex: none;
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--glasses-navy);
+  font-size: 10px;
+  line-height: 1;
+  color: var(--glasses-type-color);
+}
+.glasses-type.glasses-relation { color: var(--glasses-relation-color); }
+.glasses-type:empty { display: none; }
+.glasses-task-row .glasses-number,
+.glasses-focus .glasses-focus-type { color: var(--glasses-type-color); }
+.glasses-focus-type { font-size: 12px; }
+@media(max-width:420px) {
+  .glasses-task-row { gap: 7px; }
+}

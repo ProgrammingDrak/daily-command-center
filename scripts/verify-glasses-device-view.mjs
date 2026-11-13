@@ -13,7 +13,6 @@ await fs.mkdir(out, { recursive: true });
 const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
 const context = await browser.newContext({ viewport: { width: 600, height: 600 }, hasTouch: true });
 await context.route('**/*', r => new URL(r.request().url()).origin === base ? r.continue() : r.abort());
-await context.addInitScript(() => { window.DCC_ACCOUNT_CONTEXT = { userId: 1, workspaceId: 'ws-1' }; });
 const page = await context.newPage(), errors = [], checks = [];
 page.on('pageerror', e => errors.push(e.message));
 const check = name => { checks.push(name); console.log('PASS ' + name); };
@@ -30,10 +29,28 @@ try {
   const initial = await selected();
   const ids = await page.locator('.glasses-task-row').evaluateAll(rows => rows.map(r => r.dataset.taskId));
   const canonical = await page.evaluate(async () => (await window.DCCTaskLibrary.glassesCollections()).allTasks.map(task => task.id));
-  assert.deepEqual(ids, canonical.slice(0, 11));
+  assert.ok(ids.every(id => canonical.includes(id)));
   assert.equal(await page.evaluate(() => window.DCCGlasses.snapshot().count), canonical.length);
   assert.ok(!canonical.includes('glasses-done'));
-  check('All Tasks has exact canonical open-task count and order, without completed or duplicate rows');
+  assert.equal(new Set(ids).size, ids.length);
+  const parentIndex = ids.indexOf('review-detail-task');
+  assert.deepEqual(ids.slice(parentIndex, parentIndex + 3), ['review-detail-task', 'review-detail-step', 'glasses-review-nested']);
+  const taskRow = id => page.locator('.glasses-task-row[data-task-id="' + id + '"]');
+  const titleX = async id => (await taskRow(id).locator('.glasses-title').boundingBox()).x;
+  for (const width of [600, 320]) {
+    await page.setViewportSize({ width, height: 600 });
+    assert.ok(await titleX('review-detail-task') < await titleX('review-detail-step'));
+    assert.ok(await titleX('review-detail-step') < await titleX('glasses-review-nested'));
+  }
+  await page.setViewportSize({ width: 600, height: 600 });
+  assert.equal(await taskRow('review-detail-step').getAttribute('data-relation'), 'subtask');
+  assert.equal(await taskRow('glasses-review-nested').getAttribute('data-relation'), 'ride-along');
+  assert.match(await taskRow('glasses-review-nested').getAttribute('aria-label'), /Nested task/);
+  const typeColor = id => taskRow(id).locator('.glasses-type').evaluate(el => getComputedStyle(el).color);
+  assert.notEqual(await typeColor('review-detail-step'), await typeColor('glasses-review-nested'));
+  assert.equal(await typeColor('review-workout'), 'rgb(56, 189, 248)');
+  assert.equal(await typeColor('review-meeting'), 'rgb(249, 115, 22)');
+  check('All Tasks keeps the canonical open-task count, indents each level and displays DCC type colors');
   await page.keyboard.press('ArrowDown');
   assert.equal(await selected(), ids[5]);
   assert.equal(await page.locator('.glasses-range').count(), 5);
