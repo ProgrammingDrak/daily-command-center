@@ -24,6 +24,7 @@
 <link rel="stylesheet" href="/public/css/ui-optimization.css?v=task-workspace-nav-2">
 <link rel="stylesheet" href="/public/css/activity.css?v=movement-cards-1">
 <link rel="stylesheet" href="/public/css/task-sources.css">
+<link rel="stylesheet" href="/public/css/itinerary-costs.css?v=ledger-1">
 <link rel="stylesheet" href="/public/css/commitments.css">
 <link rel="stylesheet" href="/public/css/completion-memories.css?v=shared-journal-1">
 <link rel="stylesheet" href="/public/css/task-workspace.css?v=task-workspace-nav-5">
@@ -801,6 +802,7 @@
       <div id="am-work-actions" class="am-work-actions" aria-label="Task execution"></div>
       <div id="am-time-summary" aria-label="Planned and actual time"></div>
       <div id="am-commute"></div>
+      <div id="am-costs"></div>
       </div>
       <div id="am-panel-subtasks" class="am-detail-panel" role="tabpanel" aria-labelledby="am-tab-subtasks" data-am-panel="subtasks" tabindex="0" hidden>
       <!-- Combined items list -->
@@ -2163,13 +2165,14 @@
 <script src="/public/js/completion-memories.js?v=photo-toolbar-1"></script>
 <script src="/public/js/itinerary-sharing.js"></script>
 <script src="/public/js/task-sources.js"></script>
-<script src="/public/js/task-serialize.js?v=task-serialize-1"></script>
+<script src="/public/js/task-costs.js?v=transactions-1"></script>
+<script src="/public/js/task-serialize.js?v=itinerary-costs-1"></script>
 <!-- task-model.js: the one block -> ev projection (window.DCC.TaskModel.fromBlock); must load before data.js/persistence.js/state.js and the carryover lane consume it -->
 <script src="/public/js/app-config.js?v=app-config-1"></script>
 <script src="/public/js/account-context.js"></script>
 <script src="/public/js/measured-task-window.js?v=measured-task-window-1"></script>
 <script src="/public/js/slack-titles.js?v=slack-rules-v1"></script>
-<script src="/public/js/task-model.js?v=someday-1"></script>
+<script src="/public/js/task-model.js?v=itinerary-costs-1"></script>
 <!-- Before schedule.js: its add-bar destinations read DCC.Whenever.LABEL at load. -->
 <script src="/public/js/task-queues.js"></script>
 <script src="/public/js/whenever.js?v=whenever-2"></script>
@@ -2199,7 +2202,8 @@
 <script src="/public/js/itinerary-card.js?v=inline-journal-1"></script>
 <script src="/public/js/hold-action.js"></script>
 <script src="/public/js/itinerary-commute.js"></script>
-<script src="/public/js/schedule-tab.js?v=progress-collapse-1"></script>
+<script src="/public/js/itinerary-costs.js?v=ledger-1"></script>
+<script src="/public/js/schedule-tab.js?v=itinerary-costs-1"></script>
 <script src="/public/js/schedule-zones.js?v=2"></script>
 <script src="/public/js/itinerary-calendar.js?v=calendar-zones-2"></script>
 <script src="/public/js/touch-drag.js"></script>
@@ -2228,7 +2232,7 @@
 <!-- Graph (B7): the global force-directed view. Needs the same vendored d3 above; loads before vault-tab.js, which wires it. -->
 <script src="/public/js/vault-graph.js?v=vault-b7-1"></script>
 <script src="/public/js/vault-tab.js?v=journal-cards-1"></script>
-<script src="/public/js/features.js?v=inline-moments-1"></script>
+<script src="/public/js/features.js?v=itinerary-costs-1"></script>
 <script src="/public/js/task-reconciliation.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>

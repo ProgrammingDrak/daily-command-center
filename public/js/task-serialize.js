@@ -164,6 +164,7 @@
       occurrenceAnchor: src.occurrenceAnchor === true,
       point_multiplier: src.point_multiplier == null ? undefined : Number(src.point_multiplier),
       ...(src.taskLocation ? {taskLocation: src.taskLocation} : {}),
+      ...(src.taskCosts ? {taskCosts: src.taskCosts} : {}),
       ...(src.commuteEndpoints ? {commuteEndpoints: src.commuteEndpoints} : {}),
       ...(Array.isArray(src.incomingCommute) ? {incomingCommute: src.incomingCommute} : {}),
       commuteMinutes: commuteMinutes,

@@ -522,6 +522,7 @@ function openAddModal(taskId, taskTitle, options) {
   }
 
   window.mountTaskCommute?.(document.getElementById('am-commute'), _addModalBlockId);
+  window.mountTaskCosts?.(document.getElementById('am-costs'), _addModalBlockId, taskEntry);
 
   // Load notes into block editor
   var notes = loadNotes();

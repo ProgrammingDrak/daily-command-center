@@ -22,11 +22,13 @@ const { slackTarget } = require("../lib/slack-status");
 // reference pattern.
 
 const TaskSources = require("../public/js/task-sources");
-function validateSourceProps(props) {
-  if (props && Object.prototype.hasOwnProperty.call(props, "sourceReferences")) {
-    try { TaskSources.validate(props.sourceReferences); }
-    catch (error) { error.statusCode = 400; throw error; }
-  }
+const TaskCosts = require("../public/js/task-costs");
+function validateTaskMetadata(props) {
+  if (!props) return;
+  try {
+    if (Object.hasOwn(props, "sourceReferences")) TaskSources.validate(props.sourceReferences);
+    if (Object.hasOwn(props, "taskCosts")) TaskCosts.validate(props.taskCosts);
+  } catch (error) { error.statusCode = 400; throw error; }
 }
 const validate = require("../middleware/validate");
 const schemas = require("../middleware/schemas");
@@ -683,7 +685,7 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks/pending-create-repair", route(async (req) => {
     if (req.dccServiceAuth || !req.session?.userId) throw clientError("Use an authenticated browser session to repair a pending task", 403);
     const { userId, workspaceId } = await resolveOwnerStrict(req);
-    validateSourceProps(req.body?.original?.properties);
+    validateTaskMetadata(req.body?.original?.properties);
     const result = await pendingCreateRepair({ original: req.body?.original,
       expected: req.body?.expected, apply: req.body?.apply === true, userId, workspaceId });
     if (result.created) broadcast("blocks-changed", { action: "create", blockIds: [result.block.id], clientId: req.body?._clientId }, workspaceId);
@@ -693,7 +695,7 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks", validate(schemas.blockCreate), route(async (req, res) => {
     const body = req.body;
     const items = Array.isArray(body) ? body : [body];
-    for (const item of items) validateSourceProps(typeof item.properties === "string" ? safeParseProps(item.properties) : item.properties);
+    for (const item of items) validateTaskMetadata(typeof item.properties === "string" ? safeParseProps(item.properties) : item.properties);
     if (items.some(item => waitingItems.isTaskDependency(
       typeof (item && item.properties) === "string" ? safeParseProps(item.properties) : ((item && item.properties) || {})
     ))) {
@@ -1108,7 +1110,7 @@ module.exports = function mount(app, ctx) {
     assertBlockOwnership(existing, req.workspaceId);
     const requestedProps = typeof (req.body && req.body.properties) === "string"
       ? safeParseProps(req.body.properties) : ((req.body && req.body.properties) || {});
-    validateSourceProps(requestedProps);
+    validateTaskMetadata(requestedProps);
     if (waitingItems.isTaskDependency(existing)
         || waitingItems.isTaskDependency(requestedProps)) {
       res.status(409).json({ error: "Update task dependencies through the Waiting API" });
@@ -1339,7 +1341,7 @@ module.exports = function mount(app, ctx) {
     for (const op of operations) {
       if (!op || typeof op !== "object") continue;
       const opProps = typeof op.properties === "string" ? safeParseProps(op.properties) : (op.properties || {});
-      if (op.op === "create" || op.op === "update") validateSourceProps(opProps);
+      if (op.op === "create" || op.op === "update") validateTaskMetadata(opProps);
       if ((op.op === "create" || op.op === "update") && waitingItems.isTaskDependency(opProps)) {
         res.status(409).json({ error: "Mutate task dependencies through the Waiting API" });
         return;

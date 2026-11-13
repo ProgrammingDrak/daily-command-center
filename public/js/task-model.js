@@ -117,6 +117,7 @@
       ...(Array.isArray(p.sourceReferences) ? {sourceReferences: p.sourceReferences.map(ref => Object.assign({}, ref))} : {}),
       source_id: p.source_id || "", notes: p.notes || "", untimed: untimed,
       ...(p.taskLocation ? {taskLocation: p.taskLocation} : {}),
+      ...(p.taskCosts ? {taskCosts: p.taskCosts} : {}),
       ...(p.commuteEndpoints ? {commuteEndpoints: p.commuteEndpoints} : {}),
       ...(Array.isArray(p.incomingCommute) ? {incomingCommute: p.incomingCommute} : {}),
       ...(Array.isArray(p.arrivalLinks) ? {arrivalLinks: p.arrivalLinks} : {}),
