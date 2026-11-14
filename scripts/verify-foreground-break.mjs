@@ -148,7 +148,9 @@ try {
     assert.equal(await card('a').locator('.wq-break-title').evaluate(el=>el.scrollHeight<=el.clientHeight),true,'task title remains fully readable');
     assert.notEqual(await veil.evaluate(el=>getComputedStyle(el).backdropFilter),'none');
     await page.waitForFunction(()=>document.querySelector('[data-queue-id="a"] .wq-break-veil [data-queue-action=focus]')?.getBoundingClientRect().height>=44);
-    await card('a').screenshot({path:path.join(output,'foreground-break-'+width+'.png')});
+    // Capture the settled viewport. A queue refresh can replace the card while
+    // Playwright waits for an element screenshot to stabilize.
+    await page.screenshot({path:path.join(output,'foreground-break-'+width+'.png')});
   }
   // Same queued command recovers a response lost after the transaction commits.
   let attempts=0,first;
