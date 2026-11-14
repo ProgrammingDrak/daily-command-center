@@ -377,13 +377,14 @@ function createProjectStore(deps = {}) {
   async function listTaskRows(workspaceId) {
     // Filter canonical artifacts in SQL. Parsed title and local_id checks
     // stay in JavaScript, where legacy values retain their original semantics.
+    // The id breaks exact sort ties, including for legacy local_id resolution.
     const { rows } = await pool.query(
       `SELECT * FROM blocks WHERE workspace_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL
        AND (type = 'block' OR type = ANY($2::text[]))
        AND dcc_is_task_row(type, properties)
        ORDER BY CASE WHEN COALESCE(properties->>'projectOrder','') ~ '^-?[0-9]+(?:[.][0-9]+)?$'
                      THEN (properties->>'projectOrder')::double precision ELSE sort_order END,
-                created_at ASC`,
+                created_at ASC, id ASC`,
       [workspaceId || null, LEGACY_TASK_TYPES]
     );
     return rows.map(blockDB.parseBlock).filter(row => isLibraryTask(row, blockDB));

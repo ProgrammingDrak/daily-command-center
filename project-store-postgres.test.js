@@ -15,11 +15,17 @@ const LEGACY_TASK_QUERY = `SELECT * FROM blocks WHERE workspace_id IS NOT DISTIN
 async function measureQuery(pool, sql, params) {
   const client = await pool.connect();
   let dataRowBytes = 0;
+  let dataRowCount = 0;
   // pg's DataRow length includes its length word. Add the one-byte message tag.
-  const record = message => { dataRowBytes += 1 + message.length; };
+  const record = message => {
+    dataRowCount++;
+    dataRowBytes += 1 + message.length;
+  };
   client.connection.on("dataRow", record);
   try {
     const { rows } = await client.query(sql, params);
+    assert.equal(dataRowCount, rows.length, "observed one DataRow message per result row");
+    if (rows.length) assert.ok(dataRowBytes > 0, "nonempty results transfer bytes");
     return { sql, params, rows, dataRowBytes, rowJsonBytes: Buffer.byteLength(JSON.stringify(rows)) };
   } finally {
     client.connection.off("dataRow", record);
@@ -154,4 +160,19 @@ test("Task Library PostgreSQL response parity and transfer budget", {
       }
     });
   }
+
+  await t.test("exact sort ties have stable order and legacy dependency readiness", async () => {
+    await pool.query(`
+      INSERT INTO blocks (id, type, properties, sort_order, created_at, updated_at, workspace_id)
+      VALUES
+        ('tie-z', 'block', '{"kind":"task","title":"Z","local_id":"tie-alias"}', 1, NOW(), NOW(), 'ws-3'),
+        ('tie-a', 'block', '{"kind":"task","title":"A","local_id":"tie-alias","done":true}', 1, NOW(), NOW(), 'ws-3'),
+        ('tie-edge', 'block', '{"kind":"delegated_item","blockerType":"task","blockerBlockId":"tie-alias","linkedBlockId":"library-third-workspace"}', 1, NOW(), NOW(), 'ws-3')
+    `);
+    const payload = JSON.parse(await fetchLibrary("filtered", "ws-3"));
+    assert.deepEqual(payload.tasks.slice(0, 2).map(row => row.id), ["tie-a", "tie-z"]);
+    assert.deepEqual(payload.readiness["library-third-workspace"], {
+      state: "blocked", total: 1, satisfied: 0, blockers: [{ id: "tie-z", title: "Z" }],
+    });
+  });
 });
