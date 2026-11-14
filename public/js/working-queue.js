@@ -68,6 +68,7 @@
           if(!entry.sent){
             if(state.revision!==entry.body.expectedRevision){
               const current=await previewFor(entry.body.taskId);
+              assertActionAccount();
               if(previewVersion(current)!==previewVersion(entry.preview)){
                 const error=new Error('Task or recorded time changed. Review this completion before retrying.');
                 error.status=409;
@@ -87,9 +88,11 @@
             window.performance?.mark('dcc-completion-acknowledged');
             DCC.toast('Task completed · '+(result.task?.properties.actualMinutes==null?'focused time unknown':result.task.properties.actualMinutes+'m recorded'),'success');
           }
+          assertActionAccount();
           if(entry.note)await window.saveTaskNotes(entry.body.taskId,entry.note);
           localStorage.removeItem(completionKey(entry));
         }catch(error){
+          if(!sameAccount())return;
           if(![400,401,403,404,409].includes(error.status))throw error;
           setConflict({body:entry.body,note:entry.note,message:error.message});
           localStorage.removeItem(completionKey(entry));
@@ -147,11 +150,11 @@
       assertActionAccount();
       const hadProblem=problem;
       problem='';
-      if(state!==checkedState){
+      if(!value.unchanged){
+        if(!value.state)throw new Error('Queue connection changed. Reload to continue.');
+        accept(value.state,value.version||null);
+      }else if(state!==checkedState){
         invalidated=true;
-      }else if(!value.unchanged){
-        // Older servers still send the raw snapshot.
-        accept(value.state||value,value.version||null);
       }else if(hadProblem)render();
       return state;
     }).catch(error=>{
@@ -643,7 +646,9 @@
       assertActionAccount();
       const activeRead=loading;
       if(activeRead)await activeRead.catch(()=>{});
-      await refresh();
+      let confirmed=await refresh();
+      if(invalidated||confirmed!==state)confirmed=await refresh();
+      if(invalidated||confirmed!==state)return;
       if(!result.claimed||!items().some(i=>i.task.id===due.task.id&&i.generation===due.generation&&i.needsYou))return;
       const text='Time to check back on '+(due.task.properties.title||'your background task')+'.';
       if(DCC.PetNudge?.deliverWorkCheckIn)await DCC.PetNudge.deliverWorkCheckIn(text,{open:()=>activate(due.task.id)});

@@ -104,7 +104,7 @@ try {
     await page.locator('.wq-completed').screenshot({path:path.join(output,width===375?'completed-filter-mobile.png':'completed-filter-desktop.png')});
   }
   // Empty dated result still exposes every choice; use the same API with synthetic old timestamps.
-  await page.route('**/api/working-queue',async route=>{const response=await route.fetch(),data=await response.json();for(const item of data.queue.items)if(item.status==='completed'&&item.completedAt!==null)item.completedAt=now-2*3600000;return route.fulfill({response,json:data});});
+  await page.route('**/api/working-queue',async route=>{const headers=await route.request().allHeaders();delete headers["x-dcc-queue-version"];const response=await route.fetch({headers}),data=await response.json();delete data.version;for(const item of data.state.queue.items)if(item.status==='completed'&&item.completedAt!==null)item.completedAt=now-2*3600000;return route.fulfill({response,json:data});});
   await select.selectOption('hour');await page.evaluate(()=>DCCWorkingQueue.refresh());await page.getByText('No completed tasks in this time range.',{exact:true}).waitFor();assert.equal(await select.isVisible(),true);
   assert.equal(posts,0);assert.deepEqual((await ctx.pool.query('SELECT id,properties FROM blocks ORDER BY id')).rows,before);assert.deepEqual(errors,[]);
   console.log(JSON.stringify({passed:true,checks:['Today default/reload','all seven ranges','latest tie','unknown timestamp','empty range','refresh retains choice','keyboard focus','375px/desktop','zero writes'],screenshots:output}));

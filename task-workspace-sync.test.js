@@ -31,6 +31,7 @@ function workingQueue() {
       dispatchEvent: (event) => (docListeners[event.type] || []).forEach((fn) => fn(event))
     },
     addEventListener() {},
+    setTimeout: () => 1,
     setInterval() {},
     matchMedia: () => ({matches:false, addEventListener() {}}),
     navigator: { onLine: true },

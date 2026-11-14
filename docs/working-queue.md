@@ -43,7 +43,7 @@ The browser coalesces existing workspace SSE hints for 150 ms. It also checks on
 
 The browser opts in through `X-DCC-Queue-Scope` and sends its last `X-DCC-Queue-Version`. Unchanged reads return `{"unchanged":true}` before taking the foreground lock. Changed reads return `{state,version}`. Clients without the scope header use the existing snapshot contract. Responses use `Cache-Control: private, no-store`.
 
-The owner-checked SQL fingerprint covers task rows, session markers, day roots, rotation metadata, legacy background rows, delegated reports and other-workspace foreground. It uses existing Postgres row versions and the command revision. The full payload and its validator share one MVCC snapshot. Browser lane derivation handles time locally. Validators expire at reminder and worker lease boundaries so later reads also refresh the raw projection.
+The owner-checked SQL fingerprint covers task rows, session markers, day roots, rotation metadata, legacy background rows, delegated reports and other-workspace foreground. It uses existing Postgres row versions and the command revision. The locked path compares fingerprints around projection reads. Concurrent edits suppress that response’s validator. Browser lane derivation handles time locally. Validators expire at reminder and worker lease boundaries so later reads also refresh the raw projection.
 
 Browser writes and MCP commands send the existing workspace events after commit. Cross-workspace foreground writers also send a data-free account hint. The fingerprint covers direct writes and late commits that SSE can miss. The delta-sync cursor is prunable and omits queue-only tables. No schema change is required.
 

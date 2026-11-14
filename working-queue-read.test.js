@@ -70,7 +70,7 @@ test("browser queue validators cover private dependencies and skip the foregroun
     VALUES ('test-day','day_root','2026-10-20','{"_done":{"ids":["legacy-local"]}}',1,'ws-1',NOW(),NOW())`);
   assert.equal(completed.queue.items[0].status, "completed");
 
-  await changed("DELETE FROM blocks WHERE id='test-day'");
+  await changed("UPDATE blocks SET deleted_at=NOW() WHERE id='test-day'");
   const due = new Date(now + 1000).toISOString();
   const rotation = {
     version: 2, order: ["next", "queued"],
@@ -112,7 +112,7 @@ test("browser queue validators cover private dependencies and skip the foregroun
     { version:2, order:["other"], items:{other:{status:"foreground",breakStartedAt:due,breakOperationId:null}} }
   ]);
   assert.equal(retained.otherWorkspaceForeground, true);
-  assert.equal((await changed("DELETE FROM blocks WHERE id='other'")).otherWorkspaceForeground, false);
+  assert.equal((await changed("UPDATE blocks SET deleted_at=NOW() WHERE id='other'")).otherWorkspaceForeground, false);
 
   // Commit an ordinary block edit after the validator reads its snapshot.
   // The old payload must never acquire the fingerprint of the new row.
@@ -139,8 +139,8 @@ test("browser queue validators cover private dependencies and skip the foregroun
   };
   try {
     current = await (await read()).json();
-    assert.ok(editedDuringRead && current.version);
-    assert.equal(current.state.queue.items[1].task.properties.title, "Edited");
+    assert.equal(editedDuringRead, true);
+    assert.equal(current.version, undefined, "a mixed read must have no validator");
   } finally {
     ctx.pool.connect = pgConnect;
   }

@@ -153,16 +153,19 @@ function createConversationStore(ctx) {
     }
     const q = await pool.connect();
     try {
-      await q.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      await q.query("BEGIN READ ONLY");
       await authorize(q, owner);
       await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["dcc-foreground:" + owner.userId]);
-      // Read the validator and projection from the same database snapshot.
-      // A queued writer can commit while we wait for the foreground lock.
-      // Its new fingerprint will invalidate this response on the next check.
+      // Ordinary block writes can commit without the foreground lock. Only
+      // certify a payload when the dependency reads agree on both sides.
       const version = await Read.fingerprint(q, owner);
       const value = await state(owner, q);
+      const stable = version === await Read.fingerprint(q, owner);
       await q.query("COMMIT");
-      return { state: value, version: Read.validator(owner, version, Read.expires(value), ctx.queueReadSecret) };
+      return {
+        state: value,
+        ...(stable && { version: Read.validator(owner, version, Read.expires(value), ctx.queueReadSecret) })
+      };
     } catch (error) {
       await q.query("ROLLBACK");
       throw error;

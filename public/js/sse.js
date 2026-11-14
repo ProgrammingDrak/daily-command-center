@@ -293,7 +293,7 @@
     sse.onmessage = async function(e){
       if(e.data === 'connected') {
         console.log('[SSE] Connected to live update stream');
-        window.DCCWorkingQueue?.invalidate();
+        window.DCCWorkingQueue?.invalidate?.();
         // Replay any buffered writes from when server was down
         if(window.blockStore && typeof window.blockStore.replayWAL === 'function') {
           window.blockStore.replayWAL();
@@ -316,7 +316,7 @@
 
           // DCC state updated via refresh/state APIs. Carries msg.date -> scoped.
           case 'dcc-state-changed':
-            window.DCCWorkingQueue?.invalidate();
+            window.DCCWorkingQueue?.invalidate?.();
             if(window.DCC_DELTA_SYNC_ENABLED&&window.blockStore){
               window.blockStore.handleDccStateChanged(msg);
             }else{
@@ -327,10 +327,10 @@
 
           // Block data changed (from another tab or API call)
           case 'working-queue-changed':
-            window.DCCWorkingQueue?.invalidate();
+            window.DCCWorkingQueue?.invalidate?.();
             break;
           case 'blocks-changed':
-            window.DCCWorkingQueue?.invalidate();
+            window.DCCWorkingQueue?.invalidate?.();
             // A meeting recap just landed (async sweep) — toast once so Drake knows
             // to open it even after he marked the meeting done. Fires independently
             // of the re-render below (which handleBlockEvent may skip mid-reschedule).

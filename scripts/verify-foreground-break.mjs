@@ -188,7 +188,7 @@ try {
   await card('b').locator('[data-queue-action=pause]').waitFor();
   assert.equal((await state()).queue.items.find(i=>i.task.id==='a').snoozed,true);
   await second.close();
-  await page.route('**/api/working-queue',async route=>{const response=await route.fetch(),data=await response.json();data.otherWorkspaceForeground=true;return route.fulfill({response,json:data});});
+  await page.route('**/api/working-queue',async route=>{const headers=await route.request().allHeaders();delete headers["x-dcc-queue-version"];const response=await route.fetch({headers}),data=await response.json();delete data.version;data.state.otherWorkspaceForeground=true;return route.fulfill({response,json:data});});
   await page.evaluate(()=>DCCWorkingQueue.refresh());
   await page.getByText(/Another workspace holds Foreground/).waitFor();
   await button('c','focus').click();await page.locator('#toast-container').getByText(/choose Return to Priority before switching/).waitFor();

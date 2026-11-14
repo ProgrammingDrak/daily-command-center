@@ -159,7 +159,7 @@ if (!LOCAL_AUTH_ENABLED) {
 app.use(session(sessionOptions));
 
 // Isolated OAuth/MCP boundary: bearer tokens here never enter the legacy service gate.
-require("./routes/conversation")(app, { pool, blockDB, APP_TIME_ZONE, broadcast });
+require("./routes/conversation")(app, { pool, blockDB, APP_TIME_ZONE, broadcast, broadcastQueueChange });
 
 // ── Auth Middleware ──
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
