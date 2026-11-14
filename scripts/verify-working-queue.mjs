@@ -250,7 +250,11 @@ const focus = async (id) => {
       assert.deepEqual(await page.evaluate(()=>DCCWorkingQueue.getState().foreground.map(row=>row.id)),previous.map(row=>row.id));
       await button(id,'focus').click();switchCancelChecked=true;
     }
-    await page.getByRole('dialog').getByRole('button',{name:'Bring forward',exact:true}).press('Enter');
+    const submitted = page.waitForResponse(response => response.url().endsWith("/api/working-queue") &&
+      response.request().method()==="POST" && response.request().postDataJSON().action==="start", {timeout:5000});
+    await dialog.getByRole('button',{name:'Bring forward',exact:true}).click();
+    const response = await submitted;
+    assert.ok(response.ok(), await response.text());
   }
   await closed();
   try{await page.waitForFunction(
