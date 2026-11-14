@@ -567,9 +567,11 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
       recurrence.applySchedule(props, { blockId, localId, date: safeDate }));
   }
 
-  async function upsertResponsibility({ properties, userId, workspaceId }) {
+  async function upsertResponsibility({ properties, userId, workspaceId, client = null }) {
     const slug = properties.slug || String(properties.title || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-    const existing = slug ? await findResponsibilityBySlug(slug, workspaceId) : null;
+    const existing = slug ? (client
+      ? (await blockDB.getBlocksByKind('responsibility_item', workspaceId, client)).find(row => row.properties.slug === slug)
+      : await findResponsibilityBySlug(slug, workspaceId)) : null;
     const nowIso = new Date().toISOString();
     const props = {
       kind: "responsibility_item",
@@ -621,9 +623,9 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
       if (properties.activityPlanSourceId) throw Object.assign(new Error("A repeat with this title already exists. Choose a unique title for this activity plan"), { statusCode: 409 });
       // writableProps: `existing` came back from normalizeResponsibility, so merging
       // it raw would persist the derived importanceScore/suppressed/preferredDue.
-      return normalizeResponsibility(await blockDB.updateBlock(existing.id, { properties: { ...writableProps(existing.properties), ...props, createdAt: existing.properties.createdAt || props.createdAt } }), new Date(), appTimeZone);
+      return normalizeResponsibility(await blockDB.updateBlock(existing.id, { properties: { ...writableProps(existing.properties), ...props, createdAt: existing.properties.createdAt || props.createdAt } }, client), new Date(), appTimeZone);
     }
-    return normalizeResponsibility(await blockDB.createBlock({ type: "block", properties: props, sort_order: 0, user_id: userId || null, workspace_id: workspaceId || null }), new Date(), appTimeZone);
+    return normalizeResponsibility(await blockDB.createBlock({ type: "block", properties: props, sort_order: 0, user_id: userId || null, workspace_id: workspaceId || null }, client), new Date(), appTimeZone);
   }
 
   // Load a day's existing blocks and work-hour bounds once, plus the blockers
@@ -1264,8 +1266,8 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     return result;
   }
 
-  async function convertScheduledToReadiness({ id, workspaceId, changes = {} }) {
-    return withSeriesLock(id, workspaceId, async (client) => {
+  async function convertScheduledToReadiness({ id, workspaceId, changes = {}, transactionClient = null }) {
+    const convert = async (client) => {
       const definition = await getResponsibilityBlock(id, workspaceId, { tz: appTimeZone, client });
       if (!definition || (definition.properties || {}).repeatType !== "scheduled") return null;
       const rows = await blockDB.getRepeatSeriesBlocks(id, workspaceId, { includeDeleted: false }, client);
@@ -1286,7 +1288,8 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
       }
       await blockDB.batchOp(operations, client);
       return getResponsibilityBlock(id, workspaceId, { tz: appTimeZone, client });
-    });
+    };
+    return transactionClient ? convert(transactionClient) : withSeriesLock(id, workspaceId, convert);
   }
 
   function badLifecycle(message, statusCode = 400) {
@@ -1424,6 +1427,8 @@ function createResponsibilityStore({ blockDB, getTodayStr, assertBlockOwnership,
     materializeScheduledRepeatsForDate,
     catchUpScheduledRepeats,
     changeScheduledSeries,
+    changeScheduledSeriesLocked,
+    applyLifecycle,
     convertScheduledToReadiness,
     attachDefaultSubtasks,
     getKindedBlock,

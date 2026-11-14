@@ -64,6 +64,8 @@ jobs:
         run: npm run test:postgres
       - name: Install Chromium for smoke
         run: npx playwright-core install --with-deps --no-progress chromium
+      - name: Verify Chat integration permissions and responsive page
+        run: CHROMIUM_PATH="$(node -e 'process.stdout.write(require("playwright-core").chromium.executablePath())')" node scripts/verify-chat-integrations.cjs
       - name: Verify shared activity queue privacy and mobile actions
         run: |
           CHROME_PATH="$(node -e 'process.stdout.write(require("playwright-core").chromium.executablePath())')" node scripts/verify-foreground-break.mjs

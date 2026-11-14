@@ -72,7 +72,7 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   assert.equal((await ctx.pool.query("SELECT count(*)::int AS n FROM conversation_grants")).rows[0].n,0,"viewing consent never grants access");
   r = await call(url, { headers: { cookie } });
   const html = await r.text();
-  assert.match(html, /Allow access/);
+  assert.match(html, /Allow selected access/);
   assert.match(html, /Synthetic 1/);
   for(const permission of [/Manage Working Queue membership/, /add or remove without deleting tasks/, /order, priority, context, blockers and check-back reminders/, /Return to Priority/, /Start and pause foreground timers/, /Does not start or stop external workers/]) assert.match(html, permission);
   assert.doesNotMatch(html, /undo a review choice/, "unrequested reconciliation authority is not advertised as granted");
@@ -85,7 +85,7 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
     call("/oauth/dcc/authorize", {
       method: "POST",
       headers: { cookie, origin, "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ csrf: token, decision: "allow" })
+      body: new URLSearchParams([["csrf",token],["decision","allow"],...auth.scope.split(" ").map(scope=>["legacy",scope])])
     });
   assert.equal((await consent("forged")).status, 403);
   assert.equal((await consent(csrf, "https://evil.example")).status, 403);
@@ -149,7 +149,7 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   assert.equal((await rpc("tools/call", capture)).status, 403);
   await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.capture"])]);
   result = await rpc("tools/list");
-  assert.deepEqual(result.body.result.tools.map(tool => tool.name), [capture.name]);
+  assert.deepEqual(result.body.result.tools.map(tool => tool.name), ['dcc_connection_status', capture.name]);
   const saved = (await rpc("tools/call", capture, { "x-workspace-id": "ws-2" })).body.result.structuredContent;
   assert.equal(saved.ok, true);
   assert.equal(saved.duplicate, false);

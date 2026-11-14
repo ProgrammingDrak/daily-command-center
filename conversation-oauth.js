@@ -2,7 +2,7 @@
 // opaque tokens. No shared DCC admin token or caller-selected identity is accepted.
 const crypto = require("node:crypto");
 const M = require("./lib/conversation-model");
-const SCOPES = ["dcc.read", "dcc.work", "dcc.correct", "dcc.complete", "dcc.delegate", "dcc.reconcile", "dcc.capture", "dcc.wishlist.read", "dcc.wishlist.write"];
+const SCOPES = require('./lib/chat-permissions').scopes;
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS conversation_grants (
  id TEXT PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id),workspace_id TEXT NOT NULL REFERENCES workspaces(id),
@@ -16,13 +16,20 @@ CREATE TABLE IF NOT EXISTS conversation_oauth_tokens (
  hash TEXT PRIMARY KEY,grant_id TEXT NOT NULL REFERENCES conversation_grants(id),kind TEXT NOT NULL,
  resource TEXT NOT NULL,expires_at TIMESTAMPTZ NOT NULL,used_at TIMESTAMPTZ
 );
+ALTER TABLE conversation_grants ADD COLUMN IF NOT EXISTS last_verified_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS conversation_preferences (
+ user_id INTEGER NOT NULL REFERENCES users(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+ scopes JSONB NOT NULL, PRIMARY KEY(user_id,workspace_id)
+);
+ALTER TABLE conversation_preferences ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON conversation_preferences FROM PUBLIC;
 ALTER TABLE conversation_grants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conversation_oauth_codes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conversation_oauth_tokens ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON conversation_grants,conversation_oauth_codes,conversation_oauth_tokens FROM PUBLIC;
 DO $privacy$ DECLARE r TEXT; BEGIN
  FOR r IN SELECT rolname FROM pg_roles WHERE rolname IN ('anon','authenticated') LOOP
- EXECUTE format('REVOKE ALL ON conversation_grants,conversation_oauth_codes,conversation_oauth_tokens FROM %I',r);
+ EXECUTE format('REVOKE ALL ON conversation_grants,conversation_oauth_codes,conversation_oauth_tokens,conversation_preferences FROM %I',r);
  END LOOP;
 END $privacy$;
 `;
@@ -202,14 +209,14 @@ function createOAuth({ pool, baseUrl, clients = {} }) {
     );
     const g = r.rows[0];
     if (!g || g.resource !== resource) throw M.fail("Invalid access token", 401);
-    if (scope && !g.scopes.includes(scope)) throw M.fail("Insufficient scope", 403);
+    if (scope && !(Array.isArray(scope) ? scope : [scope]).some(s => g.scopes.includes(s))) throw M.fail("Insufficient scope", 403);
     return { userId: g.user_id, workspaceId: g.workspace_id, grantId: g.id, scopes: g.scopes };
   }
   async function list(o) {
     await owner(pool, o);
     return (
       await pool.query(
-        "SELECT id,client_id,scopes,created_at,revoked_at FROM conversation_grants WHERE user_id=$1 AND workspace_id=$2 ORDER BY created_at DESC",
+        "SELECT id,client_id,scopes,created_at,revoked_at,last_verified_at FROM conversation_grants WHERE user_id=$1 AND workspace_id=$2 ORDER BY created_at DESC",
         [o.userId, o.workspaceId]
       )
     ).rows;
@@ -222,6 +229,29 @@ function createOAuth({ pool, baseUrl, clients = {} }) {
     );
     return { ok: true };
   }
+  async function preferences(o, scopes) {
+    await owner(pool, o);
+    if (scopes !== undefined) {
+      if (scopes.some(s => !SCOPES.includes(s))) throw M.fail('Invalid scope');
+      await pool.query('INSERT INTO conversation_preferences(user_id,workspace_id,scopes) VALUES($1,$2,$3) ON CONFLICT(user_id,workspace_id) DO UPDATE SET scopes=EXCLUDED.scopes', [o.userId,o.workspaceId,JSON.stringify(scopes)]);
+    }
+    const result = await pool.query('SELECT scopes FROM conversation_preferences WHERE user_id=$1 AND workspace_id=$2', [o.userId,o.workspaceId]);
+    return result.rows[0]?.scopes || require('./lib/chat-permissions').defaults();
+  }
+  async function reduce(id, scopes, o) {
+    return tx(async q => {
+      await owner(q,o);
+      const result = await q.query('SELECT scopes FROM conversation_grants WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND revoked_at IS NULL FOR UPDATE', [id,o.userId,o.workspaceId]);
+      const current = result.rows[0]?.scopes;
+      if (!current) throw M.fail('Connection not found',404);
+      if (scopes.some(s => !current.includes(s))) throw M.fail('Additional access requires a new authorization',409);
+      await q.query('UPDATE conversation_grants SET scopes=$1 WHERE id=$2', [JSON.stringify(scopes),id]);
+      return {ok:true};
+    });
+  }
+  async function verified(id) {
+    await pool.query('UPDATE conversation_grants SET last_verified_at=NOW() WHERE id=$1 AND revoked_at IS NULL', [id]);
+  }
   return {
     resource,
     baseUrl,
@@ -231,6 +261,9 @@ function createOAuth({ pool, baseUrl, clients = {} }) {
     verify,
     list,
     revoke,
+    preferences,
+    reduce,
+    verified,
     metadata: {
       issuer: baseUrl,
       authorization_endpoint: baseUrl + "/oauth/dcc/authorize",
