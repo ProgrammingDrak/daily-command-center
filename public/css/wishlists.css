@@ -1,0 +1,356 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--surface-canvas);
+  color: var(--ink);
+  font: 0.95rem/1.55 var(--font-sans);
+}
+a {
+  color: var(--info);
+}
+:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 3px;
+}
+.top {
+  padding: 0.85rem max(1rem, calc((100% - 1120px) / 2));
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-base);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+}
+.top a {
+  color: var(--ink-strong);
+  text-decoration: none;
+  font-weight: 600;
+}
+.top span {
+  color: var(--ink-muted);
+  border-left: 1px solid var(--line);
+  padding-left: 1rem;
+}
+main {
+  max-width: 1152px;
+  padding: 1rem 1rem 4rem;
+  margin: auto;
+}
+.feedback {
+  min-height: 1.6rem;
+  color: var(--ink-muted);
+}
+h1,
+h2,
+h3 {
+  margin: 0;
+  color: var(--ink-strong);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+h1 {
+  font-size: clamp(1.75rem, 4vw, 2.65rem);
+  letter-spacing: -0.035em;
+}
+h2 {
+  font-size: 1.25rem;
+}
+h3 {
+  font-size: 1.05rem;
+}
+p {
+  margin: 0.5rem 0;
+  overflow-wrap: anywhere;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-base);
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  min-height: 44px;
+}
+button {
+  cursor: pointer;
+}
+button:hover,
+button[aria-current="page"],
+button[aria-pressed="true"] {
+  background: var(--surface-hover);
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+button.primary {
+  background: #a9d6ff;
+  border-color: #a9d6ff;
+  color: #112339;
+  font-weight: 600;
+}
+button.primary:hover {
+  background: #d1e9ff;
+}
+label {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  font-size: 0.875rem;
+}
+input,
+select,
+textarea {
+  width: 100%;
+  min-width: 0;
+}
+input[type="checkbox"] {
+  width: auto;
+  min-height: auto;
+}
+textarea {
+  resize: vertical;
+  min-height: 5.2rem;
+}
+.bar,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+.bar {
+  justify-content: space-between;
+  margin-bottom: 1.1rem;
+}
+.filters {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.7rem;
+  margin-bottom: 1rem;
+}
+.cards,
+.record-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 235px), 1fr));
+  gap: 0.85rem;
+}
+.cards {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 255px), 1fr));
+}
+.card,
+.panel,
+.record {
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  min-width: 0;
+}
+.card {
+  overflow: hidden;
+}
+.card a {
+  display: block;
+  padding: 1rem;
+  text-decoration: none;
+  color: inherit;
+}
+.card a:hover {
+  background: var(--surface-hover);
+}
+.card img {
+  display: block;
+  width: 100%;
+  height: 8rem;
+  object-fit: cover;
+}
+.card .card-copy {
+  padding: 0.15rem 0;
+}
+.list {
+  display: grid;
+  gap: 0.45rem;
+}
+.list .card img {
+  display: none;
+}
+.list .card a {
+  padding: 0.65rem 0.85rem;
+}
+.list .card-copy {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.8rem;
+}
+.list .card-copy p {
+  margin: 0;
+}
+.panel,
+.record {
+  padding: 1rem;
+}
+.panel + .panel,
+.record + .record,
+.stack > * + * {
+  margin-top: 0.85rem;
+}
+.record-grid .record {
+  margin: 0;
+}
+.muted,
+small {
+  color: var(--ink-muted);
+}
+.hard {
+  color: #ff929c;
+  font-weight: 600;
+}
+.warn {
+  color: #ffc76c;
+}
+.pill {
+  display: inline-block;
+  padding: 0.16rem 0.52rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 2rem;
+  font-size: 0.8rem;
+}
+.back {
+  display: inline-block;
+  margin-bottom: 0.6rem;
+}
+.detail-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 1rem 0;
+}
+dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  gap: 0.7rem 1.1rem;
+  margin: 0.7rem 0;
+}
+dl div {
+  min-width: 0;
+}
+dt {
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+}
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+details {
+  margin-top: 0.75rem;
+}
+summary {
+  cursor: pointer;
+  padding: 0.6rem 0;
+}
+.table-scroll {
+  overflow: auto;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  text-align: left;
+}
+caption {
+  text-align: left;
+  padding: 0.65rem;
+  color: var(--ink-muted);
+}
+th,
+td {
+  min-width: 11rem;
+  max-width: 22rem;
+  padding: 0.65rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+th {
+  background: var(--surface-base);
+}
+th[scope="row"] {
+  min-width: 8rem;
+  max-width: 11rem;
+  position: sticky;
+  left: 0;
+}
+dialog {
+  width: min(620px, calc(100% - 1.5rem));
+  max-height: calc(100% - 1.5rem);
+  overflow: auto;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 0.8rem;
+  padding: 1rem;
+}
+dialog::backdrop {
+  background: var(--surface-scrim);
+}
+.dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+.editor-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+.wide {
+  grid-column: 1 / -1;
+}
+.editor-actions {
+  margin-top: 1rem;
+}
+#editor-status {
+  min-height: 1.5rem;
+}
+.photo {
+  max-width: min(100%, 20rem);
+  max-height: 14rem;
+  object-fit: contain;
+  border-radius: 0.4rem;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 480px) {
+  .filters,
+  .editor-fields {
+    grid-template-columns: 1fr;
+  }
+  .detail-nav button {
+    flex: 1 1 28%;
+    padding-inline: 0.5rem;
+    font-size: 0.85rem;
+  }
+  th[scope="row"] {
+    min-width: 6.25rem;
+    max-width: 6.25rem;
+  }
+  td,
+  th[scope="col"] {
+    min-width: 9rem;
+  }
+}
