@@ -29,6 +29,7 @@
   scrollbar-width: none;
 }
 .dcc-pages::-webkit-scrollbar { display: none; }
+.dcc-pages .wishlist-nav { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 .dcc-pages .tab {
   min-height: var(--target-min);
   padding: 0 var(--sp-3);
@@ -317,7 +318,7 @@ body[data-nav-page="activity"] .progress-header { display: flex; justify-content
   .header.dcc-topbar > .dcc-pages {
     order: 2;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     width: 100%;
     overflow: visible;
   }

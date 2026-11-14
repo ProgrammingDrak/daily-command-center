@@ -78,6 +78,7 @@ CREATE INDEX IF NOT EXISTS idx_blocks_time_entry_task
   WHERE type = 'time_entry' AND deleted_at IS NULL;
 
 ${require("./task-attachment-store").SCHEMA_SQL}
+${require("./wishlist-store").SCHEMA_SQL}
 ${require("./routes/completion-memories").SCHEMA_SQL}
 ${require("./routes/itinerary-shares").SCHEMA_SQL}
 
@@ -1054,6 +1055,7 @@ const POST_SCHEMA_STATEMENTS = [
     RETURNS boolean LANGUAGE sql IMMUTABLE AS $fn$
       SELECT p_type IS DISTINCT FROM 'day_root'
          AND p_type IS DISTINCT FROM 'time_entry'
+         AND p_type IS DISTINCT FROM 'wishlist_attachment'
          AND COALESCE(p_props->>'kind', '') NOT IN
              ('delegated_item', 'task_group', 'project', 'task_facet', 'task_view',
               'reschedule_tombstone', 'triage_suppression', 'slack_reaction_tombstone', 'slack_done_intent',

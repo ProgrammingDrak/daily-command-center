@@ -4,10 +4,13 @@ const crypto = require("node:crypto");
 const { createOAuth, SCOPES } = require("../conversation-oauth");
 const { createConversationStore } = require("../conversation-store");
 const M = require("../lib/conversation-model");
+const wishlistMcp = require("../lib/wishlist-mcp");
 const { createProjectStore } = require("../project-store");
 const escape = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const descriptions = {
+  "dcc.wishlist.read": "Read private Wishlists and their structured research.",
+  "dcc.wishlist.write": "Create and edit private Wishlists and their structured research.",
   "dcc.capture": "Save explicitly requested, undated Someday ideas.",
   "dcc.read": "Find current, completed, and recurring tasks; read timing and audit history.",
   "dcc.work":
@@ -28,6 +31,7 @@ const envelope = {
   at: { type: "string", description: "User-confirmed instant with explicit timezone offset." }
 };
 const tools = [
+  ...wishlistMcp.tools,
   {
     name: "dcc_save_someday_idea",
     description: "Save a task to DCC Someday on explicit request. Given a link or location, look up the idea when possible, give it an actionable title, retain the original link, and add a verified venue/neighborhood and a short planning note when available. Leave unknown details blank; ask if an ambiguous place materially changes the idea. Use existing user-provided tags such as With Fae when requested. Do not assign a date. Reuse sourceEventId on retry.",
@@ -330,7 +334,7 @@ const tools = [
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }
   }
 ];
-const scopeFor = (name) =>
+const scopeFor = (name) => wishlistMcp.scopeFor(name) || (
   name === "dcc_save_someday_idea" ? "dcc.capture" :
   name === "dcc_reconcile_task"
     ? "dcc.reconcile"
@@ -342,7 +346,7 @@ const scopeFor = (name) =>
           ? "dcc.correct"
           : name === "dcc_complete_task"
             ? "dcc.complete"
-            : "dcc.read";
+            : "dcc.read");
 module.exports = function mount(app, ctx, config = {}) {
   const enabled =
     config.enabled ??
@@ -568,6 +572,7 @@ module.exports = function mount(app, ctx, config = {}) {
       identity = await oauth.verify(raw.slice(7), scopeFor(name));
       try {
         let result;
+        if (wishlistMcp.scopeFor(name)) result = await wishlistMcp.run(ctx, name, args, identity);
         if (name === "dcc_save_someday_idea") {
           const sourceEventId = M.text(args.sourceEventId, "sourceEventId", 200);
           const id = "someday-" + M.digest(JSON.stringify([identity.workspaceId, identity.userId, sourceEventId]));
@@ -680,7 +685,7 @@ module.exports = function mount(app, ctx, config = {}) {
             {
               type: "text",
               text: JSON.stringify({
-                error: e.statusCode ? e.message : "Activity could not be saved",
+                error: e.statusCode ? e.message : wishlistMcp.scopeFor(name) ? "Wishlist request could not be confirmed" : "Activity could not be saved",
                 status: e.statusCode || 500
               })
             }

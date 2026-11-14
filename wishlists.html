@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="same-origin">
+  <title>Wishlists · Daily Command Center</title>
+  <link rel="icon" href="/public/icons/favicon.ico">
+  <link rel="stylesheet" href="/public/css/tokens.css">
+  <link rel="stylesheet" href="/public/css/wishlists.css">
+  <script defer src="/public/js/wishlist-pricing.js"></script>
+  <script defer src="/public/js/wishlists.js"></script>
+</head>
+<body>
+  <header class="top"><a href="/">Daily Command Center</a><span>Wishlists</span></header>
+  <main id="workspace">
+    <div class="feedback" id="feedback" role="status" aria-live="polite"></div>
+    <div id="view" aria-busy="true"><h1>Wishlists</h1><p>Loading…</p></div>
+  </main>
+  <dialog id="editor" aria-labelledby="editor-title">
+    <div class="dialog-header"><h2 id="editor-title"></h2><button type="button" id="close-editor">Close</button></div>
+    <div id="editor-body"></div>
+    <p id="editor-status" role="status" aria-live="polite"></p>
+  </dialog>
+</body>
+</html>
