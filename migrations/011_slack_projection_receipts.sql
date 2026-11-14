@@ -1,0 +1,11 @@
+-- @gated: Install only for the Slack reconciliation receipt rollout.
+CREATE TABLE IF NOT EXISTS slack_projection_receipts (
+  workspace_id TEXT NOT NULL,
+  actor_key TEXT NOT NULL,
+  block_id TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('settled', 'retry', 'unreachable', 'cooldown')),
+  next_attempt_at TIMESTAMPTZ,
+  PRIMARY KEY (workspace_id, actor_key, block_id),
+  CHECK ((block_id = '') = (outcome = 'cooldown'))
+);

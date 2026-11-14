@@ -43,9 +43,9 @@ function makeHarness(opts = {}) {
       writes.push({ method: verb, url: u });
       if (failWith && (!failWith.only || failWith.only === verb)) {
         return {
-          ok: false, status: failWith.code === "ratelimited" ? 429 : 200,
+          ok: false, status: failWith.code === "ratelimited" || failWith.code === "http_429" ? 429 : 200,
           headers: { get: (h) => (h.toLowerCase() === "retry-after" && failWith.retryAfter ? String(failWith.retryAfter) : null) },
-          json: async () => ({ ok: false, error: failWith.code }),
+          json: async () => failWith.code === "http_429" ? {} : ({ ok: false, error: failWith.code }),
         };
       }
       void parsed;
@@ -316,4 +316,97 @@ test("with no token configured nothing is attempted at all", async (t) => {
   // the absence of an error log is what proves we never tried.
   assert.equal(h.logs.filter(([lvl]) => lvl === "error").length, 0);
   assert.ok(!h.logs.some(([, m]) => m.includes("no Slack token is configured")));
+});
+
+test("HTTP 429 without a Slack body pauses the next immediate projection", async (t) => {
+  const h = makeHarness();
+  t.after(h.restoreConsole);
+  const row = task(h, "rate.42");
+  h.setFailure("http_429", { retryAfter: 60 });
+  await h.ctx.syncSlackTaskReactions(row);
+  assert.equal(h.writes.length, 1);
+  h.setFailure(null);
+  await h.ctx.syncSlackTaskReactions(row);
+  assert.equal(h.writes.length, 1);
+});
+
+test("real Postgres preserves mid-page cooldown and retry work across restart", {
+  skip: !process.env.DCC_TEST_DATABASE_URL,
+}, async t => {
+  const { fixture, response, properties, seed, stamp } = require("./test-support/slack-reconciliation-postgres");
+  const f = await fixture(t);
+  await seed(f, [
+    { id: "a", props: properties(1) },
+    { id: "b", props: properties(2) },
+    { id: "c", props: properties(3), at: "2026-01-01T00:00:00.123457Z" },
+    { id: "foreign", props: properties(2), workspace: "ws-2" },
+  ]);
+  f.mock.write = call => call.auth === "Bearer xoxp-fixture" && call.timestamp === stamp(2)
+    ? response({}, 429, { "Retry-After": "120" }) : null;
+  const before = await f.api.runReconciliation();
+  assert.equal(before.metrics.rateLimited, 1);
+  const attempts = () => f.writes.filter(call => call.auth === "Bearer xoxp-fixture").map(call => call.timestamp);
+  assert.deepEqual(attempts(), [stamp(1), stamp(1), stamp(1), stamp(2)]);
+  const restarted = f.restart();
+  const paused = await restarted.runReconciliation();
+  assert.equal(paused.metrics.cooldown, 1);
+  assert.equal(paused.metrics.projections, 0);
+  assert.equal(paused.metrics.mirror.queries, 3, "two cooldown checks and the other actor's candidate read");
+  assert.deepEqual(attempts(), [stamp(1), stamp(1), stamp(1), stamp(2)]);
+
+  await f.pool.query("UPDATE slack_projection_receipts SET next_attempt_at = NOW() - interval '1 second' WHERE outcome IN ('retry', 'cooldown')");
+  f.mock.write = call => {
+    if (call.timestamp === stamp(2) && call.auth === "Bearer xoxp-fixture") throw new DOMException("timeout", "TimeoutError");
+    return null;
+  };
+  const resumed = await f.restart().runReconciliation();
+  assert.equal(resumed.metrics.retries, 1);
+  assert.ok(attempts().includes(stamp(3)), "a later row drains while the older timeout remains pending");
+  assert.equal(attempts().filter(ts => ts === stamp(1)).length, 3);
+
+  await f.pool.query("UPDATE slack_projection_receipts SET next_attempt_at = NOW() - interval '1 second' WHERE outcome = 'retry'");
+  f.mock.write = call => response({ ok: false, error: call.method === "reactions.add" ? "already_reacted" : "no_reaction" });
+  const recovered = await f.restart().runReconciliation();
+  assert.equal(recovered.metrics.settled, 1);
+  assert.equal((await f.restart().runReconciliation()).metrics.slackWrites, 0);
+});
+
+test("real Postgres finds late commits behind the sweep and projects the newer state", {
+  skip: !process.env.DCC_TEST_DATABASE_URL,
+}, async t => {
+  const { fixture, properties, seed, stamp } = require("./test-support/slack-reconciliation-postgres");
+  const f = await fixture(t);
+  await seed(f, [
+    { id: "a", props: properties(1), at: "2026-01-01T00:00:00.123456Z" },
+    { id: "b", props: properties(2), at: "2026-01-01T00:00:00.123456Z" },
+    { id: "c", props: properties(3), at: "2026-01-01T00:00:00.123457Z" },
+  ]);
+  const writer = await f.pool.connect();
+  t.after(() => { if (!writer.releasedForTest) writer.release(true); });
+  await writer.query("BEGIN");
+  await writer.query("UPDATE blocks SET properties = properties || '{\"status\":\"done\"}'::jsonb WHERE id = 'a'");
+  let lockedOut;
+  let sameProcess;
+  f.mock.write = async call => {
+    if (call.timestamp !== stamp(2) || lockedOut) return null;
+    lockedOut = await f.restart().runReconciliation();
+    sameProcess = await f.api.runReconciliation();
+    await writer.query("COMMIT");
+    writer.release();
+    writer.releasedForTest = true;
+    return null;
+  };
+  await f.api.runReconciliation();
+  assert.equal(lockedOut.skipped, "lock_held");
+  assert.equal(sameProcess.skipped, "already_running");
+  assert.deepEqual([...new Set(f.writes.map(call => call.timestamp))], [stamp(1), stamp(2), stamp(3)]);
+  const recoveredWrites = f.writes.length;
+  await f.restart().runReconciliation();
+  assert.deepEqual([...new Set(f.writes.slice(recoveredWrites).map(call => call.timestamp))], [stamp(1)]);
+  assert.ok(f.writes.slice(recoveredWrites).some(call => call.name === "white_check_mark" && call.method === "reactions.add"));
+
+  await f.pool.query("UPDATE blocks SET properties = properties || '{\"status\":\"open\"}'::jsonb WHERE id = 'a'");
+  const reopenedWrites = f.writes.length;
+  await f.restart().runReconciliation();
+  assert.ok(f.writes.slice(reopenedWrites).some(call => call.name === "white_check_mark" && call.method === "reactions.remove"));
 });
