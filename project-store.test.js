@@ -189,3 +189,36 @@ test("dependency uniqueness applies only while an edge is active", () => {
       `${file} must allow a closed dependency to be created again`);
   }
 });
+
+test("library titles use the first truthy title or text, then trim it", () => {
+  const blockDB = require("./db");
+  for (const [properties, expected] of [
+    [{ title: null, text: "Fallback" }, true],
+    [{ title: "", text: "Fallback" }, true],
+    [{ title: false, text: "Fallback" }, true],
+    [{ title: 0, text: "Fallback" }, true],
+    [{ title: " \t\u00a0", text: "Unused fallback" }, false],
+    [{ title: [], text: "Unused fallback" }, false],
+    [{ text: "\uFEFF\n" }, false],
+    [{ title: 42 }, true],
+    [{}, false],
+  ]) {
+    const row = blockDB.parseBlock({ type: "block", properties: { kind: "task", ...properties } });
+    assert.equal(isLibraryTask(row, blockDB), expected, JSON.stringify(properties));
+  }
+});
+
+test("legacy library blocks honor JavaScript local_id truthiness", () => {
+  const blockDB = require("./db");
+  for (const [local_id, expected] of [
+    [undefined, false], [null, false], [false, false], [0, false], ["", false],
+    ["0", true], ["false", true], [" ", true], [42, true], [true, true], [[], true], [{}, true],
+  ]) {
+    const row = blockDB.parseBlock({ type: "block", properties: { title: "Legacy task", local_id } });
+    assert.equal(isLibraryTask(row, blockDB), expected, JSON.stringify(local_id));
+  }
+  const artifact = blockDB.parseBlock({
+    type: "action_item", properties: '{"kind":"proposed_action_item","title":"Awaiting approval","local_id":"proposal"}',
+  });
+  assert.equal(isLibraryTask(artifact, blockDB), false);
+});
