@@ -401,10 +401,14 @@ try {
   await page.getByRole("button",{name:"Close",exact:true}).last().click();
   await closed();
   await card("c").focus();
-  await page.keyboard.press("Alt+ArrowUp");
-  await page.waitForFunction(
-    () => DCCWorkingQueue.getState().queue.order.indexOf("c") < DCCWorkingQueue.getState().queue.order.indexOf("b")
-  );
+  await Promise.all([
+    page.waitForResponse(response => response.url().endsWith("/api/working-queue") &&
+      response.request().method()==="POST" && response.request().postDataJSON().action==="queue-reorder" && response.ok()),
+    page.keyboard.press("Alt+ArrowUp")
+  ]);
+  await page.waitForFunction(() => !DCCWorkingQueue.syncState().pending);
+  assert.ok(await page.evaluate(() => DCCWorkingQueue.getState().queue.order.indexOf("c") <
+    DCCWorkingQueue.getState().queue.order.indexOf("b")));
   await focus("b");
   assert.equal((await task("a")).properties.actualMinutes, 2);
   assert.equal((await task("a")).properties.subtaskOf, "parent");

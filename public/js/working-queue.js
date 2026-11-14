@@ -145,19 +145,24 @@
     assertActionAccount();
     if(loading)return loading;
     invalidated=false;
-    const checkedState=state;
-    loading=requestQueue({},readVersion).then(value=>{
+    loading=(async()=>{
+      const checkedState=state;
+      let value=await requestQueue({},readVersion);
       assertActionAccount();
+      // A conditional hit confirms the state sent with its validator. If a
+      // storage or write response replaced it, validate the replacement too.
+      if(value.unchanged&&state!==checkedState){
+        value=await requestQueue();
+        assertActionAccount();
+      }
       const hadProblem=problem;
       problem='';
       if(!value.unchanged){
         if(!value.state)throw new Error('Queue connection changed. Reload to continue.');
         accept(value.state,value.version||null);
-      }else if(state!==checkedState){
-        invalidated=true;
       }else if(hadProblem)render();
       return state;
-    }).catch(error=>{
+    })().catch(error=>{
       problem=error.message;
       render();
       throw error;
@@ -649,9 +654,7 @@
       assertActionAccount();
       const activeRead=loading;
       if(activeRead)await activeRead.catch(()=>{});
-      let confirmed=await refresh();
-      if(invalidated||confirmed!==state)confirmed=await refresh();
-      if(invalidated||confirmed!==state)return;
+      await refresh();
       if(!result.claimed||!items().some(i=>i.task.id===due.task.id&&i.generation===due.generation&&i.needsYou))return;
       const text='Time to check back on '+(due.task.properties.title||'your background task')+'.';
       if(DCC.PetNudge?.deliverWorkCheckIn)await DCC.PetNudge.deliverWorkCheckIn(text,{open:()=>activate(due.task.id)});
