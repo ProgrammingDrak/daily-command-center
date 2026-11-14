@@ -1,5 +1,6 @@
 const M = require("./lib/conversation-model");
 const Q = require("./lib/working-queue");
+const Read = require("./lib/working-queue-read");
 const R = require("./lib/task-reconciliation");
 const { checkInState } = require("./public/js/work-checkin-policy");
 const meetingIdentity = require("./meeting-identity");
@@ -142,6 +143,32 @@ function createConversationStore(ctx) {
       queue,
       timeZone
     };
+  }
+  async function browserState(owner, submitted) {
+    const now = ctx.now || Date.now;
+    // A hit performs no foreground locking and builds no queue projection.
+    if (submitted) {
+      const version = await Read.fingerprint(pool, owner);
+      if (Read.matches(owner, version, submitted, now(), ctx.queueReadSecret)) return { unchanged: true };
+    }
+    const q = await pool.connect();
+    try {
+      await q.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      await authorize(q, owner);
+      await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["dcc-foreground:" + owner.userId]);
+      // Read the validator and projection from the same database snapshot.
+      // A queued writer can commit while we wait for the foreground lock.
+      // Its new fingerprint will invalidate this response on the next check.
+      const version = await Read.fingerprint(q, owner);
+      const value = await state(owner, q);
+      await q.query("COMMIT");
+      return { state: value, version: Read.validator(owner, version, Read.expires(value), ctx.queueReadSecret) };
+    } catch (error) {
+      await q.query("ROLLBACK");
+      throw error;
+    } finally {
+      q.release();
+    }
   }
   async function search(body, owner) {
     await authorize(pool, owner);
@@ -726,6 +753,6 @@ function createConversationStore(ctx) {
       await q.query("COMMIT"); return {...review,revision};
     } catch(e) { await q.query("ROLLBACK"); throw e; } finally { q.release(); }
   }
-  return { state, search, searchQueueTasks, get, completionPreview, completionReview, reconciliationReceipt, calendarEvents, execute, history };
+  return { state, browserState, search, searchQueueTasks, get, completionPreview, completionReview, reconciliationReceipt, calendarEvents, execute, history };
 }
 module.exports = { SCHEMA_SQL, FOREGROUND_INDEX_SQL, createConversationStore, timingFor, pauseForSchedule };

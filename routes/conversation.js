@@ -661,6 +661,7 @@ module.exports = function mount(app, ctx, config = {}) {
             },
             identity.workspaceId
           );
+          ctx.broadcastQueueChange?.(identity.userId, identity.workspaceId);
           // A write grant does not imply permission to read unrelated queue rows,
           // private reports or audit snapshots, including on idempotent replay.
           if (!identity.scopes.includes("dcc.read"))
