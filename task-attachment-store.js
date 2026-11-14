@@ -32,8 +32,13 @@ function createStore({ pool, storage }) {
       // Owner only. Neither invited workspace members nor commitment roles grant private Notes access.
       const { rows } = await client.query(`SELECT b.* FROM blocks b JOIN workspaces w ON w.id=b.workspace_id
         WHERE b.id=$1 AND b.workspace_id=$2 AND w.owner_id=$3 AND (b.user_id IS NULL OR b.user_id=$3)
-        AND b.deleted_at IS NULL${read ? "" : " FOR UPDATE OF b,w"}`, [blockId, actor.workspaceId, actor.userId]);
-      if (!rows[0] || !isTaskRow(rows[0])) throw fail("Task or note unavailable", 404);
+        AND ${actor.wishlistId
+          ? "EXISTS (SELECT 1 FROM wishlists l WHERE l.id=$4 AND l.attachment_block_id=b.id AND l.workspace_id=$2 AND l.user_id=$3)"
+          : "b.deleted_at IS NULL AND b.type <> 'wishlist_attachment'"}
+        ${read ? "" : " FOR UPDATE OF b,w"}`, actor.wishlistId
+        ? [blockId, actor.workspaceId, actor.userId, actor.wishlistId]
+        : [blockId, actor.workspaceId, actor.userId]);
+      if (!rows[0] || (!actor.wishlistId && !isTaskRow(rows[0]))) throw fail("Task or note unavailable", 404);
       const result = await run(client);
       await client.query("COMMIT"); return result;
     } catch (error) { await client.query("ROLLBACK"); throw error; }
@@ -53,6 +58,13 @@ function createStore({ pool, storage }) {
   }
   return {
     configured: storage.configured,
+    async wishlistParent(actor) {
+      const { rows } = await pool.query(`SELECT l.attachment_block_id FROM wishlists l JOIN workspaces w ON w.id=l.workspace_id
+        WHERE l.id=$1 AND l.workspace_id=$2 AND l.user_id=$3 AND w.owner_id=$3`,
+      [actor.wishlistId, actor.workspaceId, actor.userId]);
+      if (!rows.length) throw fail("Wishlist unavailable", 404);
+      return rows[0].attachment_block_id;
+    },
     async authorize(actor, blockId) { return transaction(actor, blockId, async () => true, { read: true }); },
     async list(actor, blockId) {
       return transaction(actor, blockId, async client => {

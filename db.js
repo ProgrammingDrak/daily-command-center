@@ -174,7 +174,7 @@ const NON_TASK_KINDS = new Set([
 function isTaskRow(block) {
   if (!block) return false;
   const type = block.type;
-  if (type === "day_root" || type === "time_entry") return false;
+  if (type === "day_root" || type === "time_entry" || type === "wishlist_attachment") return false;
   const kind = ((block.properties || {}).kind) || "";
   if (NON_TASK_KINDS.has(kind)) return false;
   if (kind.startsWith("responsibility") && kind !== "responsibility_task") return false;
@@ -1406,6 +1406,11 @@ async function undeleteBlock(id, client, expectedDeleteMutationId) {
     error.statusCode = 409; error.code = "RESTORE_SUPERSEDED"; throw error;
   }
   if (!existing.deleted_at) return parseBlock(existing);
+  if (existing.properties?._deleteUndoToken?.startsWith("wishlist-convert:")) {
+    const error = new Error("This task was converted to a Wishlist");
+    error.statusCode = 409;
+    throw error;
+  }
   // Clearing deleted_at moves the row INTO idx_blocks_idem_unique's partial predicate
   // (`... AND deleted_at IS NULL`), so if a live row already holds this key the UPDATE
   // raises 23505 — and a raw one would surface as a 500 from POST /:id/undelete. Not
@@ -2538,6 +2543,7 @@ async function purgeSoftDeleted(olderThanDays = 30) {
   const result = await pool.query(`WITH RECURSIVE retained AS (
     SELECT b.id,b.parent_id FROM blocks b JOIN task_activity_records r ON r.task_id=b.id
     UNION SELECT b.id,b.parent_id FROM blocks b JOIN task_attachments a ON a.block_id=b.id
+    UNION SELECT b.id,b.parent_id FROM blocks b JOIN wishlists l ON l.attachment_block_id=b.id
     UNION SELECT b.id,b.parent_id FROM blocks b JOIN retained child ON child.parent_id=b.id
   ) DELETE FROM blocks WHERE deleted_at IS NOT NULL AND deleted_at < $1
     AND id NOT IN (SELECT id FROM retained)`, [cutoff.toISOString()]);

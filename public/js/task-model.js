@@ -339,7 +339,7 @@
     // This dateless definition belongs only to the Anytime surface.
     "anytime_item"
   ];
-  const NON_TASK_TYPES = ["day_root", "time_entry"];
+  const NON_TASK_TYPES = ["day_root", "time_entry", "wishlist_attachment"];
   function isTaskRow(block) {
     block = block || {};
     if (NON_TASK_TYPES.indexOf(block.type) !== -1) return false;

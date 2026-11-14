@@ -103,11 +103,12 @@ test("glasses keeps a visible Full app exit and task navigation", () => {
 });
 
 test("phones keep the clock, cog and dot, and show every page label whole", () => {
+  assert.match(read("index.html"), /<a class="tab wishlist-nav" href="\/wishlists">Wishlists<\/a>/);
   const css = read("public/css/task-workspace.css");
   const phone = css.slice(css.indexOf("@media (max-width: 760px)"));
   assert.match(phone, /\.dcc-cluster \.time-now \{ display: flex !important;/);
   assert.match(phone, /\.header\.dcc-topbar > \.dcc-cluster \{ order: 1; display: flex !important; position: relative; inset: auto; width: 100%; \}/);
-  assert.match(phone, /\.header\.dcc-topbar > \.dcc-pages \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);[^}]*overflow: visible;/, "no clipped Workouts & meals");
+  assert.match(phone, /\.header\.dcc-topbar > \.dcc-pages \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);[^}]*overflow: visible;/, "no clipped Workouts & meals");
   assert.match(phone, /\.dcc-pages \.tab \{[^}]*min-height: var\(--target-min\);[^}]*white-space: normal;/);
   // The old fixed top-right badge must not leak offsets into the cluster.
   const desktop = css.slice(0, css.indexOf("@media (max-width: 760px)"));

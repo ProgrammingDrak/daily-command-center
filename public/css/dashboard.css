@@ -5912,6 +5912,15 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .it-task-location > [role="status"] { margin: 0; }
 .it-task-location > [role="status"]:empty { display: none; }
 .it-commute form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin: 10px 0; }
+.it-commute-route-form > label { flex: 1 1 10rem; }
+.it-commute-route-form > label:first-child { flex-basis: 100%; }
+.it-commute-route-links:not(:empty) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-block: 6px 10px;
+}
+.it-commute-route-links a { color: inherit; text-decoration: underline; }
 :is(.it-commute, .it-task-location) label:not([hidden]) { display: grid; gap: 4px; min-width: 0; max-width: 100%; }
 :is(.it-commute, .it-task-location) :is(input, select, textarea, button) {
   color: inherit;

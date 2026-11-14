@@ -155,7 +155,7 @@ module.exports = function mount(app, ctx) {
   }
 
   // ── Local helpers ──
-  function assertBlockOwnership(block, workspaceId) { if (block.workspace_id && workspaceId && block.workspace_id !== workspaceId) { const err = new Error("Block not found"); err.statusCode = 404; throw err; } }
+  function assertBlockOwnership(block, workspaceId) { if (block.type === "wishlist_attachment" || (block.workspace_id && workspaceId && block.workspace_id !== workspaceId)) { const err = new Error("Block not found"); err.statusCode = 404; throw err; } }
   function apiErrorMessage(e) {
     return [e && e.message, e && e.detail, e && e.code].filter(Boolean).join(" · ") || "Request failed";
   }

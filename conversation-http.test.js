@@ -122,6 +122,21 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   assert.ok(result.body.result.tools.some((t) => t.name === "dcc_work"));
   assert.ok(!result.body.result.tools.some((t) => t.name === "dcc_correct_time"));
   assert.ok(result.body.result.tools.some((t) => t.name === "dcc_delegate"));
+  const wishlistCreate = {
+    name: "dcc_create_wishlist", arguments: { id: crypto.randomUUID(), title: "Fixture carry-on" },
+  };
+  assert.ok(!result.body.result.tools.some(tool => tool.name === "dcc_read_wishlist"));
+  assert.equal((await rpc("tools/call", wishlistCreate)).status, 403);
+  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.wishlist.write"])]);
+  const createdWishlist = (await rpc("tools/call", wishlistCreate, { "x-workspace-id": "ws-2" })).body.result.structuredContent;
+  assert.deepEqual(createdWishlist, { id: wishlistCreate.arguments.id, revision: 1, duplicate: false });
+  const wishlistRead = { name: "dcc_read_wishlist", arguments: { wishlistId: createdWishlist.id } };
+  assert.equal((await rpc("tools/call", wishlistRead)).status, 403);
+  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.wishlist.read"])]);
+  const readWishlist = (await rpc("tools/call", wishlistRead)).body.result.structuredContent;
+  assert.equal(readWishlist.title, "Fixture carry-on");
+  assert.equal((await rpc("tools/call", wishlistCreate)).status, 403);
+  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.read", "dcc.work", "dcc.delegate"])]);
   const capture = {
     name: "dcc_save_someday_idea",
     arguments: {
