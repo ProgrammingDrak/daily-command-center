@@ -28,7 +28,7 @@ const queue = {
   }
 };
 app.use("/public", express.static(path.join(root, "public")));
-app.get("/api/working-queue", (_req, res) => res.json(queue));
+app.get("/api/working-queue", (_req, res) => res.json({state:queue}));
 app.get("/", (_req, res) =>
   res
     .type("html")

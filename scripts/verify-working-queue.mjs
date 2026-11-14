@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import express from "express";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -15,7 +16,13 @@ if (
 )
   throw new Error("A disposable localhost database is required");
 const ctx = await require("../test-support/activity-db").createActivityDb();
-Object.assign(ctx, { APP_TIME_ZONE: "UTC", broadcast() {} });
+const streams = new Set();
+function broadcast(type, data = {}, workspaceId = "ws-1") {
+  for (const stream of streams) {
+    if (stream.workspaceId === workspaceId) stream.res.write("data: " + JSON.stringify({ type, ...data }) + "\n\n");
+  }
+}
+Object.assign(ctx, { APP_TIME_ZONE: "UTC", broadcast });
 await ctx.pool.query(require("../conversation-store").FOREGROUND_INDEX_SQL);
 const make = (id, title, p = {}) =>
   ctx.blockDB.createBlock({
@@ -42,25 +49,32 @@ process.env.DCC_CONVERSATION_ENABLED = "true";
 const app = express();
 app.use(express.json());
 app.use((req, res, next) => {
-  req.session = { userId: 1 };
-  req.workspaceId = "ws-1";
+  const userId = req.headers.cookie?.includes("fixture-account=2") ? 2 : 1;
+  req.session = { userId };
+  req.workspaceId = "ws-" + userId;
   res.set("Cache-Control", "no-store");
   next();
+});
+app.get("/api/events", (req, res) => {
+  const stream = { res, workspaceId: req.workspaceId };
+  res.type("text/event-stream").write("data: connected\n\n");
+  streams.add(stream);
+  req.on("close", () => streams.delete(stream));
 });
 app.use("/public", express.static(path.join(root, "public")));
 require("../routes/working-queue")(app, ctx);
 require("../routes/guided")(app, ctx);
 app.get("/fixture/tasks", async (_req, res) =>
-  res.json((await ctx.pool.query("SELECT * FROM blocks WHERE type='block' AND deleted_at IS NULL")).rows)
+  res.json((await ctx.pool.query("SELECT * FROM blocks WHERE type='block' AND deleted_at IS NULL AND user_id=$1", [_req.session.userId])).rows)
 );
-app.get("/", (_req, res) =>
+app.get("/", (req, res) =>
   res.type("html")
     .send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public/css/dashboard.css"><link rel="stylesheet" href="/public/css/core-ui.css"><link rel="stylesheet" href="/public/css/working-queue.css"></head><body style="padding:20px"><nav id="tab-bar" aria-label="Pages"><button class="tab active" type="button" data-page="tasks">Tasks</button><button class="tab" type="button" data-page="budget" data-tab="budget">Budget</button></nav><div id="task-view-switch" role="tablist"><button type="button" role="tab" data-task-view="queue">Working Queue</button><button type="button" role="tab" data-task-view="list">Itinerary</button><button type="button" role="tab" data-task-view="calendar">Calendar</button></div><button type="button" id="task-actual-toggle" aria-pressed="false" hidden>Actual</button><div class="tab-content" id="tab-schedule">Itinerary fixture</div><div class="tab-content active" id="tab-working-queue"><div id="working-queue-root"></div></div><div class="tab-content" id="tab-budget">Budget fixture</div><div id="toast-container"></div>
-<script>window.__state={date:"2099-01-02"};window.addActionItem=()=>{};window.closeNotesDrawer=()=>{};window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:'ws-1'};</script><script src="/public/js/core.js"></script><script src="/public/js/core-ui.js"></script><script src="/public/js/task-types.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/nav-state.js"></script><script src="/public/js/tabs.js"></script>
+<script>window.__state={date:"2099-01-02"};window.addActionItem=()=>{};window.closeNotesDrawer=()=>{};window.DCC_ACCOUNT_CONTEXT={userId:${req.session.userId},workspaceId:${JSON.stringify(req.workspaceId)}};</script><script src="/public/js/core.js"></script><script src="/public/js/core-ui.js"></script><script src="/public/js/task-types.js"></script><script src="/public/js/task-model.js"></script><script src="/public/js/nav-state.js"></script><script src="/public/js/tabs.js"></script>
 <script>window.scheduled=[];window.backlog=[];window.fixtureRows=[];window.isDone=t=>t.status==='done';window.render=()=>{};
-window.blockStore={get:id=>fixtureRows.find(r=>r.id===id),getByType:()=>fixtureRows,acceptWorkRotation:rows=>{for(const row of rows){const i=fixtureRows.findIndex(r=>r.id===row.id);if(i>=0)fixtureRows[i]=row;else fixtureRows.push(row);}scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));}};
+window.blockStore={handleBlocksChanged:()=>window.fixtureLoad(),get:id=>fixtureRows.find(r=>r.id===id),getByType:()=>fixtureRows,acceptWorkRotation:rows=>{for(const row of rows){const i=fixtureRows.findIndex(r=>r.id===row.id);if(i>=0)fixtureRows[i]=row;else fixtureRows.push(row);}scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));}};
 window.fixtureLoad=async()=>{fixtureRows=await fetch('/fixture/tasks').then(r=>r.json());scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));};window.petDeliveries=[];DCC.PetNudge={deliverWorkCheckIn:async(text,options)=>{petDeliveries.push(text);DCC.toast(text,'info',60000,{label:'Open queue',onClick:options.open});}};
-</script>${require("../test-support/queue-browser-components")()}<script src="/public/js/work-checkin-policy.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/work-sessions.js"></script><script src="/public/js/work-completion.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/working-queue.js"></script><script>fixtureLoad().then(()=>dispatchEvent(new Event('dcc:data-ready')));</script></body></html>`)
+</script>${require("../test-support/queue-browser-components")()}<script src="/public/js/work-checkin-policy.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/work-sessions.js"></script><script src="/public/js/work-completion.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/working-queue.js"></script><script src="/public/js/refresh-coordinator.js"></script><script src="/public/js/sse.js"></script><script>fixtureLoad().then(()=>dispatchEvent(new Event('dcc:data-ready')));</script></body></html>`)
 );
 const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
@@ -73,6 +87,147 @@ const context = await browser.newContext({ viewport: { width: 1280, height: 950 
   page = await context.newPage(),
   errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
+if (process.env.DCC_QUEUE_BENCHMARK === "1") {
+  let snapshotBuilds = 0, databaseQueries = 0, databaseResultBytes = 0;
+  let gets = 0, httpBodyBytes = 0;
+  for (let n = 0; n < 90; n++) {
+    await make("bench-" + n, "Synthetic task " + n, { notes: "Synthetic queue detail ".repeat(105) });
+  }
+  const ids = Array.from({length:90}, (_,n)=>"bench-"+n);
+  await ctx.pool.query("INSERT INTO work_rotations(user_id,workspace_id,state) VALUES(1,'ws-1',$1)",
+    [{version:2,order:ids,items:Object.fromEntries(ids.map(id=>[id,{status:"queued"}]))}]);
+  const observed = new WeakSet();
+  let measuring = false;
+  ctx.pool.on("acquire", client => {
+    if (observed.has(client)) return;
+    observed.add(client);
+    const query = client.query;
+    client.query = function (sql, ...args) {
+      if (measuring) {
+        databaseQueries++;
+        if (sql.includes("SELECT state FROM work_rotations")) snapshotBuilds++;
+      }
+      return query.call(this, sql, ...args);
+    };
+    client.connection.on("dataRow", msg => { if (measuring) databaseResultBytes += msg.length + 1; });
+  });
+  const second = await browser.newPage({viewport:{width:1280,height:950}});
+  for (const tab of [page,second]) tab.on("response", response => {
+    if (!measuring || response.request().method() !== "GET" || !response.url().endsWith("/api/working-queue")) return;
+    gets++;
+    httpBodyBytes += Number(response.headers()["content-length"] || 0);
+  });
+  try {
+    await Promise.all([page,second].map(tab => tab.goto(base)));
+    await Promise.all([page,second].map(tab => tab.waitForFunction(() => DCCWorkingQueue.getState().queue.order.length === 91)));
+    assert.equal(streams.size, 2);
+    assert.deepEqual(await Promise.all([page,second].map(tab=>tab.evaluate(()=>document.visibilityState))), ["visible","visible"]);
+    await new Promise(r=>setTimeout(r,1000));
+    measuring = true;
+    const idleMs = Number(process.env.DCC_QUEUE_IDLE_MS || 300000);
+    await new Promise(r=>setTimeout(r,idleMs));
+    measuring = false;
+    const idle = {idleMs,gets,snapshotBuilds,databaseQueries,databaseResultBytes,httpBodyBytes};
+    const remoteStarted = performance.now();
+    await ctx.blockDB.updateBlock("bench-0", { properties: { title: "Remote synthetic edit" } });
+    ctx.broadcast("blocks-changed", { action:"update", blockIds:["bench-0"] }, "ws-1");
+    const remoteChangeMs = await Promise.all([page,second].map(async tab=>{
+      await tab.waitForFunction(()=>DCCWorkingQueue.getState().queue.items.some(item=>item.task.properties.title==="Remote synthetic edit"));
+      return Math.round(performance.now()-remoteStarted);
+    }));
+    console.log(JSON.stringify({idle,remoteChangeMs}));
+    if (process.env.DCC_QUEUE_REQUIRE_IDLE_GUARD === "1") {
+      assert.equal(snapshotBuilds, 0, "unchanged visible tabs must not build snapshots");
+      assert.ok(remoteChangeMs.every(ms => ms < 5000), "both tabs see the SSE edit within five seconds");
+    }
+    // Start immediately after the next fallback so the dropped-event test spans a full interval.
+    await Promise.all([page,second].map(tab=>tab.waitForResponse(response =>
+      response.url().endsWith("/api/working-queue") && response.request().method()==="GET", {timeout:32000})));
+    const missedStarted = performance.now();
+    await ctx.blockDB.updateBlock("bench-1", { properties: { title: "Edit without event" } });
+    await Promise.all([page,second].map(tab => tab.waitForFunction(() =>
+      DCCWorkingQueue.getState().queue.items.some(item=>item.task.properties.title==="Edit without event"), null, {timeout:32000})));
+    console.log(JSON.stringify({missedEventMs: Math.round(performance.now()-missedStarted)}));
+    for (const stream of streams) stream.res.end();
+    const reconnectStarted = performance.now();
+    await ctx.blockDB.updateBlock("bench-2", { properties: { title: "Edit during disconnect" } });
+    await Promise.all([page,second].map(tab => tab.waitForFunction(() =>
+      DCCWorkingQueue.getState().queue.items.some(item=>item.task.properties.title==="Edit during disconnect"), null, {timeout:8000})));
+    console.log(JSON.stringify({reconnectMs: Math.round(performance.now()-reconnectStarted)}));
+    const orderingStarted = performance.now();
+    await page.evaluate(async () => {
+      const {revision, queue} = DCCWorkingQueue.getState();
+      await DCCWorkingQueue.send({action:"queue-reorder",sourceEventId:crypto.randomUUID(),
+        expectedRevision:revision,at:new Date().toISOString(),order:[...queue.order].reverse()});
+    });
+    await second.waitForFunction(() => DCCWorkingQueue.getState().queue.order[0]==="a", null, {timeout:5000});
+    console.log(JSON.stringify({remoteOrderMs: Math.round(performance.now()-orderingStarted)}));
+
+    const dueAt = new Date(Date.now()+2500).toISOString();
+    await ctx.pool.query(`UPDATE work_rotations SET state=jsonb_set(state,'{items,bench-0}',$1)
+      WHERE user_id=1 AND workspace_id='ws-1'`, [{
+      status:"queued", pausedOperationId:null, generation:"bench-reminder", dueAt, snoozedUntil:dueAt
+    }]);
+    ctx.broadcast("blocks-changed", {action:"working-queue",blockIds:["bench-0"]}, "ws-1");
+    await Promise.all([page,second].map(tab=>tab.waitForFunction(() =>
+      document.querySelector('.wq-background [data-queue-id="bench-0"]'),null,{timeout:2300})));
+    await Promise.all([page,second].map(tab=>tab.waitForFunction(() =>
+      document.querySelector('.wq-needs [data-queue-id="bench-0"]'),null,{timeout:19000})));
+    const deliveries = async () => (await Promise.all([page,second].map(tab=>
+      tab.evaluate(()=>petDeliveries.length)))).reduce((total,count)=>total+count,0);
+    const deadline = Date.parse(dueAt)+17000;
+    while (await deliveries()===0 && Date.now()<deadline) await new Promise(r=>setTimeout(r,100));
+    assert.equal(await deliveries(),1,"only one tab delivers the reminder");
+    console.log(JSON.stringify({reminderMs: Math.max(0,Date.now()-Date.parse(dueAt))}));
+    // Capture a response from account one, then release it after the page changes scope.
+    let requestArrived, requestFailed, releaseResponse;
+    const arrived = new Promise((resolve,reject) => { requestArrived = resolve; requestFailed = reject; });
+    const release = new Promise(resolve => { releaseResponse = resolve; });
+    await ctx.blockDB.updateBlock("bench-3", {properties:{title:"Obsolete private response"}});
+    await page.route("**/api/working-queue", async route => {
+      try {
+        const headers = {...await route.request().allHeaders()};
+        delete headers["x-dcc-queue-version"];
+        const response = await route.fetch({headers});
+        const value = await response.json();
+        assert.ok(value.state.queue.items.some(item => item.task.properties.title === "Obsolete private response"));
+        requestArrived();
+        await release;
+        await route.fulfill({response});
+      } catch (error) {
+        requestFailed(error);
+        await route.abort();
+      }
+    });
+    const inFlight = page.evaluate(() => DCCWorkingQueue.refresh().catch(()=>{}));
+    await Promise.race([arrived,inFlight.then(()=>{throw new Error("Expected an intercepted queue response");})]);
+    await page.evaluate(() => { window.DCC_ACCOUNT_CONTEXT = {userId:2,workspaceId:"ws-2"}; });
+    releaseResponse();
+    await inFlight;
+    assert.equal(await page.locator("[data-queue-id]").count(), 0, "obsolete response never renders on a switched account");
+    await page.unroute("**/api/working-queue");
+    await page.evaluate(() => { window.DCC_ACCOUNT_CONTEXT = {userId:1,workspaceId:"ws-1"}; });
+    await context.addCookies([{name:"fixture-account",value:"2",url:base}]);
+    const rejected = page.waitForResponse(response =>
+      response.url().endsWith("/api/working-queue") && response.status()===409, {timeout:5000});
+    await page.evaluate(async () => {
+      await DCCWorkingQueue.refresh().catch(()=>{});
+      await DCCWorkingQueue.refresh().catch(()=>{});
+    });
+    await rejected;
+    assert.equal(await page.locator("[data-queue-id]").count(), 0, "old tab hides its queue on server account mismatch");
+    await Promise.all([page.waitForResponse(response => response.url().endsWith("/api/working-queue") && response.status()===200), page.reload()]);
+    assert.deepEqual(await page.evaluate(() => ({account:window.DCC_ACCOUNT_CONTEXT, order:DCCWorkingQueue.getState().queue.order})),
+      {account:{userId:2,workspaceId:"ws-2"},order:[]});
+    console.log(JSON.stringify({accountSwitch:"passed"}));
+  } finally {
+    await browser.close();
+    server.closeAllConnections();
+    await new Promise(r=>server.close(r));
+    await ctx.close();
+  }
+  process.exit(0);
+}
 const card = (id) => page.locator('[data-queue-id="' + id + '"]'),
   button = (id, action) => card(id).locator('[data-queue-action="' + action + '"]');
 const closed = () => page.waitForFunction(() => !Array.from(document.querySelectorAll("[role=dialog]")).some(el=>el.getClientRects().length));
@@ -95,7 +250,11 @@ const focus = async (id) => {
       assert.deepEqual(await page.evaluate(()=>DCCWorkingQueue.getState().foreground.map(row=>row.id)),previous.map(row=>row.id));
       await button(id,'focus').click();switchCancelChecked=true;
     }
-    await page.getByRole('dialog').getByRole('button',{name:'Bring forward',exact:true}).press('Enter');
+    const submitted = page.waitForResponse(response => response.url().endsWith("/api/working-queue") &&
+      response.request().method()==="POST" && response.request().postDataJSON().action==="start", {timeout:5000});
+    await dialog.getByRole('button',{name:'Bring forward',exact:true}).click();
+    const response = await submitted;
+    assert.ok(response.ok(), await response.text());
   }
   await closed();
   try{await page.waitForFunction(
@@ -126,11 +285,16 @@ const snoozeVia = async (id) => {
   );
 };
 const task = (id) => ctx.blockDB.getBlock(id);
-const due = async (id) =>
+const setDueInDatabase = async (id) =>
   ctx.pool.query(
     "UPDATE work_rotations SET state=jsonb_set(jsonb_set(state,ARRAY['items',$1,'dueAt'],to_jsonb($2::text)),ARRAY['items',$1,'notifiedAt'],'null')",
     [id, new Date(Date.now() - 1000).toISOString()]
   );
+async function due(id) {
+  await setDueInDatabase(id);
+  // The test's SQL bypasses SSE. Load the changed schedule before driving the local claim tick.
+  await page.evaluate(() => DCCWorkingQueue.refresh());
+}
 try {
   await page.goto(base);
   await page.waitForSelector(".wq-focus");
@@ -213,12 +377,11 @@ try {
   const priorityOrder=await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId));
   await button('b','up').click();
   assert.deepEqual(await page.locator('.wq-next [data-queue-id]').evaluateAll(rows=>rows.map(r=>r.dataset.queueId)),priorityOrder,'arrows cannot silently change priority');
-  await card('d').locator('.btn-schedule').click();
-  await page.getByRole('button',{name:'Blocked / Waiting…',exact:true}).click();
+  await page.evaluate(() => DCCWorkingQueue.openBlocked(DCCWorkingQueue.taskAnchor("d").ev));
   await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();await closed();
   await page.waitForFunction(()=>{const item=DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='d');return item?.blocked&&item.snoozed;});
   assert.equal((await task('d')).properties.actualMinutes,undefined,'blocking and Snooze add no focused effort');
-  await card('d').locator('.btn-schedule').click();await page.getByRole('button',{name:'Unblock task',exact:true}).click();
+  await page.evaluate(() => DCCWorkingQueue.openBlocked(DCCWorkingQueue.taskAnchor("d").ev));
   await page.waitForFunction(()=>{const item=DCCWorkingQueue.getState().queue.items.find(i=>i.task.id==='d');return item?.status==='queued'&&!item.blocked;});
   assert.equal(await page.locator('.wq-next [data-queue-id="d"]').count(),1,'unblock preserves history without claiming running execution');
   await page.reload();await page.waitForSelector('[data-queue-id="b"]');
@@ -242,10 +405,14 @@ try {
   await page.getByRole("button",{name:"Close",exact:true}).last().click();
   await closed();
   await card("c").focus();
-  await page.keyboard.press("Alt+ArrowUp");
-  await page.waitForFunction(
-    () => DCCWorkingQueue.getState().queue.order.indexOf("c") < DCCWorkingQueue.getState().queue.order.indexOf("b")
-  );
+  await Promise.all([
+    page.waitForResponse(response => response.url().endsWith("/api/working-queue") &&
+      response.request().method()==="POST" && response.request().postDataJSON().action==="queue-reorder" && response.ok()),
+    page.keyboard.press("Alt+ArrowUp")
+  ]);
+  await page.waitForFunction(() => !DCCWorkingQueue.syncState().pending);
+  assert.ok(await page.evaluate(() => DCCWorkingQueue.getState().queue.order.indexOf("c") <
+    DCCWorkingQueue.getState().queue.order.indexOf("b")));
   await focus("b");
   assert.equal((await task("a")).properties.actualMinutes, 2);
   assert.equal((await task("a")).properties.subtaskOf, "parent");
@@ -466,6 +633,7 @@ try {
   );
 } finally {
   await browser.close();
+  server.closeAllConnections();
   await new Promise((r) => server.close(r));
   await ctx.close();
 }

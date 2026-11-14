@@ -147,7 +147,7 @@ try {
     assert.ok(await card('a').locator('.wq-break-title').isVisible());
     assert.equal(await card('a').locator('.wq-break-title').evaluate(el=>el.scrollHeight<=el.clientHeight),true,'task title remains fully readable');
     assert.notEqual(await veil.evaluate(el=>getComputedStyle(el).backdropFilter),'none');
-    const resume=button('a','focus'),box=await resume.boundingBox();assert.ok(box.height>=44);
+    await page.waitForFunction(()=>document.querySelector('[data-queue-id="a"] .wq-break-veil [data-queue-action=focus]')?.getBoundingClientRect().height>=44);
     await card('a').screenshot({path:path.join(output,'foreground-break-'+width+'.png')});
   }
   // Same queued command recovers a response lost after the transaction commits.
@@ -188,7 +188,7 @@ try {
   await card('b').locator('[data-queue-action=pause]').waitFor();
   assert.equal((await state()).queue.items.find(i=>i.task.id==='a').snoozed,true);
   await second.close();
-  await page.route('**/api/working-queue',async route=>{const response=await route.fetch(),data=await response.json();data.otherWorkspaceForeground=true;return route.fulfill({response,json:data});});
+  await page.route('**/api/working-queue',async route=>{const headers=await route.request().allHeaders();delete headers["x-dcc-queue-version"];const response=await route.fetch({headers}),data=await response.json();delete data.version;data.state.otherWorkspaceForeground=true;return route.fulfill({response,json:data});});
   await page.evaluate(()=>DCCWorkingQueue.refresh());
   await page.getByText(/Another workspace holds Foreground/).waitFor();
   await button('c','focus').click();await page.locator('#toast-container').getByText(/choose Return to Priority before switching/).waitFor();

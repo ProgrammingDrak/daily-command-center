@@ -28,7 +28,7 @@ try{
   await context.route('**/*',route=>new URL(route.request().url()).origin===base?route.continue():route.abort());
   await context.route('**/api/state/tomorrow',route=>route.fulfill({json:{date:tomorrow,schedule:{timeline:[]}}}));
   let snapshot=active;
-  await context.route('**/api/working-queue',route=>route.fulfill({json:snapshot}));
+  await context.route('**/api/working-queue',route=>route.fulfill({json:{state:snapshot}}));
   const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(base+'/?tab=tasks&view=queue');await page.waitForSelector('[data-queue-id="combined-focus"]');
   await page.waitForFunction(()=>!!document.querySelector('#ptrack').dataset.date);

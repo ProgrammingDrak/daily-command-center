@@ -8,10 +8,19 @@ module.exports = async function mount(app) {
   process.env.DCC_CONVERSATION_REMOTE_ENABLED = "false";
   await ctx.pool.query(require("../conversation-store").FOREGROUND_INDEX_SQL);
   const date = new Date().toISOString().slice(0, 10);
+  const clients = new Set();
+  app.get("/api/events", (req, res) => {
+    res.set("Cache-Control", "no-cache");
+    res.type("text/event-stream").write("data: connected\n\n");
+    clients.add(res);
+    req.on("close", () => clients.delete(res));
+  });
   Object.assign(ctx, {
     APP_TIME_ZONE: "UTC", getTodayStr: () => date, getScheduleBlocks: async () => [],
     filterLegacyGcalBlocks: rows => rows, isValidDate: require("../public/js/activity-model").validDate,
-    broadcast() {}
+    broadcast(type, data) {
+      for (const client of clients) client.write("data: " + JSON.stringify({type, ...data}) + "\n\n");
+    }
   });
   app.use((req, _res, next) => { req.session = { userId: 1 }; req.workspaceId = "ws-1"; next(); });
   require("../routes/working-queue")(app, ctx);

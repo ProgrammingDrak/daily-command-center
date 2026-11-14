@@ -935,6 +935,7 @@ module.exports = function mount(app, ctx) {
     broadcast("blocks-changed", {
       action: "work", workAction: body.action, blockIds: result.conversation?.affectedTasks?.map(row => row.id) || [req.params.id], clientId: body._clientId,
     }, req.workspaceId);
+    if (result.changed) ctx.broadcastQueueChange?.(req.session.userId, req.workspaceId);
     await syncSlack(block);
     return { ok: true, changed: !!result.changed, reason: result.reason || null, block, affectedTasks: result.conversation?.affectedTasks || [] };
   }));
@@ -1801,6 +1802,7 @@ module.exports = function mount(app, ctx) {
         }
         const result = await blockDB.rescheduleBlocks(moves,creates,queueRescheduleOptions(req));
         broadcast("blocks-changed",{action:"reschedule",blockIds:result.blocks.map(row=>row.id),clientId:_clientId},req.workspaceId);
+        ctx.broadcastQueueChange?.(req.session.userId, req.workspaceId);
         return res.json({moved:planned.ids,blocks:result.blocks.slice(0,planned.moves.length),created:result.blocks.slice(planned.moves.length),parentId:parent.id,fromDate:parent.date,targetDate,count:planned.ids.length});
       }
       // Did a HUMAN name the landing time? A timed placement cannot answer that on its
@@ -2035,6 +2037,7 @@ module.exports = function mount(app, ctx) {
       const movedIds = subtreeIds;
       const created = result.blocks.slice(moves.length); // tombstone(s) appended after moves
       broadcast("blocks-changed", { action: "reschedule", blockIds: result.blocks.map(b => b.id), clientId: _clientId }, req.workspaceId);
+      ctx.broadcastQueueChange?.(req.session.userId, req.workspaceId);
       res.json({ moved: movedIds, blocks: result.blocks.slice(0, moves.length), created, parentId: parent.id, fromDate, targetDate, count: movedIds.length });
     } catch (e) {
       const body = { error: e.message };

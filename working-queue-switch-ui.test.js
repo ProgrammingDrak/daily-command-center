@@ -15,7 +15,7 @@ test('foreground switch preview, cancellation, stale state and exact retry', { s
     writes.length = 0; receipts.clear(); mode = 'ok';
   }
   reset();
-  app.get('/api/working-queue', (_req,res) => res.json(state));
+  app.get('/api/working-queue', (_req,res) => res.json({state}));
   app.get('/api/guided/tasks/new', (_req,res) => res.json({ revision: 1, definitionRevision: 1, contextVersion: 1, prompt: 'Synthetic instructions' }));
   app.post('/api/working-queue', (req,res) => {
     const b = req.body; writes.push(b);

@@ -159,7 +159,7 @@ if (!LOCAL_AUTH_ENABLED) {
 app.use(session(sessionOptions));
 
 // Isolated OAuth/MCP boundary: bearer tokens here never enter the legacy service gate.
-require("./routes/conversation")(app, { pool, blockDB, APP_TIME_ZONE, broadcast });
+require("./routes/conversation")(app, { pool, blockDB, APP_TIME_ZONE, broadcast, broadcastQueueChange });
 
 // ── Auth Middleware ──
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
@@ -407,6 +407,7 @@ app.get("/vendor/drake-auth/browser.js", (req, res) => res.sendFile(require.reso
 
 // ── SSE ──
 const sseClients = new Map();
+const sseAccounts = new Map();
 // Shared-link viewers: capped, coalesced, heartbeated (lib/public-sse.js).
 const MAX_PUBLIC_SSE_CLIENTS = 100;
 const MAX_PUBLIC_SSE_PER_WORKSPACE = 20;
@@ -419,7 +420,21 @@ app.get("/api/events", (req, res) => {
   const wsId = req.workspaceId || "__global";
   if (!sseClients.has(wsId)) sseClients.set(wsId, new Set());
   sseClients.get(wsId).add(res);
-  req.on("close", () => { const clients = sseClients.get(wsId); if (clients) { clients.delete(res); if (clients.size === 0) sseClients.delete(wsId); } });
+  const userId = req.session?.userId;
+  if (userId) {
+    if (!sseAccounts.has(userId)) sseAccounts.set(userId, new Map());
+    sseAccounts.get(userId).set(res, wsId);
+  }
+  req.on("close", () => {
+    const clients = sseClients.get(wsId);
+    clients.delete(res);
+    if (!clients.size) sseClients.delete(wsId);
+    const account = sseAccounts.get(userId);
+    if (account) {
+      account.delete(res);
+      if (!account.size) sseAccounts.delete(userId);
+    }
+  });
 });
 
 function broadcast(eventType, data, workspaceId) {
@@ -430,6 +445,13 @@ function broadcast(eventType, data, workspaceId) {
   for (const client of targets) { client.write(`data: ${payload}\n\n`); }
   if (workspaceId && ["blocks-changed", "dcc-state-changed", "todo-share-changed", "slot-changed"].includes(eventType)) {
     publicSse.ping(workspaceId);
+  }
+}
+
+// Foreground and command revisions span workspaces owned by the same account.
+function broadcastQueueChange(userId, sourceWorkspace) {
+  for (const [client, workspaceId] of sseAccounts.get(userId) || []) {
+    if (workspaceId !== sourceWorkspace) client.write('data: {"type":"working-queue-changed"}\n\n');
   }
 }
 
@@ -985,6 +1007,7 @@ const meetingMaterializer = require("./meeting-materializer")({
 // value (they never change); vault/syncMgr are getters because startup
 // initializes them after routes mount.
 const ctx = {
+  queueReadSecret: sessionSecret, broadcastQueueChange,
   APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, gcalAuth, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAdminSession, isAllowedSweepBlockItem, meetingAutomation, meetingSignals, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, reimbursementStore, rewardVaultStore, readDayStateMirror, readJSON, readTriageSuppressionsForWorkspace, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, waitingItems, writeJSON,
   dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR, accessStore,
   meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN, registerPublicSse, closePublicSse,

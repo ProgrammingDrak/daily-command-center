@@ -46,9 +46,9 @@ test('real coordinator completion replay and undo are idempotent and account gua
 function clientFixture(){
   const fs=require('node:fs'),vm=require('node:vm');
   const source=fs.readFileSync('public/js/working-queue.js','utf8');
-  const fragment=source.slice(source.indexOf('  const actionAccount='),source.indexOf('  window.DCCWorkingQueue='));
+  const fragment=source.slice(source.indexOf('  function sameAccount()'),source.indexOf('  window.DCCWorkingQueue='));
   const account={userId:1,workspaceId:'ws'},state={revision:4,foreground:[]},item={task:{id:'task',properties:{}},status:'queued'},sent=[];
-  const c={account,window:{DCC_ACCOUNT_CONTEXT:account},navigator:{onLine:true},state,sending:false,pending:null,conflict:null,items:()=>[item],refresh:async()=>state,DCC:{api:async()=>({task:item.task})},envelope:(action,extra)=>({action,...extra}),send:async command=>{sent.push(command);return {undo:{taskId:'task',sourceEventId:'completed',expectedRevision:5,expiresAt:Date.now()+30000}};}};
+  const c={actionAccount:{...account},scopeRejected:false,requestQueue:async()=>({task:item.task}),window:{DCC_ACCOUNT_CONTEXT:account},navigator:{onLine:true},state,sending:false,pending:null,conflict:null,items:()=>[item],refresh:async()=>state,DCC:{api:async()=>({task:item.task})},envelope:(action,extra)=>({action,...extra}),send:async command=>{sent.push(command);return {undo:{taskId:'task',sourceEventId:'completed',expectedRevision:5,expiresAt:Date.now()+30000}};}};
   vm.runInNewContext(fragment+';globalThis.actions={performTaskAction,openTaskOutcome,undoCompletion};',c);
   return {c,sent,item};
 }
