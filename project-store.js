@@ -1,6 +1,7 @@
 const nodeCrypto = require("node:crypto");
 const TaskSources = require("./public/js/task-sources");
 
+const LEGACY_TASK_TYPES = ["added_task", "schedule_item", "pending_task", "trivial_task", "action_item", "subtask"];
 const ORGANIZATION_KINDS = new Set(["project", "task_facet", "task_view"]);
 const FACET_CARDINALITIES = new Set(["single", "multi"]);
 const FACET_SCOPES = new Set(["workspace", "project"]);
@@ -57,7 +58,7 @@ function isLibraryTask(block, blockDB) {
   const props = block.properties || {};
   const hasTitle = cleanText(props.title || props.text, 300);
   if (!hasTitle) return false;
-  if (block.type !== "block") return ["added_task", "schedule_item", "pending_task", "trivial_task", "action_item", "subtask"].includes(block.type);
+  if (block.type !== "block") return LEGACY_TASK_TYPES.includes(block.type);
   return !!(props.local_id || ["task", "backlog", "shell", "meeting", "responsibility_task", "placeholder_task"].includes(props.kind)
     || ["task", "shell", "meeting", "oneone"].includes(props.type));
 }
@@ -374,12 +375,16 @@ function createProjectStore(deps = {}) {
   }
 
   async function listTaskRows(workspaceId) {
+    // Filter canonical artifacts in SQL. Parsed title and local_id checks
+    // stay in JavaScript, where legacy values retain their original semantics.
     const { rows } = await pool.query(
       `SELECT * FROM blocks WHERE workspace_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL
+       AND (type = 'block' OR type = ANY($2::text[]))
+       AND dcc_is_task_row(type, properties)
        ORDER BY CASE WHEN COALESCE(properties->>'projectOrder','') ~ '^-?[0-9]+(?:[.][0-9]+)?$'
                      THEN (properties->>'projectOrder')::double precision ELSE sort_order END,
                 created_at ASC`,
-      [workspaceId || null]
+      [workspaceId || null, LEGACY_TASK_TYPES]
     );
     return rows.map(blockDB.parseBlock).filter(row => isLibraryTask(row, blockDB));
   }
