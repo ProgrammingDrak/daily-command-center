@@ -195,7 +195,6 @@
   // ---- Tasks-sheet section pills (Phase 3) -----------------------------------
 
   const SHEET_SECTIONS = [
-    { id:"tm-task-library-section",           label:"Task Library" },
     { id:"tm-triage-section",                 label:"Triage" },
     { id:"tm-scheduled-section",              label:"Scheduled" },
     { id:"tm-action-items-section",           label:"Action items" },

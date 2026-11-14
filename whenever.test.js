@@ -166,7 +166,7 @@ test("x sends it back to the Task Library through persistRowProp, and Undo resto
   assert.equal(page.ctx.backlog[0].stage, "Backlog");
   assert.equal(W.selectWhenever(page.ctx.backlog).length, 0);
   const toast = page.log.find(e => e[0] === "toast");
-  assert.deepEqual(toast.slice(0, 3), ["toast", "Moved to the Task Library", "Undo"]);
+  assert.deepEqual(toast.slice(0, 3), ["toast", "Moved to Unscheduled", "Undo"]);
   await Promise.resolve();
   assert.ok(page.log.some(e => e[0] === "refold"), "the itinerary refolds once the stage write lands");
 });
@@ -195,12 +195,12 @@ test("a pool item with no resolvable row refuses instead of pretending to save",
 
 // ── wiring contracts ──
 
-test("the header is one capsule with Someday immediately after Whenever", () => {
+test("the header is one capsule with All Tasks and Someday", () => {
   const html = fs.readFileSync(require.resolve("./index.html"), "utf8");
   const header = html.slice(html.indexOf('id="task-view-bar"'), html.indexOf('class="progress-wrap"'));
   const capsule = header.slice(header.indexOf('id="queue-pill"'));
   const doors = [...capsule.matchAll(/<button class="queue-seg[^"]*" id="([^"]+)"/g)].map(m => m[1]);
-  assert.deepEqual(doors, ["triage-pill-nav", "loose-ends-pill", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav", "someday-pill-nav"]);
+  assert.deepEqual(doors, ["triage-pill-nav", "loose-ends-pill", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav", "all-tasks-pill-nav", "someday-pill-nav"]);
   assert.equal((header.match(/class="(waiting-pill-nav|loose-ends-pill)/g) || []).length, 0, "no door is a pill of its own anymore");
   // Loose Ends keeps its blue and its count gate (catch-up.js unhides it); Waiting reads
   // the app-wide Waiting family, so its door matches every other Waiting surface.

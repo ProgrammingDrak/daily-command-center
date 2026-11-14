@@ -18,7 +18,7 @@
 <link rel="stylesheet" href="/public/css/review-tomorrow.css?v=review-tomorrow-1">
 <link rel="stylesheet" href="/public/css/dashboard.css?v=progress-collapse-1">
 <link rel="stylesheet" href="/public/css/meeting-reviews.css">
-<link rel="stylesheet" href="/public/css/task-library.css?v=task-library-1">
+<link rel="stylesheet" href="/public/css/task-library.css?v=task-collections-1">
 <link rel="stylesheet" href="/public/css/calendar-week.css?v=calendar-week-zones-1">
 <link rel="stylesheet" href="/public/css/vault.css?v=vault-b6-1">
 <link rel="stylesheet" href="/public/css/ui-optimization.css?v=task-workspace-nav-2">
@@ -85,7 +85,7 @@
         </select>
         <select class="tab-dest">
           <option value="schedule">Schedule</option>
-          <option value="backlog">Task Library (Solo)</option>
+          <option value="backlog">Unscheduled</option>
           <option value="urgent" selected>Urgent</option>
         </select>
         <button class="tab-add">+ Add</button>
@@ -176,7 +176,7 @@
       <!-- The task queues, one capsule in triage order. whenever.js
            hosts Triage, Unscheduled and Whenever (all work with no time on it);
            catch-up.js owns Loose Ends (hidden while it has nothing to show) and
-           delegated.js owns Waiting and task-library.js opens Someday. -->
+           delegated.js owns Waiting. All Tasks and Someday share the task list. -->
       <div class="queue-pill" id="queue-pill" role="group" aria-label="Task queues">
         <button class="queue-seg queue-theme--crimson" id="triage-pill-nav" type="button" aria-label="Open Triage tasks" aria-controls="tasks-drawer" aria-haspopup="dialog" title="Triage: tasks discovered while reviewing incoming messages and meetings.">
           <span data-triage-label>Triage</span><span class="queue-seg-count" id="triage-pill-nav-count" aria-live="polite">0</span>
@@ -192,6 +192,9 @@
         </button>
         <button class="queue-seg queue-theme--sage" id="whenever-pill-nav" type="button" aria-label="Open Whenever tasks" aria-controls="tasks-drawer" aria-haspopup="dialog" title="Whenever: no set time. Knock one out when you have a free minute.">
           <span data-whenever-label>Whenever</span><span class="queue-seg-count" id="whenever-pill-nav-count" aria-live="polite">0</span>
+        </button>
+        <button class="queue-seg queue-theme--blue" id="all-tasks-pill-nav" type="button" aria-controls="tasks-drawer" aria-haspopup="dialog">
+          <span>All Tasks</span><span class="queue-seg-count" id="all-tasks-pill-nav-count" aria-live="polite">0</span>
         </button>
         <button class="queue-seg queue-theme--slate" id="someday-pill-nav" type="button" aria-label="Open Someday ideas" aria-controls="tasks-drawer" aria-haspopup="dialog" title="Ideas saved for later">
           <span>Someday</span><span class="queue-seg-count" id="someday-pill-nav-count" aria-live="polite">0</span>
@@ -257,7 +260,7 @@
       </select>
       <select class="tab-dest">
         <option value="schedule">Schedule</option>
-        <option value="backlog">Task Library (Solo)</option>
+        <option value="backlog">Unscheduled</option>
         <option value="urgent" selected>Urgent</option>
       </select>
       <button class="tab-add">+ Add</button>
@@ -349,18 +352,11 @@
       </div>
       <div class="tm-accordion">
 
-        <details class="tm-section tm-task-library-section" id="tm-task-library-section" data-sidecar-label="Task Library" open>
-          <summary class="tm-section-header">
-            <span class="tm-chevron"></span>
-            Task Library
-            <span class="badge" id="task-library-count">0</span>
-          </summary>
-          <div class="tm-section-body tm-task-library-body" id="tm-task-library">
-            <div id="task-library-root" aria-live="polite">
-              <div class="task-library-loading">Loading your task library…</div>
-            </div>
+        <section class="tm-section task-collection-section" id="tm-task-collection-section">
+          <div class="tm-section-body">
+            <div id="task-collection-root"></div>
           </div>
-        </details>
+        </section>
 
         <details class="tm-section" id="tm-triage-section" open>
           <summary class="tm-section-header">
@@ -603,7 +599,7 @@
       <select class="tab-dest" aria-label="Task type or destination">
         <option value="urgent" selected>Urgent</option>
         <option value="schedule">Schedule</option>
-        <option value="backlog">Task Library (Solo)</option>
+        <option value="backlog">Unscheduled</option>
       </select>
       <button class="tab-add">+ Add</button>
     </div>
@@ -2250,7 +2246,7 @@
 <script src="/public/js/catch-up.js"></script>
 <script src="/public/js/boot.js"></script>
 <script src="/public/js/block-store.js?v=ledger-1"></script>
-<script src="/public/js/task-library.js?v=someday-pill-1"></script>
+<script src="/public/js/task-library.js?v=task-collections-1"></script>
 <script src="/public/js/reading-sessions.js?v=1"></script>
 <script src="/public/js/day-review.js?v=task-workspace-nav-2"></script>
 <script src="/public/js/actual-projection.js?v=task-workspace-nav-2"></script>
@@ -2282,10 +2278,10 @@
 <script src="/public/js/pomodoro.js"></script>
 <script src="/public/js/queue-layout.js"></script>
 <script src="/public/js/working-queue.js"></script>
-<script src="/public/js/side-drawers.js"></script>
+<script src="/public/js/side-drawers.js?v=task-collections-1"></script>
 <script src="/public/js/budget.js"></script>
 <script src="/public/js/reimbursements.js"></script>
-<script src="/public/js/mobile-shell.js"></script>
+<script src="/public/js/mobile-shell.js?v=task-collections-1"></script>
 <script src="/public/js/prompted-sequence.js?v=1"></script>
 <script src="/public/js/workout-model.js?v=movement-cards-1"></script>
 <script src="/public/js/activity-model.js?v=workout-2"></script>
