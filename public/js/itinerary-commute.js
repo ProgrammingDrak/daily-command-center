@@ -32,6 +32,57 @@
     return url.href;
   }
 
+  function navigationUrl(value) {
+    if (!value || value.length > 4096) return null;
+    try {
+      const url = new URL(value);
+      return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password ? url : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function linkedEndpoints(url) {
+    if (!url) return {};
+    const params = url.searchParams;
+    if (url.hostname === "maps.apple.com") {
+      return {
+        origin: params.get("source") || params.get("saddr"),
+        destination: params.get("destination") || params.get("daddr")
+      };
+    }
+    if (["google.com", "www.google.com", "maps.google.com"].includes(url.hostname)) {
+      const [, , , from, to] = url.pathname.split("/");
+      const decode = part => {
+        if (!part || /^[@!]|^data=/.test(part)) return "";
+        try {
+          return decodeURIComponent(part.replace(/\+/g, " "));
+        } catch {
+          return "";
+        }
+      };
+      const isDirections = url.pathname.startsWith("/maps/dir/");
+      return {
+        origin: params.get("origin") || params.get("saddr") || (isDirections && decode(from)),
+        destination: params.get("destination") || params.get("daddr") || (isDirections && decode(to))
+      };
+    }
+    return {};
+  }
+
+  function drawRouteLinks(parent, route) {
+    parent.replaceChildren();
+    const original = typeof route?.url === "string" ? navigationUrl(route.url) : null;
+    if (original) directionsLink(parent, "Open saved link").href = original.href;
+    if (!route?.destination) return;
+    directionsLink(parent, "Google Maps").href = directionsUrl(route.destination, route.origin);
+    if (!route.origin) return;
+    const apple = new URL("https://maps.apple.com/directions");
+    apple.searchParams.set("source", route.origin);
+    apple.searchParams.set("destination", route.destination);
+    directionsLink(parent, "Apple Maps").href = apple.href;
+  }
+
   // Saved places can supply an icon key and a color through the same location object.
   const locationIcons = new Map([
     ["pin", "M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0ZM12 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"],
@@ -86,8 +137,8 @@
     return enqueueRowPropsWrite(blockId, merge, { _reportSaveStatus: true }, { rejectOnError: true });
   }
 
-  function legSnapshot(legs) {
-    return JSON.stringify(legs || [], (_, value) => {
+  function snapshot(value) {
+    return JSON.stringify(value, (_, value) => {
       if (!value || typeof value !== "object" || Array.isArray(value)) return value;
       return Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]));
     });
@@ -197,44 +248,100 @@
     const summary = append(row, "summary", "Add commute");
     const panel = append(row, "div");
     panel.className = "it-commute-panel";
-    const destination = destinationOf(task.taskLocation);
-    const suggested = destination ? suggestedCommuteOrigin(blockId) : "";
-    let draft, origin, review, saveRoute;
-    if (destination) {
-      draft = append(panel, "details");
-      append(draft, "summary", "Plan commute");
-      append(draft, "p", "To " + destination);
-      origin = field(draft, "From", "input");
-      origin.maxLength = 180;
-      origin.value = task.commuteEndpoints?.origin || suggested;
-      origin.placeholder = "Starting point";
-      if (suggested) {
-        append(draft, "p", "Previous stop: " + suggested);
-        button(draft, "Use previous stop", () => {
-          origin.value = suggested;
-          updateDirections();
-        });
-      }
-      const directions = directionsLink(draft, "Review route in Google Maps");
-      function updateDirections() {
-        directions.href = directionsUrl(destination, origin.value.trim());
-      }
-      origin.addEventListener("input", updateDirections);
-      updateDirections();
-      append(draft, "p", "Review directions, then save the route or add a leg below.");
-      saveRoute = button(draft, "Save route endpoints", () => save(legs, draftEndpoints()));
-      const saved = task.commuteEndpoints;
-      if (saved && (saved.destination !== destination || (saved.usedPreviousStop && saved.origin !== suggested))) {
-        review = append(panel, "p", "Review route: the location or previous stop has changed.");
-      }
-    } else if (task.commuteEndpoints) {
-      append(panel, "p", "Review route: the task location was removed.");
+    const taskDestination = destinationOf(task.taskLocation);
+    const suggested = suggestedCommuteOrigin(blockId);
+    let savedRoute = task.commuteEndpoints || null;
+    const savedLinks = append(panel, "div");
+    savedLinks.className = "it-commute-route-links";
+    const draft = append(panel, "details");
+    const draftSummary = append(draft, "summary");
+    const routeForm = append(draft, "form");
+    routeForm.className = "it-commute-route-form";
+    const routeLink = field(routeForm, "Navigation link", "input");
+    routeLink.type = "url";
+    routeLink.maxLength = 4096;
+    routeLink.placeholder = "Paste a maps link";
+    const origin = field(routeForm, "From", "input");
+    origin.maxLength = 180;
+    origin.placeholder = "Starting point";
+    const destination = field(routeForm, "To", "input");
+    destination.maxLength = 180;
+    destination.placeholder = "Destination";
+    let imported;
+    function resetRouteForm() {
+      routeLink.value = savedRoute?.url || "";
+      routeLink.setCustomValidity("");
+      origin.value = savedRoute?.origin ?? suggested;
+      destination.value = savedRoute?.destination ?? taskDestination;
+      imported = linkedEndpoints(navigationUrl(routeLink.value));
     }
+    resetRouteForm();
+    if (suggested) button(routeForm, "Use previous stop", () => {
+      origin.value = suggested;
+      updateDirections();
+    });
+    append(routeForm, "button", "Save route");
+    const removeRoute = button(routeForm, "Remove route", async () => {
+      if (await save(legs, null)) {
+        resetRouteForm();
+        updateDirections();
+        routeLink.focus();
+      }
+    });
+    const draftLinks = append(draft, "div");
+    draftLinks.className = "it-commute-route-links";
+    const review = append(panel, "p");
+    function updateDirections() {
+      drawRouteLinks(draftLinks, {
+        url: routeLink.value.trim(),
+        origin: origin.value.trim(),
+        destination: destination.value.trim()
+      });
+    }
+    function importRouteLink() {
+      const parsed = navigationUrl(routeLink.value.trim());
+      routeLink.setCustomValidity(routeLink.value && !parsed ? "Enter an http:// or https:// link." : "");
+      if (parsed) {
+        const linked = linkedEndpoints(parsed);
+        for (const [key, input] of [["origin", origin], ["destination", destination]]) {
+          if (linked[key] && linked[key].length <= input.maxLength) input.value = linked[key];
+          else if (input.value === imported[key]) input.value = "";
+        }
+        imported = linked;
+      }
+      updateDirections();
+    }
+    routeLink.addEventListener("input", importRouteLink);
+    routeLink.addEventListener("dragover", event => {
+      if (event.dataTransfer.types.includes("text/uri-list")) event.preventDefault();
+    });
+    routeLink.addEventListener("drop", event => {
+      const link = event.dataTransfer.getData("text/uri-list").split(/\r?\n/).find(line => line && !line.startsWith("#"));
+      if (!link) return;
+      event.preventDefault();
+      routeLink.value = link;
+      importRouteLink();
+    });
+    origin.addEventListener("input", updateDirections);
+    destination.addEventListener("input", updateDirections);
+    updateDirections();
+    routeForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      const endpoints = draftEndpoints();
+      if (!endpoints.url && !(endpoints.origin && endpoints.destination)) {
+        status.textContent = "Paste a navigation link or enter both From and To.";
+        return;
+      }
+      if (await save(legs, endpoints)) {
+        draft.open = false;
+        draftSummary.focus();
+      }
+    });
     const legsContainer = append(panel, "div");
     legsContainer.className = "it-commute-legs";
     const status = append(panel, "p");
     status.setAttribute("role", "status");
-    let savedLegs = legSnapshot(task.incomingCommute);
+    let savedLegs = snapshot(task.incomingCommute || []);
     let legs = (task.incomingCommute || []).map((leg, index) => ({
       ...leg,
       id: leg.id || "planned-" + index,
@@ -243,40 +350,59 @@
 
     function draftEndpoints() {
       const from = origin.value.trim();
-      return { origin: from, destination, usedPreviousStop: Boolean(suggested && from === suggested) };
+      const to = destination.value.trim();
+      const url = navigationUrl(routeLink.value.trim())?.href;
+      return {
+        origin: from,
+        destination: to,
+        usedPreviousStop: Boolean(suggested && from === suggested),
+        ...(url ? { url } : {}),
+        usesTaskLocation: Boolean(taskDestination && to === taskDestination)
+      };
     }
 
     function updateSummary() {
       clearButton.hidden = !legs.length;
-      if (saveRoute) saveRoute.hidden = !legs.length;
-      addButton.textContent = legs.length ? "Add leg" : "Save commute";
-      summary.textContent = legs.length ? "Commute · " + legs.length + (legs.length === 1 ? " leg" : " legs") : "Add commute";
+      addButton.textContent = legs.length || savedRoute ? "Add leg" : "Save commute";
+      summary.textContent = legs.length ? "Commute · " + legs.length + (legs.length === 1 ? " leg" : " legs") : savedRoute ? "Commute" : "Add commute";
+      draftSummary.textContent = savedRoute ? "Edit route" : "Plan commute";
+      removeRoute.hidden = !savedRoute;
+      drawRouteLinks(savedLinks, savedRoute);
+      const locationChanged = savedRoute && (savedRoute.usesTaskLocation || (!savedRoute.url && !("usesTaskLocation" in savedRoute))) &&
+        savedRoute.destination !== taskDestination;
+      const previousStopChanged = savedRoute?.usedPreviousStop && savedRoute.origin !== suggested;
+      review.textContent = locationChanged || previousStopChanged ? "Review route: the location or previous stop has changed." : "";
+      review.hidden = !review.textContent;
     }
 
     async function save(next, endpoints) {
       panel.inert = true;
       try {
         const result = await writeTask(blockId, props => {
-          if (legSnapshot(props.incomingCommute) !== savedLegs) {
+          if (snapshot(props.incomingCommute || []) !== savedLegs) {
             throw new Error("The saved legs changed. Reopen Task Details before editing them.");
           }
-          if (endpoints && destinationOf(props.taskLocation) !== endpoints.destination) {
+          if (endpoints !== undefined && snapshot(props.commuteEndpoints || null) !== snapshot(savedRoute)) {
+            throw new Error("The saved route changed. Reopen Task Details before editing it.");
+          }
+          if (endpoints?.usesTaskLocation && destinationOf(props.taskLocation) !== endpoints.destination) {
             throw new Error("The task location changed. Reopen Task Details to plan from the new location.");
           }
           return {
             ...props,
             incomingCommute: next,
-            commuteEndpoints: next.length ? endpoints || props.commuteEndpoints || null : null
+            commuteEndpoints: endpoints === undefined ? props.commuteEndpoints || null : endpoints
           };
         });
-        savedLegs = legSnapshot(next);
-        if (endpoints) review?.remove();
+        savedLegs = snapshot(next);
+        savedRoute = result?.properties ? result.properties.commuteEndpoints || null :
+          endpoints === undefined ? savedRoute : endpoints;
         legs = next;
         status.textContent = result?._savePending ? "Saved locally. Waiting to sync." : "";
         updateSummary();
         drawLegs();
         for (const card of document.querySelectorAll('[data-commute-task="' + CSS.escape(blockId) + '"]')) {
-          updateTopper(card, blockId, legs);
+          updateTopper(card, blockId, legs, savedRoute);
         }
         if (typeof refoldTaskStateFromBlockCache === "function") refoldTaskStateFromBlockCache();
         return true;
@@ -385,12 +511,17 @@
     const addButton = append(add, "button", legs.length ? "Add leg" : "Save commute");
     addButton.type = "submit";
     const clearButton = button(add, "Clear commute", async () => {
-      if (!window.confirm("Clear all commute legs and unlink their attachments? Uploaded files will remain in task files.")) return;
-      if (await save([])) mode.focus();
+      if (!window.confirm("Clear the commute route and all legs? Uploaded files will remain in task files.")) return;
+      if (await save([], null)) {
+        resetRouteForm();
+        updateDirections();
+        mode.focus();
+      }
     });
     add.addEventListener("submit", async event => {
       event.preventDefault();
-      const endpoints = draft?.open ? draftEndpoints() : undefined;
+      const endpoints = draft.open && !savedRoute && !routeLink.value && taskDestination && destination.value.trim()
+        ? draftEndpoints() : undefined;
       if (await save([...legs, { id: crypto.randomUUID(), mode: mode.value, minutes: duration.value ? Number(duration.value) : null, assets: [] }], endpoints)) {
         add.reset();
         mode.focus();
@@ -454,19 +585,22 @@
     refresh(block.properties);
   };
 
-  function updateTopper(card, blockId, legs) {
+  function updateTopper(card, blockId, legs, savedRoute) {
     const previous = card.querySelector(":scope > .it-commute-topper");
-    if (!legs.length) {
+    if (!legs.length && !savedRoute) {
       previous?.remove();
       return;
     }
     const topper = document.createElement("details");
     topper.className = "it-commute-topper";
     const minutes = legs.reduce((total, leg) => total + (leg.minutes || 0), 0);
-    const label = legs.some(leg => leg.minutes == null)
+    const label = !legs.length ? "Commute route" : legs.some(leg => leg.minutes == null)
       ? "Commute · Time pending"
       : minutes + " Minute commute";
     append(topper, "summary", label).className = "it-commute-handle";
+    const routeLinks = append(topper, "div");
+    routeLinks.className = "it-commute-route-links";
+    drawRouteLinks(routeLinks, savedRoute);
     const route = append(topper, "div");
     route.className = "it-commute-cards";
     const attachmentBase = "/api/tasks/" + encodeURIComponent(blockId) + "/attachments";
@@ -490,7 +624,7 @@
   window.mountItineraryCommute = (card, task) => {
     if (!task._blockId || !window.DCC_ACCOUNT_CONTEXT?.userId) return;
     card.dataset.commuteTask = task._blockId;
-    updateTopper(card, task._blockId, task.incomingCommute || []);
+    updateTopper(card, task._blockId, task.incomingCommute || [], task.commuteEndpoints);
     const links = append(card.querySelector(".it-list-main") || card, "div");
     links.className = "it-arrival-links";
     for (const entry of task.arrivalLinks || []) {
