@@ -1,9 +1,23 @@
 # Chat integrations
 
-Open **Settings → Chat integrations** (`/connections/conversation`). Sign in with
-the existing DCC login. This is the owner’s permission and connection dashboard;
-it remains available when remote MCP is disabled. It does not install a ChatGPT
-plugin or bypass ChatGPT/workspace installation policy.
+Open **Settings → Connections**. ChatGPT, Slack, Google Calendar and AI triage
+share one in-app dialog using DCC’s dark theme and shared keyboard/focus behavior.
+The former `/connections/conversation` URL redirects to the ChatGPT panel in DCC.
+Slack reactions, Calendar OAuth and the local AI-triage workflow remain active
+features; their setup flows are preserved rather than deleted. Onboarding keeps
+its direct Slack/triage entry points.
+
+The compact list and per-connection details follow the patterns documented by
+[Notion](https://www.notion.com/help/connect-mcp-servers-to-your-notion-agent) and
+[Claude](https://support.claude.com/en/articles/11176164-use-connectors-to-extend-claude-s-capabilities).
+Technical MCP setup details are collapsed until needed. OAuth consent remains a
+separate, DCC-branded authorization screen because it is part of the client’s
+sign-in flow. The UI cannot install a ChatGPT connector or bypass workspace policy.
+
+`GET /api/me/chat-connections` supplies owner-only, private/no-store connection
+state and a CSRF token. Mutations retain server-side identity, owner, CSRF and
+scope checks. Optional expected account/workspace values reject stale forms;
+they never select the acting identity. No database migration is required.
 
 ## Access
 
@@ -39,7 +53,7 @@ disconnect obsolete connections explicitly.
 ## Connect and verify
 
 Use the deployed `/mcp/dcc` URL with OAuth in ChatGPT, and request the scope string
-shown by the dashboard. Reuse the existing operator registration described in
+shown under Manual connection details. Reuse the existing operator registration described in
 `docs/chatgpt-connection-readiness.md`: exact HTTPS callback allowlisting, public
 client authentication `none`, PKCE S256, resource-bound tokens and owner consent.
 Never put a PA/admin token into ChatGPT. The page guides setup but cannot automate
