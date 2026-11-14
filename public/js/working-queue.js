@@ -172,7 +172,7 @@
     if(loading||refreshTimer!==null||document.hidden||!navigator.onLine||!sameAccount())return;
     refreshTimer=setTimeout(()=>{
       refreshTimer=null;
-      if(!document.hidden&&navigator.onLine&&sameAccount())refresh().then(()=>tick()).catch(()=>{});
+      if(!document.hidden&&navigator.onLine&&sameAccount())refresh().then(()=>processPendingQueueWork()).catch(()=>{});
     },150);
   }
   function envelope(action,extra={}){return {action,sourceEventId:'queue:'+crypto.randomUUID(),expectedRevision:state.revision,at:new Date().toISOString(),...extra};}
@@ -624,8 +624,11 @@
     });
   }
   setInterval(updateBreakClocks,1000);
-  async function tick(){
+  function tick(){
     render();
+    return processPendingQueueWork();
+  }
+  async function processPendingQueueWork(){
     if(document.hidden||ticking||sending||!navigator.onLine||!sameAccount())return;
     ticking=true;
     try{

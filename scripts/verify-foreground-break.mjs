@@ -147,7 +147,7 @@ try {
     assert.ok(await card('a').locator('.wq-break-title').isVisible());
     assert.equal(await card('a').locator('.wq-break-title').evaluate(el=>el.scrollHeight<=el.clientHeight),true,'task title remains fully readable');
     assert.notEqual(await veil.evaluate(el=>getComputedStyle(el).backdropFilter),'none');
-    const resume=button('a','focus'),box=await resume.boundingBox();assert.ok(box.height>=44);
+    await page.waitForFunction(()=>document.querySelector('[data-queue-id="a"] .wq-break-veil [data-queue-action=focus]')?.getBoundingClientRect().height>=44);
     await card('a').screenshot({path:path.join(output,'foreground-break-'+width+'.png')});
   }
   // Same queued command recovers a response lost after the transaction commits.
