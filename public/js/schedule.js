@@ -2319,7 +2319,7 @@ const TASK_DESTINATIONS=[
   {value:"urgent",  icon:"⚡", label:"Urgent"},
   {value:"done",    icon:"✅", label:"Completed"},
   {value:"schedule",icon:"📅", label:"Schedule…"},
-  {value:"backlog", icon:"💡", label:"Task Library (Solo)"},
+  {value:"backlog", icon:"💡", label:"Unscheduled"},
   {value:"whenever",icon:"🧺", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever"},
   {value:"anytime", icon:"💧", label:"Anytime"},
   {value:"habit",   icon:"🔁", label:"Habit"},

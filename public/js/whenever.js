@@ -232,7 +232,7 @@
       '<button type="button" class="whenever-now" data-whenever-action="now" data-whenever-id="' + id + '"' +
         ' title="Put it on today at your next free slot"' + (pending ? " disabled" : "") + '>Do it now</button>' +
       '<button type="button" class="whenever-release" data-whenever-action="release" data-whenever-id="' + id + '"' +
-        ' aria-label="Move ' + title + ' back to the Task Library" title="Not a ' + esc(LABEL) + ' task">&times;</button>' +
+        ' aria-label="Move ' + title + ' to Unscheduled" title="Not a ' + esc(LABEL) + ' task">&times;</button>' +
     '</div>';
   }
 
@@ -261,7 +261,7 @@
         {icon:'+',label:'Add inside',onPick:()=>openTaskAdd(id,button)},
         {icon:'↳',label:'Nest under…',onPick:()=>typeof openMakeSubtaskOf==='function'&&openMakeSubtaskOf(id,button)},
         {icon:'📅',label:'Schedule…',onPick:()=>schedulePicker(id,button)},
-        {icon:'📦',label:'Task Library',onPick:()=>release(id)}
+        {icon:'📦',label:'Unscheduled',onPick:()=>release(id)}
       ],{a0:90,a1:270,r:140,labelStagger:true,clampY:true});},
       draggable:!pending,gripTitle:'Drag onto another Whenever task to nest it; Shift makes a subtask',
       onDragStart:e=>{e.dataTransfer.setData('text/dcc-whenever',id);e.dataTransfer.effectAllowed='move';},
@@ -314,7 +314,7 @@
     title = String(title || "").trim();
     if (!title) return null;
     if (typeof addWheneverTask !== "function") {
-      toast("The Task Library is still loading. Try again in a moment.", "info");
+      toast("Tasks are still loading. Try again in a moment.", "info");
       return null;
     }
     const item = addWheneverTask(title, durMin);
@@ -432,7 +432,7 @@
     function notify(ok){
       if(!ok)return;
       build();
-      toast("Moved to the Task Library", "success", 5000, {
+      toast("Moved to Unscheduled", "success", 5000, {
         label: "Undo",
         onClick: () => { if (setStage(id, STAGE)) build(); }
       });

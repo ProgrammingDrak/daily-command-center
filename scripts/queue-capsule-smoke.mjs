@@ -25,9 +25,9 @@ export function measureQueueCapsule(count = null) {
     const mobile = window.innerWidth <= 760;
     return {
       looseEndsVisible: getComputedStyle(pill).display !== "none" && pill.getBoundingClientRect().width > 0,
-      doorsInOrder: doors.map(door => door.id).join() === "triage-pill-nav,loose-ends-pill,waiting-pill-nav,unscheduled-pill-nav,whenever-pill-nav,someday-pill-nav",
+      doorsInOrder: doors.map(door => door.id).join() === "triage-pill-nav,loose-ends-pill,waiting-pill-nav,unscheduled-pill-nav,whenever-pill-nav,all-tasks-pill-nav,someday-pill-nav",
       dedicatedRow: !mobile || capsuleBox.top >= Math.max(...otherBottoms),
-      doorsShareOneRow: doorBoxes.every(door => Math.abs(door.top - doorBoxes[0].top) < 1),
+      doorsUseExpectedRows: new Set(doorBoxes.map(door => Math.round(door.top))).size === (window.innerWidth <= 355 ? 2 : 1),
       capsuleFillsNav: !mobile || capsuleBox.width >= navBox.width - 1,
       capsuleInsideViewport: capsuleBox.left >= 0 && capsuleBox.right <= window.innerWidth,
       doorsInsideCapsule: doorBoxes.every(door => door.left >= capsuleBox.left && door.right <= capsuleBox.right + 0.5),

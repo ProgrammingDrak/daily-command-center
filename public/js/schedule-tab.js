@@ -1558,7 +1558,7 @@ function openMoveMenu(id, anchorEl){
     {label:"Today",     action:()=>_mv(_resolvedTodayDate(),moveTaskToToday)},
     {label:"Next week", action:()=>_mv(_nextSundayDate(),moveTaskToNextWeek)},
     {label:"Trivial",   action:()=>moveTaskToTrivial(id)},
-    {label:"Task Library (Solo)", action:()=>moveTaskToBacklog(id)}
+    {label:"Unscheduled", action:()=>moveTaskToBacklog(id)}
   ];
   const pop=document.createElement("div");
   pop.className="move-menu-popup";
@@ -1642,7 +1642,7 @@ function buildBacklog(){
   // Legacy Priority-stage rows remain ordinary backlog tasks.
   const items=backlog;
   document.getElementById("backlog-count").textContent=items.length;
-  if(!items.length){board.innerHTML='<div class="board-empty">Nothing in Task Library yet. Add tasks above or check your Notion board.</div>';return}
+  if(!items.length){board.innerHTML='<div class="board-empty">No unscheduled tasks.</div>';return}
   const sorted=typeof taskBankSort==="function"?taskBankSort(items):items;
   sorted.forEach(t=>{
     const c=cfg(t.type);

@@ -1,5 +1,6 @@
 const nodeCrypto = require("node:crypto");
 const TaskSources = require("./public/js/task-sources");
+const { isBlockDone } = require("./lib/task-timing");
 
 const LEGACY_TASK_TYPES = ["added_task", "schedule_item", "pending_task", "trivial_task", "action_item", "subtask"];
 const ORGANIZATION_KINDS = new Set(["project", "task_facet", "task_view"]);
@@ -45,11 +46,6 @@ function clientError(message, statusCode = 400, code) {
   error.statusCode = statusCode;
   if (code) error.code = code;
   return error;
-}
-
-function isDone(block) {
-  const props = (block && block.properties) || {};
-  return props.status === "done" || props.done === true || !!props.completedAt;
 }
 
 function isLibraryTask(block, blockDB) {
@@ -391,11 +387,17 @@ function createProjectStore(deps = {}) {
   }
 
   async function listLibrary(workspaceId) {
-    const [tasks, organization, dependencyRows] = await Promise.all([
+    const [tasks, organization, dependencyRows, dayRootsResult] = await Promise.all([
       listTaskRows(workspaceId),
       listOrganization(workspaceId),
       blockDB.getDelegatedItems(workspaceId),
+      pool.query(`SELECT date::text AS date, properties->'_done' AS completion
+        FROM blocks WHERE workspace_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL
+          AND type='day_root' AND date IS NOT NULL AND properties ? '_done'`, [workspaceId || null]),
     ]);
+    const dayRoots = new Map(dayRootsResult.rows.map(row => [row.date, {_done: row.completion}]));
+    const completedTaskIds = tasks.filter(task => isBlockDone(task, dayRoots.get(task.date))).map(task => task.id);
+    const completed = new Set(completedTaskIds);
     const byId = new Map(tasks.map(task => [String(task.id), task]));
     for (const task of tasks) {
       const localId = cleanText((task.properties || {}).local_id, 200);
@@ -413,13 +415,13 @@ function createProjectStore(deps = {}) {
       const blocker = byId.get(String(props.blockerBlockId));
       if (!dependent) continue;
       const entry = readiness[dependent.id] || (readiness[dependent.id] = { state: "ready", total: 0, satisfied: 0, blockers: [] });
-      const satisfied = !!blocker && isDone(blocker);
+      const satisfied = !!blocker && completed.has(blocker.id);
       entry.total++;
       if (satisfied) entry.satisfied++;
       else entry.blockers.push({ id: blocker ? blocker.id : props.blockerBlockId, title: blocker ? cleanText(blocker.properties.title || blocker.properties.text) : props.title || "Missing prerequisite" });
       if (!satisfied) entry.state = "blocked";
     }
-    return { tasks, ...organization, dependencies, readiness, builtinViews: BUILTIN_VIEWS };
+    return { tasks, ...organization, dependencies, readiness, completedTaskIds, builtinViews: BUILTIN_VIEWS };
   }
 
   async function createOrganizationBlock(kind, properties, owner, client, sortOrder) {
