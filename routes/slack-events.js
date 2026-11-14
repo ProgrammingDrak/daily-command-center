@@ -438,8 +438,8 @@ module.exports = function mount(app, ctx) {
     // cancelled found nothing and minted a brand-new task. A live row still wins
     // (`deleted_at IS NULL DESC`), so every other caller behaves exactly as before —
     // they just have to say they want a live row, via findLiveTaskByKey.
-    async function findTaskByKey(idemKey) {
-      const { rows } = await pool.query(
+    async function findTaskByKey(idemKey, client = pool) {
+      const { rows } = await client.query(
         // workspace_id is selected so the timer row's delete fence in
         // lib/task-timing.js has a tenant to check against rather than falling
         // through its "unknown workspace" branch.
@@ -452,8 +452,8 @@ module.exports = function mount(app, ctx) {
     }
     // Lifecycle handlers (⌛ / un-⌛ / ✅ / un-✅) act on live rows only: a
     // tombstoned task is one the user cancelled, and reactions on it are noise.
-    async function findLiveTaskByKey(idemKey) {
-      const t = await findTaskByKey(idemKey);
+    async function findLiveTaskByKey(idemKey, client) {
+      const t = await findTaskByKey(idemKey, client);
       return t && !t.deleted_at && (t.properties || {}).kind !== "slack_reaction_tombstone" ? t : null;
     }
     // A ✅ can follow either capture reaction. Check both on every retry so a
@@ -982,10 +982,21 @@ module.exports = function mount(app, ctx) {
       });
       const bookmark = await findLiveTaskByKey(keyFor(channel, ts));
       if (bookmark) await projectTaskToSlack(bookmark);
-      else {
-        await removeSlackReaction(channel, ts, R_START);
-        await removeSlackReaction(channel, ts, R_DONE);
-      }
+      else await removeUnownedWorkReactions(channel, ts, [R_START, R_DONE]);
+    }
+
+    async function removeUnownedWorkReactions(channel, ts, names, completedDelegateOnly = false) {
+      if (await loadReactionCooldown()) return;
+      await withProjectionLock(`${OWNER_WORKSPACE_ID}:${channel}:${ts}`, async client => {
+        if (receiptsAvailable) {
+          const bookmark = await findLiveTaskByKey(keyFor(channel, ts), client);
+          const task = await findLiveTaskByKey(delegateCompletionKeyFor(channel, ts), client);
+          const delegate = await findLiveTaskByKey(delegateKeyFor(channel, ts), client);
+          if (bookmark || task) return;
+          if (completedDelegateOnly ? !isBlockDone(delegate, null) : delegate) return;
+        }
+        for (const name of names) await removeSlackReaction(channel, ts, name, client);
+      });
     }
 
     // Removing Slack's bookmark removes the canonical DCC task too. If it is
@@ -1076,7 +1087,7 @@ module.exports = function mount(app, ctx) {
       const task = await taskForWorkReaction(channel, ts);
       if (!task) {
         const delegate = await findLiveTaskByKey(delegateKeyFor(channel, ts));
-        if (delegate && isBlockDone(delegate, null)) await removeSlackReaction(channel, ts, R_START);
+        if (delegate && isBlockDone(delegate, null)) await removeUnownedWorkReactions(channel, ts, [R_START], true);
         else console.warn(`[slack-events] ⌛ with no task for ${channel}:${ts} — ignored`);
         return;
       }
