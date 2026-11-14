@@ -1153,7 +1153,7 @@ app.get("/api/me/integrations", async (req, res) => {
       canOauth: !!(ctx.slackOAuth && ctx.slackOAuth.configured() && ctx.slackOAuth.hasEncryptionKey()),
     },
     google,
-    conversation: { enabled: process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false", url: "/connections/conversation" },
+    conversation: { enabled: process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false", url: "/?settings=connections&connection=chatgpt" },
     triage: {
       // Everything the wizard needs to render a copy-paste login command. NOT
       // getRequestOrigin, which is the caller's IP for rate limiting; this has to

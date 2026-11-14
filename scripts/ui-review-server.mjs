@@ -674,6 +674,8 @@ app.get("/admin", (_req, res) => res.sendFile(path.join(root, "admin.html")));
 app.get("/reimburse/:token", (_req, res) => res.sendFile(path.join(root, "reimburse.html")));
 app.use(express.static(root));
 
-app.listen(port, "127.0.0.1", () => {
+if (process.env.DCC_REVIEW_EXPORT_APP !== "1") app.listen(port, "127.0.0.1", () => {
   console.log(`UI review server: http://127.0.0.1:${port}`);
 });
+
+export default app;
