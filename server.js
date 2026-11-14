@@ -130,6 +130,8 @@ if (process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSAT
 // verify callback stashes the raw body so the Slack Events route can HMAC it
 // (express.json otherwise consumes the stream before any route runs).
 app.use(require("./lib/retired-todo-share"));
+// Base64 attachment uploads need room for the existing 10MB private-file limit.
+app.use('/mcp/dcc', express.json({ limit: '15mb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
 app.use(express.json({ limit: "5mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
 
 // ── Session Setup ──

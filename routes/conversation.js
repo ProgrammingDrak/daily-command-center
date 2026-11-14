@@ -1,27 +1,13 @@
 const express = require("express");
 const { createIngress, createBudget, limited } = require("../lib/conversation-limits");
 const crypto = require("node:crypto");
+const permissions = require("../lib/chat-permissions");
+const integrationPage = require("../lib/chat-integration-page");
 const { createOAuth, SCOPES } = require("../conversation-oauth");
 const { createConversationStore } = require("../conversation-store");
 const M = require("../lib/conversation-model");
 const wishlistMcp = require("../lib/wishlist-mcp");
 const { createProjectStore } = require("../project-store");
-const escape = (s) =>
-  String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const descriptions = {
-  "dcc.wishlist.read": "Read private Wishlists and their structured research.",
-  "dcc.wishlist.write": "Create and edit private Wishlists and their structured research.",
-  "dcc.capture": "Save explicitly requested, undated Someday ideas.",
-  "dcc.read": "Find current, completed, and recurring tasks; read timing and audit history.",
-  "dcc.work":
-    "Manage Working Queue membership (add or remove without deleting tasks), order, priority, context, blockers and check-back reminders, including Return to Priority. Start and pause foreground timers and change DCC background bookkeeping. Does not start or stop external workers.",
-  "dcc.correct": "Correct time allocation, including existing calendar meetings and unknown intervals.",
-  "dcc.reconcile":
-    "Review explicit task outcomes, reversibly drop one occurrence, undo a review choice, and close a work iteration with a linked next-action task. Does not complete an entire recurring series.",
-  "dcc.complete": "Mark an explicitly selected task complete.",
-  "dcc.delegate":
-    "Link or create explicitly delegated tasks and report background progress or human review needs; never start focus or send external messages."
-};
 const envelope = {
   sourceEventId: {
     type: "string",
@@ -32,6 +18,7 @@ const envelope = {
 };
 const tools = [
   ...wishlistMcp.tools,
+  ...require("../lib/chat-control-tools").tools,
   {
     name: "dcc_save_someday_idea",
     description: "Save a task to DCC Someday on explicit request. Given a link or location, look up the idea when possible, give it an actionable title, retain the original link, and add a verified venue/neighborhood and a short planning note when available. Leave unknown details blank; ask if an ambiguous place materially changes the idea. Use existing user-provided tags such as With Fae when requested. Do not assign a date. Reuse sourceEventId on retry.",
@@ -335,6 +322,12 @@ const tools = [
   }
 ];
 const scopeFor = (name) => wishlistMcp.scopeFor(name) || (
+  require('../lib/chat-control-tools').categoryFor[name] ? `dcc.${require('../lib/chat-control-tools').categoryFor[name]}.read` :
+  name === 'dcc_connection_status' ? permissions.scopes :
+  name === 'dcc_working_queue' ? ['dcc.read','dcc.queue.read'] :
+  name === 'dcc_correct_time' ? ['dcc.correct','dcc.time.write'] :
+  ['dcc_queue','dcc_work'].includes(name) ? ['dcc.work','dcc.queue.write'] :
+  name === 'dcc_delegate' ? ['dcc.delegate','dcc.queue.write'] :
   name === "dcc_save_someday_idea" ? "dcc.capture" :
   name === "dcc_reconcile_task"
     ? "dcc.reconcile"
@@ -352,6 +345,7 @@ module.exports = function mount(app, ctx, config = {}) {
     config.enabled ??
     (process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false");
   if (!enabled) {
+    require("./chat-integrations")(app, ctx);
     // Machine discovery must not fall through to the interactive login page.
     // This discloses no client/account configuration and never instantiates OAuth.
     app.all(
@@ -379,6 +373,8 @@ module.exports = function mount(app, ctx, config = {}) {
     clients: config.clients || JSON.parse(process.env.DCC_CONVERSATION_CLIENTS || "{}")
   });
   const store = createConversationStore(ctx);
+  let control;
+  require("./chat-integrations")(app, ctx, { oauth, enabled, clientsReady: Object.keys(config.clients || JSON.parse(process.env.DCC_CONVERSATION_CLIENTS || "{}")).length > 0 });
   const route = (fn) => async (req, res, next) => {
     try {
       res.set("Cache-Control", "no-store");
@@ -400,21 +396,6 @@ module.exports = function mount(app, ctx, config = {}) {
       req.body.csrf !== req.session.conversationCsrf
     )
       throw M.fail("Invalid consent request", 403);
-  }
-  function page(res, title, body, validatedRedirectUri) {
-    // The browser applies form-action to the post-consent redirect too. Only
-    // the exact registered request's origin is allowed on this consent page.
-    const callbackOrigin = validatedRedirectUri ? " " + new URL(validatedRedirectUri).origin : "";
-    res.set(
-      "Content-Security-Policy",
-      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'" + callbackOrigin + "; frame-ancestors 'none'; base-uri 'none'"
-    );
-    res.set("Referrer-Policy", "same-origin");
-    res
-      .type("html")
-      .send(
-        `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title><style>body{font:17px system-ui;max-width:640px;margin:48px auto;padding:24px;color:#17362c;background:#f7faf8}h1{font-size:28px}li{margin:14px 0}button{font:inherit;padding:12px 20px;margin:8px 10px 8px 0;border-radius:8px;border:1px solid #007f56;background:#fff;color:#005e40}button[value=allow]{background:#007f56;color:#fff}code{overflow-wrap:anywhere}section{border-top:1px solid #ccd8d2;margin-top:24px;padding-top:16px}a{color:#006844}</style><main><h1>${escape(title)}</h1>${body}</main></html>`
-      );
   }
   const form = express.urlencoded({ extended: false, limit: "12kb" });
   app.get(
@@ -447,19 +428,22 @@ module.exports = function mount(app, ctx, config = {}) {
         req.session.workspaceId = r.rows[0]?.workspace_id;
       }
       await oauth.list(owner(req));
-      req.session.conversationCsrf = crypto.randomBytes(24).toString("base64url");
+      req.session.conversationCsrf ||= crypto.randomBytes(24).toString("base64url");
       req.session.conversationConsent = {
         ...request,
         userId: req.session.userId,
         workspaceId: req.session.workspaceId,
         expiresAt: Date.now() + 300000
       };
-      page(
-        res,
-        "Connect " + request.clientName,
-        `<p>Signed in as <strong>${escape(req.session.username || "DCC account " + req.session.userId)}</strong>, workspace <strong>${escape(req.session.workspaceId)}</strong>.</p><p>This client requests:</p><ul>${request.scopes.map((s) => "<li>" + escape(descriptions[s]) + "</li>").join("")}</ul><p>You can disconnect at any time from Conversational connections. This consent does not change existing tasks.</p><form method="post" action="/oauth/dcc/authorize"><input type="hidden" name="csrf" value="${escape(req.session.conversationCsrf)}"><button name="decision" value="allow">Allow access</button><button name="decision" value="deny">Cancel</button></form>`,
-        request.redirectUri
-      );
+      const prefs = await oauth.preferences(owner(req));
+      // Existing legacy-only clients keep explicit legacy choices; modern clients
+      // begin with the user's preferences intersected with requested authority.
+      const granted = request.scopes.some(s => !permissions.legacy.includes(s))
+        ? prefs.filter(s => request.scopes.includes(s)) : request.scopes;
+      const callbackOrigin = new URL(request.redirectUri).origin;
+      res.set("Content-Security-Policy", `default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self' ${callbackOrigin}; frame-ancestors 'none'; base-uri 'none'`);
+      res.set('Referrer-Policy','same-origin');
+      res.type('html').send(integrationPage.consent({request,csrf:req.session.conversationCsrf,granted,account:req.session.username || 'DCC account',workspace:req.session.workspaceId}));
     })
   );
   app.post(
@@ -482,7 +466,9 @@ module.exports = function mount(app, ctx, config = {}) {
         u.searchParams.set("state", request.state);
         return res.redirect(u.href);
       }
-      res.redirect(await oauth.consent(request, owner(req)));
+      const chosen = permissions.selected(req.body, request.scopes);
+      if (!chosen.length) throw M.fail('Select at least one permission');
+      res.redirect(await oauth.consent({ ...request, scopes: chosen }, owner(req)));
     })
   );
   app.post(
@@ -490,35 +476,6 @@ module.exports = function mount(app, ctx, config = {}) {
     form,
     route(async (req, res) => {
       res.json(await oauth.token(req.body || {}));
-    })
-  );
-  app.get(
-    "/connections/conversation",
-    route(async (req, res) => {
-      if (!req.session?.userId) return res.redirect("/login?next=%2Fconnections%2Fconversation");
-      if (!req.session.workspaceId) {
-        const r = await ctx.pool.query(
-          "SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND role='owner' ORDER BY workspace_id LIMIT 1",
-          [req.session.userId]
-        );
-        req.session.workspaceId = r.rows[0]?.workspace_id;
-      }
-      const grants = await oauth.list(owner(req));
-      req.session.conversationCsrf = crypto.randomBytes(24).toString("base64url");
-      page(
-        res,
-        "Conversational connections",
-        `<p>Connect your DCC account from ChatGPT Plugins → Add custom MCP server. Use <code>${escape(oauth.resource)}</code> and OAuth. Install and enable the resulting plugin, then authorize your account.</p><p>Creating a DCC account alone does not install a ChatGPT plugin. Availability depends on your ChatGPT account and workspace. A new account uses this same consent flow.</p><p>Ask to find a task first, then say “starting [task],” “pause,” or “done.” Questions and mentions never start timers. Background processing is separate from focused effort.</p><p><a href="/">Return to DCC</a></p>${grants.map((g) => `<section><strong>${escape(g.client_id)}</strong><p>${g.scopes.map((s) => escape(descriptions[s])).join("<br>")}</p>${g.revoked_at ? "<p>Disconnected</p>" : `<form method="post" action="/connections/conversation/revoke"><input type="hidden" name="csrf" value="${escape(req.session.conversationCsrf)}"><input type="hidden" name="grantId" value="${escape(g.id)}"><button>Disconnect</button></form>`}</section>`).join("") || "<p>No connected clients.</p>"}`
-      );
-    })
-  );
-  app.post(
-    "/connections/conversation/revoke",
-    form,
-    route(async (req, res) => {
-      csrf(req);
-      await oauth.revoke(req.body.grantId, owner(req));
-      res.redirect("/connections/conversation");
     })
   );
   app.all(
@@ -560,8 +517,8 @@ module.exports = function mount(app, ctx, config = {}) {
       if (b.method === "tools/list")
         return reply({
           tools: tools
-            .filter((t) => identity.scopes.includes(scopeFor(t.name)))
-            .map((t) => ({ ...t, securitySchemes: [{ type: "oauth2", scopes: [scopeFor(t.name)] }] }))
+            .filter((t) => (Array.isArray(scopeFor(t.name)) ? scopeFor(t.name) : [scopeFor(t.name)]).some(s => identity.scopes.includes(s)))
+            .map((t) => ({ ...t, securitySchemes: (Array.isArray(scopeFor(t.name)) ? scopeFor(t.name) : [scopeFor(t.name)]).filter(s=>identity.scopes.includes(s)).map(s=>({type:'oauth2',scopes:[s]})) }))
         });
       if (b.method !== "tools/call")
         return res.json({ jsonrpc: "2.0", id: b.id, error: { code: -32601, message: "Method not found" } });
@@ -573,6 +530,18 @@ module.exports = function mount(app, ctx, config = {}) {
       try {
         let result;
         if (wishlistMcp.scopeFor(name)) result = await wishlistMcp.run(ctx, name, args, identity);
+        const category = require('../lib/chat-control-tools').categoryFor[name];
+        if (name === 'dcc_connection_status') result = {accountId:identity.userId,workspaceId:identity.workspaceId,status:'verified',permissions:permissions.categories.map(c=>({category:c.id,level:permissions.level(identity.scopes,c.id)})),legacyScopes:identity.scopes.filter(s=>permissions.legacy.includes(s))};
+        if (category && name !== 'dcc_time_records') {
+          control ||= require('../chat-control-store').createChatControlStore(ctx);
+          result = await control[name === 'dcc_bulk_cleanup' ? 'bulk' : category](args,identity);
+        }
+        if (name === 'dcc_time_records') {
+          const offset = Number(args.offset || 0);
+          if (!Number.isInteger(offset) || offset < 0) throw M.fail('Invalid offset');
+          const entries = await ctx.pool.query("SELECT id,date,properties FROM blocks WHERE workspace_id=$1 AND user_id=$2 AND deleted_at IS NULL AND (type='time_entry' OR properties->>'kind'='time_entry') ORDER BY date DESC,id LIMIT 51 OFFSET $3", [identity.workspaceId,identity.userId,offset]);
+          result = {entries:entries.rows.slice(0,50),nextOffset:entries.rows.length>50?offset+50:null};
+        }
         if (name === "dcc_save_someday_idea") {
           const sourceEventId = M.text(args.sourceEventId, "sourceEventId", 200);
           const id = "someday-" + M.digest(JSON.stringify([identity.workspaceId, identity.userId, sourceEventId]));
@@ -589,7 +558,10 @@ module.exports = function mount(app, ctx, config = {}) {
           result = await store.reconciliationReceipt(args.sourceEventId, identity);
         if (name === "dcc_completion_review") result = await store.completionReview(args, identity);
         if (name === "dcc_search_tasks") result = await store.search(args, identity);
-        if (name === "dcc_current_activity" || name === "dcc_working_queue") result = await store.state(identity);
+        if (name === "dcc_current_activity" || name === "dcc_working_queue") {
+          result = await store.state(identity);
+          if (!identity.scopes.includes('dcc.read')) result = {revision:result.revision,queue:{items:(result.queue?.items||[]).map(item=>({status:item.status,taskId:item.task?.id,title:item.task?.properties?.title,taskPriority:item.taskPriority,blocked:item.blocked,needsYou:item.needsYou}))}};
+        }
         if (name === "dcc_calendar_events") result = await store.calendarEvents(args, identity);
         if (name === "dcc_task") result = await store.get(M.text(args.taskId, "taskId"), identity);
         if (name === "dcc_activity_history") result = { events: await store.history(identity) };
@@ -679,6 +651,7 @@ module.exports = function mount(app, ctx, config = {}) {
               duplicate: result.duplicate === true
             };
         }
+        await oauth.verified(identity.grantId);
         reply({ content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, isError: false });
       } catch (e) {
         reply({

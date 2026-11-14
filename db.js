@@ -2002,10 +2002,10 @@ async function batchOp(operations, transactionClient) {
 // update/delete/reorder branches run on the tx client, not the pool.)
 async function rescheduleBlocks(moves, creates, options = {}) {
   const now = new Date().toISOString();
-  const client = await pool.connect();
+  const client = options.transactionClient || await pool.connect();
   const results = [];
   try {
-    await client.query("BEGIN");
+    if (!options.transactionClient) await client.query("BEGIN");
     const queueOwner=options.queueOwner;
     let movedQueue=null,queueChanged=false,clockSettled=false;
     if(queueOwner){
@@ -2100,12 +2100,12 @@ async function rescheduleBlocks(moves, creates, options = {}) {
       await require('./lib/working-queue').save(client,queueOwner,movedQueue);
       await client.query('UPDATE conversation_state SET revision=revision+1,changed_at=CASE WHEN $2 THEN GREATEST(changed_at,$3::timestamptz) ELSE changed_at END WHERE user_id=$1',[queueOwner.userId,clockSettled,now]);
     }
-    await client.query("COMMIT");
+    if (!options.transactionClient) await client.query("COMMIT");
   } catch (err) {
-    await client.query("ROLLBACK");
+    if (!options.transactionClient) await client.query("ROLLBACK");
     throw err;
   } finally {
-    client.release();
+    if (!options.transactionClient) client.release();
   }
   return { blocks: results };
 }

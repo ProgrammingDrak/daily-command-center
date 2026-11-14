@@ -451,8 +451,8 @@ function createProjectStore(deps = {}) {
     }, owner, client);
   }
 
-  async function patchProject(id, input, owner) {
-    const existing = await getOwnedBlock(id, owner.workspaceId);
+  async function patchProject(id, input, owner, client) {
+    const existing = await getOwnedBlock(id, owner.workspaceId, client);
     if (!existing || (existing.properties || {}).kind !== "project") throw clientError("Project not found", 404);
     const props = { ...existing.properties };
     if (input.name !== undefined) {
@@ -468,7 +468,7 @@ function createProjectStore(deps = {}) {
     }
     if (input.color !== undefined) props.color = cleanText(input.color, 24) || "#0075EB";
     props.updatedAt = new Date().toISOString();
-    return blockDB.updateBlock(id, { properties: props });
+    return blockDB.updateBlock(id, { properties: props }, client);
   }
 
   async function createFacet(input, owner, client) {
@@ -488,22 +488,22 @@ function createProjectStore(deps = {}) {
     return blockDB.updateBlock(id, { properties: props }, client);
   }
 
-  async function createView(input, owner) {
-    return createOrganizationBlock("task_view", normalizeView(input), owner);
+  async function createView(input, owner, client) {
+    return createOrganizationBlock("task_view", normalizeView(input), owner, client);
   }
 
-  async function patchView(id, input, owner) {
-    const existing = await getOwnedBlock(id, owner.workspaceId);
+  async function patchView(id, input, owner, client) {
+    const existing = await getOwnedBlock(id, owner.workspaceId, client);
     if (!existing || (existing.properties || {}).kind !== "task_view") throw clientError("Saved view not found", 404);
     const props = normalizeView(input, existing.properties);
     props.updatedAt = new Date().toISOString();
-    return blockDB.updateBlock(id, { properties: props });
+    return blockDB.updateBlock(id, { properties: props }, client);
   }
 
-  async function deleteView(id, owner) {
-    const existing = await getOwnedBlock(id, owner.workspaceId);
+  async function deleteView(id, owner, client) {
+    const existing = await getOwnedBlock(id, owner.workspaceId, client);
     if (!existing || (existing.properties || {}).kind !== "task_view") throw clientError("Saved view not found", 404);
-    return blockDB.deleteBlock(id);
+    return blockDB.deleteBlock(id, client);
   }
 
   async function createTask(input, owner, client) {
@@ -544,10 +544,10 @@ function createProjectStore(deps = {}) {
     }, client);
   }
 
-  async function organizeTask(id, input, owner) {
-    const task = await getOwnedBlock(id, owner.workspaceId);
+  async function organizeTask(id, input, owner, client) {
+    const task = await getOwnedBlock(id, owner.workspaceId, client);
     if (!task || !isLibraryTask(task, blockDB)) throw clientError("Task not found", 404);
-    const organization = await listOrganization(owner.workspaceId);
+    const organization = await listOrganization(owner.workspaceId, client);
     const projectId = input.projectId === undefined ? ((task.properties || {}).projectId || null) : (cleanText(input.projectId, 120) || null);
     if (projectId && !organization.projects.some(project => project.id === projectId && (project.properties || {}).status !== "archived")) {
       throw clientError("Project not found", 404);
@@ -581,7 +581,7 @@ function createProjectStore(deps = {}) {
       props.durMin = duration;
     }
     if (input.projectOrder !== undefined && Number.isFinite(Number(input.projectOrder))) props.projectOrder = Number(input.projectOrder);
-    return blockDB.updateBlock(id, { properties: props });
+    return blockDB.updateBlock(id, { properties: props }, client);
   }
 
   async function reorderTasks(ids, owner) {
@@ -607,13 +607,13 @@ function createProjectStore(deps = {}) {
     }
   }
 
-  async function commitImport(manifest, input, owner) {
+  async function commitImport(manifest, input, owner, transactionClient) {
     validateImportManifest(manifest);
     const idempotencyKey = cleanText(input && input.idempotencyKey, 160);
     if (!idempotencyKey) throw clientError("Import idempotency key is required");
-    const client = await pool.connect();
+    const client = transactionClient || await pool.connect();
     try {
-      await client.query("BEGIN");
+      if (!transactionClient) await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`project-import:${owner.workspaceId}:${idempotencyKey}`]);
       const { rows: existingRows } = await client.query(
         `SELECT * FROM blocks WHERE workspace_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL
@@ -621,7 +621,7 @@ function createProjectStore(deps = {}) {
         [owner.workspaceId || null, idempotencyKey]
       );
       if (existingRows[0]) {
-        await client.query("COMMIT");
+        if (!transactionClient) await client.query("COMMIT");
         return { duplicate: true, project: blockDB.parseBlock(existingRows[0]), tasks: [] };
       }
       const project = await createProject({
@@ -695,13 +695,13 @@ function createProjectStore(deps = {}) {
           await blockDB.updateBlock(task.id, { properties: task.properties }, client);
         }
       }
-      await client.query("COMMIT");
+      if (!transactionClient) await client.query("COMMIT");
       return { duplicate: false, project, tasks };
     } catch (error) {
-      await client.query("ROLLBACK");
+      if (!transactionClient) await client.query("ROLLBACK");
       throw error;
     } finally {
-      client.release();
+      if (!transactionClient) client.release();
     }
   }
 

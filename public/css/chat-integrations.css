@@ -1,0 +1,158 @@
+:root {
+  color-scheme: light;
+  --green: #006d50;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: #f4f7f5;
+  color: #17362c;
+  overflow-wrap: anywhere;
+  font:
+    16px/1.6 system-ui,
+    sans-serif;
+}
+main {
+  max-width: 900px;
+  margin: auto;
+  padding: 32px 20px 72px;
+}
+h1 {
+  font-size: clamp(30px, 5vw, 44px);
+  letter-spacing: -0.035em;
+  margin: 20px 0 8px;
+}
+h2 {
+  font-size: 23px;
+}
+h3 {
+  font-size: 19px;
+}
+.intro {
+  font-size: 19px;
+  color: #466459;
+}
+a {
+  color: var(--green);
+}
+section {
+  background: white;
+  border: 1px solid #dce6df;
+  border-radius: 18px;
+  padding: 24px;
+  margin: 24px 0;
+  box-shadow: 0 3px 15px #163d2210;
+}
+article {
+  border-top: 1px solid #dce6df;
+  padding: 16px 0;
+}
+.permissions {
+  min-inline-size: 0;
+  border: 0;
+  padding: 0;
+  margin: 20px 0;
+}
+legend {
+  max-width: 100%;
+  font-weight: 650;
+  font-size: 18px;
+  margin-bottom: 12px;
+}
+.permission {
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #e4ebe6;
+  padding: 16px 0;
+}
+.permission span {
+  flex: 1;
+  min-width: 0;
+}
+small {
+  display: block;
+  color: #577064;
+}
+select,
+button,
+textarea {
+  font: inherit;
+}
+select {
+  padding: 10px;
+  border: 1px solid #b4cabc;
+  border-radius: 8px;
+  background: white;
+  width: 145px;
+  min-width: 0;
+  max-width: 100%;
+}
+button {
+  max-width: 100%;
+  border: 1px solid var(--green);
+  border-radius: 8px;
+  padding: 10px 16px;
+  background: var(--green);
+  color: white;
+  cursor: pointer;
+  margin: 5px 8px 5px 0;
+}
+button[data-select-all],
+button[value="deny"],
+button.danger {
+  background: white;
+  color: var(--green);
+}
+button.danger {
+  color: #a12b2b;
+  border-color: #a12b2b;
+}
+textarea {
+  display: block;
+  width: 100%;
+  min-height: 100px;
+  padding: 12px;
+  border: 1px solid #b4cabc;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+code {
+  overflow-wrap: anywhere;
+}
+.status {
+  border-left: 4px solid var(--green);
+  padding: 10px 14px;
+  background: #edf6f0;
+}
+.account {
+  color: #466459;
+}
+:focus-visible {
+  outline: 3px solid #2b77dc;
+  outline-offset: 3px;
+}
+@media (max-width: 560px) {
+  section {
+    padding: 18px;
+  }
+  .permission {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .permission select {
+    width: 100%;
+  }
+  main {
+    padding: 20px 12px 48px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto;
+  }
+}

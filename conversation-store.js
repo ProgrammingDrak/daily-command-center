@@ -185,6 +185,8 @@ function createConversationStore(ctx) {
       ORDER BY updated_at DESC,id LIMIT 51 OFFSET $4`,
       [owner.userId, owner.workspaceId, "%" + query.replace(/[\\%_]/g, "\\$&") + "%", offset]
     );
+    const roots = await pool.query("SELECT date::text AS date,properties FROM blocks WHERE workspace_id=$1 AND type='day_root' AND deleted_at IS NULL AND date=ANY($2::date[])", [owner.workspaceId,[...new Set(r.rows.map(b=>b.date).filter(Boolean))]]);
+    const dayRoots = new Map(roots.rows.map(b=>[b.date,b.properties]));
     return {
       tasks: r.rows
         .slice(0, 50)
@@ -193,7 +195,7 @@ function createConversationStore(ctx) {
           id: b.id,
           title: b.properties.title,
           date: b.date,
-          status: b.properties.status || "open",
+          status: isBlockDone(b,dayRoots.get(b.date)) ? "done" : b.properties.status || "open",
           type: b.properties.kind === "responsibility_item" ? "recurring-definition" : b.properties.type || b.type,
           definitionId: b.properties.responsibilityId || null,
           startedAt: b.properties.startedAt || null,
