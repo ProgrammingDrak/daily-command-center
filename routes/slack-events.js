@@ -289,7 +289,7 @@ module.exports = function mount(app, ctx) {
           AND next_attempt_at > clock_timestamp()
       `, [cooldownKey]);
       cooldownChecked = true;
-      if (rows[0]?.resume_at) reactionCooldowns.set(cooldownKey, new Date(rows[0].resume_at).getTime());
+      if (rows[0]?.resume_at) reactionCooldowns.set(cooldownKey, Math.max(reactionCooldowns.get(cooldownKey) || 0, new Date(rows[0].resume_at).getTime()));
       return reactionPaused();
     }
 
@@ -522,7 +522,7 @@ module.exports = function mount(app, ctx) {
     }
 
     // `settled` means stop asking: either Slack agrees with us, or it never will.
-    async function classifyReactionFailure(error, channel, ts, name, verb) {
+    async function classifyReactionFailure(error, channel, ts, name, verb, client = pool) {
       if (PERMANENT_REACTION_ERRORS.has(error.code)) {
         // Logged once per message, at info level, where this used to repeat every
         // five minutes per emoji per dead row. Once is structural rather than
@@ -539,10 +539,10 @@ module.exports = function mount(app, ctx) {
         // several reconcile passes costs nothing.
         const backoff = error.retryAfterMs ?? RATE_LIMIT_BACKOFF_MS;
         const resumeAt = Date.now() + backoff;
-        reactionCooldowns.set(cooldownKey, resumeAt);
+        reactionCooldowns.set(cooldownKey, Math.max(reactionCooldowns.get(cooldownKey) || 0, resumeAt));
         sweepMetrics.count("rateLimited");
         if (receiptsAvailable) {
-          await recordReceipt(pool, "", cooldownKey, "", "", "cooldown", new Date(resumeAt));
+          await recordReceipt(client, "", cooldownKey, "", "", "cooldown", new Date(resumeAt));
         }
         console.warn(`[slack-events] rate-limited by Slack; pausing reaction writes for ${Math.round(backoff / 1000)}s`);
         return { settled: false };
@@ -553,7 +553,7 @@ module.exports = function mount(app, ctx) {
       return { settled: false };
     }
 
-    async function addSlackReaction(channel, ts, name) {
+    async function addSlackReaction(channel, ts, name, client) {
       if (await loadReactionCooldown()) return false;
       if (reactionWriteBlocked(channel, ts, name, "add")) return !!deadMessageCode(channel, ts, OWNER_WORKSPACE_ID);
       try {
@@ -561,10 +561,10 @@ module.exports = function mount(app, ctx) {
         return true;
       } catch (e) {
         if (e.code === "already_reacted") return true;
-        return (await classifyReactionFailure(e, channel, ts, name, "add")).settled;
+        return (await classifyReactionFailure(e, channel, ts, name, "add", client)).settled;
       }
     }
-    async function removeSlackReaction(channel, ts, name) {
+    async function removeSlackReaction(channel, ts, name, client) {
       if (await loadReactionCooldown()) return false;
       if (reactionWriteBlocked(channel, ts, name, "remove")) return !!deadMessageCode(channel, ts, OWNER_WORKSPACE_ID);
       try {
@@ -572,7 +572,7 @@ module.exports = function mount(app, ctx) {
         return true;
       } catch (e) {
         if (e.code === "no_reaction") return true;
-        return (await classifyReactionFailure(e, channel, ts, name, "remove")).settled;
+        return (await classifyReactionFailure(e, channel, ts, name, "remove", client)).settled;
       }
     }
 
@@ -749,17 +749,17 @@ module.exports = function mount(app, ctx) {
       await applyPendingDoneIntent(channel, ts);
     }
 
-    async function waitingTarget(item) {
+    async function waitingTarget(item, client) {
       const own = slackTarget(item.properties, SLACK_HOST);
       if (own) return own;
       const ref = (item.properties || {}).linkedBlockId;
       if (!ref) return null;
-      const linked = await blockDB.findUniqueLiveBlockByReference(ref, OWNER_WORKSPACE_ID);
+      const linked = await blockDB.findUniqueLiveBlockByReference(ref, OWNER_WORKSPACE_ID, client);
       if (!linked || linked.deleted_at || String(linked.workspace_id) !== String(OWNER_WORKSPACE_ID)) return null;
       return slackTarget(linked.properties, SLACK_HOST);
     }
 
-    async function linkedWaitingForMessage(channel, ts, includeDeleted = false) {
+    async function linkedWaitingForMessage(channel, ts, includeDeleted = false, client = pool) {
       // SQL excludes only explicit mismatches. The JS resolver owns URL parsing
       // and target precedence, and ambiguity is checked before filtering by target.
       const coordinates = alias => `jsonb_build_object(
@@ -771,7 +771,7 @@ module.exports = function mount(app, ctx) {
       const candidates = alias => `(NOT COALESCE(${alias}.properties->>'slack_channel' ~ '^[CDG][A-Z0-9]+$'
           AND ${alias}.properties->>'slack_ts' ~ '^[0-9]+[.][0-9]+$', false)
           OR (${alias}.properties->>'slack_channel' = $3 AND ${alias}.properties->>'slack_ts' = $4))`;
-      const { rows } = await sweepMetrics.phase("waiting", () => pool.query(`
+      const { rows } = await sweepMetrics.phase("waiting", () => client.query(`
         SELECT w.id, w.workspace_id, w.deleted_at, ${coordinates("w")}
           || jsonb_build_object('source', w.properties->'source', 'status', w.properties->'status',
              'completedAt', w.properties->'completedAt') AS properties,
@@ -1038,8 +1038,11 @@ module.exports = function mount(app, ctx) {
       }
       await blockDB.deleteBlock(task.id);
       await syncLinkedTriage(task, "release", eventMs);
-      await removeSlackReaction(channel, ts, R_START);
-      await removeSlackReaction(channel, ts, R_DONE);
+      if (receiptsAvailable) await projectTaskToSlack(task);
+      else {
+        await removeSlackReaction(channel, ts, R_START);
+        await removeSlackReaction(channel, ts, R_DONE);
+      }
       broadcast("blocks-changed", { action: "slack-bookmark-cancel", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
     }
 
@@ -1079,7 +1082,8 @@ module.exports = function mount(app, ctx) {
       }
       const started = await startWork({ block: task, atMs: eventMs, actor: "slack", actionId: actionId || `${channel}:${ts}:${eventMs}` });
       if (!started.changed && (started.reason === "not-trackable" || started.reason === "completed")) {
-        await removeSlackReaction(channel, ts, R_START);
+        if (receiptsAvailable) await projectTaskToSlack(task);
+        else await removeSlackReaction(channel, ts, R_START);
       }
       broadcast("blocks-changed", { action: "slack-start", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
     }
@@ -1163,7 +1167,8 @@ module.exports = function mount(app, ctx) {
       // Completion owns the active-work cleanup on both surfaces. completeWork
       // closes the DCC session; remove the matching Slack signal immediately.
       // The reconciliation loop remains the retry path if this write cannot land.
-      await removeSlackReaction(channel, ts, R_START);
+      if (receiptsAvailable) await projectTaskToSlack(canonical);
+      else await removeSlackReaction(channel, ts, R_START);
       await awardSlackCompletion(canonical, completedIso);
       await syncLinkedTriage(canonical, "done", eventMs);
 
@@ -1272,7 +1277,10 @@ module.exports = function mount(app, ctx) {
       }
 
       // Back into the active queue on the Slack side too (E2 reads 🔖 as the queue).
-      if (bookmark) await addSlackReaction(channel, ts, R_BOOKMARK);
+      if (bookmark) {
+        if (receiptsAvailable) await projectTaskToSlack(durable.task || task);
+        else await addSlackReaction(channel, ts, R_BOOKMARK);
+      }
       await syncLinkedTriage(durable.task || task, "scheduled", eventMs);
 
       if (!reopenDelegate) {
@@ -1297,7 +1305,8 @@ module.exports = function mount(app, ctx) {
         });
       } catch (error) {
         if (error.code !== "ratelimited") throw error;
-        searchCooldowns.set(cooldownKey, Date.now() + (error.retryAfterMs ?? RATE_LIMIT_BACKOFF_MS));
+        const resumeAt = Date.now() + (error.retryAfterMs ?? RATE_LIMIT_BACKOFF_MS);
+        searchCooldowns.set(cooldownKey, Math.max(searchCooldowns.get(cooldownKey) || 0, resumeAt));
         sweepMetrics.count("rateLimited");
         return null;
       }
@@ -1500,6 +1509,7 @@ module.exports = function mount(app, ctx) {
       const bookmarkTask = p.source === "slack-bookmark";
       const delegateTask = p.source === "slack-delegate-completion";
       if (!delegatedItem && !bookmarkTask && !delegateTask) return false;
+      if (await loadReactionCooldown()) return false;
       const target = delegatedItem ? await waitingTarget(block) : slackTarget(p, SLACK_HOST);
       if (!target) {
         if (repair) repair.ineligible = true;
@@ -1507,28 +1517,28 @@ module.exports = function mount(app, ctx) {
       }
       const queueKey = `${OWNER_WORKSPACE_ID}:${target.channel}:${target.ts}`;
       const previous = projectionQueues.get(queueKey) || Promise.resolve();
-      const next = previous.catch(() => {}).then(async () => {
+      const next = previous.catch(() => {}).then(() => withProjectionLock(queueKey, async client => {
         if (reactionPaused()) return false;
         // Route arguments and mirror pages may have waited behind a newer change.
         // Always read the durable row inside the queue, never replay the snapshot.
-        const fresh = await blockDB.getBlockIncludingDeleted(block.id);
+        const fresh = await blockDB.getBlockIncludingDeleted(block.id, client);
         if (!fresh || String(fresh.workspace_id) !== String(OWNER_WORKSPACE_ID)) {
           if (repair) repair.ineligible = true;
           return false;
         }
         const props = fresh.properties || {};
-        const currentTarget = props.kind === "delegated_item" ? await waitingTarget(fresh) : slackTarget(props, SLACK_HOST);
+        const currentTarget = props.kind === "delegated_item" ? await waitingTarget(fresh, client) : slackTarget(props, SLACK_HOST);
         if (!sameTarget(target, currentTarget)) return false;
         if (repair && fresh.deleted_at && props.kind === "slack_reaction_tombstone") {
           repair.ineligible = true;
           return false;
         }
         if (repair) repair.target = target;
-        const items = await linkedWaitingForMessage(target.channel, target.ts);
+        const items = await linkedWaitingForMessage(target.channel, target.ts, false, client);
         const markerIds = new Set((props.dependencyWaitingItemIds || [props.dependencyWaitingItemId]).filter(Boolean).map(String));
         const dependencies = [];
         for (const id of markerIds) {
-          const item = await blockDB.getBlockIncludingDeleted(id);
+          const item = await blockDB.getBlockIncludingDeleted(id, client);
           if (item && String(item.workspace_id) === String(OWNER_WORKSPACE_ID)) dependencies.push(item);
         }
         const waiting = items.concat(dependencies).some(item => !item.deleted_at && waitingItems.isOpen(item));
@@ -1556,16 +1566,35 @@ module.exports = function mount(app, ctx) {
         let settled = true;
         for (const [name, add] of writes) {
           // No user parameter: Slack removes only the token owner's reaction.
-          const ok = await (add ? addSlackReaction : removeSlackReaction)(target.channel, target.ts, name);
+          const ok = await (add ? addSlackReaction : removeSlackReaction)(target.channel, target.ts, name, client);
           settled = ok && settled;
           if (reactionPaused()) break;
         }
         return settled;
-      });
+      }));
       projectionQueues.set(queueKey, next);
       try { return await next; }
       catch (error) { console.warn(`[slack-events] projection retry for ${block.id}:`, error.message); return false; }
       finally { if (projectionQueues.get(queueKey) === next) projectionQueues.delete(queueKey); }
+    }
+
+    async function withProjectionLock(key, project) {
+      if (!receiptsAvailable) return project();
+      const client = await pool.connect();
+      let failure;
+      try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", ["slack-projection:" + key]);
+        const result = await project(client);
+        await client.query("COMMIT");
+        return result;
+      } catch (error) {
+        failure = error;
+        throw error;
+      } finally {
+        // Destroy a failed client so the pool releases its transaction lock.
+        client.release(failure);
+      }
     }
 
     async function mirrorDccCompletions() {
@@ -1652,7 +1681,7 @@ module.exports = function mount(app, ctx) {
       enrichBlock, reconcileMatch, reconcileMatches, refreshCapture, searchSlack,
       handleBookmark, handleBookmarkRemoved, handleDelegate, handleDelegateRemoved,
       handleStart, clearStart, handleDone, handleUndone,
-      projectTaskToSlack, retryPendingEnrichment, mirrorDccCompletions, loadReactionCooldown,
+      projectTaskToSlack, retryPendingEnrichment, mirrorDccCompletions,
     };
   }
 
@@ -1673,8 +1702,7 @@ module.exports = function mount(app, ctx) {
       : await blockDB.getBlockIncludingDeleted(blockOrId);
     if (!block) return false;
     const bound = await forWorkspace(block.workspace_id);
-    if (!bound || await bound.loadReactionCooldown()) return false;
-    return bound.projectTaskToSlack(block);
+    return bound ? bound.projectTaskToSlack(block) : false;
   }
   ctx.syncSlackTaskReactions = syncSlackTaskReactions;
   // Published for GET /api/me/integrations (server.js), which needs the read-only
@@ -1803,6 +1831,7 @@ module.exports = function mount(app, ctx) {
       }
       return;
     }
+    if (receiptsAvailable === null && typeof pool.connect === "function") await checkReceiptSchema();
     const bound = forActor(actor);
 
     const { channel, ts } = ev.item;

@@ -356,7 +356,7 @@ test("real Postgres preserves mid-page cooldown and retry work across restart", 
 
   await f.pool.query("UPDATE slack_projection_receipts SET next_attempt_at = NOW() - interval '1 second' WHERE outcome IN ('retry', 'cooldown')");
   f.mock.write = call => {
-    if (call.timestamp === stamp(2) && call.auth === "Bearer xoxp-fixture") throw new DOMException("timeout", "TimeoutError");
+    if (call.timestamp === stamp(2) && call.auth === "Bearer xoxp-fixture") throw new globalThis.DOMException("timeout", "TimeoutError");
     return null;
   };
   const resumed = await f.restart().runReconciliation();
@@ -409,4 +409,43 @@ test("real Postgres finds late commits behind the sweep and projects the newer s
   const reopenedWrites = f.writes.length;
   await f.restart().runReconciliation();
   assert.ok(f.writes.slice(reopenedWrites).some(call => call.name === "white_check_mark" && call.method === "reactions.remove"));
+});
+
+test("real Postgres serializes two workers projecting the same Slack message", {
+  skip: !process.env.DCC_TEST_DATABASE_URL,
+}, async t => {
+  const { fixture, properties, seed } = require("./test-support/slack-reconciliation-postgres");
+  const f = await fixture(t);
+  await seed(f, [{ id: "a", props: properties(1) }]);
+  await f.api.runReconciliation();
+  let unblock;
+  let entered;
+  const blocked = new Promise(resolve => { unblock = resolve; });
+  const writing = new Promise(resolve => { entered = resolve; });
+  const olderContext = {};
+  f.restart(olderContext);
+  f.mock.write = async call => {
+    if (call.name === "white_check_mark" && call.method === "reactions.remove") {
+      entered();
+      await blocked;
+    }
+    return null;
+  };
+  const old = olderContext.syncSlackTaskReactions("a");
+  await writing;
+  await f.pool.query("UPDATE blocks SET properties = properties || '{\"status\":\"done\"}'::jsonb WHERE id = 'a'");
+  const repair = f.restart().runReconciliation();
+  try {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const { rows } = await f.pool.query("SELECT granted FROM pg_locks WHERE locktype = 'advisory' AND NOT granted");
+      if (rows.length) break;
+      assert.ok(attempt < 99, "repair must wait for the older projection lock");
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  } finally {
+    unblock();
+    await Promise.all([old, repair]);
+  }
+  const checks = f.writes.filter(call => call.name === "white_check_mark");
+  assert.equal(checks.at(-1).method, "reactions.add");
 });

@@ -27,7 +27,7 @@ The diagnostic control loads the route from `890f1c64c594cfb2b34aeeca9c5ae1ff096
 | Projections | 21 | 0 |
 | Mocked Slack reaction writes | 63 | 0 |
 
-The candidate examined two extra historical keys, including a missed capture and a tombstone. Lookup bytes fell 96.0%. Estimates sum each returned row’s UTF-8 JSON size. Wire traffic includes protocol overhead and comes from Railway flow logs. Supabase usage comes from the billing dashboard.
+The candidate examined two extra historical keys, including a missed capture and a tombstone. Lookup bytes fell 96.0%. Estimates sum each returned row’s UTF-8 JSON size. Set `SLACK_RECONCILE_METRICS=1` on a local server to emit aggregate metrics. Wire traffic includes protocol overhead and comes from Railway flow logs. Supabase usage comes from the billing dashboard.
 
 ### QA checklist
 
@@ -41,7 +41,7 @@ The candidate examined two extra historical keys, including a missed capture and
 
 The five-minute default sweep remains. For actors with Slack search access, each reaction kind reads up to ten newest-first pages. One additional dated history page per kind advances each sweep. A saturated date range subdivides until it fits Slack’s page cap. A saturated single day remains bounded by Slack’s 100-page cap. The in-memory history position restarts after a process restart. Slack search coverage depends on token access, search indexing, and Slack result limits.
 
-The mirror processes up to 20 due candidates per actor per sweep. A quiet actor performs a cooldown check and a revision scan. The fixture’s quiet candidate scan took about 5.6 ms with warm buffers. Legacy aliases and permalinks can broaden invalidation when their inputs change. Receipt comparisons use exact Postgres timestamp and row versions. A crash after Slack accepts a write but before the receipt commits can repeat that idempotent write. Unreachable messages remain eligible after the existing 24-hour retry window. Catch-up can write reactions for historical rows once.
+The mirror processes up to 20 due candidates per actor per sweep. New revisions take priority over earlier failures. A quiet actor performs a cooldown check and a revision scan. The fixture’s quiet candidate scan took about 5.6 ms with warm buffers. Legacy aliases and permalinks can broaden invalidation when their inputs change. Receipt comparisons use exact Postgres timestamp and row versions. A crash after Slack accepts a write but before the receipt commits can repeat that idempotent write. Unreachable messages remain eligible after the existing 24-hour retry window. Catch-up can write reactions for historical rows once.
 
 ## Approved rollout and rollback
 

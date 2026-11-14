@@ -7,7 +7,6 @@ const Module = require("node:module");
 const { execFileSync } = require("node:child_process");
 const { createActivityDb } = require("./activity-db");
 const candidateMount = require("../routes/slack-events");
-const metrics = require("../lib/slack-sweep-metrics");
 
 const baseCommit = "890f1c64c594cfb2b34aeeca9c5ae1ff09690b0c";
 const fixtureDate = "2026-11-14";
@@ -122,7 +121,7 @@ async function fixture(t, { baseline = false } = {}) {
     ...db, broadcast() {}, APP_TIME_ZONE: "UTC", getTodayStr: () => fixtureDate,
     slotStore: require("../slot-store"),
   };
-  const restart = () => mount(app, { ...ctx });
+  const restart = (context = {}) => mount(app, Object.assign(context, ctx));
   const api = restart();
   await api.actors.ensureTable();
   await db.pool.query(`
@@ -133,7 +132,7 @@ async function fixture(t, { baseline = false } = {}) {
 }
 
 function response(data, status = 200, headers) {
-  return new Response(JSON.stringify(data), { status, headers });
+  return new globalThis.Response(JSON.stringify(data), { status, headers });
 }
 
 function properties(index, extra = {}) {
