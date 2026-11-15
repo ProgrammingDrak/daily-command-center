@@ -1,15 +1,43 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { unpack, pack } = require("./public/js/journal-notebook");
+const { PAPER_TYPES, unpack, pack } = require("./public/js/journal-notebook");
 const stroke = { color: "#292722", size: 3, points: [[10, 20], [400, 700]] };
 
 test("existing journal text and photo references survive a drawing round trip", () => {
   const text = "# Morning\n\n**Good day.**\n\n![Photo](media:sha256:" + "a".repeat(64) + ")\n\n[Day photo](#dcc-photo-123)\n";
-  assert.deepEqual(unpack(text), { text, pages: [[]] });
+  assert.deepEqual(unpack(text), { text, pages: [[]], templates: ["dotted"] });
   const saved = pack(text, [[stroke], [], [stroke]]);
-  assert.deepEqual(unpack(saved), { text, pages: [[stroke], [], [stroke]] });
+  assert.deepEqual(unpack(saved), { text, pages: [[stroke], [], [stroke]], templates: ["dotted", "dotted", "dotted"] });
   assert.equal(pack(unpack(saved).text, unpack(saved).pages), saved);
+});
+
+test("ten paper types persist independently, even on a page without ink", () => {
+  assert.equal(PAPER_TYPES.length, 10);
+  assert.equal(new Set(PAPER_TYPES.map(type => type.id)).size, 10);
+  const pages = PAPER_TYPES.map((_, index) => index % 2 ? [] : [stroke]);
+  const templates = PAPER_TYPES.map(type => type.id);
+  const saved = unpack(pack("Text and photos", pages, templates));
+  assert.deepEqual(saved, { text: "Text and photos", pages, templates });
+  saved.templates[1] = "music";
+  assert.equal(saved.templates[0], "blank");
+  assert.equal(saved.templates[2], "wide-ruled");
+  assert.deepEqual(unpack(pack("", [[]], ["college-ruled"])).templates, ["college-ruled"]);
+});
+
+test("legacy drawings gain dotted paper without changing their strokes or encoding", () => {
+  const legacy = pack("Legacy entry", [[stroke], []]);
+  const { text, pages, templates } = unpack(legacy);
+  assert.deepEqual(templates, ["dotted", "dotted"]);
+  assert.equal(pack(text, pages, templates), legacy);
+});
+
+test("unknown or mismatched page templates cannot overwrite an entry", () => {
+  for (const templates of [["invalid"], [], ["dotted", "music"], "dotted"]) {
+    assert.throws(() => pack("", [[]], templates), /templates/);
+    const raw = 'Text\n\n<!-- dcc-journal-ink:v1\n' + JSON.stringify({ pages: [[]], templates }) + '\n-->';
+    assert.throws(() => unpack(raw), /templates/);
+  }
 });
 
 test("opening a legacy entry without drawing does not rewrite it", () => {
