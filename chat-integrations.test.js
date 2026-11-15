@@ -16,27 +16,21 @@ test("permission choices cannot manufacture authority or grant writes through re
     workspace: "ws-1"
   });
   assert.match(html, /&lt;script&gt;/);
-  assert.doesNotMatch(html, /option value="write"/);
+  assert.doesNotMatch(html, /name="tasks" value="write"/);
   assert.match(html, /name="tasks"/);
 });
-test("management distinguishes authorization from verification and disconnection", () => {
-  const html = page.management({
-    grants: [
-      { id: "one", client_id: "ChatGPT", scopes: ["dcc.tasks.read"] },
-      { id: "two", client_id: "Old", scopes: ["dcc.read"], revoked_at: "2026-11-01" }
-    ],
-    preferences: P.defaults(),
+test("consent uses DCC tokens and returns management to the in-app Connections view", () => {
+  const html = page.consent({
+    request: { clientName: "ChatGPT", scopes: P.scopes },
     csrf: "safe",
-    account: "User",
-    workspace: "ws",
-    resource: "https://dcc.example/mcp/dcc",
-    enabled: true,
-    clientsReady: true
+    granted: P.defaults(),
+    account: "Owner",
+    workspace: "ws-1"
   });
-  assert.match(html, /Authorized · awaiting first successful call/);
-  assert.match(html, /Disconnected/);
-  assert.match(html, /Legacy access/);
-  assert.match(html, /Preferences guide your next authorization/);
+  assert.match(html, /public\/css\/tokens.css/);
+  assert.match(html, /dcc-connection-consent/);
+  assert.match(html, /settings=connections&amp;connection=chatgpt/);
+  assert.match(html, /role="radiogroup"/);
 });
 
 test(

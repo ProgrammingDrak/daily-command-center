@@ -5,6 +5,15 @@ The canonical `/glasses` and `/glasses.html` bookmarks still redirect to
 `public/js/device-views/glasses.js` adapter and stylesheet. The standalone
 prototype has been removed.
 
+Glasses launches now receive a glasses loading shell from the authenticated
+`/` or `/index.html` route before the desktop markup or shared scripts load.
+Critical startup styles hide the desktop until the adapter mounts; a slow or
+failed script leaves the glasses loading screen with Reload and Full app links.
+The adapter replaces that shell directly with task navigation. Normal desktop
+responses are unchanged. This fixes the desktop flash, but still loads the
+canonical document and task runtime behind the shell; it is not a standalone
+glasses bundle or a reduction in downloaded desktop code.
+
 ## Interface
 
 Jump and Select show up to eleven open task rows, keeping a full viewport near
@@ -39,7 +48,14 @@ the existing outcome flow. Those flows do not claim the new generic undo receipt
 Arrow keys are the established browser directional input. Enter is forefinger
 (tap or 550ms hold); Escape is middle (320ms double-tap discrimination). Pointer
 controls use the same recognizer. Cancelled or lost pointers never emit a tap.
-Native Backspace and Alt/Meta browser history shortcuts are not intercepted.
+Native browser Back now follows the same view hierarchy: Details/More → Task →
+Select → Jump. A further Back at Jump is left to normal browser/shell exit.
+On-screen Back and Escape use those same history entries. Directional movement
+updates the current entry without adding steps; Back preserves the selected task.
+Forward and reload restore navigation identities against current canonical lists,
+falling back to Select when a task has disappeared. No task action is replayed.
+Namespaced glasses history preserves the full app's existing tab state and URL.
+Backspace and Alt/Meta history shortcuts retain their browser behavior.
 `dcc:glasses-gesture` can deliver an already recognized action to the same adapter;
 this is an integration seam, not a claim of a working Meta SDK bridge.
 
@@ -67,3 +83,20 @@ point the mutation suites at production or a personal database.
 The new server operation reuses the coordinator's revision, idempotency receipt,
 account binding and transactional completion writer. No schema migration, new
 authentication mechanism, credentials or hardware permissions are introduced.
+
+### Native Back regression verification
+
+Verified on Node 22 with synthetic local fixtures: standard Node suite 3,399
+passed / 49 skipped / zero failures; 31 focused navigation, owner-projection and
+completion/undo tests passed with disposable PGlite; glasses-device and glasses
+queue browser suites passed, as did the canonical working-queue browser suite.
+Repository lint has zero errors and 74 existing warnings. Browser geometry/style
+assertions read attached DOM nodes atomically to avoid races with canonical
+rerenders.
+
+An additional full-suite PGlite run passed 3,482 tests but cancelled the unrelated
+guided lifecycle test and its role subtest: the fixture holds a connection while
+requesting a second operation through PGlite's serialized connection adapter.
+That run is not a clean full database-suite result. No production database was
+used. Physical middle-finger mapping and the shell exit menu remain on-device
+acceptance checks; this change has not been deployed.

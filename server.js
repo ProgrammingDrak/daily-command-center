@@ -1153,7 +1153,7 @@ app.get("/api/me/integrations", async (req, res) => {
       canOauth: !!(ctx.slackOAuth && ctx.slackOAuth.configured() && ctx.slackOAuth.hasEncryptionKey()),
     },
     google,
-    conversation: { enabled: process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false", url: "/connections/conversation" },
+    conversation: { enabled: process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false", url: "/?settings=connections&connection=chatgpt" },
     triage: {
       // Everything the wizard needs to render a copy-paste login command. NOT
       // getRequestOrigin, which is the caller's IP for rate limiting; this has to
@@ -1209,6 +1209,7 @@ app.get("/pet/:shareSlug", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "
 app.get(["/ink", "/ink.html"], requireAdmin, (req, res) => { res.sendFile(path.join(PROJECT_DIR, "ink.html")); });
 // Keep existing authentication and account binding ahead of the launch redirect.
 app.get(["/glasses", "/glasses.html"], require("./lib/glasses-launch"));
+app.get(["/", "/index.html"], require("./lib/glasses-shell")(PROJECT_DIR));
 app.use(express.static(PROJECT_DIR, { extensions: ["html"], etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 app.get("/guided", (req, res) => { res.setHeader("Cache-Control", "private, no-store"); res.sendFile(path.join(PROJECT_DIR, "guided.html")); });
 app.get("/", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "index.html")); });

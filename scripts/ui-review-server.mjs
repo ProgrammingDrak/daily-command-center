@@ -21,6 +21,8 @@ const app = express();
 app.use(express.json());
 const { default: glassesLaunch } = await import("../lib/glasses-launch.js");
 app.get(["/glasses", "/glasses.html"], glassesLaunch);
+const { default: glassesShell } = await import("../lib/glasses-shell.js");
+app.get(["/", "/index.html"], glassesShell(root));
 if (process.env.DCC_REVIEW_COMMITMENTS === "1") {
   const { default: mountCommitmentReview } = await import("./commitment-review-backend.js");
   await mountCommitmentReview(app);
@@ -262,11 +264,11 @@ if (process.env.DCC_REVIEW_ACTUAL === "1") {
     res.json({ ok: true, today, yesterday });
   });
 }
-// Synthetic transaction boundary for the subtree Undo browser verifier only.
-if(process.env.DCC_REVIEW_HIERARCHY==='1'){
+// Synthetic transaction boundary for the hierarchy and Glasses Undo verifiers.
+if(process.env.DCC_REVIEW_HIERARCHY==='1'||process.env.DCC_REVIEW_GLASSES_DEVICE==='1'){
  let failureStatus=0;
  const deleteReceipts=new Set();
- app.post('/api/review/hierarchy/restore-failure',(req,res)=>{failureStatus=Number(req.body.status)||0;res.json({ok:true});});
+ if(process.env.DCC_REVIEW_HIERARCHY==='1')app.post('/api/review/hierarchy/restore-failure',(req,res)=>{failureStatus=Number(req.body.status)||0;res.json({ok:true});});
  app.post('/api/blocks/batch',(req,res)=>{
   const ops=req.body.operations||[],next=new Map([...reviewBlocks].map(([id,row])=>[id,structuredClone(row)])),blocks=[],restoredDayRoots=[];
   for(const op of ops){
@@ -674,6 +676,8 @@ app.get("/admin", (_req, res) => res.sendFile(path.join(root, "admin.html")));
 app.get("/reimburse/:token", (_req, res) => res.sendFile(path.join(root, "reimburse.html")));
 app.use(express.static(root));
 
-app.listen(port, "127.0.0.1", () => {
+if (process.env.DCC_REVIEW_EXPORT_APP !== "1") app.listen(port, "127.0.0.1", () => {
   console.log(`UI review server: http://127.0.0.1:${port}`);
 });
+
+export default app;

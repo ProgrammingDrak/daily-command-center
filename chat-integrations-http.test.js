@@ -30,6 +30,9 @@ test(
     const base = "http://127.0.0.1:" + server.address().port;
     const call = (path, options = {}) => fetch(base + path, { redirect: "manual", ...options });
     assert.equal((await call("/connections/conversation")).status, 302);
+    const signedOut = await call("/api/me/chat-connections");
+    assert.equal(signedOut.status, 401);
+    assert.match(signedOut.headers.get("content-type"), /json/);
     const login = await call("/fixture/login", { method: "POST" }),
       cookie = login.headers.get("set-cookie").split(";")[0];
     const request = async (path, body) =>
@@ -38,10 +41,17 @@ test(
         headers: { cookie, origin: "https://dcc.example", "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams(body)
       });
-    let html = await (await call("/connections/conversation", { headers: { cookie } })).text();
-    assert.match(html, /Tasks and scheduling/);
-    assert.match(html, /No connected clients yet/);
-    const csrf = /name="csrf" value="([^"]+)"/.exec(html)[1];
+    const legacy = await call("/connections/conversation", { headers: { cookie } });
+    assert.equal(legacy.status, 302);
+    assert.equal(legacy.headers.get("location"), "/?settings=connections&connection=chatgpt");
+    const api = await call("/api/me/chat-connections", { headers: { cookie } });
+    const settings = await api.json();
+    assert.equal(settings.categories.length, 6);
+    assert.deepEqual(settings.grants, []);
+    assert.equal(settings.accountId, 1);
+    assert.equal(api.headers.get("cache-control"), "no-store");
+    const csrf = settings.csrf;
+    let html;
     assert.equal(
       (await request("/connections/conversation/preferences", { csrf: "wrong", tasks: "write" })).status,
       403
@@ -55,6 +65,29 @@ test(
       "dcc.tasks.write",
       "dcc.repeats.read"
     ]);
+    const staleAccount = await call("/connections/conversation/preferences", {
+      method: "POST",
+      headers: {
+        cookie,
+        origin: "https://dcc.example",
+        Accept: "application/json",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ csrf, tasks: "write", expectedUserId: 2, expectedWorkspaceId: "ws-2" })
+    });
+    assert.equal(staleAccount.status, 409);
+    const jsonSave = await call("/connections/conversation/preferences", {
+      method: "POST",
+      headers: {
+        cookie,
+        origin: "https://dcc.example",
+        Accept: "application/json",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ csrf, tasks: "write", repeats: "read", expectedUserId: 1, expectedWorkspaceId: "ws-1" })
+    });
+    assert.equal(jsonSave.status, 200);
+    assert.deepEqual(await jsonSave.json(), { ok: true });
     const verifier = crypto.randomBytes(32).toString("base64url");
     const params = {
       client_id: "fixture",
