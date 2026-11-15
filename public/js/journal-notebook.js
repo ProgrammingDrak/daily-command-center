@@ -8,6 +8,7 @@
   "use strict";
   const MARKER = "\n\n<!-- dcc-journal-ink:v1\n";
   const WIDTH = 1000, HEIGHT = 1200;
+  let notebookSequence = 0;
   const PAPER_TYPES = Object.freeze([
     { id: "blank", label: "Blank / sketchbook" },
     { id: "college-ruled", label: "College ruled" },
@@ -101,21 +102,20 @@
     let tool = "turn", color = "#292722", size = 3;
     let active = null, pointer = null, swipe = null, before = null, frame = null;
     const undo = pages.map(() => []), redo = pages.map(() => []);
+    const panelId = `journal-drawing-pages-${++notebookSequence}`;
     host.classList.add("journal-notebook");
-    host.innerHTML = `<details class="journal-drawer">
-      <summary><span class="journal-drawer-title">Sketchbook</span><span data-notebook-summary></span><span class="journal-drawer-chevron" aria-hidden="true">›</span></summary>
-      <div class="journal-drawer-content"><div class="journal-page-settings">
-      ${readOnly ? '<span data-template-name></span>' : `<label>Paper for this page <select data-template aria-label="Paper for this page">${PAPER_TYPES.map(type => `<option value="${type.id}">${type.label}</option>`).join("")}</select></label>`}
-      <span data-template-status></span></div>
-      <div class="journal-ink-tools" role="group" aria-label="Drawing tools">
-      <span class="journal-ink-label">Sketchbook</span>
+    host.innerHTML = `<div class="journal-drawer">
+      <div class="journal-ink-tools journal-menu" role="group" aria-label="Sketchbook menu">
+      <button type="button" class="journal-menu-toggle" data-notebook-toggle aria-expanded="false" aria-controls="${panelId}"><span>Sketchbook</span><span class="journal-drawer-chevron" aria-hidden="true">›</span></button>
+      ${readOnly ? '<span data-template-name></span>' : `<label>Paper <select data-template aria-label="Paper for this page">${PAPER_TYPES.map(type => `<option value="${type.id}">${type.label}</option>`).join("")}</select></label>`}
+      <span data-notebook-summary></span><span data-template-status hidden></span>
       ${readOnly ? "" : `<button type="button" data-tool="pen" aria-pressed="false">Pen</button>
       <button type="button" data-tool="eraser" aria-pressed="false">Eraser</button>
       <button type="button" data-tool="turn" aria-pressed="true">Turn pages</button>
       <label>Ink <input type="color" value="#292722" aria-label="Ink color"></label>
       <label>Width <select data-pen-width aria-label="Pen width"><option value="3">Fine</option><option value="6">Medium</option><option value="12">Broad</option></select></label>
       <button type="button" data-undo>Undo</button><button type="button" data-redo>Redo</button>`}
-      </div><div class="journal-page-gallery" aria-label="Drawing page gallery">
+      </div><div class="journal-drawer-content" id="${panelId}" hidden><div class="journal-page-gallery" aria-label="Drawing page gallery">
       <button type="button" class="journal-neighbor journal-neighbor-previous" data-neighbor="-1"><span class="journal-sheet journal-peek-paper"><canvas width="1000" height="1200" aria-hidden="true"></canvas></span><span class="journal-peek-label"></span></button>
       <div class="journal-paper journal-sheet journal-current-paper"><canvas data-drawing width="1000" height="1200" aria-label="Hand drawing page" ${readOnly ? 'role="img"' : 'tabindex="0"'}></canvas></div>
       <button type="button" class="journal-neighbor journal-neighbor-next" data-neighbor="1"><span class="journal-sheet journal-peek-paper"><canvas width="1000" height="1200" aria-hidden="true"></canvas></span><span class="journal-peek-label"></span></button>
@@ -125,7 +125,7 @@
       <span data-page role="status" aria-live="polite"></span>
       <button type="button" data-next aria-label="Next drawing page">→</button>
       ${readOnly ? "" : '<button type="button" data-add>+ Page</button>'}</div>
-      <p class="journal-ink-hint">${readOnly ? "Swipe, tap a dot, or select a neighboring page." : "Swipe to turn. Choose Pen or Eraser to draw. Paper changes apply to this page only."}</p></div></details>`;
+      <p class="journal-ink-hint">${readOnly ? "Swipe, tap a dot, or select a neighboring page." : "Swipe to turn. Choose Pen or Eraser to draw. Paper changes apply to this page only."}</p></div></div>`;
     const canvas = host.querySelector("[data-drawing]"), context = canvas.getContext("2d");
     const q = selector => host.querySelector(selector);
     const histories = () => { undo[index] ||= []; redo[index] ||= []; };
@@ -158,7 +158,7 @@
       histories();
       const pageLabel = `Page ${index + 1} / ${pages.length}`;
       if (q("[data-page]").textContent !== pageLabel) q("[data-page]").textContent = pageLabel;
-      q("[data-notebook-summary]").textContent = `${pageLabel} · ${paperName(paper[index])}`;
+      q("[data-notebook-summary]").textContent = pageLabel;
       canvas.setAttribute("aria-label", `Hand drawing page ${index + 1} of ${pages.length}`);
       q("[data-previous]").disabled = index === 0;
       q("[data-next]").disabled = index === pages.length - 1;
@@ -192,13 +192,16 @@
     q("[data-next]").onclick = () => turn(1);
     const footer = q(".journal-page-turn");
     const gallery = q(".journal-page-gallery");
-    q(".journal-drawer").addEventListener("toggle", () => {
+    function setExpanded(expanded) {
       finish();
       swipe = null;
       q(".journal-current-paper").style.transform = "";
       q(".journal-current-paper").getAnimations().forEach(animation => animation.cancel());
-      if (q(".journal-drawer").open) paint();
-    });
+      q(".journal-drawer-content").hidden = !expanded;
+      q("[data-notebook-toggle]").setAttribute("aria-expanded", String(expanded));
+      if (expanded) paint();
+    }
+    q("[data-notebook-toggle]").onclick = () => setExpanded(q(".journal-drawer-content").hidden);
     let suppressNeighborClick = false;
     function beginSwipe(event) {
       if (!event.isPrimary || event.button !== 0 || (event.currentTarget === footer && event.target.closest("button"))) return;
@@ -281,6 +284,7 @@
       q("[data-pen-width]").onchange = event => { size = Number(event.target.value); };
       q("[data-template]").onchange = event => { finish(); paper[index] = event.target.value; paint(); };
       host.querySelectorAll("[data-tool]").forEach(control => { control.onclick = () => {
+        setExpanded(true);
         finish(); tool = control.dataset.tool;
         canvas.style.touchAction = tool === "turn" ? "pan-y" : "none";
         canvas.style.cursor = tool === "turn" ? "grab" : "crosshair";
