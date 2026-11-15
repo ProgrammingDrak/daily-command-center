@@ -19,18 +19,17 @@ test("HTTP MCP Events discovery, consent scopes, subscribe and unsubscribe", { s
     workspace_id: "ws-1",
     properties: { local_id: "http-task", type: "task", title: "Synthetic", status: "open" }
   });
-  await require("./conversation-store")
-    .createConversationStore({ ...ctx, now: () => now })
-    .execute(
-      {
-        action: "queue-add",
-        taskId: "http-task",
-        sourceEventId: "http-add",
-        expectedRevision: 0,
-        at: new Date(now).toISOString()
-      },
-      identity
-    );
+  const queueStore = require("./conversation-store").createConversationStore({ ...ctx, now: () => now });
+  await queueStore.execute(
+    {
+      action: "queue-add",
+      taskId: "http-task",
+      sourceEventId: "http-add",
+      expectedRevision: 0,
+      at: new Date(now).toISOString()
+    },
+    identity
+  );
   for (const [id, scopes] of [
     ["http-grant", ["dcc.read", "dcc.events"]],
     ["read-grant", ["dcc.read"]]
@@ -47,11 +46,20 @@ test("HTTP MCP Events discovery, consent scopes, subscribe and unsubscribe", { s
   const express = require("express"),
     app = express();
   app.use(express.json());
+  app.use(
+    require("express-session")({ secret: "synthetic-event-consent-fixture", resave: false, saveUninitialized: false })
+  );
+  app.post("/fixture/login", (req, res) => {
+    req.session.userId = 1;
+    req.session.workspaceId = "ws-1";
+    req.session.username = "Synthetic owner";
+    res.end();
+  });
   const mount = require("./routes/conversation");
   const mounted = mount(app, ctx, {
     enabled: true,
     baseUrl: "https://dcc.example",
-    clients: {},
+    clients: { fixture: { name: "Synthetic ChatGPT", redirect_uris: ["https://client.example/callback"] } },
     eventsEnabled: true,
     eventsKey: key,
     eventWorker: false,
@@ -162,4 +170,90 @@ test("HTTP MCP Events discovery, consent scopes, subscribe and unsubscribe", { s
   });
   assert.equal(invalid.events, null, "bad event configuration cannot bring down existing DCC tools");
   invalid.close();
+  // Exercise the current permission catalog through real consent and reduction.
+  const base = "http://127.0.0.1:" + server.address().port;
+  const login = await fetch(base + "/fixture/login", { method: "POST" });
+  const cookie = login.headers.get("set-cookie").split(";")[0];
+  const settings = await (await fetch(base + "/api/me/chat-connections", { headers: { cookie } })).json();
+  const verifier = crypto.randomBytes(32).toString("base64url");
+  const authorization = {
+    client_id: "fixture",
+    redirect_uri: "https://client.example/callback",
+    resource: "https://dcc.example/mcp/dcc",
+    response_type: "code",
+    code_challenge_method: "S256",
+    code_challenge: crypto.createHash("sha256").update(verifier).digest("base64url"),
+    state: "synthetic-event-consent",
+    scope: "dcc.read dcc.events"
+  };
+  const consent = await fetch(base + "/oauth/dcc/authorize?" + new URLSearchParams(authorization), {
+    headers: { cookie },
+    redirect: "manual"
+  });
+  assert.equal(consent.status, 200);
+  const html = await consent.text();
+  assert.match(html, /name="legacy"[^>]*value="dcc.events"/);
+  assert.match(html, /Subscribe this chat to check-back deadlines/);
+  const selected = new URLSearchParams({ csrf: settings.csrf, decision: "allow" });
+  selected.append("legacy", "dcc.read");
+  selected.append("legacy", "dcc.events");
+  const form = (path, body) =>
+    fetch(base + path, {
+      method: "POST",
+      redirect: "manual",
+      headers: { cookie, origin: "https://dcc.example", "content-type": "application/x-www-form-urlencoded" },
+      body
+    });
+  const allowed = await form("/oauth/dcc/authorize", selected);
+  assert.equal(allowed.status, 302);
+  const code = new URL(allowed.headers.get("location")).searchParams.get("code");
+  assert.ok(code);
+  const exchange = await form(
+    "/oauth/dcc/token",
+    new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: "fixture",
+      redirect_uri: authorization.redirect_uri,
+      resource: authorization.resource,
+      code,
+      code_verifier: verifier
+    })
+  );
+  assert.equal(exchange.status, 200);
+  const token = await exchange.json();
+  assert.deepEqual(token.scope.split(" ").sort(), ["dcc.events", "dcc.read"]);
+  assert.equal((await call("events/list", {}, token.access_token)).result.events[0].name, E.NAME);
+  const authorizedSub = (await call("events/subscribe", params, token.access_token)).result;
+  assert.ok(authorizedSub.id);
+  const grantId = (await ctx.pool.query("SELECT grant_id FROM dcc_event_subscriptions WHERE id=$1", [authorizedSub.id]))
+    .rows[0].grant_id;
+  await queueStore.execute(
+    {
+      action: "background-start",
+      taskId: "http-task",
+      remindMinutes: 1,
+      sourceEventId: "consent-background",
+      expectedRevision: (await queueStore.state(identity)).revision,
+      at: new Date(now).toISOString()
+    },
+    identity
+  );
+  assert.equal(
+    (
+      await form(
+        "/connections/conversation/permissions",
+        new URLSearchParams({ csrf: settings.csrf, grantId, legacy: "dcc.read" })
+      )
+    ).status,
+    302
+  );
+  assert.deepEqual((await call("events/list", {}, token.access_token)).result.events, []);
+  assert.equal((await call("events/subscribe", params, token.access_token)).error.code, -32001);
+  now += 61000;
+  await mounted.events.tick();
+  assert.equal(deliveries, 0, "removing only event scope stops the existing due subscription");
+  const grant = (await ctx.pool.query("SELECT scopes,revoked_at FROM conversation_grants WHERE id=$1", [grantId]))
+    .rows[0];
+  assert.deepEqual(grant.scopes, ["dcc.read"]);
+  assert.equal(grant.revoked_at, null, "the grant remains connected");
 });
