@@ -78,7 +78,7 @@ async function main() {
     await page.locator('[data-service="chatgpt"]').click();
     await page.locator("[data-permissions]").waitFor();
     assert.equal(await page.locator('[data-permissions] [role="radiogroup"]').count(), 6);
-    assert.equal(await page.locator('input[name="tasks"][value="read"]').isChecked(), true);
+    assert.equal(await page.locator('input[name="tasks"][value="write"]').isChecked(), true);
     await page.locator('[data-action="allow-all"]').click();
     await page.locator('[data-action="connect"]').click();
     await page.getByRole("heading", { name: "Connect ChatGPT", exact: true }).waitFor();
@@ -88,7 +88,7 @@ async function main() {
     assert.equal((await oauth.list({ userId: 1, workspaceId: "ws-1" })).length, 0, "choosing access does not grant it");
     await page.locator('[data-action="check"]').click();
     await page.waitForFunction(() =>
-      document.querySelector(".connection-feedback")?.textContent.includes("No new authorization")
+      document.querySelector(".connection-feedback")?.textContent.includes("awaiting authorization")
     );
     const scopes = require("../lib/chat-permissions").categories.flatMap((c) => [c.read, c.write]);
     await ctx.pool.query(

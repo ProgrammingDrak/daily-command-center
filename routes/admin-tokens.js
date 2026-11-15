@@ -12,7 +12,7 @@ module.exports = function mount(app, ctx) {
   app.get("/api/admin/tokens", requireAdmin, route(() => tokenStore.listTokens()));
 
   app.post("/api/admin/tokens", requireAdmin, validate(schemas.tokenCreate), route(async (req, res) => {
-    const created = await tokenStore.createToken(req.body);
+    const created = await tokenStore.createToken({...req.body,userId:req.session.userId,workspaceId:req.workspaceId});
     res.status(201).json({ ...created, note: "Store this token now — it cannot be retrieved again." });
   }));
 

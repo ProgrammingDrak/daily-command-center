@@ -180,7 +180,7 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   result = await rpc("tools/list");
   assert.deepEqual(
     result.body.result.tools.map((tool) => tool.name),
-    ["dcc_connection_status", capture.name]
+    ["dcc_connection_status", capture.name, "dcc_profile", "dcc_approval_status"]
   );
   const saved = (await rpc("tools/call", capture, { "x-workspace-id": "ws-2" })).body.result.structuredContent;
   assert.equal(saved.ok, true);
@@ -335,7 +335,7 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
       status: "open"
     }
   });
-  await mounted.store.execute(
+  await require("./conversation-store").createConversationStore(ctx).execute(
     {
       action: "queue-add",
       taskId: "unrelated-private",

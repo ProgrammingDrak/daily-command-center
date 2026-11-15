@@ -21,13 +21,17 @@ CREATE INDEX IF NOT EXISTS idx_task_attachments_parent ON task_attachments(block
 function publicRow(row) {
   return { id: row.id, filename: row.filename, mime: row.mime, size: row.size, uploadedAt: row.created_at, removed: !!row.deleted_at, pending: row.state === "pending" };
 }
-function createStore({ pool, storage }) {
+function createStore({ pool, storage, authorizeMcp }) {
   // Writes lock the owner row (quota serialization) and the parent. Reads take no
   // row locks, so listing and downloads never stall block saves or FK checks.
   async function transaction(actor, blockId, run, { read = false } = {}) {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      if (!read && authorizeMcp) {
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['dcc-foreground:'+actor.userId]);
+        await authorizeMcp(actor,client);
+      }
       if (!read) await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [actor.userId]);
       // Owner only. Neither invited workspace members nor commitment roles grant private Notes access.
       const { rows } = await client.query(`SELECT b.* FROM blocks b JOIN workspaces w ON w.id=b.workspace_id

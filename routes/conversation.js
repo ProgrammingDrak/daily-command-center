@@ -321,9 +321,16 @@ const tools = [
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }
   }
 ];
-const scopeFor = (name) => wishlistMcp.scopeFor(name) || (
+const controlTools = require('../lib/chat-control-tools');
+const approvalModule = require('../mcp-approval-store');
+tools.push({name:'dcc_profile',description:'Identify the account represented by this authenticated DCC connection.',inputSchema:{type:'object',properties:{},additionalProperties:false},outputSchema:{type:'object',properties:{id:{type:'string'},name:{type:'string'}},required:['id'],additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},_meta:{'openai/profile':true}});
+tools.push({name:'dcc_approval_status',description:'Read the status of a DCC approval. This tool cannot approve a change.',inputSchema:{type:'object',properties:{approvalId:{type:'string'}},required:['approvalId'],additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false}});
+for (const t of tools) t.annotations={destructiveHint:false,openWorldHint:false,...t.annotations};
+const scopeFor = (inputName) => { const alias=controlTools.aliases[inputName]; const name=alias?.name || inputName;
+ if(alias && !tools.find(t=>t.name===inputName).annotations.readOnlyHint) return 'dcc.'+controlTools.categoryFor[name]+'.write';
+ return wishlistMcp.scopeFor(name) || (
   require('../lib/chat-control-tools').categoryFor[name] ? `dcc.${require('../lib/chat-control-tools').categoryFor[name]}.read` :
-  name === 'dcc_connection_status' ? permissions.scopes :
+  ['dcc_connection_status','dcc_profile','dcc_approval_status'].includes(name) ? permissions.scopes :
   name === 'dcc_working_queue' ? ['dcc.read','dcc.queue.read'] :
   name === 'dcc_correct_time' ? ['dcc.correct','dcc.time.write'] :
   ['dcc_queue','dcc_work'].includes(name) ? ['dcc.work','dcc.queue.write'] :
@@ -339,13 +346,23 @@ const scopeFor = (name) => wishlistMcp.scopeFor(name) || (
           ? "dcc.correct"
           : name === "dcc_complete_task"
             ? "dcc.complete"
-            : "dcc.read");
+            : "dcc.read"); };
 module.exports = function mount(app, ctx, config = {}) {
   const enabled =
     config.enabled ??
     (process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false");
+  const provider = config.provider || process.env.DCC_CONVERSATION_AUTH_PROVIDER || 'legacy';
+  const buildOAuth = () => config.oauth || (provider === 'clerk' ? require('../clerk-mcp-auth').createClerkMcpAuth({
+    pool:ctx.pool,baseUrl:config.baseUrl || process.env.DCC_CONVERSATION_URL,
+    issuer:process.env.CLERK_MCP_ISSUER,secretKey:process.env.CLERK_SECRET_KEY,
+    encryptionKey:process.env.DCC_MCP_TOKEN_ENCRYPTION_KEY,
+    clientIds:JSON.parse(process.env.DCC_MCP_CLIENT_IDS || '[]')
+  }) : createOAuth({pool:ctx.pool,baseUrl:config.baseUrl || process.env.DCC_CONVERSATION_URL,
+    clients:config.clients || JSON.parse(process.env.DCC_CONVERSATION_CLIENTS || '{}')}));
   if (!enabled) {
-    require("./chat-integrations")(app, ctx);
+    let managementOAuth=null;
+    if(provider==='clerk'||config.oauth) { try{managementOAuth=buildOAuth();}catch{/* Local disconnect remains available without a working provider. */} }
+    require("./chat-integrations")(app, ctx,{oauth:managementOAuth,providerHint:provider,enabled:false,clientsReady:!!managementOAuth});
     // Machine discovery must not fall through to the interactive login page.
     // This discloses no client/account configuration and never instantiates OAuth.
     app.all(
@@ -367,14 +384,23 @@ module.exports = function mount(app, ctx, config = {}) {
   }
   app.use(createIngress(config.limits));
   const accountBudget = createBudget({ limit: 120, ...config.limits?.account });
-  const oauth = createOAuth({
-    pool: ctx.pool,
-    baseUrl: config.baseUrl || process.env.DCC_CONVERSATION_URL,
-    clients: config.clients || JSON.parse(process.env.DCC_CONVERSATION_CLIENTS || "{}")
-  });
-  const store = createConversationStore(ctx);
-  let control;
-  require("./chat-integrations")(app, ctx, { oauth, enabled, clientsReady: Object.keys(config.clients || JSON.parse(process.env.DCC_CONVERSATION_CLIENTS || "{}")).length > 0 });
+  const oauth=buildOAuth();
+  const authorizeMcp=async(actor,q)=>{
+    const live=await oauth.revalidate(actor.grantId,actor,q);
+    if(actor.scopes.some(scope=>!live.scopes.includes(scope)))throw M.fail('Connection permissions changed',403);
+  };
+  const store = createConversationStore({...ctx,authorizeMcp});
+  if (!oauth.revalidate) oauth.revalidate = async (id,actor,q=ctx.pool) => {
+    const g=(await q.query('SELECT * FROM conversation_grants WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND revoked_at IS NULL FOR UPDATE',[id,actor.userId,actor.workspaceId])).rows[0];
+    if(!g) throw M.fail('Connection disconnected',401);
+    const membership=await q.query("SELECT 1 FROM workspace_members WHERE user_id=$1 AND workspace_id=$2 AND role='owner'",[actor.userId,actor.workspaceId]);
+    if(!membership.rows.length) throw M.fail('Workspace owner required',403);
+    return {...actor,grantId:id,scopes:g.scopes};
+  };
+  const approvals = approvalModule.createApprovalStore(ctx);
+  require("./chat-integrations")(app, ctx, { oauth, enabled, approvals,
+    executeApproved:(name,args,identity,q)=>runTool(name,args,identity,q),
+    clientsReady:oauth.provider === 'clerk' || Object.keys(config.clients || JSON.parse(process.env.DCC_CONVERSATION_CLIENTS || '{}')).length > 0 });
   const route = (fn) => async (req, res, next) => {
     try {
       res.set("Cache-Control", "no-store");
@@ -388,152 +414,20 @@ module.exports = function mount(app, ctx, config = {}) {
       res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Conversation service unavailable" });
     }
   };
-  const owner = (req) => ({ userId: req.session?.userId, workspaceId: req.session?.workspaceId });
-  function csrf(req) {
-    if (
-      req.get("origin") !== oauth.baseUrl ||
-      !req.session?.conversationCsrf ||
-      req.body.csrf !== req.session.conversationCsrf
-    )
-      throw M.fail("Invalid consent request", 403);
-  }
-  const form = express.urlencoded({ extended: false, limit: "12kb" });
-  app.get(
-    "/.well-known/oauth-authorization-server",
-    route(async (_req, res) => res.json(oauth.metadata))
-  );
-  for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp/dcc"])
-    app.get(
-      path,
-      route(async (_req, res) =>
-        res.json({
-          resource: oauth.resource,
-          authorization_servers: [oauth.baseUrl],
-          scopes_supported: SCOPES,
-          bearer_methods_supported: ["header"]
-        })
-      )
-    );
-  app.get(
-    "/oauth/dcc/authorize",
-    route(async (req, res) => {
-      const request = oauth.validateRequest(req.query);
-      if (!req.session?.userId) return res.redirect("/login?next=" + encodeURIComponent(req.originalUrl));
-      // Use the same signed-in workspace selected by DCC; no query/header identity.
-      if (!req.session.workspaceId) {
-        const r = await ctx.pool.query(
-          "SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND role='owner' ORDER BY workspace_id LIMIT 1",
-          [req.session.userId]
-        );
-        req.session.workspaceId = r.rows[0]?.workspace_id;
-      }
-      await oauth.list(owner(req));
-      req.session.conversationCsrf ||= crypto.randomBytes(24).toString("base64url");
-      req.session.conversationConsent = {
-        ...request,
-        userId: req.session.userId,
-        workspaceId: req.session.workspaceId,
-        expiresAt: Date.now() + 300000
-      };
-      const prefs = await oauth.preferences(owner(req));
-      // Existing legacy-only clients keep explicit legacy choices; modern clients
-      // begin with the user's preferences intersected with requested authority.
-      const granted = request.scopes.some(s => !permissions.legacy.includes(s))
-        ? prefs.filter(s => request.scopes.includes(s)) : request.scopes;
-      const callbackOrigin = new URL(request.redirectUri).origin;
-      res.set("Content-Security-Policy", `default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self' ${callbackOrigin}; frame-ancestors 'none'; base-uri 'none'`);
-      res.set('Referrer-Policy','same-origin');
-      res.type('html').send(integrationPage.consent({request,csrf:req.session.conversationCsrf,granted,account:req.session.username || 'DCC account',workspace:req.session.workspaceId}));
-    })
-  );
-  app.post(
-    "/oauth/dcc/authorize",
-    form,
-    route(async (req, res) => {
-      csrf(req);
-      const request = req.session.conversationConsent;
-      if (
-        !request ||
-        request.expiresAt < Date.now() ||
-        request.userId !== req.session.userId ||
-        request.workspaceId !== req.session.workspaceId
-      )
-        throw M.fail("Consent expired or account changed", 409);
-      delete req.session.conversationConsent;
-      if (req.body.decision !== "allow") {
-        const u = new URL(request.redirectUri);
-        u.searchParams.set("error", "access_denied");
-        u.searchParams.set("state", request.state);
-        return res.redirect(u.href);
-      }
-      const chosen = permissions.selected(req.body, request.scopes);
-      if (!chosen.length) throw M.fail('Select at least one permission');
-      res.redirect(await oauth.consent({ ...request, scopes: chosen }, owner(req)));
-    })
-  );
-  app.post(
-    "/oauth/dcc/token",
-    form,
-    route(async (req, res) => {
-      res.json(await oauth.token(req.body || {}));
-    })
-  );
-  app.all(
-    "/mcp/dcc",
-    route(async (req, res) => {
-      if (req.get("origin") && req.get("origin") !== oauth.baseUrl) throw M.fail("Origin not allowed", 403);
-      let identity;
-      const raw = String(req.get("authorization") || "");
-      try {
-        identity = await oauth.verify(raw.startsWith("Bearer ") ? raw.slice(7) : "");
-      } catch (e) {
-        res.set(
-          "WWW-Authenticate",
-          `Bearer resource_metadata="${oauth.baseUrl}/.well-known/oauth-protected-resource/mcp/dcc"`
-        );
-        throw e;
-      }
-      if (!accountBudget(String(identity.userId))) return limited(res);
-      if (req.method !== "POST") return res.status(405).set("Allow", "POST").end();
-      const b = req.body;
-      if (!b || Array.isArray(b) || b.jsonrpc !== "2.0" || typeof b.method !== "string")
-        return res.status(400).json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid Request" } });
-      if (b.id === undefined) {
-        if (b.method === "notifications/initialized") return res.status(202).end();
-        return res.status(400).end();
-      }
-      const reply = (result) => res.json({ jsonrpc: "2.0", id: b.id, result });
-      if (b.method === "initialize")
-        return reply({
-          protocolVersion: ["2025-03-26", "2025-06-18", "2025-11-25"].includes(b.params?.protocolVersion)
-            ? b.params.protocolVersion
-            : "2025-03-26",
-          capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "dcc-account", version: "0.1.0" },
-          instructions:
-            "Resolve existing tasks before acting. Only explicit user start/pause/done/correction instructions authorize activity changes. Preserve unknown time and plan versus actual. For explicit completion use dcc_complete_task after reading the canonical task/version. For meaningful progress, summarize accomplishments and remaining scope with dcc_reconcile_task step_done, keeping the goal open. At existing morning/evening reviews call dcc_completion_review and offer its choices without inferring completion. Confirm reconciliation with dcc_reconciliation_receipt; only verified_saved means saved."
-        });
-      if (b.method === "ping") return reply({});
-      if (b.method === "tools/list")
-        return reply({
-          tools: tools
-            .filter((t) => (Array.isArray(scopeFor(t.name)) ? scopeFor(t.name) : [scopeFor(t.name)]).some(s => identity.scopes.includes(s)))
-            .map((t) => ({ ...t, securitySchemes: (Array.isArray(scopeFor(t.name)) ? scopeFor(t.name) : [scopeFor(t.name)]).filter(s=>identity.scopes.includes(s)).map(s=>({type:'oauth2',scopes:[s]})) }))
-        });
-      if (b.method !== "tools/call")
-        return res.json({ jsonrpc: "2.0", id: b.id, error: { code: -32601, message: "Method not found" } });
-      const name = b.params?.name,
-        args = b.params?.arguments || {};
-      if (!tools.some((t) => t.name === name))
-        return res.json({ jsonrpc: "2.0", id: b.id, error: { code: -32602, message: "Unknown tool" } });
-      identity = await oauth.verify(raw.slice(7), scopeFor(name));
-      try {
+  async function runTool(name,args,identity,transactionClient=null) {
         let result;
-        if (wishlistMcp.scopeFor(name)) result = await wishlistMcp.run(ctx, name, args, identity);
+        if(name==='dcc_profile') return {id:identity.profileId || 'dcc-profile-'+M.digest([identity.userId,identity.workspaceId]),name:'DCC '+identity.workspaceId};
+        if(name==='dcc_approval_status') {
+          const a=await approvals.get(args.approvalId,identity);
+          if(a.connection_id!==identity.grantId)throw M.fail('Approval not found',404);
+          if(a.scopes.some(s=>!identity.scopes.includes(s)))throw M.fail('Insufficient scope',403);
+          return approvals.receipt(a);
+        }
+        if (wishlistMcp.scopeFor(name)) result = await wishlistMcp.run({...ctx,authorizeMcp,mcpActor:identity}, name, args, identity);
         const category = require('../lib/chat-control-tools').categoryFor[name];
         if (name === 'dcc_connection_status') result = {accountId:identity.userId,workspaceId:identity.workspaceId,status:'verified',permissions:permissions.categories.map(c=>({category:c.id,level:permissions.level(identity.scopes,c.id)})),legacyScopes:identity.scopes.filter(s=>permissions.legacy.includes(s))};
         if (category && name !== 'dcc_time_records') {
-          control ||= require('../chat-control-store').createChatControlStore(ctx);
+          const control = require('../chat-control-store').createChatControlStore({...ctx,transactionClient,authorizeMcp});
           result = await control[name === 'dcc_bulk_cleanup' ? 'bulk' : category](args,identity);
         }
         if (name === 'dcc_time_records') {
@@ -545,13 +439,21 @@ module.exports = function mount(app, ctx, config = {}) {
         if (name === "dcc_save_someday_idea") {
           const sourceEventId = M.text(args.sourceEventId, "sourceEventId", 200);
           const id = "someday-" + M.digest(JSON.stringify([identity.workspaceId, identity.userId, sourceEventId]));
-          const idea = await createProjectStore(ctx).createTask({
+          const captureClient=await ctx.pool.connect();
+          let idea;
+          try {
+            await captureClient.query('BEGIN');
+            await captureClient.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['dcc-foreground:'+identity.userId]);
+            await authorizeMcp(identity,captureClient);
+            idea = await createProjectStore({...ctx,mcpAccountScoped:true}).createTask({
             id, title: M.text(args.title, "title", 300), detail: args.detail, tags: args.tags,
             location: args.location, sourceUrl: args.sourceUrl, duration: args.duration,
             someday: true, source: "conversation"
-          }, identity);
+          }, identity,captureClient);
+            await captureClient.query('COMMIT');
+          }catch(e){await captureClient.query('ROLLBACK');throw e;}finally{captureClient.release();}
           if (idea.deleted_at) throw M.fail("This idea was deleted", 409);
-          if (!idea._resolvedExisting) ctx.broadcast?.("blocks-changed", { action: "someday-capture", blockIds: [idea.id] }, identity.workspaceId);
+          if (!idea._resolvedExisting) (transactionClient ? null : ctx.broadcast)?.("blocks-changed", { action: "someday-capture", blockIds: [idea.id] }, identity.workspaceId);
           result = { ok: true, taskId: idea.id, duplicate: idea._resolvedExisting === true };
         }
         if (name === "dcc_reconciliation_receipt")
@@ -622,9 +524,10 @@ module.exports = function mount(app, ctx, config = {}) {
                     ? { action: "correct" }
                     : {})
             },
-            identity
+            identity,
+            {transactionClient}
           );
-          ctx.broadcast?.(
+          (transactionClient ? null : ctx.broadcast)?.(
             "blocks-changed",
             {
               action: "conversation",
@@ -638,7 +541,7 @@ module.exports = function mount(app, ctx, config = {}) {
             },
             identity.workspaceId
           );
-          ctx.broadcastQueueChange?.(identity.userId, identity.workspaceId);
+          (transactionClient ? null : ctx.broadcastQueueChange)?.(identity.userId, identity.workspaceId);
           // A write grant does not imply permission to read unrelated queue rows,
           // private reports or audit snapshots, including on idempotent replay.
           if (!identity.scopes.includes("dcc.read"))
@@ -651,6 +554,171 @@ module.exports = function mount(app, ctx, config = {}) {
               duplicate: result.duplicate === true
             };
         }
+        return result;
+  }
+  function requiredWriteScopes(name,args,identity) {
+    const required = name==='dcc_correct_time' ? [identity.scopes.includes('dcc.time.write')?'dcc.time.write':'dcc.correct'] :
+      name==='dcc_organization' ? ['dcc.organization.read','dcc.organization.write','dcc.tasks.write'] : ['dcc.tasks.read','dcc.tasks.write'];
+    if(name==='dcc_bulk_cleanup' && identity.scopes.includes('dcc.repeats.write')) required.push('dcc.repeats.read','dcc.repeats.write');
+    if(required.some(x=>!identity.scopes.includes(x))) throw M.fail('Insufficient scope',403);
+    return required;
+  }
+  const owner = (req) => ({ userId: req.session?.userId, workspaceId: req.session?.workspaceId });
+  function csrf(req) {
+    if (
+      req.get("origin") !== oauth.baseUrl ||
+      !req.session?.conversationCsrf ||
+      req.body.csrf !== req.session.conversationCsrf
+    )
+      throw M.fail("Invalid consent request", 403);
+  }
+  const form = express.urlencoded({ extended: false, limit: "12kb" });
+  app.get(
+    "/.well-known/oauth-authorization-server",
+    route(async (_req, res) => res.json(oauth.discovery ? await oauth.discovery() : oauth.metadata))
+  );
+  for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp/dcc"])
+    app.get(
+      path,
+      route(async (_req, res) =>
+        res.json({
+          resource: oauth.resource,
+          authorization_servers: [oauth.issuer || oauth.baseUrl],
+          scopes_supported: SCOPES,
+          bearer_methods_supported: ["header"]
+        })
+      )
+    );
+  app.get(
+    "/oauth/dcc/authorize",
+    route(async (req, res) => {
+      if (oauth.provider === 'clerk') return res.status(410).json({error:'Reconnect using the official DCC OAuth connection.'});
+      const request = oauth.validateRequest(req.query);
+      if (!req.session?.userId) return res.redirect("/login?next=" + encodeURIComponent(req.originalUrl));
+      // Use the same signed-in workspace selected by DCC; no query/header identity.
+      if (!req.session.workspaceId) {
+        const r = await ctx.pool.query(
+          "SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND role='owner' ORDER BY workspace_id LIMIT 1",
+          [req.session.userId]
+        );
+        req.session.workspaceId = r.rows[0]?.workspace_id;
+      }
+      await oauth.list(owner(req));
+      req.session.conversationCsrf ||= crypto.randomBytes(24).toString("base64url");
+      req.session.conversationConsent = {
+        ...request,
+        userId: req.session.userId,
+        workspaceId: req.session.workspaceId,
+        expiresAt: Date.now() + 300000
+      };
+      const prefs = await oauth.preferences(owner(req));
+      // Existing legacy-only clients keep explicit legacy choices; modern clients
+      // begin with the user's preferences intersected with requested authority.
+      const granted = request.scopes.some(s => !permissions.legacy.includes(s))
+        ? prefs.filter(s => request.scopes.includes(s)) : request.scopes;
+      const callbackOrigin = new URL(request.redirectUri).origin;
+      res.set("Content-Security-Policy", `default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self' ${callbackOrigin}; frame-ancestors 'none'; base-uri 'none'`);
+      res.set('Referrer-Policy','same-origin');
+      res.type('html').send(integrationPage.consent({request,csrf:req.session.conversationCsrf,granted,account:req.session.username || 'DCC account',workspace:req.session.workspaceId}));
+    })
+  );
+  app.post(
+    "/oauth/dcc/authorize",
+    form,
+    route(async (req, res) => {
+      if (oauth.provider === 'clerk') return res.status(410).json({error:'Use Clerk consent.'});
+      csrf(req);
+      const request = req.session.conversationConsent;
+      if (
+        !request ||
+        request.expiresAt < Date.now() ||
+        request.userId !== req.session.userId ||
+        request.workspaceId !== req.session.workspaceId
+      )
+        throw M.fail("Consent expired or account changed", 409);
+      delete req.session.conversationConsent;
+      if (req.body.decision !== "allow") {
+        const u = new URL(request.redirectUri);
+        u.searchParams.set("error", "access_denied");
+        u.searchParams.set("state", request.state);
+        return res.redirect(u.href);
+      }
+      const chosen = permissions.selected(req.body, request.scopes);
+      if (!chosen.length) throw M.fail('Select at least one permission');
+      res.redirect(await oauth.consent({ ...request, scopes: chosen }, owner(req)));
+    })
+  );
+  app.post(
+    "/oauth/dcc/token",
+    form,
+    route(async (req, res) => {
+      if (oauth.provider === 'clerk') return res.status(410).json({error:'Legacy token issuance is retired.'});
+      res.json(await oauth.token(req.body || {}));
+    })
+  );
+  app.all(
+    "/mcp/dcc",
+    route(async (req, res) => {
+      if (req.get("origin") && req.get("origin") !== oauth.baseUrl) throw M.fail("Origin not allowed", 403);
+      let identity;
+      const raw = String(req.get("authorization") || "");
+      try {
+        identity = await oauth.verify(raw.startsWith("Bearer ") ? raw.slice(7) : "");
+      } catch (e) {
+        res.set(
+          "WWW-Authenticate",
+          `Bearer resource_metadata="${oauth.baseUrl}/.well-known/oauth-protected-resource/mcp/dcc"`
+        );
+        throw e;
+      }
+      if (!accountBudget(String(identity.userId))) return limited(res);
+      if (req.method !== "POST") return res.status(405).set("Allow", "POST").end();
+      const b = req.body;
+      if (!b || Array.isArray(b) || b.jsonrpc !== "2.0" || typeof b.method !== "string")
+        return res.status(400).json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid Request" } });
+      if (b.id === undefined) {
+        if (b.method === "notifications/initialized") return res.status(202).end();
+        return res.status(400).end();
+      }
+      const reply = (result) => res.json({ jsonrpc: "2.0", id: b.id, result });
+      if (b.method === "initialize")
+        return reply({
+          protocolVersion: ["2025-03-26", "2025-06-18", "2025-11-25"].includes(b.params?.protocolVersion)
+            ? b.params.protocolVersion
+            : "2025-03-26",
+          capabilities: { tools: { listChanged: false } },
+          serverInfo: { name: "dcc-account", version: "0.1.0" },
+          instructions:
+            "Resolve existing tasks before acting. Only explicit user start/pause/done/correction instructions authorize activity changes. Preserve unknown time and plan versus actual. For explicit completion use dcc_complete_task after reading the canonical task/version. For meaningful progress, summarize accomplishments and remaining scope with dcc_reconcile_task step_done, keeping the goal open. At existing morning/evening reviews call dcc_completion_review and offer its choices without inferring completion. Confirm reconciliation with dcc_reconciliation_receipt; only verified_saved means saved."
+        });
+      if (b.method === "ping") return reply({});
+      if (b.method === "tools/list")
+        return reply({
+          tools: tools
+            .filter((t) => (Array.isArray(scopeFor(t.name)) ? scopeFor(t.name) : [scopeFor(t.name)]).some(s => identity.scopes.includes(s)))
+            .map((t) => ({ ...t, securitySchemes: (Array.isArray(scopeFor(t.name)) ? scopeFor(t.name) : [scopeFor(t.name)]).filter(s=>identity.scopes.includes(s)).map(s=>({type:'oauth2',scopes:[s]})) }))
+        });
+      if (b.method !== "tools/call")
+        return res.json({ jsonrpc: "2.0", id: b.id, error: { code: -32601, message: "Method not found" } });
+      const name = b.params?.name,
+        args = b.params?.arguments || {};
+      if (!tools.some((t) => t.name === name))
+        return res.json({ jsonrpc: "2.0", id: b.id, error: { code: -32602, message: "Unknown tool" } });
+      try { identity = await oauth.verify(raw.slice(7), scopeFor(name)); }
+      catch(e) {
+        if(e.statusCode===403)res.set('WWW-Authenticate',`Bearer resource_metadata="${oauth.baseUrl}/.well-known/oauth-protected-resource/mcp/dcc", error="insufficient_scope", scope="${(Array.isArray(scopeFor(name))?scopeFor(name):[scopeFor(name)]).join(' ')}"`);
+        throw e;
+      }
+      try {
+        const alias=controlTools.aliases[name];
+        if (alias && Object.prototype.hasOwnProperty.call(args,'action')) throw M.fail('Unexpected action');
+        const operation=alias?.name || name;
+        const payload=alias ? {...args,action:alias.action} : args;
+        const result = approvalModule.highImpact(operation,payload)
+          ? await approvals.prepare(operation,payload,identity,requiredWriteScopes(operation,payload,identity))
+          : await runTool(operation,payload,identity);
+        const descriptor=tools.find(t=>t.name===name);
+        if(!descriptor.annotations.readOnlyHint) await ctx.pool.query('INSERT INTO mcp_action_log(id,user_id,workspace_id,connection_id,operation,outcome,affected_ids) VALUES($1,$2,$3,$4,$5,$6,$7)',[crypto.randomUUID(),identity.userId,identity.workspaceId,identity.grantId,name,result.saveStatus==='pending_approval'?'pending_approval':'succeeded',JSON.stringify([result.task?.id,result.taskId,result.id,result.projectId,result.definitionId,...(result.taskIds||[])].filter(Boolean))]);
         await oauth.verified(identity.grantId);
         reply({ content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, isError: false });
       } catch (e) {
@@ -664,7 +732,8 @@ module.exports = function mount(app, ctx, config = {}) {
               })
             }
           ],
-          isError: true
+          isError: true,
+          ...(e.statusCode===403 && /scope/i.test(e.message) ? {_meta:{'mcp/www_authenticate':[`Bearer resource_metadata="${oauth.baseUrl}/.well-known/oauth-protected-resource/mcp/dcc", error="insufficient_scope", scope="${(Array.isArray(scopeFor(name))?scopeFor(name):[scopeFor(name)]).join(' ')}"`]}} : {})
         });
       }
     })

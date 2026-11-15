@@ -346,21 +346,22 @@ function createProjectStore(deps = {}) {
   const cryptoImpl = deps.crypto || nodeCrypto;
   if (!pool || !blockDB) throw new Error("project-store requires pool and blockDB");
 
-  async function getOwnedBlock(id, workspaceId, client, includeDeleted = false) {
+  async function getOwnedBlock(id, workspaceId, client, includeDeleted = false, ownerUserId) {
     const q = client || pool;
     const { rows } = await q.query(
-      `SELECT * FROM blocks WHERE id=$1 AND workspace_id IS NOT DISTINCT FROM $2 ${includeDeleted ? "" : "AND deleted_at IS NULL"} LIMIT 1`,
-      [id, workspaceId || null]
+      `SELECT * FROM blocks WHERE id=$1 AND workspace_id IS NOT DISTINCT FROM $2 ${deps.mcpAccountScoped ? "AND user_id=$3" : ""} ${includeDeleted ? "" : "AND deleted_at IS NULL"} LIMIT 1`,
+      [id, workspaceId || null, ...(deps.mcpAccountScoped ? [ownerUserId] : [])]
     );
     return rows[0] ? blockDB.parseBlock(rows[0]) : null;
   }
 
-  async function listOrganization(workspaceId, client) {
+  async function listOrganization(workspaceId, client, ownerUserId) {
     const q = client || pool;
     const { rows } = await q.query(
       `SELECT * FROM blocks WHERE type='block' AND workspace_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL
+       ${deps.mcpAccountScoped ? 'AND user_id=$2' : ''}
        AND properties->>'kind' IN ('project','task_facet','task_view') ORDER BY sort_order ASC, created_at ASC`,
-      [workspaceId || null]
+      [workspaceId || null, ...(deps.mcpAccountScoped ? [ownerUserId] : [])]
     );
     const parsed = rows.map(blockDB.parseBlock);
     return {
@@ -452,7 +453,7 @@ function createProjectStore(deps = {}) {
   }
 
   async function patchProject(id, input, owner, client) {
-    const existing = await getOwnedBlock(id, owner.workspaceId, client);
+    const existing = await getOwnedBlock(id, owner.workspaceId, client, false, owner.userId);
     if (!existing || (existing.properties || {}).kind !== "project") throw clientError("Project not found", 404);
     const props = { ...existing.properties };
     if (input.name !== undefined) {
@@ -474,14 +475,14 @@ function createProjectStore(deps = {}) {
   async function createFacet(input, owner, client) {
     const props = normalizeFacet(input, null, cryptoImpl);
     if (props.projectId) {
-      const project = await getOwnedBlock(props.projectId, owner.workspaceId, client);
+      const project = await getOwnedBlock(props.projectId, owner.workspaceId, client, false, owner.userId);
       if (!project || (project.properties || {}).kind !== "project") throw clientError("Project not found", 404);
     }
     return createOrganizationBlock("task_facet", props, owner, client);
   }
 
   async function patchFacet(id, input, owner, client) {
-    const existing = await getOwnedBlock(id, owner.workspaceId, client);
+    const existing = await getOwnedBlock(id, owner.workspaceId, client, false, owner.userId);
     if (!existing || (existing.properties || {}).kind !== "task_facet") throw clientError("Category not found", 404);
     const props = normalizeFacet(input, existing.properties, cryptoImpl);
     props.updatedAt = new Date().toISOString();
@@ -493,7 +494,7 @@ function createProjectStore(deps = {}) {
   }
 
   async function patchView(id, input, owner, client) {
-    const existing = await getOwnedBlock(id, owner.workspaceId, client);
+    const existing = await getOwnedBlock(id, owner.workspaceId, client, false, owner.userId);
     if (!existing || (existing.properties || {}).kind !== "task_view") throw clientError("Saved view not found", 404);
     const props = normalizeView(input, existing.properties);
     props.updatedAt = new Date().toISOString();
@@ -501,7 +502,7 @@ function createProjectStore(deps = {}) {
   }
 
   async function deleteView(id, owner, client) {
-    const existing = await getOwnedBlock(id, owner.workspaceId, client);
+    const existing = await getOwnedBlock(id, owner.workspaceId, client, false, owner.userId);
     if (!existing || (existing.properties || {}).kind !== "task_view") throw clientError("Saved view not found", 404);
     return blockDB.deleteBlock(id, client);
   }
@@ -545,9 +546,9 @@ function createProjectStore(deps = {}) {
   }
 
   async function organizeTask(id, input, owner, client) {
-    const task = await getOwnedBlock(id, owner.workspaceId, client);
+    const task = await getOwnedBlock(id, owner.workspaceId, client, false, owner.userId);
     if (!task || !isLibraryTask(task, blockDB)) throw clientError("Task not found", 404);
-    const organization = await listOrganization(owner.workspaceId, client);
+    const organization = await listOrganization(owner.workspaceId, client, owner.userId);
     const projectId = input.projectId === undefined ? ((task.properties || {}).projectId || null) : (cleanText(input.projectId, 120) || null);
     if (projectId && !organization.projects.some(project => project.id === projectId && (project.properties || {}).status !== "archived")) {
       throw clientError("Project not found", 404);
@@ -592,7 +593,7 @@ function createProjectStore(deps = {}) {
     try {
       await client.query("BEGIN");
       for (let index = 0; index < unique.length; index++) {
-        const task = await getOwnedBlock(unique[index], owner.workspaceId, client);
+        const task = await getOwnedBlock(unique[index], owner.workspaceId, client, false, owner.userId);
         if (!task || !isLibraryTask(task, blockDB)) throw clientError("Task not found", 404);
         const props = { ...(task.properties || {}), projectOrder: (index + 1) * 1000, updatedAt: new Date().toISOString() };
         updated.push(await blockDB.updateBlock(task.id, { properties: props }, client));
@@ -617,8 +618,9 @@ function createProjectStore(deps = {}) {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`project-import:${owner.workspaceId}:${idempotencyKey}`]);
       const { rows: existingRows } = await client.query(
         `SELECT * FROM blocks WHERE workspace_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL
+         ${deps.mcpAccountScoped ? 'AND user_id=$3' : ''}
          AND properties->>'kind'='project' AND properties->>'sourceImportKey'=$2 LIMIT 1`,
-        [owner.workspaceId || null, idempotencyKey]
+        [owner.workspaceId || null, idempotencyKey, ...(deps.mcpAccountScoped ? [owner.userId] : [])]
       );
       if (existingRows[0]) {
         if (!transactionClient) await client.query("COMMIT");
@@ -630,7 +632,7 @@ function createProjectStore(deps = {}) {
         sourceImportKey: idempotencyKey,
         source: { type: "pasted_document", url: cleanText(manifest.project && manifest.project.sourceUrl, 1000) || null, importedAt: new Date().toISOString(), parser: manifest.parser || "reviewed" },
       }, owner, client);
-      const organization = await listOrganization(owner.workspaceId, client);
+      const organization = await listOrganization(owner.workspaceId, client, owner.userId);
       const facetMap = new Map();
       for (const facetInput of manifest.facets || []) {
         const normalizedName = cleanText(facetInput.name, 80).toLowerCase();

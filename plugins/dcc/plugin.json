@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "daily-command-center",
+  "version": "2.0.0",
+  "description": "Read and manage your own DCC tasks through an account-scoped OAuth connection."
+}

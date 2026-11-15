@@ -12,12 +12,9 @@ test("lenient: service identity beats session (ingest attribution)", () => {
   assert.equal(r.workspaceId, "ws-7");
 });
 
-test("lenient: session, then x-user-id header, then null; ws-1 default", () => {
-  assert.equal(resolveOwnerLenient({ session: { userId: 1 }, headers: {} }).userId, 1);
-  const h = resolveOwnerLenient({ headers: { "x-user-id": "3" } });
-  assert.equal(h.userId, 3);
-  assert.equal(h.workspaceId, "ws-1");
-  assert.equal(resolveOwnerLenient({ headers: {} }).userId, null);
+test("lenient refuses identity headers and unknown account",()=>{
+  assert.deepEqual(resolveOwnerLenient({session:{userId:1,workspaceId:'ws-1'},headers:{'x-user-id':'2'}}),{userId:1,workspaceId:'ws-1'});
+  assert.throws(()=>resolveOwnerLenient({headers:{'x-user-id':'3'}}),e=>e.statusCode===401);
 });
 
 test("strict: session beats service identity (interactive writes)", async () => {
@@ -29,14 +26,14 @@ test("strict: refuses to guess identity in production", async (t) => {
   const prev = process.env.NODE_ENV;
   process.env.NODE_ENV = "production";
   t.after(() => { process.env.NODE_ENV = prev; });
-  await assert.rejects(() => resolveOwnerStrict({ headers: {} }), (e) => e.status === 400);
+  await assert.rejects(() => resolveOwnerStrict({ headers: {} }), (e) => e.statusCode === 401);
 });
 
 test("strict: user-only service requests resolve the owned workspace using the exported pool",async(t)=>{
  const pool=require("./pg-pool");const previous=pool.query;const calls=[];
  pool.query=async(sql,args)=>{calls.push({sql,args});return {rows:[{workspace_id:"ws-owned"}]};};
  t.after(()=>{pool.query=previous;});
- const owner=await resolveOwnerStrict({headers:{"x-user-id":"1"}});
+ const owner=await resolveOwnerStrict({dccServiceAuth:{userId:1},headers:{"x-user-id":"2"}});
  assert.deepEqual(owner,{userId:1,workspaceId:"ws-owned"});
  assert.equal(calls.length,1);assert.deepEqual(calls[0].args,[1]);assert.match(calls[0].sql,/workspace_members WHERE user_id=\$1 AND role='owner'/);
 });

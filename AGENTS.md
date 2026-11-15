@@ -5,7 +5,8 @@
 This app runs in two places at once. Know which you're touching before any write.
 
 - **Local dev:** `http://localhost:8090` (local Postgres + legacy `data/blocks.db`).
-  `NODE_ENV` unset → localhost is trusted, so service endpoints work without a token.
+  Token-free service writes require explicit disposable-local mode; see
+  `docs/clerk-mcp-rollout.md`. A local HTTP peer alone is never trusted.
 - **Production:** `https://daily-command-center-production-1d04.up.railway.app` — live on
   Railway (migrated off Render 2026-06-26), Supabase Postgres, auto-deploys from `main`.
   `NODE_ENV=production` → localhost is NOT trusted, so programmatic writes require
@@ -20,14 +21,13 @@ Production Clerk auth runs on Railway. (The old Render custom-domain cutover doc
 removed 2026-06-26 once Clerk worked on Railway; if you ever need it, the prod-DB
 Google-login email pre-link note is in this file's git history.)
 
-Assistant task scheduling: `POST {BASE}/api/dcc/quick-task` with the bearer token —
-body `{ title, date, start, durationMinutes, priority, detail, tags }`. Don't hand-roll
-it — use one of the built tools:
-- CLI: `node scripts/dcc-schedule.js --title "..." [--date --start --duration --priority --tags]`
-  (env: `DCC_BASE_URL`, `DCC_PA_TOKEN`/`SECRET_PA_TOKEN`; `--dry-run` to preview).
-- MCP: `mcp/dcc-mcp/server.js` → `schedule_task` tool (see `mcp/dcc-mcp/README.md`).
-
-Prereq: `SECRET_PA_TOKEN` set on the Railway service + same value in the caller's env.
+Account assistants use the remote `/mcp/dcc` OAuth connection packaged in
+`plugins/dcc/`. Never provision PA/admin tokens or database credentials to this
+connection. Owner repository/database access belongs in an explicitly selected
+operator environment. Service automation requires account-bound, action-limited
+credentials; see `docs/clerk-mcp-rollout.md` for migration and configuration.
+The legacy stdio scheduler is operator-only and disabled unless
+`DCC_OPERATOR_MCP=1`. Do not use it for normal assistant access.
 
 ## Git Worktrees
 

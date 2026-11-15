@@ -1,3 +1,5 @@
+> Operator-only legacy helper, disabled unless DCC_OPERATOR_MCP=1. Normal assistant access must use plugins/dcc and account OAuth; see docs/clerk-mcp-rollout.md.
+
 # dcc-mcp — schedule into the Daily Command Center as a native Claude tool
 
 A zero-dependency MCP server (stdio, Node 18+). Exposes one tool, `schedule_task`,

@@ -156,6 +156,7 @@ function createConversationStore(ctx) {
       await q.query("BEGIN READ ONLY");
       await authorize(q, owner);
       await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["dcc-foreground:" + owner.userId]);
+      await ctx.authorizeMcp?.(owner,q);
       // Ordinary block writes can commit without the foreground lock. Only
       // certify a payload when the dependency reads agree on both sides.
       const version = await Read.fingerprint(q, owner);
@@ -471,6 +472,7 @@ function createConversationStore(ctx) {
       await authorize(q, owner);
       // One account-wide lock, before all task row locks, across every client/workspace.
       await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["dcc-foreground:" + owner.userId]);
+      await ctx.authorizeMcp?.(owner,q);
       const prior = await q.query("SELECT * FROM conversation_events WHERE user_id=$1 AND source_event_id=$2", [
         owner.userId,
         b.sourceEventId

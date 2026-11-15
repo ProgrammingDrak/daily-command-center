@@ -23,39 +23,21 @@
 
 const pool = require("../pg-pool");
 
-function headerOwner(req) {
-  return Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 0) || null;
-}
-
-function headerWorkspace(req) {
-  return req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || null;
-}
-
 function resolveOwnerLenient(req) {
-  const userId = req.dccServiceAuth?.userId || req.session?.userId || headerOwner(req);
-  const workspaceId = req.dccServiceAuth?.workspaceId || req.workspaceId
-    || headerWorkspace(req) || "ws-1";
+  const userId = req.dccServiceAuth?.userId || req.session?.userId;
+  const workspaceId = req.dccServiceAuth?.workspaceId || req.workspaceId || req.session?.workspaceId;
+  if (!userId || !workspaceId) throw Object.assign(new Error("Authenticated account and workspace required"),{statusCode:401});
   return { userId, workspaceId };
 }
 
 async function resolveOwnerStrict(req) {
-  let userId = req.session?.userId || req.dccServiceAuth?.userId || headerOwner(req);
-  let workspaceId = req.workspaceId || req.dccServiceAuth?.workspaceId || headerWorkspace(req);
-  if (!userId) {
-    if (process.env.NODE_ENV === "production") {
-      const err = new Error("owner required: supply an x-user-id header or set DCC_SERVICE_USER_ID");
-      err.status = 400;
-      throw err;
-    }
-    const { rows } = await pool.query(
-      "SELECT user_id FROM workspace_members WHERE role='owner'" + (workspaceId ? " AND workspace_id=$1" : "") + " ORDER BY user_id LIMIT 1",
-      workspaceId ? [workspaceId] : []
-    );
-    userId = rows[0] ? rows[0].user_id : 1;
-  }
+  let userId = req.session?.userId || req.dccServiceAuth?.userId;
+  let workspaceId = req.dccServiceAuth?.workspaceId || req.workspaceId || req.session?.workspaceId;
+  if (!userId) throw Object.assign(new Error('Authenticated account required'),{statusCode:401});
   if (!workspaceId) {
-    const { rows } = await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND role='owner' LIMIT 1", [userId]);
-    workspaceId = rows[0] ? rows[0].workspace_id : `ws-${userId}`;
+    const { rows } = await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND role='owner' ", [userId]);
+    if(rows.length!==1)throw Object.assign(new Error('Select a workspace'),{statusCode:409});
+    workspaceId=rows[0].workspace_id;
   }
   return { userId, workspaceId };
 }

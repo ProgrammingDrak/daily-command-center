@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "dcc": {
+      "type": "streamable-http",
+      "url": "https://daily-command-center-production-1d04.up.railway.app/mcp/dcc",
+      "extensions": {
+        "com.openai": {
+          "auth": {
+            "type": "oauth",
+            "client": { "mode": "cimd" },
+            "baseScopes": ["dcc.tasks.read", "dcc.tasks.write", "offline_access"]
+          }
+        }
+      }
+    }
+  }
+}
