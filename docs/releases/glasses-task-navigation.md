@@ -5,6 +5,15 @@ The canonical `/glasses` and `/glasses.html` bookmarks still redirect to
 `public/js/device-views/glasses.js` adapter and stylesheet. The standalone
 prototype has been removed.
 
+Glasses launches now receive a glasses loading shell from the authenticated
+`/` or `/index.html` route before the desktop markup or shared scripts load.
+Critical startup styles hide the desktop until the adapter mounts; a slow or
+failed script leaves the glasses loading screen with Reload and Full app links.
+The adapter replaces that shell directly with task navigation. Normal desktop
+responses are unchanged. This fixes the desktop flash, but still loads the
+canonical document and task runtime behind the shell; it is not a standalone
+glasses bundle or a reduction in downloaded desktop code.
+
 ## Interface
 
 Jump and Select show up to eleven open task rows, keeping a full viewport near

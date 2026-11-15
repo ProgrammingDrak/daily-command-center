@@ -22,7 +22,25 @@ const level = async expected => assert.equal(await page.locator('#glasses-app').
 let writes = 0;
 page.on('request', r => { if (r.method() !== 'GET' && /\/api\/(working-queue|tasks\/.*\/completion)/.test(r.url())) writes++; });
 try {
-  await page.goto(base + '/?tab=schedule&device=glasses');
+  // Hold the task runtime indefinitely: glasses must paint before any of it can
+  // execute, and desktop controls must never become the loading screen.
+  let releaseRuntime;
+  const runtimeGate = new Promise(resolve => { releaseRuntime = resolve; });
+  const holdRuntime = async route => { await runtimeGate; await route.continue(); };
+  await page.route('**/public/js/core.js?*', holdRuntime);
+  try {
+    await page.goto(base + '/?tab=schedule&device=glasses', { waitUntil: 'commit' });
+    await page.locator('#glasses-startup').waitFor({ state: 'visible' });
+    assert.equal(await page.evaluate(() => typeof window.DCCGlasses), 'undefined');
+    assert.equal(await page.locator('#glasses-startup [role="status"]').innerText(), 'Loading your tasks…');
+    assert.equal(await page.locator('#glasses-startup').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(13, 23, 34)');
+    assert.equal(await page.evaluate(() => [...document.body.children].filter(el => !['SCRIPT', 'STYLE', 'LINK'].includes(el.tagName) && el.id !== 'glasses-startup').every(el => getComputedStyle(el).display === 'none')), true);
+  } finally { releaseRuntime(); }
+  await page.waitForSelector('.glasses-task-row');
+  assert.equal(await page.locator('#glasses-startup').count(), 0);
+  assert.equal(await page.evaluate(() => document.documentElement.classList.contains('glasses-starting')), false);
+  await page.unroute('**/public/js/core.js?*', holdRuntime);
+  check('glasses paints before the task runtime loads, hides desktop throughout startup and hands off to task navigation');
   await page.waitForSelector('.glasses-task-row');
   await level('jump');
   assert.equal(await page.locator('.glasses-task-row').count(), 11);
@@ -36,20 +54,30 @@ try {
   const parentIndex = ids.indexOf('review-detail-task');
   assert.deepEqual(ids.slice(parentIndex, parentIndex + 3), ['review-detail-task', 'review-detail-step', 'glasses-review-nested']);
   const taskRow = id => page.locator('.glasses-task-row[data-task-id="' + id + '"]');
-  const titleX = async id => (await taskRow(id).locator('.glasses-title').boundingBox()).x;
   for (const width of [600, 320]) {
     await page.setViewportSize({ width, height: 600 });
-    assert.ok(await titleX('review-detail-task') < await titleX('review-detail-step'));
-    assert.ok(await titleX('review-detail-step') < await titleX('glasses-review-nested'));
+    // Read the whole hierarchy in one browser turn; polling refreshes replace
+    // rows and can detach elements between separate boundingBox calls.
+    await page.waitForFunction(() => {
+      const ids = ['review-detail-task', 'review-detail-step', 'glasses-review-nested'];
+      const rows = ids.map(id => document.querySelector('.glasses-task-row[data-task-id="' + id + '"] .glasses-title'));
+      if (rows.some(row => !row)) return false;
+      const x = rows.map(row => row.getBoundingClientRect().x);
+      return x[0] < x[1] && x[1] < x[2];
+    });
   }
   await page.setViewportSize({ width: 600, height: 600 });
   assert.equal(await taskRow('review-detail-step').getAttribute('data-relation'), 'subtask');
   assert.equal(await taskRow('glasses-review-nested').getAttribute('data-relation'), 'ride-along');
   assert.match(await taskRow('glasses-review-nested').getAttribute('aria-label'), /Nested task/);
-  const typeColor = id => taskRow(id).locator('.glasses-type').evaluate(el => getComputedStyle(el).color);
-  assert.notEqual(await typeColor('review-detail-step'), await typeColor('glasses-review-nested'));
-  assert.equal(await typeColor('review-workout'), 'rgb(56, 189, 248)');
-  assert.equal(await typeColor('review-meeting'), 'rgb(249, 115, 22)');
+  await page.waitForFunction(() => {
+    const color = id => {
+      const node = document.querySelector('.glasses-task-row[data-task-id="' + id + '"] .glasses-type');
+      return node && getComputedStyle(node).color;
+    };
+    return color('review-detail-step') && color('review-detail-step') !== color('glasses-review-nested')
+      && color('review-workout') === 'rgb(56, 189, 248)' && color('review-meeting') === 'rgb(249, 115, 22)';
+  });
   check('All Tasks keeps the canonical open-task count, indents each level and displays DCC type colors');
   await page.keyboard.press('ArrowDown');
   assert.equal(await selected(), ids[5]);
