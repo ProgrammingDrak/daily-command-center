@@ -116,6 +116,11 @@
       ...(p._taskNotes ? {_taskNotes:JSON.parse(JSON.stringify(p._taskNotes))} : {}),
       ...(Array.isArray(p.sourceReferences) ? {sourceReferences: p.sourceReferences.map(ref => Object.assign({}, ref))} : {}),
       source_id: p.source_id || "", notes: p.notes || "", untimed: untimed,
+      ...(p.taskLocation ? {taskLocation: p.taskLocation} : {}),
+      ...(p.taskCosts ? {taskCosts: p.taskCosts} : {}),
+      ...(p.commuteEndpoints ? {commuteEndpoints: p.commuteEndpoints} : {}),
+      ...(Array.isArray(p.incomingCommute) ? {incomingCommute: p.incomingCommute} : {}),
+      ...(Array.isArray(p.arrivalLinks) ? {arrivalLinks: p.arrivalLinks} : {}),
       ...Object.fromEntries(["completionOutcome","remainingWork","originalGoal","goalId","goalComplete","iteration","nextStepId","previousStepId","completionTimeKnown"].filter(key=>Object.hasOwn(p,key)).map(key=>[key,p[key]])),
       guidedDefinitionId: p.guidedDefinitionId || null,
       status: p.status || "open",
@@ -126,6 +131,7 @@
       sourceLabel: sourceLabel,
       startedAt: p.startedAt || null,
       completedAt: p.completedAt || null,
+      ...(p._completionRevision ? { completionRevision: p._completionRevision } : {}),
       actualMinutes: p.actualMinutes == null ? null : Number(p.actualMinutes),
       actualMinutesFrom: p.actualMinutesFrom || null,
       actualTimeUnknown: p.actualTimeUnknown === true,
@@ -333,7 +339,7 @@
     // This dateless definition belongs only to the Anytime surface.
     "anytime_item"
   ];
-  const NON_TASK_TYPES = ["day_root", "time_entry"];
+  const NON_TASK_TYPES = ["day_root", "time_entry", "wishlist_attachment"];
   function isTaskRow(block) {
     block = block || {};
     if (NON_TASK_TYPES.indexOf(block.type) !== -1) return false;
@@ -460,6 +466,7 @@
       // included), but the code it replaces handled it explicitly, so narrowing it
       // silently is how a latent path becomes a bug report.
       if (!foldsIntoItinerary(b) && p.kind !== "backlog") continue;
+      if (!b.date && p.someday === true) continue;
       // Closed work is not unscheduled work. `done` is in this list where the fold
       // admits it, because the fold seeds a done registry from the row and this
       // selector feeds a to-do list. A dateless done row has no day to be done ON,

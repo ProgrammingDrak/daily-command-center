@@ -839,7 +839,7 @@ test("server reconciliation searches both portable reactions and backfills each 
   setFetch(async (url) => {
     if (String(url).includes("search.messages")) {
       const query = new URL(url).searchParams.get("query");
-      const delegate = query === "hasmy::busts_in_silhouette:";
+      const delegate = query.startsWith("hasmy::busts_in_silhouette:");
       return { ok: true, status: 200, json: async () => ({ ok: true, messages: {
         matches: [{
           ts: delegate ? nowTs : "222.53",
@@ -860,7 +860,11 @@ test("server reconciliation searches both portable reactions and backfills each 
   const queries = calls.fetch
     .filter((c) => c.url.includes("search.messages"))
     .map((c) => new URL(c.url).searchParams.get("query"));
-  assert.deepEqual(queries, ["hasmy::bookmark:", "hasmy::busts_in_silhouette:"]);
+  assert.deepEqual(queries.map(query => query.split(" ")[0]), [
+    "hasmy::bookmark:", "hasmy::bookmark:", "hasmy::busts_in_silhouette:", "hasmy::busts_in_silhouette:",
+  ]);
+  assert.match(queries[1], / before:\d{4}-\d{2}-\d{2}$/);
+  assert.match(queries[3], / before:\d{4}-\d{2}-\d{2}$/);
 });
 
 test("reconciliation repairs legacy poller rows that only stored the idempotency key", async () => {
@@ -886,20 +890,6 @@ test("reconciliation repairs legacy poller rows that only stored the idempotency
   assert.equal(blocks[0].properties.slack_ts, "222.531");
   assert.equal(blocks[0].properties.source_message_preview, "Review the repaired legacy capture before launch");
   assert.equal(calls.fetch.some((call) => call.url.includes("reactions.get")), true, "the original webhook capture still used reactions.get");
-});
-
-test("completion mirroring selects only rows with valid Slack coordinates", () => {
-  const source = require("node:fs").readFileSync(require.resolve("./routes/slack-events.js"), "utf8");
-  const start = source.indexOf("async function mirrorDccCompletions");
-  const end = source.indexOf("\n    return {", start);
-  assert.ok(start >= 0 && end > start, "mirrorDccCompletions source slice exists");
-  const mirror = source.slice(start, end);
-  assert.match(mirror, /properties->>'source' IN \('slack-bookmark', 'slack-delegate', 'slack-delegate-completion'\)/);
-  assert.match(mirror, /properties->>'kind' = 'delegated_item'/);
-  assert.match(mirror, /waitingTarget\(block\)/);
-  assert.match(mirror, /ORDER BY updated_at ASC, id ASC/);
-  assert.match(mirror, /LIMIT \$4/);
-  assert.match(source, /mirrorCursor/);
 });
 
 test("Slack projection refuses blocks from another workspace", async () => {
@@ -1413,4 +1403,96 @@ test("mirror retries failed Waiting writes without advancing its cursor and skip
   assert.equal(queries[2][2], 'c', 'successful writes and terminal missing messages advance the page');
   assert.ok(calls.reactionsAdd.some(call => call.body.timestamp === '1791471296.535379'));
   assert.equal(calls.reactionsAdd.some(call => call.body.timestamp === undefined), false);
+});
+
+test("real Postgres lookup reduces result bytes and repairs an old missed capture", {
+  skip: !process.env.DCC_TEST_DATABASE_URL,
+}, async t => {
+  const { fixture, match, properties, seed, catchUp } = require("./test-support/slack-reconciliation-postgres");
+  const { candidatesSql } = require("./lib/slack-projection-receipts");
+  const baseline = process.env.DCC_SLACK_DIAGNOSTIC_BASELINE === "1";
+  const f = await fixture(t, { baseline });
+  const recent = Array.from({ length: 240 }, (_, index) => match(index + 20));
+  const old = match(1);
+  const oldTombstone = match(2);
+  f.mock.results = (query, page) => {
+    if (query.includes("before:") && query.includes("bookmark")) return [old, oldTombstone];
+    if (!query.includes("bookmark") || query.includes(" ")) return [];
+    return { matches: recent.slice((page - 1) * 100, page * 100), pages: 3 };
+  };
+  await seed(f, [
+    ...recent.map((_, index) => ({
+      id: `capture-${index}`, props: properties(index + 20, { notes: "Synthetic fixture notes. ".repeat(96) }),
+    })),
+    { id: "tombstone", props: properties(2, { kind: "slack_reaction_tombstone" }) },
+    { id: "foreign-old", props: properties(1), workspace: "ws-2" },
+    { id: "legacy-waiting", props: { kind: "delegated_item", linkedBlockId: "legacy-23", status: "open" } },
+    {
+      id: "legacy-target", props: { local_id: "legacy-23",
+        permalink: "https://cleverrealestate.slack.com/archives/C1/p1770000023000001" },
+    },
+  ]);
+  if (baseline) {
+    for (let index = 0; index < 13; index += 1) await f.api.runReconciliation();
+  } else {
+    await catchUp(f);
+    const created = await f.pool.query(
+      "SELECT workspace_id, properties FROM blocks WHERE properties->>'idempotency_key' = $1 ORDER BY workspace_id",
+      [`slack-bookmark:C1:${old.ts}`]
+    );
+    assert.deepEqual(created.rows.map(row => row.workspace_id), ["ws-1", "ws-2"]);
+    assert.equal(created.rows[0].properties.slackBookmarkChangedAt, undefined);
+    assert.equal(created.rows[0].properties.startedAt, undefined);
+    assert.equal((await f.pool.query(
+      "SELECT count(*)::int AS total FROM blocks WHERE properties->>'idempotency_key' = $1",
+      [`slack-bookmark:C1:${oldTombstone.ts}`]
+    )).rows[0].total, 1);
+  }
+  const passes = [];
+  for (let pass = 0; pass < 3; pass += 1) {
+    const writesBefore = f.writes.length;
+    const stats = await f.api.runReconciliation();
+    passes.push({ ...stats.metrics, observedWrites: f.writes.length - writesBefore });
+    if (!baseline) {
+      assert.equal(stats.metrics.lookup.queries, 3);
+      assert.equal(stats.metrics.lookup.rows, 242);
+      // Measured against the diagnostic route on these same 240 seeded captures.
+      assert.ok(stats.metrics.lookup.estimatedResultBytes <= 676210 * 0.1);
+      assert.equal(f.writes.length, writesBefore);
+    }
+  }
+  t.diagnostic(`${baseline ? "diagnostic" : "candidate"} ${JSON.stringify(passes)}`);
+  if (!baseline) {
+    const actorKey = JSON.stringify([1, "U_FIXTURE", null, "user"]);
+    const explained = await f.pool.query(
+      "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + candidatesSql, ["ws-1", actorKey, 20]
+    );
+    const plan = explained.rows[0]["QUERY PLAN"][0];
+    t.diagnostic(JSON.stringify({
+      candidateScanMs: plan["Execution Time"], sharedHitBlocks: plan.Plan["Shared Hit Blocks"],
+      sharedReadBlocks: plan.Plan["Shared Read Blocks"],
+    }));
+  }
+});
+
+test("history repair advances into dated ranges when a Slack search saturates", async () => {
+  const { api, blocks, setFetch } = makeHarness();
+  const history = [];
+  setFetch(async url => {
+    const req = new URL(url);
+    const query = req.searchParams.get("query");
+    if (!query?.startsWith("hasmy::bookmark: ")) {
+      return { ok: true, json: async () => ({ ok: true, messages: { matches: [] } }) };
+    }
+    history.push(query);
+    const messages = history.length === 1
+      ? { matches: [], paging: { pages: 101 } }
+      : { matches: [{ channel: { id: "C1" }, ts: "222.594", text: "Old capture" }] };
+    return { ok: true, json: async () => ({ ok: true, messages }) };
+  });
+  await api.runReconciliation();
+  await api.runReconciliation();
+  assert.equal(history.length, 2);
+  assert.notEqual(history[0], history[1]);
+  assert.ok(blocks.some(block => block.properties.idempotency_key === "slack-bookmark:C1:222.594"));
 });

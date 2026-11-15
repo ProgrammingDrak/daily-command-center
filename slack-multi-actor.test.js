@@ -475,7 +475,7 @@ test("a user-tier actor that DOES hold search:read still sweeps", async () => {
     identities: [{ slackUserId: "U_WIDE", userId: 5, workspaceId: "ws-5", linkedVia: "oauth", userTokenEnc: sealed }],
   });
   await h.api.runReconciliation();
-  assert.deepEqual(h.calls.searches.map(c => c.query), ["hasmy::bookmark:", "hasmy::busts_in_silhouette:"],
+  assert.deepEqual(h.calls.searches.map(c => c.query.split(" ")[0]), ["hasmy::bookmark:", "hasmy::bookmark:", "hasmy::busts_in_silhouette:", "hasmy::busts_in_silhouette:"],
     "the gate must not have become a blanket refusal");
   // And it searched as THEM, on the token from their own grant.
   assert.ok(h.calls.searches.every(c => c.auth === "Bearer xoxp-wide"));
@@ -501,8 +501,8 @@ test("reconciliation sweeps a user-tier actor and skips the bot-tier one in the 
   });
   await h.api.runReconciliation();
   assert.deepEqual(
-    h.calls.searches.map(s => s.query),
-    ["hasmy::bookmark:", "hasmy::busts_in_silhouette:"],
+    h.calls.searches.map(s => s.query.split(" ")[0]),
+    ["hasmy::bookmark:", "hasmy::bookmark:", "hasmy::busts_in_silhouette:", "hasmy::busts_in_silhouette:"],
     "exactly one actor can run the sweep"
   );
   assert.deepEqual([...new Set(h.calls.searches.map(s => s.auth))], ["Bearer xoxp-env"]);
@@ -765,4 +765,59 @@ test("an already-linked identity is dropped when the event team is not its own",
   await post(h.handler, envelope(reaction("bookmark", "U_NORA", "team.y"), TEAM));
   assert.equal(h.blocks.length, 1);
   assert.equal(h.blocks[0].workspace_id, "ws-4");
+});
+
+test("real Postgres resolves Waiting aliases within their workspace and preserves own-target precedence", {
+  skip: !process.env.DCC_TEST_DATABASE_URL,
+}, async t => {
+  const { fixture, properties, seed, catchUp, stamp } = require("./test-support/slack-reconciliation-postgres");
+  const f = await fixture(t);
+  await seed(f, [
+    { id: "task", props: properties(1, { local_id: "alias", slackWaitingManaged: true }) },
+    { id: "foreign-task", workspace: "ws-2", props: properties(1, { local_id: "alias", slackWaitingManaged: true }) },
+    { id: "linked", props: { kind: "delegated_item", linkedBlockId: "alias", status: "open" } },
+    { id: "own", props: { kind: "delegated_item", linkedBlockId: "alias", status: "open", slack_channel: "C2", slack_ts: stamp(2) } },
+    {
+      id: "deleted-own", deleted: "2026-01-01T00:01:00Z",
+      props: { kind: "delegated_item", status: "open", slack_channel: "C2", slack_ts: stamp(2) },
+    },
+  ]);
+  await catchUp(f);
+  const delegateWrites = workspaceToken => f.writes.filter(
+    call => call.auth === workspaceToken && call.name === "busts_in_silhouette"
+  );
+  assert.ok(delegateWrites("Bearer xoxp-fixture").some(call => call.channel === "C1" && call.method === "reactions.add"));
+  assert.ok(delegateWrites("Bearer xoxp-fixture").some(call => call.channel === "C2" && call.method === "reactions.add"));
+  assert.deepEqual(delegateWrites("Bearer xoxb-fixture").map(call => call.method), ["reactions.remove"]);
+
+  const before = f.writes.length;
+  await f.pool.query("UPDATE blocks SET deleted_at = NOW() WHERE id = 'linked'");
+  await catchUp(f);
+  assert.ok(f.writes.slice(before).some(call =>
+    call.auth === "Bearer xoxp-fixture" && call.timestamp === stamp(1) &&
+    call.name === "busts_in_silhouette" && call.method === "reactions.remove"
+  ));
+  assert.equal(f.writes.slice(before).some(call => call.auth === "Bearer xoxb-fixture"), false);
+});
+
+test("real Postgres target lookups exclude unrelated Waiting rows", {
+  skip: !process.env.DCC_TEST_DATABASE_URL,
+}, async t => {
+  const { fixture, properties, seed, stamp } = require("./test-support/slack-reconciliation-postgres");
+  const f = await fixture(t);
+  await seed(f, [
+    { id: "a-target", props: properties(0, { slackWaitingManaged: true }) },
+    ...Array.from({ length: 120 }, (_, index) => ({
+      id: `waiting-${index}`,
+      props: {
+        kind: "delegated_item", status: "open", slack_channel: "C2", slack_ts: stamp(index),
+        notes: "Synthetic unrelated content ".repeat(100),
+      },
+    })),
+  ]);
+  const stats = await f.api.runReconciliation();
+  assert.equal(stats.mirrored, 20);
+  assert.equal(stats.metrics.waiting.queries, 20);
+  assert.equal(stats.metrics.waiting.rows, 19, "each Waiting row matches only its own target");
+  assert.ok(stats.metrics.waiting.estimatedResultBytes < 10000);
 });

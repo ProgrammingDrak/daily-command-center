@@ -1,5 +1,6 @@
 "use strict";
 
+const { performance } = require("node:perf_hooks");
 const syncStore = require("../sync-store");
 const { compactState } = require("../state-projection");
 const triageSuppressions = require("../triage-suppressions");
@@ -15,10 +16,18 @@ module.exports = function mountSyncRoutes(app, ctx) {
     try {
       const date = req.query.date || getTodayStr();
       if (!isValidDate(date)) return res.status(400).json({ error: "Invalid date" });
+      const started = performance.now();
       const { userId, workspaceId } = await resolveOwnerStrict(req);
+      const authorized = performance.now();
       await ctx.prepareScheduledDay(date, userId, workspaceId);
+      const prepared = performance.now();
       const snapshot = await syncStore.bootstrap({ workspaceId, date });
+      const read = performance.now();
       snapshot.dayState = await buildDayResponse(date, userId, workspaceId);
+      res.setHeader?.("Server-Timing", [
+        ["owner", authorized - started], ["recurrence", prepared - authorized],
+        ["snapshot", read - prepared], ["projection", performance.now() - read],
+      ].map(([name, ms]) => name + ";dur=" + ms.toFixed(1)).join(", "));
       res.json(snapshot);
     } catch (error) { next(error); }
   });

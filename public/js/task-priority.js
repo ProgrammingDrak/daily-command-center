@@ -4,15 +4,16 @@
   if(typeof module==='object'&&module.exports)module.exports=api;
   if(root){root.DCC=root.DCC||{};root.DCC.TaskPriority=api;}
 })(typeof self!=='undefined'?self:this,function(){
+  const levels=['Very low','Low','Medium','High','Very high'];
   function normalize(value){
     const key=typeof value==='string'?value.trim().toLowerCase():'';
-    return key==='low'?'Low':key==='high'?'High':'Medium';
+    return levels.find(level=>level.toLowerCase()===key)||'Medium';
   }
   function read(task){return normalize(task&&task.taskPriority);}
   // Stable partition: never sort or write the caller's task array. Dedupe IDs
   // because the day model can expose a task through more than one relationship.
   function group(tasks){
-    const groups=['High','Medium','Low'].map(priority=>({priority,tasks:[]}));
+    const groups=[...levels].reverse().map(priority=>({priority,tasks:[]}));
     const byPriority=new Map(groups.map(group=>[group.priority,group])),seen=new Set();
     (tasks||[]).forEach(task=>{
       if(!task||seen.has(task.id))return;
@@ -20,5 +21,5 @@
     });
     return groups;
   }
-  return {normalize,read,group};
+  return {levels,normalize,read,group};
 });

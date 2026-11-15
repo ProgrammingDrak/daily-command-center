@@ -12,6 +12,7 @@ import seedTaskDetailReview from "./task-detail-review-fixtures.cjs";
 import seedGlassesDeviceReview from "./glasses-device-review-fixtures.cjs";
 import seedHierarchyReview from "./hierarchy-review-fixtures.cjs";
 import hierarchy from "../lib/task-hierarchy.js";
+import TaskCosts from "../public/js/task-costs.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -20,6 +21,8 @@ const app = express();
 app.use(express.json());
 const { default: glassesLaunch } = await import("../lib/glasses-launch.js");
 app.get(["/glasses", "/glasses.html"], glassesLaunch);
+const { default: glassesShell } = await import("../lib/glasses-shell.js");
+app.get(["/", "/index.html"], glassesShell(root));
 if (process.env.DCC_REVIEW_COMMITMENTS === "1") {
   const { default: mountCommitmentReview } = await import("./commitment-review-backend.js");
   await mountCommitmentReview(app);
@@ -78,6 +81,10 @@ function liveReviewBlocks() {
   return [...reviewBlocks.values()].filter((block) => !block.deleted_at);
 }
 if (process.env.DCC_REVIEW_GLASSES_DEVICE === '1') {
+  app.get('/public/js/app-config.js', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.type('js').send('window.DCC_ACCOUNT_CONTEXT={userId:1,workspaceId:"ws-1"};');
+  });
   seedGlassesDeviceReview(reviewBlocks, localDateKey(new Date()));
   app.post('/api/review/glasses-device/reset', (_req,res) => {
     reviewBlocks.clear(); seedGlassesDeviceReview(reviewBlocks,localDateKey(new Date())); res.json({ok:true});
@@ -201,18 +208,16 @@ app.get("/api/blocks", (req, res) => {
   }
   res.json(blocks);
 });
-// Synthetic Actual-time fixture for verify-task-workspace-actual.mjs only. The
-// Calendar reads a week through /api/blocks/range; the seed writes in-memory
-// tasks and time entries covering every evidence class. No live data.
-if (process.env.DCC_REVIEW_ACTUAL === "1") {
-  // Synthetic client config, the same shape server.js sends: the fixed review
-  // account (user 1, ws-1) and the app zone. No credentials, no session lookup.
-  // Registered only here, so other review modes keep their own config.
+// Enable owner-scoped controls with a fixed review account and an in-memory store.
+if (process.env.DCC_REVIEW_ACTUAL === "1" || process.env.DCC_REVIEW_TASK_DETAILS === "1") {
   app.get("/public/js/app-config.js", (_req, res) => {
     res.type("application/javascript");
     res.setHeader("Cache-Control", "no-store");
     res.send('window.DCC_APP_TIME_ZONE="America/New_York";window.DCC_DELTA_SYNC_ENABLED=false;window.DCC_ACCOUNT_CONTEXT={"userId":1,"workspaceId":"ws-1"};');
   });
+}
+// Synthetic Actual-time fixture for verify-task-workspace-actual.mjs only.
+if (process.env.DCC_REVIEW_ACTUAL === "1") {
   app.get("/api/blocks/range", (req, res) => {
     const start = String(req.query.start || ""), end = String(req.query.end || "");
     res.json(liveReviewBlocks().filter((block) => block.date && block.date >= start && block.date <= end));
@@ -259,11 +264,11 @@ if (process.env.DCC_REVIEW_ACTUAL === "1") {
     res.json({ ok: true, today, yesterday });
   });
 }
-// Synthetic transaction boundary for the subtree Undo browser verifier only.
-if(process.env.DCC_REVIEW_HIERARCHY==='1'){
+// Synthetic transaction boundary for the hierarchy and Glasses Undo verifiers.
+if(process.env.DCC_REVIEW_HIERARCHY==='1'||process.env.DCC_REVIEW_GLASSES_DEVICE==='1'){
  let failureStatus=0;
  const deleteReceipts=new Set();
- app.post('/api/review/hierarchy/restore-failure',(req,res)=>{failureStatus=Number(req.body.status)||0;res.json({ok:true});});
+ if(process.env.DCC_REVIEW_HIERARCHY==='1')app.post('/api/review/hierarchy/restore-failure',(req,res)=>{failureStatus=Number(req.body.status)||0;res.json({ok:true});});
  app.post('/api/blocks/batch',(req,res)=>{
   const ops=req.body.operations||[],next=new Map([...reviewBlocks].map(([id,row])=>[id,structuredClone(row)])),blocks=[],restoredDayRoots=[];
   for(const op of ops){
@@ -376,6 +381,15 @@ app.get('/api/blocks/:id', (req,res) => {
 app.patch("/api/blocks/:id", (req, res) => {
   const block = reviewBlocks.get(req.params.id);
   if (!block || block.deleted_at) return res.status(404).json({ error: "Block not found" });
+  if (Object.hasOwn(req.body || {}, "taskCostsChange")) {
+    try {
+      const taskCosts = TaskCosts.applyChange(block.properties.taskCosts, req.body.taskCostsChange);
+      if (taskCosts === undefined) return res.json(block);
+      const saved = { ...block, properties: { ...block.properties, taskCosts }, updated_at: new Date().toISOString() };
+      reviewBlocks.set(saved.id, saved);
+      return res.json(saved);
+    } catch (error) { return res.status(error.statusCode || 400).json({error:error.message,code:error.publicCode}); }
+  }
   const next = {
     ...block,
     ...(Object.hasOwn(req.body || {}, "date") ? { date: req.body.date } : {}),
@@ -639,6 +653,12 @@ app.get("/api/task-library", (_req,res)=>res.json({
   tasks:liveReviewBlocks().filter(row=>row.type==='block'&&((row.properties||{}).local_id||['task','backlog'].includes((row.properties||{}).kind))),
   projects:[],facets:[],views:[],readiness:{}
 }));
+if (process.env.DCC_REVIEW_GLASSES_DEVICE === '1') {
+  app.get('/api/tasks/open', (req, res) => res.json({
+    rows: liveReviewBlocks().filter(row => row.type === 'block' && row.date && row.date < String(req.query.before || localDateKey())),
+    overlays: {}, truncated: false
+  }));
+}
 app.get("/api/*", (req, res) => {
   if (req.path.includes("social/feed/publishable") || req.path.includes("social/friends") || req.path.includes("social/rewards/queue") || req.path.includes("access/grants") || req.path.includes("access/granted-to-me")) return res.json([]);
   if (req.path.includes("responsibilities")) return res.json([]);
@@ -656,6 +676,8 @@ app.get("/admin", (_req, res) => res.sendFile(path.join(root, "admin.html")));
 app.get("/reimburse/:token", (_req, res) => res.sendFile(path.join(root, "reimburse.html")));
 app.use(express.static(root));
 
-app.listen(port, "127.0.0.1", () => {
+if (process.env.DCC_REVIEW_EXPORT_APP !== "1") app.listen(port, "127.0.0.1", () => {
   console.log(`UI review server: http://127.0.0.1:${port}`);
 });
+
+export default app;

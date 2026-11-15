@@ -16,17 +16,20 @@ const { chromium } = require('playwright-core');
     for (const width of [1440, 375]) {
       await fixture.pool.query("DELETE FROM todo_task_reactions; DELETE FROM todo_task_comments; DELETE FROM todo_sponsorships");
       const context = await browser.newContext({ viewport: { width, height: 1000 } });
-      // Capture polling callback to drive the real refresh without time delays.
-      await context.addInitScript(() => { const original = window.setInterval; window.setInterval = (fn, ms, ...args) => { if (ms === 300000) window.refreshShareForTest = fn; return original(fn, ms, ...args); }; });
       const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
       page.on('dialog', dialog => dialog.accept());
       await page.goto(fixture.base + '/todo/' + fixture.token);
       await page.locator('.shared-queue-card').first().waitFor();
       assert.equal(await page.locator('.shared-queue-card').count(), 8);
-      assert.equal(await page.locator('.shared-queue-priority h3').first().innerText(), 'Prepare the release checklist');
+      assert.equal(await page.locator('.shared-queue-next .ttl').first().innerText(), 'Prepare the release checklist');
       assert.ok(!(await page.locator('body').innerText()).includes('SENTINEL'));
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       assert.equal(await page.getByRole('button', { name: 'Bring forward' }).count(), 0);
+      // Owner row renderer, read-only: no complete, schedule, priority, drag or open controls.
+      assert.equal(await page.locator('.shared-queue-card.wq-card.it-list-item').count(), 8);
+      assert.equal(await page.locator('.shared-queue-card :is(.it-list-check,.btn-schedule,.wq-priority-symbol,.btn-task-radial,.btn-del-task,[draggable=true],.ttl[role=button])').count(), 0);
+      assert.ok(!(await page.locator('.shared-queue-card .ttl').allInnerTexts()).some(t => t.includes('›')), 'no parent paths');
+      assert.equal(await page.locator('#todo-public-list .wq-grid > .wq-col').count(), 2);
       const focus = page.locator('[data-shared-task="local-focus"]');
       assert.equal(await focus.locator('.todo-bounty-btn').isDisabled(), true);
       assert.equal(await focus.locator('.todo-reward-form').isVisible(), false);
@@ -35,7 +38,7 @@ const { chromium } = require('playwright-core');
       await focus.getByRole('textbox', { name: 'Reward offered' }).fill('Coffee together');
       await focus.getByRole('textbox', { name: 'Your name', exact: true }).fill('Casey');
       await focus.getByRole('textbox', { name: 'Reward offered' }).evaluate(el=>{el.focus();el.setSelectionRange(2,5);});
-      await page.evaluate(() => window.refreshShareForTest());
+      await page.evaluate(() => window.DCCShareLive.refresh('test'));
       assert.deepEqual(await focus.getByRole('textbox', { name: 'Reward offered' }).evaluate(el=>[el.selectionStart,el.selectionEnd]),[2,5]);
       assert.equal(await focus.getByRole('textbox', { name: 'Reward offered' }).inputValue(), 'Coffee together');
       assert.ok(await focus.getByRole('textbox', { name: 'Reward offered' }).isVisible());
@@ -54,11 +57,11 @@ const { chromium } = require('playwright-core');
       await page.getByRole('status').filter({ hasText: 'Try again shortly' }).waitFor();
       assert.equal(await focus.getByRole('button', { name: 'React 🔥', exact: true }).isDisabled(), false);
       await page.unroute('**/reactions');
-      await page.locator('.shared-queue-completed > summary').click();
-      await page.evaluate(() => window.refreshShareForTest());
-      assert.equal(await page.locator('.shared-queue-completed').evaluate(el => el.open), true);
+      await page.locator('.shared-queue-done > summary').click();
+      await page.evaluate(() => window.DCCShareLive.refresh('test'));
+      assert.equal(await page.locator('.shared-queue-done').evaluate(el => el.open), true);
       await focus.locator('summary').click();
-      await page.locator('.shared-queue-completed > summary').click();
+      await page.locator('.shared-queue-done > summary').click();
       await page.evaluate(() => { document.getElementById('todo-action-status').textContent = ''; });
       await page.screenshot({ path: path.join(output, width === 1440 ? 'shared-queue-desktop.png' : 'shared-queue-mobile.png'), fullPage: true });
       mark(width + 'px: queue order, privacy, guest capabilities, rewards, reactions, comments, refresh preservation and error feedback');
@@ -66,22 +69,58 @@ const { chromium } = require('playwright-core');
     }
     // A -> B -> A: an old A response must not clear the new A draft or busy state.
     const abaContext=await browser.newContext();
-    await abaContext.addInitScript(()=>{const original=window.setInterval;window.setInterval=(fn,ms,...args)=>{if(ms===300000)window.refreshShareForTest=fn;return original(fn,ms,...args);};});
     const aba=await abaContext.newPage();let viewer='A', commentRequests=0,releaseOld,releaseNew,oldFetched,newFetched;
     const oldReady=new Promise(resolve=>oldFetched=resolve),newReady=new Promise(resolve=>newFetched=resolve);
     const oldGate=new Promise(resolve=>releaseOld=resolve),newGate=new Promise(resolve=>releaseNew=resolve);
+    // This check fakes viewer switches by rewriting responses, so live pings are
+    // stubbed out here; the live check below covers them.
+    await aba.route('**/events',route=>route.fulfill({status:204,body:''}));
     await aba.route('**/api/public/todo-share/'+fixture.token,async route=>{const response=await route.fetch();const data=await response.json();data.viewer.username=viewer;return route.fulfill({response,json:data});});
     await aba.route('**/comments',async route=>{const response=await route.fetch();if(++commentRequests===1){oldFetched();await oldGate;}else{newFetched();await newGate;}return route.fulfill({response});});
     await aba.goto(fixture.base+'/todo/'+fixture.token);
     const card=aba.locator('[data-shared-task="local-focus"]');await card.waitFor();await card.locator('summary').click();
     await card.getByRole('textbox',{name:'Comment',exact:true}).fill('Old A comment');await card.locator('.todo-public-comment-form button').click();await oldReady;
-    viewer='B';await aba.evaluate(()=>window.refreshShareForTest());viewer='A';await aba.evaluate(()=>window.refreshShareForTest());
+    viewer='B';await aba.evaluate(()=>window.DCCShareLive.refresh('test'));viewer='A';await aba.evaluate(()=>window.DCCShareLive.refresh('test'));
     await card.locator('summary').click();await card.getByRole('textbox',{name:'Comment',exact:true}).fill('New A comment');await card.locator('.todo-public-comment-form button').click();await newReady;
     releaseOld();await aba.waitForTimeout(100);
     assert.equal(await card.getByRole('textbox',{name:'Comment',exact:true}).inputValue(),'New A comment');
     assert.equal(await card.locator('.todo-public-comment-form button').isDisabled(),true);
     releaseNew();await aba.waitForFunction(()=>document.querySelector('[data-shared-task="local-focus"] .todo-public-comment-form input[aria-label="Comment"]').value==='');
     assert.equal(commentRequests,2);await abaContext.close();mark('viewer A→B→A rejects stale responses and keeps the current submission locked');
+    // Live: a worker report plus an owner write moves the card without a reload;
+    // revoking the link clears an open page.
+    {
+      const liveContext = await browser.newContext({ viewport: { width: 375, height: 900 } });
+      const live = await liveContext.newPage(); live.on('pageerror', error => errors.push(error.message));
+      await live.goto(fixture.base + '/todo/' + fixture.token);
+      await live.locator('#todo-public-live[data-state="live"]').waitFor({ timeout: 5000 });
+      assert.deepEqual(await live.locator('[data-shared-lane]').evaluateAll(els => els.map(el => el.dataset.sharedLane)), ['now', 'running', 'next', 'later', 'done']);
+      assert.equal(await live.locator('.shared-queue-running .shared-queue-card').count(), 0);
+      assert.match(await live.locator('[data-shared-task="local-focus"] .shared-card-meta').innerText(), /^Started /);
+      const until = new Date(Date.now() + 10 * 60000).toISOString();
+      await fixture.pool.query("INSERT INTO delegated_work(user_id,workspace_id,task_id,work_key,report) VALUES(1,'ws-1','background','live',$1)",
+        [{ phase: 'working', work: { source: 'claude', id: 'w' }, at: new Date().toISOString(), summary: 'WORKER SENTINEL',
+          execution: { state: 'running', observedAt: new Date().toISOString(), validUntil: until } }]);
+      const started = Date.now();
+      fixture.broadcast('blocks-changed', {}, 'ws-1');
+      await live.locator('.shared-queue-running [data-shared-task="local-background"]').waitFor({ timeout: 3000 });
+      assert.ok(Date.now() - started < 3000);
+      assert.match(await live.locator('.shared-queue-running .shared-card-meta').innerText(), /Confirmed/);
+      assert.ok(!(await live.locator('body').innerText()).includes('SENTINEL'));
+      assert.ok(await live.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await live.screenshot({ path: path.join(output, 'shared-activity-live-mobile.png'), fullPage: true });
+      await fixture.pool.query("DELETE FROM delegated_work WHERE work_key='live'");
+      fixture.broadcast('blocks-changed', {}, 'ws-1');
+      await live.locator('.shared-queue-next [data-shared-task="local-background"]').waitFor({ timeout: 3000 });
+      // The owner's real "disable link" route: deactivates and closes open streams.
+      assert.equal((await fixture.request('/api/todo-share', { user: 1, method: 'DELETE' })).status, 200);
+      await live.getByRole('alert').filter({ hasText: 'no longer active' }).waitFor({ timeout: 8000 });
+      assert.equal(await live.locator('[data-shared-task]').count(), 0);
+      assert.equal(await live.locator('#todo-public-live').getAttribute('data-state'), 'revoked');
+      await fixture.pool.query('UPDATE todo_shares SET active=TRUE');
+      await liveContext.close();
+      mark('375px live: lane order, worker Running via ping within 3s, lease removal, revoke clears the open page');
+    }
     const context = await browser.newContext({ extraHTTPHeaders: { 'X-Review-User': '3' } });
     const page = await context.newPage(); page.on('dialog', dialog => dialog.accept());
     await page.goto(fixture.base + '/todo/' + fixture.token);
@@ -90,7 +129,7 @@ const { chromium } = require('playwright-core');
     await focus.locator('.todo-bounty-btn.bountied').waitFor();
     assert.equal((await fixture.pool.query("SELECT status FROM todo_sponsorships WHERE kind='bounty'")).rows[0].status, 'pending');
     await fixture.pool.query('UPDATE todo_shares SET active=FALSE');
-    await page.reload(); await page.getByRole('alert').filter({ hasText: 'unavailable' }).waitFor();
+    await page.reload(); await page.getByRole('alert').filter({ hasText: 'no longer active' }).waitFor();
     assert.equal(await page.locator('#todo-public-content').isVisible(), false);
     await page.goto(fixture.base + '/todo/invalid'); await page.getByRole('alert').waitFor();
     mark('signed-in bounty remains pending; revoked and invalid pages hide the prior feed');

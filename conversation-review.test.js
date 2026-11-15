@@ -150,7 +150,9 @@ test(
       assert.equal(result.uncertainIntervals[0].start, "2026-10-22T00:50:00.000Z");
       const paused = await exec("pause", "late-continue", "2026-10-22T09:10:00Z");
       assert.equal(paused.task.properties.actualMinutes, 60);
-      assert.equal(paused.state.foreground.length, 0);
+      assert.equal(paused.state.foreground.length, 1);
+      assert.equal(paused.state.foreground[0].onBreak, true);
+      assert.equal(paused.state.foreground[0].started_at, null);
       assert.ok(paused.entries.some((row) => row.properties.durSec === 600));
     });
     await t.test(

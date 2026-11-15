@@ -14,11 +14,12 @@ function mount(rows, writer){
   const handlers={}, writes=[], broadcasts=[], pools=[];
   const app={get(){},post(url,handler){handlers[url]=handler;},patch(){},put(){},delete(){}};
   require('./routes/blocks')(app,{
+    getTodayStr:()=> '2026-10-07',
     isValidDate:value=>/^\d{4}-\d{2}-\d{2}$/.test(value||''),
     blockDB:{
       getBlockIncludingDeleted:async id=>rows.find(item=>item.id===id),
       getRescheduleSubtreePool:async(...args)=>{pools.push(args);return rows;},
-      rescheduleBlocks:async(moves,creates)=>{if(writer)await writer(moves);writes.push({moves,creates});return {blocks:moves};},
+      rescheduleBlocks:async(moves,creates,options)=>{assert.equal(options.queueToday,'2026-10-07');assert.deepEqual(options.queueOwner,{userId:1,workspaceId:'mine'});assert.equal(typeof options.pauseActive,'function');if(writer)await writer(moves);writes.push({moves,creates});return {blocks:moves};},
     },broadcast:(...args)=>broadcasts.push(args),
   });
   return {writes,broadcasts,pools,async call(id,body){
@@ -95,7 +96,7 @@ test('date-only assignment passes revision guards and propagates concurrent-move
 function libraryCallback(write){
   const source=fs.readFileSync(require.resolve('./public/js/task-library'),'utf8');
   const begin=source.indexOf('  function scheduleTask(task,anchor){');
-  const end=source.indexOf('\n  function continueProject(',begin);
+  const end=source.indexOf('\n  const open =',begin);
   assert.ok(begin>=0&&end>begin);
   let config;const notices=[],refreshes=[];
   const schedule=vm.runInNewContext('('+source.slice(begin,end)+')',{
@@ -105,7 +106,7 @@ function libraryCallback(write){
   return {notices,refreshes,pick(task){schedule(task,{});return config.onPick;}};
 }
 
-test('actual Task Library date callback assigns an undated task without source date or times',async()=>{
+test('All Tasks date callback assigns an undated task without source date or times',async()=>{
   for(const target of ['2026-10-07','2026-10-08','2026-12-19']){
     const fixture=mount(tree());const sent=[];
     const ui=libraryCallback(async(id,date,options)=>{
@@ -120,7 +121,7 @@ test('actual Task Library date callback assigns an undated task without source d
   }
 });
 
-test('dated Task Library moves keep their origin and rejected assignments show an error instead of success',async()=>{
+test('dated All Tasks moves keep their origin and rejected assignments show an error',async()=>{
   const sent=[];const ui=libraryCallback(async(id,date,options)=>sent.push({id,date,options}));
   await ui.pick({id:'dated',title:'Existing dated task',raw:{date:'2026-10-07'}})('2026-10-08');
   assert.equal(sent[0].options.fromDate,'2026-10-07');assert.equal(sent[0].options.placement,undefined);

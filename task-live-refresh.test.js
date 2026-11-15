@@ -41,13 +41,9 @@ test("refolding twice rebuilds from the immutable baseline instead of accumulati
 });
 
 function coordinatorFactory() {
-  const start = sseSource.indexOf("function createTaskRefreshCoordinator(opts)");
-  const end = sseSource.indexOf("\n  window.createTaskRefreshCoordinator", start);
-  assert.ok(start >= 0 && end > start, "task refresh coordinator must remain discoverable");
-  const context = {};
-  vm.createContext(context);
-  vm.runInContext(sseSource.slice(start, end), context);
-  return context.createTaskRefreshCoordinator;
+  // sse.js imports the shared module; the owner loop and the shared-link page run the same code.
+  assert.ok(sseSource.includes("window.DCCRefreshCoordinator.createTaskRefreshCoordinator"), "sse.js must use the shared coordinator");
+  return require("./public/js/refresh-coordinator").createTaskRefreshCoordinator;
 }
 
 function harness(overrides) {

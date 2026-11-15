@@ -1,3 +1,4 @@
+const { performance } = require("node:perf_hooks");
 const { slackTarget } = require("../lib/slack-status");
 // Extracted from server.js — mounted via routes/index pattern: module.exports(app, ctx).
 // ctx carries shared server-scope helpers/stores; see server.js where ctx is built.
@@ -21,14 +22,18 @@ const { slackTarget } = require("../lib/slack-status");
 // reference pattern.
 
 const TaskSources = require("../public/js/task-sources");
-function validateSourceProps(props) {
-  if (props && Object.prototype.hasOwnProperty.call(props, "sourceReferences")) {
-    try { TaskSources.validate(props.sourceReferences); }
-    catch (error) { error.statusCode = 400; throw error; }
-  }
+const TaskCosts = require("../public/js/task-costs");
+function validateTaskMetadata(props) {
+  if (!props) return;
+  try {
+    if (Object.hasOwn(props, "sourceReferences")) TaskSources.validate(props.sourceReferences);
+    if (Object.hasOwn(props, "taskCosts")) TaskCosts.validate(props.taskCosts);
+  } catch (error) { error.statusCode = 400; throw error; }
 }
 const validate = require("../middleware/validate");
 const schemas = require("../middleware/schemas");
+const { validZone, shiftDate, validDate: validViewingDate } = require("../public/js/schedule-zones");
+const { selectViewingRange } = require("../lib/viewing-date-range");
 const { collectSubtreeBlockIds, unplannedProperties } = require("../lib/reschedule");
 const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 const { route } = require("../lib/route-helpers");
@@ -150,7 +155,7 @@ module.exports = function mount(app, ctx) {
   }
 
   // ── Local helpers ──
-  function assertBlockOwnership(block, workspaceId) { if (block.workspace_id && workspaceId && block.workspace_id !== workspaceId) { const err = new Error("Block not found"); err.statusCode = 404; throw err; } }
+  function assertBlockOwnership(block, workspaceId) { if (block.type === "wishlist_attachment" || (block.workspace_id && workspaceId && block.workspace_id !== workspaceId)) { const err = new Error("Block not found"); err.statusCode = 404; throw err; } }
   function apiErrorMessage(e) {
     return [e && e.message, e && e.detail, e && e.code].filter(Boolean).join(" · ") || "Request failed";
   }
@@ -680,7 +685,7 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks/pending-create-repair", route(async (req) => {
     if (req.dccServiceAuth || !req.session?.userId) throw clientError("Use an authenticated browser session to repair a pending task", 403);
     const { userId, workspaceId } = await resolveOwnerStrict(req);
-    validateSourceProps(req.body?.original?.properties);
+    validateTaskMetadata(req.body?.original?.properties);
     const result = await pendingCreateRepair({ original: req.body?.original,
       expected: req.body?.expected, apply: req.body?.apply === true, userId, workspaceId });
     if (result.created) broadcast("blocks-changed", { action: "create", blockIds: [result.block.id], clientId: req.body?._clientId }, workspaceId);
@@ -690,7 +695,7 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks", validate(schemas.blockCreate), route(async (req, res) => {
     const body = req.body;
     const items = Array.isArray(body) ? body : [body];
-    for (const item of items) validateSourceProps(typeof item.properties === "string" ? safeParseProps(item.properties) : item.properties);
+    for (const item of items) validateTaskMetadata(typeof item.properties === "string" ? safeParseProps(item.properties) : item.properties);
     if (items.some(item => waitingItems.isTaskDependency(
       typeof (item && item.properties) === "string" ? safeParseProps(item.properties) : ((item && item.properties) || {})
     ))) {
@@ -794,6 +799,7 @@ module.exports = function mount(app, ctx) {
   app.post("/api/tasks/:taskRef/completion", async (req, res) => {
     const requestId = crypto.randomUUID();
     const startedAt = Date.now();
+    const started = performance.now();
     res.setHeader("X-Request-Id", requestId);
     const body = req.body || {};
     try {
@@ -808,6 +814,7 @@ module.exports = function mount(app, ctx) {
         userId,
         workspaceId,
       });
+      const persisted = performance.now();
       const recordedMs = Number.isFinite(Date.parse(body.completedAt || ""))
         ? Date.parse(body.completedAt)
         : Date.now();
@@ -839,7 +846,12 @@ module.exports = function mount(app, ctx) {
           mutationId: body.mutationId, dependencyTransitions: result.dependencyTransitions || [],
         }, workspaceId);
       }
+      const followUp = performance.now();
       for (const row of result.affectedTasks || []) await syncSlack(row);
+      res.setHeader("Server-Timing", [
+        ["persist", persisted - started], ["follow-up", followUp - persisted],
+        ["slack", performance.now() - followUp],
+      ].map(([name, ms]) => name + ";dur=" + ms.toFixed(1)).join(", "));
       logCompletion(req, {
         requestId, mutationId: body.mutationId || null, taskRef: req.params.taskRef,
         resolvedTaskId: result.task && result.task.id || null, taskDate: body.taskDate || null,
@@ -923,6 +935,7 @@ module.exports = function mount(app, ctx) {
     broadcast("blocks-changed", {
       action: "work", workAction: body.action, blockIds: result.conversation?.affectedTasks?.map(row => row.id) || [req.params.id], clientId: body._clientId,
     }, req.workspaceId);
+    if (result.changed) ctx.broadcastQueueChange?.(req.session.userId, req.workspaceId);
     await syncSlack(block);
     return { ok: true, changed: !!result.changed, reason: result.reason || null, block, affectedTasks: result.conversation?.affectedTasks || [] };
   }));
@@ -1098,11 +1111,17 @@ module.exports = function mount(app, ctx) {
     assertBlockOwnership(existing, req.workspaceId);
     const requestedProps = typeof (req.body && req.body.properties) === "string"
       ? safeParseProps(req.body.properties) : ((req.body && req.body.properties) || {});
-    validateSourceProps(requestedProps);
+    validateTaskMetadata(requestedProps);
     if (waitingItems.isTaskDependency(existing)
         || waitingItems.isTaskDependency(requestedProps)) {
       res.status(409).json({ error: "Update task dependencies through the Waiting API" });
       return;
+    }
+    if (Object.hasOwn(req.body || {}, "taskCostsChange")) {
+      if (existing.deleted_at || !TaskModel.isTaskRow(existing)) throw clientError("Task not found", 404);
+      const result = await blockDB.updateBlock(req.params.id, { taskCostsChange: req.body.taskCostsChange });
+      broadcast("blocks-changed", { action: "update", blockIds: [result.id], clientId: req.body._clientId }, req.workspaceId);
+      return result;
     }
     // Compatibility window for already-open clients and their old WAL entries.
     // Ignore the stale full properties snapshot and delegate only the completion
@@ -1329,7 +1348,7 @@ module.exports = function mount(app, ctx) {
     for (const op of operations) {
       if (!op || typeof op !== "object") continue;
       const opProps = typeof op.properties === "string" ? safeParseProps(op.properties) : (op.properties || {});
-      if (op.op === "create" || op.op === "update") validateSourceProps(opProps);
+      if (op.op === "create" || op.op === "update") validateTaskMetadata(opProps);
       if ((op.op === "create" || op.op === "update") && waitingItems.isTaskDependency(opProps)) {
         res.status(409).json({ error: "Mutate task dependencies through the Waiting API" });
         return;
@@ -1590,6 +1609,17 @@ module.exports = function mount(app, ctx) {
   app.get("/api/blocks/range", route(async (req, res) => {
     const { start, end } = req.query;
     if (!start || !end || !isValidDate(start) || !isValidDate(end)) { res.status(400).json({ error: "Provide ?start=&end=" }); return; }
+    if (req.query.viewingZone !== undefined) {
+      const { viewingZone } = req.query;
+      if (!validZone(viewingZone) || !validViewingDate(start) || !validViewingDate(end) || end < start || end > shiftDate(start, 62)) {
+        return res.status(400).json({ error: "Provide an IANA viewing zone and a range of at most 63 days" });
+      }
+      if (!req.workspaceId) return res.status(403).json({ error: "Workspace required" });
+      const rows = filterLegacyGcalBlocks(await blockDB.getBlocksByDateRange(
+        shiftDate(start, -2), shiftDate(end, 2), req.workspaceId,
+      ));
+      return selectViewingRange(rows, start, end, viewingZone, APP_TIME_ZONE);
+    }
     // Reconciled here too, not just on the day read: block-store's getTimeEntries
     // serves the CURRENT date from the day cache but every OTHER date from the
     // range cache, so Day Review's planned-vs-actual for a past day comes through
@@ -1717,6 +1747,12 @@ module.exports = function mount(app, ctx) {
   });
   app.get("/api/review-tomorrow", previewTomorrow);
   app.post("/api/review-tomorrow/preview", previewTomorrow);
+  app.get("/api/brief/today", route(async (req, res) => {
+    await ctx.prepareScheduledDay(getTodayStr(), req.session.userId, req.workspaceId);
+    const plan = await reviewTomorrow.loadPlan(ctx, req, null, 14, { today: true });
+    return { date: plan.targetDate, truncated: plan.truncated, tasks: plan.items
+      .filter(item => item.placement?.kind === "timed").slice(0, 3) };
+  }));
 
   app.get("/api/time-block-placement", route(async (req, res) => {
     if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date" });
@@ -1737,6 +1773,10 @@ module.exports = function mount(app, ctx) {
   // Kept as an explicit handler (not routed through route()) on purpose: this is
   // the atomic-delegation reference pattern — bespoke HH:MM validation + the
   // load-bearing subtree move should not be churned by the P8 extraction.
+  function queueRescheduleOptions(req,base={}){
+    const owner={userId:req.session.userId,workspaceId:req.workspaceId};
+    return {...base,queueToday:getTodayStr(),queueOwner:owner,pauseActive:(row,client,at)=>require('../conversation-store').pauseForSchedule(ctx,client,owner,row,{at,sourceEventId:'schedule:'+crypto.randomUUID()})};
+  }
   app.post("/api/blocks/:id/reschedule", async (req, res) => {
     try {
       const { targetDate, parentStart, parentEnd, placement, userSetStart, _clientId } = req.body || {};
@@ -1760,8 +1800,9 @@ module.exports = function mount(app, ctx) {
           if(existing){assertBlockOwnership(existing,req.workspaceId);moves.push({id:existing.id,date:existing.date,properties,expectedDate:existing.date,expectedUpdatedAt:existing.updated_at});}
           else creates.push({type:'block',date:parent.date,user_id:parent.user_id||req.session.userId||null,workspace_id:parent.workspace_id||req.workspaceId||null,properties});
         }
-        const result = await blockDB.rescheduleBlocks(moves,creates);
+        const result = await blockDB.rescheduleBlocks(moves,creates,queueRescheduleOptions(req));
         broadcast("blocks-changed",{action:"reschedule",blockIds:result.blocks.map(row=>row.id),clientId:_clientId},req.workspaceId);
+        ctx.broadcastQueueChange?.(req.session.userId, req.workspaceId);
         return res.json({moved:planned.ids,blocks:result.blocks.slice(0,planned.moves.length),created:result.blocks.slice(planned.moves.length),parentId:parent.id,fromDate:parent.date,targetDate,count:planned.ids.length});
       }
       // Did a HUMAN name the landing time? A timed placement cannot answer that on its
@@ -1879,6 +1920,9 @@ module.exports = function mount(app, ctx) {
           if (dateChanged) properties.rescheduledFrom = { date: fromDate, at: now };
           if (place && place.kind === "timed") {
             properties.start = place.start; properties.end = place.end; properties._pinnedStart = place.start;
+            // Keep the estimate read by queues/connectors aligned with the saved slot.
+            properties.duration = toMin(place.end) - toMin(place.start);
+            properties.durMin = properties.duration;
             if (blockChoice) {
               properties.timeBlockPlacement = { requestId: placement.requestId, blockId: placement.blockId, fromDate, start: place.start, end: place.end };
               if (typeof placement.title === "string" && placement.title.trim()) properties.title = placement.title.trim().slice(0, 1000);
@@ -1989,10 +2033,11 @@ module.exports = function mount(app, ctx) {
           await reviewTomorrow.validateMove(ctx, req, freshParent, members, place, req.body.reviewGuard, client);
         },
       } : undefined;
-      const result = await blockDB.rescheduleBlocks(moves, creates, reviewOptions);
+      const result = await blockDB.rescheduleBlocks(moves, creates, queueRescheduleOptions(req,reviewOptions));
       const movedIds = subtreeIds;
       const created = result.blocks.slice(moves.length); // tombstone(s) appended after moves
       broadcast("blocks-changed", { action: "reschedule", blockIds: result.blocks.map(b => b.id), clientId: _clientId }, req.workspaceId);
+      ctx.broadcastQueueChange?.(req.session.userId, req.workspaceId);
       res.json({ moved: movedIds, blocks: result.blocks.slice(0, moves.length), created, parentId: parent.id, fromDate, targetDate, count: movedIds.length });
     } catch (e) {
       const body = { error: e.message };
@@ -2681,15 +2726,29 @@ module.exports = function mount(app, ctx) {
       let affected;
       try {
         await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["dcc-foreground:" + userId]);
         const task = await blockDB.findUniqueLiveBlockByReference(convertTaskId, workspaceId, client, true);
         if (!task || task.deleted_at || !blockDB.isTaskRow(task)) throw clientError("Selected task is no longer available", 409);
         assertBlockOwnership(task, workspaceId);
         if (isCompleted(task)) throw clientError("A completed task cannot move to Waiting", 409);
         const subtree = await blockDB.getSubtree([task.id], workspaceId, client);
         const rows = subtree.length ? subtree : [task];
-        if (rows.some(row => (row.properties || {}).dependencyWaitingItemId ||
-          ((row.properties || {}).dependencyWaitingItemIds || []).length)) {
+        if (rows.some(row => waitingItems.isParkedInWaiting(row.properties || {}))) {
           throw clientError("Selected task is already waiting on another item", 409);
+        }
+        const active = rows.find(row => (row.properties || {}).startedAt);
+        if (active) {
+          const at = new Date().toISOString();
+          await require("../conversation-store").pauseForSchedule(ctx, client, { userId, workspaceId }, active, {
+            at, sourceEventId: "waiting:" + crypto.randomUUID()
+          });
+          rows[rows.indexOf(active)] = await blockDB.findUniqueLiveBlockByReference(active.id, workspaceId, client, true);
+          await client.query(
+            `INSERT INTO conversation_state(user_id, revision, changed_at) VALUES($1, 1, $2::timestamptz)
+             ON CONFLICT(user_id) DO UPDATE SET revision=conversation_state.revision+1,
+             changed_at=GREATEST(conversation_state.changed_at,EXCLUDED.changed_at)`,
+            [userId, at]
+          );
         }
         props.linkedBlockId = task.id;
         props.myTask = String((task.properties || {}).title || props.myTask).slice(0, 300);

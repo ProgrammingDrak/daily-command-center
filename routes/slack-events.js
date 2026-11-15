@@ -21,8 +21,8 @@
 // user, the owner workspace, the Slack host, and the actor gate) are read off
 // the actor instead. Anything genuinely global (the signing secret, timeouts,
 // the enrichment model, the reaction names) stays at mount scope. State that is
-// per-tenant but must survive between passes — the mirror cursor — lives in a
-// mount-scope Map keyed by workspace, because `forActor` is rebuilt per event.
+// per-tenant survives across actor bindings. Mirror receipts persist settled
+// revisions and retry state when the gated schema is present.
 //
 // TOKENS ARE NOT INTERCHANGEABLE, which is the one real seam here. `slackApi`
 // prefers the actor's user token and falls back to the shared bot token, EXCEPT
@@ -42,6 +42,8 @@
 //
 // This path is in AUTH_PUBLIC (server.js), so Clerk/session is skipped and
 // verifying the request is Slack's signature is THIS route's job.
+const sweepMetrics = require("../lib/slack-sweep-metrics");
+const { candidatesSql, recordReceipt } = require("../lib/slack-projection-receipts");
 const createTaskTiming = require("../lib/task-timing");
 const { slackTarget, sameTarget } = require("../lib/slack-status");
 const waitingItems = require("../waiting-items");
@@ -58,6 +60,9 @@ const { isBlockDone, isStaleWorkEvent } = createTaskTiming;
 
 module.exports = function mount(app, ctx) {
   const { pool, blockDB, slotStore, broadcast, crypto, getTodayStr, APP_TIME_ZONE } = ctx;
+
+  const measureSweep = process.env.SLACK_RECONCILE_METRICS === "1";
+  if (measureSweep) sweepMetrics.instrumentPool(pool);
 
   const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || "";
   const TZ = APP_TIME_ZONE || "America/New_York";
@@ -107,6 +112,8 @@ module.exports = function mount(app, ctx) {
   const delegateKeyFor = (channel, ts) => `slack-delegate:${channel}:${ts}`;
   const delegateCompletionKeyFor = (channel, ts) => `slack-delegate-completion:${channel}:${ts}`;
   const pendingDoneKeyFor = (channel, ts) => `slack-done-pending:${channel}:${ts}`;
+  const taskKeyPrecedence = `(COALESCE(properties->>'kind', '') = 'slack_reaction_tombstone') ASC,
+    deleted_at IS NULL DESC, created_at DESC`;
 
   // Everything outside this set is user-owned delegated-item state. The stored
   // snapshot lets reaction removal delete only a pristine auto-created item.
@@ -164,10 +171,16 @@ module.exports = function mount(app, ctx) {
     return `slack:${crypto.createHash("sha256").update(seed).digest("hex").slice(0, 48)}`;
   }
 
-  // Per-tenant mirror cursors, keyed by workspace. This is mount-scope rather
-  // than inside forActor because forActor is rebuilt on every event: a cursor
-  // living there would reset each pass and re-walk the same page forever.
+  // The old cursor is used only until the explicitly gated schema is installed.
   const mirrorCursors = new Map();
+  const historySearches = new Map();
+  const searchCooldowns = new Map();
+  let receiptsAvailable = null;
+
+  async function checkReceiptSchema() {
+    const { rows } = await pool.query("SELECT to_regclass('slack_projection_receipts') IS NOT NULL AS available");
+    receiptsAvailable = rows[0]?.available === true;
+  }
   const projectionQueues = new Map();
 
   // ── Reaction-write failure state ─────────────────────────────────────────
@@ -199,9 +212,9 @@ module.exports = function mount(app, ctx) {
   const DEAD_MESSAGE_TTL_MS = Math.max(0, Number(process.env.SLACK_DEAD_MESSAGE_TTL_MS ?? 86_400_000));
   const DEAD_MESSAGE_MAX = 5_000;
   const deadMessages = new Map();            // "channel:ts" -> { code, at }
-  // Per-workspace because the rate limit belongs to the token, and one actor
-  // owns one workspace. Mount scope because forActor is rebuilt per event.
-  const reactionCooldowns = new Map();       // workspaceId -> resumeAtMs
+  // Slack limits applications per team. Use the configured Slack host as a
+  // conservative key for legacy identities without a team ID.
+  const reactionCooldowns = new Map();       // Slack team or host -> resumeAtMs
   // Floor of 0 rather than a second so the pause is testable without a real
   // sleep; 0 disables it outright, matching how the other tunables here behave.
   // Prod does not set this, so the 60s default is what actually runs.
@@ -252,6 +265,33 @@ module.exports = function mount(app, ctx) {
     const OWNER_USER_ID = actor.userId;
     const OWNER_WORKSPACE_ID = actor.workspaceId;
     const SLACK_HOST = actor.slackHost;
+    const actorKey = JSON.stringify([OWNER_USER_ID, actor.slackUserId, actor.slackTeamId, actor.tier]);
+    // Bot-tier actors share the app's reaction quota within a Slack team.
+    const cooldownKey = actor.slackTeamId
+      ? JSON.stringify(["team", actor.slackTeamId])
+      : JSON.stringify(["host", SLACK_HOST]);
+
+    const saveReceipt = (id, revision, outcome, nextAttempt) =>
+      recordReceipt(pool, OWNER_WORKSPACE_ID, actorKey, id, revision, outcome, nextAttempt);
+
+    function reactionPaused() {
+      return (reactionCooldowns.get(cooldownKey) || 0) > Date.now();
+    }
+
+    let cooldownChecked = false;
+    async function loadReactionCooldown() {
+      if (reactionPaused() || cooldownChecked) return reactionPaused();
+      if (receiptsAvailable === null && typeof pool.connect === "function") await checkReceiptSchema();
+      if (!receiptsAvailable) return false;
+      const { rows } = await pool.query(`
+        SELECT next_attempt_at AS resume_at FROM slack_projection_receipts
+        WHERE workspace_id = '' AND actor_key = $1 AND block_id = ''
+          AND next_attempt_at > clock_timestamp()
+      `, [cooldownKey]);
+      cooldownChecked = true;
+      if (rows[0]?.resume_at) reactionCooldowns.set(cooldownKey, Math.max(reactionCooldowns.get(cooldownKey) || 0, new Date(rows[0].resume_at).getTime()));
+      return reactionPaused();
+    }
 
     async function syncLinkedTriage(block, reason, atMs) {
       if (!(block && (block.properties || {}).triageId) || typeof ctx.transitionLinkedTriage !== "function") return;
@@ -279,6 +319,7 @@ module.exports = function mount(app, ctx) {
       });
       const usePost = options.post === true;
       const url = `https://slack.com/api/${method}${usePost ? "" : `?${body.toString()}`}`;
+      if (method === "reactions.add" || method === "reactions.remove") sweepMetrics.count("slackWrites");
       const response = await fetch(url, {
         method: usePost ? "POST" : "GET",
         signal: globalThis.AbortSignal.timeout(SLACK_API_TIMEOUT_MS),
@@ -291,11 +332,12 @@ module.exports = function mount(app, ctx) {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) {
         const error = new Error(`Slack ${method} failed: ${data.error || response.status}`);
-        error.code = data.error || `http_${response.status}`;
+        error.code = response.status === 429 ? "ratelimited" : data.error || `http_${response.status}`;
         // Slack answers a 429 with Retry-After in seconds. Honour its number
         // rather than guessing; the fallback only applies when it is absent.
-        const retryAfter = Number(response.headers && response.headers.get && response.headers.get("retry-after"));
-        if (Number.isFinite(retryAfter) && retryAfter > 0) error.retryAfterMs = retryAfter * 1000;
+        const retryHeader = response.headers?.get?.("retry-after");
+        const retryAfter = retryHeader?.trim() ? Number(retryHeader) : NaN;
+        if (Number.isFinite(retryAfter) && retryAfter >= 0) error.retryAfterMs = retryAfter * 1000;
         throw error;
       }
       return data;
@@ -362,7 +404,7 @@ module.exports = function mount(app, ctx) {
     // Settle old enrichment jobs locally. Preserve titles changed by the user.
     async function enrichBlock(blockOrId) {
       const block = await blockDB.getBlock(typeof blockOrId === "string" ? blockOrId : blockOrId.id);
-      if (!block || block.deleted_at) return false;
+      if (!block || block.deleted_at || String(block.workspace_id) !== String(OWNER_WORKSPACE_ID)) return false;
       const props = block.properties || {};
       if (props.kind === "slack_reaction_tombstone" || !props.slack_channel || !props.slack_ts) return false;
       if (props.enrichment_model === ENRICHMENT_MODEL && props.enrichment_status === "complete") return true;
@@ -396,23 +438,22 @@ module.exports = function mount(app, ctx) {
     // cancelled found nothing and minted a brand-new task. A live row still wins
     // (`deleted_at IS NULL DESC`), so every other caller behaves exactly as before —
     // they just have to say they want a live row, via findLiveTaskByKey.
-    async function findTaskByKey(idemKey) {
-      const { rows } = await pool.query(
+    async function findTaskByKey(idemKey, client = pool) {
+      const { rows } = await client.query(
         // workspace_id is selected so the timer row's delete fence in
         // lib/task-timing.js has a tenant to check against rather than falling
         // through its "unknown workspace" branch.
         `SELECT id, type, parent_id, to_char(date, 'YYYY-MM-DD') AS date, properties, deleted_at, user_id, workspace_id FROM blocks
           WHERE properties->>'idempotency_key' = $1 AND workspace_id = $2
-          ORDER BY (COALESCE(properties->>'kind', '') = 'slack_reaction_tombstone') ASC,
-                   deleted_at IS NULL DESC, created_at DESC LIMIT 1`,
+          ORDER BY ${taskKeyPrecedence} LIMIT 1`,
         [idemKey, OWNER_WORKSPACE_ID]
       );
       return rows[0] || null;
     }
     // Lifecycle handlers (⌛ / un-⌛ / ✅ / un-✅) act on live rows only: a
     // tombstoned task is one the user cancelled, and reactions on it are noise.
-    async function findLiveTaskByKey(idemKey) {
-      const t = await findTaskByKey(idemKey);
+    async function findLiveTaskByKey(idemKey, client) {
+      const t = await findTaskByKey(idemKey, client);
       return t && !t.deleted_at && (t.properties || {}).kind !== "slack_reaction_tombstone" ? t : null;
     }
     // A ✅ can follow either capture reaction. Check both on every retry so a
@@ -476,13 +517,12 @@ module.exports = function mount(app, ctx) {
       }
       const dead = deadMessageCode(channel, ts, OWNER_WORKSPACE_ID);
       if (dead) return true;                       // already learned, silently
-      const resumeAt = reactionCooldowns.get(OWNER_WORKSPACE_ID) || 0;
-      if (Date.now() < resumeAt) return true;      // rate-limited, see below
+      if (reactionPaused()) return true;      // rate-limited, see below
       return false;
     }
 
     // `settled` means stop asking: either Slack agrees with us, or it never will.
-    function classifyReactionFailure(error, channel, ts, name, verb) {
+    async function classifyReactionFailure(error, channel, ts, name, verb, client = pool) {
       if (PERMANENT_REACTION_ERRORS.has(error.code)) {
         // Logged once per message, at info level, where this used to repeat every
         // five minutes per emoji per dead row. Once is structural rather than
@@ -497,8 +537,13 @@ module.exports = function mount(app, ctx) {
         // into the same wall — the poller breaks its loop here for the same
         // reason. The mirror is explicitly allowed latency, so draining across
         // several reconcile passes costs nothing.
-        const backoff = error.retryAfterMs || RATE_LIMIT_BACKOFF_MS;
-        reactionCooldowns.set(OWNER_WORKSPACE_ID, Date.now() + backoff);
+        const backoff = error.retryAfterMs ?? RATE_LIMIT_BACKOFF_MS;
+        const resumeAt = Date.now() + backoff;
+        reactionCooldowns.set(cooldownKey, Math.max(reactionCooldowns.get(cooldownKey) || 0, resumeAt));
+        sweepMetrics.count("rateLimited");
+        if (receiptsAvailable) {
+          await recordReceipt(client, "", cooldownKey, "", "", "cooldown", new Date(resumeAt));
+        }
         console.warn(`[slack-events] rate-limited by Slack; pausing reaction writes for ${Math.round(backoff / 1000)}s`);
         return { settled: false };
       }
@@ -508,24 +553,26 @@ module.exports = function mount(app, ctx) {
       return { settled: false };
     }
 
-    async function addSlackReaction(channel, ts, name) {
+    async function addSlackReaction(channel, ts, name, client) {
+      if (await loadReactionCooldown()) return false;
       if (reactionWriteBlocked(channel, ts, name, "add")) return !!deadMessageCode(channel, ts, OWNER_WORKSPACE_ID);
       try {
         await slackApi("reactions.add", { channel, timestamp: ts, name }, { post: true });
         return true;
       } catch (e) {
         if (e.code === "already_reacted") return true;
-        return classifyReactionFailure(e, channel, ts, name, "add").settled;
+        return (await classifyReactionFailure(e, channel, ts, name, "add", client)).settled;
       }
     }
-    async function removeSlackReaction(channel, ts, name) {
+    async function removeSlackReaction(channel, ts, name, client) {
+      if (await loadReactionCooldown()) return false;
       if (reactionWriteBlocked(channel, ts, name, "remove")) return !!deadMessageCode(channel, ts, OWNER_WORKSPACE_ID);
       try {
         await slackApi("reactions.remove", { channel, timestamp: ts, name }, { post: true });
         return true;
       } catch (e) {
         if (e.code === "no_reaction") return true;
-        return classifyReactionFailure(e, channel, ts, name, "remove").settled;
+        return (await classifyReactionFailure(e, channel, ts, name, "remove", client)).settled;
       }
     }
 
@@ -615,9 +662,10 @@ module.exports = function mount(app, ctx) {
     }
 
     // ── 🔖 create ───────────────────────────────────────────────────────────
-    async function handleBookmark(channel, ts, seed, eventMs = Date.now()) {
+    async function handleBookmark(channel, ts, seed, eventMs = Date.now(), recovery = false) {
       const idemKey = keyFor(channel, ts);
       let existing = await findTaskByKey(idemKey);
+      if (existing && recovery) return;
       if (existing) {
         const existingProps = existing.properties || {};
         const previousMs = Date.parse(existingProps.slackBookmarkChangedAt || "");
@@ -662,7 +710,7 @@ module.exports = function mount(app, ctx) {
             source: "slack-bookmark",
             idempotency_key: idemKey,
             delegatedItemId: completedDelegate.id,
-            slackBookmarkChangedAt: new Date(eventMs).toISOString(),
+            ...(!recovery && { slackBookmarkChangedAt: new Date(eventMs).toISOString() }),
           };
           await blockDB.updateBlock(delegateTask.id, { properties: transferredProps });
           broadcast("blocks-changed", {
@@ -686,7 +734,7 @@ module.exports = function mount(app, ctx) {
         priority: "Medium",
         source: "slack-bookmark", created_by: "slack-events",
         created_at: new Date().toISOString(),
-        slackBookmarkChangedAt: new Date(eventMs).toISOString(),
+        ...(!recovery && { slackBookmarkChangedAt: new Date(eventMs).toISOString() }),
         start: "09:00", end: addMin("09:00", NO_HOURGLASS_MIN),
         idempotency_key: idemKey,
       };
@@ -701,35 +749,56 @@ module.exports = function mount(app, ctx) {
       await applyPendingDoneIntent(channel, ts);
     }
 
-    async function waitingTarget(item) {
+    async function waitingTarget(item, client) {
       const own = slackTarget(item.properties, SLACK_HOST);
       if (own) return own;
       const ref = (item.properties || {}).linkedBlockId;
       if (!ref) return null;
-      const linked = await blockDB.findUniqueLiveBlockByReference(ref, OWNER_WORKSPACE_ID);
+      const linked = await blockDB.findUniqueLiveBlockByReference(ref, OWNER_WORKSPACE_ID, client);
       if (!linked || linked.deleted_at || String(linked.workspace_id) !== String(OWNER_WORKSPACE_ID)) return null;
       return slackTarget(linked.properties, SLACK_HOST);
     }
 
-    async function linkedWaitingForMessage(channel, ts, includeDeleted = false) {
-      // One workspace-scoped read resolves both canonical ids and legacy local ids.
-      // Limit two detects ambiguous references; those never authorize a reaction.
-      const { rows } = await pool.query(`
-        SELECT w.*, linked.targets AS slack_linked_targets
+    async function linkedWaitingForMessage(channel, ts, includeDeleted = false, client = pool) {
+      // SQL excludes only explicit mismatches. The JS resolver owns URL parsing
+      // and target precedence, and ambiguity is checked before filtering by target.
+      const coordinates = alias => `jsonb_build_object(
+        'slack_channel', ${alias}.properties->'slack_channel', 'slack_ts', ${alias}.properties->'slack_ts',
+        'contact', jsonb_build_object('sourceRef', ${alias}.properties->'contact'->'sourceRef'),
+        'source_id', ${alias}.properties->'source_id', 'sourceRef', ${alias}.properties->'sourceRef',
+        'source_url', ${alias}.properties->'source_url', 'slack_url', ${alias}.properties->'slack_url',
+        'permalink', ${alias}.properties->'permalink')`;
+      const candidates = alias => `(NOT COALESCE(${alias}.properties->>'slack_channel' ~ '^[CDG][A-Z0-9]+$'
+          AND ${alias}.properties->>'slack_ts' ~ '^[0-9]+[.][0-9]+$', false)
+          OR (${alias}.properties->>'slack_channel' = $3 AND ${alias}.properties->>'slack_ts' = $4))`;
+      const { rows } = await sweepMetrics.phase("waiting", () => client.query(`
+        SELECT w.id, w.workspace_id, w.deleted_at, ${coordinates("w")}
+          || jsonb_build_object('source', w.properties->'source', 'status', w.properties->'status',
+             'completedAt', w.properties->'completedAt') AS properties,
+          linked.targets AS slack_linked_targets
         FROM blocks w
         LEFT JOIN LATERAL (
-          SELECT jsonb_agg(t.properties) AS targets FROM (
-            SELECT t.properties FROM blocks t
-            WHERE t.workspace_id = w.workspace_id
-              AND (t.id = w.properties->>'linkedBlockId'
-                OR t.properties->>'local_id' = w.properties->>'linkedBlockId')
-              AND t.deleted_at IS NULL
+          SELECT jsonb_agg(t.target) AS targets, count(*) AS matches,
+                 bool_or(t.possible) AS possible FROM (
+            SELECT ${coordinates("b")} AS target, ${candidates("b")} AS possible
+            FROM blocks b
+            WHERE b.workspace_id = w.workspace_id
+              AND (b.id = w.properties->>'linkedBlockId'
+                OR b.properties->>'local_id' = w.properties->>'linkedBlockId')
+              AND b.deleted_at IS NULL
             LIMIT 2
           ) t
         ) linked ON true
         WHERE w.workspace_id = $1 AND w.properties->>'kind' = 'delegated_item'
           AND ($2::boolean OR w.deleted_at IS NULL)
-      `, [OWNER_WORKSPACE_ID, includeDeleted]);
+          AND ${candidates("w")}
+          AND (
+            (w.properties->>'slack_channel' = $3 AND w.properties->>'slack_ts' = $4)
+            OR w.properties->'contact'->'sourceRef' IS NOT NULL
+            OR w.properties ?| ARRAY['source_id','sourceRef','source_url','slack_url','permalink']
+            OR (linked.matches = 1 AND linked.possible)
+          )
+      `, [OWNER_WORKSPACE_ID, includeDeleted, channel, ts]));
       return rows.filter(item => {
         const targets = item.slack_linked_targets || [];
         const target = slackTarget(item.properties, SLACK_HOST)
@@ -745,10 +814,11 @@ module.exports = function mount(app, ctx) {
         (item.properties || {}).source !== "slack-delegate" || (item.properties || {}).status === "unblocked");
     }
 
-    async function handleDelegate(channel, ts, seed, eventMs = Date.now()) {
+    async function handleDelegate(channel, ts, seed, eventMs = Date.now(), recovery = false) {
       if (await isLinkedWaitingEcho(channel, ts)) return;
       const idemKey = delegateKeyFor(channel, ts);
       let existing = await findTaskByKey(idemKey);
+      if (existing && recovery) return;
       if (existing) {
         const existingProps = existing.properties || {};
         const previousMs = Date.parse(existingProps.slackDelegateChangedAt || "");
@@ -796,7 +866,7 @@ module.exports = function mount(app, ctx) {
         idempotency_key: idemKey,
         created_by: "slack-events",
         created_at: new Date().toISOString(),
-        slackDelegateChangedAt: new Date(eventMs).toISOString(),
+        ...(!recovery && { slackDelegateChangedAt: new Date(eventMs).toISOString() }),
       };
       props = stampDelegateSnapshot(props);
       const created = await blockDB.createBlock({
@@ -912,10 +982,21 @@ module.exports = function mount(app, ctx) {
       });
       const bookmark = await findLiveTaskByKey(keyFor(channel, ts));
       if (bookmark) await projectTaskToSlack(bookmark);
-      else {
-        await removeSlackReaction(channel, ts, R_START);
-        await removeSlackReaction(channel, ts, R_DONE);
-      }
+      else await removeUnownedWorkReactions(channel, ts, [R_START, R_DONE]);
+    }
+
+    async function removeUnownedWorkReactions(channel, ts, names, completedDelegateOnly = false) {
+      if (await loadReactionCooldown()) return;
+      await withProjectionLock(`${OWNER_WORKSPACE_ID}:${channel}:${ts}`, async client => {
+        if (receiptsAvailable) {
+          const bookmark = await findLiveTaskByKey(keyFor(channel, ts), client);
+          const task = await findLiveTaskByKey(delegateCompletionKeyFor(channel, ts), client);
+          const delegate = await findLiveTaskByKey(delegateKeyFor(channel, ts), client);
+          if (bookmark || task) return;
+          if (completedDelegateOnly ? !isBlockDone(delegate, null) : delegate) return;
+        }
+        for (const name of names) await removeSlackReaction(channel, ts, name, client);
+      });
     }
 
     // Removing Slack's bookmark removes the canonical DCC task too. If it is
@@ -968,8 +1049,11 @@ module.exports = function mount(app, ctx) {
       }
       await blockDB.deleteBlock(task.id);
       await syncLinkedTriage(task, "release", eventMs);
-      await removeSlackReaction(channel, ts, R_START);
-      await removeSlackReaction(channel, ts, R_DONE);
+      if (receiptsAvailable) await projectTaskToSlack(task);
+      else {
+        await removeSlackReaction(channel, ts, R_START);
+        await removeSlackReaction(channel, ts, R_DONE);
+      }
       broadcast("blocks-changed", { action: "slack-bookmark-cancel", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
     }
 
@@ -1003,13 +1087,14 @@ module.exports = function mount(app, ctx) {
       const task = await taskForWorkReaction(channel, ts);
       if (!task) {
         const delegate = await findLiveTaskByKey(delegateKeyFor(channel, ts));
-        if (delegate && isBlockDone(delegate, null)) await removeSlackReaction(channel, ts, R_START);
+        if (delegate && isBlockDone(delegate, null)) await removeUnownedWorkReactions(channel, ts, [R_START], true);
         else console.warn(`[slack-events] ⌛ with no task for ${channel}:${ts} — ignored`);
         return;
       }
       const started = await startWork({ block: task, atMs: eventMs, actor: "slack", actionId: actionId || `${channel}:${ts}:${eventMs}` });
       if (!started.changed && (started.reason === "not-trackable" || started.reason === "completed")) {
-        await removeSlackReaction(channel, ts, R_START);
+        if (receiptsAvailable) await projectTaskToSlack(task);
+        else await removeSlackReaction(channel, ts, R_START);
       }
       broadcast("blocks-changed", { action: "slack-start", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
     }
@@ -1093,7 +1178,8 @@ module.exports = function mount(app, ctx) {
       // Completion owns the active-work cleanup on both surfaces. completeWork
       // closes the DCC session; remove the matching Slack signal immediately.
       // The reconciliation loop remains the retry path if this write cannot land.
-      await removeSlackReaction(channel, ts, R_START);
+      if (receiptsAvailable) await projectTaskToSlack(canonical);
+      else await removeSlackReaction(channel, ts, R_START);
       await awardSlackCompletion(canonical, completedIso);
       await syncLinkedTriage(canonical, "done", eventMs);
 
@@ -1202,7 +1288,10 @@ module.exports = function mount(app, ctx) {
       }
 
       // Back into the active queue on the Slack side too (E2 reads 🔖 as the queue).
-      if (bookmark) await addSlackReaction(channel, ts, R_BOOKMARK);
+      if (bookmark) {
+        if (receiptsAvailable) await projectTaskToSlack(durable.task || task);
+        else await addSlackReaction(channel, ts, R_BOOKMARK);
+      }
       await syncLinkedTriage(durable.task || task, "scheduled", eventMs);
 
       if (!reopenDelegate) {
@@ -1219,13 +1308,64 @@ module.exports = function mount(app, ctx) {
     // this is the one call marked user_required. A bot-tier actor cannot run it at
     // all, so runReconciliation skips the sweep for them rather than logging a
     // failure every five minutes.
-    async function searchSlack(query) {
+    async function searchPage(query, page) {
+      if ((searchCooldowns.get(cooldownKey) || 0) > Date.now()) return null;
+      try {
+        return await slackApi("search.messages", { query, count: 100, sort: "timestamp", page }, {
+          token: "user_required",
+        });
+      } catch (error) {
+        if (error.code !== "ratelimited") throw error;
+        const resumeAt = Date.now() + (error.retryAfterMs ?? RATE_LIMIT_BACKOFF_MS);
+        searchCooldowns.set(cooldownKey, Math.max(searchCooldowns.get(cooldownKey) || 0, resumeAt));
+        sweepMetrics.count("rateLimited");
+        return null;
+      }
+    }
+
+    async function searchSlack(query, history = false) {
+      if (history) {
+        const key = JSON.stringify([OWNER_WORKSPACE_ID, actorKey, query]);
+        const today = new Date().toISOString().slice(0, 10);
+        const state = historySearches.get(key) || { ranges: [{ before: today }], page: 1 };
+        const range = state.ranges[0];
+        const filter = range.on
+          ? `on:${range.on}`
+          : `before:${range.before}${range.after ? ` after:${range.after}` : ""}`;
+        const result = await searchPage(`${query} ${filter}`, state.page);
+        if (!result) return [];
+        const pages = Number(result.messages?.paging?.pages || 1);
+        if (pages > 100 && !range.on) {
+          sweepMetrics.count("saturatedHistory");
+          const dayMs = 86_400_000;
+          const oldest = Date.parse(range.after || "2013-01-01");
+          const newest = Date.parse(range.before);
+          const middle = new Date(oldest + Math.floor((newest - oldest) / (2 * dayMs)) * dayMs)
+            .toISOString().slice(0, 10);
+          if (oldest < Date.parse(middle) && Date.parse(middle) < newest) {
+            state.ranges.splice(0, 1, { ...range, before: middle }, { on: middle }, { ...range, after: middle });
+          } else {
+            state.ranges.splice(0, 1, { on: new Date(newest - dayMs).toISOString().slice(0, 10) });
+          }
+          state.page = 1;
+        } else if (state.page < Math.min(pages, 100)) {
+          state.page += 1;
+        } else {
+          if (pages > 100) sweepMetrics.count("saturatedHistory");
+          state.ranges.shift();
+          state.page = 1;
+        }
+        if (state.ranges.length) historySearches.set(key, state);
+        else historySearches.delete(key);
+        return result.messages?.matches || [];
+      }
       const matches = [];
       const seen = new Set();
       let page = 1;
       let pages = 1;
       while (page <= pages && page <= 10) {
-        const result = await slackApi("search.messages", { query, count: 100, sort: "timestamp", page }, { token: "user_required" });
+        const result = await searchPage(query, page);
+        if (!result) break;
         const messages = result.messages || {};
         pages = Math.max(1, Number(messages.paging && messages.paging.pages || 1));
         for (const match of messages.matches || []) {
@@ -1252,7 +1392,8 @@ module.exports = function mount(app, ctx) {
       const captured = captureProperties(kind, channel, ts, capture);
       // Slack calls can take seconds. Re-read before merging so a UI edit made
       // during capture always wins over this delayed automation write.
-      const latest = await blockDB.getBlock(block.id) || block;
+      const latest = await blockDB.getBlock(block.id);
+      if (!latest || latest.deleted_at || String(latest.workspace_id) !== String(OWNER_WORKSPACE_ID)) return block;
       const props = latest.properties || {};
       const displayField = kind === "delegate" ? "myTask" : "title";
       const currentTitle = props[displayField] || "";
@@ -1281,17 +1422,60 @@ module.exports = function mount(app, ctx) {
       return { ...latest, properties: finalProps };
     }
 
-    async function reconcileMatch(kind, match) {
-      const channelObj = match.channel && typeof match.channel === "object" ? match.channel : {};
-      const channel = String(channelObj.id || match.channel || "");
+    function searchHit(kind, match) {
+      const channel = String(match.channel?.id || match.channel || "");
       const ts = String(match.ts || "");
-      if (!channel || !ts) return { skipped: true };
-      if (kind === "delegate" && Number(ts.split(".")[0]) * 1000 < DELEGATE_IMPORT_AFTER_MS) return { skipped: true };
-      const idemKey = kind === "delegate" ? delegateKeyFor(channel, ts) : keyFor(channel, ts);
+      if (!channel || !ts) return null;
+      if (kind === "delegate" && Number(ts.split(".")[0]) * 1000 < DELEGATE_IMPORT_AFTER_MS) return null;
+      return { match, channel, ts, idemKey: kind === "delegate" ? delegateKeyFor(channel, ts) : keyFor(channel, ts) };
+    }
+
+    async function reconcileMatches(kind, matches) {
+      const hits = new Map();
+      for (const match of matches) {
+        const hit = searchHit(kind, match);
+        if (hit && !hits.has(hit.idemKey)) hits.set(hit.idemKey, hit);
+      }
+      const keys = [...hits.keys()];
+      sweepMetrics.count("keys", keys.length);
+      for (let start = 0; start < keys.length; start += 100) {
+        const batch = keys.slice(start, start + 100);
+        const { rows } = await pool.query(`
+          SELECT DISTINCT ON (properties->>'idempotency_key')
+                 properties->>'idempotency_key' AS key,
+                 deleted_at IS NOT NULL OR COALESCE(properties->>'kind' = 'slack_reaction_tombstone', false) AS blocked,
+                 properties->>'capture_status' = 'captured'
+                   AND COALESCE(properties->>'source_message_preview', '') <> '' AS captured,
+                 properties->>'enrichment_status' = 'complete' AS enriched,
+                 properties->>'enrichment_next_attempt_at' AS next_attempt
+          FROM blocks
+          WHERE workspace_id = $1 AND properties->>'idempotency_key' = ANY($2::text[])
+          ORDER BY properties->>'idempotency_key', ${taskKeyPrecedence}
+        `, [OWNER_WORKSPACE_ID, batch]);
+        const byKey = new Map(rows.map(row => [row.key, row]));
+        for (const key of batch) {
+          const row = byKey.get(key);
+          if (row?.blocked) continue;
+          const enrichmentDue = row && !row.enriched
+            && (!row.next_attempt || Date.parse(row.next_attempt) <= Date.now());
+          if (row?.captured && !enrichmentDue) continue;
+          await reconcileMatch(kind, hits.get(key).match);
+        }
+      }
+      return hits.size;
+    }
+
+    async function reconcileMatch(kind, match) {
+      const hit = searchHit(kind, match);
+      if (!hit) return { skipped: true };
+      return queueMessage(actor.slackUserId, hit.channel, hit.ts, () => reconcileHit(kind, hit));
+    }
+
+    async function reconcileHit(kind, { channel, ts, idemKey, match }) {
       let block = await findTaskByKey(idemKey);
       if (!block) {
-        if (kind === "delegate") await handleDelegate(channel, ts, match);
-        else await handleBookmark(channel, ts, match);
+        if (kind === "delegate") await handleDelegate(channel, ts, match, Date.now(), true);
+        else await handleBookmark(channel, ts, match, Date.now(), true);
         return { created: true };
       }
       if (block.deleted_at || (block.properties || {}).kind === "slack_reaction_tombstone") return { skipped: true };
@@ -1307,7 +1491,7 @@ module.exports = function mount(app, ctx) {
 
     async function retryPendingEnrichment(limit = 25) {
       const { rows } = await pool.query(
-        `SELECT id, to_char(date, 'YYYY-MM-DD') AS date, properties, deleted_at, workspace_id
+        `SELECT id
            FROM blocks
           WHERE workspace_id = $1
             AND deleted_at IS NULL
@@ -1327,30 +1511,45 @@ module.exports = function mount(app, ctx) {
       return enriched;
     }
 
-    async function projectTaskToSlack(block) {
+    async function projectTaskToSlack(block, repair = null) {
+      sweepMetrics.count("projections");
+      if (reactionPaused()) return false;
       if (!block || String(block.workspace_id || "") !== String(OWNER_WORKSPACE_ID || "")) return false;
       const p = block.properties || {};
       const delegatedItem = p.kind === "delegated_item";
       const bookmarkTask = p.source === "slack-bookmark";
       const delegateTask = p.source === "slack-delegate-completion";
       if (!delegatedItem && !bookmarkTask && !delegateTask) return false;
+      if (await loadReactionCooldown()) return false;
       const target = delegatedItem ? await waitingTarget(block) : slackTarget(p, SLACK_HOST);
-      if (!target) return false;
+      if (!target) {
+        if (repair) repair.ineligible = true;
+        return false;
+      }
       const queueKey = `${OWNER_WORKSPACE_ID}:${target.channel}:${target.ts}`;
       const previous = projectionQueues.get(queueKey) || Promise.resolve();
-      const next = previous.catch(() => {}).then(async () => {
+      const next = previous.catch(() => {}).then(() => withProjectionLock(queueKey, async client => {
+        if (reactionPaused()) return false;
         // Route arguments and mirror pages may have waited behind a newer change.
         // Always read the durable row inside the queue, never replay the snapshot.
-        const fresh = await blockDB.getBlockIncludingDeleted(block.id);
-        if (!fresh || String(fresh.workspace_id) !== String(OWNER_WORKSPACE_ID)) return false;
+        const fresh = await blockDB.getBlockIncludingDeleted(block.id, client);
+        if (!fresh || String(fresh.workspace_id) !== String(OWNER_WORKSPACE_ID)) {
+          if (repair) repair.ineligible = true;
+          return false;
+        }
         const props = fresh.properties || {};
-        const currentTarget = props.kind === "delegated_item" ? await waitingTarget(fresh) : slackTarget(props, SLACK_HOST);
+        const currentTarget = props.kind === "delegated_item" ? await waitingTarget(fresh, client) : slackTarget(props, SLACK_HOST);
         if (!sameTarget(target, currentTarget)) return false;
-        const items = await linkedWaitingForMessage(target.channel, target.ts);
+        if (repair && fresh.deleted_at && props.kind === "slack_reaction_tombstone") {
+          repair.ineligible = true;
+          return false;
+        }
+        if (repair) repair.target = target;
+        const items = await linkedWaitingForMessage(target.channel, target.ts, false, client);
         const markerIds = new Set((props.dependencyWaitingItemIds || [props.dependencyWaitingItemId]).filter(Boolean).map(String));
         const dependencies = [];
         for (const id of markerIds) {
-          const item = await blockDB.getBlockIncludingDeleted(id);
+          const item = await blockDB.getBlockIncludingDeleted(id, client);
           if (item && String(item.workspace_id) === String(OWNER_WORKSPACE_ID)) dependencies.push(item);
         }
         const waiting = items.concat(dependencies).some(item => !item.deleted_at && waitingItems.isOpen(item));
@@ -1378,21 +1577,89 @@ module.exports = function mount(app, ctx) {
         let settled = true;
         for (const [name, add] of writes) {
           // No user parameter: Slack removes only the token owner's reaction.
-          const ok = await (add ? addSlackReaction : removeSlackReaction)(target.channel, target.ts, name);
+          const ok = await (add ? addSlackReaction : removeSlackReaction)(target.channel, target.ts, name, client);
           settled = ok && settled;
+          if (reactionPaused()) break;
         }
         return settled;
-      });
+      }));
       projectionQueues.set(queueKey, next);
       try { return await next; }
       catch (error) { console.warn(`[slack-events] projection retry for ${block.id}:`, error.message); return false; }
       finally { if (projectionQueues.get(queueKey) === next) projectionQueues.delete(queueKey); }
     }
 
+    async function withProjectionLock(key, project) {
+      if (!receiptsAvailable) return project();
+      const client = await pool.connect();
+      let failure;
+      try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", ["slack-projection:" + key]);
+        const result = await project(client);
+        await client.query("COMMIT");
+        return result;
+      } catch (error) {
+        failure = error;
+        throw error;
+      } finally {
+        // Destroy a failed client so the pool releases its transaction lock.
+        client.release(failure);
+      }
+    }
+
     async function mirrorDccCompletions() {
+      if (!ANY_TOKEN) return 0;
+      if (await loadReactionCooldown()) {
+        sweepMetrics.count("cooldown");
+        return 0;
+      }
+      if (!receiptsAvailable) return mirrorWithoutReceipts();
+
+      const { rows } = await pool.query(candidatesSql, [OWNER_WORKSPACE_ID, actorKey, 20]);
+      let mirrored = 0;
+      for (const candidate of rows) {
+        if (reactionPaused()) break;
+        const repair = {};
+        let settled = false;
+        try {
+          const block = await blockDB.getBlockIncludingDeleted(candidate.id);
+          if (!block || String(block.workspace_id) !== String(OWNER_WORKSPACE_ID)
+              || block.properties?.kind === "slack_reaction_tombstone") {
+            repair.ineligible = true;
+          } else {
+            settled = await projectTaskToSlack(block, repair);
+          }
+        } catch {
+          // Leave the revision retryable, including ambiguous links and query failures.
+          console.warn("[slack-events] mirror candidate read or resolution failed");
+        }
+        const dead = repair.target && deadMessages.get(
+          `${OWNER_WORKSPACE_ID}:${repair.target.channel}:${repair.target.ts}`);
+        if (repair.ineligible) {
+          sweepMetrics.count("ineligible");
+          await saveReceipt(candidate.id, candidate.revision, "settled");
+        } else if (settled && dead) {
+          sweepMetrics.count("unreachable");
+          await saveReceipt(candidate.id, candidate.revision, "unreachable", new Date(dead.at + DEAD_MESSAGE_TTL_MS));
+        } else if (settled) {
+          sweepMetrics.count("settled");
+          await saveReceipt(candidate.id, candidate.revision, "settled");
+          mirrored += 1;
+        } else {
+          sweepMetrics.count("retries");
+          await saveReceipt(candidate.id, candidate.revision, "retry", new Date(
+            Math.max(reactionCooldowns.get(cooldownKey) || 0, Date.now() + RECONCILE_MS)));
+        }
+      }
+      return mirrored;
+    }
+
+    // Preserve recovery while running with the old schema.
+    async function mirrorWithoutReceipts() {
       const cursor = mirrorCursors.get(OWNER_WORKSPACE_ID) || null;
       const { rows } = await pool.query(
-        `SELECT id, to_char(date, 'YYYY-MM-DD') AS date, properties, deleted_at, workspace_id, updated_at
+        `SELECT id, to_char(date, 'YYYY-MM-DD') AS date, properties, deleted_at, workspace_id, updated_at::text AS updated_at
           FROM blocks
           WHERE workspace_id = $1
             AND (properties->>'source' IN ('slack-bookmark', 'slack-delegate', 'slack-delegate-completion')
@@ -1422,7 +1689,7 @@ module.exports = function mount(app, ctx) {
 
     return {
       actor,
-      enrichBlock, reconcileMatch, refreshCapture, searchSlack,
+      enrichBlock, reconcileMatch, reconcileMatches, refreshCapture, searchSlack,
       handleBookmark, handleBookmarkRemoved, handleDelegate, handleDelegateRemoved,
       handleStart, clearStart, handleDone, handleUndone,
       projectTaskToSlack, retryPendingEnrichment, mirrorDccCompletions,
@@ -1455,6 +1722,13 @@ module.exports = function mount(app, ctx) {
 
   let reconciliationRunning = false;
   async function runReconciliation() {
+    if (!measureSweep) return reconcile();
+    const result = await sweepMetrics.withSweepMetrics(reconcile);
+    console.info("[slack-events] reconciliation metrics", JSON.stringify(result.metrics));
+    return result;
+  }
+
+  async function reconcile() {
     if (reconciliationRunning) return { skipped: "already_running" };
     reconciliationRunning = true;
     let lockClient = null;
@@ -1466,11 +1740,13 @@ module.exports = function mount(app, ctx) {
       // both cheaper and immune to a partial-lock ordering bug.
       if (typeof pool.connect === "function") {
         lockClient = await pool.connect();
-        const lock = await lockClient.query("SELECT pg_try_advisory_lock($1) AS locked", [1_934_816_113]);
+        await lockClient.query("BEGIN");
+        const lock = await lockClient.query("SELECT pg_try_advisory_xact_lock($1) AS locked", [1_934_816_113]);
         locked = !!(lock.rows[0] && lock.rows[0].locked);
       }
       if (!locked) return { skipped: "lock_held" };
 
+      await checkReceiptSchema();
       const roster = await actors.listActors();
       stats.actors = roster.length;
       if (!roster.length) {
@@ -1488,30 +1764,42 @@ module.exports = function mount(app, ctx) {
         // minutes, per actor, forever. Unknown scopes stay permissive, so the env
         // identity keeps sweeping exactly as before. See makeActor.
         if (actors.actorHasScope(actor, "search:read")) {
-          try {
-            const bookmarks = await bound.searchSlack("hasmy::bookmark:");
-            for (const match of bookmarks) await bound.reconcileMatch("bookmark", match);
-            stats.bookmarks += bookmarks.length;
-          } catch (error) { console.error(`[slack-events] bookmark reconciliation failed for user ${actor.userId}:`, error.message); }
-
-          try {
-            const delegates = await bound.searchSlack("hasmy::busts_in_silhouette:");
-            for (const match of delegates) await bound.reconcileMatch("delegate", match);
-            stats.delegates += delegates.length;
-          } catch (error) { console.error(`[slack-events] delegate reconciliation failed for user ${actor.userId}:`, error.message); }
+          for (const [kind, query, stat] of [
+            ["bookmark", "hasmy::bookmark:", "bookmarks"],
+            ["delegate", "hasmy::busts_in_silhouette:", "delegates"],
+          ]) {
+            let matches = [];
+            try {
+              matches = await bound.searchSlack(query);
+            } catch {
+              console.warn(`[slack-events] ${kind} search failed`);
+            }
+            try {
+              matches.push(...await bound.searchSlack(query, true));
+            } catch {
+              console.warn(`[slack-events] ${kind} history repair failed`);
+            }
+            try {
+              stats[stat] += await sweepMetrics.phase("lookup", () => bound.reconcileMatches(kind, matches));
+            } catch {
+              console.warn(`[slack-events] ${kind} reconciliation failed`);
+            }
+          }
         }
 
         try { stats.enriched += await bound.retryPendingEnrichment(); }
         catch (error) { console.error(`[slack-events] enrichment retry failed for user ${actor.userId}:`, error.message); }
 
-        try { stats.mirrored += await bound.mirrorDccCompletions(); }
+        try { stats.mirrored += await sweepMetrics.phase("mirror", bound.mirrorDccCompletions); }
         catch (error) { console.error(`[slack-events] completion mirror failed for user ${actor.userId}:`, error.message); }
       }
       return stats;
     } finally {
       if (lockClient) {
-        if (locked) await lockClient.query("SELECT pg_advisory_unlock($1)", [1_934_816_113]).catch(() => {});
-        lockClient.release();
+        let rollbackError;
+        try { await lockClient.query("ROLLBACK"); }
+        catch (error) { rollbackError = error; }
+        lockClient.release(rollbackError);
       }
       reconciliationRunning = false;
     }
@@ -1521,16 +1809,13 @@ module.exports = function mount(app, ctx) {
   const messageQueues = new Map();
   let warnedUnconfigured = false;
   function enqueueEvent(ev, teamId) {
-    const item = ev && ev.item;
-    // Keyed per PERSON per message. Two people reacting to the SAME message are
-    // independent writes to different workspaces and must not queue behind each
-    // other; what the self-echo suppression and the tombstone ordering guards
-    // actually need is ordering within one actor's reactions to one message.
-    const key = item && item.channel && item.ts
-      ? `${(ev && ev.user) || "?"}:${item.channel}:${item.ts}`
-      : "unkeyed";
+    return queueMessage(ev?.user, ev?.item?.channel, ev?.item?.ts, () => processEvent(ev, teamId));
+  }
+
+  function queueMessage(user, channel, ts, work) {
+    const key = channel && ts ? `${user || "?"}:${channel}:${ts}` : "unkeyed";
     const previous = messageQueues.get(key) || Promise.resolve();
-    const next = previous.catch(() => {}).then(() => processEvent(ev, teamId));
+    const next = previous.catch(() => {}).then(work);
     messageQueues.set(key, next);
     return next.finally(() => {
       if (messageQueues.get(key) === next) messageQueues.delete(key);
@@ -1557,6 +1842,7 @@ module.exports = function mount(app, ctx) {
       }
       return;
     }
+    if (receiptsAvailable === null && typeof pool.connect === "function") await checkReceiptSchema();
     const bound = forActor(actor);
 
     const { channel, ts } = ev.item;

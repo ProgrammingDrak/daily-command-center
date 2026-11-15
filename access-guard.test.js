@@ -152,3 +152,22 @@ test("wiring a non-delegatable capability fails at MOUNT, not at request time", 
   assert.equal(capabilities.isDelegatable("place_bounty"), false, "tier-only");
   assert.equal(capabilities.isDelegatable("adjust_points"), true);
 });
+
+test("a delegated itinerary viewer cannot see private transactions", async () => {
+  const endpoint = mountRoutes({
+    accessStore: { async resolveRole() { return "viewer"; } },
+    blockDB: { async getBlocksByDate() {
+      return [{ id: "task", type: "block", properties: {
+        title: "Dinner", kind: "task", local_id: "task",
+        taskCosts: [{ merchant: "Private merchant", receiptUrl: "https://example.com/private-receipt" }]
+      } }];
+    } }
+  }).find(dayRoute);
+  const req = REQ();
+  let allowed = false;
+  await endpoint.mw[0](req, fakeRes(), () => { allowed = true; });
+  assert.equal(allowed, true);
+  const response = await endpoint.mw[1](req);
+  assert.equal(response.tasks[0].title, "Dinner");
+  assert.equal(Object.hasOwn(response.tasks[0], "taskCosts"), false);
+});

@@ -139,6 +139,15 @@ module.exports = function createMeetingMaterializer(deps) {
     return props;
   }
 
+  function sourceSchedule(meeting, start, end) {
+    return {
+      date: isoToDate(meeting.start), start, end,
+      startAt: new Date(meeting.start).toISOString(),
+      endAt: new Date(meeting.end).toISOString(),
+      source: "calendar",
+    };
+  }
+
   function buildProps({ meeting, identity, start, end, durationMinutes, allDay, allDayStart, allDayEnd }) {
     const title = meeting.title || "(No title)";
     const props = {
@@ -151,7 +160,7 @@ module.exports = function createMeetingMaterializer(deps) {
         all_day: true,
         all_day_start: allDayStart,
         all_day_end: allDayEnd,
-      } : { start, end }),
+      } : { start, end, scheduleInstant: sourceSchedule(meeting, start, end) }),
       estimatedMinutes: durationMinutes,
       priority: "Medium",
       source: "calendar",
@@ -359,11 +368,14 @@ module.exports = function createMeetingMaterializer(deps) {
           const nextCalendarColor = meeting.calendar_color || p.calendar_color || "";
           const nextAccountKey = meeting.account_key || p.account_key || "";
           const nextAccountEmail = meeting.account_email || p.account_email || "";
+          const scheduleInstant = allDay ? null : sourceSchedule(meeting, start, end);
           const changed =
             existing.date !== date || p.title !== nextTitle ||
             (!!p.all_day !== !!allDay) ||
             (allDay ? (p.all_day_start !== allDayStart || p.all_day_end !== allDayEnd)
               : (p.start !== start || p.end !== end)) ||
+            (p.scheduleInstant?.startAt || null) !== (scheduleInstant?.startAt || null) ||
+            (p.scheduleInstant?.endAt || null) !== (scheduleInstant?.endAt || null) ||
             p.synced_gcal_start !== (allDay ? allDayStart : start) ||
             p.synced_gcal_end !== (allDay ? allDayEnd : end) ||
             p.calUrl !== nextCalUrl || p.calendar_id !== nextCalendarId ||
@@ -385,6 +397,7 @@ module.exports = function createMeetingMaterializer(deps) {
                 all_day: false, all_day_start: undefined, all_day_end: undefined,
                 start, end,
               }),
+              scheduleInstant: scheduleInstant || undefined,
               estimatedMinutes: durationMinutes,
               location: meeting.location || p.location || "",
               hangout_link: meeting.hangout_link || meeting.conferenceUrl || p.hangout_link || "",
@@ -399,7 +412,7 @@ module.exports = function createMeetingMaterializer(deps) {
               synced_gcal_end: allDay ? allDayEnd : end,
               synced_gcal_title: nextTitle,
             };
-            if (allDay) { delete props.start; delete props.end; }
+            if (allDay) { delete props.start; delete props.end; delete props.scheduleInstant; }
             else { delete props.all_day_start; delete props.all_day_end; }
             if (wantsPending) props.prep_status = "pending";
             stampMeetingPoints(props, durationMinutes);

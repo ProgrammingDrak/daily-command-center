@@ -33,13 +33,16 @@ function applyScheduleView(navState,prev){
   const review=document.getElementById("actual-view");
   const reviewOpen=!!(window.DCC&&DCC.nav&&DCC.nav.reviewOpen());
   if(review){review.style.display=reviewOpen?"block":"none";review.hidden=!reviewOpen;}
+  const reviewButton=document.getElementById("progress-day-review");
+  if(reviewButton){reviewButton.setAttribute("aria-expanded",String(reviewOpen));reviewButton.textContent=reviewOpen?"Close day review":"Day review";}
   const viewChanged=!prev||prev.view!==nav.view||prev.page!==nav.page;
   const actualChanged=!prev||prev.actual!==nav.actual;
+  const dismiss=document.getElementById("progress-hide-actual-details");
+  if(dismiss)dismiss.hidden=!_actualOn();
   if(viewChanged){
     if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
     if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   }
-  renderActualSummary();
   if(schedView==="list"&&(viewChanged||actualChanged))_buildUnlessDraft(listView,buildListView);
   if(schedView==="calendar"&&typeof buildItineraryCalendar==="function"){
     // The Actual toggle repaints the layer only, so an open inspector keeps its fields.
@@ -50,13 +53,13 @@ function applyScheduleView(navState,prev){
 }
 window.applyScheduleView=applyScheduleView;
 // Day review stays the planned-vs-actual chart with time_entry editing. It is
-// reached from the Actual summary, never shown in place of List or Calendar.
+// opened from the progress header above the Planned and Actual bars.
 function buildActualView(dateStr){
   if(typeof buildDayReview==="function") buildDayReview(dateStr);
 }
 document.addEventListener("dcc:actual-time-saved",()=>{
+  buildProgress();
   if(!_actualOn())return;
-  renderActualSummary();
   if(schedView==="list"&&typeof render==="function")render("schedule");
   if(schedView==="calendar"&&window.ItineraryCalendar&&ItineraryCalendar.build)ItineraryCalendar.build({keepScroll:true});
 });
@@ -82,24 +85,6 @@ function actualDayProjection(){
   return A.projectDay(_actualEvents(),entries,{date,sessions,timeZone:A.appTimeZone()});
 }
 function _actualOn(){const nav=window.DCC&&DCC.nav&&DCC.nav.get();return !!(nav&&nav.page==="tasks"&&nav.view!=="queue"&&nav.actual);}
-// Summary strip: day totals, completion review and the explicit Day review panel.
-function renderActualSummary(){
-  const strip=document.getElementById("actual-summary");
-  if(!strip)return;
-  const A=window.DCC&&DCC.ActualProjection;
-  if(!_actualOn()||!A){strip.hidden=true;strip.innerHTML="";return;}
-  const date=_schedViewDate();
-  const day=actualDayProjection();
-  const items=A.describeDay(day);
-  const open=!!(DCC.nav&&DCC.nav.reviewOpen());
-  strip.hidden=false;
-  strip.innerHTML='<div class="actual-summary-stats">'+items.map(item=>'<span class="actual-stat actual-stat--'+item.key+'"><b>'+escHtml(item.value)+'</b> '+escHtml(item.label)+'</span>').join("")+'</div>'+
-    '<p class="actual-summary-note">Actual comes from recorded time entries. Waiting time is not focused effort.'+(schedView==="calendar"?' Bars show recorded segments; minutes without a clock time are listed per day.':'')+'</p>'+
-    '<div class="actual-summary-actions"><button type="button" data-completion-review data-review-date="'+escHtml(date||"")+'">Did these happen?</button>'+
-    '<button type="button" class="actual-review-toggle" aria-expanded="'+open+'" aria-controls="actual-view">'+(open?'Hide day review':'Day review')+'</button></div>';
-  strip.querySelector(".actual-review-toggle").addEventListener("click",()=>{if(DCC.nav)DCC.nav.setReviewOpen(!DCC.nav.reviewOpen());});
-}
-window.renderActualSummary=renderActualSummary;
 window.actualDayProjection=actualDayProjection;
 function _actualRowHtml(ev,projection){
   const A=window.DCC&&DCC.ActualProjection;
@@ -195,50 +180,12 @@ function openMeetingPanel(ev,opts){
   if(typeof openPrepModal==="function"){ openPrepModal(ev,opts); return; }
   if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(ev.meetingBlockId||ev.id);
 }
-function openTaskNotes(ev){
-  if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);
+function openTaskNotes(ev,options){
+  if(typeof openAddModal==="function")openAddModal(options?.anchor?.blockId||ev.id,ev.title,options);
   else if(typeof openNotesDrawer==="function")openNotesDrawer(ev.id,ev.title);
 }
-const QUICK_COMPLETE_HOLD_MS=550;
 function bindQuickCompleteControl(button,onQuick,onWithNotes){
-  if(!button)return;
-  let holdTimer=null;
-  let suppressClick=false;
-  const clearPress=()=>{
-    if(holdTimer){clearTimeout(holdTimer);holdTimer=null;}
-    button.classList.remove("is-holding");
-  };
-  button.addEventListener("pointerdown",event=>{
-    if(event.button!=null&&event.button!==0)return;
-    event.stopPropagation();
-    suppressClick=false;
-    button.classList.add("is-holding");
-    try{button.setPointerCapture(event.pointerId);}catch(_err){}
-    holdTimer=setTimeout(()=>{
-      holdTimer=null;
-      suppressClick=true;
-      button.classList.remove("is-holding");
-      if(typeof onWithNotes==="function")onWithNotes();
-    },QUICK_COMPLETE_HOLD_MS);
-  });
-  button.addEventListener("pointerup",clearPress);
-  button.addEventListener("pointercancel",clearPress);
-  button.addEventListener("click",event=>{
-    event.preventDefault();
-    event.stopPropagation();
-    clearPress();
-    if(suppressClick){suppressClick=false;return;}
-    button.classList.add("flash");
-    if(typeof onQuick==="function")onQuick();
-  });
-  button.addEventListener("keydown",event=>{
-    if(!event.shiftKey||!(event.key==="Enter"||event.key===" "))return;
-    event.preventDefault();
-    event.stopPropagation();
-    clearPress();
-    if(typeof onWithNotes==="function")onWithNotes();
-  });
-  button.addEventListener("contextmenu",event=>event.preventDefault());
+  return window.DCC.bindHoldAction(button,onQuick,onWithNotes);
 }
 // Task-bar controls own duration, add, details, delete and work-session actions.
 // The radial contains only contextual changes; calendar blocks keep Prep/Recap.
@@ -258,6 +205,8 @@ function buildTaskChangeItems(ev,trig){
   const items=[
     {icon:"🪜", label:"Subtask…",  onPick:()=>{if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(ev.id,trig);}}
   ];
+  if(window.DCCWorkingQueue?.addTask && !(typeof isDone==='function'&&isDone(ev)))
+    items.push({icon:'≡',label:'Move to Priority Queue',onPick:()=>window.DCCWorkingQueue.addTask(ev).catch(error=>DCC.toast(error.message||'Could not add task to queue','error'))});
   // Promote: pull a nested subtask/ride-along out to a standalone top-level task.
   // Same action as dragging it out to the timeline — here for discoverability + touch.
   if(typeof isNested==="function"&&isNested(ev))
@@ -454,6 +403,8 @@ function _unfRecById(id){
 // caller that resolves by local_id silently writes nothing. With the row id there is
 // nothing to search for.
 function taskAnchorById(id){
+  const queueAnchor=window.DCCWorkingQueue?.taskAnchor?.(id);
+  if(queueAnchor?.blockId===id)return queueAnchor;
   const ev=(typeof scheduled!=="undefined"&&Array.isArray(scheduled))?scheduled.find(e=>e.id===id):null;
   if(ev){
     const day=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
@@ -472,7 +423,7 @@ function taskAnchorById(id){
     const u=unf.__unf||{};
     return {ev:unf,date:u.sourceDate||null,blockId:u.sourceId||null,carryover:true};
   }
-  return null;
+  return window.DCCWorkingQueue?.taskAnchor?.(id)||null;
 }
 window.taskAnchorById=taskAnchorById;
 // Reorder within the Unscheduled section. Works across both id spaces (untimed
@@ -828,6 +779,7 @@ function createTaskListRowRenderer(context){
       (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'')+
       // Actual toggle: evidence only, from the List view's day projection.
       (context.actual&&!isUnfRow?_actualRowHtml(ev,context.actual):'');
+    const openDetails=()=>{if(context.onOpen){context.onOpen(ev);return;}if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);};
     const el=renderItineraryListRow(ev,{
       done:isDoneRow,
       draggable:movable,
@@ -850,7 +802,7 @@ function createTaskListRowRenderer(context){
       onDelete:!isDoneRow?()=>{if(isUnfRow){_unfDrop(ev,el);return;}openDeleteConfirm(ev.id);}:null,
       onAdd:!isDoneRow?(am)=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}:null,
       onCollapse:()=>{if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render("schedule");}},
-      onOpen:()=>{if(context.onOpen){context.onOpen(ev);return;}if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);},
+      onOpen:()=>openDetails(),
       onDragStart:(e)=>dStart(e,ev.id),onDragEnd:dEnd,
       onDragOver:!isDoneRow?(e)=>dOver(e,ev.id):null,onDragLeave:!isDoneRow?dLeave:null,onDrop:!isDoneRow?(e)=>dDrop(e,ev.id):null,
       afterRender:(rowEl)=>{
@@ -863,6 +815,11 @@ function createTaskListRowRenderer(context){
         const ae=rowEl.querySelector("[data-actual-edit]");if(ae)ae.addEventListener("click",e=>{e.stopPropagation();if(typeof window.editTimeEntries==="function")window.editTimeEntries(ev.id,ev.title,_schedViewDate(),ae);});
       }
     });
+    if(context.showCommute){
+      window.mountItineraryLocation?.(el,ev,openDetails);
+      window.mountItineraryCosts?.(el,ev);
+    }
+    if(context.showCommute&&!node?.depth&&_rowIsTimed(ev))window.mountItineraryCommute?.(el,ev);
     return el;
   }
 
@@ -912,7 +869,20 @@ window.createTaskListRowRenderer=createTaskListRowRenderer;
 // `day.unscheduled` is the Unscheduled SUBTREE, `day.timed` is the work list with done
 // rows inline, `day.folded` are the done rows that render inside a still-visible
 // parent, and `day.carryover` is yesterday's leftovers — empty unless this IS today.
-function _itineraryListModel(){
+function suggestedCommuteOrigin(blockId){
+  const stops=_itineraryListModel().groups.flatMap(group=>group.nodes)
+    .filter(node=>!node.depth&&_rowIsTimed(node.ev)&&!node.ev.allDay)
+    .sort((a,b)=>pt(a.ev.start)-pt(b.ev.start));
+  let previous="";
+  for(const {ev} of stops){
+    if(ev._blockId===blockId)return previous;
+    const location=ev._blockId && window.blockStore.get(ev._blockId)?.properties?.taskLocation;
+    if(location)previous=location.address||location.label||previous;
+  }
+  return "";
+}
+
+function _itineraryListModel(options={}){
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   // isActive() is time-of-day only (no date), so the "Now" chip must be gated to
   // today or it would light up on a past/future day whose times overlap the clock.
@@ -924,7 +894,7 @@ function _itineraryListModel(){
   const day=DCC.TaskModel.selectDay(scheduled,viewDate,{today:actualToday,carryoverPool:unfPool,waitingRows:window.blockStore ? window.blockStore.getByType("block") : []});
   const visible=day.visible;
   const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
-  const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible}),timeBlocks);
+  const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible,...(options.expandAll?{isCollapsed:()=>false}:{})}),timeBlocks);
   const unscheduledGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.UNPLANNED_BLOCK.id)||{nodes:[]};
   const triageGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.TRIAGE_BLOCK.id)||{nodes:[]};
   _fileDoneUntimedOnTheDay(groups,triageGroup,timeBlocks);
@@ -983,6 +953,15 @@ function renderUnscheduledInto(listEl,model){
 }
 window.renderUnscheduledInto=renderUnscheduledInto;
 window.itineraryListModel=_itineraryListModel;
+window.glassesItineraryTasks=function(){
+  const model=_itineraryListModel({expandAll:true});
+  return model.groups.filter(group=>group!==model.unscheduledGroup&&group!==model.triageGroup)
+    .flatMap(group=>group.nodes.filter(node=>!isDone(node.ev)).map(node=>node.ev));
+};
+window.glassesUnscheduledTasks=function(){
+  const model=_itineraryListModel({expandAll:true});
+  return _orderUnscheduledNodes(model.unscheduledGroup.nodes).filter(node=>!isDone(node.ev)).map(node=>node.ev);
+};
 // Triage rows are created by triage.js (buildScheduleTriage) from inbox and repeat
 // sources, so the panel also carries that loader's status, with Retry on a failure.
 function renderTriageInto(listEl,model){
@@ -1003,6 +982,7 @@ window.renderTriageInto=renderTriageInto;
 function buildListView(){
   const wrap=document.getElementById("list-view");
   if(!wrap)return;
+  const restoreDrafts=window.DCC?.ItineraryCosts?.captureDrafts(wrap);
   wrap.innerHTML="";
   const model=_itineraryListModel();
   const {viewDate,isTodayView,unfPool,day}=model;
@@ -1041,10 +1021,10 @@ function buildListView(){
       e.stopPropagation();_setSectionSort(sortKey,b.dataset.mode);buildListView();
     }));
     wrap.appendChild(el);
+    return el;
   }
 
-  const row=createTaskListRowRenderer({pool:unfPool,isTodayView,actual:_actualOn()?actualDayProjection():null});
-  if(_actualOn())renderActualSummary();
+  const row=createTaskListRowRenderer({pool:unfPool,isTodayView,showCommute:true,actual:_actualOn()?actualDayProjection():null});
   function emitNode(node,idx,mode){return row(node.ev,_isSubRow(node)?0:idx,mode,node);}
   // Idle-gap marker between two spaced-out timed rows (fixed tiny height; see
   // .it-list-gap CSS). Label via ms() -> "45m" / "1h 30m".
@@ -1113,7 +1093,27 @@ function buildListView(){
   // fold widened from `subtaskOf` to either parent edge (so a done RIDE-ALONG folds
   // too) and gated on the subtree being finished (so a done step with open steps under
   // it stays visible with its children nested, instead of hiding live work).
-  section("Work list",[...activeIds].filter(id=>!queuedIds.has(id)).length);
+  const workListHeader=section("Work list",[...activeIds].filter(id=>!queuedIds.has(id)).length);
+  const journalButton=document.createElement("button");
+  journalButton.type="button";
+  journalButton.className="it-list-ctrl-btn";
+  journalButton.textContent="Journal";
+  journalButton.addEventListener("click",async()=>{
+    journalButton.disabled=true;
+    try{await DCC.openDayJournal(viewDate);}
+    finally{journalButton.disabled=false;}
+  });
+  workListHeader.appendChild(journalButton);
+  if (DCC.ItineraryShare) {
+    const shareButton = document.createElement("button");
+    shareButton.type = "button";
+    shareButton.className = "it-list-ctrl-btn";
+    shareButton.textContent = "Share Itinerary";
+    shareButton.title = "Copy a link to the public tasks on this day";
+    shareButton.addEventListener("click", () => DCC.ItineraryShare.copy(viewDate,shareButton));
+    workListHeader.appendChild(shareButton);
+    DCC.ItineraryShare.openDay(viewDate);
+  }
   let rank=0;
   const now=new Date(),nowMin=now.getHours()*60+now.getMinutes();
   groups.forEach(({block,nodes})=>{
@@ -1172,6 +1172,7 @@ function buildListView(){
   }
 
 
+  restoreDrafts?.();
 }
 
 // ======== SCHEDULE TAB ========
@@ -1190,7 +1191,6 @@ function buildSchedule(){
   if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
   if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
-  if(typeof window.ensureTodoShareReactionsForDate==="function")window.ensureTodoShareReactionsForDate(viewDate);
   // Separate done vs active vs deleted vs side-project-marked.
   // C6a: one derivation, same as buildListView. `day.done` is the compact Done
   // section with the fold widened to either parent edge, so a done RIDE-ALONG now
@@ -1265,7 +1265,6 @@ function buildSchedule(){
         evSrcTag+
         petPrivacyChip(ev),
       timeRange:f12(ev.start)+' - '+f12(ev.end),
-      trailingHtml:(window.todoShareCompactFeedbackHtml?window.todoShareCompactFeedbackHtml(ev):''),
       onCheck:()=>toggleDone(ev.id),
       afterRender:el=>{const rb=el.querySelector(".review-badge");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();openReviewPopover(rb)});}
     });
@@ -1559,7 +1558,7 @@ function openMoveMenu(id, anchorEl){
     {label:"Today",     action:()=>_mv(_resolvedTodayDate(),moveTaskToToday)},
     {label:"Next week", action:()=>_mv(_nextSundayDate(),moveTaskToNextWeek)},
     {label:"Trivial",   action:()=>moveTaskToTrivial(id)},
-    {label:"Task Library (Solo)", action:()=>moveTaskToBacklog(id)}
+    {label:"Unscheduled", action:()=>moveTaskToBacklog(id)}
   ];
   const pop=document.createElement("div");
   pop.className="move-menu-popup";
@@ -1643,7 +1642,7 @@ function buildBacklog(){
   // Legacy Priority-stage rows remain ordinary backlog tasks.
   const items=backlog;
   document.getElementById("backlog-count").textContent=items.length;
-  if(!items.length){board.innerHTML='<div class="board-empty">Nothing in Task Library yet. Add tasks above or check your Notion board.</div>';return}
+  if(!items.length){board.innerHTML='<div class="board-empty">No unscheduled tasks.</div>';return}
   const sorted=typeof taskBankSort==="function"?taskBankSort(items):items;
   sorted.forEach(t=>{
     const c=cfg(t.type);
@@ -1764,6 +1763,82 @@ function _scheduleTaskHasDelegate(taskId){
     .some(b=>(b.properties||{}).kind==="delegated_item" && (b.properties||{}).linkedBlockId===taskId);
 }
 
+// The shared header has its own lifecycle: Working Queue can be usable before
+// the day snapshot arrives, and scoped view renders must not strand the header.
+let _dayProgressStatus="loading";
+function refreshDayProgress(status){
+  if(status)_dayProgressStatus=status;
+  buildProgress();
+}
+window.addEventListener("dcc:day-data-ready",event=>refreshDayProgress(event.detail?.available===false?"error":"ready"));
+window.addEventListener("dcc:view-date-changed",event=>refreshDayProgress(event.detail?.blocksLoaded===false?"error":"ready"));
+
+function progressActualModel(){
+  const P=window.DCC&&DCC.ProgressActual,A=window.DCC&&DCC.ActualProjection;
+  if(!P||!A)return null;
+  const date=_schedViewDate(),bs=window.blockStore;
+  const entries=bs&&bs.getTimeEntries?bs.getTimeEntries(date):[];
+  const active=window.DCCWorkSessions?DCCWorkSessions.activeTasks():[];
+  const model=P.model(entries,active,{date,zone:A.appTimeZone(),projection:A,policy:window.DCCWorkCheckInPolicy});
+  const day=actualDayProjection();
+  model.knownMin=day?.knownMin||0;
+  model.unplannedMin=day?.unmatchedMin||0;
+  // Legacy sessions are minutes only. They never acquire a made-up clock slot.
+  if(day)for(const task of day.byId.values())for(const seg of task.unpositioned)if(seg.source==="legacy")model.unplacedMin+=seg.durMin;
+  return model;
+}
+function buildProgressActual(model,start,total){
+  const track=document.getElementById("pactual"),note=document.getElementById("pactual-note");
+  if(!track||!note)return;
+  track.replaceChildren();
+  if(!model){note.textContent="Activity is loading…";return;}
+  const A=DCC.ActualProjection;
+  const laneCount=Math.max(1,model.lanes);
+  model.segments.forEach(seg=>{
+    const task=(typeof scheduled!=="undefined"?scheduled:[]).find(t=>t.id===seg.taskId||t._blockId===seg.taskId);
+    const block=window.blockStore&&blockStore.get(seg.taskId);
+    const p=block&&block.properties||{};
+    const ev=task||{id:seg.taskId,title:seg.title,type:p.type||"task",tags:p.tags||[]};
+    const button=document.createElement("button");
+    button.type="button";button.className="progress-actual-segment"+(seg.live?" live":"");
+    button.dataset.entryId=seg.id;
+    const color=typeof taskTagColor==="function"&&taskTagColor(ev)||cfg(ev.type).color;
+    button.style.cssText="left:"+((seg.startMin-start)/total*100)+"%;width:"+((seg.endMin-seg.startMin)/total*100)+"%;--lane-top:"+(seg.lane/laneCount*100)+"%;--lane-height:"+(100/laneCount)+"%;background:"+color;
+    const timing=(seg.clockLabel||A.clock(seg.startMin)+" – "+A.clock(seg.endMin))+" · "+A.minutes(seg.endMin-seg.startMin)+(seg.live?" · Ongoing":" · Recorded");
+    button.setAttribute("aria-label",seg.title+" · "+timing);
+    _bindProgressTooltip(button,{title:seg.title},timing);
+    button.addEventListener("click",()=>{if(block&&typeof openAddModal==="function")openAddModal(p.local_id||block.id,seg.title);else openProgressDayReview(true);});
+    track.appendChild(button);
+  });
+  const notes=[A.minutes(model.knownMin||0)+" recorded actual."];
+  if(model.unplannedMin)notes.push(A.minutes(model.unplannedMin)+" unplanned activity.");
+  if(!model.segments.length)notes.push("No timed activity recorded for this day.");
+  if(model.segments.some(s=>s.live))notes.push("Dashed segments are ongoing work.");
+  if(model.unplacedMin)notes.push(A.minutes(model.unplacedMin)+" recorded without a reliable clock time.");
+  if(model.clockChange)notes.push("Clock changes: segments split at the offset change; repeated clock times use separate lanes. Tooltips include the time zone. Clock-only entries on this day remain unpositioned.");
+  if(model.unknownMin)notes.push(A.minutes(model.unknownMin)+" unknown time (not focused work).");
+  const message=notes.join(" ");
+  if(note.textContent!==message)note.textContent=message;
+  note.hidden=!notes.length;
+}
+function openProgressDayReview(forceOpen){
+  if(window.DCC&&DCC.nav){
+    const open=forceOpen===true||!DCC.nav.reviewOpen();
+    if(DCC.nav.get().view==="queue")DCC.nav.go({page:"tasks",view:"list"});
+    DCC.nav.setReviewOpen(open);
+  }
+}
+document.getElementById("progress-day-review")?.addEventListener("click",openProgressDayReview);
+document.getElementById("progress-hide-actual-details")?.addEventListener("click",()=>DCC.nav.setActual(false));
+document.getElementById("day-progress-title")?.addEventListener("click",event=>{
+  const toggle=event.currentTarget,bars=document.getElementById("day-progress-bars");
+  const expanded=bars.hidden;
+  bars.hidden=!expanded;
+  toggle.setAttribute("aria-expanded",String(expanded));
+});
+window.addEventListener("dcc:work-session-changed",()=>buildProgress());
+
+
 // ======== PROGRESS ========
 const DAY_PROGRESS_VARIANT="quiet-axis";
 
@@ -1785,13 +1860,14 @@ function _progressRange(dayItems,state){
 function _progressLocalDateKey(value){
   const date=value instanceof Date?value:new Date(value);
   if(Number.isNaN(date.getTime()))return "";
+  if(typeof window!=="undefined"&&window.DCC?.ProgressActual)return DCC.ProgressActual.parts(date,DCC.ActualProjection.appTimeZone()).date;
   return date.getFullYear()+"-"+String(date.getMonth()+1).padStart(2,"0")+"-"+String(date.getDate()).padStart(2,"0");
 }
 
 function _progressNowPercent(dateKey,nowValue,start,end){
   const nowDate=nowValue instanceof Date?nowValue:new Date(nowValue);
   if(Number.isNaN(nowDate.getTime())||dateKey!==_progressLocalDateKey(nowDate)||end<=start)return null;
-  const nowMinutes=nowDate.getHours()*60+nowDate.getMinutes();
+  const nowMinutes=typeof window!=="undefined"&&window.DCC?.ProgressActual?DCC.ProgressActual.parts(nowDate,DCC.ActualProjection.appTimeZone()).minute:nowDate.getHours()*60+nowDate.getMinutes();
   if(nowMinutes<start||nowMinutes>end)return null;
   return Math.max(0,Math.min(100,((nowMinutes-start)/(end-start))*100));
 }
@@ -1805,7 +1881,7 @@ function updateProgressNow(nowValue){
   marker.hidden=pct===null;
   if(pct===null)return;
   marker.style.left=pct+"%";
-  const label="Current time "+f12(fmt(nowDate.getHours()*60+nowDate.getMinutes()));
+  const label="Current time "+f12(fmt(DCC.ProgressActual.parts(nowDate,DCC.ActualProjection.appTimeZone()).minute));
   marker.title=label;
   marker.setAttribute("aria-label",label);
 }
@@ -1813,9 +1889,32 @@ function updateProgressNow(nowValue){
 function buildProgress(){
   const track=document.getElementById("ptrack");
   if(!track)return;
+  const ready=_dayProgressStatus==="ready";
+  const actualTrack=document.getElementById("pactual"),reviewButton=document.getElementById("progress-day-review");
+  track.setAttribute("aria-busy",String(_dayProgressStatus==="loading"));
+  if(actualTrack)actualTrack.setAttribute("aria-busy",String(_dayProgressStatus==="loading"));
+  if(reviewButton)reviewButton.disabled=!ready;
+  if(!ready){
+    if(_progressTooltipClose)_progressTooltipClose();
+    track.replaceChildren();if(actualTrack)actualTrack.replaceChildren();
+    delete track.dataset.date;delete track.dataset.startMin;delete track.dataset.endMin;
+    track.setAttribute("aria-label",_dayProgressStatus==="error"?"Day plan unavailable":"Day plan loading");
+    const rails=document.getElementById("prails");if(rails){rails.replaceChildren();rails.style.display="none";}
+    const marker=document.getElementById("pnow");if(marker)marker.hidden=true;
+    for(const id of ["pstart","pend"]){const label=document.getElementById(id);if(label){label.textContent="";label.removeAttribute("datetime");}}
+    document.getElementById("ppct").textContent=_dayProgressStatus==="error"?"Unavailable":"Loading…";
+    const note=document.getElementById("pactual-note");
+    if(note){const message=_dayProgressStatus==="error"?"Day activity unavailable. Reload to try again.":"Loading day activity…";if(note.textContent!==message)note.textContent=message;note.hidden=false;}
+    return;
+  }
+  const focused=document.activeElement;
+  const focusTrack=focused?.closest?.("#ptrack, #pactual");
+  const focusKey=focusTrack?(focused.dataset.progressKey||focused.dataset.entryId):null;
   if(_progressTooltipClose)_progressTooltipClose();
   const dayItems=DCC.TaskModel.selectDayScoped(scheduled); // Unscheduled-everywhere rows aren't today's plan
-  const range=_progressRange(dayItems,typeof __state!=="undefined"?__state:null);
+  const activity=progressActualModel();
+  const rangeItems=dayItems.concat(activity?activity.segments.map(s=>({start:s.startMin,end:s.endMin})):[]);
+  const range=_progressRange(rangeItems,typeof __state!=="undefined"?__state:null);
   const ds=range.start,de=range.end,tot=range.total;
   const stateDate=(typeof __state!=="undefined"&&__state&&__state.date)||"";
   const viewKey=(typeof viewDate!=="undefined"&&viewDate)||stateDate;
@@ -1827,7 +1926,7 @@ function buildProgress(){
   track.setAttribute("aria-label","Schedule from "+f12(fmt(ds))+" to "+f12(fmt(de))+". Select a task segment for details.");
   const startLabel=document.getElementById("pstart"),endLabel=document.getElementById("pend");
   if(startLabel){startLabel.textContent=f12(fmt(ds));startLabel.dateTime=fmt(ds);}
-  if(endLabel){endLabel.textContent=f12(fmt(de));endLabel.dateTime=fmt(de);}
+  if(endLabel){endLabel.textContent=de===1440?"12:00 AM (+1 day)":f12(fmt(de));endLabel.dateTime=fmt(de%1440);}
   track.innerHTML="";
   let cursor=ds;
   dayItems.slice().sort((a,b)=>pt(a.start)-pt(b.start)||pt(a.end)-pt(b.end)).forEach(ev=>{
@@ -1845,11 +1944,16 @@ function buildProgress(){
   });
   if(cursor<de)addPS(track,cursor,de,"Free","rgba(255,255,255,0.08)",false,tot);
   buildShellRails(dayItems,ds,tot);
+  buildProgressActual(activity,ds,tot);
   // Shells are wrappers, not tasks — they don't count toward the day's done tally.
   const counted=dayItems.filter(ev=>!_isShellEv(ev));
   const dc=DCC.TaskModel.selectDone(counted).length;
   document.getElementById("ppct").textContent=dc+" / "+counted.length+" done · "+Math.round(dc/(counted.length||1)*100)+"%";
   updateProgressNow();
+  if(focusTrack&&focusKey){
+    const replacement=Array.from(document.getElementById(focusTrack.id).querySelectorAll("button")).find(b=>(b.dataset.progressKey||b.dataset.entryId)===focusKey);
+    (replacement||document.getElementById("progress-day-review"))?.focus({preventScroll:true});
+  }
 }
 function _isShellEv(ev){
   return (window.TaskTypes&&window.TaskTypes.isRollup(ev))||String(ev.type||"").toLowerCase()==="shell";
@@ -1956,9 +2060,9 @@ function addPS(track,s,e,title,color,done,tot,ev){
   if(w<=0)return;
   const seg=document.createElement(ev?"button":"span");
   seg.className="pseg";
-  if(ev)seg.type="button";
-  // Shrink proportionally to leave room for track gaps, including the last task.
-  seg.style.cssText="flex:0 1 "+w+"%;background:"+color+";opacity:"+(done?0.45:1);
+  if(ev){seg.type="button";seg.dataset.progressKey=String(ev.id);}
+  // Both rows share exact coordinates; borders separate adjacent tasks.
+  seg.style.cssText="position:absolute;left:"+((s-Number(track.dataset?.startMin||0))/tot*100)+"%;width:"+w+"%;background:"+color+";opacity:"+(done?0.45:1);
   const time=(ev?f12(ev.start)+" - "+f12(ev.end)+" · "+ms(pt(ev.end)-pt(ev.start)):ms(e-s))+(done?" · Done":"");
   const detail=title+" · "+time;
   if(ev){

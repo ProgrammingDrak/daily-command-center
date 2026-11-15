@@ -46,3 +46,40 @@ test('already parsed document hydrates immediately without waiting for a past DO
   assert.deepEqual(h.renders[0],['synthetic-boot-task']);
   assert.equal(h.events.filter(x=>x==='dcc:data-ready').length,1);
 });
+
+test('shared Day Progress readiness is published after core hydration and before unrelated builders',async()=>{
+  const h=harness('complete');h.dependencies();
+  let published=false;
+  h.ctx.dispatchEvent=event=>{h.events.push(event.type);if(event.type==='dcc:day-data-ready'){
+    published=true;assert.equal(event.detail.available,true);assert.equal(event.detail.date,'2026-10-26');
+    assert.equal(h.ctx.scheduled[0].id,'synthetic-boot-task');
+  }};
+  h.ctx.buildTriage=()=>assert.equal(published,true);
+  h.run();await settle();assert.equal(published,true);
+});
+test('failed core hydration publishes unavailable rather than a valid empty day',async()=>{
+  const h=harness('complete',false);h.dependencies();
+  h.ctx.fetch=async()=>({ok:false,status:503});
+  let available;h.ctx.dispatchEvent=event=>{if(event.type==='dcc:day-data-ready')available=event.detail.available;};
+  h.run();await settle();assert.equal(available,false);
+});
+
+test('signed-in repeat startup renders saved Today before starting its refresh', async()=>{
+  const h=harness('complete');h.dependencies();
+  const date=new Intl.DateTimeFormat('sv-SE',{timeZone:'America/New_York'}).format();
+  h.ctx.DCC_ACCOUNT_CONTEXT={userId:7,workspaceId:'ws-7'};
+  h.ctx.localStorage={getItem:()=>JSON.stringify({userId:7,snapshot:{
+    date,workspaceId:'ws-7',cursor:5,dayState:{date},blocks:[{id:'saved'}],globals:[],
+  }})};
+  h.ctx.addEventListener=()=>{};
+  h.ctx.blockStore.refreshSavedToday=async today=>{
+    assert.equal(today,date);
+    assert.deepEqual(h.renders[0],['saved']);
+    return true;
+  };
+  h.run();await settle();
+  assert.deepEqual(h.renders[0],['saved']);
+  assert.equal(h.reads.includes('/api/sync/bootstrap'),false);
+  assert.equal(h.removed(),true);
+  assert.deepEqual(h.errors,[]);
+});

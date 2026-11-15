@@ -41,29 +41,30 @@ test("the header is pages plus one clock, cog and sync dot cluster; branding is 
   assert.match(cluster, /id="save-status"[^>]*aria-describedby="save-status-tooltip"/);
   assert.match(cluster, /id="save-status-tooltip" role="tooltip"/);
   assert.match(cluster, /id="save-status-live" role="status" aria-live="polite"/);
-  for (const id of ["dcc-review-tomorrow", "dcc-day-start", "dcc-schedule-defaults", "dcc-setup-integrations", "dcc-replay-tutorial", "dcc-sign-out", "todo-share-open", "todo-reactions-toggle", "sn-open-btn"]) {
+  for (const id of ["dcc-review-tomorrow", "dcc-day-start", "dcc-schedule-defaults", "dcc-setup-integrations", "dcc-replay-tutorial", "dcc-sign-out", "dcc-general-settings", "sn-open-btn"]) {
     assert.match(cluster, new RegExp('id="' + id + '"'), "utility kept: " + id);
   }
   assert.equal((html.match(/id="save-status"/g) || []).length, 1, "one sync control");
 });
 
-test("Tasks head orders views, the date row with queues, then Day Progress", () => {
+test("Tasks head combines views and queues above the day navigation in Day Progress", () => {
   const head = slice(html, '<section class="task-workspace-head"', "</section>\n");
-  const order = ["task-view-switch", "task-actual-toggle", "date-nav", "dn-prev", "date-label", "dn-next", "queue-pill", "date-picker-drop", "day-progress-title"].map((id) => head.indexOf('id="' + id + '"'));
+  const order = ["task-view-switch", "queue-pill", "day-progress-title", "date-nav", "dn-prev", "date-label", "dn-next", "date-picker-drop"].map((id) => head.indexOf('id="' + id + '"'));
   assert.ok(order.every((at) => at >= 0), JSON.stringify(order));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
   for (const door of ["triage-pill-nav", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav", "loose-ends-pill"]) assert.match(head, new RegExp('id="' + door + '"'));
   assert.match(head, /role="tablist" aria-label="Task views"/);
   assert.match(head, /data-task-view="queue"[^>]*aria-controls="tab-working-queue"/);
   assert.match(head, /id="task-view-list"[^>]*data-task-view="list"[^>]*>Itinerary<\/button>/);
-  assert.match(head, /id="task-actual-toggle" aria-pressed="false"[^>]*hidden>Actual</);
+  assert.doesNotMatch(head, /id="task-actual-toggle"/);
+  assert.match(head, /id="pactual"/);
 });
 
 test("Actual is not a view: no Actual view button, Itinerary and Calendar keep their containers", () => {
   assert.doesNotMatch(html, /class="svt-btn[^"]*" data-view="actual"/);
   assert.doesNotMatch(html, /id="sched-view-toggle"/);
   const schedule = slice(html, 'id="tab-schedule"', "<!-- Anytime dock");
-  for (const id of ["actual-summary", "actual-view", "list-view", "calendar-view"]) assert.match(schedule, new RegExp('id="' + id + '"'));
+  for (const id of ["actual-view", "list-view", "calendar-view"]) assert.match(schedule, new RegExp('id="' + id + '"'));
   const tab = read("public/js/schedule-tab.js");
   assert.doesNotMatch(tab, /schedView\s*=\s*["']actual["']/);
   assert.doesNotMatch(read("public/js/persistence.js"), /"actual"\s*:\s*\(/);
@@ -91,18 +92,23 @@ test("retired pages have no visible route from the top bar, mobile, tutorial or 
 test("glasses keeps a visible Full app exit and task navigation", () => {
   const glasses = read("public/js/device-views/glasses.js");
   assert.doesNotMatch(glasses, /\.header h1'\)\?\.append\(exit\)/);
-  assert.match(glasses, /bar\.append\(prev, position, next, tools, exit, status\)/);
+  assert.match(glasses, /header\.append\(mode, position, refresh, exit\)/);
+  assert.match(glasses, /root\.append\(header, collection, content, footer, status\)/);
+  assert.match(glasses, /url\.searchParams\.delete\('device'\)/);
+  assert.match(html, /device-views\/glasses-navigation-model\.js/);
   const css = read("public/css/device-views/glasses.css");
-  assert.match(css, /\.device-glasses \.glasses-exit\{display:inline-flex;[^}]*min-height:46px/);
-  assert.match(css, /:not\(\.glasses-tools-open\) :is\(#tab-bar,\.source-row,\.header>div:last-child,#task-view-bar,#actual-summary\)/);
+  assert.match(css, /:not\(#glasses-app\)/);
+  assert.match(css, /\.glasses-exit\{/);
+  assert.match(css, /\.glasses-list\{[^}]*grid-template-columns:minmax\(0,1fr\)/);
 });
 
 test("phones keep the clock, cog and dot, and show every page label whole", () => {
+  assert.match(read("index.html"), /<a class="tab wishlist-nav" href="\/wishlists">Wishlists<\/a>/);
   const css = read("public/css/task-workspace.css");
   const phone = css.slice(css.indexOf("@media (max-width: 760px)"));
   assert.match(phone, /\.dcc-cluster \.time-now \{ display: flex !important;/);
   assert.match(phone, /\.header\.dcc-topbar > \.dcc-cluster \{ order: 1; display: flex !important; position: relative; inset: auto; width: 100%; \}/);
-  assert.match(phone, /\.header\.dcc-topbar > \.dcc-pages \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);[^}]*overflow: visible;/, "no clipped Workouts & meals");
+  assert.match(phone, /\.header\.dcc-topbar > \.dcc-pages \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);[^}]*overflow: visible;/, "no clipped Workouts & meals");
   assert.match(phone, /\.dcc-pages \.tab \{[^}]*min-height: var\(--target-min\);[^}]*white-space: normal;/);
   // The old fixed top-right badge must not leak offsets into the cluster.
   const desktop = css.slice(0, css.indexOf("@media (max-width: 760px)"));
@@ -113,17 +119,18 @@ test("phones keep the clock, cog and dot, and show every page label whole", () =
   assert.doesNotMatch(read("public/css/ui-optimization.css"), /\.header > div:last-child > :not\(#save-status\) \{ display: none/);
 });
 
-test("new controls meet the 44px target and the tooltip can be hovered and dismissed", () => {
+test("utility controls keep full targets; compact task controls remain accessible and tooltips dismiss", () => {
   const css = read("public/css/task-workspace.css");
   const rule = (selector) => {
     const at = css.indexOf(selector + " {");
     assert.ok(at >= 0, selector);
     return css.slice(at, css.indexOf("}", at));
   };
-  for (const selector of [".dcc-pages .tab", ".task-view-switch [role=\"tab\"]", ".task-actual-toggle", ".actual-summary-actions button"]) {
+  for (const selector of [".dcc-pages .tab", ".task-view-switch [role=\"tab\"]", ".task-actual-toggle"]) {
     assert.match(rule(selector), /min-height: var\(--target-min\)/, selector);
   }
-  assert.doesNotMatch(css, /min-height: (3\d|40)px/, "no sub-44 minimums left in the new stylesheet");
+  assert.match(css, /\.task-view-bar \.queue-seg \{ min-height: 32px/);
+  assert.match(css, /\.progress-date-controls :is\(\.dn-arrow, \.dn-date, \.dn-quick\) \{ min-height: 24px/);
   assert.match(rule(".it-actual-edit::after"), /height: var\(--target-min\)/, "compact chip, full hit area");
   assert.match(css, /\.save-status:hover \.save-status-tooltip \{ opacity: 1; visibility: visible; pointer-events: auto; \}/);
   assert.match(css, /\.save-status:focus-visible \.save-status-tooltip \{ opacity: 1; visibility: visible; pointer-events: auto; \}/);
@@ -439,13 +446,13 @@ test("a focused editor inside a view counts as a draft", () => {
   assert.equal(h.DCC.nav.hasDraftIn(list), true);
 });
 
-test("Day review opens only as an explicit panel under Actual", () => {
+test("Day review is independent of Actual details", () => {
   const h = harness({ search: "?tab=tasks&view=list&actual=1" });
   assert.equal(h.DCC.nav.reviewOpen(), false);
   h.DCC.nav.setReviewOpen(true);
   assert.equal(h.DCC.nav.reviewOpen(), true);
   h.DCC.nav.setActual(false);
-  assert.equal(h.DCC.nav.reviewOpen(), false, "turning Actual off hides it");
+  assert.equal(h.DCC.nav.reviewOpen(), true, "turning Actual off does not hide the independent review");
   h.DCC.nav.go({ view: "queue" });
   assert.equal(h.DCC.nav.reviewOpen(), false);
 });
@@ -453,9 +460,8 @@ test("Day review opens only as an explicit panel under Actual", () => {
 // ── Itinerary Actual presentation ──
 
 function listActualContext(entries, scheduled, nav = { page: "tasks", view: "list", actual: true }) {
-  const strip = { hidden: true, innerHTML: "", querySelector: () => ({ addEventListener() {} }) };
   const context = vm.createContext({
-    window: {}, document: { getElementById: (id) => (id === "actual-summary" ? strip : null) },
+    window: {},
     scheduled, viewDate: "2026-11-02", schedView: nav.view,
     blockStore: { getTimeEntries: () => entries }, loadSessions: () => ({}),
     isDeleted: () => false,
@@ -466,7 +472,7 @@ function listActualContext(entries, scheduled, nav = { page: "tasks", view: "lis
   const source = read("public/js/schedule-tab.js");
   vm.runInContext(slice(source, "function _schedViewDate()", "function _buildUnlessDraft(") +
     slice(source, "// ── Actual evidence for the List view ──", "// Subtask row helpers"), context);
-  return { context, strip };
+  return { context };
 }
 
 test("Itinerary Actual adds evidence chips and an edit entry point to each row", () => {
@@ -485,30 +491,13 @@ test("Itinerary Actual adds evidence chips and an edit entry point to each row",
   assert.match(row("c"), /data-actual-edit="c" aria-label="Add or edit actual time for Plan &lt;Q1&gt;">\+ time</);
 });
 
-test("Itinerary Actual summary keeps the completion review and Day review entry points", () => {
-  const entries = [
-    { id: "t1", type: "time_entry", date: "2026-11-02", properties: { blockId: "a", durSec: 600 } },
-    { id: "t2", type: "time_entry", date: "2026-11-02", properties: { allocationKind: "unknown", durSec: 300 } }
-  ];
-  const { context, strip } = listActualContext(entries, [{ id: "a", title: "A", start: "09:00", end: "10:00" }]);
-  vm.runInContext("renderActualSummary()", context);
-  assert.equal(strip.hidden, false);
-  assert.match(strip.innerHTML, /<b>10m<\/b> Known actual/);
-  assert.match(strip.innerHTML, /<b>10m<\/b> Without a clock time/);
-  assert.match(strip.innerHTML, /<b>5m<\/b> Unknown time \(not focused\)/);
-  assert.match(strip.innerHTML, /data-completion-review data-review-date="2026-11-02">Did these happen\?/);
-  assert.match(strip.innerHTML, /class="actual-review-toggle" aria-expanded="false" aria-controls="actual-view">Day review</);
-  assert.match(strip.innerHTML, /Waiting time is not focused effort/);
-});
-
-test("the summary stays hidden when Actual is off or on the queue", () => {
-  for (const nav of [{ page: "tasks", view: "list", actual: false }, { page: "tasks", view: "queue", actual: true }]) {
-    const { context, strip } = listActualContext([], [], nav);
-    strip.hidden = false; strip.innerHTML = "stale";
-    vm.runInContext("renderActualSummary()", context);
-    assert.equal(strip.hidden, true);
-    assert.equal(strip.innerHTML, "");
-  }
+test("the progress header owns actual totals and Day review", () => {
+  const html = read("index.html");
+  const schedule = read("public/js/schedule-tab.js");
+  assert.doesNotMatch(html, /id="actual-summary"/);
+  assert.match(html, /id="progress-day-review"/);
+  assert.match(schedule, /model\.knownMin=day\?\.knownMin/);
+  assert.match(schedule, /A\.minutes\(model\.knownMin\|\|0\)/);
 });
 
 test("the calendar layer repaints without rebuilding and never plots plan times", () => {
@@ -529,7 +518,6 @@ test("the sync dot reports queue conflicts without resolving them", () => {
   assert.match(shell, /discard\.textContent = "Confirm discard"/, "discard asks first");
   assert.doesNotMatch(shell, /persist\(':conflict'|removeItem\("dcc-working-queue/);
   const queue = read("public/js/working-queue.js");
-  assert.match(queue, /function syncState\(\)\{return \{pending:!!pending,conflict:/);
-  assert.match(queue, /Itinerary and Calendar plan when\./);
+  assert.match(queue, /function syncState\(\)\{return \{pending:!!pending\|\|completionEntries\(\).length>0,conflict:/);
   assert.match(queue, /function activate\(id\)\{if\(DCC\.nav\)DCC\.nav\.go\(\{page:'tasks',view:'queue'\}\)/);
 });

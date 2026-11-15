@@ -41,6 +41,20 @@
   // parallel.
   const _rescheduleChains = new Map();
   const _updateChains = new Map();
+  const MAX_COMPLETION_REQUESTS = 4;
+  const completionWaiters = [];
+  let activeCompletionRequests = 0;
+  async function sendCompletion(url, body) {
+    if (activeCompletionRequests < MAX_COMPLETION_REQUESTS) activeCompletionRequests++;
+    else await new Promise(resolve => completionWaiters.push(resolve));
+    try {
+      return await apiPost(url, body);
+    } finally {
+      const next = completionWaiters.shift();
+      if (next) next();
+      else activeCompletionRequests--;
+    }
+  }
   const _completionBases = new Map(); // authoritative rollback rows while intents are queued
   // Server IDs for day_root are workspace-prefixed (e.g. "day-root-ws-1-2026-04-24").
   // Resolved from the block list returned by loadDay() so callsites can look up
@@ -63,6 +77,27 @@
     if (_syncWorkspaceId && _syncCursor !== null) {
       try { localStorage.setItem(syncCursorKey(_syncWorkspaceId), String(_syncCursor)); } catch (e) {}
     }
+  }
+
+  function saveTodaySnapshot(dayState, today) {
+    if (window.__DCC_SIGNING_OUT__ || ACCOUNT_SCOPE === 'unverified' || _syncWorkspaceId !== ACCOUNT.workspaceId
+        || _currentDate !== today || dayState?.date !== today || _syncCursor === null
+        || hasPendingWritesNow()) return;
+    const snapshot = {
+      workspaceId: ACCOUNT.workspaceId, date: today, cursor: _syncCursor, dayState,
+      blocks: [..._dayCache.values()], globals: [..._globalCache.values()],
+    };
+    try { localStorage.setItem('dcc-today-snapshot', JSON.stringify({ userId: ACCOUNT.userId, snapshot })); }
+    catch (error) { console.warn('[BlockStore] Could not save Today for next launch', error); }
+  }
+
+  async function refreshSavedToday(today) {
+    await replayWAL();
+    if (_currentDate !== today || hasPendingWritesNow()) return false;
+    const result = await pullSyncChanges(today, { includeState: true });
+    if (!result?.dayState || _currentDate !== today) return false;
+    saveTodaySnapshot(result.dayState, today);
+    return true;
   }
 
   function hydrateSyncSnapshot(snapshot) {
@@ -91,7 +126,8 @@
     }
     _syncPullDate = dateStr;
     const generation = _mutationGeneration;
-    const canApply = () => generation === _mutationGeneration;
+    const dayLoadSequence = _dayLoadSequence;
+    const canApply = () => generation === _mutationGeneration && dayLoadSequence === _dayLoadSequence;
     _syncPullPromise = (async () => {
       if (_syncCursor === null || _currentDate !== dateStr) {
         const snapshot = await apiGet("/api/sync/bootstrap?date=" + encodeURIComponent(dateStr));
@@ -111,7 +147,7 @@
         } catch (error) {
           if (!error || error.status !== 410) throw error;
           const snapshot = await apiGet("/api/sync/bootstrap?date=" + encodeURIComponent(dateStr));
-          if (!canApply()) return null;
+          if (!canApply() || hasPendingWritesNow()) return null;
           hydrateSyncSnapshot(snapshot);
           _syncForceStateDates.delete(dateStr);
           if (snapshot.dayState) window.dispatchEvent(new CustomEvent("dcc-sync-day-state", { detail: snapshot.dayState }));
@@ -142,9 +178,7 @@
     })().finally(() => {
       _syncPullPromise = null;
       _syncPullDate = null;
-      if (_syncForceStateDates.has(dateStr) && _currentDate === dateStr && !hasPendingWritesNow()) {
-        setTimeout(() => pullSyncChanges(dateStr), 0);
-      }
+
     });
     return _syncPullPromise;
   }
@@ -508,6 +542,10 @@
 
   function cacheSet(block) {
     block = overlayPendingCompletion(block);
+    const pendingCosts = walGet().filter(entry => entry?.op === "task-costs" && entry.id === block.id);
+    if (pendingCosts.length) {
+      block = { ...block, properties: { ...block.properties, taskCosts: pendingCosts.at(-1).data.taskCostsChange.after } };
+    }
     // Remove any prior entry in either cache so a block can migrate between
     // global and day partitions without leaving a stale duplicate behind.
     _dayCache.delete(block.id);
@@ -613,6 +651,7 @@
     // source calendar owns placement. That authority will not change on retry.
     if ((entry.op === "undelete" || entry.op === "reschedule" || (entry.op === "batch" && entry.data?.operations?.some(op => op.op === "undelete"))) && err.status === 409) return true;
     if ((entry.op === "update" || entry.op === "completion") && err.status === 409) return true;
+    if (entry.op === "task-costs" && [400, 404, 409].includes(err.status)) return true;
     if ((entry.op === "work" || entry.op === "realloc") && err.status === 409) return true;
     return false;
   }
@@ -701,6 +740,15 @@
           case "create":
             await apiPost("/api/blocks", entry.data);
             break;
+          case "task-costs": {
+            await queueUpdateRequest(entry.id, async () => {
+              if (!walGet().some(e => e && e._walId === entry._walId)) return;
+              const block = await apiPatch("/api/blocks/" + encodeURIComponent(entry.id), entry.data);
+              walRemove(entry._walId);
+              cacheSet(block);
+            });
+            break;
+          }
           case "update":
             await queueUpdateRequest(entry.id, async () => {
               // The replay loop snapshots the WAL before awaiting. A newer live
@@ -817,6 +865,11 @@
             if (current && current.type !== "legacy_task") cacheSet(current);
             else cacheDelete(entry.id);
             setError("Completion rejected" + (e.requestId ? " (request " + e.requestId + ")" : ""));
+          }
+          if (entry.op === "task-costs") {
+            try { cacheSet(await apiGet("/api/blocks/" + encodeURIComponent(entry.id))); }
+            catch (_) { cacheDelete(entry.id); }
+            if (typeof showToast === "function") showToast("A queued transaction could not be saved. " + e.message, "error");
           }
           if(entry.op==="reschedule"&&entry.data?.placement?.kind==="unplanned"&&typeof showToast==="function")showToast("Move to "+((window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled")+" rejected: "+e.message,"error");
           dropped++;
@@ -941,6 +994,33 @@
         // Entry stays in WAL; optimistic entry is already in cache.
         return optimistic;
       }
+    },
+
+    updateTaskCosts(id, before, after) {
+      const data = { taskCostsChange: { before, after } };
+      setSaving();
+      const existing = cacheGet(id);
+      const walId = walPush({ op: "task-costs", id, data });
+      if (existing) cacheSet(existing);
+      return queueUpdateRequest(id, async () => {
+        try {
+          const block = await apiPatch("/api/blocks/" + encodeURIComponent(id), data);
+          walRemove(walId);
+          cacheSet(block);
+          setSaved();
+          return block;
+        } catch (error) {
+          if (isPermanentReplayFailure({ op: "task-costs" }, error)) {
+            walRemove(walId);
+            try { cacheSet(await apiGet("/api/blocks/" + encodeURIComponent(id))); }
+            catch (_) { if (error.status === 404) cacheDelete(id); else if (existing) cacheSet(existing); }
+            setError(error.message);
+            throw error;
+          }
+          setError("Save failed. Buffered for retry.");
+          return { _savePending: true };
+        }
+      });
     },
 
     // Update a block (full properties replacement)
@@ -1119,7 +1199,7 @@
           }
           let result;
           try {
-            result = await apiPost("/api/tasks/" + encodeURIComponent(taskRef) + "/completion", body);
+            result = await sendCompletion("/api/tasks/" + encodeURIComponent(taskRef) + "/completion", body);
           } catch (error) {
             if (!(error && error.status === 409 && error.code === "COMPLETION_CONFLICT")) throw error;
             const current = error.currentTask || await apiGet("/api/blocks/" + encodeURIComponent(taskRef));
@@ -1128,7 +1208,7 @@
             body.expectedRevision = current && current.properties
               ? (current.properties._completionRevision || null) : null;
             walReplaceData(walId, body);
-            result = await apiPost("/api/tasks/" + encodeURIComponent(taskRef) + "/completion", body);
+            result = await sendCompletion("/api/tasks/" + encodeURIComponent(taskRef) + "/completion", body);
           }
           walRemove(walId);
           (result.affectedTasks || []).forEach(row => {
@@ -1706,6 +1786,13 @@
     // ── Range Loading (for Calendar View) ──
     _rangeCache: new Map(), // dateStr -> { blocks: [], dccState: null }
 
+    async loadViewingDateRange(startDate, endDate, viewingZone) {
+      const query = new URLSearchParams({ start: startDate, end: endDate, viewingZone });
+      // Viewing-zone rows keep their scheduling dates. Never put this filtered
+      // response in the legacy date cache used by editors and history.
+      return { blocks: await apiGet("/api/blocks/range?" + query) };
+    },
+
     async loadDateRange(startDate, endDate) {
       try {
         // dcc-state is nice-to-have here; blocks are what the range consumers
@@ -1831,6 +1918,9 @@
       }
       return null;
     },
+
+    saveTodaySnapshot,
+    refreshSavedToday,
 
     // ── WAL ──
     pendingSubtaskCreates() {

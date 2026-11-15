@@ -64,7 +64,7 @@ test("nothing in public/js reads the retired `ev.nested` field any more", () => 
 // promoting it to a numbered top-level row. Pool it on `day.timed` and the layer still
 // passes every unit test while the surface reverts to pre-C6a behaviour.
 test("★ the work list pools its tree on `visible`, not on the section it is rendering", () => {
-  const rx = /selectTree\(day\.timed\.concat\(_orderUnscheduled\(day\.unscheduled\)\),\{pool:visible\}\)/;
+  const rx = /selectTree\(day\.timed\.concat\(_orderUnscheduled\(day\.unscheduled\)\),\{pool:visible,\.\.\.\(options\.expandAll\?\{isCollapsed:\(\)=>false\}:\{\}\)\}\)/;
   assert.match(schedTabCode, rx,
     "the work list must resolve roots against the whole visible day, or a child whose parent " +
     "is Unscheduled/folded gets promoted to a top-level row again");
@@ -75,7 +75,7 @@ test("★ the work list pools its tree on `visible`, not on the section it is re
 });
 
 test("★ the Unscheduled section renders a TREE, not a flat list of roots", () => {
-  const rx = /groupItineraryTree\(DCC\.TaskModel\.selectTree\(day\.timed\.concat\(_orderUnscheduled\(day\.unscheduled\)\),\{pool:visible\}\)[\s\S]*wrap\.appendChild\(emitNode\(node,_isSubRow\(node\)\?0:rank\+\+,isDone\(node\.ev\)\?"done":"open"\)\);/;
+  const rx = /groupItineraryTree\(DCC\.TaskModel\.selectTree\(day\.timed\.concat\(_orderUnscheduled\(day\.unscheduled\)\),\{pool:visible,\.\.\.\(options\.expandAll\?\{isCollapsed:\(\)=>false\}:\{\}\)\}\)[\s\S]*wrap\.appendChild\(emitNode\(node,_isSubRow\(node\)\?0:rank\+\+,isDone\(node\.ev\)\?"done":"open"\)\);/;
   assert.match(schedTabCode, rx,
     "roots + their closure must go through selectTree and emitNode WITH the real done/open " +
     "mode, or a step of an untimed parent renders as a standalone numbered row in the Work " +
@@ -204,7 +204,7 @@ test("★ the list view derives ONCE — one selectDay call feeding every sectio
     "buildListView must not call selectDay itself; it reads the shared model");
   assert.equal((listView.match(/_itineraryListModel\(\)/g) || []).length, 1,
     "buildListView must take the shared model exactly once");
-  const mStart = schedTabCode.indexOf("function _itineraryListModel(){");
+  const mStart = schedTabCode.indexOf("function _itineraryListModel(options={}){");
   assert.ok(mStart > 0, "_itineraryListModel must exist");
   const model = schedTabCode.slice(mStart, schedTabCode.indexOf("\nfunction ", mStart + 1));
   const calls = (model.match(/TaskModel\.selectDay\(/g) || []).length;

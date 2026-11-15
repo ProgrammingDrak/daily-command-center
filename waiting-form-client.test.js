@@ -43,7 +43,7 @@ function harness(values, existing = null) {
 }
 
 test("Waiting access is prominent and contact fields are collapsed below the blocker", () => {
-  const header = html.slice(html.indexOf('id="date-nav"'), html.indexOf('id="date-picker-drop"'));
+  const header = html.slice(html.indexOf('id="task-view-bar"'), html.indexOf('class="progress-wrap"'));
   assert.match(header, /loose-ends-pill[\s\S]*waiting-pill-nav/);
   assert.match(taskActions, /function buildTaskChangeItems[\s\S]*label:"Delegate \/ block"/);
   const form = html.slice(html.indexOf('id="delegated-modal-form"'), html.indexOf('id="dm-save"'));

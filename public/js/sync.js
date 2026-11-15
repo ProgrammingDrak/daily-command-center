@@ -46,11 +46,11 @@ function saveNotes(data, options) {
       if (!val) continue;
       const html = typeof val === "string" ? val : (val.html || "");
       const text = typeof val === "string" ? val : (val.text || "");
-      const anchor=typeof taskAnchorById==='function'?taskAnchorById(taskId):null;
+      const anchor=options?.anchor||(typeof taskAnchorById==='function'?taskAnchorById(taskId):null);
       const row=anchor&&anchor.blockId&&window.blockStore.get(anchor.blockId);
-      if(row&&(anchor.whenever||(row.properties||{})._taskNotes)){
+      if(row&&(anchor.whenever||anchor.queue||(row.properties||{})._taskNotes)){
         const note={html,text,blocks:Array.isArray(val.blocks)?val.blocks:[]};
-        if(typeof enqueueRowPropsWrite==='function')enqueueRowPropsWrite(row.id,props=>({...props,_taskNotes:note})).catch(()=>{if(typeof showToast==='function')showToast('Could not save task notes','error');});
+        if(typeof enqueueRowPropsWrite==='function')saveTaskNotes(row.id,note).catch(()=>{if(typeof showToast==='function')showToast('Could not save task notes','error');});
         else window.blockStore.updateBlockDebounced(row.id,{...row.properties,_taskNotes:note});
         continue;
       }
@@ -69,13 +69,42 @@ function saveNotes(data, options) {
   localStorage.setItem(NOTES_KEY, JSON.stringify(data)); scheduleIDBSave();
 }
 
+// Completion must observe the canonical note write acknowledgement separately from
+// the atomic completion command, so a failed note can be retried without re-completing.
+async function saveTaskNotes(blockId,note) {
+  const saved=await enqueueRowPropsWrite(blockId,props=>({...props,_taskNotes:note}),{_reportSaveStatus:true},{rejectOnError:true});
+  if(!saved||saved._savePending)throw new Error('Notes are saved locally and waiting for server confirmation.');
+  return saved;
+}
+async function loadTaskNotesForAnchor(anchor) {
+  const row=anchor.ev.__unf.sourceBlock,p=row.properties||{};
+  // Legacy note blocks are day-scoped and usually reference local_id. Read the
+  // origin partition without changing the viewed day or merging its aliases.
+  const rows=anchor.date?await DCC.api('/api/blocks/range?start='+encodeURIComponent(anchor.date)+'&end='+encodeURIComponent(anchor.date))
+    :await DCC.api('/api/blocks/'+encodeURIComponent(row.id)+'/children');
+  anchor.sourceRows=rows;window.DCCWorkingQueue?.rememberTaskContext?.(rows);
+  if(Object.prototype.hasOwnProperty.call(p,'_taskNotes'))return p._taskNotes;
+  const candidates=rows.filter(b=>b.type==='note'||(b.type==='block'&&b.parent_id&&typeof b.properties?.html==='string'&&typeof b.properties?.text==='string'));
+  const exact=candidates.find(b=>(b.properties._sourceTaskId||b.parent_id)===row.id);
+  let note=exact;
+  if(!note&&p.local_id&&anchor.date){
+    const aliases=rows.filter(b=>b.type==='block'&&b.properties?.local_id===p.local_id&&b.date===anchor.date);
+    const legacy=candidates.filter(b=>b.date===anchor.date&&(b.properties._sourceTaskId||b.parent_id)===p.local_id);
+    if(legacy.length&&(aliases.length!==1||aliases[0].id!==row.id))throw new Error('Task notes have an ambiguous identity on their source date.');
+    note=legacy.at(-1);
+  }
+  return note?{html:note.properties.html,text:note.properties.text,blocks:note.properties.blocks,_blockId:note.id}:undefined;
+}
+window.loadTaskNotesForAnchor=loadTaskNotesForAnchor;
+window.saveTaskNotes=saveTaskNotes;
+
 function seedNoteForTask(taskId, ev) {
   const pools = [];
   if (ev) pools.push([ev]);
   if (typeof scheduled !== "undefined" && Array.isArray(scheduled)) pools.push(scheduled);
   if (typeof INIT_SCHED !== "undefined" && Array.isArray(INIT_SCHED)) pools.push(INIT_SCHED);
   for (const pool of pools) {
-    const item = pool.find(e => e && e.id === taskId);
+    const item = pool.find(e => e && (e.id === taskId || e._blockId === taskId));
     if (!item) continue;
     const seed = item.notes || item.detail || item.description || "";
     if (typeof seed === "string" && seed.trim()) return seed;
@@ -97,12 +126,19 @@ function noteBlocksForTask(taskId, noteVal, ev) {
   return seed ? migrateHtmlToBlocks(seed) : null;
 }
 
-function loadActions() {
+function loadActions(taskId) {
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.actions && window.blockStore) {
-    const actionBlocks = [...window.blockStore.getByType("action_item"),...window.blockStore.getByType("block").filter(b=>((b.properties||{}).tags||[]).includes("action-item"))];
+    const scoped=taskId&&window.DCCWorkingQueue?.taskAnchor?.(taskId);
+    const source=scoped?.blockId===taskId?scoped:null;
+    const actionBlocks = source?(source.sourceRows||[]).filter(b=>b.type==="action_item"||((b.properties||{}).tags||[]).includes("action-item")):[...window.blockStore.getByType("action_item"),...window.blockStore.getByType("block").filter(b=>((b.properties||{}).tags||[]).includes("action-item"))];
     const result = {};
     actionBlocks.forEach(b => {
-      const taskId = b.properties._sourceTaskId || b.parent_id;
+      let taskId = b.properties._sourceTaskId || b.parent_id;
+      if(source){
+        const alias=source.ev.id, matches=(source.sourceRows||[]).filter(r=>r.properties?.local_id===alias);
+        if(taskId!==source.blockId&&!(taskId===alias&&matches.length===1&&matches[0].id===source.blockId))return;
+        taskId=source.blockId;
+      }
       if (!result[taskId]) result[taskId] = [];
       result[taskId].push({ ...b.properties, _blockId: b.id });
     });
@@ -110,9 +146,11 @@ function loadActions() {
   }
   try { return JSON.parse(localStorage.getItem(ACTIONS_KEY) || "{}"); } catch(e) { return {}; }
 }
-function saveActions(data) {
+function saveActions(data, options) {
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.actions && window.blockStore) {
-    for (const [taskId, items] of Object.entries(data)) {
+    for (const [taskId, items] of Object.entries(options?.taskId?{[options.taskId]:data[options.taskId]}:data)) {
+      const source=options?.taskId&&window.DCCWorkingQueue?.taskAnchor?.(taskId);
+      const taskDate=source?.blockId===taskId?source.date:window.blockStore.getCurrentDate();
       if (!Array.isArray(items)) continue;
       items.forEach((item, i) => {
         if (item._blockId) {
@@ -122,9 +160,10 @@ function saveActions(data) {
             ...(item._scheduled ? { scheduled: item._scheduled, scheduledAt: item._scheduledAt } : {}),
             ...(item._notionQueued ? { _notionQueued: true, _notionQueuedAt: item._notionQueuedAt } : {})
           };
-          window.blockStore.updateBlock(item._blockId, metadata).then(() =>
+          const write=source?.blockId===taskId?enqueueRowPropsWrite(item._blockId,props=>({...props,...metadata})):window.blockStore.updateBlock(item._blockId, metadata);
+          Promise.resolve(write).then(() =>
             window.blockStore.setTaskCompletion(item._blockId,!!item.done,{
-              taskDate:window.blockStore.getCurrentDate(),completedAt:item.done?(item.doneAt||new Date().toISOString()):null
+              taskDate,completedAt:item.done?(item.doneAt||new Date().toISOString()):null
             })
           ).catch(e=>console.warn("[actions] completion failed:",e));
         } else {
@@ -133,8 +172,8 @@ function saveActions(data) {
             _sourceTaskId: taskId, created: item.created || new Date().toISOString(),
             tags:["action-item"]
           }, {
-            parentId: window.blockStore.getDayRootId(),
-            date: window.blockStore.getCurrentDate(),
+            parentId: source?.blockId===taskId?((source.sourceRows||[]).find(r=>r.type==='day_root')?.id||taskId):window.blockStore.getDayRootId(),
+            date: taskDate,
             sortOrder: (i + 1) * 1000        // C6c: 1000-spaced; a 0 would have meant "unset"
           }).then(block => { item._blockId = block.id; });
         }
@@ -358,7 +397,7 @@ function savePendingTasks(tasks){
 }
 
 function scheduleActionToday(taskId, idx){
-  const actions=loadActions();
+  const actions=loadActions(taskId);
   if(!actions[taskId]||!actions[taskId][idx])return;
   const item=actions[taskId][idx];
   if(item._scheduled)return;
@@ -370,7 +409,7 @@ function scheduleActionToday(taskId, idx){
   insertTaskFromDrawer(item.text, 30);
   item._scheduled=true;
   item._scheduledAt=new Date().toISOString();
-  saveActions(actions);
+  saveActions(actions,{taskId:taskId});
   if(typeof showToast==="function")showToast("Added to today's schedule","success");
   // Re-render whichever list is showing
   if(document.getElementById("done-modal-overlay").classList.contains("open")) renderDmActions(taskId);
@@ -378,7 +417,7 @@ function scheduleActionToday(taskId, idx){
 }
 
 function queueActionForLater(taskId, idx){
-  const actions=loadActions();
+  const actions=loadActions(taskId);
   if(!actions[taskId]||!actions[taskId][idx])return;
   const item=actions[taskId][idx];
   if(item._notionQueued)return;
@@ -400,7 +439,7 @@ function queueActionForLater(taskId, idx){
   // Mark item as queued
   item._notionQueued=true;
   item._notionQueuedAt=new Date().toISOString();
-  saveActions(actions);
+  saveActions(actions,{taskId:taskId});
   if(typeof showToast==="function")showToast("Queued for task review","success");
   if(document.getElementById("done-modal-overlay").classList.contains("open")) renderDmActions(taskId);
   else renderActionItems(taskId);

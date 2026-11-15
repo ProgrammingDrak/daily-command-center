@@ -533,6 +533,7 @@ async function commitDoneOnDate(id,dateStr,opts){
     manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
     if(opts.cascade!==false)optimisticSubtasks=_optimisticallyCompleteSubtasks(id,completedAt);
     render();
+    if(celebration)_finishCompletionCelebration(celebration,id);
   }
   try{
     const result=await _persistDone(id,true,{ev:ev,dateStr:dateStr,completedAt:completedIso});
@@ -547,7 +548,6 @@ async function commitDoneOnDate(id,dateStr,opts){
     if(currentDate===dateStr&&opts.cascade!==false)_onParentCompleted(id);
     log("checked-on",id,"Marked done on "+dateStr);
     render();
-    if(celebration)_finishCompletionCelebration(celebration,id);
     awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{
       sourceDate:dateStr,completedAt:completedIso,awardPoints:award,
       sourceKey:"completion:"+((result&&result.mutationId)||id),silent:!!opts.silent
@@ -1061,13 +1061,31 @@ function toggleDone(id,opts){
   const _today=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   return commitDoneOnDate(id,_today,{ev:scheduled.find(e=>e.id===id),silent:!!opts.silent});
 }
+// Persist the estimate on the task row as well as the legacy day overlay.
+// Merge inside the shared row queue so notes and concurrent edits survive.
+function taskDurationFitsDay(start,minutes){
+  if(pt(start)+minutes<=1439)return true;
+  if(typeof showToast==="function")showToast("This duration extends past the end of the day. Move the task earlier or choose a shorter duration.","error");
+  return false;
+}
+function persistTaskDuration(ev,minutes){
+  ev.duration=minutes;ev.durMin=minutes;
+  const row=_findTaskBlockForDate(ev.id,typeof viewDate!=="undefined"?viewDate:null,ev);
+  if(!row||typeof enqueueRowPropsWrite!=="function")return null;
+  return enqueueRowPropsWrite(row.id,props=>{
+    if(props.start&&!taskDurationFitsDay(props.start,minutes))return null;
+    const next={...props,duration:minutes,durMin:minutes};
+    if(props.start)next.end=fmt(pt(props.start)+minutes);
+    return next;
+  });
+}
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
-  const c=dur(ev),n=stepDuration(c,delta);if(n===c)return;
+  const c=dur(ev),n=stepDuration(c,delta);if(n===c||!taskDurationFitsDay(ev.start,n))return;
   const s=pt(ev.start);ev.end=String(Math.floor((s+n)/60)).padStart(2,"0")+":"+String((s+n)%60).padStart(2,"0");
   if(ev.meta)ev.meta=ev.meta.replace(/·\s*\d+h?\s*\d*m?/,"· "+ms(n));
   durChanges[id]={original:origDur(id)||c,current:n};log("duration",id,c+"->"+n);
-  recalcTimes();saveDurChanges();render()
+  persistTaskDuration(ev,n);recalcTimes();saveDurChanges();render()
 }
 function setDurAbsolute(id,newMin){
   const anchor=typeof taskAnchorById==='function'?taskAnchorById(id):null;
@@ -1079,11 +1097,12 @@ function setDurAbsolute(id,newMin){
   }
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
   const n=Math.max(1,Math.round(newMin));
-  const c=dur(ev);if(n===c)return;
+  const c=dur(ev);if(!taskDurationFitsDay(ev.start,n))return;
+  if(n===c){persistTaskDuration(ev,n);return;}
   const s=pt(ev.start);ev.end=fmt(s+n);
   if(ev.meta)ev.meta=ev.meta.replace(/·\s*\d+h?\s*\d*m?/,"· "+ms(n));
   durChanges[id]={original:origDur(id)||c,current:n};log("duration",id,c+"->"+n);
-  recalcTimes();saveDurChanges();render()
+  persistTaskDuration(ev,n);recalcTimes();saveDurChanges();render()
 }
 // ======== START TIME ADJUSTMENT ========
 function openStartTimePicker(id, anchorEl){
@@ -1751,7 +1770,7 @@ function openPlacementPicker(cfg){
   if(!overlay){if(onPlace)onPlace(cfg.day||_resolvedTodayDate(),null);return}
   _schedPickerTitle=cfg.title||"";
   _schedPickerDur=cfg.durMin||30;
-  _schedPickerOptions={onBlockPlace:cfg.onBlockPlace};
+  _schedPickerOptions={onBlockPlace:cfg.onBlockPlace,originalStart:cfg.originalStart};
   _schedPickerDate="";
   _schedPickerOnPlace=onPlace;
   _schedPickerVerb=cfg.verb||"Move";
@@ -1824,6 +1843,15 @@ async function _renderSchedAfterStep(dateStr){
     efb.type="button";efb.className="sched-chip sched-chip-earliest";efb.textContent="⚡ Earliest free";
     efb.addEventListener("click",()=>_schedCommit(dateStr,null));
     chipWrap.appendChild(efb);
+    const originalStart=_schedPickerOptions.originalStart;
+    if(_schedPickerOnPlace&&/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(originalStart||"")){
+      const original=document.createElement("button");
+      original.type="button";original.className="sched-chip";
+      original.textContent="Original Time";
+      original.title="Keep "+_schedTimeLabel(originalStart);
+      original.addEventListener("click",()=>_schedCommit(dateStr,originalStart));
+      chipWrap.appendChild(original);
+    }
     if(_schedPickerOptions.onBlockPlace){
       const list=document.createElement("div");list.className="sched-block-list";list.textContent="Loading time blocks…";chipWrap.appendChild(list);
       fetch("/api/time-block-placement?date="+encodeURIComponent(dateStr),{cache:"no-store"}).then(async response=>{
@@ -2291,7 +2319,7 @@ const TASK_DESTINATIONS=[
   {value:"urgent",  icon:"⚡", label:"Urgent"},
   {value:"done",    icon:"✅", label:"Completed"},
   {value:"schedule",icon:"📅", label:"Schedule…"},
-  {value:"backlog", icon:"💡", label:"Task Library (Solo)"},
+  {value:"backlog", icon:"💡", label:"Unscheduled"},
   {value:"whenever",icon:"🧺", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever"},
   {value:"anytime", icon:"💧", label:"Anytime"},
   {value:"habit",   icon:"🔁", label:"Habit"},

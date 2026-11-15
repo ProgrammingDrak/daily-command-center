@@ -648,10 +648,8 @@
         shell.querySelectorAll("[data-social-tab]").forEach(button => button.classList.toggle("active", button === sectionTab));
         return;
       }
-      if (e.target.closest("[data-social-open-share]")) return document.getElementById("todo-share-open")?.click();
       // Pet Home left navigation; the adapter shows the retirement notice.
       if (e.target.closest("[data-social-open-pet]")) return window.DCC?.tabs?.select?.("pet-home");
-      if (e.target.closest("[data-social-refresh-guests]")) return document.getElementById("todo-reactions-toggle")?.click();
       const revokeBtn = e.target.closest("[data-revoke]");
       if (revokeBtn) return revokeGrant(revokeBtn.dataset.revoke);
       const openDay = e.target.closest("[data-open-day]");

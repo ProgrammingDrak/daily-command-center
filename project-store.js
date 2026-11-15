@@ -1,5 +1,8 @@
 const nodeCrypto = require("node:crypto");
+const TaskSources = require("./public/js/task-sources");
+const { isBlockDone } = require("./lib/task-timing");
 
+const LEGACY_TASK_TYPES = ["added_task", "schedule_item", "pending_task", "trivial_task", "action_item", "subtask"];
 const ORGANIZATION_KINDS = new Set(["project", "task_facet", "task_view"]);
 const FACET_CARDINALITIES = new Set(["single", "multi"]);
 const FACET_SCOPES = new Set(["workspace", "project"]);
@@ -7,6 +10,7 @@ const FACET_SCOPES = new Set(["workspace", "project"]);
 const BUILTIN_VIEWS = Object.freeze([
   { id: "all-open", name: "All open", system: true, query: { scope: "open" }, sort: { key: "project", dir: "asc" } },
   { id: "unscheduled", name: "Unscheduled", system: true, query: { scope: "open", scheduled: "no" }, sort: { key: "projectOrder", dir: "asc" } },
+  { id: "someday", name: "Someday", system: true, query: { scope: "someday" }, sort: { key: "createdAt", dir: "desc" } },
   { id: "scheduled", name: "Scheduled", system: true, query: { scope: "open", scheduled: "yes" }, sort: { key: "date", dir: "asc" } },
   { id: "solo", name: "Solo", system: true, query: { scope: "open", projectId: "solo" }, sort: { key: "title", dir: "asc" } },
   { id: "waiting", name: "Waiting", system: true, query: { scope: "open", readiness: "blocked" }, sort: { key: "title", dir: "asc" } },
@@ -15,6 +19,22 @@ const BUILTIN_VIEWS = Object.freeze([
 
 function cleanText(value, max = 300) {
   return String(value == null ? "" : value).trim().replace(/\s+/g, " ").slice(0, max);
+}
+
+function ideaMetadata(input) {
+  const fields = {};
+  if (Array.isArray(input.tags)) fields.tags = [...new Set(input.tags.map(tag => cleanText(tag, 100)).filter(Boolean))].slice(0, 50);
+  if (input.location !== undefined) fields.location = cleanText(input.location, 300);
+  if (input.sourceUrl !== undefined) {
+    const url = String(input.sourceUrl || "").trim();
+    const sources = Array.isArray(input.previousSources) ? input.previousSources : [];
+    try {
+      fields.sourceReferences = TaskSources.validate(url ? [{ kind: "link", name: "Idea source", url }, ...sources] : sources);
+    } catch (error) {
+      throw clientError(error.message);
+    }
+  }
+  return fields;
 }
 
 function slugify(value) {
@@ -28,18 +48,13 @@ function clientError(message, statusCode = 400, code) {
   return error;
 }
 
-function isDone(block) {
-  const props = (block && block.properties) || {};
-  return props.status === "done" || props.done === true || !!props.completedAt;
-}
-
 function isLibraryTask(block, blockDB) {
   if (!block || block.deleted_at || ORGANIZATION_KINDS.has((block.properties || {}).kind)) return false;
   if (blockDB && typeof blockDB.isTaskRow === "function" && !blockDB.isTaskRow(block)) return false;
   const props = block.properties || {};
   const hasTitle = cleanText(props.title || props.text, 300);
   if (!hasTitle) return false;
-  if (block.type !== "block") return ["added_task", "schedule_item", "pending_task", "trivial_task", "action_item", "subtask"].includes(block.type);
+  if (block.type !== "block") return LEGACY_TASK_TYPES.includes(block.type);
   return !!(props.local_id || ["task", "backlog", "shell", "meeting", "responsibility_task", "placeholder_task"].includes(props.kind)
     || ["task", "shell", "meeting", "oneone"].includes(props.type));
 }
@@ -116,7 +131,7 @@ function normalizeView(input, current) {
     columns,
     query: cleanText(input.query !== undefined ? input.query : current.query, 500),
     density: input.density === "compact" ? "compact" : (current.density || "comfortable"),
-    scope: ["open", "completed", "all"].includes(input.scope) ? input.scope : (current.scope || "open"),
+    scope: ["open", "completed", "all", "someday"].includes(input.scope) ? input.scope : (current.scope || "open"),
   };
 }
 
@@ -356,22 +371,33 @@ function createProjectStore(deps = {}) {
   }
 
   async function listTaskRows(workspaceId) {
+    // Filter canonical artifacts in SQL. Parsed title and local_id checks
+    // stay in JavaScript, where legacy values retain their original semantics.
+    // The id breaks exact sort ties, including for legacy local_id resolution.
     const { rows } = await pool.query(
       `SELECT * FROM blocks WHERE workspace_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL
+       AND (type = 'block' OR type = ANY($2::text[]))
+       AND dcc_is_task_row(type, properties)
        ORDER BY CASE WHEN COALESCE(properties->>'projectOrder','') ~ '^-?[0-9]+(?:[.][0-9]+)?$'
                      THEN (properties->>'projectOrder')::double precision ELSE sort_order END,
-                created_at ASC`,
-      [workspaceId || null]
+                created_at ASC, id ASC`,
+      [workspaceId || null, LEGACY_TASK_TYPES]
     );
     return rows.map(blockDB.parseBlock).filter(row => isLibraryTask(row, blockDB));
   }
 
   async function listLibrary(workspaceId) {
-    const [tasks, organization, dependencyRows] = await Promise.all([
+    const [tasks, organization, dependencyRows, dayRootsResult] = await Promise.all([
       listTaskRows(workspaceId),
       listOrganization(workspaceId),
       blockDB.getDelegatedItems(workspaceId),
+      pool.query(`SELECT date::text AS date, properties->'_done' AS completion
+        FROM blocks WHERE workspace_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL
+          AND type='day_root' AND date IS NOT NULL AND properties ? '_done'`, [workspaceId || null]),
     ]);
+    const dayRoots = new Map(dayRootsResult.rows.map(row => [row.date, {_done: row.completion}]));
+    const completedTaskIds = tasks.filter(task => isBlockDone(task, dayRoots.get(task.date))).map(task => task.id);
+    const completed = new Set(completedTaskIds);
     const byId = new Map(tasks.map(task => [String(task.id), task]));
     for (const task of tasks) {
       const localId = cleanText((task.properties || {}).local_id, 200);
@@ -389,13 +415,13 @@ function createProjectStore(deps = {}) {
       const blocker = byId.get(String(props.blockerBlockId));
       if (!dependent) continue;
       const entry = readiness[dependent.id] || (readiness[dependent.id] = { state: "ready", total: 0, satisfied: 0, blockers: [] });
-      const satisfied = !!blocker && isDone(blocker);
+      const satisfied = !!blocker && completed.has(blocker.id);
       entry.total++;
       if (satisfied) entry.satisfied++;
       else entry.blockers.push({ id: blocker ? blocker.id : props.blockerBlockId, title: blocker ? cleanText(blocker.properties.title || blocker.properties.text) : props.title || "Missing prerequisite" });
       if (!satisfied) entry.state = "blocked";
     }
-    return { tasks, ...organization, dependencies, readiness, builtinViews: BUILTIN_VIEWS };
+    return { tasks, ...organization, dependencies, readiness, completedTaskIds, builtinViews: BUILTIN_VIEWS };
   }
 
   async function createOrganizationBlock(kind, properties, owner, client, sortOrder) {
@@ -425,8 +451,8 @@ function createProjectStore(deps = {}) {
     }, owner, client);
   }
 
-  async function patchProject(id, input, owner) {
-    const existing = await getOwnedBlock(id, owner.workspaceId);
+  async function patchProject(id, input, owner, client) {
+    const existing = await getOwnedBlock(id, owner.workspaceId, client);
     if (!existing || (existing.properties || {}).kind !== "project") throw clientError("Project not found", 404);
     const props = { ...existing.properties };
     if (input.name !== undefined) {
@@ -442,7 +468,7 @@ function createProjectStore(deps = {}) {
     }
     if (input.color !== undefined) props.color = cleanText(input.color, 24) || "#0075EB";
     props.updatedAt = new Date().toISOString();
-    return blockDB.updateBlock(id, { properties: props });
+    return blockDB.updateBlock(id, { properties: props }, client);
   }
 
   async function createFacet(input, owner, client) {
@@ -462,22 +488,22 @@ function createProjectStore(deps = {}) {
     return blockDB.updateBlock(id, { properties: props }, client);
   }
 
-  async function createView(input, owner) {
-    return createOrganizationBlock("task_view", normalizeView(input), owner);
+  async function createView(input, owner, client) {
+    return createOrganizationBlock("task_view", normalizeView(input), owner, client);
   }
 
-  async function patchView(id, input, owner) {
-    const existing = await getOwnedBlock(id, owner.workspaceId);
+  async function patchView(id, input, owner, client) {
+    const existing = await getOwnedBlock(id, owner.workspaceId, client);
     if (!existing || (existing.properties || {}).kind !== "task_view") throw clientError("Saved view not found", 404);
     const props = normalizeView(input, existing.properties);
     props.updatedAt = new Date().toISOString();
-    return blockDB.updateBlock(id, { properties: props });
+    return blockDB.updateBlock(id, { properties: props }, client);
   }
 
-  async function deleteView(id, owner) {
-    const existing = await getOwnedBlock(id, owner.workspaceId);
+  async function deleteView(id, owner, client) {
+    const existing = await getOwnedBlock(id, owner.workspaceId, client);
     if (!existing || (existing.properties || {}).kind !== "task_view") throw clientError("Saved view not found", 404);
-    return blockDB.deleteBlock(id);
+    return blockDB.deleteBlock(id, client);
   }
 
   async function createTask(input, owner, client) {
@@ -490,6 +516,8 @@ function createProjectStore(deps = {}) {
       local_id: input.local_id || `library-${cryptoImpl.randomUUID()}`,
       title,
       detail: cleanText(input.detail, 5000),
+      ...ideaMetadata({ ...input, previousSources: [] }),
+      ...(input.someday === true ? { someday: true } : {}),
       type: input.type || "task",
       source: input.source || "manual",
       ...(input.source === "quietshelf-reading" && input.readingSession ? { readingSession: input.readingSession } : {}),
@@ -511,15 +539,15 @@ function createProjectStore(deps = {}) {
     };
     return blockDB.createBlock({
       id: input.id || cryptoImpl.randomUUID(), type: "block", parent_id: null,
-      date: input.date || null, sort_order: input.sort_order == null ? null : input.sort_order,
+      date: input.someday === true ? null : input.date || null, sort_order: input.sort_order == null ? null : input.sort_order,
       properties, user_id: owner.userId, workspace_id: owner.workspaceId,
     }, client);
   }
 
-  async function organizeTask(id, input, owner) {
-    const task = await getOwnedBlock(id, owner.workspaceId);
+  async function organizeTask(id, input, owner, client) {
+    const task = await getOwnedBlock(id, owner.workspaceId, client);
     if (!task || !isLibraryTask(task, blockDB)) throw clientError("Task not found", 404);
-    const organization = await listOrganization(owner.workspaceId);
+    const organization = await listOrganization(owner.workspaceId, client);
     const projectId = input.projectId === undefined ? ((task.properties || {}).projectId || null) : (cleanText(input.projectId, 120) || null);
     if (projectId && !organization.projects.some(project => project.id === projectId && (project.properties || {}).status !== "archived")) {
       throw clientError("Project not found", 404);
@@ -543,6 +571,8 @@ function createProjectStore(deps = {}) {
       props.title = cleanText(input.title, 300);
       if (!props.title) throw clientError("Task title is required");
     }
+    const previousSources = (props.sourceReferences || []).filter(ref => ref.kind !== "link" || ref.name !== "Idea source");
+    Object.assign(props, ideaMetadata({ ...input, previousSources }));
     if (input.detail !== undefined) props.detail = cleanText(input.detail, 5000);
     if (input.priority !== undefined && ["High", "Medium", "Low"].includes(input.priority)) props.priority = input.priority;
     if (input.duration !== undefined) {
@@ -551,7 +581,7 @@ function createProjectStore(deps = {}) {
       props.durMin = duration;
     }
     if (input.projectOrder !== undefined && Number.isFinite(Number(input.projectOrder))) props.projectOrder = Number(input.projectOrder);
-    return blockDB.updateBlock(id, { properties: props });
+    return blockDB.updateBlock(id, { properties: props }, client);
   }
 
   async function reorderTasks(ids, owner) {
@@ -577,13 +607,13 @@ function createProjectStore(deps = {}) {
     }
   }
 
-  async function commitImport(manifest, input, owner) {
+  async function commitImport(manifest, input, owner, transactionClient) {
     validateImportManifest(manifest);
     const idempotencyKey = cleanText(input && input.idempotencyKey, 160);
     if (!idempotencyKey) throw clientError("Import idempotency key is required");
-    const client = await pool.connect();
+    const client = transactionClient || await pool.connect();
     try {
-      await client.query("BEGIN");
+      if (!transactionClient) await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`project-import:${owner.workspaceId}:${idempotencyKey}`]);
       const { rows: existingRows } = await client.query(
         `SELECT * FROM blocks WHERE workspace_id IS NOT DISTINCT FROM $1 AND deleted_at IS NULL
@@ -591,7 +621,7 @@ function createProjectStore(deps = {}) {
         [owner.workspaceId || null, idempotencyKey]
       );
       if (existingRows[0]) {
-        await client.query("COMMIT");
+        if (!transactionClient) await client.query("COMMIT");
         return { duplicate: true, project: blockDB.parseBlock(existingRows[0]), tasks: [] };
       }
       const project = await createProject({
@@ -665,13 +695,13 @@ function createProjectStore(deps = {}) {
           await blockDB.updateBlock(task.id, { properties: task.properties }, client);
         }
       }
-      await client.query("COMMIT");
+      if (!transactionClient) await client.query("COMMIT");
       return { duplicate: false, project, tasks };
     } catch (error) {
-      await client.query("ROLLBACK");
+      if (!transactionClient) await client.query("ROLLBACK");
       throw error;
     } finally {
-      client.release();
+      if (!transactionClient) client.release();
     }
   }
 

@@ -4,13 +4,15 @@ const { checkConversationReadiness } = require("./scripts/check-conversation-rea
 const base = "https://dcc.example";
 test("disabled remote routes return explicit 503 without OAuth, session, or database access", () => {
   const registrations = [];
-  const app = { all: (paths, handler) => registrations.push({ paths, handler }) };
+  const pages = [];
+  const app = { all: (paths, handler) => registrations.push({ paths, handler }), get: path => pages.push(path), post() {} };
   const ctx = {
     get pool() {
       throw new Error("Database must not be accessed");
     }
   };
   assert.equal(require("./routes/conversation")(app, ctx, { enabled: false }), null);
+  assert.ok(pages.includes('/connections/conversation'), 'connection dashboard stays available while remote tools are disabled');
   const [{ paths, handler }] = registrations;
   for (const path of [
     "/mcp/dcc",

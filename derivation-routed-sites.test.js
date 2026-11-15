@@ -252,7 +252,7 @@ test("the done-modal parent list escapes both the title and the id", () => {
   // Titles are not all owner-authored: data.js takes them from the server timeline, and
   // guest public-share submissions are only trimmed and truncated server-side.
   const rx = /'<option value="' \+ DCC\.esc\(String\(e\.id\)\) \+ '"' \+ \(triageParents\[id\] === e\.id \? ' selected' : ''\) \+ '>' \+ DCC\.esc\(e\.title \|\| ''\)/;
-  assert.match(triageCode, rx);
+  assert.match(fs.readFileSync(__dirname+"/public/js/completion-modal.js","utf8"), rx);
   assert.equal(rx.test("'<option value=\"' + e.id + '\"' + (triageParents[id] === e.id ? ' selected' : '') + '>' + e.title"), false,
     "the unescaped form must be rejected");
 });

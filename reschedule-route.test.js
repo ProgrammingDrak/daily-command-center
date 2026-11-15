@@ -381,3 +381,15 @@ test('ordinary reschedule converts a previous pool origin marker back to a visib
  assert.equal(calls.reschedule[0].creates.length,0);const updated=calls.reschedule[0].moves.find(move=>move.id===tomb.id);
  assert.equal(updated.properties.poolOrigin,undefined);assert.equal(updated.properties.rescheduledTo,TO);assert.equal(result.body.count,1);
 });
+
+for (const minutes of [5, 15, 60]) test('timed placement persists matching duration fields: '+minutes+'m', async () => {
+  const properties={duration:30,durMin:30,start:'09:00',end:'09:30',actualMinutes:7,notes:'Preserved',recurrenceId:'same'};
+  const parent=blk('p','local-p',{properties});
+  const {app,calls}=mountApp({parent,pool:[parent]});
+  const end=String(12+Math.floor((10+minutes)/60)).padStart(2,'0')+':'+String((10+minutes)%60).padStart(2,'0');
+  const result=await post(app,'p',{targetDate:TO,parentStart:'12:10',parentEnd:end,userSetStart:true});
+  assert.equal(result.status,200);
+  const saved=calls.reschedule[0].moves.find(row=>row.id==='p').properties;
+  assert.equal(saved.duration,minutes);assert.equal(saved.durMin,minutes);assert.equal(saved.start,'12:10');assert.equal(saved.end,end);
+  assert.equal(saved.actualMinutes,7);assert.equal(saved.notes,'Preserved');assert.equal(saved.recurrenceId,'same');assert.equal(saved.local_id,'local-p');
+});

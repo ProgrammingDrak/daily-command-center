@@ -20,6 +20,8 @@ test('Priority Queue keeps inactive historical work alongside planned work witho
   assert.equal(classify(task({responsibilityId:'r',occurrenceDate:'2099-01-01'})), 'queued');
   assert.equal(classify(task({responsibilityId:'r',everStarted:true})), 'queued');
   assert.equal(classify(planned,{status:'queued',hasActivity:true}), 'queued');
+  assert.equal(classify(task({dependencyWaitingItemId:'waiting-1'}),{status:'blocked'}), null);
+  assert.equal(classify(task({dependencyWaitingItemIds:['waiting-1']})), null);
   assert.equal(JSON.stringify(planned), before);
 });
 test('priority is stable High/Medium/Low, never legacy urgency or scheduled time', () => {
@@ -30,7 +32,7 @@ test('priority is stable High/Medium/Low, never legacy urgency or scheduled time
 });
 test('priority mutation requires a strict explicit command', () => {
   const b={action:'queue-priority',taskId:'t',sourceEventId:'p',expectedRevision:0,at:'2026-10-01T00:00:00Z',taskPriority:'High'};
-  assert.equal(command(b).taskPriority,'High');
+  for(const priority of ['Very low','Low','Medium','High','Very high'])assert.equal(command({...b,taskPriority:priority}).taskPriority,priority);
   assert.throws(()=>command({...b,taskPriority:'Urgent'}));
   assert.throws(()=>command({...b,action:'start'}));
 });
@@ -49,6 +51,7 @@ test('Priority Queue coordinator lifecycle and legacy evidence', {skip:!process.
   await make('background');await make('next-occurrence',{responsibilityId:'routine'});
   for(const id of ['scheduled','background','next-occurrence'])await send('queue-add',id);
   const original=(await ctx.blockDB.getBlock('scheduled')).properties;
+  for(const priority of ['Very low','Low','Medium','High','Very high']){await send('queue-priority','scheduled',{taskPriority:priority});assert.equal((await ctx.blockDB.getBlock('scheduled')).properties.taskPriority,priority);}
   await send('queue-priority','scheduled',{taskPriority:'High'});
   assert.deepEqual((await ctx.blockDB.getBlock('scheduled')).properties,{...original,taskPriority:'High'});
   assert.equal((await entry('scheduled')).status,'queued');
@@ -60,7 +63,8 @@ test('Priority Queue coordinator lifecycle and legacy evidence', {skip:!process.
   await ctx.blockDB.rescheduleBlocks([{id:'scheduled',date:'2026-10-20',properties:{...original,title:'Move with stale properties'}}],[]);
   assert.equal((await ctx.blockDB.getBlock('scheduled')).properties.taskPriority,'High');
   await send('start','scheduled');assert.equal((await entry('scheduled')).status,'foreground');
-  await send('pause','scheduled');assert.equal((await entry('scheduled')).status,'queued');
+  await send('pause','scheduled');assert.equal((await entry('scheduled')).status,'foreground');assert.equal((await entry('scheduled')).onBreak,true);
+  await send('queue-return','scheduled');assert.equal((await entry('scheduled')).status,'queued');
   await send('queue-block','scheduled');await send('queue-unblock','scheduled');assert.equal((await entry('scheduled')).status,'queued');
   await send('background-start','background');
   assert.equal((await entry('background')).status,'queued');
@@ -113,4 +117,13 @@ test('canonical task projection and serializer preserve explicit priority',()=>{
   const projected=model.fromBlock(task({taskPriority:'High'}));
   assert.equal(projected.taskPriority,'High');
   assert.equal(serializer.taskCommonProps(projected).taskPriority,'High');
+});
+
+test('five priority levels retain legacy values and stable ordering',()=>{
+ const P=require('./public/js/task-priority');
+ assert.deepEqual(P.levels,['Very low','Low','Medium','High','Very high']);
+ for(const level of P.levels)assert.equal(P.normalize(level.toUpperCase()),level);
+ assert.equal(P.normalize(undefined),'Medium');
+ const rows=P.levels.map((taskPriority,i)=>({task:{id:String(i),properties:{taskPriority}}}));
+ assert.deepEqual(orderPriority(rows).map(i=>i.task.id),['4','3','2','1','0']);
 });

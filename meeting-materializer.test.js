@@ -555,3 +555,18 @@ test("auto-prep is idempotent: a re-ingest never resets a sweep-filled 'ready' p
   assert.equal(b.properties.title, "New title"); // reconcile ran
   assert.equal(b.properties.prep_status, "ready"); // but prep survived, not reset to pending
 });
+
+test("a provider move between repeated clock times updates the instant without replacing the block", async () => {
+  const db = makeBlockDB();
+  const date = "2026-11-01";
+  await M(db)(args([mtg("repeated", "2026-11-01T05:30:00Z", "2026-11-01T05:45:00Z")], { date }));
+  const first = bySid(db, "repeated");
+  const id = first.id;
+  assert.equal(first.properties.start, "01:30");
+  assert.equal(first.properties.scheduleInstant.startAt, "2026-11-01T05:30:00.000Z");
+  await M(db)(args([mtg("repeated", "2026-11-01T06:30:00Z", "2026-11-01T06:45:00Z")], { date }));
+  const second = bySid(db, "repeated");
+  assert.equal(second.id, id);
+  assert.equal(second.properties.start, "01:30");
+  assert.equal(second.properties.scheduleInstant.startAt, "2026-11-01T06:30:00.000Z");
+});

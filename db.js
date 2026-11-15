@@ -20,6 +20,7 @@ const recurrence = require("./lib/recurrence");
 // derives its fixed-time skip set from isFixed() so the server and the carryover lane
 // cannot drift apart on which types are never carried over.
 const TaskTypes = require("./public/js/task-types");
+const TaskCosts = require("./public/js/task-costs");
 const TimeBlocks = require("./public/js/time-blocks");
 const {edgeOf,planParentChange} = require("./lib/task-hierarchy");
 const { plannedWindowOf } = require("./lib/task-timing");
@@ -83,6 +84,10 @@ function validateBlock(type, properties) {
   if (!VALID_TYPES.has(type)) throw new Error(`Unknown block type: ${type}`);
   if (properties && Object.prototype.hasOwnProperty.call(properties, "sourceReferences")) {
     try { require("./public/js/task-sources").validate(properties.sourceReferences); }
+    catch (error) { error.statusCode = 400; throw error; }
+  }
+  if (properties && Object.hasOwn(properties, "taskCosts")) {
+    try { TaskCosts.validate(properties.taskCosts); }
     catch (error) { error.statusCode = 400; throw error; }
   }
   const size = JSON.stringify(properties).length;
@@ -169,7 +174,7 @@ const NON_TASK_KINDS = new Set([
 function isTaskRow(block) {
   if (!block) return false;
   const type = block.type;
-  if (type === "day_root" || type === "time_entry") return false;
+  if (type === "day_root" || type === "time_entry" || type === "wishlist_attachment") return false;
   const kind = ((block.properties || {}).kind) || "";
   if (NON_TASK_KINDS.has(kind)) return false;
   if (kind.startsWith("responsibility") && kind !== "responsibility_task") return false;
@@ -982,9 +987,9 @@ async function updateBlock(id, fields, client) {
     properties, sort_order, parent_id, date, completionIntent, taskPriority,
     completionMutationId, completionBaseRevision,
   } = fields;
-  if (taskPriority !== undefined && (!["Low", "Medium", "High"].includes(taskPriority)
+  if (taskPriority !== undefined && (!["Very low", "Low", "Medium", "High", "Very high"].includes(taskPriority)
       || [properties, sort_order, parent_id, date, completionIntent, completionMutationId, completionBaseRevision].some(value => value !== undefined))) {
-    const error = new Error("taskPriority must be Low, Medium, or High and cannot be combined with other block edits");
+    const error = new Error("taskPriority must be Very low, Low, Medium, High, or Very high and cannot be combined with other block edits");
     error.statusCode = 400;
     throw error;
   }
@@ -1049,6 +1054,26 @@ async function updateBlock(id, fields, client) {
         isTaskRow({ type: existing.type, properties: existing.properties }), completionMutationId);
     }
     const existingProps = existing.properties || {};
+    if (fields.taskCostsChange !== undefined) {
+      if (!isTaskRow(existing) || [properties, sort_order, parent_id, date, taskPriority, completionIntent].some(value => value !== undefined)) {
+        const error = new Error("Transaction changes require a standalone task edit");
+        error.statusCode = 400;
+        throw error;
+      }
+      let costs;
+      try { costs = TaskCosts.applyChange(existingProps.taskCosts, fields.taskCostsChange); }
+      catch (error) { error.statusCode ||= 400; throw error; }
+      if (costs === undefined) {
+        if (ownsTransaction) await q.query("COMMIT");
+        return parseBlock(existing);
+      }
+      newProps = { ...existingProps, taskCosts: costs };
+      validateBlock(existing.type, newProps);
+    } else if (properties !== undefined) {
+      // Older full-row snapshots must never roll back a ledger edit.
+      if (Object.hasOwn(existingProps, "taskCosts")) newProps.taskCosts = existingProps.taskCosts;
+      else delete newProps.taskCosts;
+    }
     // Reconciliation lineage belongs to its audited transaction. An old offline
     // property bag must not erase outcomes, links or review decisions.
     if (!fields[require("./lib/conversation-model").RECONCILIATION_WRITE]) {
@@ -1381,6 +1406,11 @@ async function undeleteBlock(id, client, expectedDeleteMutationId) {
     error.statusCode = 409; error.code = "RESTORE_SUPERSEDED"; throw error;
   }
   if (!existing.deleted_at) return parseBlock(existing);
+  if (existing.properties?._deleteUndoToken?.startsWith("wishlist-convert:")) {
+    const error = new Error("This task was converted to a Wishlist");
+    error.statusCode = 409;
+    throw error;
+  }
   // Clearing deleted_at moves the row INTO idx_blocks_idem_unique's partial predicate
   // (`... AND deleted_at IS NULL`), so if a live row already holds this key the UPDATE
   // raises 23505 — and a raw one would surface as a 500 from POST /:id/undelete. Not
@@ -1972,17 +2002,25 @@ async function batchOp(operations, transactionClient) {
 // update/delete/reorder branches run on the tx client, not the pool.)
 async function rescheduleBlocks(moves, creates, options = {}) {
   const now = new Date().toISOString();
-  const client = await pool.connect();
+  const client = options.transactionClient || await pool.connect();
   const results = [];
   try {
-    await client.query("BEGIN");
+    if (!options.transactionClient) await client.query("BEGIN");
+    const queueOwner=options.queueOwner;
+    let movedQueue=null,queueChanged=false,clockSettled=false;
+    if(queueOwner){
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",['dcc-foreground:'+queueOwner.userId]);
+      await client.query('INSERT INTO conversation_state(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING',[queueOwner.userId]);
+      await client.query('SELECT user_id FROM conversation_state WHERE user_id=$1 FOR UPDATE',[queueOwner.userId]);
+      movedQueue=await require('./lib/working-queue').load(client,queueOwner);
+    }
     if (options.beforeApply) {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [options.lockKey]);
       await options.beforeApply(client);
     }
     for (const m of moves) {
       const { rows } = await client.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [m.id]);
-      const existing = rows[0];
+      let existing = rows[0];
       if (!existing) throw new Error(`Block not found: ${m.id}`);
       if (existing.deleted_at) throw new Error(`Block is deleted: ${m.id}`);
       // The route discovers the subtree before entering this transaction. Another
@@ -2003,12 +2041,27 @@ async function rescheduleBlocks(moves, creates, options = {}) {
         err.code = "RESCHEDULE_STALE";
         throw err;
       }
+      const settledKeys=new Set();
+      if(queueOwner&&existing.user_id===queueOwner.userId&&existing.workspace_id===queueOwner.workspaceId&&options.queueToday&&m.date&&normalizeDate(m.date)!==options.queueToday){
+        if(existing.properties.startedAt&&options.pauseActive){
+          const before=structuredClone(existing.properties);
+          await options.pauseActive(existing,client,now);
+          existing=(await client.query('SELECT * FROM blocks WHERE id=$1 FOR UPDATE',[m.id])).rows[0];
+          for(const key of new Set([...Object.keys(before),...Object.keys(existing.properties)]))if(JSON.stringify(before[key])!==JSON.stringify(existing.properties[key]))settledKeys.add(key);
+          clockSettled=true;queueChanged=true;
+        }
+        if(movedQueue.items[existing.id]){
+          await require('./lib/working-queue').metadata(client,queueOwner,movedQueue,{action:'queue-remove',taskId:existing.id,at:now},existing,module.exports);
+          queueChanged=true;
+        }
+      }
       let newProps = existing.properties;
       if (m.properties !== undefined) {
         const parsed = typeof m.properties === "string" ? JSON.parse(m.properties) : m.properties;
         validateBlock(existing.type, parsed);
         newProps = parsed;
       }
+      for(const key of settledKeys){if(existing.properties[key]===undefined)delete newProps[key];else newProps[key]=existing.properties[key];}
       if (Object.hasOwn(existing.properties || {}, 'taskPriority')) newProps.taskPriority = existing.properties.taskPriority;
       else delete newProps.taskPriority;
       for (const key of ['everStarted', 'lastWorkedAt']) {
@@ -2043,12 +2096,16 @@ async function rescheduleBlocks(moves, creates, options = {}) {
     for (const c of (creates || [])) {
       results.push(await createBlock(c, client));
     }
-    await client.query("COMMIT");
+    if(queueChanged){
+      await require('./lib/working-queue').save(client,queueOwner,movedQueue);
+      await client.query('UPDATE conversation_state SET revision=revision+1,changed_at=CASE WHEN $2 THEN GREATEST(changed_at,$3::timestamptz) ELSE changed_at END WHERE user_id=$1',[queueOwner.userId,clockSettled,now]);
+    }
+    if (!options.transactionClient) await client.query("COMMIT");
   } catch (err) {
-    await client.query("ROLLBACK");
+    if (!options.transactionClient) await client.query("ROLLBACK");
     throw err;
   } finally {
-    client.release();
+    if (!options.transactionClient) client.release();
   }
   return { blocks: results };
 }
@@ -2486,6 +2543,7 @@ async function purgeSoftDeleted(olderThanDays = 30) {
   const result = await pool.query(`WITH RECURSIVE retained AS (
     SELECT b.id,b.parent_id FROM blocks b JOIN task_activity_records r ON r.task_id=b.id
     UNION SELECT b.id,b.parent_id FROM blocks b JOIN task_attachments a ON a.block_id=b.id
+    UNION SELECT b.id,b.parent_id FROM blocks b JOIN wishlists l ON l.attachment_block_id=b.id
     UNION SELECT b.id,b.parent_id FROM blocks b JOIN retained child ON child.parent_id=b.id
   ) DELETE FROM blocks WHERE deleted_at IS NOT NULL AND deleted_at < $1
     AND id NOT IN (SELECT id FROM retained)`, [cutoff.toISOString()]);

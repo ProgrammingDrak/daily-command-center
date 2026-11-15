@@ -7,14 +7,14 @@ const accountBinding = require("./lib/account-binding");
 
 test("public projection excludes private rows, stale twins, associated discussion and cross-account calendars", async () => {
   const src = fs.readFileSync(require.resolve("./routes/social-todo"), "utf8");
-  const names = ["localTimeFromAny","taskMinutes","publicTaskIdentityIds","normalizeReactionIdentityIds","addReactionToMap","addCommentToMap","publicTaskStatus","publicFeedType","publicFeedTypeLabel","getPublicCalendarMap","getPublicTagMap","calendarMeta","publicTaskPoints","normalizePublicTask","buildPublicTodoShare"];
+  const names = ["localTimeFromAny","taskMinutes","publicTaskIdentityIds","normalizeReactionIdentityIds","addReactionToMap","addCommentToMap","publicTaskStatus","getPublicCalendarMap","getPublicTagMap","calendarMeta","publicTaskPoints","normalizePublicTask","buildPublicTodoShare"];
   const functions = names.map(n => { const m = src.match(new RegExp("(?:async )?function " + n + "\\([^]*?\\n\\}")); assert.ok(m,n); return m[0]; }).join("\n");
   const blocks = [
     { id:"secret",type:"block",properties:{title:"Synthetic confidential appointment",publicVisibility:"private",source_id:"secret-source"} },
     { id:"public",type:"block",properties:{title:"Synthetic shared commitment",source_id:"public-source",gcal_calendar_id:"private@example.invalid",calendarName:"Secret account name"} },
   ];
   const queries = [];
-  const ctx = { console, crypto, isValidDate:()=>true,getTodayStr:()=>"2026-10-08",coerceDateString:x=>x,
+  const ctx = { console, crypto, ...require("./lib/public-feed-type"), isValidDate:()=>true,getTodayStr:()=>"2026-10-08",coerceDateString:x=>x,
     filterLegacyGcalBlocks:x=>x,scoreTaskPoints:()=>({eligible:false}),capabilities:require("./capabilities"),
     buildDayResponse:async()=>({schedule:{timeline:[{id:"secret",label:"Synthetic confidential appointment",source_id:"secret-source"}],timeBlocks:[]},triage:{open_items:[]}}),
     blockDB:{ getBlocksByDateIncludingDeleted:async()=>blocks },

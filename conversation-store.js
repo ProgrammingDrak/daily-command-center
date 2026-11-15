@@ -1,5 +1,6 @@
 const M = require("./lib/conversation-model");
 const Q = require("./lib/working-queue");
+const Read = require("./lib/working-queue-read");
 const R = require("./lib/task-reconciliation");
 const { checkInState } = require("./public/js/work-checkin-policy");
 const meetingIdentity = require("./meeting-identity");
@@ -30,6 +31,25 @@ DO $privacy$ DECLARE r TEXT; BEGIN
  END LOOP;
 END $privacy$;
 `;
+// Shared pause dispatch: both callers retain their own queue and audit updates.
+async function pauseForeground(ctx,q,owner,row,{at,sourceEventId,actor,operationPrefix='queue',guidedEligible=true,recordAutoPauseReason=false,timing}) {
+  if(row.user_id!==owner.userId||row.workspace_id!==owner.workspaceId)throw M.fail('Task is not in this workspace',403);
+  const atMs=M.instant(at);
+  if(atMs<=Date.parse(row.properties.startedAt))throw M.fail('Transition must follow the active start',409);
+  const safety=checkInState(row.properties,atMs),cutoff=Math.min(atMs,safety.autoPauseAtMs);
+  let paused;
+  if(row.properties.guidedDefinitionId&&guidedEligible){
+    const guided=require('./guided-store').createGuidedStore(ctx),view=await guided.get(row.id,owner,q);
+    if(view.session){const result=await guided.act(row.id,{action:'pause',operationId:operationPrefix+':'+M.digest(sourceEventId+row.id).slice(0,40),expectedRevision:view.revision},owner,q,cutoff,true);paused={changed:true,entries:result.entries||[]};}
+  }
+  if(!paused)paused=await (timing||timingFor(ctx,q,owner)).pauseWork({block:row,atMs:cutoff,transitionAtMs:atMs,actor:actor||'conversation:'+owner.userId,actionId:sourceEventId,pauseReason:recordAutoPauseReason&&cutoff<atMs?'No recent work check-in':null});
+  if(!paused.changed)throw M.fail(paused.reason||'Foreground session could not be closed',409);
+  return {paused,cutoff};
+}
+// The rescheduler holds the account lock and rolls this pause back on failure.
+async function pauseForSchedule(ctx,q,owner,row,command) {
+  return (await pauseForeground(ctx,q,owner,row,{...command,actor:'schedule:'+owner.userId,operationPrefix:'schedule',recordAutoPauseReason:true})).paused;
+}
 function timingFor(ctx, q, owner) {
   const db = ctx.blockDB;
   return createTiming({
@@ -96,16 +116,62 @@ function createConversationStore(ctx) {
       [owner.userId]
     );
     const queue = await Q.snapshot(q, owner, blockDB, (ctx.now || Date.now)());
+    // Inspect only retained-break candidates, reusing the same classification as this queue.
+    const otherBreakRows = (await q.query(`SELECT b.*, item.value AS queue_item, day.properties AS day_root_properties
+      FROM work_rotations w CROSS JOIN LATERAL jsonb_each(COALESCE(w.state->'items','{}'::jsonb)) item
+      JOIN blocks b ON b.id=item.key AND b.user_id=w.user_id AND b.workspace_id=w.workspace_id
+      LEFT JOIN blocks day ON day.type='day_root' AND day.user_id=b.user_id
+        AND day.workspace_id=b.workspace_id AND day.date=b.date AND day.deleted_at IS NULL
+      WHERE w.user_id=$1 AND w.workspace_id<>$2 AND b.deleted_at IS NULL
+        AND item.value->>'status'='foreground' AND item.value ? 'breakStartedAt'`,
+      [owner.userId, owner.workspaceId])).rows;
+    const otherBreak = otherBreakRows.some(row => {
+      const task = blockDB.parseBlock(row);
+      return blockDB.isTaskRow(task) && require('./lib/queue-classification').classify(task, row.queue_item, {dayRoot: row.day_root_properties}) === 'foreground';
+    });
     return {
       revision: s.rows[0]?.revision || 0,
-      foreground: active.rows.filter((r) => r.workspace_id === owner.workspaceId),
-      otherWorkspaceForeground: active.rows.some((r) => r.workspace_id !== owner.workspaceId),
+      foreground: queue.items.filter(item => item.status === "foreground").map(item => ({
+        id: item.task.id, workspace_id: owner.workspaceId, title: item.task.properties.title,
+        started_at: item.task.properties.startedAt || null, onBreak: item.onBreak
+      })),
+      otherWorkspaceForeground: active.rows.some((r) => r.workspace_id !== owner.workspaceId) ||
+        otherBreak,
       background: queue.items
         .filter((r) => ["background", "blocked"].includes(r.status))
         .map((r) => ({ task_id: r.task.id, started_at: r.backgroundSince })),
       queue,
       timeZone
     };
+  }
+  async function browserState(owner, submitted) {
+    const now = ctx.now || Date.now;
+    // A hit performs no foreground locking and builds no queue projection.
+    if (submitted) {
+      const version = await Read.fingerprint(pool, owner);
+      if (Read.matches(owner, version, submitted, now(), ctx.queueReadSecret)) return { unchanged: true };
+    }
+    const q = await pool.connect();
+    try {
+      await q.query("BEGIN READ ONLY");
+      await authorize(q, owner);
+      await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["dcc-foreground:" + owner.userId]);
+      // Ordinary block writes can commit without the foreground lock. Only
+      // certify a payload when the dependency reads agree on both sides.
+      const version = await Read.fingerprint(q, owner);
+      const value = await state(owner, q);
+      const stable = version === await Read.fingerprint(q, owner);
+      await q.query("COMMIT");
+      return {
+        state: value,
+        ...(stable && { version: Read.validator(owner, version, Read.expires(value), ctx.queueReadSecret) })
+      };
+    } catch (error) {
+      await q.query("ROLLBACK");
+      throw error;
+    } finally {
+      q.release();
+    }
   }
   async function search(body, owner) {
     await authorize(pool, owner);
@@ -119,6 +185,8 @@ function createConversationStore(ctx) {
       ORDER BY updated_at DESC,id LIMIT 51 OFFSET $4`,
       [owner.userId, owner.workspaceId, "%" + query.replace(/[\\%_]/g, "\\$&") + "%", offset]
     );
+    const roots = await pool.query("SELECT date::text AS date,properties FROM blocks WHERE workspace_id=$1 AND type='day_root' AND deleted_at IS NULL AND date=ANY($2::date[])", [owner.workspaceId,[...new Set(r.rows.map(b=>b.date).filter(Boolean))]]);
+    const dayRoots = new Map(roots.rows.map(b=>[b.date,b.properties]));
     return {
       tasks: r.rows
         .slice(0, 50)
@@ -127,7 +195,7 @@ function createConversationStore(ctx) {
           id: b.id,
           title: b.properties.title,
           date: b.date,
-          status: b.properties.status || "open",
+          status: isBlockDone(b,dayRoots.get(b.date)) ? "done" : b.properties.status || "open",
           type: b.properties.kind === "responsibility_item" ? "recurring-definition" : b.properties.type || b.type,
           definitionId: b.properties.responsibilityId || null,
           startedAt: b.properties.startedAt || null,
@@ -137,6 +205,20 @@ function createConversationStore(ctx) {
         })),
       nextOffset: r.rows.length > 50 ? offset + 50 : null
     };
+  }
+  async function searchQueueTasks(body, owner) {
+    await authorize(pool, owner);
+    const query = typeof body?.query === "string" ? body.query.trim().slice(0, 200) : "";
+    const offset = Number(body?.offset || 0);
+    if (!Number.isInteger(offset) || offset < 0) throw M.fail("Invalid search offset");
+    const result = await pool.query(`SELECT b.* FROM blocks b WHERE b.user_id=$1 AND b.workspace_id=$2
+      AND ${require("./lib/queue-eligibility").sql()}
+      AND b.properties->>'title' ILIKE $3 ORDER BY b.updated_at DESC,b.id LIMIT 51 OFFSET $4`,
+      [owner.userId, owner.workspaceId, "%" + query.replace(/[\\%_]/g, "\\$&") + "%", offset]);
+    return { tasks: result.rows.slice(0, 50).map(blockDB.parseBlock).map(b => ({
+      id: b.id, title: b.properties.title, date: b.date, status: b.properties.status || "open",
+      type: b.properties.type || b.type
+    })), nextOffset: result.rows.length > 50 ? offset + 50 : null };
   }
   async function get(id, owner, q = pool) {
     await authorize(q, owner);
@@ -164,7 +246,7 @@ function createConversationStore(ctx) {
       const sessions = (await blockDB.getTaskTimeEntries(b.id, owner.workspaceId, {}, q)).filter(row => row.user_id === owner.userId);
       const revision = (await q.query('SELECT revision FROM conversation_state WHERE user_id=$1', [owner.userId])).rows[0]?.revision || 0;
       const serverNow = Date.now(), safety = checkInState(b.properties, serverNow);
-      const value = { taskId: b.id, revision, serverNow,
+      const value = { taskId: b.id, revision, serverNow, taskVersion: b.updated_at,
         history: require('./public/js/work-completion').history(b.properties, sessions),
         startedMs: safety.active ? Date.parse(b.properties.startedAt) : null,
         creditUntilMs: safety.active ? safety.autoPauseAtMs : null };
@@ -429,7 +511,7 @@ function createConversationStore(ctx) {
       await q.query(
         `SELECT id FROM blocks WHERE user_id=$1 AND deleted_at IS NULL AND dcc_is_task_row(type,properties)
          AND ($2 OR id=$3 OR properties->>'local_id'=$3 OR properties->>'startedAt' IS NOT NULL) ORDER BY id FOR UPDATE`,
-        [owner.userId, ["correct", "done", "reconcile"].includes(b.action), b.taskId || null]
+        [owner.userId, ["correct", "done", "undo-completion", "reconcile", "queue-snooze-all"].includes(b.action), b.taskId || null]
       );
       const queue = await Q.load(q, owner);
       await Q.reconcile(q, owner, queue, blockDB, b.at);
@@ -439,37 +521,7 @@ function createConversationStore(ctx) {
         timing = timingFor(ctx, q, owner),
         actor = "conversation:" + owner.userId;
       async function closeForeground(row, status = "paused") {
-        if (atMs <= Date.parse(row.properties.startedAt)) throw M.fail("Transition must follow the active start", 409);
-        const safety = checkInState(row.properties, atMs);
-        const cutoff = Math.min(atMs, safety.autoPauseAtMs);
-        let paused;
-        if (row.properties.guidedDefinitionId && !legacy && b.action !== "done") {
-          const guided = require("./guided-store").createGuidedStore(ctx),
-            view = await guided.get(row.id, owner, q);
-          if (view.session) {
-            const pause = await guided.act(
-              row.id,
-              {
-                action: "pause",
-                operationId: "queue:" + M.digest(b.sourceEventId + row.id).slice(0, 40),
-                expectedRevision: view.revision
-              },
-              owner,
-              q,
-              cutoff,
-              true
-            );
-            paused = { changed: true, entries: pause.entries || [] };
-          }
-        }
-        if (!paused)
-          paused = await timing.pauseWork({
-            block: row,
-            atMs: cutoff,
-            transitionAtMs: atMs,
-            actor,
-            actionId: b.sourceEventId
-          });
+        const {paused,cutoff}=await pauseForeground(ctx,q,owner,row,{at:b.at,sourceEventId:b.sourceEventId,actor,timing,guidedEligible:!legacy&&b.action!=='done'});
         Q.setStatus(queue, await task(q, row.id, owner), status, b);
         if (status === "background") queue.order = queue.order.filter((id) => id !== row.id).concat(row.id);
         changedIds.add(row.id);
@@ -488,7 +540,8 @@ function createConversationStore(ctx) {
           });
         }
       }
-      if (b.action === "reconcile") detail = await R.apply(q, owner, queue, b, ctx);
+      if (b.action === "undo-completion") detail = await require("./lib/queue-completion-undo").undo(q, owner, queue, b, ctx, task);
+      else if (b.action === "reconcile") detail = await R.apply(q, owner, queue, b, ctx);
       else if (b.action === "correct") detail = await correct(q, b, owner, owner.userId + ":" + b.sourceEventId);
       else if (b.action.startsWith("delegated-")) detail = await require('./lib/delegated-work').apply(q,owner,queue,b,ctx,task);
       else if (b.action.startsWith("queue-") && b.action !== "queue-block") {
@@ -496,8 +549,13 @@ function createConversationStore(ctx) {
       } else {
         const target = await task(q, b.taskId, owner);
         before.task = structuredClone(target);
+        const retainedBreak = before.queue.items.find(item => item.task.id === target.id)?.onBreak;
+        if (b.action === "start" && before.otherWorkspaceForeground)
+          throw M.fail("Release foreground work in the other workspace before switching", 409);
         if (["start", "background-start", "queue-block"].includes(b.action) && isBlockDone(target))
           throw M.fail("Completed tasks must be explicitly reopened", 409);
+        if (["start", "background-start", "queue-block"].includes(b.action) && require("./waiting-items").isParkedInWaiting(target.properties))
+          throw M.fail("Unblock this task in Waiting before working on it", 409);
         if (["start", "pause", "done", "background-start", "queue-block"].includes(b.action)) {
           const active = (
             await q.query(
@@ -512,9 +570,9 @@ function createConversationStore(ctx) {
           // Pin the old task shown in the switch dialog as well as the activity
           // revision: out-of-band completion/deletion need not advance that revision.
           if (b.action === "start" && Object.hasOwn(b, "expectedForegroundTaskId")) {
-            const matches = b.expectedForegroundTaskId === null ? closing.length === 0
-              : closing.length === 1 && closing[0].id === b.expectedForegroundTaskId
-                && !isBlockDone(closing[0]);
+            const displaced = before.foreground.filter(row => row.id !== target.id);
+            const matches = b.expectedForegroundTaskId === null ? displaced.length === 0
+              : displaced.length === 1 && displaced[0].id === b.expectedForegroundTaskId;
             if (!matches) throw M.fail("Foreground changed; review the queue before switching", 409);
           }
           for (const row of closing)
@@ -528,6 +586,8 @@ function createConversationStore(ctx) {
             );
         }
         if (b.action === "start") {
+          for (const item of before.queue.items.filter(item => item.onBreak && item.task.id !== target.id))
+            Q.setStatus(queue, item.task, "background", b);
           if (target.properties.guidedDefinitionId && !legacy) {
             const guided = require("./guided-store").createGuidedStore(ctx),
               view = await guided.get(target.id, owner, q);
@@ -621,8 +681,18 @@ function createConversationStore(ctx) {
           await blockDB.updateBlock(target.id, { properties: { ...(await task(q, target.id, owner)).properties, everStarted: true }, [M.TIMING_WRITE]: true }, q);
         if (b.action === "background-start" || b.action === "queue-block")
           Q.setStatus(queue, await task(q, target.id, owner), b.action === "queue-block" ? "blocked" : "background", b);
-        if (b.action === "background-stop" || b.action === "pause")
-          Q.setStatus(queue, await task(q, target.id, owner), "paused", b);
+        if (b.action === "background-stop" || b.action === "pause") {
+          const current = await task(q, target.id, owner);
+          const hold = b.action === "pause" && !b.attentionMode && !isBlockDone(current) &&
+            (target.properties.startedAt || retainedBreak);
+          const previousBreak = queue.items[target.id]?.breakStartedAt;
+          const item = Q.setStatus(queue, current, hold ? "foreground" : "paused", b);
+          if (hold) {
+            item.breakStartedAt = previousBreak || b.at;
+            item.breakOperationId = current.properties.workStateOperationId || null;
+            item.breakCompletionRevision = current.properties._completionRevision || null;
+          }
+        }
         detail.task = await task(q, target.id, owner);
       }
       await Q.save(q, owner, queue);
@@ -645,6 +715,7 @@ function createConversationStore(ctx) {
         affectedTasks,
         state: await state(owner, q)
       };
+      if (b.action === "done" && !b.guided) result.undo = require("./lib/queue-completion-undo").receipt(result, b, (ctx.now || Date.now)());
       await q.query(
         "INSERT INTO conversation_events(user_id,workspace_id,source_event_id,request_hash,command,before_state,result) VALUES($1,$2,$3,$4,$5,$6,$7)",
         [owner.userId, owner.workspaceId, b.sourceEventId, hash, b, before, result]
@@ -687,6 +758,6 @@ function createConversationStore(ctx) {
       await q.query("COMMIT"); return {...review,revision};
     } catch(e) { await q.query("ROLLBACK"); throw e; } finally { q.release(); }
   }
-  return { state, search, get, completionPreview, completionReview, reconciliationReceipt, calendarEvents, execute, history };
+  return { state, browserState, search, searchQueueTasks, get, completionPreview, completionReview, reconciliationReceipt, calendarEvents, execute, history };
 }
-module.exports = { SCHEMA_SQL, FOREGROUND_INDEX_SQL, createConversationStore, timingFor };
+module.exports = { SCHEMA_SQL, FOREGROUND_INDEX_SQL, createConversationStore, timingFor, pauseForSchedule };

@@ -129,3 +129,25 @@ test("triage check-in cancellation leaves suppression, dismissal, and reward unt
     assert.equal(context._triageSuppressionInFlight.size, 0);
   }
 });
+
+test("Waiting cards render dated, recurring, completed, and unset follow-ups", () => {
+  const context = vm.createContext({
+    isTaskDependency: () => false,
+    isDoneDelegated: () => false,
+    itemUrgency: () => ({ cls: "" }),
+    dueLabel: () => "",
+    waitingSourceRef: () => "",
+    esc: String
+  });
+  vm.runInContext(region(delegated, "  function renderCard(", "  function wireDelegatedMount("), context);
+  for (const [properties, label, hasCheckIn] of [
+    [{ checkInDate: "2026-11-12" }, "2026-11-12", true],
+    [{ checkInRepeat: true }, "From repeat cadence", true],
+    [{ checkInRepeat: false, lastCheckedAt: "2026-11-10" }, "Complete", false],
+    [{ checkInRepeat: false }, "No follow-up set", false]
+  ]) {
+    const html = context.renderCard({ id: "waiting", properties });
+    assert.ok(html.includes("<dt>Follow-up</dt><dd>" + label + "</dd>"));
+    assert.equal(html.includes('data-delegated-action="check-in"'), hasCheckIn);
+  }
+});

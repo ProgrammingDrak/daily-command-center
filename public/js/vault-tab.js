@@ -424,7 +424,10 @@
     wireLinkClicks(root);
   }
 
+  let journalNotebookReader = null;
   function renderDetail(node) {
+    journalNotebookReader?.destroy();
+    journalNotebookReader = null;
     const el = document.getElementById("vault-detail");
     if (!el) return;
     if (!node) {
@@ -453,6 +456,16 @@
     const editBtn = el.querySelector("#vault-edit-btn");
     if (editBtn && window.VaultEditor) editBtn.onclick = () => window.VaultEditor.openEdit(node);
     upgradeMedia(el, node);
+    if (isJournalNode(node) && window.JournalNotebook) {
+      try {
+        const ink = window.JournalNotebook.unpack(node.body || "");
+        if (ink.pages.some(page => page.length) || ink.objects.some(page => page.length) || ink.pages.length > 1 || ink.templates.some(id => id !== "dotted")) {
+          const paper = document.createElement("section");
+          el.querySelector(".vault-body-md").after(paper);
+          journalNotebookReader = window.JournalNotebook.mount(paper, ink.pages, { readOnly: true, templates: ink.templates, objects: ink.objects });
+        }
+      } catch { window.DCC.toast("Journal drawing could not be opened", "error"); }
+    }
     wireLinkClicks(el);
     loadUnlinked(node.slug);
     if (window.VaultJournalWorkspace && isJournalNode(node)) {
@@ -862,15 +875,24 @@
     refreshTimeline();
   }
 
-  async function openDaily() {
+  async function openDaily(date) {
     try {
-      const r = await fetch("/api/vault/daily", { method: "POST" });
+      const options = { method: "POST" };
+      if (date) {
+        options.headers = { "Content-Type": "application/json" };
+        options.body = JSON.stringify({ date });
+      }
+      const r = await fetch("/api/vault/daily", options);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "daily note failed");
-      await afterWrite(d.slug);
-      window.DCC.toast(d.created ? "Created today's journal" : "Opened today's journal");
+      if (date) window.VaultEditor.openEdit(d.node);
+      else await afterWrite(d.slug);
+      const day = date || "today";
+      window.DCC.toast(d.created ? `Created journal for ${day}` : `Opened journal for ${day}`);
     } catch (e) { window.DCC.toast(e.message, "error"); }
   }
+
+  window.DCC.openDayJournal = openDaily;
 
   const vaultTabActive = () => { const t = document.getElementById("tab-vault"); return t && t.classList.contains("active"); };
 
@@ -976,7 +998,7 @@
     const newBtn = document.getElementById("vault-new-btn");
     if (newBtn) newBtn.addEventListener("click", () => window.VaultEditor && window.VaultEditor.openNew());
     const dailyBtn = document.getElementById("vault-daily-btn");
-    if (dailyBtn) dailyBtn.addEventListener("click", openDaily);
+    if (dailyBtn) dailyBtn.addEventListener("click", () => openDaily());
 
     const refreshBtn = document.getElementById("vault-refresh-btn");
     if (refreshBtn) refreshBtn.addEventListener("click", refreshAll);

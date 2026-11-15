@@ -1,4 +1,6 @@
 const { collectSubtreeBlockIds } = require("../lib/reschedule");
+const { publicFeedType, publicFeedTypeLabel } = require("../lib/public-feed-type");
+const { minutesOfDay } = require("../lib/public-working-queue");
 // Extracted from server.js — mounted via routes/index pattern: module.exports(app, ctx).
 // ctx carries shared server-scope helpers/stores; see server.js where ctx is built.
 
@@ -313,25 +315,6 @@ function publicTaskStatus(task, doneIds) {
   return nowMin > endMin ? "overdue" : "open";
 }
 
-function publicFeedType(input) {
-  const kind = String(input.kind || input.type || "task").toLowerCase();
-  const source = String(input.source || "").toLowerCase();
-  if (source === "calendar" || source === "gcal" || input.gcal_event_id || input.gcal_calendar_id || ["meeting", "oneone"].includes(kind)) return "calendar";
-  if (["responsibility_trigger", "repeat_responsibility", "repeat", "recurring"].includes(kind) || input.is_recurring || input.recurring) return "repeat";
-  if (["break", "free_time"].includes(kind)) return "break";
-  if (kind === "ooo") return "ooo";
-  return "task";
-}
-
-function publicFeedTypeLabel(feedType, kind) {
-  if (feedType === "calendar") return kind === "oneone" ? "1:1" : "Calendar";
-  if (feedType === "repeat") return "Repeat";
-  if (feedType === "break") return "Break";
-  if (feedType === "ooo") return "OOO";
-  if (kind === "public_task") return "Public";
-  return "Task";
-}
-
 async function getPublicCalendarMap() {
   // Calendars are not reliably tenant-owned in the legacy table. Public views
   // need only an opaque filter group; never query or publish account metadata.
@@ -438,7 +421,7 @@ async function buildPublicTodoShare(share, dateStr, req, shared) {
   // ONE day read, split locally. `getBlocksByDateIncludingDeleted` is a strict superset of
   // `getBlocksByDate` (same table, same date, same order; only the `deleted_at IS NULL`
   // predicate differs), and this handler is genuinely hot: public-todo-share.js polls
-  // `GET /api/public/todo-share/:token` every 15s per open viewer, on a day that can hold
+  // `GET /api/public/todo-share/:token` on every live ping and every 30s per visible viewer, on a day that can hold
   // ~2000 blocks, against a pool capped at 10. Two full-day scans per poll for a superset
   // relationship is pure waste.
   //
@@ -1389,18 +1372,38 @@ app.get("/api/public/todo-share/:token", async (req, res) => {
   try {
     const share = await findTodoShareByToken(req.params.token);
     if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
-    await pool.query("UPDATE todo_shares SET last_viewed_at = NOW() WHERE id = $1", [share.id]);
+    // Viewers re-read on every live ping and poll, so record a view at most every 5 minutes.
+    await pool.query("UPDATE todo_shares SET last_viewed_at = NOW() WHERE id = $1 AND (last_viewed_at IS NULL OR last_viewed_at < NOW() - INTERVAL '5 minutes')", [share.id]);
     const view = await buildPublicTodoShare(share, req.query.date, req);
     // Keep the existing shared-day allowlist. Queue membership cannot grant access
     // to backlog, other dates, guided/private tasks, notes or delegated reports.
+    // One instant for the snapshot's lease checks and the projection.
+    const now = Date.now();
     const snapshot = await require("../lib/working-queue").snapshot(pool,
-      { userId: share.owner_id, workspaceId: share.workspace_id }, blockDB);
-    view.tasks = require("../lib/public-working-queue").projectPublicQueue(view.tasks, snapshot);
+      { userId: share.owner_id, workspaceId: share.workspace_id }, blockDB, now);
+    const projector = require("../lib/public-working-queue");
+    if (process.env.DCC_SHARE_ACTIVITY_V2 === "false") {
+      // Rollback path: the PR #444 payload, unchanged.
+      view.tasks = projector.projectPublicQueue(view.tasks, snapshot);
+      view.view = "working-queue";
+    } else {
+      // Now / Running in background / Up next / Later today / Done today.
+      // Needs You, snoozes, notes and worker reports never leave the projection.
+      const today = view.date === getTodayStr();
+      const activity = projector.projectPublicActivity(view.tasks, snapshot, {
+        now, timeZone: APP_TIME_ZONE, today, localMinutes: today ? minutesOfDay(localHHMMFromDate(new Date(now))) : null
+      });
+      view.tasks = activity.tasks;
+      view.nextChangeAt = activity.nextChangeAt;
+      view.serverNow = new Date(now).toISOString();
+      view.timeZone = APP_TIME_ZONE;
+      view.view = "activity-v2";
+    }
     view.sponsorships = view.sponsorships.filter(s => view.tasks.some(t => String(t.id) === String(s.task_id)));
-    view.stats = { total: view.tasks.length, done: view.tasks.filter(t => t.queue.lane === "completed").length,
-      open: view.tasks.filter(t => t.queue.lane !== "completed").length,
+    const isDone = t => (t.activity ? t.activity.lane === "done" : t.queue.lane === "completed");
+    view.stats = { total: view.tasks.length, done: view.tasks.filter(isDone).length,
+      open: view.tasks.filter(t => !isDone(t)).length,
       sponsored: view.tasks.filter(t => t.sponsorships?.some(s => s.status !== "dismissed")).length };
-    view.view = "working-queue";
     // Schedule sections are no longer rendered on this surface.
     delete view.blocks;
     delete view.calendars;
@@ -1409,7 +1412,7 @@ app.get("/api/public/todo-share/:token", async (req, res) => {
     // Same convention as the sibling POST below, and C5b is what gave this route a real
     // failure path: `buildPublicTodoShare` calls `buildDayResponse`, which now THROWS on an
     // unreadable day where it used to return a skeleton. This endpoint is ANONYMOUS and
-    // polled every 15s, so a DB blip would otherwise hand a guest
+    // re-read on every live ping and every 30s while a viewer's tab is visible, so a DB blip would otherwise hand a guest
     // "Day state unavailable for <date>: Postgres read failed and no file mirror exists".
     //
     // Failing closed here while the owner's own /api/state/day degrades to an empty day is

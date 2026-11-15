@@ -4,7 +4,7 @@
 
 (function(){
   const PINNED_SECTIONS_KEY = "pa-sidecar-sections";
-  const DEFAULT_SECTIONS = ["tm-task-library-section", "tm-repeat-responsibilities-section"];
+  const DEFAULT_SECTIONS = ["tm-repeat-responsibilities-section"];
   let modalTrigger = null;
   const FOCUSABLE = 'button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
@@ -168,19 +168,23 @@
     }
   }
 
-  function openTasksToSideProjects(){ openTasksToSection("tm-task-library-section", { solo: true }); }
+  function openTasksToSideProjects(){ openTaskQueue("all-tasks"); }
   function openTasksToRepeatResponsibilities(){ openTasksToSection("tm-repeat-responsibilities-section", { solo: true }); }
 
   // Pill entry points use the existing live rows and modal lifecycle, but expose
   // only the selected queue. The Task Manager remains available from its own door.
   function openTaskQueue(kind){
-    const labels = { triage: "Triage", unscheduled: "Unscheduled", whenever: "Whenever", waiting: "Waiting" };
+    const labels = { triage: "Triage", unscheduled: "Unscheduled", whenever: "Whenever", waiting: "Waiting", "all-tasks": "All Tasks", someday: "Someday" };
     if(!labels[kind]) return;
     openTasks({ solo: true });
-    setSoloSection(kind === "waiting" ? "tm-delegated-blocked-section" : "tm-whenever-section");
+    const collection = kind === "all-tasks" || kind === "someday";
+    const section = collection ? "tm-task-collection-section" :
+      kind === "waiting" ? "tm-delegated-blocked-section" : "tm-whenever-section";
+    setSoloSection(section);
     const d = drawer();
     d.classList.add("queue-focused");
     d.dataset.queue = kind;
+    if(collection) window.DCCTaskLibrary.show(kind);
     document.body.classList.add("task-queue-open");
     document.getElementById("tasks-drawer-title").textContent = labels[kind];
     d.querySelectorAll(".untimed-sub").forEach(el => el.classList.toggle("queue-hidden", el.id !== kind + "-sub"));
@@ -407,6 +411,7 @@
 
     document.addEventListener("keydown", e => {
       const d = drawer();
+      if(e.target.closest?.(".tlb-overlay,.resched-popover")) return;
       const quickAddOpen = document.getElementById("dcc-compose")?.classList.contains("open");
       if(d?.classList.contains("open") && !quickAddOpen) trapFocus(e, d.querySelector(".side-drawer-body"));
       if(e.key === "Escape"){
@@ -418,7 +423,7 @@
       const d = drawer();
       if(!d?.classList.contains("open")) return;
       if(e.target.closest("#tasks-drawer .side-drawer-body")) return;
-      if(e.target.closest(".sidecar-tabs")) return;
+      if(e.target.closest(".sidecar-tabs,.tlb-overlay,.resched-popover")) return;
       if(e.target.closest("#dcc-launcher,#dcc-scrim")) return;
       closeTasks();
     });

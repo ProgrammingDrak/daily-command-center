@@ -17,3 +17,23 @@
 .task-file-panel :focus-visible { outline: 2px solid var(--accent,var(--text)); outline-offset: 3px; }
 .task-file-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
 .task-file-panel progress { width: 100%; }
+
+.task-completion-stack { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.task-photo-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.task-photo-button:hover { background: var(--surface-raised); }
+.task-photo-button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+@media (pointer: coarse) {
+  .task-photo-button { width: 44px; height: 44px; }
+}

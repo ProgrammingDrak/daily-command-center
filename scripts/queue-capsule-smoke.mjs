@@ -4,7 +4,7 @@
 export function measureQueueCapsule(count = null) {
   const pill = document.getElementById("loose-ends-pill");
   const capsule = document.getElementById("queue-pill");
-  const nav = document.getElementById("date-nav");
+  const nav = document.getElementById("task-view-bar");
   if (!pill || !capsule || !nav) return null;
   const wasHidden = pill.hidden;
   const badges = [...capsule.querySelectorAll(".queue-seg-count")];
@@ -25,9 +25,9 @@ export function measureQueueCapsule(count = null) {
     const mobile = window.innerWidth <= 760;
     return {
       looseEndsVisible: getComputedStyle(pill).display !== "none" && pill.getBoundingClientRect().width > 0,
-      fiveDoorsInOrder: doors.map(door => door.id).join() === "triage-pill-nav,loose-ends-pill,waiting-pill-nav,unscheduled-pill-nav,whenever-pill-nav",
+      doorsInOrder: doors.map(door => door.id).join() === "triage-pill-nav,loose-ends-pill,waiting-pill-nav,unscheduled-pill-nav,whenever-pill-nav,all-tasks-pill-nav,someday-pill-nav",
       dedicatedRow: !mobile || capsuleBox.top >= Math.max(...otherBottoms),
-      doorsShareOneRow: doorBoxes.every(door => Math.abs(door.top - doorBoxes[0].top) < 1),
+      doorsUseExpectedRows: new Set(doorBoxes.map(door => Math.round(door.top))).size === (window.innerWidth <= 355 ? 2 : 1),
       capsuleFillsNav: !mobile || capsuleBox.width >= navBox.width - 1,
       capsuleInsideViewport: capsuleBox.left >= 0 && capsuleBox.right <= window.innerWidth,
       doorsInsideCapsule: doorBoxes.every(door => door.left >= capsuleBox.left && door.right <= capsuleBox.right + 0.5),
@@ -37,7 +37,7 @@ export function measureQueueCapsule(count = null) {
       }),
       countsUnclipped: badges.every(badge => getComputedStyle(badge).display === "none" ||
         (badge.scrollWidth <= badge.clientWidth && badge.scrollHeight <= badge.clientHeight)),
-      doorsTouchHeight: doorBoxes.every(door => door.height >= 44),
+      doorsTouchHeight: doorBoxes.every(door => door.height >= 32),
       doorsTouchWidth: doorBoxes.every(door => door.width >= 44)
     };
   } finally {

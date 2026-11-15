@@ -61,7 +61,7 @@ app.get("/", (_req, res) =>
 <script>window.scheduled=[];window.backlog=[];window.fixtureRows=[];window.isDone=t=>t.status==='done';window.render=()=>{};
 window.blockStore={get:id=>fixtureRows.find(r=>r.id===id),getByType:()=>fixtureRows,acceptWorkRotation:rows=>{for(const row of rows){const i=fixtureRows.findIndex(r=>r.id===row.id);if(i>=0)fixtureRows[i]=row;else fixtureRows.push(row);}scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));}};
 window.fixtureLoad=async()=>{fixtureRows=await fetch('/fixture/tasks').then(r=>r.json());scheduled=fixtureRows.map(r=>DCC.TaskModel.fromBlock(r));};window.petDeliveries=[];DCC.PetNudge={deliverWorkCheckIn:async(text,options)=>{petDeliveries.push(text);DCC.toast(text,'info',60000,{label:'Open queue',onClick:options.open});}};
-</script><script src="/public/js/work-checkin-policy.js"></script><script src="/public/js/work-sessions.js"></script><script src="/public/js/work-completion.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/task-priority.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/working-queue.js"></script><script>fixtureLoad().then(()=>dispatchEvent(new Event('dcc:data-ready')));</script></body></html>`)
+</script>${require("../test-support/queue-browser-components")()}<script src="/public/js/work-checkin-policy.js"></script><script src="/public/js/queue-policy.js"></script><script src="/public/js/work-sessions.js"></script><script src="/public/js/work-completion.js"></script><script src="/public/js/completed-queue-filter.js"></script><script src="/public/js/working-queue.js"></script><script>fixtureLoad().then(()=>dispatchEvent(new Event('dcc:data-ready')));</script></body></html>`)
 );
 const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
@@ -104,7 +104,7 @@ try {
     await page.locator('.wq-completed').screenshot({path:path.join(output,width===375?'completed-filter-mobile.png':'completed-filter-desktop.png')});
   }
   // Empty dated result still exposes every choice; use the same API with synthetic old timestamps.
-  await page.route('**/api/working-queue',async route=>{const response=await route.fetch(),data=await response.json();for(const item of data.queue.items)if(item.status==='completed'&&item.completedAt!==null)item.completedAt=now-2*3600000;return route.fulfill({response,json:data});});
+  await page.route('**/api/working-queue',async route=>{const headers=await route.request().allHeaders();delete headers["x-dcc-queue-version"];const response=await route.fetch({headers}),data=await response.json();delete data.version;for(const item of data.state.queue.items)if(item.status==='completed'&&item.completedAt!==null)item.completedAt=now-2*3600000;return route.fulfill({response,json:data});});
   await select.selectOption('hour');await page.evaluate(()=>DCCWorkingQueue.refresh());await page.getByText('No completed tasks in this time range.',{exact:true}).waitFor();assert.equal(await select.isVisible(),true);
   assert.equal(posts,0);assert.deepEqual((await ctx.pool.query('SELECT id,properties FROM blocks ORDER BY id')).rows,before);assert.deepEqual(errors,[]);
   console.log(JSON.stringify({passed:true,checks:['Today default/reload','all seven ranges','latest tie','unknown timestamp','empty range','refresh retains choice','keyboard focus','375px/desktop','zero writes'],screenshots:output}));

@@ -25,7 +25,7 @@ for(const width of [1280,375]){
    [child,{kind:'backlog',local_id:child,title:'Synthetic child',type:'task',duration:0,subtaskOf:id,detail:'Child notes'},id],
   ])await page.request.post(base+'/api/blocks',{data:{id:blockId,type:'block',date:null,parent_id:parent,properties:props}});
   await page.evaluate(()=>window.DCCTaskLibrary.open());await page.evaluate(()=>window.DCCTaskLibrary.refresh());
-  await page.locator('[data-schedule-task="'+id+'"]').click();
+  await page.locator('#task-collection-root [data-schedule-id="'+id+'"]').click();
   const request=page.waitForRequest(r=>r.method()==='POST'&&r.url().endsWith('/api/blocks/'+id+'/reschedule'));
   const response=page.waitForResponse(r=>r.request().method()==='POST'&&r.url().endsWith('/api/blocks/'+id+'/reschedule'));
   if(selection==='custom'){
@@ -47,9 +47,9 @@ for(const width of [1280,375]){
   assert.equal(rows.filter(row=>row.properties.local_id===id).length,1);
   await page.reload();await page.waitForFunction(()=>!!window.DCCTaskLibrary);
   await page.evaluate(()=>window.DCCTaskLibrary.open());await page.evaluate(()=>window.DCCTaskLibrary.refresh());
-  await page.locator('[data-schedule-task="'+id+'"]').first().waitFor();
-  assert.equal(await page.locator('tr').filter({has:page.locator('[data-schedule-task="'+id+'"]')}).locator('.tlb-date-btn').innerText(),await page.evaluate(value=>new Date(value+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),selected));
-  if(selection==='tomorrow'){await page.locator('tr').filter({has:page.locator('[data-schedule-task="'+id+'"]')}).locator('.tlb-date-btn').scrollIntoViewIfNeeded();await page.screenshot({path:out+'/task-library-tomorrow-'+width+'.png'});}
+  const card=page.locator('#task-collection-root .it-list-item[data-id="'+id+'"]');
+  await card.getByText(selected,{exact:true}).waitFor();
+  if(selection==='tomorrow'){await card.scrollIntoViewIfNeeded();await page.screenshot({path:out+'/all-tasks-tomorrow-'+width+'.png'});}
   console.log('PASS '+width+' '+selection+' -> '+selected+'; same IDs/notes/subtree, no time/source date, survives reload');
  }
  assert.deepEqual(errors,[]);await context.close();

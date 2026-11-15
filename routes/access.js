@@ -161,7 +161,9 @@ module.exports = function mount(app, ctx) {
         // row with start 09:00 and no end renders "09:00-00:30". Every render
         // surface that does not immediately recalc passes this; a read-only view
         // of someone else's day never recalcs.
-        return Object.assign(TaskModel.fromBlock(row, { deriveEnd: true }), {
+        const projection = TaskModel.fromBlock(row, { deriveEnd: true });
+        delete projection.taskCosts;
+        return Object.assign(projection, {
           points: Number(props.points) || 0,
           durationMinutes: Number(props.duration) || 0,
           // Provenance of a previous coach adjustment, so the view can show that

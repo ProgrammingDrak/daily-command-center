@@ -14,7 +14,7 @@ module.exports = function mount(app, ctx) {
     try { return await run(); }
     finally { active--; const remaining = byUser.get(actor.userId) - 1; if (remaining) byUser.set(actor.userId, remaining); else byUser.delete(actor.userId); }
   }
-  const bases = ["/api/tasks/:blockId/attachments", "/api/notes/:blockId/attachments"];
+  const bases = ["/api/tasks/:blockId/attachments", "/api/notes/:blockId/attachments", "/api/wishlists/:wishlistId/attachments"];
   function route(run, mutation = false) {
     return async (req, res) => {
       res.set("Cache-Control", "private, no-store");
@@ -27,8 +27,10 @@ module.exports = function mount(app, ctx) {
           if (req.headers["x-dcc-attachment"] !== "1" || req.headers["sec-fetch-site"] === "cross-site" ||
             (origin && new URL(origin).origin !== `${req.protocol}://${req.get("host")}`)) throw fail("Use the task file controls in DCC", 403);
         }
-        if (!req.params.blockId || req.params.blockId.length > 255 || (req.params.id && !UUID.test(req.params.id))) throw fail("Invalid attachment identity");
-        const actor = { userId, workspaceId: req.workspaceId };
+        const { wishlistId, blockId, id } = req.params;
+        if ((wishlistId ? !UUID.test(wishlistId) : !blockId || blockId.length > 255) || (id && !UUID.test(id))) throw fail("Invalid attachment identity");
+        const actor = { userId, workspaceId: req.workspaceId, ...(wishlistId ? { wishlistId } : {}) };
+        if (wishlistId) req.params.blockId = await store.wishlistParent(actor);
         await run(req, res, actor);
       } catch (error) {
         const code = error.statusCode || (error.code === "LIMIT_FILE_SIZE" ? 413 : error instanceof multer.MulterError ? 400 : 503);
@@ -36,6 +38,12 @@ module.exports = function mount(app, ctx) {
       }
     };
   }
+  app.get("/api/wishlists/:wishlistId/attachments/:id/preview", route(async (req, res, actor) => {
+    const file = await bounded(actor, () => store.download(actor, req.params.blockId, req.params.id.toLowerCase()));
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.mime)) throw fail("Image preview unavailable", 404);
+    res.set({ "Content-Type": file.mime, "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox; default-src 'none'" });
+    res.send(file.bytes);
+  }));
   for (const base of bases) {
     app.get(base, route(async (req, res, actor) => res.json({ configured: store.configured, files: await store.list(actor, req.params.blockId) })));
     app.post(base, route(async (req, res, actor) => {

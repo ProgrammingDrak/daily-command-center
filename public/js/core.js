@@ -240,6 +240,19 @@
     if (isReplaceableZeroNumberInput(event.target)) event.target.value = "";
   });
 
+  // Shared by task titles and Waiting's message-copy controls.
+  DCC.copyText = async function (text) {
+    try { if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);return true;} } catch(_error) {}
+    const focused=document.activeElement;
+    let field;
+    try {
+      field=document.createElement('textarea');field.value=text;field.readOnly=true;
+      field.style.position='fixed';field.style.left='-9999px';document.body.appendChild(field);field.select();
+      return typeof document.execCommand==='function'&&document.execCommand('copy')===true;
+    } catch(_error){return false;}
+    finally {field?.remove();focused?.focus?.({preventScroll:true});}
+  };
+
   // ── legacy aliases (migration bridge) ──────────────────────────────────
   // Existing call sites keep working; consumer-migration PRs move them to
   // DCC.* and these aliases eventually retire with tag-manager/persistence.

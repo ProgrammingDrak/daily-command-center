@@ -64,6 +64,7 @@ test("a task segment opens that task's details modal", () => {
       createElement: (tagName) => ({
         tagName,
         style: {},
+        dataset: {},
         listeners: {},
         setAttribute(name, value) { this[name] = value; },
         addEventListener(name, handler) { this.listeners[name] = handler; },
@@ -78,4 +79,24 @@ test("a task segment opens that task's details modal", () => {
   assert.equal(children[0].tagName, "button");
   children[0].listeners.click();
   assert.deepEqual(opened, { id: "task-1", title: "Focus block" });
+});
+
+test("current-time marker uses the application zone and its date at UTC midnight", () => {
+  const context = contextFor(["_progressLocalDateKey", "_progressNowPercent", "updateProgressNow"]);
+  const A = require("./public/js/actual-projection.js");
+  context.DCC = { ActualProjection: A, ProgressActual: require("./public/js/progress-actual.js") };
+  context.window = { DCC: context.DCC };
+  context.now = new Date("2026-11-03T15:15:00Z");
+  const expected = (615 - 420) / 630 * 100;
+  assert.equal(vm.runInContext('_progressNowPercent("2026-11-03",now,420,1050)', context), expected);
+  context.midnight = new Date("2026-11-04T00:30:00Z");
+  assert.equal(vm.runInContext('_progressNowPercent("2026-11-03",midnight,0,1440)', context), 1170 / 1440 * 100);
+  assert.equal(vm.runInContext('_progressNowPercent("2026-11-04",midnight,0,1440)', context), null);
+  const marker = { style: {}, setAttribute(key,value) { this[key] = value; } };
+  context.document = { getElementById: id => id === "pnow" ? marker : { dataset: { date: "2026-11-03", startMin: "420", endMin: "1050" } } };
+  context.fmt = minutes => minutes;
+  context.f12 = A.clock;
+  vm.runInContext('updateProgressNow(now)', context);
+  assert.equal(marker.style.left, expected + "%");
+  assert.equal(marker["aria-label"], "Current time 10:15 AM");
 });

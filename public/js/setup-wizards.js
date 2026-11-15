@@ -99,12 +99,21 @@
     });
   }
 
+  // Preserve the proven setup flows and onboarding entry points inside the
+  // shared Connections dialog when opened from settings.
+  function wizard(title,body,options) {
+    if (!options || !options.handle) return DCC.modal({title,body});
+    const wrapper=document.createElement('div');
+    const back=document.createElement('button');back.type='button';back.className='connection-back';back.textContent='← Connections';back.addEventListener('click',options.onBack);
+    wrapper.append(back,body);options.handle.update({title,body:wrapper});return options.handle;
+  }
+
   // ── Slack reactions ───────────────────────────────────────────────────────
-  function openSlack() {
+  function openSlack(options) {
     const body = document.createElement("div");
     body.className = "dcc-sw";
     body.innerHTML = '<div class="dcc-sw-loading">Checking this server…</div>';
-    const handle = DCC.modal({ title: "Slack task reactions", body });
+    const handle = wizard("Slack task reactions", body, options);
     stamp("slack", "startedAt");
 
     async function render() {
@@ -260,11 +269,11 @@
   }
 
   // ── AI triage ─────────────────────────────────────────────────────────────
-  function openTriage() {
+  function openTriage(options) {
     const body = document.createElement("div");
     body.className = "dcc-sw";
     body.innerHTML = '<div class="dcc-sw-loading">Checking this account…</div>';
-    const handle = DCC.modal({ title: "AI triage", body });
+    const handle = wizard("AI triage", body, options);
     stamp("triage", "startedAt");
 
     async function render() {
@@ -339,73 +348,7 @@
     return handle;
   }
 
-  // ── The chooser: two optional power-ups, one at a time ────────────────────
-  function cardFor(opts) {
-    const state = opts.done ? '<span class="dcc-sw-pill done">✓ Done</span>'
-      : opts.started ? '<span class="dcc-sw-pill">Resume</span>'
-      : "";
-    return '<button class="dcc-sw-card" type="button" data-open="' + opts.key + '">'
-      + '<span class="dcc-sw-card-ico">' + opts.icon + "</span>"
-      + '<span class="dcc-sw-card-main">'
-        + '<span class="dcc-sw-card-title">' + esc(opts.title) + state + "</span>"
-        + '<span class="dcc-sw-card-note">' + esc(opts.note) + "</span>"
-      + "</span>"
-      + '<span class="dcc-sw-card-cta">' + esc(opts.cta) + "</span>"
-      + "</button>";
-  }
-
-  function openChooser() {
-    const body = document.createElement("div");
-    body.className = "dcc-sw";
-    body.innerHTML = '<div class="dcc-sw-loading">Loading…</div>';
-    const handle = DCC.modal({ title: "Optional setup", body });
-
-    (async () => {
-      let data = {};
-      try { data = await loadStatus(); } catch (e) { /* render the cards anyway */ }
-      const setup = data.setup || {};
-      const slack = data.slack || {};
-      const triage = data.triage || {};
-      const google = data.google || {};
-      body.innerHTML =
-        '<p class="dcc-sw-p">Optional connections. Set up the ones you want to use.</p>'
-        + cardFor({
-          key: "slack", icon: "💬", title: "Slack task reactions",
-          note: "React 🔖 on a message and it becomes a task on your day. ⌛ times it, ✅ finishes it.",
-          cta: "Set up", done: !!slack.connected, started: !!(setup.slack && setup.slack.startedAt),
-        })
-        + cardFor({
-          key: "triage", icon: "🤖", title: "AI-based triage",
-          note: "Your Claude sweeps email, Slack and calendar, then files the results onto your itinerary.",
-          cta: "Walk me through it", done: !!triage.lastSeenAt, started: !!(setup.triage && setup.triage.startedAt),
-        })
-        + (data.conversation && data.conversation.enabled ? '<div class="dcc-sw-oneclick"><span>ChatGPT conversational task tracking</span><a class="dcc-sw-btn" href="/connections/conversation">Connect or manage</a></div>' : '')
-        + '<div class="dcc-sw-hr"></div>'
-        + '<div class="dcc-sw-oneclick">'
-          + "<span>" + (google.connected ? "📅 Google Calendar is connected" : "📅 Pull your calendar onto the itinerary") + "</span>"
-          + (google.connected ? '<span class="dcc-sw-pill done">✓ Done</span>'
-            : '<a class="dcc-sw-btn" href="/api/gcal/auth">Connect</a>')
-        + "</div>";
-      body.querySelectorAll("[data-open]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const key = btn.getAttribute("data-open");
-          handle.close();
-          if (key === "slack") openSlack(); else openTriage();
-        });
-      });
-    })();
-
-    return handle;
-  }
-
-  window.DCCSetup = { openChooser, openSlack, openTriage };
-
-  document.addEventListener("DOMContentLoaded", () => {
-    const entry = document.getElementById("dcc-setup-integrations");
-    if (entry) entry.addEventListener("click", () => {
-      const wrap = document.getElementById("dcc-settings-wrap");
-      if (wrap) wrap.classList.remove("open");
-      openChooser();
-    });
-  });
+  // Compatibility for onboarding/old callers; only Connections owns the menu.
+  function openChooser() { return window.DCCConnections?.open(); }
+  window.DCCSetup = {openChooser,openSlack,openTriage};
 })();

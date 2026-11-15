@@ -29,6 +29,7 @@
   scrollbar-width: none;
 }
 .dcc-pages::-webkit-scrollbar { display: none; }
+.dcc-pages .wishlist-nav { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 .dcc-pages .tab {
   min-height: var(--target-min);
   padding: 0 var(--sp-3);
@@ -236,37 +237,13 @@
 
 /* Page scoping: Budget has no task controls; Workouts & meals keeps the day. */
 body[data-nav-page="budget"] .task-workspace-head { display: none; }
-body[data-nav-page="activity"] :is(#task-view-bar, .task-workspace-head .progress-wrap, #queue-pill) { display: none !important; }
+body[data-nav-page="activity"] #task-view-bar { display: none !important; }
+body[data-nav-page="activity"] .progress-box { padding: 0; border: 0; background: transparent; }
+body[data-nav-page="activity"] .progress-box > :not(.progress-header),
+body[data-nav-page="activity"] .progress-header > :not(.progress-date-controls) { display: none !important; }
+body[data-nav-page="activity"] .progress-header { display: flex; justify-content: center; }
 
 /* ── Actual evidence ── */
-.actual-summary {
-  display: grid;
-  gap: var(--sp-2);
-  margin: 0 0 var(--sp-3);
-  padding: var(--sp-3);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--success);
-  border-radius: var(--r-lg);
-  background: var(--surface-base);
-}
-.actual-summary[hidden] { display: none; }
-.actual-summary-stats { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); font-size: var(--fs-sm); color: var(--ink-muted); }
-.actual-summary-stats b { color: var(--ink-strong); }
-.actual-stat--unknown b { color: var(--warning); }
-.actual-summary-note { margin: 0; color: var(--ink-faint); font-size: var(--fs-xs); }
-.actual-summary-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
-.actual-summary-actions button {
-  min-height: var(--target-min);
-  padding: 0 var(--sp-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  color: var(--ink);
-  background: var(--surface-raised);
-  font: inherit;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  cursor: pointer;
-}
 .actual-day-review { margin-bottom: var(--sp-3); }
 .it-actual {
   display: inline-flex;
@@ -341,7 +318,7 @@ body[data-nav-page="activity"] :is(#task-view-bar, .task-workspace-head .progres
   .header.dcc-topbar > .dcc-pages {
     order: 2;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     width: 100%;
     overflow: visible;
   }
@@ -360,4 +337,42 @@ body[data-nav-page="activity"] :is(#task-view-bar, .task-workspace-head .progres
   .task-actual-toggle { min-height: var(--target-min); }
   .it-list-item .it-list-meta > :is(.it-actual, .it-actual-edit) { display: inline-flex; }
   .it-list-item .it-list-meta > .it-actual-edit { height: var(--target-min); }
+}
+
+/* Compact shared task controls and centered day navigation. Keep 24px minimum
+   targets for the deliberately smaller date controls; queue doors remain 32px. */
+.task-view-bar { gap: 6px; padding-right: 44px; margin-bottom: 6px; }
+.task-view-switch { flex: 0 0 auto; padding: 2px; }
+.task-view-switch [role="tab"] { min-height: 32px; padding: 0 10px; font-size: 12px; }
+.task-view-bar .queue-pill { min-width: 0; }
+.task-view-bar .queue-seg { min-height: 32px; gap: 4px; padding: 4px 6px; font-size: 11px; }
+.task-view-bar .queue-seg-count { min-width: 20px; height: 20px; padding: 0 3px; font-size: 10px; }
+.progress-header { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 6px; }
+.progress-header > #day-progress-title { justify-self: start; white-space: nowrap; }
+.progress-header > .progress-heading-actions { justify-self: end; }
+.progress-date-controls { position: relative; min-width: 0; max-width: 100%; }
+.task-workspace-head .progress-date-controls .date-nav { margin: 0; gap: 3px; flex-wrap: nowrap; justify-content: center; }
+.progress-date-controls :is(.dn-arrow, .dn-date, .dn-quick) { min-height: 24px; min-width: 24px; height: 24px; margin: 0; }
+.progress-date-controls .dn-arrow { width: 24px; flex: 0 0 24px; }
+.progress-date-controls .dn-date { flex: 0 0 auto; max-width: none; padding: 2px 4px; font-size: 11px; white-space: nowrap; }
+.progress-date-controls .dn-quick { padding: 2px 5px; font-size: 10px; }
+.progress-date-controls .dn-badge { font-size: 9px; }
+.task-workspace-head .progress-date-controls .date-picker-drop { top: 100%; left: 50%; transform: translateX(-50%); width: 280px; min-width: 0; max-width: calc(100vw - 24px); text-transform: none; letter-spacing: normal; }
+@media (max-width: 1000px) {
+  .task-view-bar .queue-seg { flex: 1 1 auto; min-width: 44px; flex-direction: column; gap: 2px; padding: 4px 2px; font-size: 10px; }
+  .task-view-bar .queue-seg > span:first-child { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-wrap: balance; }
+}
+@media (max-width: 760px) {
+  .task-view-bar { padding-right: 0; }
+  .task-view-switch { flex: 1 1 100%; }
+  .task-view-switch [role="tab"] { min-height: 32px; padding: 0 6px; }
+  .task-view-bar .queue-pill { display: flex; flex: 1 1 100%; width: 100%; }
+  .progress-header { grid-template-columns: minmax(0, 1fr) auto; row-gap: 3px; }
+  .progress-header > .progress-date-controls { grid-row: 2; grid-column: 1 / -1; justify-self: center; }
+  .progress-header > .progress-heading-actions { grid-column: 2; grid-row: 1; }
+}
+
+@media (max-width: 760px) {
+  .task-workspace-head .progress-date-controls .date-nav { flex-wrap: wrap; }
+  .progress-date-controls .dn-date { font-size: 10px; }
 }

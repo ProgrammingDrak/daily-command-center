@@ -113,6 +113,11 @@ try {
   await open('glasses-unplanned');
   await page.route('**/api/tasks/glasses-unplanned/completion', route => route.abort());
   await act('confirm').click(); await act('complete').click(); await act('retry').waitFor();
+  // Pending renders a disabled retry button before the original POST is sent.
+  // Wait for its failed acknowledgement to settle before switching accounts and
+  // snapshotting requests, or that original POST is miscounted as a retry write.
+  await page.getByRole('status').filter({ hasText: 'Completion unconfirmed' }).waitFor();
+  assert.equal(await act('retry').isEnabled(), true);
   const receipt = await page.evaluate(() => Object.entries(sessionStorage).find(([k]) => k.startsWith('dcc.glasses.task-retry'))?.[1]); assert.ok(receipt);
   await context.addCookies([{ name: 'dcc-review-auth', value: 'other', url: base }]);
   const beforeSwitchWrites = apiRequests.filter(r => r.method() === 'POST').length;

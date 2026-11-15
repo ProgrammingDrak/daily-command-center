@@ -38,7 +38,7 @@ try{
    await page.goBack();await ready();
    assert.deepEqual(await rows(),expected,'history must retain exact task IDs/order/completed state despite late '+script);
    assert.equal(await page.locator('.glasses-nav').count(),1);
-   assert.equal(await page.locator('#queue-pill button').count(),5);
+   assert.equal(await page.locator('#queue-pill button').count(),6);
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
    results.push({delta,script,width,rows:expected.length});
   }

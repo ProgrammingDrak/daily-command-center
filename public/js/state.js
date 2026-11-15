@@ -1397,6 +1397,7 @@ function moveTaskViaPlacement(id,dateStr,opts){
   if(!ev||typeof openPlacementPicker!=="function")return move(dateStr,null);
   openPlacementPicker({
     title:ev.title,durMin:dur(ev)||30,verb:"Move",day:dateStr||null,
+    originalStart:ev.untimed||ev.allDay||ev.all_day?null:ev.start,
     onBlockPlace:(date,blockId,title)=>_moveTaskIntoTimeBlock(ev,date,blockId,title),
     onPlace:async(dStr,timeStr,editedTitle)=>{
       if(editedTitle&&editedTitle!==ev.title)await _renameTaskForMove(ev,editedTitle);

@@ -1441,7 +1441,7 @@ app.post("/api/vault/capture", async (req, res) => {
   }
 });
 
-// One-tap daily note: today's journal. Idempotent — returns the existing note if
+// One-tap daily note for the requested date, defaulting to today. Idempotent — returns the existing note if
 // it's already there (never duplicates), else creates it from the journal template.
 app.post("/api/vault/daily", async (req, res) => {
   if (!vaultReady(res)) return;
@@ -1449,7 +1449,11 @@ app.post("/api/vault/daily", async (req, res) => {
   // an evening-ET UTC date has already rolled to tomorrow, which would open/
   // create the wrong day's journal. Derive the year from the same string so the
   // two segments can never disagree (New Year's Eve).
-  const iso = ctx.getTodayStr ? ctx.getTodayStr() : new Date().toISOString().slice(0, 10);
+  const date = req.body?.date;
+  if (date !== undefined && !validCaptureDate(date)) {
+    return res.status(400).json({ error: "date must be a real YYYY-MM-DD date" });
+  }
+  const iso = date ?? (ctx.getTodayStr ? ctx.getTodayStr() : new Date().toISOString().slice(0, 10));
   const y = iso.slice(0, 4);
   const slug = `journal/${y}/${iso}`;
   if (ctx.vault.has(slug)) return res.json({ slug, node: ctx.vault.get(slug), created: false });
@@ -1462,9 +1466,12 @@ app.post("/api/vault/daily", async (req, res) => {
   }
   const fm = Object.assign({}, tpl.data || {}, { type: "journal", title: iso, date: iso });
   try {
-    const node = await writeNode(slug, fm, tpl.content || "", { message: `daily ${slug}` });
+    const node = await writeNode(slug, fm, tpl.content || "", { message: `daily ${slug}`, expectAbsent: true });
     res.status(201).json({ slug, node, created: true });
   } catch (e) {
+    if (e.code === "STALE_WRITE" && ctx.vault.has(slug)) {
+      return res.json({ slug, node: ctx.vault.get(slug), created: false });
+    }
     res.status(400).json({ error: e.message });
   }
 });

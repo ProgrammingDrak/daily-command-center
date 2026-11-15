@@ -253,7 +253,7 @@
   function renderTaskPanel() {
     const tabs = [
       { id: "consider", label: "Consider", items: getConsiderItems() },
-      { id: "backlog", label: "Task Library (Solo)", items: getBacklogItems() },
+      { id: "backlog", label: "Unscheduled", items: getBacklogItems() },
       { id: "triage", label: "Triage", items: getTriageItems() },
     ];
 

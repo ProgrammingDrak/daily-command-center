@@ -47,7 +47,7 @@ test('cleared imported notes stay empty after saving and reopening through the b
   createBlock:(type,properties,options)=>{const block={id:'saved-note',type,properties,parent_id:options.parentId};blocks.push(block);return Promise.resolve(block);},
   updateBlockDebounced:(id,properties)=>Object.assign(blocks.find(b=>b.id===id).properties,properties),
   getDayRootId:()=> 'day-a',getCurrentDate:()=> '2026-10-06'
- }},migrateHtmlToBlocks:html=>[{text:html}],_addModalTaskId:'a',_addModalNotesFingerprint:()=>'',_addModalNotesSnapshot:null,loadNotes:null});
+ }},migrateHtmlToBlocks:html=>[{text:html}],_addModalTaskId:'a',_addModalAnchor:null,_addModalNotesFingerprint:()=>'',_addModalNotesSnapshot:null,loadNotes:null});
  const noteSource=source.slice(source.indexOf('function loadNotes('),source.indexOf('\nfunction loadActions'));
  vm.runInContext(noteSource,context);
  const features=fs.readFileSync(require.resolve('./public/js/features.js'),'utf8');

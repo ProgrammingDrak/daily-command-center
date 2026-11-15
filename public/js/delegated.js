@@ -515,7 +515,7 @@
   // Human-readable countdown, mirroring responsibilities' dueLabel.
   function dueLabel(item) {
     const p = item.properties || {};
-    if (p.checkInRepeat === false && !p.checkInDate) return "Follow-up complete";
+    if (p.checkInRepeat === false && !p.checkInDate) return p.lastCheckedAt ? "Follow-up complete" : "No follow-up set";
     const t = itemUrgency(item).timing;
     if (t.remaining < 0) return Math.abs(t.remaining) + "d overdue";
     if (t.remaining === 0) return "check in today";
@@ -620,9 +620,12 @@
       done ? "done" : ""
     ].filter(Boolean).join(" ");
 
-    const followUpComplete = p.checkInRepeat === false && !p.checkInDate;
+    const noFollowUp = p.checkInRepeat === false && !p.checkInDate;
+    const followUpLabel = p.checkInDate || (noFollowUp
+      ? (p.lastCheckedAt ? 'Complete' : 'No follow-up set')
+      : 'From repeat cadence');
     const badge = '<div class="waiting-state ' + cls + '">' +
-      (done ? 'Complete' : followUpComplete ? 'Follow-up complete' : esc(dueLabel(item))) + '</div>';
+      (done ? 'Complete' : esc(dueLabel(item))) + '</div>';
 
     const linkChip = p.linkedBlockId ? '<span class="delegated-card-link">linked task</span>' : '';
     const sourceRef = waitingSourceRef(p);
@@ -634,7 +637,7 @@
       '<details class="waiting-more"><summary>More actions</summary><div>' +
       '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
       '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button></div></details>' :
-      (followUpComplete ? '' : '<button type="button" data-delegated-action="check-in" data-id="' + esc(item.id) + '">Checked in</button>' +
+      (noFollowUp ? '' : '<button type="button" data-delegated-action="check-in" data-id="' + esc(item.id) + '">Checked in</button>' +
       '<button type="button" data-delegated-action="schedule" data-id="' + esc(item.id) + '">Schedule check-in</button>') +
       '<details class="waiting-more"><summary>More actions</summary><div>' +
       '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
@@ -647,7 +650,7 @@
         badge +
         '<div class="delegated-card-title">' + esc(headline) + linkChip + sourceLink + '</div>' +
         '<dl class="waiting-facts"><div><dt>Waiting for</dt><dd>' + sub + '</dd></div>' +
-          '<div><dt>Follow-up</dt><dd>' + esc(p.checkInDate || (followUpComplete ? 'Complete' : 'From repeat cadence')) + '</dd></div></dl>' +
+          '<div><dt>Follow-up</dt><dd>' + esc(followUpLabel) + '</dd></div></dl>' +
         (note ? '<div class="delegated-card-note">' + esc(note) + '</div>' : '') +
       '</div>' +
       '<div class="delegated-card-actions">' + actionButtons + '</div>' +
@@ -726,28 +729,7 @@
     return greeting + "\n\nQuick check-in on \"" + title + "\". Could you send me a brief update when you can?" + notes + "\n\nThanks.";
   }
 
-  async function copyText(text) {
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(text);
-        return true;
-      }
-    } catch (e) {}
-    try {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.setAttribute("readonly", "");
-      ta.style.position = "fixed";
-      ta.style.left = "-9999px";
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand("copy");
-      document.body.removeChild(ta);
-      return ok;
-    } catch (e) {
-      return false;
-    }
-  }
+  async function copyText(text) { return window.DCC.copyText(text); }
 
   async function patchDelegatedItem(id, properties, successMsg) {
     if (!id) return;
@@ -825,6 +807,21 @@
     if (window.DCC && window.DCC.CatchUp && typeof window.DCC.CatchUp.refresh === "function") {
       window.DCC.CatchUp.refresh();
     }
+  }
+
+  async function moveTaskToWaiting(task) {
+    const origin = task.__unf;
+    const sourceId = origin?.sourceId || task._blockId || task.id;
+    await window.DCC.api("/api/waiting-items", {
+      method: "POST",
+      body: {
+        convertTaskId: sourceId,
+        properties: { myTask: task.title, waitingReason: "blocked", checkInMode: "date", checkInRepeat: false }
+      }
+    });
+    toast("Task moved to Waiting", "success");
+    window.DCC.Carryover?.recollect(origin?.sourceDate);
+    await Promise.allSettled([afterWaitingAction(), window.DCCWorkingQueue?.refresh?.()]);
   }
 
   async function releaseTaskDependencyToBacklog(id, options) {
@@ -1711,6 +1708,7 @@
     snooze: snoozeWaitingItem,
     scheduleCheckIn: scheduleDelegatedItem,
     unblock: unblockWaitingItem,
+    moveTask: moveTaskToWaiting,
     complete: completeWaitingItem,
     open: openWaitingItem,
     completeCheckIn: markDelegatedItemCheckedById,

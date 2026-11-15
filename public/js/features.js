@@ -210,6 +210,7 @@ const _addModalControlState = new WeakMap();
 // getByType/cacheGet search below misses it and the write is silently dropped. With the
 // row id there is nothing to search for. `_amWriteRowProps` is the one helper that uses it.
 let _addModalBlockId = null;
+let _addModalAnchor = null;
 
 function _setAddModalPageInert(overlay, on) {
   Array.from(document.body.children).forEach(function(node) {
@@ -228,7 +229,7 @@ function _setAddModalControlsEditable(modal, editing) {
   var body = modal && modal.querySelector('.add-modal-body');
   if (!body) return;
   body.querySelectorAll('input, textarea, select, button, [contenteditable]').forEach(function(control) {
-    if (control.matches('[data-am-tab], [data-activity-open]')) return;
+    if (control.matches('[data-am-tab], [data-activity-open]') || control.closest('#am-panel-photos')) return;
     var saved = _addModalControlState.get(control);
     if (!saved) {
       saved = {
@@ -260,6 +261,7 @@ function _setAddModalControlsEditable(modal, editing) {
 function _handleAddModalKeydown(event) {
   var overlay = document.getElementById('add-modal-overlay');
   if (!overlay || !overlay.classList.contains('open')) return;
+  if (event.target?.closest?.('dialog[open]')) return;
   if (event.key === 'Escape') {
     if (event.target && event.target.classList && event.target.classList.contains('am-title-edit')) return;
     event.preventDefault();
@@ -367,7 +369,6 @@ function _amBuildDetails(ev){
   var esc=(window.DCC&&typeof window.DCC.esc==='function')?window.DCC.esc:function(v){return String(v==null?'':v);};
   var meta=[];
   if(typeof dur==='function') meta.push('<span>'+(typeof ms==='function'?ms(dur(ev)):dur(ev)+'m')+'</span>');
-  if(ev.start&&ev.end&&typeof f12==='function') meta.push('<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>');
   if(ev.source&&typeof srcTag==='function'&&srcTag(ev.source)) meta.push('<span class="am-det-src">Source:</span>'+srcTag(ev.source));
   if(ev.notionUrl){
     try{
@@ -401,7 +402,8 @@ function _amBuildDetails(ev){
 // Those two failures together are why the row's open-space click was disabled on
 // carryovers: it looked like a working affordance and saved to the wrong place.
 function openAddModal(taskId, taskTitle, options) {
-  var workoutAnchor = typeof taskAnchorById === 'function' ? taskAnchorById(taskId) : null;
+  document.querySelector("#add-modal-overlay .wq-task-context")?.remove();
+  var workoutAnchor = options?.anchor || (typeof taskAnchorById === 'function' ? taskAnchorById(taskId) : null);
   var workoutTask = workoutAnchor ? workoutAnchor.ev : (typeof scheduled !== 'undefined' ? scheduled.find(ev => ev.id === taskId) : null);
   if (!options?.generic && workoutTask?.type === 'workout' && window.DCC?.Workout) {
     return DCC.Workout.open({taskId:workoutAnchor?.blockId || workoutTask._blockId || taskId,title:workoutTask.title,localId:taskId});
@@ -416,13 +418,17 @@ function openAddModal(taskId, taskTitle, options) {
   _addModalTaskId = taskId;
   var saveStatus = document.getElementById('am-save-status');
   if (saveStatus) saveStatus.textContent = '';
-  var anchor = (typeof taskAnchorById === 'function') ? taskAnchorById(taskId) : null;
+  var anchor = options?.anchor || ((typeof taskAnchorById === 'function') ? taskAnchorById(taskId) : null);
+  _addModalAnchor = anchor;
   var taskEntry = anchor ? anchor.ev
     : ((typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null);
   // The row id, when we have one. Every helper below searches the day/global caches by
   // local_id, and a carryover row is in _rangeCache only — so the search misses and the
   // update never happens. _addModalBlockId short-circuits it.
   _addModalBlockId = (anchor && anchor.blockId) || null;
+  _addModalBlockId ||= taskEntry?._blockId || null;
+  const memories = document.getElementById("am-completion-memories");
+  if (memories) window.DCC?.CompletionMemories?.bindTask(memories, taskEntry, _addModalBlockId || taskEntry?._blockId);
   if (window.DCC && DCC.Activity) DCC.Activity.taskButton(_addModalBlockId || (taskEntry && taskEntry._blockId) || taskId, taskEntry);
   _addModalDraftTitle = (taskEntry && taskEntry.title) || taskTitle || '';
   _addModalDraftTags = taskEntry && Array.isArray(taskEntry.tags) ? taskEntry.tags.slice() : [];
@@ -430,13 +436,7 @@ function openAddModal(taskId, taskTitle, options) {
   _addModalDraftRecordingReview = !!(taskEntry && taskEntry.recordingReview);
   _amSetupTitle(taskId, taskEntry, taskTitle);
 
-  // Read-only details (priority / duration / time / source / link)
-  var detEl = document.getElementById('am-details-section');
-  if (detEl) {
-    var detHtml = _amBuildDetails(taskEntry);
-    detEl.innerHTML = detHtml;
-    detEl.style.display = detHtml ? '' : 'none';
-  }
+  _amRenderDetails(taskEntry);
 
   // Initialize tag picker
   var tagContainer = document.getElementById('am-tag-picker');
@@ -521,9 +521,12 @@ function openAddModal(taskId, taskTitle, options) {
     document.getElementById('am-source-status').textContent='Attach stable links to originals. Private links open at their provider. Use private file controls for uploads.';
   }
 
+  window.mountTaskCommute?.(document.getElementById('am-commute'), _addModalBlockId);
+  window.mountTaskCosts?.(document.getElementById('am-costs'), _addModalBlockId, taskEntry);
+
   // Load notes into block editor
   var notes = loadNotes();
-  var noteVal = notes[taskId];
+  var noteVal = anchor?.queue && Object.hasOwn(anchor,'noteValue') ? anchor.noteValue : (notes[anchor?.blockId] ?? notes[taskId]);
   var initialBlocks=typeof noteBlocksForTask === 'function' ? noteBlocksForTask(taskId, noteVal, taskEntry) : null;
   if(window._amBlockEditor) window._amBlockEditor.destroy();
   var taskFileControls=window.DCC.TaskAttachments.mount(document.getElementById('am-notes-block-editor'),_addModalBlockId);
@@ -540,7 +543,8 @@ function openAddModal(taskId, taskTitle, options) {
   taskOverlay.classList.add('open');
   taskOverlay.setAttribute('aria-hidden', 'false');
   _setAddModalPageInert(taskOverlay, true);
-  selectAddModalTab('subtasks');
+  resetAddModalPhotos();
+  selectAddModalTab(options?.tab || 'photos');
   if(window.DCCWorkSessions&&typeof window.DCCWorkSessions.renderHistory==='function')window.DCCWorkSessions.renderHistory(_addModalBlockId);
   // Clicking a task IS the edit gesture: the modal opens ready to type, so nobody
   // has to find an "Edit" button first. Read mode still exists -- Save and Cancel
@@ -551,6 +555,7 @@ function openAddModal(taskId, taskTitle, options) {
   // ungated click away on an archive day, and its row handler opens this modal.
   var archived = typeof viewMode !== 'undefined' && viewMode === 'archive';
   setAddModalMode(!archived);
+  if (options?.tab === 'photos') document.getElementById('am-tab-photos').focus();
   setTimeout(function() {
     if (_addModalTaskId !== taskId || !taskOverlay.classList.contains('open')) return;
     // Do not steal focus from a field the user has already reached while the
@@ -559,9 +564,25 @@ function openAddModal(taskId, taskTitle, options) {
   }, 80);
 }
 
+function resetAddModalPhotos() {
+  var host = document.getElementById('am-photos-anchor');
+  host._taskPhotos?.destroy();
+  delete host._taskPhotos;
+}
+
 function selectAddModalTab(tabId) {
   var modal = document.querySelector('#add-modal-overlay .add-modal');
   if (!modal) return;
+  if (tabId === 'photos') {
+    var photoHost = document.getElementById('am-photos-anchor');
+    var task = _addModalAnchor?.ev;
+    var completed = task?.done || task?.status === 'done' || task?.completedAt ||
+      (task && typeof isDone === 'function' && isDone(task));
+    photoHost._taskPhotos ||= window.DCC.CompletionMemories.mountTaskPhotos(
+      photoHost, _addModalBlockId, document.getElementById('add-modal-title').textContent,
+      typeof viewMode !== 'undefined' && viewMode === 'archive' && !completed
+    );
+  }
   if (tabId === 'overview') tabId = 'subtasks';
   modal.querySelectorAll('[data-am-tab]').forEach(function(btn) {
     var active = btn.dataset.amTab === tabId;
@@ -650,12 +671,22 @@ function refreshOpenAddModalDetails(opts) {
   }
   taskEntry=taskEntry||(anchor ? anchor.ev
     : ((typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === _addModalTaskId; }) : null));
+  _amRenderDetails(taskEntry);
+  _amRenderExecutionContext(taskEntry);
+}
+
+function _amRenderDetails(taskEntry) {
+  var time = document.getElementById('am-scheduled-time');
+  if (time) {
+    time.textContent = taskEntry && !taskEntry.untimed && taskEntry.start && taskEntry.end && typeof f12 === 'function'
+      ? f12(taskEntry.start) + ' – ' + f12(taskEntry.end) : '';
+    time.hidden = !time.textContent;
+  }
   var detEl = document.getElementById('am-details-section');
   if (!detEl) return;
   var detHtml = _amBuildDetails(taskEntry);
   detEl.innerHTML = detHtml;
   detEl.style.display = detHtml ? '' : 'none';
-  _amRenderExecutionContext(taskEntry);
 }
 
 function _amRenderExecutionContext(taskEntry) {
@@ -718,6 +749,7 @@ function _amSetupTitle(taskId, taskEntry, fallbackTitle) {
 }
 
 function closeAddModal() {
+  resetAddModalPhotos();
   var overlay = document.getElementById('add-modal-overlay');
   if (window.DCCWorkSessions && typeof window.DCCWorkSessions.cancelHistory === 'function') window.DCCWorkSessions.cancelHistory();
   // The modal now opens in edit mode, so the X, Escape, and the backdrop are ordinary exits
@@ -738,6 +770,7 @@ function closeAddModal() {
   // tag/flag writes at the previous row — a cross-task write, and the kind of stale
   // module state that only shows up on the second open.
   _addModalBlockId = null;
+  _addModalAnchor = null;
   // Flush any deferred renders now that modal is closed
   _flushDeferredRender();
   if (typeof render === 'function') render();
@@ -750,7 +783,7 @@ function closeAddModal() {
     var escaped = window.CSS && typeof window.CSS.escape === 'function' ? window.CSS.escape(String(returnTaskId || '')) : String(returnTaskId || '').replace(/"/g, '\\"');
     var row = document.querySelector('.it-list-item[data-id="' + escaped + '"], .card[data-id="' + escaped + '"]');
     var fallback = row && (row.querySelector('button:not([disabled]), [href], input:not([disabled])') || row);
-    if (fallback === row && !row.hasAttribute('tabindex')) row.setAttribute('tabindex', '-1');
+    if (row && fallback === row && !row.hasAttribute('tabindex')) row.setAttribute('tabindex', '-1');
     fallback = fallback || document.querySelector('.tab.active');
     if (fallback && typeof fallback.focus === 'function') fallback.focus({ preventScroll: true });
   });
@@ -765,9 +798,9 @@ function renderModalItems(taskId) {
 
   // Subtasks (real tasks in the unified tree: subtaskOf === taskId)
   var itemAnchor=typeof taskAnchorById==='function'?taskAnchorById(taskId):null;
-  var itemPool=itemAnchor&&itemAnchor.whenever?(typeof backlog!=='undefined'?backlog:[]):(typeof scheduled!=='undefined'?scheduled:[]);
+  var itemPool=itemAnchor&&itemAnchor.queue?window.DCCWorkingQueue.taskPool(itemAnchor):itemAnchor&&itemAnchor.whenever?(typeof backlog!=='undefined'?backlog:[]):(typeof scheduled!=='undefined'?scheduled:[]);
   var subs = DCC.TaskModel.subtasksOf(taskId,itemPool)
-    .map(function(t){return { id:t.id, text:t.title, done:(typeof isDone==='function'&&isDone(t)), created:'2000-01-01' };});
+    .map(function(t){return { id:t.id, text:t.title, done:t.status==='done'||(typeof isDone==='function'&&isDone(t)), created:'2000-01-01' };});
   subs.forEach(function(st) {
     items.push({ type: 'subtask', id: st.id, text: st.text, done: !!st.done, created: st.created || '2000-01-01' });
   });
@@ -779,7 +812,7 @@ function renderModalItems(taskId) {
   });
 
   // Action items
-  var actions = loadActions();
+  var actions = loadActions(taskId);
   var taskActions = actions[taskId] || [];
   taskActions.forEach(function(a, i) {
     items.push({ type: 'action', id: 'action-' + i, idx: i, text: a.text, done: !!a.done, priority: a.priority, created: a.created || '2000-01-01' });
@@ -874,8 +907,8 @@ function renderModalItems(taskId) {
       else if (type === 'trivial') { toggleTrivialTask(id); }
       else if (type === 'action') {
         var idx = parseInt(id.replace('action-', ''));
-        var acts = loadActions();
-        if (acts[taskId] && acts[taskId][idx]) { acts[taskId][idx].done = !acts[taskId][idx].done; saveActions(acts); }
+        var acts = loadActions(taskId);
+        if (acts[taskId] && acts[taskId][idx]) { acts[taskId][idx].done = !acts[taskId][idx].done; saveActions(acts,{taskId:taskId}); }
       }
       renderModalItems(taskId);
     });
@@ -885,8 +918,8 @@ function renderModalItems(taskId) {
       else if (type === 'trivial') { unlinkTrivialFromSchedule(id); }
       else if (type === 'action') {
         var idx = parseInt(id.replace('action-', ''));
-        var acts = loadActions();
-        if (acts[taskId]) { acts[taskId].splice(idx, 1); saveActions(acts); }
+        var acts = loadActions(taskId);
+        if (acts[taskId]) { acts[taskId].splice(idx, 1); saveActions(acts,{taskId:taskId}); }
       }
       renderModalItems(taskId);
     });
@@ -966,10 +999,10 @@ document.addEventListener('DOMContentLoaded', function() {
       // Longer delay for async BlockStore write
       setTimeout(function() { renderModalItems(_addModalTaskId); }, 300);
     } else if (type === 'action') {
-      var acts = loadActions();
+      var acts = loadActions(_addModalTaskId);
       if (!acts[_addModalTaskId]) acts[_addModalTaskId] = [];
       acts[_addModalTaskId].push({ text: text, priority: 'Medium', done: false, created: new Date().toISOString() });
-      saveActions(acts);
+      saveActions(acts,{taskId:_addModalTaskId});
     }
 
     inp.value = '';
@@ -1479,7 +1512,7 @@ function _writeAddModalNotes() {
   } else {
     notes[_addModalTaskId] = Object.assign({}, previous, { blocks: [], html: "", text: "" });
   }
-  saveNotes(notes, { taskId: _addModalTaskId, previous: previous });
+  saveNotes(notes, { taskId: _addModalTaskId, previous: previous, anchor: _addModalAnchor });
   _addModalNotesSnapshot = _addModalNotesFingerprint();
 }
 
@@ -1666,14 +1699,13 @@ const SURFACES = {
   // Day review is an explicit panel under the Actual toggle; its summary strip
   // rides along so day totals stay current with the rows.
   actualView:      {build:()=>{if(typeof buildActualView==="function")buildActualView();},      isVisible:()=>_tabActive("schedule")&&!!(window.DCC&&DCC.nav&&DCC.nav.reviewOpen())},
-  actualSummary:   {build:()=>{if(typeof renderActualSummary==="function")renderActualSummary();},isVisible:()=>_tabActive("schedule")},
 };
 
 // Named scopes let a hot call site mark only the surfaces it can actually change.
 // "whenever" rides along because the header pill's drawer renders the same itinerary rows
 // (the Triage and Unscheduled halves), whose chevron and work-session buttons call
 // render("schedule").
-const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView","actualSummary","whenever"] };
+const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView","whenever","progress"] };
 
 const _dirty = {};
 function _markDirty(scope){

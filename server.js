@@ -129,6 +129,9 @@ if (process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSAT
 
 // verify callback stashes the raw body so the Slack Events route can HMAC it
 // (express.json otherwise consumes the stream before any route runs).
+app.use(require("./lib/retired-todo-share"));
+// Base64 attachment uploads need room for the existing 10MB private-file limit.
+app.use('/mcp/dcc', express.json({ limit: '15mb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
 app.use(express.json({ limit: "5mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
 
 // ── Session Setup ──
@@ -158,12 +161,12 @@ if (!LOCAL_AUTH_ENABLED) {
 app.use(session(sessionOptions));
 
 // Isolated OAuth/MCP boundary: bearer tokens here never enter the legacy service gate.
-require("./routes/conversation")(app, { pool, blockDB, APP_TIME_ZONE, broadcast });
+require("./routes/conversation")(app, { pool, blockDB, APP_TIME_ZONE, broadcast, broadcastQueueChange });
 
 // ── Auth Middleware ──
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/ingest/day-state/v2", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts", "/api/dcc/meeting-signals", "/api/dcc/slack-reconcile"]);
-function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/sponsor/") || req.path.startsWith("/reimburse/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
+function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/shared-itinerary/") || req.path.startsWith("/sponsor/") || req.path.startsWith("/reimburse/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 // On Render the app runs behind a same-host reverse proxy, so EVERY request's
 // socket peer is 127.0.0.1 — trusting localhost there would open the DCC service
@@ -406,17 +409,34 @@ app.get("/vendor/drake-auth/browser.js", (req, res) => res.sendFile(require.reso
 
 // ── SSE ──
 const sseClients = new Map();
-const publicSseClients = new Map();
+const sseAccounts = new Map();
+// Shared-link viewers: capped, coalesced, heartbeated (lib/public-sse.js).
 const MAX_PUBLIC_SSE_CLIENTS = 100;
 const MAX_PUBLIC_SSE_PER_WORKSPACE = 20;
-let publicSseClientCount = 0;
+const publicSse = require("./lib/public-sse").createPublicSseHub({
+  maxClients: MAX_PUBLIC_SSE_CLIENTS, maxPerWorkspace: MAX_PUBLIC_SSE_PER_WORKSPACE
+});
 app.get("/api/events", (req, res) => {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   res.write("data: connected\n\n");
   const wsId = req.workspaceId || "__global";
   if (!sseClients.has(wsId)) sseClients.set(wsId, new Set());
   sseClients.get(wsId).add(res);
-  req.on("close", () => { const clients = sseClients.get(wsId); if (clients) { clients.delete(res); if (clients.size === 0) sseClients.delete(wsId); } });
+  const userId = req.session?.userId;
+  if (userId) {
+    if (!sseAccounts.has(userId)) sseAccounts.set(userId, new Map());
+    sseAccounts.get(userId).set(res, wsId);
+  }
+  req.on("close", () => {
+    const clients = sseClients.get(wsId);
+    clients.delete(res);
+    if (!clients.size) sseClients.delete(wsId);
+    const account = sseAccounts.get(userId);
+    if (account) {
+      account.delete(res);
+      if (!account.size) sseAccounts.delete(userId);
+    }
+  });
 });
 
 function broadcast(eventType, data, workspaceId) {
@@ -426,36 +446,23 @@ function broadcast(eventType, data, workspaceId) {
   else { targets = new Set(); for (const s of sseClients.values()) s.forEach(c => targets.add(c)); }
   for (const client of targets) { client.write(`data: ${payload}\n\n`); }
   if (workspaceId && ["blocks-changed", "dcc-state-changed", "todo-share-changed", "slot-changed"].includes(eventType)) {
-    for (const client of publicSseClients.get(workspaceId) || []) {
-      client.write("data: changed\n\n");
-    }
+    publicSse.ping(workspaceId);
+  }
+}
+
+// Foreground and command revisions span workspaces owned by the same account.
+function broadcastQueueChange(userId, sourceWorkspace) {
+  for (const [client, workspaceId] of sseAccounts.get(userId) || []) {
+    if (workspaceId !== sourceWorkspace) client.write('data: {"type":"working-queue-changed"}\n\n');
   }
 }
 
 function registerPublicSse(workspaceId, req, res) {
-  const workspaceClients = publicSseClients.get(workspaceId) || new Set();
-  if (publicSseClientCount >= MAX_PUBLIC_SSE_CLIENTS || workspaceClients.size >= MAX_PUBLIC_SSE_PER_WORKSPACE) {
-    return res.status(429).end();
-  }
-  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-  res.write("data: connected\n\n");
-  if (!publicSseClients.has(workspaceId)) publicSseClients.set(workspaceId, workspaceClients);
-  workspaceClients.add(res);
-  publicSseClientCount += 1;
-  let registered = true;
-  req.on("close", () => {
-    if (!registered) return;
-    registered = false;
-    const clients = publicSseClients.get(workspaceId);
-    if (!clients) return;
-    clients.delete(res);
-    publicSseClientCount = Math.max(0, publicSseClientCount - 1);
-    if (!clients.size) publicSseClients.delete(workspaceId);
-  });
+  return publicSse.register(workspaceId, req, res);
 }
 
 function closePublicSse(workspaceId) {
-  for (const client of publicSseClients.get(workspaceId) || []) client.end();
+  publicSse.close(workspaceId);
 }
 
 // ── File Watching ──
@@ -1002,6 +1009,7 @@ const meetingMaterializer = require("./meeting-materializer")({
 // value (they never change); vault/syncMgr are getters because startup
 // initializes them after routes mount.
 const ctx = {
+  queueReadSecret: sessionSecret, broadcastQueueChange,
   APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, gcalAuth, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAdminSession, isAllowedSweepBlockItem, meetingAutomation, meetingSignals, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, reimbursementStore, rewardVaultStore, readDayStateMirror, readJSON, readTriageSuppressionsForWorkspace, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, waitingItems, writeJSON,
   dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR, accessStore,
   meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN, registerPublicSse, closePublicSse,
@@ -1015,6 +1023,9 @@ require("./routes/social-todo")(app, ctx);
 require("./routes/pet-home")(app, ctx);
 require("./routes/blocks")(app, ctx);
 require("./routes/task-attachments")(app, ctx);
+require("./routes/wishlists")(app, ctx);
+require("./routes/completion-memories").mount(app, ctx);
+require("./routes/itinerary-shares").mount(app, ctx);
 require("./routes/sync")(app, ctx);
 require("./routes/projects")(app, ctx);
 require("./routes/activity")(app, ctx);
@@ -1142,7 +1153,7 @@ app.get("/api/me/integrations", async (req, res) => {
       canOauth: !!(ctx.slackOAuth && ctx.slackOAuth.configured() && ctx.slackOAuth.hasEncryptionKey()),
     },
     google,
-    conversation: { enabled: process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false", url: "/connections/conversation" },
+    conversation: { enabled: process.env.DCC_CONVERSATION_ENABLED === "true" && process.env.DCC_CONVERSATION_REMOTE_ENABLED !== "false", url: "/?settings=connections&connection=chatgpt" },
     triage: {
       // Everything the wizard needs to render a copy-paste login command. NOT
       // getRequestOrigin, which is the caller's IP for rate limiting; this has to
@@ -1193,12 +1204,12 @@ app.delete("/api/me/slack/claim", async (req, res) => {
 
 // ── Static + Fallback ──
 app.get("/pet/:shareSlug", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "public-pet.html")); });
-app.get("/todo/:token", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "public-todo.html")); });
 // Mycelium is Drake's personal vault. DCC has multiple accounts, so the ink
 // shell must not become a shared authenticated surface by accident.
 app.get(["/ink", "/ink.html"], requireAdmin, (req, res) => { res.sendFile(path.join(PROJECT_DIR, "ink.html")); });
 // Keep existing authentication and account binding ahead of the launch redirect.
 app.get(["/glasses", "/glasses.html"], require("./lib/glasses-launch"));
+app.get(["/", "/index.html"], require("./lib/glasses-shell")(PROJECT_DIR));
 app.use(express.static(PROJECT_DIR, { extensions: ["html"], etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 app.get("/guided", (req, res) => { res.setHeader("Cache-Control", "private, no-store"); res.sendFile(path.join(PROJECT_DIR, "guided.html")); });
 app.get("/", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "index.html")); });

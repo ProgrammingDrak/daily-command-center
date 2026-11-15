@@ -35,7 +35,7 @@ manual checks below in a few seconds.
 - [ ] **Quick-add urgent task**: Type task name in "Add urgent task" bar, click Add or Enter. Task appears after current active task. Times recalculate.
 - [ ] **Add from consider/backlog**: Click "Schedule" on a Consider or Backlog item. Appends to schedule, recalculates times.
 - [ ] **Overflow detection**: Add enough tasks to exceed EOD. Overflow modal opens showing deficit, task checkboxes to push. "Push Selected" works. "Work Late" extends EOD.
-- [ ] **Plan/Actual toggle**: Click "Plan" vs "Actual" buttons. Plan shows editable timeline. Actual shows planned vs actual comparison.
+- [ ] **Plan and Actual bars**: Day Progress keeps the plan above actual activity. Check empty days, recorded and ongoing work, concurrent lanes, date navigation and shared time coordinates at desktop and mobile widths. Day review remains available below the plan.
 - [ ] **Detail panel expand**: Click a task card body. Detail panel expands with description, links, side project marker, subtasks.
 - [ ] **Subtasks**: Click "+sub", add subtask text, press Enter. Checkbox toggles done. X deletes. Incomplete subtasks prompt resolution in Done Modal.
 - [ ] **Side project marker**: Click "Move to side projects" on a task card. Task leaves the schedule and appears in Side Projects.

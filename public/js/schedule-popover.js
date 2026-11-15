@@ -62,7 +62,7 @@ function openSchedulePopover(cfg){
   const anchorEl=cfg.anchorEl;
   if(!anchorEl)return;
 
-  let ev=null;
+  let ev=cfg.task||null;
   if(mode==="reschedule"){
     ev=cfg.task||scheduled.find(e=>e.id===cfg.id);
     if(!ev)return;
@@ -283,6 +283,31 @@ function openSchedulePopover(cfg){
     // silently saves a click.
   }
 
+  const waiting=window.DCC?.Waiting;
+  if(ev&&showDate&&waiting?.moveTask&&!waiting.isCheckInTask?.(ev)){
+    const control=document.createElement('button');control.type='button';control.className='resched-btn resched-blocked';
+    control.textContent='Blocked / Waiting';
+    control.title='Move this task to Waiting';
+    control.addEventListener('click',async event=>{
+      event.stopPropagation();
+      if(control.disabled)return;
+      control.disabled=true;
+      try{await waiting.moveTask(ev);closePop();}
+      catch(error){if(typeof showToast==='function')showToast(error.message,'error');}
+      finally{control.disabled=false;}
+    });
+    pop.appendChild(control);
+  }
+  if(ev&&showDate&&mode==="reschedule"&&typeof moveTaskToWhenever==="function"){
+    const control=document.createElement('button');control.type='button';control.className='resched-btn resched-whenever';
+    control.textContent=window.DCC?.Whenever?.LABEL||'Whenever';
+    control.title='Move this task to the Whenever list';
+    control.addEventListener('click',async event=>{
+      event.stopPropagation();closePop();
+      try{await moveTaskToWhenever(ev.id);}catch(error){if(typeof showToast==='function')showToast(error.message,'error');}
+    });
+    pop.appendChild(control);
+  }
   _positionPopoverNear(anchorEl,pop);
   setTimeout(()=>document.addEventListener("click",onOutside,true),0);
   document.addEventListener("keydown",onKey,true);
