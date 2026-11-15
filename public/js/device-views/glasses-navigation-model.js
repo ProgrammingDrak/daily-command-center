@@ -176,12 +176,8 @@
   // Back/Forward is handled by the history coordinator. Cancel never emits a tap.
   function createInput(emit, timers = {}) {
     const later = timers.setTimeout || setTimeout, cancel = timers.clearTimeout || clearTimeout;
-    let pressed = null, holdTimer = null, middleTimer = null;
+    let pressed = null, holdTimer = null;
     function stopPress() { if (holdTimer != null) cancel(holdTimer); holdTimer = null; pressed = null; }
-    function middleTap() {
-      if (middleTimer != null) { cancel(middleTimer); middleTimer = null; emit('double-middle'); }
-      else middleTimer = later(() => { middleTimer = null; emit('tap-middle'); }, 320);
-    }
     function down(finger) {
       if (pressed || !['fore', 'middle'].includes(finger)) return;
       pressed = { finger, held: false };
@@ -194,10 +190,9 @@
     function up(finger) {
       if (!pressed || pressed.finger !== finger) return;
       const held = pressed.held; stopPress();
-      if (!held) { if (finger === 'middle') middleTap(); else emit('tap-fore'); }
+      if (!held) emit(finger === 'middle' ? 'tap-middle' : 'tap-fore');
     }
-    function reset() { stopPress(); if (middleTimer != null) cancel(middleTimer); middleTimer = null; }
-    return Object.freeze({ down, up, cancel: stopPress, reset });
+    return Object.freeze({ down, up, cancel: stopPress, reset: stopPress });
   }
   return Object.freeze({ COLLECTIONS, LANES, LEVELS, viewport, taskHierarchy, create, createHistory, createInput });
 });
