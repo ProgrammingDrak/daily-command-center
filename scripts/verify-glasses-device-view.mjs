@@ -84,12 +84,16 @@ try {
   assert.equal(await page.locator('.glasses-range').count(), 5);
   await page.keyboard.press('ArrowUp');
   assert.equal(await selected(), initial);
-  await page.keyboard.press('Enter');
+  const animationName = () => getComputedStyle(document.querySelector('.glasses-selected')).animationName;
+  assert.equal(await page.evaluate(async () => {
+    await window.DCCGlasses.input('tap-fore');
+    return getComputedStyle(document.querySelector('.glasses-selected')).animationName;
+  }), 'glasses-select-enter');
   await level('select');
-  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.glasses-selected')).animationName), 'glasses-select-enter');
   await page.screenshot({ path: path.join(out, 'glasses-select-animation-600.png') });
   await page.keyboard.press('ArrowDown');
   assert.equal(await selected(), ids[1]);
+  assert.equal(await page.evaluate(animationName), 'none');
   await page.keyboard.press('ArrowUp');
   assert.equal(await selected(), initial);
   check('Jump moves five rows, Select moves one, eleven complete rows and five-row range render');
@@ -116,6 +120,8 @@ try {
   await input('tap-middle'); await level('task');
   await input('tap-middle'); await level('select');
   await input('tap-middle'); await level('jump');
+  assert.equal(await page.evaluate(animationName), 'none');
+  check('Select entry highlight does not replay on a redraw or on Back to Jump');
   check('task focus, details placeholder, More menu and single-middle back follow the level stack');
   await input('tap-fore'); await input('down');
   const remembered = await selected();
@@ -225,6 +231,51 @@ try {
   assert.equal(new URL(exitPage.url()).searchParams.has('device'), false);
   await exitPage.close();
   check('Back at Jump leaves the glasses entry without a trapping sentinel');
+  const swipePage = await context.newPage();
+  await swipePage.goto(base + '/?tab=schedule&device=glasses');
+  await swipePage.waitForSelector('.glasses-task-row');
+  // The static review fixture has a completion endpoint but no queue writer.
+  // The real queue coordinator and its undo are exercised by the queue tests.
+  await swipePage.evaluate(() => {
+    window.DCCWorkingQueue.performTaskAction = async (action, id, { kind }) => {
+      if (action !== 'complete' || kind !== 'task') throw new Error('Unexpected task action');
+      const result = await window.blockStore.setTaskCompletion(id, true);
+      if (!result.ok) throw new Error('Fixture completion failed');
+      return { undo: null };
+    };
+  });
+  const swipeTouch = await context.newCDPSession(swipePage);
+  const touchAt = (type, x) => swipeTouch.send('Input.dispatchTouchEvent', {
+    type, touchPoints: x == null ? [] : [{ x, y: 130, id: 1 }]
+  });
+  const swipe = async (from, to) => {
+    await touchAt('touchStart', from);
+    await touchAt('touchMove', to);
+    await touchAt('touchEnd');
+  };
+  await swipePage.evaluate(() => window.DCCGlasses.input('tap-fore'));
+  const currentSwipeTask = () => swipePage.evaluate(() => window.DCCGlasses.snapshot().selected.id);
+  const completedId = await currentSwipeTask();
+  const completed = swipePage.waitForResponse(response => response.url().includes('/api/tasks/' + completedId + '/completion') && response.request().method() === 'POST');
+  await swipe(170, 300);
+  assert.equal((await completed).ok(), true);
+  await swipePage.waitForFunction(id => window.DCCGlasses.snapshot().selected.id !== id, completedId);
+  // A selection change while a finger is down must not delete the new task.
+  await touchAt('touchStart', 300);
+  await swipePage.evaluate(() => window.DCCGlasses.input('down'));
+  await touchAt('touchMove', 170);
+  await touchAt('touchEnd');
+  assert.doesNotMatch(await swipePage.locator('.glasses-status').innerText(), /delet/i);
+  const deletedId = await currentSwipeTask();
+  const deleted = swipePage.waitForResponse(response => response.url().includes('/api/blocks/' + deletedId + '?') && response.request().method() === 'DELETE');
+  await swipe(300, 170);
+  assert.equal((await deleted).ok(), true);
+  assert.equal((await swipePage.request.get(base + '/api/blocks/' + deletedId)).status(), 404);
+  await swipePage.waitForFunction(id => window.DCCGlasses.snapshot().selected.id !== id, deletedId);
+  assert.equal(await swipePage.locator('#glasses-app').getAttribute('data-level'), 'select');
+  await swipeTouch.detach();
+  await swipePage.close();
+  check('touch swipes complete right, delete left and ignore a changed selection mid-swipe');
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(out, 'checks.json'), JSON.stringify({ checks, errors, synthetic: true, physicalMeta: false }, null, 2));
 } catch (error) {
