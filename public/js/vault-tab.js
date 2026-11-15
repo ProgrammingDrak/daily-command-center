@@ -424,7 +424,10 @@
     wireLinkClicks(root);
   }
 
+  let journalNotebookReader = null;
   function renderDetail(node) {
+    journalNotebookReader?.destroy();
+    journalNotebookReader = null;
     const el = document.getElementById("vault-detail");
     if (!el) return;
     if (!node) {
@@ -453,6 +456,16 @@
     const editBtn = el.querySelector("#vault-edit-btn");
     if (editBtn && window.VaultEditor) editBtn.onclick = () => window.VaultEditor.openEdit(node);
     upgradeMedia(el, node);
+    if (isJournalNode(node) && window.JournalNotebook) {
+      try {
+        const ink = window.JournalNotebook.unpack(node.body || "");
+        if (ink.pages.some(page => page.length) || ink.pages.length > 1) {
+          const paper = document.createElement("section");
+          el.querySelector(".vault-body-md").after(paper);
+          journalNotebookReader = window.JournalNotebook.mount(paper, ink.pages, { readOnly: true });
+        }
+      } catch { window.DCC.toast("Journal drawing could not be opened", "error"); }
+    }
     wireLinkClicks(el);
     loadUnlinked(node.slug);
     if (window.VaultJournalWorkspace && isJournalNode(node)) {

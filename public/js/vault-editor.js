@@ -242,7 +242,7 @@
     if (write) write.onclick = () => { write.classList.add("active"); q("#ed-preview").classList.remove("active"); body.hidden = false; prev.hidden = true; };
     const cover = q("#ed-day-cover");
     const state = st;
-    const entry = cover ? DCC.CompletionMemories.mountJournalEntry(cover, prev, body.value, { onAttachment: uploadAttachment }) : null;
+    const entry = cover ? DCC.CompletionMemories.mountJournalEntry(cover, prev, body.value, { onAttachment: uploadAttachment, notebook: true }) : null;
     if (entry) {
       state.clearDayStory = entry.destroy;
       state.readJournal = entry.read;
@@ -522,7 +522,8 @@
         data = await res.json();
         if (res.status === 409) { saveBtn.disabled = false; toast("This note changed elsewhere — reload before saving", "error"); return; }
         if (!res.ok) throw new Error(data.error || "save failed");
-        toast("Saved"); close(); ctx.onSaved(st.slug);
+        const savedSlug = st.slug;
+        toast("Saved"); close(); ctx.onSaved(savedSlug);
       } else {
         res = await fetch("/api/vault/create", {
           method: "POST", headers: { "Content-Type": "application/json" },
