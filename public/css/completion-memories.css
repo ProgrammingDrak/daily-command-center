@@ -254,6 +254,16 @@ a[href^="#dcc-card-"] { display: inline-block; }
 /* Formatted text sits just above the paper; photos keep their existing gallery. */
 .vault-ed-journal-surface:has(+ .journal-notebook) { margin-bottom: 6px; min-height: 7rem; max-width: none; }
 .journal-notebook { width: 100%; max-width: 52rem; margin: 6px auto 12px; }
+.journal-drawer { border: 1px solid var(--line, var(--border)); border-radius: 8px; }
+.journal-drawer > summary { display: flex; align-items: center; gap: 8px 12px; padding: 12px; min-height: 48px; cursor: pointer; list-style: none; }
+.journal-drawer > summary::-webkit-details-marker { display: none; }
+.journal-drawer-title { font-size: 13px; color: var(--ink, var(--text)); }
+.journal-drawer [data-notebook-summary] { flex: 1; min-width: 0; font-size: 11px; color: var(--text-muted); }
+.journal-drawer-chevron { font-size: 22px; line-height: 1; color: var(--text-muted); transition: transform 150ms ease; }
+.journal-drawer[open] > summary { border-bottom: 1px solid var(--line, var(--border)); }
+.journal-drawer[open] .journal-drawer-chevron { transform: rotate(90deg); }
+.journal-drawer-content { padding: 8px; }
+@media (prefers-reduced-motion: reduce) { .journal-drawer-chevron { transition: none; } }
 .journal-ink-tools, .journal-page-turn, .journal-page-settings {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   font-size: 12px; line-height: 1.4; padding: 6px 0;

@@ -102,7 +102,9 @@
     let active = null, pointer = null, swipe = null, before = null, frame = null;
     const undo = pages.map(() => []), redo = pages.map(() => []);
     host.classList.add("journal-notebook");
-    host.innerHTML = `<div class="journal-page-settings">
+    host.innerHTML = `<details class="journal-drawer">
+      <summary><span class="journal-drawer-title">Sketchbook</span><span data-notebook-summary></span><span class="journal-drawer-chevron" aria-hidden="true">›</span></summary>
+      <div class="journal-drawer-content"><div class="journal-page-settings">
       ${readOnly ? '<span data-template-name></span>' : `<label>Paper for this page <select data-template aria-label="Paper for this page">${PAPER_TYPES.map(type => `<option value="${type.id}">${type.label}</option>`).join("")}</select></label>`}
       <span data-template-status></span></div>
       <div class="journal-ink-tools" role="group" aria-label="Drawing tools">
@@ -123,7 +125,7 @@
       <span data-page role="status" aria-live="polite"></span>
       <button type="button" data-next aria-label="Next drawing page">→</button>
       ${readOnly ? "" : '<button type="button" data-add>+ Page</button>'}</div>
-      <p class="journal-ink-hint">${readOnly ? "Swipe, tap a dot, or select a neighboring page." : "Swipe to turn. Choose Pen or Eraser to draw. Paper changes apply to this page only."}</p>`;
+      <p class="journal-ink-hint">${readOnly ? "Swipe, tap a dot, or select a neighboring page." : "Swipe to turn. Choose Pen or Eraser to draw. Paper changes apply to this page only."}</p></div></details>`;
     const canvas = host.querySelector("[data-drawing]"), context = canvas.getContext("2d");
     const q = selector => host.querySelector(selector);
     const histories = () => { undo[index] ||= []; redo[index] ||= []; };
@@ -156,6 +158,7 @@
       histories();
       const pageLabel = `Page ${index + 1} / ${pages.length}`;
       if (q("[data-page]").textContent !== pageLabel) q("[data-page]").textContent = pageLabel;
+      q("[data-notebook-summary]").textContent = `${pageLabel} · ${paperName(paper[index])}`;
       canvas.setAttribute("aria-label", `Hand drawing page ${index + 1} of ${pages.length}`);
       q("[data-previous]").disabled = index === 0;
       q("[data-next]").disabled = index === pages.length - 1;
@@ -189,6 +192,13 @@
     q("[data-next]").onclick = () => turn(1);
     const footer = q(".journal-page-turn");
     const gallery = q(".journal-page-gallery");
+    q(".journal-drawer").addEventListener("toggle", () => {
+      finish();
+      swipe = null;
+      q(".journal-current-paper").style.transform = "";
+      q(".journal-current-paper").getAnimations().forEach(animation => animation.cancel());
+      if (q(".journal-drawer").open) paint();
+    });
     let suppressNeighborClick = false;
     function beginSwipe(event) {
       if (!event.isPrimary || event.button !== 0 || (event.currentTarget === footer && event.target.closest("button"))) return;
