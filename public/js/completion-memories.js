@@ -476,18 +476,22 @@
     return details;
   }
 
-  function mountJournalEntry(cover, prev, initial, { readOnly = false, onAttachment } = {}) {
+  function mountJournalEntry(cover, prev, initial, { readOnly = false, onAttachment, onNotebookImage, notebook = false, initialPage = 0 } = {}) {
     let photos = [], dirty = false, cleanup;
+    const ink = notebook ? window.JournalNotebook.unpack(initial) : null;
+    if (ink) initial = ink.text;
+    let book;
     const normalize = markdown => markdown
       .replace(/\[\[photo:([0-9a-f-]{36})\]\]/gi, "[Photo](#dcc-photo-$1)")
       .replace(/\(media:sha256:([a-f0-9]{12,64})\)/gi, "(/api/vault/media/$1)");
-    const read = () => dirty ? journalMarkdown(prev) : initial;
+    const readText = () => dirty ? journalMarkdown(prev) : initial;
+    const read = () => book ? window.JournalNotebook.pack(readText(), book.read(), book.readTemplates(), book.readObjects()) : readText();
     function keepCleanup(clear) {
       const previous = cleanup;
       cleanup = () => { previous?.(); clear(); };
     }
     function paintCover() {
-      keepCleanup(renderDayStory(cover, node("div"), photos, normalize(read())));
+      keepCleanup(renderDayStory(cover, node("div"), photos, normalize(readText())));
     }
     function paint() {
       cleanup?.();
@@ -564,6 +568,11 @@
       else document.execCommand("insertText", false, text);
     });
     paint();
+    if (ink) {
+      const paper = node("section");
+      prev.after(paper);
+      book = window.JournalNotebook.mount(paper, ink.pages, { readOnly, templates: ink.templates, objects: ink.objects, initialPage, onAttachImage: onNotebookImage });
+    }
     return {
       read, insert, mountFormatting,
       setPhotos(next) {
@@ -571,7 +580,7 @@
         if (!dirty && !prev.contains(document.activeElement)) paint();
         else paintCover();
       },
-      destroy() { cleanup?.(); },
+      destroy() { cleanup?.(); book?.destroy(); },
     };
   }
 
@@ -954,7 +963,7 @@
       const cover = node("div", "", "memory-story-cover");
       const story = node("div", "", "memory-inline-story");
       view.body.append(cover, story);
-      const editor = mountJournalEntry(cover, story, journal.body || "", { readOnly: true });
+      const editor = mountJournalEntry(cover, story, journal.body || "", { readOnly: true, notebook: true });
       view.element.addEventListener("close", editor.destroy, { once: true });
       const date = String(journal.frontmatter.date || "").slice(0, 10);
       if (date) {
