@@ -70,17 +70,17 @@ test('More returns to Task and home preserves the All Tasks selection',()=>{
  assert.equal(m.snapshot().level,'more');m.input('back');assert.equal(m.snapshot().level,'task');m.input('home');assert.equal(m.snapshot().index,5);
 });
 function clock(){let t=0,id=0;const jobs=new Map();return {setTimeout:(fn,ms)=>{jobs.set(++id,{fn,at:t+ms});return id;},clearTimeout:key=>jobs.delete(key),advance:ms=>{t+=ms;for(const [key,job]of [...jobs])if(job.at<=t){jobs.delete(key);job.fn();}}};}
-test('single middle is delayed; double middle cancels Back and fires exactly once',()=>{
+test('middle taps go Back immediately without a double-tap action',()=>{
  const time=clock(),actions=[],input=require('./public/js/device-views/glasses-navigation-model').createInput(a=>actions.push(a),time);
- input.down('middle');input.up('middle');time.advance(100);assert.deepEqual(actions,[]);input.down('middle');input.up('middle');time.advance(400);assert.deepEqual(actions,['double-middle']);
- input.down('middle');input.up('middle');time.advance(320);assert.deepEqual(actions,['double-middle','tap-middle']);
+ input.down('middle');input.up('middle');assert.deepEqual(actions,['tap-middle']);
+ input.down('middle');input.up('middle');time.advance(400);assert.deepEqual(actions,['tap-middle','tap-middle']);
 });
 test('holds and cancellation never leak a forefinger completion tap',()=>{
  const time=clock(),actions=[],input=require('./public/js/device-views/glasses-navigation-model').createInput(a=>actions.push(a),time);
  input.down('fore');input.down('fore');time.advance(550);input.up('fore');assert.deepEqual(actions,['hold-fore']);
  input.down('fore');input.cancel();input.up('fore');time.advance(600);assert.deepEqual(actions,['hold-fore']);
  input.down('fore');input.up('fore');assert.deepEqual(actions,['hold-fore','tap-fore']);
- input.down('middle');input.up('middle');input.reset();time.advance(400);assert.deepEqual(actions,['hold-fore','tap-fore']);
+ input.down('middle');input.reset();input.up('middle');time.advance(400);assert.deepEqual(actions,['hold-fore','tap-fore']);
 });
 test('More supports bounded gesture selection and returns to task',()=>{
  const m=create();m.setLists([rows(2)]);m.input('tap-fore');m.input('tap-fore');m.input('more');

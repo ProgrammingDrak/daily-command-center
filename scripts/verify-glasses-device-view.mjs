@@ -136,9 +136,10 @@ try {
   }
   const expected = ['All Tasks', 'Working Queue', 'Itinerary', 'Loose Ends', 'Unscheduled', 'Whenever', 'Someday', 'Waiting'];
   expected.forEach((name, i) => assert.ok(names[i].includes(name), 'collection ' + i + ': ' + name));
-  await input('double-middle'); await level('jump');
+  for (let i = 0; i < 7; i++) await input('right');
+  await level('jump');
   assert.ok((await page.locator('#glasses-app').innerText()).includes('All Tasks'));
-  check('all eight collections cycle in required order; double-middle returns home');
+  check('all eight collections cycle in required order');
   assert.equal(await page.evaluate(() => { const e = new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }); document.dispatchEvent(e); return e.defaultPrevented; }), false);
   await page.keyboard.press('Enter'); await level('select');
   await page.keyboard.press('Enter'); await level('task');
@@ -146,10 +147,11 @@ try {
   await level('details');
   await page.keyboard.press('Escape'); await page.waitForTimeout(450);
   assert.notEqual(await page.locator('#glasses-app').getAttribute('data-level'), 'details');
-  await page.keyboard.press('Escape'); await page.keyboard.press('Escape'); await page.waitForTimeout(450);
+  await page.keyboard.press('Escape'); await level('select');
+  await page.keyboard.press('Escape'); await page.waitForTimeout(100);
   await level('jump');
   assert.equal(writes, 0);
-  check('held Enter opens details, Escape single/double is disambiguated, Backspace stays native and navigation performs no mutations');
+  check('held Enter opens details, each Escape goes back one level, Backspace stays native and navigation performs no mutations');
   for (const [width, height] of [[320, 600], [375, 812], [600, 600], [1440, 1000]]) {
     await page.setViewportSize({ width, height });
     await page.waitForTimeout(200);
@@ -232,50 +234,110 @@ try {
   await exitPage.close();
   check('Back at Jump leaves the glasses entry without a trapping sentinel');
   const swipePage = await context.newPage();
+  await swipePage.emulateMedia({ reducedMotion: 'reduce' });
   await swipePage.goto(base + '/?tab=schedule&device=glasses');
   await swipePage.waitForSelector('.glasses-task-row');
-  // The static review fixture has a completion endpoint but no queue writer.
-  // The real queue coordinator and its undo are exercised by the queue tests.
+  // Exercise Glasses through the static review completion endpoint. Production
+  // queue receipts and their validation are covered by the queue tests.
   await swipePage.evaluate(() => {
     window.DCCWorkingQueue.performTaskAction = async (action, id, { kind }) => {
       if (action !== 'complete' || kind !== 'task') throw new Error('Unexpected task action');
       const result = await window.blockStore.setTaskCompletion(id, true);
       if (!result.ok) throw new Error('Fixture completion failed');
-      return { undo: null };
+      return { undo: { taskId: id, expiresAt: Date.now() + 5000 } };
+    };
+    window.DCCWorkingQueue.undoCompletion = async receipt => {
+      const result = await window.blockStore.setTaskCompletion(receipt.taskId, false);
+      if (!result.ok) throw new Error('Fixture completion undo failed');
     };
   });
   const swipeTouch = await context.newCDPSession(swipePage);
-  const touchAt = (type, x) => swipeTouch.send('Input.dispatchTouchEvent', {
-    type, touchPoints: x == null ? [] : [{ x, y: 130, id: 1 }]
+  const touchAt = (type, x, y = 130) => swipeTouch.send('Input.dispatchTouchEvent', {
+    type, touchPoints: x == null ? [] : [{ x, y, id: 1 }]
   });
-  const swipe = async (from, to) => {
-    await touchAt('touchStart', from);
-    await touchAt('touchMove', to);
+  const swipe = async (from, to, y) => {
+    await touchAt('touchStart', from, y);
+    await touchAt('touchMove', to, y);
     await touchAt('touchEnd');
   };
-  await swipePage.evaluate(() => window.DCCGlasses.input('tap-fore'));
+  const swipeInput = action => swipePage.evaluate(action => window.DCCGlasses.input(action), action);
+  const swipeTarget = swipePage.locator('.glasses-swipe-target');
+  const swipePrompt = swipePage.locator('.glasses-swipe-prompt');
+  const selectedRow = swipePage.locator('.glasses-task-row[aria-selected="true"]');
+  const undoButton = swipePage.locator('#glasses-undo');
+  const condition = async direction => assert.equal(await swipeTarget.getAttribute('data-swipe'), direction);
+  const completionResponse = (id, completed) => swipePage.waitForResponse(r =>
+    r.url().includes('/api/tasks/' + id + '/completion') && r.request().method() === 'POST' &&
+    r.request().postDataJSON().completed === completed);
+  const batchResponse = (id, op) => swipePage.waitForResponse(r =>
+    new URL(r.url()).pathname === '/api/blocks/batch' && r.request().method() === 'POST' &&
+    r.request().postDataJSON().operations.some(entry => entry.id === id && entry.op === op));
+  await swipeInput('tap-fore');
   const currentSwipeTask = () => swipePage.evaluate(() => window.DCCGlasses.snapshot().selected.id);
   const completedId = await currentSwipeTask();
-  const completed = swipePage.waitForResponse(response => response.url().includes('/api/tasks/' + completedId + '/completion') && response.request().method() === 'POST');
+  const beforeComplete = await selectedRow.boundingBox();
   await swipe(170, 300);
+  await condition('right');
+  assert.equal(await swipePrompt.innerText(), 'Complete?');
+  assert.ok((await selectedRow.boundingBox()).x > beforeComplete.x);
+  assert.ok(!(await swipePage.request.get(base + '/api/blocks/' + completedId).then(r => r.json())).properties.done);
+  await swipe(300, 170); await condition('');
+  await swipeInput('tap-fore');
+  const focus = await swipePage.locator('.glasses-focus').boundingBox();
+  const focusY = Math.round(focus.y + focus.height / 2);
+  await touchAt('touchStart', 170, focusY);
+  await touchAt('touchMove', 300, focusY);
+  await swipePage.evaluate(() => new Promise(resolve => {
+    document.dispatchEvent(new window.Event('dcc:working-queue-sync'));
+    window.requestAnimationFrame(resolve);
+  }));
+  await touchAt('touchEnd');
+  await condition('right');
+  assert.ok((await swipePage.locator('.glasses-focus').boundingBox()).x > focus.x);
+  assert.equal(await swipePage.getByRole('button', { name: 'Complete?', exact: true }).count(), 1);
+  const completed = completionResponse(completedId, true);
+  await swipe(170, 300, focusY);
   assert.equal((await completed).ok(), true);
-  await swipePage.waitForFunction(id => window.DCCGlasses.snapshot().selected.id !== id, completedId);
-  // A selection change while a finger is down must not delete the new task.
+  await undoButton.waitFor({ state: 'visible' });
+  assert.match(await undoButton.innerText(), /Swipe left to undo/);
+  const reopened = completionResponse(completedId, false);
+  await swipePage.keyboard.press('ArrowLeft');
+  assert.equal((await reopened).ok(), true);
+  await swipePage.locator('.glasses-status').getByText('Completion undone.', { exact: true }).waitFor();
+  await condition('');
+
+  // A selection change while a finger is down must not stage the new task.
   await touchAt('touchStart', 300);
-  await swipePage.evaluate(() => window.DCCGlasses.input('down'));
+  await swipeInput('down');
   await touchAt('touchMove', 170);
   await touchAt('touchEnd');
-  assert.doesNotMatch(await swipePage.locator('.glasses-status').innerText(), /delet/i);
+  await condition('');
   const deletedId = await currentSwipeTask();
-  const deleted = swipePage.waitForResponse(response => response.url().includes('/api/blocks/' + deletedId + '?') && response.request().method() === 'DELETE');
+  const beforeDelete = await selectedRow.boundingBox();
+  const original = await swipePage.request.get(base + '/api/blocks/' + deletedId).then(r => r.json());
+  await swipe(300, 170); await condition('left');
+  assert.equal(await swipePrompt.innerText(), 'Delete?');
+  const revealedRow = await selectedRow.boundingBox();
+  const revealedPrompt = await swipePrompt.boundingBox();
+  assert.ok(revealedRow.x < beforeDelete.x && revealedRow.x + revealedRow.width < revealedPrompt.x);
+  assert.equal((await swipePage.request.get(base + '/api/blocks/' + deletedId)).status(), 200);
+  const deleted = batchResponse(deletedId, 'delete');
   await swipe(300, 170);
   assert.equal((await deleted).ok(), true);
   assert.equal((await swipePage.request.get(base + '/api/blocks/' + deletedId)).status(), 404);
   await swipePage.waitForFunction(id => window.DCCGlasses.snapshot().selected.id !== id, deletedId);
   assert.equal(await swipePage.locator('#glasses-app').getAttribute('data-level'), 'select');
+  await undoButton.waitFor({ state: 'visible' });
+  const restored = batchResponse(deletedId, 'undelete');
+  await swipe(300, 170);
+  assert.equal((await restored).ok(), true);
+  const revived = await swipePage.request.get(base + '/api/blocks/' + deletedId).then(r => r.json());
+  assert.equal(revived.id, original.id);
+  assert.equal(revived.properties.title, original.properties.title);
+  await swipePage.locator('.glasses-status').getByText('Task restored.', { exact: true }).waitFor();
   await swipeTouch.detach();
   await swipePage.close();
-  check('touch swipes complete right, delete left and ignore a changed selection mid-swipe');
+  check('Select and Task show swipe confirmation, ignore stale gestures, and undo both writes with a left swipe');
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(out, 'checks.json'), JSON.stringify({ checks, errors, synthetic: true, physicalMeta: false }, null, 2));
 } catch (error) {

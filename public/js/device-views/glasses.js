@@ -11,6 +11,9 @@
   const signedIn = () => !sessionInvalid && !!window.DCC_ACCOUNT_CONTEXT?.userId && sameAccount();
   const nav = Navigation.create();
   let pending = false, undo = null, revision = 0, refreshGeneration = 0;
+  let preview = null;
+  const swipeActions = { left: 'delete', right: 'complete' };
+  const prompts = { left: 'Delete?', right: 'Complete?' };
   let library = { allTasks: [], someday: [] }, looseEnds = [], problem = '', loading = true;
   let loaded = false, refreshPromise = null;
   const node = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
@@ -23,7 +26,8 @@
   const footer = node('footer', 'glasses-footer');
   const back = button('↶ Back', () => input('tap-middle'), 'glasses-back'); back.setAttribute('aria-label', 'Middle finger: Back');
   const details = button('◎ Hold: Details', () => input('hold-fore'), 'glasses-details');
-  const undoStatus = node('button', 'glasses-undo'); undoStatus.id = 'glasses-undo'; undoStatus.type = 'button'; undoStatus.addEventListener('click', () => input('double-middle')); undoStatus.hidden = true;
+  const undoStatus = button('', () => undoTaskAction(), 'glasses-undo');
+  undoStatus.id = 'glasses-undo'; undoStatus.hidden = true;
   const status = node('p', 'glasses-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
   const exit = node('a', 'glasses-exit', 'Full app'); const url = new URL(location.href); url.searchParams.delete('device'); exit.href = url.pathname + url.search + url.hash;
   const refresh = button('↻', () => refreshSources(), 'glasses-refresh'); refresh.setAttribute('aria-label', 'Refresh tasks');
@@ -35,7 +39,7 @@
   const navigationHistory = Navigation.createHistory({
     history: window.history, scope: principal,
     active: () => signedIn() && new URLSearchParams(location.search).get('device') === 'glasses',
-    changed: saved => { inputAdapter.reset(); nav.restore(saved); render(); }
+    changed: saved => { inputAdapter.reset(); preview = null; nav.restore(saved); render(); }
   });
   window.addEventListener('popstate', () => navigationHistory.pop());
   function announce(message) { status.textContent = message; }
@@ -113,10 +117,25 @@
     const el = button('', () => input(action), 'glasses-direction ' + className); el.dataset.action = action; el.setAttribute('aria-label', label);
     el.append(node('span', '', symbol), node('small', '', label)); return el;
   }
+  function renderPreview() {
+    const target = content.querySelector('.glasses-swipe-target');
+    if (!target) return;
+    target.dataset.swipe = preview?.direction || '';
+    const prompt = target.querySelector('.glasses-swipe-prompt');
+    if (prompt) prompt.textContent = prompts[preview?.direction] || '';
+    for (const direction of Object.keys(prompts)) {
+      const control = target.querySelector('[data-action="' + direction + '"]');
+      if (!control) continue;
+      const label = preview?.direction === direction ? prompts[direction] : prompts[direction].slice(0, -1);
+      control.querySelector('small').textContent = label;
+      control.setAttribute('aria-label', label);
+    }
+  }
   function render() {
     // Wait for canonical lists before restoring a reload/Forward entry.
     if (loaded && restoredHistory) navigationHistory.sync(nav.snapshot());
     const state = nav.snapshot(), wasInside = content.contains(document.activeElement), previous = root.dataset.level;
+    if (preview && (preview.level !== state.level || preview.taskId !== state.selected?.id)) preview = null;
     root.dataset.level = state.level;
     const enteringSelect = previous === 'jump' && state.level === 'select';
     mode.textContent = ({ jump: 'JUMP VIEW ×5', select: 'SELECT VIEW ×1', task: 'TASK VIEW', details: 'TASK DETAILS', more: 'MORE ACTIONS' })[state.level];
@@ -147,19 +166,27 @@
         label.append(node('span', 'glasses-title', item.title));
         row.append(label, node('span', type === 'Task' ? 'glasses-type glasses-relation' : 'glasses-type',
           type === 'Task' ? relation : type));
-        list.append(row);
+        if (selected && state.level === 'select') {
+          const reveal = node('div', 'glasses-swipe-target glasses-row-reveal');
+          reveal.setAttribute('role', 'presentation');
+          const prompt = node('span', 'glasses-swipe-prompt');
+          prompt.setAttribute('aria-hidden', 'true');
+          reveal.append(row, prompt);
+          list.append(reveal);
+        } else list.append(row);
       });
       content.append(list);
     } else if (state.level === 'task') {
-      const item = state.selected, view = node('div', 'glasses-task-view');
+      const item = state.selected, view = node('div', 'glasses-task-view glasses-swipe-target');
       const { relation, label: type, color } = appearance(item);
       const foreground = window.DCCWorkingQueue?.getState().queue?.items?.some(entry => entry.task.id === item.actionId && entry.status === 'foreground');
       const focus = button('', () => input('tap-fore'), 'glasses-focus'); focus.setAttribute('aria-label', 'Complete ' + item.title);
       const category = node('span', 'glasses-focus-type', [relation, type === 'Task' && relation ? '' : type].filter(Boolean).join(' · '));
       category.style.setProperty('--glasses-type-color', color);
       focus.append(category, node('strong', '', item.title), node('span', 'glasses-task-meta', meta(item)), node('small', '', pending ? 'Saving…' : '◎ Tap to complete'));
-      bindFinger(focus, 'fore');
-      view.append(direction('↑', foreground ? 'Background · 30m' : 'Foreground', 'up', 'glasses-up'), direction('✓', 'Complete', 'left', 'glasses-left'), focus, direction('⊖', 'Remove priority', 'right', 'glasses-right'), direction('•••', 'More actions', 'down', 'glasses-down'));
+      view.append(direction('↑', foreground ? 'Background · 30m' : 'Foreground', 'up', 'glasses-up'),
+        direction('✓', 'Complete', 'right', 'glasses-left'), focus,
+        direction('⊖', 'Delete', 'left', 'glasses-right'), direction('•••', 'More actions', 'down', 'glasses-down'));
       content.append(view);
     } else if (state.level === 'details') {
       const detail = node('section', 'glasses-placeholder'); detail.append(node('h2', '', state.selected.title), node('p', '', 'Task Details'), node('p', '', 'The full details view is coming later.')); content.append(detail);
@@ -169,6 +196,7 @@
       content.append(more);
     }
     details.hidden = state.level !== 'task';
+    renderPreview();
     if (wasInside) root.focus({ preventScroll: true });
     updateUndo();
     if (problem) announce(problem);
@@ -179,25 +207,30 @@
     return [
       ['Open existing outcome flow', () => window.DCCWorkingQueue.openTaskOutcome(item.actionId, item).catch(error => announce(error.message))],
       ['Task Details', () => { nav.input('back'); nav.input('hold-fore'); render(); }],
-      ['Refresh from DCC', () => refreshSources()],
+      ['Remove priority', () => mutate('remove', item)],
       ['Back to task', () => input('tap-middle')]
     ];
   }
   function updateUndo() {
     if (undo && (!sameAccount() || Date.now() >= undo.expiresAt)) undo = null;
+    if (!undo && document.activeElement === undoStatus) root.focus({ preventScroll: true });
     undoStatus.hidden = !undo;
-    if (undo) { undoStatus.textContent = '↶↶ Undo ' + Math.max(1, Math.ceil((undo.expiresAt - Date.now()) / 1000)) + 's'; undoStatus.setAttribute('aria-label', 'Double middle finger: undo completion'); }
+    undoStatus.disabled = pending;
+    const deleteControl = content.querySelector('.glasses-task-view [data-action="left"]');
+    if (deleteControl) deleteControl.disabled = !!undo || pending;
+    if (undo) {
+      const seconds = Math.max(1, Math.ceil((undo.expiresAt - Date.now()) / 1000));
+      const label = 'Swipe left to undo · ' + seconds + 's';
+      if (undoStatus.textContent !== label) undoStatus.textContent = label;
+      undoStatus.setAttribute('aria-label', 'Undo ' + (undo.action === 'delete' ? 'deletion' : 'completion'));
+    }
   }
   async function mutate(action, item) {
     if (pending || !item || !signedIn()) return;
-    if (action === 'delete' && item.kind !== 'task') {
-      announce('Open this item’s existing flow in More to manage it.');
-      return;
-    }
     if (!navigator.onLine) { announce('Offline. Nothing submitted. Reconnect and try again.'); return; }
     pending = true; const operation = ++revision;
-    if (action === 'complete') nav.input('select-view');
     const deleting = action === 'delete';
+    const deleteMutationId = deleting ? crypto.randomUUID() : null;
     const progress = {
       complete: 'Completing task… awaiting DCC confirmation.',
       delete: 'Deleting task… awaiting DCC confirmation.'
@@ -205,7 +238,7 @@
     announce(progress[action] || 'Saving task action…'); render();
     try {
       const result = deleting
-        ? await window.blockStore.deleteBlock(item.actionId)
+        ? await window.blockStore.batchOp([{ op: 'delete', id: item.actionId, deleteMutationId }])
         : await window.DCCWorkingQueue.performTaskAction(action, item.actionId, { kind: item.kind });
       if (!sameAccount() || operation !== revision) return;
       if (deleting) {
@@ -215,27 +248,43 @@
         }
         // The Itinerary and Unscheduled projections read the folded schedule.
         window.refoldTaskStateFromBlockCache?.();
-        announce('Deleted ' + item.title + '.');
+        undo = { action: 'delete', taskId: item.actionId, deleteMutationId, expiresAt: Date.now() + 8000 };
+        announce('Deleted ' + item.title + '. Swipe left to undo.');
       } else if (action === 'complete') {
-        undo = result.undo || null;
-        announce(undo ? 'Completed ' + item.title + '. Double middle tap to undo.' : 'Completed ' + item.title + '.');
+        undo = result.undo ? { ...result.undo, action: 'complete' } : null;
+        announce(undo ? 'Completed ' + item.title + '. Swipe left to undo.' : 'Completed ' + item.title + '.');
       } else announce(action === 'remove' ? 'Removed from Priority Queue. Task retained.' : 'Task moved to ' + (action === 'background' ? 'Background for 30 minutes' : 'Foreground') + '.');
-      // Keep deletion locked until the list has refreshed past the deleted row.
-      if (!deleting) pending = false;
+      const current = nav.snapshot();
+      if ((deleting || action === 'complete') && current.level === 'task' && current.selected?.id === item.id) {
+        nav.input('select-view'); render();
+      }
+      pending = false;
       ++refreshGeneration; updateUndo();
       await refreshSources(true);
     } catch (error) { if (sameAccount() && operation === revision) announce('Not confirmed: ' + error.message); }
     finally { if (operation === revision) pending = false; reconcile(); }
   }
-  async function undoCompletion() {
+  async function undoTaskAction() {
     updateUndo(); const receipt = undo;
     if (!receipt || pending || !signedIn()) return;
     if (!navigator.onLine) { announce('Offline. Undo was not submitted.'); return; }
-    pending = true; const operation = ++revision; undo = null; updateUndo(); announce('Undoing completion… awaiting DCC confirmation.');
+    pending = true; const operation = ++revision;
+    const deleting = receipt.action === 'delete';
+    undo = null; preview = null; renderPreview(); updateUndo();
+    announce(deleting ? 'Restoring task… awaiting DCC confirmation.' : 'Undoing completion… awaiting DCC confirmation.');
     try {
-      await window.DCCWorkingQueue.undoCompletion(receipt);
+      const result = deleting
+        ? await window.blockStore.restoreBlocks([receipt.taskId], { deleteMutationId: receipt.deleteMutationId })
+        : await window.DCCWorkingQueue.undoCompletion(receipt);
       if (sameAccount() && operation === revision) {
-        pending = false; ++refreshGeneration; announce('Completion undone.'); await refreshSources(true);
+        if (deleting && !result.ok) {
+          announce(result.buffered ? 'Restore queued for retry.' : 'Restore could not be confirmed.');
+          return;
+        }
+        if (deleting) window.refoldTaskStateFromBlockCache?.();
+        pending = false; ++refreshGeneration;
+        announce(deleting ? 'Task restored.' : 'Completion undone.');
+        await refreshSources(true);
       }
     } catch (error) { if (sameAccount() && operation === revision) announce('Undo not confirmed: ' + error.message); }
     finally { if (operation === revision) pending = false; reconcile(); }
@@ -244,24 +293,47 @@
     if (!signedIn()) { reconcile(); return; }
     if (navigationHistory.busy()) return;
     updateUndo();
-    if (action === 'double-middle') { if (undo) return undoCompletion(); nav.input('home'); return render(); }
-    if (action === 'tap-middle') { return navigationHistory.back(nav.snapshot()); }
+    if (action === 'left' && undo) return undoTaskAction();
     const state = nav.snapshot();
-    if (state.level === 'select') {
-      if (action === 'right') return mutate('complete', state.selected);
-      if (action === 'left') return mutate('delete', state.selected);
+    if (swipeActions[action] && ['select', 'task'].includes(state.level)) {
+      if (pending || !state.selected) return;
+      const { selected, level } = state;
+      if (selected.kind !== 'task') {
+        announce('Open this item’s existing action flow in More.');
+        return;
+      }
+      if (preview?.taskId === selected.id && preview.level === level) {
+        const confirmed = preview.direction === action;
+        preview = null; renderPreview();
+        if (confirmed) return mutate(swipeActions[action], selected);
+        announce('Action canceled.');
+        return;
+      }
+      preview = { direction: action, taskId: selected.id, level };
+      renderPreview();
+      announce(prompts[action] + ' Swipe ' + action + ' again to confirm.');
+      return;
     }
+    if (preview) {
+      preview = null; renderPreview();
+      announce('Action canceled.');
+      if (action === 'tap-fore' && state.level === 'task') return;
+    }
+    if (action === 'tap-middle') return navigationHistory.back(state);
     if (state.level === 'more' && action === 'tap-fore') return moreOptions(state.selected)[state.moreIndex][1]();
     if (state.level === 'task') {
-      if (action === 'tap-fore' || action === 'left') return mutate('complete', state.selected);
+      if (action === 'tap-fore') return mutate('complete', state.selected);
       if (action === 'up') {
         const foreground = window.DCCWorkingQueue.getState().queue?.items?.some(item => item.task.id === state.selected.actionId && item.status === 'foreground');
         return mutate(foreground ? 'background' : 'foreground', state.selected);
       }
-      if (action === 'right') return mutate('remove', state.selected);
       if (action === 'down') { nav.input('more'); render(); return; }
     }
-    nav.input(action); return render();
+    const next = nav.input(action);
+    if (state.level === 'jump' && next.level === 'select' && !undo) {
+      announce('Swipe left to delete or right to complete.');
+    }
+    return render();
   }
   const inputAdapter = Navigation.createInput(action => input(action));
   // Pointer controls and keyboard Enter/Escape share exactly the same recognizer.
@@ -291,35 +363,60 @@
     if (!gestureScope(event) || !['Enter', 'Escape'].includes(event.key)) return;
     event.preventDefault(); inputAdapter.up(event.key === 'Enter' ? 'fore' : 'middle');
   }, true);
-  window.addEventListener('blur', () => inputAdapter.reset());
+  window.addEventListener('blur', () => { inputAdapter.reset(); swipe = null; });
   let swipe = null;
   content.addEventListener('pointerdown', event => {
-    if (!event.isPrimary || event.target.closest('button') || event.button !== 0) return;
+    const control = event.target.closest('button');
+    const onTask = control?.classList.contains('glasses-focus');
+    if (!event.isPrimary || event.button !== 0 || (control && !onTask)) return;
     const { level, selected } = nav.snapshot();
-    swipe = { id: event.pointerId, x: event.clientX, y: event.clientY, level, taskId: selected?.id };
+    swipe = { id: event.pointerId, x: event.clientX, y: event.clientY, level, taskId: selected?.id, onTask };
+    // The content survives renders even when the task button under the finger does not.
     content.setPointerCapture(event.pointerId);
+    if (onTask) inputAdapter.down('fore');
+  });
+  function swipeDelta(event) {
+    if (swipe?.id !== event.pointerId) return null;
+    const dx = event.clientX - swipe.x, dy = event.clientY - swipe.y;
+    return Math.max(Math.abs(dx), Math.abs(dy)) >= 35 ? { dx, dy } : null;
+  }
+  content.addEventListener('pointermove', event => {
+    if (swipeDelta(event)) inputAdapter.cancel();
   });
   content.addEventListener('pointerup', event => {
-    if (!swipe || swipe.id !== event.pointerId) return;
+    if (swipe?.id !== event.pointerId) return;
+    const delta = swipeDelta(event);
     const start = swipe;
     swipe = null;
-    const dx = event.clientX - start.x, dy = event.clientY - start.y;
-    if (Math.max(Math.abs(dx), Math.abs(dy)) < 35) return;
     const { level, selected } = nav.snapshot();
-    if (start.level !== level) return;
+    if (!delta && start.onTask && start.level === level && start.taskId === selected?.id) {
+      inputAdapter.up('fore');
+      return;
+    }
+    inputAdapter.cancel();
+    if (!delta || start.level !== level) return;
+    const { dx, dy } = delta;
     if (Math.abs(dx) > Math.abs(dy)) {
-      if (level !== 'select' || start.taskId === selected?.id) input(dx < 0 ? 'left' : 'right');
+      if (start.taskId === selected?.id) input(dx < 0 ? 'left' : 'right');
     } else input(dy < 0 ? 'up' : 'down');
-  });
+  }, true);
   function cancelSwipe(event) {
-    if (swipe?.id === event.pointerId) swipe = null;
+    if (swipe?.id !== event.pointerId) return;
+    swipe = null;
+    inputAdapter.cancel();
   }
+  content.addEventListener('click', event => {
+    if (event.detail > 0 && event.target.closest('.glasses-focus')) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, true);
   content.addEventListener('pointercancel', cancelSwipe);
   content.addEventListener('lostpointercapture', cancelSwipe);
-  window.addEventListener('dcc:glasses-gesture', event => { if (['up', 'down', 'left', 'right', 'tap-fore', 'hold-fore', 'tap-middle', 'double-middle'].includes(event.detail?.action)) input(event.detail.action); });
+  window.addEventListener('dcc:glasses-gesture', event => { if (['up', 'down', 'left', 'right', 'tap-fore', 'hold-fore', 'tap-middle'].includes(event.detail?.action)) input(event.detail.action); });
   if (params.has('glassesSimulator')) {
     const simulator = node('nav', 'glasses-simulator'); simulator.setAttribute('aria-label', 'Development gesture simulator');
-    for (const [label, action] of [['↑','up'],['↓','down'],['←','left'],['→','right'],['Forefinger','tap-fore'],['Hold forefinger','hold-fore'],['Middle','tap-middle'],['Double middle','double-middle']]) simulator.append(button(label, () => input(action)));
+    for (const [label, action] of [['↑','up'],['↓','down'],['←','left'],['→','right'],['Forefinger','tap-fore'],['Hold forefinger','hold-fore'],['Middle','tap-middle']]) simulator.append(button(label, () => input(action)));
     root.append(simulator);
   }
   window.DCCGlasses = Object.freeze({ input, snapshot: nav.snapshot, refresh: refreshSources });
@@ -332,7 +429,7 @@
   window.addEventListener('dcc:carryover-settled', () => refreshSources());
   window.addEventListener('dcc:view-date-changed', () => { if (loaded) refreshSources(); });
   window.addEventListener('online', () => refreshSources());
-  window.addEventListener('offline', () => announce('Offline. Completion is paused until you reconnect.'));
+  window.addEventListener('offline', () => announce('Offline. Task actions are paused until you reconnect.'));
   document.addEventListener('visibilitychange', () => { inputAdapter.reset(); if (!document.hidden) refreshSources(); });
   setInterval(() => { updateUndo(); if (!sameAccount()) reconcile(); }, 100);
   // The canonical boot owns loading. Its data-ready event refreshes all sources.
