@@ -29,6 +29,8 @@
   const refresh = button('↻', () => refreshSources(), 'glasses-refresh'); refresh.setAttribute('aria-label', 'Refresh tasks');
   header.append(mode, position, refresh, exit); footer.append(back, undoStatus, details);
   root.append(header, collection, content, footer, status); document.body.append(root); document.body.classList.add('device-glasses');
+  document.getElementById('glasses-startup')?.remove();
+  document.documentElement.classList.remove('glasses-starting');
   let restoredHistory = false;
   const navigationHistory = Navigation.createHistory({
     history: window.history, scope: principal,
