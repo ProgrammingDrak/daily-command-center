@@ -118,9 +118,7 @@
     if (loaded && restoredHistory) navigationHistory.sync(nav.snapshot());
     const state = nav.snapshot(), wasInside = content.contains(document.activeElement), previous = root.dataset.level;
     root.dataset.level = state.level;
-    if (previous === 'jump' && state.level === 'select') {
-      root.classList.remove('glasses-select-enter'); void root.offsetWidth; root.classList.add('glasses-select-enter');
-    }
+    const enteringSelect = previous === 'jump' && state.level === 'select';
     mode.textContent = ({ jump: 'JUMP VIEW ×5', select: 'SELECT VIEW ×1', task: 'TASK VIEW', details: 'TASK DETAILS', more: 'MORE ACTIONS' })[state.level];
     position.textContent = state.count ? (state.index + 1) + ' / ' + state.count : '0 / 0'; collection.textContent = state.collectionName;
     content.replaceChildren();
@@ -139,7 +137,10 @@
           row.style.setProperty('--glasses-depth', String(item.depth));
         }
         if (state.level === 'jump' && index >= state.range.start && index < state.range.end) row.classList.add('glasses-range');
-        if (selected) row.classList.add('glasses-selected');
+        if (selected) {
+          row.classList.add('glasses-selected');
+          if (enteringSelect) row.classList.add('glasses-select-enter');
+        }
         row.append(node('span', 'glasses-number', index + 1)); const label = node('span', 'glasses-row-label');
         if (item.section && item.section !== section) label.append(node('small', 'glasses-section', item.section));
         section = item.section;
@@ -189,19 +190,39 @@
   }
   async function mutate(action, item) {
     if (pending || !item || !signedIn()) return;
+    if (action === 'delete' && item.kind !== 'task') {
+      announce('Open this item’s existing flow in More to manage it.');
+      return;
+    }
     if (!navigator.onLine) { announce('Offline. Nothing submitted. Reconnect and try again.'); return; }
     pending = true; const operation = ++revision;
     if (action === 'complete') nav.input('select-view');
-    announce(action === 'complete' ? 'Completing task… awaiting DCC confirmation.' : 'Saving task action…'); render();
+    const deleting = action === 'delete';
+    const progress = {
+      complete: 'Completing task… awaiting DCC confirmation.',
+      delete: 'Deleting task… awaiting DCC confirmation.'
+    };
+    announce(progress[action] || 'Saving task action…'); render();
     try {
-      const result = await window.DCCWorkingQueue.performTaskAction(action, item.actionId, { kind: item.kind });
+      const result = deleting
+        ? await window.blockStore.deleteBlock(item.actionId)
+        : await window.DCCWorkingQueue.performTaskAction(action, item.actionId, { kind: item.kind });
       if (!sameAccount() || operation !== revision) return;
-      if (action === 'complete') {
+      if (deleting) {
+        if (!result.ok) {
+          announce(result.buffered ? 'Deletion queued for retry.' : 'Deletion could not be confirmed.');
+          return;
+        }
+        // The Itinerary and Unscheduled projections read the folded schedule.
+        window.refoldTaskStateFromBlockCache?.();
+        announce('Deleted ' + item.title + '.');
+      } else if (action === 'complete') {
         undo = result.undo || null;
         announce(undo ? 'Completed ' + item.title + '. Double middle tap to undo.' : 'Completed ' + item.title + '.');
       } else announce(action === 'remove' ? 'Removed from Priority Queue. Task retained.' : 'Task moved to ' + (action === 'background' ? 'Background for 30 minutes' : 'Foreground') + '.');
-      // Mutation ownership ends at acknowledgement, not after unrelated reads.
-      pending = false; ++refreshGeneration; updateUndo();
+      // Keep deletion locked until the list has refreshed past the deleted row.
+      if (!deleting) pending = false;
+      ++refreshGeneration; updateUndo();
       await refreshSources(true);
     } catch (error) { if (sameAccount() && operation === revision) announce('Not confirmed: ' + error.message); }
     finally { if (operation === revision) pending = false; reconcile(); }
@@ -226,6 +247,10 @@
     if (action === 'double-middle') { if (undo) return undoCompletion(); nav.input('home'); return render(); }
     if (action === 'tap-middle') { return navigationHistory.back(nav.snapshot()); }
     const state = nav.snapshot();
+    if (state.level === 'select') {
+      if (action === 'right') return mutate('complete', state.selected);
+      if (action === 'left') return mutate('delete', state.selected);
+    }
     if (state.level === 'more' && action === 'tap-fore') return moreOptions(state.selected)[state.moreIndex][1]();
     if (state.level === 'task') {
       if (action === 'tap-fore' || action === 'left') return mutate('complete', state.selected);
@@ -268,9 +293,29 @@
   }, true);
   window.addEventListener('blur', () => inputAdapter.reset());
   let swipe = null;
-  content.addEventListener('pointerdown', event => { if (event.target.closest('button') || event.button !== 0) return; swipe = { id: event.pointerId, x: event.clientX, y: event.clientY }; });
-  content.addEventListener('pointerup', event => { if (!swipe || swipe.id !== event.pointerId) return; const dx = event.clientX - swipe.x, dy = event.clientY - swipe.y; swipe = null; if (Math.max(Math.abs(dx), Math.abs(dy)) >= 35) input(Math.abs(dx) > Math.abs(dy) ? dx < 0 ? 'left' : 'right' : dy < 0 ? 'up' : 'down'); });
-  content.addEventListener('pointercancel', () => { swipe = null; });
+  content.addEventListener('pointerdown', event => {
+    if (!event.isPrimary || event.target.closest('button') || event.button !== 0) return;
+    const { level, selected } = nav.snapshot();
+    swipe = { id: event.pointerId, x: event.clientX, y: event.clientY, level, taskId: selected?.id };
+    content.setPointerCapture(event.pointerId);
+  });
+  content.addEventListener('pointerup', event => {
+    if (!swipe || swipe.id !== event.pointerId) return;
+    const start = swipe;
+    swipe = null;
+    const dx = event.clientX - start.x, dy = event.clientY - start.y;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 35) return;
+    const { level, selected } = nav.snapshot();
+    if (start.level !== level) return;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      if (level !== 'select' || start.taskId === selected?.id) input(dx < 0 ? 'left' : 'right');
+    } else input(dy < 0 ? 'up' : 'down');
+  });
+  function cancelSwipe(event) {
+    if (swipe?.id === event.pointerId) swipe = null;
+  }
+  content.addEventListener('pointercancel', cancelSwipe);
+  content.addEventListener('lostpointercapture', cancelSwipe);
   window.addEventListener('dcc:glasses-gesture', event => { if (['up', 'down', 'left', 'right', 'tap-fore', 'hold-fore', 'tap-middle', 'double-middle'].includes(event.detail?.action)) input(event.detail.action); });
   if (params.has('glassesSimulator')) {
     const simulator = node('nav', 'glasses-simulator'); simulator.setAttribute('aria-label', 'Development gesture simulator');
