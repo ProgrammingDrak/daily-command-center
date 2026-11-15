@@ -31,6 +31,13 @@
   root.append(header, collection, content, footer, status); document.body.append(root); document.body.classList.add('device-glasses');
   document.getElementById('glasses-startup')?.remove();
   document.documentElement.classList.remove('glasses-starting');
+  let restoredHistory = false;
+  const navigationHistory = Navigation.createHistory({
+    history: window.history, scope: principal,
+    active: () => signedIn() && new URLSearchParams(location.search).get('device') === 'glasses',
+    changed: saved => { inputAdapter.reset(); nav.restore(saved); render(); }
+  });
+  window.addEventListener('popstate', () => navigationHistory.pop());
   function announce(message) { status.textContent = message; }
   const hierarchy = (items, options) => Navigation.taskHierarchy(items, DCC.TaskModel, options);
   function descriptor(value, section) {
@@ -60,6 +67,11 @@
       problem = 'Account changed or signed out. Reload to continue safely.';
     } else {
       try { nav.setLists(lists()); } catch (error) { problem = error.message; }
+    }
+    if (loaded && !restoredHistory && signedIn()) {
+      restoredHistory = true;
+      const saved = navigationHistory.current();
+      if (saved) nav.restore(saved);
     }
     render();
   }
@@ -102,6 +114,8 @@
     el.append(node('span', '', symbol), node('small', '', label)); return el;
   }
   function render() {
+    // Wait for canonical lists before restoring a reload/Forward entry.
+    if (loaded && restoredHistory) navigationHistory.sync(nav.snapshot());
     const state = nav.snapshot(), wasInside = content.contains(document.activeElement), previous = root.dataset.level;
     root.dataset.level = state.level;
     if (previous === 'jump' && state.level === 'select') {
@@ -158,11 +172,12 @@
     updateUndo();
     if (problem) announce(problem);
     else if (!status.textContent) announce('Swipe to navigate. Forefinger selects. Middle finger goes back.');
+    return navigationHistory.settled();
   }
   function moreOptions(item) {
     return [
       ['Open existing outcome flow', () => window.DCCWorkingQueue.openTaskOutcome(item.actionId, item).catch(error => announce(error.message))],
-      ['Task Details', () => { nav.input('back'); return input('hold-fore'); }],
+      ['Task Details', () => { nav.input('back'); nav.input('hold-fore'); render(); }],
       ['Refresh from DCC', () => refreshSources()],
       ['Back to task', () => input('tap-middle')]
     ];
@@ -206,9 +221,10 @@
   }
   async function input(action) {
     if (!signedIn()) { reconcile(); return; }
+    if (navigationHistory.busy()) return;
     updateUndo();
-    if (action === 'double-middle') { if (undo) return undoCompletion(); nav.input('home'); render(); return; }
-    if (action === 'tap-middle') { nav.input('back'); render(); return; }
+    if (action === 'double-middle') { if (undo) return undoCompletion(); nav.input('home'); return render(); }
+    if (action === 'tap-middle') { return navigationHistory.back(nav.snapshot()); }
     const state = nav.snapshot();
     if (state.level === 'more' && action === 'tap-fore') return moreOptions(state.selected)[state.moreIndex][1]();
     if (state.level === 'task') {
@@ -220,7 +236,7 @@
       if (action === 'right') return mutate('remove', state.selected);
       if (action === 'down') { nav.input('more'); render(); return; }
     }
-    nav.input(action); render();
+    nav.input(action); return render();
   }
   const inputAdapter = Navigation.createInput(action => input(action));
   // Pointer controls and keyboard Enter/Escape share exactly the same recognizer.

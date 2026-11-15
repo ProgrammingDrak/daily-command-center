@@ -88,3 +88,69 @@ test('More supports bounded gesture selection and returns to task',()=>{
  for(let i=0;i<10;i++)m.input('down');assert.equal(m.snapshot().moreIndex,3);
  m.input('back');assert.equal(m.snapshot().level,'task');m.input('more');assert.equal(m.snapshot().moreIndex,0);
 });
+
+function historyHarness(model = create()) {
+ const { createHistory } = require('./public/js/device-views/glasses-navigation-model');
+ const entries = [{ dccNav: { page: 'tasks' }, marker: 'preserved' }];
+ let cursor = 0, requested = null, active = true;
+ const history = {
+  get state() { return entries[cursor]; },
+  replaceState(value) { entries[cursor] = value; },
+  pushState(value) { entries.splice(++cursor); entries[cursor] = value; },
+  go(delta) { requested = delta; }, back() { requested = -1; }
+ };
+ const coordinator = createHistory({ history, scope: 'account-a', active: () => active,
+  changed: saved => { model.restore(saved); coordinator.sync(model.snapshot()); } });
+ const move = action => { model.input(action); return coordinator.sync(model.snapshot()); };
+ function pop(delta = requested) { requested = null; cursor += delta; coordinator.pop(); }
+ return { model, coordinator, history, entries, move, pop,
+  requested: () => requested, deactivate: () => { active = false; } };
+}
+test('history adds only view boundaries, preserves workspace state and backs out with live selection', async () => {
+ const h = historyHarness(); h.model.setLists([rows(20)]); h.coordinator.sync(h.model.snapshot());
+ h.move('down'); assert.equal(h.entries.length, 1);
+ h.move('tap-fore'); h.move('down'); h.move('tap-fore'); h.move('hold-fore');
+ assert.equal(h.entries.length, 4);
+ assert.deepEqual(h.history.state.dccNav, {page:'tasks'});
+ assert.equal(h.history.state.marker, 'preserved');
+ for (const expected of ['task','select','jump']) {
+  const done = h.coordinator.back(h.model.snapshot());
+  assert.equal(h.requested(), -1);
+  h.coordinator.sync(h.model.snapshot()); // A canonical rerender during traversal.
+  h.pop(); await done;
+  assert.equal(h.model.snapshot().level, expected);
+  assert.equal(h.model.snapshot().selected.id, 'task-6');
+ }
+ h.coordinator.back(h.model.snapshot()); assert.equal(h.requested(), -1);
+});
+test('native Back and Forward restore navigation without emitting commands', () => {
+ const h = historyHarness(); h.model.setLists([rows(20)]); h.coordinator.sync(h.model.snapshot());
+ h.move('tap-fore'); h.move('down'); h.move('tap-fore'); h.move('more');
+ h.pop(-1); assert.equal(h.model.snapshot().level, 'task');
+ h.pop(-1); assert.equal(h.model.snapshot().level, 'select');
+ h.pop(1); assert.equal(h.model.snapshot().selected.id, 'task-1');
+ h.pop(1); assert.equal(h.model.snapshot().level, 'more');
+ const saved = h.coordinator.current();
+ const fresh = create(); fresh.setLists([rows(20)]); fresh.restore(saved);
+ assert.equal(fresh.snapshot().level, 'more'); assert.equal(fresh.snapshot().selected.id,'task-1');
+ fresh.setLists([rows(20).slice(2)]); fresh.restore(saved);
+ assert.equal(fresh.snapshot().level, 'select');
+});
+test('Home and completion traverse existing ancestors and repeated Back cannot duplicate a traversal', async () => {
+ const h = historyHarness(); h.model.setLists([rows(20)]); h.coordinator.sync(h.model.snapshot());
+ h.move('tap-fore'); h.move('tap-fore'); h.move('more');
+ const done = h.move('home'); assert.equal(h.requested(), -3);
+ h.coordinator.back(h.model.snapshot()); assert.equal(h.requested(), -3);
+ h.pop(); await done; assert.equal(h.history.state.dccGlasses.depth,0);
+ h.move('tap-fore'); h.move('tap-fore');
+ const completion = h.move('select-view'); h.model.setLists([rows(20).slice(1)]);
+ h.coordinator.sync(h.model.snapshot()); h.pop(); await completion;
+ assert.equal(h.model.snapshot().level,'select'); assert.equal(h.model.snapshot().selected.id,'task-1');
+ h.deactivate(); h.pop(1); assert.equal(h.model.snapshot().level,'select');
+});
+
+test('native Back from Select keeps the current task in Jump', () => {
+ const h = historyHarness(); h.model.setLists([rows(20)]); h.coordinator.sync(h.model.snapshot());
+ h.move('tap-fore'); h.move('down'); h.pop(-1);
+ assert.equal(h.model.snapshot().level, 'jump'); assert.equal(h.model.snapshot().selected.id, 'task-1');
+});

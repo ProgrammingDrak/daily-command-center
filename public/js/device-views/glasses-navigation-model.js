@@ -91,6 +91,16 @@
       // Task actions are deliberately delegated to the canonical DCC coordinator.
       return snapshot();
     }
+    // Only navigation identities are restored; canonical lists remain authoritative.
+    function restore(saved) {
+      collection = clamp(Number(saved?.collection) || 0, 0, COLLECTIONS.length - 1);
+      const found = lists[collection].findIndex(item => item.id === saved?.selectedId);
+      select(found >= 0 ? found : positions[collection]);
+      level = Math.max(0, LEVELS.indexOf(saved?.level));
+      if (level >= 2 && found < 0) level = 1;
+      moreIndex = clamp(Number(saved?.moreIndex) || 0, 0, 3);
+      return snapshot();
+    }
     function snapshot() {
       const rows = lists[collection], index = positions[collection];
       return Object.freeze({
@@ -101,10 +111,69 @@
         rows: rows.slice(viewport(rows.length, index).start, viewport(rows.length, index).end)
       });
     }
-    return Object.freeze({ input, setLists, snapshot });
+    return Object.freeze({ input, setLists, snapshot, restore });
+  }
+  // Browser history contains view levels, never commands or task records.
+  function createHistory({ history, scope, changed, active = () => true }) {
+    const key = 'dccGlasses', version = 1;
+    let pending = null, last = null;
+    const depthOf = level => ({ jump: 0, select: 1, task: 2, details: 3, more: 3 })[level];
+    const read = () => {
+      const entry = history.state?.[key];
+      return entry?.version === version && entry.scope === scope ? entry : null;
+    };
+    const saved = state => ({ collection: state.collection, level: state.level,
+      selectedId: state.selected?.id || null, moreIndex: state.moreIndex });
+    function write(method, state) {
+      history[method]({ ...history.state, [key]: { version, scope,
+        depth: depthOf(state.level), view: saved(state) } }, '');
+    }
+    function sync(state) {
+      if (!active()) return;
+      if (pending) { pending.state = state; return pending.promise; }
+      last = state;
+      const entry = read(), depth = depthOf(state.level);
+      if (!entry) { write('replaceState', state); return; }
+      if (depth < entry.depth) {
+        let resolve;
+        const promise = new Promise(done => { resolve = done; });
+        pending = { state, promise, resolve };
+        history.go(depth - entry.depth);
+        return promise;
+      } else write(depth > entry.depth ? 'pushState' : 'replaceState', state);
+    }
+    function pop() {
+      if (!active()) { pending?.resolve(); pending = null; return; }
+      const entry = read();
+      if (pending) {
+        const { state, resolve } = pending; pending = null;
+        if (entry) { write('replaceState', state); changed(saved(state)); }
+        resolve();
+      } else if (entry) {
+        const view = { ...entry.view };
+        if (last && entry.depth < depthOf(last.level) && view.collection === last.collection) {
+          view.selectedId = last.selected?.id || null;
+        }
+        changed(view);
+      }
+    }
+    function back(state) {
+      if (pending) return;
+      if (depthOf(state.level) === 0) history.back();
+      else {
+        // Preserve the live selection when backing out of Select.
+        const level = state.level === 'select' ? 'jump' : state.level === 'task' ? 'select' : 'task';
+        // Update the live model before the asynchronous traversal so a source
+        // refresh cannot overwrite the requested parent with the old view.
+        changed(saved({ ...state, level }));
+        return pending?.promise;
+      }
+    }
+    return Object.freeze({ sync, pop, back, current: () => read()?.view || null,
+      busy: () => !!pending, settled: () => pending?.promise });
   }
   // One recognizer for keyboard, pointer and simulator inputs. Native browser
-  // Back/Forward is intentionally not a gesture here. Cancel never emits a tap.
+  // Back/Forward is handled by the history coordinator. Cancel never emits a tap.
   function createInput(emit, timers = {}) {
     const later = timers.setTimeout || setTimeout, cancel = timers.clearTimeout || clearTimeout;
     let pressed = null, holdTimer = null, middleTimer = null;
@@ -130,5 +199,5 @@
     function reset() { stopPress(); if (middleTimer != null) cancel(middleTimer); middleTimer = null; }
     return Object.freeze({ down, up, cancel: stopPress, reset });
   }
-  return Object.freeze({ COLLECTIONS, LANES, LEVELS, viewport, taskHierarchy, create, createInput });
+  return Object.freeze({ COLLECTIONS, LANES, LEVELS, viewport, taskHierarchy, create, createHistory, createInput });
 });

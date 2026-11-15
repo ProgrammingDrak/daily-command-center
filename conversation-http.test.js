@@ -67,15 +67,33 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
     body: JSON.stringify({ userId: 1 })
   });
   const cookie = r.headers.get("set-cookie").split(";")[0];
-  const readConsent = await call("/oauth/dcc/authorize?" + new URLSearchParams({...auth,scope:"dcc.read"}), {headers:{cookie}});
+  const readConsent = await call("/oauth/dcc/authorize?" + new URLSearchParams({ ...auth, scope: "dcc.read" }), {
+    headers: { cookie }
+  });
   assert.doesNotMatch(await readConsent.text(), /Manage Working Queue membership|Start and pause foreground timers/);
-  assert.equal((await ctx.pool.query("SELECT count(*)::int AS n FROM conversation_grants")).rows[0].n,0,"viewing consent never grants access");
+  assert.equal(
+    (await ctx.pool.query("SELECT count(*)::int AS n FROM conversation_grants")).rows[0].n,
+    0,
+    "viewing consent never grants access"
+  );
   r = await call(url, { headers: { cookie } });
   const html = await r.text();
   assert.match(html, /Allow selected access/);
   assert.match(html, /Synthetic 1/);
-  for(const permission of [/Manage Working Queue membership/, /add or remove without deleting tasks/, /order, priority, context, blockers and check-back reminders/, /Return to Priority/, /Start and pause foreground timers/, /Does not start or stop external workers/]) assert.match(html, permission);
-  assert.doesNotMatch(html, /undo a review choice/, "unrequested reconciliation authority is not advertised as granted");
+  for (const permission of [
+    /Manage Working Queue membership/,
+    /add or remove without deleting tasks/,
+    /order, priority, context, blockers and check-back reminders/,
+    /Return to Priority/,
+    /Start and pause foreground timers/,
+    /Does not start or stop external workers/
+  ])
+    assert.match(html, permission);
+  assert.doesNotMatch(
+    html,
+    /undo a review choice/,
+    "unrequested reconciliation authority is not advertised as granted"
+  );
   assert.match(r.headers.get("content-security-policy"), /frame-ancestors 'none'/);
   assert.match(r.headers.get("content-security-policy"), /form-action 'self' https:\/\/chatgpt\.com;/);
   assert.doesNotMatch(r.headers.get("content-security-policy"), /form-action[^;]*\*/);
@@ -85,7 +103,11 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
     call("/oauth/dcc/authorize", {
       method: "POST",
       headers: { cookie, origin, "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams([["csrf",token],["decision","allow"],...auth.scope.split(" ").map(scope=>["legacy",scope])])
+      body: new URLSearchParams([
+        ["csrf", token],
+        ["decision", "allow"],
+        ...auth.scope.split(" ").map((scope) => ["legacy", scope])
+      ])
     });
   assert.equal((await consent("forged")).status, 403);
   assert.equal((await consent(csrf, "https://evil.example")).status, 403);
@@ -123,12 +145,14 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   assert.ok(!result.body.result.tools.some((t) => t.name === "dcc_correct_time"));
   assert.ok(result.body.result.tools.some((t) => t.name === "dcc_delegate"));
   const wishlistCreate = {
-    name: "dcc_create_wishlist", arguments: { id: crypto.randomUUID(), title: "Fixture carry-on" },
+    name: "dcc_create_wishlist",
+    arguments: { id: crypto.randomUUID(), title: "Fixture carry-on" }
   };
-  assert.ok(!result.body.result.tools.some(tool => tool.name === "dcc_read_wishlist"));
+  assert.ok(!result.body.result.tools.some((tool) => tool.name === "dcc_read_wishlist"));
   assert.equal((await rpc("tools/call", wishlistCreate)).status, 403);
   await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.wishlist.write"])]);
-  const createdWishlist = (await rpc("tools/call", wishlistCreate, { "x-workspace-id": "ws-2" })).body.result.structuredContent;
+  const createdWishlist = (await rpc("tools/call", wishlistCreate, { "x-workspace-id": "ws-2" })).body.result
+    .structuredContent;
   assert.deepEqual(createdWishlist, { id: wishlistCreate.arguments.id, revision: 1, duplicate: false });
   const wishlistRead = { name: "dcc_read_wishlist", arguments: { wishlistId: createdWishlist.id } };
   assert.equal((await rpc("tools/call", wishlistRead)).status, 403);
@@ -136,12 +160,17 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   const readWishlist = (await rpc("tools/call", wishlistRead)).body.result.structuredContent;
   assert.equal(readWishlist.title, "Fixture carry-on");
   assert.equal((await rpc("tools/call", wishlistCreate)).status, 403);
-  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.read", "dcc.work", "dcc.delegate"])]);
+  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [
+    JSON.stringify(["dcc.read", "dcc.work", "dcc.delegate"])
+  ]);
   const capture = {
     name: "dcc_save_someday_idea",
     arguments: {
-      sourceEventId: "capture-dumplings", title: "Try the dumpling spot",
-      tags: ["With Fae"], location: "Downtown", sourceUrl: "https://example.com/dumplings",
+      sourceEventId: "capture-dumplings",
+      title: "Try the dumpling spot",
+      tags: ["With Fae"],
+      location: "Downtown",
+      sourceUrl: "https://example.com/dumplings",
       detail: "Order the wontons"
     }
   };
@@ -149,7 +178,10 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   assert.equal((await rpc("tools/call", capture)).status, 403);
   await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.capture"])]);
   result = await rpc("tools/list");
-  assert.deepEqual(result.body.result.tools.map(tool => tool.name), ['dcc_connection_status', capture.name]);
+  assert.deepEqual(
+    result.body.result.tools.map((tool) => tool.name),
+    ["dcc_connection_status", capture.name]
+  );
   const saved = (await rpc("tools/call", capture, { "x-workspace-id": "ws-2" })).body.result.structuredContent;
   assert.equal(saved.ok, true);
   assert.equal(saved.duplicate, false);
@@ -165,9 +197,11 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.read", "dcc.work"])]);
   result = await rpc("tools/list");
   assert.ok(!result.body.result.tools.some((t) => t.name === "dcc_delegate"));
-  result = await rpc("tools/call", {name:"dcc_delegate", arguments:{}});
+  result = await rpc("tools/call", { name: "dcc_delegate", arguments: {} });
   assert.equal(result.status, 403);
-  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.read", "dcc.work", "dcc.delegate"])]);
+  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [
+    JSON.stringify(["dcc.read", "dcc.work", "dcc.delegate"])
+  ]);
   result = await rpc("tools/call", { name: "dcc_correct_time", arguments: {} });
   assert.equal(result.status, 403);
   result = await rpc(
@@ -244,51 +278,123 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
   result = await rpc("tools/call", { name: "dcc_working_queue", arguments: {} });
   assert.equal(result.body.result.structuredContent.queue.items[0].note, "Updated from UI");
   const completionAttempt = async (name, error) => {
-    const state = (await mounted.store.state({userId:1,workspaceId:"ws-1"}));
-    const response = await rpc("tools/call", {name,arguments:{...args,action:"done",sourceEventId:crypto.randomUUID(),expectedRevision:state.revision,at:"2026-10-20T13:10:00Z"}});
-    assert.equal(response.body.result.isError,true);
-    assert.equal(JSON.parse(response.body.result.content[0].text).error,error);
-    assert.equal((await ctx.blockDB.getBlock("http-task")).properties.status,"open");
-    assert.equal((await mounted.store.state({userId:1,workspaceId:"ws-1"})).revision,state.revision);
+    const state = await mounted.store.state({ userId: 1, workspaceId: "ws-1" });
+    const response = await rpc("tools/call", {
+      name,
+      arguments: {
+        ...args,
+        action: "done",
+        sourceEventId: crypto.randomUUID(),
+        expectedRevision: state.revision,
+        at: "2026-10-20T13:10:00Z"
+      }
+    });
+    assert.equal(response.body.result.isError, true);
+    assert.equal(JSON.parse(response.body.result.content[0].text).error, error);
+    assert.equal((await ctx.blockDB.getBlock("http-task")).properties.status, "open");
+    assert.equal((await mounted.store.state({ userId: 1, workspaceId: "ws-1" })).revision, state.revision);
   };
   await completionAttempt("dcc_queue", "Unsupported queue action");
-  const priorQueue=(await rpc('tools/call',{name:'dcc_working_queue',arguments:{}})).body.result.structuredContent;
-  result=await rpc('tools/call',{name:'dcc_delegate',arguments:{action:'delegated-register',sourceEventId:'http-delegate',expectedRevision:priorQueue.revision,at:'2026-10-20T13:03:00Z',taskId:'http-task',delegation:{work:{source:'test',id:'http-work',kind:'research'},sequence:1,phase:'needs-review',note:'Research is ready for your review',reviewActions:['Review the findings'],intent:'explicit-work-handoff'}}});
-  assert.equal(result.body.result.isError,false);
-  r=await call('/api/working-queue',{headers:{cookie}});const reported=await r.json();
-  assert.equal(reported.queue.items[0].needsReview,true);assert.equal(reported.queue.items[0].status,'foreground','reporting must not steal human focus');
+  const priorQueue = (await rpc("tools/call", { name: "dcc_working_queue", arguments: {} })).body.result
+    .structuredContent;
+  result = await rpc("tools/call", {
+    name: "dcc_delegate",
+    arguments: {
+      action: "delegated-register",
+      sourceEventId: "http-delegate",
+      expectedRevision: priorQueue.revision,
+      at: "2026-10-20T13:03:00Z",
+      taskId: "http-task",
+      delegation: {
+        work: { source: "test", id: "http-work", kind: "research" },
+        sequence: 1,
+        phase: "needs-review",
+        note: "Research is ready for your review",
+        reviewActions: ["Review the findings"],
+        intent: "explicit-work-handoff"
+      }
+    }
+  });
+  assert.equal(result.body.result.isError, false);
+  r = await call("/api/working-queue", { headers: { cookie } });
+  const reported = await r.json();
+  assert.equal(reported.queue.items[0].needsReview, true);
+  assert.equal(reported.queue.items[0].status, "foreground", "reporting must not steal human focus");
   await completionAttempt("dcc_delegate", "Unsupported delegated work action");
   // Write-only grants receive acknowledgements, never read-protected state.
-  await ctx.blockDB.createBlock({id:"unrelated-private",type:"block",user_id:1,workspace_id:"ws-1",properties:{type:"task",kind:"backlog",title:"Unrelated private context",detail:"must not leak",status:"open"}});
-  await mounted.store.execute({action:"queue-add",taskId:"unrelated-private",sourceEventId:"private-fixture",expectedRevision:reported.revision,at:"2026-10-20T13:04:00Z"},{userId:1,workspaceId:"ws-1"});
-  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1",[JSON.stringify(["dcc.delegate","dcc.work"])]);
-  const writeOnly={action:"delegated-update",sourceEventId:"write-only",expectedRevision:(await mounted.store.state({userId:1,workspaceId:"ws-1"})).revision,at:"2026-10-20T13:05:00Z",delegation:{work:{source:"test",id:"http-work",kind:"research"},sequence:2,phase:"working",note:"Applying the requested research revision",reviewActions:[]}};
-  for (const duplicate of [false,true]) {
-    result=await rpc("tools/call",{name:"dcc_delegate",arguments:writeOnly});
-    const ack=result.body.result.structuredContent;
-    assert.equal(result.body.result.isError,false);
-    assert.deepEqual(Object.keys(ack).sort(),["duplicate","ok","revision","sourceEventId","taskId"]);
-    assert.equal(ack.duplicate,duplicate);assert.equal(ack.taskId,"http-task");
-    assert.equal(ack.revision,writeOnly.expectedRevision+1);
-    assert.deepEqual(JSON.parse(result.body.result.content[0].text),ack);
+  await ctx.blockDB.createBlock({
+    id: "unrelated-private",
+    type: "block",
+    user_id: 1,
+    workspace_id: "ws-1",
+    properties: {
+      type: "task",
+      kind: "backlog",
+      title: "Unrelated private context",
+      detail: "must not leak",
+      status: "open"
+    }
+  });
+  await mounted.store.execute(
+    {
+      action: "queue-add",
+      taskId: "unrelated-private",
+      sourceEventId: "private-fixture",
+      expectedRevision: reported.revision,
+      at: "2026-10-20T13:04:00Z"
+    },
+    { userId: 1, workspaceId: "ws-1" }
+  );
+  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [JSON.stringify(["dcc.delegate", "dcc.work"])]);
+  const writeOnly = {
+    action: "delegated-update",
+    sourceEventId: "write-only",
+    expectedRevision: (await mounted.store.state({ userId: 1, workspaceId: "ws-1" })).revision,
+    at: "2026-10-20T13:05:00Z",
+    delegation: {
+      work: { source: "test", id: "http-work", kind: "research" },
+      sequence: 2,
+      phase: "working",
+      note: "Applying the requested research revision",
+      reviewActions: []
+    }
+  };
+  for (const duplicate of [false, true]) {
+    result = await rpc("tools/call", { name: "dcc_delegate", arguments: writeOnly });
+    const ack = result.body.result.structuredContent;
+    assert.equal(result.body.result.isError, false);
+    assert.deepEqual(Object.keys(ack).sort(), ["duplicate", "ok", "revision", "sourceEventId", "taskId"]);
+    assert.equal(ack.duplicate, duplicate);
+    assert.equal(ack.taskId, "http-task");
+    assert.equal(ack.revision, writeOnly.expectedRevision + 1);
+    assert.deepEqual(JSON.parse(result.body.result.content[0].text), ack);
     assert.ok(!JSON.stringify(result.body).includes("must not leak"));
   }
-  result=await rpc("tools/call",{name:"dcc_working_queue",arguments:{}});assert.equal(result.status,403);
+  result = await rpc("tools/call", { name: "dcc_working_queue", arguments: {} });
+  assert.equal(result.status, 403);
   // The response filter also applies to pre-existing work tools and replay.
-  result=await rpc("tools/call",{name:"dcc_work",arguments:args});
-  assert.deepEqual(Object.keys(result.body.result.structuredContent).sort(),["duplicate","ok","revision","sourceEventId","taskId"]);
-  assert.equal(result.body.result.structuredContent.duplicate,true);
-  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1",[JSON.stringify(["dcc.read","dcc.work","dcc.delegate"])]);
+  result = await rpc("tools/call", { name: "dcc_work", arguments: args });
+  assert.deepEqual(Object.keys(result.body.result.structuredContent).sort(), [
+    "duplicate",
+    "ok",
+    "revision",
+    "sourceEventId",
+    "taskId"
+  ]);
+  assert.equal(result.body.result.structuredContent.duplicate, true);
+  await ctx.pool.query("UPDATE conversation_grants SET scopes=$1", [
+    JSON.stringify(["dcc.read", "dcc.work", "dcc.delegate"])
+  ]);
   result = await rpc("tools/list", {}, { origin: "https://evil.example" });
   assert.equal(result.status, 403);
-  r = await call("/connections/conversation", { headers: { cookie } });
-  const connections = await r.text();
-  assert.match(connections, /Disconnect/);
-  assert.match(connections, /Manage Working Queue membership/);
-  assert.match(connections, /Start and pause foreground timers/);
-  assert.match(connections, /Does not start or stop external workers/);
-  const revokeCsrf = /name="csrf" value="([^"]+)"/.exec(connections)[1],
-    grantId = /name="grantId" value="([^"]+)"/.exec(connections)[1];
+  r = await call("/api/me/chat-connections", { headers: { cookie } });
+  const connections = await r.json();
+  assert.ok(connections.grants.some((g) => g.scopes.includes("dcc.work")));
+  assert.match(connections.legacyDescriptions["dcc.work"], /Manage Working Queue membership/);
+  assert.match(connections.legacyDescriptions["dcc.work"], /Start and pause foreground timers/);
+  assert.match(connections.legacyDescriptions["dcc.work"], /Does not start or stop external workers/);
+  const revokeCsrf = connections.csrf,
+    grantId = connections.grants[0].id;
   r = await call("/connections/conversation/revoke", {
     method: "POST",
     headers: { cookie, origin: "https://dcc.example", "content-type": "application/x-www-form-urlencoded" },
@@ -303,13 +409,15 @@ test("real HTTP: discovery, consent, MCP calls and disconnect", { skip: !configu
     "disconnect does not discard recorded work"
   );
   const management = await call("/connections/conversation", { headers: { cookie } });
-  assert.match(management.headers.get("content-security-policy"), /form-action 'self';/);
+  assert.equal(management.status, 302);
+  assert.equal(management.headers.get("location"), "/?settings=connections&connection=chatgpt");
   r = await call(url, { headers: { cookie } });
   assert.match(r.headers.get("content-security-policy"), /form-action 'self' https:\/\/chatgpt\.com;/);
   const denyCsrf = /name="csrf" value="([^"]+)"/.exec(await r.text())[1];
   const countBeforeDeny = (await ctx.pool.query("SELECT count(*)::int AS n FROM conversation_grants")).rows[0].n;
   r = await call("/oauth/dcc/authorize", {
-    method: "POST", headers: { cookie, origin: "https://dcc.example", "content-type": "application/x-www-form-urlencoded" },
+    method: "POST",
+    headers: { cookie, origin: "https://dcc.example", "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ csrf: denyCsrf, decision: "deny" })
   });
   const denied = new URL(r.headers.get("location"));

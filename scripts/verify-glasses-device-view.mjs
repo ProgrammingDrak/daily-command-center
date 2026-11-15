@@ -86,7 +86,7 @@ try {
   assert.equal(await selected(), initial);
   await page.keyboard.press('Enter');
   await level('select');
-  assert.equal(await page.locator('.glasses-selected').evaluate(el => getComputedStyle(el).animationName), 'glasses-select-enter');
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.glasses-selected')).animationName), 'glasses-select-enter');
   await page.screenshot({ path: path.join(out, 'glasses-select-animation-600.png') });
   await page.keyboard.press('ArrowDown');
   assert.equal(await selected(), ids[1]);
@@ -152,7 +152,7 @@ try {
   }
   await page.setViewportSize({ width: 600, height: 600 });
   await page.waitForTimeout(200);
-  const boxes = await page.locator('.glasses-task-row').evaluateAll(rows => rows.map(row => { const r = row.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: r.height }; }));
+  const boxes = await page.evaluate(() => [...document.querySelectorAll('.glasses-task-row')].map(row => { const r = row.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: r.height }; }));
   assert.equal(boxes.length, 11);
   assert.ok(boxes.every(box => box.height > 20 && box.top >= 0 && box.bottom <= 600));
   await page.evaluate(() => { document.documentElement.style.zoom = '2'; });
@@ -161,9 +161,33 @@ try {
   await page.evaluate(() => { document.documentElement.style.zoom = ''; });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await input('tap-fore');
-  assert.equal(await page.locator('.glasses-selected').evaluate(el => getComputedStyle(el).animationName), 'none');
+  await page.waitForFunction(() => { const el = document.querySelector('.glasses-selected'); return el && getComputedStyle(el).animationName === 'none'; });
   await input('tap-middle');
   check('eleven complete slots fit 600×600, select animation is present, reduced-motion disables it and 200 percent zoom avoids horizontal overflow');
+  // Exercise browser history, rather than the synthetic middle-tap seam.
+  const beforeHistoryWrites = writes;
+  await input('tap-fore'); await input('down');
+  const historySelected = await selected();
+  await input('tap-fore'); await input('hold-fore'); await level('details');
+  await page.goBack(); await level('task');
+  await input('down'); await level('more');
+  await page.goBack(); await level('task');
+  await page.goBack(); await level('select');
+  assert.equal(await selected(), historySelected);
+  await page.goForward(); await level('task');
+  await page.reload(); await page.waitForSelector('.glasses-focus'); await level('task');
+  assert.equal(await page.evaluate(() => window.DCCGlasses.snapshot().selected.id), historySelected);
+  await input('tap-middle'); await level('select');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => window.DCCGlasses.snapshot().level === 'jump');
+  assert.equal(await selected(), historySelected);
+  await input('tap-fore'); await input('tap-fore');
+  await page.locator('.glasses-back').click();
+  await page.waitForFunction(() => window.DCCGlasses.snapshot().level === 'select');
+  await input('tap-middle'); await level('jump');
+  assert.equal(writes, beforeHistoryWrites);
+  assert.ok(await page.evaluate(() => !!window.history.state.dccNav));
+  check('native Back, Forward, reload and mixed Back controls preserve view/selection without task writes');
   const exit = page.locator('.glasses-exit');
   assert.ok(await exit.isVisible());
   assert.equal(new URL(await exit.getAttribute('href'), base).searchParams.has('device'), false);
@@ -190,6 +214,17 @@ try {
   assert.equal(writes, beforeAccountInput);
   check('browser Back restores device mode; account change redacts tasks and blocks mutations');
   check('responsive previews have no horizontal overflow and Full app exits device mode');
+  const exitPage = await context.newPage();
+  await exitPage.goto(base + '/?tab=tasks');
+  await exitPage.goto(base + '/?tab=tasks&device=glasses');
+  await exitPage.waitForSelector('.glasses-task-row');
+  await exitPage.evaluate(() => window.DCCGlasses.input('tap-fore'));
+  await exitPage.goBack();
+  await exitPage.waitForFunction(() => window.DCCGlasses.snapshot().level === 'jump');
+  await exitPage.goBack();
+  assert.equal(new URL(exitPage.url()).searchParams.has('device'), false);
+  await exitPage.close();
+  check('Back at Jump leaves the glasses entry without a trapping sentinel');
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(out, 'checks.json'), JSON.stringify({ checks, errors, synthetic: true, physicalMeta: false }, null, 2));
 } catch (error) {

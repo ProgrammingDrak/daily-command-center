@@ -4,10 +4,27 @@ const P = require("../lib/chat-permissions");
 const page = require("../lib/chat-integration-page");
 module.exports = function mount(app, ctx, { oauth = null, enabled = false, clientsReady = false } = {}) {
   const form = express.urlencoded({ extended: false, limit: "12kb" });
+  const destination = "/?settings=connections&connection=chatgpt";
+  const json = (req) => req.path.startsWith("/api/") || String(req.get("accept") || "").includes("application/json");
+  const fail = (req, res, status, message) =>
+    json(req)
+      ? res.status(status).json({ error: message })
+      : res
+          .status(status)
+          .type("html")
+          .send(
+            page.layout(
+              `<p role="alert">${page.esc(message)}</p><a href="${destination.replace(/&/g, "&amp;")}">Return to DCC</a>`
+            )
+          );
+  const saved = (req, res) => (json(req) ? res.json({ ok: true }) : res.redirect(destination));
   const run = (fn) => async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      if (!req.session?.userId) return res.redirect("/login?next=%2Fconnections%2Fconversation");
+      if (!req.session?.userId)
+        return json(req)
+          ? res.status(401).json({ error: "Sign in to DCC to manage connections." })
+          : res.redirect("/login?next=" + encodeURIComponent(destination));
       if (!req.session.workspaceId) {
         const r = await ctx.pool.query(
           "SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND role='owner' ORDER BY workspace_id LIMIT 1",
@@ -20,7 +37,13 @@ module.exports = function mount(app, ctx, { oauth = null, enabled = false, clien
         "SELECT 1 FROM workspace_members WHERE user_id=$1 AND workspace_id=$2 AND role='owner'",
         [actor.userId, actor.workspaceId]
       );
-      if (!allowed.rows.length) return res.status(403).send("Workspace owner required");
+      if (!allowed.rows.length) return fail(req, res, 403, "Workspace owner required");
+      if (
+        req.method !== "GET" &&
+        ((req.body.expectedUserId !== undefined && req.body.expectedUserId !== actor.userId) ||
+          (req.body.expectedWorkspaceId !== undefined && req.body.expectedWorkspaceId !== actor.workspaceId))
+      )
+        return fail(req, res, 409, "Your DCC account changed. Reopen Connections before saving.");
       req.session.conversationCsrf ||= crypto.randomBytes(24).toString("base64url");
       if (
         req.method !== "GET" &&
@@ -28,21 +51,19 @@ module.exports = function mount(app, ctx, { oauth = null, enabled = false, clien
           req.body.csrf !== req.session.conversationCsrf ||
           req.get("origin") !== (oauth?.baseUrl || `${req.protocol}://${req.get("host")}`))
       )
-        return res.status(403).send("Invalid consent request");
+        return fail(req, res, 403, "Invalid consent request");
       await fn(req, res, actor);
     } catch (error) {
-      res
-        .status(error.statusCode || 400)
-        .type("html")
-        .send(
-          page.layout(
-            `<p role="alert">${page.esc(error.statusCode >= 500 ? "Connection management is temporarily unavailable." : error.message)}</p><a href="/connections/conversation">Return to integrations</a>`
-          )
-        );
+      const status = error.statusCode || 400;
+      fail(req, res, status, status >= 500 ? "Connection management is temporarily unavailable." : error.message);
     }
   };
   app.get(
     "/connections/conversation",
+    run(async (_req, res) => res.redirect(destination))
+  );
+  app.get(
+    "/api/me/chat-connections",
     run(async (req, res, actor) => {
       const grants = oauth
         ? await oauth.list(actor)
@@ -56,25 +77,19 @@ module.exports = function mount(app, ctx, { oauth = null, enabled = false, clien
         "SELECT scopes FROM conversation_preferences WHERE user_id=$1 AND workspace_id=$2",
         [actor.userId, actor.workspaceId]
       );
-      res.set(
-        "Content-Security-Policy",
-        "default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
-      );
-      res
-        .type("html")
-        .send(
-          page.management({
-            grants,
-            preferences: prefs.rows[0]?.scopes || P.defaults(),
-            csrf: req.session.conversationCsrf,
-            account: req.session.username || "DCC account",
-            workspace: actor.workspaceId,
-            resource: oauth?.resource || `${req.protocol}://${req.get("host")}/mcp/dcc`,
-            enabled,
-            clientsReady,
-            notice: req.query.saved === "1" ? "Saved. Additional access still requires authorization." : null
-          })
-        );
+      res.json({
+        grants,
+        preferences: prefs.rows[0]?.scopes || P.defaults(),
+        categories: P.categories,
+        legacyDescriptions: P.legacyDescriptions,
+        csrf: req.session.conversationCsrf,
+        accountId: actor.userId,
+        account: req.session.username || "DCC account",
+        workspace: actor.workspaceId,
+        resource: oauth?.resource || `${req.protocol}://${req.get("host")}/mcp/dcc`,
+        enabled,
+        clientsReady
+      });
     })
   );
   app.post(
@@ -86,16 +101,16 @@ module.exports = function mount(app, ctx, { oauth = null, enabled = false, clien
         "INSERT INTO conversation_preferences(user_id,workspace_id,scopes) VALUES($1,$2,$3) ON CONFLICT(user_id,workspace_id) DO UPDATE SET scopes=EXCLUDED.scopes",
         [actor.userId, actor.workspaceId, JSON.stringify(scopes)]
       );
-      res.redirect("/connections/conversation?saved=1");
+      saved(req, res);
     })
   );
   app.post(
     "/connections/conversation/permissions",
     form,
     run(async (req, res, actor) => {
-      if (!oauth) return res.status(503).send("Remote integration is disabled; access changes require operator setup.");
+      if (!oauth) return fail(req, res, 503, "This server is not ready to connect ChatGPT yet.");
       await oauth.reduce(req.body.grantId, P.selected(req.body), actor);
-      res.redirect("/connections/conversation?saved=1");
+      saved(req, res);
     })
   );
   app.post(
@@ -108,7 +123,7 @@ module.exports = function mount(app, ctx, { oauth = null, enabled = false, clien
           "UPDATE conversation_grants SET revoked_at=COALESCE(revoked_at,NOW()) WHERE id=$1 AND user_id=$2 AND workspace_id=$3",
           [req.body.grantId, actor.userId, actor.workspaceId]
         );
-      res.redirect("/connections/conversation");
+      saved(req, res);
     })
   );
 };
