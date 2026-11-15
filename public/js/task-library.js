@@ -45,7 +45,7 @@
   function buildControls() {
     const isSomeday = mode === "someday";
     root().innerHTML = '<div class="task-collection-controls">'+
-      '<label class="task-collection-search">Search<input type="search" data-filter="search" placeholder="'+(isSomeday?'Search ideas':'Search tasks')+'"></label>'+
+      '<label class="task-collection-search">Search<input type="search" data-filter="search" placeholder="Search tasks"></label>'+
       '<label>Sort<select aria-label="Sort" data-filter="sort">'+options([
         ["newest","Newest created"], ["oldest","Oldest created"], ["az","A–Z"], ["za","Z–A"], ...(!isSomeday ? [["scheduled","Itinerary date"]] : [])
       ])+'</select></label>'+
@@ -97,7 +97,7 @@
   function renderRows() {
     if (!payload || !root()?.querySelector(".task-collection-list")) return;
     const filters = controls[mode];
-    const tasks = payload.tasks.filter(row => (mode !== "someday" || isSomedayIdea(row)) && matches(row, filters));
+    const tasks = (mode === "someday" ? somedayTasks(payload, completed) : payload.tasks).filter(row => matches(row, filters));
     tasks.sort((a,b) => compareTasks(a,b,filters.sort));
     const list = root().querySelector(".task-collection-list");
     const focused = document.activeElement?.closest(".it-list-item")?.dataset.id;
@@ -128,10 +128,10 @@
     if (!tasks.length) {
       const empty = document.createElement("p");
       empty.className = "delegated-empty";
-      empty.textContent = "No matching " + (mode === "someday" ? "ideas." : "tasks.");
+      empty.textContent = "No matching tasks.";
       list.append(empty);
     }
-    const noun = mode === "someday" ? "idea" : "task";
+    const noun = "task";
     root().querySelector(".task-collection-count").textContent =
       (cards.length < tasks.length ? cards.length+" of " : "")+tasks.length+" "+noun+(tasks.length === 1 ? "" : "s");
     root().querySelector(".task-collection-more").hidden = cards.length >= tasks.length;
@@ -168,6 +168,14 @@
     return new Set(library.completedTaskIds || library.tasks.filter(ownCompletion).map(row => row.id));
   }
 
+  function somedayTasks(library, doneIds) {
+    if (!Array.isArray(library.somedayTaskIds)) {
+      return window.DCC.TaskModel.selectSomeday(library.tasks, {completedIds:doneIds, waitingRows:library.dependencies});
+    }
+    const ids = new Set(library.somedayTaskIds);
+    return library.tasks.filter(row => ids.has(row.id));
+  }
+
   async function glassesCollections() {
     const library = await loadLibrary();
     if (!Array.isArray(library.tasks)) throw new Error("Could not load tasks");
@@ -179,7 +187,7 @@
       ev:window.DCC.TaskModel.fromBlock(row), title:taskTitle(row)});
     return {
       allTasks:open.slice().sort((a,b) => name(a).localeCompare(name(b),undefined,{numeric:true,sensitivity:"base"})).map(describe),
-      someday:open.filter(row => !row.date && props(row).someday === true).sort((a,b) => compareTasks(a,b,"newest")).map(describe),
+      someday:somedayTasks(library, doneIds).sort((a,b) => compareTasks(a,b,"newest")).map(describe),
     };
   }
 
@@ -203,7 +211,7 @@
       payload = library;
       completed = completedIds(library);
       updateCollectionBadge("all-tasks-pill-nav-count", payload.tasks.filter(row => !done(row)).length, "Open All Tasks");
-      updateCollectionBadge("someday-pill-nav-count", payload.tasks.filter(isSomedayIdea).length, "Open Someday ideas");
+      updateCollectionBadge("someday-pill-nav-count", somedayTasks(payload, completed).length, "Open Someday tasks");
     }).catch(error => {
       if (payload && root()?.offsetParent) notify(error.message,"error");
     }).finally(() => {
@@ -228,7 +236,6 @@
   function props(row){ return row && row.properties || {}; }
   function ownCompletion(row){ const p=props(row); return p.status==="done" || p.done===true || p.completed===true || !!(p.completedAt || p.doneAt); }
   function done(row){ return completed.has(row.id); }
-  function isSomedayIdea(row){ return !row.deleted_at && !row.date && props(row).someday===true && !done(row); }
   function taskTitle(row){ const p=props(row); return String(p.title || p.text || "Untitled task"); }
   function projectName(id){
     if(!id) return "Solo";

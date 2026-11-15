@@ -1661,14 +1661,14 @@ async function getCarryoverPool(workspaceId, beforeDate, opts = {}) {
         -- must never become carryover work even during that version-skew window.
         AND COALESCE(b.properties->>'kind', '') <> 'proposed_action_item'
         AND ($7::boolean OR COALESCE(b.properties->>'type', '') <> ALL($5::text[]))
-        AND ($7::boolean OR COALESCE(b.properties->>'start', '') <> ''
+        AND ($7::boolean OR $8::boolean OR COALESCE(b.properties->>'start', '') <> ''
              OR b.properties->>'subtaskOf' IS NOT NULL
              OR b.properties->>'wrapId' IS NOT NULL)
         AND b.date IS NOT NULL AND b.date < $2
         AND ($3::int IS NULL OR b.date >= ($2::date - ($3::int * INTERVAL '1 day')))
       ORDER BY b.date DESC, b.sort_order ASC, b.created_at ASC
       LIMIT $6`,
-    [ws, beforeDate, days, CARRYOVER_ROW_TYPES, carryoverSkipTypes(), limit, opts.includeUntimed === true]
+    [ws, beforeDate, days, CARRYOVER_ROW_TYPES, carryoverSkipTypes(), limit, opts.includeUntimed === true, opts.includeDateOnly === true]
   );
   const pool_ = rows.map(parseBlock);
 

@@ -8,7 +8,7 @@
   'use strict';
   const COLLECTIONS = Object.freeze([
     'All Tasks', 'Working Queue', 'Itinerary', 'Loose Ends',
-    'Unscheduled', 'Whenever', 'Someday', 'Waiting'
+    'Whenever', 'Someday', 'Waiting'
   ]);
   const LANES = Object.freeze(['Foreground', 'Needs You', 'Background', 'Priority Queue']);
   const LEVELS = Object.freeze(['jump', 'select', 'task', 'details', 'more']);
@@ -115,7 +115,7 @@
   }
   // Browser history contains view levels, never commands or task records.
   function createHistory({ history, scope, changed, active = () => true }) {
-    const key = 'dccGlasses', version = 1;
+    const key = 'dccGlasses', version = 2;
     let pending = null, last = null;
     const depthOf = level => ({ jump: 0, select: 1, task: 2, details: 3, more: 3 })[level];
     const read = () => {

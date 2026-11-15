@@ -151,7 +151,9 @@
       // A finished top-level task is simply finished. A finished CHILD still counts
       // toward its parent's progress ("2/5 subtasks"), so it stays in the pool marked
       // done; the lane renders only the open rows.
-      const isDone = !!(p.done || doneIds.has(b.id) || (p.local_id && doneIds.has(p.local_id)));
+      const isDone = !!(p.done || p.completed || p.completedAt || p.doneAt ||
+        p.status === "done" || p.status === "completed" ||
+        doneIds.has(b.id) || (p.local_id && doneIds.has(p.local_id)));
       if (isDone && !nested) continue;
       if (seen.has(b.id) || (p.local_id && seen.has(p.local_id))) continue;
       seen.add(b.id);

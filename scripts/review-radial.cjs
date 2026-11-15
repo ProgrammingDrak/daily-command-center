@@ -20,7 +20,7 @@ const base=process.env.DCC_REVIEW_URL||'http://127.0.0.1:8303';
    await row.scrollIntoViewIfNeeded();await page.waitForTimeout(300);
    for(const selector of ['.row-add-menu','.btn-duration','.btn-del-task','[data-work-action]','.ttl[role="button"]'])assert(await row.locator(selector).first().isVisible(),selector+' visible at '+width);
    await row.locator('.btn-task-radial').click();
-   assert.deepEqual(await page.locator('button.dest-radial-item').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('aria-label'))),['Subtask…','Unscheduled','Convert…','Delegate / block','Blocked by task','Repeat','Solo','Whenever','Lock']);
+   assert.deepEqual(await page.locator('button.dest-radial-item').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('aria-label'))),['Subtask…','Remove time','Convert…','Delegate / block','Blocked by task','Repeat','Move to Someday','Whenever','Lock']);
    assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')),'Subtask…');
    await page.getByRole('button',{name:'Delegate / block',exact:true}).waitFor();
    await page.keyboard.press('End');await page.keyboard.press('Tab');
@@ -56,8 +56,8 @@ const base=process.env.DCC_REVIEW_URL||'http://127.0.0.1:8303';
    meeting:buildMeetingRadialItems({start:'23:59'},{}).map(i=>i.label),
    carryover:buildCarryoverRadialItems({}, {}, {}).map(i=>i.label)
   }));
-  assert.deepEqual(variants.recurring,['Subtask…','Unscheduled','Convert…','Delegate / block','Blocked by task','Repeat','Solo','Whenever','Repeat options…','Lock']);
-  assert.deepEqual(variants.carryover,['Move…','Solo']);
+  assert.deepEqual(variants.recurring,['Subtask…','Remove time','Convert…','Delegate / block','Blocked by task','Repeat','Move to Someday','Whenever','Repeat options…','Lock']);
+  assert.deepEqual(variants.carryover,['Move…','Move to Someday']);
   fs.writeFileSync(path.join(__dirname,'../design/task-details/radial-checks.json'),JSON.stringify({results,variants,syntheticOnly:true},null,2));
   console.log('PASS: four widths, visible bar actions, keyboard combined actions/Convert/Back, Escape focus return, duration/add/details dialogs and delete handler, recurring/meeting/carryover menus. No destructive action submitted.');
  }finally{await browser.close();}

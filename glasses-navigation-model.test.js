@@ -4,7 +4,7 @@ const {create, viewport, taskHierarchy, COLLECTIONS, LANES} = require('./public/
 const taskModel = require('./public/js/task-model');
 const rows = count => Array.from({length:count}, (_,i)=>({id:'task-'+i,title:'Task '+i}));
 test('collection order and working queue lanes are fixed',()=>{
- assert.deepEqual(COLLECTIONS,['All Tasks','Working Queue','Itinerary','Loose Ends','Unscheduled','Whenever','Someday','Waiting']);
+ assert.deepEqual(COLLECTIONS,['All Tasks','Working Queue','Itinerary','Loose Ends','Whenever','Someday','Waiting']);
  assert.deepEqual(LANES,['Foreground','Needs You','Background','Priority Queue']);
 });
 test('11-row viewport remains full near boundaries',()=>{
