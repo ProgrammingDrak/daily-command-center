@@ -27,7 +27,7 @@ function radialLabels(meeting) {
 test("compact task radial contains contextual actions only", () => {
   const labels = radialLabels(false);
   assert.ok(!labels.includes("Complete without notes"));
-  assert.deepEqual(labels, ["Subtask…", "Unscheduled", "Convert…", "Delegate / block", "Blocked by task", "Repeat", "Solo", "Whenever", "Lock"]);
+  assert.deepEqual(labels, ["Subtask…", "Remove time", "Convert…", "Delegate / block", "Blocked by task", "Repeat", "Move to Someday", "Whenever", "Lock"]);
   assert.ok(!labels.includes("Back"));
 });
 

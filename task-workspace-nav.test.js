@@ -52,7 +52,7 @@ test("Tasks head combines views and queues above the day navigation in Day Progr
   const order = ["task-view-switch", "queue-pill", "day-progress-title", "date-nav", "dn-prev", "date-label", "dn-next", "date-picker-drop"].map((id) => head.indexOf('id="' + id + '"'));
   assert.ok(order.every((at) => at >= 0), JSON.stringify(order));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
-  for (const door of ["triage-pill-nav", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav", "loose-ends-pill"]) assert.match(head, new RegExp('id="' + door + '"'));
+  for (const door of ["triage-pill-nav", "waiting-pill-nav", "someday-pill-nav", "whenever-pill-nav", "loose-ends-pill"]) assert.match(head, new RegExp('id="' + door + '"'));
   assert.match(head, /role="tablist" aria-label="Task views"/);
   assert.match(head, /data-task-view="queue"[^>]*aria-controls="tab-working-queue"/);
   assert.match(head, /id="task-view-list"[^>]*data-task-view="list"[^>]*>Itinerary<\/button>/);

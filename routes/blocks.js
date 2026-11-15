@@ -1664,7 +1664,7 @@ module.exports = function mount(app, ctx) {
     const rawDays = String(req.query.days == null ? "" : req.query.days);
     const days = rawDays === "all" ? null : Math.min(3650, Math.max(1, parseInt(rawDays, 10) || 14));
     const limit = Math.min(2000, Math.max(1, parseInt(req.query.limit, 10) || 500));
-    const result = await blockDB.getCarryoverPool(req.workspaceId, before, { days, limit });
+    const result = await blockDB.getCarryoverPool(req.workspaceId, before, { days, limit, includeDateOnly: true });
     const rows = filterLegacyGcalBlocks(result.rows);
     // BOTH wrappers the sibling reads use, not just the filter. The legacy-gcal filter
     // keeps a legacy row that never rendered in the lane from appearing now. The timing

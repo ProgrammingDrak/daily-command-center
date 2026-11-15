@@ -485,6 +485,23 @@
     return out;
   }
 
+  function selectSomeday(blocks, opts = {}) {
+    const rows = _arr(blocks);
+    const datedAliases = new Set(rows.filter(row => row.date && !row.deleted_at)
+      .map(row => row.properties?.local_id).filter(Boolean));
+    const parked = waitingParkedIds(rows, opts.waitingRows);
+    const eligible = new Set(selectUnscheduled(rows, opts));
+    return rows.filter(row => {
+      const p = row.properties || {};
+      return !row.date && !row.deleted_at && !isWheneverPoolRow(row) &&
+        !parked.has(String(row.id)) && !datedAliases.has(p.local_id) &&
+        !opts.completedIds?.has(row.id) && !p.triageBlock &&
+        !["done","completed","deleted","archived"].includes(p.status) &&
+        !p.done && !p.completed && !p.completedAt && !p.doneAt &&
+        (p.someday === true || eligible.has(row));
+    });
+  }
+
   // ── Whenever: chores with no set time (whenever.js owns the surface) ──
   //
   // A dateless backlog row on the Whenever stage. Its ONE home is the header pill's
@@ -1005,6 +1022,7 @@
     backlogKey: backlogKey,
     waitingParkedIds: waitingParkedIds,
     selectUnscheduled: selectUnscheduled,
+    selectSomeday,
     WHENEVER_STAGE: WHENEVER_STAGE,
     isWheneverPoolRow: isWheneverPoolRow,
     fromBacklogBlock, backlogParentKeys, selectWheneverPoolBlocks, suppressWheneverSeeds,

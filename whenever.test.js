@@ -166,7 +166,7 @@ test("x sends it back to the Task Library through persistRowProp, and Undo resto
   assert.equal(page.ctx.backlog[0].stage, "Backlog");
   assert.equal(W.selectWhenever(page.ctx.backlog).length, 0);
   const toast = page.log.find(e => e[0] === "toast");
-  assert.deepEqual(toast.slice(0, 3), ["toast", "Moved to Unscheduled", "Undo"]);
+  assert.deepEqual(toast.slice(0, 3), ["toast", "Moved to Someday", "Undo"]);
   await Promise.resolve();
   assert.ok(page.log.some(e => e[0] === "refold"), "the itinerary refolds once the stage write lands");
 });
@@ -200,7 +200,7 @@ test("the header is one capsule with All Tasks and Someday", () => {
   const header = html.slice(html.indexOf('id="task-view-bar"'), html.indexOf('class="progress-wrap"'));
   const capsule = header.slice(header.indexOf('id="queue-pill"'));
   const doors = [...capsule.matchAll(/<button class="queue-seg[^"]*" id="([^"]+)"/g)].map(m => m[1]);
-  assert.deepEqual(doors, ["triage-pill-nav", "loose-ends-pill", "waiting-pill-nav", "unscheduled-pill-nav", "whenever-pill-nav", "all-tasks-pill-nav", "someday-pill-nav"]);
+  assert.deepEqual(doors, ["triage-pill-nav", "loose-ends-pill", "waiting-pill-nav", "whenever-pill-nav", "all-tasks-pill-nav", "someday-pill-nav"]);
   assert.equal((header.match(/class="(waiting-pill-nav|loose-ends-pill)/g) || []).length, 0, "no door is a pill of its own anymore");
   // Loose Ends keeps its blue and its count gate (catch-up.js unhides it); Waiting reads
   // the app-wide Waiting family, so its door matches every other Waiting surface.
@@ -211,23 +211,23 @@ test("the header is one capsule with All Tasks and Someday", () => {
   assert.match(css, /\.queue-theme--waiting\{--queue-accent:var\(--waiting\);/);
   assert.match(header, /id="triage-pill-nav"[^>]*aria-controls="tasks-drawer"/);
   assert.match(header, /id="waiting-pill-nav"[^>]*aria-controls="tasks-drawer"/);
-  assert.match(header, /id="unscheduled-pill-nav"[^>]*aria-controls="tasks-drawer"[^>]*data-placement="unplanned"/,
-    "the Unscheduled segment is the drop target the itinerary's Unplanned zone used to be");
+  assert.doesNotMatch(header, /id="unscheduled-pill-nav"/);
+  const itinerary = html.slice(html.indexOf('id="tab-schedule"'), html.indexOf('id="list-view"'));
+  assert.match(itinerary, /id="unscheduled-sub"[\s\S]*data-placement="unplanned"[\s\S]*id="off-the-clock-toggle"[^>]*aria-controls="off-the-clock-content"/);
   assert.match(header, /id="whenever-pill-nav"[^>]*aria-controls="tasks-drawer"/);
   assert.match(header, /id="someday-pill-nav"[^>]*aria-controls="tasks-drawer"/);
-  for (const id of ["triage-pill-nav-count", "waiting-pill-nav-count", "unscheduled-pill-nav-count", "whenever-pill-nav-count",
+  for (const id of ["triage-pill-nav-count", "waiting-pill-nav-count", "whenever-pill-nav-count",
     "someday-pill-nav-count",
     "untimed-count", "triage-queue-count", "unscheduled-count", "whenever-count", "triage-queue-list", "unscheduled-list",
-    "whenever-list", "whenever-add", "whenever-pick", "triage-queue-tip", "unscheduled-tip", "whenever-tip"]) {
+    "whenever-list", "whenever-add", "whenever-pick", "triage-queue-tip", "whenever-tip"]) {
     assert.ok(html.includes('id="' + id + '"'), "missing #" + id);
   }
   // The drawer follows the capsule: Triage, then Unscheduled, then Whenever. Each half
   // explains itself.
   const drawer = html.slice(html.indexOf('id="tm-whenever-section"'));
-  assert.ok(drawer.indexOf('id="triage-sub"') < drawer.indexOf('id="unscheduled-sub"'));
-  assert.ok(drawer.indexOf('id="unscheduled-sub"') < drawer.indexOf('id="whenever-sub"'));
+  assert.ok(drawer.indexOf('id="triage-sub"') < drawer.indexOf('id="whenever-sub"'));
+  assert.doesNotMatch(drawer, /id="unscheduled-sub"/);
   assert.match(drawer, /aria-describedby="triage-queue-tip"[\s\S]*role="tooltip" id="triage-queue-tip">[^<]*messages and meetings/i);
-  assert.match(drawer, /aria-describedby="unscheduled-tip"[\s\S]*role="tooltip" id="unscheduled-tip">[^<]*schedule/i);
   assert.match(drawer, /aria-describedby="whenever-tip"[\s\S]*role="tooltip" id="whenever-tip">[^<]*free minute/i);
   // Loaded after task-model.js (it reads the stage there) and before schedule.js
   // (the add-bar destination reads the label at load).
@@ -248,7 +248,7 @@ test("the work list no longer renders the Triage or Unscheduled groups, or count
   assert.doesNotMatch(list, /triageTaskLoadState|block\.id==="triage"/, "the Triage status moved with its rows");
   // Removing the zone must not strand its mover: the radial and the pill both reach it.
   const change = tab.slice(tab.indexOf("function buildTaskChangeItems"), tab.indexOf("// Sub-fan: convert this task"));
-  assert.match(change, /if\(!ev\.untimed\)\s*items\.push\(\{icon:"🗂"[\s\S]*moveTaskToUnplanned\(ev\.id\)/);
+  assert.match(change, /label:"Remove time"[\s\S]*moveTaskToUnplanned\(ev\.id\)/);
 });
 
 test("the pill count rebuilds every render, and the change-task radial offers Whenever", () => {
@@ -396,7 +396,7 @@ test("the Triage door counts its open roots and carries the loader's status, wit
 test("the Triage door opens its half, and its loader runs on every render, not only in the list view", () => {
   const src = fs.readFileSync(require.resolve("./public/js/whenever.js"), "utf8");
   const open = src.slice(src.indexOf("function open(half)"), src.indexOf("function setTheme("));
-  assert.match(open, /half === "unscheduled" \|\| half === "triage" \? half : "whenever"/);
+  assert.match(open, /half === "triage" \? half : "whenever"/);
   assert.match(src, /getElementById\("triage-pill-nav"\);\s*if \(triageSeg\) triageSeg\.addEventListener\("click", \(\) => open\("triage"\)\);/);
   // The door is on every tab, so the source-to-task loader must be too, or its count
   // under-reports off the itinerary list view. The loader's own order (Loading, then

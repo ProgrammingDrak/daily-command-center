@@ -134,7 +134,7 @@ try {
     names.push(await page.locator('#glasses-app').innerText());
     await input('left');
   }
-  const expected = ['All Tasks', 'Working Queue', 'Itinerary', 'Loose Ends', 'Unscheduled', 'Whenever', 'Someday', 'Waiting'];
+  const expected = ['All Tasks', 'Working Queue', 'Itinerary', 'Loose Ends', 'Whenever', 'Someday', 'Waiting'];
   expected.forEach((name, i) => assert.ok(names[i].includes(name), 'collection ' + i + ': ' + name));
   for (let i = 0; i < 7; i++) await input('right');
   await level('jump');

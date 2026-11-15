@@ -174,7 +174,7 @@
   // Pill entry points use the existing live rows and modal lifecycle, but expose
   // only the selected queue. The Task Manager remains available from its own door.
   function openTaskQueue(kind){
-    const labels = { triage: "Triage", unscheduled: "Unscheduled", whenever: "Whenever", waiting: "Waiting", "all-tasks": "All Tasks", someday: "Someday" };
+    const labels = { triage: "Triage", whenever: "Whenever", waiting: "Waiting", "all-tasks": "All Tasks", someday: "Someday" };
     if(!labels[kind]) return;
     openTasks({ solo: true });
     const collection = kind === "all-tasks" || kind === "someday";

@@ -57,12 +57,11 @@
     const working = ['foreground', 'needs', 'background', 'priority'].flatMap((key, i) =>
       hierarchy((lanes[key] || []).map(item => descriptor(item, Navigation.LANES[i])), { preserveOrder: true }));
     const itinerary = (window.glassesItineraryTasks?.() || []).map(ev => descriptor(ev));
-    const unscheduled = (window.glassesUnscheduledTasks?.() || []).map(ev => descriptor(ev));
     const whenever = (DCC.Whenever?.glassesTasks?.() || []).map(ev => descriptor(ev));
     const waitingRules = DCC.TaskQueues.waitingRules({ today: DCC.dates.todayKey(), scoreClass: score => window.urgency.scoreClass(score) });
     const waiting = (DCC.Waiting?.all?.() || []).filter(waitingRules.isOpenDelegated).map(row => ({ id: 'waiting:' + row.id, actionId: row.id, kind: 'waiting', row, title: row.properties?.myTask || row.properties?.title || 'Waiting', ev: DCC.TaskModel.fromBlock(row) }));
     return [library.allTasks, working, hierarchy(itinerary), looseEnds,
-      hierarchy(unscheduled), hierarchy(whenever),
+      hierarchy(whenever),
       library.someday, waiting];
   }
   function reconcile() {
