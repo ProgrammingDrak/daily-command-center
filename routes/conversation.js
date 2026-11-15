@@ -373,6 +373,27 @@ module.exports = function mount(app, ctx, config = {}) {
     clients: config.clients || JSON.parse(process.env.DCC_CONVERSATION_CLIENTS || "{}")
   });
   const store = createConversationStore(ctx);
+  // Disabled by default: publishing code never silently enables outbound access.
+  const eventsEnabled = config.eventsEnabled ?? process.env.DCC_EVENTS_ENABLED === "true";
+  let events = null;
+  if (eventsEnabled) {
+    try {
+      events = require("../mcp-events").createEvents({
+        ...ctx,
+        key: config.eventsKey || process.env.DCC_EVENTS_ENCRYPTION_KEY,
+        ...config.eventOptions
+      });
+    } catch {
+      console.error("[dcc-events] Events disabled: encryption configuration unavailable");
+    }
+  }
+  const eventTimer =
+    events && config.eventWorker !== false
+      ? setInterval(() => {
+          events.tick().catch(() => console.error("[dcc-events] Check-back delivery unavailable"));
+        }, 15000)
+      : null;
+  eventTimer?.unref();
   let control;
   require("./chat-integrations")(app, ctx, { oauth, enabled, clientsReady: Object.keys(config.clients || JSON.parse(process.env.DCC_CONVERSATION_CLIENTS || "{}")).length > 0 });
   const route = (fn) => async (req, res, next) => {
@@ -508,12 +529,33 @@ module.exports = function mount(app, ctx, config = {}) {
           protocolVersion: ["2025-03-26", "2025-06-18", "2025-11-25"].includes(b.params?.protocolVersion)
             ? b.params.protocolVersion
             : "2025-03-26",
-          capabilities: { tools: { listChanged: false } },
+          capabilities: { tools: { listChanged: false }, ...(events ? { events: {} } : {}) },
           serverInfo: { name: "dcc-account", version: "0.1.0" },
           instructions:
             "Resolve existing tasks before acting. Only explicit user start/pause/done/correction instructions authorize activity changes. Preserve unknown time and plan versus actual. For explicit completion use dcc_complete_task after reading the canonical task/version. For meaningful progress, summarize accomplishments and remaining scope with dcc_reconcile_task step_done, keeping the goal open. At existing morning/evening reviews call dcc_completion_review and offer its choices without inferring completion. Confirm reconciliation with dcc_reconciliation_receipt; only verified_saved means saved."
         });
       if (b.method === "ping") return reply({});
+      if (events && ["events/list", "events/subscribe", "events/unsubscribe"].includes(b.method)) {
+        try {
+          const result =
+            b.method === "events/list"
+              ? events.list(identity)
+              : b.method === "events/subscribe"
+                ? await events.subscribe(identity, b.params)
+                : await events.unsubscribe(identity, b.params);
+          return reply(result);
+        } catch (e) {
+          return res.json({
+            jsonrpc: "2.0",
+            id: b.id,
+            error: {
+              code: e.rpcCode || -32603,
+              message: e.rpcCode ? e.message : "Event operation unavailable",
+              ...(e.reason ? { data: { reason: e.reason } } : {})
+            }
+          });
+        }
+      }
       if (b.method === "tools/list")
         return reply({
           tools: tools
@@ -669,6 +711,6 @@ module.exports = function mount(app, ctx, config = {}) {
       }
     })
   );
-  return { oauth, store };
+  return { oauth, store, events, close: () => clearInterval(eventTimer) };
 };
 module.exports.tools = tools;
