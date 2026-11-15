@@ -28,6 +28,7 @@
 <link rel="stylesheet" href="/public/css/itinerary-costs.css?v=ledger-1">
 <link rel="stylesheet" href="/public/css/commitments.css">
 <link rel="stylesheet" href="/public/css/completion-memories.css?v=journal-gallery-2">
+<link rel="stylesheet" href="/public/css/journal-sketchbook.css?v=journal-tools-1">
 <link rel="stylesheet" href="/public/css/task-workspace.css?v=wishlist-nav-1">
 <link rel="stylesheet" href="/public/css/device-views/glasses.css">
 </head>
@@ -2160,8 +2161,11 @@
 <script src="/public/js/task-types.js?v=task-types-1"></script>
 <!-- task-serialize.js: the one task-property serializer (window.DCC.taskBlockProps/taskCommonProps); must load before state.js/schedule.js/unfinished-tasks.js consume it -->
 <script src="/public/js/task-attachments.js"></script>
-<script src="/public/js/journal-notebook.js?v=journal-gallery-2"></script>
-<script src="/public/js/completion-memories.js?v=journal-gallery-2"></script>
+<script src="/public/js/ink/strokes.js?v=journal-tools-1"></script>
+<script src="/public/js/ink/shapes.js?v=journal-tools-1"></script>
+<script src="/public/js/journal-notebook.js?v=journal-tools-1"></script>
+<script src="/public/js/journal-sketchbook.js?v=journal-tools-1"></script>
+<script src="/public/js/completion-memories.js?v=journal-tools-1"></script>
 <script src="/public/js/itinerary-sharing.js"></script>
 <script src="/public/js/task-sources.js"></script>
 <script src="/public/js/task-costs.js?v=ledger-2"></script>
@@ -2219,7 +2223,7 @@
 <script src="/public/js/meeting-reviews.js"></script>
 <!-- d3 v7 (vendored UMD, pinned; powers the B4a timeline's scale/zoom) -->
 <script src="/public/js/vendor/d3.v7.9.0.min.js?v=d3-7.9.0"></script>
-<script src="/public/js/vault-editor.js?v=journal-notebook-1"></script>
+<script src="/public/js/vault-editor.js?v=journal-tools-1"></script>
 <script src="/public/js/vault-journal-workspace.js?v=vault-journal-workspace-1"></script>
 <script src="/public/js/vault-timeline.js?v=vault-b4b-1"></script>
 <!-- Canvas (B4b): the focused thread whiteboard. Loads after the timeline (which opens it) and before vault-tab.js (which wires both). -->
@@ -2230,7 +2234,7 @@
 <script src="/public/js/vault-review.js?v=vault-b6-1"></script>
 <!-- Graph (B7): the global force-directed view. Needs the same vendored d3 above; loads before vault-tab.js, which wires it. -->
 <script src="/public/js/vault-graph.js?v=vault-b7-1"></script>
-<script src="/public/js/vault-tab.js?v=journal-gallery-2"></script>
+<script src="/public/js/vault-tab.js?v=journal-tools-1"></script>
 <script src="/public/js/features.js?v=itinerary-costs-1"></script>
 <script src="/public/js/task-reconciliation.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>

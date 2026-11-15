@@ -242,7 +242,7 @@
     if (write) write.onclick = () => { write.classList.add("active"); q("#ed-preview").classList.remove("active"); body.hidden = false; prev.hidden = true; };
     const cover = q("#ed-day-cover");
     const state = st;
-    const entry = cover ? DCC.CompletionMemories.mountJournalEntry(cover, prev, body.value, { onAttachment: uploadAttachment, notebook: true }) : null;
+    const entry = cover ? DCC.CompletionMemories.mountJournalEntry(cover, prev, body.value, { onAttachment: uploadAttachment, onNotebookImage: uploadNotebookImage, notebook: true }) : null;
     if (entry) {
       state.clearDayStory = entry.destroy;
       state.readJournal = entry.read;
@@ -489,6 +489,27 @@
           if (!state.attaching && statusEl.textContent === message) statusEl.textContent = "";
         }, 2500);
       }
+    }
+  }
+  async function uploadNotebookImage(file) {
+    const state = st;
+    if (!state || state.attaching) throw new Error("Finish the current upload before adding another image.");
+    if (!file.type.startsWith("image/")) throw new Error("Choose an image file.");
+    state.attaching = true;
+    const saveButton = inner().querySelector("#ed-save");
+    saveButton.disabled = true;
+    try {
+      const form = new FormData();
+      form.append("file", file, file.name || "Sketchbook image");
+      if (state.slug) form.append("slug", state.slug);
+      const response = await fetch("/api/vault/attach", { method: "POST", body: form });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Image upload failed");
+      if (st !== state) throw new Error("The journal was closed before the image finished uploading.");
+      return result;
+    } finally {
+      state.attaching = false;
+      if (st === state) saveButton.disabled = false;
     }
   }
   function insertAtCaret(ta, text) {

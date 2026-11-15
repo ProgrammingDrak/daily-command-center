@@ -476,7 +476,7 @@
     return details;
   }
 
-  function mountJournalEntry(cover, prev, initial, { readOnly = false, onAttachment, notebook = false, initialPage = 0 } = {}) {
+  function mountJournalEntry(cover, prev, initial, { readOnly = false, onAttachment, onNotebookImage, notebook = false, initialPage = 0 } = {}) {
     let photos = [], dirty = false, cleanup;
     const ink = notebook ? window.JournalNotebook.unpack(initial) : null;
     if (ink) initial = ink.text;
@@ -485,7 +485,7 @@
       .replace(/\[\[photo:([0-9a-f-]{36})\]\]/gi, "[Photo](#dcc-photo-$1)")
       .replace(/\(media:sha256:([a-f0-9]{12,64})\)/gi, "(/api/vault/media/$1)");
     const readText = () => dirty ? journalMarkdown(prev) : initial;
-    const read = () => book ? window.JournalNotebook.pack(readText(), book.read(), book.readTemplates()) : readText();
+    const read = () => book ? window.JournalNotebook.pack(readText(), book.read(), book.readTemplates(), book.readObjects()) : readText();
     function keepCleanup(clear) {
       const previous = cleanup;
       cleanup = () => { previous?.(); clear(); };
@@ -571,7 +571,7 @@
     if (ink) {
       const paper = node("section");
       prev.after(paper);
-      book = window.JournalNotebook.mount(paper, ink.pages, { readOnly, templates: ink.templates, initialPage });
+      book = window.JournalNotebook.mount(paper, ink.pages, { readOnly, templates: ink.templates, objects: ink.objects, initialPage, onAttachImage: onNotebookImage });
     }
     return {
       read, insert, mountFormatting,
