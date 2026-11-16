@@ -312,7 +312,7 @@ function createClerkMcpAuth({
     await owner(pool, actor);
     const c = (
       await pool.query(
-        "UPDATE mcp_connections SET revocation_pending=(revoked_at IS NULL OR revocation_pending),revoked_at=COALESCE(revoked_at,NOW()) WHERE id=$1 AND user_id=$2 AND workspace_id=$3 RETURNING *",
+        "UPDATE mcp_connections SET revocation_pending=(revoked_at IS NULL OR revocation_pending),revoked_at=COALESCE(revoked_at,NOW()) WHERE id=$1 AND user_id=$2 AND workspace_id=$3 RETURNING *, revoked_at::text AS revocation_marker",
         [id, actor.userId, actor.workspaceId]
       )
     ).rows[0];
@@ -346,7 +346,7 @@ function createClerkMcpAuth({
           WHERE id=$1 AND revoked_at=$2 AND revocation_pending RETURNING id
         )
         UPDATE mcp_connection_tokens SET token_enc=NULL WHERE connection_id IN (SELECT id FROM disconnected)`,
-        [id, c.revoked_at]
+        [id, c.revocation_marker]
       );
       return { ok: true, revocationPending: false };
     } catch {
