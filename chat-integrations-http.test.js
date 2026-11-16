@@ -276,6 +276,42 @@ test(
       1
     );
 
+    if (!process.env.DCC_PGLITE_MODULE) {
+      const writer = await ctx.pool.connect();
+      try {
+        await writer.query("BEGIN");
+        await ctx.blockDB.createBlock(
+          {
+            id: "fixture-concurrent-browser",
+            workspace_id: "ws-1",
+            user_id: 1,
+            type: "block",
+            date,
+            properties: { title: "Concurrent browser entry", kind: "task", type: "task", start: "06:33", end: "06:41" }
+          },
+          writer
+        );
+        const pending = tool("dcc_itinerary_write", create("Blocked by browser entry", "20:33", "20:41"));
+        let workloadWaiting = false;
+        for (let attempt = 0; attempt < 80 && !workloadWaiting; attempt++) {
+          const { rows } = await ctx.pool.query(
+            "SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM workspaces WHERE id=%'"
+          );
+          workloadWaiting = Boolean(rows.length);
+          if (!workloadWaiting) await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        await writer.query("COMMIT");
+        const conflict = await pending;
+        assert.ok(workloadWaiting, "MCP waits for the competing workspace FK holder");
+        assert.match(JSON.parse(conflict.content[0].text).error, /fixture-concurrent-browser/);
+      } catch (error) {
+        await writer.query("ROLLBACK");
+        throw error;
+      } finally {
+        writer.release();
+      }
+    }
+
     const provider = await ctx.blockDB.createBlock({
       id: "fixture-provider",
       workspace_id: "ws-1",
@@ -374,6 +410,14 @@ test(
     assert.equal(completed.structuredContent?.saveStatus, "verified_saved", JSON.stringify(completed));
     assert.equal((await read()).find(({ id }) => id === park.id).status, "done");
     assert.equal((await ctx.blockDB.getBlock(park.id)).properties.completionTimeKnown, false);
+    const completedAgain = await tool("dcc_tasks", {
+      action: "complete",
+      id: park.id,
+      expectedVersion: (await read()).find(({ id }) => id === park.id).version,
+      sourceEventId: "unintended-second-completion",
+      input: { outcome: "Do not overwrite original outcome" }
+    });
+    assert.equal(JSON.parse(completedAgain.content[0].text).code, "conflict");
     const row = await ctx.blockDB.getBlock(train.id);
     const TaskModel = require("./public/js/task-model");
     assert.ok(TaskModel.foldsIntoItinerary(row));

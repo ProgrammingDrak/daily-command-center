@@ -2,7 +2,7 @@ const M = require("./lib/conversation-model");
 const { version, confirmCompletion } = require("./lib/task-reconciliation");
 const { isBlockDone } = require("./lib/task-timing");
 const { isLibraryTask, createProjectStore } = require("./project-store");
-const { lockScheduleForPlacement, originMarker } = require("./lib/reschedule");
+const { lockWorkspaceSchedule, originMarker } = require("./lib/reschedule");
 const Itinerary = require("./lib/itinerary-schedule");
 const Review = require("./lib/review-tomorrow");
 const TaskTypes = require("./public/js/task-types");
@@ -135,12 +135,14 @@ function createChatControlStore(ctx) {
       overlay: roots.get(b.date)
     }));
   }
-  async function check(q, id, expected, actor) {
-    const b = await row(q, id, actor, true);
+  function checkVersion(b, expected) {
     if (!expected || version(b) !== expected)
       throw M.fail("Record changed; read it again before applying this operation", 409);
     if (b.properties.startedAt) throw M.fail("Pause active work before editing or deleting it", 409);
     return b;
+  }
+  async function check(q, id, expected, actor) {
+    return checkVersion(await row(q, id, actor, true), expected);
   }
   async function seriesFor(q, b, actor) {
     const seen = new Set();
@@ -365,6 +367,8 @@ function createChatControlStore(ctx) {
         if (Itinerary.calendarOwned(b)) throw M.fail("Calendar records are read-only through task controls", 409);
         fields(input, args.action === "complete" ? ["outcome"] : []);
         const tree = await effective(q, await db.getSubtree([b.id], actor.workspaceId, q), actor);
+        if (args.action === "complete" && tree.some((child) => child.id === b.id && child.effectiveDone))
+          throw M.fail("Task is already complete. Reopen it explicitly before changing the outcome.", 409);
         if (tree.some((child) => child.id !== b.id && !child.effectiveDone))
           throw M.fail("Select a concrete task; unfinished subtasks remain", 409);
         const mutationId = "chat:" + M.digest(args.sourceEventId).slice(0, 40);
@@ -787,7 +791,7 @@ function createChatControlStore(ctx) {
 
   const appZone = ctx.APP_TIME_ZONE || "America/New_York";
   function itineraryEligible(b) {
-    return foldsIntoItinerary(b) && !b.properties.retiredContainerHidden;
+    return b.type === "block" && foldsIntoItinerary(b) && !b.properties.retiredContainerHidden;
   }
 
   async function itineraryRows(q, actor, start, end) {
@@ -798,7 +802,7 @@ function createChatControlStore(ctx) {
       q
     );
     return (ctx.filterLegacyGcalBlocks?.(rows) || rows).filter(
-      (b) => b.type === "block" && (b.user_id == null || b.user_id === actor.userId) && itineraryEligible(b)
+      (b) => (b.user_id == null || b.user_id === actor.userId) && itineraryEligible(b)
     );
   }
 
@@ -908,7 +912,11 @@ function createChatControlStore(ctx) {
     const result = await once({ ...args, tool: "itinerary" }, actor, async (q) => {
       if (slot) {
         try {
-          await lockScheduleForPlacement(q);
+          await q.query("SET LOCAL lock_timeout = '3s'");
+          await lockWorkspaceSchedule(q, actor.workspaceId);
+          // A scoped workspace FK lock serializes inserts in this workspace.
+          // The range's row locks below cover ordinary edits to existing slots.
+          await q.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [actor.workspaceId]);
         } catch (error) {
           if (error.code === "55P03") throw M.fail("The schedule is busy. Retry the same operation.", 409);
           throw error;
@@ -916,8 +924,8 @@ function createChatControlStore(ctx) {
       }
       let b;
       if (args.action !== "create") {
-        b = await check(q, args.id, args.expectedVersion, actor);
-        if (b.deleted_at || !itineraryEligible(b)) throw M.fail("Activity not found", 404);
+        b = await row(q, args.id, actor);
+        if (!itineraryEligible(b)) throw M.fail("Activity not found", 404);
         if (!b.date) {
           if (args.action !== "schedule" || !has(actor, "dcc.tasks.read") || !has(actor, "dcc.tasks.write"))
             throw M.fail(
@@ -925,6 +933,8 @@ function createChatControlStore(ctx) {
               404
             );
         }
+        if (Itinerary.calendarOwned(b) && !canReadCalendar(actor)) throw M.fail("Activity not found", 404);
+        checkVersion(b, args.expectedVersion);
         if (Itinerary.calendarOwned(b)) throw M.fail("Change this event in its source calendar", 409);
         if (await seriesFor(q, b, actor)) need(actor, "dcc.repeats.write");
         [b] = await effective(q, [b], actor);
@@ -949,7 +959,7 @@ function createChatControlStore(ctx) {
       }
 
       if (slot) {
-        const rows = await itineraryRows(q, actor, slot.date, slot.date);
+        const rows = await itineraryRows(q, actor, slot.date, slot.date, true);
         const conflicts = rows.filter((existing) => {
           if (existing.id === b?.id) return false;
           const times = Itinerary.occupied(existing, appZone);
