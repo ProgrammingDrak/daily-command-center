@@ -19,6 +19,8 @@ test(
     const scopes = [
       "dcc.tasks.read",
       "dcc.tasks.write",
+      "dcc.cleanup.read",
+      "dcc.cleanup.write",
       "dcc.organization.read",
       "dcc.organization.write",
       "dcc.repeats.read",
@@ -160,6 +162,10 @@ test(
         q.release();
       }
     });
+    await ctx.pool.query(
+      "INSERT INTO conversation_preferences(user_id,workspace_id,scopes) VALUES(1,'ws-1',$1)",
+      [JSON.stringify(scopes)]
+    );
     const cookie = await login(1),
       otherCookie = await login(2);
     await t.test("accept only provider OAuth tokens and reject impersonation", async () => {
@@ -170,6 +176,9 @@ test(
       assert.ok(profile.id);
       assert.deepEqual((await call("dcc_profile", {}, "rotated")).result, profile);
       assert.notEqual((await call("dcc_profile", {}, "two")).result.id, profile.id);
+      const defaultConnection = (await settings(otherCookie)).grants[0];
+      assert.deepEqual(defaultConnection.scopes, ["dcc.tasks.read", "dcc.tasks.write"]);
+      assert.equal((await call("dcc_repeats_list", {}, "two")).r.status, 403);
       const unauth = await fetch(local + "/mcp/dcc", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -269,6 +278,25 @@ test(
         (await call("dcc_tasks_create", { sourceEventId: "excessive", input: { title: "No" } }, "limited")).r.status,
         403
       );
+    });
+    await t.test("an upgrade needs new consent and does not restore superseded tokens", async () => {
+      const grant = (await settings(otherCookie)).grants[0];
+      const csrf = (await settings(otherCookie)).csrf;
+      const response = await post(
+        "/connections/conversation/upgrade",
+        { csrf, grantId: grant.id, tasks: "write", repeats: "read" },
+        otherCookie
+      );
+      assert.equal(response.status, 200);
+      mint("refresh-other", "clerk-2", { created_at: Date.now() / 1000 + 1 });
+      assert.equal((await call("dcc_repeats_list", {}, "refresh-other")).r.status, 403);
+      assert.equal((await call("dcc_tasks_list", {}, "two")).r.status, 200);
+      mint("reauthorized-other", "clerk-2", {
+        family: "new-other",
+        authorization_granted_at: Date.now() / 1000 + 1
+      });
+      assert.equal((await call("dcc_repeats_list", {}, "reauthorized-other")).r.status, 200);
+      assert.equal((await call("dcc_tasks_list", {}, "refresh-other")).r.status, 401);
     });
     let review;
     await t.test("assistant stages deletion; only the matching browser can commit exact manifest", async () => {
@@ -393,9 +421,11 @@ test(
         200
       );
       assert.equal((await call("dcc_profile", {}, "rotated")).r.status, 401);
-      mint("fresh", "clerk-1", { family: "new-grant", created_at: Date.now() / 1000 + 1 });
+      mint("old-grant-refresh", "clerk-1", { family: "unobserved", created_at: Date.now() / 1000 + 1 });
+      assert.equal((await call("dcc_profile", {}, "old-grant-refresh")).r.status, 401);
+      mint("fresh", "clerk-1", { family: "new-grant", authorization_granted_at: Date.now() / 1000 + 1 });
       assert.ok((await call("dcc_profile", {}, "fresh")).result.id);
-      assert.equal((await call("dcc_tasks_list", {}, "two")).r.status, 200);
+      assert.equal((await call("dcc_tasks_list", {}, "reauthorized-other")).r.status, 200);
     });
   }
 );

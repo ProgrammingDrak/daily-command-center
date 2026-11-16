@@ -407,7 +407,9 @@ module.exports = function mount(app, ctx, config = {}) {
     executeApproved:(name,args,identity,q)=>runTool(name,args,identity,q),
     clientsReady:oauth.provider === 'clerk' || Object.keys(config.clients || JSON.parse(process.env.DCC_CONVERSATION_CLIENTS || '{}')).length > 0 });
   // Disabled by default: publishing code never silently enables outbound access.
-  const eventsEnabled = config.eventsEnabled ?? process.env.DCC_EVENTS_ENABLED === "true";
+  // Event subscriptions are foreign-keyed to legacy OAuth grants.
+  const eventsEnabled = oauth.provider !== "clerk" &&
+    (config.eventsEnabled ?? process.env.DCC_EVENTS_ENABLED === "true");
   let events = null;
   if (eventsEnabled) {
     try {
@@ -744,11 +746,20 @@ module.exports = function mount(app, ctx, config = {}) {
           });
         }
       }
+      const availableScopes = (name) => {
+        const need = [scopeFor(name)].flat();
+        const granted = need.filter((scope) => identity.scopes.includes(scope));
+        if (granted.length || oauth.provider !== "clerk") return granted;
+        return need.filter((scope) => identity.requestedScopes?.includes(scope));
+      };
       if (b.method === "tools/list")
         return reply({
-          tools: tools
-            .filter((t) => (Array.isArray(scopeFor(t.name)) ? scopeFor(t.name) : [scopeFor(t.name)]).some(s => identity.scopes.includes(s)))
-            .map((t) => ({ ...t, securitySchemes: (Array.isArray(scopeFor(t.name)) ? scopeFor(t.name) : [scopeFor(t.name)]).filter(s=>identity.scopes.includes(s)).map(s=>({type:'oauth2',scopes:[s]})) }))
+          tools: tools.flatMap((tool) => {
+            const scopes = availableScopes(tool.name);
+            return scopes.length
+              ? [{ ...tool, securitySchemes: scopes.map((scope) => ({ type: "oauth2", scopes: [scope] })) }]
+              : [];
+          })
         });
       if (b.method !== "tools/call")
         return res.json({ jsonrpc: "2.0", id: b.id, error: { code: -32601, message: "Method not found" } });
@@ -757,8 +768,10 @@ module.exports = function mount(app, ctx, config = {}) {
       if (!tools.some((t) => t.name === name))
         return res.json({ jsonrpc: "2.0", id: b.id, error: { code: -32602, message: "Unknown tool" } });
       try { identity = await oauth.verify(raw.slice(7), scopeFor(name)); }
-      catch(e) {
-        if(e.statusCode===403)res.set('WWW-Authenticate',`Bearer resource_metadata="${oauth.baseUrl}/.well-known/oauth-protected-resource/mcp/dcc", error="insufficient_scope", scope="${(Array.isArray(scopeFor(name))?scopeFor(name):[scopeFor(name)]).join(' ')}"`);
+      catch (e) {
+        const requested = oauth.provider === "clerk" ? availableScopes(name) : [scopeFor(name)].flat();
+        if (e.statusCode === 403 && requested.length)
+          res.set("WWW-Authenticate", `Bearer resource_metadata="${oauth.baseUrl}/.well-known/oauth-protected-resource/mcp/dcc", error="insufficient_scope", scope="${requested.join(" ")}"`);
         throw e;
       }
       try {
@@ -770,7 +783,7 @@ module.exports = function mount(app, ctx, config = {}) {
           ? await approvals.prepare(operation,payload,identity,requiredWriteScopes(operation,payload,identity))
           : await runTool(operation,payload,identity);
         const descriptor=tools.find(t=>t.name===name);
-        if(!descriptor.annotations.readOnlyHint) await ctx.pool.query('INSERT INTO mcp_action_log(id,user_id,workspace_id,connection_id,operation,outcome,affected_ids) VALUES($1,$2,$3,$4,$5,$6,$7)',[crypto.randomUUID(),identity.userId,identity.workspaceId,identity.grantId,name,result.saveStatus==='pending_approval'?'pending_approval':'succeeded',JSON.stringify([result.task?.id,result.taskId,result.id,result.projectId,result.definitionId,...(result.taskIds||[])].filter(Boolean))]);
+        if(!descriptor.annotations.readOnlyHint) await ctx.pool.query('INSERT INTO mcp_action_log(id,user_id,workspace_id,connection_id,operation,outcome,affected_ids) VALUES($1,$2,$3,$4,$5,$6,$7)',[crypto.randomUUID(),identity.userId,identity.workspaceId,identity.grantId,name,result.saveStatus==='pending_approval'?'pending_approval':'succeeded',JSON.stringify([result.task?.id,result.taskId,result.id,result.projectId,result.definitionId,...(result.taskIds||[])].filter(Boolean))]).catch(() => console.error('[dcc-mcp] Action audit unavailable'));
         // Connection verification is telemetry; failure after commit must not mask a saved write.
         await oauth.verified(identity.grantId).catch(() => {});
         reply({ content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, isError: false });

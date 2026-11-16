@@ -149,7 +149,7 @@
         view='calendar';const google=providers?.google;
         frame('Google Calendar',back()+'<div class="connection-hero">'+icon('calendar')+'<div><h3>Google Calendar</h3><p>Your appointments on the DCC itinerary.</p></div></div>'+badge(google?.connected?'Connected':'Not connected',!!google?.connected)+(google?.error?'<p class="connection-notice">Calendar status is unavailable. Try again before changing the connection.</p>':google?.connected?'<div class="connection-existing">'+(google.accounts||[]).map(a=>'<p>'+esc(a.email||a.label||'Connected account')+'</p>').join('')+'</div>':'<p class="connection-intro">Connect Google to bring appointments into your itinerary.</p>')+'<a class="connection-button is-primary" href="/api/gcal/auth">'+(google?.connected?'Connect another account':'Connect Google Calendar')+'</a>');return;
       }
-      if(action==='allow-all'){body.querySelectorAll('[data-permissions] input[value="write"]').forEach(i=>i.checked=true);return;}
+      if(action==='allow-all'){body.querySelectorAll('[data-permissions] [role="radiogroup"]').forEach(row=>{const input=row.querySelector('input[value="write"]')||row.querySelector('input[value="read"]');if(input)input.checked=true;});return;}
       if(action==='disconnect-confirm'){
         frame('Disconnect ChatGPT',back()+'<h3>Disconnect this connection?</h3><p class="connection-intro">ChatGPT will lose this connection’s access to DCC. Your tasks and recorded time stay in DCC.</p><div class="connection-actions">'+button('disconnect','Disconnect')+button('chatgpt','Keep connection',true)+'</div>');return;
       }

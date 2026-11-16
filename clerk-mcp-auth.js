@@ -31,6 +31,13 @@ function httpsOrigin(value, label) {
     throw new Error(`${label} must be an HTTPS origin`);
   return u.origin;
 }
+// Only provider-verified time of the original OAuth authorization can prove
+// fresh consent. A refresh can issue an access token with a newer created_at.
+function hasFreshConsent(token, after) {
+  return Number.isFinite(token.authorization_granted_at) &&
+    token.authorization_granted_at * 1000 > new Date(after).getTime();
+}
+
 function createClerkMcpAuth({
   pool,
   baseUrl,
@@ -118,7 +125,8 @@ function createClerkMcpAuth({
       t.expired ||
       !t.expiration ||
       t.expiration * 1000 <= Date.now() ||
-      !t.aud?.includes(resource) ||
+      !Array.isArray(t.aud) ||
+      !t.aud.includes(resource) ||
       !clientIds.includes(t.client_id) ||
       !t.subject ||
       !Array.isArray(t.scopes)
@@ -139,7 +147,7 @@ function createClerkMcpAuth({
           t.client_id
         ])
       ).rows[0];
-      if (c?.authorized_after && (!t.created_at || t.created_at * 1000 < new Date(c.authorized_after).getTime()))
+      if (c?.authorized_after && !hasFreshConsent(t, c.authorized_after))
         throw M.fail("Use a newly authorized connection", 401);
       if (c?.revoked_at) throw M.fail("Connection disconnected. Reconnect from DCC Connections.", 401);
       if (!c) {
@@ -157,7 +165,7 @@ function createClerkMcpAuth({
               user[0].id,
               owned[0].workspace_id
             ])
-          ).rows[0]?.scopes || null;
+          ).rows[0]?.scopes ?? P.defaults();
         c = (
           await q.query(
             "INSERT INTO mcp_connections(id,issuer,subject,client_id,user_id,workspace_id,scopes,profile_id,scope_limit) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",
@@ -170,7 +178,7 @@ function createClerkMcpAuth({
               owned[0].workspace_id,
               JSON.stringify(t.scopes.filter((s) => P.scopes.includes(s))),
               "dcc-profile-" + hash(JSON.stringify([issuer, t.subject, owned[0].workspace_id])),
-              chosen ? JSON.stringify(chosen) : null
+              JSON.stringify(chosen)
             ]
           )
         ).rows[0];
@@ -179,16 +187,16 @@ function createClerkMcpAuth({
       await owner(q, { userId: c.user_id, workspaceId: c.workspace_id });
       if (
         c.pending_scopes &&
-        t.created_at * 1000 > new Date(c.upgrade_after).getTime() &&
+        hasFreshConsent(t, c.upgrade_after) &&
         c.pending_scopes.every((s) => t.scopes.includes(s))
       ) {
         c.scope_limit = c.pending_scopes;
         await q.query(
-          "UPDATE mcp_connections SET scope_limit=pending_scopes,pending_scopes=NULL,upgrade_after=NULL WHERE id=$1",
+          "UPDATE mcp_connections SET scope_limit=pending_scopes,authorized_after=upgrade_after,pending_scopes=NULL,upgrade_after=NULL WHERE id=$1",
           [c.id]
         );
       }
-      const scopes = t.scopes.filter((s) => P.scopes.includes(s) && (!c.scope_limit || c.scope_limit.includes(s)));
+      const scopes = t.scopes.filter((s) => P.scopes.includes(s) && (c.scope_limit ?? P.defaults()).includes(s));
       if (scope && !(Array.isArray(scope) ? scope : [scope]).some((s) => scopes.includes(s)))
         throw M.fail("Insufficient scope", 403);
       await q.query("UPDATE mcp_connections SET scopes=$1 WHERE id=$2", [JSON.stringify(scopes), c.id]);
@@ -203,6 +211,7 @@ function createClerkMcpAuth({
         grantId: c.id,
         profileId: c.profile_id,
         scopes,
+        requestedScopes: c.pending_scopes ?? c.scope_limit ?? P.defaults(),
         provider: "clerk"
       };
     } catch (e) {
@@ -277,9 +286,10 @@ function createClerkMcpAuth({
       if (
         t?.object === "clerk_idp_oauth_access_token" &&
         !t.revoked &&
+        (!c.authorized_after || hasFreshConsent(t, c.authorized_after)) &&
         !t.expired &&
         t.expiration * 1000 > Date.now() &&
-        t.aud?.includes(resource) &&
+        (Array.isArray(t.aud) && t.aud.includes(resource)) &&
         t.subject === c.subject &&
         t.client_id === c.client_id
       ) {
@@ -287,7 +297,7 @@ function createClerkMcpAuth({
           ...actor,
           grantId: id,
           provider: "clerk",
-          scopes: t.scopes.filter((s) => P.scopes.includes(s) && (!c.scope_limit || c.scope_limit.includes(s)))
+          scopes: t.scopes.filter((s) => P.scopes.includes(s) && (c.scope_limit ?? P.defaults()).includes(s))
         };
       }
     }
@@ -302,11 +312,12 @@ function createClerkMcpAuth({
     await owner(pool, actor);
     const c = (
       await pool.query(
-        "UPDATE mcp_connections SET revoked_at=COALESCE(revoked_at,NOW()),revocation_pending=TRUE WHERE id=$1 AND user_id=$2 AND workspace_id=$3 RETURNING *",
+        "UPDATE mcp_connections SET revocation_pending=(revoked_at IS NULL OR revocation_pending),revoked_at=COALESCE(revoked_at,NOW()) WHERE id=$1 AND user_id=$2 AND workspace_id=$3 RETURNING *",
         [id, actor.userId, actor.workspaceId]
       )
     ).rows[0];
     if (!c) throw M.fail("Connection not found", 404);
+    if (!c.revocation_pending) return { ok: true, revocationPending: false };
     const tokens = (
       await pool.query("SELECT token_enc FROM mcp_connection_tokens WHERE connection_id=$1 AND token_enc IS NOT NULL", [
         id
@@ -324,10 +335,19 @@ function createClerkMcpAuth({
         const raw = box.open(token.token_enc);
         const state = await api("/oauth_applications/access_tokens/verify", { access_token: raw });
         if (state?.revoked) continue;
+        if (state?.object !== "clerk_idp_oauth_access_token" || state.subject !== c.subject ||
+            state.client_id !== c.client_id || !Array.isArray(state.aud) || !state.aud.includes(resource))
+          throw M.fail("Provider revocation pending", 503);
         await api(`/oauth_applications/${encodeURIComponent(app.id)}/revoke_token`, { token: raw });
       }
-      await pool.query("UPDATE mcp_connections SET revocation_pending=FALSE WHERE id=$1", [id]);
-      await pool.query("UPDATE mcp_connection_tokens SET token_enc=NULL WHERE connection_id=$1", [id]);
+      await pool.query(
+        `WITH disconnected AS (
+          UPDATE mcp_connections SET revocation_pending=FALSE
+          WHERE id=$1 AND revoked_at=$2 AND revocation_pending RETURNING id
+        )
+        UPDATE mcp_connection_tokens SET token_enc=NULL WHERE connection_id IN (SELECT id FROM disconnected)`,
+        [id, c.revoked_at]
+      );
       return { ok: true, revocationPending: false };
     } catch {
       return { ok: true, revocationPending: true };
@@ -335,22 +355,20 @@ function createClerkMcpAuth({
   }
   async function reduce(id, scopes, actor) {
     await owner(pool, actor);
-    const c = (
-      await pool.query(
-        "SELECT scopes FROM mcp_connections WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND revoked_at IS NULL",
-        [id, actor.userId, actor.workspaceId]
-      )
-    ).rows[0];
-    if (!c) throw M.fail("Connection not found", 404);
-    if (scopes.some((s) => !c.scopes.includes(s))) throw M.fail("Additional access requires new authorization", 409);
-    await pool.query("UPDATE mcp_connections SET scope_limit=$1,scopes=$1 WHERE id=$2", [JSON.stringify(scopes), id]);
+    const result = await pool.query(
+      `UPDATE mcp_connections SET scope_limit=$1,scopes=$1,pending_scopes=NULL,upgrade_after=NULL
+       WHERE id=$2 AND user_id=$3 AND workspace_id=$4 AND revoked_at IS NULL AND scopes @> $1::jsonb
+       RETURNING id`,
+      [JSON.stringify(scopes), id, actor.userId, actor.workspaceId]
+    );
+    if (!result.rows.length) throw M.fail("Connection changed or additional access requires new authorization", 409);
     return { ok: true };
   }
   async function requestUpgrade(id, scopes, actor) {
     await owner(pool, actor);
     if (!Array.isArray(scopes) || scopes.some((s) => !P.scopes.includes(s))) throw M.fail("Invalid scope");
     const result = await pool.query(
-      "UPDATE mcp_connections SET pending_scopes=$1,upgrade_after=NOW() WHERE id=$2 AND user_id=$3 AND workspace_id=$4 AND revoked_at IS NULL RETURNING id",
+      "UPDATE mcp_connections SET pending_scopes=$1,upgrade_after=NOW(),scope_limit=(SELECT COALESCE(jsonb_agg(scope), '[]'::jsonb) FROM jsonb_array_elements_text(scopes) AS scope WHERE $1::jsonb ? scope),scopes=(SELECT COALESCE(jsonb_agg(scope), '[]'::jsonb) FROM jsonb_array_elements_text(scopes) AS scope WHERE $1::jsonb ? scope) WHERE id=$2 AND user_id=$3 AND workspace_id=$4 AND revoked_at IS NULL RETURNING id",
       [JSON.stringify(scopes), id, actor.userId, actor.workspaceId]
     );
     if (!result.rows.length) throw M.fail("Connection not found", 404);
@@ -376,11 +394,12 @@ function createClerkMcpAuth({
       if (!existing.revoked_at || existing.revocation_pending)
         throw M.fail("Disconnect the existing workspace before rebinding", 409);
       await pool.query(
-        "UPDATE mcp_connections SET workspace_id=$1,profile_id=$2,revoked_at=NULL,authorized_after=NOW(),scopes='[]',scope_limit=NULL,pending_scopes=NULL,upgrade_after=NULL,last_verified_at=NULL WHERE id=$3 AND revoked_at IS NOT NULL AND revocation_pending=FALSE",
+        "UPDATE mcp_connections SET workspace_id=$1,profile_id=$2,revoked_at=NULL,authorized_after=NOW(),scopes='[]',scope_limit=(SELECT scopes FROM conversation_preferences WHERE user_id=$4 AND workspace_id=$1),pending_scopes=NULL,upgrade_after=NULL,last_verified_at=NULL WHERE id=$3 AND revoked_at IS NOT NULL AND revocation_pending=FALSE",
         [
           actor.workspaceId,
           "dcc-profile-" + hash(JSON.stringify([issuer, user.external_id, actor.workspaceId])),
-          existing.id
+          existing.id,
+          actor.userId
         ]
       );
       return { ok: true };
@@ -391,7 +410,7 @@ function createClerkMcpAuth({
           actor.userId,
           actor.workspaceId
         ])
-      ).rows[0]?.scopes || null;
+      ).rows[0]?.scopes ?? P.defaults();
     await pool.query(
       "INSERT INTO mcp_connections(id,issuer,subject,client_id,user_id,workspace_id,scopes,profile_id,scope_limit) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
       [
@@ -403,7 +422,7 @@ function createClerkMcpAuth({
         actor.workspaceId,
         "[]",
         "dcc-profile-" + hash(JSON.stringify([issuer, user.external_id, actor.workspaceId])),
-        chosen ? JSON.stringify(chosen) : null
+        JSON.stringify(chosen)
       ]
     );
     return { ok: true };
@@ -423,7 +442,7 @@ function createClerkMcpAuth({
       if (!c || !c.revoked_at) throw M.fail("Disconnect before reconnecting", 409);
       if (c.revocation_pending) throw M.fail("Retry disconnect to finish provider revocation before reconnecting", 409);
       await q.query(
-        "UPDATE mcp_connections SET revoked_at=NULL,authorized_after=NOW(),scope_limit=NULL,pending_scopes=NULL,upgrade_after=NULL,scopes='[]',last_verified_at=NULL WHERE id=$1",
+        "UPDATE mcp_connections SET revoked_at=NULL,authorized_after=NOW(),pending_scopes=NULL,upgrade_after=NULL,scopes='[]',last_verified_at=NULL WHERE id=$1",
         [id]
       );
       await q.query("COMMIT");

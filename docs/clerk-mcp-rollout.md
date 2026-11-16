@@ -55,14 +55,14 @@ Use a separate development instance for all protocol/canary tests first.
    claims, S256 PKCE, CIMD, visible consent, opaque OAuth tokens and refresh support.
    Keep refresh audience backfill off; missing/wrong resource must fail.
 2. Add DCC custom scopes from `lib/chat-permissions.js`. Default to
-   dcc.tasks.read + dcc.tasks.write. The client also requests offline_access for
+   dcc.tasks.read + dcc.tasks.write. DCC applies this cap when no saved preferences exist. The client also requests offline_access for
    renewal; this is provider lifecycle access, not a DCC data category.
 3. Explicitly admit ChatGPT's verified CIMD identity; keep admission of unknown
    clients and unused DCR disabled for this ChatGPT-first release. Never infer a
    callback/client ID from a previous draft. Clerk resolves exact callback URIs
    from the admitted metadata document. Verify the current host's actual identity.
 4. Verify that token introspection returns object, client_id, subject, scopes,
-   resource audience, expiration, revocation and token creation time. The adapter
+   resource audience, expiration, and revocation. Confirm whether the provider exposes original grant authorization time separately from access token creation. The adapter
    rejects non-OAuth credentials and JWTs. It calls the Clerk Backend API with the
    existing server-only Clerk secret, using the documented 2026-08-20 API version.
 5. Exercise rotation/reuse, refresh concurrency, new consent, revocation of every
@@ -111,14 +111,14 @@ and the repository's existing CI acknowledgment requirement. No backup is claime
   browser selection in Connections. Membership is checked for every operation.
 - Permission reduction is a local cap checked on subsequent requests and mutation
   transactions. For expansion, the browser records the selected pending scopes;
-  they activate only on a newer provider token containing those scopes. The host
+  they activate only on provider proof of fresh authorization covering the chosen scopes. Access token creation time cannot prove new consent. The host
   must complete its authorization flow. Existing token scopes never expand alone.
 - Disconnect writes the local tombstone before attempting provider revocation.
   A provider outage leaves DCC blocked with revocation_pending=true. Retry from
   Connections. Browser reconnect is refused until provider revocation succeeds.
-- Reconnect requires explicit browser action and a token newer than that action;
+- Reconnect requires explicit browser action and provider proof that consent occurred after that action;
   all observed old grant families have already been revoked. Verify this behavior
-  against Clerk before enabling production. Old fingerprint tombstones remain.
+  against Clerk before enabling production. If original consent time is absent, DCC blocks upgrades and reconnection. Old fingerprint tombstones remain.
 - One logical connection exists per issuer + subject + OAuth client in this
   release. Refresh and reconnect keep the profile ID stable for the same workspace.
   Rebinding to another owned workspace requires confirmed disconnect first.
