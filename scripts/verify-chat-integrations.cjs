@@ -77,7 +77,10 @@ async function main() {
     );
     await page.locator('[data-service="chatgpt"]').click();
     await page.locator("[data-permissions]").waitFor();
-    assert.equal(await page.locator('[data-permissions] [role="radiogroup"]').count(), 6);
+    assert.equal(
+      await page.locator('[data-permissions] [role="radiogroup"]').count(),
+      require("../lib/chat-permissions").categories.length
+    );
     assert.equal(await page.locator('input[name="tasks"][value="read"]').isChecked(), true);
     await page.locator('[data-action="allow-all"]').click();
     await page.locator('[data-action="connect"]').click();
@@ -90,7 +93,9 @@ async function main() {
     await page.waitForFunction(() =>
       document.querySelector(".connection-feedback")?.textContent.includes("No new authorization")
     );
-    const scopes = require("../lib/chat-permissions").categories.flatMap((c) => [c.read, c.write]);
+    const scopes = require("../lib/chat-permissions").scopes.filter(
+      (scope) => !require("../lib/chat-permissions").legacy.includes(scope)
+    );
     await ctx.pool.query(
       "INSERT INTO conversation_grants(id,user_id,workspace_id,client_id,scopes,last_verified_at) VALUES('review-chat',1,'ws-1','ChatGPT',$1,NOW())",
       [JSON.stringify(scopes)]

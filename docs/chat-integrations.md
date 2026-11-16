@@ -118,3 +118,24 @@ installed PGlite package or use the existing localhost-only test DB configuratio
 checks the synthetic page with Chromium: choices, persistence, remote-disabled
 setup, desktop/mobile, zoom, reduced motion and browser errors. Screenshots go
 to `/tmp/dcc-chat-integrations-{desktop,mobile}.png`. This never reads production.
+
+## Itinerary and selected chat files
+
+`dcc_itinerary` reads a day or up to 63 days in the supplied viewing timezone.
+`dcc_itinerary_write` creates native scheduled activities and edits or moves an
+existing activity by ID, version and stable operation key. It uses
+`dcc.itinerary.read` and `dcc.itinerary.write`. Connected calendar titles require
+`dcc.calendar.read` or the existing legacy calendar access. DCC-owned appointments
+use itinerary write. Existing provider events are read from DCC and edited in
+their source calendars.
+
+The write stores origination timezone and UTC start/end alongside the schedule
+grid's civil date and clocks. Repeated hours require explicit offsets. The
+current grid requires an ascending start and end on one storage-zone date. A
+planned slot does not start an activity. For completion, use the existing task
+or reconciliation actions only after explicit confirmation.
+
+`dcc_attach_chat_file` uses ChatGPT file parameters and the `dcc.files` grant.
+Use the original file and the returned canonical activity ID. ChatGPT never
+receives the DCC storage credentials. See the [capability audit and connector
+refresh instructions](mcp-capability-audit.md).

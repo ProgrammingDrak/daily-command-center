@@ -15,7 +15,7 @@
   function choices(categories,scopes) {
     return categories.map(c=>{
       const value=scopes.includes(c.write)?'write':scopes.includes(c.read)?'read':'off';
-      return '<div class="connection-permission"><div id="connection-label-'+c.id+'"><strong>'+esc(c.label)+'</strong><small>'+esc(c.description)+'</small></div><div class="connection-levels" role="radiogroup" aria-labelledby="connection-label-'+c.id+'">'+[['off','Off'],['read','Read only'],['write','Full control']].map(([level,label])=>'<label><input type="radio" name="'+c.id+'" value="'+level+'"'+(value===level?' checked':'')+'><span>'+label+'</span></label>').join('')+'</div></div>';
+      return '<div class="connection-permission"><div id="connection-label-'+c.id+'"><strong>'+esc(c.label)+'</strong><small>'+esc(c.description)+'</small></div><div class="connection-levels" role="radiogroup" aria-labelledby="connection-label-'+c.id+'">'+[['off','Off'],['read','Read only'],['write','Full control']].filter(([level])=>level!=='write'||c.write).map(([level,label])=>'<label><input type="radio" name="'+c.id+'" value="'+level+'"'+(value===level?' checked':'')+'><span>'+label+'</span></label>').join('')+'</div></div>';
     }).join('');
   }
   async function request(url,options={}) {
