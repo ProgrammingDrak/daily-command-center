@@ -29,6 +29,10 @@ grants only the selected subset of the client-requested scopes.
 | Category | Read | Full control adds |
 | --- | --- | --- |
 | Tasks and scheduling | `dcc.tasks.read` | `dcc.tasks.write` |
+| Task deletion | `dcc.cleanup.read` | `dcc.cleanup.write` |
+| Activity controls | `dcc.activity.read` | `dcc.activity.write` |
+| Itinerary | `dcc.itinerary.read` | `dcc.itinerary.write` |
+| Connected calendar | `dcc.calendar.read` | Read only |
 | Repeat tasks | `dcc.repeats.read` | `dcc.repeats.write` |
 | Working Queue and delegation | `dcc.queue.read` | `dcc.queue.write` |
 | Time records | `dcc.time.read` | `dcc.time.write` |
@@ -72,7 +76,7 @@ bulk cleanup. Queue, delegation and time-correction tools accept their new
 category scopes as alternatives to their existing legacy scopes. New readers
 omit unrelated queue snapshots and time data. Mutations return compact receipts.
 
-For deletion, prepare a cleanup with exact IDs or `allRepeats:true`, inspect its
+Task deletion additionally requires its own scoped consent. For deletion, prepare a cleanup with exact IDs or `allRepeats:true`, inspect its
 manifest, then run its persistent job until terminal. A clear user instruction
 already authorizes this sequence; do not add another approval just because the
 operation has multiple steps. Ask if the intended records are ambiguous.

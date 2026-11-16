@@ -1,8 +1,11 @@
 const M = require("./lib/conversation-model");
-const { version } = require("./lib/task-reconciliation");
+const { version, confirmCompletion } = require("./lib/task-reconciliation");
 const { isBlockDone } = require("./lib/task-timing");
 const { isLibraryTask, createProjectStore } = require("./project-store");
+const { lockScheduleForPlacement, originMarker } = require("./lib/reschedule");
 const Itinerary = require("./lib/itinerary-schedule");
+const Review = require("./lib/review-tomorrow");
+const TaskTypes = require("./public/js/task-types");
 const Zones = require("./public/js/schedule-zones");
 const { foldsIntoItinerary } = require("./public/js/task-model");
 const SCHEMA_SQL = `
@@ -45,6 +48,7 @@ const safeTask = (row) => ({
   sourceReferences: row.properties.sourceReferences || [],
   projectId: row.properties.projectId || null,
   definitionId: row.properties.responsibilityId || row.properties.repeatSeriesId || null,
+  completionTimeKnown: row.properties.completionTimeKnown ?? null,
   version: version(row),
   deleted: !!row.deleted_at
 });
@@ -91,8 +95,8 @@ function createChatControlStore(ctx) {
     try {
       await q.query("BEGIN");
       await authorize(q, actor);
-      await activeGrant(q, actor, true);
       await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["dcc-foreground:" + actor.userId]);
+      await activeGrant(q, actor, true);
       const result = await work(q);
       await q.query("COMMIT");
       return result;
@@ -125,7 +129,11 @@ function createChatControlStore(ctx) {
       [actor.workspaceId, [...new Set(rows.map((x) => x.date).filter(Boolean))]]
     );
     const roots = new Map(r.rows.map((x) => [x.date, x.properties]));
-    return rows.map((b) => ({ ...b, effectiveDone: isBlockDone(b, roots.get(b.date)) }));
+    return rows.map((b) => ({
+      ...b,
+      effectiveDone: isBlockDone(b, roots.get(b.date)),
+      overlay: roots.get(b.date)
+    }));
   }
   async function check(q, id, expected, actor) {
     const b = await row(q, id, actor, true);
@@ -299,6 +307,15 @@ function createChatControlStore(ctx) {
         validateTime(input.start);
         if (input.date === undefined) throw M.fail("Provide a date or null to unschedule");
         const tree = await effective(q, await db.getSubtree([b.id], actor.workspaceId, q), actor);
+        if (
+          tree.some(
+            (child) =>
+              Itinerary.calendarOwned(child) ||
+              child.properties.scheduleInstant?.source === "mcp-zoned" ||
+              fixedCommitment(child)
+          )
+        )
+          throw M.fail("Use the itinerary controls for fixed or calendar commitments", 409);
         if (tree.some((child) => child.effectiveDone || child.properties.startedAt))
           throw M.fail(
             "Completed or active descendants must remain in their recorded timeline; schedule the open tasks individually",
@@ -345,19 +362,30 @@ function createChatControlStore(ctx) {
           queueToday: ctx.getTodayStr?.()
         });
       } else if (args.action === "complete" || args.action === "reopen") {
+        if (Itinerary.calendarOwned(b)) throw M.fail("Calendar records are read-only through task controls", 409);
+        fields(input, args.action === "complete" ? ["outcome"] : []);
         const tree = await effective(q, await db.getSubtree([b.id], actor.workspaceId, q), actor);
         if (tree.some((child) => child.id !== b.id && !child.effectiveDone))
           throw M.fail("Select a concrete task; unfinished subtasks remain", 409);
-        const result = await db.setTaskCompletion({
-          taskRef: b.id,
-          completed: args.action === "complete",
-          mutationId: "chat:" + args.sourceEventId,
-          expectedRevision: b.properties._completionRevision || null,
-          userId: actor.userId,
-          workspaceId: actor.workspaceId,
-          transactionClient: q,
-          includeDescendants: false
-        });
+        const mutationId = "chat:" + M.digest(args.sourceEventId).slice(0, 40);
+        const result =
+          args.action === "complete"
+            ? await confirmCompletion(db, q, actor, b, {
+                mutationId,
+                reportAt: new Date().toISOString(),
+                outcome:
+                  input.outcome === undefined ? "User reported completion" : M.text(input.outcome, "outcome", 1200)
+              })
+            : await db.setTaskCompletion({
+                taskRef: b.id,
+                completed: false,
+                mutationId,
+                expectedRevision: b.properties._completionRevision || null,
+                userId: actor.userId,
+                workspaceId: actor.workspaceId,
+                transactionClient: q,
+                includeDescendants: false
+              });
         return { task: safeTask(result.task || (await row(q, b.id, actor))) };
       } else if (args.action === "restore") {
         if (!b.deleted_at) throw M.fail("Task is not deleted", 409);
@@ -507,6 +535,8 @@ function createChatControlStore(ctx) {
   }
   async function bulk(args, actor) {
     need(actor, "dcc.tasks.read");
+    need(actor, "dcc.cleanup.read");
+    if (args.action !== "status") need(actor, "dcc.cleanup.write");
     if (args.action === "prepare") {
       need(actor, "dcc.tasks.write");
       return once(args, actor, async (q) => {
@@ -756,21 +786,24 @@ function createChatControlStore(ctx) {
   }
 
   const appZone = ctx.APP_TIME_ZONE || "America/New_York";
-  async function itineraryRows(q, actor, start, end) {
-    const { rows } = await q.query(
-      `SELECT * FROM blocks WHERE workspace_id=$1 AND (user_id=$2 OR user_id IS NULL)
-       AND type='block' AND deleted_at IS NULL AND date BETWEEN $3 AND $4 ORDER BY date,sort_order,id`,
-      [actor.workspaceId, actor.userId, Zones.shiftDate(start, -2), Zones.shiftDate(end, 2)]
-    );
-    return rows
-      .map(db.parseBlock)
-      .filter(foldsIntoItinerary)
-      .filter((b) => !b.properties.retiredContainerHidden);
+  function itineraryEligible(b) {
+    return foldsIntoItinerary(b) && !b.properties.retiredContainerHidden;
   }
 
-  function itineraryEntry(b, zone) {
+  async function itineraryRows(q, actor, start, end) {
+    const rows = await db.getBlocksByDateRange(
+      Zones.shiftDate(start, -2),
+      Zones.shiftDate(end, 2),
+      actor.workspaceId,
+      q
+    );
+    return (ctx.filterLegacyGcalBlocks?.(rows) || rows).filter(
+      (b) => b.type === "block" && (b.user_id == null || b.user_id === actor.userId) && itineraryEligible(b)
+    );
+  }
+
+  function itineraryEntry(b, zone, times = Itinerary.interval(b, appZone)) {
     const p = b.properties;
-    const times = Itinerary.interval(b, appZone);
     const start = times && Zones.civil(times.start, zone);
     const end = times?.end && Zones.civil(times.end, zone);
     return {
@@ -782,7 +815,7 @@ function createChatControlStore(ctx) {
       startAt: times ? new Date(times.start).toISOString() : null,
       endAt: times?.end ? new Date(times.end).toISOString() : null,
       timeZone: times?.fixed ? p.scheduleInstant.zone : null,
-      fixedCommitment: p.userSetStart === true || Itinerary.calendarOwned(b),
+      fixedCommitment: fixedCommitment(b) || Itinerary.calendarOwned(b),
       calendarOwned: Itinerary.calendarOwned(b),
       travel: p.itineraryTravel || null
     };
@@ -800,20 +833,35 @@ function createChatControlStore(ctx) {
     const rows = await itineraryRows(pool, actor, date, endDate);
     const first = Zones.dayWindow(date, viewingZone).start;
     const last = Zones.dayWindow(endDate, viewingZone).end;
+    const timesById = new Map();
     const matching = rows.filter((b) => {
       if (Itinerary.calendarOwned(b) && !canReadCalendar(actor)) return false;
       const times = Itinerary.interval(b, appZone);
-      if (times) return times.start < last && (times.end ? times.end > first : times.start >= first);
-      if (b.properties.all_day)
-        return b.date <= endDate && (b.properties.all_day_end || Zones.shiftDate(b.date, 1)) > date;
-      return b.date >= date && b.date <= endDate;
+      if (times && (times.start >= last || (times.end ? times.end <= first : times.start < first))) return false;
+      if (!times) {
+        const matchesDate = b.properties.all_day
+          ? b.date <= endDate && (b.properties.all_day_end || Zones.shiftDate(b.date, 1)) > date
+          : b.date >= date && b.date <= endDate;
+        if (!matchesDate) return false;
+      }
+      timesById.set(b.id, times);
+      return true;
     });
-    const activities = (await effective(pool, matching, actor)).map((b) => itineraryEntry(b, viewingZone));
-    activities.sort((a, b) => a.date.localeCompare(b.date) || (a.startAt || "").localeCompare(b.startAt || ""));
+    const localDate = (b) => {
+      const times = timesById.get(b.id);
+      return times ? Zones.civil(times.start, viewingZone).date : b.date;
+    };
+    const dates = new Map(matching.map((b) => [b.id, localDate(b)]));
+    matching.sort(
+      (a, b) =>
+        dates.get(a.id).localeCompare(dates.get(b.id)) ||
+        (timesById.get(a.id)?.start ?? 0) - (timesById.get(b.id)?.start ?? 0)
+    );
+    const page = await effective(pool, matching.slice(offset, offset + 100), actor);
     return {
       viewingZone,
-      activities: activities.slice(offset, offset + 100),
-      nextOffset: activities.length > offset + 100 ? offset + 100 : null
+      activities: page.map((b) => itineraryEntry(b, viewingZone, timesById.get(b.id))),
+      nextOffset: matching.length > offset + 100 ? offset + 100 : null
     };
   }
 
@@ -857,20 +905,43 @@ function createChatControlStore(ctx) {
     if (input.location !== undefined) changes.taskLocation = itineraryLocation(input.location);
     if (input.travel !== undefined) changes.itineraryTravel = itineraryTravel(input.travel);
     if (!slot && !Object.keys(changes).length) throw M.fail("Provide at least one field to update");
-    return once({ ...args, tool: "itinerary" }, actor, async (q) => {
+    const result = await once({ ...args, tool: "itinerary" }, actor, async (q) => {
+      if (slot) {
+        try {
+          await lockScheduleForPlacement(q);
+        } catch (error) {
+          if (error.code === "55P03") throw M.fail("The schedule is busy. Retry the same operation.", 409);
+          throw error;
+        }
+      }
       let b;
       if (args.action !== "create") {
         b = await check(q, args.id, args.expectedVersion, actor);
-        if (b.deleted_at || !foldsIntoItinerary(b)) throw M.fail("Activity not found", 404);
+        if (b.deleted_at || !itineraryEligible(b)) throw M.fail("Activity not found", 404);
+        if (!b.date) {
+          if (args.action !== "schedule" || !has(actor, "dcc.tasks.read") || !has(actor, "dcc.tasks.write"))
+            throw M.fail(
+              "Activity not found on the itinerary. To schedule from Task Library, authorize task access.",
+              404
+            );
+        }
         if (Itinerary.calendarOwned(b)) throw M.fail("Change this event in its source calendar", 409);
         if (await seriesFor(q, b, actor)) need(actor, "dcc.repeats.write");
-        if ((await effective(q, [b], actor))[0].effectiveDone)
-          throw M.fail("Completed activities retain their recorded plan", 409);
+        [b] = await effective(q, [b], actor);
+        if (b.effectiveDone) throw M.fail("Completed activities retain their recorded plan", 409);
         if (slot) {
-          if (b.properties.userSetStart && args.moveFixed !== true)
+          if (TaskTypes.rule(b.properties, "movable") === false)
+            throw M.fail("This type of activity has a fixed time in DCC", 409);
+          if (fixedCommitment(b) && args.moveFixed !== true)
             throw M.fail("Fixed commitment. Set moveFixed only when the user explicitly asks to move this entry", 409);
           const tree = await db.getSubtree([b.id], actor.workspaceId, q);
-          if (tree.some((child) => child.id !== b.id) || b.properties.subtaskOf || b.properties.wrapId)
+          const parent = b.parent_id && (await db.getBlock(b.parent_id, q));
+          if (
+            tree.some((child) => child.id !== b.id) ||
+            b.properties.subtaskOf ||
+            b.properties.wrapId ||
+            (parent && db.isTaskRow(parent))
+          )
             throw M.fail("Schedule a standalone activity. Nested moves require the DCC placement controls", 422);
         }
       } else if (!changes.title || args.id !== undefined) {
@@ -881,7 +952,7 @@ function createChatControlStore(ctx) {
         const rows = await itineraryRows(q, actor, slot.date, slot.date);
         const conflicts = rows.filter((existing) => {
           if (existing.id === b?.id) return false;
-          const times = Itinerary.interval(existing, appZone);
+          const times = Itinerary.occupied(existing, appZone);
           return (
             times?.end &&
             times.start < slot.endMs &&
@@ -910,21 +981,33 @@ function createChatControlStore(ctx) {
       }
 
       if (!b) {
-        b = await projects.createTask(
-          {
-            id: "chat-itinerary-" + M.digest([actor.userId, actor.workspaceId, args.sourceEventId]).slice(0, 32),
-            title: changes.title,
-            detail: changes.detail,
-            date: slot.date,
-            duration: slot.properties.duration,
-            kind: "task",
-            source: "conversation"
-          },
+        const id = "chat-itinerary-" + M.digest([actor.userId, actor.workspaceId, args.sourceEventId]).slice(0, 32);
+        const [saved] = await db.createItineraryTasks(
+          [
+            {
+              id,
+              date: slot.date,
+              properties: {
+                ...slot.properties,
+                ...changes,
+                local_id: id,
+                kind: "task",
+                type: "task",
+                source: "conversation",
+                status: "open",
+                priority: "Medium",
+                publicVisibility: "private",
+                added_at: new Date().toISOString()
+              }
+            }
+          ],
           actor,
           q
         );
+        return { activity: itineraryEntry(saved, input.timeZone) };
       }
       const properties = { ...b.properties, ...slot?.properties, ...changes };
+      if (changes.taskLocation) properties.taskLocation = { ...b.properties.taskLocation, ...changes.taskLocation };
       if (slot) {
         delete properties.all_day;
         delete properties.all_day_start;
@@ -933,26 +1016,48 @@ function createChatControlStore(ctx) {
         delete properties.reschedulePlacement;
         delete properties.timeBlockPlacement;
         properties._pinnedStart = properties.start;
-        if (b.date && b.date !== slot.date) properties.rescheduledFrom = { date: b.date, at: new Date().toISOString() };
-        await db.rescheduleBlocks(
-          [{ id: b.id, date: slot.date, properties, expectedDate: b.date, expectedUpdatedAt: b.updated_at }],
-          [],
-          {
-            transactionClient: q,
-            queueOwner: actor,
-            queueToday: ctx.getTodayStr?.()
-          }
-        );
+        const now = new Date().toISOString();
+        const dateChanged = b.date && b.date !== slot.date;
+        if (dateChanged) properties.rescheduledFrom = { date: b.date, at: now };
+        const existing = dateChanged ? await db.getRescheduleTombstone(b.date, b.id, actor.workspaceId, q) : null;
+        if (existing?.user_id != null && existing.user_id !== actor.userId)
+          throw M.fail("The activity's origin marker belongs to another account", 409);
+        const marker = originMarker(b, b.date, slot.date, existing, actor, now);
+        const moves = [
+          { id: b.id, date: slot.date, properties, expectedDate: b.date, expectedUpdatedAt: b.updated_at }
+        ];
+        if (marker.move) moves.push(marker.move);
+        await db.rescheduleBlocks(moves, marker.create ? [marker.create] : [], {
+          transactionClient: q,
+          queueOwner: actor,
+          queueToday: ctx.getTodayStr?.()
+        });
       } else {
         await db.updateBlock(b.id, { properties }, q);
       }
       const saved = await row(q, b.id, actor);
       return { activity: itineraryEntry(saved, input.timeZone || saved.properties.scheduleInstant?.zone || appZone) };
     });
+    if (slot) ctx.broadcastQueueChange?.(actor.userId, actor.workspaceId);
+    return result;
   }
 
   return { tasks, repeats, organization, bulk, files, attachChatFile, itineraryRead, itineraryWrite };
 }
+function fixedCommitment(block) {
+  const p = block.properties;
+  const locks = Review.overlay({ properties: block.overlay }).locked;
+  return !!(
+    p.userSetStart ||
+    p._userSetStart ||
+    p.locked ||
+    p._locked ||
+    locks.includes(block.id) ||
+    locks.includes(p.local_id) ||
+    TaskTypes.isFixed(p.type || p.kind)
+  );
+}
+
 function canReadCalendar(actor) {
   return has(actor, "dcc.calendar.read") || has(actor, "dcc.read");
 }
@@ -985,7 +1090,7 @@ function itineraryLocation(value) {
     result.latitude = value.latitude;
     result.longitude = value.longitude;
   }
-  if (!result.label && !result.address) throw M.fail("Provide a place name or address");
+  if (!Object.keys(result).length) throw M.fail("Provide location fields or null to clear the location");
   return result;
 }
 

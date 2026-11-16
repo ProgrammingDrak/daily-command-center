@@ -327,9 +327,11 @@ const scopeFor = (name) => wishlistMcp.scopeFor(name) || (
   name === "dcc_calendar_events" ? ["dcc.read", "dcc.calendar.read"] :
   require('../lib/chat-control-tools').categoryFor[name] ? `dcc.${require('../lib/chat-control-tools').categoryFor[name]}.read` :
   name === 'dcc_connection_status' ? permissions.scopes :
+  name === "dcc_current_activity" ? ["dcc.read", "dcc.activity.read"] :
+  name === "dcc_work" ? ["dcc.work", "dcc.queue.write", "dcc.activity.write"] :
   name === 'dcc_working_queue' ? ['dcc.read','dcc.queue.read'] :
   name === 'dcc_correct_time' ? ['dcc.correct','dcc.time.write'] :
-  ['dcc_queue','dcc_work'].includes(name) ? ['dcc.work','dcc.queue.write'] :
+  name === 'dcc_queue' ? ['dcc.work','dcc.queue.write'] :
   name === 'dcc_delegate' ? ['dcc.delegate','dcc.queue.write'] :
   name === "dcc_save_someday_idea" ? "dcc.capture" :
   name === "dcc_reconcile_task"
@@ -608,7 +610,9 @@ module.exports = function mount(app, ctx, config = {}) {
         if (name === "dcc_search_tasks") result = await store.search(args, identity);
         if (name === "dcc_current_activity" || name === "dcc_working_queue") {
           result = await store.state(identity);
-          if (!identity.scopes.includes('dcc.read')) result = {revision:result.revision,queue:{items:(result.queue?.items||[]).map(item=>({status:item.status,taskId:item.task?.id,title:item.task?.properties?.title,taskPriority:item.taskPriority,blocked:item.blocked,needsYou:item.needsYou}))}};
+          if (name === "dcc_current_activity" && !identity.scopes.includes("dcc.read"))
+            result = { revision: result.revision, foreground: result.foreground, background: result.background, timeZone: result.timeZone };
+          if (name === "dcc_working_queue" && !identity.scopes.includes("dcc.read")) result = {revision:result.revision,queue:{items:(result.queue?.items||[]).map(item=>({status:item.status,taskId:item.task?.id,title:item.task?.properties?.title,taskPriority:item.taskPriority,blocked:item.blocked,needsYou:item.needsYou}))}};
         }
         if (name === "dcc_calendar_events") result = await store.calendarEvents(args, identity);
         if (name === "dcc_task") result = await store.get(M.text(args.taskId, "taskId"), identity);

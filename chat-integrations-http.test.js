@@ -159,6 +159,10 @@ test(
     assert.ok(tools.includes("dcc_itinerary"));
     assert.ok(tools.includes("dcc_itinerary_write"));
     assert.ok(tools.includes("dcc_calendar_events"));
+    const schemas = (await rpc("tools/list")).body.result.tools;
+    const fileTool = schemas.find((entry) => entry.name === "dcc_attach_chat_file");
+    assert.deepEqual(fileTool._meta["openai/fileParams"], ["file"]);
+    assert.deepEqual(fileTool.securitySchemes, [{ type: "oauth2", scopes: ["dcc.files.write"] }]);
 
     const tool = async (name, args) => (await rpc("tools/call", name, args)).body.result;
     const date = "2026-11-16";
@@ -249,6 +253,85 @@ test(
       "14:10"
     );
 
+    const moveDinner = await tool("dcc_itinerary_write", {
+      action: "schedule",
+      id: dinner.id,
+      expectedVersion: (await read()).find(({ id }) => id === dinner.id).version,
+      sourceEventId: "fixture-cross-date",
+      moveFixed: true,
+      input: { date: "2026-11-17", timeZone, start: "18:00", end: "20:00" }
+    });
+    assert.equal(moveDinner.structuredContent?.activity.date, "2026-11-17");
+    const marker = await ctx.blockDB.getRescheduleTombstone(date, dinner.id, "ws-1");
+    assert.equal(marker.properties.rescheduledTo, "2026-11-17");
+    assert.equal(marker.properties.publicVisibility, "private");
+
+    const contenders = await Promise.all([
+      tool("dcc_itinerary_write", create("Fixture contender A", "20:15", "20:30")),
+      tool("dcc_itinerary_write", create("Fixture contender B", "20:15", "20:30"))
+    ]);
+    assert.equal(contenders.filter((result) => result.structuredContent?.saveStatus === "verified_saved").length, 1);
+    assert.equal(
+      contenders.filter((result) => result.isError && JSON.parse(result.content[0].text).code === "conflict").length,
+      1
+    );
+
+    const provider = await ctx.blockDB.createBlock({
+      id: "fixture-provider",
+      workspace_id: "ws-1",
+      user_id: 1,
+      type: "block",
+      date: "2026-11-10",
+      properties: {
+        title: "Synthetic provider hold",
+        type: "meeting",
+        kind: "meeting",
+        source: "calendar",
+        all_day: true,
+        all_day_start: "2026-11-10",
+        all_day_end: "2026-11-17"
+      }
+    });
+    assert.ok((await read()).some((entry) => entry.id === provider.id && entry.calendarOwned));
+    const allDayConflict = await tool("dcc_itinerary_write", create("Provider hold conflict", "20:45", "21:00"));
+    assert.match(JSON.parse(allDayConflict.content[0].text).error, /fixture-provider/);
+    const providerEdit = await tool("dcc_itinerary_write", {
+      action: "update",
+      id: provider.id,
+      expectedVersion: (await read()).find(({ id }) => id === provider.id).version,
+      sourceEventId: "provider-edit-denied",
+      input: { title: "Do not rename" }
+    });
+    assert.match(JSON.parse(providerEdit.content[0].text).error, /source calendar/);
+    assert.equal((await ctx.blockDB.getBlock(provider.id)).properties.title, "Synthetic provider hold");
+
+    const taskResult = await tool("dcc_tasks", {
+      action: "create",
+      sourceEventId: "unscheduled-private",
+      input: { title: "Unscheduled private task" }
+    });
+    const unscheduled = taskResult.structuredContent.task;
+    const limited = { userId: 1, workspaceId: "ws-1", scopes: ["dcc.itinerary.read", "dcc.itinerary.write"] };
+    const control = require("./chat-control-store").createChatControlStore(ctx);
+    await assert.rejects(
+      control.itineraryWrite(
+        {
+          action: "update",
+          id: unscheduled.id,
+          expectedVersion: unscheduled.version,
+          sourceEventId: "private-update-denied",
+          input: { title: "Do not rename" }
+        },
+        limited
+      ),
+      /Activity not found/
+    );
+    assert.ok(
+      !(await control.itineraryRead({ date, viewingZone: timeZone }, limited)).activities.some(
+        (entry) => entry.id === provider.id
+      )
+    );
+
     const image = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jE3cAAAAASUVORK5CYII=",
       "base64"
@@ -261,6 +344,13 @@ test(
       mime: "image/png",
       base64: image.toString("base64")
     };
+    const refused = await tool("dcc_attach_chat_file", {
+      taskId: train.id,
+      id: upload.id,
+      filename: upload.filename,
+      file: { file_id: "fixture", download_url: "http://127.0.0.1/private" }
+    });
+    assert.equal(JSON.parse(refused.content[0].text).code, "not_supported");
     const file = (await tool("dcc_files", upload)).structuredContent;
     assert.equal(file?.saveStatus, "verified_saved");
     assert.deepEqual((await tool("dcc_files", upload)).structuredContent, file);
@@ -283,11 +373,13 @@ test(
     });
     assert.equal(completed.structuredContent?.saveStatus, "verified_saved", JSON.stringify(completed));
     assert.equal((await read()).find(({ id }) => id === park.id).status, "done");
+    assert.equal((await ctx.blockDB.getBlock(park.id)).properties.completionTimeKnown, false);
     const row = await ctx.blockDB.getBlock(train.id);
     const TaskModel = require("./public/js/task-model");
     assert.ok(TaskModel.foldsIntoItinerary(row));
     assert.equal(TaskModel.fromBlock(row, { deriveEnd: true }).start, "07:03");
     assert.equal(TaskModel.fromBlock(row, { deriveEnd: true }).end, "08:28");
+    assert.equal(row.properties.publicVisibility, "private");
     assert.equal(row.properties.startedAt, undefined);
     assert.equal(row.properties.completedAt, undefined);
     assert.ok(!tools.includes("dcc_task"), "legacy all-data readers are not exposed");
@@ -297,11 +389,23 @@ test(
     const grant = (await oauth.list({ userId: 1, workspaceId: "ws-1" }))[0];
     assert.ok(grant.last_verified_at);
     assert.equal(
-      (await request("/connections/conversation/permissions", { csrf, grantId: grant.id, tasks: "read" })).status,
+      (
+        await request("/connections/conversation/permissions", {
+          csrf,
+          grantId: grant.id,
+          tasks: "read",
+          itinerary: "read",
+          files: "read"
+        })
+      ).status,
       302
     );
     tools = (await rpc("tools/list")).body.result.tools.map((t) => t.name);
     assert.ok(!tools.includes("dcc_itinerary_write"));
+    assert.ok(!tools.includes("dcc_attach_chat_file"));
+    assert.ok(tools.includes("dcc_itinerary"));
+    assert.ok(tools.includes("dcc_files"));
+    assert.ok(!tools.includes("dcc_calendar_events"));
     assert.equal((await rpc("tools/call", "dcc_itinerary_write", trainRequest)).status, 403);
     const denied = await rpc("tools/call", "dcc_tasks", {
       action: "create",
