@@ -322,11 +322,16 @@ const tools = [
   }
 ];
 const scopeFor = (name) => wishlistMcp.scopeFor(name) || (
+  name === "dcc_attach_chat_file" ? "dcc.files.write" :
+  name === "dcc_itinerary_write" ? "dcc.itinerary.write" :
+  name === "dcc_calendar_events" ? ["dcc.read", "dcc.calendar.read"] :
   require('../lib/chat-control-tools').categoryFor[name] ? `dcc.${require('../lib/chat-control-tools').categoryFor[name]}.read` :
   name === 'dcc_connection_status' ? permissions.scopes :
+  name === "dcc_current_activity" ? ["dcc.read", "dcc.activity.read"] :
+  name === "dcc_work" ? ["dcc.work", "dcc.queue.write", "dcc.activity.write"] :
   name === 'dcc_working_queue' ? ['dcc.read','dcc.queue.read'] :
   name === 'dcc_correct_time' ? ['dcc.correct','dcc.time.write'] :
-  ['dcc_queue','dcc_work'].includes(name) ? ['dcc.work','dcc.queue.write'] :
+  name === 'dcc_queue' ? ['dcc.work','dcc.queue.write'] :
   name === 'dcc_delegate' ? ['dcc.delegate','dcc.queue.write'] :
   name === "dcc_save_someday_idea" ? "dcc.capture" :
   name === "dcc_reconcile_task"
@@ -576,7 +581,10 @@ module.exports = function mount(app, ctx, config = {}) {
         if (name === 'dcc_connection_status') result = {accountId:identity.userId,workspaceId:identity.workspaceId,status:'verified',permissions:permissions.categories.map(c=>({category:c.id,level:permissions.level(identity.scopes,c.id)})),legacyScopes:identity.scopes.filter(s=>permissions.legacy.includes(s))};
         if (category && name !== 'dcc_time_records') {
           control ||= require('../chat-control-store').createChatControlStore(ctx);
-          result = await control[name === 'dcc_bulk_cleanup' ? 'bulk' : category](args,identity);
+          const handler = {
+            dcc_attach_chat_file: "attachChatFile", dcc_bulk_cleanup: "bulk", dcc_itinerary: "itineraryRead", dcc_itinerary_write: "itineraryWrite"
+          }[name] || category;
+          result = await control[handler](args, identity);
         }
         if (name === 'dcc_time_records') {
           const offset = Number(args.offset || 0);
@@ -602,7 +610,9 @@ module.exports = function mount(app, ctx, config = {}) {
         if (name === "dcc_search_tasks") result = await store.search(args, identity);
         if (name === "dcc_current_activity" || name === "dcc_working_queue") {
           result = await store.state(identity);
-          if (!identity.scopes.includes('dcc.read')) result = {revision:result.revision,queue:{items:(result.queue?.items||[]).map(item=>({status:item.status,taskId:item.task?.id,title:item.task?.properties?.title,taskPriority:item.taskPriority,blocked:item.blocked,needsYou:item.needsYou}))}};
+          if (name === "dcc_current_activity" && !identity.scopes.includes("dcc.read"))
+            result = { revision: result.revision, foreground: result.foreground, background: result.background, timeZone: result.timeZone };
+          if (name === "dcc_working_queue" && !identity.scopes.includes("dcc.read")) result = {revision:result.revision,queue:{items:(result.queue?.items||[]).map(item=>({status:item.status,taskId:item.task?.id,title:item.task?.properties?.title,taskPriority:item.taskPriority,blocked:item.blocked,needsYou:item.needsYou}))}};
         }
         if (name === "dcc_calendar_events") result = await store.calendarEvents(args, identity);
         if (name === "dcc_task") result = await store.get(M.text(args.taskId, "taskId"), identity);
@@ -693,16 +703,22 @@ module.exports = function mount(app, ctx, config = {}) {
               duplicate: result.duplicate === true
             };
         }
-        await oauth.verified(identity.grantId);
+        // Connection verification is telemetry; failure after commit must not mask a saved write.
+        await oauth.verified(identity.grantId).catch(() => {});
         reply({ content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, isError: false });
       } catch (e) {
+        const status = e.statusCode || 500;
+        const code = ({ 400: "validation_failed", 401: "permission_denied", 403: "permission_denied",
+          404: "not_found", 409: "conflict", 413: "validation_failed", 415: "validation_failed",
+          422: "not_supported", 503: "not_supported" })[status] || "save_uncertain";
         reply({
           content: [
             {
               type: "text",
               text: JSON.stringify({
                 error: e.statusCode ? e.message : wishlistMcp.scopeFor(name) ? "Wishlist request could not be confirmed" : "Activity could not be saved",
-                status: e.statusCode || 500
+                status,
+                code
               })
             }
           ],

@@ -47,6 +47,34 @@ async function main() {
     enabled: true,
     clientsReady: true
   });
+  const { selectViewingRange } = require("../lib/viewing-date-range");
+  const Zones = require("../public/js/schedule-zones");
+  app.get("/api/blocks/range", async (req, res, next) => {
+    try {
+      const { start, end, viewingZone } = req.query;
+      const rows = await ctx.blockDB.getBlocksByDateRange(Zones.shiftDate(start, -2), Zones.shiftDate(end, 2), "ws-1");
+      res.json(viewingZone ? selectViewingRange(rows, start, end, viewingZone, "America/New_York") : rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+  await require("../chat-control-store")
+    .createChatControlStore(ctx)
+    .itineraryWrite(
+      {
+        action: "create",
+        sourceEventId: "calendar-tokyo-browser-fixture",
+        input: {
+          date: "2026-11-16",
+          start: "21:03",
+          end: "22:28",
+          timeZone: "Asia/Tokyo",
+          title: "Nozomi 108 fixture",
+          location: { label: "Hiroshima Station" }
+        }
+      },
+      { ...session, scopes: ["dcc.itinerary.read", "dcc.itinerary.write"] }
+    );
   process.env.DCC_REVIEW_EXPORT_APP = "1";
   const review = await import("./ui-review-server.mjs");
   app.use(review.default);
@@ -77,7 +105,10 @@ async function main() {
     );
     await page.locator('[data-service="chatgpt"]').click();
     await page.locator("[data-permissions]").waitFor();
-    assert.equal(await page.locator('[data-permissions] [role="radiogroup"]').count(), 6);
+    assert.equal(
+      await page.locator('[data-permissions] [role="radiogroup"]').count(),
+      require("../lib/chat-permissions").categories.length
+    );
     assert.equal(await page.locator('input[name="tasks"][value="read"]').isChecked(), true);
     await page.locator('[data-action="allow-all"]').click();
     await page.locator('[data-action="connect"]').click();
@@ -90,7 +121,9 @@ async function main() {
     await page.waitForFunction(() =>
       document.querySelector(".connection-feedback")?.textContent.includes("No new authorization")
     );
-    const scopes = require("../lib/chat-permissions").categories.flatMap((c) => [c.read, c.write]);
+    const scopes = require("../lib/chat-permissions").scopes.filter(
+      (scope) => !require("../lib/chat-permissions").legacy.includes(scope)
+    );
     await ctx.pool.query(
       "INSERT INTO conversation_grants(id,user_id,workspace_id,client_id,scopes,last_verified_at) VALUES('review-chat',1,'ws-1','ChatGPT',$1,NOW())",
       [JSON.stringify(scopes)]
@@ -144,9 +177,20 @@ async function main() {
     await page.goto(base + "/connections/conversation");
     await page.getByRole("dialog", { name: "ChatGPT", exact: true }).waitFor();
     assert.equal(new URL(page.url()).pathname, "/", "old bookmarks route to the in-app panel");
+    await page.goto(base + "/?tab=tasks&view=calendar");
+    await page.locator(".iwc-date-jump").evaluate((input) => {
+      input.value = "2026-11-16";
+      input.dispatchEvent(new window.Event("change"));
+    });
+    await page.locator(".iwc-zone-settings summary").click();
+    await page.locator('.iwc-zone-settings select[name="mode"]').selectOption("manual");
+    await page.locator('.iwc-zone-settings input[name="zone"]').fill("Asia/Tokyo");
+    await page.locator(".iwc-zone-settings").getByRole("button", { name: "Apply" }).click();
+    await page.getByText("21:03 · Nozomi 108 fixture", { exact: true }).waitFor();
+    await page.screenshot({ path: "/tmp/dcc-mcp-tokyo-calendar.png" });
     assert.deepEqual(errors, []);
     console.log(
-      "Passed: real DCC shell, unified menu, permission persistence, explicit authorization, reductions, disconnect, retained Slack/Calendar/triage, old links, keyboard focus, mobile, zoom and reduced motion."
+      "Passed: real DCC shell, unified menu, permission persistence, explicit authorization, reductions, disconnect, retained Slack/Calendar/triage, old links, keyboard focus, mobile, zoom, reduced motion and Calendar rendering of a zoned MCP activity."
     );
   } finally {
     await browser.close();

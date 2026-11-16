@@ -1,7 +1,13 @@
 const M = require("./lib/conversation-model");
-const { version } = require("./lib/task-reconciliation");
+const { version, confirmCompletion } = require("./lib/task-reconciliation");
 const { isBlockDone } = require("./lib/task-timing");
 const { isLibraryTask, createProjectStore } = require("./project-store");
+const { lockWorkspaceSchedule, originMarker } = require("./lib/reschedule");
+const Itinerary = require("./lib/itinerary-schedule");
+const Review = require("./lib/review-tomorrow");
+const TaskTypes = require("./public/js/task-types");
+const Zones = require("./public/js/schedule-zones");
+const { foldsIntoItinerary } = require("./public/js/task-model");
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS chat_operations (
  user_id INTEGER NOT NULL REFERENCES users(id),workspace_id TEXT NOT NULL REFERENCES workspaces(id),
@@ -36,8 +42,13 @@ const safeTask = (row) => ({
   status: row.effectiveDone ? "done" : row.properties.status || "open",
   start: row.properties.start || null,
   duration: row.properties.duration || null,
+  priority: row.properties.priority || null,
+  tags: row.properties.tags || [],
+  location: row.properties.taskLocation || row.properties.location || null,
+  sourceReferences: row.properties.sourceReferences || [],
   projectId: row.properties.projectId || null,
   definitionId: row.properties.responsibilityId || row.properties.repeatSeriesId || null,
+  completionTimeKnown: row.properties.completionTimeKnown ?? null,
   version: version(row),
   deleted: !!row.deleted_at
 });
@@ -69,12 +80,23 @@ function createChatControlStore(ctx) {
     ]);
     if (!r.rows.length) throw M.fail("Workspace owner required", 403);
   }
+  async function activeGrant(q, actor, lock = false) {
+    if (!actor.grantId) return;
+    const { rows } = await q.query(
+      "SELECT scopes FROM conversation_grants WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND revoked_at IS NULL" +
+        (lock ? " FOR SHARE" : ""),
+      [actor.grantId, actor.userId, actor.workspaceId]
+    );
+    if (!rows[0] || !actor.scopes.every((scope) => rows[0].scopes.includes(scope)))
+      throw M.fail("Connection access changed. Read the current permissions and retry.", 403);
+  }
   async function tx(actor, work) {
     const q = await pool.connect();
     try {
       await q.query("BEGIN");
       await authorize(q, actor);
       await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["dcc-foreground:" + actor.userId]);
+      await activeGrant(q, actor, true);
       const result = await work(q);
       await q.query("COMMIT");
       return result;
@@ -85,7 +107,7 @@ function createChatControlStore(ctx) {
       q.release();
     }
   }
-  async function row(q, id, actor, deleted = false) {
+  async function row(q, id, actor, deleted = false, missing = "Record not found") {
     M.text(id, "taskId", 200);
     const r = await q.query(
       "SELECT * FROM blocks WHERE id=$1 AND workspace_id=$2 AND (user_id=$3 OR user_id IS NULL)" +
@@ -98,7 +120,7 @@ function createChatControlStore(ctx) {
       !b ||
       (!db.isTaskRow(b) && !definition(b) && !["project", "task_facet", "task_view"].includes(b.properties.kind))
     )
-      throw M.fail("Record not found", 404);
+      throw M.fail(missing, 404);
     return b;
   }
   async function effective(q, rows, actor) {
@@ -107,14 +129,20 @@ function createChatControlStore(ctx) {
       [actor.workspaceId, [...new Set(rows.map((x) => x.date).filter(Boolean))]]
     );
     const roots = new Map(r.rows.map((x) => [x.date, x.properties]));
-    return rows.map((b) => ({ ...b, effectiveDone: isBlockDone(b, roots.get(b.date)) }));
+    return rows.map((b) => ({
+      ...b,
+      effectiveDone: isBlockDone(b, roots.get(b.date)),
+      overlay: roots.get(b.date)
+    }));
   }
-  async function check(q, id, expected, actor) {
-    const b = await row(q, id, actor, true);
+  function checkVersion(b, expected) {
     if (!expected || version(b) !== expected)
       throw M.fail("Record changed; read it again before applying this operation", 409);
     if (b.properties.startedAt) throw M.fail("Pause active work before editing or deleting it", 409);
     return b;
+  }
+  async function check(q, id, expected, actor) {
+    return checkVersion(await row(q, id, actor, true), expected);
   }
   async function seriesFor(q, b, actor) {
     const seen = new Set();
@@ -159,17 +187,31 @@ function createChatControlStore(ctx) {
       ]);
       return result;
     });
-    ctx.broadcast?.("blocks-changed", { action: "chat-control", sourceEventId: args.sourceEventId }, actor.workspaceId);
+    const blockIds = [result.task?.id, result.activity?.id, ...(result.activities || []).map((item) => item.id)].filter(
+      Boolean
+    );
+    ctx.broadcast?.(
+      "blocks-changed",
+      { action: "chat-control", blockIds, sourceEventId: args.sourceEventId },
+      actor.workspaceId
+    );
     return result;
   }
   async function tasks(args, actor) {
     need(actor, "dcc.tasks.read");
-    if (["list", "get"].includes(args.action)) {
+    if (["list", "get", "history"].includes(args.action)) {
       await authorize(pool, actor);
-      if (args.action === "get") {
+      if (args.action === "get" || args.action === "history") {
         const b = await row(pool, args.id, actor, true);
         if (!isLibraryTask({ ...b, deleted_at: null }, db)) throw M.fail("Task not found", 404);
-        return safeTask((await effective(pool, [b], actor))[0]);
+        if (args.action === "get") return safeTask((await effective(pool, [b], actor))[0]);
+        const offset = args.offset ?? 0;
+        if (!Number.isSafeInteger(offset) || offset < 0) throw M.fail("Invalid offset");
+        const { rows } = await pool.query(
+          "SELECT id,op_type AS action,timestamp AS at FROM operations WHERE block_id=$1 ORDER BY id DESC LIMIT 51 OFFSET $2",
+          [b.id, offset]
+        );
+        return { taskId: b.id, events: rows.slice(0, 50), nextOffset: rows.length > 50 ? offset + 50 : null };
       }
       const offset = Number(args.offset || 0);
       if (!Number.isInteger(offset) || offset < 0) throw M.fail("Invalid offset");
@@ -242,6 +284,7 @@ function createChatControlStore(ctx) {
       if (!isLibraryTask({ ...b, deleted_at: null }, db)) throw M.fail("Task not found", 404);
       if (await seriesFor(q, b, actor)) need(actor, "dcc.repeats.write");
       if (args.action === "update") {
+        if (Itinerary.calendarOwned(b)) throw M.fail("Change this event in its source calendar", 409);
         fields(input, [
           "title",
           "detail",
@@ -253,14 +296,28 @@ function createChatControlStore(ctx) {
           "location",
           "sourceUrl"
         ]);
+        if (input.duration !== undefined && b.properties.scheduleInstant?.source === "mcp-zoned")
+          throw M.fail("Use dcc_itinerary_write to change the scheduled duration", 409);
         if (input.projectId !== undefined || input.facetValues !== undefined) need(actor, "dcc.organization.write");
         await projects.organizeTask(b.id, input, actor, q);
       } else if (args.action === "schedule") {
+        if (Itinerary.calendarOwned(b)) throw M.fail("Change this event in its source calendar", 409);
+        if (b.properties.scheduleInstant?.source === "mcp-zoned")
+          throw M.fail("Use dcc_itinerary_write to reschedule zoned itinerary entries", 409);
         fields(input, ["date", "start"]);
         validateDate(input.date);
         validateTime(input.start);
         if (input.date === undefined) throw M.fail("Provide a date or null to unschedule");
         const tree = await effective(q, await db.getSubtree([b.id], actor.workspaceId, q), actor);
+        if (
+          tree.some(
+            (child) =>
+              Itinerary.calendarOwned(child) ||
+              child.properties.scheduleInstant?.source === "mcp-zoned" ||
+              fixedCommitment(child)
+          )
+        )
+          throw M.fail("Use the itinerary controls for fixed or calendar commitments", 409);
         if (tree.some((child) => child.effectiveDone || child.properties.startedAt))
           throw M.fail(
             "Completed or active descendants must remain in their recorded timeline; schedule the open tasks individually",
@@ -307,19 +364,32 @@ function createChatControlStore(ctx) {
           queueToday: ctx.getTodayStr?.()
         });
       } else if (args.action === "complete" || args.action === "reopen") {
+        if (Itinerary.calendarOwned(b)) throw M.fail("Calendar records are read-only through task controls", 409);
+        fields(input, args.action === "complete" ? ["outcome"] : []);
         const tree = await effective(q, await db.getSubtree([b.id], actor.workspaceId, q), actor);
+        if (args.action === "complete" && tree.some((child) => child.id === b.id && child.effectiveDone))
+          throw M.fail("Task is already complete. Reopen it explicitly before changing the outcome.", 409);
         if (tree.some((child) => child.id !== b.id && !child.effectiveDone))
           throw M.fail("Select a concrete task; unfinished subtasks remain", 409);
-        const result = await db.setTaskCompletion({
-          taskRef: b.id,
-          completed: args.action === "complete",
-          mutationId: "chat:" + args.sourceEventId,
-          expectedRevision: b.properties._completionRevision || null,
-          userId: actor.userId,
-          workspaceId: actor.workspaceId,
-          transactionClient: q,
-          includeDescendants: false
-        });
+        const mutationId = "chat:" + M.digest(args.sourceEventId).slice(0, 40);
+        const result =
+          args.action === "complete"
+            ? await confirmCompletion(db, q, actor, b, {
+                mutationId,
+                reportAt: new Date().toISOString(),
+                outcome:
+                  input.outcome === undefined ? "User reported completion" : M.text(input.outcome, "outcome", 1200)
+              })
+            : await db.setTaskCompletion({
+                taskRef: b.id,
+                completed: false,
+                mutationId,
+                expectedRevision: b.properties._completionRevision || null,
+                userId: actor.userId,
+                workspaceId: actor.workspaceId,
+                transactionClient: q,
+                includeDescendants: false
+              });
         return { task: safeTask(result.task || (await row(q, b.id, actor))) };
       } else if (args.action === "restore") {
         if (!b.deleted_at) throw M.fail("Task is not deleted", 409);
@@ -469,6 +539,8 @@ function createChatControlStore(ctx) {
   }
   async function bulk(args, actor) {
     need(actor, "dcc.tasks.read");
+    need(actor, "dcc.cleanup.read");
+    if (args.action !== "status") need(actor, "dcc.cleanup.write");
     if (args.action === "prepare") {
       need(actor, "dcc.tasks.write");
       return once(args, actor, async (q) => {
@@ -490,6 +562,7 @@ function createChatControlStore(ctx) {
         for (const id of ids) selected.push(await row(q, id, actor));
         const rows = new Map();
         for (const b of selected) {
+          if (Itinerary.calendarOwned(b)) throw M.fail("Remove this event in its source calendar", 409);
           if (!definition(b) && !db.isTaskRow(b))
             throw M.fail("Cleanup accepts tasks and repeat definitions only", 400);
           if (await seriesFor(q, b, actor)) {
@@ -593,7 +666,13 @@ function createChatControlStore(ctx) {
         );
         for (const item of pending) {
           const b = await row(q, item.id, actor, true);
-          if (b.deleted_at || version(b) !== item.version || b.properties.startedAt || runningWorkers.has(b.id)) {
+          if (
+            b.deleted_at ||
+            Itinerary.calendarOwned(b) ||
+            version(b) !== item.version ||
+            b.properties.startedAt ||
+            runningWorkers.has(b.id)
+          ) {
             results.push({ id: b.id, status: "conflict" });
             continue;
           }
@@ -671,8 +750,9 @@ function createChatControlStore(ctx) {
     await authorize(pool, actor);
     if (args.action === "list")
       return { configured: attachments.configured, files: await attachments.list(actor, args.taskId) };
+    if (!require("./lib/task-attachment-policy").UUID.test(args.id || "")) throw M.fail("Provide a valid file UUID");
     if (args.action === "download") {
-      const file = await attachments.download(actor, args.taskId, args.id);
+      const file = await attachments.download(actor, args.taskId, args.id.toLowerCase());
       return { ...file, bytes: undefined, base64: file.bytes.toString("base64") };
     }
     need(actor, "dcc.files.write");
@@ -686,16 +766,369 @@ function createChatControlStore(ctx) {
         throw M.fail("Invalid or oversized file");
       const bytes = Buffer.from(args.base64, "base64"),
         meta = policy.validateFile({ buffer: bytes, originalname: args.filename, mimetype: args.mime });
-      if (!policy.UUID.test(args.id || "")) throw M.fail("Use a stable UUID for upload retries");
-      return attachments.upload(actor, args.taskId, args.id, meta, bytes);
+      const file = await attachments.upload(actor, args.taskId, args.id.toLowerCase(), meta, bytes);
+      return { ...file, taskId: args.taskId, saveStatus: file.pending ? "pending" : "verified_saved" };
     }
-    if (args.action === "remove") await attachments.remove(actor, args.taskId, args.id);
-    else if (args.action === "restore") await attachments.restore(actor, args.taskId, args.id);
+    if (args.action === "remove") await attachments.remove(actor, args.taskId, args.id.toLowerCase());
+    else if (args.action === "restore") await attachments.restore(actor, args.taskId, args.id.toLowerCase());
     else throw M.fail("Unknown file action");
-    return { id: args.id, saveStatus: "verified_saved" };
+    return { id: args.id.toLowerCase(), taskId: args.taskId, saveStatus: "verified_saved" };
   }
-  return { tasks, repeats, organization, bulk, files };
+  async function attachChatFile(args, actor) {
+    need(actor, "dcc.files.read");
+    need(actor, "dcc.files.write");
+    await authorize(pool, actor);
+    fields(args, ["taskId", "id", "filename", "file"]);
+    const policy = require("./lib/task-attachment-policy");
+    if (!policy.UUID.test(args.id || "")) throw M.fail("Use a stable UUID v4 for upload retries");
+    if (!attachments.configured) throw M.fail("Private task file storage is not configured", 503);
+    await attachments.authorize(actor, args.taskId);
+    const { meta, bytes } = await require("./lib/chat-file-input").readChatFile(args.file, args.filename);
+    await activeGrant(pool, actor);
+    const file = await attachments.upload(actor, args.taskId, args.id.toLowerCase(), meta, bytes);
+    return { ...file, taskId: args.taskId, saveStatus: file.pending ? "pending" : "verified_saved" };
+  }
+
+  const appZone = ctx.APP_TIME_ZONE || "America/New_York";
+  function itineraryEligible(b) {
+    return b.type === "block" && foldsIntoItinerary(b) && !b.properties.retiredContainerHidden;
+  }
+
+  async function itineraryRows(q, actor, start, end) {
+    const rows = await db.getBlocksByDateRange(
+      Zones.shiftDate(start, -2),
+      Zones.shiftDate(end, 2),
+      actor.workspaceId,
+      q
+    );
+    return (ctx.filterLegacyGcalBlocks?.(rows) || rows).filter(
+      (b) => (b.user_id == null || b.user_id === actor.userId) && itineraryEligible(b)
+    );
+  }
+
+  function itineraryEntry(b, zone, times = Itinerary.interval(b, appZone)) {
+    const p = b.properties;
+    const start = times && Zones.civil(times.start, zone);
+    const end = times?.end && Zones.civil(times.end, zone);
+    return {
+      ...safeTask(b),
+      date: start?.date || b.date,
+      start: start?.time || p.start || null,
+      end: end?.time || p.end || null,
+      endDate: end?.date || null,
+      startAt: times ? new Date(times.start).toISOString() : null,
+      endAt: times?.end ? new Date(times.end).toISOString() : null,
+      timeZone: times?.fixed ? p.scheduleInstant.zone : null,
+      fixedCommitment: fixedCommitment(b) || Itinerary.calendarOwned(b),
+      calendarOwned: Itinerary.calendarOwned(b),
+      travel: p.itineraryTravel || null
+    };
+  }
+
+  async function itineraryRead(args, actor) {
+    need(actor, "dcc.itinerary.read");
+    await authorize(pool, actor);
+    fields(args, ["date", "endDate", "viewingZone", "offset"]);
+    const { date, endDate = date, viewingZone = appZone, offset = 0 } = args;
+    if (!Zones.validDate(date) || !Zones.validDate(endDate) || endDate < date || endDate > Zones.shiftDate(date, 62))
+      throw M.fail("Provide a date range of up to 63 days");
+    if (!Zones.validZone(viewingZone)) throw M.fail("Provide an IANA viewing timezone");
+    if (!Number.isSafeInteger(offset) || offset < 0) throw M.fail("Invalid offset");
+    const rows = await itineraryRows(pool, actor, date, endDate);
+    const first = Zones.dayWindow(date, viewingZone).start;
+    const last = Zones.dayWindow(endDate, viewingZone).end;
+    const timesById = new Map();
+    const matching = rows.filter((b) => {
+      if (Itinerary.calendarOwned(b) && !canReadCalendar(actor)) return false;
+      const times = Itinerary.interval(b, appZone);
+      if (times && (times.start >= last || (times.end ? times.end <= first : times.start < first))) return false;
+      if (!times) {
+        const matchesDate = b.properties.all_day
+          ? b.date <= endDate && (b.properties.all_day_end || Zones.shiftDate(b.date, 1)) > date
+          : b.date >= date && b.date <= endDate;
+        if (!matchesDate) return false;
+      }
+      timesById.set(b.id, times);
+      return true;
+    });
+    const localDate = (b) => {
+      const times = timesById.get(b.id);
+      return times ? Zones.civil(times.start, viewingZone).date : b.date;
+    };
+    const dates = new Map(matching.map((b) => [b.id, localDate(b)]));
+    matching.sort(
+      (a, b) =>
+        dates.get(a.id).localeCompare(dates.get(b.id)) ||
+        (timesById.get(a.id)?.start ?? 0) - (timesById.get(b.id)?.start ?? 0)
+    );
+    const page = await effective(pool, matching.slice(offset, offset + 100), actor);
+    return {
+      viewingZone,
+      activities: page.map((b) => itineraryEntry(b, viewingZone, timesById.get(b.id))),
+      nextOffset: matching.length > offset + 100 ? offset + 100 : null
+    };
+  }
+
+  async function itineraryWrite(args, actor) {
+    need(actor, "dcc.itinerary.read");
+    need(actor, "dcc.itinerary.write");
+    fields(args, ["action", "id", "expectedVersion", "sourceEventId", "input", "allowOverlapWith", "moveFixed"]);
+    if (!["create", "update", "schedule"].includes(args.action)) throw M.fail("Unsupported itinerary action", 422);
+    const input = fields(args.input, [
+      "title",
+      "detail",
+      "date",
+      "start",
+      "end",
+      "endDate",
+      "timeZone",
+      "startOffset",
+      "endOffset",
+      "location",
+      "travel"
+    ]);
+    const editsTiming = ["date", "start", "end", "endDate", "timeZone", "startOffset", "endOffset"].some((key) =>
+      Object.hasOwn(input, key)
+    );
+    if (args.action === "update" && editsTiming) throw M.fail("Use schedule to move an existing activity");
+    const slot = args.action === "update" ? null : Itinerary.placement(input, appZone);
+    if (args.moveFixed !== undefined && typeof args.moveFixed !== "boolean") throw M.fail("Invalid moveFixed");
+    const allowed = args.allowOverlapWith ?? [];
+    if (
+      !Array.isArray(allowed) ||
+      allowed.length > 20 ||
+      allowed.some((id) => typeof id !== "string" || !id || id.length > 200)
+    )
+      throw M.fail("Provide up to 20 exact overlap IDs");
+    const changes = {};
+    if (input.title !== undefined) changes.title = M.text(input.title, "title", 300);
+    if (input.detail !== undefined) {
+      if (typeof input.detail !== "string" || input.detail.length > 5000) throw M.fail("Invalid detail");
+      changes.detail = input.detail;
+    }
+    if (input.location !== undefined) changes.taskLocation = itineraryLocation(input.location);
+    if (input.travel !== undefined) changes.itineraryTravel = itineraryTravel(input.travel);
+    if (!slot && !Object.keys(changes).length) throw M.fail("Provide at least one field to update");
+    const result = await once({ ...args, tool: "itinerary" }, actor, async (q) => {
+      if (slot) {
+        await q.query("SET LOCAL lock_timeout = '3s'");
+        await lockWorkspaceSchedule(q, actor.workspaceId);
+        // New rows take a key-share lock through their workspace foreign key.
+        await q.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [actor.workspaceId]);
+        // An existing row can move in from any date, including the undated pool.
+        // Lock only this workspace's native itinerary row type before reading occupancy.
+        await q.query(
+          "SELECT count(*) FROM (SELECT id FROM blocks WHERE workspace_id=$1 AND type='block' ORDER BY id FOR NO KEY UPDATE) AS placement_rows",
+          [actor.workspaceId]
+        );
+      }
+      let b;
+      if (args.action !== "create") {
+        b = await row(q, args.id, actor, false, "Activity not found");
+        if (!itineraryEligible(b)) throw M.fail("Activity not found", 404);
+        if (!b.date) {
+          if (args.action !== "schedule" || !has(actor, "dcc.tasks.read") || !has(actor, "dcc.tasks.write"))
+            throw M.fail("Activity not found", 404);
+        }
+        if (Itinerary.calendarOwned(b) && !canReadCalendar(actor)) throw M.fail("Activity not found", 404);
+        checkVersion(b, args.expectedVersion);
+        if (Itinerary.calendarOwned(b)) throw M.fail("Change this event in its source calendar", 409);
+        if (await seriesFor(q, b, actor)) need(actor, "dcc.repeats.write");
+        [b] = await effective(q, [b], actor);
+        if (b.effectiveDone) throw M.fail("Completed activities retain their recorded plan", 409);
+        if (slot) {
+          if (TaskTypes.rule(b.properties, "movable") === false)
+            throw M.fail("This type of activity has a fixed time in DCC", 409);
+          if (fixedCommitment(b) && args.moveFixed !== true)
+            throw M.fail("Fixed commitment. Set moveFixed only when the user explicitly asks to move this entry", 409);
+          const tree = await db.getSubtree([b.id], actor.workspaceId, q);
+          const parent = b.parent_id && (await db.getBlock(b.parent_id, q));
+          if (
+            tree.some((child) => child.id !== b.id) ||
+            b.properties.subtaskOf ||
+            b.properties.wrapId ||
+            (parent && db.isTaskRow(parent))
+          )
+            throw M.fail("Schedule a standalone activity. Nested moves require the DCC placement controls", 422);
+        }
+      } else if (!changes.title || args.id !== undefined) {
+        throw M.fail("Create requires a title and no existing ID");
+      }
+
+      if (slot) {
+        const rows = await itineraryRows(q, actor, slot.date, slot.date);
+        const conflicts = rows.filter((existing) => {
+          if (existing.id === b?.id) return false;
+          const times = Itinerary.occupied(existing, appZone);
+          return (
+            times?.end &&
+            times.start < slot.endMs &&
+            times.end > slot.startMs &&
+            !(allowed.includes(existing.id) && (!Itinerary.calendarOwned(existing) || canReadCalendar(actor)))
+          );
+        });
+        if (conflicts.length) {
+          const visible = conflicts.filter((existing) => !Itinerary.calendarOwned(existing) || canReadCalendar(actor));
+          const hidden = conflicts.length - visible.length;
+          const message = visible.length
+            ? "Overlapping entries: " +
+              visible
+                .slice(0, 10)
+                .map((existing) => existing.id)
+                .join(", ") +
+              ". "
+            : "";
+          throw M.fail(
+            message +
+              (hidden ? "A connected calendar commitment also occupies this time. " : "") +
+              "Read the itinerary and specify only explicitly permitted overlaps.",
+            409
+          );
+        }
+      }
+
+      if (!b) {
+        const id = "chat-itinerary-" + M.digest([actor.userId, actor.workspaceId, args.sourceEventId]).slice(0, 32);
+        const [saved] = await db.createItineraryTasks(
+          [
+            {
+              id,
+              date: slot.date,
+              properties: {
+                ...slot.properties,
+                ...changes,
+                local_id: id,
+                kind: "task",
+                type: "task",
+                source: "conversation",
+                status: "open",
+                priority: "Medium",
+                publicVisibility: "private",
+                added_at: new Date().toISOString()
+              }
+            }
+          ],
+          actor,
+          q
+        );
+        return { activity: itineraryEntry(saved, input.timeZone) };
+      }
+      const properties = { ...b.properties, ...slot?.properties, ...changes };
+      if (changes.taskLocation) properties.taskLocation = { ...b.properties.taskLocation, ...changes.taskLocation };
+      if (slot) {
+        delete properties.all_day;
+        delete properties.all_day_start;
+        delete properties.all_day_end;
+        delete properties.schedulePlacement;
+        delete properties.reschedulePlacement;
+        delete properties.timeBlockPlacement;
+        properties._pinnedStart = properties.start;
+        const now = new Date().toISOString();
+        const dateChanged = b.date && b.date !== slot.date;
+        if (dateChanged) properties.rescheduledFrom = { date: b.date, at: now };
+        const existing = dateChanged ? await db.getRescheduleTombstone(b.date, b.id, actor.workspaceId, q) : null;
+        if (existing?.user_id != null && existing.user_id !== actor.userId)
+          throw M.fail("The activity's origin marker belongs to another account", 409);
+        const marker = originMarker(b, b.date, slot.date, existing, actor, now);
+        const moves = [
+          { id: b.id, date: slot.date, properties, expectedDate: b.date, expectedUpdatedAt: b.updated_at }
+        ];
+        if (marker.move) moves.push(marker.move);
+        await db.rescheduleBlocks(moves, marker.create ? [marker.create] : [], {
+          transactionClient: q,
+          queueOwner: actor,
+          queueToday: ctx.getTodayStr?.()
+        });
+      } else {
+        await db.updateBlock(b.id, { properties }, q);
+      }
+      const saved = await row(q, b.id, actor);
+      return { activity: itineraryEntry(saved, input.timeZone || saved.properties.scheduleInstant?.zone || appZone) };
+    }).catch((error) => {
+      if (error.code === "55P03" || error.code === "40P01")
+        throw M.fail("The schedule is busy. Retry the same operation.", 409);
+      throw error;
+    });
+    if (slot) ctx.broadcastQueueChange?.(actor.userId, actor.workspaceId);
+    return result;
+  }
+
+  return { tasks, repeats, organization, bulk, files, attachChatFile, itineraryRead, itineraryWrite };
 }
+function fixedCommitment(block) {
+  const p = block.properties;
+  const locks = Review.overlay({ properties: block.overlay }).locked;
+  return !!(
+    p.userSetStart ||
+    p._userSetStart ||
+    p.locked ||
+    p._locked ||
+    locks.includes(block.id) ||
+    locks.includes(p.local_id) ||
+    TaskTypes.isFixed(p.type || p.kind)
+  );
+}
+
+function canReadCalendar(actor) {
+  return has(actor, "dcc.calendar.read") || has(actor, "dcc.read");
+}
+
+function itineraryLocation(value) {
+  if (value === null) return null;
+  fields(value, ["label", "address", "latitude", "longitude", "mapsUrl"]);
+  const result = {};
+  for (const key of ["label", "address"]) {
+    if (value[key] !== undefined) result[key] = M.text(value[key], key, 180);
+  }
+  if (value.mapsUrl !== undefined) {
+    let url;
+    try {
+      url = new URL(M.text(value.mapsUrl, "mapsUrl", 2000));
+    } catch {
+      throw M.fail("Invalid maps URL");
+    }
+    if (url.protocol !== "https:" || url.username || url.password) throw M.fail("Use a public HTTPS maps URL");
+    result.mapsUrl = url.href;
+  }
+  if (value.latitude !== undefined || value.longitude !== undefined) {
+    if (
+      !Number.isFinite(value.latitude) ||
+      Math.abs(value.latitude) > 90 ||
+      !Number.isFinite(value.longitude) ||
+      Math.abs(value.longitude) > 180
+    )
+      throw M.fail("Invalid coordinates");
+    result.latitude = value.latitude;
+    result.longitude = value.longitude;
+  }
+  if (!Object.keys(result).length) throw M.fail("Provide location fields or null to clear the location");
+  return result;
+}
+
+function itineraryTravel(value) {
+  if (value === null) return null;
+  const keys = [
+    "origin",
+    "destination",
+    "method",
+    "serviceNumber",
+    "platformOrGate",
+    "reservation",
+    "confirmationNumber"
+  ];
+  fields(value, [...keys, "durationMinutes"]);
+  const result = {};
+  for (const key of keys) {
+    if (value[key] !== undefined) result[key] = M.text(value[key], key, key === "reservation" ? 500 : 180);
+  }
+  if (value.durationMinutes !== undefined) {
+    if (!Number.isInteger(value.durationMinutes) || value.durationMinutes < 1 || value.durationMinutes > 1440)
+      throw M.fail("Invalid travel duration");
+    result.durationMinutes = value.durationMinutes;
+  }
+  return result;
+}
+
 function validateDate(date) {
   if (
     date !== undefined &&
