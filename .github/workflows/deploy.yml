@@ -88,6 +88,8 @@ jobs:
           node scripts/verify-day-progress-loading.mjs
           node scripts/verify-progress-bars.mjs
           node scripts/verify-combined-task-header.mjs
+      - name: Verify journal notebook tools and persistence
+        run: CHROME_PATH="$(node -e 'process.stdout.write(require("playwright-core").chromium.executablePath())')" node scripts/verify-journal-notebook.cjs
       - name: Verify synthetic login return paths
         run: node scripts/verify-login-return.mjs
       - name: Verify glasses with production account binding

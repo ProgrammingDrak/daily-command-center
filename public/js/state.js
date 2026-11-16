@@ -1566,15 +1566,12 @@ async function _moveTaskToBacklogStage(id,stage,toastMsg){
   render();
 }
 
-function moveTaskToBacklog(id){_moveTaskToBacklogStage(id,"Backlog","Moved to backlog");}
-// No set time after all (laundry, the mail): the same in-place unschedule, landing on
-// the Whenever stage so the header pill's pool picks it up. See whenever.js.
-//
-// The refold is the one difference from its siblings. They leave the ev on screen
-// because a backlog row still renders in Unplanned; a Whenever pool row does not
-// (TaskModel.isWheneverPoolRow keeps it out of the fold), so without the refold it
-// would linger there until the next reload and then vanish.
-async function moveTaskToWhenever(id){
+function moveTaskToBacklog(id){return moveTaskToTaskPool(id,"Backlog");}
+async function moveTaskToWhenever(id){return moveTaskToTaskPool(id,"Whenever");}
+
+// Both undated collections use the same subtree reschedule transaction.
+async function moveTaskToTaskPool(id,stage){
+  const destination=stage==="Backlog"?"Someday":"Whenever";
   const anchor=typeof taskAnchorById==='function'?taskAnchorById(id):null;
   const ev=(anchor&&anchor.ev)||scheduled.find(task=>task.id===id);
   if(!ev)return false;
@@ -1587,11 +1584,11 @@ async function moveTaskToWhenever(id){
       const minutes=member&&typeof dur==='function'?dur(member):null;
       if(memberRow&&Number.isFinite(minutes)&&minutes>=0)durations[memberRow.id]=minutes;
     }
-    try{await window.blockStore.rescheduleBlock(row.id,null,{placement:{kind:'whenever',durations}});}
+    try{await window.blockStore.rescheduleBlock(row.id,null,{placement:{kind:'whenever',durations,...(stage==="Backlog"?{stage}:{})}});}
     catch(error){if(typeof showToast==='function')showToast(error.message,'error');return false;}
   }else{
     if(typeof childrenOf==='function'&&childrenOf(id,scheduled).length){if(typeof showToast==='function')showToast('Save this task before moving its tree','info');return false;}
-    await _moveTaskToBacklogStage(id,'Whenever','Moved to Whenever');
+    await _moveTaskToBacklogStage(id,stage,'Moved to '+destination);
   }
   if(typeof refoldTaskStateFromBlockCache==='function'){refoldTaskStateFromBlockCache();render();}
   return true;

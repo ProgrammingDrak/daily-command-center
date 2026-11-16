@@ -31,6 +31,10 @@ grants only the selected subset of the client-requested scopes.
 | Category | Read | Full control adds |
 | --- | --- | --- |
 | Tasks and scheduling | `dcc.tasks.read` | `dcc.tasks.write` |
+| Task deletion | `dcc.cleanup.read` | `dcc.cleanup.write` |
+| Activity controls | `dcc.activity.read` | `dcc.activity.write` |
+| Itinerary | `dcc.itinerary.read` | `dcc.itinerary.write` |
+| Connected calendar | `dcc.calendar.read` | Read only |
 | Repeat tasks | `dcc.repeats.read` | `dcc.repeats.write` |
 | Working Queue and delegation | `dcc.queue.read` | `dcc.queue.write` |
 | Time records | `dcc.time.read` | `dcc.time.write` |
@@ -74,7 +78,7 @@ bulk cleanup. Queue, delegation and time-correction tools accept their new
 category scopes as alternatives to their existing legacy scopes. New readers
 omit unrelated queue snapshots and time data. Mutations return compact receipts.
 
-For deletion, prepare a cleanup with exact IDs or `allRepeats:true`, inspect its
+Task deletion additionally requires its own scoped consent. For deletion, prepare a cleanup with exact IDs or `allRepeats:true`, inspect its
 manifest, then run its persistent job until terminal. A clear user instruction
 already authorizes this sequence; do not add another approval just because the
 operation has multiple steps. Ask if the intended records are ambiguous.
@@ -120,3 +124,24 @@ installed PGlite package or use the existing localhost-only test DB configuratio
 checks the synthetic page with Chromium: choices, persistence, remote-disabled
 setup, desktop/mobile, zoom, reduced motion and browser errors. Screenshots go
 to `/tmp/dcc-chat-integrations-{desktop,mobile}.png`. This never reads production.
+
+## Itinerary and selected chat files
+
+`dcc_itinerary` reads a day or up to 63 days in the supplied viewing timezone.
+`dcc_itinerary_write` creates native scheduled activities and edits or moves an
+existing activity by ID, version and stable operation key. It uses
+`dcc.itinerary.read` and `dcc.itinerary.write`. Connected calendar titles require
+`dcc.calendar.read` or the existing legacy calendar access. DCC-owned appointments
+use itinerary write. Existing provider events are read from DCC and edited in
+their source calendars.
+
+The write stores origination timezone and UTC start/end alongside the schedule
+grid's civil date and clocks. Repeated hours require explicit offsets. The
+current grid requires an ascending start and end on one storage-zone date. A
+planned slot does not start an activity. For completion, use the existing task
+or reconciliation actions only after explicit confirmation.
+
+`dcc_attach_chat_file` uses ChatGPT file parameters and the `dcc.files` grant.
+Use the original file and the returned canonical activity ID. ChatGPT never
+receives the DCC storage credentials. See the [capability audit and connector
+refresh instructions](mcp-capability-audit.md).

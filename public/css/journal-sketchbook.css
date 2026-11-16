@@ -1,0 +1,296 @@
+/* Compact stack: the approved grouped toolbar opens directly over the pages. */
+.journal-sketchbook {
+  color: var(--ink);
+  font: inherit;
+}
+.journal-sketchbook [hidden] {
+  display: none !important;
+}
+.journal-sketchbook button,
+.journal-sketchbook select,
+.journal-sketchbook input {
+  font: inherit;
+}
+.journal-sketchbook button,
+.journal-sketchbook select,
+.journal-sketchbook input[type="color"] {
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  min-height: 38px;
+  max-width: 100%;
+}
+.journal-sketchbook button {
+  padding: 6px 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 12px;
+}
+.journal-sketchbook button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.journal-sketchbook button[aria-pressed="true"] {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--ink-strong);
+}
+.journal-sketchbook button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+.journal-sketchbook :is(button, select, input):focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 2px;
+}
+.journal-sketchbook select {
+  padding: 6px 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+.journal-sketchbook label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  min-width: 0;
+}
+.journal-sketchbook .jsk-menu,
+.journal-sketchbook .jsk-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 0;
+}
+.journal-sketchbook .jsk-spacer {
+  flex: 1;
+}
+.journal-sketchbook .jsk-collapse {
+  font-weight: 500;
+}
+.journal-sketchbook .jsk-page-label {
+  font-size: 11px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.journal-sketchbook .jsk-toolbox {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 0;
+  border-block: 1px solid var(--line-subtle);
+}
+.journal-sketchbook .jsk-toolbox button {
+  flex-direction: column;
+  gap: 2px;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 5px 7px;
+  font-size: 11px;
+  background: transparent;
+  border-color: transparent;
+}
+.journal-sketchbook .jsk-toolbox button[aria-pressed="true"] {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+}
+.journal-sketchbook .jsk-icon {
+  font:
+    20px/1.1 "Segoe UI Symbol",
+    sans-serif;
+}
+.journal-sketchbook .jsk-context {
+  gap: 7px;
+  padding: 7px 0;
+  min-height: 48px;
+}
+.journal-sketchbook .jsk-context strong {
+  font-size: 12px;
+  font-weight: 500;
+  margin-right: 3px;
+}
+.journal-sketchbook .jsk-color {
+  width: 28px;
+  min-width: 28px;
+  min-height: 30px;
+  padding: 5px;
+  border-radius: 50%;
+}
+.journal-sketchbook .jsk-color span {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--swatch);
+  display: block;
+}
+.journal-sketchbook input[type="color"] {
+  width: 32px;
+  padding: 2px;
+  min-height: 32px;
+}
+.journal-sketchbook .jsk-popup {
+  background: var(--surface-overlay);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 12px;
+  margin: 5px 0;
+}
+.journal-sketchbook .jsk-popup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+.journal-sketchbook .jsk-popup strong {
+  font-weight: 500;
+  font-size: 13px;
+}
+.journal-sketchbook .jsk-popup-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.journal-sketchbook .jsk-popup input[type="text"] {
+  min-height: 38px;
+  background: var(--surface-base);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  max-width: 100%;
+}
+.journal-sketchbook .jsk-gallery {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 34px;
+  gap: 8px;
+  align-items: stretch;
+  padding: 8px 0;
+}
+.journal-sketchbook .jsk-peek {
+  position: relative;
+  overflow: hidden;
+  background: #f7f1df;
+  opacity: 0.7;
+  border-radius: 8px;
+  padding: 0;
+  cursor: pointer;
+}
+.journal-sketchbook .jsk-peek canvas {
+  height: 100%;
+  width: 500px;
+  position: absolute;
+  top: 0;
+}
+.journal-sketchbook .jsk-peek-prev canvas {
+  right: 0;
+}
+.journal-sketchbook .jsk-peek-next canvas {
+  left: 0;
+}
+.journal-sketchbook .jsk-paper {
+  position: relative;
+  background: #f7f1df;
+  border: 1px solid #d4c9ae;
+  border-radius: 3px 14px 14px 3px;
+  box-shadow: 3px 3px 0 #c9bda2;
+  overflow: hidden;
+}
+.journal-sketchbook .jsk-paper canvas {
+  display: block;
+  width: 100%;
+  height: 360px;
+  touch-action: none;
+  transform-origin: center;
+}
+.journal-sketchbook .jsk-paper[data-hand="true"] canvas {
+  touch-action: pan-y;
+  cursor: grab;
+}
+.journal-sketchbook .jsk-canvas-text {
+  position: absolute;
+  inset: auto 8px 8px;
+  padding: 4px 7px;
+  background: #f7f1dfdd;
+  color: #685f4e;
+  font-size: 11px;
+  pointer-events: none;
+}
+.journal-sketchbook .jsk-pages {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  padding: 4px 0;
+}
+.journal-sketchbook .jsk-dot {
+  min-width: 30px;
+  min-height: 32px;
+  width: 30px;
+  border: 0;
+  background: none;
+  padding: 0;
+}
+.journal-sketchbook .jsk-dot span {
+  width: 6px;
+  height: 6px;
+  background: var(--ink-muted);
+  border-radius: 50%;
+}
+.journal-sketchbook .jsk-dot[aria-current="page"] span {
+  width: 18px;
+  border-radius: 6px;
+  background: var(--brand);
+}
+.journal-sketchbook .jsk-selection-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+.journal-sketchbook .jsk-integration {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.journal-sketchbook .jsk-status {
+  color: var(--ink-muted);
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+.journal-sketchbook .jsk-status:empty {
+  display: none;
+}
+@media (max-width: 480px) {
+  .journal-sketchbook :is(button, select) {
+    min-height: 44px;
+  }
+  .journal-sketchbook .jsk-toolbox button {
+    min-width: 44px;
+  }
+  .journal-sketchbook .jsk-gallery {
+    grid-template-columns: 28px minmax(0, 1fr) 28px;
+    gap: 5px;
+  }
+  .journal-sketchbook .jsk-paper canvas {
+    height: 330px;
+  }
+  .journal-sketchbook .jsk-context {
+    gap: 5px;
+  }
+  .journal-sketchbook .jsk-dot {
+    width: 44px;
+    min-width: 44px;
+  }
+  .journal-sketchbook .jsk-context label {
+    flex-wrap: wrap;
+  }
+}

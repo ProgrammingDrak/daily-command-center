@@ -1661,14 +1661,14 @@ async function getCarryoverPool(workspaceId, beforeDate, opts = {}) {
         -- must never become carryover work even during that version-skew window.
         AND COALESCE(b.properties->>'kind', '') <> 'proposed_action_item'
         AND ($7::boolean OR COALESCE(b.properties->>'type', '') <> ALL($5::text[]))
-        AND ($7::boolean OR COALESCE(b.properties->>'start', '') <> ''
+        AND ($7::boolean OR $8::boolean OR COALESCE(b.properties->>'start', '') <> ''
              OR b.properties->>'subtaskOf' IS NOT NULL
              OR b.properties->>'wrapId' IS NOT NULL)
         AND b.date IS NOT NULL AND b.date < $2
         AND ($3::int IS NULL OR b.date >= ($2::date - ($3::int * INTERVAL '1 day')))
       ORDER BY b.date DESC, b.sort_order ASC, b.created_at ASC
       LIMIT $6`,
-    [ws, beforeDate, days, CARRYOVER_ROW_TYPES, carryoverSkipTypes(), limit, opts.includeUntimed === true]
+    [ws, beforeDate, days, CARRYOVER_ROW_TYPES, carryoverSkipTypes(), limit, opts.includeUntimed === true, opts.includeDateOnly === true]
   );
   const pool_ = rows.map(parseBlock);
 
@@ -1873,8 +1873,8 @@ async function getRescheduleSubtreePool(fromDate, workspaceId, { includeTriageRo
 // would silently break the one-tombstone-per-(row, day) rule and start piling up a new
 // amber entry on every repeat reschedule. Asking for the thing you want is cheaper than
 // that trap, and it reads one row instead of filtering a day.
-async function getRescheduleTombstone(fromDate, movedBlockId, workspaceId) {
-  const { rows } = await pool.query(
+async function getRescheduleTombstone(fromDate, movedBlockId, workspaceId, client = pool) {
+  const { rows } = await client.query(
     `SELECT * FROM blocks
       WHERE date = $1
         AND workspace_id IS NOT DISTINCT FROM $3
@@ -2013,6 +2013,7 @@ async function rescheduleBlocks(moves, creates, options = {}) {
       await client.query('INSERT INTO conversation_state(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING',[queueOwner.userId]);
       await client.query('SELECT user_id FROM conversation_state WHERE user_id=$1 FOR UPDATE',[queueOwner.userId]);
       movedQueue=await require('./lib/working-queue').load(client,queueOwner);
+      if (queueOwner.workspaceId) await require('./lib/reschedule').lockWorkspaceSchedule(client, queueOwner.workspaceId);
     }
     if (options.beforeApply) {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [options.lockKey]);
@@ -2570,14 +2571,14 @@ async function getOperations(blockId, limit = 50) {
   return rows;
 }
 
-async function getBlocksByDateRange(startDate, endDate, workspaceId) {
+async function getBlocksByDateRange(startDate, endDate, workspaceId, client = pool) {
   const { rows } = workspaceId
-    ? await pool.query(`SELECT * FROM blocks WHERE workspace_id = $3 AND deleted_at IS NULL
+    ? await client.query(`SELECT * FROM blocks WHERE workspace_id = $3 AND deleted_at IS NULL
         AND ((date >= $1 AND date <= $2) OR (properties->>'all_day' = 'true'
           AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $2
           AND CASE WHEN properties->>'all_day_end' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_end')::date END > $1))
         ORDER BY date ASC, sort_order ASC, created_at ASC`, [startDate, endDate, workspaceId])
-    : await pool.query(`SELECT * FROM blocks WHERE deleted_at IS NULL
+    : await client.query(`SELECT * FROM blocks WHERE deleted_at IS NULL
         AND ((date >= $1 AND date <= $2) OR (properties->>'all_day' = 'true'
           AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $2
           AND CASE WHEN properties->>'all_day_end' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_end')::date END > $1))

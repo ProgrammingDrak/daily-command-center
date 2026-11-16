@@ -8,7 +8,7 @@
   'use strict';
   const COLLECTIONS = Object.freeze([
     'All Tasks', 'Working Queue', 'Itinerary', 'Loose Ends',
-    'Unscheduled', 'Whenever', 'Someday', 'Waiting'
+    'Whenever', 'Someday', 'Waiting'
   ]);
   const LANES = Object.freeze(['Foreground', 'Needs You', 'Background', 'Priority Queue']);
   const LEVELS = Object.freeze(['jump', 'select', 'task', 'details', 'more']);
@@ -115,7 +115,7 @@
   }
   // Browser history contains view levels, never commands or task records.
   function createHistory({ history, scope, changed, active = () => true }) {
-    const key = 'dccGlasses', version = 1;
+    const key = 'dccGlasses', version = 2;
     let pending = null, last = null;
     const depthOf = level => ({ jump: 0, select: 1, task: 2, details: 3, more: 3 })[level];
     const read = () => {
@@ -176,12 +176,8 @@
   // Back/Forward is handled by the history coordinator. Cancel never emits a tap.
   function createInput(emit, timers = {}) {
     const later = timers.setTimeout || setTimeout, cancel = timers.clearTimeout || clearTimeout;
-    let pressed = null, holdTimer = null, middleTimer = null;
+    let pressed = null, holdTimer = null;
     function stopPress() { if (holdTimer != null) cancel(holdTimer); holdTimer = null; pressed = null; }
-    function middleTap() {
-      if (middleTimer != null) { cancel(middleTimer); middleTimer = null; emit('double-middle'); }
-      else middleTimer = later(() => { middleTimer = null; emit('tap-middle'); }, 320);
-    }
     function down(finger) {
       if (pressed || !['fore', 'middle'].includes(finger)) return;
       pressed = { finger, held: false };
@@ -194,10 +190,9 @@
     function up(finger) {
       if (!pressed || pressed.finger !== finger) return;
       const held = pressed.held; stopPress();
-      if (!held) { if (finger === 'middle') middleTap(); else emit('tap-fore'); }
+      if (!held) emit(finger === 'middle' ? 'tap-middle' : 'tap-fore');
     }
-    function reset() { stopPress(); if (middleTimer != null) cancel(middleTimer); middleTimer = null; }
-    return Object.freeze({ down, up, cancel: stopPress, reset });
+    return Object.freeze({ down, up, cancel: stopPress, reset: stopPress });
   }
   return Object.freeze({ COLLECTIONS, LANES, LEVELS, viewport, taskHierarchy, create, createHistory, createInput });
 });

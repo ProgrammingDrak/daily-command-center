@@ -5,6 +5,20 @@ const vm=require('node:vm');
 const TM=require('./public/js/task-model');
 const source=name=>fs.readFileSync('./public/js/'+name+'.js','utf8');
 const block=(id,properties={},date=null)=>({id,type:'block',date,properties:{kind:'backlog',title:id,...properties}});
+
+test('Someday combines undated tasks and ideas without taking work from another queue',()=>{
+  const rows=[
+    block('task'),block('idea',{someday:true,tags:['outdoors']}),
+    block('dated',{},'2026-11-10'),block('ready',{stage:'Whenever'}),
+    block('triage',{triageBlock:true}),block('completed',{completedAt:'2026-11-09'}),
+    block('waiting'),block('child',{subtaskOf:'waiting'}),
+    block('copy',{local_id:'placed'}),block('placed',{local_id:'placed'},'2026-11-10'),
+    block('overlay-done'),{...block('removed'),deleted_at:'2026-11-09'}
+  ];
+  const waitingRows=[block('edge',{kind:'delegated_item',linkedBlockId:'waiting',status:'open'})];
+  const result=TM.selectSomeday(rows,{waitingRows,completedIds:new Set(['overlay-done'])});
+  assert.deepEqual(result,[rows[0],rows[1]]);
+});
 function context(extra={}){
   const window={DCC:{TaskModel:TM},addEventListener(){}};
   return vm.createContext({window,document:{getElementById(){return null;},addEventListener(){}},location:{href:'http://localhost/'},URL,
@@ -16,7 +30,7 @@ test('glasses library reads the full API independently of desktop filters and ke
   vm.runInContext(source('task-library'),ctx);
   const result=await ctx.window.DCCTaskLibrary.glassesCollections();
   assert.deepEqual(Array.from(result.allTasks,row=>row.id),['scheduled','open','idea','dated-idea']);
-  assert.deepEqual(Array.from(result.someday,row=>row.id),['idea']);
+  assert.deepEqual(Array.from(result.someday,row=>row.id),['idea','open']);
   assert.equal(result.allTasks[0].actionId,'scheduled');
   assert.equal(result.allTasks[0].ev._blockId,'scheduled');
   assert.equal(result.allTasks[0].ev.id,'legacy');
@@ -75,6 +89,6 @@ test('glasses itinerary expands desktop-collapsed parents before filtering done 
   ctx.DCC=ctx.window.DCC;ctx.DCC.TaskModel=T;ctx.DCC.TimeBlocks=timeBlocks;
   const text=source('schedule-tab');
   vm.runInContext(text.slice(text.indexOf('function _itineraryListModel('),text.indexOf('// Finished work is recorded')),ctx);
-  vm.runInContext(text.slice(text.indexOf('window.glassesItineraryTasks='),text.indexOf('window.glassesUnscheduledTasks=')),ctx);
+  vm.runInContext(text.slice(text.indexOf('window.glassesItineraryTasks='),text.indexOf('// Triage rows are created')),ctx);
   assert.deepEqual(Array.from(ctx.window.glassesItineraryTasks(),ev=>ev.id),['child']);
 });

@@ -2655,6 +2655,12 @@ span.waiting-pill{cursor:default}
 /* A door scrolls its half to the top of the drawer, where the Task Manager's sticky
    toolbar (8px in the solo drawer) would sit over the half's heading. */
 .untimed-sub{scroll-margin-top:16px}
+.off-the-clock{min-width:0;margin-bottom:14px;padding:4px 12px;border:1px solid var(--queue-line);border-radius:10px}
+.off-the-clock .untimed-sub-head{margin-bottom:0}
+.off-the-clock .untimed-sub-head.drag-over-block{background:var(--queue-soft)}
+.off-the-clock .untimed-sub-title{flex:1}
+.off-the-clock .time-block-toggle{min-height:44px;width:100%;justify-content:flex-start}
+.off-the-clock [hidden]{display:none}
 .untimed-sub+.untimed-sub{margin-top:18px;padding-top:16px;border-top:1px solid var(--border)}
 /* The tooltip anchors to this row, not to its "i", so it always fits the drawer's
    width: anchored to an "i" near the right edge it ran off the side on a phone. */

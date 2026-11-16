@@ -28,6 +28,8 @@ function applyScheduleView(navState,prev){
   const timeline=document.getElementById("timeline");if(timeline)timeline.style.display="none";
   const listView=document.getElementById("list-view");
   const calendarView=document.getElementById("calendar-view");
+  const offClock=document.getElementById("unscheduled-sub");
+  if(offClock)offClock.hidden=schedView!=="list";
   if(listView)listView.style.display=schedView==="list"?"flex":"none";
   if(calendarView)calendarView.style.display=schedView==="calendar"?"block":"none";
   const review=document.getElementById("actual-view");
@@ -215,13 +217,13 @@ function buildTaskChangeItems(ev,trig){
   // mover the old Unplanned drop zone called; the zone went with the section, so the
   // radial (touch) and the pill itself (desktop drop) are its two doors now.
   if(!ev.untimed)
-    items.push({icon:"🗂", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.UNSCHEDULED_LABEL)||"Unscheduled", onPick:()=>{if(typeof moveTaskToUnplanned==="function")moveTaskToUnplanned(ev.id);}});
+    items.push({icon:"🕒", label:"Remove time", onPick:()=>{if(typeof moveTaskToUnplanned==="function")moveTaskToUnplanned(ev.id);}});
   items.push(
     {icon:"🔄", label:"Convert…",  onPick:()=>openConvertToRadial(ev,trig)},
     {icon:"↗", label:"Delegate / block", onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
     {icon:"🔒", label:"Blocked by task", onPick:()=>{if(typeof window.openTaskDependencyModal==="function")window.openTaskDependencyModal(ev._blockId||ev.blockId||ev.id);}},
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
-    {icon:"💡", label:"Solo",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}},
+    {icon:"💡", label:"Move to Someday", onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}},
     // No set time after all: off the day and into the header pill's pool (whenever.js).
     // The canonical placement moves the parent and its descendants together.
     {icon:"🧺", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever", onPick:()=>{if(typeof moveTaskToWhenever==="function")moveTaskToWhenever(ev.id);}},
@@ -891,7 +893,7 @@ function _itineraryListModel(options={}){
   // Loose Ends owns past-day unfinished work now. Keep carryovers out of the task
   // list derivation entirely, including the old hidden fetch and second render.
   const unfPool=[];
-  const day=DCC.TaskModel.selectDay(scheduled,viewDate,{today:actualToday,carryoverPool:unfPool,waitingRows:window.blockStore ? window.blockStore.getByType("block") : []});
+  const day=DCC.TaskModel.selectDay(DCC.TaskModel.selectDayScoped(scheduled),viewDate,{today:actualToday,carryoverPool:unfPool,waitingRows:window.blockStore ? window.blockStore.getByType("block") : []});
   const visible=day.visible;
   const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
   const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible,...(options.expandAll?{isCollapsed:()=>false}:{})}),timeBlocks);
@@ -955,12 +957,8 @@ window.renderUnscheduledInto=renderUnscheduledInto;
 window.itineraryListModel=_itineraryListModel;
 window.glassesItineraryTasks=function(){
   const model=_itineraryListModel({expandAll:true});
-  return model.groups.filter(group=>group!==model.unscheduledGroup&&group!==model.triageGroup)
+  return [model.unscheduledGroup,...model.groups.filter(group=>group!==model.unscheduledGroup&&group!==model.triageGroup)]
     .flatMap(group=>group.nodes.filter(node=>!isDone(node.ev)).map(node=>node.ev));
-};
-window.glassesUnscheduledTasks=function(){
-  const model=_itineraryListModel({expandAll:true});
-  return _orderUnscheduledNodes(model.unscheduledGroup.nodes).filter(node=>!isDone(node.ev)).map(node=>node.ev);
 };
 // Triage rows are created by triage.js (buildScheduleTriage) from inbox and repeat
 // sources, so the panel also carries that loader's status, with Retry on a failure.
@@ -1558,7 +1556,7 @@ function openMoveMenu(id, anchorEl){
     {label:"Today",     action:()=>_mv(_resolvedTodayDate(),moveTaskToToday)},
     {label:"Next week", action:()=>_mv(_nextSundayDate(),moveTaskToNextWeek)},
     {label:"Trivial",   action:()=>moveTaskToTrivial(id)},
-    {label:"Unscheduled", action:()=>moveTaskToBacklog(id)}
+    {label:"Move to Someday", action:()=>moveTaskToBacklog(id)}
   ];
   const pop=document.createElement("div");
   pop.className="move-menu-popup";

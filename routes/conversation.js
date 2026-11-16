@@ -329,11 +329,16 @@ for (const t of tools) t.annotations={destructiveHint:false,openWorldHint:false,
 const scopeFor = (inputName) => { const alias=controlTools.aliases[inputName]; const name=alias?.name || inputName;
  if(alias && !tools.find(t=>t.name===inputName).annotations.readOnlyHint) return 'dcc.'+controlTools.categoryFor[name]+'.write';
  return wishlistMcp.scopeFor(name) || (
+  name === "dcc_attach_chat_file" ? "dcc.files.write" :
+  name === "dcc_itinerary_write" ? "dcc.itinerary.write" :
+  name === "dcc_calendar_events" ? ["dcc.read", "dcc.calendar.read"] :
   require('../lib/chat-control-tools').categoryFor[name] ? `dcc.${require('../lib/chat-control-tools').categoryFor[name]}.read` :
   ['dcc_connection_status','dcc_profile','dcc_approval_status'].includes(name) ? permissions.scopes :
+  name === "dcc_current_activity" ? ["dcc.read", "dcc.activity.read"] :
+  name === "dcc_work" ? ["dcc.work", "dcc.queue.write", "dcc.activity.write"] :
   name === 'dcc_working_queue' ? ['dcc.read','dcc.queue.read'] :
   name === 'dcc_correct_time' ? ['dcc.correct','dcc.time.write'] :
-  ['dcc_queue','dcc_work'].includes(name) ? ['dcc.work','dcc.queue.write'] :
+  name === 'dcc_queue' ? ['dcc.work','dcc.queue.write'] :
   name === 'dcc_delegate' ? ['dcc.delegate','dcc.queue.write'] :
   name === "dcc_save_someday_idea" ? "dcc.capture" :
   name === "dcc_reconcile_task"
@@ -401,6 +406,27 @@ module.exports = function mount(app, ctx, config = {}) {
   require("./chat-integrations")(app, ctx, { oauth, enabled, approvals,
     executeApproved:(name,args,identity,q)=>runTool(name,args,identity,q),
     clientsReady:oauth.provider === 'clerk' || Object.keys(config.clients || JSON.parse(process.env.DCC_CONVERSATION_CLIENTS || '{}')).length > 0 });
+  // Disabled by default: publishing code never silently enables outbound access.
+  const eventsEnabled = config.eventsEnabled ?? process.env.DCC_EVENTS_ENABLED === "true";
+  let events = null;
+  if (eventsEnabled) {
+    try {
+      events = require("../mcp-events").createEvents({
+        ...ctx,
+        key: config.eventsKey || process.env.DCC_EVENTS_ENCRYPTION_KEY,
+        ...config.eventOptions
+      });
+    } catch {
+      console.error("[dcc-events] Events disabled: encryption configuration unavailable");
+    }
+  }
+  const eventTimer =
+    events && config.eventWorker !== false
+      ? setInterval(() => {
+          events.tick().catch(() => console.error("[dcc-events] Check-back delivery unavailable"));
+        }, 15000)
+      : null;
+  eventTimer?.unref();
   const route = (fn) => async (req, res, next) => {
     try {
       res.set("Cache-Control", "no-store");
@@ -428,7 +454,10 @@ module.exports = function mount(app, ctx, config = {}) {
         if (name === 'dcc_connection_status') result = {accountId:identity.userId,workspaceId:identity.workspaceId,status:'verified',permissions:permissions.categories.map(c=>({category:c.id,level:permissions.level(identity.scopes,c.id)})),legacyScopes:identity.scopes.filter(s=>permissions.legacy.includes(s))};
         if (category && name !== 'dcc_time_records') {
           const control = require('../chat-control-store').createChatControlStore({...ctx,transactionClient,authorizeMcp});
-          result = await control[name === 'dcc_bulk_cleanup' ? 'bulk' : category](args,identity);
+          const handler = {
+            dcc_attach_chat_file: "attachChatFile", dcc_bulk_cleanup: "bulk", dcc_itinerary: "itineraryRead", dcc_itinerary_write: "itineraryWrite"
+          }[name] || category;
+          result = await control[handler](args, identity);
         }
         if (name === 'dcc_time_records') {
           const offset = Number(args.offset || 0);
@@ -462,7 +491,9 @@ module.exports = function mount(app, ctx, config = {}) {
         if (name === "dcc_search_tasks") result = await store.search(args, identity);
         if (name === "dcc_current_activity" || name === "dcc_working_queue") {
           result = await store.state(identity);
-          if (!identity.scopes.includes('dcc.read')) result = {revision:result.revision,queue:{items:(result.queue?.items||[]).map(item=>({status:item.status,taskId:item.task?.id,title:item.task?.properties?.title,taskPriority:item.taskPriority,blocked:item.blocked,needsYou:item.needsYou}))}};
+          if (name === "dcc_current_activity" && !identity.scopes.includes("dcc.read"))
+            result = { revision: result.revision, foreground: result.foreground, background: result.background, timeZone: result.timeZone };
+          if (name === "dcc_working_queue" && !identity.scopes.includes("dcc.read")) result = {revision:result.revision,queue:{items:(result.queue?.items||[]).map(item=>({status:item.status,taskId:item.task?.id,title:item.task?.properties?.title,taskPriority:item.taskPriority,blocked:item.blocked,needsYou:item.needsYou}))}};
         }
         if (name === "dcc_calendar_events") result = await store.calendarEvents(args, identity);
         if (name === "dcc_task") result = await store.get(M.text(args.taskId, "taskId"), identity);
@@ -558,7 +589,7 @@ module.exports = function mount(app, ctx, config = {}) {
   }
   function requiredWriteScopes(name,args,identity) {
     const required = name==='dcc_correct_time' ? [identity.scopes.includes('dcc.time.write')?'dcc.time.write':'dcc.correct'] :
-      name==='dcc_organization' ? ['dcc.organization.read','dcc.organization.write','dcc.tasks.write'] : ['dcc.tasks.read','dcc.tasks.write'];
+      name==='dcc_organization' ? ['dcc.organization.read','dcc.organization.write','dcc.tasks.write'] : ['dcc.tasks.read','dcc.tasks.write','dcc.cleanup.read','dcc.cleanup.write'];
     if(name==='dcc_bulk_cleanup' && identity.scopes.includes('dcc.repeats.write')) required.push('dcc.repeats.read','dcc.repeats.write');
     if(required.some(x=>!identity.scopes.includes(x))) throw M.fail('Insufficient scope',403);
     return required;
@@ -686,12 +717,33 @@ module.exports = function mount(app, ctx, config = {}) {
           protocolVersion: ["2025-03-26", "2025-06-18", "2025-11-25"].includes(b.params?.protocolVersion)
             ? b.params.protocolVersion
             : "2025-03-26",
-          capabilities: { tools: { listChanged: false } },
+          capabilities: { tools: { listChanged: false }, ...(events ? { events: {} } : {}) },
           serverInfo: { name: "dcc-account", version: "0.1.0" },
           instructions:
             "Resolve existing tasks before acting. Only explicit user start/pause/done/correction instructions authorize activity changes. Preserve unknown time and plan versus actual. For explicit completion use dcc_complete_task after reading the canonical task/version. For meaningful progress, summarize accomplishments and remaining scope with dcc_reconcile_task step_done, keeping the goal open. At existing morning/evening reviews call dcc_completion_review and offer its choices without inferring completion. Confirm reconciliation with dcc_reconciliation_receipt; only verified_saved means saved."
         });
       if (b.method === "ping") return reply({});
+      if (events && ["events/list", "events/subscribe", "events/unsubscribe"].includes(b.method)) {
+        try {
+          const result =
+            b.method === "events/list"
+              ? events.list(identity)
+              : b.method === "events/subscribe"
+                ? await events.subscribe(identity, b.params)
+                : await events.unsubscribe(identity, b.params);
+          return reply(result);
+        } catch (e) {
+          return res.json({
+            jsonrpc: "2.0",
+            id: b.id,
+            error: {
+              code: e.rpcCode || -32603,
+              message: e.rpcCode ? e.message : "Event operation unavailable",
+              ...(e.reason ? { data: { reason: e.reason } } : {})
+            }
+          });
+        }
+      }
       if (b.method === "tools/list")
         return reply({
           tools: tools
@@ -719,16 +771,22 @@ module.exports = function mount(app, ctx, config = {}) {
           : await runTool(operation,payload,identity);
         const descriptor=tools.find(t=>t.name===name);
         if(!descriptor.annotations.readOnlyHint) await ctx.pool.query('INSERT INTO mcp_action_log(id,user_id,workspace_id,connection_id,operation,outcome,affected_ids) VALUES($1,$2,$3,$4,$5,$6,$7)',[crypto.randomUUID(),identity.userId,identity.workspaceId,identity.grantId,name,result.saveStatus==='pending_approval'?'pending_approval':'succeeded',JSON.stringify([result.task?.id,result.taskId,result.id,result.projectId,result.definitionId,...(result.taskIds||[])].filter(Boolean))]);
-        await oauth.verified(identity.grantId);
+        // Connection verification is telemetry; failure after commit must not mask a saved write.
+        await oauth.verified(identity.grantId).catch(() => {});
         reply({ content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, isError: false });
       } catch (e) {
+        const status = e.statusCode || 500;
+        const code = ({ 400: "validation_failed", 401: "permission_denied", 403: "permission_denied",
+          404: "not_found", 409: "conflict", 413: "validation_failed", 415: "validation_failed",
+          422: "not_supported", 503: "not_supported" })[status] || "save_uncertain";
         reply({
           content: [
             {
               type: "text",
               text: JSON.stringify({
                 error: e.statusCode ? e.message : wishlistMcp.scopeFor(name) ? "Wishlist request could not be confirmed" : "Activity could not be saved",
-                status: e.statusCode || 500
+                status,
+                code
               })
             }
           ],
@@ -738,6 +796,6 @@ module.exports = function mount(app, ctx, config = {}) {
       }
     })
   );
-  return { oauth, store };
+  return { oauth, store, events, close: () => clearInterval(eventTimer) };
 };
 module.exports.tools = tools;

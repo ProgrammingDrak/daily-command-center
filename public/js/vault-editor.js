@@ -242,7 +242,7 @@
     if (write) write.onclick = () => { write.classList.add("active"); q("#ed-preview").classList.remove("active"); body.hidden = false; prev.hidden = true; };
     const cover = q("#ed-day-cover");
     const state = st;
-    const entry = cover ? DCC.CompletionMemories.mountJournalEntry(cover, prev, body.value, { onAttachment: uploadAttachment }) : null;
+    const entry = cover ? DCC.CompletionMemories.mountJournalEntry(cover, prev, body.value, { onAttachment: uploadAttachment, onNotebookImage: uploadNotebookImage, notebook: true }) : null;
     if (entry) {
       state.clearDayStory = entry.destroy;
       state.readJournal = entry.read;
@@ -491,6 +491,27 @@
       }
     }
   }
+  async function uploadNotebookImage(file) {
+    const state = st;
+    if (!state || state.attaching) throw new Error("Finish the current upload before adding another image.");
+    if (!file.type.startsWith("image/")) throw new Error("Choose an image file.");
+    state.attaching = true;
+    const saveButton = inner().querySelector("#ed-save");
+    saveButton.disabled = true;
+    try {
+      const form = new FormData();
+      form.append("file", file, file.name || "Sketchbook image");
+      if (state.slug) form.append("slug", state.slug);
+      const response = await fetch("/api/vault/attach", { method: "POST", body: form });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Image upload failed");
+      if (st !== state) throw new Error("The journal was closed before the image finished uploading.");
+      return result;
+    } finally {
+      state.attaching = false;
+      if (st === state) saveButton.disabled = false;
+    }
+  }
   function insertAtCaret(ta, text) {
     const s = ta.selectionStart ?? ta.value.length, e = ta.selectionEnd ?? ta.value.length;
     ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
@@ -522,7 +543,8 @@
         data = await res.json();
         if (res.status === 409) { saveBtn.disabled = false; toast("This note changed elsewhere — reload before saving", "error"); return; }
         if (!res.ok) throw new Error(data.error || "save failed");
-        toast("Saved"); close(); ctx.onSaved(st.slug);
+        const savedSlug = st.slug;
+        toast("Saved"); close(); ctx.onSaved(savedSlug);
       } else {
         res = await fetch("/api/vault/create", {
           method: "POST", headers: { "Content-Type": "application/json" },

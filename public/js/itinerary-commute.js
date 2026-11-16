@@ -103,7 +103,7 @@
     control.setAttribute("aria-label", label);
     if (destination) {
       control.dataset.known = "true";
-      control.href = directionsUrl(destination);
+      control.href = locationDirections(location, destination);
       control.target = "_blank";
       control.rel = "noopener noreferrer";
       if (/^#[0-9a-f]{6}$/i.test(location.color || "")) control.style.color = location.color;
@@ -130,7 +130,17 @@
   };
 
   function destinationOf(location) {
+    if (Number.isFinite(location?.latitude) && Number.isFinite(location?.longitude))
+      return location.latitude + "," + location.longitude;
     return location?.address || location?.label || "";
+  }
+
+  function locationDirections(location, destination) {
+    try {
+      const url = new URL(location?.mapsUrl);
+      if (url.protocol === "https:" && !url.username && !url.password) return url.href;
+    } catch {}
+    return directionsUrl(destination);
   }
 
   function writeTask(blockId, merge) {
@@ -556,12 +566,26 @@
     const status = append(form, "p");
     status.setAttribute("role", "status");
     const commute = append(host, "div");
+    const travel = append(host, "div");
 
     function refresh(props) {
       const destination = destinationOf(props.taskLocation);
       directions.hidden = !destination;
-      directions.href = destination ? directionsUrl(destination) : "";
+      directions.href = destination ? locationDirections(props.taskLocation, destination) : "";
       commute.replaceChildren(render({ ...props, _blockId: blockId }));
+      travel.replaceChildren();
+      const trip = props.itineraryTravel;
+      if (!trip || !Object.keys(trip).length) return;
+      append(travel, "strong", "Travel details");
+      const list = append(travel, "dl");
+      for (const [key, label] of Object.entries({
+        origin: "Departure", destination: "Destination", method: "Transport", serviceNumber: "Service",
+        durationMinutes: "Minutes", platformOrGate: "Platform or gate", reservation: "Reservation", confirmationNumber: "Confirmation"
+      })) {
+        if (trip[key] == null) continue;
+        append(list, "dt", label);
+        append(list, "dd", String(trip[key]));
+      }
     }
 
     form.addEventListener("submit", async event => {

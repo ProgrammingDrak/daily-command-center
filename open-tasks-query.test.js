@@ -87,6 +87,17 @@ test("the fixed-type skip set is derived from the registry, not a second literal
 
 // ── the pool query ───────────────────────────────────────────────────────────
 
+test("Loose Ends can include date-only tasks while retaining fixed-type exclusions", async () => {
+  const pool = makeRecordingPool();
+  const db = loadDbWithMock(pool);
+  await db.getCarryoverPool("ws-1", "2026-07-29", { includeDateOnly: true });
+  const {text,params} = pool.log[0];
+  assert.deepEqual(params.slice(6), [false, true]);
+  assert.match(text, /\$7::boolean OR COALESCE\(b\.properties->>'type', ''\) <> ALL/);
+  assert.match(text, /\$8::boolean OR COALESCE\(b\.properties->>'start', ''\)/);
+  assert.match(text, /b\.date IS NOT NULL AND b\.date < \$2/);
+});
+
 test("the pool query carries every term of the client predicate it replaced", async () => {
   const pool = makeRecordingPool();
   const db = loadDbWithMock(pool);

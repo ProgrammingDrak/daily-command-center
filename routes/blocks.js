@@ -34,7 +34,7 @@ const validate = require("../middleware/validate");
 const schemas = require("../middleware/schemas");
 const { validZone, shiftDate, validDate: validViewingDate } = require("../public/js/schedule-zones");
 const { selectViewingRange } = require("../lib/viewing-date-range");
-const { collectSubtreeBlockIds, unplannedProperties } = require("../lib/reschedule");
+const { collectSubtreeBlockIds, unplannedProperties, lockScheduleForPlacement, originMarker } = require("../lib/reschedule");
 const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 const { route } = require("../lib/route-helpers");
 const createTaskTiming = require("../lib/task-timing");
@@ -1664,7 +1664,7 @@ module.exports = function mount(app, ctx) {
     const rawDays = String(req.query.days == null ? "" : req.query.days);
     const days = rawDays === "all" ? null : Math.min(3650, Math.max(1, parseInt(rawDays, 10) || 14));
     const limit = Math.min(2000, Math.max(1, parseInt(req.query.limit, 10) || 500));
-    const result = await blockDB.getCarryoverPool(req.workspaceId, before, { days, limit });
+    const result = await blockDB.getCarryoverPool(req.workspaceId, before, { days, limit, includeDateOnly: true });
     const rows = filterLegacyGcalBlocks(result.rows);
     // BOTH wrappers the sibling reads use, not just the filter. The legacy-gcal filter
     // keeps a legacy row that never rendered in the lane from appearing now. The timing
@@ -1865,7 +1865,6 @@ module.exports = function mount(app, ctx) {
       if (!fromDate) return res.status(400).json({ error: "Block has no source date to move from" });
       const dateChanged = fromDate !== targetDate;
       if (!dateChanged && !place) return res.status(400).json({ error: "Already on that date" });
-      const parentLocalId = (parent.properties || {}).local_id || null;
 
       // Gather the origin day's task rows (plus undated linked strays) and walk the
       // nesting tree. The walk reads BOTH edge spaces — the subtaskOf/wrapId local-id
@@ -1979,38 +1978,18 @@ module.exports = function mount(app, ctx) {
       // restart the pile-up.
       const creates = [];
       const existingTomb = dateChanged ? await blockDB.getRescheduleTombstone(fromDate, parent.id, req.workspaceId) : null;
-      if(dateChanged&&existingTomb&&(existingTomb.properties||{}).poolOrigin){
-        assertBlockOwnership(existingTomb,req.workspaceId);
-        const properties={...existingTomb.properties,rescheduledTo:targetDate,at:now};delete properties.poolOrigin;
-        moves.push({id:existingTomb.id,date:existingTomb.date,properties,expectedDate:existingTomb.date,expectedUpdatedAt:existingTomb.updated_at});
-      }
-      if (dateChanged && !existingTomb) {
-        creates.push({
-          type: "block",
-          date: fromDate,
-          user_id: parent.user_id || req.session.userId || null,
-          workspace_id: parent.workspace_id || req.workspaceId || null,
-          properties: {
-            local_id: "resched-tomb-" + parent.id,
-            kind: "reschedule_tombstone",
-            title: (parent.properties || {}).title || "Task",
-            priority: (parent.properties || {}).priority || "Medium",
-            movedBlockId: parent.id,
-            sourceLocalId: parentLocalId,
-            rescheduledFrom: { date: fromDate },
-            rescheduledTo: targetDate,
-            at: now
-          }
-        });
-      }
+      if (existingTomb) assertBlockOwnership(existingTomb, req.workspaceId);
+      const marker = originMarker(parent, fromDate, targetDate, existingTomb,
+        { userId: req.session.userId, workspaceId: req.workspaceId }, now);
+      if (marker.move) moves.push(marker.move);
+      if (marker.create) creates.push(marker.create);
 
       const reviewOptions = blockChoice ? {
         lockKey: "dcc-time-block:" + req.workspaceId + ":" + targetDate,
         beforeApply: async client => {
           // Include concurrent inserts, calendar ingestion, and settings edits, not
           // just existing row updates. Keep the lock bounded and the read fail-closed.
-          await client.query("SET LOCAL lock_timeout = '3s'");
-          await client.query("LOCK TABLE blocks, dcc_state IN SHARE ROW EXCLUSIVE MODE");
+          await lockScheduleForPlacement(client);
           const freshParent = await blockDB.getBlock(parent.id, client);
           const freshPool = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId, { client });
           if (!freshParent || freshParent.deleted_at) timeBlockPlacement.reject("The task changed. Refresh the day.");

@@ -1,5 +1,6 @@
 const nodeCrypto = require("node:crypto");
 const TaskSources = require("./public/js/task-sources");
+const TaskModel = require("./public/js/task-model");
 const { isBlockDone } = require("./lib/task-timing");
 
 const LEGACY_TASK_TYPES = ["added_task", "schedule_item", "pending_task", "trivial_task", "action_item", "subtask"];
@@ -422,7 +423,8 @@ function createProjectStore(deps = {}) {
       else entry.blockers.push({ id: blocker ? blocker.id : props.blockerBlockId, title: blocker ? cleanText(blocker.properties.title || blocker.properties.text) : props.title || "Missing prerequisite" });
       if (!satisfied) entry.state = "blocked";
     }
-    return { tasks, ...organization, dependencies, readiness, completedTaskIds, builtinViews: BUILTIN_VIEWS };
+    const somedayTaskIds = TaskModel.selectSomeday(tasks, {completedIds:completed, waitingRows:dependencyRows}).map(task => task.id);
+    return { tasks, ...organization, dependencies, readiness, completedTaskIds, somedayTaskIds, builtinViews: BUILTIN_VIEWS };
   }
 
   async function createOrganizationBlock(kind, properties, owner, client, sortOrder) {

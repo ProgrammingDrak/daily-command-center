@@ -41,7 +41,7 @@ test(
     t.after(() => ctx.close());
     const { createChatControlStore } = require("./chat-control-store");
     const store = createChatControlStore({ ...ctx, getTodayStr: () => "2026-11-14" });
-    const actor = { userId: 1, workspaceId: "ws-1", scopes: P.categories.flatMap((c) => [c.read, c.write]) };
+    const actor = { userId: 1, workspaceId: "ws-1", scopes: P.scopes.filter((scope) => !P.legacy.includes(scope)) };
     const read = { ...actor, scopes: ["dcc.tasks.read"] };
     await assert.rejects(
       store.tasks({ action: "create", sourceEventId: "denied", input: { title: "No" } }, read),
