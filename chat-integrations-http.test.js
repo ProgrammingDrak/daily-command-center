@@ -292,18 +292,46 @@ test(
           writer
         );
         const pending = tool("dcc_itinerary_write", create("Blocked by browser entry", "20:33", "20:41"));
-        let workloadWaiting = false;
-        for (let attempt = 0; attempt < 80 && !workloadWaiting; attempt++) {
-          const { rows } = await ctx.pool.query(
-            "SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM workspaces WHERE id=%'"
-          );
-          workloadWaiting = Boolean(rows.length);
-          if (!workloadWaiting) await new Promise((resolve) => setTimeout(resolve, 10));
-        }
+        const waitForQuery = async (pattern) => {
+          for (let attempt = 0; attempt < 80; attempt++) {
+            const { rows } = await ctx.pool.query(
+              "SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE $1",
+              [pattern]
+            );
+            if (rows.length) return true;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          return false;
+        };
+        const workloadWaiting = await waitForQuery("SELECT id FROM workspaces WHERE id=%");
         await writer.query("COMMIT");
         const conflict = await pending;
         assert.ok(workloadWaiting, "MCP waits for the competing workspace FK holder");
         assert.match(JSON.parse(conflict.content[0].text).error, /fixture-concurrent-browser/);
+
+        const existing = await ctx.blockDB.createBlock({
+          id: "fixture-browser-promotion",
+          workspace_id: "ws-1",
+          user_id: 1,
+          type: "block",
+          date: null,
+          properties: { title: "Promoted from the browser", kind: "task", type: "task" }
+        });
+        await writer.query("BEGIN");
+        await ctx.blockDB.updateBlock(
+          existing.id,
+          {
+            date,
+            properties: { ...existing.properties, start: "06:42", end: "06:49" }
+          },
+          writer
+        );
+        const edited = tool("dcc_itinerary_write", create("Blocked by existing browser edit", "20:42", "20:49"));
+        const rowWaiting = await waitForQuery("SELECT count(*) FROM (SELECT id FROM blocks%FOR NO KEY UPDATE)%");
+        await writer.query("COMMIT");
+        const editConflict = await edited;
+        assert.ok(rowWaiting, "MCP waits for a browser promotion from the undated pool");
+        assert.match(JSON.parse(editConflict.content[0].text).error, /fixture-browser-promotion/);
       } catch (error) {
         await writer.query("ROLLBACK");
         throw error;

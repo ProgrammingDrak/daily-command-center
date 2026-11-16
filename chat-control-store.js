@@ -107,7 +107,7 @@ function createChatControlStore(ctx) {
       q.release();
     }
   }
-  async function row(q, id, actor, deleted = false) {
+  async function row(q, id, actor, deleted = false, missing = "Record not found") {
     M.text(id, "taskId", 200);
     const r = await q.query(
       "SELECT * FROM blocks WHERE id=$1 AND workspace_id=$2 AND (user_id=$3 OR user_id IS NULL)" +
@@ -120,7 +120,7 @@ function createChatControlStore(ctx) {
       !b ||
       (!db.isTaskRow(b) && !definition(b) && !["project", "task_facet", "task_view"].includes(b.properties.kind))
     )
-      throw M.fail("Record not found", 404);
+      throw M.fail(missing, 404);
     return b;
   }
   async function effective(q, rows, actor) {
@@ -911,27 +911,24 @@ function createChatControlStore(ctx) {
     if (!slot && !Object.keys(changes).length) throw M.fail("Provide at least one field to update");
     const result = await once({ ...args, tool: "itinerary" }, actor, async (q) => {
       if (slot) {
-        try {
-          await q.query("SET LOCAL lock_timeout = '3s'");
-          await lockWorkspaceSchedule(q, actor.workspaceId);
-          // A scoped workspace FK lock serializes inserts in this workspace.
-          // The range's row locks below cover ordinary edits to existing slots.
-          await q.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [actor.workspaceId]);
-        } catch (error) {
-          if (error.code === "55P03") throw M.fail("The schedule is busy. Retry the same operation.", 409);
-          throw error;
-        }
+        await q.query("SET LOCAL lock_timeout = '3s'");
+        await lockWorkspaceSchedule(q, actor.workspaceId);
+        // New rows take a key-share lock through their workspace foreign key.
+        await q.query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", [actor.workspaceId]);
+        // An existing row can move in from any date, including the undated pool.
+        // Lock only this workspace's native itinerary row type before reading occupancy.
+        await q.query(
+          "SELECT count(*) FROM (SELECT id FROM blocks WHERE workspace_id=$1 AND type='block' ORDER BY id FOR NO KEY UPDATE) AS placement_rows",
+          [actor.workspaceId]
+        );
       }
       let b;
       if (args.action !== "create") {
-        b = await row(q, args.id, actor);
+        b = await row(q, args.id, actor, false, "Activity not found");
         if (!itineraryEligible(b)) throw M.fail("Activity not found", 404);
         if (!b.date) {
           if (args.action !== "schedule" || !has(actor, "dcc.tasks.read") || !has(actor, "dcc.tasks.write"))
-            throw M.fail(
-              "Activity not found on the itinerary. To schedule from Task Library, authorize task access.",
-              404
-            );
+            throw M.fail("Activity not found", 404);
         }
         if (Itinerary.calendarOwned(b) && !canReadCalendar(actor)) throw M.fail("Activity not found", 404);
         checkVersion(b, args.expectedVersion);
@@ -959,7 +956,7 @@ function createChatControlStore(ctx) {
       }
 
       if (slot) {
-        const rows = await itineraryRows(q, actor, slot.date, slot.date, true);
+        const rows = await itineraryRows(q, actor, slot.date, slot.date);
         const conflicts = rows.filter((existing) => {
           if (existing.id === b?.id) return false;
           const times = Itinerary.occupied(existing, appZone);
@@ -1047,6 +1044,10 @@ function createChatControlStore(ctx) {
       }
       const saved = await row(q, b.id, actor);
       return { activity: itineraryEntry(saved, input.timeZone || saved.properties.scheduleInstant?.zone || appZone) };
+    }).catch((error) => {
+      if (error.code === "55P03" || error.code === "40P01")
+        throw M.fail("The schedule is busy. Retry the same operation.", 409);
+      throw error;
     });
     if (slot) ctx.broadcastQueueChange?.(actor.userId, actor.workspaceId);
     return result;

@@ -41,6 +41,11 @@ an explicitly approved account and remains open.
 | Budget, reimbursement, time and costs | Yes, domain-specific stores and itinerary ledger | Time records as listed above | Expense writes, ledger amounts and reimbursements are outside the existing grants |
 | Access administration, evaluation, rewards, pet, slots and sponsorship | Yes, dedicated APIs with separate guardrails | No tools on the DCC ChatGPT endpoint | Each needs its own authorization and consequence model before exposure |
 
+A placement checks persisted workspace rows, including all-day provider holds.
+The concurrency tests cover new inserts and promotion of existing dateless rows.
+A later manual edit or provider update can introduce an overlap after the write.
+Read the itinerary after calendar sync to reconcile new conflicts.
+
 ## Reconnect and refresh
 
 1. In DCC, open **Settings → Connections → ChatGPT** and choose **Tasks and

@@ -2571,13 +2571,13 @@ async function getOperations(blockId, limit = 50) {
   return rows;
 }
 
-async function getBlocksByDateRange(startDate, endDate, workspaceId, client = pool, { lock = false } = {}) {
+async function getBlocksByDateRange(startDate, endDate, workspaceId, client = pool) {
   const { rows } = workspaceId
     ? await client.query(`SELECT * FROM blocks WHERE workspace_id = $3 AND deleted_at IS NULL
         AND ((date >= $1 AND date <= $2) OR (properties->>'all_day' = 'true'
           AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $2
           AND CASE WHEN properties->>'all_day_end' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_end')::date END > $1))
-        ORDER BY date ASC, sort_order ASC, created_at ASC${lock ? " FOR UPDATE" : ""}`, [startDate, endDate, workspaceId])
+        ORDER BY date ASC, sort_order ASC, created_at ASC`, [startDate, endDate, workspaceId])
     : await client.query(`SELECT * FROM blocks WHERE deleted_at IS NULL
         AND ((date >= $1 AND date <= $2) OR (properties->>'all_day' = 'true'
           AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $2
