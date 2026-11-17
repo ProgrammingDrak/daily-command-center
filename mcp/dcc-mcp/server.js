@@ -97,6 +97,7 @@ function reply(id, result) { send({ jsonrpc: "2.0", id, result }); }
 function replyError(id, code, message) { send({ jsonrpc: "2.0", id, error: { code, message } }); }
 
 async function scheduleTask(args) {
+  if (process.env.DCC_OPERATOR_MCP !== "1") throw new Error("Operator-only legacy MCP is disabled. Use the remote DCC account OAuth plugin.");
   if (!args || typeof args.title !== "string" || !args.title.trim()) {
     throw new Error("title is required");
   }

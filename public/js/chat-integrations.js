@@ -21,15 +21,15 @@
   async function request(url,options={}) {
     const response=await fetch(url,{...options,headers:{Accept:'application/json',...options.headers},redirect:'error'});
     let data;try{data=await response.json();}catch{throw new Error('Could not load connection settings. Try again.');}
-    if(!response.ok)throw new Error(data.error || (response.status===401?'Sign in to DCC to manage connections.':'Could not update this connection.'));
+    if(!response.ok){const error=new Error(data.error || (response.status===401?'Sign in to DCC to manage connections.':'Could not update this connection.'));error.data=data;throw error;}
     return data;
   }
   function open(options={}) {
     let handle,closed=false,view='hub',providers=null,chat=null,providerError='',chatError='',selectedId=null,busy=false,message='',generation=0;
-    let wizardScopes=null,baselineIds=[];
-    const principal=JSON.stringify(window.DCC_ACCOUNT_CONTEXT||null);
+    let wizardScopes=null,pollTimer=null,pollUntil=0,workspaceOptions=null;
+    let principal=JSON.stringify(window.DCC_ACCOUNT_CONTEXT||null);
     const body=document.createElement('div');body.className='connections';
-    const active=()=>chat?.grants.filter(g=>!g.revoked_at)||[];
+    const active=()=>chat?.grants.filter(g=>!g.revoked_at && (g.scopes.length||g.last_verified_at))||[];
     const current=()=>active().find(g=>g.id===selectedId)||active()[0];
     const legacy=g=>(g?.scopes||[]).filter(scope=>!chat.categories.some(c=>scope===c.read||scope===c.write));
     const accountCheck=()=>{if(principal!==JSON.stringify(window.DCC_ACCOUNT_CONTEXT||null))throw new Error('Your DCC account changed. Close and reopen Connections.');};
@@ -44,7 +44,7 @@
     }
     function renderHub() {
       view='hub';
-      const linked=active().length>0;
+      const linked=!!chat?.enabled && !['reconnect_required','temporarily_unavailable'].includes(chat.state) && active().length>0;
       const slack=providers?.slack,google=providers?.google,triage=providers?.triage;
       frame('Connections','<p class="connection-intro">Your apps, connected to your day.</p><div class="connection-list">'+
         row('chatgpt','ChatGPT','Work with DCC tasks from your chat.',chatError?'Unavailable':!chat?'Loading…':linked?'Connected':chat.enabled&&chat.clientsReady?'Not connected':'Setup needed',linked)+
@@ -62,15 +62,18 @@
       const grant=current();selectedId=grant?.id||null;
       const scopes=grant?.scopes||chat.preferences;
       const multiple=active().length>1?'<label class="connection-select-label">Connection<select data-connection>'+active().map((g,i)=>'<option value="'+esc(g.id)+'"'+(g.id===selectedId?' selected':'')+'>Connection '+(i+1)+' · '+esc(new Date(g.created_at).toLocaleDateString())+'</option>').join('')+'</select></label>':'';
-      const status=grant?(grant.last_verified_at?'Connected · verified':'Connected · awaiting first use'):'Not connected';
+      const status=!chat.enabled||grant?.connection_state==='temporarily_unavailable'?'Temporarily unavailable':grant?.connection_state==='reconnect_required'?'Reconnect required':grant?(grant.last_verified_at?'Authorized · previously verified':'Authorized · awaiting first use'):'Not connected';
       const legacyOnly=grant&&legacy(grant).length&&!chat.categories.some(c=>scopes.includes(c.read)||scopes.includes(c.write));
       let html=back()+'<div class="connection-hero">'+icon('chatgpt')+'<div><h3>ChatGPT</h3><p>Ask your chat to find, plan and update your tasks.</p></div></div><div class="connection-summary">'+badge(status,!!grant)+(grant?'<span>Last used '+esc(grant.last_verified_at?new Date(grant.last_verified_at).toLocaleString():'not yet')+'</span>':'<span>Choose access, then connect your account.</span>')+'</div>'+multiple;
       if(legacyOnly)html+='<p class="connection-notice">Choose access below, then reconnect to update this connection.</p><details class="connection-advanced"><summary>Current access</summary>'+legacy(grant).map(scope=>'<p>'+esc(chat.legacyDescriptions[scope]||scope)+'</p>').join('')+'</details>';
       const editorScopes=legacyOnly?chat.preferences:scopes;
       html+='<form data-permissions><div class="connection-permissions-head"><div><h3>Permissions</h3><p>Choose what your chat can do in DCC.</p></div><button type="button" class="connection-text-button" data-action="allow-all">Full control for all</button></div>'+choices(chat.categories,editorScopes);
       if(grant&&!legacyOnly&&legacy(grant).length)html+='<details class="connection-advanced"><summary>Earlier permissions on this connection</summary><p>These permissions remain active unless you uncheck them.</p>'+legacy(grant).map(scope=>'<label class="connection-legacy"><input type="checkbox" name="legacy" value="'+esc(scope)+'" checked> '+esc(chat.legacyDescriptions[scope]||scope)+'</label>').join('')+'</details>';
-      html+='<p class="connection-footnote">Full control includes editing and recoverable deletion when you ask.</p><div class="connection-actions">'+button(grant&&!legacyOnly?'save':'connect',grant?(legacyOnly?'Update connection':'Save changes'):'Connect ChatGPT',true)+(grant?button('disconnect-confirm','Disconnect'):'')+'</div></form>';
-      html+='<details class="connection-advanced"><summary>Connection details</summary><p>Signed in to DCC as '+esc(chat.account)+'.</p>'+(grant?'<p>Client: '+esc(grant.client_id)+'</p>':'')+'<p>Additional access requires authorization in ChatGPT. Reducing access takes effect immediately.</p></details>';
+      html+='<p class="connection-footnote">ChatGPT’s “Allow read actions” setting asks before changes. Bulk cleanup, imports and time corrections also require review in DCC. Your ChatGPT setting cannot be verified here.</p><div class="connection-actions">'+button(grant&&!legacyOnly?'save':'connect',grant?(legacyOnly?'Update connection':'Save changes'):'Connect ChatGPT',true)+(grant?button('disconnect-confirm','Disconnect'):'')+'</div></form>';
+      html+='<details class="connection-advanced"><summary>Connection details</summary><p>Signed in to DCC as '+esc(chat.account)+'.</p>'+(grant?'<p>Client: '+esc(grant.client_id)+'</p>':'')+'<p>Additional access requires authorization in ChatGPT. Reducing access takes effect immediately. This connection does not provide repository or database administration.</p></details>';
+      const disconnected=chat.grants.find(g=>g.revoked_at);
+      if(disconnected)html+='<p>'+esc(disconnected.revocation_pending?'Disconnected in DCC · provider revocation pending':'Disconnected')+'</p>'+button('retry-revoke','Retry provider disconnect')+(chat.provider==='clerk'&&!disconnected.revocation_pending?button('reconnect-clerk','Reconnect account'):'');
+      html+=button('activity-log','Recent assistant actions');
       frame('ChatGPT',html);
     }
     function values() {
@@ -92,8 +95,29 @@
     }
     function renderWizard() {
       view='connect';
-      frame('Connect ChatGPT','<button type="button" class="connection-back" data-action="chatgpt">← ChatGPT</button>'+icon('chatgpt')+'<h3 class="connection-wizard-title">Bring DCC into your chat</h3><p class="connection-intro">Your access choices are saved. Finish connecting in ChatGPT, then authorize your DCC account.</p>'+(!chat.enabled||!chat.clientsReady?'<p class="connection-notice">This server is not ready for a new connection yet. Your access choices will be here when setup is complete.</p>':'<ol class="connection-steps"><li><strong>Open ChatGPT’s connector settings</strong><span>Add DCC as a custom connector, or reconnect your existing DCC connector.</span></li><li><strong>Connect your DCC account</strong><span>Use the connection details below, sign in, and review the permissions you chose.</span></li><li><strong>Come back here</strong><span>We’ll check that the connection was authorized.</span></li></ol><div class="connection-actions"><a class="connection-button is-primary" href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">Open ChatGPT ↗</a>'+button('check','Check connection')+'</div>')+setupDetails(wizardScopes));
+      const matching=active().find(g=>!['reconnect_required','temporarily_unavailable'].includes(g.connection_state)&&(wizardScopes||[]).every(scope=>g.scopes.includes(scope)));
+      const ready=chat.enabled&&chat.clientsReady;
+      const existing=matching?'<p class="connection-notice">Your existing connection already has the selected access. Last successful use: '+esc(matching.last_verified_at?new Date(matching.last_verified_at).toLocaleString():'not yet verified')+'.</p>':active().length?'<p class="connection-notice">Your existing connection still works with its current permissions. The additional access below is awaiting authorization.</p>':'';
+      const install=chat.installUrl?'<a class="connection-button is-primary" href="'+esc(chat.installUrl)+'" target="_blank" rel="noopener noreferrer">'+(matching?'Open DCC in ChatGPT':'Connect in ChatGPT')+' ↗</a>':'<p class="connection-notice">The official installation link has not been configured yet. Ask the DCC owner to complete connection setup.</p>';
+      const steps=ready?'<ol class="connection-steps"><li><strong>Open DCC in ChatGPT</strong><span>Install or open the DCC plugin.</span></li><li><strong>Authorize your account</strong><span>Sign in and approve the DCC permissions you want.</span></li><li><strong>Return here</strong><span>Connection status refreshes when you return.</span></li></ol>'+install+button('check','Check connection'):'<p class="connection-notice">Connection setup is temporarily unavailable. Your access choices are saved.</p>';
+      frame('Connect ChatGPT',back()+icon('chatgpt')+'<h3 class="connection-wizard-title">Bring DCC into your chat</h3>'+existing+steps+setupDetails(wizardScopes||chat.preferences));
     }
+    async function checkConnection() {
+      const updated=await request('/api/me/chat-connections');
+      accountCheck();if(closed)return;
+      chat=updated;
+      const match=active().find(g=>!['reconnect_required','temporarily_unavailable'].includes(g.connection_state)&&(wizardScopes||[]).every(scope=>g.scopes.includes(scope)));
+      if(match){selectedId=match.id;message=match.last_verified_at?'Access verified.':'Access authorized; awaiting the first successful tool call.';renderChat();}
+      else {message='Selected access is still awaiting authorization. Existing permissions remain separate.';renderWizard();}
+    }
+    function pollSetup() {
+      clearTimeout(pollTimer);
+      if(closed||view!=='connect'||Date.now()>pollUntil)return;
+      pollTimer=setTimeout(()=>act(async()=>{await checkConnection();pollSetup();}),3000);
+    }
+    const onReturn=()=>{if(!closed&&document.visibilityState==='visible'&&view==='connect'){pollUntil=Date.now()+60000;act(async()=>{await checkConnection();pollSetup();});}};
+    document.addEventListener('visibilitychange',onReturn);
+    window.addEventListener('focus',onReturn);
     async function refresh(target=view) {
       const sequence=++generation;
       const results=await Promise.allSettled([request('/api/me/integrations'),request('/api/me/chat-connections')]);
@@ -101,6 +125,11 @@
       accountCheck();
       providers=results[0].status==='fulfilled'?results[0].value:null;providerError=results[0].status==='rejected'?results[0].reason.message:'';
       chat=results[1].status==='fulfilled'?results[1].value:null;chatError=results[1].status==='rejected'?results[1].reason.message:'';
+      if(results[1].status==='rejected'&&results[1].reason.data?.workspaceSelectionRequired){
+        workspaceOptions=await request('/api/me/chat-workspaces');
+        frame('Choose DCC workspace','<p>Select the workspace for this connection.</p><select data-workspace>'+workspaceOptions.workspaces.map(w=>'<option value="'+esc(w.workspace_id)+'">'+esc(w.workspace_id)+'</option>').join('')+'</select>'+button('choose-workspace','Use workspace',true));
+        return;
+      }
       if(target==='chatgpt')renderChat();else if(target==='connect'&&chat)renderWizard();else renderHub();
     }
     body.addEventListener('change',event=>{if(event.target.matches('[data-connection]')){selectedId=event.target.value;renderChat();}});
@@ -120,7 +149,7 @@
         view='calendar';const google=providers?.google;
         frame('Google Calendar',back()+'<div class="connection-hero">'+icon('calendar')+'<div><h3>Google Calendar</h3><p>Your appointments on the DCC itinerary.</p></div></div>'+badge(google?.connected?'Connected':'Not connected',!!google?.connected)+(google?.error?'<p class="connection-notice">Calendar status is unavailable. Try again before changing the connection.</p>':google?.connected?'<div class="connection-existing">'+(google.accounts||[]).map(a=>'<p>'+esc(a.email||a.label||'Connected account')+'</p>').join('')+'</div>':'<p class="connection-intro">Connect Google to bring appointments into your itinerary.</p>')+'<a class="connection-button is-primary" href="/api/gcal/auth">'+(google?.connected?'Connect another account':'Connect Google Calendar')+'</a>');return;
       }
-      if(action==='allow-all'){body.querySelectorAll('[data-permissions] input[value="write"]').forEach(i=>i.checked=true);return;}
+      if(action==='allow-all'){body.querySelectorAll('[data-permissions] [role="radiogroup"]').forEach(row=>{const input=row.querySelector('input[value="write"]')||row.querySelector('input[value="read"]');if(input)input.checked=true;});return;}
       if(action==='disconnect-confirm'){
         frame('Disconnect ChatGPT',back()+'<h3>Disconnect this connection?</h3><p class="connection-intro">ChatGPT will lose this connection’s access to DCC. Your tasks and recorded time stay in DCC.</p><div class="connection-actions">'+button('disconnect','Disconnect')+button('chatgpt','Keep connection',true)+'</div>');return;
       }
@@ -136,19 +165,24 @@
           if(!chosen.scopes.length&&action!=='save')throw new Error('Choose at least one permission before connecting.');
           const grant=current();
           if(action==='save'&&grant&&chosen.scopes.every(s=>grant.scopes.includes(s))){await post('permissions',{...chosen.data,legacy:chosen.legacy,grantId:grant.id});message='Permissions updated.';await refresh('chatgpt');}
-          else{await post('preferences',{...chosen.data,legacy:[]});wizardScopes=chosen.scopes.filter(s=>chat.categories.some(c=>s===c.read||s===c.write));baselineIds=active().map(g=>g.id);renderWizard();}
+          else{if(grant&&chat.provider==='clerk')await post('upgrade',{...chosen.data,legacy:chosen.legacy,grantId:grant.id});await post('preferences',{...chosen.data,legacy:[]});wizardScopes=chosen.scopes.filter(s=>chat.categories.some(c=>s===c.read||s===c.write));renderWizard();pollUntil=Date.now()+60000;pollSetup();}
         }
-        if(action==='check'){
-          const updated=await request('/api/me/chat-connections');chat=updated;
-          const match=active().find(g=>!baselineIds.includes(g.id)&&wizardScopes.every(s=>g.scopes.includes(s)));
-          if(match){selectedId=match.id;message='Connected. Your chat can now use the access you authorized.';renderChat();}
-          else message='No new authorization yet. Finish connecting in ChatGPT, then check again.';
+        if(action==='choose-workspace'){
+          const selected=await request('/connections/conversation/workspace',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({csrf:workspaceOptions.csrf,workspaceId:body.querySelector('[data-workspace]').value})});
+          window.DCC_ACCOUNT_CONTEXT={userId:selected.accountId,workspaceId:selected.workspaceId};principal=JSON.stringify(window.DCC_ACCOUNT_CONTEXT);await refresh('chatgpt');
         }
-        if(action==='disconnect'){await post('revoke',{grantId:selectedId});selectedId=null;message='Disconnected.';await refresh('chatgpt');}
+        if(action==='check')await checkConnection();
+        if(action==='disconnect'){const result=await post('revoke',{grantId:selectedId});selectedId=null;message=result.revocationPending?'Access blocked in DCC. Provider disconnect needs a retry.':'Disconnected.';await refresh('chatgpt');}
+        if(action==='retry-revoke'){await post('revoke',{grantId:chat.grants.find(g=>g.revoked_at).id});await refresh('chatgpt');}
+        if(action==='reconnect-clerk'){await post('reconnect',{grantId:chat.grants.find(g=>g.revoked_at&&!g.revocation_pending).id});wizardScopes=chat.preferences;renderWizard();}
+        if(action==='activity-log'){
+          const log=await request('/api/me/chat-actions');
+          frame('Assistant activity',back()+'<ul>'+log.actions.map(a=>'<li>'+esc(new Date(a.created_at).toLocaleString())+' · '+esc(a.client?.includes('chatgpt')?'ChatGPT':a.client||'Assistant')+' · '+esc(a.operation.replace(/^dcc_/, '').replaceAll('_',' '))+' · '+esc(a.outcome.replaceAll('_',' '))+(a.affected_ids?.length?' · '+a.affected_ids.length+' records':'')+'</li>').join('')+'</ul>');
+        }
         const status=body.querySelector('.connection-feedback');if(status)status.textContent=message;
       });
     });
-    handle=DCC.modal({title:'Connections',anchor:options.anchor,body,onClose:()=>{closed=true;generation++;}});
+    handle=DCC.modal({title:'Connections',anchor:options.anchor,body,onClose:()=>{closed=true;generation++;clearTimeout(pollTimer);document.removeEventListener('visibilitychange',onReturn);window.removeEventListener('focus',onReturn);}});
     handle.el.classList.add('connections-modal');renderHub();
     act(()=>refresh(options.service==='chatgpt'?'chatgpt':'hub'));
     return handle;

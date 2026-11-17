@@ -1,3 +1,5 @@
+> Current Clerk cutover and authorization contract: [Clerk MCP rollout](clerk-mcp-rollout.md). The legacy registration instructions below apply only before cutover.
+
 # Chat integrations
 
 Open **Settings → Connections**. ChatGPT, Slack, Google Calendar and AI triage
@@ -17,12 +19,12 @@ sign-in flow. The UI cannot install a ChatGPT connector or bypass workspace poli
 `GET /api/me/chat-connections` supplies owner-only, private/no-store connection
 state and a CSRF token. Mutations retain server-side identity, owner, CSRF and
 scope checks. Optional expected account/workspace values reject stale forms;
-they never select the acting identity. No database migration is required.
+they never select the acting identity. The Clerk cutover adds the reviewed access-boundary migration; see [the rollout guide](clerk-mcp-rollout.md).
 
 ## Access
 
 Each category has Off, Read only and Full control. New connection preferences
-start with Tasks and scheduling read-only and every other category off.
+start with Tasks and scheduling read/write and every other category off.
 Select all is an explicit choice. Preferences are not grants: OAuth consent
 grants only the selected subset of the client-requested scopes.
 

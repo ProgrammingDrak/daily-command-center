@@ -1,3 +1,5 @@
+> The Clerk migration supersedes the manual registration setup below after cutover. See [Clerk MCP rollout](clerk-mcp-rollout.md).
+
 # ChatGPT connection readiness
 
 Code deployment, public protocol ingress, account consent, and host lifecycle reporting are separate steps. A healthy DCC page alone proves none of the latter three. New DCC signup does not automatically install a ChatGPT plugin.

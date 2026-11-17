@@ -38,9 +38,10 @@ const blockItem = z.object({
 const blockCreate = z.union([blockItem, z.array(blockItem).min(1)]);
 
 const tokenCreate = z.object({
+  actions:z.array(z.string().regex(/^(GET|POST|PATCH|DELETE) \/api\/[a-z0-9/_-]+$/)).min(1),
   name: z.string().trim().min(1, "name required"),
   scope: z.enum(["dcc", "sweep", "all"]).optional(),
-  ttlDays: z.coerce.number().int().positive().max(3650).optional(),
+  ttlDays: z.coerce.number().int().positive().max(30).optional(),
 }).passthrough();
 
 module.exports = { login, register, quickTask, blockCreate, tokenCreate };

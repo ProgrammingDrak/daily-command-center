@@ -63,8 +63,9 @@ function fields(input, allowed) {
   return input;
 }
 function createChatControlStore(ctx) {
-  const { pool, blockDB: db } = ctx;
-  const projects = createProjectStore(ctx);
+  const { blockDB: db } = ctx;
+  const pool = ctx.transactionClient ? {query:(...args)=>ctx.transactionClient.query(...args),connect:async()=>ctx.transactionClient} : ctx.pool;
+  const projects = createProjectStore({...ctx,pool,mcpAccountScoped:true});
   const reps = require("./responsibility-store")({
     blockDB: db,
     getTodayStr: ctx.getTodayStr || (() => new Date().toISOString().slice(0, 10)),
@@ -82,6 +83,7 @@ function createChatControlStore(ctx) {
   }
   async function activeGrant(q, actor, lock = false) {
     if (!actor.grantId) return;
+    if (ctx.authorizeMcp) return ctx.authorizeMcp(actor, q);
     const { rows } = await q.query(
       "SELECT scopes FROM conversation_grants WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND revoked_at IS NULL" +
         (lock ? " FOR SHARE" : ""),
@@ -91,26 +93,26 @@ function createChatControlStore(ctx) {
       throw M.fail("Connection access changed. Read the current permissions and retry.", 403);
   }
   async function tx(actor, work) {
-    const q = await pool.connect();
+    const q = ctx.transactionClient || await pool.connect();
     try {
-      await q.query("BEGIN");
+      if (!ctx.transactionClient) await q.query("BEGIN");
       await authorize(q, actor);
       await q.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["dcc-foreground:" + actor.userId]);
       await activeGrant(q, actor, true);
       const result = await work(q);
-      await q.query("COMMIT");
+      if (!ctx.transactionClient) await q.query("COMMIT");
       return result;
     } catch (e) {
-      await q.query("ROLLBACK");
+      if (!ctx.transactionClient) await q.query("ROLLBACK");
       throw e;
     } finally {
-      q.release();
+      if (!ctx.transactionClient) q.release();
     }
   }
   async function row(q, id, actor, deleted = false, missing = "Record not found") {
     M.text(id, "taskId", 200);
     const r = await q.query(
-      "SELECT * FROM blocks WHERE id=$1 AND workspace_id=$2 AND (user_id=$3 OR user_id IS NULL)" +
+      "SELECT * FROM blocks WHERE id=$1 AND workspace_id=$2 AND user_id=$3" +
         (deleted ? "" : " AND deleted_at IS NULL") +
         (q === pool ? "" : " FOR UPDATE"),
       [id, actor.workspaceId, actor.userId]
@@ -152,7 +154,7 @@ function createChatControlStore(ctx) {
       if (repeat(b)) return b.properties.responsibilityId || b.properties.repeatSeriesId;
       if (!b.parent_id && !b.properties.subtaskOf) return null;
       const r = await q.query(
-        "SELECT * FROM blocks WHERE workspace_id=$1 AND (user_id=$2 OR user_id IS NULL) AND (id=$3 OR (properties->>'local_id'=$4 AND date IS NOT DISTINCT FROM $5::date))",
+        "SELECT * FROM blocks WHERE workspace_id=$1 AND user_id=$2 AND (id=$3 OR (properties->>'local_id'=$4 AND date IS NOT DISTINCT FROM $5::date))",
         [actor.workspaceId, actor.userId, b.parent_id || b.properties.subtaskOf, b.properties.subtaskOf || null, b.date]
       );
       if (r.rows.length !== 1) return null;
@@ -216,7 +218,7 @@ function createChatControlStore(ctx) {
       const offset = Number(args.offset || 0);
       if (!Number.isInteger(offset) || offset < 0) throw M.fail("Invalid offset");
       const r = await pool.query(
-        "SELECT * FROM blocks WHERE workspace_id=$1 AND (user_id=$2 OR user_id IS NULL) AND deleted_at IS NULL AND dcc_is_task_row(type,properties) AND COALESCE(properties->>'title','') ILIKE $3 ORDER BY updated_at DESC,id",
+        "SELECT * FROM blocks WHERE workspace_id=$1 AND user_id=$2 AND deleted_at IS NULL AND dcc_is_task_row(type,properties) AND COALESCE(properties->>'title','') ILIKE $3 ORDER BY updated_at DESC,id",
         [actor.workspaceId, actor.userId, "%" + String(args.query || "").replace(/[\\%_]/g, "\\$&") + "%"]
       );
       let rows = await effective(
@@ -299,6 +301,8 @@ function createChatControlStore(ctx) {
         if (input.duration !== undefined && b.properties.scheduleInstant?.source === "mcp-zoned")
           throw M.fail("Use dcc_itinerary_write to change the scheduled duration", 409);
         if (input.projectId !== undefined || input.facetValues !== undefined) need(actor, "dcc.organization.write");
+        if (input.projectId) await row(q,input.projectId,actor);
+        if (input.facetValues) for (const id of Object.keys(input.facetValues)) await row(q,id,actor);
         await projects.organizeTask(b.id, input, actor, q);
       } else if (args.action === "schedule") {
         if (Itinerary.calendarOwned(b)) throw M.fail("Change this event in its source calendar", 409);
@@ -323,7 +327,7 @@ function createChatControlStore(ctx) {
             "Completed or active descendants must remain in their recorded timeline; schedule the open tasks individually",
             409
           );
-        if (tree.some((child) => child.user_id != null && child.user_id !== actor.userId))
+        if (tree.some((child) => child.user_id !== actor.userId))
           throw M.fail("Task tree includes another account", 403);
         const minutes = (time) => {
           const [h, m] = time.split(":").map(Number);
@@ -403,7 +407,7 @@ function createChatControlStore(ctx) {
     if (args.action === "list" || args.action === "get") {
       await authorize(pool, actor);
       const r = await pool.query(
-        "SELECT * FROM blocks WHERE workspace_id=$1 AND (user_id=$2 OR user_id IS NULL) AND deleted_at IS NULL AND properties->>'kind'='responsibility_item' ORDER BY id",
+        "SELECT * FROM blocks WHERE workspace_id=$1 AND user_id=$2 AND deleted_at IS NULL AND properties->>'kind'='responsibility_item' ORDER BY id",
         [actor.workspaceId, actor.userId]
       );
       const rows = r.rows.map(db.parseBlock).filter((b) => !args.id || b.id === args.id);
@@ -485,9 +489,9 @@ function createChatControlStore(ctx) {
     need(actor, "dcc.organization.read");
     await authorize(pool, actor);
     if (args.action === "list") {
-      const organization = await projects.listOrganization(actor.workspaceId);
+      const organization = await projects.listOrganization(actor.workspaceId,undefined,actor.userId);
       return Object.fromEntries(
-        Object.entries(organization).map(([key, rows]) => [key, rows.map((b) => ({ ...b, version: version(b) }))])
+        Object.entries(organization).map(([key, rows]) => [key, rows.filter(b => b.user_id === actor.userId).map((b) => ({ ...b, version: version(b) }))])
       );
     }
     if (args.action === "preview_import") return projects.previewImport(args.input || {});
@@ -554,7 +558,7 @@ function createChatControlStore(ctx) {
         let selected = [];
         if (args.allRepeats) {
           const r = await q.query(
-            "SELECT * FROM blocks WHERE workspace_id=$1 AND (user_id=$2 OR user_id IS NULL) AND deleted_at IS NULL AND properties->>'kind'='responsibility_item'",
+            "SELECT * FROM blocks WHERE workspace_id=$1 AND user_id=$2 AND deleted_at IS NULL AND properties->>'kind'='responsibility_item'",
             [actor.workspaceId, actor.userId]
           );
           selected = r.rows.map(db.parseBlock);
@@ -579,7 +583,7 @@ function createChatControlStore(ctx) {
         }
         if (
           [...rows.values()].some(
-            (b) => b.workspace_id !== actor.workspaceId || (b.user_id != null && b.user_id !== actor.userId)
+            (b) => b.workspace_id !== actor.workspaceId || b.user_id !== actor.userId
           )
         )
           throw M.fail("Cleanup includes records from another account", 403);
@@ -743,11 +747,13 @@ function createChatControlStore(ctx) {
     ctx.taskAttachmentStore ||
     require("./task-attachment-store").createStore({
       pool,
+      authorizeMcp:ctx.authorizeMcp,
       storage: require("./lib/task-attachment-storage").createStorage()
     });
   async function files(args, actor) {
     need(actor, "dcc.files.read");
     await authorize(pool, actor);
+    if (!actor.wishlistId) await row(pool, args.taskId, actor);
     if (args.action === "list")
       return { configured: attachments.configured, files: await attachments.list(actor, args.taskId) };
     if (!require("./lib/task-attachment-policy").UUID.test(args.id || "")) throw M.fail("Provide a valid file UUID");

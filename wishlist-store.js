@@ -63,11 +63,15 @@ const ordered = (data) => Object.fromEntries(Object.entries(data).sort(([a], [b]
 const serialize = (row) => ({ ...row.data, id: row.id, revision: row.revision });
 const normalize = (schema, data) => M.parse(schema, data);
 
-function createStore({ pool, blockDB }) {
+function createStore({ pool, blockDB, authorizeMcp, mcpActor }) {
   async function transaction(run, read = false) {
     const q = await pool.connect();
     try {
       await q.query(read ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" : "BEGIN");
+      if(!read && authorizeMcp && mcpActor) {
+        await q.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['dcc-foreground:'+mcpActor.userId]);
+        await authorizeMcp(mcpActor,q);
+      }
       const result = await run(q);
       await q.query("COMMIT");
       return result;
@@ -94,7 +98,7 @@ function createStore({ pool, blockDB }) {
   async function findTask(q, actor, id, lock = false) {
     const { rows } = await q.query(
       `SELECT b.* FROM blocks b JOIN workspaces w ON w.id=b.workspace_id
-      WHERE b.id=$1 AND b.workspace_id=$2 AND w.owner_id=$3 AND (b.user_id IS NULL OR b.user_id=$3)
+      WHERE b.id=$1 AND b.workspace_id=$2 AND w.owner_id=$3 AND ${mcpActor ? 'b.user_id=$3' : '(b.user_id IS NULL OR b.user_id=$3)'}
       AND b.deleted_at IS NULL${lock ? " FOR UPDATE OF b" : ""}`,
       [id, actor.workspaceId, actor.userId]
     );
@@ -118,7 +122,7 @@ function createStore({ pool, blockDB }) {
         SELECT COALESCE(b.properties->>'title', b.properties->>'text') AS title
         FROM wishlist_records r JOIN blocks b ON b.id=r.data->>'taskId'
         WHERE r.wishlist_id=l.id AND r.kind='tasks' AND b.workspace_id=l.workspace_id
-          AND (b.user_id IS NULL OR b.user_id=l.user_id) AND b.deleted_at IS NULL
+          AND ${mcpActor ? 'b.user_id=l.user_id' : '(b.user_id IS NULL OR b.user_id=l.user_id)'} AND b.deleted_at IS NULL
           AND COALESCE(b.properties->>'status','open')<>'done' AND b.properties->>'completedAt' IS NULL
         ORDER BY r.created_at, r.id LIMIT 1
       ) next_task ON true
@@ -139,7 +143,7 @@ function createStore({ pool, blockDB }) {
     if (!search) return [];
     const { rows } = await pool.query(
       `SELECT b.id, b.type, b.date::text, b.properties FROM blocks b JOIN workspaces w ON w.id=b.workspace_id
-      WHERE b.workspace_id=$1 AND w.owner_id=$2 AND (b.user_id IS NULL OR b.user_id=$2)
+      WHERE b.workspace_id=$1 AND w.owner_id=$2 AND ${mcpActor ? 'b.user_id=$2' : '(b.user_id IS NULL OR b.user_id=$2)'}
       AND b.deleted_at IS NULL AND dcc_is_task_row(b.type,b.properties)
       AND strpos(lower(COALESCE(b.properties->>'title', b.properties->>'text')), lower($3))>0
       ORDER BY b.updated_at DESC LIMIT 40`,
@@ -184,7 +188,7 @@ function createStore({ pool, blockDB }) {
         const { rows: tasks } = await q.query(
           `SELECT id, COALESCE(properties->>'title',properties->>'text') AS title,
           date::text, properties->>'status' AS status
-          FROM blocks WHERE workspace_id=$1 AND (user_id IS NULL OR user_id=$2)
+          FROM blocks WHERE workspace_id=$1 AND ${mcpActor ? 'user_id=$2' : '(user_id IS NULL OR user_id=$2)'}
           AND deleted_at IS NULL AND id=ANY($3::text[])`,
           [actor.workspaceId, actor.userId, result.tasks.map((task) => task.taskId)]
         );

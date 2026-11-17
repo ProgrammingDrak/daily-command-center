@@ -1386,6 +1386,9 @@ async function createSchema() {
   await pool.query(require("./conversation-oauth").SCHEMA_SQL);
   await pool.query(require("./mcp-events").SCHEMA_SQL);
   await pool.query(require("./chat-control-store").SCHEMA_SQL);
+  await pool.query(require("./clerk-mcp-auth").SCHEMA_SQL);
+  await pool.query(require("./mcp-approval-store").SCHEMA_SQL);
+  await pool.query(require("./token-store").SCHEMA_SQL);
   await pool.query(require("./activity-store").SCHEMA_SQL);
   await pool.query(require("./guided-store").SCHEMA_SQL);
   await pool.query(require("./work-rotation-store").SCHEMA_SQL);

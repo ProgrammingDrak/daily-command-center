@@ -25,8 +25,9 @@ test("hashToken is deterministic sha256 hex", () => {
 test("createToken returns plaintext once and stores only the hash", async () => {
   const pool = stubPool();
   const store = createTokenStore(pool);
+  pool.queueRow({ owner: true });
   pool.queueRow({ id: 1, name: "sweep bot", scope: "sweep", created_at: "x", expires_at: null });
-  const out = await store.createToken({ name: "sweep bot", scope: "sweep" });
+  const out = await store.createToken({ name: "sweep bot", scope: "sweep",userId:1,workspaceId:"ws-1",actions:["POST /api/dcc/quick-task"] });
   assert.match(out.token, /^dcc_[0-9a-f]{48}$/);
   const insert = pool.calls.find((c) => /INSERT INTO service_tokens/.test(c.sql));
   assert.strictEqual(insert.params[1], hashToken(out.token));
@@ -39,17 +40,15 @@ test("createToken rejects bad scope and missing name", async () => {
   await assert.rejects(() => store.createToken({ name: "  " }), /name required/);
 });
 
-test("verifyToken: false when no row, scope-checked when row exists", async () => {
-  const pool = stubPool();
-  const store = createTokenStore(pool);
-  assert.strictEqual(await store.verifyToken("dcc_missing", "dcc"), false);
-
-  pool.queueRow({ id: 7, scope: "sweep" });
-  assert.strictEqual(await store.verifyToken("dcc_tok", "dcc"), false, "sweep-scoped token must not pass dcc scope");
-
-  pool.queueRow({ id: 7, scope: "all" });
-  assert.strictEqual(await store.verifyToken("dcc_tok", "dcc"), true, "all scope passes any scope");
-  assert.strictEqual(await store.verifyToken(null, "dcc"), false);
+test("service authentication requires account binding, current membership and exact action",async()=>{
+ const pool=stubPool(),store=createTokenStore(pool);
+ assert.equal(await store.authenticateToken('missing','dcc','POST /api/dcc/quick-task'),null);
+ pool.queueRow({id:7,scope:'all'});
+ assert.equal(await store.authenticateToken('global','dcc','POST /api/dcc/quick-task'),null);
+ pool.queueRow({id:7,scope:'dcc',user_id:1,workspace_id:'ws-1',actions:['POST /api/dcc/quick-task']});
+ assert.deepEqual(await store.authenticateToken('bound','dcc','POST /api/dcc/quick-task'),{userId:1,workspaceId:'ws-1',source:'service-token:7'});
+ pool.queueRow({id:7,scope:'dcc',user_id:1,workspace_id:'ws-1',actions:['POST /api/dcc/quick-task']});
+ assert.equal(await store.authenticateToken('bound','dcc','POST /api/dcc/refresh'),null);
 });
 
 test("revokeToken returns false when nothing live matched", async () => {

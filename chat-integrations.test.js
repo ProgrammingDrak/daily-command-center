@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const P = require("./lib/chat-permissions");
 const page = require("./lib/chat-integration-page");
 test("permission choices cannot manufacture authority or grant writes through read access", () => {
-  assert.deepEqual(P.defaults(), ["dcc.tasks.read"]);
+  assert.deepEqual(P.defaults(), ["dcc.tasks.read", "dcc.tasks.write"]);
   assert.deepEqual(P.selected({ tasks: "write" }), ["dcc.tasks.read", "dcc.tasks.write"]);
   assert.throws(() => P.selected({ tasks: "write" }, ["dcc.tasks.read"]), /not available/);
   assert.throws(() => P.selected({ tasks: "admin" }), /Invalid/);
@@ -315,3 +315,11 @@ test(
     assert.equal((await store.bulk({ action: "undo", jobId: chunked.jobId }, actor)).status, "restored");
   }
 );
+
+test('approval review shows selected user-facing changes without protocol payloads',()=>{
+ const html=page.approval({account:'Synthetic',workspace:'Personal',csrf:'test',review:{operation:'dcc_bulk_cleanup',payload:{action:'run',jobId:'internal-job-id'},status:'pending',expires_at:'2026-11-15T15:00:00Z',manifest:{records:[],cleanup:[{title:'<script>Bad title</script>',definition:false}]}}});
+ assert.match(html,/Delete selected tasks/);
+ assert.match(html,/&lt;script&gt;Bad title&lt;\/script&gt;/);
+ assert.doesNotMatch(html,/internal-job-id|dcc_bulk_cleanup/);
+ assert.match(html,/Approve exact change/);
+});

@@ -421,6 +421,7 @@
   overflow-wrap: anywhere;
 }
 .connections-consent {
+  box-sizing: border-box;
   width: min(700px, 100%);
   margin: 32px auto;
   background: var(--surface-overlay);
@@ -546,3 +547,8 @@
   box-sizing: border-box;
   white-space: normal;
 }
+
+/* Approval pages must remain readable for long task names on mobile. */
+.connections-consent { overflow-wrap: anywhere; }
+.connections-consent ul { padding-inline-start: 1.4rem; }
+.connections-consent li { margin-block: .6rem; }

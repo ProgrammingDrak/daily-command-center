@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "daily-command-center",
+  "version": "2.0.0",
+  "description": "Read and manage your own DCC tasks through an account-scoped OAuth connection.",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Daily Command Center",
+        "shortDescription": "Plan and manage your tasks",
+        "longDescription": "Find your Daily Command Center tasks, update your schedule, and complete tasks from ChatGPT. Connect your DCC account through Clerk and set what ChatGPT can access in DCC Settings. This plugin requires a Daily Command Center account."
+      }
+    }
+  }
+}

@@ -167,36 +167,37 @@ require("./routes/conversation")(app, { pool, blockDB, APP_TIME_ZONE, getTodaySt
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/ingest/day-state/v2", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts", "/api/dcc/meeting-signals", "/api/dcc/slack-reconcile"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/shared-itinerary/") || req.path.startsWith("/sponsor/") || req.path.startsWith("/reimburse/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
-function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 // On Render the app runs behind a same-host reverse proxy, so EVERY request's
 // socket peer is 127.0.0.1 — trusting localhost there would open the DCC service
 // endpoints to the public internet. So localhost is only trusted off-production;
 // in production these endpoints require a bearer token (or a real session).
-function trustLocalhost(req) { return process.env.NODE_ENV !== "production" && isLocalhost(req); }
+const serviceAccess = require("./lib/service-access");
+function trustLocalhost(req) { return serviceAccess.trustedDevelopment(req); }
 function hasDccToken(req) { const dccToken = process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!dccToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === dccToken : false; }
 function hasSweepWriteToken(req) { const token = process.env.SECRET_SWEEP_SUITE_TOKEN || process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!token) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === token : false; }
 function isDccStateIngest(req) { return req.method === "POST" && (req.path === "/api/ingest/day-state" || req.path === "/api/ingest/day-state/v2"); }
 // DB-backed service tokens (token-store.js, rotatable/revocable via
 // /api/admin/tokens) with the legacy env-var tokens kept as a fallback.
 async function hasServiceToken(req, scope) {
-  if (scope === "sweep" ? hasSweepWriteToken(req) : hasDccToken(req)) return true; // env fallback
+  if (scope === "sweep" ? hasSweepWriteToken(req) : hasDccToken(req)) {
+    if(process.env.DCC_ALLOW_LEGACY_SERVICE_TOKENS !== 'true')return false;
+    const target=serviceAccess.targetFromEnvironment();
+    if(!target)return false;
+    serviceAccess.bindService(req,target);return true;
+  }
   const authHeader = req.headers.authorization || "";
   if (!authHeader.startsWith("Bearer ")) return false;
-  try { return await tokenStore.verifyToken(authHeader.slice(7), scope); }
+  try {
+    const target=await tokenStore.authenticateToken(authHeader.slice(7),scope,req.method+' '+req.path);
+    if(!target)return false;
+    serviceAccess.bindService(req,target);return true;
+  }
   catch (e) { console.error("[token-store] verify failed:", e.message); return false; }
 }
 function attachSweepServiceAuth(req) {
-  const userId = Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 1);
-  const workspaceId = req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || `ws-${userId}`;
-  req.dccServiceAuth = { userId, workspaceId, source: "sweep-suite" };
-  req.workspaceId = workspaceId;
+  serviceAccess.bindService(req,req.dccServiceAuth || serviceAccess.targetFromEnvironment());
 }
-function attachMeetingRetentionServiceAuth(req) {
-  const userId = Number(process.env.DCC_SERVICE_USER_ID || 1);
-  const workspaceId = process.env.DCC_SERVICE_WORKSPACE_ID || `ws-${userId}`;
-  req.dccServiceAuth = { userId, workspaceId, source: "meeting-retention" };
-  req.workspaceId = workspaceId;
-}
+function attachMeetingRetentionServiceAuth(req) { attachSweepServiceAuth(req); }
 function isAllowedSweepBlockItem(item) { const props = item && item.properties; return item && item.type === "block" && props && props.kind === "sweep_suite_task"; }
 function getRequestOrigin(req) {
   const forwardedFor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();

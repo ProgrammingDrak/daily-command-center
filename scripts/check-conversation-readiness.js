@@ -1,10 +1,12 @@
 // Read-only ingress check. Does not log in, send tokens, grant access, create a
 // plugin, or claim that an assistant lifecycle hook is installed.
 const RESOURCE_PATH = "/.well-known/oauth-protected-resource/mcp/dcc";
-async function checkConversationReadiness(baseUrl, { fetchImpl = fetch, timeoutMs = 15000 } = {}) {
+async function checkConversationReadiness(baseUrl, { fetchImpl = fetch, timeoutMs = 15000, expectedIssuer = null } = {}) {
   const base = new URL(baseUrl);
   if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash || base.pathname !== "/")
     throw new Error("Provide the canonical public HTTPS origin without credentials, query or path");
+  const issuer=expectedIssuer ? new URL(expectedIssuer).origin : base.origin;
+  if(!issuer.startsWith("https://"))throw new Error("HTTPS issuer required");
   const origin = base.origin,
     resource = origin + "/mcp/dcc";
   const paths = ["/api/health", RESOURCE_PATH, "/.well-known/oauth-authorization-server", "/mcp/dcc"];
@@ -31,12 +33,13 @@ async function checkConversationReadiness(baseUrl, { fetchImpl = fetch, timeoutM
     protectedResource:
       metadata.status === 200 &&
       metadata.json?.resource === resource &&
-      metadata.json?.authorization_servers?.includes(origin),
+      metadata.json?.authorization_servers?.includes(issuer),
     authorizationServer:
       auth.status === 200 &&
-      auth.json?.issuer === origin &&
-      auth.json?.authorization_endpoint === origin + "/oauth/dcc/authorize" &&
-      auth.json?.token_endpoint === origin + "/oauth/dcc/token" &&
+      auth.json?.issuer === issuer &&
+      (issuer === origin
+        ? auth.json?.authorization_endpoint === origin + '/oauth/dcc/authorize' && auth.json?.token_endpoint === origin + '/oauth/dcc/token'
+        : [auth.json?.authorization_endpoint,auth.json?.token_endpoint].every(value=>{try{return new URL(value).origin===issuer;}catch{return false;}}) && auth.json?.client_id_metadata_document_supported === true) &&
       auth.json?.code_challenge_methods_supported?.includes("S256") &&
       auth.json?.token_endpoint_auth_methods_supported?.includes("none"),
     unauthenticatedChallenge:
@@ -64,7 +67,7 @@ async function checkConversationReadiness(baseUrl, { fetchImpl = fetch, timeoutM
   };
 }
 if (require.main === module) {
-  checkConversationReadiness(process.argv[2])
+  checkConversationReadiness(process.argv[2],{expectedIssuer:process.env.CLERK_MCP_ISSUER})
     .then((result) => {
       console.log(JSON.stringify(result, null, 2));
       process.exitCode = result.status === "ingress_ready" ? 0 : 1;
