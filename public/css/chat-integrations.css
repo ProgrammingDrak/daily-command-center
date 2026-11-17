@@ -34,6 +34,7 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+  text-decoration: none;
 }
 .connection-service:last-child {
   border-bottom: 0;

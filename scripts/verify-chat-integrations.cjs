@@ -97,7 +97,8 @@ async function main() {
     };
     await openMenu();
     assert.equal(page.url(), original, "opening settings never navigates away");
-    assert.equal(await page.locator(".connection-service").count(), 4);
+    assert.equal(await page.locator(".connection-service").count(), 5);
+    assert.equal(await page.getByRole("link", { name: /Connect glasses/ }).getAttribute("href"), "/connect-glasses");
     assert.equal(
       await page.getByRole("menuitem", { name: "Chat integrations", exact: true }).count(),
       0,

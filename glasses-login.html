@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Sign in · DCC Glasses</title>
+  <link rel="icon" href="/public/icons/favicon.ico">
+  <link rel="stylesheet" href="/public/css/device-pairing.css">
+  <script defer src="/public/js/login-return.js"></script>
+  <script defer src="/public/js/device-pairing.js"></script>
+</head>
+<body class="glasses" data-pairing-view="glasses">
+<main>
+  <header>DCC Glasses</header>
+  <section id="pair-start">
+    <h1>Sign in to DCC</h1>
+    <p>Use Google on your phone to open your tasks here.</p>
+    <div class="actions">
+      <button type="button" id="pair-begin">Sign in on your phone</button>
+      <a class="control secondary" id="browser-signin" href="/login?method=browser">Sign in in this window</a>
+    </div>
+  </section>
+  <section id="pair-waiting" hidden>
+    <h1 id="pair-title">Connect your glasses</h1>
+    <p>On your phone, open DCC. Tap the gear, then <strong>Connections</strong> and <strong>Connect glasses</strong>.</p>
+    <output id="pair-code" aria-label="Pairing code"></output>
+    <p id="pair-expiry"></p>
+    <div class="actions">
+      <button type="button" id="pair-renew" hidden>Get a new code</button>
+      <button type="button" class="secondary" id="pair-cancel">Cancel</button>
+    </div>
+  </section>
+  <p id="feedback" role="status" aria-live="polite" hidden></p>
+</main>
+</body>
+</html>

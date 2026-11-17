@@ -1,0 +1,26 @@
+:root { color-scheme: dark; font-family: system-ui, -apple-system, sans-serif; color: #f1f5f9; background: #0f1117; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100dvh; padding: max(20px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom)); display: grid; place-items: center; }
+main { width: min(100%, 460px); padding: 26px; border: 1px solid #2d3148; border-radius: 16px; background: #1a1d2e; }
+header { display: flex; align-items: center; gap: 10px; font-size: .85rem; font-weight: 700; margin-bottom: 26px; }
+header img { width: 32px; height: 32px; }
+h1 { font-size: 1.8rem; line-height: 1.12; letter-spacing: -.035em; margin: 0 0 18px; }
+p { margin: 0 0 16px; line-height: 1.5; color: #c4d0e0; overflow-wrap: anywhere; }
+form, .actions { display: grid; gap: 12px; }
+label { font-size: .9rem; font-weight: 650; }
+input { min-width: 0; width: 100%; min-height: 52px; background: #0f1117; color: white; border: 1px solid #69758b; border-radius: 8px; font: 600 1.4rem ui-monospace, monospace; letter-spacing: .16em; padding: 10px 14px; }
+button, a.control { display: inline-flex; align-items: center; justify-content: center; min-height: 50px; background: #3b82f6; color: #fff; border: 2px solid #3b82f6; border-radius: 10px; font: 650 1rem system-ui, sans-serif; padding: 10px 14px; cursor: pointer; text-align: center; text-decoration: none; }
+button.secondary, a.secondary { background: transparent; border-color: #617b91; color: #d8e8fa; }
+button:disabled { opacity: .65; cursor: wait; }
+button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid #8fdbff; outline-offset: 3px; }
+[hidden] { display: none !important; }
+#feedback { margin-top: 18px; color: #ffdc85; }
+#pair-code, #matching-code { display: block; font: 650 clamp(2.3rem, 10vw, 3.6rem)/1.2 ui-monospace, monospace; letter-spacing: .08em; color: #8fdbff; margin: 18px 0; }
+body.glasses { background: #000; padding: 24px; font-size: 20px; }
+.glasses main { max-width: 600px; border: 0; border-radius: 0; padding: 0; background: #000; }
+.glasses header { color: #8fdbff; text-transform: uppercase; letter-spacing: .08em; }
+.glasses h1 { font-size: clamp(1.8rem, 6vw, 2.6rem); }
+.glasses button { background: #8fdbff; color: #000; border-color: #8fdbff; }
+.glasses button.secondary { background: #000; border-color: #617b91; color: #fff; }
+.glasses #pair-code { font-size: clamp(2.8rem, 11vw, 4rem); }
+.glasses .actions { justify-items: start; }
