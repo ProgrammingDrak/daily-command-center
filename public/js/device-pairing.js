@@ -120,6 +120,8 @@
     }));
     get('pair-cancel').addEventListener('click', () => act(async () => {
       await request('cancel');
+      const status = await request('status');
+      if (status.state === 'connected') { finish(); return; }
       active = false;
       pause();
       get('pair-start').hidden = false;
