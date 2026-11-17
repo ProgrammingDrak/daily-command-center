@@ -52,9 +52,19 @@ try {
 
   // Inspection by itself must never sign the glasses in.
   assert.equal(new URL(glasses.url()).pathname,'/login');
+  let heldRedemption;
+  let markRedemptionHeld;
+  const redemptionHeld = new Promise(resolve => { markRedemptionHeld = resolve; });
+  await glasses.route('**/api/auth/device/redeem', route => {
+    heldRedemption = route;
+    markRedemptionHeld();
+  });
   await phone.getByRole('button',{name:'Connect glasses',exact:true}).click();
   await phone.getByRole('heading',{name:'Glasses approved',exact:true}).waitFor();
   await glasses.bringToFront();
+  await redemptionHeld;
+  await glasses.getByRole('button',{name:'Cancel',exact:true}).click();
+  await heldRedemption.continue();
   await glasses.waitForURL(base + '/?device=glasses',{timeout:15000});
   assert.notEqual((await glassesContext.cookies()).find(cookie=>cookie.name==='dcc_session').value,pairingCookie);
   const responses = await Promise.all([

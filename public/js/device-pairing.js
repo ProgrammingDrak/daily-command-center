@@ -4,6 +4,7 @@
   const get = id => document.getElementById(id);
   const glasses = document.body.dataset.pairingView === 'glasses';
   let busy = false, polling = null, timer = null, active = false, approval = null, disposed = false;
+  let connected = false;
   let nextPoll = 3000;
   function feedback(message) {
     get('feedback').textContent = message || '';
@@ -34,6 +35,7 @@
     document.querySelectorAll('button').forEach(button => { button.disabled = true; });
     try {
       if (polling) await polling;
+      if (connected) return;
       await callback();
     }
     catch (error) { feedback(error.message || 'Could not connect. Please try again.'); }
@@ -53,6 +55,7 @@
     timer = setTimeout(poll, nextPoll);
   }
   function finish() {
+    connected = true;
     active = false;
     pause();
     const next = DccLoginReturn.normalize(new URLSearchParams(location.search).get('next'));
@@ -83,12 +86,14 @@
     polling = new Promise(resolve => { finishPolling = resolve; });
     try {
       const data = await request('status');
-      if (disposed || busy) return;
+      if (disposed) return;
+      if (data.state === 'connected') { updateGlasses(data); return; }
+      if (busy) return;
       updateGlasses(data);
       feedback('');
       if (data.state === 'approved') {
         const result = await request('redeem');
-        if (!disposed && !busy) updateGlasses(result);
+        if (!disposed && (result.state === 'connected' || !busy)) updateGlasses(result);
       }
       nextPoll = 3000;
     } catch {
