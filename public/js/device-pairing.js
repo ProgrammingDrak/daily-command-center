@@ -3,7 +3,7 @@
   'use strict';
   const get = id => document.getElementById(id);
   const glasses = document.body.dataset.pairingView === 'glasses';
-  let busy = false, timer = null, active = false, approval = null, disposed = false;
+  let busy = false, polling = null, timer = null, active = false, approval = null, disposed = false;
   let nextPoll = 3000;
   function feedback(message) {
     get('feedback').textContent = message || '';
@@ -32,7 +32,10 @@
     busy = true;
     feedback('');
     document.querySelectorAll('button').forEach(button => { button.disabled = true; });
-    try { await callback(); }
+    try {
+      if (polling) await polling;
+      await callback();
+    }
     catch (error) { feedback(error.message || 'Could not connect. Please try again.'); }
     finally {
       busy = false;
@@ -46,7 +49,7 @@
   function pause() { clearTimeout(timer); timer = null; }
   function schedule() {
     pause();
-    if (disposed || !glasses || !active || busy || document.hidden) return;
+    if (disposed || !glasses || !active || busy || polling || document.hidden) return;
     timer = setTimeout(poll, nextPoll);
   }
   function finish() {
@@ -75,22 +78,27 @@
   }
   async function poll() {
     pause();
-    if (busy || !active || disposed || document.hidden) return;
-    busy = true;
+    if (busy || polling || !active || disposed || document.hidden) return;
+    let finishPolling;
+    polling = new Promise(resolve => { finishPolling = resolve; });
     try {
       const data = await request('status');
-      if (disposed) return;
+      if (disposed || busy) return;
       updateGlasses(data);
       feedback('');
       if (data.state === 'approved') {
         const result = await request('redeem');
-        if (!disposed) updateGlasses(result);
+        if (!disposed && !busy) updateGlasses(result);
       }
       nextPoll = 3000;
     } catch {
       nextPoll = Math.min(nextPoll * 2, 30000);
-      if (!disposed) feedback('Connection interrupted. Retrying while this page is open.');
-    } finally { busy = false; schedule(); }
+      if (!disposed && !busy) feedback('Connection interrupted. Retrying while this page is open.');
+    } finally {
+      polling = null;
+      finishPolling();
+      schedule();
+    }
   }
   function phoneView(id) {
     for (const name of ['phone-code', 'phone-confirm', 'phone-complete']) get(name).hidden = name !== id;

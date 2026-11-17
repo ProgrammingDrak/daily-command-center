@@ -86,11 +86,21 @@ try {
   await retry.reload();
   await retry.locator('#pair-code').waitFor();
   assert.equal(await retry.locator('#pair-code').innerText(),firstCode);
+  let heldStatus;
+  let markStatusHeld;
+  const statusHeld = new Promise(resolve => { markStatusHeld = resolve; });
+  await retry.route('**/api/auth/device/status', route => {
+    heldStatus = route;
+    markStatusHeld();
+  });
+  await statusHeld;
   await retry.getByRole('button',{name:'Cancel',exact:true}).click();
+  await heldStatus.continue();
   await retry.getByRole('button',{name:'Sign in on your phone',exact:true}).waitFor();
+  await retry.unroute('**/api/auth/device/status');
   await retry.getByRole('link',{name:'Sign in in this window',exact:true}).click();
   await retry.locator('#clerkSignIn').waitFor({state:'attached'});
   assert.equal(new URL(retry.url()).searchParams.get('method'),'browser');
   assert.deepEqual(errors,[]);
-  console.log('PASS real DCC phone login return, explicit matching-code approval, cookie rotation, same account/workspace, Connections menu entry, reload, cancel and browser fallback');
+  console.log('PASS real DCC phone login return, explicit matching-code approval, cookie rotation, same account/workspace, Connections menu entry, reload, cancel during polling and browser fallback');
 } finally { await browser.close(); }
