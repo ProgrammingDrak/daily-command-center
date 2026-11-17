@@ -1,4 +1,5 @@
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { createDevicePairing, createPgDevicePairingStore } = require("drake-auth/device-pairing");
 
 // Every pairing issues the same app-owned session as DCC's ordinary sign-in.
@@ -16,7 +17,7 @@ module.exports = function mountDevicePairing(app, { pool, sessionSecret, project
   const store = createPgDevicePairingStore(pool);
   const pairing = createDevicePairing({
     store,
-    secret: sessionSecret,
+    secret: crypto.createHmac("sha256", sessionSecret).update("dcc-device-pairing-v1").digest("hex"),
     getAccount: req => req.session.userId ? resolveAccount(req.session.userId) : null,
     resolveAccount,
     onSession: async (req, user, client) => {

@@ -12,21 +12,20 @@
   async function request(action, data = {}) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
-    let response;
     try {
-      response = await fetch('/api/auth/device/' + action, {
+      const response = await fetch('/api/auth/device/' + action, {
         method: 'POST', credentials: 'same-origin', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', 'X-Device-Pairing': '1' },
         body: JSON.stringify(data)
       });
+      if (response.status === 401 && !glasses) {
+        location.href = '/login?next=' + encodeURIComponent('/connect-glasses');
+        throw new Error('Sign in to DCC on your phone to continue.');
+      }
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'Could not connect. Please try again.');
+      return body;
     } finally { clearTimeout(timeout); }
-    if (response.status === 401 && !glasses) {
-      location.href = '/login?next=' + encodeURIComponent('/connect-glasses');
-      throw new Error('Sign in to DCC on your phone to continue.');
-    }
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || 'Could not connect. Please try again.');
-    return body;
   }
   async function act(callback) {
     if (busy) return;

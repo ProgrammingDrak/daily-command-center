@@ -57,10 +57,14 @@ try {
   await glasses.bringToFront();
   await glasses.waitForURL(base + '/?device=glasses',{timeout:15000});
   assert.notEqual((await glassesContext.cookies()).find(cookie=>cookie.name==='dcc_session').value,pairingCookie);
-  const [phoneMe, glassesMe] = await Promise.all([
-    phoneContext.request.get(base + '/api/me').then(response=>response.json()),
-    glassesContext.request.get(base + '/api/me').then(response=>response.json())
+  const responses = await Promise.all([
+    phoneContext.request.get(base + '/api/me'),
+    glassesContext.request.get(base + '/api/me')
   ]);
+  for (const response of responses) assert.equal(response.status(),200);
+  const [phoneMe, glassesMe] = await Promise.all(responses.map(response=>response.json()));
+  assert(phoneMe.userId);
+  assert(phoneMe.workspaceId);
   assert.equal(glassesMe.userId,phoneMe.userId);
   assert.equal(glassesMe.workspaceId,phoneMe.workspaceId);
 
