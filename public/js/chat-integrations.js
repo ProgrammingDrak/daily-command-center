@@ -48,6 +48,7 @@
       const slack=providers?.slack,google=providers?.google,triage=providers?.triage;
       frame('Connections','<p class="connection-intro">Your apps, connected to your day.</p><div class="connection-list">'+
         row('chatgpt','ChatGPT','Work with DCC tasks from your chat.',chatError?'Unavailable':!chat?'Loading…':linked?'Connected':chat.enabled&&chat.clientsReady?'Not connected':'Setup needed',linked)+
+        '<a class="connection-service" href="/connect-glasses"><span class="connection-service-copy"><strong>Connect glasses</strong><small>Sign in to DCC on your glasses using your phone.</small></span><span class="connection-chevron" aria-hidden="true">›</span></a>'+
         row('slack','Slack','Turn message reactions into tasks.',providerError?'Unavailable':!providers?'Loading…':slack?.connected?'Connected':'Not connected',!!slack?.connected)+
         row('calendar','Google Calendar','See your appointments on the itinerary.',providerError||google?.error?'Unavailable':!providers?'Loading…':google?.connected?'Connected':'Not connected',!!google?.connected)+
         '</div><h3 class="connection-section-title">Workflows</h3>'+row('triage','AI triage','Bring email and Slack follow-ups into DCC.',providerError?'Unavailable':!providers?'Loading…':triage?.lastSeenAt?'Receiving updates':'Set up',!!triage?.lastSeenAt)+

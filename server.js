@@ -164,7 +164,7 @@ app.use(session(sessionOptions));
 require("./routes/conversation")(app, { pool, blockDB, APP_TIME_ZONE, getTodayStr, filterLegacyGcalBlocks, broadcast, broadcastQueueChange });
 
 // ── Auth Middleware ──
-const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
+const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/auth/device/start", "/api/auth/device/status", "/api/auth/device/cancel", "/api/auth/device/inspect", "/api/auth/device/approve", "/api/auth/device/redeem", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/ingest/day-state/v2", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts", "/api/dcc/meeting-signals", "/api/dcc/slack-reconcile"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/shared-itinerary/") || req.path.startsWith("/sponsor/") || req.path.startsWith("/reimburse/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
@@ -279,7 +279,11 @@ app.use(async (req, res, next) => {
 app.use(require("./lib/account-binding"));
 function sendAuthPage(req, res) {
   if (req.session.userId) return res.redirect(loginReturn.normalize(req.query.next));
-  res.sendFile(path.join(PROJECT_DIR, "login.html"));
+  const destination = new URL(loginReturn.normalize(req.query.next), "https://dcc.invalid");
+  const glasses = destination.searchParams.get("device") === "glasses" ||
+    /^\/glasses(?:\.html)?$/.test(destination.pathname);
+  res.set("Cache-Control", "private, no-store");
+  res.sendFile(path.join(PROJECT_DIR, glasses && req.query.method !== "browser" ? "glasses-login.html" : "login.html"));
 }
 
 app.get("/login", sendAuthPage);
@@ -402,6 +406,9 @@ const clerkAuth = createClerkAuth({
   },
 });
 app.use(clerkAuth.router);
+require("./routes/device-pairing")(app, {
+  pool, sessionSecret, projectDir: PROJECT_DIR, recordLoginEvent
+});
 
 // The login page loads the shared sign-in module while unauthenticated, so
 // this path is in AUTH_PUBLIC.
@@ -538,8 +545,8 @@ async function ensureFeedbackTable() {
   await pool.query("CREATE INDEX IF NOT EXISTS idx_feedback_messages_workspace_created ON feedback_messages(workspace_id, created_at DESC)");
 }
 
-async function ensureLoginEventsTable() {
-  await pool.query(`
+async function ensureLoginEventsTable(client = pool) {
+  await client.query(`
     CREATE TABLE IF NOT EXISTS login_events (
       id           SERIAL PRIMARY KEY,
       workspace_id TEXT REFERENCES workspaces(id),
@@ -551,13 +558,13 @@ async function ensureLoginEventsTable() {
       created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
-  await pool.query("CREATE INDEX IF NOT EXISTS idx_login_events_workspace_created ON login_events(workspace_id, created_at DESC)");
+  await client.query("CREATE INDEX IF NOT EXISTS idx_login_events_workspace_created ON login_events(workspace_id, created_at DESC)");
 }
 
-async function recordLoginEvent(req, { userId, username, workspaceId, eventType = "login" }) {
+async function recordLoginEvent(req, { userId, username, workspaceId, eventType = "login" }, client = pool) {
   try {
-    await ensureLoginEventsTable();
-    await pool.query(
+    await ensureLoginEventsTable(client);
+    await client.query(
       `INSERT INTO login_events (workspace_id, user_id, username, event_type, ip_address, user_agent)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [

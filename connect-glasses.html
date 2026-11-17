@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Connect glasses · Daily Command Center</title>
+  <link rel="icon" href="/public/icons/favicon.ico">
+  <link rel="stylesheet" href="/public/css/device-pairing.css">
+  <script defer src="/public/js/device-pairing.js"></script>
+</head>
+<body data-pairing-view="phone">
+<main>
+  <header><img src="/public/icons/icon-192.png" alt="">Daily Command Center</header>
+  <section id="phone-code">
+    <h1>Connect glasses</h1>
+    <p>Choose <strong>Sign in on your phone</strong> on your glasses, then enter the six digits here.</p>
+    <form id="pair-form">
+      <label for="pair-input">Pairing code</label>
+      <input id="pair-input" inputmode="numeric" autocomplete="off" maxlength="9" placeholder="000 000" required aria-describedby="feedback">
+      <button type="submit">Continue</button>
+      <a class="control secondary" href="/?settings=connections">Back to Connections</a>
+    </form>
+  </section>
+  <section id="phone-confirm" hidden>
+    <h1>Connect these glasses?</h1>
+    <p>Confirm this code matches your glasses.</p>
+    <output id="matching-code"></output>
+    <p id="pair-account"></p>
+    <div class="actions">
+      <button type="button" id="pair-approve">Connect glasses</button>
+      <button type="button" class="secondary" id="pair-change">Use a different code</button>
+    </div>
+  </section>
+  <section id="phone-complete" hidden>
+    <h1 tabindex="-1">Glasses approved</h1>
+    <p>Your glasses will open DCC when they receive the confirmation.</p>
+    <a class="control" href="/">Return to DCC</a>
+  </section>
+  <p id="feedback" role="status" aria-live="polite" hidden></p>
+</main>
+</body>
+</html>

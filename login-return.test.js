@@ -29,8 +29,8 @@ const pageEnd = source.indexOf('\napp.get("/login"', pageStart);
 assert.ok(pageStart > 0 && pageEnd > pageStart);
 function execute(code, req) {
   const result = {};
-  const res = { redirect: value => { result.redirect = value; }, status: value => { result.status = value; return res; }, json: value => { result.json = value; }, sendFile: value => { result.file = value; } };
-  vm.runInNewContext(code, { req, res, loginReturn, path: require('node:path'), PROJECT_DIR: '/fixture' });
+  const res = { set: (name, value) => { result[name] = value; }, redirect: value => { result.redirect = value; }, status: value => { result.status = value; return res; }, json: value => { result.json = value; }, sendFile: value => { result.file = value; } };
+  vm.runInNewContext(code, { req, res, URL, loginReturn, path: require('node:path'), PROJECT_DIR: '/fixture' });
   return result;
 }
 const gate = req => execute('(function () {' + source.slice(gateStart, gateEnd) + '})();', { session: {}, method: 'GET', ...req });
@@ -55,4 +55,14 @@ test('completed or interrupted login returns signed-in sessions safely without l
   for (const next of ['//evil.example', '/login', ['/glasses.html', '//evil.example']]) {
     assert.equal(authPage({ session: { userId: 1 }, query: { next } }).redirect, '/');
   }
+});
+
+test('glasses login defaults to phone pairing and keeps ordinary browser sign-in available', () => {
+  for (const next of ['/?device=glasses', '/glasses', '/glasses.html?task=abc']) {
+    const paired = authPage({ query: { next } });
+    assert.equal(paired.file, '/fixture/glasses-login.html');
+    assert.equal(paired['Cache-Control'], 'private, no-store');
+    assert.equal(authPage({ query: { next, method: 'browser' } }).file, '/fixture/login.html');
+  }
+  assert.equal(authPage({ query: { next: '/connect-glasses' } }).file, '/fixture/login.html');
 });
