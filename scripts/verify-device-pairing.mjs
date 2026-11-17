@@ -52,9 +52,19 @@ try {
 
   // Inspection by itself must never sign the glasses in.
   assert.equal(new URL(glasses.url()).pathname,'/login');
+  let heldRedemption;
+  let markRedemptionHeld;
+  const redemptionHeld = new Promise(resolve => { markRedemptionHeld = resolve; });
+  await glasses.route('**/api/auth/device/redeem', route => {
+    heldRedemption = route;
+    markRedemptionHeld();
+  });
   await phone.getByRole('button',{name:'Connect glasses',exact:true}).click();
   await phone.getByRole('heading',{name:'Glasses approved',exact:true}).waitFor();
   await glasses.bringToFront();
+  await redemptionHeld;
+  await glasses.getByRole('button',{name:'Cancel',exact:true}).click();
+  await heldRedemption.continue();
   await glasses.waitForURL(base + '/?device=glasses',{timeout:15000});
   assert.notEqual((await glassesContext.cookies()).find(cookie=>cookie.name==='dcc_session').value,pairingCookie);
   const responses = await Promise.all([
@@ -77,6 +87,34 @@ try {
   await phone.getByRole('textbox',{name:'Pairing code',exact:true}).waitFor();
   assert.equal(await phone.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
 
+  // A saved session cookie remains authoritative if redemption's JSON is lost.
+  const interruptedContext = await browser.newContext({viewport:{width:600,height:600}});
+  const interrupted = await interruptedContext.newPage();
+  await interrupted.goto(base + '/?device=glasses');
+  await interrupted.getByRole('button',{name:'Sign in on your phone',exact:true}).click();
+  await interrupted.locator('#pair-code').waitFor();
+  const interruptedCode = (await interrupted.locator('#pair-code').innerText()).replace(/\s/g,'');
+  let interruptedRedemption;
+  let markInterrupted;
+  const interruptedHeld = new Promise(resolve => { markInterrupted = resolve; });
+  await interrupted.route('**/api/auth/device/redeem', route => {
+    interruptedRedemption = route;
+    markInterrupted();
+  });
+  await phone.getByRole('textbox',{name:'Pairing code',exact:true}).fill(interruptedCode);
+  await phone.getByRole('button',{name:'Continue',exact:true}).click();
+  await phone.getByRole('button',{name:'Connect glasses',exact:true}).click();
+  await interrupted.bringToFront();
+  await interruptedHeld;
+  await interrupted.getByRole('button',{name:'Cancel',exact:true}).click();
+  const savedRedemption = await interruptedRedemption.fetch();
+  assert.equal(savedRedemption.status(),200);
+  await interruptedRedemption.fulfill({response:savedRedemption,body:'{'});
+  await interrupted.waitForURL(base + '/?device=glasses',{timeout:15000});
+  const recoveredMe = await interruptedContext.request.get(base + '/api/me');
+  assert.equal(recoveredMe.status(),200);
+  assert.equal((await recoveredMe.json()).userId,phoneMe.userId);
+
   const retryContext = await browser.newContext({viewport:{width:600,height:600}});
   const retry = await retryContext.newPage();
   await retry.goto(base + '/?device=glasses');
@@ -86,11 +124,22 @@ try {
   await retry.reload();
   await retry.locator('#pair-code').waitFor();
   assert.equal(await retry.locator('#pair-code').innerText(),firstCode);
+  let heldStatus;
+  let markStatusHeld;
+  const statusHeld = new Promise(resolve => { markStatusHeld = resolve; });
+  await retry.route('**/api/auth/device/status', route => {
+    if (heldStatus) return route.continue();
+    heldStatus = route;
+    markStatusHeld();
+  });
+  await statusHeld;
   await retry.getByRole('button',{name:'Cancel',exact:true}).click();
+  await heldStatus.continue();
   await retry.getByRole('button',{name:'Sign in on your phone',exact:true}).waitFor();
+  await retry.unroute('**/api/auth/device/status');
   await retry.getByRole('link',{name:'Sign in in this window',exact:true}).click();
   await retry.locator('#clerkSignIn').waitFor({state:'attached'});
   assert.equal(new URL(retry.url()).searchParams.get('method'),'browser');
   assert.deepEqual(errors,[]);
-  console.log('PASS real DCC phone login return, explicit matching-code approval, cookie rotation, same account/workspace, Connections menu entry, reload, cancel and browser fallback');
+  console.log('PASS real DCC phone login return, explicit matching-code approval, cookie rotation, same account/workspace, Connections menu entry, reload, cancel during polling and browser fallback');
 } finally { await browser.close(); }
