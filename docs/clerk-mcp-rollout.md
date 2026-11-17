@@ -23,6 +23,31 @@ inside the one browser-owned transaction; MCP cannot approve or substitute a
 payload. Account record snapshots are capped at 10,000 and cleanup at 5,000.
 There is no new background scheduler or worker hook.
 
+## Private Clerk canary results
+
+On November 16, 2026, a separate development Clerk application issued
+audience-bound opaque tokens to two disposable DCC workspace owners. The
+diagnostic used Clerk's real consent and authorization-code exchange with S256.
+Both initial and refreshed tokens read only their owner's tasks. Each owner
+created, scheduled and completed a fixture. Cross-account lookup returned 404
+in both directions. Tightening the first connection to read-only preserved
+reads and returned 403 on its next write.
+
+Two protocol gaps remain for the direct Clerk issuer:
+
+- The Backend API's verified access-token response includes `created_at` but
+  omits `authorization_granted_at` for both authorization-code and refresh
+  grants. A freshly minted token does not prove freshly granted consent.
+- Clerk's dashboard accepted the pre-registered ChatGPT CIMD client. Its
+  Backend API application list omitted that client, and a direct lookup by its
+  Clerk application ID returned 404. The adapter cannot find this client
+  through its current provider-revocation path.
+
+Keep the production provider gated while these gaps remain. A dedicated
+Railway test service and private ChatGPT plugin were prepared. The diagnostic
+results use a separate loopback OAuth client. ChatGPT workspace approval,
+end-to-end verification and public directory submission are still pending.
+
 ## Changes to operator credentials
 
 New service tokens require an owning user, owned workspace, exact allowed HTTP
