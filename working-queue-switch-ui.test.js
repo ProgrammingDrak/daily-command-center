@@ -1,4 +1,4 @@
-/* global window, document */
+/* global window, document, navigator, localStorage */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -105,6 +105,18 @@ test('foreground switch preview, cancellation, stale state and exact retry', { s
     assert.equal(await dialog().locator('[data-minutes]').count(),0);
     await submit(); await started(); await dialog().waitFor({state:'hidden'});
     assert.equal(writes[0].guided.expectedRevision,1); assert.equal(writes[0].expectedForegroundTaskId,null);
+  });
+  await t.test('explicit task actions reach DCC despite a false browser offline flag', async()=>{
+    reset(); await page.evaluate(()=>localStorage.clear()); await page.reload(); await refresh();
+    await page.evaluate(()=>Object.defineProperty(navigator,'onLine',{configurable:true,get:()=>false}));
+    try {
+      await page.evaluate(()=>window.DCCWorkingQueue.performTaskAction('foreground','new',{kind:'task'}));
+      assert.equal(writes.length,1);
+      assert.equal(writes[0].action,'start');
+      assert.equal(state.foreground[0].id,'new');
+    } finally {
+      await page.evaluate(()=>delete navigator.onLine);
+    }
   });
   assert.deepEqual(errors,[]);
 });

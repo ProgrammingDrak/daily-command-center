@@ -696,7 +696,7 @@
   }
   function assertActionReady(){
     assertActionAccount();
-    if(navigator.onLine===false)throw new Error('You are offline. Reconnect before updating tasks.');
+    // navigator.onLine is advisory; requestQueue checks actual connectivity.
     if(sending||pending||conflict)throw new Error('Resolve the current queue update before changing this task.');
   }
   async function performTaskAction(action,taskId,descriptor={}){
