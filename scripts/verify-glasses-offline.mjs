@@ -61,10 +61,16 @@ try {
     assert.match(await page.locator('.glasses-status').innerText(), /not confirmed|unavailable/i);
     await context.setOffline(false);
     await page.evaluate(() => window.DCCGlasses.refresh());
-    await page.route('**/api/working-queue', route => route.request().method() === 'POST' ? route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'Synthetic permission refusal' }) }) : route.continue());
+    let refusedWrites = 0;
+    await page.route('**/api/working-queue', route => {
+      if (route.request().method() !== 'POST') return route.continue();
+      refusedWrites++;
+      return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'Synthetic permission refusal' }) });
+    });
     await input('tap-fore');
     assert.equal((await api('/api/working-queue')).revision, before);
-    assert.match(await page.locator('.glasses-status').innerText(), /not confirmed|permission/i);
+    assert.equal(refusedWrites, 1);
+    assert.match(await page.locator('.glasses-status').innerText(), /Synthetic permission refusal/);
     assert.deepEqual(errors, []);
     console.log('PASS ' + size + ': network failure and permission refusal preserve server state and never claim success');
     if (process.env.DCC_GLASSES_REVIEW_OUT) {
