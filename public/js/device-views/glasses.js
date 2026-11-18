@@ -226,7 +226,8 @@
   }
   async function mutate(action, item) {
     if (pending || !item || !signedIn()) return;
-    if (!navigator.onLine) { announce('Offline. Nothing submitted. Reconnect and try again.'); return; }
+    // Embedded browsers can report offline while DCC remains reachable.
+    // The canonical action confirms connectivity and server acceptance.
     pending = true; const operation = ++revision;
     const deleting = action === 'delete';
     const deleteMutationId = deleting ? crypto.randomUUID() : null;
@@ -266,7 +267,6 @@
   async function undoTaskAction() {
     updateUndo(); const receipt = undo;
     if (!receipt || pending || !signedIn()) return;
-    if (!navigator.onLine) { announce('Offline. Undo was not submitted.'); return; }
     pending = true; const operation = ++revision;
     const deleting = receipt.action === 'delete';
     undo = null; preview = null; renderPreview(); updateUndo();
@@ -428,7 +428,7 @@
   window.addEventListener('dcc:carryover-settled', () => refreshSources());
   window.addEventListener('dcc:view-date-changed', () => { if (loaded) refreshSources(); });
   window.addEventListener('online', () => refreshSources());
-  window.addEventListener('offline', () => announce('Offline. Task actions are paused until you reconnect.'));
+  window.addEventListener('offline', () => refreshSources());
   document.addEventListener('visibilitychange', () => { inputAdapter.reset(); if (!document.hidden) refreshSources(); });
   setInterval(() => { updateUndo(); if (!sameAccount()) reconcile(); }, 100);
   // The canonical boot owns loading. Its data-ready event refreshes all sources.
