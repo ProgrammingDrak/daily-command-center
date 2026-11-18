@@ -58,13 +58,23 @@ test('client only offers acknowledged five-second undo and uses canonical comman
   assert.ok(result.undo.expiresAt>=start+5000&&result.undo.expiresAt<=Date.now()+5000);
   c.state.revision=5;await c.actions.undoCompletion(result.undo);assert.equal(sent[1].action,'undo-completion');
 });
-test('client refuses offline, pending, changed account/revision, expired undo and source-specific completion',async()=>{
-  for(const mutate of [f=>f.c.navigator.onLine=false,f=>f.c.pending={},f=>f.c.window.DCC_ACCOUNT_CONTEXT={userId:2,workspaceId:'ws'},f=>f.c.refresh=async()=>({revision:8})]){
+test('client refuses pending, changed account/revision, expired undo and source-specific completion',async()=>{
+  for(const mutate of [f=>f.c.pending={},f=>f.c.window.DCC_ACCOUNT_CONTEXT={userId:2,workspaceId:'ws'},f=>f.c.refresh=async()=>({revision:8})]){
     const f=clientFixture();mutate(f);await assert.rejects(f.c.actions.performTaskAction('complete','task'));assert.equal(f.sent.length,0);
   }
   const f=clientFixture();await assert.rejects(f.c.actions.performTaskAction('complete','task',{kind:'waiting'}));assert.equal(f.sent.length,0);
   await assert.rejects(f.c.actions.undoCompletion({account:{userId:1,workspaceId:'ws'},expectedRevision:4,expiresAt:0}));assert.equal(f.sent.length,0);
   f.c.send=async()=>{throw new Error('Not acknowledged');};await assert.rejects(f.c.actions.performTaskAction('complete','task'),/Not acknowledged/);
+});
+
+test('client uses request results when browser reports offline',async()=>{
+  const f=clientFixture();f.c.navigator.onLine=false;
+  const result=await f.c.actions.performTaskAction('complete','task');
+  assert.equal(f.sent.length,1);assert.equal(f.sent[0].action,'done');assert.ok(result.undo);
+  f.c.state.revision=5;await f.c.actions.undoCompletion(result.undo);
+  assert.equal(f.sent.length,2);assert.equal(f.sent[1].action,'undo-completion');
+  f.c.send=async()=>{throw new Error('Failed to fetch');};
+  await assert.rejects(f.c.actions.performTaskAction('complete','task'),/Failed to fetch/);
 });
 
 test('background uses the existing explicit thirty-minute snooze policy',async()=>{
