@@ -60,11 +60,12 @@ const references = {
 };
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const ordered = (data) => Object.fromEntries(Object.entries(data).sort(([a], [b]) => a.localeCompare(b)));
-const serialize = (row) => ({ ...row.data, id: row.id, revision: row.revision });
+const serialize = (row) => ({ ...row.data, id: row.id, revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at });
 const normalize = (schema, data) => M.parse(schema, data);
 
-function createStore({ pool, blockDB }) {
+function createStore({ pool, blockDB, transactionClient }) {
   async function transaction(run, read = false) {
+    if (transactionClient) return run(transactionClient);
     const q = await pool.connect();
     try {
       await q.query(read ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" : "BEGIN");
@@ -123,6 +124,7 @@ function createStore({ pool, blockDB }) {
         ORDER BY r.created_at, r.id LIMIT 1
       ) next_task ON true
       WHERE l.workspace_id=$1 AND l.user_id=$2 AND w.owner_id=$2
+      AND NOT EXISTS (SELECT 1 FROM research_records rr WHERE rr.id=l.id AND rr.kind IN ('idea','research','product'))
       ORDER BY l.updated_at DESC, l.id`,
       [actor.workspaceId, actor.userId]
     );
@@ -399,6 +401,13 @@ function createStore({ pool, blockDB }) {
         }
       }
       const result = { ...data, id: recordId || id, revision };
+      if (current) await q.query(
+        `INSERT INTO wishlist_revisions(wishlist_id,kind,record_id,revision,data,actor_id)
+         VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
+        [id,kind,recordId || id,current.revision,current.data,actor.userId]);
+      await q.query(
+        `INSERT INTO wishlist_revisions(wishlist_id,kind,record_id,revision,data,actor_id)
+         VALUES($1,$2,$3,$4,$5,$6)`, [id,kind,recordId || id,revision,data,actor.userId]);
       await q.query("INSERT INTO wishlist_mutations VALUES($1,$2,$3,$4)", [id, body.mutationId, fingerprint, result]);
       return result;
     });
