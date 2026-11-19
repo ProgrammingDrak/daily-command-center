@@ -60,7 +60,13 @@ const references = {
 };
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const ordered = (data) => Object.fromEntries(Object.entries(data).sort(([a], [b]) => a.localeCompare(b)));
-const serialize = (row) => ({ ...row.data, id: row.id, revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at });
+const serialize = (row) => ({
+  ...row.data,
+  id: row.id,
+  revision: row.revision,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at
+});
 const normalize = (schema, data) => M.parse(schema, data);
 
 function createStore({ pool, blockDB, transactionClient }) {
@@ -106,7 +112,7 @@ function createStore({ pool, blockDB, transactionClient }) {
     return task;
   }
 
-  async function list(actor) {
+  async function list(actor, { legacyOnly = false } = {}) {
     const { rows } = await pool.query(
       `SELECT l.*, cover.id AS cover_id, concat_ws(' · ', favorite.data->>'title', NULLIF(favorite.data->>'variant', '')) AS favorite,
       next_task.title AS linked_next
@@ -124,9 +130,10 @@ function createStore({ pool, blockDB, transactionClient }) {
         ORDER BY r.created_at, r.id LIMIT 1
       ) next_task ON true
       WHERE l.workspace_id=$1 AND l.user_id=$2 AND w.owner_id=$2
-      AND NOT EXISTS (SELECT 1 FROM research_records rr WHERE rr.id=l.id AND rr.kind IN ('idea','research','product'))
+      AND COALESCE((l.data->>'archived')::boolean,FALSE)=FALSE
+      AND NOT EXISTS (SELECT 1 FROM research_records rr WHERE rr.id=l.id AND ($3::boolean OR rr.kind IN ('idea','research','product')))
       ORDER BY l.updated_at DESC, l.id`,
-      [actor.workspaceId, actor.userId]
+      [actor.workspaceId, actor.userId, legacyOnly]
     );
     return rows.map((row) => ({
       ...serialize(row),
@@ -152,9 +159,11 @@ function createStore({ pool, blockDB, transactionClient }) {
       .map((row) => ({ id: row.id, title: row.properties.title || row.properties.text, date: row.date }));
   }
 
-  async function get(actor, id) {
+  async function get(actor, id, { legacyOnly = false } = {}) {
     return transaction(async (q) => {
       const row = await owned(q, actor, M.parse(M.uuid, id));
+      if (legacyOnly && (await q.query("SELECT id FROM research_records WHERE id=$1", [id])).rows.length)
+        throw M.fail("Use the scoped Research & Ideas tools for this record", 403);
       const { rows } = await q.query("SELECT * FROM wishlist_records WHERE wishlist_id=$1 ORDER BY created_at,id", [
         id
       ]);
@@ -319,7 +328,7 @@ function createStore({ pool, blockDB, transactionClient }) {
     }
   }
 
-  async function save(actor, id, kind, recordId, input) {
+  async function save(actor, id, kind, recordId, input, { legacyOnly = false } = {}) {
     const overview = kind === "overview";
     if (!overview && !Object.hasOwn(M.records, kind)) throw M.fail("Unknown record type");
     if (!overview) M.parse(M.uuid, recordId);
@@ -330,6 +339,8 @@ function createStore({ pool, blockDB, transactionClient }) {
     const fingerprint = digest([kind, recordId || null, body.revision, ordered(patch)]);
     return transaction(async (q) => {
       const row = await owned(q, actor, M.parse(M.uuid, id), true);
+      if (legacyOnly && (await q.query("SELECT id FROM research_records WHERE id=$1", [id])).rows.length)
+        throw M.fail("Use the scoped Research & Ideas tools for this record", 403);
       const {
         rows: [receipt]
       } = await q.query("SELECT fingerprint,result FROM wishlist_mutations WHERE wishlist_id=$1 AND id=$2", [
@@ -401,13 +412,17 @@ function createStore({ pool, blockDB, transactionClient }) {
         }
       }
       const result = { ...data, id: recordId || id, revision };
-      if (current) await q.query(
-        `INSERT INTO wishlist_revisions(wishlist_id,kind,record_id,revision,data,actor_id)
+      if (current)
+        await q.query(
+          `INSERT INTO wishlist_revisions(wishlist_id,kind,record_id,revision,data,actor_id)
          VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
-        [id,kind,recordId || id,current.revision,current.data,actor.userId]);
+          [id, kind, recordId || id, current.revision, current.data, actor.userId]
+        );
       await q.query(
         `INSERT INTO wishlist_revisions(wishlist_id,kind,record_id,revision,data,actor_id)
-         VALUES($1,$2,$3,$4,$5,$6)`, [id,kind,recordId || id,revision,data,actor.userId]);
+         VALUES($1,$2,$3,$4,$5,$6)`,
+        [id, kind, recordId || id, revision, data, actor.userId]
+      );
       await q.query("INSERT INTO wishlist_mutations VALUES($1,$2,$3,$4)", [id, body.mutationId, fingerprint, result]);
       return result;
     });

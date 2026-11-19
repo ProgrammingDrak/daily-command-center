@@ -71,7 +71,8 @@ backfill, deletion, legacy reclassification or destructive schema migration.
 Run twice to verify idempotency. The dry-run runner rolls back transactionally.
 
 Rollback means redeploying the previous application revision and retaining the additive
-schema and records. Old Wishlist readers continue using original rows and fields.
+schema and records. Old Wishlist readers continue using original rows and fields. New typed records may
+appear as generic Wishlists until the forward application is restored.
 Never drop the new tables during rollback. Subsequent forward deployment restores access.
 A fresh production backup is optional under the repository release policy.
 
@@ -89,6 +90,9 @@ Background retry follows online, visibility and heartbeat events. API data is no
 in service-worker caches. Cached detail reads work while the page remains available.
 
 ## UI variants
+
+Offline browser reopening still depends on DCC's application shell. This change adds
+pending-edit durability and cached reads, without replacing DCC's application-wide shell.
 
 `DEFAULT_LAYOUT` in `public/js/research.js` selects `cards`.
 Real `list` and `notebook` variants use the same routes and behavior via `?layout=`.

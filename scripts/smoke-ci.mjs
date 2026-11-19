@@ -11,6 +11,9 @@
 // Requires the chromium binary (CI: `npx playwright-core install chromium`).
 // Exits non-zero on the first failed assertion.
 
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { measureQueueCapsule } from "./queue-capsule-smoke.mjs";
 
@@ -257,5 +260,13 @@ const unexpected = consoleErrors.filter((l) => APP_ERROR_RX.test(l));
 check("no app-code console errors", unexpected.length === 0, unexpected.slice(0, 3).join(" ; "));
 
 await browser.close();
+if(process.env.DCC_TEST_DATABASE_URL){
+  try{
+    const result=await promisify(execFile)(process.execPath,[fileURLToPath(new URL('./verify-research.cjs',import.meta.url))],{
+      env:{...process.env,DCC_RESEARCH_SELF_HOST:'1'},timeout:180000,maxBuffer:1024*1024
+    });
+    console.log(result.stdout);check('Research & Ideas full browser acceptance',true);
+  }catch(error){check('Research & Ideas full browser acceptance',false,String(error.stderr||error.message));}
+}
 console.log(failures ? `\nSMOKE FAILED (${failures})` : "\nSMOKE PASSED");
 process.exit(failures ? 1 : 0);
