@@ -175,6 +175,7 @@ const { chromium } = require("playwright-core");
       .filter({ has: page.getByRole("link", { name: requirementTitle, exact: true }) })
       .getByRole("button", { name: "Unlink", exact: true })
       .click();
+    await page.getByRole("link", { name: requirementTitle, exact: true }).waitFor({ state: "hidden" });
     await page.getByRole("button", { name: "Link existing", exact: true }).click();
     await page.getByLabel("Find by title").fill(requirementTitle);
     await page.getByRole("button", { name: requirementTitle, exact: true }).click();
@@ -214,6 +215,12 @@ const { chromium } = require("playwright-core");
         await page.goto(base + "/research?layout=" + layout);
         await page.getByRole("link", { name: title, exact: true }).waitFor();
         assert.equal(await page.locator("#results").getAttribute("data-layout"), layout);
+        await page.getByText("Status filters", { exact: true }).click();
+        assert.ok(
+          await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+          "Expanded filters fit " + width
+        );
+        await page.getByText("Status filters", { exact: true }).click();
         assert.ok(
           await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
           layout + " overflow at " + width

@@ -93,6 +93,7 @@
     records = [],
     searchVersion = 0;
   const actions = new Map();
+  let actionRunning = false;
   const feedback = (message) => {
     $("#feedback").textContent = message;
   };
@@ -111,13 +112,17 @@
     const b = event.target.closest("[data-act]");
     if (!b) return;
     const fn = actions.get(b.dataset.act);
-    if (fn)
+    if (fn && !actionRunning)
       void run(async () => {
+        actionRunning = true;
+        view.inert = true;
         b.disabled = true;
         try {
           await fn();
         } finally {
           b.disabled = false;
+          view.inert = false;
+          actionRunning = false;
         }
       });
   });
@@ -899,7 +904,10 @@
       const identity = await response.json();
       if (!response.ok || !identity.userId || !identity.workspaceId)
         throw new Error("Sign in to open Research & Ideas");
-      if(identity.synthetic){$('#environment').hidden=false;$('#environment').textContent='Local review data';}
+      if (identity.synthetic) {
+        $("#environment").hidden = false;
+        $("#environment").textContent = "Local review data";
+      }
       api = await ResearchSync.init(identity);
       await syncStatus();
       if (params.get("id")) await detail(params.get("id"));

@@ -18,6 +18,8 @@
   purchase task creation, owned metadata, private files, archive/restore and history.
 - Browser recovery checks preserve a failed write through reload and automatically
   retry through the online event. Invalid input can be corrected without queue blockage.
+- Real main-shell smoke covers task/project deep links, reverse navigation and exact-once
+  dialogs under overlapping startup events. Its guard mutation fails on the earlier race.
 - Nine responsive combinations pass: cards/list/notebook at 375/768/1280 pixels.
 - Mutation checks detect removed ownership and MCP scope enforcement. Removing both
   independent stale-write protections also fails the concurrent-edit assertion.

@@ -15,6 +15,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { verifyResearchMain } from "./research-main-smoke.mjs";
 import { measureQueueCapsule } from "./queue-capsule-smoke.mjs";
 
 /* Browser-context globals referenced inside page.evaluate() callbacks (they run
@@ -254,6 +255,13 @@ check("modal opens", (await page.evaluate(() => !!document.querySelector(".dcc-m
 await page.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
 await page.waitForTimeout(400);
 check("modal closes on Escape", (await page.evaluate(() => !document.querySelector(".dcc-modal"))) === true);
+
+try {
+  await verifyResearchMain(page,BASE);
+  check('Research main-shell navigation and single dialogs',true);
+} catch(error) {
+  check('Research main-shell navigation and single dialogs',false,error.message);
+}
 
 // console errors (minus the known-allowlisted 404s)
 const unexpected = consoleErrors.filter((l) => APP_ERROR_RX.test(l));

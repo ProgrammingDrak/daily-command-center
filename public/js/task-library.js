@@ -316,7 +316,7 @@
   async function openResearchLink(){
     const p=new URLSearchParams(location.search),task=p.get('researchTask'),project=p.get('researchProject');
     if(researchLinkOpened||(!task&&!project))return;
-    await refresh();if(!payload)return;researchLinkOpened=true;
+    await refresh();if(!payload||researchLinkOpened)return;researchLinkOpened=true;
     open();
     if(task){if(payload.tasks.some(row=>row.id===task))taskEditor(task);else notify("Linked task is unavailable","error");}else {projectManager();document.querySelector('[data-project-edit="'+CSS.escape(project)+'"]')?.click();}
   }

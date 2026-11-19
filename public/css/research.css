@@ -59,6 +59,7 @@
 }
 .ri-filter-options {
   position: absolute;
+  right: 0;
   z-index: 2;
   background: var(--surface-base);
   padding: 1rem;
