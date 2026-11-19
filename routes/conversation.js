@@ -6,6 +6,7 @@ const integrationPage = require("../lib/chat-integration-page");
 const { createOAuth, SCOPES } = require("../conversation-oauth");
 const { createConversationStore } = require("../conversation-store");
 const M = require("../lib/conversation-model");
+const researchMcp = require("../lib/research-mcp");
 const wishlistMcp = require("../lib/wishlist-mcp");
 const { createProjectStore } = require("../project-store");
 const envelope = {
@@ -18,6 +19,7 @@ const envelope = {
 };
 const tools = [
   ...wishlistMcp.tools,
+  ...researchMcp.tools,
   ...require("../lib/chat-control-tools").tools,
   {
     name: "dcc_save_someday_idea",
@@ -321,7 +323,7 @@ const tools = [
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }
   }
 ];
-const scopeFor = (name) => wishlistMcp.scopeFor(name) || (
+const scopeFor = (name) => researchMcp.scopeFor(name) || wishlistMcp.scopeFor(name) || (
   name === "dcc_attach_chat_file" ? "dcc.files.write" :
   name === "dcc_itinerary_write" ? "dcc.itinerary.write" :
   name === "dcc_calendar_events" ? ["dcc.read", "dcc.calendar.read"] :
@@ -576,6 +578,7 @@ module.exports = function mount(app, ctx, config = {}) {
       identity = await oauth.verify(raw.slice(7), scopeFor(name));
       try {
         let result;
+        if (researchMcp.scopeFor(name)) result = await researchMcp.run(ctx, name, args, identity);
         if (wishlistMcp.scopeFor(name)) result = await wishlistMcp.run(ctx, name, args, identity);
         const category = require('../lib/chat-control-tools').categoryFor[name];
         if (name === 'dcc_connection_status') result = {accountId:identity.userId,workspaceId:identity.workspaceId,status:'verified',permissions:permissions.categories.map(c=>({category:c.id,level:permissions.level(identity.scopes,c.id)})),legacyScopes:identity.scopes.filter(s=>permissions.legacy.includes(s))};

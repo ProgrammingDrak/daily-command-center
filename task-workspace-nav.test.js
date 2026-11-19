@@ -103,7 +103,7 @@ test("glasses keeps a visible Full app exit and task navigation", () => {
 });
 
 test("phones keep the clock, cog and dot, and show every page label whole", () => {
-  assert.match(read("index.html"), /<a class="tab wishlist-nav" href="\/wishlists">Wishlists<\/a>/);
+  assert.match(read("index.html"), /<a class="tab wishlist-nav" href="\/research">Research &amp; Ideas<\/a>/);
   const css = read("public/css/task-workspace.css");
   const phone = css.slice(css.indexOf("@media (max-width: 760px)"));
   assert.match(phone, /\.dcc-cluster \.time-now \{ display: flex !important;/);

@@ -521,6 +521,12 @@ function openAddModal(taskId, taskTitle, options) {
     document.getElementById('am-source-status').textContent='Attach stable links to originals. Private links open at their provider. Use private file controls for uploads.';
   }
 
+  var researchLink=document.getElementById('am-research-link');
+  if(!researchLink){researchLink=document.createElement('a');researchLink.id='am-research-link';document.getElementById('am-source-status').after(researchLink);}
+  researchLink.textContent='Linked research, ideas and products';
+  researchLink.href='/research?block='+encodeURIComponent(_addModalBlockId||'');
+  researchLink.hidden=!_addModalBlockId;
+
   window.mountTaskCommute?.(document.getElementById('am-commute'), _addModalBlockId);
   window.mountTaskCosts?.(document.getElementById('am-costs'), _addModalBlockId, taskEntry);
 

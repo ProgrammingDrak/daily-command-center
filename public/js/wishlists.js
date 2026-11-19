@@ -251,7 +251,7 @@
   function renderDetail(restoreFocus = false) {
     actions.clear();
     const render = [overview, criteria, options, compare, research, decision][section];
-    view.innerHTML = '<a class="back" href="/wishlists">← All Wishlists</a><div class="bar"><div><h1>' + esc(current.title)
+    view.innerHTML = '<a href="/research?id=' + esc(current.id) + '">Idea, research, purchases and connections</a><br><a class="back" href="/wishlists">← All Wishlists</a><div class="bar"><div><h1>' + esc(current.title)
       + '</h1><p class="pill">' + esc(current.stage || "Idea") + "</p></div>" + button("Quick capture", () => capture(), primary)
       + '</div><nav class="detail-nav" aria-label="Wishlist sections">' + sections.map((label, index) => button(label, () => {
         section = index;
