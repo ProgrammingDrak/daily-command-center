@@ -258,7 +258,7 @@
   }
 
   function projectManager(){
-    const projects=(payload.projects||[]);const body='<div class="tlb-manager-list">'+projects.map(project=>'<div class="tlb-manager-row"><i style="background:'+esc(props(project).color||'#0075EB')+'"></i><div><b>'+esc(props(project).name)+'</b><span>'+esc(props(project).status||'active')+'</span></div><button data-project-edit="'+esc(project.id)+'">Edit</button></div>').join('')+'</div><form id="tlb-project-form" class="tlb-manager-form"><input id="tlb-project-id" type="hidden"><label class="tlb-field"><span>Project name</span><input id="tlb-project-name" required placeholder="Griffin Renovation"></label><label class="tlb-field"><span>Color</span><input id="tlb-project-color" type="color" value="#0075EB"></label><label class="tlb-field"><span>Status</span><select id="tlb-project-status"><option>active</option><option>paused</option><option>complete</option><option>archived</option></select></label><button class="tlb-btn primary" type="submit">Save project</button></form>';
+    const projects=(payload.projects||[]);const body='<div class="tlb-manager-list">'+projects.map(project=>'<div class="tlb-manager-row"><i style="background:'+esc(props(project).color||'#0075EB')+'"></i><div><b>'+esc(props(project).name)+'</b><span>'+esc(props(project).status||'active')+'</span><a href="/research?block='+encodeURIComponent(project.id)+'">Research &amp; Ideas</a></div><button data-project-edit="'+esc(project.id)+'">Edit</button></div>').join('')+'</div><form id="tlb-project-form" class="tlb-manager-form"><input id="tlb-project-id" type="hidden"><label class="tlb-field"><span>Project name</span><input id="tlb-project-name" required placeholder="Griffin Renovation"></label><label class="tlb-field"><span>Color</span><input id="tlb-project-color" type="color" value="#0075EB"></label><label class="tlb-field"><span>Status</span><select id="tlb-project-status"><option>active</option><option>paused</option><option>complete</option><option>archived</option></select></label><button class="tlb-btn primary" type="submit">Save project</button></form>';
     const m=modal('Projects',body,{subtitle:'Projects organize tasks and add progress, sequencing, and Continue behavior.'});
     m.overlay.querySelectorAll('[data-project-edit]').forEach(button=>button.onclick=()=>{const project=projects.find(row=>row.id===button.dataset.projectEdit);m.overlay.querySelector('#tlb-project-id').value=project.id;m.overlay.querySelector('#tlb-project-name').value=props(project).name;m.overlay.querySelector('#tlb-project-color').value=props(project).color||'#0075EB';m.overlay.querySelector('#tlb-project-status').value=props(project).status||'active';});
     m.overlay.querySelector('form').onsubmit=async event=>{event.preventDefault();const id=m.overlay.querySelector('#tlb-project-id').value;const body={name:m.overlay.querySelector('#tlb-project-name').value,color:m.overlay.querySelector('#tlb-project-color').value,status:m.overlay.querySelector('#tlb-project-status').value};try{await api(id?'/api/projects/'+id:'/api/projects',{method:id?'PATCH':'POST',body:JSON.stringify(body)});m.close();await refresh();notify('Project saved');}catch(error){notify(error.message,'error');}};
@@ -312,6 +312,16 @@
 
   const open = () => window.openTaskQueue("all-tasks");
   window.DCCTaskLibrary = {refresh, glassesCollections, open, show};
+  let researchLinkOpened=false;
+  async function openResearchLink(){
+    const p=new URLSearchParams(location.search),task=p.get('researchTask'),project=p.get('researchProject');
+    if(researchLinkOpened||(!task&&!project))return;
+    await refresh();if(!payload)return;researchLinkOpened=true;
+    open();
+    if(task)taskEditor(task);else {projectManager();document.querySelector('[data-project-edit="'+CSS.escape(project)+'"]')?.click();}
+  }
+  window.addEventListener('dcc:data-ready',()=>void openResearchLink());
+  document.addEventListener('DOMContentLoaded',()=>void openResearchLink());
   document.getElementById("all-tasks-pill-nav")?.addEventListener("click",open);
   document.getElementById("someday-pill-nav")?.addEventListener("click",() => window.openTaskQueue("someday"));
   window.addEventListener("blocks-changed",() => {
