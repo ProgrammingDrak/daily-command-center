@@ -12,7 +12,7 @@ async function account(user,width=1440){
  await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());
  const page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));await page.goto(origin+"/?tab=tasks&view=list",{waitUntil:'domcontentloaded'});await page.waitForFunction(()=>!!window.DCCCommitmentSync);return {context,page};
 }
-async function settle(page){await page.evaluate(()=>DCCCommitmentSync.flush());await page.waitForFunction(()=>DCCCommitmentSync.summary.pending===0);}
+async function settle(page){await page.waitForFunction(()=>!document.querySelector('#commitment-workspace form[data-saving]'));await page.evaluate(()=>DCCCommitmentSync.flush());await page.waitForFunction(()=>DCCCommitmentSync.summary.pending===0);}
 async function refresh(page){await page.evaluate(async()=>{await DCCCommitmentSync.refresh();});await page.locator('#commitment-inline-sync').isVisible().then(async visible=>{await page.locator(visible?'#commitment-inline-sync':'#commitment-refresh').click();});}
 async function action(page,kind,note){await page.locator('#commitment-action-form [name=kind]').selectOption(kind);await page.locator('#commitment-action-form [name=note]').fill(note);await page.locator('#commitment-action-form button[type=submit]').click();await settle(page);}
 async function delayedSeenDraft(page,id,entry,{invitation=false,fail=false}={}) {

@@ -20,7 +20,7 @@ async function account(id,width=1440){
   await page.waitForFunction(()=>!!window.DCCCommitmentSync);
   return {context,page};
 }
-async function sync(page){await page.locator('#commitment-refresh').click();try { await page.waitForFunction(()=>window.DCCCommitmentSync.summary.pending===0 && !document.getElementById("commitment-refresh").disabled && !document.getElementById("commitment-workspace").hasAttribute("aria-busy"),{},{timeout:10000}); }
+async function sync(page){await page.waitForFunction(()=>!document.querySelector('#commitment-workspace form[data-saving]'));await page.locator('#commitment-refresh').click();try { await page.waitForFunction(()=>window.DCCCommitmentSync.summary.pending===0 && !document.getElementById("commitment-refresh").disabled && !document.getElementById("commitment-workspace").hasAttribute("aria-busy"),{},{timeout:10000}); }
 catch(e){console.error('Sync debug',await page.evaluate(async()=>({summary:DCCCommitmentSync.summary,pending:await DCCCommitmentSync.pending(),cache:await DCCCommitmentSync.cached()})));throw e;}}
 async function action(page,kind,note){
   await page.locator('#commitment-action-form [name="kind"]').selectOption(kind);
@@ -30,6 +30,8 @@ async function action(page,kind,note){
 await fs.mkdir('test-results/accountability',{recursive:true});
 try{
   const {page:owner,context:ownerCtx}=await account(1);
+  // Lookup finishes before queue creation. Exercise that async gap explicitly.
+  await owner.route('**/api/social/users/lookup?*',async route=>{const response=await route.fetch();await new Promise(resolve=>setTimeout(resolve,250));await route.fulfill({response});});
   await owner.locator('.commitment-create summary').click();
   await owner.locator('#commitment-create-form [name="title"]').fill(outcome);
   await owner.locator('#commitment-create-form [name="definitionDone"]').fill('A reviewed conclusion and supporting evidence are present.');
@@ -41,6 +43,7 @@ try{
     await owner.locator('#commitment-invite-form [name="person"]').fill(person);
     await owner.locator('#commitment-invite-form [name="role"]').selectOption(role);
     await owner.locator('#commitment-invite-form button[type="submit"]').click();await sync(owner);
+    assert.equal(await owner.evaluate(async ({id,person,role})=>(await DCCCommitmentSync.detail(id)).members.some(m=>m.username===person&&m.role===role&&m.state==='invited'),{id,person,role}),true,'invitation reaches server before the next lookup');
   }
   const {page:coach,context:coachCtx}=await account(2,390);
   await coach.locator('.commitment-card').filter({hasText:outcome}).click();

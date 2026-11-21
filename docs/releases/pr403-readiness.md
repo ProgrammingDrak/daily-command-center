@@ -21,7 +21,7 @@ The recovered rebase omitted published bounty safeguards. Restored the original 
 - Five independent FULL review lanes completed: security, performance, correctness, test quality and consistency. Independent second-pass verification and PostgreSQL regressions cleared the restored bounty and navigation findings. Review size exceeds 1,000 changed lines but remains below the automated refusal limits.
 - CI now runs the three browser workflows sequentially against its disposable PostgreSQL fixture. Exact published-head CI must be checked on PR403; local evidence does not substitute for it.
 
-One local browser rerun encountered a pending-action timeout during bounty submission. A direct rerun passed; the complete sequential CI-style run and exact-head CI are the final browser evidence. No assertion was weakened or bypassed.
+A local bounty-submission timeout and first CI run exposed fixture synchronization races. The form handler performs asynchronous lookup and local queue creation before submission finishes; the fixture previously checked an empty queue too early. Browser helpers now wait for the submitting form to finish before checking durable sync. Delayed lookup and server-confirmed invitation membership guard this gap. No assertion was weakened or bypassed.
 
 ## Current release boundaries
 
