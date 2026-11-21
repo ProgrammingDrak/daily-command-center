@@ -127,11 +127,12 @@ test("the Social tab shows the viewer's handle and labels email lookup honestly"
   const client = fs.readFileSync(require.resolve("./public/js/social.js"), "utf8");
 
   assert.match(html, /id="social-you-name"/);
-  assert.match(html, /id="social-you-copy"/);
+  assert.doesNotMatch(html, /id="social-you-copy"/);
+  assert.match(html, /id="friend-invite-create"[^>]*>Invite Link<\/button>/);
   assert.match(html, /id="social-lookup-input"[^>]*placeholder="Username or email"/);
   assert.match(client, /api\("\/api\/me"\)/);
-  assert.match(client, /navigator\.clipboard\.writeText\(myUsername\)/);
+  assert.doesNotMatch(client, /navigator\.clipboard\.writeText\(myUsername\)/);
   assert.match(client, /lookup\?q=" \+ encodeURIComponent\(identifier\)/);
   assert.match(client, /Enter a username or email\./);
-  assert.match(client, /Copy blocked here\. Your username is /);
+
 });

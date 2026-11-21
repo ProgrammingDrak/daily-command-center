@@ -706,7 +706,7 @@
   // before the tab's node list finishes reloading.
   // Mycelium is retired from navigation. Note-opening bridges stay inert there
   // instead of switching the page; the vault, its APIs and journals remain.
-  const vaultRetired = () => !!(window.DCC && DCC.nav && DCC.nav.isRetired("vault"));
+  const vaultRetired = () => !!(window.DCC && DCC.nav && !DCC.nav.openUtility && DCC.nav.isRetired("vault"));
   function openSlug(slug) {
     if (vaultRetired()) return;
     const btn = document.getElementById("vault-tab-btn");
