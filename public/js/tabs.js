@@ -47,6 +47,10 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
   const storage=(()=>{try{return window.localStorage;}catch(_e){return null;}})();
   let prefs=NS.readPrefs(storage);
   let state=null;
+  const UTILITY_PANELS = {vault:"personal-vault",social:"people-sharing"};
+  let utility=null;
+  let activePanel=null;
+  const readUtility=()=>{const value=new URLSearchParams(location.search).get("utility");return Object.hasOwn(UTILITY_PANELS,value)?value:null;};
   let explicitActual=false; // the URL or the person chose Actual on or off
   let archiveDefault=false; // Actual forced on for a past day, not a choice
   let archiveMode=false;    // the viewed day is a past (archive) day
@@ -72,14 +76,15 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
     if(!mode){history.replaceState(historyEntry(),"");return;}
     const url=new URL(location.href);
     url.search=NS.toSearch(state,location.search,{explicitActual});
+    if(utility)url.searchParams.set("utility",utility);else url.searchParams.delete("utility");
     if(mode==="push")history.pushState(historyEntry(),"",url);else history.replaceState(historyEntry(),"",url);
   }
 
   function paint(){
-    const panel=NS.panelFor(state);
+    const panel=utility||NS.panelFor(state);
     document.querySelectorAll(".tab-content").forEach(el=>el.classList.toggle("active",el.id==="tab-"+panel));
     document.querySelectorAll("#tab-bar .tab[data-page]").forEach(btn=>{
-      const on=btn.dataset.page===state.page;
+      const on=!utility&&btn.dataset.page===state.page;
       btn.classList.toggle("active",on);
       if(on)btn.setAttribute("aria-current","page");else btn.removeAttribute("aria-current");
     });
@@ -117,7 +122,8 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
     const prev=state;
     state=NS.normalize(next,prefs);
     if(NS.same(prev,state)&&!o.force){writeUrl(o.url);return state;}
-    const prevPanel=prev?NS.panelFor(prev):null,panel=NS.panelFor(state);
+    const prevPanel=activePanel,panel=utility||NS.panelFor(state);
+    activePanel=panel;
     if(typeof window.clearSlotCoinEffects==="function")window.clearSlotCoinEffects();
     paint();
     writeUrl(o.url);
@@ -134,9 +140,10 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
   // Merge a partial change. Switching to Tasks keeps its last view.
   function go(partial,opts){
     const p=partial||{};
+    const leavingUtility=!!utility;utility=null;
     const next=Object.assign({},state,p);
     if(p.view==="list"||p.view==="calendar"){NS.saveBaseView(storage,p.view);prefs.baseView=p.view;}
-    return apply(next,Object.assign({url:"push"},opts));
+    return apply(next,Object.assign({url:"push",force:leavingUtility},opts));
   }
   function setActual(on,opts){
     explicitActual=true;archiveDefault=false;
@@ -145,7 +152,13 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
   }
 
   // Compatibility adapter for the old panel names used by click-driven callers.
+  function openUtility(name){
+    if(!Object.hasOwn(UTILITY_PANELS,name))return null;
+    utility=name;
+    return apply(state,{url:"push",source:"utility",force:true});
+  }
   function select(name){
+    if(Object.hasOwn(UTILITY_PANELS,name))return openUtility(name);
     if(NS.isRetired(name)){retiredNotice(name);return go({page:"tasks",view:"queue"});}
     const mapped=NS.fromLegacyTab(name,prefs);
     if(!mapped)return null;
@@ -177,7 +190,7 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
 
   DCC.nav={
     get:()=>Object.assign({},state),
-    go,setActual,select,setArchive,setReviewOpen,hasDraftIn,
+    go,setActual,select,openUtility,setArchive,setReviewOpen,hasDraftIn,
     isRetired:NS.isRetired,
     reviewOpen:()=>reviewOpen&&state.page==="tasks"&&state.view!=="queue",
     prefs:()=>Object.assign({},prefs)
@@ -201,6 +214,8 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
   const toggle=byId("task-actual-toggle");
   if(toggle)toggle.addEventListener("click",()=>setActual(!state.actual));
 
+  document.querySelectorAll("[data-utility]").forEach(btn=>btn.addEventListener("click",()=>openUtility(btn.dataset.utility)));
+  utility=readUtility();
   const parsed=NS.parse(location.search,history.state,prefs);
   explicitActual=parsed.explicitActual;
   if(parsed.legacy&&parsed.legacy.retired)retiredNotice(parsed.legacy.from);
@@ -210,17 +225,18 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
   history.replaceState(historyEntry(),"");
   window.addEventListener("popstate",()=>{
     // The entry's saved workspace wins; the current state covers entries without one.
+    utility=readUtility();
     const back=NS.parse(location.search,history.state,prefs,state);
     explicitActual=back.explicitActual||explicitActual;
     // History stores the preference, not a past-day default, so re-derive the
     // default for the day still on screen. An explicit choice always wins.
     const restored=NS.withArchiveDefault(back.state,{archive:archiveMode,explicitActual});
     archiveDefault=archiveMode&&!explicitActual&&restored.actual&&!back.state.actual;
-    apply(restored,{source:"history"});
+    apply(restored,{source:"history",force:true});
   });
   // Render after all tab modules register, without overriding intervening navigation.
   document.addEventListener("DOMContentLoaded",()=>{
-    const panel=NS.panelFor(state);
+    const panel=utility||NS.panelFor(state);
     DCC.tabs.run(panel);
     if(panel==="schedule")runScheduleView(state,null);
   });

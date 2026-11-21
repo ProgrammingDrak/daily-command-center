@@ -79,6 +79,10 @@ const commitmentBounty=require('./routes/social-todo')({get(){},post(){},use(){}
   assert.equal((await pool.query("SELECT properties FROM blocks WHERE type='day_root'")).rows[0].properties._bounty.partner.sponsorshipId,offer.id);
   assert.equal((await pool.query('SELECT value_cents FROM todo_sponsorships WHERE id=$1',[offer.id])).rows[0].value_cents,0);
   await act(1,{kind:'bounty_decision',sponsorshipId:offer.id,decision:'dismissed',note:'Remove points offer'});
+  const closedRevision=(await store.read(id,1)).revision;
+  await assert.rejects(act(1,{kind:'bounty_decision',sponsorshipId:offer.id,decision:'approved',note:'Replay old approval'}),e=>e.statusCode===409);
+  assert.equal((await store.read(id,1)).revision,closedRevision);
+  assert.equal((await pool.query('SELECT status FROM todo_sponsorships WHERE id=$1',[offer.id])).rows[0].status,'dismissed');
   assert.equal((await pool.query("SELECT properties FROM blocks WHERE type='day_root'")).rows[0].properties._bounty.partner,null);
  });
  await t.test('summary stays lightweight and complete; history pages have no gaps/duplicates',async()=>{

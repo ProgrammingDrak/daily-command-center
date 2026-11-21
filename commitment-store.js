@@ -309,6 +309,7 @@ function createStore({ pool, blockDB, commitmentBounty }) {
           if(!offer)throw error("Offer unavailable",404);
           if(offer.status!==input.decision){
             if(input.decision==='approved') {
+              if(offer.status!=='pending') throw error("This offer is closed. Ask for a new one.",409);
               const block=await source(q,row.source_block_id,row.workspace_id,userId);
               if(completed(block.properties) || String(block.date instanceof Date ? block.date.toISOString().slice(0,10) : block.date).slice(0,10)!==String(offer.task_date instanceof Date ? offer.task_date.toISOString().slice(0,10) : offer.task_date).slice(0,10))throw error("This task changed. Dismiss this offer and ask for a new one.",409);
               await commitmentBounty.activate(offer,userId,q);

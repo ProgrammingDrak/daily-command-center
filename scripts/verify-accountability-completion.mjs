@@ -4,13 +4,13 @@ import assert from 'node:assert/strict';
 import {chromium} from 'playwright-core';
 import fs from 'node:fs/promises';
 const origin='http://127.0.0.1:8107';
-const browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
+const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
 const errors=[];const contexts=[];
 async function account(user,width=1440){
  const context=await browser.newContext({viewport:{width,height:900},timezoneId:'America/New_York'});contexts.push(context);
  await context.addCookies([{name:'dcc_review_user',value:String(user),url:origin}]);
  await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());
- const page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));await page.goto(origin,{waitUntil:'domcontentloaded'});await page.waitForFunction(()=>!!window.DCCCommitmentSync);return {context,page};
+ const page=await context.newPage();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));await page.goto(origin+"/?tab=tasks&view=list",{waitUntil:'domcontentloaded'});await page.waitForFunction(()=>!!window.DCCCommitmentSync);return {context,page};
 }
 async function settle(page){await page.evaluate(()=>DCCCommitmentSync.flush());await page.waitForFunction(()=>DCCCommitmentSync.summary.pending===0);}
 async function refresh(page){await page.evaluate(async()=>{await DCCCommitmentSync.refresh();});await page.locator('#commitment-inline-sync').isVisible().then(async visible=>{await page.locator(visible?'#commitment-inline-sync':'#commitment-refresh').click();});}
@@ -70,9 +70,9 @@ try{
  await owner.request.post(origin+'/review/commitments/reset');await owner.reload();await owner.waitForFunction(()=>!!window.DCCCommitmentSync);
  assert.equal(await owner.locator('#tab-bar [data-tab=social]').count(),0);assert.equal(await owner.locator('#tab-bar [data-tab=vault]').count(),0);
  await owner.locator('#dcc-settings-button').click();await owner.locator('#vault-tab-btn').click();await owner.waitForFunction(()=>document.getElementById('tab-vault').classList.contains('active'));
- assert.equal(new URL(owner.url()).hash,'#personal-vault');await owner.reload();assert.equal(await owner.locator('#tab-vault').getAttribute('class'),'tab-content active');
- await owner.locator('[data-tab=budget]').click();assert.equal(new URL(owner.url()).hash,'#budget');await owner.reload();assert.ok(await owner.locator('#tab-budget').evaluate(el=>el.classList.contains('active')));
- await owner.locator('[data-tab=schedule]').click();
+ assert.equal(new URL(owner.url()).searchParams.get('utility'),'vault');assert.equal(await owner.locator('body').getAttribute('data-shell-surface'),'vault');await owner.reload();assert.equal(await owner.locator('#tab-vault').getAttribute('class'),'tab-content active');
+ await owner.locator('[data-tab=budget]').click();assert.equal(new URL(owner.url()).searchParams.get('tab'),'budget');await owner.reload();assert.ok(await owner.locator('#tab-budget').evaluate(el=>el.classList.contains('active')));
+ await owner.locator('[data-page=tasks]').click();await owner.locator('[data-task-view=list]').click();assert.equal(await owner.locator('body').getAttribute('data-shell-surface'),'schedule');
  const task='fixture-'+Date.now();
  await owner.evaluate(async id=>{await DCC.api('/api/blocks',{method:'POST',body:{id,type:'block',date:DCC.dates.todayKey(),properties:{kind:'task',local_id:id,title:'OWNER PRIVATE rehearsal',detail:'PRIVATE inbox notes',source:'manual',duration:30,start:'09:30',end:'10:00',status:'open'}}});},task);
  await owner.reload();await owner.waitForFunction(id=>!!document.querySelector('[data-task-collaborate="'+id+'"]'),task);

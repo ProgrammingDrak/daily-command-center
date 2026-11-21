@@ -696,6 +696,7 @@ async function listPendingSponsorships(ownerUserId) {
   const { rows } = await pool.query(
     `SELECT * FROM todo_sponsorships
       WHERE owner_user_id=$1 AND review_state='pending'
+        AND accountability_commitment_id IS NULL
       ORDER BY created_at DESC`,
     [ownerUserId]
   );
@@ -714,7 +715,7 @@ async function earnSponsorshipRoute({ sponsorshipId, ownerUserId, routeType, tar
   try {
     await client.query("BEGIN");
     const { rows: [sponsorship] } = await client.query(
-      "SELECT * FROM todo_sponsorships WHERE id=$1 AND owner_user_id=$2 FOR UPDATE",
+      "SELECT * FROM todo_sponsorships WHERE id=$1 AND owner_user_id=$2 AND accountability_commitment_id IS NULL FOR UPDATE",
       [sponsorshipId, ownerUserId]
     );
     if (!sponsorship) { const e = new Error("sponsorship not found"); e.statusCode = 404; throw e; }
@@ -830,7 +831,7 @@ async function approveSponsorship(sponsorshipId, reviewerUserId) {
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `SELECT * FROM todo_sponsorships WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`,
+      `SELECT * FROM todo_sponsorships WHERE id=$1 AND owner_user_id=$2 AND accountability_commitment_id IS NULL FOR UPDATE`,
       [sponsorshipId, reviewerUserId]
     );
     const row = rows[0];
@@ -858,6 +859,7 @@ async function rejectSponsorship(sponsorshipId, reviewerUserId) {
     `UPDATE todo_sponsorships
         SET review_state='rejected', status='rejected', reviewed_by_user_id=$2, reviewed_at=NOW()
       WHERE id=$1 AND owner_user_id=$2 AND review_state='pending'
+        AND accountability_commitment_id IS NULL
       RETURNING *`,
     [sponsorshipId, reviewerUserId]
   );
@@ -872,7 +874,7 @@ async function removeSponsorship(sponsorshipId, ownerUserId) {
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `SELECT * FROM todo_sponsorships WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`,
+      `SELECT * FROM todo_sponsorships WHERE id=$1 AND owner_user_id=$2 AND accountability_commitment_id IS NULL FOR UPDATE`,
       [sponsorshipId, ownerUserId]
     );
     const row = rows[0];

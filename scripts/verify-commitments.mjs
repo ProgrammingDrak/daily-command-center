@@ -16,7 +16,7 @@ async function account(id,width=1440){
   await context.route('**/*', r => new URL(r.request().url()).origin===origin ? r.continue():r.abort());
   if (!reset) { const result=await context.request.post(origin+'/review/commitments/reset');assert.equal(result.status(),200);reset=true; }
   const page=await context.newPage();page.setDefaultTimeout(10000);console.log('Opening fictional account',id);page.on('pageerror',e=>errors.push(e.message));
-  await page.goto(origin,{waitUntil:'domcontentloaded'});await page.locator('#itinerary-collaboration > summary').click();
+  await page.goto(origin+"/?tab=tasks&view=list",{waitUntil:'domcontentloaded'});await page.locator('#itinerary-collaboration > summary').click();
   await page.waitForFunction(()=>!!window.DCCCommitmentSync);
   return {context,page};
 }
@@ -129,7 +129,7 @@ try{
   });
   await tabB.route('**/api/commitments?summary=1',r=>r.fulfill({status:200,json:snapshot}));
   for(const page of [tabA,tabB]){
-    await page.goto(origin,{waitUntil:'domcontentloaded'});
+    await page.goto(origin+"/?tab=tasks&view=list",{waitUntil:'domcontentloaded'});
     await page.waitForFunction(()=>!!window.DCCCommitmentSync?.summary.lastSyncedAt);
   }
   const record={id:'synthetic-race',revision:2,title:'Fictional newer snapshot'};

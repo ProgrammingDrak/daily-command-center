@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import {chromium} from 'playwright-core';
 const origin='http://127.0.0.1:8107';
-const browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
+const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
 const contexts=[];
 async function account(user,url='/'){
  const context=await browser.newContext({viewport:{width:390,height:900},permissions:['clipboard-read','clipboard-write']});contexts.push(context);
@@ -40,8 +40,8 @@ try {
  await existing.reload();await existing.getByRole('button',{name:'Add alex as a friend',exact:true}).click();await existing.waitForFunction(()=>document.getElementById('invite-message').textContent.includes('already friends'));
  const {page:login}=await account(0,path);await login.getByRole('link',{name:'Already use DCC? Sign in and add',exact:true}).click();
  assert.equal(new URL(login.url()).searchParams.get('next'),path);
- await login.waitForFunction(()=>typeof window.dccAuthNext==='function');
- assert.deepEqual(await login.evaluate(()=>['//evil.test','https://evil.test','/\\evil.test','/safe\npath','/friend-invite/token'].map(window.dccAuthNext)),['/','/','/','/','/friend-invite/token']);
+ await login.waitForFunction(()=>typeof window.DccLoginReturn.normalize==='function');
+ assert.deepEqual(await login.evaluate(()=>['//evil.test','https://evil.test','/\\evil.test','/safe\npath','/friend-invite/token'].map(window.DccLoginReturn.normalize)),['/','/','/','/','/friend-invite/token']);
  await login.locator('#username').fill('fictional-devon');await login.locator('#password').fill('fictional-qa-password');await login.locator('#submitBtn').click();await login.waitForURL(origin+path);
  // Exercise the actual drake-auth adapter with a fictional managed session.
  // No Clerk account, external identity or remote request is created.

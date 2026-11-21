@@ -521,3 +521,33 @@ test("the sync dot reports queue conflicts without resolving them", () => {
   assert.match(queue, /function syncState\(\)\{return \{pending:!!pending\|\|completionEntries\(\).length>0,conflict:/);
   assert.match(queue, /function activate\(id\)\{if\(DCC\.nav\)DCC\.nav\.go\(\{page:'tasks',view:'queue'\}\)/);
 });
+
+
+test("Utilities preserve workspace state and report actual panel transitions through Back and reload", () => {
+  const h = harness();
+  h.views[2].click();
+  h.toggle.click();
+  const workspace = JSON.stringify(h.DCC.nav.get());
+  h.DCC.nav.openUtility("vault");
+  assert.equal(activePanel(h), "tab-vault");
+  assert.equal(JSON.stringify(h.DCC.nav.get()), workspace);
+  assert.equal(activePanel(reload(h)), "tab-vault");
+  h.DCC.nav.openUtility("social");
+  assert.equal(h.events.at(-1).detail.prevPanel, "vault");
+  h.pages[0].click();
+  assert.equal(activePanel(h), "tab-schedule");
+  assert.equal(h.events.at(-1).detail.prevPanel, "social");
+  assert.equal(JSON.stringify(h.DCC.nav.get()), workspace);
+  assert.equal(new URL(h.location.href).searchParams.has("utility"), false);
+  h.history.back();
+  assert.equal(activePanel(h), "tab-social");
+  h.history.back();
+  assert.equal(activePanel(h), "tab-vault");
+  assert.equal(h.events.at(-1).detail.prevPanel, "social");
+  h.pages[1].click();
+  h.DCC.nav.openUtility("vault");
+  const before = h.runs.length;
+  h.pages[1].click();
+  assert.equal(h.runs.length, before + 1, "returning to underlying page runs its renderer");
+  assert.equal(h.runs.at(-1), "budget");
+});
