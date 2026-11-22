@@ -459,8 +459,12 @@
       try {
         const token=await openDay(date,true);
         if(closed||!token)return;
-        preview.replaceChildren(...state.stops.map(task=>node("li",task.title)));
-        if(!state.stops.length)preview.append(node("li","No public tasks on this day. Mark a task Public to include it."));
+        // Explicit sharing can run while a closed discussion still awaits its Post.
+        // Its preview must not depend on the background polling/draft guards.
+        const sharedDay=await api(token);
+        if(closed)return;
+        preview.replaceChildren(...sharedDay.stops.map(task=>node("li",task.title)));
+        if(!sharedDay.stops.length)preview.append(node("li","No public tasks on this day. Mark a task Public to include it."));
         link.value=new URL("/shared-itinerary/"+token,location.origin).href;
         const copy=button("Copy link",async()=>{
           try{await navigator.clipboard.writeText(link.value);status.textContent="Link copied. Send it to someone for feedback.";}

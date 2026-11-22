@@ -103,6 +103,24 @@ try {
   await ownerThread.getByLabel('Comment',{exact:true}).fill('Looking forward to it!');
   await ownerThread.getByRole('button',{name:'Post',exact:true}).click();
   await ownerThread.getByText('Looking forward to it!',{exact:true}).waitFor();
+  // Sharing must load independently while a closed discussion is still posting.
+  let releaseOwner,ownerBegan;
+  const ownerGate=new Promise(resolve=>{releaseOwner=resolve;});
+  const ownerStarted=new Promise(resolve=>{ownerBegan=resolve;});
+  await owner.route('**/contributions',async route=>{const response=await route.fetch();ownerBegan();await ownerGate;await route.fulfill({response});});
+  await ownerThread.getByLabel('Comment',{exact:true}).fill('An owner message still sending.');
+  await ownerThread.getByRole('button',{name:'Post',exact:true}).click();
+  await ownerStarted;
+  await ownerThread.getByRole('button',{name:'Close',exact:true}).click();
+  await owner.getByRole('button',{name:'Share Itinerary',exact:true}).click();
+  try {
+    await share.getByRole('link',{name:'Preview shared day'}).waitFor();
+    assert.equal(new URL(await share.getByLabel('Daily itinerary link').inputValue()).pathname,info.sharedPath);
+  } finally {releaseOwner();}
+  await share.getByRole('button',{name:'Close',exact:true}).click();
+  await owner.unroute('**/contributions');
+  await owner.locator('[data-id="feedback-coffee"]').getByRole('button',{name:/Comments on Coffee/}).click();
+  await ownerThread.getByText('An owner message still sending.',{exact:true}).waitFor();
   await ownerThread.screenshot({path:output+'/thread-mobile.png'});
   for(const width of [320,390,760,1024,1440]){
     await guest.setViewportSize({width,height:900});
