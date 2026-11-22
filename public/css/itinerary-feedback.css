@@ -1,0 +1,15 @@
+.itinerary-feedback{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem;margin-top:.5rem;min-width:0}
+.itinerary-feedback .it-list-ctrl-btn{min-height:44px;height:auto;padding:.35rem .65rem;font-size:.8rem;text-transform:none;white-space:nowrap}
+.itinerary-feedback .itinerary-reaction[aria-pressed="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 18%,var(--card));opacity:1}
+.itinerary-feedback-status{width:100%;font-size:.8rem;color:var(--text-secondary)}
+.itinerary-feedback-status:empty{display:none}
+.itinerary-feedback[data-presentation="compact"] .it-list-ctrl-btn{padding:.35rem .45rem;border-radius:2rem}
+.itinerary-feedback[data-presentation="footer"]{border-top:1px solid var(--border);padding-top:.5rem}
+.itinerary-share-content li{margin:.5rem 0;overflow-wrap:anywhere}
+.itinerary-share-content input{display:block;width:100%;box-sizing:border-box;min-height:44px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:.5rem}
+.itinerary-share-content output{display:block;margin:.5rem 0;font-size:.9rem}
+.itinerary-share-content .it-list-ctrl-btn{display:inline-flex;align-items:center;justify-content:center;margin:.3rem .3rem .3rem 0;min-height:44px;height:auto;text-transform:none;text-decoration:none}
+.discussion-comment>div{min-width:0}
+.discussion-branch{min-width:0!important;margin-left:.15rem!important;padding-left:.45rem!important}
+.discussion-compose .itinerary-feedback{margin:0 0 .35rem}
+.dcc-discussion-sheet[open] .it-list-ctrl-btn{min-height:44px}

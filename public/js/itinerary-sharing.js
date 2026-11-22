@@ -11,6 +11,19 @@
   let busy = false;
   let activeTask = null;
   let activeTrigger = null;
+  const FEEDBACK_PRESENTATION = "inline"; // inline, compact, footer
+  const REACTIONS = {heart:"❤️",clap:"👏",celebrate:"🎉"};
+  const drafts = new Map();
+  const draftKey = taskId => "dcc-itinerary-draft:" + key + ":" + (window.DCC_ACCOUNT_CONTEXT?.userId || "guest") + ":" + taskId;
+  function readDraft(taskId) {
+    const id=draftKey(taskId);
+    if (!drafts.has(id)) {try { drafts.set(id,JSON.parse(sessionStorage.getItem(id))||{}); } catch { drafts.set(id,{}); }}
+    return drafts.get(id);
+  }
+  function saveDraft(taskId,draft) {
+    const id=draftKey(taskId);drafts.set(id,draft);
+    try {sessionStorage.setItem(id,JSON.stringify(draft));} catch { /* Keep the in-memory draft. */ }
+  }
   const dialog = document.createElement("dialog");
   dialog.setAttribute("aria-labelledby", "shared-discussion-title");
   dialog.className = "dcc-discussion-sheet";
@@ -34,8 +47,8 @@
   window.visualViewport?.addEventListener("scroll",fitSheet);
   window.addEventListener("resize",fitSheet);
   const authorKey = "dcc-itinerary-guest-name";
-  const rememberedName = () => localStorage.getItem(authorKey) || sessionStorage.getItem(authorKey) || "";
-  const rememberName = name => localStorage.setItem(authorKey, name.trim());
+  const rememberedName = () => {try {return localStorage.getItem(authorKey) || sessionStorage.getItem(authorKey) || "";} catch {return "";}};
+  const rememberName = name => {try {localStorage.setItem(authorKey, name.trim());} catch { /* A name can still be submitted. */ }};
   document.body.append(dialog);
   dialog.addEventListener("close", () => {
     activeTask = null;
@@ -77,19 +90,50 @@
     if (main.sharedSnapshot === snapshot) return;
     main.sharedSnapshot = snapshot;
     row.querySelector(".shared-itinerary-social")?.remove();
+    row.querySelector(".itinerary-feedback")?.remove();
     const bounty = row.querySelector(".btn-bounty");
     if (bounty) bounty.style.setProperty("display", "none", "important");
-    const social = button("", () => showSheet());
-    social.className = "btn-task-radial shared-itinerary-social";
-    social.style.gridColumn = "1";
-    social.setAttribute("aria-label", "Social discussion");
+    const feedback=node("div","","itinerary-feedback");
+    feedback.dataset.presentation=FEEDBACK_PRESENTATION;
+    const social = button("💬 " + task.comments.length + " " + (task.comments.length===1?"comment":"comments"), () => showSheet());
+    social.className = "it-list-ctrl-btn shared-itinerary-social";
+    social.setAttribute("aria-label", "Comments on " + task.title + ": " + task.comments.length);
     social.setAttribute("aria-haspopup", "dialog");
-    social.dataset.tooltip = "Discussion";
-    social.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 11a7 7 0 0 1-7 7H5l2-4a7 7 0 1 1 13-3Z"/><path d="M9 11h7"/></svg>';
-    if (bounty) bounty.before(social);
-    else row.querySelector(".it-list-actions").prepend(social);
+    feedback.append(social);
+    const reactionStatus=node("span","","itinerary-feedback-status");
+    reactionStatus.setAttribute("role","status");
+    function reactionButtons(container) {
+      for (const [reaction,emoji] of Object.entries(REACTIONS)) {
+        const count=task.reactions?.[reaction] ?? (reaction==="heart"?task.likes:0) ?? 0;
+        const storageKey="dcc-itinerary-reaction:"+key+":"+task.id+":"+reaction;
+        let saved;try {saved=JSON.parse(sessionStorage.getItem(storageKey));} catch { /* Storage can be unavailable. */ }
+        const react=button(emoji+" "+count, async el=>{
+          el.disabled=true;
+          const requestKey=key;
+          saved=saved||{operationId:crypto.randomUUID(),done:false};
+          try {sessionStorage.setItem(storageKey,JSON.stringify(saved));} catch { /* The live request retains its identifier. */ }
+          try {
+            const next=await api(requestKey+"/contributions",{action:"like",reaction,blockId:task.id,operationId:saved.operationId});
+            saved.done=true;
+            try {sessionStorage.setItem(storageKey,JSON.stringify(saved));} catch { /* Preserve the in-memory result. */ }
+            if(requestKey===key){state=next;paint();}
+          } catch(error) {el.disabled=false;reactionStatus.textContent=error.message;}
+        });
+        react.className="it-list-ctrl-btn itinerary-reaction";
+        react.setAttribute("aria-label",reaction+" reaction on "+task.title+": "+count);
+        react.setAttribute("aria-pressed",String(!!saved?.done));
+        react.disabled=!!saved?.done;
+        container.append(react);
+      }
+    }
+    if (!removed) reactionButtons(feedback);
+    feedback.append(reactionStatus);
+    main.append(feedback);
 
     function showSheet() {
+      const oldText=dialog.querySelector('.discussion-compose textarea');
+      const restoreFocus=oldText===document.activeElement;
+      const selection=oldText?[oldText.selectionStart,oldText.selectionEnd]:null;
       activeTask = task.id;
       activeTrigger = social;
       const scrollTop = dialog.querySelector(".discussion-feed")?.scrollTop || 0;
@@ -102,11 +146,12 @@
       const feed = node("div", "", "discussion-feed");
       const footer = node("footer", "", "discussion-compose");
       const form = node("form");
+      const draft=readDraft(task.id);
       const target = node("div");
       const name = node("input");
       name.placeholder = "Your name";
       name.setAttribute("aria-label", "Your name");
-      name.value = rememberedName();
+      name.value = draft.name || rememberedName();
       name.required = true; name.hidden = !!name.value;
       name.maxLength = 60;
       const text = node("textarea");
@@ -114,6 +159,7 @@
       text.rows = 1;
       text.maxLength = 1000;
       text.setAttribute("aria-label", "Comment");
+      text.value = draft.text || "";
       const post = node("button", "Post", "it-list-ctrl-btn");
       const status = node("output");
       status.setAttribute("aria-live", "polite");
@@ -125,10 +171,17 @@
                 if (comment) {
           const quote = node("span", "Replying to " + comment.name + " · " + comment.text, "discussion-reply-quote");
           quote.title = comment.text;
-          target.append(quote, button("Cancel reply", () => selectReply(null)));
+          target.append(quote, button("Cancel reply", () => {selectReply(null);retainDraft();}));
         }
       };
-      selectReply(null);
+      selectReply(task.comments.find(comment=>comment.id===draft.parentId)||null);
+      function retainDraft() {
+        const previous=readDraft(task.id);
+        const next={name:name.value,text:text.value,parentId:replyTo?.id||null};
+        if (previous.operation && JSON.stringify(previous.operation.body)===JSON.stringify({action:"comment",name:name.value,text:text.value,parentId:replyTo?.id})) next.operation=previous.operation;
+        saveDraft(task.id,next);
+      }
+      form.addEventListener("input",retainDraft);
       text.addEventListener("keydown", event => {
         if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
         event.preventDefault();
@@ -136,10 +189,6 @@
       });
       form.append(target,name,text,post,status);
       if (!removed) footer.append(form);
-      async function send(body) {
-        state = await api(key + "/contributions",{...body,blockId:task.id});
-        paint();
-      }
       const comments = new Map(task.comments.map(comment => [comment.id,comment]));
       function commentRow(comment) {
         const line = node("article", "", "discussion-comment");
@@ -150,6 +199,7 @@
         body.append(node("strong", comment.name), node("p",(parent ? "@" + parent.name + " " : "") + comment.text));
         if (!removed) body.append(button("Reply", () => {
           selectReply(comment);
+          retainDraft();
           (name.value ? text : name).focus();
         }));
         line.append(avatar,body);
@@ -214,24 +264,28 @@
         busy = post.disabled = true;
         try {
           const body = {action:"comment",name:name.value,text:text.value,parentId:replyTo?.id};
+          const previous=readDraft(task.id);
+          const operation=previous.operation&&JSON.stringify(previous.operation.body)===JSON.stringify(body)?previous.operation:{id:crypto.randomUUID(),body};
+          saveDraft(task.id,{...previous,operation});
           for (let ancestor = replyTo; ancestor; ancestor = comments.get(ancestor.parentId)) {
             openBranches.add(ancestor.id);
           }
           rememberName(name.value);
-          await send(body);
+          const requestKey=key;
+          const next=await api(requestKey+"/contributions",{...body,blockId:task.id,operationId:operation.id});
+          if(requestKey!==key)return;
+          const current=readDraft(task.id);
+          if(current.operation?.id===operation.id&&current.text===body.text&&current.name===body.name&&current.parentId===(body.parentId||null)) saveDraft(task.id,{name:body.name,text:"",parentId:null});
+          state=next;paint();
         } catch (error) {status.textContent = error.message;}
         finally {busy = post.disabled = false;}
       };
       const actions = node("div", "", "discussion-actions");
       if (!removed) {
-        const likedKey = key + task.id;
-        const like = button("♡ " + task.likes, async el => {
-          el.disabled = true;
-          try {sessionStorage.setItem(likedKey,"1"); await send({action:"like"});}
-          catch (error) {sessionStorage.removeItem(likedKey); el.disabled = false; status.textContent = error.message;}
-        });
-        like.setAttribute("aria-label","Love this task");
-        like.disabled = !!sessionStorage.getItem(likedKey);
+        const reactionBar=node("div","","itinerary-feedback");
+        reactionButtons(reactionBar);
+        reactionBar.append(reactionStatus);
+        footer.prepend(reactionBar);
         function contributePhoto(toDay) {
           if (feed.querySelector(".discussion-memory")) return;
           const memory = node("form","","discussion-memory");
@@ -273,7 +327,7 @@
             finally {busy = save.disabled = false;}
           };
         }
-        actions.append(like,button("Add task journal photo",()=>contributePhoto(false)),button("Add day journal photo",()=>contributePhoto(true)));
+        actions.append(button("Add task journal photo",()=>contributePhoto(false)),button("Add day journal photo",()=>contributePhoto(true)));
       }
       if (bounty) actions.append(button("Set bounty", () => {
         dialog.close();
@@ -289,9 +343,11 @@
       }
       header.append(headerActions);
       dialog.replaceChildren(header,feed,footer);
+      if(draft.text)status.textContent="Draft kept on this device.";
       fitSheet();
       if (!dialog.open) dialog.showModal();
       feed.scrollTop = scrollTop;
+      if(restoreFocus){text.focus({preventScroll:true});if(selection)text.setSelectionRange(...selection);}
     }
     if (activeTask === task.id && dialog.open) showSheet();
   }
@@ -333,7 +389,9 @@
       const task = tasks.get(row.dataset.id);
       const main = row.querySelector(".it-list-main");
       if (task && main) addThread(main,task);
+      else {main?.querySelector(".itinerary-feedback")?.remove();if(main)delete main.sharedSnapshot;}
     }
+    if(activeTask&&!tasks.has(activeTask)&&!state.removed.some(task=>task.id===activeTask))dialog.close();
     let earlier = list.querySelector(".shared-itinerary-earlier");
     if (!earlier && state.removed.length) {
       earlier = node("section","","it-list-section shared-itinerary-earlier");
@@ -387,6 +445,32 @@
   }
   DCC.ItineraryShare = {
     openDay,
+    async manage(date, trigger) {
+      if(!DCC.overlay?.open){trigger.textContent="Reload to share";return;}
+      trigger.disabled=true;
+      const content=node("div","","itinerary-share-content");
+      const message=node("p","Anyone with this link can view the public tasks below, comment, reply, and react. Private tasks and notes stay private.");
+      const preview=node("ul");
+      const status=node("output");status.setAttribute("role","status");
+      const link=node("input");link.readOnly=true;link.setAttribute("aria-label","Daily itinerary link");
+      content.append(node("p",date),message,preview,link,status);
+      let closed=false;
+      DCC.overlay.open({kind:"sheet",title:"Share your daily itinerary",body:content,anchor:trigger,onClose(){closed=true;}});
+      try {
+        const token=await openDay(date,true);
+        if(closed||!token)return;
+        preview.replaceChildren(...state.stops.map(task=>node("li",task.title)));
+        if(!state.stops.length)preview.append(node("li","No public tasks on this day. Mark a task Public to include it."));
+        link.value=new URL("/shared-itinerary/"+token,location.origin).href;
+        const copy=button("Copy link",async()=>{
+          try{await navigator.clipboard.writeText(link.value);status.textContent="Link copied. Send it to someone for feedback.";}
+          catch{link.focus();link.select();status.textContent="Select and copy the link above.";}
+        });
+        const open=node("a","Preview shared day","it-list-ctrl-btn");open.href=link.value;open.target="_blank";open.rel="noopener";
+        content.append(copy,open);
+      }catch(error){status.textContent=error.message;}
+      finally{trigger.disabled=false;}
+    },
     async copy(date, button) {
       button.disabled = true;
       try {
