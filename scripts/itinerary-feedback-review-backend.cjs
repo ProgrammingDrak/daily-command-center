@@ -10,6 +10,9 @@ module.exports = async function mount(app) {
   app.get('/api/me',(_req,res)=>res.json({id:1,username:'alex-demo',onboardingState:{dailyCommandCenterTour:{version:2,completedAt:'2026-01-01T00:00:00Z'}}}));
   app.get('/api/auth/me',(_req,res)=>res.json({authenticated:true,user:{id:1,username:'alex-demo'}}));
   app.get('/api/health',(_req,res)=>res.json({database:'ok',reviewOnly:true,feature:'itinerary-feedback'}));
+  // The generic review route defaults to the host's timezone. Keep its initial
+  // day aligned with these fixtures even when CI runs after UTC midnight.
+  app.use('/api/state/day',(req,_res,next)=>{if(!req.query.date)req.query.date=date;next();});
   require('../routes/itinerary-shares').mount(app,ctx);
   require('../routes/blocks')(app,ctx);
   await ctx.blockDB.ensureDayRoot(date,1,'ws-1');

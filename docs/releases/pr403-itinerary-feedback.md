@@ -42,6 +42,8 @@ Disposable localhost PostgreSQL 16 only; no production QA data or credentials.
   incoming polling updates, reply drafts after reload, lost acknowledgements,
   delayed responses after closing/reopening, and sharing during a pending Post.
 - Responsive screenshots: 320, 390, 760, 1024, and 1440 pixels.
+- The browser workflow also passes with a UTC server and New York browser.
+  Its bootstrap date must match the fixture date, including after UTC midnight.
 - FULL security, performance, correctness, test-quality, and consistency review.
   Confirmed findings were independently verified and fixed. Restoring each of
   four bugs makes its regression fail: reaction counts, reopened draft clearing,

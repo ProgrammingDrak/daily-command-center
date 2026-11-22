@@ -19,6 +19,8 @@ const request=await browser.newContext();
 try {
   const info=await request.request.get(origin+'/api/feedback-review-info').then(r=>r.json());
   assert.equal(info.synthetic,true);
+  const dayState=await request.request.get(origin+'/api/state/day').then(r=>r.json());
+  assert.equal(dayState.date,info.date,'review bootstrap day must match the fixture day across server timezones');
   assert.equal((await request.request.post(origin+'/review/feedback/reset')).status(),200);
   const owner=await page();
   await owner.goto(origin+'/?tab=tasks&view=list',{waitUntil:'domcontentloaded'});
