@@ -663,12 +663,12 @@
     const handle=DCC.overlay.open({kind:'modal',title:'Review queue changes',body,actions:[{label:'Close'}]});
     function show(){
       body.querySelectorAll('section').forEach(section=>section.remove());
+      const titles=new Map((state.queue?.items||[]).map(({task})=>[task.id,task.properties.title]));
       for(const entry of reviewEntries()){
         const id=entry.body.sourceEventId;
-        const item=items().find(row=>row.task.id===entry.body.taskId);
         const completion=entry.body.action==='done';
         const section=document.createElement('section');
-        section.innerHTML='<h3>'+esc(item?.task.properties.title|| (completion?'Task completion':'Reminder dismissal'))+'</h3>'
+        section.innerHTML='<h3>'+esc(titles.get(entry.body.taskId)||(completion?'Task completion':'Reminder dismissal'))+'</h3>'
           +'<p>'+esc(entry.message)+'</p>'
           +'<details><summary>Attempted change</summary><pre>'+esc(JSON.stringify(entry.note?{command:entry.body,notes:entry.note.text}:entry.body,null,2))+'</pre></details>'
           +'<div class="wq-actions">'+(completion?'<button type="button" data-reopen>Review completion</button>':'')
@@ -678,9 +678,16 @@
           control.disabled=true;
           try{
             await refresh();
+            assertActionAccount();
+            const current=reviewEntries().find(review=>review.body.sourceEventId===id);
+            if(!current){
+              if(reviewEntries().length)show();else handle.close('review-dismissed');
+              warn(new Error('This review was dismissed.'));
+              return;
+            }
             // Close the blocking review overlay before opening the shared completion dialog.
             handle.close('review-completion');
-            await openTaskOutcome(entry.body.taskId,{},entry);
+            await openTaskOutcome(current.body.taskId,{},current);
           }catch(error){warn(error);control.disabled=false;}
         });
         section.querySelector('[data-dismiss]').addEventListener('click',()=>{
@@ -873,6 +880,7 @@
     }
     if(item.status==='completed'||props.done||props.status==='done')throw new Error('This task is already completed.');
     if(document.getElementById('done-modal-overlay')?.classList.contains('open'))throw new Error('Finish or close the current task outcome first.');
+    if(savedReview&&!localStorage.getItem(reviewKey(savedReview.body.sourceEventId)))throw new Error('This review was dismissed.');
     await transition('done',item,savedReview);
     if(!document.getElementById('done-modal-overlay')?.classList.contains('open'))throw new Error('The task outcome flow could not open. Refresh and try again.');
     return {opened:true,completed:false,owner:'task'};

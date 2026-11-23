@@ -62,13 +62,15 @@ const revisionChanged=()=>Object.assign(new Error('Revision changed'),{status:40
 
 test('confirmed revision rejection creates one durable replacement before sending it',async()=>{
   const h=harness();
+  let persistedBeforeSend;
   h.onSend(body=>{
     if(body.sourceEventId==='a'){h.ctx.state.revision=2;throw revisionChanged();}
-    assert.deepEqual(h.completionEntries()[0].body,body);
+    persistedBeforeSend={...h.completionEntries()[0].body};
     throw new Error('Response lost');
   });
   h.enqueue('a',0);await turn();
   assert.equal(h.sent.length,2);
+  assert.deepEqual(persistedBeforeSend,h.sent[1]);
   assert.notEqual(h.sent[1].sourceEventId,h.sent[0].sourceEventId);
   assert.equal(h.sent[1].expectedRevision,2);
   assert.equal(h.sent[1].at,h.sent[0].at);

@@ -15,16 +15,16 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function workingQueue() {
-  const store = new Map();
+function workingQueue(saved = {}) {
+  const key = "dcc-working-queue:ws-1:1";
+  const store = new Map(Object.entries(saved).map(([suffix, value]) => [key + suffix, JSON.stringify(value)]));
   const docListeners = {};
   const snapshots = [];
   const posts = [];
-  const key = "dcc-working-queue:ws-1:1";
   class CustomEvent { constructor(type) { this.type = type; } }
   const context = {
     DCC_ACCOUNT_CONTEXT: { userId: 1, workspaceId: "ws-1" },
-    localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) },
+    localStorage: { get length() { return store.size; }, key: (i) => [...store.keys()][i], getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) },
     document: {
       getElementById: () => null,
       addEventListener: (type, fn) => { (docListeners[type] = docListeners[type] || []).push(fn); },
@@ -104,6 +104,24 @@ test("queue sync notifications fire after pending and conflict are updated", asy
   // Clearing is explicit and also notifies with the cleared state.
   q.click("clear-conflict");
   assert.deepEqual(q.snapshots.at(-1), { state: { pending: false, conflict: null }, storedPending: false, storedConflict: false });
+});
+
+test("legacy and newly rejected reminder dismissals are reviewable without a queue-wide conflict", async () => {
+  const legacy = { body: { action: "queue-dismiss", sourceEventId: "old" }, message: "Old dismissal conflict" };
+  const q = workingQueue({ ":conflict": legacy });
+  assert.deepEqual(JSON.parse(q.store.get(q.key + ":review:old")), legacy);
+  assert.equal(q.store.has(q.key + ":conflict"), false);
+  assert.deepEqual(plain(q.wq.syncState()), { pending: false, conflict: { message: legacy.message } });
+
+  const body = { action: "queue-dismiss", sourceEventId: "new", expectedRevision: 0 };
+  const sent = q.wq.send(body);
+  q.posts[0].d.reject(Object.assign(new Error("This check-back is no longer current"), {
+    status: 409, code: "queue_reminder_changed",
+  }));
+  await assert.rejects(sent, { code: "queue_reminder_changed" });
+  assert.deepEqual(JSON.parse(q.store.get(q.key + ":review:new")).body, body);
+  assert.equal(q.store.has(q.key + ":conflict"), false);
+  assert.equal(q.wq.syncState().pending, false);
 });
 
 // ── Recovery rows from shell.js ──
