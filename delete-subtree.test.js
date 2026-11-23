@@ -156,8 +156,9 @@ test("queue deletion and Undo use canonical IDs without changing the viewed day'
   });
   const otherDate = "2026-07-28";
   const ids = ["canonical-parent", "canonical-child"];
-  const deleting = context.deleteQueueTaskWithUndo(ev("shared-local-id", { _blockId: ids[0], date: otherDate }), ids);
-  assert.deepEqual(plain(batches), [[{ op: "delete", id: ids[0] }, { op: "delete", id: ids[1] }]]);
+  const version = "2026-07-28T12:00:00.000Z";
+  const deleting = context.deleteQueueTaskWithUndo(ev("shared-local-id", { _blockId: ids[0], date: otherDate }), ids, new Map(ids.map(id => [id, version])));
+  assert.deepEqual(plain(batches), [ids.map(id => ({ op: "delete", id, expectedUpdatedAt: version }))]);
   const undo = toasts.at(-1).action.onClick();
   assert.equal(restoreBatches.length, 0, "Undo waits for deletion to settle");
   context.window.blockStore.batchOp = () => assert.fail("Undo must use guarded restoration");

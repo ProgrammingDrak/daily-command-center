@@ -499,7 +499,7 @@
   async function deletionPreview(anchor){
     const id=anchor.blockId;
     const date=anchor.date||null;
-    const partition=date?'/api/blocks/range?start='+encodeURIComponent(date)+'&end='+encodeURIComponent(date):'/api/blocks?type=block';
+    const partition=date?'/api/blocks/range?start='+encodeURIComponent(date)+'&end='+encodeURIComponent(date):'/api/blocks?type=block&undated=1';
     const rows=await DCC.api(partition,{cache:'no-store'});
     assertActionAccount();
     const scope=rows.filter(row=>(row.date||null)===date&&!row.deleted_at);
@@ -513,14 +513,15 @@
     const task=byId.get(id);
     if(!task)throw new Error('This task is no longer available. Refresh the queue.');
     const members=[task,...DCC.TaskModel.descendantsOf(id,pool)];
-    const ids=members.map(member=>member.id).sort();
+    const versions=new Map(members.map(member=>[member.id,member.__unf.sourceBlock.updated_at]));
+    const ids=[...versions.keys()].sort();
     if(members.some(member=>member.__unf.sourceBlock.properties.startedAt)){
       throw new Error('Pause the active timer before deleting this task.');
     }
     if(completionEntries().some(entry=>ids.includes(entry.body.taskId))){
       throw new Error('Wait for the task completion to finish saving.');
     }
-    return {task,ids,date};
+    return {task,ids,date,versions};
   }
   let openingDelete=false;
   async function openDelete(id,opener){
@@ -528,11 +529,11 @@
     openingDelete=true;
     try {
       const anchor=await prepareTask(id);
-      if(anchor.ev.repeatMode==='scheduled'&&window.openScheduledOccurrenceActions){
-        await window.openScheduledOccurrenceActions(anchor.ev);
+      const preview=await deletionPreview(anchor);
+      if(preview.task.repeatMode==='scheduled'&&window.openScheduledOccurrenceActions){
+        await window.openScheduledOccurrenceActions(preview.task);
         return;
       }
-      const preview=await deletionPreview(anchor);
       const count=preview.ids.length-1;
       const consequence=count?' and '+count+' '+(count===1?'nested task':'nested tasks'):'';
       const body=form('<p>Delete <strong>'+esc(preview.task.title)+'</strong>'+consequence+' from DCC?</p><p>Undo is available after deleting.</p>');
@@ -546,11 +547,11 @@
           busy=true;
           try{
             const current=await deletionPreview(await prepareTask(id));
-            if(current.date!==preview.date||current.task.title!==preview.task.title||
+            if(current.date!==preview.date||current.task.title!==preview.task.title||current.task.repeatMode!==preview.task.repeatMode||
                 JSON.stringify(current.ids)!==JSON.stringify(preview.ids)){
               throw new Error('This task or its nested tasks changed. Reopen Delete task to review.');
             }
-            const result=await window.deleteQueueTaskWithUndo({...current.task,date:current.date},current.ids);
+            const result=await window.deleteQueueTaskWithUndo({...current.task,date:current.date},current.ids,current.versions);
             if(!result?.ok&&!result?.buffered)throw new Error(result?.error?.message||'Could not confirm deletion.');
             invalidate();
             return true;

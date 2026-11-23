@@ -2071,13 +2071,14 @@ async function deleteTaskWithUndo(id){
   }
   return _submitTaskDelete({id,ev,ids,members,undoDate});
 }
-function deleteQueueTaskWithUndo(task,ids){
+function deleteQueueTaskWithUndo(task,ids,versions){
   return _submitTaskDelete({
     id:task._blockId,ev:task,ids,undoDate:task.date||null,canonicalOnly:true,
-    members:ids.map(id=>({id,overlayId:id}))
+    members:ids.map(id=>({id,overlayId:id,expectedUpdatedAt:versions.get(id)}))
   });
 }
 async function _submitTaskDelete({id,ev,ids,members,undoDate,canonicalOnly=false}){
+  if(canonicalOnly&&members.some(member=>!member.expectedUpdatedAt))throw new Error("Could not verify the current task version.");
   const deleteMutationId=typeof crypto!=="undefined"&&crypto.randomUUID?crypto.randomUUID():"delete-"+Date.now()+"-"+Math.random();
   const accountKey=_deleteUndoStorageKey();
   const blockIds=members.map(member=>member.id);
@@ -2095,9 +2096,11 @@ async function _submitTaskDelete({id,ev,ids,members,undoDate,canonicalOnly=false
     // batchOp does not reject today, but undoDeleteTask decides what to do from this
     // value, and "undefined" would read as "landed fine".
     const restoring=[...new Set(blockIds.map(bid=>_deleteUndoRestores.get(bid)).filter(Boolean))];
-    const write=()=>window.blockStore.batchOp(blockIds.map(bid=>({op:"delete",id:bid,deleteMutationId})));
+    const write=()=>window.blockStore.batchOp(members.map(({id,expectedUpdatedAt})=>({
+      op:"delete",id,deleteMutationId,...(canonicalOnly?{expectedUpdatedAt}:{})
+    })));
     deletePromise=(restoring.length?Promise.all(restoring).then(write):write())
-      .catch(()=>({blocks:[],buffered:true}));
+      .catch(error=>canonicalOnly?{ok:false,buffered:false,error:{message:error.message}}:{blocks:[],buffered:true});
   }
   _stashUndoSnapshot(id,{ids,blockIds,members,date:undoDate,overlayBlockId:canonicalOnly?undefined:window.blockStore?.getDayRootId?.(),canonicalOnly,deleteMutationId,state:"deleted",deletePromise});
   // Offer Undo without waiting for the round-trip, so the affordance is as instant as
