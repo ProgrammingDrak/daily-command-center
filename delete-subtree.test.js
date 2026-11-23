@@ -150,6 +150,28 @@ function makeDay({ scheduled, rows = {}, alreadyDeleted = [], deferDelete = fals
   };
 }
 
+test("queue deletion and Undo use canonical IDs without changing the viewed day's overlay", async () => {
+  const { context, batches, toasts, deleteTokens, restoreBatches, deletedSet, releaseDelete } = makeDay({
+    scheduled: [ev("shared-local-id")], deferDelete: true
+  });
+  const otherDate = "2026-07-28";
+  const ids = ["canonical-parent", "canonical-child"];
+  const deleting = context.deleteQueueTaskWithUndo(ev("shared-local-id", { _blockId: ids[0], date: otherDate }), ids);
+  assert.deepEqual(plain(batches), [[{ op: "delete", id: ids[0] }, { op: "delete", id: ids[1] }]]);
+  const undo = toasts.at(-1).action.onClick();
+  assert.equal(restoreBatches.length, 0, "Undo waits for deletion to settle");
+  context.window.blockStore.batchOp = () => assert.fail("Undo must use guarded restoration");
+  // The pending deletion is still held by the original writer.
+  assert.equal(deletedSet.size, 0);
+  releaseDelete();
+  await deleting;
+  await undo;
+  assert.deepEqual(plain(restoreBatches[0].ids), ids);
+  assert.equal(restoreBatches[0].meta.deleteMutationId, deleteTokens[0][0]);
+  assert.equal(restoreBatches[0].meta.date, otherDate);
+  assert.equal(deletedSet.size, 0);
+});
+
 // ── _subtreeIdsOf ──
 
 test("a leaf task is its own whole subtree", () => {
