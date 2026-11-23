@@ -2,7 +2,7 @@
 module.exports = function seedTaskDetailReview(store, date) {
   const now=new Date().toISOString();
   const add=(id,properties,day=date)=>store.set(id,{id,type:'block',date:day,parent_id:null,properties,created_at:now,updated_at:now,deleted_at:null});
-  add('review-detail-task',{local_id:'review-detail-task',title:'Prepare the project handoff with the revised launch notes',type:'task',start:'10:00',end:'10:30',duration:30,tags:[],priority:'High'});
+  add('review-detail-task',{local_id:'review-detail-task',title:'Prepare the project handoff with the revised launch notes',type:'task',start:'10:00',end:'10:30',duration:30,tags:[],priority:'High',sourceReferences:[{kind:'link',name:'Project brief',url:'https://example.test/project-brief'}]});
   add('review-detail-step',{local_id:'review-detail-step',title:'Attach the latest mockups',type:'task',subtaskOf:'review-detail-task',start:'10:00',end:'10:00',duration:0});
   add('review-workout',{local_id:'review-workout',title:'Strength session',type:'workout',start:'11:00',end:'11:45',duration:45,description:'Plan: three sets of eight squats, then a ten-minute walk.'});
   add('review-meal',{local_id:'review-meal',title:'Lunch',type:'meal',start:'12:00',end:'12:30',duration:30,description:'Plan: a bowl of rice, vegetables and tofu.'});

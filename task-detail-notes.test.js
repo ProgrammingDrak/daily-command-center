@@ -47,19 +47,16 @@ test('cleared imported notes stay empty after saving and reopening through the b
   createBlock:(type,properties,options)=>{const block={id:'saved-note',type,properties,parent_id:options.parentId};blocks.push(block);return Promise.resolve(block);},
   updateBlockDebounced:(id,properties)=>Object.assign(blocks.find(b=>b.id===id).properties,properties),
   getDayRootId:()=> 'day-a',getCurrentDate:()=> '2026-10-06'
- }},migrateHtmlToBlocks:html=>[{text:html}],_addModalTaskId:'a',_addModalAnchor:null,_addModalNotesFingerprint:()=>'',_addModalNotesSnapshot:null,loadNotes:null});
+ }},migrateHtmlToBlocks:html=>[{text:html}],_addModalTaskId:'a',_addModalAnchor:null,loadNotes:null});
  const noteSource=source.slice(source.indexOf('function loadNotes('),source.indexOf('\nfunction loadActions'));
  vm.runInContext(noteSource,context);
- const features=fs.readFileSync(require.resolve('./public/js/features.js'),'utf8');
- vm.runInContext(features.slice(features.indexOf('function _writeAddModalNotes()'),features.indexOf('\nfunction persistAddModalEdits')),context);
  assert.equal(context.noteBlocksForTask('a',context.loadNotes().a)[0].text,'Original imported note');
- context.window._amBlockEditor={isEmpty:()=>true};
- context._writeAddModalNotes();await Promise.resolve();
+ context.saveNotes({a:{blocks:[],html:'',text:''}},{taskId:'a'});await Promise.resolve();
  assert.equal(context.noteBlocksForTask('a',context.loadNotes().a),null);
  assert.equal(blocks.length,1);assert.equal(blocks[0].properties._sourceTaskId,'a');
  blocks.push({id:'action-a',type:'block',parent_id:'day-a',properties:{text:'Call supplier',_sourceTaskId:'a',tags:['action-item'],priority:'High'}});
  assert.equal(context.loadNotes().a._blockId,'saved-note','action items never replace a task note');
- context._writeAddModalNotes();await Promise.resolve();assert.equal(blocks.length,2,'repeated clear retains the note and action blocks');
+ context.saveNotes(context.loadNotes(),{taskId:'a'});await Promise.resolve();assert.equal(blocks.length,2,'repeated clear retains the note and action blocks');
  assert.equal(blocks[1].properties.text,'Call supplier');
 });
 

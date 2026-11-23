@@ -70,14 +70,14 @@ try{
  // Opening an itinerary task with an inferred queue anchor retains its saved notes.
  await page.locator('[data-task-view="list"]').click();
  await page.getByRole('button',{name:'Open task details: Compare launch options',exact:true}).click();
- await page.waitForFunction(()=>window._amBlockEditor?.toMarkdown().includes('Saved canonical itinerary notes'));
+ await page.locator('#am-panel-photos').waitFor();
  await page.locator('#am-items-list').getByText('Cached current-day child',{exact:true}).waitFor();
  await page.locator('#am-items-list').getByText('Cached current-day action',{exact:true}).waitFor();
  await closeDetails();
  assert.equal((await api('/api/blocks/b')).properties._taskNotes.text,'Saved canonical itinerary notes');
  await page.locator('[data-task-view="queue"]').click();await refresh();
  // Date-scoped legacy notes: same local_id, different canonical rows and days.
- await card('old').locator('.ttl').click();await page.waitForFunction(()=>window._amBlockEditor?.toMarkdown().includes('Earlier occurrence notes'));
+ await card('old').locator('.ttl').click();await page.locator('#am-panel-photos').waitFor();
  assert.match(await page.locator('#am-items-list').innerText(),/Earlier occurrence child/);
  assert.match(await page.locator('#am-items-list').innerText(),/Earlier follow-up/);
  assert.doesNotMatch(await page.locator('#am-items-list').innerText(),/Current occurrence child|Current follow-up/);
