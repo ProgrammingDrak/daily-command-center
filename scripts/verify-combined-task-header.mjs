@@ -35,7 +35,14 @@ try{
   await page.locator('#day-progress-title').click();
   await page.waitForSelector('#ptrack button');await page.waitForSelector('#pactual button');
   await page.evaluate(()=>document.fonts.ready);
-  const card=page.locator('[data-queue-id="combined-focus"]'),before=await card.boundingBox();
+  const card=page.locator('[data-queue-id="combined-focus"]');
+  // Hydration can briefly hide the workspace after the earlier selector wait.
+  // Read and validate the initial dimensions together, before comparing pause.
+  const before=await page.waitForFunction(()=>{
+   const card=document.querySelector('[data-queue-id="combined-focus"]');
+   const rect=card?.getBoundingClientRect();
+   return rect?.width>0&&rect?.height>0?{width:rect.width,height:rect.height}:null;
+  }).then(handle=>handle.jsonValue());
   snapshot=paused;await page.evaluate(()=>DCCWorkingQueue.refresh());await card.locator('.wq-break-veil').waitFor();
   const m=await page.evaluate(()=>{
    const rect=node=>{const r=node.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
