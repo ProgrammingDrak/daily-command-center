@@ -41,15 +41,15 @@ test('Waiting badge counts overdue check-ins, while its list includes open snooz
   const v = M.project(s, undefined, options);
   const q = v.queues.find(q => q.id === 'waiting');
   assert.equal(q.count, 1); assert.equal(q.rows.length, 4);
-  assert.deepEqual(ids(v.queues.find(q => q.id === 'loose').rows), ['waiting:overdue']);
+  assert.deepEqual(ids(v.queues.find(q => q.id === 'loose').rows), []);
 });
-test('Loose Ends preserves origin-day completion overlays and deduplicates Waiting review entries', () => {
+test('Loose Ends preserves origin-day completion overlays and excludes Waiting review entries', () => {
   const s = snapshot([root({ _dismissed: { dismissed: true }, _triageDeleted: ['deleted'] })]);
   s.globals = [task('wait', { kind: 'delegated_item', checkInDate: '2026-10-22' }, { date: null })];
   s.dayState.triage = { open_items: ['review', 'dismissed', 'deleted', 'suppressed'].map(id => ({ id, title: id })).concat({ id: 'waiting-review', waiting_item_id: 'wait' }), suppressed_items: [{triage_id:'suppressed',reason:'done'}] };
   const carry = { rows: [task('old', { local_id: 'alias' }, { date:'2026-10-20' }), task('open', {}, {date:'2026-10-23'})], overlays: { '2026-10-20': {done:['alias']} } };
   const v = M.project(s, carry, options), q=v.queues.find(q=>q.id==='loose');
-  assert.deepEqual(ids(q.rows), ['open','waiting:wait','triage:review']); assert.equal(q.count,3); assert.equal(v.unpreparedSources,1);
+  assert.deepEqual(ids(q.rows), ['open','triage:review']); assert.equal(q.count,2); assert.equal(v.unpreparedSources,1);
 });
 test('all-day events spanning the viewed day remain visible, empty queues remain explicit', () => {
   const v=M.project(snapshot([task('trip',{all_day:true,all_day_end:'2026-10-26'},{date:'2026-10-23'})]),undefined,options);

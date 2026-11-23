@@ -836,6 +836,13 @@
     });
   }
 
+  // Waiting check-in drafts belong to Waiting, including orphaned or snoozed cycles.
+  function selectLooseEndsTriage(items) {
+    return _arr(items).filter(item => item && !item.waiting_item_id &&
+      ![item.source, item.type].some(value => String(value || "").replace(/-/g, "_") === "waiting_checkin") &&
+      !/^waiting-checkin:/.test(String(item.id || "")));
+  }
+
   // ── selectCarryover: the open rows of a carryover pool ──
   //
   // A past-day row's completion is NOT `isDone(ev)` (that reads TODAY's registry) —
@@ -843,8 +850,10 @@
   // `unfinished-tasks.js openRows` delegates here so the carryover lane, the Catch
   // up modal and the morning prompt keep sharing ONE definition; this is its home,
   // not a second copy.
-  function selectCarryover(pool) {
-    const list = normalizeCollection(pool);
+  function selectCarryover(pool, opts) {
+    const normalized = normalizeCollection(pool);
+    const parked = waitingParkedIds(normalized, opts && opts.waitingRows);
+    const list = normalized.filter(ev => !parked.has(String(ev.id)));
     const byId = new Map(list.map(ev => [ev.id, ev]));
     const included = new Set();
     for (const ev of list) {
@@ -1024,7 +1033,7 @@
     // FAIL CLOSED. The old form was `(dateStr && today && dateStr !== today) ? [] : collect`,
     // which meant a caller passing a carryoverPool but no `today` got the full pool on EVERY
     // date -- the exact opposite of the documented today-only rule.
-    const carryover = (opts.today && dateStr === opts.today) ? selectCarryover(opts.carryoverPool) : [];
+    const carryover = (opts.today && dateStr === opts.today) ? selectCarryover(opts.carryoverPool, opts) : [];
 
     return {
       visible: visible,
@@ -1157,6 +1166,7 @@
     selectTopLevel: selectTopLevel,
     selectOpenTopLevel: selectOpenTopLevel,
     selectCarryover: selectCarryover,
+    selectLooseEndsTriage,
     selectRoots: selectRoots,
     selectDay: selectDay,
     selectTree: selectTree

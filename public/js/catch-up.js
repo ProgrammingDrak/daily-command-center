@@ -86,11 +86,6 @@
     if (typeof __todayDate === "string" && __todayDate) return __todayDate;
     return new Date().toISOString().slice(0, 10);
   }
-  function nextDayStr() {
-    const date = new Date(todayStr() + "T12:00:00Z");
-    date.setUTCDate(date.getUTCDate() + 1);
-    return date.toISOString().slice(0, 10);
-  }
   // Both predicates come from DCC.Carryover, the same place the projection and the
   // actions do. They used to be local copies here, which is how "this prompt has to
   // agree with the lane" became a comment instead of an invariant: the lane spelled
@@ -281,9 +276,6 @@
     const overlay = ensureModal();
     const roots = rootsOf(pool);
     const triage = cfg.triage || [];
-    const waiting = cfg.waiting || [];
-    const waitingTriage = cfg.waitingTriage || [];
-    const waitingDraftById = new Map(waitingTriage.map(item => [String(item.waiting_item_id || ""), item]));
     const slack = triage.filter(item => triageLane(item) === "slack");
     const gmail = triage.filter(item => triageLane(item) === "gmail");
     const otherTriage = triage.filter(item => triageLane(item) === "other");
@@ -299,10 +291,8 @@
     const taskPhrase = roots.length + " unfinished task" + (roots.length === 1 ? "" : "s") +
       " from the last two weeks" + (total > openCount ? " (showing " + openCount + " of " + total + ")" : "");
     const triagePhrase = triage.length + " Sweep item" + (triage.length === 1 ? "" : "s") + " waiting";
-    const waitingPhrase = waiting.length + " Waiting item" + (waiting.length === 1 ? "" : "s") + " due for a decision";
     const phrases = [];
     if (roots.length) phrases.push(taskPhrase);
-    if (waiting.length) phrases.push(waitingPhrase);
     if (triage.length) phrases.push(triagePhrase);
     hintEl.textContent = phrases.join(phrases.length > 2 ? ", " : " and ") +
       ". Handle what matters now, or close this and come back from the reminder above.";
@@ -310,10 +300,8 @@
 
     const rowEls = new Map();   // unfinished rows, keyed by ev.id
     const triEls = new Map();   // triage rows, keyed by triage item id
-    const waitingEls = new Map(); // Waiting rows, keyed by global item id
     const activeReviewRows = new Set();
     const taskRows = [];
-    const waitingRows = [];
     const slackRows = [];
     const gmailRows = [];
     const otherRows = [];
@@ -323,7 +311,7 @@
     // "older waiting" line still counts as something to answer — closing over it
     // would hide the queue it exists to advertise.
     let olderPending = olderTriage.length > 0;
-    const pendingDomCount = () => rootsOf(pool.filter(ev=>rowEls.has(ev.id))).length + waitingEls.size + triEls.size + (olderPending ? olderTriage.length : 0);
+    const pendingDomCount = () => rootsOf(pool.filter(ev=>rowEls.has(ev.id))).length + triEls.size + (olderPending ? olderTriage.length : 0);
     const updateCount = () => setIndicatorCount(pendingDomCount());
     _activeTaskActionCount=updateCount;
     const closeIfDrained = () => {
@@ -393,20 +381,12 @@
     const addTriageRow = (item, before) => {
       const title = item.title || "Untitled";
       const detailId = "cu-triage-details-" + (++detailSeq);
-      // Delegated check-ins wear the shared --waiting look here too: the recap envelope
-      // lists the same reminders the itinerary strip does, and "Drop" on one of them
-      // drops the REMINDER, never the delegated task (triage.js isWaitingCheckIn).
-      const isCheckIn = typeof isWaitingCheckIn === "function" && isWaitingCheckIn(item);
-      const checkInPill = isCheckIn
-        ? '<span class="waiting-pill checkin" title="Check-in reminder: this handles the reminder only. The delegated task stays open in Waiting.">&#128276; Check-in</span>'
-        : "";
       const safe = (window.DCC && window.DCC.safeUrl) || (() => "");
       const href = safe(item.draft_link || item.draft_url) || safe(item.link || item.source_url);
       const ev = window.DCC.TaskModel.fromTriageItem(item);
       const el = reviewRow(ev, {
-        extraClass: "cu-triage-row" + (isCheckIn ? " cu-waiting-checkin waiting-checkin-card" : ""),
-        barColor: isCheckIn ? "var(--waiting)" : "var(--amber)",
-        titleExtrasHtml: checkInPill,
+        extraClass: "cu-triage-row",
+        barColor: "var(--amber)",
         metaHtml: '<span>' + esc(triageMeta(item)) +
           (href ? ' · <a class="cu-tri-link" href="' + esc(href) + '" target="_blank" rel="noopener">Open</a>' : '') + '</span>',
         detailId,
@@ -493,94 +473,6 @@
       cfg._olderButton = more;
     }
 
-    waiting.forEach(item => {
-      const api = window.DCC && window.DCC.Waiting;
-      if (!api) return;
-      const p = item.properties || {};
-      const task = p.myTask || p.title || "Waiting task";
-      const detailId = "cu-waiting-details-" + (++detailSeq);
-      const draft = waitingDraftById.get(String(item.id));
-      const safe = (window.DCC && window.DCC.safeUrl) || (() => "");
-      const draftHref = draft && safe(draft.draft_link || draft.draft_url);
-      const sourceHref = draft && safe(draft.link || draft.source_url);
-      const reviewHref = draftHref || sourceHref;
-      const shouldCopyDraft = !!(draft && draft.draft_preview && !draftHref);
-      const urgency = api.itemUrgency(item);
-      const blocker = api.blockerLabel(item);
-      const ev = window.DCC.TaskModel.fromBlock(item);
-      ev.title = task;
-      const el = reviewRow(ev, {
-        extraClass: "cu-waiting-row waiting-checkin-card",
-        barColor: "var(--waiting)",
-        metaHtml: '<span>' + esc(blocker + " · " + api.dueLabel(item) + " · urgency " + urgency.score) + '</span>',
-        detailId,
-        onComplete: () => runWaiting(() => api.completeCheckIn(item.id)),
-        onDate: date => runWaiting(() => api.snooze(item.id, date)),
-        dateHeader: 'Snooze "' + task + '" until…',
-        dateAction: "Snooze",
-        onToday: trigger => api.scheduleCheckIn(item.id, trigger, forget, todayStr()),
-        onDelete: () => runWaiting(() => api.snooze(item.id, nextDayStr())),
-        deleteLabel: "Dismiss until tomorrow",
-        onDetails: () => toggleDetails()
-      });
-      const titleEl = el.querySelector(".ttl");
-      const detailsToggle = titleEl;
-      const details = el.querySelector(".cu-details");
-      const detailBody = el.querySelector(".cu-details-body");
-      titleEl.textContent = task;
-      titleEl.title = task;
-      details.hidden = true;
-      detailsToggle.setAttribute("aria-expanded", "false");
-      detailsToggle.setAttribute("aria-controls", detailId);
-      el.querySelector(".cu-details-full-title").textContent = task;
-      appendDetailSection(detailBody, "Waiting on", [blocker]);
-      appendDetailSection(detailBody, "Context", [p.notes]);
-      appendDetailSection(detailBody, "Check-in draft", [draft && draft.draft_preview]);
-      const detailActions = document.createElement("div");
-      detailActions.className = "carryover-row-actions cu-wait-detail-actions";
-      detailActions.innerHTML =
-        (reviewHref ? '<a class="carryover-btn carryover-btn-schedule cu-wait-draft' + (shouldCopyDraft ? ' cu-wait-copy' : '') + '" target="_blank" rel="noopener">Review and Send</a>' :
-          (draft && draft.draft_preview ? '<button class="carryover-btn carryover-btn-schedule cu-wait-copy">Copy Draft</button>' : '')) +
-        '<button class="carryover-btn cu-wait-schedule">Schedule check-in</button>' +
-        '<button class="carryover-btn carryover-btn-schedule cu-wait-unblock">Unblock</button>';
-      detailBody.appendChild(detailActions);
-      const toggleDetails = () => {
-        const opening = details.hidden;
-        details.hidden = !opening;
-        detailsToggle.setAttribute("aria-expanded", opening ? "true" : "false");
-        detailsToggle.setAttribute("aria-label", (opening ? "Hide" : "Show") + " details for " + task);
-        el.classList[opening ? "add" : "remove"]("details-open");
-      };
-      const busy = on => el.querySelectorAll("button").forEach(button => { button.disabled = !!on; });
-      const forget = () => forgetRow(el, waitingEls, item.id);
-      const runWaiting = async fn => { busy(true); if (await fn()) forget(); else busy(false); };
-      el.querySelector(".cu-wait-schedule").addEventListener("click", event => api.scheduleCheckIn(item.id, event.currentTarget, forget));
-      el.querySelector(".cu-wait-unblock").addEventListener("click", () => runWaiting(() => api.unblock(item.id)));
-      const draftLink = el.querySelector(".cu-wait-draft");
-      if (draftLink) draftLink.href = reviewHref;
-      const copy = el.querySelector(".cu-wait-copy");
-      if (copy) copy.addEventListener("click", async event => {
-        const sourceToOpen = sourceHref && !draftHref ? sourceHref : "";
-        if (sourceToOpen && event && typeof event.preventDefault === "function") event.preventDefault();
-        const pending = sourceToOpen && typeof window.open === "function" ? window.open("about:blank", "_blank") : null;
-        if (pending) pending.opener = null;
-        const copied = await api.copyText(draft.draft_preview);
-        if (typeof showToast === "function") showToast(copied ? "Check-in draft copied" : "Could not copy draft", copied ? "success" : "error");
-        if (!copied) {
-          if (pending && typeof pending.close === "function") pending.close();
-          return;
-        }
-        if (pending) pending.location.href = sourceToOpen;
-        else if (sourceToOpen && typeof window.open === "function") {
-          const opened = window.open(sourceToOpen, "_blank", "noopener");
-          if (!opened && typeof showToast === "function") showToast("Draft copied, but the source could not be opened. Allow popups and try again.", "info");
-        }
-      });
-      waitingEls.set(item.id, el);
-      activeReviewRows.add(el);
-      waitingRows.push(el);
-    });
-
     const taskNodes=window.DCC.TaskModel.selectTree(openOf(pool),{isCollapsed:()=>false});
     taskNodes.forEach((node, index) => {
       const ev=node.ev;
@@ -646,7 +538,6 @@
       rows.forEach(row => listEl.appendChild(row));
     };
     appendRows("Slipped tasks", taskRows);
-    appendRows("Waiting", waitingRows);
     appendRows("Slack", slackRows);
     appendRows("Gmail", gmailRows);
     appendRows("Other", otherRows);
@@ -730,7 +621,7 @@
   // Only actionable work contributes to this queue.
   function snapshotCount(snapshot) {
     if (!snapshot) return 0;
-    return rootsOf(snapshot.res.rows).length + snapshot.waiting.length + snapshot.triage.length;
+    return rootsOf(snapshot.res.rows).length + snapshot.triage.length;
   }
 
   async function collectSnapshot() {
@@ -738,15 +629,9 @@
     if (!CO) return null;
     const results = await Promise.allSettled([CO.collect()]);
     const failed = results.some(result => result.status === "rejected" || result.value?.failed === true);
-    const waiting = typeof window.getAttentionWaitingItems === "function" ? window.getAttentionWaitingItems() : [];
-    const waitingIds = new Set(waiting.map(item => String(item.id)));
-    const allTriage = activeTriage();
-    const waitingTriage = allTriage.filter(item => waitingIds.has(String(item.waiting_item_id || "")));
     const snapshot = {
       res: results[0].status === "fulfilled" ? results[0].value : (_lastSnapshot ? _lastSnapshot.res : { rows: [], total: 0 }),
-      waiting,
-      waitingTriage,
-      triage: allTriage.filter(item => !waitingIds.has(String(item.waiting_item_id || ""))),
+      triage: window.DCC.TaskModel.selectLooseEndsTriage(activeTriage()),
       failed: failed
     };
     _lastSnapshot = snapshot;
@@ -754,22 +639,15 @@
     return snapshot;
   }
 
-  // Read-only owner projection. Waiting reminders and source triage are not
-  // ordinary task completions: retain their kind and their owner's action ID.
+  // Read-only owner projection. Retain each source's kind and action identity.
   async function glassesTasks() {
     const snapshot=await collectSnapshot();
     if(!snapshot||snapshot.failed)throw new Error('Loose Ends could not be refreshed');
     const describe=(kind,actionId,ev,row,extra={})=>({kind,id:kind+':'+actionId,actionId,ev,row,title:ev.title,...extra});
     const tasks=rootsOf(snapshot.res.rows).map(ev=>describe('task',ev.__unf?.sourceId||ev._blockId||ev.id,ev,ev.__unf?.sourceBlock||null,{pool:snapshot.res.rows}));
-    const drafts=new Map(snapshot.waitingTriage.map(row=>[String(row.waiting_item_id||''),row]));
-    const waiting=snapshot.waiting.map(row=>{
-      const ev=window.DCC.TaskModel.fromBlock(row);
-      ev.title=row.properties?.myTask||row.properties?.title||'Waiting task';
-      return describe('waiting',row.id,ev,row,{draft:drafts.get(String(row.id))||null});
-    });
     const triage=['slack','gmail','other'].flatMap(lane=>snapshot.triage.filter(row=>triageLane(row)===lane))
       .map(row=>describe('triage',row.id,window.DCC.TaskModel.fromTriageItem(row),row));
-    const rows=tasks.concat(waiting,triage);
+    const rows=tasks.concat(triage);
     // Preserve the owner's bounded-lookback metadata instead of implying that
     // the current Loose Ends scan is the entire historical task universe.
     rows.truncated=!!snapshot.res.truncated;
@@ -785,8 +663,6 @@
     if ((opts.open || wasOpen) && snapshotCount(snapshot)) {
       openPrompt(snapshot.res.rows, snapshot.res.total, {
         triage: snapshot.triage,
-        waiting: snapshot.waiting,
-        waitingTriage: snapshot.waitingTriage,
         loadFailed: snapshot.failed,
         focus: opts.focus
       });
@@ -820,7 +696,7 @@
     // banking it here is what stops the courier from running the pet at page load
     // for mail Drake has already been shown.
     const courier = window.DCC && window.DCC.TriageCourier;
-    if (courier && typeof courier.markSeen === "function") courier.markSeen(triage.concat(snapshot.waitingTriage).map(i => i.id));
+    if (courier && typeof courier.markSeen === "function") courier.markSeen(activeTriage().map(i => i.id));
     // Gate on OPEN rows, not raw rows: a pool made up entirely of done children is
     // nothing to catch up on, and prompting on it opened an empty-feeling modal.
     if (!snapshotCount(snapshot)) {
@@ -840,17 +716,13 @@
     const CO = window.DCC && window.DCC.Carryover;
     if (!CO) return false;
     const ids = new Set(newIds || []);
-    const waiting = typeof window.getAttentionWaitingItems === "function" ? window.getAttentionWaitingItems() : [];
-    const waitingIds = new Set(waiting.map(item => String(item.id)));
-    const rawTriage = activeTriage();
-    const waitingTriage = rawTriage.filter(item => waitingIds.has(String(item.waiting_item_id || "")));
-    const all = rawTriage.filter(item => !waitingIds.has(String(item.waiting_item_id || "")));
+    const all = window.DCC.TaskModel.selectLooseEndsTriage(activeTriage());
     const fresh = all.filter(i => ids.has(i.id));
     if (!fresh.length) return false;
     let res = { rows: [], total: 0 };
     let loadFailed = false;
     try { res = await CO.collect(); } catch (e) { loadFailed = true; }
-    _lastSnapshot = { res, triage: all, waiting, waitingTriage, failed: loadFailed };
+    _lastSnapshot = { res, triage: all, failed: loadFailed };
     setIndicatorCount(snapshotCount(_lastSnapshot));
     if (typeof showToast === "function") showToast(fresh.length + " new Loose End" + (fresh.length === 1 ? "" : "s"), "info");
     return true;

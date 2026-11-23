@@ -474,7 +474,7 @@
 
   function isSnoozed(item) { return window.DCC.TaskQueues.waitingRules({today:todayStr(),scoreClass:score=>window.urgency.scoreClass(score)}).isSnoozed(item); }
 
-  // Waiting enters Loose Ends as soon as its urgency reaches 70 percent.
+  // Attention remains within Waiting as urgency reaches 70 percent.
   function attentionItems(items) { return window.DCC.TaskQueues.waitingRules({today:todayStr(),scoreClass:score=>window.urgency.scoreClass(score)}).attentionItems(items); }
 
   function blockerLabel(item) {
