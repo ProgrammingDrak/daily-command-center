@@ -88,6 +88,18 @@ jobs:
           node scripts/verify-day-progress-loading.mjs
           node scripts/verify-progress-bars.mjs
           node scripts/verify-combined-task-header.mjs
+      - name: Verify shared daily itinerary feedback
+        run: |
+          DCC_ITINERARY_FEEDBACK_REVIEW=1 PORT=8117 node scripts/ui-review-server.mjs > feedback-server.log 2>&1 &
+          feedback_pid=$!
+          trap 'kill "$feedback_pid" 2>/dev/null || true' EXIT
+          ok=""
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8117/api/health >/dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          if [ -z "$ok" ]; then cat feedback-server.log; exit 1; fi
+          CHROME_PATH="$(node -e 'process.stdout.write(require("playwright-core").chromium.executablePath())')" node scripts/verify-itinerary-feedback.mjs
       - name: Verify journal notebook tools and persistence
         run: CHROME_PATH="$(node -e 'process.stdout.write(require("playwright-core").chromium.executablePath())')" node scripts/verify-journal-notebook.cjs
       - name: Verify synthetic login return paths

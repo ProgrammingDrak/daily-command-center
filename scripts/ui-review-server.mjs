@@ -39,6 +39,10 @@ const { default: glassesLaunch } = await import("../lib/glasses-launch.js");
 app.get(["/glasses", "/glasses.html"], glassesLaunch);
 const { default: glassesShell } = await import("../lib/glasses-shell.js");
 app.get(["/", "/index.html"], glassesShell(root));
+if (process.env.DCC_ITINERARY_FEEDBACK_REVIEW === "1") {
+  const { default: mountFeedbackReview } = await import("./itinerary-feedback-review-backend.cjs");
+  await mountFeedbackReview(app);
+}
 if (process.env.DCC_REVIEW_COMMITMENTS === "1") {
   const { default: mountCommitmentReview } = await import("./commitment-review-backend.js");
   await mountCommitmentReview(app);

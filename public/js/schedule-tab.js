@@ -1107,8 +1107,8 @@ function buildListView(){
     shareButton.type = "button";
     shareButton.className = "it-list-ctrl-btn";
     shareButton.textContent = "Share Itinerary";
-    shareButton.title = "Copy a link to the public tasks on this day";
-    shareButton.addEventListener("click", () => DCC.ItineraryShare.copy(viewDate,shareButton));
+    shareButton.title = "Share this day for task comments and reactions";
+    shareButton.addEventListener("click", () => DCC.ItineraryShare.manage(viewDate,shareButton));
     workListHeader.appendChild(shareButton);
     DCC.ItineraryShare.openDay(viewDate);
   }

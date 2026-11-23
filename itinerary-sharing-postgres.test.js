@@ -49,10 +49,42 @@ test("day links persist, scope guest data and preserve nested contributions", {
     const initial=await read();
     assert.deepEqual(initial.stops.map(task=>task.id),["coffee"]);
     assert.equal(JSON.stringify(initial).includes("private notes"),false);
+    await db.blockDB.createBlock({id:'same-day',type:'block',workspace_id:'ws-1',user_id:1,date:day,properties:{title:'Same-day public task',kind:'task',type:'task',publicVisibility:'public'}});
     const contribute=(action,extra={})=>request(api+"/contributions","POST",{action,blockId:"coffee",name:"Guest",text:"Hello",...extra});
+    for(const reaction of ['heart','clap','celebrate']) {
+      const operationId=require('node:crypto').randomUUID();
+      const responses=await Promise.all([contribute('like',{reaction,operationId}),contribute('like',{reaction,operationId})]);
+      assert.deepEqual(responses.map(res=>res.status).sort(),[200,201]);
+      assert.equal((await read()).stops[0].reactions[reaction],1);
+      assert.equal((await contribute('like',{reaction,operationId,blockId:'next'})).status,409);
+      assert.equal((await contribute('like',{reaction,operationId,blockId:'same-day'})).status,409);
+      assert.equal((await read()).stops.find(task=>task.id==='same-day').reactions[reaction],0);
+    }
+    assert.equal((await contribute('like',{reaction:'<script>'})).status,400);
+    assert.equal((await contribute('like',{operationId:{id:'bad'}})).status,400);
+    assert.equal((await contribute('complete')).status,400);
     assert.equal((await contribute("comment",{blockId:"private"})).status,409);
     assert.equal((await contribute("comment",{blockId:"next"})).status,409);
-    const first=await contribute("comment").then(res=>res.json());
+    // Detect any response snapshot that requests another pooled connection before release.
+    const connect=db.pool.connect.bind(db.pool),query=db.pool.query.bind(db.pool);
+    let held=0;
+    db.pool.connect=(...args)=>{
+      if(args.length)return connect(...args);
+      return connect().then(client=>{held++;
+      const release=client.release.bind(client);
+      client.release=(...values)=>{held--;return release(...values);};
+      return client;});
+    };
+    db.pool.query=(sql,...args)=>{
+      if(typeof sql==='string'&&sql.startsWith('SELECT c.id,'))assert.equal(held,0,'release transaction client before snapshot');
+      return query(sql,...args);
+    };
+    const commentOperation=require('node:crypto').randomUUID();
+    const first=await contribute("comment",{operationId:commentOperation}).then(res=>res.json());
+    assert.equal((await contribute('comment',{operationId:commentOperation})).status,200);
+    assert.equal((await contribute('comment',{operationId:commentOperation,text:'Changed intent'})).status,409);
+    assert.equal((await read()).stops[0].comments.length,1);
+    assert.ok(first.stops[0].comments[0].createdAt);
     const parent=first.stops[0].comments[0].id;
     assert.equal((await contribute("comment",{parentId:parent,text:"Nested reply"})).status,201);
     assert.equal((await contribute("photo",{photo:png})).status,201);
@@ -81,7 +113,7 @@ test("day links persist, scope guest data and preserve nested contributions", {
     assert.equal((await read()).stops[0].comments.length,2);
     await db.pool.query("UPDATE blocks SET properties=properties || '{\"publicVisibility\":\"private\"}'::jsonb WHERE id='coffee'");
     assert.equal((await request(src)).status,404);
-    assert.deepEqual((await read()).stops,[]);
+    assert.deepEqual((await read()).stops.map(task=>task.id),['same-day']);
   } finally {
     if (server) await server.close();
     await db.close();

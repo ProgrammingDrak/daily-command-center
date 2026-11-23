@@ -25,6 +25,7 @@ CREATE INDEX IF NOT EXISTS itinerary_contributions_token ON itinerary_contributi
 `;
 const tokenPattern = /^[a-f0-9]{48}$/;
 const uuidPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+const REACTIONS = {heart:"❤️",clap:"👏",celebrate:"🎉"};
 function validDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0,10) === value;
 }
@@ -74,14 +75,14 @@ function mount(app, {pool}) {
   }
   async function snapshot(s) {
     const rows = await blocks(s);
-    const {rows: contributions} = await pool.query(`SELECT c.id,c.block_id,c.parent_id,c.kind,c.author,c.body,
+    const {rows: contributions} = await pool.query(`SELECT c.id,c.block_id,c.parent_id,c.kind,c.author,c.body,c.created_at,
         b.deleted_at IS NOT NULL AS deleted, b.properties->>'publicVisibility' AS visibility
       FROM itinerary_contributions c LEFT JOIN blocks b ON b.id=c.block_id AND b.workspace_id=$2
       WHERE c.token=$1 ORDER BY c.created_at,c.id`,[s.token,s.workspace_id]);
     const active = new Map(rows.map(row => {
       const p=row.properties;
       const time=value=>typeof value==="string" && /^\d{1,2}:\d{2}$/.test(value)?value:"";
-      return [row.id,{id:row.id,localId:typeof p.local_id==="string"?p.local_id:row.id,title:p.title,time:time(p.start),end:time(p.end),done:p.done===true||p.status==="done",comments:[],likes:0,photos:[]}];
+      return [row.id,{id:row.id,localId:typeof p.local_id==="string"?p.local_id:row.id,title:p.title,time:time(p.start),end:time(p.end),done:p.done===true||p.status==="done",comments:[],likes:0,reactions:{heart:0,clap:0,celebrate:0},photos:[]}];
     }));
     const removed = new Map();
     const photos = [];
@@ -94,14 +95,18 @@ function mount(app, {pool}) {
           task?.photos.push(photo);
         }
       } else if (row.kind === "like") {
-        if (task) task.likes++;
+        if (task) {
+          task.likes++;
+          const reaction=Object.hasOwn(REACTIONS,row.body)?row.body:"heart";
+          task.reactions[reaction]++;
+        }
       } else {
         let thread = task;
         if (!thread && row.deleted && row.visibility === "public") {
           if (!removed.has(row.block_id)) removed.set(row.block_id,{id:row.block_id,title:"Removed task",comments:[]});
           thread = removed.get(row.block_id);
         }
-        thread?.comments.push({id:row.id,parentId:row.parent_id,name:row.author,text:row.body});
+        thread?.comments.push({id:row.id,parentId:row.parent_id,name:row.author,text:row.body,createdAt:row.created_at});
       }
     }
     return {date:s.day,stops:[...active.values()].sort((a,b)=>(a.time||"99").localeCompare(b.time||"99")),removed:[...removed.values()],photos};
@@ -152,8 +157,11 @@ function mount(app, {pool}) {
   }));
   app.post(api+"/:token/contributions",wrap(async(req,res)=>{
     if (!writeAllowed(req)) return res.sendStatus(403);
-    const {action,blockId,name,text,parentId,photo}=req.body||{};
+    const {action,blockId,name,text,parentId,photo,operationId}=req.body||{};
+    const reaction=req.body?.reaction ?? "heart";
     if (!["comment","like","photo"].includes(action) ||
+        (operationId != null && (typeof operationId!=="string" || !uuidPattern.test(operationId))) ||
+        (action==="like" && !Object.hasOwn(REACTIONS,reaction)) ||
         (blockId != null && (typeof blockId!=="string" || blockId.length>255)) ||
         (action!=="photo" && !blockId) ||
         (parentId != null && (action!=="comment" || !uuidPattern.test(parentId))) ||
@@ -164,6 +172,7 @@ function mount(app, {pool}) {
     if (action==="photo" && !media) return res.sendStatus(415);
     const db = await pool.connect();
     let committed = false;
+    let responseStatus = 201;
     let s;
     try {
       await db.query("BEGIN");
@@ -179,16 +188,28 @@ function mount(app, {pool}) {
         const parent = await db.query("SELECT id FROM itinerary_contributions WHERE id=$1 AND token=$2 AND block_id=$3 AND kind='comment'",[parentId,s.token,blockId]);
         if (!parent.rows.length) return res.sendStatus(409);
       }
+      const id=operationId||randomUUID();
+      const author=action==="like"?"":name.trim();
+      const body=action==="like"?reaction:text.trim();
+      const {rows:[prior]}=await db.query("SELECT * FROM itinerary_contributions WHERE id=$1",[id]);
+      if (prior) {
+        if (prior.token!==s.token || prior.block_id!==(blockId||null) || prior.parent_id!==(parentId||null) ||
+            prior.kind!==action || prior.author!==author || prior.body!==body ||
+            (media && (!prior.image || !Buffer.from(prior.image).equals(media.image) || prior.mime!==media.mime))) return res.sendStatus(409);
+        await db.query("COMMIT"); committed=true;
+        responseStatus=200;
+      } else {
       const {rows:[count]} = await db.query("SELECT COUNT(*)::int AS total FROM itinerary_contributions WHERE token=$1 AND kind=$2",[s.token,action]);
       if (count.total >= (action==="photo"?30:1000)) return res.sendStatus(409);
       await db.query(`INSERT INTO itinerary_contributions(id,token,block_id,parent_id,kind,author,body,image,mime)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,[randomUUID(),s.token,blockId||null,parentId||null,action,action==="like"?"":name.trim(),action==="like"?"":text.trim(),media?.image||null,media?.mime||null]);
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,[id,s.token,blockId||null,parentId||null,action,author,body,media?.image||null,media?.mime||null]);
       await db.query("COMMIT");
       committed=true;
+      }
     } finally {
       try { if (!committed) await db.query("ROLLBACK"); } finally { db.release(); }
     }
-    res.status(201).json(await snapshot(s));
+    res.status(responseStatus).json(await snapshot(s));
   }));
 }
-module.exports = {mount,SCHEMA_SQL,validDate,visible,imageData};
+module.exports = {mount,SCHEMA_SQL,validDate,visible,imageData,REACTIONS};
