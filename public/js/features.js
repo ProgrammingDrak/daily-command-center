@@ -711,7 +711,7 @@ function closeAddModal() {
   _addModalTaskId = null;
   _addModalOpener = null;
   // C4: clear the row id with the task id. Leaving it set would point the NEXT modal's
-  // title writes at the previous row — a cross-task write, and the kind of stale
+  // title writes at the previous row, causing a cross-task write and stale state
   // module state that only shows up on the second open.
   _addModalBlockId = null;
   _addModalAnchor = null;
