@@ -231,7 +231,6 @@
 .task-actual-toggle[aria-pressed="true"]::before { content: "● "; }
 .task-actual-toggle[hidden] { display: none; }
 .task-workspace-head .date-nav { margin: 0 0 var(--sp-2); }
-.task-workspace-head .date-picker-drop { top: 100%; left: 0; }
 .task-workspace-head .progress-wrap { margin-bottom: 0; }
 #tab-schedule .source-row { justify-content: flex-end; }
 
@@ -357,7 +356,11 @@ body[data-nav-page="activity"] .progress-header { display: flex; justify-content
 .progress-date-controls .dn-date { flex: 0 0 auto; max-width: none; padding: 2px 4px; font-size: 11px; white-space: nowrap; }
 .progress-date-controls .dn-quick { padding: 2px 5px; font-size: 10px; }
 .progress-date-controls .dn-badge { font-size: 9px; }
-.task-workspace-head .progress-date-controls .date-picker-drop { top: 100%; left: 50%; transform: translateX(-50%); width: 280px; min-width: 0; max-width: calc(100vw - 24px); text-transform: none; letter-spacing: normal; }
+/* Preserve the compact calendar inside the shared, viewport-level popover. */
+.date-picker-popover { width: 280px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); background: var(--card); border-radius: 10px; }
+.date-picker-popover > :is(.dcc-overlay-head, .dcc-overlay-actions) { display: none; }
+.date-picker-popover > .dcc-overlay-body { padding: 0; font-size: 12px; line-height: normal; }
+.date-picker-popover .date-picker-drop { position: static; width: auto; min-width: 0; margin: 0; border: 0; border-radius: 0; box-shadow: none; text-transform: none; letter-spacing: normal; }
 @media (max-width: 1000px) {
   .task-view-bar .queue-seg { flex: 1 1 auto; min-width: 44px; flex-direction: column; gap: 2px; padding: 4px 2px; font-size: 10px; }
   .task-view-bar .queue-seg > span:first-child { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-wrap: balance; }

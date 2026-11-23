@@ -58,9 +58,10 @@
 
   function placePopover(panel, anchor) {
     if (!anchor || typeof anchor.getBoundingClientRect !== "function") return;
-    const rect = anchor.getBoundingClientRect();
     const gap = 8;
     requestAnimationFrame(() => {
+      if (!panel.isConnected) return;
+      const rect = anchor.getBoundingClientRect();
       const width = panel.offsetWidth || 320;
       const height = panel.offsetHeight || 240;
       const left = Math.max(gap, Math.min(window.innerWidth - width - gap, rect.left));
@@ -119,6 +120,10 @@
     let closed = false;
     let finishPendingClose = null;
 
+    function reposition() {
+      if (kind === "popover" && !closed) placePopover(panel, opts.anchor);
+    }
+
     function render(view) {
       const state = view || opts;
       title.textContent = state.title || "";
@@ -143,7 +148,7 @@
         footer.appendChild(button);
       });
       back.hidden = stack.length === 0;
-      if (kind === "popover") placePopover(panel, opts.anchor);
+      reposition();
     }
 
     function push(view) {
@@ -184,6 +189,8 @@
       overlay.classList.remove("open");
       document.removeEventListener("keydown", onKey, true);
       document.removeEventListener("pointerdown", onOutside, true);
+      window.removeEventListener("resize", reposition);
+      document.removeEventListener("scroll", onScroll, true);
       let finished = false;
       let closeReason = reason;
       const done = () => { if (!finished) { finished = true; finishClose(closeReason); } };
@@ -224,7 +231,12 @@
       close("outside");
     }
 
-    const handle = { el: panel, overlay, close, push, back: goBack, update: render };
+    function onScroll(event) {
+      // Internal scrolling must not move the panel beneath the pointer.
+      if (!panel.contains(event.target)) reposition();
+    }
+
+    const handle = { el: panel, overlay, close, push, back: goBack, update: render, reposition };
     panel.querySelector(".dcc-overlay-close").addEventListener("click", () => close("close-button"));
     back.addEventListener("click", goBack);
     if (blocking) {
@@ -234,6 +246,8 @@
       document.body.classList.add("dcc-overlay-open");
     } else {
       document.addEventListener("pointerdown", onOutside, true);
+      window.addEventListener("resize", reposition);
+      document.addEventListener("scroll", onScroll, true);
     }
     document.addEventListener("keydown", onKey, true);
     render(opts);

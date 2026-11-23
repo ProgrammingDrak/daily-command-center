@@ -208,7 +208,7 @@
         <div class="progress-date-controls">
           <div class="date-nav" id="date-nav">
             <button class="dn-arrow" id="dn-prev" onclick="navDate(-1)" title="Previous day" aria-label="Previous day">&lsaquo;</button>
-            <button class="dn-date" id="dn-date-btn" onclick="toggleDatePicker()">
+            <button class="dn-date" id="dn-date-btn" onclick="toggleDatePicker()" aria-haspopup="dialog" aria-expanded="false">
               <span id="date-label">--</span>
               <span class="dn-badge" id="dn-badge" style="display:none"></span>
             </button>
@@ -216,7 +216,6 @@
             <button class="dn-quick" id="dn-today-btn" onclick="switchToDate(__todayDate)" style="display:none">Today</button>
             <button class="dn-quick dn-tomorrow" id="dn-tomorrow-btn" onclick="switchToDate(__tomorrowDate)" style="display:none">Tomorrow</button>
           </div>
-          <div class="date-picker-drop" id="date-picker-drop" style="display:none"></div>
         </div>
         <span class="progress-heading-actions"><span id="ppct">Loading…</span><button type="button" id="progress-day-review" aria-controls="actual-view" aria-expanded="false" disabled>Day review</button></span>
       </div>
