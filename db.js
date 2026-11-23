@@ -1514,14 +1514,14 @@ function isIdempotencyConflict(err) {
   return !!(err && err.code === "23505" && err.constraint === IDEM_UNIQUE_INDEX);
 }
 
-async function findByIdempotencyKey(workspaceId, key) {
+async function findByIdempotencyKey(workspaceId, key, client) {
   if (!key) return null;
-  const { rows } = await pool.query(
+  const { rows } = await (client || pool).query(
     `SELECT * FROM blocks
       WHERE properties->>'idempotency_key' = $1
         AND workspace_id IS NOT DISTINCT FROM $2
       ORDER BY (deleted_at IS NULL) DESC, created_at ASC
-      LIMIT 1`,
+      LIMIT 1${client ? " FOR UPDATE" : ""}`,
     [String(key), workspaceId || null]
   );
   return rows[0] ? parseBlock(rows[0]) : null;
@@ -2692,11 +2692,11 @@ async function findResponsibilityBySlug(slug, workspaceId) {
 }
 
 // Generic "all type='block' rows of this kind", oldest first (task_menu, task_group).
-async function findTaskByTriageSource(workspaceId, triageId, triageKey) {
-  const { rows } = await pool.query(
+async function findTaskByTriageSource(workspaceId, triageId, triageKey, client) {
+  const { rows } = await (client || pool).query(
     `SELECT * FROM blocks WHERE type='block' AND workspace_id IS NOT DISTINCT FROM $1
       AND (properties->>'triageId'=$2 OR ($3<>'' AND properties->>'triageKey'=$3))
-      ORDER BY (deleted_at IS NULL) DESC, created_at ASC LIMIT 1`,
+      ORDER BY (deleted_at IS NULL) DESC, created_at ASC LIMIT 1${client ? " FOR UPDATE" : ""}`,
     [workspaceId || null, String(triageId), String(triageKey || "")]);
   return rows[0] ? parseBlock(rows[0]) : null;
 }

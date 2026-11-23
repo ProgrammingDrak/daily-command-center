@@ -33,45 +33,49 @@ function validate(packet) {
 }
 
 module.exports = function createTriageReplyDraftStore({ pool }) {
-  async function attach({ packet, userId, workspaceId, dryRun = false }) {
+  async function attachInTransaction({ packet, userId, workspaceId, client }) {
     const drafts = validate(packet);
+    if (!Number.isInteger(userId) || userId < 1 || !workspaceId) fail(403, "Reply draft owner required");
+    const { rows } = await client.query(
+      "SELECT * FROM blocks WHERE id=ANY($1::text[]) AND workspace_id=$2 AND user_id=$3 ORDER BY id FOR UPDATE",
+      [drafts.map(draft => draft.task_id), workspaceId, userId]);
+    const changes = [];
+    for (const draft of drafts) {
+      const row = rows.find(value => value.id === draft.task_id);
+      if (!row || row.deleted_at) fail(404, "Open private Triage task not found");
+      const props = row.properties || {}, context = props.triageContext || {};
+      if (row.type !== "block" || props.kind !== "task" || row.date != null || !props.triageBlock || props.publicVisibility !== "private" ||
+          props.done || props.completedAt || ["done", "completed", "deleted", "cancelled"].includes(props.status)) fail(409, "Task is no longer open in private Triage");
+      const groups = TimeBlocks.groupItineraryTree([{ ev: TaskModel.fromBlock(row), depth: 0 }], []);
+      if (!groups.find(group => group.block.id === TimeBlocks.TRIAGE_BLOCK.id).nodes.length) fail(409, "Task is outside the Triage lane");
+      const source = props.triageSourceRef || context.source_ref || context.source_url || context.link || props.source_id;
+      if (props.triageId !== draft.triage_id || source !== draft.source_ref) fail(409, "Reply source does not match the task");
+      const prior = [context, props].filter(value => value.draft_preview || value.draft_id || value.draft_link || value.draft_url);
+      if (prior.length) {
+        if (prior.some(value => value.draft_preview !== draft.draft_preview)) fail(409, "Existing draft preserved; review it before replacing");
+        continue;
+      }
+      changes.push({ id: row.id, context: { ...context, id: props.triageId, source_ref: source,
+        draft_preview: draft.draft_preview, draft_type: "internal", draft_status: "drafted" } });
+    }
+    for (const change of changes) {
+      await client.query("UPDATE blocks SET properties=jsonb_set(properties,'{triageContext}',$1::jsonb),updated_at=NOW() WHERE id=$2 AND workspace_id=$3",
+        [JSON.stringify(change.context), change.id, workspaceId]);
+    }
+    return { duplicate: changes.length === 0, taskIds: drafts.map(draft => draft.task_id), changedIds: changes.map(change => change.id) };
+  }
+  async function attach({ packet, userId, workspaceId, dryRun = false }) {
+    validate(packet);
     if (!Number.isInteger(userId) || userId < 1 || !workspaceId) fail(403, "Reply draft owner required");
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      const { rows } = await client.query(
-        "SELECT * FROM blocks WHERE id=ANY($1::text[]) AND workspace_id=$2 AND user_id=$3 ORDER BY id FOR UPDATE",
-        [drafts.map(draft => draft.task_id), workspaceId, userId]);
-      const changes = [];
-      for (const draft of drafts) {
-        const row = rows.find(value => value.id === draft.task_id);
-        if (!row || row.deleted_at) fail(404, "Open private Triage task not found");
-        const props = row.properties || {}, context = props.triageContext || {};
-        if (row.type !== "block" || props.kind !== "task" || row.date != null || !props.triageBlock || props.publicVisibility !== "private" ||
-            props.done || props.completedAt || ["done", "completed", "deleted", "cancelled"].includes(props.status)) fail(409, "Task is no longer open in private Triage");
-        const groups = TimeBlocks.groupItineraryTree([{ ev: TaskModel.fromBlock(row), depth: 0 }], []);
-        if (!groups.find(group => group.block.id === TimeBlocks.TRIAGE_BLOCK.id).nodes.length) fail(409, "Task is outside the Triage lane");
-        const source = props.triageSourceRef || context.source_ref || context.source_url || context.link || props.source_id;
-        if (props.triageId !== draft.triage_id || source !== draft.source_ref) fail(409, "Reply source does not match the task");
-        const prior = [context, props].filter(value => value.draft_preview || value.draft_id || value.draft_link || value.draft_url);
-        if (prior.length) {
-          if (prior.some(value => value.draft_preview !== draft.draft_preview)) fail(409, "Existing draft preserved; review it before replacing");
-          continue;
-        }
-        changes.push({ id: row.id, context: { ...context, id: props.triageId, source_ref: source,
-          draft_preview: draft.draft_preview, draft_type: "internal", draft_status: "drafted" } });
-      }
-      for (const change of changes) {
-        await client.query("UPDATE blocks SET properties=jsonb_set(properties,'{triageContext}',$1::jsonb),updated_at=NOW() WHERE id=$2 AND workspace_id=$3",
-          [JSON.stringify(change.context), change.id, workspaceId]);
-      }
+      const result = await attachInTransaction({ packet, userId, workspaceId, client });
       await client.query(dryRun ? "ROLLBACK" : "COMMIT");
-      return { duplicate: changes.length === 0, taskIds: drafts.map(draft => draft.task_id), changedIds: changes.map(change => change.id) };
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally { client.release(); }
+      return result;
+    } catch (error) { await client.query("ROLLBACK"); throw error; }
+    finally { client.release(); }
   }
-  return { attach };
+  return { attach, attachInTransaction };
 };
 module.exports.validate = validate;

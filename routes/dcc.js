@@ -809,6 +809,16 @@ module.exports = function mount(app, ctx) {
     try {
       const body = req.body || {};
       const packet = body.packet || body;
+      if (Object.hasOwn(packet, "reply_findings")) {
+        if (body.dry_run != null && typeof body.dry_run !== "boolean") return res.status(400).json({ error: "dry_run must be boolean" });
+        const owner = await resolveOwnerStrict(req);
+        const result = await require("../triage-reply-findings")({ pool: ctx.pool, blockDB }).capture({
+          packet, ...owner, dryRun: body.dry_run === true,
+        });
+        if (!body.dry_run && !result.duplicate) broadcast("blocks-changed", { action: "triage-reply-finding", blockIds: result.changedIds }, owner.workspaceId);
+        return res.json({ ok: true, owner, status: body.dry_run ? "dry_run" : result.duplicate ? "duplicate" : "merged",
+          task_ids: result.taskIds, source_ids: result.sourceIds });
+      }
       if (Object.hasOwn(packet, "reply_drafts")) {
         if (body.dry_run != null && typeof body.dry_run !== "boolean") return res.status(400).json({ error: "dry_run must be boolean" });
         const owner = await resolveOwnerStrict(req);

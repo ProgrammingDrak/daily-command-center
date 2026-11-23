@@ -31,3 +31,36 @@ The existing TaskModel and Triage copy/review controls render the stored context
 Run `DCC_TEST_DATABASE_URL='postgresql://drakeshadwell@localhost/postgres?host=/tmp' node --test triage-reply-drafts.test.js`. It uses a uniquely named disposable local schema and drops only that schema. It mounts the actual intake and block read routes with a test-only session fixture, uses the real Postgres store, and exercises the existing TaskModel/Triage functions. No production server, data, credentials or external messaging adapters participate.
 
 The old generic triage-check intake's replay counters are intentionally unchanged. The new reply_drafts mode has true no-op retries. This is a same-task attachment path, not a new researched-finding collector or a repair for all historical intake behavior.
+
+## Newly discovered finding plus draft (separate undeployed extension)
+
+The same intake also accepts `packet.reply_findings`, mutually exclusive with `reply_drafts` and the legacy `items` packet. It uses the standard Triage task materializer and canonical createItineraryTask/createBlock with an explicit transaction client. The task is created with its unsent internal draft already in triageContext; no pending side file or second production call is required.
+
+```json
+{
+  "dry_run": true,
+  "packet": {
+    "reply_findings": [{
+      "source_id": "gmail:abc123:abc456",
+      "source_ref": "https://mail.google.com/mail/u/0/#all/abc123",
+      "title": "Review the verified business request",
+      "reason": "Minimized rationale based on the current complete source and supporting research",
+      "draft_preview": "Researched reply, unsent",
+      "thread_id": "abc123",
+      "received_at": "2026-11-23T17:00:00Z",
+      "reviewed_at": "2026-11-23T17:10:00Z",
+      "sensitivity": "ordinary_business"
+    }]
+  }
+}
+```
+
+Replace the example IDs and timestamps with actual verified values. These nine fields are required and no other per-finding fields are accepted. One to ten findings; native Gmail thread/message or Slack dm/mention IDs with exact matching links. The verified thread_id is required: Gmail must match its native thread ID; Slack must carry the actual root timestamp, no later than the source message. The writer never guesses that a reply is its own thread root. Duplicate sources/conversation links in a batch are refused. Reviews must be timezone-qualified and at most one hour old; received_at must be a qualified source timestamp. Titles are bounded to 200 characters; rationale and draft to 1000 each. The declaration is a caller attestation, not server-side research or privacy classification. Both excluded legal Slack channels and Calendar/unknown sources remain refused.
+
+The mode acquires source locks, checks existing Triage suppressions (including legacy Gmail thread cutoffs), reuses exact-source anchors including tombstones and rejects ambiguous/moved/handled/foreign-owner sources. Existing owner titles and drafts win; it does not move another queue's task into Triage. New tasks are private, date-free and use the existing canonical Triage classifier. No day-state, legacy cycle accounting or suppression rows are written by this mode. No Gmail/Slack send, native-draft or reaction adapter is invoked.
+
+The task, draft and ordinary create operation commit together or all their rows roll back. Source identity, not the title, reviewed_at or packet nonce, determines reuse. Identical/concurrent replays converge on the same task without new operations or broadcasts. Contention with an older writer can still return a retriable database conflict rather than silently minting another task; retry the same source packet after reconciling its result. Existing unique-key and tombstone semantics are retained.
+
+Rollback preflight returns prospective task IDs which need not survive rollback. Verify owner and source_ids; take durable task IDs only from the actual successful receipt. Postgres may allocate operation sequence values even during rolled-back preflight; no task/operation rows survive it. No production preflight or delivery has been performed for this extension.
+
+Verify locally with `DCC_TEST_DATABASE_URL='postgresql://drakeshadwell@localhost/postgres?host=/tmp' node --test triage-reply-findings.test.js triage-reply-drafts.test.js`. The fixture uses actual public handlers, canonical task creation, operation logging, private lane classification and cookie-authenticated readback in its own disposable schema. New findings are synthetic, never posted to production or a source system. The original existing-task-only branch remains preserved at f019e946eb506a4e490dcf21cb4ebf9380301a70.
