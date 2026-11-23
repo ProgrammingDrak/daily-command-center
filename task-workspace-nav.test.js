@@ -49,7 +49,7 @@ test("the header is pages plus one clock, cog and sync dot cluster; branding is 
 
 test("Tasks head combines views and queues above the day navigation in Day Progress", () => {
   const head = slice(html, '<section class="task-workspace-head"', "</section>\n");
-  const order = ["task-view-switch", "queue-pill", "day-progress-title", "date-nav", "dn-prev", "date-label", "dn-next", "date-picker-drop"].map((id) => head.indexOf('id="' + id + '"'));
+  const order = ["task-view-switch", "queue-pill", "day-progress-title", "date-nav", "dn-prev", "date-label", "dn-next"].map((id) => head.indexOf('id="' + id + '"'));
   assert.ok(order.every((at) => at >= 0), JSON.stringify(order));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
   for (const door of ["triage-pill-nav", "waiting-pill-nav", "someday-pill-nav", "whenever-pill-nav", "loose-ends-pill"]) assert.match(head, new RegExp('id="' + door + '"'));
@@ -58,6 +58,7 @@ test("Tasks head combines views and queues above the day navigation in Day Progr
   assert.match(head, /id="task-view-list"[^>]*data-task-view="list"[^>]*>Itinerary<\/button>/);
   assert.doesNotMatch(head, /id="task-actual-toggle"/);
   assert.match(head, /id="pactual"/);
+  assert.doesNotMatch(head, /id="date-picker-drop"/, "the calendar must escape the clipping progress panel");
 });
 
 test("Actual is not a view: no Actual view button, Itinerary and Calendar keep their containers", () => {

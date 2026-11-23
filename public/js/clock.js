@@ -100,18 +100,37 @@ function navDate(direction) {
 
 // ── Date Picker (calendar popup) ──
 let dpMonth = null; // currently displayed month {year, month}
+let dpOverlay = null;
 
 function toggleDatePicker() {
-  const drop = document.getElementById("date-picker-drop");
-  if (drop.style.display !== "none") {
-    drop.style.display = "none";
+  if (dpOverlay) {
+    dpOverlay.close("toggle");
     return;
   }
   // Initialize to viewDate's month
   const parts = (viewDate || __todayDate || new Date().toISOString().slice(0,10)).split("-");
   dpMonth = { year: parseInt(parts[0]), month: parseInt(parts[1]) - 1 };
+  const btn = document.getElementById("dn-date-btn");
+  const drop = document.createElement("div");
+  drop.id = "date-picker-drop";
+  drop.className = "date-picker-drop";
+  // The shared overlay lives under body, outside the collapsible progress panel.
+  dpOverlay = window.DCC.overlay.open({
+    kind: "popover",
+    title: "Choose date",
+    anchor: btn,
+    body: drop,
+    onClose() {
+      dpOverlay = null;
+      btn.setAttribute("aria-expanded", "false");
+      // A closing overlay can animate while the next one opens.
+      drop.removeAttribute("id");
+      drop.inert = true;
+    },
+  });
+  dpOverlay.el.classList.add("date-picker-popover");
+  btn.setAttribute("aria-expanded", "true");
   renderDatePicker();
-  drop.style.display = "";
 }
 
 function renderDatePicker() {
@@ -169,6 +188,7 @@ function renderDatePicker() {
 
   html += '</div>';
   drop.innerHTML = html;
+  if (dpOverlay) dpOverlay.reposition();
 }
 
 function dpNav(dir) {
@@ -179,18 +199,9 @@ function dpNav(dir) {
 }
 
 function dpSelect(dateStr) {
-  document.getElementById("date-picker-drop").style.display = "none";
+  if (dpOverlay) dpOverlay.close("selection");
   switchToDate(dateStr);
 }
-
-// Close date picker on outside click
-document.addEventListener("click", function(e) {
-  const drop = document.getElementById("date-picker-drop");
-  const btn = document.getElementById("dn-date-btn");
-  if (drop && drop.style.display !== "none" && !drop.contains(e.target) && !btn.contains(e.target)) {
-    drop.style.display = "none";
-  }
-});
 
 // Initialize date nav on load
 (function initDateNav() {
