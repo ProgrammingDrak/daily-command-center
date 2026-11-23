@@ -2,6 +2,8 @@
 
 // Opt-in attachment to an EXISTING private Triage task. No source collection,
 // task creation, day-state replacement, native draft creation or sending.
+const TaskModel = require("./public/js/task-model");
+const TimeBlocks = require("./public/js/time-blocks");
 const EXCLUDED_SLACK = new Set(["C0A2YDUD4N5", "C08KRSS69MH"]);
 function fail(statusCode, message) { throw Object.assign(new Error(message), { statusCode }); }
 function validate(packet) {
@@ -45,8 +47,10 @@ module.exports = function createTriageReplyDraftStore({ pool }) {
         const row = rows.find(value => value.id === draft.task_id);
         if (!row || row.deleted_at) fail(404, "Open private Triage task not found");
         const props = row.properties || {}, context = props.triageContext || {};
-        if (row.type !== "block" || row.date != null || !props.triageBlock || props.publicVisibility !== "private" ||
+        if (row.type !== "block" || props.kind !== "task" || row.date != null || !props.triageBlock || props.publicVisibility !== "private" ||
             props.done || props.completedAt || ["done", "completed", "deleted", "cancelled"].includes(props.status)) fail(409, "Task is no longer open in private Triage");
+        const groups = TimeBlocks.groupItineraryTree([{ ev: TaskModel.fromBlock(row), depth: 0 }], []);
+        if (!groups.find(group => group.block.id === TimeBlocks.TRIAGE_BLOCK.id).nodes.length) fail(409, "Task is outside the Triage lane");
         const source = props.triageSourceRef || context.source_ref || context.source_url || context.link || props.source_id;
         if (props.triageId !== draft.triage_id || source !== draft.source_ref) fail(409, "Reply source does not match the task");
         const prior = [context, props].filter(value => value.draft_preview || value.draft_id || value.draft_link || value.draft_url);

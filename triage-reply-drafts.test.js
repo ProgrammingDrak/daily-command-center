@@ -74,12 +74,19 @@ test("authenticated intake, real Postgres store and existing block readback pres
     const before=(await pool.query("SELECT * FROM blocks ORDER BY id")).rows;
     const preview=await post({...body,dry_run:true});assert.equal(preview.status,200);assert.equal(preview.body.status,"dry_run");
     assert.deepEqual((await pool.query("SELECT * FROM blocks ORDER BY id")).rows,before);assert.equal(events.length,0);
+    await pool.query("UPDATE blocks SET properties=jsonb_set(properties,'{title}','\"Owner changed after preflight\"') WHERE id='task-fixture'");
     const result=await post(body);assert.equal(result.status,200);assert.equal(result.body.status,"merged");assert.deepEqual(result.body.owner,{userId:7,workspaceId:"ws-owned"});assert.equal(events.length,1);
     const read=await request("/api/blocks/task-fixture");assert.equal(read.status,200);
     const row=read.body;assert.equal(row.date,null);assert.equal(row.properties.triageBlock,true);assert.equal(row.properties.publicVisibility,"private");
-    assert.equal(row.properties.title,props.title);assert.equal(row.properties.detail,props.detail);assert.equal(row.properties.triageContext.summary,"Owner context");
+    assert.equal(row.properties.title,"Owner changed after preflight");assert.equal(row.properties.detail,props.detail);assert.equal(row.properties.triageContext.summary,"Owner context");
     assert.equal(row.properties.triageContext.draft_preview,draft().draft_preview);
     const task=require("./public/js/task-model").fromBlock(row),view=viewContext(task);
+    const groups=require("./public/js/time-blocks").groupItineraryTree([{ev:task,depth:0}],[]);
+    assert.equal(groups.find(group=>group.block.id==="triage").nodes.length,1);
+    // The canonical model makes date-free rows untimed even with a legacy clock.
+    // A clock string alone must not invent another lane policy in this writer.
+    const legacyTask=require("./public/js/task-model").fromBlock({...row,properties:{...row.properties,start:"09:00",untimed:false}});
+    assert.equal(require("./public/js/time-blocks").groupItineraryTree([{ev:legacyTask,depth:0}],[]).find(group=>group.block.id==="triage").nodes.length,1);
     assert.match(view.ctx.triageTaskSourceActionsHtml(task),/Review and Send/);await view.ctx.copyTriageDraft(task.triageId);assert.deepEqual(view.copied,[draft().draft_preview]);
     const stored=(await pool.query("SELECT * FROM blocks ORDER BY id")).rows;
     const replay=await post(body);assert.equal(replay.body.status,"duplicate");assert.equal(events.length,1);assert.deepEqual((await pool.query("SELECT * FROM blocks ORDER BY id")).rows,stored);
@@ -89,9 +96,9 @@ test("authenticated intake, real Postgres store and existing block readback pres
     assert.equal((await post({packet:{reply_drafts:[{...draft(),triage_id:"wrong-source-wrapper"}]}})).status,409);
     assert.equal((await post({packet:{reply_drafts:[{...draft(),source_ref:source.replace("7919","7920")}]}})).status,400);
     assert.equal((await post({packet:{reply_drafts:[{...draft(),draft_preview:"Overwrite owner"}]}})).status,409);
-    for(const patch of [{status:"done"},{triageBlock:false},{publicVisibility:"public"}]) {
+    for(const patch of [{status:"done"},{triageBlock:false},{publicVisibility:"public"},{responsibilityId:"recurring"},{delegatedItemId:"waiting"},{kind:"backlog"}]) {
       await pool.query("UPDATE blocks SET properties=properties || $1::jsonb WHERE id='task-fixture'",[JSON.stringify(patch)]);
-      assert.equal((await post(body)).status,409);
+      assert.equal((await post(body)).status,409,JSON.stringify(patch));
       await pool.query("UPDATE blocks SET properties=$1 WHERE id='task-fixture'",[row.properties]);
     }
     await pool.query("UPDATE blocks SET deleted_at=now() WHERE id='task-fixture'");assert.equal((await post(body)).status,404);
