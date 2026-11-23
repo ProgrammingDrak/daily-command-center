@@ -219,7 +219,7 @@ function buildTaskChangeItems(ev,trig){
   if(!ev.untimed)
     items.push({icon:"🕒", label:"Remove time", onPick:()=>{if(typeof moveTaskToUnplanned==="function")moveTaskToUnplanned(ev.id);}});
   items.push(
-    {icon:"🔄", label:"Convert…",  onPick:()=>openConvertToRadial(ev,trig)},
+    {icon:"🔄", label:"Convert…", children:()=>buildConvertToItems(ev,trig).slice(1), onPick:()=>openConvertToRadial(ev,trig)},
     {icon:"↗", label:"Delegate / block", onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
     {icon:"🔒", label:"Blocked by task", onPick:()=>{if(typeof window.openTaskDependencyModal==="function")window.openTaskDependencyModal(ev._blockId||ev.blockId||ev.id);}},
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},

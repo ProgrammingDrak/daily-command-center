@@ -242,9 +242,11 @@ if (await login(page)) {
     if (await page.locator("#add-modal-overlay").evaluate((node) => node.classList.contains("open"))) {
       check("Task Details identifies itself as a modal", await page.locator("#add-modal-overlay .add-modal").evaluate((node) => node.getAttribute("role") === "dialog" && node.getAttribute("aria-modal") === "true"));
       check("Task Details makes the page inert", await page.locator(".header").evaluate((node) => node.inert));
-      check("Task Details starts in read mode", await page.locator("#add-modal-edit").isVisible());
-      await page.locator('[data-am-tab="notes"]').click();
-      check("Task Details read mode blocks note editing", await page.locator("#am-notes-block-editor [contenteditable]").first().evaluate((node) => node.getAttribute("contenteditable") === "false"));
+      check("Task Details starts in edit mode", await page.locator("#add-modal-save").isVisible());
+      await page.locator("#add-modal-save").click();
+      await page.locator('[data-am-tab="photos"]').click();
+      await page.locator('#am-sources-section > summary').click();
+      check("Task Details read mode blocks source editing", !(await page.locator("#am-source-form input[name=url]").isEnabled()));
       for (let index = 0; index < 12; index += 1) await page.keyboard.press("Tab");
       check("Task Details traps focus", await page.evaluate(() => document.activeElement?.closest("#add-modal-overlay") !== null));
       await page.locator("#add-modal-edit").click();

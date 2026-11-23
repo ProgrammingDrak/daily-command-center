@@ -69,7 +69,7 @@ test("closing Loose Ends hides its workspace without a page refresh", () => {
 test("task details provide explicit read and edit controls", () => {
   const index = read("index.html");
   const details = read("public/js/features.js");
-  for (const label of ["settings", "notes", "subtasks", "history", "automation"]) {
+  for (const label of ["photos", "actions", "subtasks", "history", "automation"]) {
     assert.match(index, new RegExp(`data-am-panel="${label}"`));
   }
   assert.match(index, /role="tablist" aria-label="Task detail sections"/);
@@ -106,17 +106,13 @@ test("clicking a task opens the details modal already in edit mode", () => {
   const cancel = fnBody("cancelAddModalEdits");
   assert.match(cancel, /openAddModal\(taskId, fallbackTitle, \{generic:true\}\);[\s\S]*setAddModalMode\(false\)/);
 
-  // Save is one click from every open now, so an untouched tag draft must not be written.
+  // Removed settings and notes must never mutate hidden stored properties.
   const save = fnBody("saveAddModalEdits");
-  assert.match(save, /if \(_addModalTagsDirty\) _persistTaskTags\(_addModalTaskId, _addModalDraftTags\.slice\(\)\);/);
-  assert.match(open, /_addModalTagsDirty = false;/);
-  assert.match(details, /createTagPicker\(tagContainer, currentTags, function\(newIds\) \{[\s\S]*?_addModalTagsDirty = true;/);
-
-  // The X, Escape, and the backdrop now exit a live edit session, so notes flush on close.
   const close = fnBody("closeAddModal");
-  assert.match(close, /notesNow !== _addModalNotesSnapshot\) _writeAddModalNotes\(\)/);
-  // Commute stays on the Save path only: persisting it on close is the state.js carryover wipe.
-  assert.doesNotMatch(close, /persistAddModalCommute|persistAddModalEdits/);
+  for (const body of [open, save, close]) {
+    assert.doesNotMatch(body, /createTagPicker|_persistTaskTags|_persistMeetingFlag|persistAddModalCommute|_writeAddModalNotes|createBlockEditor/);
+  }
+
 });
 
 test("Task Manager uses Quick add without duplicating task creation", () => {

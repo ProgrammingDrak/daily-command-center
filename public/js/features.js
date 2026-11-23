@@ -186,17 +186,6 @@ function openTrivialPicker(scheduleId, anchorEl){
 let _addModalTaskId = null;
 let _addModalEditing = false;
 let _addModalDraftTitle = '';
-let _addModalDraftTags = [];
-// The modal now opens in EDIT mode, so Save is one click from every open -- including
-// opens where taskAnchorById missed and the tag draft seeded empty (delegated.js does
-// this deliberately). Persisting an untouched draft there writes tags:[] over the row's
-// real tags, so only the picker firing marks tags writable.
-let _addModalTagsDirty = false;
-// Serialized blocks as the notes editor was seeded. closeAddModal flushes notes only
-// when they actually changed, so opening and dismissing never materializes a task's
-// description into stored notes.
-let _addModalNotesSnapshot = null;
-let _addModalDraftRecordingReview = false;
 let _addModalOpener = null;
 const _addModalControlState = new WeakMap();
 // C4: the open row's BLOCK id, whenever the ev carries one. That is MOST rows, not just
@@ -228,8 +217,10 @@ function _setAddModalPageInert(overlay, on) {
 function _setAddModalControlsEditable(modal, editing) {
   var body = modal && modal.querySelector('.add-modal-body');
   if (!body) return;
+  var sourceFiles = document.getElementById('am-source-files');
+  if (sourceFiles) sourceFiles.disabled = !editing;
   body.querySelectorAll('input, textarea, select, button, [contenteditable]').forEach(function(control) {
-    if (control.matches('[data-am-tab], [data-activity-open]') || control.closest('#am-panel-photos')) return;
+    if (control.matches('[data-am-tab], [data-activity-open]') || control.closest('#am-photos-anchor')) return;
     var saved = _addModalControlState.get(control);
     if (!saved) {
       saved = {
@@ -294,12 +285,8 @@ function _handleAddModalKeydown(event) {
 // the pre-write bag and the second PATCH drops the first one's field. Three helpers route
 // through here now, so the collision is three-way.
 //
-// The triggering gesture is ordinary, not exotic: type a new title in the modal header and
-// then click a tag chip. The click blurs the input, so `save()` fires _persistTaskTitle and
-// the same click fires the tag-picker callback, both in flight. For a row in the cache the
-// first write's synchronous cacheSet makes the second read see it; for a CARRYOVER row
-// each call issues its own GET and both resolve stale, so the rename vanishes behind the
-// "Title updated" toast — the exact failure _amWriteRowProps was added to fix.
+// Concurrent title edits and other row writes must merge against the latest row.
+// For carryovers, the row may exist only in the range cache. Avoid the failure _amWriteRowProps was added to fix.
 //
 // The queue itself lives in state.js `enqueueRowPropsWrite`, shared with the commute write
 // (setTaskCommuteTimes), which is the FOURTH writer of this same properties bag and was
@@ -327,43 +314,7 @@ function taskForRepeatResponsibility(taskId, fallbackTitle) {
   return { id: taskId, title: fallbackTitle || document.getElementById('add-modal-title')?.textContent || '', type: 'task', durMin: 30 };
 }
 
-function _persistTaskTags(taskId, tagIds) {
-  if (_amWriteRowProps({ tags: tagIds })) return;
-  if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.addedTasks && window.blockStore) {
-    // Check added_task blocks (legacy + new "block" type with scheduled_dates)
-    var addedBlocks = (window.blockStore.getByType('added_task')||[]).concat(window.blockStore.getByType('block').filter(function(b){return (b.properties||{}).scheduled_dates;}));
-    var block = addedBlocks.find(function(b) { return (b.properties||{}).local_id === taskId; });
-    if (block) {
-      window.blockStore.updateBlock(block.id, Object.assign({}, block.properties, {tags: tagIds}));
-      return;
-    }
-    // Check schedule_item blocks (legacy + new "block" type)
-    var schedBlocks = (window.blockStore.getByType('schedule_item')||[]).concat(window.blockStore.getByType('block').filter(function(b){return (b.properties||{}).start||(b.properties||{}).end;}));
-    var sBlock = schedBlocks.find(function(b) { return (b.properties||{}).local_id === taskId || b.id === taskId; });
-    if (sBlock) {
-      window.blockStore.updateBlock(sBlock.id, Object.assign({}, sBlock.properties, {tags: tagIds}));
-      return;
-    }
-  }
-  // Fallback: IDB save
-  if (typeof scheduleIDBSave === 'function') scheduleIDBSave();
-}
-
-// Set a single property on a meeting's own block (e.g. recording_review). Same
-// block resolution as _persistTaskTags; used by the Recording Review toggle.
-function _persistMeetingFlag(taskId, key, val) {
-  var patch = {}; patch[key] = val;
-  if (_amWriteRowProps(patch)) return;
-  if (window.blockStore) {
-    var schedBlocks = (window.blockStore.getByType('schedule_item')||[]).concat(window.blockStore.getByType('block').filter(function(b){return (b.properties||{}).start||(b.properties||{}).end;}));
-    var sBlock = schedBlocks.find(function(b) { return (b.properties||{}).local_id === taskId || b.id === taskId; });
-    if (sBlock) { var np = Object.assign({}, sBlock.properties); np[key] = val; window.blockStore.updateBlock(sBlock.id, np); return; }
-  }
-  if (typeof scheduleIDBSave === 'function') scheduleIDBSave();
-}
-
-// Read-only detail line for the Task Details modal (description itself seeds the
-// Notes editor via seedNoteForTask, so this shows only the meta — no duplication).
+// Read-only task metadata for Time and history.
 function _amBuildDetails(ev){
   if(!ev) return '';
   var esc=(window.DCC&&typeof window.DCC.esc==='function')?window.DCC.esc:function(v){return String(v==null?'':v);};
@@ -431,56 +382,12 @@ function openAddModal(taskId, taskTitle, options) {
   if (memories) window.DCC?.CompletionMemories?.bindTask(memories, taskEntry, _addModalBlockId || taskEntry?._blockId);
   if (window.DCC && DCC.Activity) DCC.Activity.taskButton(_addModalBlockId || (taskEntry && taskEntry._blockId) || taskId, taskEntry);
   _addModalDraftTitle = (taskEntry && taskEntry.title) || taskTitle || '';
-  _addModalDraftTags = taskEntry && Array.isArray(taskEntry.tags) ? taskEntry.tags.slice() : [];
-  _addModalTagsDirty = false;
-  _addModalDraftRecordingReview = !!(taskEntry && taskEntry.recordingReview);
   _amSetupTitle(taskId, taskEntry, taskTitle);
 
   _amRenderDetails(taskEntry);
 
-  // Initialize tag picker
-  var tagContainer = document.getElementById('am-tag-picker');
-  if (tagContainer && typeof createTagPicker === 'function') {
-    var currentTags = _addModalDraftTags.slice();
-    createTagPicker(tagContainer, currentTags, function(newIds) {
-      _addModalDraftTags = newIds.slice();
-      _addModalTagsDirty = true;
-    });
-  }
-
-  // Recording Review toggle — meetings only. Flags the meeting for the
-  // recording-review bridge (transcript + dashboard after it ends).
-  var rrEl = document.getElementById('am-recording-review');
-  if (rrEl) {
-    var isMtg = taskEntry && (typeof isMeeting === 'function' ? isMeeting(taskEntry) : (taskEntry.type === 'meeting' || taskEntry.type === 'oneone'));
-    if (isMtg) {
-      rrEl.style.display = '';
-      rrEl.innerHTML = '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">'
-        + '<input type="checkbox" id="am-rr-check"' + (taskEntry.recordingReview ? ' checked' : '') + '>'
-        + '<span>&#128252; Recording Review <span style="opacity:.6;font-weight:400">— transcript + dashboard after this meeting</span></span></label>';
-      var rrChk = document.getElementById('am-rr-check');
-      if (rrChk) rrChk.addEventListener('change', function () {
-        _addModalDraftRecordingReview = rrChk.checked;
-      });
-    } else {
-      rrEl.style.display = 'none';
-      rrEl.innerHTML = '';
-    }
-  }
-
-  var commuteToInput = document.getElementById('am-commute-to-input');
-  var commuteBackInput = document.getElementById('am-commute-back-input');
-  var commuteHint = document.getElementById('am-commute-hint');
-  if (commuteToInput || commuteBackInput) {
-    var pair = (typeof commutePairForTask === 'function') ? commutePairForTask(taskEntry) : { to: taskEntry ? (taskEntry.commuteMinutes || 0) : 0, back: taskEntry ? (taskEntry.commuteBackMinutes || 0) : 0 };
-    if (commuteToInput) commuteToInput.value = pair.to ? String(pair.to) : '';
-    if (commuteBackInput) commuteBackInput.value = pair.back ? String(pair.back) : '';
-    updateAddModalCommuteHint();
-  } else if (commuteHint) {
-    commuteHint.textContent = 'No leave window';
-  }
-
-  // One provenance rail for desktop and mobile Notes, with stable linked attachments.
+  // Sources live beneath the task journal, with stable linked attachments.
+  document.getElementById('am-sources-section').open = false;
   var sourceRail=document.getElementById('am-source-references');
   var sourceForm=document.getElementById('am-source-form');
   if(sourceRail&&window.DCC.TaskSources){
@@ -526,18 +433,10 @@ function openAddModal(taskId, taskTitle, options) {
   researchLink.textContent='Linked research, ideas and products';
   researchLink.href='/research?block='+encodeURIComponent(_addModalBlockId||'');
   researchLink.hidden=!_addModalBlockId;
+  window.DCC.TaskAttachments.mount(document.getElementById('am-source-files-anchor'), _addModalBlockId);
 
   window.mountTaskCommute?.(document.getElementById('am-commute'), _addModalBlockId);
   window.mountTaskCosts?.(document.getElementById('am-costs'), _addModalBlockId, taskEntry);
-
-  // Load notes into block editor
-  var notes = loadNotes();
-  var noteVal = anchor?.queue && Object.hasOwn(anchor,'noteValue') ? anchor.noteValue : (notes[anchor?.blockId] ?? notes[taskId]);
-  var initialBlocks=typeof noteBlocksForTask === 'function' ? noteBlocksForTask(taskId, noteVal, taskEntry) : null;
-  if(window._amBlockEditor) window._amBlockEditor.destroy();
-  var taskFileControls=window.DCC.TaskAttachments.mount(document.getElementById('am-notes-block-editor'),_addModalBlockId);
-  window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks, { onAttachmentFile: function(file){taskFileControls.add(file);}, accessibleLabel: 'Task notes', stableImagesOnly: true, onAttachmentError: function(message){ document.getElementById('am-source-status').textContent=message; } });
-  _addModalNotesSnapshot = _addModalNotesFingerprint();
 
   // Render combined items list
   renderModalItems(taskId);
@@ -579,6 +478,9 @@ function resetAddModalPhotos() {
 function selectAddModalTab(tabId) {
   var modal = document.querySelector('#add-modal-overlay .add-modal');
   if (!modal) return;
+  if (tabId === 'overview') tabId = 'subtasks';
+  if (tabId === 'notes') { tabId = 'photos'; document.getElementById('am-sources-section').open = true; }
+  if (!Array.from(modal.querySelectorAll('[data-am-tab]')).some(function(btn) { return btn.dataset.amTab === tabId; })) tabId = 'photos';
   if (tabId === 'photos') {
     var photoHost = document.getElementById('am-photos-anchor');
     var task = _addModalAnchor?.ev;
@@ -589,7 +491,7 @@ function selectAddModalTab(tabId) {
       typeof viewMode !== 'undefined' && viewMode === 'archive' && !completed
     );
   }
-  if (tabId === 'overview') tabId = 'subtasks';
+  if (tabId === 'actions') renderAddModalTaskActions(_addModalAnchor?.ev || taskForRepeatResponsibility(_addModalTaskId));
   modal.querySelectorAll('[data-am-tab]').forEach(function(btn) {
     var active = btn.dataset.amTab === tabId;
     btn.classList.toggle('active', active);
@@ -599,6 +501,65 @@ function selectAddModalTab(tabId) {
   modal.querySelectorAll('[data-am-panel]').forEach(function(panel) {
     panel.hidden = panel.dataset.amPanel !== tabId;
   });
+}
+
+// A second presentation of the radial's definitions, including its Convert submenu.
+// Callbacks stay in schedule-tab.js; closing first releases the blocking modal.
+const TASK_ACTIONS_LAYOUT = 'list';
+function renderAddModalTaskActions(task) {
+  var host = document.getElementById('am-task-actions');
+  if (!host) return;
+  host.dataset.layout = TASK_ACTIONS_LAYOUT;
+  host.replaceChildren();
+  if (!task || typeof buildTaskRadialItems !== 'function') return;
+  var rect = host.getBoundingClientRect();
+  var trigger = { getBoundingClientRect: function() { return rect; } };
+  var anchor = _addModalAnchor;
+  // Queue anchors also describe today's scheduled tasks as carryovers. Prefer
+  // the matching live row so they retain the radial's full menu and lock state.
+  var currentTask = typeof scheduled !== 'undefined' && scheduled.find(function(ev) {
+    return ev.id === task.id && (!anchor?.blockId || ev._blockId === anchor.blockId);
+  });
+  task = currentTask || task;
+  var carryover = anchor?.carryover && !currentTask && window.DCC?.Carryover;
+  var items = carryover ? buildCarryoverRadialItems(task, trigger, {
+    move: function() {
+      openPlacementPicker({title:task.title, durMin:dur(task), day:typeof viewDate !== 'undefined' ? viewDate : undefined,
+        onPlace: function(date, time) {
+          var slot = time ? {start:time, end:fmt(pt(time) + dur(task))} : null;
+          return carryover.moveTo(task, date, {pool:typeof _unfRows === 'function' ? _unfRows() : [task], slot:slot});
+        }});
+    },
+    backlog: function() { return carryover.toBacklog(task, typeof _unfRows === 'function' ? _unfRows() : [task]); }
+  }) : buildTaskRadialItems(task, trigger);
+  function show(choices, parent) {
+    host.replaceChildren();
+    if (parent) {
+      var back = document.createElement('button');
+      back.type = 'button'; back.className = 'work-action-btn'; back.textContent = 'Back';
+      back.addEventListener('click', function() { show(parent); });
+      host.appendChild(back);
+    }
+    choices.forEach(function(item) {
+      var button = document.createElement('button');
+      button.type = 'button'; button.className = 'work-action-btn am-task-action';
+      button.textContent = (item.icon ? item.icon + ' ' : '') + item.label;
+      button.setAttribute('aria-label', item.label);
+      if (item.children) button.setAttribute('aria-expanded', 'false');
+      button.addEventListener('click', async function() {
+        if (typeof viewMode !== 'undefined' && viewMode === 'archive') return;
+        if (item.children) { show(item.children(), choices); host.querySelector('button')?.focus(); return; }
+        rect = button.getBoundingClientRect();
+        closeAddModal();
+        try { await item.onPick(); }
+        catch (error) { if (typeof showToast === 'function') showToast(error.message || 'Could not update task', 'error'); }
+      });
+      host.appendChild(button);
+    });
+    var modal = document.querySelector('#add-modal-overlay .add-modal');
+    _setAddModalControlsEditable(modal, _addModalEditing);
+  }
+  show(items);
 }
 
 function setAddModalMode(editing) {
@@ -635,16 +596,6 @@ function saveAddModalEdits() {
     _persistTaskTitle(_addModalTaskId, _addModalDraftTitle);
     if (typeof isBountyTask === 'function' && isBountyTask(_addModalTaskId) && typeof saveBountyState === 'function') saveBountyState();
   }
-  if (taskEntry) {
-    taskEntry.tags = _addModalDraftTags.slice();
-    taskEntry.recordingReview = _addModalDraftRecordingReview;
-  }
-  if (_addModalTagsDirty) _persistTaskTags(_addModalTaskId, _addModalDraftTags.slice());
-  var recordingReview = document.getElementById('am-recording-review');
-  if (recordingReview && recordingReview.style.display !== 'none') {
-    _persistMeetingFlag(_addModalTaskId, 'recording_review', _addModalDraftRecordingReview);
-  }
-  persistAddModalEdits();
   setAddModalMode(false);
   // BlockStore may buffer a write for retry. Submission is not acknowledgment.
   if (typeof showToast === 'function') showToast('Changes submitted', 'info');
@@ -661,9 +612,7 @@ function cancelAddModalEdits() {
   setAddModalMode(false);
 }
 
-// Repaint only the read-only metadata while this modal is open. Rebuilding the
-// modal would destroy an in-progress notes edit, which is why ordinary renders
-// are deferred until closeAddModal.
+// Refresh metadata and actions without rebuilding the journal or source form.
 function refreshOpenAddModalDetails(opts) {
   if (!_addModalTaskId) return;
   opts=opts||{};
@@ -679,6 +628,7 @@ function refreshOpenAddModalDetails(opts) {
     : ((typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === _addModalTaskId; }) : null));
   _amRenderDetails(taskEntry);
   _amRenderExecutionContext(taskEntry);
+  if (document.getElementById('am-tab-actions')?.getAttribute('aria-selected') === 'true') renderAddModalTaskActions(taskEntry);
 }
 
 function _amRenderDetails(taskEntry) {
@@ -758,12 +708,6 @@ function closeAddModal() {
   resetAddModalPhotos();
   var overlay = document.getElementById('add-modal-overlay');
   if (window.DCCWorkSessions && typeof window.DCCWorkSessions.cancelHistory === 'function') window.DCCWorkSessions.cancelHistory();
-  // The modal now opens in edit mode, so the X, Escape, and the backdrop are ordinary exits
-  // from a LIVE edit session rather than from a read view. Flush typed notes before the
-  // editor is torn down. Commute deliberately stays on the Save path only: persisting it on
-  // every close is the {to:0,back:0} carryover wipe documented in state.js setTaskCommuteTimes.
-  var notesNow = _addModalNotesFingerprint();
-  if (notesNow !== null && notesNow !== _addModalNotesSnapshot) _writeAddModalNotes();
   var returnFocus = _addModalOpener;
   var returnTaskId = _addModalTaskId;
   overlay.classList.remove('open');
@@ -773,7 +717,7 @@ function closeAddModal() {
   _addModalTaskId = null;
   _addModalOpener = null;
   // C4: clear the row id with the task id. Leaving it set would point the NEXT modal's
-  // tag/flag writes at the previous row — a cross-task write, and the kind of stale
+  // title writes at the previous row, causing a cross-task write and stale state
   // module state that only shows up on the second open.
   _addModalBlockId = null;
   _addModalAnchor = null;
@@ -946,6 +890,9 @@ document.addEventListener('DOMContentLoaded', function() {
   document.getElementById('add-modal-edit').addEventListener('click', function() { setAddModalMode(true); });
   document.getElementById('add-modal-save').addEventListener('click', saveAddModalEdits);
   document.getElementById('add-modal-cancel-edit').addEventListener('click', cancelAddModalEdits);
+  document.getElementById('am-source-files').addEventListener('drop', function(event) {
+    if (event.currentTarget.disabled) { event.preventDefault(); event.stopImmediatePropagation(); }
+  }, true);
   document.querySelectorAll('[data-am-tab]').forEach(function(btn) {
     btn.addEventListener('click', function() { selectAddModalTab(btn.dataset.amTab); });
     btn.addEventListener('keydown', function(e) {
@@ -979,15 +926,6 @@ document.addEventListener('DOMContentLoaded', function() {
   document.getElementById('add-modal-overlay').addEventListener('click', function(e) {
     if (e.target === e.currentTarget) closeAddModal();
   });
-  ['am-commute-to-input','am-commute-back-input'].forEach(function(id) {
-    var commuteInput = document.getElementById(id);
-    if (!commuteInput) return;
-    commuteInput.addEventListener('input', updateAddModalCommuteHint);
-    commuteInput.addEventListener('change', function() {
-      updateAddModalCommuteHint();
-    });
-  });
-
   // Add item (subtask, side project, or action -- based on type dropdown)
   function addModalItem() {
     var inp = document.getElementById('am-item-input');
@@ -1492,71 +1430,6 @@ function toggleSnCreateTask(){
   titleInp && titleInp.addEventListener("keydown", e=>{ if(e.key==="Enter") collapseIfAdded(); });
 })();
 
-// Everything the open modal holds that is not yet durable: commute inputs and the notes
-// block editor. Split out of closeAddModal because a caller can need the SAVE without the
-// CLOSE. openAddModal destroys the block editor to rebuild it, so re-entering the modal on
-// a different task (the origin-task chip) silently discarded whatever was typed, while
-// calling closeAddModal instead would have run its trailing _flushDeferredRender() +
-// render() -- and that refold races a following switchToDate, leaving the day's task array
-// empty. Persisting without closing avoids both.
-// Serialized shape of what the notes editor currently holds. Lets closeAddModal tell an
-// untouched open from a real edit, so dismissing a modal you only looked at never writes.
-function _addModalNotesFingerprint() {
-  if (!window._amBlockEditor || typeof window._amBlockEditor.getBlocks !== 'function') return null;
-  try { return JSON.stringify(window._amBlockEditor.getBlocks()); } catch (e) { return null; }
-}
-
-// Write the notes editor into storage for the open task. Shared by the Save path and by
-// closeAddModal's dismissal flush, so the two can never drift.
-function _writeAddModalNotes() {
-  if (!_addModalTaskId || !window._amBlockEditor) return;
-  var notes = loadNotes();
-  var previous = notes[_addModalTaskId];
-  if (!window._amBlockEditor.isEmpty()) {
-    var blocks = window._amBlockEditor.getBlocks();
-    notes[_addModalTaskId] = Object.assign({}, previous, { blocks: blocks, html: window._amBlockEditor.toHtml(), text: window._amBlockEditor.toMarkdown() });
-  } else {
-    notes[_addModalTaskId] = Object.assign({}, previous, { blocks: [], html: "", text: "" });
-  }
-  saveNotes(notes, { taskId: _addModalTaskId, previous: previous, anchor: _addModalAnchor });
-  _addModalNotesSnapshot = _addModalNotesFingerprint();
-}
-
-function persistAddModalEdits() {
-  persistAddModalCommute();
-  _writeAddModalNotes();
-}
-window.persistAddModalEdits = persistAddModalEdits;
-
-function persistAddModalCommute() {
-  if (!_addModalTaskId) return;
-  var toInput = document.getElementById('am-commute-to-input');
-  var backInput = document.getElementById('am-commute-back-input');
-  if ((!toInput && !backInput) || typeof setTaskCommuteTimes !== 'function') return;
-  setTaskCommuteTimes(_addModalTaskId, {
-    to: toInput ? toInput.value : 0,
-    back: backInput ? backInput.value : 0
-  }, { blockId: _addModalBlockId });
-}
-
-function updateAddModalCommuteHint() {
-  var toInput = document.getElementById('am-commute-to-input');
-  var backInput = document.getElementById('am-commute-back-input');
-  var hint = document.getElementById('am-commute-hint');
-  if ((!toInput && !backInput) || !hint) return;
-  var taskEntry = (typeof scheduled !== 'undefined' && _addModalTaskId) ? scheduled.find(function(ev) { return ev.id === _addModalTaskId; }) : null;
-  var to = typeof normalizeCommuteMinutes === 'function' ? normalizeCommuteMinutes(toInput ? toInput.value : 0) : (parseInt(toInput && toInput.value, 10) || 0);
-  var back = typeof normalizeCommuteMinutes === 'function' ? normalizeCommuteMinutes(backInput ? backInput.value : 0) : (parseInt(backInput && backInput.value, 10) || 0);
-  var pts = Math.round((to + back) * 0.1);
-  var pointsText = (to || back) ? ((pts > 0 ? '+' + pts : '<1') + ' pts') : '';
-  if (!taskEntry || !to || typeof commuteLeaveWindow !== 'function') {
-    hint.textContent = pointsText || 'No leave window';
-    return;
-  }
-  var preview = Object.assign({}, taskEntry, { commuteMinutes: to, commuteToMinutes: to, commuteBackMinutes: back });
-  var win = commuteLeaveWindow(preview);
-  hint.textContent = win ? (win.label + (pointsText ? ' · ' + pointsText : '')) : (pointsText || 'No leave window');
-}
 // Wire TQP collapse toggle + accordion expand/collapse-all (runs once after DOM load)
 document.addEventListener('DOMContentLoaded',function(){
   // PIN 4: expand/collapse-all controls for both accordions.

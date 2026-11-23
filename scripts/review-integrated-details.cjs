@@ -31,6 +31,7 @@ const base='http://127.0.0.1:8301';const date='2026-10-06';
   await page.screenshot({path:path.join(__dirname,'../design/task-details/screenshots/integrated-details-'+width+'.png')});
  }
  await page.setViewportSize({width:390,height:844});
+ await page.locator('#am-tab-history').click();
  await page.locator('#am-work-actions [data-work-action="start"]').click();
  await page.locator('#am-work-actions [data-work-action="pause"]').waitFor();
  assert((await(await fetch(base+'/api/blocks/detail-review/work')).json()).block.properties.startedAt);
@@ -38,9 +39,8 @@ const base='http://127.0.0.1:8301';const date='2026-10-06';
  await page.locator('#am-work-actions [data-work-action="start"]').waitFor();
  assert(!(await(await fetch(base+'/api/blocks/detail-review/work')).json()).block.properties.startedAt);
  await page.locator('#add-modal-title').click();await page.locator('.am-title-edit').fill('Saved handoff title');await page.locator('.am-title-edit').press('Enter');
- await page.getByText('Task settings',{exact:true}).click();await page.locator('#am-commute-to-input').fill('20');
  await page.locator('#add-modal-save').click();
- await page.waitForFunction(async()=>{const b=await(await fetch('/api/blocks/detail-review/work')).json();return b.block.properties.title==='Saved handoff title'&&b.block.properties.commuteToMinutes===20;});
+ await page.waitForFunction(async()=>{const b=await(await fetch('/api/blocks/detail-review/work')).json();return b.block.properties.title==='Saved handoff title'&&b.block.properties.commuteToMinutes===15;});
  await page.evaluate(()=>closeAddModal());await page.evaluate(()=>openAddModal('detail-review'));
  assert.equal(await page.locator('#add-modal-title').textContent(),'Saved handoff title');
  await page.locator('#add-modal-title').click();await page.locator('.am-title-edit').fill('Discard this draft');await page.locator('.am-title-edit').press('Enter');

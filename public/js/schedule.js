@@ -1870,7 +1870,7 @@ async function _renderSchedAfterStep(dateStr){
       b.addEventListener("click",()=>_schedCommit(dateStr,t));chipWrap.appendChild(b);
     });
   }
-  // Every task already on that day, "After <title> · ends <end>"
+  // Open tasks already on that day, "After <title> · ends <end>"
   const taskWrap=document.getElementById("sched-after-tasks");
   if(taskWrap){
     taskWrap.setAttribute("aria-busy","true");
@@ -1911,17 +1911,35 @@ async function _schedDayTasks(dateStr){
   // it (task-model.js: no properties.start => untimed), which this code was missing
   // because it only ever required an end.
   if(dateStr===viewing&&typeof scheduled!=="undefined"&&Array.isArray(scheduled)){
-    scheduled.forEach(ev=>{if(ev&&!ev.untimed&&ev.title&&ev.end)out.push({title:ev.title,end:toHHMM(ev.end)})});
+    window.DCC.TaskModel.selectOpen(scheduled).forEach(ev=>{if(ev&&!ev.untimed&&ev.title&&ev.end)out.push({title:ev.title,end:toHHMM(ev.end)})});
   }else{
     // One shared day fetch: the same {state,blocks} the earliest-free slot math
     // reads, so the "After…" anchors and the landed slot can't diverge.
     const ctx=await window.DCC.getDayContext(dateStr);
+    // Resolve completion for the TARGET day, never the viewed day's registry.
+    // A timeline entry can also have a completed backing row; collect every row's
+    // identity before reading either source so that copy cannot leak back in.
+    const blocks=(ctx&&ctx.blocks)||[];
+    const doneIds=new Set();
+    const addDoneOverlay=p=>{
+      const ids=p&&p._done&&p._done.ids;
+      if(Array.isArray(ids))ids.forEach(id=>doneIds.add(id));
+    };
+    addDoneOverlay(ctx&&ctx.state);
+    const rowDone=p=>!!(p&&(p.done||p.completed||p.completedAt||p.doneAt||p.status==="done"||p.status==="completed"));
+    blocks.forEach(b=>{
+      if(!b||b.deleted_at)return;
+      const p=b.properties||b.props||{};
+      if(b.type==="day_root")addDoneOverlay(p);
+      if(rowDone(p)){doneIds.add(b.id);if(p.local_id)doneIds.add(p.local_id)}
+    });
+    const completed=(p,id)=>rowDone(p)||doneIds.has(id)||!!(p.local_id&&doneIds.has(p.local_id));
     const timeline=(ctx&&ctx.state&&ctx.state.schedule&&ctx.state.schedule.timeline)||[];
-    timeline.forEach(e=>{if(e&&e.title&&e.start&&e.end&&e.type!=="break"&&e.type!=="ooo")out.push({title:e.title,end:toHHMM(e.end)})});
+    timeline.forEach(e=>{if(e&&!completed(e,e.id)&&e.title&&e.start&&e.end&&e.type!=="break"&&e.type!=="ooo")out.push({title:e.title,end:toHHMM(e.end)})});
     // Tasks persisted directly to that date (added/scheduled blocks)
-    ((ctx&&ctx.blocks)||[]).forEach(b=>{
+    blocks.forEach(b=>{
       const p=(b&&(b.properties||b.props))||{};
-      if(b&&!b.deleted_at&&p.title&&p.start&&p.end)out.push({title:p.title,end:toHHMM(p.end)});
+      if(b&&!b.deleted_at&&!completed(p,b.id)&&p.title&&p.start&&p.end)out.push({title:p.title,end:toHHMM(p.end)});
     });
   }
   // Dedup by title+end, drop entries with an unparseable end, sort by end time.

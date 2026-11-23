@@ -91,6 +91,19 @@ if (process.env.DCC_REVIEW_GLASSES_DEVICE === '1') {
   });
 }
 if (process.env.DCC_REVIEW_TASK_DETAILS === '1') seedTaskDetailReview(reviewBlocks, localDateKey(new Date()));
+if (process.env.DCC_REVIEW_TASK_DETAILS === '1') {
+  const memories = new Map();
+  app.get('/api/itinerary-journal-photos', (_req, res) => res.json([]));
+  app.get('/api/tasks/:id/attachments', (_req, res) => res.json({ files: [], configured: true }));
+  app.get('/api/completion-memories', (_req, res) => res.json([...memories.values()]));
+  app.post('/api/completion-memories', (req, res) => {
+    const key = String(req.body.blockId) + ':' + String(req.body.revision);
+    const entry = { id: key, block_id: req.body.blockId, revision: req.body.revision,
+      photos: [], reflection: '', ...memories.get(key), ...req.body };
+    memories.set(key, entry);
+    res.json(entry);
+  });
+}
 if (process.env.DCC_REVIEW_HIERARCHY === '1') seedHierarchyReview(reviewBlocks, localDateKey(new Date()));
 if (process.env.DCC_REVIEW_HIERARCHY === '1') app.post('/api/review/hierarchy/reset',(_req,res)=>{reviewBlocks.clear();seedHierarchyReview(reviewBlocks,localDateKey(new Date()));res.json({ok:true});});
 

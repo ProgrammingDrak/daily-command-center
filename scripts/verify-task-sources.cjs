@@ -6,18 +6,19 @@ const root=require('path').resolve(__dirname,'..');
 (async()=>{const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
 try{for(const width of [1280,390]){
  const page=await browser.newPage({viewport:{width,height:800}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
- const html=fs.readFileSync(root+'/index.html','utf8');const section=html.slice(html.indexOf('<div id="am-source-references"'),html.indexOf('<div id="am-panel-settings"'));
- await page.setContent('<style>'+fs.readFileSync(root+'/public/css/task-sources.css','utf8')+'</style>'+section);
+ const html=fs.readFileSync(root+'/index.html','utf8');const section=html.slice(html.indexOf('<div id="am-source-references"'),html.indexOf('<div id="am-panel-history"'));
+ await page.setContent('<style>'+fs.readFileSync(root+'/public/css/task-sources.css','utf8')+'</style><details id="am-sources-section" open>'+section+'<div id="source-editor-fixture"></div>');
  await page.addScriptTag({path:root+'/public/js/task-sources.js'});
  await page.addScriptTag({path:root+'/public/js/block-editor.js'});
- const code=fs.readFileSync(root+'/public/js/features.js','utf8');const rail=code.slice(code.indexOf('  // One provenance rail'),code.indexOf('  // Load notes into block editor'));
+ const code=fs.readFileSync(root+'/public/js/features.js','utf8');const rail=code.slice(code.indexOf('  // Sources live beneath'),code.indexOf('  var researchLink='));
  await page.evaluate(rail=>{
   window.taskEntry={source_id:'https://clever.slack.com/archives/C1/p1',sourceReferences:[{kind:'file',name:'Private original.pdf',url:'https://drive.google.com/file/d/private/view'}]};
   window._addModalBlockId='a';window._addModalTaskId='task-a';window.stored={...taskEntry,title:'Preserved',slack_ts:'1'};window.failSave=false;
   window.DCC.taskSourceUrl=t=>t.source_id;
   window.enqueueRowPropsWrite=async(id,merge)=>{const next=merge(stored);if(failSave)throw new Error('Access revoked');stored=next;return {properties:next};};
   eval(rail);
-  window.editor=createBlockEditor(document.getElementById('am-notes-block-editor'),[{type:'paragraph',content:'Synthetic notes'}],{stableImagesOnly:true,onAttachmentError:m=>document.getElementById('am-source-status').textContent=m});
+  document.getElementById('am-sources-section').open=true;
+  window.editor=createBlockEditor(document.getElementById('source-editor-fixture'),[{type:'paragraph',content:'Synthetic notes'}],{stableImagesOnly:true,onAttachmentError:m=>document.getElementById('am-source-status').textContent=m});
  },rail);
  assert.equal(await page.locator('.task-source-pill').count(),2);
  assert.equal(await page.locator('.task-source-remove').count(),1);

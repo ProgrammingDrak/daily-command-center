@@ -1127,7 +1127,7 @@ test("_recollectCarryover still re-collects when the create FAILS", () => {
   });
 });
 
-test("each details-modal helper writes its OWN key, with the right value", () => {
+test("the details-modal title helper writes the new title under its own key", () => {
   // The routing test was presence-only, so every patch PAYLOAD could be wrong and stay
   // green: `{ key: val }` instead of `{ [key]: val }` writes properties.key; `{ title:
   // taskId }` writes the ev id as the title; `{ tag: ids }` lands where nothing reads.
@@ -1149,20 +1149,11 @@ test("each details-modal helper writes its OWN key, with the right value", () =>
     return spy;
   }
   assert.deepEqual(
-    patchFrom("_persistMeetingFlag", /^function _persistMeetingFlag\(taskId, key, val\) \{[\s\S]*?\n\}/m,
-      (c) => c._persistMeetingFlag("c-1", "recording_review", true)),
-    [{ recording_review: true }],
-    "the flag must be written under its OWN key, not the literal 'key'");
-  assert.deepEqual(
     patchFrom("_persistTaskTitle", /^function _persistTaskTitle\(taskId, newTitle\) \{[\s\S]*?\n\}/m,
       (c) => c._persistTaskTitle("c-1", "Renamed")),
     [{ title: "Renamed" }],
     "the title must be the NEW title, not the task id");
-  assert.deepEqual(
-    patchFrom("_persistTaskTags", /^function _persistTaskTags\(taskId, tagIds\) \{[\s\S]*?\n\}/m,
-      (c) => c._persistTaskTags("c-1", ["home"])),
-    [{ tags: ["home"] }],
-    "tags go under `tags`");
+
 });
 
 test("DCC.Carryover.recollect is exported, so the next caller finds it", () => {
@@ -1418,17 +1409,13 @@ test("every details-modal write helper routes through _amWriteRowProps", () => {
   // mention in a comment cannot satisfy it.
   const featuresSource = fs.readFileSync(require.resolve("./public/js/features.js"), "utf8");
   for (const [re, what] of [
-    [/^function _persistTaskTags\(taskId, tagIds\) \{[\s\S]*?\n\}/m, "_persistTaskTags"],
-    [/^function _persistMeetingFlag\(taskId, key, val\) \{[\s\S]*?\n\}/m, "_persistMeetingFlag"],
     [/^function _persistTaskTitle\(taskId, newTitle\) \{[\s\S]*?\n\}/m, "_persistTaskTitle"],
   ]) {
     const fn = mustSlice(featuresSource, re, what);
     assert.ok(/_amWriteRowProps\(/.test(fn),
       what + " must address the row directly, or its edit is silently dropped on a carryover");
   }
-  const commute = mustSlice(featuresSource, /^function persistAddModalCommute\(\) \{[\s\S]*?\n\}/m, "persistAddModalCommute");
-  assert.ok(/blockId: _addModalBlockId/.test(commute),
-    "the commute write must hand the row id to setTaskCommuteTimes, or it records against the wrong day");
+
 });
 
 test("addSubtask on an ordinary row is unchanged: viewed day, and it joins the plan", () => {
