@@ -663,6 +663,9 @@ function createTaskListRowRenderer(context){
   // A Waiting check-in falls back to its Waiting item's deeplink, which is what
   // gives reminders scheduled before creation forwarded source_id a live link.
   function sourceJumpLink(ev){
+    const placeLink=ev&&((/^[a-f0-9-]{36}$/i.test(ev.placeTripId||'')&&'/places?trip='+encodeURIComponent(ev.placeTripId))||
+      (/^[a-f0-9-]{36}$/i.test(ev.placeId||'')&&'/places?place='+encodeURIComponent(ev.placeId)));
+    if(placeLink)return '<a class="src-jump" href="'+escHtml(placeLink)+'" onclick="event.stopPropagation()">Places ↗</a>';
     let url=DCC.taskSourceUrl(ev&&ev.source_id);
     if(!url&&typeof window.waitingCheckInSourceUrl==="function")url=window.waitingCheckInSourceUrl(ev);
     if(!url)return "";

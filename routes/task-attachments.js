@@ -4,6 +4,7 @@ module.exports = function mount(app, ctx) {
   const store = ctx.taskAttachmentStore || require("../task-attachment-store").createStore({
     pool: ctx.pool, storage: require("../lib/task-attachment-storage").createStorage(),
   });
+  const screenshotReader = ctx.placesScreenshotReader || require("../lib/places-providers").imageReader();
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_BYTES, files: 1, fields: 0, parts: 2 } }).single("file");
   let active = 0;
   const byUser = new Map();
@@ -14,7 +15,7 @@ module.exports = function mount(app, ctx) {
     try { return await run(); }
     finally { active--; const remaining = byUser.get(actor.userId) - 1; if (remaining) byUser.set(actor.userId, remaining); else byUser.delete(actor.userId); }
   }
-  const bases = ["/api/tasks/:blockId/attachments", "/api/notes/:blockId/attachments", "/api/wishlists/:wishlistId/attachments"];
+  const bases = ["/api/tasks/:blockId/attachments", "/api/notes/:blockId/attachments", "/api/wishlists/:wishlistId/attachments", "/api/places/records/:placeId/attachments"];
   function route(run, mutation = false) {
     return async (req, res) => {
       res.set("Cache-Control", "private, no-store");
@@ -27,10 +28,23 @@ module.exports = function mount(app, ctx) {
           if (req.headers["x-dcc-attachment"] !== "1" || req.headers["sec-fetch-site"] === "cross-site" ||
             (origin && new URL(origin).origin !== `${req.protocol}://${req.get("host")}`)) throw fail("Use the task file controls in DCC", 403);
         }
-        const { wishlistId, blockId, id } = req.params;
-        if ((wishlistId ? !UUID.test(wishlistId) : !blockId || blockId.length > 255) || (id && !UUID.test(id))) throw fail("Invalid attachment identity");
-        const actor = { userId, workspaceId: req.workspaceId, ...(wishlistId ? { wishlistId } : {}) };
+        const { wishlistId, placeId, blockId, id } = req.params;
+        const resourceId = wishlistId || placeId;
+        if ((resourceId ? !UUID.test(resourceId) : !blockId || blockId.length > 255) || (id && !UUID.test(id))) throw fail("Invalid attachment identity");
+        const actor = { userId, workspaceId: req.workspaceId, ...(wishlistId ? { wishlistId } : {}), ...(placeId ? { placeId } : {}) };
         if (wishlistId) req.params.blockId = await store.wishlistParent(actor);
+        if (placeId) {
+          const expected = userId + ":" + req.workspaceId;
+          if (mutation && req.get("x-dcc-places-owner") !== expected) throw fail("The account changed. Reopen Places.", 401);
+          const upload = req.method === "POST" && !id;
+          if (upload && (!store.configured || !UUID.test(req.get("x-upload-id") || "")))
+            throw fail(store.configured ? "Upload identity required" : "Private file storage is not configured", store.configured ? 400 : 503);
+          req.params.blockId = await store.placeParent(actor, upload);
+          if (!req.params.blockId) {
+            if (req.method === "GET" && !id) return res.json({ configured: store.configured, textRecognition: screenshotReader.available, files: [] });
+            throw fail("Attachment unavailable", 404);
+          }
+        }
         await run(req, res, actor);
       } catch (error) {
         const code = error.statusCode || (error.code === "LIMIT_FILE_SIZE" ? 413 : error instanceof multer.MulterError ? 400 : 503);
@@ -38,14 +52,22 @@ module.exports = function mount(app, ctx) {
       }
     };
   }
-  app.get("/api/wishlists/:wishlistId/attachments/:id/preview", route(async (req, res, actor) => {
+  for (const base of bases.slice(2)) app.get(base + "/:id/preview", route(async (req, res, actor) => {
     const file = await bounded(actor, () => store.download(actor, req.params.blockId, req.params.id.toLowerCase()));
     if (!["image/png", "image/jpeg", "image/webp"].includes(file.mime)) throw fail("Image preview unavailable", 404);
     res.set({ "Content-Type": file.mime, "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox; default-src 'none'" });
     res.send(file.bytes);
   }));
+  app.post("/api/places/records/:placeId/attachments/:id/extract", route(async (req, res, actor) => {
+    if (!screenshotReader.available) throw fail("Screenshot text recognition is unavailable", 503);
+    const result = await bounded(actor, async () => {
+      const file = await store.download(actor, req.params.blockId, req.params.id.toLowerCase());
+      return screenshotReader.read(file.bytes, file.mime);
+    });
+    res.json(result);
+  }, true));
   for (const base of bases) {
-    app.get(base, route(async (req, res, actor) => res.json({ configured: store.configured, files: await store.list(actor, req.params.blockId) })));
+    app.get(base, route(async (req, res, actor) => res.json({ configured: store.configured, ...(actor.placeId ? { textRecognition: screenshotReader.available } : {}), files: await store.list(actor, req.params.blockId) })));
     app.post(base, route(async (req, res, actor) => {
       const id = req.headers["x-upload-id"];
       if (typeof id !== "string" || !UUID.test(id)) throw fail("Upload identity required");

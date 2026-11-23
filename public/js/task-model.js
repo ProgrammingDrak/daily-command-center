@@ -116,6 +116,8 @@
       ...(p._taskNotes ? {_taskNotes:JSON.parse(JSON.stringify(p._taskNotes))} : {}),
       ...(Array.isArray(p.sourceReferences) ? {sourceReferences: p.sourceReferences.map(ref => Object.assign({}, ref))} : {}),
       source_id: p.source_id || "", notes: p.notes || "", untimed: untimed,
+      ...(p.placeTripId ? {placeTripId: p.placeTripId} : {}),
+      ...(p.placeId ? {placeId: p.placeId} : {}),
       ...(p.taskLocation ? {taskLocation: p.taskLocation} : {}),
       ...(p.taskCosts ? {taskCosts: p.taskCosts} : {}),
       ...(p.commuteEndpoints ? {commuteEndpoints: p.commuteEndpoints} : {}),
