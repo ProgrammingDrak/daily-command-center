@@ -91,6 +91,7 @@
 
     const today = todayStr();
     let payload;
+    const actionRead=window.DCC?.TaskActions?.readToken();
     try {
       // The unbounded sweep asks for the route's full headroom. Its LIMIT applies to
       // the raw pool BEFORE the done filter below, and since C2 that pool is roots,
@@ -106,7 +107,10 @@
       return EMPTY(true);
     }
     if (!payload || !Array.isArray(payload.rows)) return EMPTY(true);
-    const blocks = payload.rows;
+    const candidates = new Set(payload.rows.map(row => row.id));
+    const blocks = [...new Map([...(payload.ancestors || []), ...(payload.actionRows || []), ...payload.rows].map(row => [row.id, row])).values()];
+    window.DCC?.TaskActions?.reconcile(blocks,actionRead);
+    const projected = new Map(TaskModel.projectCollection(blocks, {deriveEnd:true}).map(ev => [ev._blockId || ev.id, ev]));
     const overlays = (payload && payload.overlays) || {};
 
     const rows = [];
@@ -147,21 +151,20 @@
 
       // A nested step (subtask / ride-along) legitimately carries no time — it lives
       // under its parent. The server keeps them, which is what lets the lane nest.
-      const nested = !!(p.subtaskOf || p.wrapId);
       // A finished top-level task is simply finished. A finished CHILD still counts
       // toward its parent's progress ("2/5 subtasks"), so it stays in the pool marked
       // done; the lane renders only the open rows.
       const isDone = !!(p.done || p.completed || p.completedAt || p.doneAt ||
         p.status === "done" || p.status === "completed" ||
         doneIds.has(b.id) || (p.local_id && doneIds.has(p.local_id)));
-      if (isDone && !nested) continue;
-      if (seen.has(b.id) || (p.local_id && seen.has(p.local_id))) continue;
+      if (seen.has(b.id)) continue;
       seen.add(b.id);
-      if (p.local_id) seen.add(p.local_id);
 
       // deriveEnd: a carryover row never gets a recalcTimes pass, so its `end`
       // has to be anchored to its own start (see task-model.js).
-      const ev = TaskModel.fromBlock(b, { deriveEnd: true });
+      const ev = projected.get(b.id);
+      if (!ev) continue;
+      ev._contextOnly = !candidates.has(b.id) || isDone;
       ev.__unf = {
         sourceId: b.id,
         sourceBlock: b,
@@ -174,16 +177,20 @@
       rows.push(ev);
     }
 
+    // Completed top-level rows are context only when open descendants need them.
+    const needed=new Set(TaskModel.selectCarryover(rows).map(row=>row.id));
+    for(let i=rows.length-1;i>=0;i--)if(rows[i].__unf.done&&!TaskModel.isNested(rows[i])&&!needed.has(rows[i].id))rows.splice(i,1);
     // Most recent first.
     rows.sort((a, b) => (a.__unf.sourceDate < b.__unf.sourceDate ? 1 : (a.__unf.sourceDate > b.__unf.sourceDate ? -1 : 0)));
     // `total` is what the lane and the prompt count: OPEN rows. The done children
     // riding along are progress data, not work.
-    const total = rows.filter(ev => !ev.__unf.done).length;
+    const total = rows.filter(ev => !ev._contextOnly && !ev.__unf.done).length;
     // `scanned` is still "how many past days this pool came from", now counted by the
     // server off the dates it actually touched rather than by the client off the days
     // it walked. The modal's footer copy reads it. `truncated` says the server's LIMIT
     // clipped the raw pool, which makes `total` a floor rather than an exact count.
     collectedRows = rows; // Keep the full server-bounded pool: slicing can sever a deep tree.
+    if(typeof window.dispatchEvent==='function'&&typeof window.CustomEvent==='function')window.dispatchEvent(new window.CustomEvent('dcc:task-context'));
     return {
       rows: collectedRows, total, failed: false,
       scanned: Number(payload.scanned) || 0,
@@ -203,7 +210,7 @@
 
   // Carryover actions use the same complete, cycle-safe graph walk as the day.
   function descendants(ev, pool) {
-    return DCC.TaskModel.descendantsOf(ev && ev.id, pool || []);
+    return DCC.TaskModel.actionTargets(ev && ev.id, pool || [ev]).slice(1);
   }
 
   function originOf(ev) { return (ev && ev.__unf) || {}; }
@@ -316,7 +323,7 @@
   // C6a: the predicate itself lives in TaskModel.selectCarryover. This name stays
   // because DCC.Carryover is the carryover lane's published API (the itinerary lane,
   // the Catch up modal and the morning prompt all call it), but there is one body.
-  function openRows(pool) { return DCC.TaskModel.selectCarryover(pool); }
+  function openRows(pool) { return DCC.TaskModel.selectCarryover(window.DCC?.TaskActions?.projectPool(pool)||pool); }
   // Same deal as openRows: this is TaskModel.selectRoots under the name the three carryover
   // surfaces call. Keeping a body here made the layer's copy the DEAD one -- selectRoots's only
   // other call site is schedule-tab's `_CO_ ? ... : ...` fallback, which never fires -- so a fix
@@ -339,7 +346,8 @@
   //
   // Sequential await is no longer about clobbering -- per-row writes go through
   // `enqueueRowPropsWrite`, which serializes them -- but it keeps the ledger calls ordered.
-  async function complete(ev, pool) {
+  async function complete(ev, pool, _sharedAction=false) {
+    if(window.DCC?.TaskActions&&!_sharedAction)return window.DCC.TaskActions.run({task:ev,action:'complete',write:()=>complete(ev,pool,true)});
     const u = originOf(ev);
     const kids = descendants(ev, pool);
     const removed = [];
@@ -348,8 +356,9 @@
       const date = tu.sourceDate || u.sourceDate;
       try {
         if (typeof commitDoneOnDate !== "function") throw new Error("Completion writer unavailable");
-        const result = await commitDoneOnDate(writeId(t) || t.id, date, { cascade: false, ev: t });
+        const result = await commitDoneOnDate(writeId(t) || t.id, date, { cascade: false, ev: t, _sharedAction:true });
         if (result === false) return null;
+        if (result?.pending) return null; // The shared projection stays pending until replay acknowledges it.
       } catch (e) {
         if (typeof showToast === "function") showToast("Could not mark complete: " + ev.title, "error");
         return null;
@@ -410,13 +419,19 @@
   // Drop = a real soft-delete of the origin block AND its subtree, in one atomic
   // batch. (carryover-review.js's Drop was a log line that deleted nothing, so the
   // task came straight back the next morning.)
-  async function drop(ev, pool) {
+  async function drop(ev, pool, _sharedAction=false) {
+    if(window.DCC?.TaskActions&&!_sharedAction)return window.DCC.TaskActions.run({task:ev,action:'delete',write:()=>drop(ev,pool,true)});
     const u = originOf(ev);
     const kids = descendants(ev, pool);
     const ids = [u.sourceId].concat(kids.map(t => originOf(t).sourceId).filter(Boolean));
     let writeResult = null;
     try {
-      if (ids.length > 1 && window.blockStore && typeof window.blockStore.batchOp === "function") {
+      if(typeof _submitTaskDelete==='function') {
+        const targets=[ev,...kids];
+        writeResult=await _submitTaskDelete({id:u.sourceId,ev,ids:targets.map(t=>originOf(t).sourceId),
+          members:targets.map(t=>({id:originOf(t).sourceId,overlayId:originOf(t).sourceId,expectedUpdatedAt:originOf(t).sourceBlock?.updated_at})),
+          undoDate:u.sourceDate,canonicalOnly:true});
+      } else if (ids.length > 1 && window.blockStore && typeof window.blockStore.batchOp === "function") {
         writeResult = await window.blockStore.batchOp(ids.map(id => ({ op: "delete", id })));
       } else {
         if (!window.blockStore || typeof window.blockStore.deleteBlock !== "function") throw new Error("Delete writer unavailable");
@@ -429,6 +444,7 @@
     // A Drop is settled only after the server acknowledges it. Cancel a buffered
     // attempt immediately so replay cannot delete a row the UI restored for retry.
     if (!writeResult || writeResult.ok !== true || writeResult.buffered) {
+      if(writeResult?.buffered&&typeof _submitTaskDelete==='function')return null;
       if (writeResult && writeResult.walId && window.blockStore && typeof window.blockStore.cancelBufferedWrite === "function") {
         window.blockStore.cancelBufferedWrite(writeResult.walId, ids);
       }
@@ -436,6 +452,7 @@
       if (typeof showToast === "function") showToast("Could not drop " + ev.title + (detail ? ": " + detail : ""), "error");
       return null;
     }
+    if(window.DCC?.TaskActions?.stateFor(ev)?.action==='restore')return null;
     if (window.blockStore && typeof window.blockStore.invalidateRangeCache === "function") window.blockStore.invalidateRangeCache(u.sourceDate);
     if (typeof window.invalidateHabitStreaks === "function") window.invalidateHabitStreaks();
     if (typeof log === "function") log("dropped", u.sourceId, "Dropped unfinished: " + ev.title);

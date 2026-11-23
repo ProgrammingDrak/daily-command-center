@@ -363,6 +363,20 @@ test("moveTo refolds the viewed day once, and deferRefold suppresses it for bulk
 
 // ───────────────── the shared pool predicates ─────────────────
 
+test('shared carryover deletion supplies canonical Undo membership despite legacy display IDs',async()=>{
+  const {d,days}=parentAndKid();
+  days[d].find(row=>row.id==='p').properties.local_id='display-parent';
+  days[d].find(row=>row.id==='k').properties.local_id='display-child';
+  const h=load(days,[d]);
+  let submitted;
+  h.ctx._submitTaskDelete=async spec=>{submitted=spec;return {ok:true};};
+  const result=await h.CO.collect();
+  await h.CO.drop(result.rows.find(row=>row.__unf.sourceId==='p'),result.rows);
+  assert.deepEqual(plain(submitted.ids),['p','k']);
+  assert.deepEqual(plain(submitted.members.map(member=>[member.id,member.overlayId])),[['p','p'],['k','k']]);
+  assert.equal(submitted.canonicalOnly,true);
+});
+
 test("openRows / rootsOf are exported and are the ONE definition every surface uses", async () => {
   const d = ymd(1);
   const h = load({ [d]: [
@@ -381,7 +395,7 @@ test("openRows / rootsOf are exported and are the ONE definition every surface u
   // ...but is not work
   assert.ok(!h.CO.openRows(rows).some(r => r.id === "donekid"));
   // roots: the standalone row and the orphan whose parent is finished
-  assert.deepEqual(plain(h.CO.rootsOf(rows).map(r => r.id).sort()), ["open", "orphan"]);
+  assert.deepEqual(plain(h.CO.rootsOf(rows).map(r => r.id).sort()), ["doneparent", "open"]);
 });
 
 // Every action ends with invalidateRangeCache(sourceDate), and the itinerary lane

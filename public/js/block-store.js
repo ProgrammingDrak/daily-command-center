@@ -237,10 +237,11 @@
       setError(_localSaveError);
       throw Object.assign(new Error(_localSaveError), { cause: e });
     }
+    window.DCC?.TaskActions?.captureWrite({...entry,_walId:entryId});
     return entryId;
   }
 
-  function walRemove(entryId) {
+  function walRemove(entryId, outcome = 'confirmed') {
     if (!entryId) return;
     try {
       const wal = JSON.parse(localStorage.getItem(WAL_KEY) || "[]");
@@ -248,6 +249,7 @@
       if (next.length === 0) localStorage.removeItem(WAL_KEY);
       else localStorage.setItem(WAL_KEY, JSON.stringify(next));
     } catch {}
+    window.DCC?.TaskActions?.finish(entryId,outcome);
   }
 
   function walGet() {
@@ -393,6 +395,7 @@
 
   function walMoveToDeadLetter(entry, reason) {
     if (!entry) return;
+    window.DCC?.TaskActions?.finish(entry._walId,'rejected');
     try {
       const dead = JSON.parse(localStorage.getItem(WAL_DEAD_LETTER_KEY) || "[]");
       dead.push({ ...entry, deadLetteredAt: new Date().toISOString(), reason: reason || "permanent failure" });
@@ -509,12 +512,16 @@
   }
 
   async function apiGet(url) {
+    const actionRead=window.DCC?.TaskActions?.readToken();
     const res = await fetch(url);
     // Carry the status on the error: handleBlocksChanged has to tell "gone" (404)
     // apart from "the network hiccuped", and sniffing the message string for a
     // number is not a contract.
     if (!res.ok) { const err = new Error(`API error ${res.status}`); err.status = res.status; throw err; }
-    return res.json();
+    const value=await res.json();
+    const rows=Array.isArray(value)?value:value?.blocks||((value?.id&&value?.type)?[value]:[]);
+    window.DCC?.TaskActions?.reconcile(rows,actionRead);
+    return value;
   }
 
   // ── Cache Helpers ──
@@ -1187,8 +1194,11 @@
       const predecessor = walPendingTaskCompletion(taskRef);
       const predecessors = predecessor
         ? [...(predecessor.meta?.predecessorMutationIds || []), predecessor.data.mutationId].slice(-100) : [];
+      let taskTargets;
+      try{taskTargets=window.DCC?.TaskActions?.targetList(taskRef,body.taskDate,!!completed);}
+      catch(error){setError(error.message);throw error;}
       const walId = walPush({ op: "completion", id: taskRef, data: body,
-        meta: { ...(context.sideEffects || {}), predecessorMutationIds: predecessors } });
+        meta: { ...(context.sideEffects || {}), ...(taskTargets?{taskTargets}:{}), predecessorMutationIds: predecessors } });
       if (!_completionBases.has(taskRef)) _completionBases.set(taskRef, existing);
       if (optimistic) cacheSet(optimistic);
       const write = queueUpdateRequest(taskRef, async () => {
@@ -1423,7 +1433,7 @@
       if (_replaying) return false;
       const pending = !!walId && walGet().some(e => e && e._walId === walId);
       if (!pending) return false;
-      walRemove(walId);
+      walRemove(walId,'cancelled');
       for (const id of ids || []) _tombstones.delete(id);
       setSaved();
       return true;
@@ -1510,7 +1520,7 @@
         return { ...result, ok: true, walId, buffered: false };
       } catch (e) {
         if (isReviewedDeleteRejection(entry, e)) {
-          walRemove(walId);
+          walRemove(walId,'rejected');
           for (const op of operations) if (op.op === "delete") _tombstones.delete(op.id);
           setSaved();
           return { ok: false, buffered: false, error: { message: e.message, status: e.status } };
@@ -2014,6 +2024,17 @@
 
   // Expose globally
   window.blockStore = blockStore;
+  window.DCC?.TaskActions?.restore(walGet());
+  window.addEventListener('storage',event=>{
+    if(event.key!==WAL_KEY)return;
+    const actions=window.DCC?.TaskActions;
+    if(!actions)return;
+    const entries=walGet(),ids=new Set(entries.map(entry=>entry._walId));
+    actions.restore(entries);
+    let rejected=[];
+    try{rejected=JSON.parse(localStorage.getItem(WAL_DEAD_LETTER_KEY)||'[]');}catch{}
+    actions.settleMissing('blockstore',ids,rejected.map(entry=>entry._walId));
+  });
 
   // Flush pending content edits on page unload
   window.addEventListener("beforeunload", flushContentEdits);

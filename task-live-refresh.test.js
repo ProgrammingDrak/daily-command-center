@@ -9,7 +9,7 @@ const blockStoreSource = fs.readFileSync(require.resolve("./public/js/block-stor
 
 test("completion is projected before an already-folded task is skipped", () => {
   const loopStart = persistenceSource.indexOf("if(_tmReady)addedBlocks.forEach(block=>{");
-  const loopEnd = persistenceSource.indexOf("const task=TM.fromBlock(block);", loopStart);
+  const loopEnd = persistenceSource.indexOf("const task=projectedTasks.get(block.id);", loopStart);
   assert.ok(loopStart >= 0 && loopEnd > loopStart, "task fold loop must remain discoverable");
   const loop = persistenceSource.slice(loopStart, loopEnd);
   const seed = loop.indexOf('if(p.done===true||p.status==="done")');

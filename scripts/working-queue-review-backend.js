@@ -25,6 +25,14 @@ module.exports = async function mount(app) {
   app.use((req, _res, next) => { req.session = { userId: 1 }; req.workspaceId = "ws-1"; next(); });
   require("../routes/working-queue")(app, ctx);
   require("../routes/blocks")(app, ctx);
+  if(process.env.DCC_TASK_ACTIONS_REVIEW==='1'){
+    Object.assign(ctx,{
+      prepareScheduledDay:async()=>{},
+      resolveOwnerStrict:async()=>({userId:1,workspaceId:'ws-1'}),
+      buildDayResponse:async date=>({date,schedule:{timeline:[],timeBlocks:[{id:'review-day',name:'Day',start:'00:00',end:'24:00'}]}})
+    });
+    require('../routes/sync')(app,ctx);
+  }
   require("../routes/projects")(app, ctx);
   app.get("/api/tasks/:id/attachments", (_req,res)=>res.json({files:[]}));
   app.post("/api/queue-review/seed", require("../lib/route-helpers").route(async req => {

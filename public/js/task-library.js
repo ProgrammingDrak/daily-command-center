@@ -101,9 +101,13 @@
     tasks.sort((a,b) => compareTasks(a,b,filters.sort));
     const list = root().querySelector(".task-collection-list");
     const focused = document.activeElement?.closest(".it-list-item")?.dataset.id;
-    const cards = tasks.slice(0,limit).map(row => {
-      const ev = window.DCC.TaskModel.fromBlock(row);
-      ev.id = row.id;
+    const TM=window.DCC.TaskModel;
+    const projected=TM.projectCollection(payload.tasks,{canonicalIds:true});
+    const ids=new Set(tasks.map(row=>row.id));
+    const nodes=TM.selectTree(TM.withAncestorContext(projected.filter(ev=>ids.has(ev.id)),projected),{isCollapsed:()=>false});
+    const byId=new Map(payload.tasks.map(row=>[row.id,row]));
+    const cards = nodes.slice(0,limit).map(node => {
+      const ev=node.ev,row=byId.get(ev.id);
       ev.title = taskTitle(row);
       const metadata = [row.date || (mode === "someday" ? "Someday" : "Unscheduled"), projectName(props(row).projectId)];
       if (done(row)) metadata.push("Completed");
@@ -112,9 +116,10 @@
       const canReturn = row.date && props(row).someday === true && !done(row);
       return window.renderItineraryListRow(ev, {
         done:done(row),
+        depth:node.depth,
         metaHtml:metadata.filter(Boolean).map(value => '<span class="task-collection-meta">'+esc(value)+'</span>').join(""),
         onOpen:() => taskEditor(row.id),
-        onComplete:() => toggleCompletion(row),
+        onComplete:ev._contextOnly?null:() => toggleCompletion(row),
         onSchedule:done(row) ? null : anchor => scheduleTask({id:row.id, title:taskTitle(row), raw:row},anchor),
         actionsBeforeHtml:canReturn ? '<button class="btn btn-ghost" type="button" data-return-idea>Return to Someday</button>' : "",
         afterRender:card => card.querySelector("[data-return-idea]")?.addEventListener("click", event => returnIdea(row, event.currentTarget)),
@@ -149,20 +154,20 @@
     }
   }
 
-  const completing = new Set();
   async function toggleCompletion(row) {
-    if (completing.has(row.id)) return;
-    completing.add(row.id);
     try {
-      await api('/api/task-library/tasks/'+encodeURIComponent(row.id)+'/complete',{
-        method:"POST",body:JSON.stringify({completed:!done(row)})
-      });
+      const completed=!done(row),completedAt=new Date().toISOString();
+      await window.DCC.TaskActions.run({task:{id:row.id,date:row.date},action:completed?'complete':'reopen',
+        write:()=>window.blockStore.setTaskCompletion(row.id,completed,{block:row,taskDate:row.date||completedAt.slice(0,10),completedAt})});
       await refresh();
     } catch (error) { notify(error.message,"error"); }
-    finally { completing.delete(row.id); }
   }
 
-  function loadLibrary() { return api('/api/task-library'); }
+  async function loadLibrary() {
+    const read=window.DCC.TaskActions?.readToken();
+    const library=await api('/api/task-library');
+    window.DCC.TaskActions?.reconcile(library.tasks||[],read);return library;
+  }
 
   function completedIds(library) {
     return new Set(library.completedTaskIds || library.tasks.filter(ownCompletion).map(row => row.id));
@@ -183,8 +188,9 @@
     const open = library.tasks.filter(row => !row.deleted_at && !doneIds.has(row.id));
     const projects = new Map((library.projects || []).map(row => [row.id, props(row).name || props(row).title || "Project"]));
     const name = row => props(row).projectId ? (projects.get(props(row).projectId) || "Unknown project") : "Solo";
+    const projected=new Map(window.DCC.TaskModel.projectCollection(library.tasks).map(task=>[task._blockId,task]));
     const describe = row => ({kind:"task", id:row.id, actionId:row.id, row,
-      ev:window.DCC.TaskModel.fromBlock(row), title:taskTitle(row)});
+      ev:projected.get(row.id), title:(projected.get(row.id)?._parentTaskTitle?projected.get(row.id)._parentTaskTitle+' › ':'')+taskTitle(row)});
     return {
       allTasks:open.slice().sort((a,b) => name(a).localeCompare(name(b),undefined,{numeric:true,sensitivity:"base"})).map(describe),
       someday:somedayTasks(library, doneIds).sort((a,b) => compareTasks(a,b,"newest")).map(describe),
@@ -312,6 +318,7 @@
 
   const open = () => window.openTaskQueue("all-tasks");
   window.DCCTaskLibrary = {refresh, glassesCollections, open, show};
+  window.DCC.TaskActions?.registerPool('task-library',()=>window.DCC.TaskModel.projectCollection(payload?.tasks||[],{canonicalIds:true}));
   let researchLinkOpened=false;
   async function openResearchLink(){
     const p=new URLSearchParams(location.search),task=p.get('researchTask'),project=p.get('researchProject');

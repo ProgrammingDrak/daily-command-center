@@ -32,9 +32,27 @@
       ||a.body.sourceEventId.localeCompare(b.body.sourceEventId));
   }
   const completionEntries=()=>storedActions(completionPrefix);
+  function captureQueueCompletion(entry){
+    const row=items().find(item=>item.task.id===entry.body.taskId)?.task;
+    DCC.TaskActions?.capture({token:'queue:'+entry.body.sourceEventId,source:'queue-completion',action:'complete',
+      targets:entry.targets||DCC.TaskActions?.targetList(entry.body.taskId,row?.date)||[{id:entry.body.taskId,date:row?.date||null}],mutationId:entry.body.sourceEventId});
+  }
+  function captureQueueUndo(body){
+    if(body?.action!=='undo-completion')return;
+    const row=items().find(item=>item.task.id===body.taskId)?.task;
+    DCC.TaskActions?.capture({token:'queue:'+body.sourceEventId,source:'queue-transition',action:'reopen',targets:DCC.TaskActions.targetList(body.taskId,row?.date)});
+  }
+  function syncQueueActionReceipts(){
+    const entries=completionEntries(),current=new Set(entries.map(entry=>'queue:'+entry.body.sourceEventId));
+    for(const entry of entries)captureQueueCompletion(entry);
+    DCC.TaskActions?.settleMissing('queue-completion',current,reviewEntries().map(entry=>'queue:'+entry.body.sourceEventId));
+  }
   const reviewEntries=()=>storedActions(reviewPrefix);
   const completionKey=entry=>completionPrefix+entry.body.sourceEventId;
-  const saveCompletion=entry=>localStorage.setItem(completionKey(entry),JSON.stringify(entry));
+  const saveCompletion=entry=>{
+    if(!entry.targets)entry.targets=DCC.TaskActions?.targetList(entry.body.taskId,items().find(item=>item.task.id===entry.body.taskId)?.task.date);
+    localStorage.setItem(completionKey(entry),JSON.stringify(entry));captureQueueCompletion(entry);
+  };
   const reviewKey=id=>reviewPrefix+id;
   const reviewableAction=body=>['queue-dismiss','done'].includes(body?.action);
   function saveReview(entry){
@@ -54,10 +72,11 @@
   const previewVersion=preview=>JSON.stringify([preview.taskVersion,preview.history,preview.startedMs,preview.creditUntilMs]);
   function displayedItems(){
     const entries=new Map(completionEntries().map(entry=>[entry.body.taskId,entry]));
-    return items().map(item=>{
+    return items().filter(item=>DCC.TaskActions?.stateFor({_blockId:item.task.id,date:item.task.date})?.action!=='delete').map(item=>{
       const entry=entries.get(item.task.id);
-      if(!entry||item.status==='completed')return item;
-      return {...item,status:'completed',needsYou:false,snoozed:false,dueAt:null,onBreak:false,completedAt:Date.parse(entry.body.at),savingCompletion:true};
+      const shared=DCC.TaskActions?.stateFor({_blockId:item.task.id,date:item.task.date});
+      if((!entry&&shared?.action!=='complete')||item.status==='completed')return item;
+      return {...item,status:'completed',needsYou:false,snoozed:false,dueAt:null,onBreak:false,completedAt:entry?Date.parse(entry.body.at):shared.at,savingCompletion:shared?shared.status==='pending':true};
     });
   }
   function enqueueCompletion(body,preview,note,reviewId){
@@ -96,6 +115,7 @@
         entry.replaces=priorId;
         entry.sent=true;
         saveCompletion(entry);
+        DCC.TaskActions?.finish('queue:'+priorId,'cancelled');
         localStorage.removeItem(completionPrefix+priorId);
         return;
       }
@@ -125,6 +145,7 @@
             problem='';
             entry.acknowledged=true;
             saveCompletion(entry);
+            DCC.TaskActions?.finish('queue:'+entry.body.sourceEventId);
             window.performance?.mark('dcc-completion-acknowledged');
             DCC.toast('Task completed · '+(result.task?.properties.actualMinutes==null?'focused time unknown':result.task.properties.actualMinutes+'m recorded'),'success');
             break;
@@ -137,6 +158,7 @@
               continue;
             }
             saveReview({body:entry.body,note:entry.note,message:error.message});
+            DCC.TaskActions?.finish('queue:'+entry.body.sourceEventId,'rejected');
             localStorage.removeItem(completionKey(entry));
             warn(error);
             break;
@@ -206,6 +228,7 @@
     invalidated=false;
     loading=(async()=>{
       const checkedState=state;
+      const actionRead=DCC.TaskActions?.readToken();
       let value=await requestQueue({},readVersion);
       assertActionAccount();
       // A conditional hit confirms the state sent with its validator. If a
@@ -219,6 +242,7 @@
       if(!value.unchanged){
         if(!value.state)throw new Error('Queue connection changed. Reload to continue.');
         accept(value.state,value.version||null);
+        DCC.TaskActions?.reconcile(items().map(item=>item.task),actionRead);
       }else if(hadProblem)render();
       return state;
     })().catch(error=>{
@@ -246,10 +270,11 @@
     if(sending)throw new Error('A queue update is still being saved.');
     if(pending && pending.sourceEventId!==body.sourceEventId)throw new Error('Resolve the pending update first.');
     if(window.blockStore?.hasPendingWrites?.()){window.blockStore.flushPending();throw new Error('Wait for your task edits to sync first.');}
-    sending=true;setPending(body);render();
-    try {const result=await requestQueue({method:'POST',body});assertActionAccount();setPending(null);apply(result);return result;}
+    sending=true;setPending(body);captureQueueUndo(body);render();
+    try {const result=await requestQueue({method:'POST',body});assertActionAccount();setPending(null);apply(result);if(body.action==='undo-completion')DCC.TaskActions?.finish('queue:'+body.sourceEventId);return result;}
     catch(error){
       if(sameAccount()&&[...rejectedStatuses,401,403].includes(error.status)){
+        if(body.action==='undo-completion')DCC.TaskActions?.finish('queue:'+body.sourceEventId,'rejected');
         const rejected={body,message:error.message,status:error.status};
         if(reviewableAction(body)&&rejectedStatuses.includes(error.status)){
           if(!fromCompletionOutbox)saveReview(rejected);
@@ -314,15 +339,14 @@
   function contextRows(){
     const dates=new Set([...detailRows.map(r=>r.date),...items().map(item=>item.task.date)]),rows=new Map(detailRows.map(row=>[row.id,window.blockStore?.get?.(row.id)||row]));
     for(const type of ['block','action_item','note'])for(const row of window.blockStore?.getByType?.(type)||[])if(dates.has(row.date))rows.set(row.id,row);
+    for(const item of items())rows.set(item.task.id,window.blockStore?.get?.(item.task.id)||item.task);
+    for(const task of DCC.Carryover?.rows?.()||[]){const row=task.__unf?.sourceBlock;if(row&&!rows.has(row.id))rows.set(row.id,row);}
     return [...rows.values()].filter(row=>!row.deleted_at);
   }
   function taskPool(anchor){
-    const rows=anchor.sourceRows||[],parents=new Map(),byId=new Map(rows.map(row=>[row.id,row]));
-    for(const row of rows)for(const id of new Set([row.id,row.properties?.local_id].filter(Boolean))){if(!parents.has(id))parents.set(id,[]);parents.get(id).push(row);}
-    return rows.filter(r=>r.type==='block').map(row=>{
-      const ev=DCC.TaskModel.fromBlock(row);ev.id=row.id;ev.__unf={sourceId:row.id,sourceDate:row.date,sourceBlock:row};
-      for(const key of ['subtaskOf','wrapId']){const parent=parents.get(ev[key])||[];if(!byId.has(ev[key])&&parent.length===1)ev[key]=parent[0].id;}
-      return ev;
+    const rows=anchor.sourceRows||[],byId=new Map(rows.map(row=>[row.id,row]));
+    return DCC.TaskModel.projectCollection(rows,{canonicalIds:true}).map(ev=>{
+      const row=byId.get(ev.id);ev.__unf={sourceId:row.id,sourceDate:row.date,sourceBlock:row};return ev;
     });
   }
   async function refreshTaskContext(taskId){
@@ -506,10 +530,6 @@
     const taskRows=scope.filter(row=>row.type==='block'&&DCC.TaskModel.isTaskRow(row));
     const pool=taskPool({sourceRows:taskRows});
     const byId=new Map(pool.map(task=>[task.id,task]));
-    for(const task of pool){
-      const parent=task.__unf.sourceBlock.parent_id;
-      if(!DCC.TaskModel.parentIdOf(task)&&byId.has(parent))task.subtaskOf=parent;
-    }
     const task=byId.get(id);
     if(!task)throw new Error('This task is no longer available. Refresh the queue.');
     const members=[task,...DCC.TaskModel.descendantsOf(id,pool)];
@@ -861,7 +881,7 @@
       }
       if(event.key===key+':conflict'){conflict=JSON.parse(event.newValue);importLegacyReview();render();notifySync();}
       if(event.key===key+':pending'){pending=JSON.parse(event.newValue);render();notifySync();}
-      if(event.key?.startsWith(completionPrefix)||event.key?.startsWith(reviewPrefix)){render();notifySync();}
+      if(event.key?.startsWith(completionPrefix)||event.key?.startsWith(reviewPrefix)){syncQueueActionReceipts();render();notifySync();}
     }catch(_e){}
   });
   function recover(){
@@ -881,6 +901,11 @@
     const review=conflict||reviewEntries().at(0);
     return {pending:!!pending||completionEntries().length>0,conflict:review?{message:review.message||''}:null};
   }
+  DCC.TaskActions?.registerPool('working-queue',()=>taskPool({sourceRows:contextRows()}));
+  syncQueueActionReceipts();
+  captureQueueUndo(pending);
+  window.addEventListener('dcc:task-action',()=>{if(sameAccount())render();});
+  window.addEventListener('dcc:task-context',()=>{if(sameAccount())render();});
   function sameAccount(){
     const current=window.DCC_ACCOUNT_CONTEXT;
     return !scopeRejected&&!window.__DCC_SIGNING_OUT__&&current?.userId===actionAccount.userId&&current.workspaceId===actionAccount.workspaceId;

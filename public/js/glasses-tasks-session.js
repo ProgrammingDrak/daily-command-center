@@ -1,11 +1,37 @@
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./glasses-model'), require('./task-model'));
-  else root.GlassesTasksSession = factory(root.GlassesModel, root.DCC.TaskModel);
-})(typeof self !== 'undefined' ? self : this, function (M, TM) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./glasses-model'), require('./task-model'), require('./task-actions'));
+  else root.GlassesTasksSession = factory(root.GlassesModel, root.DCC.TaskModel, root.DCC.TaskActionsFactory);
+})(typeof self !== 'undefined' ? self : this, function (M, TM, Actions) {
   'use strict';
   const issue = (message, status = 0) => Object.assign(new Error(message), { status });
   function create({ request, storage, uuid, online = () => true, timeZone = 'UTC', changed = () => {} }) {
     const s = { row: null, view: null, busy: false, pending: null, error: '', status: 'Opening…', code: 0, account: null, date: null };
+    let actions=null,authoritativeView=null;
+    function projectPending(){
+      if(!authoritativeView||!actions)return;
+      s.view={...authoritativeView};
+      const project=task=>{
+        const state=actions.stateFor(task);
+        return state?.action==='complete'?{...task,completed:true,savingCompletion:state.status==='pending'}:task;
+      };
+      for(const [key,value] of Object.entries(authoritativeView))if(Array.isArray(value))s.view[key]=value.map(project);
+      s.view.todos=s.view.todos.filter(task=>!task.completed&&!task._contextOnly);
+      const earlier=TM.selectCarryover(actions.projectPool(authoritativeView.earlier||[]));
+      s.view.earlier=TM.selectTree(earlier,{isCollapsed:()=>false}).map(node=>({...node.ev,depth:node.depth}));
+      const earlierIds=new Set((authoritativeView.earlier||[]).map(task=>task.taskId));
+      s.view.queues=(authoritativeView.queues||[]).map(queue=>{
+        if(queue.id!=='loose')return {...queue,rows:queue.rows.map(project)};
+        const other=queue.rows.filter(task=>!earlierIds.has(task.taskId));
+        return {...queue,rows:[...s.view.earlier,...other],count:TM.selectRoots(earlier).length+other.length};
+      });
+    }
+    function controller(){
+      if(!actions)actions=Actions.create({account:()=>({userId:s.account,workspaceId:s.account}),
+        pool:()=>authoritativeView?Object.values(authoritativeView).filter(Array.isArray).flat().filter(task=>task.taskId):[],
+        notify:()=>{projectPending();changed(s);}});
+      return actions;
+    }
+    function capture(p){controller().captureWrite({op:'completion',id:p.taskId,data:p.body,meta:{taskTargets:p.targets},_walId:p.body.mutationId},'glasses');}
     const key = () => 'dcc.glasses.task-retry.v1:' + s.account;
     async function verify() {
       const me = await request('/api/me');
@@ -38,13 +64,16 @@
       const b = await request('/api/blocks/' + encodeURIComponent(id));
       const backlog = b.type === 'block' && b.properties?.kind === 'backlog' && TM.isTaskRow(b);
       if ((!TM.foldsIntoItinerary(b) && !backlog) || b.deleted_at || ['deleted', 'archived'].includes(b.properties?.status)) throw issue('Task is no longer available.', 404);
-      return M.fromBlock(b, s.view?.overlays?.[b.date]);
+      return {...M.fromBlock(b, s.view?.overlays?.[b.date]),_contextOnly:!!s.view?.all?.find(task=>task.taskId===id)?._contextOnly};
     }
     async function refreshView(date, allEarlier) {
+      const actionRead=controller().readToken();
       const snapshot = await request('/api/sync/bootstrap' + (date ? '?date=' + encodeURIComponent(date) : ''));
       if (s.account.split(':').slice(1).join(':') !== snapshot.workspaceId) throw issue('Workspace changed. Reload before continuing.', 403);
       const carry = await request('/api/tasks/open?before=' + M.clock(timeZone).date + (allEarlier ? '&days=all&limit=2000' : '&days=14'));
-      s.view = M.project(snapshot, carry, { timeZone }); s.view.allEarlier = !!allEarlier; s.date = snapshot.date;
+      controller().reconcile([...(snapshot.blocks||[]),...(snapshot.globals||[]),...(carry.rows||[]),...(carry.ancestors||[])],actionRead);
+      authoritativeView=M.project(snapshot, carry, { timeZone });
+      s.view=authoritativeView;s.view.allEarlier=!!allEarlier;s.date=snapshot.date;projectPending();
     }
     function restore() {
       const raw = storage.getItem(key());
@@ -52,16 +81,21 @@
       const p = JSON.parse(raw);
       if (p.account !== s.account || typeof p.taskId !== 'string' || p.body?.completed !== true || typeof p.body.mutationId !== 'string') throw issue('Recovery receipt is invalid. Clear this site’s local recovery data before continuing.');
       s.pending = p;
+      capture(p);
     }
     async function send() {
       await verify();
       const p = s.pending;
       if (!p || p.account !== s.account) throw issue('Retry receipt belongs to another account.', 403);
-      const result = await request('/api/tasks/' + encodeURIComponent(p.taskId) + '/completion', { method: 'POST', body: p.body });
+      capture(p);
+      let result;
+      try{result=await request('/api/tasks/' + encodeURIComponent(p.taskId) + '/completion', { method: 'POST', body: p.body });}
+      catch(error){if([400,401,403,404,409].includes(error.status))controller().finish(p.body.mutationId,'rejected');throw error;}
       if (result.ok !== true || result.mutationId !== p.body.mutationId) throw issue('DCC did not acknowledge this completion. Retry the same request safely.');
       const fresh = await row(p.taskId);
       // Read-after-write prevents a historical duplicate receipt from overriding a reopen.
       storage.removeItem(key()); s.pending = null; s.row = fresh;
+      controller().finish(p.body.mutationId,fresh.completed?'confirmed':'rejected');
       s.status = fresh.completed ? 'Completion synced' : 'Task is open · saved state';
       if (s.view) {
         for (const values of Object.values(s.view)) if (Array.isArray(values)) for (const task of values) if (task.taskId === fresh.taskId) Object.assign(task, fresh);
@@ -73,7 +107,7 @@
       load: options => run(async () => {
         const { taskId, date, allEarlier = false, discardConflict = false } = options || {};
         await verify();
-        if (discardConflict && s.pending) { storage.removeItem(key()); s.pending = null; }
+        if (discardConflict && s.pending) { controller().finish(s.pending.body.mutationId,'cancelled');storage.removeItem(key()); s.pending = null; }
         restore(); await refreshView(date, allEarlier);
         const id = s.pending?.taskId || taskId;
         s.row = null;
@@ -82,22 +116,24 @@
       }),
       complete: () => run(async () => {
         if (!s.row || s.row.completed || s.pending) return;
+        if(s.row._contextOnly)throw issue('This row is parent context. Complete its unfinished children instead.');
         if (!s.row.date) throw issue('Schedule this task in DCC before completing it here.');
         await verify();
         const fresh = await row(s.row.taskId);
         if (!fresh.date) throw issue('Schedule this task in DCC before completing it here.');
         if (fresh.completed) { s.row = fresh; s.status = 'Already completed in DCC'; return; }
         if (fresh.completionRevision !== s.row.completionRevision) throw issue('Completion state changed.', 409);
-        const pending = { account: s.account, taskId: fresh.taskId, body: { completed: true, taskDate: fresh.date, expectedRevision: fresh.completionRevision, mutationId: uuid() } };
+        const pending = { account: s.account, taskId: fresh.taskId, targets:controller().targetList(fresh.taskId,fresh.date), body: { completed: true, taskDate: fresh.date, expectedRevision: fresh.completionRevision, mutationId: uuid() } };
         try { storage.setItem(key(), JSON.stringify(pending)); }
         catch { throw issue('Recovery storage unavailable. No completion was sent. Enable site storage and retry.'); }
-        s.pending = pending; changed(s); await send();
+        s.pending = pending; capture(pending); changed(s); await send();
       }),
       retry: () => run(send),
       leaveUnresolved: () => {
         if (s.busy || !s.pending) return;
         // Keep the receipt for investigation, but stop forcing an inaccessible task open.
         storage.setItem(key() + ':unresolved:' + s.pending.body.mutationId, JSON.stringify(s.pending));
+        controller().finish(s.pending.body.mutationId,'cancelled');
         storage.removeItem(key()); s.pending = null; s.row = null; s.status = 'Left unresolved · completion not confirmed'; changed(s);
       }
     };

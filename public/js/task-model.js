@@ -615,6 +615,95 @@
   // `state.js` documents why this deliberately diverges from `lib/reschedule.js`'s
   // row-space order; do not "fix" that. Mirrored (not moved) from state.js, which
   // keeps the bare globals every existing call site reads.
+  // A collection, not an individual row, owns alias resolution. Exact block IDs
+  // win; legacy aliases are date scoped and must identify exactly one task.
+  function normalizeCollection(items) {
+    const list = _arr(items).filter(Boolean).map(ev => ({...ev}));
+    const idCounts=new Map();
+    for(const ev of list)idCounts.set(ev.id,(idCounts.get(ev.id)||0)+1);
+    for(const ev of list)if(idCounts.get(ev.id)>1&&(ev._blockId||ev.__unf?.sourceId)){
+      ev._localTaskId=ev._localTaskId||ev.id;ev.id=ev._blockId||ev.__unf.sourceId;
+    }
+    const exact = new Map(), aliases = new Map();
+    const dateOf = ev => ev.__unf?.sourceDate ?? ev.date ?? ev._taskDate ?? null;
+    for (const ev of list) {
+      const canonical = ev._blockId || ev.__unf?.sourceId || ev.taskId || ev.id;
+      ev._canonicalTaskId = canonical;
+      if (!exact.has(String(canonical))) exact.set(String(canonical), []);
+      exact.get(String(canonical)).push(ev);
+      for (const key of new Set([ev.id, ev.__unf?.sourceLocalId, ev._localTaskId].filter(Boolean))) {
+        const alias = JSON.stringify([String(key), dateOf(ev)]);
+        if (!aliases.has(alias)) aliases.set(alias, []);
+        aliases.get(alias).push(ev);
+      }
+    }
+    for(const matches of aliases.values())if(new Set(matches.map(ev=>ev._canonicalTaskId)).size>1){
+      for(const ev of matches)ev._identityIssue='duplicate-alias';
+    }
+    for (const ev of list) {
+      const ref = parentIdOf(ev) || ev._taskParentId;
+      if (!ref) continue;
+      const candidates = exact.get(String(ref)) || aliases.get(JSON.stringify([String(ref), dateOf(ev)])) || [];
+      const distinct = [...new Map(candidates.map(p => [p._canonicalTaskId, p])).values()];
+      const parent = distinct.length === 1 ? distinct[0] : null;
+      if (parent) {
+        if (ev.wrapId) ev.wrapId = parent.id;
+        else ev.subtaskOf = parent.id;
+        ev._parentTaskId = parent._canonicalTaskId;
+        ev._parentTaskTitle = parent.title || 'parent task';
+        ev._hierarchyIssue = null;
+      } else {
+        ev._hierarchyIssue = distinct.length ? 'ambiguous-parent' : 'unavailable-parent';
+        // Retain the relationship. Missing context never changes the task's type.
+        if (!parentIdOf(ev)) ev.subtaskOf = ref;
+      }
+    }
+    return list;
+  }
+  function projectCollection(blocks, opts = {}) {
+    const contexts = new Set(opts.contextIds || []);
+    const taskIds=new Set(_arr(blocks).filter(isTaskRow).map(row=>row.id));
+    return normalizeCollection(_arr(blocks).filter(isTaskRow).map(block => {
+      const ev = fromBlock(block, opts);
+      ev._taskDate = block.date || null;
+      ev._localTaskId = block.properties?.local_id || null;
+      ev._taskParentId = block.parent_id || null;
+      // parent_id may point at a day container. Only retain task-to-task edges.
+      if (!taskIds.has(ev._taskParentId)) ev._taskParentId = null;
+      ev._contextOnly = contexts.has(block.id);
+      return opts.canonicalIds ? {...ev, id:block.id} : ev;
+    }));
+  }
+  function hierarchyLabel(ev) {
+    if (ev?._hierarchyIssue === 'ambiguous-parent') return 'Subtask: parent reference needs review';
+    if (ev?._hierarchyIssue) return ev.wrapId ? 'Nested task: parent unavailable' : 'Subtask: parent unavailable';
+    if (ev?._contextOnly) return 'Parent context';
+    if(ev?._identityIssue)return 'Task identity needs review';
+    if(ev?.subtaskOf)return 'Subtask of '+(ev._parentTaskTitle||'parent task');
+    if(ev?.wrapId)return 'Nested in '+(ev._parentTaskTitle||'parent task');
+    return '';
+  }
+  function actionTargets(id, items, opts = {}) {
+    const pool = normalizeCollection(items);
+    const matches = pool.filter(ev => [ev.id, ev._canonicalTaskId].includes(id));
+    if (matches.length !== 1) throw new Error('Task identity is unavailable or ambiguous');
+    const targets = [matches[0], ...descendantsOf(matches[0].id, pool, opts)];
+    const root=matches[0];
+    if (targets.some(ev => ev._hierarchyIssue === 'ambiguous-parent')||pool.some(ev=>
+      ev._hierarchyIssue==='ambiguous-parent'&&[root.id,root._localTaskId,root._canonicalTaskId].includes(parentIdOf(ev)))) throw new Error('Parent task reference is ambiguous');
+    return targets;
+  }
+  function withAncestorContext(items,pool) {
+    const all=normalizeCollection(pool), byId=new Map(all.map(ev=>[ev.id,ev]));
+    const eligible=new Set(items.map(ev=>ev._blockId||ev.id)), included=new Set();
+    for(const ev of all)if(eligible.has(ev._blockId||ev.id)){
+      let current=ev;const seen=new Set();
+      while(current&&!seen.has(current.id)){
+        seen.add(current.id);included.add(current.id);current=byId.get(parentIdOf(current));
+      }
+    }
+    return all.filter(ev=>included.has(ev.id)).map(ev=>({...ev,_contextOnly:ev._contextOnly||!eligible.has(ev._blockId||ev.id)}));
+  }
   function hierarchyRoot(id,items,index){
     const byId=index||new Map(_arr(items).map(ev=>[ev.id,ev])),seen=new Set();
     const original=byId.get(id);let current=original;
@@ -755,7 +844,19 @@
   // up modal and the morning prompt keep sharing ONE definition; this is its home,
   // not a second copy.
   function selectCarryover(pool) {
-    return _arr(pool).filter(function (ev) { return !!ev && !(ev.__unf && ev.__unf.done); });
+    const list = normalizeCollection(pool);
+    const byId = new Map(list.map(ev => [ev.id, ev]));
+    const included = new Set();
+    for (const ev of list) {
+      if (ev._contextOnly || ev.__unf?.done) continue;
+      let current = ev;
+      const seen = new Set();
+      while (current && !seen.has(current.id)) {
+        seen.add(current.id); included.add(current.id);
+        current = byId.get(parentIdOf(current));
+      }
+    }
+    return list.filter(ev => included.has(ev.id));
   }
 
   // ── selectDay: the viewed day, partitioned ──
@@ -1028,6 +1129,7 @@
     fromBacklogBlock, backlogParentKeys, selectWheneverPoolBlocks, suppressWheneverSeeds,
     // C6a — shape
     hierarchyIndex, descendantsOf, isAncestor,
+    projectCollection, normalizeCollection, hierarchyLabel, actionTargets, withAncestorContext,
     parentIdOf: parentIdOf,
     hierarchyRoot,
     relOf: relOf,

@@ -19,6 +19,22 @@ const root = path.resolve(here, "..");
 const port = Number(process.env.PORT || 8099);
 const app = express();
 app.use(express.json());
+if(process.env.DCC_TASK_ACTIONS_REVIEW==='1'){
+  app.get('/api/me',(_req,res)=>res.json({id:1,userId:1,workspaceId:'ws-1',username:'review',onboardingState:{dailyCommandCenterTour:{version:2,completedAt:'2026-01-01T00:00:00.000Z'}}}));
+  const options={delayMs:2000,failureStatus:0};
+  app.post('/api/review/task-actions/options',(req,res)=>{
+    if(Number.isFinite(req.body.delayMs))options.delayMs=Math.max(0,Math.min(10000,req.body.delayMs));
+    options.failureStatus=[0,400,409,503].includes(req.body.failureStatus)?req.body.failureStatus:0;
+    res.json(options);
+  });
+  app.use(async(req,res,next)=>{
+    const write=req.method==='POST'&&(/\/api\/tasks\/[^/]+\/completion$/.test(req.path)||req.path==='/api/blocks/batch'||(req.path==='/api/working-queue'&&req.body.action==='done'));
+    if(!write)return next();
+    await new Promise(resolve=>setTimeout(resolve,options.delayMs));
+    if(options.failureStatus){const status=options.failureStatus;options.failureStatus=0;return res.status(status).json({error:'Synthetic task save rejected'});}
+    next();
+  });
+}
 const { default: glassesLaunch } = await import("../lib/glasses-launch.js");
 app.get(["/glasses", "/glasses.html"], glassesLaunch);
 const { default: glassesShell } = await import("../lib/glasses-shell.js");

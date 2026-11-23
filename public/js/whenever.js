@@ -397,16 +397,15 @@
     return result;
   }
 
-  // Did it already. Land it on today first so the check-off is the normal one:
-  // points, streaks and the completion row, with no Whenever-only completion path.
-  // No toast of its own: toggleDone already says "+N points", and a second one stacked
-  // on top of it in the same corner.
+  // Completion already supports undated rows and stamps today atomically. Moving
+  // the whole root to a timed slot first delayed feedback and could complete the
+  // wrong node when the selected task was a child.
   async function markDone(id) {
-    const ev = await doNow(id, { silent: true });
-    if (!ev || typeof toggleDone !== "function") return false;
-    toggleDone(ev.id);
-    refresh();
-    return true;
+    const ev=pool().find(task=>task.id===id);
+    const today=typeof _resolvedTodayDate==='function'?_resolvedTodayDate():null;
+    if(!ev||!today||typeof commitDoneOnDate!=='function')return false;
+    const result=await commitDoneOnDate(ev.id,today,{ev});
+    refresh();return result!==false;
   }
 
   // Through state.js persistRowProp, the canonical one-field writer: it queues a

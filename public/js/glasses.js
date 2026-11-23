@@ -12,7 +12,7 @@
   function time(t) { return t.allDay ? 'All day' : t.untimed ? (t.date ? 'Unplanned' : 'Unscheduled') : t.start + '–' + t.end; }
   function tile(t, label) {
     const now = viewClock, overdue = t.overdue || (!t.completed && t.date && (t.date < now.date || (t.date === now.date && !t.untimed && !t.allDay && t.end < now.time)));
-    const status = t.completed ? '✓ Done' : overdue ? 'Overdue' : t.startedAt ? 'In progress' : 'Open';
+    const status = t._contextOnly ? 'Parent context' : t.savingCompletion ? 'Saving completion' : t.completed ? '✓ Done' : overdue ? 'Overdue' : t.startedAt ? 'In progress' : 'Open';
     return '<button class="routine task-row' + (t.completed ? ' done' : '') + (t.depth ? ' nested depth-' + Math.min(t.depth,3) : '') + '" data-action="open:' + esc(t.taskId) + '"><small>' + esc(label || time(t)) + ' · ' + status + (t.depth ? ' · Level ' + (t.depth + 1) : '') + '</small><span>' + (t.depth ? '↳ ' : '') + esc(t.title) + '</span></button>';
   }
   const session = GlassesTasksSession.create({
@@ -54,7 +54,7 @@
         actions = button('Cancel', 'cancel', s.busy) + button('Confirm completion', 'complete', locked, true);
       } else {
         content += '<p class="muted">' + (row.completed ? 'Completed · confirmed by DCC' : row.startedAt ? 'In progress' : 'Open') + '</p><p class="instruction">' + esc(row.detail || row.notes || 'No additional details.') + '</p>';
-        if (!row.completed && row.date) actions += button('Complete task…', 'confirm', locked, true);
+        if (!row.completed && !row._contextOnly && row.date) actions += button('Complete task…', 'confirm', locked, true);
         if (!row.date) content += '<p class="muted">Schedule this task in DCC before completing it here.</p><a class="control" data-action="full-dcc" href="/">Open full DCC</a>';
         if (row.type === 'workout') actions += '<a class="control" data-action="routine" href="/glasses-routine.html?task=' + encodeURIComponent(row.taskId) + '&date=' + encodeURIComponent(date) + '">Guided cards</a>';
         actions += button('Back', 'back', s.busy || !!s.pending);

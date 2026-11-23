@@ -686,7 +686,7 @@ function createTaskListRowRenderer(context){
   // Ride-alongs are unaffected (their rel is "ride-along", never "subtask").
 
   function row(ev,idx,mode,node){
-    const isDoneRow=mode==="done";
+    const isDoneRow=mode==="done"||(mode==="unfinished"&&!!ev._contextOnly);
     // Unfinished: a past-day carryover ev (TaskModel.fromBlock + an __unf origin
     // stamp) rendered through this same builder with the same affordances. Its
     // complete/move/drop route to the origin day (see the _unf* bindings below).
@@ -715,7 +715,7 @@ function createTaskListRowRenderer(context){
     // Always emit a leading cell (button when expandable, else a spacer) so every
     // Expand and reorder controls share one compact navigation cell. Rows without
     // children do not need an empty chevron column.
-    const chev=(node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'';
+    const chev=(!context.expandAll&&node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'';
     const tt=window.TaskTypes?window.TaskTypes.get(ev):null;
     // Delegated look (delegated.js waitingChipHtml): a check-in reminder and the
     // original task it chases share the --waiting hue and each carry a labelled pill,
@@ -795,7 +795,7 @@ function createTaskListRowRenderer(context){
       metaHtml:metaHtml,
       barColor:isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#7c3aed)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)),
       actionsBeforeHtml:(!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+workButton,
-      onComplete:completeNow,
+      onComplete:ev._contextOnly?null:completeNow,
       onCompleteWithNotes:chkBlocked?completeNow:()=>openDoneModal(ev.id,ev.title,completeNow,ev),
       onSchedule:(!subTimeless&&!isDoneRow&&!isMeeting(ev))?(sb)=>{if(isUnfRow){_unfSchedulePopover(ev,el,sb);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});}:null,
       durationLabel:ms(dur(ev)),
@@ -1251,7 +1251,7 @@ function buildSchedule(){
     const needsReview = comp && comp.needs_review && !reviewedState[ev.id];
     const reviewBadgeHtml = needsReview ?
       '<span class="review-badge" data-review-id="'+ev.id+'" data-review-type="task" data-evidence="'+(comp.evidence_summary||'Auto-detected by sweep').replace(/"/g,'&quot;')+'" data-evidence-link="'+(comp.evidence_link||'').replace(/"/g,'&quot;')+'" title="Auto-completed -- click to review">Needs Review</span>' : '';
-    const el=renderCompactRow({
+    const el=renderCompactRow({task:ev,
       dataset:{id:ev.id},
       timeStr:f12(ev.start).replace(/ (AM|PM)/,""),
       checkTitle:"Uncheck",
@@ -1592,7 +1592,8 @@ function buildUnscheduledSuggestions(){
   const ccBadge=document.getElementById("consider-count");if(ccBadge)ccBadge.textContent=merged.length;
   if(!merged.length){board.innerHTML='<div class="board-empty">No unscheduled suggestions.</div>';return}
   const sorted=typeof taskBankSort==="function"?taskBankSort(merged):merged;
-  sorted.forEach(t=>{
+  const nodes=DCC.TaskModel.selectTree(DCC.TaskModel.normalizeCollection(sorted),{isCollapsed:()=>false});
+  nodes.forEach(node=>{const t=node.ev;
     const c=cfg(t.type);
     const stageClass=t.stage==="Backlog"?"stage-backlog":t.stage==="Next Sprint"?"stage-next":t.stage==="Tasks for Today"?"stage-today":"stage-scheduled";
     const tSrcTag=srcTag(t.source);
@@ -1630,6 +1631,7 @@ function buildUnscheduledSuggestions(){
     const repeatBtn=el.querySelector(".repeat-resp-btn");
     if(repeatBtn)repeatBtn.addEventListener("click",e=>{e.stopPropagation();if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(t)});
     el.addEventListener("click",e=>{if(e.target.closest(".add-btn")||e.target.closest(".work-action-btn")||e.target.closest(".notes-btn"))return;const panel=el.querySelector(".detail-panel");if(panel){panel.classList.toggle("open");const cv=el.querySelector(":scope > svg");if(cv)cv.style.transform=panel.classList.contains("open")?"rotate(180deg)":""}});
+    DCC.TaskRows?.bind(el,t,{depth:node.depth,metaSelector:'.meta'});
     board.appendChild(el);
   });
 }
@@ -1642,7 +1644,8 @@ function buildBacklog(){
   document.getElementById("backlog-count").textContent=items.length;
   if(!items.length){board.innerHTML='<div class="board-empty">No unscheduled tasks.</div>';return}
   const sorted=typeof taskBankSort==="function"?taskBankSort(items):items;
-  sorted.forEach(t=>{
+  const nodes=DCC.TaskModel.selectTree(DCC.TaskModel.normalizeCollection(sorted),{isCollapsed:()=>false});
+  nodes.forEach(node=>{const t=node.ev;
     const c=cfg(t.type);
     const stageClass=t.stage==="Backlog"?"stage-backlog":t.stage==="Next Sprint"?"stage-next":t.stage==="Tasks for Today"?"stage-today":"stage-scheduled";
     const tSrcTag=srcTag(t.source);
@@ -1750,6 +1753,7 @@ function buildBacklog(){
       if(e.target.closest("button")||e.target.closest("a"))return;
       el.classList.toggle("expanded");
     });
+    DCC.TaskRows?.bind(el,t,{depth:node.depth,metaSelector:'.bc-body'});
     board.appendChild(el);
   });
 }

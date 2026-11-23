@@ -21,6 +21,7 @@ const recurrence = require("./lib/recurrence");
 // cannot drift apart on which types are never carried over.
 const TaskTypes = require("./public/js/task-types");
 const TaskCosts = require("./public/js/task-costs");
+const TaskModel = require("./public/js/task-model");
 const TimeBlocks = require("./public/js/time-blocks");
 const {edgeOf,planParentChange} = require("./lib/task-hierarchy");
 const { plannedWindowOf } = require("./lib/task-timing");
@@ -599,21 +600,9 @@ function completionWalkableRow(block) {
 }
 
 function collectCompletionSubtreeIds(rows, parent) {
-  const links = new Map(), rowIds = new Set([String(parent.id)]), queue = [parent];
-  const add = (ref, row) => { if (!ref) return; if (!links.has(String(ref))) links.set(String(ref), []); links.get(String(ref)).push(row); };
-  for (const row of rows) {
-    const props = row.properties || {};
-    if (props.wrapId) continue; // Independent work does not cascade completion.
-    add(props.subtaskOf || row.parent_id, row);
-  }
-  for (let i=0; i<queue.length; i++) {
-    const row=queue[i], refs=[row.id, row.properties?.local_id].filter(Boolean);
-    for (const ref of refs) for (const child of links.get(String(ref)) || []) {
-      if (rowIds.has(String(child.id))) continue;
-      rowIds.add(String(child.id)); queue.push(child);
-    }
-  }
-  return rowIds;
+  const pool=TaskModel.projectCollection([parent,...rows.filter(row=>row.id!==parent.id)],{canonicalIds:true});
+  try{return new Set(TaskModel.actionTargets(parent.id,pool,{edge:'subtask'}).map(task=>task._canonicalTaskId));}
+  catch(error){throw taskCompletionError(error.message,409,'TASK_HIERARCHY_INVALID',parent);}
 }
 
 // The durable completion boundary. Completion owns a small set of task fields and
@@ -1725,6 +1714,24 @@ async function getCarryoverPool(workspaceId, beforeDate, opts = {}) {
 // Stops at day_roots in both directions: a day_root is a container, not a task, so
 // walking through one would drag in every unrelated task on that date.
 // Visited IDs terminate cycles without silently truncating legitimate descendants.
+async function getTaskAncestors(ids, workspaceId) {
+  if (!ids.length) return [];
+  const { rows } = await pool.query(`WITH RECURSIVE ancestors AS (
+    SELECT b.*, ARRAY[b.id]::text[] AS path FROM blocks b
+      WHERE b.id = ANY($1::text[]) AND b.workspace_id IS NOT DISTINCT FROM $2
+    UNION ALL
+    SELECT p.*, a.path || p.id FROM ancestors a
+      JOIN LATERAL (
+        SELECT b.* FROM blocks b WHERE b.workspace_id IS NOT DISTINCT FROM $2
+          AND b.deleted_at IS NULL AND dcc_is_task_row(b.type, b.properties)
+          AND (b.id = COALESCE(a.properties->>'wrapId',a.properties->>'subtaskOf',a.parent_id)
+            OR (b.properties->>'local_id' = COALESCE(a.properties->>'wrapId',a.properties->>'subtaskOf')
+              AND b.date IS NOT DISTINCT FROM a.date))
+      ) p ON NOT p.id = ANY(a.path)
+  ) SELECT DISTINCT ON (id) * FROM ancestors ORDER BY id`, [ids, workspaceId || null]);
+  return rows.map(parseBlock);
+}
+
 async function getSubtree(rootIds, workspaceId, client, { byRoot = false } = {}) {
   const ids = (Array.isArray(rootIds) ? rootIds : [rootIds]).filter(Boolean);
   if (ids.length === 0) return [];
@@ -2903,7 +2910,7 @@ module.exports = {
   createBlock, updateBlock, deleteBlock,
   // Canonical task model primitives (A1) — no callers yet except the audit endpoint.
   undeleteBlock, updateDeletedBlockProperties, getBlockIncludingDeleted, findByIdempotencyKey, getBlocksByIdempotencyKeys, getRepeatSeriesBlocks, withRepeatSeriesLock, isIdempotencyConflict,
-  getCarryoverPool, carryoverSkipTypes, getSubtree, isTaskRow,
+  getCarryoverPool, carryoverSkipTypes, getTaskAncestors, getSubtree, isTaskRow,
   isCompletedTaskProps, applyCompletionIntent, setTaskCompletion, propagateResponsibilityDone,
   getProposalSourceMatches, getMeetingProposalAnchors, mergeDccProposalPacket,
   findTaskByTriageSource, getBlocksByDate, getBlocksByDateIncludingDeleted, getCalendarMeetingContextBySourceIds, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,

@@ -89,7 +89,8 @@ test("both Scheduled board sections render decoded Slack markup as text", () => 
     const board = { innerHTML: "", querySelectorAll: () => [] };
     const ctx = vm.createContext({ document: { getElementById: id => id === "scheduled-board" ? board : null }, __state: { date: "2026-09-09" }, now: () => minutes,
       DCC: { esc: s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"), TaskModel: { selectNotDeleted: rows => rows } },
-      scheduled: [task], pt: () => 540, isDone: () => false, cfg: () => ({ color: "red", cls: "task", tag: "Task" }), isMeeting: () => false, f12: x => x, ms: String, dur: () => 5 });
+      scheduled: [task], pt: () => 540, isDone: () => false, isDeleted:()=>false, cfg: () => ({ color: "red", cls: "task", tag: "Task" }), isMeeting: () => false, f12: x => x, ms: String, dur: () => 5 });
+    require('./task-model-vm-fixture').installTaskModel(ctx);
     vm.runInContext(fn + "\nbuildScheduled();", ctx);
     assert.ok(!board.innerHTML.includes("<img"));
     assert.ok(board.innerHTML.includes("&lt;img"));
