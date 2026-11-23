@@ -79,12 +79,13 @@ function createConversationStore(ctx) {
     ]);
     if (!r.rows.length) throw M.fail("Workspace owner access required", 403);
   }
-  async function task(q, id, owner) {
+  async function task(q, id, owner, missingTaskError) {
     const r = await q.query(
       `SELECT * FROM blocks WHERE (id=$1 OR properties->>'local_id'=$1) AND user_id=$2 AND workspace_id=$3 AND deleted_at IS NULL`,
       [id, owner.userId, owner.workspaceId]
     );
     const matches = r.rows.map(blockDB.parseBlock).filter(blockDB.isTaskRow);
+    if (!matches.length && missingTaskError) throw missingTaskError();
     if (matches.length !== 1)
       throw M.fail(
         matches.length ? "Ambiguous task; select a canonical ID" : "Task not found",
@@ -498,8 +499,9 @@ function createConversationStore(ctx) {
       }
       await q.query("INSERT INTO conversation_state(user_id) VALUES($1) ON CONFLICT DO NOTHING", [owner.userId]);
       const before = await state(owner, q);
-      if (!legacy && before.revision !== b.expectedRevision)
-        throw M.fail("Activity changed; read current state before retrying", 409);
+      // Dismissal is scoped to one reminder generation, checked under the same lock below.
+      if (!legacy && b.action !== "queue-dismiss" && before.revision !== b.expectedRevision)
+        throw M.fail("Activity changed; read current state before retrying", 409, "queue_revision_changed");
       const s = (await q.query("SELECT * FROM conversation_state WHERE user_id=$1 FOR UPDATE", [owner.userId])).rows[0];
       const clockAction = b.action !== "reconcile" && (!b.action.startsWith("queue-") && !b.action.startsWith("delegated-")) || b.action === "queue-block";
       if (clockAction && b.action !== "correct" && s.changed_at && M.instant(b.at) < new Date(s.changed_at).getTime())
@@ -545,7 +547,9 @@ function createConversationStore(ctx) {
       else if (b.action === "correct") detail = await correct(q, b, owner, owner.userId + ":" + b.sourceEventId);
       else if (b.action.startsWith("delegated-")) detail = await require('./lib/delegated-work').apply(q,owner,queue,b,ctx,task);
       else if (b.action.startsWith("queue-") && b.action !== "queue-block") {
-        detail = await Q.metadata(q, owner, queue, b, b.taskId ? await task(q, b.taskId, owner) : null, blockDB, (ctx.now || Date.now)());
+        const missingTaskError = b.action === "queue-dismiss" ? Q.reminderChanged : undefined;
+        const target = b.taskId ? await task(q, b.taskId, owner, missingTaskError) : null;
+        detail = await Q.metadata(q, owner, queue, b, target, blockDB, (ctx.now || Date.now)());
       } else {
         const target = await task(q, b.taskId, owner);
         before.task = structuredClone(target);

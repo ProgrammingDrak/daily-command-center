@@ -15,21 +15,41 @@
   let state=emptyState,pending=null,conflict=null,loading=null,sending=false,ticking=false,problem='',startOpening=false;
   try {const cached=JSON.parse(localStorage.getItem(key));if(cached){delete cached.readVersion;state=cached;}pending=JSON.parse(localStorage.getItem(key+':pending'));conflict=JSON.parse(localStorage.getItem(key+':conflict'));}catch(_e){}
   const completionPrefix=key+':completion:';
+  const reviewPrefix=key+':review:';
+  const rejectedStatuses=[400,404,409];
   let draining=false;
-  function completionEntries(){
+  function storedActions(prefix){
     const entries=[];
     for(let i=0;i<localStorage.length;i++){
       const storageKey=localStorage.key(i);
-      if(!storageKey?.startsWith(completionPrefix))continue;
+      if(!storageKey?.startsWith(prefix))continue;
       try {
         const entry=JSON.parse(localStorage.getItem(storageKey));
-        if(entry?.body)entries.push(entry);
+        if(entry?.body?.sourceEventId)entries.push(entry);
       } catch(_error){}
     }
-    return entries.sort((a,b)=>a.body.at.localeCompare(b.body.at)||a.body.sourceEventId.localeCompare(b.body.sourceEventId));
+    return entries.sort((a,b)=>String(a.body.at||'').localeCompare(String(b.body.at||''))
+      ||a.body.sourceEventId.localeCompare(b.body.sourceEventId));
   }
+  const completionEntries=()=>storedActions(completionPrefix);
+  const reviewEntries=()=>storedActions(reviewPrefix);
   const completionKey=entry=>completionPrefix+entry.body.sourceEventId;
   const saveCompletion=entry=>localStorage.setItem(completionKey(entry),JSON.stringify(entry));
+  const reviewKey=id=>reviewPrefix+id;
+  const reviewableAction=body=>['queue-dismiss','done'].includes(body?.action);
+  function saveReview(entry){
+    localStorage.setItem(reviewKey(entry.body.sourceEventId),JSON.stringify(entry));
+    notifySync();
+  }
+  function importLegacyReview(){
+    const raw=localStorage.getItem(key+':conflict');
+    let saved;
+    try { saved=JSON.parse(raw); } catch(_error){ return; }
+    if(!reviewableAction(saved?.body)||!saved.body.sourceEventId||[401,403].includes(saved.status))return;
+    const id=reviewKey(saved.body.sourceEventId);
+    if(!localStorage.getItem(id))saveReview(saved);
+    if(localStorage.getItem(key+':conflict')===raw)setConflict(null);
+  }
   const previewFor=id=>requestQueue({},null,'/tasks/'+encodeURIComponent(id)+'/completion-preview');
   const previewVersion=preview=>JSON.stringify([preview.taskVersion,preview.history,preview.startedMs,preview.creditUntilMs]);
   function displayedItems(){
@@ -40,11 +60,12 @@
       return {...item,status:'completed',needsYou:false,snoozed:false,dueAt:null,onBreak:false,completedAt:Date.parse(entry.body.at),savingCompletion:true};
     });
   }
-  function enqueueCompletion(body,preview,note){
+  function enqueueCompletion(body,preview,note,reviewId){
     assertActionAccount();
     if(conflict)throw new Error('Review the current queue conflict before completing another task.');
     if(completionEntries().some(entry=>entry.body.taskId===body.taskId))throw new Error('This task is already marked done and syncing.');
     saveCompletion({body,preview,note});
+    if(reviewId)localStorage.removeItem(reviewKey(reviewId));
     const checkbox=[...document.querySelectorAll('[data-queue-id]')].find(row=>row.dataset.queueId===body.taskId)
       ?.querySelector('.quick-complete-control');
     const rect=checkbox?.getBoundingClientRect();
@@ -54,59 +75,97 @@
     notifySync();
     void drainCompletions();
   }
+  async function prepareCompletion(entry){
+    if(entry.sent&&!entry.revisionRejected)return;
+    if(entry.revisionRejected||state.revision!==entry.body.expectedRevision){
+      const current=await previewFor(entry.body.taskId);
+      assertActionAccount();
+      if(previewVersion(current)!==previewVersion(entry.preview)){
+        const error=new Error('Task or recorded time changed. Review this completion before retrying.');
+        error.status=409;
+        throw error;
+      }
+      const priorId=entry.body.sourceEventId;
+      entry.body={...entry.body,expectedRevision:current.revision};
+      if(entry.revisionRejected){
+        entry.body.sourceEventId='queue:'+crypto.randomUUID();
+        entry.retried=true;
+        delete entry.revisionRejected;
+        // Persist the new request before removing the rejected one. The replacement
+        // identifies its predecessor so recovery can handle a crash between writes.
+        entry.replaces=priorId;
+        entry.sent=true;
+        saveCompletion(entry);
+        localStorage.removeItem(completionPrefix+priorId);
+        return;
+      }
+    }
+    entry.sent=true;
+    saveCompletion(entry);
+  }
   async function drainCompletions(){
     if(draining||navigator.onLine===false||conflict)return;
     draining=true;
     const drain=async()=>{
       if(localStorage.getItem(key+':conflict'))return;
-      for(let entry=completionEntries()[0];entry;entry=completionEntries()[0]){
+      const entries=completionEntries();
+      // Keep only the durable replacement if a tab closed during the handoff.
+      const replaced=new Set(entries.map(entry=>entry.replaces).filter(Boolean));
+      for(const id of replaced)localStorage.removeItem(completionPrefix+id);
+      const next=()=>completionEntries().find(entry=>!entry.acknowledged);
+      for(let entry=next();entry;entry=next()){
         assertActionAccount();
         pending=JSON.parse(localStorage.getItem(key+':pending')||'null');
         if(pending&&pending.sourceEventId!==entry.body.sourceEventId)return;
         if(window.blockStore?.hasPendingWrites?.()){window.blockStore.flushPending();return;}
-        try{
-          if(!entry.sent){
-            if(state.revision!==entry.body.expectedRevision){
-              const current=await previewFor(entry.body.taskId);
-              assertActionAccount();
-              if(previewVersion(current)!==previewVersion(entry.preview)){
-                const error=new Error('Task or recorded time changed. Review this completion before retrying.');
-                error.status=409;
-                throw error;
-              }
-              entry.body.expectedRevision=current.revision;
-            }
-            // Freeze the envelope before its first network attempt. Retries use it verbatim.
-            entry.sent=true;
-            saveCompletion(entry);
-          }
-          if(!entry.acknowledged){
-            const result=await sendUnlocked(entry.body);
+        for(;;){
+          try{
+            await prepareCompletion(entry);
+            const result=await sendUnlocked(entry.body,{fromCompletionOutbox:true});
             problem='';
             entry.acknowledged=true;
             saveCompletion(entry);
             window.performance?.mark('dcc-completion-acknowledged');
             DCC.toast('Task completed · '+(result.task?.properties.actualMinutes==null?'focused time unknown':result.task.properties.actualMinutes+'m recorded'),'success');
+            break;
+          }catch(error){
+            if(!sameAccount())return;
+            if(conflict||!rejectedStatuses.includes(error.status))throw error;
+            if(error.code==='queue_revision_changed'&&!entry.retried&&!entry.revisionRejected){
+              entry.revisionRejected=true;
+              saveCompletion(entry);
+              continue;
+            }
+            saveReview({body:entry.body,note:entry.note,message:error.message});
+            localStorage.removeItem(completionKey(entry));
+            warn(error);
+            break;
           }
-          assertActionAccount();
+        }
+      }
+      for(const entry of completionEntries().filter(entry=>entry.acknowledged)){
+        assertActionAccount();
+        try{
           if(entry.note)await window.saveTaskNotes(entry.body.taskId,entry.note);
+          assertActionAccount();
           localStorage.removeItem(completionKey(entry));
         }catch(error){
           if(!sameAccount())return;
-          if(![400,401,403,404,409].includes(error.status))throw error;
-          setConflict({body:entry.body,note:entry.note,message:error.message});
-          localStorage.removeItem(completionKey(entry));
-          warn(error);
-          return;
+          if(problem!=='Completion notes are saved on this device. Waiting to sync.')
+            DCC.toast('Completion notes are saved on this device. Waiting to sync.','info');
+          problem='Completion notes are saved on this device. Waiting to sync.';
         }
       }
+      if(!completionEntries().length&&problem==='Completion notes are saved on this device. Waiting to sync.')problem='';
     };
     try {
       if(navigator.locks?.request)await navigator.locks.request(key+':write',drain);
       else await drain();
     } catch(error){
-      if(problem!=='Completion saved on this device. Waiting to sync.')DCC.toast('Completion saved on this device. Waiting to sync.','info');
-      problem='Completion saved on this device. Waiting to sync.';
+      if(sameAccount()&&!conflict){
+        if(problem!=='Completion saved on this device. Waiting to sync.')DCC.toast('Completion saved on this device. Waiting to sync.','info');
+        problem='Completion saved on this device. Waiting to sync.';
+      }
     } finally {
       draining=false;
       render();
@@ -181,7 +240,7 @@
     },150);
   }
   function envelope(action,extra={}){return {action,sourceEventId:'queue:'+crypto.randomUUID(),expectedRevision:state.revision,at:new Date().toISOString(),...extra};}
-  async function sendUnlocked(body){
+  async function sendUnlocked(body,{fromCompletionOutbox=false}={}){
     assertActionAccount();
     pending=JSON.parse(localStorage.getItem(key+':pending')||'null');
     if(sending)throw new Error('A queue update is still being saved.');
@@ -189,7 +248,17 @@
     if(window.blockStore?.hasPendingWrites?.()){window.blockStore.flushPending();throw new Error('Wait for your task edits to sync first.');}
     sending=true;setPending(body);render();
     try {const result=await requestQueue({method:'POST',body});assertActionAccount();setPending(null);apply(result);return result;}
-    catch(error){if(sameAccount()&&[400,401,403,404,409].includes(error.status)){setConflict({body,message:error.message});setPending(null);await refresh().catch(()=>{});}throw error;}
+    catch(error){
+      if(sameAccount()&&[...rejectedStatuses,401,403].includes(error.status)){
+        const rejected={body,message:error.message,status:error.status};
+        if(reviewableAction(body)&&rejectedStatuses.includes(error.status)){
+          if(!fromCompletionOutbox)saveReview(rejected);
+        }else setConflict(rejected);
+        setPending(null);
+        await refresh().catch(()=>{});
+      }
+      throw error;
+    }
     finally{sending=false;render();}
   }
   function send(body){return navigator.locks?.request?navigator.locks.request(key+':write',()=>sendUnlocked(body)):sendUnlocked(body);}
@@ -370,11 +439,13 @@
     const {foreground:fg,needs,background,priority:upNext}=window.DCCQueuePolicy.lanes(all,DCC.TaskPriority.group);
     const lanes={'wq-foreground':lane('Foreground',fg,'Choose a task below to begin focused work.','wq-foreground','foreground'),'wq-needs':lane('Needs You',needs,'No reported review actions or manual check-backs due.','wq-needs','needs'),'wq-next':lane('Priority Queue',upNext,'No inactive tasks in your queue. Add existing tasks to prioritize them.','wq-next','priority'),'wq-background':lane('Background',background,'No active workers or snoozed requests.','wq-background','background')};
     root.dataset.priorityStyle='outline';
+    const reviewCount=reviewEntries().length;
     const syncMessage=sending?'Saving…':problem||((pending||completionEntries().length)?'Update awaiting confirmation.':'');
     root.innerHTML='<header class="wq-header">'+button('add','Add tasks')+'</header>'+
       (syncMessage?'<p class="wq-sync" role="status">'+esc(syncMessage)+'</p>':'')+
       ((pending||completionEntries().length)&&!conflict?button('retry','Retry saved update'):'')+
       (conflict?'<div class="wq-conflict wq-actions"><span>Update conflict.</span>'+button('conflict','Review change')+button('clear-conflict','Dismiss conflict')+'</div>':'')+
+      (!conflict&&reviewCount?'<div class="wq-conflict wq-actions"><span>'+reviewCount+' '+(reviewCount===1?'change needs':'changes need')+' review.</span>'+button('conflict','Review change')+'</div>':'')+
       (state.otherWorkspaceForeground?'<p class="wq-conflict">Another workspace holds Foreground. Open it, pause if needed, then choose Return to Priority before bringing a task forward here.</p>':'')+
       '<div class="wq-grid">'+layout().map(names=>'<div class="wq-col">'+names.map(name=>lanes[name]).join('')+'</div>').join('')+'</div>'+completedHtml();
     function completedHtml(){
@@ -452,7 +523,7 @@
   }
   function modal(title,body,submit,label='Save',onClose,returnFocus){let busy=false;return DCC.overlay.open({kind:'modal',title,body,onClose,anchor:returnFocus?.(),returnFocus,canClose:()=>!busy,actions:[{label:'Cancel'},{label,kind:'primary',onClick:async()=>{if(busy)return false;busy=true;try{await submit();return true;}catch(error){const el=body.querySelector('[role=status]');if(el)el.textContent=error.message;else warn(error);return false;}finally{busy=false;}}}]});}
   function form(html){const body=document.createElement('div');body.className='wq-form';body.innerHTML=html+'<p role="status"></p>';return body;}
-  async function transition(action,item){
+  async function transition(action,item,savedReview){
     let displaced=null,startRevision=null;
     if(action==='start'){
       if(startOpening)return;
@@ -478,11 +549,14 @@
           ||document.getElementById('done-modal-overlay')?.classList.contains('open'))return;
       window.performance?.mark('dcc-completion-open-start');
     }
+    const review=action==='done'?(savedReview||reviewEntries().filter(entry=>
+      entry.body.action==='done'&&entry.body.taskId===item.task.id).at(-1)):null;
     let notesReady=action!=='done';
     const timerNeeded=action==='start'?!!displaced:['background-start','queue-block'].includes(action);
     const timer=timerNeeded?'<label>'+'Snooze'+'<select data-minutes aria-label="Snooze duration">'+(action==='queue-block'?'<option value="">Needs You now</option>':'')+'<option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="240">4 hours</option><option value="1440">24 hours</option><option value="custom">Custom</option></select></label><label data-custom hidden>Minutes<input type="number" min="1" max="1440" value="10"></label>':'';
     const heading=action==='start'?(displaced?'<div class="wq-switch-old"><div><strong>Moving to Background</strong><p>'+esc(displaced.task.properties.title||'Task')+'</p></div>'+timer+'</div><div class="wq-switch-new"><strong>Moving to Foreground</strong><p>'+esc(item.task.properties.title||'Task')+'</p></div>':'<p>'+esc(item.task.properties.title||'Task')+'</p>'):'<p>'+esc(item.task.properties.title||'Task')+'</p>';
-    const body=form(heading+(action==='background-start'?'<p>This sets the task aside and optionally sets a check-back. It does not start a worker. A selected Snooze waits in Background; without one, inactive work returns to Priority.</p>':'')+(action==='start'?'':timer)+(action==='done'?'<div data-completion-time aria-live="off">Loading recorded time…</div><p>Completing saves the current focused session to this task. The saved total is confirmed after the update succeeds.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome required></textarea></label>':''):''));
+    const reviewNotice=review?'<p>Review the current timing before completing this task again.</p>':'';
+    const body=form(heading+reviewNotice+(action==='background-start'?'<p>This sets the task aside and optionally sets a check-back. It does not start a worker. A selected Snooze waits in Background; without one, inactive work returns to Priority.</p>':'')+(action==='start'?'':timer)+(action==='done'?'<div data-completion-time aria-live="off">Loading recorded time…</div><p>Completing saves the current focused session to this task. The saved total is confirmed after the update succeeds.</p>':'')+(item.task.properties.guidedDefinitionId?'<details open><summary>Guided instructions</summary><pre data-preview>Loading…</pre></details>'+(action==='done'?'<label>Outcome<textarea data-outcome required></textarea></label>':''):''));
     let guided=null,ready=!item.task.properties.guidedDefinitionId,completion=null,clockOffset=0,command=null;
     function updateConfirm(){
       if(action==='done'&&body.isConnected)document.getElementById('done-modal-confirm').disabled=!(ready&&completion&&notesReady);
@@ -506,7 +580,7 @@
       if(!command||!['start','done'].includes(action))command=envelope(action,{...payload,...(action==='start'?{expectedRevision:startRevision}:completion?{expectedRevision:completion.revision}:{})});
       if(action==='start')body.querySelectorAll('[data-minutes],[data-custom] input').forEach(el=>{el.disabled=true;});
       updateCompletion();
-      if(action==='done'){enqueueCompletion(command,completion,note);return;}
+      if(action==='done'){enqueueCompletion(command,completion,note||review?.note,review?.body.sourceEventId);return;}
       try {
         await send(command);
       } catch(error) {
@@ -515,7 +589,7 @@
       }
     };
     const handle=action==='done'
-      ?window.openDoneModal(item.task.id,item.task.properties.title,submit,DCC.TaskModel.fromBlock(item.task),{body,noteValue:undefined,authoritativeTime:true,awaitConfirmation:true,queueCompletion:true,loadNotes:()=>window.loadTaskNotesForAnchor(completionAnchor),onNotesReady:()=>{notesReady=true;updateConfirm();}})
+      ?window.openDoneModal(item.task.id,item.task.properties.title,submit,DCC.TaskModel.fromBlock(item.task),{body,noteValue:undefined,authoritativeTime:true,awaitConfirmation:true,queueCompletion:true,loadNotes:async()=>{const current=await window.loadTaskNotesForAnchor(completionAnchor);return review?.note||current;},onNotesReady:()=>{notesReady=true;updateConfirm();}})
       :modal(action==='start'?(displaced?'Switch foreground task':'Guided instructions'):action==='queue-block'?'Blocked / Waiting':['queue-snooze','queue-remind'].includes(action)?'Snooze':'Set task aside',body,submit,action==='start'?'Bring forward':'Save',()=>{if(action==='start')startOpening=false;});
     if(action==='start'&&!body.isConnected)startOpening=false;
     if(action==='done')window.performance?.mark('dcc-completion-dialog-open');
@@ -582,6 +656,52 @@
     const order=state.queue.order.filter(id=>activeIds.has(id)),from=order.indexOf(id),to=order.indexOf(targetId);
     order.splice(from,1);order.splice(to,0,id);return send(envelope('queue-reorder',{order}));
   }
+  function reviewRejectedChanges(){
+    const entries=reviewEntries();
+    if(!entries.length)return;
+    const body=form('');
+    const handle=DCC.overlay.open({kind:'modal',title:'Review queue changes',body,actions:[{label:'Close'}]});
+    function show(){
+      body.querySelectorAll('section').forEach(section=>section.remove());
+      const titles=new Map((state.queue?.items||[]).map(({task})=>[task.id,task.properties.title]));
+      for(const entry of reviewEntries()){
+        const id=entry.body.sourceEventId;
+        const completion=entry.body.action==='done';
+        const section=document.createElement('section');
+        section.innerHTML='<h3>'+esc(titles.get(entry.body.taskId)||(completion?'Task completion':'Reminder dismissal'))+'</h3>'
+          +'<p>'+esc(entry.message)+'</p>'
+          +'<details><summary>Attempted change</summary><pre>'+esc(JSON.stringify(entry.note?{command:entry.body,notes:entry.note.text}:entry.body,null,2))+'</pre></details>'
+          +'<div class="wq-actions">'+(completion?'<button type="button" data-reopen>Review completion</button>':'')
+          +'<button type="button" data-dismiss>Dismiss review</button></div>';
+        section.querySelector('[data-reopen]')?.addEventListener('click',async event=>{
+          const control=event.currentTarget;
+          control.disabled=true;
+          try{
+            await refresh();
+            assertActionAccount();
+            const current=reviewEntries().find(review=>review.body.sourceEventId===id);
+            if(!current){
+              if(reviewEntries().length)show();else handle.close('review-dismissed');
+              warn(new Error('This review was dismissed.'));
+              return;
+            }
+            // Close the blocking review overlay before opening the shared completion dialog.
+            handle.close('review-completion');
+            await openTaskOutcome(current.body.taskId,{},current);
+          }catch(error){warn(error);control.disabled=false;}
+        });
+        section.querySelector('[data-dismiss]').addEventListener('click',()=>{
+          if(entry.note&&!window.confirm('Discard the notes from this attempted completion?'))return;
+          localStorage.removeItem(reviewKey(id));
+          render();
+          notifySync();
+          if(reviewEntries().length)show();else handle.close('dismiss-review');
+        });
+        body.insertBefore(section,body.querySelector('[role=status]'));
+      }
+    }
+    show();
+  }
   document.addEventListener('change',event=>{if(event.target.matches('[data-completed-period]')){completedPeriod=event.target.value;render();}});
   document.addEventListener('click',event=>{
     const button=event.target.closest?.('[data-queue-action]');if(!button)return;const action=button.dataset.queueAction,item=items().find(i=>i.task.id===button.dataset.taskId);
@@ -589,6 +709,7 @@
     if(action==='snooze-all'){snooze(null);return;}
     if(action==='pomodoro'){window.DCCPomodoro?.open(items().find(i=>i.status==='foreground')?.task);return;}
     if(action==='clear-conflict'){setConflict(null);render();void drainCompletions();return;}
+    if(action==='conflict'&&!conflict){reviewRejectedChanges();return;}
     if(action==='conflict'){const body=form('<p>'+esc(conflict?.message)+'</p><pre>'+esc(JSON.stringify(conflict?.note ? {command:conflict.body,notes:conflict.note.text} : conflict?.body,null,2))+'</pre>');DCC.overlay.open({kind:'modal',title:'Attempted change',body,actions:[{label:'Close'}]});return;}
     if(!item)return;
     if(action==='details'){const task=DCC.TaskModel.fromBlock(item.task);if(window.DCCTaskWorkspace?.preview)window.DCCTaskWorkspace.preview(task);else if(typeof window.openAddModal==='function')window.openAddModal(task.id,task.title);else {const body=form('<h3>'+esc(task.title)+'</h3><p>'+esc(task.detail||'No task details yet.')+'</p>');DCC.overlay.open({kind:'modal',title:'Task details',body,actions:[{label:'Close'}]});}return;}
@@ -668,9 +789,9 @@
         const {readVersion:version,...value}=JSON.parse(event.newValue);
         accept(value,version||null,false);
       }
-      if(event.key===key+':conflict'){conflict=JSON.parse(event.newValue);render();}
-      if(event.key===key+':pending'){pending=JSON.parse(event.newValue);render();}
-      if(event.key?.startsWith(completionPrefix)){render();notifySync();}
+      if(event.key===key+':conflict'){conflict=JSON.parse(event.newValue);importLegacyReview();render();notifySync();}
+      if(event.key===key+':pending'){pending=JSON.parse(event.newValue);render();notifySync();}
+      if(event.key?.startsWith(completionPrefix)||event.key?.startsWith(reviewPrefix)){render();notifySync();}
     }catch(_e){}
   });
   function recover(){
@@ -686,7 +807,10 @@
   setInterval(tick,localTickMs);
   setInterval(invalidate,fallbackMs);
   DCC.tabs?.register('working-queue',()=>{render();invalidate();});
-  function syncState(){return {pending:!!pending||completionEntries().length>0,conflict:conflict?{message:conflict.message||''}:null};}
+  function syncState(){
+    const review=conflict||reviewEntries().at(0);
+    return {pending:!!pending||completionEntries().length>0,conflict:review?{message:review.message||''}:null};
+  }
   function sameAccount(){
     const current=window.DCC_ACCOUNT_CONTEXT;
     return !scopeRejected&&!window.__DCC_SIGNING_OUT__&&current?.userId===actionAccount.userId&&current.workspaceId===actionAccount.workspaceId;
@@ -727,7 +851,7 @@
     if(result.undo)result.undo={...result.undo,expiresAt:Math.min(result.undo.expiresAt,Date.now()+5000),account:{...actionAccount}};
     return result;
   }
-  async function openTaskOutcome(taskId,descriptor={}){
+  async function openTaskOutcome(taskId,descriptor={},savedReview){
     assertActionReady();
     const actionId=descriptor.actionId||taskId;
     if(descriptor.kind==='waiting'){
@@ -756,7 +880,8 @@
     }
     if(item.status==='completed'||props.done||props.status==='done')throw new Error('This task is already completed.');
     if(document.getElementById('done-modal-overlay')?.classList.contains('open'))throw new Error('Finish or close the current task outcome first.');
-    await transition('done',item);
+    if(savedReview&&!localStorage.getItem(reviewKey(savedReview.body.sourceEventId)))throw new Error('This review was dismissed.');
+    await transition('done',item,savedReview);
     if(!document.getElementById('done-modal-overlay')?.classList.contains('open'))throw new Error('The task outcome flow could not open. Refresh and try again.');
     return {opened:true,completed:false,owner:'task'};
   }
@@ -771,6 +896,7 @@
   window.DCCWorkingQueue={performTaskAction,openTaskOutcome,undoCompletion,syncState,addTask,render,refresh,invalidate,tick,activate,send,taskAnchor,taskPool,refreshTaskContext,rememberTaskContext,openBlocked,isBlocked,getState:()=>sameAccount()?state:emptyState};
   // Keep the former rotation navigation entry point. Floating workspace focus()
   // must be migrated to the shared coordinator when that separate feature lands.
+  importLegacyReview();
   notifySync();
   recover();
   window.DCCWorkRotation={render,refresh,tick,open:(_from,to)=>{activate();if(to){const row=items().find(i=>i.task.id===(to._blockId||to.id));if(row)transition('start',row);}else addTasks();}};

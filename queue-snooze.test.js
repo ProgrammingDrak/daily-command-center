@@ -113,6 +113,25 @@ test('durable Needs You snooze preserves reasons and clocks, serializes retries 
     assert.deepEqual((await ctx.blockDB.getBlock('focus')).properties,focusBefore.properties);
     assert.equal((await ctx.blockDB.getTaskTimeEntries('blocked','ws-1')).length,0);
   });
+  await t.test('dismissal validates the reminder generation across unrelated activity',async()=>{
+    await send('queue-snooze','blocked',{generation:(await entry('blocked')).generation,remindMinutes:15});
+    const same=await body('queue-dismiss','blocked',{generation:(await entry('blocked')).generation});
+    await send('queue-note','idle',{note:'Other activity advanced the revision'});
+    const result=await store.execute(same,owner);
+    assert.equal((await entry('blocked')).dueAt,null);
+    assert.equal((await entry('blocked')).blocked,true);
+    assert.equal((await store.execute(same,owner)).sourceEventId,result.sourceEventId);
+    await send('queue-snooze','blocked',{remindMinutes:15});
+    const stale=await body('queue-dismiss','blocked',{generation:(await entry('blocked')).generation});
+    const staleDone=await body('done','idle');
+    await send('queue-snooze','blocked',{generation:stale.generation,remindMinutes:30});
+    const replacement=await entry('blocked');
+    await assert.rejects(store.execute(stale,owner),{statusCode:409,publicCode:'queue_reminder_changed'});
+    await assert.rejects(store.execute(staleDone,owner),{statusCode:409,publicCode:'queue_revision_changed'});
+    assert.equal((await entry('blocked')).generation,replacement.generation);
+    await send('queue-dismiss','blocked',{generation:replacement.generation});
+  });
+
   await t.test('dismiss and review now retain reasons; completion and deletion invalidate old reminders',async()=>{
     const old=await entry('blocked');
     await send('queue-snooze','blocked',{generation:old.generation,remindMinutes:15});
