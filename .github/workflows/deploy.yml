@@ -116,6 +116,7 @@ jobs:
           done
           if [ -z "$ok" ]; then echo "::error::server never became healthy"; cat server.log; exit 1; fi
           node scripts/smoke-ci.mjs "http://localhost:${PORT}"
+          CHROME_PATH="$(node -e 'process.stdout.write(require("playwright-core").chromium.executablePath())')" node scripts/verify-places.mjs "http://localhost:${PORT}"
 
   guardrails:
     if: github.event_name != 'pull_request'

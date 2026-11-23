@@ -1,3 +1,4 @@
+const { randomUUID } = require("node:crypto");
 const { MAX_FILES, MAX_OWNER_FILES, MAX_OWNER_BYTES, fail, keyFor, assertKey } = require("./lib/task-attachment-policy");
 const { isTaskRow } = require("./public/js/task-model");
 const crypto = require("node:crypto");
@@ -32,13 +33,15 @@ function createStore({ pool, storage }) {
       // Owner only. Neither invited workspace members nor commitment roles grant private Notes access.
       const { rows } = await client.query(`SELECT b.* FROM blocks b JOIN workspaces w ON w.id=b.workspace_id
         WHERE b.id=$1 AND b.workspace_id=$2 AND w.owner_id=$3 AND (b.user_id IS NULL OR b.user_id=$3)
-        AND ${actor.wishlistId
+        AND ${actor.placeId
+          ? "b.deleted_at IS NULL AND EXISTS (SELECT 1 FROM places p WHERE p.id=$4 AND p.attachment_block_id=b.id AND p.workspace_id=$2 AND p.user_id=$3)"
+          : actor.wishlistId
           ? "EXISTS (SELECT 1 FROM wishlists l WHERE l.id=$4 AND l.attachment_block_id=b.id AND l.workspace_id=$2 AND l.user_id=$3)"
           : "b.deleted_at IS NULL AND b.type <> 'wishlist_attachment'"}
-        ${read ? "" : " FOR UPDATE OF b,w"}`, actor.wishlistId
-        ? [blockId, actor.workspaceId, actor.userId, actor.wishlistId]
+        ${read ? "" : " FOR UPDATE OF b,w"}`, (actor.wishlistId || actor.placeId)
+        ? [blockId, actor.workspaceId, actor.userId, actor.wishlistId || actor.placeId]
         : [blockId, actor.workspaceId, actor.userId]);
-      if (!rows[0] || (!actor.wishlistId && !isTaskRow(rows[0]))) throw fail("Task or note unavailable", 404);
+      if (!rows[0] || (!actor.wishlistId && !actor.placeId && !isTaskRow(rows[0]))) throw fail("Task or note unavailable", 404);
       const result = await run(client);
       await client.query("COMMIT"); return result;
     } catch (error) { await client.query("ROLLBACK"); throw error; }
@@ -64,6 +67,29 @@ function createStore({ pool, storage }) {
       [actor.wishlistId, actor.workspaceId, actor.userId]);
       if (!rows.length) throw fail("Wishlist unavailable", 404);
       return rows[0].attachment_block_id;
+    },
+    async placeParent(actor, create = false) {
+      const q = await pool.connect();
+      try {
+        await q.query("BEGIN");
+        const result = await q.query(`SELECT p.attachment_block_id, p.merged_into FROM places p JOIN workspaces w ON w.id=p.workspace_id
+          WHERE p.id=$1 AND p.workspace_id=$2 AND p.user_id=$3 AND w.owner_id=$3 ${create ? "FOR UPDATE OF p" : ""}`,
+        [actor.placeId, actor.workspaceId, actor.userId]);
+        const place = result.rows[0];
+        if (!place || (place.merged_into && create)) throw fail("Place unavailable", 404);
+        let id = place.attachment_block_id;
+        if (create && !id) {
+          id = "place-files-" + randomUUID();
+          await q.query("INSERT INTO blocks(id,type,workspace_id,user_id,properties,created_at,updated_at) VALUES($1,'wishlist_attachment',$2,$3,'{}',now(),now())",
+            [id, actor.workspaceId, actor.userId]);
+          await q.query("UPDATE places SET attachment_block_id=$1 WHERE id=$2", [id, actor.placeId]);
+        }
+        await q.query("COMMIT");
+        return id;
+      } catch (error) {
+        await q.query("ROLLBACK");
+        throw error;
+      } finally { q.release(); }
     },
     async authorize(actor, blockId) { return transaction(actor, blockId, async () => true, { read: true }); },
     async list(actor, blockId) {

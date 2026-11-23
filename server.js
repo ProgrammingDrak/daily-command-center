@@ -1032,6 +1032,7 @@ require("./routes/blocks")(app, ctx);
 require("./routes/task-attachments")(app, ctx);
 require("./routes/wishlists")(app, ctx);
 require("./routes/research")(app, ctx);
+require("./routes/places")(app, ctx);
 require("./routes/completion-memories").mount(app, ctx);
 require("./routes/itinerary-shares").mount(app, ctx);
 require("./routes/sync")(app, ctx);

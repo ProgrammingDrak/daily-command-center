@@ -1,0 +1,33 @@
+# Places and Experiences implementation plan
+
+The approved hybrid uses the Places library as its landing page, the same library filters and selection in a map view, and a separate trip planning workspace. The working baseline is main at `1799476f472aa66918463dc67e39345f064fa9fd`. DCC’s existing Itinerary and Calendar continue to display canonical scheduled blocks.
+
+## Data and API contracts
+
+- Add owner-scoped PostgreSQL place, trip, projection and mutation receipt tables in migration 013. Run the same SQL at boot. A place retains typed geographic representations, original sources, notes, tags, collections, status, evidence and links. Place IDs stay stable through edits and merges. A merged row redirects to the surviving identity. Existing Task Library and Research records remain authoritative.
+- Store each trip version as an independently revisioned record with a family ID shared by alternatives. Days and stops are ordered structured data with stable UUIDs. Copies regenerate day/stop identity and reuse place IDs. Relative days work without dates. A scheduled trip records its starting civil date and an IANA zone, with optional stop-level overrides. Lifecycle status remains independent.
+- Serve the owner-only feature at `/places`. Mount owner-scoped reads and mutation commands under `/api/places`. Use same-origin mutation controls, exact request replay receipts and optimistic revisions. Validate linked place, task, research and Wishlist IDs in their canonical stores. Require the workspace owner for private links and files. Use query and collection controls across card, list and map views.
+- Reuse DCC’s task attachment store, private object storage, content validation and owner checks. Add a private attachment parent kind with a distinct namespace and exclusion from task projections; retain source URLs separately. The installed web app keeps its existing share target. A session-scoped opt-in uses Places as the share destination. The default still writes to the Vault inbox.
+- Start with manually entered facts, optional geometry, local map rendering and explicit directions links. Keep requests for enrichment behind replaceable providers with source/freshness metadata. AI proposals should be structured, previewed and checked against real evidence. Provider-free workflows stay functional with unresolved or unverified facts. Enable paid APIs only after approval.
+
+## Incremental delivery
+
+1. Add the schema, normalization, validation, owner-scoped API, capture, list/gallery/map, source details, search, collection filters and duplicate handling.
+2. Move the approved relative-day editor into the DCC shell. Connect place selections, the unscheduled pool, alternative versions and shared settings to durable records. Validate deep-copy isolation and optimistic conflicts.
+3. Connect dating and schedule preview. Recalculate civil dates and call DCC’s timezone-aware placement helpers. Report conflicts, DST ambiguity, crossings unsupported by the current DCC grid and unverified travel conditions. Require explicit approval for DCC writes. Deduplicate by trip stop and canonical block ID; surface manual edits or completed rows before overwriting. Keep external Google Calendar sync disabled and offer deliberate export where possible.
+4. Add candidate planning based on entered evidence, user priorities and optional provider results. Keep distance and duration blank until obtained. Test selections, locked stops, route assumptions, the transfer buffer and alternative comparison.
+5. Validate companion metadata, Research/Wishlist and task links, recorded visits, screenshot capture, account isolation and the three acceptance workflows. Confirm phone and desktop behavior with a disposable account. Evaluate provider coverage for the Sanriku Coast, transit and dates outside current timetable windows before activation.
+
+## Validation and rollout
+
+Cover validation and time logic with Node tests. Exercise ownership, migration replay, transaction rollback and linked block idempotency against isolated PostgreSQL. Use Chromium for capture, scheduling preview, dated copy, state reload, private access and responsive behavior. Run repository lint, Node tests and relevant smoke checks. Any issues in fixture infrastructure and unavailable providers remain explicit release gaps.
+
+Keep migration 013 additive and retain its data after an app rollback. Use the existing guarded release workflow only after applicable database review and release authorization. Confirm the exact deployed merge revision and the authenticated feature after shipping. A prior application revision can roll back application behavior while preserving saved data. Review any already-published canonical activities individually if a scheduling rollback is necessary.
+
+## Provider activation and known boundaries
+
+- The bundled Natural Earth geography supports a worldwide overview, map pins, clustering, manually supplied GeoJSON and straight-line selection. It has no address or road detail. Explicit live route lookups use openrouteservice when `DCC_PLACES_ORS_KEY` is configured. The request submits the selected coordinates and mode. Check account limits and permissions before adding a key. Public transit still uses operator resources. [Natural Earth public-domain terms](https://www.naturalearthdata.com/about/terms-of-use/) · [openrouteservice terms](https://openrouteservice.org/terms-of-service/)
+- Private image files use existing DCC attachment storage. Optional Tesseract screenshot reading runs locally when `DCC_PLACES_TESSERACT` is configured. Recognition proposes text and marks it inferred. The original file and source URL remain attached. Managed AI lookup of social posts and live venue hours, weather, and transit enrichment are outside the delivered provider set.
+- Date-specific availability accepts user-entered closures and opening windows. Timed scheduling detects unresolved clocks, overlapping activities, insufficient transfers and DST ambiguity. The travel-window estimator combines entered visit durations with routed transfers including the chosen buffer. Its output still depends on access and opening hours.
+- Dating a trip, publishing chosen stops to DCC, and downloading selected activities to an iCalendar file are separate decisions. Projection links prevent duplicate blocks when a trip date changes. A deleted draft stop with an unchanged DCC block can be removed from scheduling after a separate confirmation. Canonical task completion and manual edits take precedence.
+- Refine uses previewable rules for relaxed, shorter, nearby, budget, outdoors and food-focused plans. Broad natural-language itinerary generation and live web enrichment still need an approved provider.
