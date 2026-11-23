@@ -217,7 +217,7 @@ test("a done subtask is NOT offered as work that slipped", async () => {
   assert.deepEqual(listedTitles(ctx), ["Actually unfinished"]);
 });
 
-test("roots only: a child with an open parent nests and is not listed separately", async () => {
+test("a child and ride-along render under their parent through the shared tree", async () => {
   const d = ymd(2);
   const { ctx } = load({ [d]: [
     dayRoot(),
@@ -226,10 +226,10 @@ test("roots only: a child with an open parent nests and is not listed separately
     blk("ride", d, { title: "Ride along", wrapId: "parent" })
   ] }, [d]);
   await openLooseEnds(ctx);
-  assert.deepEqual(listedTitles(ctx), ["Ship C1"]);
+  assert.deepEqual(listedTitles(ctx), ["Ship C1", "Write the tests", "Ride along"]);
 });
 
-test("a child orphaned by a FINISHED parent is still real work and stays listed", async () => {
+test("an unfinished child retains its FINISHED parent as context", async () => {
   const d = ymd(1);
   // Same shape as the first test, except the child is open. Filtering done rows
   // must not also swallow a live subtask whose parent is gone -- standalone work
@@ -240,7 +240,7 @@ test("a child orphaned by a FINISHED parent is still real work and stays listed"
     blk("kid", d, { title: "Dryer still running", subtaskOf: "parent" })
   ] }, [d]);
   await openLooseEnds(ctx);
-  assert.deepEqual(listedTitles(ctx), ["Dryer still running"]);
+  assert.deepEqual(listedTitles(ctx), ["Do Laundry", "Dryer still running"]);
 });
 
 test("an all-done pool marks the day reviewed instead of opening an empty prompt", async () => {

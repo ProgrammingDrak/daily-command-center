@@ -24,6 +24,14 @@
 //                    owner omits them and the window globals are used unchanged)
 (function(){
   "use strict";
+  function bindTaskRow(el,task,{done=false,depth,metaSelector='.it-list-meta'}={}){
+    if(depth!==undefined)el.style.marginLeft='min('+(depth*22)+'px,var(--task-indent-max,132px))';
+    const label=window.DCC?.TaskModel?.hierarchyLabel(task),host=el.querySelector(metaSelector);
+    if(label&&host){const node=document.createElement('span');node.className='task-hierarchy-context';node.textContent=label;host.appendChild(node);}
+    if(window.DCC?.TaskActions){el.setAttribute('data-task-action-row','');window.DCC.TaskActions.bind(el,task,{done});}
+    return el;
+  }
+  if(window.DCC)window.DCC.TaskRows={bind:bindTaskRow};
 
   // SVG / icon constants (were local consts inside buildSchedule).
   var ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
@@ -326,6 +334,7 @@
       '</div>';
 
     bindPhotoButton(el, ev);
+    bindTaskRow(el,ev,{done:typeof isDone==='function'&&isDone(ev),metaSelector:'.meta'});
     return el;
   }
 
@@ -418,6 +427,7 @@
       if(e.target.closest("button,a,input,textarea,select,summary,details,[contenteditable],.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag,.recap-flag"))return;
       opts.onOpen(e,ev);
     });
+    bindTaskRow(el,ev,{done});
     if(typeof opts.afterRender==="function")opts.afterRender(el,ev);
     return el;
   }
@@ -460,6 +470,7 @@
       el.querySelector(".c-check").addEventListener("click",function(e){ e.stopPropagation(); o.onCheck(e); });
     }
     if(typeof o.afterRender==="function") o.afterRender(el);
+    if(o.task)bindTaskRow(el,o.task,{done:true,metaSelector:'.compact-row'});
     return el;
   }
 

@@ -302,7 +302,7 @@ test("the legacy dated-backlog inclusion is OPT-IN, and it is the only way a dat
     "with the flag, a DATED backlog row rides along — but an ordinary dated task never does");
 });
 
-test("hydrateBacklogFromBlocks projects the selector and dedupes the live twin", () => {
+test("hydrateBacklogFromBlocks preserves canonical records with ambiguous legacy aliases", () => {
   // `carry-200` really does have two live rows sharing one local_id on the prod restore.
   // The drawer shows one, matching the fold (which keys on local_id||row id) — kept
   // deliberately rather than rendering a twin nobody asked for.
@@ -322,8 +322,9 @@ test("hydrateBacklogFromBlocks projects the selector and dedupes the live twin",
   const { store } = makeStore(rows);
   const ctx = ctxWith([SRC.hydrateBacklog], { window: { blockStore: store, DCC: { TaskModel } } });
   const added = ctx.hydrateBacklogFromBlocks();
-  assert.equal(added, 3, "two distinct dateless local_ids plus the legacy dated backlog row");
-  assert.deepEqual(ctx.backlog.map((b) => b.id), ["carry-200", "bl-1", "dcc-legacy"]);
+  assert.equal(added, 4, "distinct canonical records must not disappear through alias deduplication");
+  assert.deepEqual(ctx.backlog.map((b) => b.id), ["r1", "r2", "bl-1", "dcc-legacy"]);
+  assert.ok(ctx.backlog.slice(0,2).every(task=>task._identityIssue==='duplicate-alias'));
   assert.equal(ctx.backlog[0]._blockId, "r1", "the projection carries the ROW id so writes can target it");
 });
 

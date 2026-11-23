@@ -427,9 +427,10 @@ function reloadPersistedEdits() {
       };
       if(_tmReady&&typeof TM.suppressWheneverSeeds==='function')scheduled=TM.suppressWheneverSeeds(scheduled,window.blockStore.getByType("block"),currentDate);
       const addedBlocks=_tmReady?[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(isFoldableTask)]:[];
+      const projectedTasks=new Map(_tmReady?TM.projectCollection(addedBlocks).map(task=>[task._blockId,task]):[]);
       if(_tmReady)addedBlocks.forEach(block=>{
         const p=block.properties||{};
-        const taskId=p.local_id||block.id;   // API task blocks have no local_id; key on the row id
+        const taskId=projectedTasks.get(block.id)?.id;
         if(!taskId)return;
         // Safety net: a stale cached day file can still carry the synthesized
         // meeting ghost (id "mtg-<sourceId>") for this same event. The real
@@ -475,7 +476,7 @@ function reloadPersistedEdits() {
         // The block -> ev projection lives in task-model.js now: ONE shape shared
         // with the carryover lane (schedule-tab.js), which used to hand-roll a
         // narrower bag and drop half the fields the row builder reads.
-        const task=TM.fromBlock(block);
+        const task=projectedTasks.get(block.id);
         if(task.reschedulePlacement==="earliest"&&!task.subtaskOf)scheduled.unshift(task);
         else scheduled.push(task);
       });
@@ -513,6 +514,8 @@ function reloadPersistedEdits() {
       });
     }
   } catch(e) {}
+  // Resolve relationships once over the complete collection, before any view filters.
+  if (window.DCC?.TaskModel?.normalizeCollection) scheduled=window.DCC.TaskModel.normalizeCollection(scheduled);
   // Restore saved task order (from drag reorder)
   try {
     const order = loadTaskOrder();

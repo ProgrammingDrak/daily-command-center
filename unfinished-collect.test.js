@@ -316,7 +316,7 @@ test("both lossy projections are gone", () => {
   assert.ok(!/function _unfToEv/.test(schedTabSource), "_unfToEv must be retired");
   assert.ok(!/durMin:\s*durMin/.test(unfSource) && !/rows\.push\(\{/.test(unfSource),
     "the bespoke 15-field row bag must be retired (rows are evs now)");
-  assert.ok(/TaskModel\.fromBlock\(b, \{ deriveEnd: true \}\)/.test(unfSource), "the collector must project through TaskModel");
+  assert.ok(unfSource.includes('TaskModel.projectCollection(blocks'), "the collector must project the collection through TaskModel");
 });
 
 test("carryover keeps its canonical completion and scheduling affordances", () => {

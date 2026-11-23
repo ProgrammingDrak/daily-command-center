@@ -1354,12 +1354,15 @@ function buildScheduled() {
   const today = __state && __state.date ? __state.date : new Date().toISOString().split("T")[0];
   const todayLabel = new Date(today + "T12:00:00").toLocaleDateString("en-US", {weekday:"long", month:"short", day:"numeric"});
   const nowMins = now();
-  const activeAll = DCC.TaskModel.selectNotDeleted(scheduled);
-  const active = (typeof taskBankMatches==="function")
+  const activeAll = DCC.TaskModel.normalizeCollection(DCC.TaskModel.selectNotDeleted(scheduled));
+  const selected = (typeof taskBankMatches==="function")
     ? activeAll.filter(ev=>taskBankMatches(ev,["title","detail","priority","source","meta"]))
     : activeAll;
-  const needsReview = active.filter(ev => pt(ev.start) < nowMins && !isDone(ev));
-  const rest = active.filter(ev => pt(ev.start) >= nowMins || isDone(ev));
+  const nodes=DCC.TaskModel.selectTree(DCC.TaskModel.withAncestorContext(selected,activeAll),{isCollapsed:()=>false});
+  const active=nodes.map(node=>({...node.ev,_displayDepth:node.depth}));
+  const inReview=ev=>{const root=DCC.TaskModel.hierarchyRoot(ev.id,activeAll)||ev;return pt(root.start)<nowMins&&!isDone(root);};
+  const needsReview = active.filter(inReview);
+  const rest = active.filter(ev=>!inReview(ev));
 
   let html = "";
 
@@ -1375,7 +1378,7 @@ function buildScheduled() {
       const bountyPlaced = typeof hasSelfBounty === "function" ? hasSelfBounty() : !!(typeof getDailyBounty === "function" && getDailyBounty());
       const canEditBounty = typeof viewMode === "undefined" || viewMode !== "archive";
       html +=
-        '<div class="board-card" style="margin-bottom:6px">' +
+        '<div class="board-card" data-scheduled-task-id="'+DCC.esc(ev.id)+'" style="margin-bottom:6px">' +
           '<div class="bar" style="background:' + c.color + '"></div>' +
           '<div class="body">' +
             '<div class="title-row"><span class="ttl">' + DCC.esc(ev.title) + '</span>' + (isBounty ? '<span class="bounty-chip' + bountySponsorAttr + '>Bounty x' + Math.pow(2, bountyCount) + '</span>' : '') + '</div>' +
@@ -1400,7 +1403,7 @@ function buildScheduled() {
       const bountyMeta = typeof getBountyMetaForTask === "function" ? getBountyMetaForTask(ev.id) : { hasSponsor: false, sponsorName: "" };
       const bountySponsorTitle = bountyMeta.hasSponsor ? ' title="' + ("Bounty from " + (bountyMeta.sponsorName || "a visitor")).replace(/"/g, "&quot;") + '"' : '';
       html +=
-        '<div class="board-card" style="margin-bottom:6px;' + (done ? 'opacity:0.4;' : '') + '">' +
+        '<div class="board-card" data-scheduled-task-id="'+DCC.esc(ev.id)+'" style="margin-bottom:6px;' + (done ? 'opacity:0.4;' : '') + '">' +
           '<div class="bar" style="background:' + c.color + '"></div>' +
           '<div class="body">' +
             '<div class="title-row"><span class="ttl"' + (done ? ' style="text-decoration:line-through"' : '') + '>' + DCC.esc(ev.title) + '</span>' + (isBounty ? '<span class="bounty-chip' + (done ? ' done' : '') + (bountyMeta.hasSponsor ? ' bounty-chip-sponsor' : '') + '"' + bountySponsorTitle + '>Bounty x' + Math.pow(2, bountyCount) + '</span>' : '') + '</div>' +
@@ -1416,6 +1419,12 @@ function buildScheduled() {
   }
 
   el.innerHTML = html;
+  const tasksById=new Map(active.map(task=>[String(task.id),task]));
+  el.querySelectorAll('[data-scheduled-task-id]').forEach(card=>{
+    const task=tasksById.get(card.dataset.scheduledTaskId);if(!task)return;
+    if(task._contextOnly)card.querySelectorAll('button').forEach(button=>button.disabled=true);
+    DCC.TaskRows?.bind(card,task,{done:isDone(task),depth:task._displayDepth,metaSelector:'.meta'});
+  });
 
   el.querySelectorAll(".sched-done-btn").forEach(btn => {
     btn.addEventListener("click", () => { toggleDone(btn.dataset.id); render(); });
@@ -1441,7 +1450,7 @@ function buildScheduled() {
   });
 
   const badge = document.getElementById("scheduled-count");
-  if (badge) { badge.textContent = needsReview.length; badge.style.display = needsReview.length ? "" : "none"; }
+  if (badge) { badge.textContent = DCC.TaskModel.selectRoots(needsReview).length; badge.style.display = needsReview.length ? "" : "none"; }
 }
 
 function buildTriage() {

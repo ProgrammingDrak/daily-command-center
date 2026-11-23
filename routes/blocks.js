@@ -1692,8 +1692,15 @@ module.exports = function mount(app, ctx) {
     await withReconciledTiming(rows.concat(result.dayRoots || []), req);
     // reconcileTiming mutates block.properties in place, so `rows` already carries any
     // settlement. dayRoots is internal plumbing and never goes over the wire.
+    // Bounds apply to work candidates, never to their relationship context or
+    // mutation targets. All expansion remains inside the authenticated workspace.
+    const TaskModel = require('../public/js/task-model');
+    const projected = TaskModel.projectCollection(rows, {canonicalIds:true});
+    const rootIds = TaskModel.selectRoots(projected).map(task => task.id);
+    const actionRows = rootIds.length ? (await blockDB.getSubtree(rootIds, req.workspaceId)).filter(blockDB.isTaskRow) : [];
+    const ancestors = rows.length ? await blockDB.getTaskAncestors(rows.map(row => row.id), req.workspaceId) : [];
     return {
-      rows,
+      rows, actionRows, ancestors,
       overlays: result.overlays,
       scanned: result.scanned,
       // The LIMIT lands on the RAW pool, before the caller applies its done filter, and

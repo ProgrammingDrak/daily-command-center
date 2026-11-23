@@ -35,6 +35,11 @@
   let _openHasLoadFailure = false;
   let _retryTimer = null;
   let _activeCarryoverSettlement = null;
+  let _activeTaskActionCount = null;
+  window.addEventListener('dcc:task-action',()=>{
+    if(_lastSnapshot)setIndicatorCount(snapshotCount(_lastSnapshot));
+    if(_activeTaskActionCount)_activeTaskActionCount();
+  });
 
   function pruneSettledCarryover(ids) {
     if (!_lastSnapshot || !_lastSnapshot.res || !Array.isArray(_lastSnapshot.res.rows)) return;
@@ -110,7 +115,7 @@
       onPick: opts.onDate
     }) : undefined;
     const el = ev.__unf
-      ? window.createTaskListRowRenderer({pool:opts.pool,onSettle:opts.onSettle,onOpen:opts.onDetails})(ev,opts.index||0,"unfinished")
+      ? window.createTaskListRowRenderer({pool:opts.pool,expandAll:true,onSettle:opts.onSettle,onOpen:opts.onDetails})(ev,opts.index||0,"unfinished",opts.node)
       : window.renderItineraryListRow(ev, {
       extraClass: opts.extraClass,
       barColor: opts.barColor || "var(--accent-light)",
@@ -259,6 +264,7 @@
   // Closing IS the answer "leave the rest where they are" — mark the day reviewed
   // so the prompt doesn't nag twice, and let the lane carry the remainder.
   function close() {
+    _activeTaskActionCount=null;
     const overlay = document.getElementById("catchup-overlay");
     if (overlay) overlay.classList.remove("open");
     if (!_openHasLoadFailure) markReviewed();
@@ -317,8 +323,9 @@
     // "older waiting" line still counts as something to answer — closing over it
     // would hide the queue it exists to advertise.
     let olderPending = olderTriage.length > 0;
-    const pendingDomCount = () => rowEls.size + waitingEls.size + triEls.size + (olderPending ? olderTriage.length : 0);
+    const pendingDomCount = () => rootsOf(pool.filter(ev=>rowEls.has(ev.id))).length + waitingEls.size + triEls.size + (olderPending ? olderTriage.length : 0);
     const updateCount = () => setIndicatorCount(pendingDomCount());
+    _activeTaskActionCount=updateCount;
     const closeIfDrained = () => {
       updateCount();
       if (!pendingDomCount()) close();
@@ -341,11 +348,15 @@
       closeIfDrained();
       if (restoreIndex >= 0) focusAfterRemoval(orderedRows, restoreIndex);
     };
+    const settledIds=new Set();
     const settle = (res, focusRow) => {
       if (!res) return false;
       const orderedRows = Array.from(listEl.children).filter(row => activeReviewRows.has(row));
       const restoreIndex = focusRow ? orderedRows.indexOf(focusRow) : -1;
-      (res.removed || []).forEach(id => {
+      (res.removed || []).forEach(id=>settledIds.add(id));
+      const retained=new Set(openOf(pool.filter(ev=>!settledIds.has(ev.id))).map(ev=>ev.id));
+      const gone=[...(res.removed||[]),...pool.filter(ev=>ev._contextOnly&&!retained.has(ev.id)).map(ev=>ev.id)];
+      gone.forEach(id => {
         const el = rowEls.get(id);
         if (!el) return;
         el.remove();
@@ -570,7 +581,9 @@
       waitingRows.push(el);
     });
 
-    roots.forEach((ev, index) => {
+    const taskNodes=window.DCC.TaskModel.selectTree(openOf(pool),{isCollapsed:()=>false});
+    taskNodes.forEach((node, index) => {
+      const ev=node.ev;
       const title = ev.title || "Untitled";
       const detailId = "cu-task-details-" + (++detailSeq);
       const el = reviewRow(ev, {
@@ -578,6 +591,7 @@
         detailId,
         pool,
         index,
+        node,
         onSettle: (el, res) => settle(res, el),
         onDetails: () => toggleDetails()
       });
@@ -621,7 +635,7 @@
       const toggleDetails = () => openDetails(detailEl.hidden);
 
       rowEls.set(ev.id, el);
-      addBulkSelect(el, "task", ev.id);
+      if(!ev._contextOnly&&!node.depth)addBulkSelect(el, "task", ev.id);
       activeReviewRows.add(el);
       taskRows.push(el);
     });

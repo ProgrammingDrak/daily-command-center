@@ -26,11 +26,11 @@
     const backlogIds = new Set(backlog.map(b => b.id));
     const rows = all.filter(b => !b.deleted_at && ['block', 'added_task', 'pending_task'].includes(b.type) && (TM.foldsIntoItinerary(b) || backlogIds.has(b.id)) &&
       !['deleted', 'archived'].includes(b.properties?.status) && !hidden.has(b.id) && !hidden.has(b.properties?.local_id));
-    const pool = rows.filter(b => !TM.isWheneverPoolRow(b) && (b.date === date || (b.properties?.all_day && b.date <= date && (!b.properties.all_day_end || b.properties.all_day_end > date)) || (!b.date && !datedIds.has(b.properties?.local_id))))
-      .map(b => fromBlock(b, { done }, parentKeys)).filter(e => e.date || !e.completed);
+    const pool = TM.normalizeCollection(rows.filter(b => !TM.isWheneverPoolRow(b) && (b.date === date || (b.properties?.all_day && b.date <= date && (!b.properties.all_day_end || b.properties.all_day_end > date)) || (!b.date && !datedIds.has(b.properties?.local_id))))
+      .map(b => fromBlock(b, { done }, parentKeys))).filter(e => e.date || !e.completed);
     const opts = { isDone: e => e.completed, isDeleted: () => false, trivialFlags: props._trivialFlags || {}, waitingRows: all };
     const day = TM.selectDay(pool, date, opts);
-    const tree = items => TM.selectTree(items, { pool: items, isCollapsed: () => false }).map(n => ({ ...n.ev, depth: n.depth }));
+    const tree = items => TM.selectTree(TM.normalizeCollection(items), { isCollapsed: () => false }).map(n => ({ ...n.ev, depth: n.depth, hierarchyLabel:TM.hierarchyLabel(n.ev) }));
     const timeZone = options.timeZone || 'UTC', now = options.now || new Date();
     const timeBlocks = TB.forDate(snapshot.dayState?.schedule?.timeBlocks || snapshot.dayState?.schedule?.blocks || [], date);
     // Keep completed children readable in place on the small display. Desktop folds
@@ -54,7 +54,14 @@
     const triage = flatten(groups.find(g => g.block.id === 'triage').nodes);
     const unplanned = flatten(groups.find(g => g.block.id === 'unplanned').nodes);
     const anytime = tree(Q.selectWhenever(TM.selectWheneverPoolBlocks(rows).map(b => fromBlock(b, {}, parentKeys))).filter(e => !e.completed));
-    const earlier = tree(list(carry.rows).filter(TM.isTaskRow).sort((a,b) => String(b.date).localeCompare(String(a.date)) || order(a,b)).map(b => fromBlock(b, carry.overlays?.[b.date])).filter(e => !e.completed));
+    const eligible=new Set(list(carry.rows).map(row=>row.id));
+    const earlierRows=[...new Map([...list(carry.ancestors),...list(carry.actionRows),...list(carry.rows)].filter(TM.isTaskRow).map(row=>[row.id,row])).values()];
+    const earlierPool=TM.projectCollection(earlierRows,{deriveEnd:true}).map(ev=>{
+      const block=earlierRows.find(row=>row.id===ev._blockId)||earlierRows.find(row=>row.id===ev.id);
+      const display=fromBlock(block,carry.overlays?.[block.date]);
+      return {...display,...ev,_contextOnly:!eligible.has(block.id)||display.completed,__unf:{sourceDate:block.date,done:display.completed}};
+    });
+    const earlier = tree(TM.selectCarryover(earlierPool));
     const today = clock(timeZone, now).date;
     const rules = Q.waitingRules({ today, nowValue: new Date(today + 'T12:00:00') });
     const waitingBlocks = all.filter(b => !b.deleted_at && b.properties?.kind === 'delegated_item').sort(rules.sortByUrgency);
@@ -69,13 +76,13 @@
     const looseEnds = earlier.concat(attention.map(waitingItem), review);
     const queues = [
       { id: 'triage', label: 'Triage', rows: triage },
-      { id: 'loose', label: 'Loose Ends', rows: looseEnds },
+      { id: 'loose', label: 'Loose Ends', rows: looseEnds, count:TM.selectRoots(TM.selectCarryover(earlierPool)).length+attention.length+review.length },
       { id: 'waiting', label: 'Waiting', rows: waiting, count: waiting.filter(i => i.overdue).length },
       { id: 'unscheduled', label: 'Unscheduled', rows: unplanned },
       { id: 'whenever', label: 'Whenever', rows: anytime }
     ].map(q => ({ ...q, count: q.count ?? q.rows.filter(e => !e.depth && !e.completed).length }));
     const byId = new Map();
-    const todos = itinerary.concat(triage, unplanned, anytime, earlier).filter(e => !e.completed && !byId.has(e.taskId) && byId.set(e.taskId, true));
+    const todos = itinerary.concat(triage, unplanned, anytime, earlier).filter(e => !e.completed && !e._contextOnly && !byId.has(e.taskId) && byId.set(e.taskId, true));
     return { date, sections, queues, unpreparedSources, itinerary, triage, unplanned, anytime, earlier, todos, all: tree(day.visible).concat(anytime, earlier), overlays: { ...carry.overlays, [date]: { done } }, truncated: !!carry.truncated,
       // Legacy seed-only timeline entries have no safe row identity in this snapshot.
       // Do not resurrect tombstones by rendering them as actionable tasks.

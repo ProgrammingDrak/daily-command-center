@@ -39,6 +39,8 @@ function fixture() {
     loadSubtasks: () => ({ "next-step": [{}] }),
     getLinkedTrivialTasks: () => []
   });
+  ctx.window=ctx;
+  require('./task-model-vm-fixture').installTaskModel(ctx);
   return { ctx, boards };
 }
 test("remaining-work summaries remain plain text in actual itinerary and library renderers", () => {

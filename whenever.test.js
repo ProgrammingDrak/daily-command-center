@@ -100,6 +100,7 @@ function makePage(opts) {
       return ctx.scheduled.find(e => e.id === id);
     },
     toggleDone: id => log.push(["toggleDone", id]),
+    commitDoneOnDate:async(id,date,opts)=>{log.push(['complete',id,date,opts.ev.id]);return {ok:true};},
     persistRowProp: (id, key, value, ev, o) => { log.push(["persistRowProp", id, key, value, o && o.row && o.row.id]); return Promise.resolve(); },
     refoldTaskStateFromBlockCache: () => log.push(["refold"]),
   };
@@ -150,12 +151,12 @@ test("Do it now moves to today first when you are looking at another day", async
   assert.deepEqual(page.log.find(e => e[0] === "switch"), ["switch", TODAY]);
 });
 
-test("Done lands it on today, then checks it off through the normal toggleDone", async () => {
+test("Done completes the selected task atomically without a preliminary schedule write", async () => {
   const page = makePage();
   assert.equal(await page.api.markDone("wh-laundry"), true);
   const order = page.log.map(e => e[0]).filter(k => k !== "toast");
-  assert.deepEqual(order, ["addToSchedule", "place", "toggleDone"]);
-  assert.deepEqual(page.log.find(e => e[0] === "toggleDone"), ["toggleDone", "wh-laundry"]);
+  assert.deepEqual(order, ["complete"]);
+  assert.deepEqual(page.log.find(e => e[0] === "complete"), ["complete", "wh-laundry", TODAY, "wh-laundry"]);
   assert.equal(page.log.filter(e => e[0] === "toast").length, 0, "toggleDone already toasts the points");
 });
 

@@ -513,6 +513,10 @@ async function _legacyCommitDoneOnDate(id,dateStr,opts){
 async function commitDoneOnDate(id,dateStr,opts){
   if(!id||!dateStr)return false;
   opts=opts||{};
+  if(window.DCC?.TaskActions&&!opts._sharedAction){
+    const task=opts.ev||(typeof scheduled!=='undefined'&&scheduled.find(ev=>ev.id===id))||{id,date:dateStr};
+    return window.DCC.TaskActions.run({task,action:'complete',write:()=>commitDoneOnDate(id,dateStr,{...opts,_sharedAction:true})});
+  }
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   const ev=((typeof scheduled!=="undefined"&&scheduled.find(e=>e.id===id))||opts.ev||null);
   const waiting=window.DCC&&window.DCC.Waiting;
@@ -1558,19 +1562,14 @@ function hydrateBacklogFromBlocks(){
   let added=0;
   const rows=window.blockStore.getByType("block");
   const parentKeys=TM.backlogParentKeys(rows);
-  const candidates=[...TM.selectUnscheduled(rows,{includeLegacyDatedBacklog:true}),...TM.selectWheneverPoolBlocks(rows)];
-  candidates.forEach(b=>{
-    const p=b.properties||{};
-    const localId=TM.backlogKey(b);
-    // Dedupe by ev id, matching the fold (persistence.js keys on local_id||row id).
-    // Two live rows CAN share one local_id — `carry-200` does on the prod restore —
-    // and in that case the drawer shows one while both rows exist. That is the
-    // pre-existing behavior, kept deliberately rather than "fixed" by rendering a
-    // twin nobody asked for; the pair is flagged to Track A for the migration.
-    if(backlog.find(x=>x.id===localId))return;
-    backlog.push(TM.fromBacklogBlock(b,parentKeys));
+  const candidates=[...new Map([...TM.selectUnscheduled(rows,{includeLegacyDatedBacklog:true}),...TM.selectWheneverPoolBlocks(rows)].map(row=>[row.id,row])).values()];
+  const tasks=TM.normalizeCollection(candidates.map(row=>TM.fromBacklogBlock(row,parentKeys)));
+  tasks.forEach(task=>{
+    if(backlog.find(existing=>existing._blockId===task._blockId||(!existing._blockId&&existing.id===task.id)))return;
+    backlog.push(task);
     added++;
   });
+  if(TM.normalizeCollection)backlog=TM.normalizeCollection(backlog);
   return added;
 }
 
