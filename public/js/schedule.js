@@ -1415,8 +1415,15 @@ function saveLockedSet(ids){
   localStorage.setItem(LOCKED_KEY,JSON.stringify(ids||[]));scheduleIDBSave();
   return 0;
 }
-function toggleLock(id){
-  const ev=scheduled.find(e=>e.id===id);if(!ev||isMeeting(ev))return;
+function toggleLock(id,opts){
+  const ev=opts?.task||scheduled.find(e=>e.id===id);if(!ev||isMeeting(ev))return;
+  if(opts?.task&&!scheduled.includes(ev)){
+    const row=window.DCCWorkSessions?.blockFor?.(ev);
+    if(!row)return false;
+    return enqueueRowPropsWrite(row.id,props=>Object.assign({},props,{locked:!props.locked}),{},{rejectOnError:true})
+      .then(saved=>{ev._locked=!!saved.properties.locked;render();return true;})
+      .catch(error=>{showToast(error.message,"error");return false;});
+  }
   const set=new Set(loadLockedSet());
   if(ev._locked){
     delete ev._locked;

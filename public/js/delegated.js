@@ -537,13 +537,15 @@
     updateBadge(all.filter(isOverdue).length);
 
     const list = filterItems(all, _currentFilter);
-    const rows = list.length ? list.map(renderCard).join("") : renderEmpty(true, all.filter(isOpenDelegated).length);
     mount.innerHTML =
       '<div class="delegated-sidebar-tools">' +
         '<button type="button" class="delegated-mini-btn" data-delegated-action="new">+ New</button>' +
         renderFilters() +
       '</div>' +
-      '<div class="delegated-itinerary-list">' + rows + '</div>';
+      '<div class="delegated-itinerary-list"></div>';
+    const rows = mount.querySelector('.delegated-itinerary-list');
+    if (list.length) rows.replaceChildren(...list.map(renderCard));
+    else rows.innerHTML = renderEmpty(true, all.filter(isOpenDelegated).length);
 
     wireDelegatedMount(mount);
   }
@@ -565,126 +567,96 @@
     return '<div class="delegated-empty">No check-ins need attention.</div>';
   }
 
+  // Both Waiting surfaces project the complete task through the canonical model.
+  function taskForItem(item) {
+    const ev = window.DCC.TaskModel.fromBlock(item);
+    const p = item.properties || {};
+    ev.id = item.id;
+    ev.title = p.myTask || p.title || "Waiting task";
+    return ev;
+  }
+
+  function waitingActions(item, trigger) {
+    const p = item.properties || {};
+    const closed = isDoneDelegated(item);
+    const dependency = isTaskDependency(item);
+    const actions = [];
+    if (!closed && !dependency && !(p.checkInRepeat === false && !p.checkInDate)) {
+      actions.push({icon:"✓", label:"Checked in", onPick:()=>markDelegatedItemCheckedById(item.id)});
+      actions.push({icon:"📅", label:"Schedule check-in", onPick:()=>scheduleDelegatedItem(item.id, trigger)});
+    }
+    if (!closed && (!dependency || p.status === "ready")) {
+      actions.push({icon:"📅", label:"Schedule task", onPick:()=>unblockWaitingItem(item.id, trigger)});
+    }
+    if (!closed && dependency) {
+      if (p.status === "ready") actions.push({icon:"↗", label:"Move to Solo", onPick:()=>releaseTaskDependencyToBacklog(item.id)});
+      actions.push({icon:"✎", label:"Change prerequisite", onPick:()=>openTaskDependencyModal(null, item.id)});
+      actions.push({icon:"↗", label:p.status === "ready" ? "Remove dependency" : "Unblock to Solo", onPick:()=>removeTaskDependency(item.id)});
+    } else {
+      actions.push({icon:"✎", label:"Edit", onPick:()=>openDelegatedModal(item.id)});
+      if (!closed) actions.push({icon:"✓", label:"Complete task", onPick:()=>completeWaitingItem(item.id)});
+    }
+    actions.push({icon:"×", label:"Delete", onPick:()=>deleteDelegatedItem(item.id)});
+    window.openRadialMenu(trigger, actions, {a0:90,a1:270,r:140,labelStagger:true,clampY:true});
+  }
+
+  function openTaskActions(id,trigger) {
+    const item=getDelegatedItemById(id);
+    if(!item)return false;
+    const row=checkInWorkBlock({id:"waiting-checkin-task:"+item.id,delegatedItemId:item.id});
+    const task=row?window.DCC.TaskModel.fromBlock(row,{deriveEnd:true}):taskForItem(item);
+    const actions={delegate:()=>waitingActions(item,trigger)};
+    if(isTaskDependency(item))actions.dependency=()=>openTaskDependencyModal(null,item.id);
+    window.openTaskRadial(task,trigger,{
+      unavailableReason:row?null:"This Waiting entry has no underlying task yet. Schedule the task first.",
+      actions
+    });
+    return true;
+  }
+
   function renderTaskDependencyCard(item) {
     const p = item.properties || {};
     const closed = isDoneDelegated(item);
     const ready = p.status === "ready";
-    const dependent = blockTitle(p.linkedBlockId, p.myTask);
+    const ev = taskForItem(item);
+    ev.title = blockTitle(p.linkedBlockId, p.myTask);
     const blocker = blockTitle(p.blockerBlockId, p.title);
-    const icon = (ready || closed) ? "&#10003;" : '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
-    const statePill = closed
-      ? '<span class="task-dependency-pill ready">&#10003; Released</span>'
-      : '<button type="button" class="task-dependency-pill ' + (ready ? "ready" : "blocked") + '" data-delegated-action="dependency-edit" data-id="' + esc(item.id) + '" title="Change prerequisite">' + (ready ? "&#10003; Ready" : "&#128274; Blocked by " + esc(truncate(blocker, 44))) + "</button>";
-    let actions = "";
-    if (closed) {
-      actions += '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button>';
-    } else if (ready) {
-      actions += '<button type="button" data-delegated-action="unblock" data-id="' + esc(item.id) + '">Schedule task</button>';
-      actions += '<button type="button" data-delegated-action="dependency-backlog" data-id="' + esc(item.id) + '">Move to Solo</button>';
-    }
-    if (!closed) {
-      actions += '<button type="button" data-delegated-action="dependency-edit" data-id="' + esc(item.id) + '">Change prerequisite</button>';
-      actions += '<button type="button" data-delegated-action="dependency-remove" data-id="' + esc(item.id) + '">' + (ready ? "Remove dependency" : "Unblock to Solo") + "</button>";
-    }
-    return '<div class="delegated-card delegated-itinerary-card task-dependency-card' + ((ready || closed) ? " dependency-ready" : "") + '" data-id="' + esc(item.id) + '">' +
-      '<div class="delegated-card-score dependency' + ((ready || closed) ? " ready" : "") + '">' + icon + "</div>" +
-      '<div class="delegated-card-body"><div class="delegated-card-title">' + esc(dependent) + '</div><div class="delegated-card-meta">' + statePill + "</div></div>" +
-      '<div class="delegated-card-actions">' + actions + "</div></div>";
+    return window.renderItineraryListRow(ev, {
+      done:closed, dataset:{waitingId:item.id},
+      barColor:"var(--waiting)",
+      metaHtml:'<span class="it-list-untimed">'+esc(closed ? "Released" : ready ? "Ready" : "Blocked by " + blocker)+'</span>',
+      onOpen:()=>openTaskDependencyModal(null, item.id),
+      onSchedule:!closed && ready ? trigger=>unblockWaitingItem(item.id, trigger) : null,
+      onRadial:trigger=>openTaskActions(item.id, trigger),
+      onDelete:()=>deleteDelegatedItem(item.id), deleteLabel:"Delete dependency", deleteTitle:"Delete dependency"
+    });
   }
 
   function renderCard(item) {
-    const p = item.properties || {};
     if (isTaskDependency(item)) return renderTaskDependencyCard(item);
+    const p = item.properties || {};
     const done = isDoneDelegated(item);
-    const u = itemUrgency(item);
-    const cls = done ? "" : u.cls;
-
-    const who = (p.delegatee && p.delegatee.name) || "";
-    const waiting = (p.title || "").trim();
-    const myTask = (p.myTask || "").trim();
-    const headline = myTask || waiting || "(untitled)";
-    const note = String(p.aiSummary || p.notes || "").trim();
-
-    // Subline: legacy items may still carry a separate what/who; surface them
-    // under the headline. The due label always shows.
-    const subParts = [];
-    if (myTask && waiting) subParts.push(esc(waiting));
-    if (who) subParts.push(esc(who));
-    if (!subParts.length) subParts.push('Not specified');
-    const sub = subParts.map(s => '<span>' + s + '</span>').join("");
-
-    const cardCls = [
-      "delegated-card",
-      "delegated-itinerary-card",
-      cls,
-      done ? "done" : ""
-    ].filter(Boolean).join(" ");
-
     const noFollowUp = p.checkInRepeat === false && !p.checkInDate;
-    const followUpLabel = p.checkInDate || (noFollowUp
-      ? (p.lastCheckedAt ? 'Complete' : 'No follow-up set')
-      : 'From repeat cadence');
-    const badge = '<div class="waiting-state ' + cls + '">' +
-      (done ? 'Complete' : esc(dueLabel(item))) + '</div>';
-
-    const linkChip = p.linkedBlockId ? '<span class="delegated-card-link">linked task</span>' : '';
     const sourceRef = waitingSourceRef(p);
     const sourceLink = /^https?:\/\//.test(sourceRef)
-      ? '<a class="delegated-card-source" href="' + esc(sourceRef) + '" target="_blank" rel="noopener" title="Open source" onclick="event.stopPropagation()">Source &#8599;</a>'
-      : '';
-
-    const actionButtons = done ?
-      '<details class="waiting-more"><summary>More actions</summary><div>' +
-      '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
-      '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button></div></details>' :
-      (noFollowUp ? '' : '<button type="button" data-delegated-action="check-in" data-id="' + esc(item.id) + '">Checked in</button>' +
-      '<button type="button" data-delegated-action="schedule" data-id="' + esc(item.id) + '">Schedule check-in</button>') +
-      '<details class="waiting-more"><summary>More actions</summary><div>' +
-      '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
-      '<button type="button" data-delegated-action="unblock" data-id="' + esc(item.id) + '" title="The blocker is gone. Put the actual task on your schedule.">Schedule task</button>' +
-      '<button type="button" data-delegated-action="complete" data-id="' + esc(item.id) + '" title="The actual task is already finished.">Complete task</button>' +
-      '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button></div></details>';
-
-    return '<div class="' + cardCls + '" data-id="' + esc(item.id) + '">' +
-      '<div class="delegated-card-body">' +
-        badge +
-        '<div class="delegated-card-title">' + esc(headline) + linkChip + sourceLink + '</div>' +
-        '<dl class="waiting-facts"><div><dt>Waiting for</dt><dd>' + sub + '</dd></div>' +
-          '<div><dt>Follow-up</dt><dd>' + esc(followUpLabel) + '</dd></div></dl>' +
-        (note ? '<div class="delegated-card-note">' + esc(note) + '</div>' : '') +
-      '</div>' +
-      '<div class="delegated-card-actions">' + actionButtons + '</div>' +
-    '</div>';
+      ? '<a class="detail-action-link" href="'+esc(sourceRef)+'" target="_blank" rel="noopener">Source ↗</a>' : '';
+    return window.renderItineraryListRow(taskForItem(item), {
+      done, dataset:{waitingId:item.id}, barColor:"var(--waiting)",
+      titleExtrasHtml:sourceLink,
+      metaHtml:'<span class="it-list-untimed">'+esc(blockerLabel(item) + " · " + dueLabel(item))+'</span>',
+      completionTitle:"Record a check-in. The delegated task stays open.",
+      onComplete:!done && !noFollowUp ? ()=>markDelegatedItemCheckedById(item.id) : null,
+      onSchedule:!done && !noFollowUp ? trigger=>scheduleDelegatedItem(item.id, trigger) : null,
+      onOpen:()=>openDelegatedModal(item.id),
+      onRadial:trigger=>openTaskActions(item.id, trigger),
+      onDelete:()=>deleteDelegatedItem(item.id), deleteLabel:"Delete Waiting task", deleteTitle:"Delete Waiting task"
+    });
   }
 
   function wireDelegatedMount(mount) {
-    mount.querySelectorAll("[data-delegated-action]").forEach(btn => {
-      btn.addEventListener("click", e => {
-        e.stopPropagation();
-        const action = btn.dataset.delegatedAction;
-        const id = btn.dataset.id;
-        if (action === "new") {
-          openDelegatedModal(null);
-        } else if (action === "check-in") {
-          markDelegatedItemCheckedById(id);
-        } else if (action === "schedule") {
-          scheduleDelegatedItem(id, btn);
-        } else if (action === "edit") {
-          openDelegatedModal(id);
-        } else if (action === "unblock") {
-          unblockWaitingItem(id, btn);
-        } else if (action === "complete") {
-          completeWaitingItem(id);
-        } else if (action === "dependency-backlog") {
-          releaseTaskDependencyToBacklog(id);
-        } else if (action === "dependency-edit") {
-          openTaskDependencyModal(null, id);
-        } else if (action === "dependency-remove") {
-          removeTaskDependency(id);
-        } else if (action === "delete") {
-          deleteDelegatedItem(id);
-        }
-      });
+    mount.querySelector('[data-delegated-action="new"]')?.addEventListener("click", event => {
+      event.stopPropagation();
+      openDelegatedModal(null);
     });
     mount.querySelectorAll(".delegated-filter-btn").forEach(btn => {
       btn.addEventListener("click", e => {
@@ -693,12 +665,7 @@
         renderDelegatedSidebar();
       });
     });
-    mount.querySelectorAll("[data-task-dependency-open]").forEach(btn => {
-      btn.addEventListener("click", e => {
-        e.stopPropagation();
-        openWaitingItem(btn.dataset.taskDependencyOpen);
-      });
-    });
+
   }
 
   // The badge is a notification, not an inventory: it counts only items overdue for
@@ -1165,7 +1132,7 @@
       window.openTaskQueue("waiting");
     }
     setTimeout(() => {
-      const card = Array.from(document.querySelectorAll("#delegated-blocked-list .delegated-card"))
+      const card = Array.from(document.querySelectorAll("#delegated-blocked-list .it-list-item"))
         .find(node => node.dataset.id === String(id));
       if (!card) return;
       card.classList.add("delegated-card-target");
@@ -1702,6 +1669,8 @@
     all: getAllDelegatedItems,
     attentionItems,
     blockerLabel,
+    taskForItem,
+    openTaskActions,
     cycleKey,
     dueLabel,
     itemUrgency,

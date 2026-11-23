@@ -338,6 +338,15 @@
     return el;
   }
 
+  // Resolve the task accent once for every collection using the itinerary row.
+  function itineraryTaskBarColor(ev) {
+    var type = window.TaskTypes ? window.TaskTypes.get(ev) : null;
+    var tagColor = W("taskTagColor");
+    var config = W("cfg");
+    return (type && type.barColor) || (tagColor && tagColor(ev)) ||
+      (config && config(ev.type).color) || "var(--accent-light)";
+  }
+
   // ======== SHARED ITINERARY LIST ROW ========
   // One DOM skeleton and one interaction binder for every task-like row in the
   // visible itinerary. Callers keep source-specific policy in callbacks. Missing
@@ -386,7 +395,7 @@
         '<div class="it-list-nav"><div class="grip it-list-grip" title="'+escHtml(opts.gripTitle||"Fixed item")+'">'+gripSvg+'</div></div>'+
         '<div class="it-list-check-col">'+completionControl+(!done && completionControl ? photoButton : '')+'</div>'+
       '</div>'+
-      '<div class="bar" style="background:'+(opts.barColor||"")+'"></div>'+
+      '<div class="bar" style="background:'+(opts.barColor||itineraryTaskBarColor(ev))+'"></div>'+
       '<div class="it-list-main">'+
         '<div class="it-list-title-row">'+(opts.collapseHtml||"")+'<span class="ttl" title="'+escHtml(ev.title||"")+'">'+escHtml(ev.title||"")+'</span>'+(opts.titleExtrasHtml||"")+(done && completionControl ? photoButton : "")+addButton+'</div>'+
         '<div class="it-list-meta">'+(opts.metaHtml||"")+(ev.sourceContext?'<span class="task-source-context">'+escHtml(ev.sourceContext)+'</span>':'')+scheduleButton+durationButton+'</div>'+
@@ -424,7 +433,10 @@
     var add=el.querySelector(".row-add-menu");
     if(add)add.addEventListener("click",function(e){e.stopPropagation();opts.onAdd(add,e,ev);});
     if(typeof opts.onOpen==="function")el.addEventListener("click",function(e){
-      if(e.target.closest("button,a,input,textarea,select,summary,details,[contenteditable],.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag,.recap-flag"))return;
+      var control=e.target.closest("button,a,input,textarea,select,summary,details,[contenteditable],.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag,.recap-flag");
+      // Queue sections themselves are <details>. Only controls INSIDE this row
+      // consume its click; an ancestor section must not swallow title/details taps.
+      if(control&&el.contains(control))return;
       opts.onOpen(e,ev);
     });
     bindTaskRow(el,ev,{done});

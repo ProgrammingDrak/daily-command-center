@@ -741,7 +741,7 @@ function addStackedTask(taskId, text, durMinArg, opts){
 function reparentAsSubtask(childId, parentId,options){
   const childAnchor=typeof taskAnchorById==='function'?taskAnchorById(childId):null;
   const parentAnchor=typeof taskAnchorById==='function'?taskAnchorById(parentId):null;
-  if(childAnchor&&parentAnchor&&childAnchor.whenever&&parentAnchor.whenever){
+  if(childAnchor&&parentAnchor&&(childAnchor.whenever||childAnchor.date===null)&&(parentAnchor.whenever||parentAnchor.date===null)){
     if(childId===parentId||(typeof _isAncestor==='function'&&_isAncestor(childId,parentId,backlog)))return false;
     const child=childAnchor.ev,parent=parentAnchor.ev;
     const nested=!!(options&&options.childEdge==='wrap')||!!(window.TaskTypes&&window.TaskTypes.rule(parent,'childEdge')==='wrap');
@@ -812,7 +812,7 @@ function openMakeSubtaskOf(childId, anchorEl){
   // C6a: the reusable half (open rows) comes from the derivation layer; the rest is
   // this popover's own cycle/self/duplicate-parent guard and stays here.
   const childAnchor=typeof taskAnchorById==='function'?taskAnchorById(childId):null;
-  const parentPool=childAnchor&&childAnchor.whenever?backlog:scheduled;
+  const parentPool=childAnchor&&(childAnchor.whenever||childAnchor.date===null)?backlog:scheduled;
   const candidates=DCC.TaskModel.selectOpen(parentPool,{isDone:done}).filter(e=>
     e&&e.id!==childId&&
     // Meetings are fixed-time but still valid parents. They can own either a

@@ -233,7 +233,7 @@ body.dcc-legacy-overlay-open:not(.tasks-drawer-open) .dcc-launcher { display: no
   box-shadow: var(--shadow-2);
 }
 .side-drawer.open .side-drawer-body { transform: none; }
-.side-drawer-backdrop { background: rgba(2, 8, 23, 0.44); }
+.side-drawer-backdrop, .carryover-overlay { background: rgba(2, 8, 23, 0.44); }
 .side-drawer-content { padding: var(--sp-3); }
 .side-drawer-header,
 .task-manager-toolbar { position: sticky; z-index: 3; background: var(--surface-base); }
@@ -243,28 +243,13 @@ body.dcc-legacy-overlay-open:not(.tasks-drawer-open) .dcc-launcher { display: no
 .task-manager-toolbar .task-bank-tools { position: static; margin: 0; }
 body.tasks-drawer-open { padding-right: min(560px, 44vw); transition: padding-right 200ms cubic-bezier(.32,.72,0,1); }
 body.tasks-drawer-open .dcc-launcher { right: calc(min(560px, 44vw) + var(--sp-4)); }
-body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
+body.tasks-drawer-open #sidecar-tabs,
+body:has(.carryover-overlay.open) #sidecar-tabs { opacity: 0; pointer-events: none; }
 
-/* Loose Ends is a dedicated non-blocking triage workspace. */
-.carryover-overlay {
-  display: none;
-  justify-content: flex-end;
-  align-items: stretch;
-  padding: 0;
-  background: transparent;
-  pointer-events: none;
-}
+/* Loose Ends uses the same centered task-queue modal presentation. */
+.carryover-overlay { display: none; justify-content: center; align-items: center; padding: 8px; }
 .carryover-overlay.open { display: flex; }
-.carryover {
-  width: min(760px, 100vw);
-  max-width: none;
-  max-height: 100dvh;
-  height: 100dvh;
-  border-radius: 0;
-  border-width: 0 0 0 1px;
-  background: var(--surface-base);
-  pointer-events: auto;
-}
+.carryover { background: var(--surface-base); }
 .carryover-hdr,
 .carryover-footer { position: sticky; z-index: 2; background: var(--surface-base); }
 .carryover-hdr { top: 0; }
@@ -385,7 +370,7 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 .it-list-meta > :is(.tag-chip,.pet-privacy-toggle,.habit-streak,.points-chip,.prep-flag,.recap-flag,.pri-chip,.commute-chip) { display: none; }
 .it-list-item:hover .it-list-meta > *,
 .it-list-item:focus-within .it-list-meta > * { display: inline-flex; }
-.it-list-meta > :is(.start-time,.it-list-untimed,.it-list-duration,.task-progress-pill,.it-list-now,.tag) { display: inline-flex; }
+.it-list-meta > :is(.start-time,.it-list-untimed,.it-list-context,.it-list-duration,.task-progress-pill,.it-list-now,.tag) { display: inline-flex; }
 .it-list-title-row .it-list-privacy {
   display: inline-flex;
   align-items: center;
@@ -725,7 +710,7 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
   .add-modal { width: 100%; }
   .it-list-item .it-list-actions { opacity: 1; }
   .it-list-item .it-list-meta > * { display: none; }
-  .it-list-item .it-list-meta > :is(.start-time,.it-list-untimed,.it-list-duration,.task-progress-pill,.it-list-now,.tag) { display: inline-flex; }
+  .it-list-item .it-list-meta > :is(.start-time,.it-list-untimed,.it-list-context,.it-list-duration,.task-progress-pill,.it-list-now,.tag) { display: inline-flex; }
   .bt-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .bt-finance-purchase-form { grid-template-columns: 1fr; }
   .bt-finance-editor .dcc-collection-tools { grid-template-columns: 1fr; }
@@ -945,7 +930,10 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 #tasks-drawer.queue-focused .queue-hidden { display: none !important; }
 #tasks-drawer.queue-focused.open .side-drawer-body {
   top: 50%; bottom: auto; left: 50% !important; right: auto !important; transform: translate(-50%, -50%) !important;
-  width: min(720px, calc(100vw - 24px)) !important; height: auto; max-height: 88dvh;
+}
+.carryover,
+#tasks-drawer.queue-focused.open .side-drawer-body {
+  width: min(720px, calc(100vw - 24px)) !important; max-width: none; flex-shrink: 0; height: auto; max-height: 88dvh;
   border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
 }
 #tasks-drawer.queue-focused .side-drawer-content { padding: 16px; overflow-y: auto; }
@@ -954,21 +942,6 @@ body.tasks-drawer-open #sidecar-tabs { opacity: 0; pointer-events: none; }
 #tasks-drawer.queue-focused .untimed-sub { margin: 0; padding: 0; border: 0; }
 body.tasks-drawer-open.task-queue-open { padding-right: var(--sp-5); }
 body.task-queue-open .dcc-launcher { display: none; }
-#tasks-drawer.queue-focused .delegated-card { display: block; padding: 16px; border-left-width: 1px; }
-#tasks-drawer.queue-focused .delegated-card-title { font-size: 17px; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
-.waiting-state { font-size: 12px; font-weight: 650; color: var(--text-muted); margin-bottom: 8px; }
-.waiting-facts { display: grid; gap: 10px; margin: 14px 0; }
-.waiting-facts dt { font-size: 12px; color: var(--text-muted); }
-.waiting-facts dd { margin: 2px 0 0; font-size: 14px; overflow-wrap: anywhere; }
-.waiting-facts dd span + span::before { content: ' · '; }
-#tasks-drawer.queue-focused .delegated-card-note { font-size: 13px; line-height: 1.5; margin-bottom: 12px; }
-#tasks-drawer.queue-focused .delegated-card-actions { justify-content: flex-start; gap: 8px; }
-#tasks-drawer.queue-focused .delegated-card-actions button,
-.waiting-more summary { min-height: 44px; padding: 10px 12px; font-size: 13px; }
-#tasks-drawer.queue-focused button[data-delegated-action="schedule"] { order: -1; color: white; background: var(--accent); border-color: var(--accent); }
-.waiting-more { width: 100%; }
-.waiting-more summary { cursor: pointer; color: var(--text-muted); }
-.waiting-more > div { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px 0; }
 @media (max-width: 1024px) {
   body.tasks-drawer-open.task-queue-open { padding-right: var(--sp-4); }
 }
@@ -976,6 +949,7 @@ body.task-queue-open .dcc-launcher { display: none; }
   body.tasks-drawer-open.task-queue-open { padding-right: var(--sp-3); }
 }
 @media (max-width: 480px) {
+  .carryover,
   #tasks-drawer.queue-focused.open .side-drawer-body { width: calc(100vw - 16px) !important; max-height: calc(100dvh - 32px); }
   #tasks-drawer.queue-focused .side-drawer-content { padding: 12px; }
 }

@@ -10,5 +10,6 @@ module.exports = function seedTaskDetailReview(store, date) {
   add('review-unscheduled',{local_id:'review-unscheduled',title:'Choose a time for the workshop',type:'task',duration:30,untimed:true});
   add('review-incoming',{local_id:'review-incoming',title:'Review the request from the example meeting',type:'task',duration:15,untimed:true,triageBlock:true,triageId:'meeting:synthetic-review',triageContext:{id:'meeting:synthetic-review',type:'meeting'}},null);
   add('review-whenever',{local_id:'review-whenever',title:'Organize the example project folder',kind:'backlog',stage:'Whenever',duration:15},null);
+  add('review-waiting-linked',{kind:'delegated_item',myTask:'Prepare the project handoff with the revised launch notes',title:'Final review',linkedBlockId:'review-detail-task',delegatee:{name:'Example reviewer'},status:'open',checkInDate:date,checkInRepeat:false},null);
   add('review-waiting',{kind:'delegated_item',myTask:'Finalize the project estimate',title:'Revised supplier quote',delegatee:{name:'Example reviewer'},notes:'The estimate needs an updated materials total.',status:'open',checkInDate:date,checkInRepeat:false},null);
 };

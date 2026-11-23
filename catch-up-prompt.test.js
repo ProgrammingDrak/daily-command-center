@@ -166,10 +166,15 @@ function load(daysByDate, archiveDates, extra) {
   vm.runInContext(rowSource, ctx);
   vm.runInContext(scheduleSource.slice(scheduleSource.indexOf("function createTaskListRowRenderer("), scheduleSource.indexOf("function buildListView(){")), ctx);
   vm.runInContext(scheduleSource.slice(scheduleSource.indexOf("function _isSubRow("), scheduleSource.indexOf("function createTaskListRowRenderer(")), ctx);
-  vm.runInContext(scheduleSource.slice(scheduleSource.indexOf("function buildCarryoverRadialItems("), scheduleSource.indexOf("function openTaskChangeRadial(")), ctx);
+  vm.runInContext(scheduleSource.slice(scheduleSource.indexOf("function buildMeetingRadialItems("), scheduleSource.indexOf("// ── Section sorting")), ctx);
   vm.runInContext(unfSource, ctx);
   ctx.window.blockStore = store;
   installTaskModel(ctx);
+  const waitingSource = fs.readFileSync(require.resolve("./public/js/delegated.js"), "utf8");
+  const projection = waitingSource.slice(waitingSource.indexOf("  function taskForItem("), waitingSource.indexOf("  function waitingActions("));
+  vm.runInContext(projection, ctx);
+  ctx.DCC.Waiting = { taskForItem:ctx.taskForItem };
+
   // C2: the collector reads GET /api/tasks/open instead of scanning the range cache.
   // The blockStore stub above stays because _originBlock still resolves through it.
   ctx.window.DCC.api = apiStub(daysByDate);
@@ -182,13 +187,6 @@ function load(daysByDate, archiveDates, extra) {
 async function openLooseEnds(ctx) {
   await ctx.window.initCatchUp();
   return ctx.window.DCC.CatchUp.open();
-}
-
-function pickAction(row, label) {
-  const trigger = row.querySelector(".btn-task-radial");
-  trigger.fire("click");
-  const action = trigger._actions.find(item => item.label === label);
-  if (action) return action.onPick();
 }
 
 // Titles the prompt actually rendered, in order.
@@ -327,7 +325,7 @@ test("Today moves the root to the current day", async () => {
   await openLooseEnds(ctx);
   let target = null;
   ctx.window.DCC.Carryover.moveTo = async (ev, date) => { target = date; return { removed: [ev.id] }; };
-  pickAction(row0(ctx), "Move…");
+  row0(ctx).querySelector(".btn-schedule").fire("click");
   ctx._schedulePopover.onMove(TODAY, null);
   await settled();
   assert.equal(target, TODAY);
@@ -431,7 +429,7 @@ test("details expansion uses a native button and explains an empty task", async 
   const toggle = r.querySelector(".ttl");
   ctx.window.DCC.Carryover.loadDetails = async () => ({ title: "Slipped", details: [], notes: [] });
   r.querySelector(".btn-task-radial").fire("click");
-  assert.deepEqual(Array.from(r.querySelector(".btn-task-radial")._actions, action => action.label), ["Move…", "Solo"]);
+  assert.deepEqual(Array.from(r.querySelector(".btn-task-radial")._actions, action => action.label), ["Subtask…", "Move to Priority Queue", "Remove time", "Convert…", "Delegate / block", "Blocked by task", "Repeat", "Move to Someday", "Whenever", "Lock"]);
   toggle.fire("click");
   await settled();
   assert.equal(r.querySelector(".cu-details").hidden, false);
@@ -559,7 +557,15 @@ function waitingCtx(draftOverrides) {
     getAttentionWaitingItems: () => [item],
     activeTriageItems: () => [draft]
   });
+  const delegatedSource = fs.readFileSync(require.resolve("./public/js/delegated.js"), "utf8");
+  h.ctx.getDelegatedItemById = () => item;
+  h.ctx.checkInWorkBlock = () => null;
+  h.ctx.isTaskDependency = () => false;
+  h.ctx.waitingActions = () => {};
+  vm.runInContext(delegatedSource.slice(delegatedSource.indexOf("  function openTaskActions("),delegatedSource.indexOf("  function renderTaskDependencyCard(")),h.ctx);
   h.ctx.window.DCC.Waiting = {
+    openTaskActions:h.ctx.openTaskActions,
+    taskForItem:h.ctx.taskForItem,
     itemUrgency: () => ({ score: 100 }),
     blockerLabel: () => "Blocked by Alex: Legal approval",
     dueLabel: () => "check in today",
@@ -773,7 +779,8 @@ test("Today on a triage row schedules it on the current day and clears the row",
   const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")]);
   await openLooseEnds(ctx);
   const first = [...rowsOf(ctx)][0];
-  pickAction(first, "Today");
+  first.querySelector(".btn-schedule").fire("click");
+  calls.pickers.at(-1).onPick(TODAY);
   await new Promise(r => setTimeout(r, 0));
   assert.deepEqual(calls.placed, [{ id: "m1", date: TODAY }]);
   assert.equal(first._removed, true, "a scheduled item leaves the list");
@@ -833,11 +840,12 @@ test("a refused schedule leaves the triage row in place and re-enables it", asyn
   const d = ymd(1);
   // No free slot / already on that day: scheduleTriageOnDate returns null, and the
   // row must survive so the answer isn't silently lost.
-  const { ctx } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")],
+  const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")],
     { scheduleTriageOnDate: async () => null });
   await openLooseEnds(ctx);
   const r = [...rowsOf(ctx)][0];
-  pickAction(r, "Today");
+  r.querySelector(".btn-schedule").fire("click");
+  calls.pickers.at(-1).onPick(TODAY);
   await new Promise(r2 => setTimeout(r2, 0));
   assert.equal(r._removed, false);
   assert.equal(r.querySelector(".btn-task-radial").disabled, false);

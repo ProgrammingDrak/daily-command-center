@@ -647,7 +647,7 @@ test("the two bl- minting copies are gone: one mechanic, not three", () => {
   // the call left the suite green). Same hardening for triage, whose nearby comment writes
   // the name and would have carried the regex on its own after one edit.
   const mover = mustSlice(stateSource,
-    /^async function _moveTaskToBacklogStage\(id,stage,toastMsg\)\{[\s\S]*?\n\}/m, "_moveTaskToBacklogStage");
+    /^async function _moveTaskToBacklogStage\(id,stage,toastMsg,opts\)\{[\s\S]*?\n\}/m, "_moveTaskToBacklogStage");
   assert.ok(/await unscheduleRow\(/.test(mover),
     "_moveTaskToBacklogStage must actually CALL the primitive");
   // The mover DOES still mint an id — but only in the block-less branch, where no row
@@ -670,7 +670,7 @@ test("the two bl- minting copies are gone: one mechanic, not three", () => {
 // ───────────────────── the day -> backlog mover, behaviorally ─────────────────────
 
 const MOVER = mustSlice(stateSource,
-  /^async function _moveTaskToBacklogStage\(id,stage,toastMsg\)\{[\s\S]*?\n\}/m, "_moveTaskToBacklogStage");
+  /^async function _moveTaskToBacklogStage\(id,stage,toastMsg,opts\)\{[\s\S]*?\n\}/m, "_moveTaskToBacklogStage");
 
 function moverCtx(extra) {
   return ctxWith([MOVER].concat(PRIMITIVES), extra);

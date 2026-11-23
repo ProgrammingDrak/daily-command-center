@@ -195,47 +195,55 @@ function buildMeetingRadialItems(ev,trig){
   const started=(typeof now==="function"&&typeof pt==="function")?now()>=pt(ev.start):false;
   return [{icon:started?"📝":"📋",label:started?"Recap":"Prep",onPick:()=>openMeetingPanel(ev,{defaultTab:started?"recap":"prep"})}];
 }
-function buildTaskRadialItems(ev,trig){
+// Every task view uses these definitions. Adapters provide source-aware commands,
+// never another list of labels, icons, ordering, or radial geometry.
+function taskMenuItem(ev,trig,opts,key,icon,label,run){
+  const override=opts&&opts.actions&&opts.actions[key];
+  const reason=!override&&opts&&opts.unavailableReason;
+  return {id:key,icon,label,disabled:!!reason,title:reason||"",onPick:()=>{
+    if(reason)return;
+    return override?override(trig,ev):run();
+  }};
+}
+function buildTaskRadialItems(ev,trig,opts){
+  opts=opts||{};
   if(typeof isMeeting==="function"&&isMeeting(ev))return buildMeetingRadialItems(ev,trig);
-  const items=buildTaskChangeItems(ev,trig);
-  if(ev.repeatMode==="scheduled")items.push({icon:"↻",label:"Repeat options…",onPick:()=>{if(typeof window.openScheduledOccurrenceActions==="function")window.openScheduledOccurrenceActions(ev);}});
-  items.push({icon:ev._locked?"🔓":"🔒",label:ev._locked?"Unlock":"Lock",onPick:()=>{if(typeof toggleLock==="function")toggleLock(ev.id);}});
+  const items=buildTaskChangeItems(ev,trig,opts);
+  if(ev.repeatMode==="scheduled")items.push(taskMenuItem(ev,trig,opts,"repeat-options","↻","Repeat options…",()=>window.openScheduledOccurrenceActions?.(ev)));
+  items.push(taskMenuItem(ev,trig,opts,"lock",ev._locked?"🔓":"🔒",ev._locked?"Unlock":"Lock",()=>toggleLock(ev.id,{task:ev})));
   return items;
 }
-// Direct task changes share one circle with Lock/Unlock.
-function buildTaskChangeItems(ev,trig){
+// Nesting still uses its canonical editor on the task's own day.
+async function openTaskHierarchyAction(ev,action){
+  const row=window.DCCWorkSessions?.blockFor?.(ev);
+  if(row?.date&&row.date!==_schedViewDate()&&typeof switchToDate==="function")await switchToDate(row.date);
+  if(row&&!row.date&&!window.blockStore?.get?.(row.id))await window.blockStore?.loadGlobals?.();
+  return action();
+}
+function buildTaskChangeItems(ev,trig,opts){
+  opts=opts||{};
+  const item=(key,icon,label,run)=>taskMenuItem(ev,trig,opts,key,icon,label,run);
   const items=[
-    {icon:"🪜", label:"Subtask…",  onPick:()=>{if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(ev.id,trig);}}
+    item("subtask","🪜","Subtask…",()=>openTaskHierarchyAction(ev,()=>openMakeSubtaskOf(ev.id,trig))),
+    item("priority","≡","Move to Priority Queue",()=>window.DCCWorkingQueue.addTask(ev).catch(error=>DCC.toast(error.message||"Could not add task to queue","error")))
   ];
-  if(window.DCCWorkingQueue?.addTask && !(typeof isDone==='function'&&isDone(ev)))
-    items.push({icon:'≡',label:'Move to Priority Queue',onPick:()=>window.DCCWorkingQueue.addTask(ev).catch(error=>DCC.toast(error.message||'Could not add task to queue','error'))});
-  // Promote: pull a nested subtask/ride-along out to a standalone top-level task.
-  // Same action as dragging it out to the timeline — here for discoverability + touch.
-  if(typeof isNested==="function"&&isNested(ev))
-    items.push({icon:"⬆", label:"Promote", onPick:()=>{if(typeof promoteToTopLevel==="function")promoteToTopLevel(ev.id);}});
-  // Take the time off but keep the day: the header pill's Unscheduled list. This is the
-  // mover the old Unplanned drop zone called; the zone went with the section, so the
-  // radial (touch) and the pill itself (desktop drop) are its two doors now.
-  if(!ev.untimed)
-    items.push({icon:"🕒", label:"Remove time", onPick:()=>{if(typeof moveTaskToUnplanned==="function")moveTaskToUnplanned(ev.id);}});
+  if(typeof isNested==="function"&&isNested(ev))items.push(item("promote","⬆","Promote",()=>openTaskHierarchyAction(ev,()=>promoteToTopLevel(ev.id))));
   items.push(
-    {icon:"🔄", label:"Convert…", children:()=>buildConvertToItems(ev,trig).slice(1), onPick:()=>openConvertToRadial(ev,trig)},
-    {icon:"↗", label:"Delegate / block", onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
-    {icon:"🔒", label:"Blocked by task", onPick:()=>{if(typeof window.openTaskDependencyModal==="function")window.openTaskDependencyModal(ev._blockId||ev.blockId||ev.id);}},
-    {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
-    {icon:"💡", label:"Move to Someday", onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}},
-    // No set time after all: off the day and into the header pill's pool (whenever.js).
-    // The canonical placement moves the parent and its descendants together.
-    {icon:"🧺", label:(window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever", onPick:()=>{if(typeof moveTaskToWhenever==="function")moveTaskToWhenever(ev.id);}},
-
+    item("unscheduled","🕒","Remove time",()=>moveTaskToUnplanned(ev.id,{task:ev})),
+    {...item("convert","🔄","Convert…",()=>openConvertToRadial(ev,trig,opts)),children:()=>buildConvertToItems(ev,trig,opts).slice(1)},
+    item("delegate","↗","Delegate / block",()=>openTaskHierarchyAction(ev,()=>convertTaskToDelegated(ev.id,{task:ev}))),
+    item("dependency","🔒","Blocked by task",()=>openTaskHierarchyAction(ev,()=>window.openTaskDependencyModal(ev._blockId||ev.blockId||ev.id))),
+    item("repeat","🔁","Repeat",()=>openRepeatResponsibilityFromTask(ev)),
+    item("solo","💡","Move to Someday",()=>moveTaskToBacklog(ev.id,{task:ev})),
+    item("whenever","🧺",(window.DCC&&DCC.Whenever&&DCC.Whenever.LABEL)||"Whenever",()=>moveTaskToWhenever(ev.id,{task:ev}))
   );
   return items;
 }
 // Sub-fan: convert this task to another registry type. Lists every type valid
 // for conversion (registry-driven, so new types appear here for free) — i.e. the
 // non-fixed types (excludes meeting/oneone/break/ooo, and the current type).
-function buildConvertToItems(ev,trig){
-  const items=[{icon:"←", label:"Back", onPick:()=>openTaskChangeRadial(ev,trig)}];
+function buildConvertToItems(ev,trig,opts){
+  const items=[{icon:"←", label:"Back", onPick:()=>openTaskRadial(ev,trig,opts)}];
   const R=window.TaskTypes;
   if(R&&R.TYPES){
     Object.keys(R.TYPES).forEach(t=>{
@@ -243,14 +251,14 @@ function buildConvertToItems(ev,trig){
       if(R.isFixed(t))return;                // calendar/fixed blocks aren't conversion targets
       const meta=R.get(t);
       items.push({icon:(meta.emoji||_convertIcon(t)), label:"→ "+meta.label,
-        onPick:()=>convertTaskType(ev.id,t)});
+        onPick:()=>convertTaskType(ev.id,t,{task:ev})});
     });
   }
   return items;
 }
 function _convertIcon(t){return {task:"📋",triage:"🗂",focus:"🎯",shell:"🐚",wrap:"🎁",habit:"🔁"}[t]||"•";}
-function openConvertToRadial(ev,trig){
-  openRadialMenu(trig,buildConvertToItems(ev,trig),_TASK_RADIAL_OPTS);
+function openConvertToRadial(ev,trig,opts){
+  openRadialMenu(trig,buildConvertToItems(ev,trig,opts),_TASK_RADIAL_OPTS);
 }
 // Convert a scheduled task to another type: set the type, re-derive the wrap flag
 // (so shell/wrap carry their subtree on drag, per insertTaskNow), persist, and
@@ -259,13 +267,13 @@ function openConvertToRadial(ev,trig){
 // rollup container (shell) loses its rollup, we flag that its bonus no longer
 // applies. The shell bonus idempotency key (<date>:<shellId>) is untouched — the
 // task id never changes.
-async function convertTaskType(id,newType){
-  const ev=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null;
+async function convertTaskType(id,newType,opts){
+  const ev=opts?.task||((typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null);
   const R=window.TaskTypes;
   if(!ev||!newType||ev.type===newType||ev._typeConversionPending)return false;
   if(!R||!R.TYPES[newType]||R.isFixed(newType)||R.isFixed(ev.type))return false;
   const store=window.blockStore;
-  const block=store&&((ev._blockId&&store.get(ev._blockId))||store.getByType("block").find(b=>b.id===id||(b.properties||{}).local_id===id));
+  const block=window.DCCWorkSessions?.blockFor?.(ev)||store&&((ev._blockId&&store.get(ev._blockId))||store.getByType("block").find(b=>b.id===id||(b.properties||{}).local_id===id));
   if(!block){
     if(typeof showToast==="function")showToast("Save this task before changing its type","error");
     return false;
@@ -314,23 +322,26 @@ async function convertTaskType(id,newType){
     return false;
   }finally{delete ev._typeConversionPending;}
 }
-// Carryovers retain origin-aware Move and Solo handlers. Other actions stay on
-// their row; never resolve a past-day task against today's scheduled pool.
+// Carryovers share the menu; only their existing origin-aware Solo writer differs.
 function buildCarryoverRadialItems(ev,trig,acts){
-  return [
-    {icon:"📅",label:"Move…",onPick:()=>acts.move(trig)},
-    {icon:"📦",label:"Solo",onPick:()=>acts.backlog()},
-  ];
+  return buildTaskRadialItems(ev,trig,{actions:{solo:()=>acts.backlog()}});
 }
 const _TASK_RADIAL_OPTS={fullCircle:true,a0:-90,r:140};
 function openTaskRadial(ev,trig,opts){
-  if(opts&&opts.carryover){
-    openRadialMenu(trig,buildCarryoverRadialItems(ev,trig,opts.carryover),_TASK_RADIAL_OPTS);
-    return;
+  opts=opts||{};
+  const row=window.DCCWorkSessions?.blockFor?.(ev);
+  if(row&&window.DCC?.TaskModel?.isTaskRow(row)){
+    const anchor=typeof taskAnchorById==="function"?taskAnchorById(row.id)||taskAnchorById(ev.id):null;
+    const task=anchor?.ev||window.DCC.TaskModel.fromBlock(row,{deriveEnd:true});
+    if(ev.__unf)task.__unf=ev.__unf;
+    if(ev.__taskContext)task.__taskContext=ev.__taskContext;
+    task._locked=!!row.properties?.locked;
+    ev=task;
   }
-  // Clamp the circle as a whole inward from the row and viewport edges.
-  openRadialMenu(trig,buildTaskRadialItems(ev,trig),_TASK_RADIAL_OPTS);
+  const items=opts.carryover?buildCarryoverRadialItems(ev,trig,opts.carryover):buildTaskRadialItems(ev,trig,opts);
+  openRadialMenu(trig,items,_TASK_RADIAL_OPTS);
 }
+window.openTaskRadial=openTaskRadial;
 function openTaskChangeRadial(ev,trig){
   openTaskRadial(ev,trig);
 }
@@ -424,6 +435,11 @@ function taskAnchorById(id){
   if(unf){
     const u=unf.__unf||{};
     return {ev:unf,date:u.sourceDate||null,blockId:u.sourceId||null,carryover:true};
+  }
+  const row=window.blockStore?.get?.(id);
+  if(row&&!row.deleted_at&&window.DCC?.TaskModel?.isTaskRow(row)){
+    const task=window.DCC.TaskModel.fromBlock(row,{deriveEnd:true});
+    return {ev:task,date:row.date||null,blockId:row.id,carryover:!!row.date&&row.date!==_schedViewDate(),whenever:!row.date&&row.properties?.stage==="Whenever"};
   }
   return window.DCCWorkingQueue?.taskAnchor?.(id)||null;
 }
@@ -796,7 +812,7 @@ function createTaskListRowRenderer(context){
       collapseHtml:chev,
       titleExtrasHtml:(ev.type==='guided'?'<a href="/guided?task='+encodeURIComponent(ev._blockId||ev.id)+'" onclick="event.stopPropagation()" class="prep-flag">Open guided conversation</a>':'')+dependencyChip+waitChip+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip,
       metaHtml:metaHtml,
-      barColor:isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#7c3aed)':((tt&&tt.barColor)||taskTagColor(ev)||c.color)),
+      barColor:isUnfRow?'var(--amber,#f59e0b)':(waitChip?'var(--waiting,#7c3aed)':undefined),
       actionsBeforeHtml:(!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+workButton,
       onComplete:ev._contextOnly?null:completeNow,
       onCompleteWithNotes:chkBlocked?completeNow:()=>openDoneModal(ev.id,ev.title,completeNow,ev),

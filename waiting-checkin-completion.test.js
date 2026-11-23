@@ -130,24 +130,37 @@ test("triage check-in cancellation leaves suppression, dismissal, and reward unt
   }
 });
 
-test("Waiting cards render dated, recurring, completed, and unset follow-ups", () => {
+test("Waiting rows share itinerary controls without offering check-in on unset follow-ups", () => {
+  const calls = [];
   const context = vm.createContext({
     isTaskDependency: () => false,
-    isDoneDelegated: () => false,
-    itemUrgency: () => ({ cls: "" }),
-    dueLabel: () => "",
+    isDoneDelegated: item => item.properties.status === "done",
+    dueLabel: () => "check in today",
+    blockerLabel: () => "Waiting on reviewer",
+    taskForItem: item => ({id:item.id,title:"Review"}),
     waitingSourceRef: () => "",
-    esc: String
+    markDelegatedItemCheckedById: id => calls.push(["check-in",id]),
+    scheduleDelegatedItem: (id,button) => calls.push(["schedule",id,button]),
+    openDelegatedModal: id => calls.push(["edit",id]),
+    openTaskActions: (id,button) => calls.push(["actions",id,button]),
+    deleteDelegatedItem: id => calls.push(["delete",id]),
+    window:{renderItineraryListRow:(ev,opts)=>({ev,opts})},
+    esc:String
   });
   vm.runInContext(region(delegated, "  function renderCard(", "  function wireDelegatedMount("), context);
-  for (const [properties, label, hasCheckIn] of [
-    [{ checkInDate: "2026-11-12" }, "2026-11-12", true],
-    [{ checkInRepeat: true }, "From repeat cadence", true],
-    [{ checkInRepeat: false, lastCheckedAt: "2026-11-10" }, "Complete", false],
-    [{ checkInRepeat: false }, "No follow-up set", false]
+  for (const [properties, hasCheckIn] of [
+    [{checkInDate:"2026-11-12"},true],
+    [{checkInRepeat:true},true],
+    [{checkInRepeat:false,lastCheckedAt:"2026-11-10"},false],
+    [{checkInRepeat:false},false],
+    [{status:"done"},false]
   ]) {
-    const html = context.renderCard({ id: "waiting", properties });
-    assert.ok(html.includes("<dt>Follow-up</dt><dd>" + label + "</dd>"));
-    assert.equal(html.includes('data-delegated-action="check-in"'), hasCheckIn);
+    const {ev,opts} = context.renderCard({id:"waiting",properties});
+    assert.equal(ev.id,"waiting");
+    assert.equal(typeof opts.onComplete === "function",hasCheckIn);
+    assert.equal(typeof opts.onSchedule === "function",hasCheckIn);
+    if (hasCheckIn) { opts.onComplete(); opts.onSchedule("trigger"); }
+    opts.onOpen(); opts.onRadial("trigger"); opts.onDelete();
   }
+  assert.deepEqual(calls.slice(0,5),[["check-in","waiting"],["schedule","waiting","trigger"],["edit","waiting"],["actions","waiting","trigger"],["delete","waiting"]]);
 });

@@ -39,6 +39,7 @@
   function blockFor(task) {
     if (!task || !window.blockStore) return null;
     if (task._blockId && window.blockStore.get(task._blockId)) return window.blockStore.get(task._blockId);
+    if (task._blockId && task.__taskContext?.block?.id === task._blockId) return task.__taskContext.block;
     var anchor = typeof taskAnchorById === "function" ? taskAnchorById(task.id) : null;
     if (anchor && anchor.blockId) {
       var anchored = window.blockStore.get(anchor.blockId);
