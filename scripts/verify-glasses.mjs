@@ -39,7 +39,7 @@ try {
   assert.match(await page.locator('#card').innerText(), /NOW/); assert.match(await page.locator('#card').innerText(), /UP NEXT/);
   assert.equal(new URL(page.url()).searchParams.has('date'),false);
   await page.reload(); await ready(); assert.equal(new URL(page.url()).searchParams.has('date'),false);
-  assert.deepEqual(await page.locator('.queue-pills button').allTextContents(), ['Triage 1','Loose Ends 4','Waiting 1','Unscheduled 2','Whenever 2']);
+  assert.deepEqual(await page.locator('.queue-pills button').allTextContents(), ['Triage 1','Loose Ends 3','Waiting 1','Unscheduled 2','Whenever 2']);
   assert.equal(await act('open:glasses-done').getAttribute('class').then(c=>c.includes('done')), true);
   assert.equal(await act('open:glasses-child-done').getAttribute('class').then(c=>c.includes('nested')&&c.includes('done')), true);
   assert.match(await act('open:glasses-child-open').innerText(), /Open/);
@@ -51,6 +51,7 @@ try {
     await act('open:'+taskId).waitFor();
     if(id==='triage')await page.getByText(/additional source item/).waitFor();
     if(id==='loose'){
+      assert.equal(await act('open:waiting:glasses-waiting').count(),0);
       assert.match(await act('open:'+taskId).innerText(),/Overdue/);
       await page.getByRole('button',{name:/Earlier workout/}).waitFor();
     }
