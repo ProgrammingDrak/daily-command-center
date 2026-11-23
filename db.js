@@ -1363,20 +1363,25 @@ async function propagateResponsibilityDone({ id, before, after, at, date, client
   }
 }
 
-async function deleteBlock(id, client, deleteMutationId) {
+async function hasDeleteReceipt(q, id, deleteMutationId) {
+  if (!deleteMutationId) return false;
+  const receipt = await q.query("SELECT 1 FROM operations WHERE block_id = $1 AND op_type = 'delete' AND after_data->>'deleteMutationId' = $2 LIMIT 1", [id, deleteMutationId]);
+  return receipt.rows.length > 0;
+}
+
+async function deleteBlock(id, client, deleteMutationId, reviewed = false) {
   const q = client || pool;
   const now = new Date().toISOString();
   const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1" + (client ? " FOR UPDATE" : ""), [id]);
   const existing = rows[0];
   if (!existing) throw new Error(`Block not found: ${id}`);
-  if (deleteMutationId) {
-    const receipt = await q.query("SELECT 1 FROM operations WHERE block_id = $1 AND op_type = 'delete' AND after_data->>'deleteMutationId' = $2 LIMIT 1", [id, deleteMutationId]);
-    if (receipt.rows.length) return existing.deleted_at ? {id,deleted_at:existing.deleted_at} : parseBlock(existing);
-  }
+  if (await hasDeleteReceipt(q, id, deleteMutationId))
+    return existing.deleted_at ? {id,deleted_at:existing.deleted_at} : parseBlock(existing);
   if (deleteMutationId || existing.properties?._deleteUndoToken) {
     const properties = { ...existing.properties };
     if (deleteMutationId) properties._deleteUndoToken = deleteMutationId;
     else delete properties._deleteUndoToken;
+    if (reviewed && properties.source === "slack-bookmark") properties.slackBookmarkChangedAt = now;
     await q.query("UPDATE blocks SET properties = $1 WHERE id = $2", [properties, id]);
   }
   await q.query("UPDATE blocks SET deleted_at = $1, updated_at = $2 WHERE id = $3", [now, now, id]);
@@ -1887,11 +1892,12 @@ async function getRescheduleTombstone(fromDate, movedBlockId, workspaceId, clien
   return rows[0] ? parseBlock(rows[0]) : null;
 }
 
-async function getBlocksByTypes(types, workspaceId) {
+async function getBlocksByTypes(types, workspaceId, { undated = false } = {}) {
+  const dateClause = undated ? " AND date IS NULL" : "";
   const placeholders = types.map((_, i) => `$${i + 1}`).join(",");
   const { rows } = workspaceId
-    ? await pool.query(`SELECT * FROM blocks WHERE type IN (${placeholders}) AND workspace_id = $${types.length + 1} AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC`, [...types, workspaceId])
-    : await pool.query(`SELECT * FROM blocks WHERE type IN (${placeholders}) AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC`, types);
+    ? await pool.query(`SELECT * FROM blocks WHERE type IN (${placeholders}) AND workspace_id = $${types.length + 1} AND deleted_at IS NULL${dateClause} ORDER BY sort_order ASC, created_at ASC`, [...types, workspaceId])
+    : await pool.query(`SELECT * FROM blocks WHERE type IN (${placeholders}) AND deleted_at IS NULL${dateClause} ORDER BY sort_order ASC, created_at ASC`, types);
   return rows.map(parseBlock);
 }
 
@@ -1943,13 +1949,30 @@ async function batchOp(operations, transactionClient) {
     if (operations.some(op => op.op === "undelete" || op.deleteMutationId)) {
       // A common lock order keeps overlapping subtree mutations serialized.
       const ids = [...new Set(operations.map(op => op.id).filter(Boolean))].sort();
-      await client.query("SELECT id FROM blocks WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE", [ids]);
+      const reviewed = operations.filter(op => op.op === "delete" && op.expectedUpdatedAt);
+      if (!reviewed.length) {
+        await client.query("SELECT id FROM blocks WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE", [ids]);
+      } else {
+        const { rows } = await client.query(
+          "SELECT id, updated_at, deleted_at, properties->>'startedAt' AS started_at FROM blocks WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE",
+          [ids]
+        );
+        const byId = new Map(rows.map(row => [row.id, row]));
+        // Validate every confirmed row before internal dependency updates can change its version.
+        for (const op of reviewed) {
+          const row = byId.get(op.id);
+          if (!row) throw taskCompletionError("Task not found", 404, "DELETE_TASK_MISSING");
+          if (!row.deleted_at && !row.started_at && new Date(row.updated_at).getTime() === Date.parse(op.expectedUpdatedAt)) continue;
+          if (await hasDeleteReceipt(client, op.id, op.deleteMutationId)) continue;
+          throw taskCompletionError("This task changed. Reopen Delete task to review.", 409, "DELETE_TASK_CHANGED");
+        }
+      }
     }
     for (const op of operations) {
       switch (op.op) {
         case "create": results.push(await createBlock(op, client)); break;
         case "update": results.push(await updateBlock(op.id, op, client)); break;
-        case "delete": results.push(await deleteBlock(op.id, client, op.deleteMutationId)); break;
+        case "delete": results.push(await deleteBlock(op.id, client, op.deleteMutationId, !!op.expectedUpdatedAt)); break;
         case "undelete": results.push(await undeleteBlock(op.id, client, op.expectedDeleteMutationId)); break;
         case "reorder": await reorderBlocks(op.items, client); results.push({ reordered: op.items.length }); break;
         default: throw new Error(`Unknown batch operation: ${op.op}`);

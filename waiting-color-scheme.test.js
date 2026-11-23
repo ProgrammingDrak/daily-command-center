@@ -306,7 +306,7 @@ test("List rows and cards take the waiting hue and the pill from one helper", ()
 });
 
 test("deleting a check-in row says the delegated task is still open", () => {
-  const del = mustSlice(STATE_SRC, /^async function deleteTaskWithUndo\(id\)\{[\s\S]*?\n\}/m, "deleteTaskWithUndo");
+  const del = mustSlice(STATE_SRC, /^async function _submitTaskDelete\([^\n]+\n[\s\S]*?\n\}/m, "shared task deletion");
   assert.match(del, /window\.isWaitingCheckInTask\(ev\)/);
   // Orientation, not mere presence: an inverted ternary would put "Task deleted" back on
   // a check-in row, which is the exact regression this change exists to remove.

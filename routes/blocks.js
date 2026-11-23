@@ -1331,6 +1331,10 @@ module.exports = function mount(app, ctx) {
       if (op?.op === "undelete" && (typeof op.expectedDeleteMutationId !== "string" || !op.expectedDeleteMutationId || op.expectedDeleteMutationId.length > 128)) {
         res.status(400).json({ error: "Atomic restore requires its original deletion token" }); return;
       }
+      if (op?.op === "delete" && op.expectedUpdatedAt != null &&
+          (!op.deleteMutationId || typeof op.expectedUpdatedAt !== "string" || !Number.isFinite(Date.parse(op.expectedUpdatedAt)))) {
+        res.status(400).json({ error: "Invalid reviewed deletion version" }); return;
+      }
       if (op?.deleteMutationId != null && (typeof op.deleteMutationId !== "string" || !op.deleteMutationId || op.deleteMutationId.length > 128)) {
         res.status(400).json({ error: "Invalid deletion token" }); return;
       }
@@ -1405,6 +1409,7 @@ module.exports = function mount(app, ctx) {
     }
 
     const opsWithUser = operations.map(op => op && op.op === "create" ? { ...op, user_id: userId, workspace_id: workspaceId } : op);
+    const reviewedDeleteIds = new Set(opsWithUser.filter(op => op?.op === "delete" && op.expectedUpdatedAt).map(op => op.id));
     const deletedBlocks = [];
     for (const op of opsWithUser) {
       if (!op || op.op !== "delete" || !op.id) continue;
@@ -1471,6 +1476,7 @@ module.exports = function mount(app, ctx) {
         batchOps = expanded;
         publicResultIndexes = publicIndexes;
         for (const block of dependencyDeletes) {
+          if (reviewedDeleteIds.has(block.id)) continue;
           const deleteAt = Date.now();
           await stampSlackDeleteBoundary(block, deleteAt);
           if ((block.properties || {}).startedAt) {
@@ -1478,6 +1484,7 @@ module.exports = function mount(app, ctx) {
           }
         }
         for (const block of dependencyDeletes) {
+          if (reviewedDeleteIds.has(block.id)) continue;
           await blockDB.getBlockIncludingDeleted(block.id, dependencyClient, true);
         }
       } catch (error) {
@@ -1601,7 +1608,7 @@ module.exports = function mount(app, ctx) {
     } else if (req.query.type) {
       const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t));
       if (!types.length) { res.status(400).json({ error: "No valid types" }); return; }
-      return filterLegacyGcalBlocks(await blockDB.getBlocksByTypes(types, req.workspaceId));
+      return filterLegacyGcalBlocks(await blockDB.getBlocksByTypes(types, req.workspaceId, { undated: req.query.undated === "1" }));
     }
     res.status(400).json({ error: "Provide ?date= or ?type=" });
   }));

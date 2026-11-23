@@ -753,6 +753,25 @@ test("replayWAL dead-letters a batch that 404s rather than re-queueing it foreve
   assert.match(dead(storage)[0].reason, /404/);
 });
 
+test("reviewed deletes stop on a definitive rejection before or during replay", async () => {
+  const ops = [{ op: "delete", id: "b1", deleteMutationId: "reviewed-delete", expectedUpdatedAt: "2026-07-08T12:00:00Z" }];
+  const error = "This task changed. Reopen Delete task to review.";
+  const first = makeStore({
+    fetchImpl: async () => ({ ok: false, status: 409, json: async () => ({ error }) }),
+  });
+  const result = await first.store.batchOp(ops);
+  assert.equal(result.ok, false);
+  assert.equal(result.buffered, false);
+  assert.equal(result.error.message, error);
+  assert.equal(wal(first.storage).length, 0);
+
+  const retry = makeStore({ fetchStatus: 409 });
+  seedWal(retry.storage, [{ op: "batch", data: { operations: ops }, _walId: "reviewed", timestamp: minsAgo(1) }]);
+  await retry.store.replayWAL();
+  assert.equal(wal(retry.storage).length, 0);
+  assert.equal(dead(retry.storage).length, 1);
+});
+
 test("replayWAL keeps a batch buffered on a 503, so the fix does not over-drop", async () => {
   const { store, storage } = makeStore({ fetchStatus: 503 });
   seedWal(storage, [{ op: "batch", data: { operations: [{ op: "delete", id: "b1" }] }, _walId: "w1", timestamp: minsAgo(1) }]);

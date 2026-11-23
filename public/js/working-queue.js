@@ -317,11 +317,11 @@
     return [...rows.values()].filter(row=>!row.deleted_at);
   }
   function taskPool(anchor){
-    const rows=anchor.sourceRows||[],parents=new Map();
+    const rows=anchor.sourceRows||[],parents=new Map(),byId=new Map(rows.map(row=>[row.id,row]));
     for(const row of rows)for(const id of new Set([row.id,row.properties?.local_id].filter(Boolean))){if(!parents.has(id))parents.set(id,[]);parents.get(id).push(row);}
     return rows.filter(r=>r.type==='block').map(row=>{
       const ev=DCC.TaskModel.fromBlock(row);ev.id=row.id;ev.__unf={sourceId:row.id,sourceDate:row.date,sourceBlock:row};
-      for(const key of ['subtaskOf','wrapParent']){const parent=parents.get(ev[key])||[];if(parent.length===1)ev[key]=parent[0].id;}
+      for(const key of ['subtaskOf','wrapId']){const parent=parents.get(ev[key])||[];if(!byId.has(ev[key])&&parent.length===1)ev[key]=parent[0].id;}
       return ev;
     });
   }
@@ -376,6 +376,8 @@
       const held=!completed&&!foreground&&returnHold(item);
       if(!completed&&!foreground)controls+=button('return','Return to Priority',row.id,held?'disabled aria-describedby="queue-return-'+esc(row.id)+'"':'')+button('snooze','Snooze',row.id,'aria-haspopup="dialog"');
       if(item.dueAt)controls+=button('dismiss','Dismiss reminder',row.id);
+      if(!item.savingCompletion)controls+=button('delete','Delete task',row.id,
+        'aria-haspopup="dialog" aria-label="Delete task: '+esc(task.title)+'"');
       const snoozedHtml=item.snoozed?'<p class="wq-attention">Snoozed until '+esc(when(Date.parse(item.snoozedUntil),completionView.timeZone))+'</p><p class="wq-time">Attention snoozed; worker state and focused time are unchanged.</p>':'';
 
 
@@ -493,6 +495,73 @@
         catch(error){editor.querySelector('[role=status]').textContent=error.message;}finally{button.disabled=false;}
       });context.append(label,editor);host.appendChild(context);
     }
+  }
+  async function deletionPreview(anchor){
+    const id=anchor.blockId;
+    const date=anchor.date||null;
+    const partition=date?'/api/blocks/range?start='+encodeURIComponent(date)+'&end='+encodeURIComponent(date):'/api/blocks?type=block&undated=1';
+    const rows=await DCC.api(partition,{cache:'no-store'});
+    assertActionAccount();
+    const scope=rows.filter(row=>(row.date||null)===date&&!row.deleted_at);
+    const taskRows=scope.filter(row=>row.type==='block'&&DCC.TaskModel.isTaskRow(row));
+    const pool=taskPool({sourceRows:taskRows});
+    const byId=new Map(pool.map(task=>[task.id,task]));
+    for(const task of pool){
+      const parent=task.__unf.sourceBlock.parent_id;
+      if(!DCC.TaskModel.parentIdOf(task)&&byId.has(parent))task.subtaskOf=parent;
+    }
+    const task=byId.get(id);
+    if(!task)throw new Error('This task is no longer available. Refresh the queue.');
+    const members=[task,...DCC.TaskModel.descendantsOf(id,pool)];
+    const versions=new Map(members.map(member=>[member.id,member.__unf.sourceBlock.updated_at]));
+    const ids=[...versions.keys()].sort();
+    if(members.some(member=>member.__unf.sourceBlock.properties.startedAt)){
+      throw new Error('Pause the active timer before deleting this task.');
+    }
+    if(completionEntries().some(entry=>ids.includes(entry.body.taskId))){
+      throw new Error('Wait for the task completion to finish saving.');
+    }
+    return {task,ids,date,versions};
+  }
+  let openingDelete=false;
+  async function openDelete(id,opener){
+    if(openingDelete)return;
+    openingDelete=true;
+    try {
+      const anchor=await prepareTask(id);
+      const preview=await deletionPreview(anchor);
+      if(preview.task.repeatMode==='scheduled'&&window.openScheduledOccurrenceActions){
+        await window.openScheduledOccurrenceActions(preview.task);
+        return;
+      }
+      const count=preview.ids.length-1;
+      const consequence=count?' and '+count+' '+(count===1?'nested task':'nested tasks'):'';
+      const body=form('<p>Delete <strong>'+esc(preview.task.title)+'</strong>'+consequence+' from DCC?</p><p>Undo is available after deleting.</p>');
+      let busy=false;
+      const dialog=DCC.overlay.open({kind:'modal',title:'Delete task',body,anchor:opener,canClose:()=>!busy,
+        returnFocus:()=>document.querySelector('[data-queue-id="'+CSS.escape(id)+'"] [data-queue-action="break-options"]')
+          ||document.querySelector('[data-queue-action="delete"][data-task-id="'+CSS.escape(id)+'"]')
+          ||document.querySelector('[data-queue-action="add"]'),
+        actions:[{label:'Cancel'},{label:'Delete task',destructive:true,onClick:async()=>{
+          if(busy)return false;
+          busy=true;
+          try{
+            const current=await deletionPreview(await prepareTask(id));
+            if(current.date!==preview.date||current.task.title!==preview.task.title||current.task.repeatMode!==preview.task.repeatMode||
+                JSON.stringify(current.ids)!==JSON.stringify(preview.ids)){
+              throw new Error('This task or its nested tasks changed. Reopen Delete task to review.');
+            }
+            const result=await window.deleteQueueTaskWithUndo({...current.task,date:current.date},current.ids,current.versions);
+            if(!result?.ok&&!result?.buffered)throw new Error(result?.error?.message||'Could not confirm deletion.');
+            invalidate();
+            return true;
+          }catch(error){
+            body.querySelector('[role=status]').textContent=error.message;
+            return false;
+          }finally{busy=false;}
+        }}]});
+      requestAnimationFrame(()=>dialog.el.querySelector('.dcc-overlay-actions button')?.focus());
+    }finally{openingDelete=false;}
   }
   async function openSchedule(item,anchorEl){
     const anchor=await prepareTask(item.task.id),task=anchor.ev;
@@ -642,7 +711,7 @@
     search();return handle;
   }
   function openBreakOptions(item,anchor){
-      const body=form('<p>'+esc(item.task.properties.title||'Paused task')+'</p><div class="wq-break-option-actions">'+button('return','Return to Priority',item.task.id)+button('background','Send to background',item.task.id)+button('complete','Complete task',item.task.id)+button('details','Task details',item.task.id)+'</div>');
+      const body=form('<p>'+esc(item.task.properties.title||'Paused task')+'</p><div class="wq-break-option-actions">'+button('return','Return to Priority',item.task.id)+button('background','Send to background',item.task.id)+button('complete','Complete task',item.task.id)+button('details','Task details',item.task.id)+button('delete','Delete task',item.task.id)+'</div>');
       const handle=DCC.overlay.open({kind:'modal',title:'Paused task options',body,anchor,returnFocus:()=>document.querySelector('[data-queue-id="'+CSS.escape(item.task.id)+'"] [data-queue-action="break-options"]')||document.querySelector('[data-queue-id="'+CSS.escape(item.task.id)+'"] [data-queue-action="focus"]'),actions:[{label:'Close'}]});
       body.addEventListener('click',event=>{if(event.target.closest('[data-queue-action]'))handle.close('action');});
   }
@@ -712,6 +781,7 @@
     if(action==='conflict'&&!conflict){reviewRejectedChanges();return;}
     if(action==='conflict'){const body=form('<p>'+esc(conflict?.message)+'</p><pre>'+esc(JSON.stringify(conflict?.note ? {command:conflict.body,notes:conflict.note.text} : conflict?.body,null,2))+'</pre>');DCC.overlay.open({kind:'modal',title:'Attempted change',body,actions:[{label:'Close'}]});return;}
     if(!item)return;
+    if(action==='delete'){openDelete(item.task.id,button).catch(warn);return;}
     if(action==='details'){const task=DCC.TaskModel.fromBlock(item.task);if(window.DCCTaskWorkspace?.preview)window.DCCTaskWorkspace.preview(task);else if(typeof window.openAddModal==='function')window.openAddModal(task.id,task.title);else {const body=form('<h3>'+esc(task.title)+'</h3><p>'+esc(task.detail||'No task details yet.')+'</p>');DCC.overlay.open({kind:'modal',title:'Task details',body,actions:[{label:'Close'}]});}return;}
     if(['snooze','remind'].includes(action)){snooze(item);return;}
     if(['focus','background','complete','block'].includes(action)){transition(action==='focus'?'start':action==='complete'?'done':action==='block'?'queue-block':'background-start',item).catch(warn);return;}

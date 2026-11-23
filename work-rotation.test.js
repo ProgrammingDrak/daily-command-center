@@ -308,5 +308,33 @@ test(
       assert.equal((await store.state(owner)).foreground[0].id, "guard-new");
       await send("pause", "guard-new");
     });
+    await t.test("reviewed delete checks all versions before updating or deleting rows", async () => {
+      const parent = await make("review-delete-parent");
+      const child = await make("review-delete-child", { subtaskOf: parent.id });
+      const token = uid();
+      const reviewed = (task) => ({
+        op: "delete", id: task.id, deleteMutationId: token, expectedUpdatedAt: new Date(task.updated_at).toISOString(),
+      });
+      const batch = [reviewed(parent), reviewed(child)];
+      now += 60000;
+      await send("start", child.id);
+      await assert.rejects(ctx.blockDB.batchOp(batch), { statusCode: 409 });
+      assert.equal((await row(parent.id)).deleted_at, null);
+      assert.ok((await row(child.id)).properties.startedAt);
+
+      now += 60000;
+      await send("pause", child.id, { attentionMode: "priority" });
+      const paused = await row(child.id);
+      // A dependency cleanup may update the same row earlier in the delete batch.
+      const committed = await ctx.blockDB.batchOp([
+        { op: "update", id: child.id, properties: { ...paused.properties, detail: "Retained detail" } },
+        reviewed(parent), reviewed(paused),
+      ]);
+      assert.ok(committed.blocks[1].deleted_at);
+      assert.ok(committed.blocks[2].deleted_at);
+      await ctx.blockDB.batchOp([reviewed(parent), reviewed(paused)]);
+      assert.equal((await row(child.id)).properties.detail, "Retained detail");
+      assert.equal((await row(child.id)).properties._deleteUndoToken, token);
+    });
   }
 );

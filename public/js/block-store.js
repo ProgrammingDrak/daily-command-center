@@ -617,8 +617,14 @@
   // Replays every pending mutation and removes each entry on its own success.
   // Failures stay queued so the next reconnect (or next boot) can retry them --
   // a partial failure no longer wipes the unreplayed entries.
+  function isReviewedDeleteRejection(entry, err) {
+    return entry.op === "batch" && [400, 401, 403, 404, 409, 422].includes(err?.status) &&
+      entry.data?.operations?.some(op => op?.op === "delete" && op.expectedUpdatedAt);
+  }
+
   function isPermanentReplayFailure(entry, err) {
     if (!entry || !err) return false;
+    if (isReviewedDeleteRejection(entry, err)) return true;
     if (err.status === 401 || err.status === 403) return false;
     if (err.status === 400) return true;
     // "batch" belongs in this list as of #260/#262, and its absence was a
@@ -849,6 +855,10 @@
           // transiently (so undoDeleteTask keeps the optimistic restore), then the replay
           // gets a 409 because a live row holds the key. Put the row back where the server
           // has it, and say so, rather than letting the task silently vanish on next load.
+          if (isReviewedDeleteRejection(entry, e)) {
+            for (const op of entry.data.operations) if (op.op === "delete") _tombstones.delete(op.id);
+            if (typeof showToast === "function") showToast(e.message, "error");
+          }
           if (restoreMetadata(entry)) {
             for (const op of entry.data.operations || []) { _tombstones.add(op.id); cacheDelete(op.id); }
             notifyRestore(entry, { ok: false, permanent: true, error: e.message });
@@ -1472,11 +1482,11 @@
 
     async batchOp(operations, meta) {
       setSaving();
-      for (const op of operations) {
-        if (op && op.op === "delete" && op.id) _tombstones.add(op.id);
-      }
       const entry = { op: "batch", data: { operations }, ...(meta ? { meta } : {}) };
       const walId = walPush(entry);
+      for (const op of operations) {
+        if (op?.op === "delete" && op.id) _tombstones.add(op.id);
+      }
       entry._walId=walId;
       if(restoreWaitsForDelete(entry)){
         setError("Task tree restore pending — waiting for deletion to settle");
@@ -1499,6 +1509,12 @@
         setSaved();
         return { ...result, ok: true, walId, buffered: false };
       } catch (e) {
+        if (isReviewedDeleteRejection(entry, e)) {
+          walRemove(walId);
+          for (const op of operations) if (op.op === "delete") _tombstones.delete(op.id);
+          setSaved();
+          return { ok: false, buffered: false, error: { message: e.message, status: e.status } };
+        }
         if (restoreMetadata(entry) && isPermanentReplayFailure(entry, e)) {
           walMoveToDeadLetter({ ...entry, _walId: walId }, `${e.status || "error"} ${e.message || ""}`.trim());
           for (const op of operations) { _tombstones.add(op.id); cacheDelete(op.id); }

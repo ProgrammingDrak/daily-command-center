@@ -1947,7 +1947,7 @@ function _deleteUndoStorageKey(){
 }
 function _persistDeleteUndo(){
   try{localStorage.setItem(_deleteUndoStorageKey(),JSON.stringify({
-    snapshots:[..._deleteUndoSnapshots].map(([id,snap])=>[id,{rootId:snap.rootId,ids:snap.ids,blockIds:snap.blockIds,members:snap.members,date:snap.date,overlayBlockId:snap.overlayBlockId,deleteMutationId:snap.deleteMutationId,state:snap.state}]),
+    snapshots:[..._deleteUndoSnapshots].map(([id,snap])=>[id,{rootId:snap.rootId,ids:snap.ids,blockIds:snap.blockIds,members:snap.members,date:snap.date,overlayBlockId:snap.overlayBlockId,canonicalOnly:snap.canonicalOnly,deleteMutationId:snap.deleteMutationId,state:snap.state}]),
     intents:[..._deleteUndoIntents]
   }));}catch(e){}
 }
@@ -1972,9 +1972,9 @@ function _showDeleteUndoNotice(id,snap){
 function restoreDeleteUndoState(){
   for(const snap of _deleteUndoSnapshots.values()){
     const id=snap.rootId;
-    if(!["pending","failed","restoring"].includes(snap.state)||(snap.date!==null&&snap.date!==_viewedDateStr()))continue;
+    if(!["pending","failed","restoring"].includes(snap.state)||(!snap.canonicalOnly&&snap.date!==null&&snap.date!==_viewedDateStr()))continue;
     if(_deleteUndoIntents.get(_deleteUndoIntentKey(snap.date,id))!==snap.deleteMutationId)continue;
-    snap.ids.filter(sid=>_deleteUndoIntents.get(_deleteUndoIntentKey(snap.date,sid))===snap.deleteMutationId).forEach(sid=>deletedSet.add(sid));
+    if(!snap.canonicalOnly)snap.ids.filter(sid=>_deleteUndoIntents.get(_deleteUndoIntentKey(snap.date,sid))===snap.deleteMutationId).forEach(sid=>deletedSet.add(sid));
     _showDeleteUndoNotice(id,snap);
   }
 }
@@ -1983,7 +1983,7 @@ function _applyTaskRestoreOutcome(meta,result){
   const snap=_deleteUndoSnapshots.get(key);
   const sameSnapshot=snap&&snap.deleteMutationId===meta.deleteMutationId;
   const currentRoot=_deleteUndoIntents.get(_deleteUndoIntentKey(meta.date,meta.rootId))===meta.deleteMutationId;
-  const applies=meta.date===null||meta.date===_viewedDateStr();
+  const applies=meta.canonicalOnly||meta.date===null||meta.date===_viewedDateStr();
   const ids=(meta.ids||[]).filter(id=>_deleteUndoIntents.get(_deleteUndoIntentKey(meta.date,id))===meta.deleteMutationId);
   if(sameSnapshot){
     if(result.ok){
@@ -1995,8 +1995,9 @@ function _applyTaskRestoreOutcome(meta,result){
   }
   if(applies){
     if(result.ok&&typeof refoldTaskStateFromBlockCache==="function")refoldTaskStateFromBlockCache();
-    ids.forEach(id=>result.ok?deletedSet.delete(id):deletedSet.add(id));
-    saveDeletedState();recalcTimes();render();
+    if(meta.canonicalOnly)window.DCCWorkingQueue?.invalidate();
+    else {ids.forEach(id=>result.ok?deletedSet.delete(id):deletedSet.add(id));saveDeletedState();}
+    recalcTimes();render();
   }
   if(!currentRoot||!applies)return;
   if(result.ok){
@@ -2044,9 +2045,7 @@ async function deleteTaskWithUndo(id){
   // resurfaces later as a standalone unfinished task. Anything already deleted
   // separately is left out so Undo can't resurrect it.
   const ids=[..._subtreeIdsOf(id,pool)].filter(sid=>sid===id||!deletedSet.has(sid));
-  const deleteMutationId=typeof crypto!=="undefined"&&crypto.randomUUID?crypto.randomUUID():"delete-"+Date.now()+"-"+Math.random();
   const undoDate=anchor&&anchor.whenever?null:dateStr;
-  ids.forEach(sid=>_deleteUndoIntents.set(_deleteUndoIntentKey(undoDate,sid),deleteMutationId));
   const evById=new Map(pool.map(e=>[e.id,e]));
   // Hide first. Row resolution below scans the whole block cache once per subtree
   // node, and none of it changes what the user sees -- doing it before the render
@@ -2065,11 +2064,25 @@ async function deleteTaskWithUndo(id){
   // are never the client's to remember. That also retires a whole bug class: a snapshot's
   // hand-maintained field list silently drifting from the schema, which is exactly why
   // B1 rejected persistAddedTask's ~35-field allowlist in the first place.
-  const blockIds=[],members=[];
+  const members=[];
   for(const sid of ids){
     const block=_findTaskBlockForDate(sid,dateStr,evById.get(sid));
-    if(block){blockIds.push(block.id);members.push({id:block.id,overlayId:sid});}
+    if(block)members.push({id:block.id,overlayId:sid});
   }
+  return _submitTaskDelete({id,ev,ids,members,undoDate});
+}
+function deleteQueueTaskWithUndo(task,ids,versions){
+  return _submitTaskDelete({
+    id:task._blockId,ev:task,ids,undoDate:task.date||null,canonicalOnly:true,
+    members:ids.map(id=>({id,overlayId:id,expectedUpdatedAt:versions.get(id)}))
+  });
+}
+async function _submitTaskDelete({id,ev,ids,members,undoDate,canonicalOnly=false}){
+  if(canonicalOnly&&members.some(member=>!member.expectedUpdatedAt))throw new Error("Could not verify the current task version.");
+  const deleteMutationId=typeof crypto!=="undefined"&&crypto.randomUUID?crypto.randomUUID():"delete-"+Date.now()+"-"+Math.random();
+  const accountKey=_deleteUndoStorageKey();
+  const blockIds=members.map(member=>member.id);
+  ids.forEach(sid=>_deleteUndoIntents.set(_deleteUndoIntentKey(undoDate,sid),deleteMutationId));
   // One transactional batch, so the subtree is deleted all-or-nothing instead of
   // half-deleted with stranded children. Deletes are idempotent server-side
   // (db.deleteBlock just re-stamps deleted_at), so a WAL replay is harmless.
@@ -2083,11 +2096,13 @@ async function deleteTaskWithUndo(id){
     // batchOp does not reject today, but undoDeleteTask decides what to do from this
     // value, and "undefined" would read as "landed fine".
     const restoring=[...new Set(blockIds.map(bid=>_deleteUndoRestores.get(bid)).filter(Boolean))];
-    const write=()=>window.blockStore.batchOp(blockIds.map(bid=>({op:"delete",id:bid,deleteMutationId})));
+    const write=()=>window.blockStore.batchOp(members.map(({id,expectedUpdatedAt})=>({
+      op:"delete",id,deleteMutationId,...(canonicalOnly?{expectedUpdatedAt}:{})
+    })));
     deletePromise=(restoring.length?Promise.all(restoring).then(write):write())
-      .catch(()=>({blocks:[],buffered:true}));
+      .catch(error=>canonicalOnly?{ok:false,buffered:false,error:{message:error.message}}:{blocks:[],buffered:true});
   }
-  _stashUndoSnapshot(id,{ids,blockIds,members,date:undoDate,overlayBlockId:window.blockStore?.getDayRootId?.(),deleteMutationId,state:"deleted",deletePromise});
+  _stashUndoSnapshot(id,{ids,blockIds,members,date:undoDate,overlayBlockId:canonicalOnly?undefined:window.blockStore?.getDayRootId?.(),canonicalOnly,deleteMutationId,state:"deleted",deletePromise});
   // Offer Undo without waiting for the round-trip, so the affordance is as instant as
   // the hide.
   if(typeof showToast==="function"){
@@ -2097,12 +2112,26 @@ async function deleteTaskWithUndo(id){
     // Liveness, not just role: a reminder outlives its Waiting item (complete and delete
     // leave the scheduled row alone), so a stale one must not claim the task is open.
     const liveCheckIn=isCheckIn&&(typeof window.waitingCheckInIsLive==="function")&&window.waitingCheckInIsLive(ev);
-    showToast(isCheckIn?(liveCheckIn?"Check-in deleted. The delegated task is still open in Waiting":"Check-in deleted. Its Waiting item was already closed"):"Task deleted","success",8000,{
-      label:"Undo",
-      onClick:()=>undoDeleteTask(id,undoDate,deleteMutationId)
-    });
+    const undo={label:"Undo",onClick:()=>{
+      if(_deleteUndoStorageKey()===accountKey)return undoDeleteTask(id,undoDate,deleteMutationId);
+    }};
+    const deletedLabel=isCheckIn?(liveCheckIn?"Check-in deleted. The delegated task is still open in Waiting":"Check-in deleted. Its Waiting item was already closed"):"Task deleted";
+    if(canonicalOnly){
+      const notice=showToast("Deleting task…","info",0,undo);
+      const result=await deletePromise;
+      notice?.remove?.();
+      if(_deleteUndoStorageKey()!==accountKey)return result;
+      if(result?.ok&&typeof refoldTaskStateFromBlockCache==="function")refoldTaskStateFromBlockCache();
+      const snapshot=_deleteUndoSnapshots.get(_deleteUndoIntentKey(undoDate,id));
+      if(snapshot?.deleteMutationId===deleteMutationId&&snapshot.state==="deleted"){
+        if(result?.ok)showToast(deletedLabel,"success",8000,undo);
+        else if(result?.buffered)showToast("Task deletion waiting to sync","info",8000,undo);
+      }
+      return result;
+    }
+    showToast(deletedLabel,"success",8000,undo);
   }
-  await deletePromise;
+  return deletePromise;
 }
 // Revive the ORIGINAL rows through one guarded transactional batch, so notes, tags, source
 // links, prep state, privacy and the subtask/ride-along edges all come back because they
@@ -2119,9 +2148,9 @@ async function undoDeleteTask(id,date,expectedToken){
   if(!ids.includes(id))return;
   const members=(snap.members||[]).filter(member=>ids.includes(member.overlayId));
   const blockIds=members.map(member=>member.id);
-  const meta={rootId:id,ids,blockIds,members,date:snap.date,overlayBlockId:snap.overlayBlockId,deleteMutationId:snap.deleteMutationId};
+  const meta={rootId:id,ids,blockIds,members,date:snap.date,overlayBlockId:snap.overlayBlockId,canonicalOnly:snap.canonicalOnly,deleteMutationId:snap.deleteMutationId};
   // Keep the intended tree visible immediately, but never claim durability yet.
-  if(snap.date===null||snap.date===_viewedDateStr()){ids.forEach(sid=>deletedSet.delete(sid));recalcTimes();render();}
+  if(!snap.canonicalOnly&&(snap.date===null||snap.date===_viewedDateStr())){ids.forEach(sid=>deletedSet.delete(sid));recalcTimes();render();}
   let finishRestore;
   const restoring=new Promise(resolve=>{finishRestore=resolve;});
   for(const bid of blockIds)_deleteUndoRestores.set(bid,restoring);
