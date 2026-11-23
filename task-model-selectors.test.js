@@ -502,7 +502,7 @@ test("selectCarryover is the carryover done predicate, and DCC.Carryover.openRow
   assert.deepEqual(ids(TaskModel.selectCarryover([Object.assign(T("x"), { __unf: { done: true } })])), []);
   const fs = require("node:fs");
   const unfSrc = fs.readFileSync(require.resolve("./public/js/unfinished-tasks.js"), "utf8");
-  assert.match(unfSrc, /function openRows\(pool\) \{ return DCC\.TaskModel\.selectCarryover\(window\.DCC\?\.TaskActions\?\.projectPool\(pool\)\|\|pool\); \}/,
+  assert.match(unfSrc, /function openRows\(pool\) \{ return DCC\.TaskModel\.selectCarryover\(window\.DCC\?\.TaskActions\?\.projectPool\(pool\)\|\|pool, \{waitingRows:window\.blockStore\?\.getByType\?\.\("block"\)\}\); \}/,
     "DCC.Carryover.openRows must delegate, not carry a second copy of the predicate");
 });
 

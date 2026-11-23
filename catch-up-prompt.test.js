@@ -572,69 +572,44 @@ function waitingCtx(draftOverrides) {
   return Object.assign(h, { calls });
 }
 
-test("Waiting has one Loose Ends row with its internal draft, not a duplicate triage row", async () => {
-  const { ctx } = waitingCtx();
-  await openLooseEnds(ctx);
-  assert.deepEqual([...rowsOf(ctx)].map(titleOf).filter(Boolean), ["Launch plan"]);
-  assert.deepEqual(
-    [...allRowsOf(ctx)].filter(r => r.className === "cu-section-label").map(r => r.textContent),
-    ["Waiting"]
-  );
-  const row = [...rowsOf(ctx)][0];
-  assert.ok(row.querySelector(".cu-wait-copy"), "the copy-ready fallback stays in Waiting details");
-  assert.match(row.innerHTML, /class="it-list-actions"/);
-  assert.doesNotMatch(row.innerHTML, /cu-today|cu-drop|cu-details-action/);
-  row.querySelector(".btn-task-radial").fire("click");
-  assert.deepEqual(Array.from(row.querySelector(".btn-task-radial")._actions, item => item.label), ["Schedule…", "Today", "Details"]);
+test("Waiting and its drafts never create a Loose Ends reminder or mutate Waiting", async () => {
+  for (const draft of [{}, { source: "gmail", link: "https://example.com/draft" }]) {
+    const { ctx, calls } = waitingCtx(draft);
+    const pill = ctx.document.createElement("button"); pill.id = "loose-ends-pill"; ctx.document.body.appendChild(pill);
+    const count = ctx.document.createElement("span"); count.id = "loose-ends-pill-count"; ctx.document.body.appendChild(count);
+    assert.equal(await openLooseEnds(ctx), false);
+    assert.equal(ctx.document.getElementById("catchup-overlay"), null);
+    assert.equal(pill.hidden, true);
+    assert.equal(count.textContent, "0");
+    assert.equal(await ctx.window.DCC.CatchUp.openArrivals(["waiting-checkin:waiting-1:" + TODAY]), false);
+    assert.deepEqual(calls, { snoozed: [], scheduled: [], unblocked: [], copied: [] });
+  }
 });
 
-test("Waiting actions snooze, schedule a check-in, unblock, and copy the fallback", async () => {
-  const { ctx, calls } = waitingCtx();
-  await openLooseEnds(ctx);
-  const row = [...rowsOf(ctx)][0];
-  row.querySelector(".ttl").fire("click");
-  assert.equal(row.querySelector(".cu-details").hidden, false);
-  row.querySelector(".btn-del-task").fire("click");
-  await new Promise(resolve => setTimeout(resolve, 0));
-  pickAction(row, "Today");
-  row.querySelector(".cu-wait-schedule").fire("click", { currentTarget: row.querySelector(".cu-wait-schedule") });
-  row.querySelector(".cu-wait-unblock").fire("click");
-  await new Promise(resolve => setTimeout(resolve, 0));
-  row.querySelector(".cu-wait-copy").fire("click");
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.deepEqual(calls.snoozed, [{ id: "waiting-1", date: "2026-07-30" }]);
-  assert.deepEqual(calls.scheduled, [{ id: "waiting-1", date: TODAY }, { id: "waiting-1", date: null }]);
-  assert.deepEqual(calls.unblocked, ["waiting-1"]);
-  assert.deepEqual(calls.copied, ["Hi Alex, quick check-in."]);
+test("Waiting drafts stay excluded without an attention item, including legacy source shapes", async () => {
+  for (const item of [
+    { waiting_item_id: "snoozed" }, { source: "waiting_checkin" },
+    { source: "waiting-checkin" }, { type: "waiting_checkin" }, { id: "waiting-checkin:old:cycle" }
+  ]) {
+    const { ctx, calls } = triageCtx({ [ymd(1)]: [dayRoot()] }, [ymd(1)], [TRI("w1", item), TRI("s1")]);
+    await openLooseEnds(ctx);
+    assert.deepEqual([...rowsOf(ctx)].map(titleOf), ["Reply to s1"]);
+    assert.equal(await ctx.window.DCC.CatchUp.openArrivals([item.id || "w1"]), false);
+    assert.deepEqual(calls.completed, []);
+    assert.deepEqual(calls.dropped, []);
+  }
 });
 
-test("a source-backed Waiting draft offers one Review and Send action", async () => {
-  const { ctx, calls } = waitingCtx({ link: "https://slack.example/thread" });
+test("delegated carryover roots and descendants stay out until unblocked", async () => {
+  const d = ymd(1);
+  const waiting = { id: "waiting", properties: { kind: "delegated_item", linkedBlockId: "parent", status: "open" } };
+  const { ctx } = load({ [d]: [dayRoot(), blk("parent", d), blk("child", d, { subtaskOf: "parent" }), blk("own", d)] }, [d]);
+  ctx.window.blockStore.getByType = () => [waiting];
   await openLooseEnds(ctx);
-  const row = [...rowsOf(ctx)][0];
-  const detailsBody = row.querySelector(".cu-details-body");
-  const actionHtml = detailsBody.children[detailsBody.children.length - 1].innerHTML;
-  assert.match(actionHtml, /cu-wait-draft cu-wait-copy[^>]*>Review and Send<\/a>/);
-  assert.doesNotMatch(actionHtml, />Copy Draft<\/button>/);
-  assert.equal(row.querySelector(".cu-wait-draft").href, "https://slack.example/thread");
-  row.querySelector(".cu-wait-copy").fire("click");
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.deepEqual(calls.copied, ["Hi Alex, quick check-in."]);
-});
-
-test("a failed Waiting draft copy closes the reserved source tab", async () => {
-  const { ctx } = waitingCtx({ link: "https://slack.example/thread" });
-  const pending = { opener: {}, location: {}, closed: false, close() { this.closed = true; } };
-  ctx.window.open = () => pending;
-  ctx.window.DCC.Waiting.copyText = async () => false;
-  await openLooseEnds(ctx);
-  const row = [...rowsOf(ctx)][0];
-  let prevented = false;
-  row.querySelector(".cu-wait-copy").fire("click", { preventDefault() { prevented = true; } });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(prevented, true);
-  assert.equal(pending.closed, true);
-  assert.equal(pending.location.href, undefined);
+  assert.deepEqual(listedTitles(ctx), ["own"]);
+  waiting.properties.status = "unblocked";
+  const pool = await ctx.window.DCC.Carryover.collect();
+  assert.deepEqual(Array.from(ctx.window.DCC.Carryover.openRows(pool.rows), ev => ev.title), ["parent", "child", "own"]);
 });
 
 test("the unified modal follows the requested section order", async () => {
@@ -1035,33 +1010,4 @@ test("the Journal mood dialog uses semantic choices and its own focus trap", () 
   assert.match(source, /aria-labelledby="gb-mood-title"/);
   assert.match(source, /gbMoodReturnFocus/);
   assert.match(source, /overlay\.querySelectorAll\('button:not\(\[disabled\]\)/);
-});
-
-// A delegated check-in in the recap envelope is the same reminder the itinerary strip
-// shows, and "Drop" on it drops the reminder, never the delegated task. The row has to
-// say so here too, or the envelope becomes the one surface where the old confusion
-// survives. isWaitingCheckIn is triage.js's predicate, injected the way the module sees
-// it at runtime.
-test("a delegated check-in row in the envelope is labelled as a check-in", async () => {
-  const d = ymd(1);
-  const { ctx } = triageCtx(
-    { [d]: [dayRoot()] },
-    [d],
-    [TRI("w1", { source: "waiting_checkin", title: "Check in: Launch plan", waiting_item_id: "waiting-1" }),
-     TRI("s1")],
-    { isWaitingCheckIn: item => !!(item && (item.waiting_item_id || item.source === "waiting_checkin")) }
-  );
-  await openLooseEnds(ctx);
-  const rows = [...rowsOf(ctx)];
-  const checkIn = rows.find(r => titleOf(r) === "Check in: Launch plan");
-  const plain = rows.find(r => titleOf(r) === "Reply to s1");
-  assert.ok(checkIn, "the check-in row rendered");
-  assert.ok(checkIn.className.includes("cu-waiting-checkin"), "the row carries the waiting marker");
-  assert.match(checkIn.innerHTML, /class="waiting-pill checkin"[^>]*>&#128276; Check-in<\/span>/);
-  // The pill sits inside the title line, which is where the CSS positions it.
-  assert.match(checkIn.innerHTML, /<\/span><span class="waiting-pill checkin"/);
-  assert.match(checkIn.innerHTML, /The delegated task stays open in Waiting/);
-  // A swept Slack item is untouched: no marker, no pill.
-  assert.ok(plain && !plain.className.includes("cu-waiting-checkin"));
-  assert.doesNotMatch(plain.innerHTML, /waiting-pill/);
 });

@@ -42,7 +42,7 @@ test('glasses library rejects failed or malformed reads rather than returning pa
     await assert.rejects(ctx.window.DCCTaskLibrary.glassesCollections());
   }
 });
-test('Loose Ends retains source action identity, owner ordering, and Waiting draft deduplication',async()=>{
+test('Loose Ends retains source action identity, owner ordering, and excludes Waiting drafts',async()=>{
   const ev={id:'carry-local',title:'Slipped',__unf:{sourceId:'carry-block'}};
   const waiting=block('waiting',{kind:'delegated_item',myTask:'Follow up'});
   const draft={id:'draft',waiting_item_id:'waiting',source:'gmail',title:'Draft'};
@@ -52,9 +52,8 @@ test('Loose Ends retains source action identity, owner ordering, and Waiting dra
   ctx.window.getAttentionWaitingItems=()=>[waiting];
   vm.runInContext(source('catch-up'),ctx);
   const rows=await ctx.window.DCC.CatchUp.glassesTasks();
-  assert.deepEqual(Array.from(rows,row=>[row.kind,row.actionId]),[['task','carry-block'],['waiting','waiting'],['triage','slack'],['triage','mail']]);
+  assert.deepEqual(Array.from(rows,row=>[row.kind,row.actionId]),[['task','carry-block'],['triage','slack'],['triage','mail']]);
   assert.equal(rows[0].ev,ev);assert.equal(rows[0].pool[0],ev);
-  assert.equal(rows[1].draft,draft);assert.equal(rows[1].title,'Follow up');
   assert.equal(rows.truncated,true);assert.equal(rows.total,4);
 });
 test('failed and malformed real carryover reads remain errors through the glasses projection',async()=>{

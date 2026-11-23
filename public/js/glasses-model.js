@@ -61,22 +61,20 @@
       const display=fromBlock(block,carry.overlays?.[block.date]);
       return {...display,...ev,_contextOnly:!eligible.has(block.id)||display.completed,__unf:{sourceDate:block.date,done:display.completed}};
     });
-    const earlier = tree(TM.selectCarryover(earlierPool));
+    const earlier = tree(TM.selectCarryover(earlierPool, {waitingRows:all}));
     const today = clock(timeZone, now).date;
     const rules = Q.waitingRules({ today, nowValue: new Date(today + 'T12:00:00') });
     const waitingBlocks = all.filter(b => !b.deleted_at && b.properties?.kind === 'delegated_item').sort(rules.sortByUrgency);
     const waitingItem = b => ({ taskId: 'waiting:' + b.id, kind: 'waiting', title: b.properties.myTask || b.properties.title || 'Waiting task', detail: [b.properties.delegatee?.name && 'Waiting on ' + b.properties.delegatee.name, b.properties.title, b.properties.notes].filter(Boolean).join('\n'), overdue: rules.isOverdue(b), depth: 0, untimed: true });
     const waiting = waitingBlocks.filter(rules.isOpenDelegated).map(waitingItem);
-    const attention = rules.attentionItems(waitingBlocks), waitingIds = new Set(attention.map(b => b.id));
     const rawTriage = snapshot.dayState?.triage || {}, suppressed = Object.fromEntries(list(rawTriage.suppressed_items).map(i => [i.triage_id, i]));
-    const review = Q.activeTriage(list(rawTriage.open_items), { dismissed: props._dismissed || {}, scheduled: Array.isArray(rawTriage.suppressed_items) ? {} : props._triageScheduled || {}, deleted: props._triageDeleted || [], suppressed })
-      .filter(i => !waitingIds.has(i.waiting_item_id)).map(i => ({ taskId: 'triage:' + i.id, kind: 'review', title: i.title || i.summary || 'Review item', detail: [i.summary, i.notes].filter(Boolean).join('\n'), depth: 0, untimed: true }));
+    const review = TM.selectLooseEndsTriage(Q.activeTriage(list(rawTriage.open_items), { dismissed: props._dismissed || {}, scheduled: Array.isArray(rawTriage.suppressed_items) ? {} : props._triageScheduled || {}, deleted: props._triageDeleted || [], suppressed })).map(i => ({ taskId: 'triage:' + i.id, kind: 'review', title: i.title || i.summary || 'Review item', detail: [i.summary, i.notes].filter(Boolean).join('\n'), depth: 0, untimed: true }));
     const preparedSources = new Set(pool.map(t => 'triage:' + t.triageId));
     const unpreparedSources = review.filter(t => !preparedSources.has(t.taskId)).length;
-    const looseEnds = earlier.concat(attention.map(waitingItem), review);
+    const looseEnds = earlier.concat(review);
     const queues = [
       { id: 'triage', label: 'Triage', rows: triage },
-      { id: 'loose', label: 'Loose Ends', rows: looseEnds, count:TM.selectRoots(TM.selectCarryover(earlierPool)).length+attention.length+review.length },
+      { id: 'loose', label: 'Loose Ends', rows: looseEnds, count:TM.selectRoots(TM.selectCarryover(earlierPool, {waitingRows:all})).length+review.length },
       { id: 'waiting', label: 'Waiting', rows: waiting, count: waiting.filter(i => i.overdue).length },
       { id: 'unscheduled', label: 'Unscheduled', rows: unplanned },
       { id: 'whenever', label: 'Whenever', rows: anytime }

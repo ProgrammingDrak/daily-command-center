@@ -149,3 +149,15 @@ test('secondary guidance cannot bypass dateless completion restriction', async (
   await a.load({ taskId: 'routine' }); await a.complete();
   assert.match(a.state.error, /Schedule this task/); assert.equal(writes, 0);
 });
+
+test('Loose Ends excludes Waiting and check-in drafts while Waiting keeps open items', () => {
+  const waiting = block('waiting', { kind: 'delegated_item', myTask: 'Delegated work', linkedBlockId: 'parked', status: 'open', checkInDate: '2026-10-01' }, { date: null });
+  const view = M.project({ date: '2026-10-24', blocks: [], globals: [waiting], dayState: { triage: { open_items: [
+    { id: 'draft', waiting_item_id: 'waiting', source: 'gmail', title: 'Draft' },
+    { id: 'orphan', source: 'waiting_checkin', title: 'Old check-in' },
+    { id: 'mail', source: 'gmail', title: 'Reply' }
+  ] } } }, { rows: [block('parked'), block('child', { subtaskOf: 'parked' }), block('own')] });
+  assert.deepEqual(view.queues.find(q => q.id === 'loose').rows.map(row => row.title), ['own', 'Reply']);
+  assert.equal(view.queues.find(q => q.id === 'loose').count, 2);
+  assert.deepEqual(view.queues.find(q => q.id === 'waiting').rows.map(row => row.title), ['Delegated work']);
+});

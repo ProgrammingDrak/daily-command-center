@@ -184,7 +184,7 @@
     rows.sort((a, b) => (a.__unf.sourceDate < b.__unf.sourceDate ? 1 : (a.__unf.sourceDate > b.__unf.sourceDate ? -1 : 0)));
     // `total` is what the lane and the prompt count: OPEN rows. The done children
     // riding along are progress data, not work.
-    const total = rows.filter(ev => !ev._contextOnly && !ev.__unf.done).length;
+    const total = openRows(rows).filter(ev => !ev._contextOnly && !ev.__unf.done).length;
     // `scanned` is still "how many past days this pool came from", now counted by the
     // server off the dates it actually touched rather than by the client off the days
     // it walked. The modal's footer copy reads it. `truncated` says the server's LIMIT
@@ -323,7 +323,7 @@
   // C6a: the predicate itself lives in TaskModel.selectCarryover. This name stays
   // because DCC.Carryover is the carryover lane's published API (the itinerary lane,
   // the Catch up modal and the morning prompt all call it), but there is one body.
-  function openRows(pool) { return DCC.TaskModel.selectCarryover(window.DCC?.TaskActions?.projectPool(pool)||pool); }
+  function openRows(pool) { return DCC.TaskModel.selectCarryover(window.DCC?.TaskActions?.projectPool(pool)||pool, {waitingRows:window.blockStore?.getByType?.("block")}); }
   // Same deal as openRows: this is TaskModel.selectRoots under the name the three carryover
   // surfaces call. Keeping a body here made the layer's copy the DEAD one -- selectRoots's only
   // other call site is schedule-tab's `_CO_ ? ... : ...` fallback, which never fires -- so a fix
