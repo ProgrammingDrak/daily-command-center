@@ -29,7 +29,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-const { installDayContext } = require("./task-model-vm-fixture");
+const { installDayContext, installTaskModel } = require("./task-model-vm-fixture");
 const serialize = require("./public/js/task-serialize");
 
 const SRC = fs.readFileSync(require.resolve("./public/js/schedule.js"), "utf8");
@@ -127,6 +127,7 @@ function harness(opts) {
       setItem: (k, v) => { store[k] = String(v); }
     },
     scheduled: rec.scheduled,
+    manualDone: new Set(opts.doneIds || []),
     viewDate: opts.viewDate || DAY,
     __state: { date: opts.viewDate || DAY },
     qaId: () => "t" + (++seq),
@@ -152,6 +153,8 @@ function harness(opts) {
   vm.createContext(ctx);
   // REAL slot engine + REAL serializer, both inside the context.
   installDayContext(ctx);
+  vm.runInContext(mustSlice(STATE_SRC, /^function isDone\(ev\)\{[^\n]*\}/m, "isDone"), ctx);
+  installTaskModel(ctx);
   ctx.window.DCC = ctx.DCC;
   ctx.DCC.taskCommonProps = serialize.taskCommonProps;
   ctx.DCC.taskBlockProps = serialize.taskBlockProps;
@@ -396,6 +399,52 @@ test("placement mode still hands a raw null straight to onPlace", async () => {
 });
 
 // ── 7. the anchor list ─────────────────────────────────────────────────────
+
+test("completed live tasks disappear from create and move anchor options", async () => {
+  for (const moving of [false, true]) {
+    const h = harness({ doneIds: ["coffee"] });
+    h.rec.scheduled.push(
+      { id: "coffee", title: "Coffee", start: "06:00", end: "06:15" },
+      { id: "open", title: "Open task", start: "09:00", end: "10:00" }
+    );
+    if (moving) h.run('_schedPickerOnPlace=()=>{}');
+    await h.run('_renderSchedAfterStep("' + DAY + '")');
+    const buttons = h.els["sched-after-tasks"].children;
+    assert.deepEqual(buttons.map(b => b.children[0].textContent), ["After Open task"]);
+    // Reopening after a completion must read the live registry again.
+    h.ctx.manualDone.add("open");
+    assert.equal((await h.run('_schedDayTasks("' + DAY + '")')).length, 0);
+    h.ctx.manualDone.delete("coffee");
+    assert.deepEqual(Array.from(await h.run('_schedDayTasks("' + DAY + '")'), i => i.title), ["Coffee"]);
+  }
+});
+
+test("fetched days exclude completed rows and their timeline copies using target-day identities", async () => {
+  const flags = [{ status: "done" }, { done: true }, { completed: true },
+    { completedAt: "2099-01-05T10:00:00Z" }, { doneAt: "2099-01-05T10:00:00Z" }, { status: "completed" }];
+  const blocks = flags.map((flag, i) => ({ id: "row-" + i, type: "block",
+    properties: { local_id: "done-" + i, title: "Done " + i, start: "09:00", end: "10:00", ...flag } }));
+  const timeline = flags.map((_, i) => ({ id: "done-" + i, title: "Done " + i,
+    type: "task", start: "09:00", end: "10:00" }));
+  timeline.push({ id: "legacy", title: "Legacy done", type: "task", start: "09:00", end: "10:00" },
+    { id: "open", title: "Open task", type: "task", start: "10:00", end: "11:00" });
+  blocks.push({ id: "root", type: "day_root", properties: { _done: { ids: ["legacy", "overlay-row"] } } },
+    { id: "overlay-row", type: "block", properties: { title: "Overlay done", start: "09:00", end: "10:00" } });
+  const h = harness({ viewDate: "2099-03-01", doneIds: ["open"], blocks, timeline });
+  const items = await h.run('_schedDayTasks("' + DAY + '")');
+  assert.deepEqual(Array.from(items, i => i.title), ["Open task"], "viewed-day completion must not hide target-day work");
+});
+
+test("fetched timeline completion and legacy state marks also hide anchors", async () => {
+  const h = harness({ viewDate: "2099-03-01", timeline: [
+    { id: "done", title: "Done", type: "task", start: "09:00", end: "10:00", status: "done" },
+    { id: "legacy", title: "Legacy", type: "task", start: "09:00", end: "10:00" }
+  ] });
+  h.state._done = { ids: ["legacy"] };
+  await h.run('_renderSchedAfterStep("' + DAY + '")');
+  assert.equal(h.els["sched-after-tasks"].children.length, 0);
+  assert.match(h.els["sched-after-tasks"].innerHTML, /No tasks scheduled/);
+});
 
 test("an UNTIMED row is not offered as an anchor (the live arm)", async () => {
   // What Drake actually saw: five "ends 12:30 AM" rows crowding out the real anchors.
