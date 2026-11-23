@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const { installTaskModel } = require('./task-model-vm-fixture');
 const source = fs.readFileSync(require.resolve('./public/js/features.js'), 'utf8');
 const radial = fs.readFileSync(require.resolve('./public/js/schedule-tab.js'), 'utf8');
 const html = fs.readFileSync(require.resolve('./index.html'), 'utf8');
@@ -18,13 +19,15 @@ function element() {
     getBoundingClientRect() { return {left:20, right:320, top:200, bottom:244, width:300, height:44}; },
     querySelector() { return this.children[0]; }, focus() {} };
 }
-function harness({archive = false, meeting = false, carryover = false} = {}) {
+function harness({archive = false, meeting = false, carryover = false, queuedToday = false} = {}) {
   const host = element(), calls = [], task = {id:'local', _blockId:'stored', title:'Task', type:'task'};
   const ctx = {document:{getElementById:()=>host, createElement:element, querySelector:()=>host},
     window:{TaskTypes:{TYPES:{task:{},focus:{}},isFixed:()=>false,get:type=>({label:type})},
       openTaskDependencyModal:id=>calls.push(['dependency',id]),
       DCC:{Carryover:{toBacklog:ev=>calls.push(['carryover',ev.id])}}},
-    _addModalAnchor:{ev:task,carryover}, _addModalEditing:!archive, viewMode:archive?'archive':'today',
+    _addModalAnchor:{ev:task,carryover:carryover || queuedToday,queue:queuedToday,blockId:'stored'},
+    scheduled:queuedToday ? [{...task,_locked:true}] : [],
+    _addModalEditing:!archive, viewMode:archive?'archive':'today',
     isMeeting:()=>meeting, isNested:()=>true, now:()=>0, pt:()=>1,
     _setAddModalControlsEditable() {}, closeAddModal:()=>calls.push(['close']),
     toggleLock:id=>calls.push(['lock',id]), convertTaskToDelegated:id=>calls.push(['waiting',id]),
@@ -66,6 +69,33 @@ test('Convert uses the shared type submenu without opening a second radial', asy
   await h.host.children.find(b=>b.attrs['aria-label']==='Convert…').click();
   await h.host.children.find(b=>b.attrs['aria-label']==='→ focus').click();
   assert.deepEqual(h.calls,[['close'],['convert','local','focus']]);
+});
+
+test('current-day queue anchors use the full shared menu and live lock state', async () => {
+  const h = harness({queuedToday:true});
+  const queueSource = fs.readFileSync(require.resolve('./public/js/working-queue.js'), 'utf8');
+  const anchorSource = queueSource.match(/^ {2}function taskAnchor\(id\)\{[\s\S]*?\n {2}\}/m);
+  assert.ok(anchorSource, 'real queue anchor function must be present');
+  installTaskModel(h.ctx);
+  const row = {id:'stored',date:'2099-01-05',properties:{local_id:'local',title:'Task',type:'task',start:'09:00',end:'09:30'}};
+  h.ctx.items = ()=>[{task:row}];
+  h.ctx.contextRows = ()=>[row];
+  vm.runInContext(anchorSource[0],h.ctx);
+  h.ctx._addModalAnchor = h.ctx.taskAnchor('stored');
+  assert.equal(h.ctx._addModalAnchor.carryover,true);
+  h.ctx.scheduled = [{...h.ctx._addModalAnchor.ev,_locked:true}];
+  h.ctx.renderAddModalTaskActions(h.ctx._addModalAnchor.ev);
+  const labels = h.host.children.map(b=>b.attrs['aria-label']);
+  assert.ok(labels.includes('Convert…'));
+  assert.ok(labels.includes('Delegate / block'));
+  assert.ok(labels.includes('Unlock'));
+  assert.ok(!labels.includes('Solo'));
+  await h.host.children.find(b=>b.attrs['aria-label']==='Unlock').click();
+  assert.deepEqual(h.calls,[['close'],['lock','local']]);
+  // A historical row may reuse a local id. Never act on today's different row.
+  h.ctx._addModalAnchor.blockId = 'historical-row';
+  h.ctx.renderAddModalTaskActions(h.ctx._addModalAnchor.ev);
+  assert.deepEqual(h.host.children.map(b=>b.attrs['aria-label']),['Move…','Solo']);
 });
 
 test('archived actions cannot mutate; meetings and carryovers keep their own shared menus', async () => {

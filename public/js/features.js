@@ -515,7 +515,13 @@ function renderAddModalTaskActions(task) {
   var rect = host.getBoundingClientRect();
   var trigger = { getBoundingClientRect: function() { return rect; } };
   var anchor = _addModalAnchor;
-  var carryover = anchor?.carryover && window.DCC?.Carryover;
+  // Queue anchors also describe today's scheduled tasks as carryovers. Prefer
+  // the matching live row so they retain the radial's full menu and lock state.
+  var currentTask = typeof scheduled !== 'undefined' && scheduled.find(function(ev) {
+    return ev.id === task.id && (!anchor?.blockId || ev._blockId === anchor.blockId);
+  });
+  task = currentTask || task;
+  var carryover = anchor?.carryover && !currentTask && window.DCC?.Carryover;
   var items = carryover ? buildCarryoverRadialItems(task, trigger, {
     move: function() {
       openPlacementPicker({title:task.title, durMin:dur(task), day:typeof viewDate !== 'undefined' ? viewDate : undefined,
