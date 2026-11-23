@@ -140,10 +140,41 @@ check("date navigation is centered inside Day Progress, with views and queues ab
   const n = nav.getBoundingClientRect(), h = header.getBoundingClientRect();
   return header.contains(nav) && views.contains(pill) && views.contains(document.getElementById("task-view-switch")) &&
     !!(views.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_FOLLOWING) &&
-    nav.nextElementSibling?.id === "date-picker-drop" &&
+    !progress.querySelector("#date-picker-drop") &&
     n.left >= h.left - 1 && n.right <= h.right + 1 && n.top >= h.top - 1 && n.bottom <= h.bottom + 1 &&
     Math.abs((n.left + n.right - h.left - h.right) / 2) <= 1;
 })) === true);
+// The date control stays in Day Progress; its calendar must escape that clip.
+const progressWasExpanded = await page.locator("#day-progress-title").getAttribute("aria-expanded");
+for (const width of [320, 375, 1280]) {
+  await page.setViewportSize({ width, height: 900 });
+  for (const expanded of [true, false]) {
+    if ((await page.locator("#day-progress-title").getAttribute("aria-expanded")) !== String(expanded)) {
+      await page.locator("#day-progress-title").click();
+    }
+    await page.locator("#dn-date-btn").click();
+    await page.waitForFunction(() => {
+      const panel = document.querySelector(".date-picker-popover");
+      return panel?.parentElement.classList.contains("open") && parseFloat(panel.style.top) >= 8;
+    });
+    check(`calendar escapes Day Progress and every day is clickable @${width}, expanded=${expanded}`, await page.evaluate(() => {
+      const drop = document.getElementById("date-picker-drop"), panel = drop?.closest(".date-picker-popover");
+      if (!panel || panel.parentElement.parentElement !== document.body) return false;
+      const r = panel.getBoundingClientRect();
+      return r.left >= 0 && r.right <= window.innerWidth && r.top >= 0 && r.bottom <= window.innerHeight &&
+        [...drop.querySelectorAll(".dp-day")].every(day => {
+          const d = day.getBoundingClientRect();
+          return day.contains(document.elementFromPoint(d.x + d.width / 2, d.y + d.height / 2));
+        });
+    }));
+    await page.locator("#date-picker-drop .dp-header button").first().press("Escape");
+    await page.locator("#date-picker-drop").waitFor({ state: "detached" });
+  }
+}
+if ((await page.locator("#day-progress-title").getAttribute("aria-expanded")) !== progressWasExpanded) {
+  await page.locator("#day-progress-title").click();
+}
+await page.setViewportSize({ width: 375, height: 812 });
 await page.evaluate(() => window.DCC.nav.setActual(true));
 check("Actual keeps the List and exposes evidence controls in Day Progress", (await page.evaluate(() =>
   document.getElementById("list-view").style.display !== "none" && !document.getElementById("progress-hide-actual-details").hidden &&

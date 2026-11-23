@@ -11,7 +11,9 @@ test("Loose Ends is a door in the queue capsule, not a row of its own", () => {
   assert.match(mobileShell, /\n {2}\.date-nav\{[^}]*flex-wrap:wrap/);
   assert.doesNotMatch(css, /\.loose-ends-pill\{/, "Loose Ends styles as a .queue-seg now");
   const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
-  const capsule = html.slice(html.indexOf('id="queue-pill"'), html.indexOf('id="date-picker-drop"'));
+  const start = html.indexOf('id="queue-pill"'), end = html.indexOf('id="day-progress-title"', start);
+  assert.ok(start >= 0 && end > start, "queue and progress markers exist");
+  const capsule = html.slice(start, end);
   assert.match(capsule, /id="loose-ends-pill"/);
 });
 
