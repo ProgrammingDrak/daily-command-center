@@ -197,12 +197,15 @@ function buildMeetingRadialItems(ev,trig){
 }
 // Every task view uses these definitions. Adapters provide source-aware commands,
 // never another list of labels, icons, ordering, or radial geometry.
+async function settleTaskMenuAction(run,opts){
+  try{return await run();}finally{await opts?.onSettled?.();}
+}
 function taskMenuItem(ev,trig,opts,key,icon,label,run){
   const override=opts&&opts.actions&&opts.actions[key];
   const reason=!override&&opts&&opts.unavailableReason;
   return {id:key,icon,label,disabled:!!reason,title:reason||"",onPick:()=>{
     if(reason)return;
-    return override?override(trig,ev):run();
+    return settleTaskMenuAction(()=>override?override(trig,ev):run(),opts);
   }};
 }
 function buildTaskRadialItems(ev,trig,opts){
@@ -251,7 +254,7 @@ function buildConvertToItems(ev,trig,opts){
       if(R.isFixed(t))return;                // calendar/fixed blocks aren't conversion targets
       const meta=R.get(t);
       items.push({icon:(meta.emoji||_convertIcon(t)), label:"→ "+meta.label,
-        onPick:()=>convertTaskType(ev.id,t,{task:ev})});
+        onPick:()=>settleTaskMenuAction(()=>convertTaskType(ev.id,t,{task:ev}),opts)});
     });
   }
   return items;

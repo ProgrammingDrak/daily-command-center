@@ -41,7 +41,7 @@ test("Change task retains delegation and dependencies with the correct identitie
   const calls=[];
   const context={window:{openTaskDependencyModal:id=>calls.push(["dependency",id])},scheduled:[],childrenOf:()=>[],convertTaskToDelegated:id=>calls.push(["delegate",id])};
   vm.createContext(context);
-  vm.runInContext(scheduleSource.slice(scheduleSource.indexOf("function taskMenuItem"),scheduleSource.indexOf("// Sub-fan: convert")),context);
+  vm.runInContext(scheduleSource.slice(scheduleSource.indexOf("async function settleTaskMenuAction"),scheduleSource.indexOf("// Sub-fan: convert")),context);
   const items=context.buildTaskChangeItems({id:"local-task",_blockId:"stored-block",untimed:true},{});
   items.find(item=>item.label==="Delegate / block").onPick();
   items.find(item=>item.label==="Blocked by task").onPick();

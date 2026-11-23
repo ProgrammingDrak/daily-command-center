@@ -120,7 +120,7 @@
         depth:node.depth,
         metaHtml:metadata.filter(Boolean).map(value => '<span class="it-list-context">'+esc(value)+'</span>').join(""),
         onOpen:() => taskEditor(row.id),
-        onRadial:done(row)||ev._contextOnly ? null : trigger => window.openTaskRadial(ev,trigger),
+        onRadial:done(row)||ev._contextOnly ? null : trigger => window.openTaskRadial(ev,trigger,{onSettled:refresh}),
         onComplete:ev._contextOnly?null:() => toggleCompletion(row),
         onSchedule:done(row) ? null : anchor => scheduleTask({id:row.id, title:taskTitle(row), raw:row},anchor),
         actionsBeforeHtml:canReturn ? '<button class="btn btn-ghost" type="button" data-return-idea>Return to Someday</button>' : "",

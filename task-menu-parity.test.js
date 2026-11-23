@@ -54,3 +54,17 @@ test('Loose Ends shares centered modal dimensions and blocks backdrop clicks',()
  assert.doesNotMatch(css,/\.carryover-overlay \{[^}]*pointer-events: none/);
  assert.match(read('./public/js/catch-up.js'),/class="carryover" role="dialog" aria-modal="true"/);
 });
+
+
+test('all library mutations refresh their source after acknowledgement, including Convert children',async()=>{
+ const {context}=menuPage(),calls=[],task={id:'local',_blockId:'actual-row',type:'task'};
+ context.window.TaskTypes={TYPES:{task:{},focus:{}},isFixed:()=>false,get:type=>({label:type})};
+ context.convertTaskType=async()=>calls.push('write');
+ vm.runInContext(source.slice(source.indexOf('function buildConvertToItems('),source.indexOf('// Convert a scheduled task')),context);
+ const opts={onSettled:()=>calls.push('refresh')};
+ await context.buildTaskRadialItems(task,{},opts).find(item=>item.id==='lock').onPick();
+ assert.deepEqual(calls,['refresh']);calls.length=0;
+ await context.buildConvertToItems(task,{},opts)[1].onPick();
+ assert.deepEqual(calls,['write','refresh']);
+ assert.match(read('./public/js/task-library.js'),/window\.openTaskRadial\(ev,trigger,\{onSettled:refresh\}\)/);
+});
