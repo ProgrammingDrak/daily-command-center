@@ -99,6 +99,7 @@ function openRadialMenu(anchorEl,items,opts){
   if(opts.backdrop!==false){
     const backdrop=document.createElement("div");
     backdrop.className="dest-radial-backdrop";
+    backdrop.dataset.dccLayer="above";
     backdrop.addEventListener("click",closeRadialMenu);
     document.body.appendChild(backdrop);
   }
@@ -135,8 +136,10 @@ function openRadialMenu(anchorEl,items,opts){
     y=Math.max(30,Math.min(y,window.innerHeight-30));
     const item=document.createElement("button");
     item.type="button";item.className="dest-radial-item";
-    buttons.push(item);
-    if(d.title)item.title=d.title;
+    item.dataset.dccLayer="above";
+    if(d.disabled){item.disabled=true;item.setAttribute("aria-disabled","true");}
+    else buttons.push(item);
+    if(d.title){item.title=d.title;if(d.disabled)item.setAttribute("aria-description",d.title);}
     if(d.label)item.setAttribute("aria-label",d.label);
     item.innerHTML='<span class="dri-icon">'+d.icon+'</span>';
     if(opts.fullCircle){
@@ -171,6 +174,7 @@ function openRadialMenu(anchorEl,items,opts){
   if(opts.fullCircle){
     const cancel=document.createElement("button");
     cancel.type="button";cancel.className="dest-radial-cancel";
+    cancel.dataset.dccLayer="above";
     const center=circle.grid?_radialCirclePoint(circle,n,n,a0):{x:cx,y:cy};
     cancel.textContent="Cancel";cancel.style.left=center.x+"px";cancel.style.top=center.y+"px";
     if(circle.grid){cancel.style.minWidth="44px";cancel.style.width="44px";cancel.style.height="44px";}

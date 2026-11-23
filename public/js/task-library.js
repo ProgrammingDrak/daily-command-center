@@ -108,6 +108,7 @@
     const byId=new Map(payload.tasks.map(row=>[row.id,row]));
     const cards = nodes.slice(0,limit).map(node => {
       const ev=node.ev,row=byId.get(ev.id);
+      ev.__taskContext = {block:row};
       ev.title = taskTitle(row);
       const metadata = [row.date || (mode === "someday" ? "Someday" : "Unscheduled"), projectName(props(row).projectId)];
       if (done(row)) metadata.push("Completed");
@@ -117,8 +118,9 @@
       return window.renderItineraryListRow(ev, {
         done:done(row),
         depth:node.depth,
-        metaHtml:metadata.filter(Boolean).map(value => '<span class="task-collection-meta">'+esc(value)+'</span>').join(""),
+        metaHtml:metadata.filter(Boolean).map(value => '<span class="it-list-context">'+esc(value)+'</span>').join(""),
         onOpen:() => taskEditor(row.id),
+        onRadial:done(row)||ev._contextOnly ? null : trigger => window.openTaskRadial(ev,trigger,{onSettled:refresh}),
         onComplete:ev._contextOnly?null:() => toggleCompletion(row),
         onSchedule:done(row) ? null : anchor => scheduleTask({id:row.id, title:taskTitle(row), raw:row},anchor),
         actionsBeforeHtml:canReturn ? '<button class="btn btn-ghost" type="button" data-return-idea>Return to Someday</button>' : "",

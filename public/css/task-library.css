@@ -8,13 +8,6 @@
 .task-collection-actions details summary{cursor:pointer}
 .task-collection-tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .task-collection-count{margin:0 0 8px;color:var(--text-muted);font-size:12px}
-.task-collection-list .it-list-item{grid-template-columns:36px minmax(0,1fr) auto}
-.task-collection-list .it-list-nav{display:none}
-.task-collection-list .it-list-title-row .ttl{white-space:normal;overflow-wrap:anywhere}
-.task-collection-list .it-list-meta{flex-wrap:wrap}
-.task-collection-list .it-list-actions:empty{display:none}
-.task-collection-list .it-list-item .it-list-meta > .task-collection-meta,
-.task-collection-list .it-list-meta .btn-schedule{display:inline-flex}
 .task-collection-more{margin-top:10px}
 @media(max-width:355px){
   #task-view-bar #queue-pill{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px}

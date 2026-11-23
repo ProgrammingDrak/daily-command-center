@@ -29,8 +29,8 @@ test("opening a reminder targets the full Waiting card and its lifecycle actions
   const openSource = mustSlice(WAITING_SRC, /^ {2}function openWaitingItem\(id\) \{[\s\S]*?^ {2}\}/m, "openWaitingItem");
   assert.match(openSource, /openTaskQueue\("waiting"\)/);
   assert.match(openSource, /node\.dataset\.id === String\(id\)/);
-  assert.match(WAITING_SRC, /data-delegated-action="unblock"[\s\S]*?>Schedule task<\/button>/);
-  assert.match(WAITING_SRC, /data-delegated-action="complete"[\s\S]*?>Complete task<\/button>/);
+  assert.match(WAITING_SRC, /label:"Schedule task", onPick:\(\)=>unblockWaitingItem\(item.id, trigger\)/);
+  assert.match(WAITING_SRC, /label:"Complete task", onPick:\(\)=>completeWaitingItem\(item.id\)/);
   assert.match(WAITING_SRC, /postWaitingAction\(id, "complete"/);
 });
 

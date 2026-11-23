@@ -249,7 +249,7 @@ test("the work list no longer renders the Triage or Unscheduled groups, or count
   assert.doesNotMatch(list, /triageTaskLoadState|block\.id==="triage"/, "the Triage status moved with its rows");
   // Removing the zone must not strand its mover: the radial and the pill both reach it.
   const change = tab.slice(tab.indexOf("function buildTaskChangeItems"), tab.indexOf("// Sub-fan: convert this task"));
-  assert.match(change, /label:"Remove time"[\s\S]*moveTaskToUnplanned\(ev\.id\)/);
+  assert.match(change, /item\("unscheduled"[\s\S]*moveTaskToUnplanned\(ev\.id,\{task:ev\}\)/);
 });
 
 test("the pill count rebuilds every render, and the change-task radial offers Whenever", () => {
@@ -260,7 +260,7 @@ test("the pill count rebuilds every render, and the change-task radial offers Wh
   const end = tab.indexOf("// Sub-fan: convert this task", start);
   assert.ok(start !== -1 && end > start, "buildTaskChangeItems moved");
   const change = tab.slice(start, end);
-  assert.match(change, /moveTaskToWhenever\(ev\.id\)/);
+  assert.match(change, /moveTaskToWhenever\(ev\.id,\{task:ev\}\)/);
 });
 
 test("a row's modal replaces the Tasks drawer instead of opening underneath it", () => {

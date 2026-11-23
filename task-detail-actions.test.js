@@ -95,7 +95,7 @@ test('current-day queue anchors use the full shared menu and live lock state', a
   // A historical row may reuse a local id. Never act on today's different row.
   h.ctx._addModalAnchor.blockId = 'historical-row';
   h.ctx.renderAddModalTaskActions(h.ctx._addModalAnchor.ev);
-  assert.deepEqual(h.host.children.map(b=>b.attrs['aria-label']),['Move…','Solo']);
+  assert.deepEqual(h.host.children.map(b=>b.attrs['aria-label']),Array.from(h.ctx.buildTaskRadialItems(h.task,{}),item=>item.label));
 });
 
 test('archived actions cannot mutate; meetings and carryovers keep their own shared menus', async () => {
@@ -107,8 +107,8 @@ test('archived actions cannot mutate; meetings and carryovers keep their own sha
   await meeting.host.children[0].click();
   assert.deepEqual(meeting.calls,[['close'],['meeting','local']]);
   const carryover = harness({carryover:true});
-  assert.deepEqual(carryover.host.children.map(b=>b.attrs['aria-label']),['Move…','Solo']);
-  await carryover.host.children[1].click();
+  assert.deepEqual(carryover.host.children.map(b=>b.attrs['aria-label']),Array.from(carryover.ctx.buildTaskRadialItems(carryover.task,{}),item=>item.label));
+  await carryover.host.children.find(b=>b.attrs['aria-label']==='Move to Someday').click();
   assert.deepEqual(carryover.calls,[['close'],['carryover','local']]);
 });
 

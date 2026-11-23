@@ -179,3 +179,13 @@ test("conversion checks protected types again after the shared queue reads the r
   assert.equal(await context.convertTaskType("changed","task"),false);
   assert.equal(persists.length,0);assert.equal(toasts.at(-1).kind,"error");
 });
+
+test("conversion accepts a dateless task outside the viewed itinerary without changing its row identity", async () => {
+  const ev={id:"pool",_blockId:"pool-row",type:"task",duration:45,_dateless:true};
+  const {context,persists}=convertCtx([ev]);
+  context.scheduled=[];
+  assert.equal(await context.convertTaskType(ev.id,"focus",{task:ev}),true);
+  assert.equal(persists.length,1);assert.equal(persists[0].id,"pool-row");
+  assert.equal(persists[0].patch.duration,45);assert.equal(ev.type,"focus");
+  assert.equal(context.scheduled.length,0);
+});

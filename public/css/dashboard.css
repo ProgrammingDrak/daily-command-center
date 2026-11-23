@@ -1416,19 +1416,12 @@
   .delegated-mini-btn{font-size:11px;padding:5px 9px;border-radius:6px;background:var(--card);border:1px solid var(--border);color:var(--text-muted);cursor:pointer}
   .delegated-mini-btn:hover{border-color:var(--accent);color:var(--accent)}
   .delegated-itinerary-list{display:flex;flex-direction:column;gap:6px}
-  .delegated-itinerary-card{align-items:flex-start;background:rgba(255,255,255,0.025)}
-  .delegated-itinerary-card.overdue{border-color:rgba(239,68,68,0.45)}
-  .delegated-itinerary-card.due-today{border-color:rgba(245,158,11,0.42)}
-  .delegated-card-note{margin-top:4px;color:var(--text-muted);font-size:11px;line-height:1.35;white-space:normal}
   .manager-open .delegated-filter-bar{margin-bottom:8px}
   .detail-action-link{display:inline-flex;align-items:center;gap:4px;font:inherit;font-size:11px;color:var(--cyan);background:transparent;border:0;padding:0;cursor:pointer}
   .detail-action-link:hover{color:var(--accent-light)}
   @media(max-width:760px){
     .schedule-triage-header{align-items:flex-start;flex-direction:column;gap:3px}
     .delegated-strip-header{align-items:flex-start;flex-direction:column;gap:6px}
-    .delegated-itinerary-card{flex-wrap:wrap}
-    .delegated-card-actions{width:100%;flex-wrap:wrap}
-    .delegated-card-actions button{flex:1 0 auto}
     .schedule-triage-sub{white-space:normal}
   }
 
@@ -1739,6 +1732,7 @@
      picking one commits the add. Hover shows a mini non-interactive preview. */
   .dest-radial-backdrop{position:fixed;inset:0;z-index:20000;background:rgba(6,10,18,0.55)}
   .dest-radial-item{position:fixed;z-index:20001;width:44px;height:44px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,0.45);opacity:0;transform:scale(0.4);transition:left 0.22s cubic-bezier(0.2,0.9,0.3,1.2),top 0.22s cubic-bezier(0.2,0.9,0.3,1.2),opacity 0.18s,transform 0.22s}
+  .dest-radial-item.out:disabled{opacity:.45;cursor:not-allowed}
   .dest-radial-item.out{opacity:1;transform:scale(1)}
   .dest-radial-item:hover{border-color:var(--accent);background:rgba(59,130,246,0.16)}
   .dest-radial-label{position:fixed;z-index:20001;transform:translate(-50%,-50%);font-size:10px;font-weight:600;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:10px;padding:2px 8px;opacity:0;transition:opacity 0.18s;pointer-events:none;white-space:nowrap}
@@ -2592,24 +2586,6 @@
 .delegated-filter-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
 .delegated-list{display:flex;flex-direction:column;gap:6px}
 .delegated-empty{padding:24px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--card);border:1px dashed var(--border);border-radius:8px}
-.delegated-card{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:8px;transition:border-color 0.12s;position:relative;overflow:hidden}
-.delegated-card:hover{border-color:var(--accent)}
-.delegated-card.done{opacity:0.55}
-/* Colored left edge driven by urgency score class (mirrors .repeat-resp-card). */
-.delegated-card::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--border)}
-.delegated-card.green::before{background:var(--green)}
-.delegated-card.blue::before{background:var(--accent-light)}
-.delegated-card.yellow::before{background:var(--amber)}
-.delegated-card.red::before{background:var(--red)}
-/* Urgency score badge (the creeping number), colored to match. */
-.delegated-card-score{width:32px;height:32px;border-radius:50%;border:3px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;font-variant-numeric:tabular-nums;background:var(--bg);flex-shrink:0;color:var(--text-muted)}
-.delegated-card-score.green{border-color:var(--green);color:var(--green)}
-.delegated-card-score.blue{border-color:var(--accent-light);color:var(--accent-light)}
-.delegated-card-score.yellow{border-color:var(--amber);color:var(--amber)}
-.delegated-card-score.red{border-color:var(--red);color:var(--red)}
-.delegated-card-score.done{border-color:var(--green);color:var(--green)}
-.delegated-card-score.dependency{border-radius:8px;border-width:1px;color:var(--amber);border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.10)}
-.delegated-card-score.dependency.ready{color:var(--green);border-color:rgba(34,197,94,.45);background:rgba(34,197,94,.10)}
 .task-dependency-pill{display:inline-flex;align-items:center;gap:4px;max-width:220px;padding:2px 7px;border-radius:999px;border:1px solid currentColor;background:transparent;font:inherit;font-size:9px;font-weight:800;line-height:1.35;cursor:pointer;vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background .12s,border-color .12s,color .12s}
 .task-dependency-pill.blocked{color:var(--amber);background:rgba(245,158,11,.10);border-color:rgba(245,158,11,.38)}
 .task-dependency-pill.unlocks{color:var(--accent-light);background:rgba(59,130,246,.10);border-color:rgba(96,165,250,.38)}
@@ -2629,21 +2605,12 @@ span.waiting-pill{cursor:default}
  * around the row, so a delegated row still reads as an ordinary row of work
  * (Drake, 2026-08-18). .waiting-row / .waiting-checkin-card / .cu-waiting-checkin
  * stay on as markers for the bar color and as JS/test hooks. */
-.delegated-card-body{flex:1;min-width:0}
-.delegated-card-title{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px}
-.delegated-card-link{font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border:1px solid var(--waiting-border);background:var(--waiting-bg);border-radius:999px;padding:1px 6px;color:var(--waiting-ink);flex-shrink:0}
 #delegated-blocked-count,details[open]>.tm-section-header #delegated-blocked-count{background:var(--waiting-bg);color:var(--waiting-ink)}
-.delegated-card-source{font-size:9px;font-weight:700;text-decoration:none;border:1px solid #93c5fd;border-radius:999px;padding:1px 6px;color:#60a5fa;flex-shrink:0}
-.delegated-card-source:hover{background:rgba(59,130,246,.12);text-decoration:none}
-.delegated-card-meta{display:flex;gap:10px;font-size:11px;color:var(--text-muted);margin-top:2px;flex-wrap:wrap}
-.delegated-card-when{font-variant-numeric:tabular-nums}
-.delegated-card-channel{text-transform:capitalize}
 /* Sidebar tools (New + filter chips) for the Delegated / Blocked section. */
 .delegated-sidebar-tools{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
 .delegated-sidebar-tools .delegated-filter-bar{margin-bottom:0;flex-wrap:wrap}
 .delegated-sidebar-tools .delegated-mini-btn{align-self:flex-start;font-size:11px;padding:5px 12px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer;white-space:nowrap}
 .delegated-sidebar-tools .delegated-mini-btn:hover{background:var(--accent-light)}
-.delegated-sidebar-list .delegated-card-actions button{font-size:10px;padding:3px 7px}
 
 /* ======== TRIAGE + UNSCHEDULED + WHENEVER DRAWER (whenever.js) ======== */
 /* A door scrolls its half to the top of the drawer, where the Task Manager's sticky
@@ -2685,25 +2652,13 @@ span.waiting-pill{cursor:default}
 .whenever-add button{min-height:36px;padding:0 14px;border:0;border-radius:8px;background:var(--queue-accent);color:var(--queue-on-accent);font:inherit;font-size:12px;font-weight:800;cursor:pointer}
 .whenever-add button:hover{filter:brightness(1.1)}
 .whenever-list{display:flex;flex-direction:column;gap:6px}
-.whenever-row:not(.it-list-item){display:flex;align-items:center;gap:10px;padding:8px 8px 8px 10px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--queue-accent);border-radius:8px;transition:border-color .2s,box-shadow .2s,opacity .2s}
 .whenever-row.is-picked{border-color:var(--queue-accent);box-shadow:0 0 0 2px var(--queue-soft)}
 .whenever-row.is-busy{opacity:.55}
-.whenever-check{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:1.5px solid var(--border);border-radius:50%;background:transparent;color:transparent;cursor:pointer;transition:border-color .12s,color .12s}
-.whenever-check:hover,.whenever-check:focus-visible{border-color:var(--queue-accent);color:var(--queue-accent)}
-.whenever-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
-.whenever-title{font-size:13px;font-weight:600;color:var(--text);overflow-wrap:anywhere}
-.whenever-dur{font-size:11px;color:var(--text-muted)}
-.whenever-now{flex-shrink:0;min-height:30px;padding:4px 10px;border:1px solid var(--queue-line);border-radius:6px;background:var(--queue-soft);color:var(--queue-ink);font:inherit;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}
-.whenever-now:hover:not(:disabled){filter:brightness(1.2)}
-.whenever-release{flex-shrink:0;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--text-muted);font-size:17px;line-height:1;cursor:pointer}
-.whenever-release:hover{background:rgba(255,255,255,0.06);color:var(--text)}
 .whenever-row button:disabled{cursor:progress}
 @media (max-width:760px){
   .untimed-sort button{min-height:36px;padding:0 12px}
   .whenever-pick{min-height:40px}
   .whenever-add input,.whenever-add select,.whenever-add button{min-height:44px}
-  .whenever-check,.whenever-release{width:40px;height:40px}
-  .whenever-now{min-height:40px;padding:4px 12px}
 }
 .resched-popover .resched-whenever{display:block;width:100%;margin-top:6px}
 /* Convert-to-Delegated affordance inside the reschedule popover. */
@@ -2715,21 +2670,7 @@ span.waiting-pill{cursor:default}
 .resched-popover .resched-time{display:flex;gap:6px;align-items:stretch}
 .resched-popover .resched-tool[data-tool=delegate]:hover{border-color:var(--waiting);color:var(--waiting-ink);background:var(--waiting-bg)}
 /* Urgency progress meter (mirrors .repeat-resp-meter). */
-.delegated-card-meter{height:5px;border-radius:999px;background:rgba(255,255,255,0.07);overflow:hidden;margin:7px 0 4px;border:1px solid rgba(255,255,255,0.05)}
-.delegated-card-meter span{display:block;height:100%;border-radius:inherit}
-.delegated-card-meter span.green{background:var(--green)}
-.delegated-card-meter span.blue{background:var(--accent-light)}
-.delegated-card-meter span.yellow{background:var(--amber)}
-.delegated-card-meter span.red{background:var(--red)}
-.delegated-card-actions{display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
-.delegated-card-actions button{font-size:10px;padding:3px 8px;border-radius:5px;background:var(--card);border:1px solid var(--border);color:var(--text-muted);cursor:pointer;transition:border-color 0.12s,color 0.12s}
-.delegated-card-actions button:hover{border-color:var(--accent);color:var(--accent)}
-.delegated-card-actions button[data-delegated-action="complete"]{border-color:rgba(34,197,94,.4);color:var(--green)}
-.delegated-card-actions button[data-delegated-action="complete"]:hover{border-color:var(--green);background:rgba(34,197,94,.1)}
-.delegated-card-actions button[data-delegated-action="delete"]:hover{border-color:var(--red);color:var(--red)}
-.delegated-card-actions .delegated-edit:hover{border-color:var(--accent);color:var(--accent)}
-.delegated-card-actions .delegated-delete:hover{border-color:var(--red);color:var(--red)}
-.delegated-card.delegated-card-target{border-color:var(--accent-light);box-shadow:0 0 0 3px rgba(96,165,250,.18)}
+.it-list-item.delegated-card-target{border-color:var(--accent-light);box-shadow:0 0 0 3px rgba(96,165,250,.18)}
 .tri-open-waiting,.schedule-triage-open-waiting{border:0;background:transparent;color:var(--waiting-ink);font:inherit;font-weight:700;cursor:pointer;padding:0;text-decoration:none}
 .tri-open-waiting:hover,.schedule-triage-open-waiting:hover{text-decoration:underline}
 
@@ -5805,27 +5746,6 @@ body:has(#tab-budget.active .rb-create) #dcc-launcher-btn{display:none}
 .waiting-checkin-error:empty{display:none}
 .waiting-checkin-note{white-space:pre-wrap;overflow-wrap:anywhere}
 .waiting-checkin-history{margin-top:12px;overflow-wrap:anywhere}
-/* Whenever tasks use the normal editor and nesting controls, with touch-safe targets. */
-.whenever-title{background:none;border:0;padding:0;text-align:left;cursor:pointer;font:inherit}
-.whenever-add-child,.whenever-collapse,.whenever-delete{border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text-muted);min-width:32px;min-height:32px;cursor:pointer}
-.whenever-title:focus-visible,.whenever-row button:focus-visible{outline:2px solid var(--queue-accent);outline-offset:3px}
-@media(max-width:760px){.whenever-row:not(.it-list-item){flex-wrap:wrap}.whenever-main{flex-basis:calc(100% - 120px)}.whenever-row button{min-height:44px}.whenever-add-child,.whenever-collapse,.whenever-delete,.whenever-check,.whenever-release{min-width:44px}}
-
-/* Share the itinerary grid; the legacy compact Whenever flex row must not override it. */
-.whenever-row.it-list-item{display:grid;border-left:3px solid var(--queue-accent)}
-.whenever-row.it-list-item .it-list-actions{opacity:1;visibility:visible}
-@media(max-width:760px){
-  .whenever-row.it-list-item{grid-template-columns:44px minmax(0,1fr) !important}
-  .whenever-row.it-list-item .it-list-actions{grid-column:2 !important;display:flex !important;flex-direction:row !important;flex-wrap:wrap;justify-content:flex-start !important;grid-template-columns:none !important;grid-auto-rows:auto !important}
-  .whenever-row.it-list-item .it-list-actions .btn-task-radial,.whenever-row.it-list-item .it-list-actions .btn-del-task{width:44px;height:44px}
-  .whenever-row.it-list-item .it-list-meta{display:flex !important;flex-wrap:wrap}
-  .whenever-row.it-list-item .ttl{white-space:normal}
-  .whenever-row.it-list-item .btn-add-menu,.whenever-row.it-list-item .wrap-collapse{min-width:44px;min-height:44px}
-}
-
-@media(max-width:760px){
-  .whenever-row.it-list-item .it-list-meta > span,.whenever-row.it-list-item .it-list-meta > .btn-schedule,.whenever-row.it-list-item .it-list-meta > .detail-action-link{display:inline-flex}
-}
 
 /* Task actions form a complete ring; captions stay inside each touch target. */
 .dest-radial-circle-item{flex-direction:column;gap:2px;padding:5px;font-size:16px;line-height:1}

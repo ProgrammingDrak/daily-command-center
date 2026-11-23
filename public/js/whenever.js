@@ -222,36 +222,12 @@
     return counts.open;
   }
 
-  const CHECK_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>';
-
-  function rowHtml(t,node) {
-    node=node||{depth:0,hasKids:false};
-    const title = esc(t.title || "Untitled task");
-    const id = esc(t.id);
-    const pending = busy.has(t.id);
-    return '<div class="whenever-row' + (pending ? " is-busy" : "") + '" data-whenever-id="' + id + '" style="margin-left:' + Math.min(node.depth,6)*14 + 'px">' +
-      '<button type="button" class="whenever-check" data-whenever-action="done" data-whenever-id="' + id + '"' +
-        ' aria-label="Mark ' + title + ' done" title="Done, log it on today"' + (pending ? " disabled" : "") + '>' + CHECK_SVG + '</button>' +
-      (node.hasKids?'<button type="button" class="whenever-collapse" data-whenever-action="collapse" data-whenever-id="'+id+'" aria-label="'+(node.collapsed?'Expand':'Collapse')+' '+title+'" aria-expanded="'+(!node.collapsed)+'">'+(node.collapsed?'▸':'▾')+'</button>':'')+
-      '<div class="whenever-main">' +
-        '<button type="button" class="whenever-title" data-whenever-action="details" data-whenever-id="'+id+'" aria-label="Edit '+title+'">' + title + '</button>' +
-        '<span class="whenever-dur">' + esc(t.subtaskOf?'Subtask':fmtDur(durationOf(t))) + '</span>' +
-      '</div>' +
-      '<button type="button" class="whenever-add-child" data-whenever-action="add-child" data-whenever-id="'+id+'" aria-label="Add subtask or nested task to '+title+'">+</button>' +
-      '<button type="button" class="whenever-delete" data-whenever-action="delete" data-whenever-id="'+id+'" aria-label="Delete '+title+'">Delete</button>' +
-      '<button type="button" class="whenever-now" data-whenever-action="now" data-whenever-id="' + id + '"' +
-        ' title="Put it on today at your next free slot"' + (pending ? " disabled" : "") + '>Do it now</button>' +
-      '<button type="button" class="whenever-release" data-whenever-action="release" data-whenever-id="' + id + '"' +
-        ' aria-label="Move ' + title + ' to Someday" title="Move to Someday">&times;</button>' +
-    '</div>';
-  }
-
   // Production uses the same task-row component as normal tasks and subtasks.
   function sharedRow(t,node,index){
     const id=t.id,title=esc(t.title||'Task'),pending=busy.has((TaskModel.hierarchyRoot(id,null,index)||t).id);
     const source=window.DCC&&window.DCC.taskSourceUrl?window.DCC.taskSourceUrl(t):'';
     const safeSource=window.DCC&&window.DCC.TaskSources?window.DCC.TaskSources.safeUrl(source):'';
-    const meta='<span>'+(node.rel==='subtask'?'Subtask':node.depth?'Nested task':'Whenever')+'</span>'+
+    const meta='<span class="it-list-context">'+(node.rel==='subtask'?'Subtask':node.depth?'Nested task':'Whenever')+'</span>'+
       (typeof taskTagsChipHtml==='function'?taskTagsChipHtml(t):'')+
       (safeSource?'<a class="detail-action-link" href="'+esc(safeSource)+'" target="_blank" rel="noopener noreferrer">Open source ↗</a>':'');
     const el=window.renderItineraryListRow(t,{
@@ -259,20 +235,13 @@
       barColor:'var(--queue-accent)',metaHtml:meta,
       completionTitle:'Complete this task; its tree moves to today',
       collapseHtml:node.hasKids?'<button class="wrap-collapse" aria-label="'+(node.collapsed?'Expand':'Collapse')+' '+title+'" aria-expanded="'+(!node.collapsed)+'">'+(node.collapsed?'▸':'▾')+'</button>':'',
-      actionsBeforeHtml:'<button type="button" class="whenever-now" data-whenever-action="now" data-whenever-id="'+esc(id)+'"'+(pending?' disabled':'')+'>Do it now</button>',
       durationLabel:fmtDur(durationOf(t)),onDuration:!t.subtaskOf&&typeof openDurPopover==='function'?button=>openDurPopover(t,button):null,
       onComplete:()=>markDone(id),onCompleteWithNotes:()=>typeof openAddModal==='function'&&openAddModal(id,t.title),
       onSchedule:button=>schedulePicker(id,button),onAdd:button=>typeof openTaskAdd==='function'&&openTaskAdd(id,button),
       onOpen:()=>typeof openAddModal==='function'&&openAddModal(id,t.title),
       onDelete:()=>typeof openDeleteConfirm==='function'&&openDeleteConfirm(id),deleteLabel:'Delete task',deleteTitle:'Delete task and its subtasks',
       onCollapse:()=>{if(collapsed.has(id))collapsed.delete(id);else collapsed.add(id);build();},
-      onRadial:button=>{if(typeof openRadialMenu==='function')openRadialMenu(button,[
-        {icon:'✎',label:'Task details',onPick:()=>openAddModal(id,t.title)},
-        {icon:'+',label:'Add inside',onPick:()=>openTaskAdd(id,button)},
-        {icon:'↳',label:'Nest under…',onPick:()=>typeof openMakeSubtaskOf==='function'&&openMakeSubtaskOf(id,button)},
-        {icon:'📅',label:'Schedule…',onPick:()=>schedulePicker(id,button)},
-        {icon:'📦',label:'Someday',onPick:()=>release(id)}
-      ],{a0:90,a1:270,r:140,labelStagger:true,clampY:true});},
+      onRadial:button=>window.openTaskRadial(t,button),
       draggable:!pending,gripTitle:'Drag onto another Whenever task to nest it; Shift makes a subtask',
       onDragStart:e=>{e.dataTransfer.setData('text/dcc-whenever',id);e.dataTransfer.effectAllowed='move';},
       onDragOver:e=>{if(Array.from(e.dataTransfer.types||[]).includes('text/dcc-whenever'))e.preventDefault();},
@@ -305,13 +274,12 @@
     const list = document.getElementById("whenever-list");
     if (!list) return;
     keepFocus(list, () => {
-      if(items.length&&typeof window.renderItineraryListRow==='function'){
+      if(items.length){
         const index=new Map(items.map(item=>[item.id,item]));
-        list.replaceChildren(...nodes.map(node=>sharedRow(node.ev,node,index)));return;
+        list.replaceChildren(...nodes.map(node=>sharedRow(node.ev,node,index)));
+      }else{
+        list.innerHTML = '<div class="delegated-empty whenever-empty">Nothing here. Add the chores with no set time, like laundry or the mail.</div>';
       }
-      list.innerHTML = items.length
-        ? nodes.map(node=>rowHtml(node.ev,node)).join("")
-        : '<div class="delegated-empty whenever-empty">Nothing here. Add the chores with no set time, like laundry or the mail.</div>';
     });
   }
 

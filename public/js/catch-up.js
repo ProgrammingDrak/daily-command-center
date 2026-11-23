@@ -124,13 +124,9 @@
       deleteLabel: opts.deleteLabel || "Drop task",
       deleteTitle: opts.deleteLabel || "Drop task",
       onOpen: opts.onDetails,
-      onRadial: trigger => {
-        const actions = [];
-        if (schedule) actions.push({ icon: "📅", label: "Schedule…", onPick: () => schedule(trigger) });
-        if (opts.onToday) actions.push({ icon: "📅", label: "Today", onPick: () => opts.onToday(trigger) });
-        actions.push({ icon: "↗", label: "Details", onPick: opts.onDetails });
-        window.openRadialMenu(trigger, actions, { a0: 90, a1: 270, r: 140, labelStagger: true, clampY: true });
-      }
+      onRadial: opts.onTaskActions || (trigger => window.openTaskRadial(ev, trigger, {
+        unavailableReason: "Schedule this incoming item before changing its task settings."
+      }))
     });
     const title = el.querySelector(".ttl");
     title.textContent = ev.title;
@@ -223,7 +219,7 @@
     overlay.className = "carryover-overlay";
     overlay.id = "catchup-overlay";
     overlay.innerHTML =
-      '<div class="carryover" role="region" aria-labelledby="catchup-title">' +
+      '<div class="carryover" role="dialog" aria-modal="true" aria-labelledby="catchup-title">' +
         '<div class="carryover-hdr">' +
           '<h3 id="catchup-title">Loose Ends</h3>' +
           '<button class="pvb-close" id="catchup-close" aria-label="Close Loose Ends">&times;</button>' +
@@ -387,7 +383,7 @@
       const el = reviewRow(ev, {
         extraClass: "cu-triage-row",
         barColor: "var(--amber)",
-        metaHtml: '<span>' + esc(triageMeta(item)) +
+        metaHtml: '<span class="it-list-context">' + esc(triageMeta(item)) +
           (href ? ' · <a class="cu-tri-link" href="' + esc(href) + '" target="_blank" rel="noopener">Open</a>' : '') + '</span>',
         detailId,
         onComplete: () => runTri(async () => typeof dismissTriage === "function" && !!(await dismissTriage(item.id, "Already done", false))),

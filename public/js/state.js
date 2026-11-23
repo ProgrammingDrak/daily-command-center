@@ -1363,11 +1363,17 @@ async function moveTaskToToday(id){
 // task on that day as an anchor, and Earliest free), so placement is chosen
 // the same way app-wide. Falls back to a direct auto-slot move when the picker
 // isn't available (e.g. embeds without the overlay markup).
-async function moveTaskToUnplanned(id){
-  const ev=scheduled.find(task=>task.id===id);
+async function moveTaskToUnplanned(id,opts){
+  const ev=opts?.task||scheduled.find(task=>task.id===id);
   if(!ev||ev._locked||isDone(ev))return false;
-  const fromDate=viewDate,targetDate=viewDate,row=_findTaskBlockForDate(id,fromDate,ev);
+  const row=window.DCCWorkSessions?.blockFor?.(ev)||_findTaskBlockForDate(id,viewDate,ev);
   if(!row||!window.blockStore)return false;
+  if(ev._dateless){
+    try{await window.blockStore.rescheduleBlock(row.id,null,{placement:{kind:"whenever",stage:"Backlog"}});}
+    catch(error){showToast(error.message,"error");return false;}
+    refoldTaskStateFromBlockCache();render();return true;
+  }
+  const fromDate=row.date||viewDate,targetDate=fromDate;
   // Remember verified support so disconnected moves can enter the normal write queue.
   let supported=false;
   try{supported=sessionStorage.getItem("dcc-unplanned-placement")==="1";}catch(_error){}
@@ -1380,7 +1386,8 @@ async function moveTaskToUnplanned(id){
   const durations={};
   // Reuse the existing task-tree projection to preserve effective UI durations.
   const tree=DCC.TaskModel.selectTree(scheduled,{pool:scheduled});let depth=null;
-  tree.forEach(node=>{if(node.ev.id===id)depth=node.depth;else if(depth!==null&&node.depth<=depth)depth=null;if(depth!==null){const block=_findTaskBlockForDate(node.ev.id,fromDate,node.ev);if(block){const minutes=dur(node.ev);durations[block.id]=Number.isFinite(minutes)&&minutes>=0?minutes:_positiveDuration(node.ev.duration,30);}}});
+  if(fromDate===viewDate)tree.forEach(node=>{if(node.ev.id===id)depth=node.depth;else if(depth!==null&&node.depth<=depth)depth=null;if(depth!==null){const block=_findTaskBlockForDate(node.ev.id,fromDate,node.ev);if(block){const minutes=dur(node.ev);durations[block.id]=Number.isFinite(minutes)&&minutes>=0?minutes:_positiveDuration(node.ev.duration,30);}}});
+  if(fromDate!==viewDate){const minutes=dur(ev);if(Number.isFinite(minutes)&&minutes>=0)durations[row.id]=minutes;}
   try{
     await window.blockStore.rescheduleBlock(row.id,targetDate,{fromDate,placement:{kind:"unplanned",durations}});
   }catch(error){showToast(error.permanent?(error.message||"Move rejected"):"Move queued. It will retry when connected.",error.permanent?"error":"info");return false;}
@@ -1484,9 +1491,17 @@ function moveScheduledTaskToSideProject(id){
 // The identity that survives is the point: `local_id` is what the ledger's client-side
 // credit key and every `subtaskOf` link is written against, and the block id is what
 // `parent_id` and the server-side credit key use. Minting a new id orphaned both.
-async function _moveTaskToBacklogStage(id,stage,toastMsg){
-  const ev=scheduled.find(e=>e.id===id);
+async function _moveTaskToBacklogStage(id,stage,toastMsg,opts){
+  const ev=opts?.task||scheduled.find(e=>e.id===id);
   if(!ev)return;
+  if(opts?.task&&!scheduled.includes(ev)){
+    const row=window.DCCWorkSessions?.blockFor?.(ev);
+    if(!row||!window.blockStore?.rescheduleBlock)return false;
+    try{await window.blockStore.rescheduleBlock(row.id,null,{placement:{kind:"whenever",stage}});}
+    catch(error){showToast(error.message,"error");return false;}
+    if(typeof refoldTaskStateFromBlockCache==="function")refoldTaskStateFromBlockCache();
+    render();showToast(toastMsg,"success");return true;
+  }
   // The block id, not the ev id: unscheduleRow re-dates a ROW. _findTaskBlockForDate
   // resolves it the same way the mover does, including its ev._blockId branch, so a
   // task whose local_id is ambiguous (the prod restore has 28 such collision groups)
@@ -1566,29 +1581,33 @@ async function _moveTaskToBacklogStage(id,stage,toastMsg){
   render();
 }
 
-function moveTaskToBacklog(id){return moveTaskToTaskPool(id,"Backlog");}
-async function moveTaskToWhenever(id){return moveTaskToTaskPool(id,"Whenever");}
+function moveTaskToBacklog(id,opts){return moveTaskToTaskPool(id,"Backlog",opts);}
+async function moveTaskToWhenever(id,opts){return moveTaskToTaskPool(id,"Whenever",opts);}
 
 // Both undated collections use the same subtree reschedule transaction.
-async function moveTaskToTaskPool(id,stage){
+async function moveTaskToTaskPool(id,stage,opts){
   const destination=stage==="Backlog"?"Someday":"Whenever";
   const anchor=typeof taskAnchorById==='function'?taskAnchorById(id):null;
-  const ev=(anchor&&anchor.ev)||scheduled.find(task=>task.id===id);
+  const ev=opts?.task||(anchor&&anchor.ev)||scheduled.find(task=>task.id===id);
   if(!ev)return false;
-  const row=(anchor&&anchor.blockId)?await _rowForDateWrite(anchor.blockId):_findTaskBlockForDate(id,_viewedDateStr(),ev);
+  const row=window.DCCWorkSessions?.blockFor?.(ev)||((anchor&&anchor.blockId)?await _rowForDateWrite(anchor.blockId):_findTaskBlockForDate(id,_viewedDateStr(),ev));
   if(row&&window.blockStore&&typeof window.blockStore.rescheduleBlock==='function'){
     const durations={};
-    for(const sid of _subtreeIdsOf(id)){
+    if(row.date===_viewedDateStr())for(const sid of _subtreeIdsOf(id)){
       const member=scheduled.find(task=>task.id===sid);
       const memberRow=member&&_findTaskBlockForDate(sid,_viewedDateStr(),member);
       const minutes=member&&typeof dur==='function'?dur(member):null;
       if(memberRow&&Number.isFinite(minutes)&&minutes>=0)durations[memberRow.id]=minutes;
     }
+    if(row.date!==_viewedDateStr()){
+      const minutes=typeof dur==='function'?dur(ev):null;
+      if(Number.isFinite(minutes)&&minutes>=0)durations[row.id]=minutes;
+    }
     try{await window.blockStore.rescheduleBlock(row.id,null,{placement:{kind:'whenever',durations,...(stage==="Backlog"?{stage}:{})}});}
     catch(error){if(typeof showToast==='function')showToast(error.message,'error');return false;}
   }else{
     if(typeof childrenOf==='function'&&childrenOf(id,scheduled).length){if(typeof showToast==='function')showToast('Save this task before moving its tree','info');return false;}
-    await _moveTaskToBacklogStage(id,stage,'Moved to '+destination);
+    await _moveTaskToBacklogStage(id,stage,'Moved to '+destination,opts);
   }
   if(typeof refoldTaskStateFromBlockCache==='function'){refoldTaskStateFromBlockCache();render();}
   return true;
@@ -1599,10 +1618,10 @@ async function moveTaskToTaskPool(id,stage){
 // original scheduled task is removed only once the blocked item is saved (see
 // removeTaskForConversion, called from delegated.js saveDelegatedItem) so a
 // cancelled convert leaves the task untouched.
-function convertTaskToDelegated(id){
-  const ev=scheduled.find(e=>e.id===id);
+function convertTaskToDelegated(id,opts){
+  const ev=opts?.task||scheduled.find(e=>e.id===id);
   if(!ev)return;
-  if(typeof openDelegatedFromTask==="function")openDelegatedFromTask({title:ev.title,durMin:dur(ev)||30,sourceTaskId:id});
+  if(typeof openDelegatedFromTask==="function")openDelegatedFromTask({title:ev.title,durMin:dur(ev)||30,sourceTaskId:ev._blockId||id});
   else if(typeof showToast==="function")showToast("Delegated / Blocked is still loading. Try again in a moment.","info");
 }
 
