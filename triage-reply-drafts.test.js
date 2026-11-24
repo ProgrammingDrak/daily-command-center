@@ -101,6 +101,20 @@ test("authenticated intake, real Postgres store and existing block readback pres
       assert.equal((await post(body)).status,409,JSON.stringify(patch));
       await pool.query("UPDATE blocks SET properties=$1 WHERE id='task-fixture'",[row.properties]);
     }
+    const parentProps={kind:"task",type:"task",title:"Owner moved this under Unplanned",status:"open",publicVisibility:"private"};
+    await pool.query("INSERT INTO blocks(id,type,user_id,workspace_id,properties) VALUES('unplanned-parent','block',7,'ws-owned',$1)",[parentProps]);
+    const childProps={...row.properties,subtaskOf:"unplanned-parent"};
+    await pool.query("UPDATE blocks SET parent_id='unplanned-parent',properties=$1 WHERE id='task-fixture'",[childProps]);
+    const hierarchy=(await pool.query("SELECT * FROM blocks WHERE id IN ('unplanned-parent','task-fixture')")).rows;
+    const TM=require("./public/js/task-model"),TB=require("./public/js/time-blocks");
+    const realGroups=TB.groupItineraryTree(TM.selectTree(hierarchy.map(block=>TM.fromBlock(block))),[]);
+    assert.ok(realGroups.find(group=>group.block.id==="unplanned").nodes.some(node=>node.ev._blockId==="task-fixture"));
+    assert.equal(realGroups.find(group=>group.block.id==="triage").nodes.length,0);
+    const hierarchyBefore=(await pool.query("SELECT * FROM blocks ORDER BY id")).rows;
+    assert.equal((await post({...body,dry_run:true})).status,409,"Nested source is no longer a standalone Triage task");
+    assert.equal((await post(body)).status,409);
+    assert.deepEqual((await pool.query("SELECT * FROM blocks ORDER BY id")).rows,hierarchyBefore);assert.equal(events.length,1);
+    await pool.query("UPDATE blocks SET parent_id=NULL,properties=$1 WHERE id='task-fixture'",[row.properties]);
     await pool.query("UPDATE blocks SET deleted_at=now() WHERE id='task-fixture'");assert.equal((await post(body)).status,404);
     await pool.query("UPDATE blocks SET deleted_at=NULL,date='2026-11-23' WHERE id='task-fixture'");assert.equal((await post(body)).status,409);
     assert.equal(events.length,1);

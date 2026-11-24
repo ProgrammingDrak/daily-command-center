@@ -46,7 +46,10 @@ module.exports = function createTriageReplyDraftStore({ pool }) {
       const props = row.properties || {}, context = props.triageContext || {};
       if (row.type !== "block" || props.kind !== "task" || row.date != null || !props.triageBlock || props.publicVisibility !== "private" ||
           props.done || props.completedAt || ["done", "completed", "deleted", "cancelled"].includes(props.status)) fail(409, "Task is no longer open in private Triage");
-      const groups = TimeBlocks.groupItineraryTree([{ ev: TaskModel.fromBlock(row), depth: 0 }], []);
+      // An isolated node cannot establish the real lane of a nested task.
+    // Hold these for owner review instead of treating a moved child as a root.
+    if (row.parent_id || props.subtaskOf || props.wrapId) fail(409, "Task is no longer a standalone Triage root");
+    const groups = TimeBlocks.groupItineraryTree([{ ev: TaskModel.fromBlock(row), depth: 0 }], []);
       if (!groups.find(group => group.block.id === TimeBlocks.TRIAGE_BLOCK.id).nodes.length) fail(409, "Task is outside the Triage lane");
       const source = props.triageSourceRef || context.source_ref || context.source_url || context.link || props.source_id;
       if (props.triageId !== draft.triage_id || source !== draft.source_ref) fail(409, "Reply source does not match the task");
