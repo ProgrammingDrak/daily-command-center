@@ -1,7 +1,7 @@
 {
   "name": "daily-command-center",
   "version": "1.0.0",
-  "description": "Drake's Daily Command Center \u2014 standalone Express dashboard",
+  "description": "Drake's Daily Command Center — standalone Express dashboard",
   "main": "server.js",
   "scripts": {
     "check:db": "node scripts/check-db.js",
