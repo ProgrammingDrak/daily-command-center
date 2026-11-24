@@ -911,7 +911,7 @@ function suggestedCommuteOrigin(blockId){
 function _datelessTriageNodes(items,waitingRows,options){
   const {TaskModel,TimeBlocks}=DCC;
   const privateDateless=items.filter(ev=>ev&&ev._dateless&&ev.untimed&&ev.publicVisibility==="private"
-    &&!["done","deleted","archived"].includes(ev.status));
+    &&!ev.completedAt&&!["done","completed","deleted","archived","cancelled"].includes(ev.status));
   if(!privateDateless.length)return [];
   const candidates=TaskModel.selectActive(TaskModel.selectVisible(privateDateless));
   const parked=TaskModel.waitingParkedIds(candidates.concat(waitingRows),waitingRows);

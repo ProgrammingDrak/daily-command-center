@@ -40,6 +40,8 @@ test('drawer model projects only open private date-free reviewed trees without p
     task('public', {...marker, publicVisibility:'public'}),
     task('deleted', marker), task('hidden', marker),
     task('finished', {...marker, status:'done'}), task('archived', {...marker, status:'archived'}),
+    task('completed', {...marker, status:'completed'}), task('cancelled', {...marker, status:'cancelled'}),
+    task('completed-at', {...marker, completedAt:'2026-11-23T10:00:00Z'}),
     task('parked', {...marker, dependencyWaitingItemId:'active-waiting'}),
     task('responsibility', {...marker, responsibilityId:'r'}),
     task('waiting', {...marker, triageContext:{waiting_item_id:'w'}}),
