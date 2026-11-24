@@ -427,7 +427,7 @@
       const d = drawer();
       if(!d?.classList.contains("open")) return;
       if(e.target.closest("#tasks-drawer .side-drawer-body")) return;
-      if(e.target.closest(".sidecar-tabs,.tlb-overlay,.resched-popover")) return;
+      if(e.target.closest(".sidecar-tabs,.tlb-overlay,.resched-popover,.toast-container")) return;
       if(e.target.closest("#dcc-launcher,#dcc-scrim")) return;
       closeTasks();
     });

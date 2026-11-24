@@ -85,3 +85,19 @@ test('drawer dismissal defers pointer and keyboard events while the delete dialo
     assert.equal(trapped,0,event+' must not steal modal focus');
   }
 });
+
+test('Undo toast pointerdown preserves the collection and does not steal the action click',()=>{
+  const drawer=fs.readFileSync(require.resolve('./public/js/side-drawers.js'),'utf8');
+  const start=drawer.indexOf('    document.addEventListener("pointerdown", e => {');
+  const end=drawer.indexOf('\n    });',start);
+  let handler,closed=0;
+  vm.runInNewContext(drawer.slice(start,end)+'\n    });',{
+    document:{addEventListener:(_name,fn)=>handler=fn},
+    window:{DCC:{overlay:{activeBlocking:null,eventInLayerAbove:()=>false}}},
+    drawer:()=>({classList:{contains:()=>true}}),closeTasks:()=>closed++,
+  });
+  handler({target:{closest:selector=>selector.split(',').includes('.toast-container')?{}:null}});
+  assert.equal(closed,0,'Undo must keep the drawer and its filter intact');
+  handler({target:{closest:()=>null}});
+  assert.equal(closed,1,'ordinary outside clicks still dismiss the drawer');
+});
