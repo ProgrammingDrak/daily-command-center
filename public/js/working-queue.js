@@ -544,11 +544,19 @@
     return {task,ids,date,versions};
   }
   let openingDelete=false;
-  async function openDelete(id,opener){
+  async function openDelete(id,opener,options={}){
     if(openingDelete)return;
     openingDelete=true;
     try {
-      const anchor=await prepareTask(id);
+      const prepare=async()=>{
+        assertActionAccount();
+        if(window.blockStore?.hasPendingWrites?.())throw new Error('Wait for task edits to finish saving.');
+        const anchor=await (options.resolveAnchor?options.resolveAnchor():prepareTask(id));
+        assertActionAccount();
+        if(!anchor||anchor.blockId!==id)throw new Error('This task is no longer available. Refresh and try again.');
+        return anchor;
+      };
+      const anchor=await prepare();
       const preview=await deletionPreview(anchor);
       if(preview.task.repeatMode==='scheduled'&&window.openScheduledOccurrenceActions){
         await window.openScheduledOccurrenceActions(preview.task);
@@ -559,14 +567,14 @@
       const body=form('<p>Delete <strong>'+esc(preview.task.title)+'</strong>'+consequence+' from DCC?</p><p>Undo is available after deleting.</p>');
       let busy=false;
       const dialog=DCC.overlay.open({kind:'modal',title:'Delete task',body,anchor:opener,canClose:()=>!busy,
-        returnFocus:()=>document.querySelector('[data-queue-id="'+CSS.escape(id)+'"] [data-queue-action="break-options"]')
+        returnFocus:options.returnFocus||(()=>document.querySelector('[data-queue-id="'+CSS.escape(id)+'"] [data-queue-action="break-options"]')
           ||document.querySelector('[data-queue-action="delete"][data-task-id="'+CSS.escape(id)+'"]')
-          ||document.querySelector('[data-queue-action="add"]'),
+          ||document.querySelector('[data-queue-action="add"]')),
         actions:[{label:'Cancel'},{label:'Delete task',destructive:true,onClick:async()=>{
           if(busy)return false;
           busy=true;
           try{
-            const current=await deletionPreview(await prepareTask(id));
+            const current=await deletionPreview(await prepare());
             if(current.date!==preview.date||current.task.title!==preview.task.title||current.task.repeatMode!==preview.task.repeatMode||
                 JSON.stringify(current.ids)!==JSON.stringify(preview.ids)){
               throw new Error('This task or its nested tasks changed. Reopen Delete task to review.');
@@ -574,6 +582,7 @@
             const result=await window.deleteQueueTaskWithUndo({...current.task,date:current.date},current.ids,current.versions);
             if(!result?.ok&&!result?.buffered)throw new Error(result?.error?.message||'Could not confirm deletion.');
             invalidate();
+            await options.onSettled?.();
             return true;
           }catch(error){
             body.querySelector('[role=status]').textContent=error.message;
@@ -988,7 +997,7 @@
     const result=await send(envelope('undo-completion',{taskId:receipt.taskId,expectedRevision:receipt.expectedRevision,undoEventId:receipt.sourceEventId}));
     assertActionAccount();return result;
   }
-  window.DCCWorkingQueue={performTaskAction,openTaskOutcome,undoCompletion,syncState,addTask,render,refresh,invalidate,tick,activate,send,taskAnchor,taskPool,refreshTaskContext,rememberTaskContext,openBlocked,isBlocked,getState:()=>sameAccount()?state:emptyState};
+  window.DCCWorkingQueue={openDelete,performTaskAction,openTaskOutcome,undoCompletion,syncState,addTask,render,refresh,invalidate,tick,activate,send,taskAnchor,taskPool,refreshTaskContext,rememberTaskContext,openBlocked,isBlocked,getState:()=>sameAccount()?state:emptyState};
   // Keep the former rotation navigation entry point. Floating workspace focus()
   // must be migrated to the shared coordinator when that separate feature lands.
   importLegacyReview();

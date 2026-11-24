@@ -410,6 +410,7 @@
     }
 
     document.addEventListener("keydown", e => {
+      if(window.DCC?.overlay?.activeBlocking) return;
       if(window.DCC?.overlay?.layerAboveOpen()) return;
       const d = drawer();
       if(e.target.closest?.(".tlb-overlay,.resched-popover")) return;
@@ -421,6 +422,7 @@
     });
 
     document.addEventListener("pointerdown", e => {
+      if(window.DCC?.overlay?.activeBlocking) return;
       if(window.DCC?.overlay?.eventInLayerAbove(e)) return;
       const d = drawer();
       if(!d?.classList.contains("open")) return;
