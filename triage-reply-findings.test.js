@@ -1,4 +1,6 @@
 const test=require("node:test"),assert=require("node:assert/strict"),fs=require("node:fs");
+const {execFile}=require("node:child_process"),{promisify}=require("node:util");
+const exec=promisify(execFile);
 const {validate}=require("./triage-reply-findings");
 const SOURCE="slack:mention:C123TEST:1795453462.467919";
 const REF="https://cleverrealestate.slack.com/archives/C123TEST/p1795453462467919";
@@ -25,23 +27,26 @@ test("public handler atomically creates a private Triage task with its researche
   const db=require("./db"),{resolveOwnerStrict}=require("./middleware/resolve-owner");const app=express(),events=[];
   app.use(express.json());app.use(session({secret:"disposable-finding-fixture-only",resave:false,saveUninitialized:false}));
   app.post("/__fixture/login",(req,res)=>{req.session.userId=7;req.session.workspace="ws-owned";res.json({ok:true});});
-  app.use((req,res,next)=>{if(!req.session.userId)return res.status(401).json({error:"Not authenticated"});req.workspaceId=req.session.workspace;next();});
+  app.use(async(req,res,next)=>{if(req.headers.authorization){try{req.dccServiceAuth=await require("./lib/sweep-triage").authenticate(req.headers.authorization,async()=>false,{SECRET_SWEEP_SUITE_TOKEN:"synthetic-sweep",DCC_SERVICE_USER_ID:"7",DCC_SERVICE_WORKSPACE_ID:"ws-owned"});}catch(e){return res.status(e.statusCode).json({error:e.message});}req.workspaceId=req.dccServiceAuth.workspaceId;return next();}if(!req.session.userId)return res.status(401).json({error:"Not authenticated"});req.workspaceId=req.session.workspace;next();});
   const ctx={pool,blockDB:db,resolveOwnerStrict,broadcast:(...args)=>events.push(args),crypto:require("node:crypto"),getTodayStr:()=>"2026-11-23",isValidDate:()=>true,
    // Tripwires: the new intake must never call any outward source synchronization.
    syncSlackTaskReactions:()=>{throw Error("Unexpected external Slack action");},materializeScrapedSlackItems:()=>{throw Error("Unexpected legacy outward path");}};
   require("./routes/dcc")(app,ctx);require("./routes/blocks")(app,ctx);
   server=http.createServer(app);await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));const base=`http://127.0.0.1:${server.address().port}`;
   const login=await fetch(base+"/__fixture/login",{method:"POST"}),cookie=login.headers.get("set-cookie").split(";")[0];
-  const request=async(path,body,authed=true)=>{const r=await fetch(base+path,{method:body?"POST":"GET",headers:{...(authed?{cookie}:{}),"content-type":"application/json","x-user-id":"99","x-workspace-id":"ws-foreign"},...(body?{body:JSON.stringify(body)}:{})});return{status:r.status,body:await r.json()};};
-  const post=body=>request("/api/dcc/triage-check/ingest",body);const body={packet:{reply_findings:[finding()]}};
+  const request=async(path,body,authed=true,sweep=false)=>{const r=await fetch(base+path,{method:body?"POST":"GET",headers:{...(authed?{cookie}:{}),...(sweep?{authorization:"Bearer synthetic-sweep"}:{}),"content-type":"application/json","x-user-id":"99","x-workspace-id":"ws-foreign"},...(body?{body:JSON.stringify(body)}:{})});return{status:r.status,body:await r.json()};};
+  const post=body=>request("/api/dcc/triage-check/ingest",body,false,true);const body={packet:{reply_findings:[finding()]}};
   assert.equal((await request("/api/dcc/triage-check/ingest",body,false)).status,401);
+  assert.equal((await request("/api/dcc/triage-check/ingest",body,true)).status,403);
   const preview=await post({...body,dry_run:true});assert.equal(preview.status,200);assert.equal(preview.body.status,"dry_run");
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM blocks")).rows[0].n,0);assert.equal((await pool.query("SELECT count(*)::int AS n FROM operations")).rows[0].n,0);assert.equal(events.length,0);
   const published=await post(body);assert.equal(published.status,200);assert.equal(published.body.status,"merged");assert.deepEqual(published.body.owner,{userId:7,workspaceId:"ws-owned"});assert.deepEqual(published.body.source_ids,[SOURCE]);assert.equal(published.body.task_ids.length,1);
   const id=published.body.task_ids[0];assert.ok(id);const read=await request("/api/blocks/"+id);assert.equal(read.status,200);const row=read.body;
-  assert.equal(row.workspace_id,"ws-owned");assert.equal(row.user_id,7);assert.equal(row.date,null);assert.equal(row.properties.publicVisibility,"private");assert.equal(row.properties.triageBlock,true);assert.equal(row.properties.status,"open");
+  assert.equal(row.workspace_id,"ws-owned");assert.equal(row.user_id,7);assert.equal(row.date,null);assert.equal(row.properties.publicVisibility,"private");assert.equal(row.properties.triageBlock,true);assert.equal(row.properties.status,"open");assert.equal(row.properties.sweepTriage.origin,"automated_sweep");assert.equal(row.properties.sweepTriage.disposition,"pending");
   assert.equal(row.properties.triageId,SOURCE);assert.equal(row.properties.slack_thread_ts,body.packet.reply_findings[0].thread_id);assert.equal(row.properties.triageContext.thread_id,body.packet.reply_findings[0].thread_id);assert.equal(row.properties.triageSourceRef,REF);assert.equal(row.properties.triageContext.draft_preview,body.packet.reply_findings[0].draft_preview);
-  const model=require("./public/js/task-model").fromBlock(row),groups=require("./public/js/time-blocks").groupItineraryTree([{ev:model,depth:0}],[]);
+  const TM=require("./public/js/task-model");
+  assert.equal(TM.selectSweepTriage([TM.fromBlock(row)],{isDone:()=>false,isDeleted:()=>false,trivialFlags:{}}).length,1);
+  const model=TM.fromBlock(row),groups=require("./public/js/time-blocks").groupItineraryTree([{ev:model,depth:0}],[]);
   assert.equal(groups.find(group=>group.block.id==="triage").nodes.length,1);assert.equal(groups.find(group=>group.block.id==="unplanned").nodes.length,0);
   const saved=(await pool.query("SELECT * FROM blocks ORDER BY id")).rows,ops=(await pool.query("SELECT * FROM operations ORDER BY id")).rows;
   const retry=await post(body);assert.equal(retry.body.status,"duplicate");assert.deepEqual(retry.body.task_ids,[id]);assert.equal(events.length,1);
@@ -72,6 +77,73 @@ test("public handler atomically creates a private Triage task with its researche
   const sqlBefore=(await pool.query("SELECT * FROM blocks ORDER BY id")).rows,opsBefore=(await pool.query("SELECT * FROM operations ORDER BY id")).rows;
   const sqlFail=await post({packet:{reply_findings:[finding({source_id:"gmail:aaa111:aaa222",source_ref:"https://mail.google.com/mail/u/0/#all/aaa111"}),finding({source_id:"gmail:bad111:bad222",source_ref:"https://mail.google.com/mail/u/0/#all/bad111"})]}});
   assert.equal(sqlFail.status,500);assert.deepEqual((await pool.query("SELECT * FROM blocks ORDER BY id")).rows,sqlBefore);assert.deepEqual((await pool.query("SELECT * FROM operations ORDER BY id")).rows,opsBefore);assert.equal(events.length,2);
+  const {draft_preview:ignoredDraft,...plain}=finding({source_id:"gmail:aaa331:aaa332",source_ref:"https://mail.google.com/mail/u/0/#all/aaa331",title:"Synthetic sweep item without draft"});
+  assert.ok(ignoredDraft);
+  const {mkdtemp,writeFile,rm}=require("node:fs/promises"),{tmpdir}=require("node:os"),{join}=require("node:path");
+  const dir=await mkdtemp(join(tmpdir(),"dcc-sweep-test-"));
+  try {
+    const file=join(dir,"packet.json");
+    await writeFile(file,JSON.stringify({sweep_findings:[plain]}));
+    const send=async (...args)=>JSON.parse((await exec(process.execPath,[require.resolve("./scripts/triage-check-ingest"),"--file",file,"--base-url",base,...args],{
+      env:{PATH:process.env.PATH,DCC_SWEEP_CAPTURE_TOKEN:"synthetic-sweep",DCC_API_TOKEN:"synthetic-broad",DCC_SERVICE_USER_ID:"99",DCC_SERVICE_WORKSPACE_ID:"ws-foreign"},
+    })).stdout);
+    const verified=await send("--verify");assert.equal(verified.status,"dry_run");
+    assert.equal((await pool.query("SELECT 1 FROM blocks WHERE properties->>'triageId'=$1",[plain.source_id])).rowCount,0);
+    const created=await send();assert.equal(created.status,"merged");
+    assert.deepEqual((await send()).task_ids,created.task_ids);
+    const plainId=created.task_ids[0], plainRow=(await request("/api/blocks/"+plainId)).body;
+    assert.equal(plainRow.properties.sweepTriage.disposition,"pending");
+    assert.equal(plainRow.properties.triageContext.draft_preview,undefined);
+    const manualSource="gmail:aaa441:aaa442",manualRef="https://mail.google.com/mail/u/0/#all/aaa441";
+    const manualProps={kind:"task",title:"Manually saved source",status:"open",publicVisibility:"private",notes:"Owner notes",source_id:manualRef};
+    await pool.query("INSERT INTO blocks(id,type,workspace_id,user_id,properties) VALUES('manual-bookmark','block','ws-owned',7,$1)",[manualProps]);
+    const existing=await post({packet:{sweep_findings:[finding({source_id:manualSource,source_ref:manualRef})]}});
+    assert.equal(existing.body.status,"duplicate");assert.deepEqual(existing.body.task_ids,["manual-bookmark"]);
+    assert.deepEqual((await request("/api/blocks/manual-bookmark")).body.properties,manualProps);
+    if (process.env.DCC_SWEEP_BROWSER_BASE && process.env.DCC_SWEEP_BROWSER_EXEC) {
+      const {chromium}=require("playwright-core");
+      const reviewBase=process.env.DCC_SWEEP_BROWSER_BASE;
+      const browser=await chromium.launch({executablePath:process.env.DCC_SWEEP_BROWSER_EXEC,args:["--single-process"]});
+      try {
+        const browserContext=await browser.newContext();
+        await browserContext.route("**/*",async route=>{
+          const req=route.request(), url=new URL(req.url());
+          if (url.origin!==reviewBase) return route.abort();
+          if (url.pathname==="/api/blocks" && req.method()==="GET") {
+            const {rows}=await pool.query("SELECT * FROM blocks WHERE workspace_id='ws-owned' AND user_id=7 AND deleted_at IS NULL");
+            return route.fulfill({json:rows});
+          }
+          if (/^\/api\/triage\/tasks\/[^/]+\/dismiss$/.test(url.pathname)) {
+            const r=await request(url.pathname,{});
+            return route.fulfill({status:r.status,json:r.body});
+          }
+          return route.continue();
+        });
+        const page=await browserContext.newPage(), title=plain.title;
+        for(let pass=0;pass<2;pass++){
+          if(pass===0) await page.goto(reviewBase+"/"); else await page.reload();
+          await page.waitForFunction(text=>typeof globalThis.itineraryListModel==="function"&&globalThis.itineraryListModel({expandAll:true}).triageGroup.nodes.some(n=>n.ev.title===text),title);
+          await page.locator("#triage-pill-nav").click();
+          const list=page.locator("#triage-queue-list");
+          await list.getByText(title,{exact:true}).waitFor({state:"visible"});
+          assert.equal(await list.getByText(manualProps.title,{exact:true}).count(),0);
+        }
+        await page.locator("#triage-queue-list .it-list-item").filter({hasText:title}).getByRole("button",{name:"Task actions"}).click();
+        await page.getByRole("button",{name:"Dismiss from Triage",exact:true}).click();
+        await page.locator("#triage-queue-list").getByText(title,{exact:true}).waitFor({state:"hidden"});
+        await page.reload();
+        await page.waitForFunction(text=>typeof globalThis.itineraryListModel==="function"&&!globalThis.itineraryListModel({expandAll:true}).triageGroup.nodes.some(n=>n.ev.title===text),title);
+        t.diagnostic("Canonical publisher, actual route and PostgreSQL row verified in actual browser Triage before/after reload, then immediately absent after real dismissal");
+      } finally {await browser.close();}
+    } else {
+      assert.equal((await request("/api/triage/tasks/"+plainId+"/dismiss",{})).status,200);
+    }
+    assert.equal((await request("/api/blocks/"+plainId)).body.properties.sweepTriage.disposition,"dismissed");
+    assert.equal((await send()).status,"duplicate");
+    const audit=(await pool.query("SELECT before_data,after_data FROM operations WHERE block_id=$1 ORDER BY id DESC LIMIT 1",[plainId])).rows[0];
+    assert.equal(audit.before_data.sweepTriage.disposition,"pending");
+    assert.equal(audit.after_data.sweepTriage.disposition,"dismissed");
+  } finally {await rm(dir,{recursive:true,force:true});}
   if(process.env.DCC_DRAFT_EVIDENCE_PATH) fs.writeFileSync(process.env.DCC_DRAFT_EVIDENCE_PATH,JSON.stringify({local_only:true,receipt:published.body,readback:{id:row.id,user_id:row.user_id,workspace_id:row.workspace_id,date:row.date,private:row.properties.publicVisibility,triage_id:row.properties.triageId,draft_preview:row.properties.triageContext.draft_preview,lane:groups.find(group=>group.block.id==="triage").block.id},retry:retry.body,preflight_rows:0,forced_insert_failure_rolled_back:true},null,2)+"\n");
   t.diagnostic("Actual new Slack and Gmail findings through public POST -> canonical creator/materializer -> atomic draft -> authenticated GET -> canonical private Triage lane; no source sends");
  }finally{if(server)await new Promise(resolve=>server.close(resolve));await pool.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();}

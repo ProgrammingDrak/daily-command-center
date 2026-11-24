@@ -6,15 +6,20 @@ const TaskModel = require("./public/js/task-model");
 const triage = require("./triage-suppressions");
 const createMaterializer = require("./triage-task-store");
 const createDraftStore = require("./triage-reply-drafts");
+const sweep = require("./lib/sweep-triage");
+const { randomUUID } = require("node:crypto");
 function fail(statusCode, message) { throw Object.assign(new Error(message), { statusCode }); }
 function validate(packet, now = Date.now()) {
+  const isSweep = !!packet && Object.hasOwn(packet, "sweep_findings");
+  const lane = isSweep ? "sweep_findings" : "reply_findings";
   if (!packet || typeof packet !== "object" || Array.isArray(packet) ||
-      Object.keys(packet).some(key => !["id", "reply_findings"].includes(key))) fail(400, "Reply findings cannot be mixed with other intake fields");
+      Object.keys(packet).some(key => !["id", lane].includes(key))) fail(400, "Reply findings cannot be mixed with other intake fields");
   if (packet.id != null && (typeof packet.id !== "string" || !packet.id.trim() || packet.id.length > 500)) fail(400, "Invalid finding packet id");
-  if (!Array.isArray(packet.reply_findings) || packet.reply_findings.length < 1 || packet.reply_findings.length > 10) fail(400, "Expected one to ten reviewed findings");
+  if (!Array.isArray(packet[lane]) || packet[lane].length < 1 || packet[lane].length > 10) fail(400, "Expected one to ten reviewed findings");
   const seen = new Set(), refs = new Set();
-  return packet.reply_findings.map(finding => {
-    const keys = ["source_id", "source_ref", "title", "reason", "draft_preview", "thread_id", "received_at", "reviewed_at", "sensitivity"];
+  return packet[lane].map(finding => {
+    const keys = ["source_id", "source_ref", "title", "reason", "thread_id", "received_at", "reviewed_at", "sensitivity"];
+    if (!isSweep || Object.hasOwn(finding || {}, "draft_preview")) keys.push("draft_preview");
     if (!finding || Array.isArray(finding) || typeof finding !== "object" || Object.keys(finding).length !== keys.length ||
         Object.keys(finding).some(key => !keys.includes(key)) || keys.some(key => typeof finding[key] !== "string" || !finding[key].trim()) ||
         finding.sensitivity !== "ordinary_business") fail(400, "Minimized ordinary-business finding required");
@@ -23,7 +28,7 @@ function validate(packet, now = Date.now()) {
     if ((slack && (!/^\d{10}\.\d{6}$/.test(finding.thread_id) || Number(finding.thread_id) > Number(slack[3]))) ||
         (!slack && finding.thread_id !== finding.source_id.split(":")[1])) fail(400, "Verified source thread identity required");
     createDraftStore.validate({ reply_drafts: [{ task_id: "source-preflight", triage_id: finding.source_id,
-      source_ref: finding.source_ref, draft_preview: finding.draft_preview }] });
+      source_ref: finding.source_ref, draft_preview: finding.draft_preview || "source identity preflight" }] });
     const reviewed = Date.parse(finding.reviewed_at), received = Date.parse(finding.received_at);
     const qualified = value => /(?:Z|[+-]\d{2}:\d{2})$/.test(value);
     if (!qualified(finding.reviewed_at) || !qualified(finding.received_at) || !Number.isFinite(reviewed) || !Number.isFinite(received) ||
@@ -33,18 +38,21 @@ function validate(packet, now = Date.now()) {
     seen.add(finding.source_id); refs.add(finding.source_ref);
     return { id: finding.source_id, type: slack ? "slack" : "email", title: finding.title, summary: finding.reason,
       source_ref: finding.source_ref, link: finding.source_ref, received_at: finding.received_at,
-      reviewed_at: finding.reviewed_at, thread_id: finding.thread_id, draft_preview: finding.draft_preview, draft_type: "internal", draft_status: "drafted",
+      reviewed_at: finding.reviewed_at, thread_id: finding.thread_id,
+      ...(finding.draft_preview ? {draft_preview:finding.draft_preview, draft_type:"internal", draft_status:"drafted"} : {}),
       ...(slack ? { channel_id: slack[2], message_ts: slack[3] } : {}) };
   });
 }
 module.exports = function createReplyFindingStore({ pool, blockDB }) {
   async function capture({ packet, userId, workspaceId, dryRun = false }) {
     const items = validate(packet);
+    const authority = { runId:randomUUID() };
     if (!Number.isInteger(userId) || userId < 1 || !workspaceId) fail(403, "Finding owner required");
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      for (const sourceId of items.map(item => item.id).sort()) {
+      const identities = [...new Set(items.flatMap(item => ["id:"+item.id, "ref:"+item.source_ref]))].sort();
+      for (const sourceId of identities) {
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`triage-reviewed:${workspaceId}:${sourceId}`]);
       }
       const ids = items.map(item => item.id), keys = items.map(triage.triageItemKey);
@@ -61,7 +69,7 @@ module.exports = function createReplyFindingStore({ pool, blockDB }) {
         const matches = await blockDB.getProposalSourceMatches(workspaceId, [item.id, item.source_ref], client);
         if (matches.length > 1) fail(409, "Source already has multiple task references; review before creating");
         const existing = matches[0];
-        if (existing && existing.user_id !== userId) fail(404, "Source task unavailable");
+        if (existing && (existing.user_id !== userId || existing.deleted_at)) fail(404, "Source task unavailable");
         const suppression = triage.matchingSuppression(item, suppressions);
         if (suppression && !(suppression.reason === "scheduled" && existing && suppression.task_id === existing.id)) fail(409, "Source was already handled");
         known.set(item.id, existing);
@@ -91,14 +99,18 @@ module.exports = function createReplyFindingStore({ pool, blockDB }) {
             triageType: item.type, triageTitle: item.title, triageSourceRef: item.source_ref,
             triageReceivedAt: item.received_at, triageConversationId: item.thread_id,
             triageContext: item,
-          }], responsibilityIds: [] });
+          }], responsibilityIds: [], [sweep.CAPTURE]:authority });
         }
         tasks.push(task);
       }
-      const attached = await createDraftStore({ pool }).attachInTransaction({ userId, workspaceId, client,
-        packet: { reply_drafts: tasks.map((task, index) => ({ task_id: task.id, triage_id: items[index].id,
-          source_ref: items[index].source_ref, draft_preview: items[index].draft_preview })) } });
-      attached.changedIds.forEach(id => changed.add(id));
+      const drafts = tasks.flatMap((task, index) =>
+        !task.deleted_at && !task.date && !sweep.terminal(task.properties) && sweep.state(task.properties)?.disposition === "pending" && items[index].draft_preview
+          ? [{task_id:task.id, triage_id:items[index].id, source_ref:items[index].source_ref, draft_preview:items[index].draft_preview}] : []);
+      if (drafts.length) {
+        const attached = await createDraftStore({ pool }).attachInTransaction({ userId, workspaceId, client,
+          packet: { reply_drafts:drafts } });
+        attached.changedIds.forEach(id => changed.add(id));
+      }
       await client.query(dryRun ? "ROLLBACK" : "COMMIT");
       return { duplicate: changed.size === 0, taskIds: tasks.map(task => task.id), changedIds: [...changed], sourceIds: ids };
     } catch (error) { await client.query("ROLLBACK"); throw error; }

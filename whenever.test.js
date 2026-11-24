@@ -228,7 +228,7 @@ test("the header is one capsule with All Tasks and Someday", () => {
   const drawer = html.slice(html.indexOf('id="tm-whenever-section"'));
   assert.ok(drawer.indexOf('id="triage-sub"') < drawer.indexOf('id="whenever-sub"'));
   assert.doesNotMatch(drawer, /id="unscheduled-sub"/);
-  assert.match(drawer, /aria-describedby="triage-queue-tip"[\s\S]*role="tooltip" id="triage-queue-tip">[^<]*messages and meetings/i);
+  assert.match(drawer, /aria-describedby="triage-queue-tip"[\s\S]*role="tooltip" id="triage-queue-tip">[^<]*automated sweeps/i);
   assert.match(drawer, /aria-describedby="whenever-tip"[\s\S]*role="tooltip" id="whenever-tip">[^<]*free minute/i);
   // Loaded after task-model.js (it reads the stage there) and before schedule.js
   // (the add-bar destination reads the label at load).

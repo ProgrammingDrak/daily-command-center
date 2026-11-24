@@ -1883,7 +1883,8 @@
     acceptWorkRotation(blocks) {
       _mutationGeneration++;
       (blocks || []).forEach(row => { if (row.deleted_at) cacheDelete(row.id); else cacheSet(row); });
-      if (typeof reloadPersistedEdits === "function") reloadPersistedEdits();
+      if ((blocks || []).some(row=>row.properties?.sweepTriage) && typeof refoldTaskStateFromBlockCache === "function") refoldTaskStateFromBlockCache();
+      else if (typeof reloadPersistedEdits === "function") reloadPersistedEdits();
       if (typeof render === "function") render("schedule");
     },
 

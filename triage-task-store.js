@@ -2,6 +2,7 @@
 
 const { normalizeTriageItem } = require("./public/js/slack-titles");
 const crypto = require("node:crypto");
+const { CAPTURE } = require("./lib/sweep-triage");
 const { createMaterializeGuard } = require("./lib/materialize-guard");
 const { taskCommonProps } = require("./public/js/task-serialize");
 
@@ -25,7 +26,7 @@ function slackCapture(item) {
 // until the standard task mover or completion path assigns them a day.
 module.exports = function createTriageTaskStore({ blockDB, respStore, linkTriage }) {
   const guard = createMaterializeGuard({ blockDB });
-  async function materialize({ items, responsibilityIds, userId, workspaceId, tz, onSlackTask }) {
+  async function materialize({ items, responsibilityIds, userId, workspaceId, tz, onSlackTask, [CAPTURE]: sweepCapture }) {
     const blocks = [];
     for (const rawItem of items || []) {
       const item = normalizeTriageItem(rawItem);
@@ -40,7 +41,7 @@ module.exports = function createTriageTaskStore({ blockDB, respStore, linkTriage
       let syncSlackTask = false;
       if (!block) {
         block = await blockDB.createItineraryTask({
-          date: null, userId, workspaceId, ensureRoot: false,
+          date: null, userId, workspaceId, ensureRoot: false, [CAPTURE]: sweepCapture,
           properties: {
             ...taskCommonProps(item), kind: "task", type: "task",
             local_id: key, idempotency_key: captureKey,
@@ -53,7 +54,7 @@ module.exports = function createTriageTaskStore({ blockDB, respStore, linkTriage
         });
         syncSlackTask = !!slack;
       }
-      if (slack && !block.deleted_at) {
+      if (slack && !block.deleted_at && !sweepCapture) {
         // A manual bookmark may already own this message. Attach its Triage link
         // instead of creating another task, while preserving the person's edits.
         // Older Triage tasks also gain the canonical reaction identity on replay.

@@ -1,5 +1,6 @@
 const M = require("./lib/conversation-model");
 const Q = require("./lib/working-queue");
+const Sweep = require("./lib/sweep-triage");
 const Read = require("./lib/working-queue-read");
 const R = require("./lib/task-reconciliation");
 const { checkInState } = require("./public/js/work-checkin-policy");
@@ -681,10 +682,18 @@ function createConversationStore(ctx) {
           }
           // No completeWork inference: a task without tracked effort retains unknown actuals.
         }
-        if (b.action === 'background-start' && !target.properties.everStarted)
-          await blockDB.updateBlock(target.id, { properties: { ...(await task(q, target.id, owner)).properties, everStarted: true }, [M.TIMING_WRITE]: true }, q);
-        if (b.action === "background-start" || b.action === "queue-block")
+        if (b.action === "background-start" || b.action === "queue-block") {
+          const current = await task(q, target.id, owner);
+          const startsBackground = b.action === "background-start" && !current.properties.everStarted;
+          const promotesSweep = Sweep.state(current.properties)?.disposition === "pending";
+          if (startsBackground || promotesSweep) {
+            await blockDB.updateBlock(target.id, {
+              ...(startsBackground ? {properties:{...current.properties, everStarted:true}} : {}),
+              [Sweep.QUEUE]:true, [M.TIMING_WRITE]:true,
+            }, q);
+          }
           Q.setStatus(queue, await task(q, target.id, owner), b.action === "queue-block" ? "blocked" : "background", b);
+        }
         if (b.action === "background-stop" || b.action === "pause") {
           const current = await task(q, target.id, owner);
           const hold = b.action === "pause" && !b.attentionMode && !isBlockDone(current) &&

@@ -777,6 +777,16 @@ module.exports = function mount(app, ctx) {
     if (blocks.length) broadcast("blocks-changed", { action: "triage-materialize", blockIds: blocks.map(block => block.id) }, workspaceId);
     return blocks;
   };
+  app.post("/api/triage/tasks/:id/dismiss", route(async (req, res) => {
+    if (!req.session?.userId || req.dccServiceAuth) return res.status(401).json({ error:"Owner session required" });
+    const sweep = require("../lib/sweep-triage");
+    const row = await blockDB.getBlock(req.params.id);
+    if (!row || row.user_id !== req.session.userId || row.workspace_id !== req.workspaceId ||
+        !sweep.state(row.properties)) return res.status(404).json({ error:"Sweep task not found" });
+    const saved = await blockDB.updateBlock(row.id, { [sweep.DISMISS]:true });
+    broadcast("blocks-changed", { action:"sweep-triage-dismiss", blockIds:[saved.id] }, row.workspace_id);
+    return saved;
+  }));
   app.post("/api/triage/tasks/materialize", route(async (req, res) => {
     if (req.dccServiceAuth) return res.status(403).json({ error: "Owner session required" });
     const body = req.body || {};

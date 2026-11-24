@@ -230,6 +230,14 @@ function buildTaskChangeItems(ev,trig,opts){
     item("subtask","🪜","Subtask…",()=>openTaskHierarchyAction(ev,()=>openMakeSubtaskOf(ev.id,trig))),
     item("priority","≡","Move to Priority Queue",()=>window.DCCWorkingQueue.addTask(ev).catch(error=>DCC.toast(error.message||"Could not add task to queue","error")))
   ];
+  if(typeof DCC!=="undefined"&&DCC.TaskModel?.isPendingSweepTriage?.(ev))items.push(item("dismiss-triage","×","Dismiss from Triage",async()=>{
+    try {
+      const result=await fetch("/api/triage/tasks/"+encodeURIComponent(ev._blockId)+"/dismiss",{method:"POST"});
+      if(!result.ok)throw new Error("Could not dismiss this task");
+      window.blockStore.acceptWorkRotation([await result.json()]);
+      DCC.toast("Dismissed from Triage. Still in All Tasks.");
+    }catch(error){DCC.toast(error.message,"error");}
+  }));
   if(typeof isNested==="function"&&isNested(ev))items.push(item("promote","⬆","Promote",()=>openTaskHierarchyAction(ev,()=>promoteToTopLevel(ev.id))));
   items.push(
     item("unscheduled","🕒","Remove time",()=>moveTaskToUnplanned(ev.id,{task:ev})),
@@ -906,34 +914,10 @@ function suggestedCommuteOrigin(blockId){
   return "";
 }
 
-// Durable reviewed tasks have no day. Project their private trees straight into
-// the Triage drawer, never into the day's plan, progress, or Unscheduled group.
+// Pending sweep tasks are date-free and do not contribute to the day's plan,
+// progress, or Unscheduled group.
 function _datelessTriageNodes(items,waitingRows,options){
-  const {TaskModel,TimeBlocks}=DCC;
-  const privateDateless=items.filter(ev=>ev&&ev._dateless&&ev.untimed&&ev.publicVisibility==="private"
-    &&!ev.completedAt&&!["done","completed","deleted","archived","cancelled"].includes(ev.status));
-  if(!privateDateless.length)return [];
-  const candidates=TaskModel.selectActive(TaskModel.selectVisible(privateDateless));
-  const parked=TaskModel.waitingParkedIds(candidates.concat(waitingRows),waitingRows);
-  const eligible=candidates.filter(ev=>!parked.has(String(ev.id)));
-  const children=new Map(),roots=[];
-  eligible.forEach(ev=>{
-    const parent=TaskModel.parentIdOf(ev);
-    if(parent){
-      if(!children.has(parent))children.set(parent,[]);
-      children.get(parent).push(ev);
-    }else if(TimeBlocks.isSourceReviewTask(ev))roots.push(ev);
-  });
-  const tree=[],seen=new Set(),pending=roots.slice().reverse();
-  while(pending.length){
-    const ev=pending.pop();
-    if(seen.has(ev.id))continue;
-    seen.add(ev.id);
-    tree.push(ev);
-    const kids=children.get(ev.id)||[];
-    for(let i=kids.length-1;i>=0;i--)pending.push(kids[i]);
-  }
-  return TaskModel.selectTree(tree,options.expandAll?{isCollapsed:()=>false}:{});
+  return DCC.TaskModel.selectSweepTriage(items,{waitingRows,...(options.expandAll?{isCollapsed:()=>false}:{})});
 }
 
 function _itineraryListModel(options={}){
@@ -949,7 +933,7 @@ function _itineraryListModel(options={}){
   const day=DCC.TaskModel.selectDay(DCC.TaskModel.selectDayScoped(scheduled),viewDate,{today:actualToday,carryoverPool:unfPool,waitingRows});
   const visible=day.visible;
   const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
-  const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible,...(options.expandAll?{isCollapsed:()=>false}:{})}),timeBlocks);
+  const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible,...(options.expandAll?{isCollapsed:()=>false}:{})}),timeBlocks,{sourceReviewIntoTriage:false});
   const unscheduledGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.UNPLANNED_BLOCK.id)||{nodes:[]};
   const triageGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.TRIAGE_BLOCK.id)||{nodes:[]};
   _fileDoneUntimedOnTheDay(groups,triageGroup,timeBlocks);
@@ -1014,20 +998,12 @@ window.glassesItineraryTasks=function(){
   return [model.unscheduledGroup,...model.groups.filter(group=>group!==model.unscheduledGroup&&group!==model.triageGroup)]
     .flatMap(group=>group.nodes.filter(node=>!isDone(node.ev)).map(node=>node.ev));
 };
-// Triage rows are created by triage.js (buildScheduleTriage) from inbox and repeat
-// sources, so the panel also carries that loader's status, with Retry on a failure.
+// Durable sweep tasks come from the canonical block collection, not the legacy
+// day-state inbox/repeat loader.
 function renderTriageInto(listEl,model){
   if(!listEl||!window.DCC||!DCC.TaskModel||!DCC.TimeBlocks)return {open:0,total:0,status:false};
   model=model||_itineraryListModel();
-  const state=typeof triageTaskLoadState==="function"?triageTaskLoadState():{};
-  let status=null;
-  if(state.loading||state.error){
-    status=document.createElement(state.error?"button":"div");
-    status.className="it-list-empty";
-    status.textContent=state.error?"Triage could not load. Retry":"Loading Triage tasks…";
-    if(state.error){status.type="button";status.addEventListener("click",()=>buildScheduleTriage());}
-  }
-  return Object.assign(_renderQueueInto(listEl,model.triageGroup.nodes,model,status),{status:!!status});
+  return Object.assign(_renderQueueInto(listEl,model.triageGroup.nodes,model,null),{status:false});
 }
 window.renderTriageInto=renderTriageInto;
 

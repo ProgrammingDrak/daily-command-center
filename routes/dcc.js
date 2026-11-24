@@ -809,9 +809,12 @@ module.exports = function mount(app, ctx) {
     try {
       const body = req.body || {};
       const packet = body.packet || body;
-      if (Object.hasOwn(packet, "reply_findings")) {
+      if (Object.hasOwn(packet, "reply_findings") || Object.hasOwn(packet, "sweep_findings")) {
+        if (req.dccServiceAuth?.source !== "verified-sweep-capture")
+          return res.status(403).json({ error:"Dedicated Sweep service authentication required" });
         if (body.dry_run != null && typeof body.dry_run !== "boolean") return res.status(400).json({ error: "dry_run must be boolean" });
-        const owner = await resolveOwnerStrict(req);
+        const { userId, workspaceId } = req.dccServiceAuth;
+        const owner = { userId, workspaceId };
         const result = await require("../triage-reply-findings")({ pool: ctx.pool, blockDB }).capture({
           packet, ...owner, dryRun: body.dry_run === true,
         });

@@ -258,7 +258,9 @@ async function nextSortOrderForDay(q, { date, workspace_id }) {
   return (Math.floor(mx / SORT_STEP) + 1) * SORT_STEP;
 }
 
-async function createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id }, client) {
+const sweepTriage = require("./lib/sweep-triage");
+
+async function createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id, [sweepTriage.CAPTURE]: sweepCapture }, client) {
   // Recurring/reused activity plans are snapshotted with the task atomically.
   const sourceProps = typeof properties === "string" ? JSON.parse(properties) : (properties || {});
   if (process.env.DCC_CONVERSATION_ENABLED === "true" && type !== "time_entry" && sourceProps.startedAt) {
@@ -269,7 +271,7 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
     const c = await pool.connect();
     try {
       await c.query("BEGIN");
-      const row = await createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id }, c);
+      const row = await createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id, [sweepTriage.CAPTURE]: sweepCapture }, c);
       await c.query("COMMIT");
       return row;
     } catch (e) { await c.query("ROLLBACK"); throw e; }
@@ -282,6 +284,7 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
   // pushes the same `c.block.properties` reference once per future date into one
   // batchOp, so mutating in place would give N rows one row's stamped values.
   const props = typeof properties === "string" ? JSON.parse(properties) : { ...(properties || {}) };
+  sweepTriage.create(props, sweepCapture);
   const activityStore = require("./activity-store");
   const activityPlan = props.activityPlanSourceId
     ? await activityStore.readPlanSource(client, props.activityPlanSourceId, workspace_id, user_id) : null;
@@ -879,6 +882,7 @@ async function setTaskCompletion({
         delete props._doneStampedDate;
         if (props._wasBacklog) { props.kind = "backlog"; delete props._wasBacklog; }
       }
+      props = sweepTriage.reconcile(before, props, { date, parentId: row.parent_id });
       const { rows: written } = await q.query(
         `UPDATE blocks SET properties = $1, date = $2, updated_at = $3
           WHERE id = $4 RETURNING *`,
@@ -1125,6 +1129,11 @@ async function updateBlock(id, fields, client) {
         && isTaskRow({ type: existing.type, properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps })) {
       newSortOrder = await nextSortOrderForDay(q, { date: newDate, workspace_id: existing.workspace_id });
     }
+    if (fields[sweepTriage.DISMISS] && !["pending","dismissed"].includes(sweepTriage.state(existingProps)?.disposition)) {
+      const error = new Error("The task already left Triage"); error.statusCode = 409; throw error;
+    }
+    newProps = sweepTriage.reconcile(existingProps, newProps, { date:newDate || existing.date, parentId:newParentId,
+      reason:fields[sweepTriage.DISMISS] ? "dismissed" : fields[sweepTriage.QUEUE] ? "queued" : null });
     const { rows: writtenRows } = await q.query(
       `UPDATE blocks SET properties = $1, sort_order = $2, parent_id = $3, date = $4, updated_at = $5 WHERE id = $6 RETURNING properties`,
       [newProps, newSortOrder, newParentId, newDate, now, id]
@@ -2105,6 +2114,7 @@ async function rescheduleBlocks(moves, creates, options = {}) {
       if(existing.properties?.guidedDefinitionId) newProps.guidedDefinitionId=existing.properties.guidedDefinitionId;
       if(newProps.guidedDefinitionId) newProps.publicVisibility="private";
       const newDate = m.date !== undefined ? m.date : existing.date;
+      newProps = sweepTriage.reconcile(existing.properties, newProps, { date:newDate || existing.date, parentId:m.parentId === undefined ? existing.parent_id : m.parentId });
       // C6c: a row that CHANGES DAY joins the target day's space at the end. It used to keep the
       // originating day's `sort_order`, so an arriving task landed wherever it happened to sit on
       // the day it came from -- which under a `sort_order` read means a carryover can insert itself
@@ -2205,7 +2215,7 @@ async function ensureDayRoot(date, userId, workspaceId, client) {
 //   client     a pg client to run inside a caller's transaction
 // The canonical dual-write (local_id, status, parent_id/rel) is NOT repeated here —
 // this funnels through createBlock, which owns it. One insertion point, not two.
-async function createItineraryTask({ id, parent_id, date, properties, userId = null, workspaceId = null, sortOrder, score = false, ensureRoot = true, client } = {}) {
+async function createItineraryTask({ id, parent_id, date, properties, userId = null, workspaceId = null, sortOrder, score = false, ensureRoot = true, client, [sweepTriage.CAPTURE]: sweepCapture } = {}) {
   if (ensureRoot) await ensureDayRoot(date, userId, workspaceId);
   const props = { ...(properties || {}) };
   if (score) {
@@ -2224,7 +2234,7 @@ async function createItineraryTask({ id, parent_id, date, properties, userId = n
   // 1000-spaced drag value, which is what made the column unreadable as an order. Passing no
   // sort_order lets createBlock append to the day in the one space. The itinerary still renders
   // timed rows by their `start`; that is a separate axis and always was.
-  return createBlock({ id, type: "block", parent_id: parent_id || null, date, properties: props, sort_order: sortOrder, user_id: userId, workspace_id: workspaceId }, client);
+  return createBlock({ id, type: "block", parent_id: parent_id || null, date, properties: props, sort_order: sortOrder, user_id: userId, workspace_id: workspaceId, [sweepTriage.CAPTURE]: sweepCapture }, client);
 }
 
 // Batch-create itinerary tasks atomically. The store owns the transaction (per

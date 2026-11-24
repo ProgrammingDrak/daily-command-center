@@ -5,7 +5,7 @@ const vm = require('node:vm');
 
 const script = name => fs.readFileSync(require.resolve('./public/js/' + name), 'utf8');
 const date = '2026-11-24';
-const marker = {triageBlock:true, triageId:'gmail:synthetic-reviewed'};
+const marker = {triageBlock:true, triageId:'gmail:synthetic-reviewed', sweepTriage:{origin:'automated_sweep',disposition:'pending',runId:'synthetic'}};
 const task = (id, props = {}, day = null) => ({
   id, type:'block', date:day,
   properties:{kind:'task', title:id, publicVisibility:'private', ...props},
@@ -31,11 +31,13 @@ function makeModel(blocks, options = {}, collapsed = '') {
 
 const rows = nodes => Array.from(nodes, node=>[node.ev.id, node.depth]);
 
-test('drawer model projects only open private date-free reviewed trees without polluting the day', () => {
+test('drawer model projects only open private date-free sweep roots without polluting the day', () => {
   const model = makeModel([
     task('reviewed', marker), task('step', {subtaskOf:'reviewed'}),
     task('nested', {subtaskOf:'step'}), task('public-step', {subtaskOf:'reviewed', publicVisibility:'public'}),
-    task('unrelated'), task('wrong-root', {...marker, subtaskOf:'unrelated'}),
+    task('unrelated'), task('legacy-source',{triageBlock:true,triageId:'legacy'}),
+    task('moved',{...marker,sweepTriage:{...marker.sweepTriage,disposition:'promoted'}}),
+    task('dismissed',{...marker,sweepTriage:{...marker.sweepTriage,disposition:'dismissed'}}), task('wrong-root', {...marker, subtaskOf:'unrelated'}),
     task('orphan', {...marker, subtaskOf:'missing'}),
     task('public', {...marker, publicVisibility:'public'}),
     task('deleted', marker), task('hidden', marker),
@@ -48,14 +50,14 @@ test('drawer model projects only open private date-free reviewed trees without p
     task('dated-review', marker, date), task('dated-unplanned', {}, date),
   ]);
   assert.deepEqual(rows(model.triageGroup.nodes), [
-    ['dated-review', 0], ['reviewed', 0], ['step', 1], ['nested', 2],
+    ['reviewed', 0],
   ]);
   assert.deepEqual(Array.from(model.day.visible, t=>t.id), ['dated-review', 'dated-unplanned']);
-  assert.deepEqual(rows(model.unscheduledGroup.nodes), [['dated-unplanned', 0]]);
+  assert.deepEqual(rows(model.unscheduledGroup.nodes), [['dated-review', 0], ['dated-unplanned', 0]]);
 });
 
-test('drawer model preserves collapse state without promoting descendants', () => {
+test('drawer does not confer sweep eligibility on any descendant', () => {
   const blocks = [task('reviewed', marker), task('step', {subtaskOf:'reviewed'})];
   assert.deepEqual(rows(makeModel(blocks, {}, 'reviewed').triageGroup.nodes), [['reviewed', 0]]);
-  assert.deepEqual(rows(makeModel(blocks, {expandAll:true}, 'reviewed').triageGroup.nodes), [['reviewed', 0], ['step', 1]]);
+  assert.deepEqual(rows(makeModel(blocks, {expandAll:true}, 'reviewed').triageGroup.nodes), [['reviewed', 0]]);
 });
