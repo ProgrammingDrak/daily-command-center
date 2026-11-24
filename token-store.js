@@ -52,7 +52,7 @@ function createTokenStore(pool) {
       return { ...row, token };
     },
     /** True if `plain` matches an active (unrevoked, unexpired) token covering `scope`. */
-    async verifyToken(plain, scope = "dcc") {
+    async verifyToken(plain, scope = "dcc", { exact = false } = {}) {
       if (!plain || typeof plain !== "string") return false;
       await ensureTable();
       const { rows: [row] } = await pool.query(
@@ -61,7 +61,7 @@ function createTokenStore(pool) {
         [hashToken(plain)]
       );
       if (!row) return false;
-      if (row.scope !== "all" && row.scope !== scope) return false;
+      if (row.scope !== scope && (exact || row.scope !== "all")) return false;
       pool.query("UPDATE service_tokens SET last_used_at = now() WHERE id = $1", [row.id]).catch(() => {});
       return true;
     },

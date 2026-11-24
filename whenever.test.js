@@ -228,7 +228,7 @@ test("the header is one capsule with All Tasks and Someday", () => {
   const drawer = html.slice(html.indexOf('id="tm-whenever-section"'));
   assert.ok(drawer.indexOf('id="triage-sub"') < drawer.indexOf('id="whenever-sub"'));
   assert.doesNotMatch(drawer, /id="unscheduled-sub"/);
-  assert.match(drawer, /aria-describedby="triage-queue-tip"[\s\S]*role="tooltip" id="triage-queue-tip">[^<]*messages and meetings/i);
+  assert.match(drawer, /aria-describedby="triage-queue-tip"[\s\S]*role="tooltip" id="triage-queue-tip">[^<]*automated sweeps/i);
   assert.match(drawer, /aria-describedby="whenever-tip"[\s\S]*role="tooltip" id="whenever-tip">[^<]*free minute/i);
   // Loaded after task-model.js (it reads the stage there) and before schedule.js
   // (the add-bar destination reads the label at load).
@@ -354,54 +354,34 @@ test("the pill's Unscheduled count is open ROOTS: not sub-steps, not done rows",
   assert.deepEqual(rendered.map(r => r.mode), ["open", "open", "done", "open"], "done rows render as done, not as unchecked");
 });
 
-test("the Triage door counts its open roots and carries the loader's status, with Retry", () => {
+test("the Triage drawer counts canonical sweep rows without inheriting the legacy loader status", () => {
   const src = queueRenderers();
-  const nodes = [{ ev: { id: "gmail" }, depth: 0 }, { ev: { id: "gmail-step" }, depth: 1 }, { ev: { id: "slack" }, depth: 0 }];
-  let state = { loading: true, error: "" };
-  let retried = 0;
+  const nodes = [{ ev: { id: "gmail" }, depth: 0 }, { ev: { id: "slack" }, depth: 0 }];
   const made = [];
   const DCC = { TaskModel: {}, TimeBlocks: {} };
   const ctx = {
     window: { DCC }, DCC, isDone: () => false, _isSubRow: n => n.depth > 0,
     _itineraryListModel: () => ({ triageGroup: { nodes }, unscheduledGroup: { nodes: [] }, unfPool: [], isTodayView: true }),
     _orderUnscheduledNodes: n => n,
-    triageTaskLoadState: () => state,
-    buildScheduleTriage: () => { retried++; },
+    triageTaskLoadState: () => assert.fail("legacy day-state loader is not the canonical sweep task collection"),
     createTaskListRowRenderer: () => (ev, idx, mode) => ({ kind: "row", id: ev.id, mode }),
     document: {
       createDocumentFragment: () => { const kids = []; made.push(kids); return { appendChild: x => kids.push(x) }; },
-      createElement: tag => ({ kind: tag, listeners: {}, addEventListener(t, fn) { this.listeners[t] = fn; } }),
     },
   };
   vm.createContext(ctx);
   vm.runInContext(src + "\nthis.t = renderTriageInto;", ctx);
   const list = { innerHTML: "", appendChild() {} };
-  const loading = ctx.t(list);
-  assert.deepEqual({ ...loading }, { open: 2, total: 3, status: true }, "sub-steps never count");
-  assert.equal(made[0][0].kind, "div");
-  assert.match(made[0][0].textContent, /Loading Triage/);
-  assert.deepEqual(made[0].slice(1).map(r => r.id), ["gmail", "gmail-step", "slack"], "the status leads, the rows follow");
-  state = { loading: false, error: "Triage tasks could not be loaded" };
-  ctx.t(list);
-  const retry = made[1][0];
-  assert.equal(retry.kind, "button");
-  assert.equal(retry.type, "button");
-  retry.listeners.click();
-  assert.equal(retried, 1, "Retry reruns the loader");
-  state = { loading: false, error: "" };
-  const idle = ctx.t(list);
-  assert.equal(idle.status, false);
-  assert.equal(made[2][0].kind, "row", "no status row once the loader is idle");
+  assert.deepEqual({ ...ctx.t(list) }, { open: 2, total: 2, status: false });
+  assert.deepEqual(made[0].map(r => r.id), ["gmail", "slack"]);
 });
 
-test("the Triage door opens its half, and its loader runs on every render, not only in the list view", () => {
+test("the Triage door opens its half, and the legacy source loader stays registered for other views", () => {
   const src = fs.readFileSync(require.resolve("./public/js/whenever.js"), "utf8");
   const open = src.slice(src.indexOf("function open(half)"), src.indexOf("function setTheme("));
   assert.match(open, /half === "triage" \? half : "whenever"/);
   assert.match(src, /getElementById\("triage-pill-nav"\);\s*if \(triageSeg\) triageSeg\.addEventListener\("click", \(\) => open\("triage"\)\);/);
-  // The door is on every tab, so the source-to-task loader must be too, or its count
-  // under-reports off the itinerary list view. The loader's own order (Loading, then
-  // settled) is pinned behaviorally in triage-shared-row.test.js.
+  // Preserve the source loader for legacy surfaces. It no longer drives this drawer.
   const features = fs.readFileSync(require.resolve("./public/js/features.js"), "utf8");
   assert.match(features, /scheduleTriage:\s*\{build:\(\)=>\{if\(typeof buildScheduleTriage==="function"\)buildScheduleTriage\(\);\},isVisible:\(\)=>true\}/);
 });

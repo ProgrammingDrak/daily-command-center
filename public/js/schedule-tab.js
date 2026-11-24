@@ -230,6 +230,14 @@ function buildTaskChangeItems(ev,trig,opts){
     item("subtask","🪜","Subtask…",()=>openTaskHierarchyAction(ev,()=>openMakeSubtaskOf(ev.id,trig))),
     item("priority","≡","Move to Priority Queue",()=>window.DCCWorkingQueue.addTask(ev).catch(error=>DCC.toast(error.message||"Could not add task to queue","error")))
   ];
+  if(typeof DCC!=="undefined"&&DCC.TaskModel?.isPendingSweepTriage?.(ev))items.push(item("dismiss-triage","×","Dismiss from Triage",async()=>{
+    try {
+      const result=await fetch("/api/triage/tasks/"+encodeURIComponent(ev._blockId)+"/dismiss",{method:"POST"});
+      if(!result.ok)throw new Error("Could not dismiss this task");
+      window.blockStore.acceptWorkRotation([await result.json()]);
+      DCC.toast("Dismissed from Triage. Still in All Tasks.");
+    }catch(error){DCC.toast(error.message,"error");}
+  }));
   if(typeof isNested==="function"&&isNested(ev))items.push(item("promote","⬆","Promote",()=>openTaskHierarchyAction(ev,()=>promoteToTopLevel(ev.id))));
   items.push(
     item("unscheduled","🕒","Remove time",()=>moveTaskToUnplanned(ev.id,{task:ev})),
@@ -906,6 +914,12 @@ function suggestedCommuteOrigin(blockId){
   return "";
 }
 
+// Pending sweep tasks are date-free and do not contribute to the day's plan,
+// progress, or Unscheduled group.
+function _datelessTriageNodes(items,waitingRows,options){
+  return DCC.TaskModel.selectSweepTriage(items,{waitingRows,...(options.expandAll?{isCollapsed:()=>false}:{})});
+}
+
 function _itineraryListModel(options={}){
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   // isActive() is time-of-day only (no date), so the "Now" chip must be gated to
@@ -915,14 +929,16 @@ function _itineraryListModel(options={}){
   // Loose Ends owns past-day unfinished work now. Keep carryovers out of the task
   // list derivation entirely, including the old hidden fetch and second render.
   const unfPool=[];
-  const day=DCC.TaskModel.selectDay(DCC.TaskModel.selectDayScoped(scheduled),viewDate,{today:actualToday,carryoverPool:unfPool,waitingRows:window.blockStore ? window.blockStore.getByType("block") : []});
+  const waitingRows=window.blockStore ? window.blockStore.getByType("block") : [];
+  const day=DCC.TaskModel.selectDay(DCC.TaskModel.selectDayScoped(scheduled),viewDate,{today:actualToday,carryoverPool:unfPool,waitingRows});
   const visible=day.visible;
   const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
-  const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible,...(options.expandAll?{isCollapsed:()=>false}:{})}),timeBlocks);
+  const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible,...(options.expandAll?{isCollapsed:()=>false}:{})}),timeBlocks,{sourceReviewIntoTriage:false});
   const unscheduledGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.UNPLANNED_BLOCK.id)||{nodes:[]};
   const triageGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.TRIAGE_BLOCK.id)||{nodes:[]};
   _fileDoneUntimedOnTheDay(groups,triageGroup,timeBlocks);
   _fileDoneUntimedOnTheDay(groups,unscheduledGroup,timeBlocks);
+  triageGroup.nodes=triageGroup.nodes.concat(_datelessTriageNodes(scheduled,waitingRows,options));
   return {viewDate,isTodayView,unfPool,day,timeBlocks,groups,unscheduledGroup,triageGroup};
 }
 // Finished work is recorded on the day it was finished, never in a pill: the drawer's
@@ -982,20 +998,12 @@ window.glassesItineraryTasks=function(){
   return [model.unscheduledGroup,...model.groups.filter(group=>group!==model.unscheduledGroup&&group!==model.triageGroup)]
     .flatMap(group=>group.nodes.filter(node=>!isDone(node.ev)).map(node=>node.ev));
 };
-// Triage rows are created by triage.js (buildScheduleTriage) from inbox and repeat
-// sources, so the panel also carries that loader's status, with Retry on a failure.
+// Durable sweep tasks come from the canonical block collection, not the legacy
+// day-state inbox/repeat loader.
 function renderTriageInto(listEl,model){
   if(!listEl||!window.DCC||!DCC.TaskModel||!DCC.TimeBlocks)return {open:0,total:0,status:false};
   model=model||_itineraryListModel();
-  const state=typeof triageTaskLoadState==="function"?triageTaskLoadState():{};
-  let status=null;
-  if(state.loading||state.error){
-    status=document.createElement(state.error?"button":"div");
-    status.className="it-list-empty";
-    status.textContent=state.error?"Triage could not load. Retry":"Loading Triage tasks…";
-    if(state.error){status.type="button";status.addEventListener("click",()=>buildScheduleTriage());}
-  }
-  return Object.assign(_renderQueueInto(listEl,model.triageGroup.nodes,model,status),{status:!!status});
+  return Object.assign(_renderQueueInto(listEl,model.triageGroup.nodes,model,null),{status:false});
 }
 window.renderTriageInto=renderTriageInto;
 

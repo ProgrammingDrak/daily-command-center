@@ -2,7 +2,7 @@
 // They share one capsule with Loose Ends (catch-up.js) and Waiting (delegated.js), in
 // triage order: Triage, Loose Ends, Waiting, Whenever.
 //
-//   Triage       tasks discovered while reviewing incoming messages and meetings.
+//   Triage       open, unscheduled tasks created by automated sweeps.
 //                Source identities stay attached. This is the itinerary's "Triage"
 //                group, moved here; like Unscheduled, the itinerary still owns the
 //                rows (schedule-tab.js renderTriageInto) and this file hosts them.
@@ -464,7 +464,7 @@
     attr("#whenever-sub .untimed-tip", "aria-label", "What goes in " + LABEL + "?");
     attr("#unscheduled-sort", "aria-label", "Sort " + UNSCHEDULED_LABEL);
     attr("#whenever-pill-nav", "title", LABEL + ": no set time. Knock one out when you have a free minute.");
-    attr("#triage-pill-nav", "title", TRIAGE_LABEL + ": tasks discovered while reviewing incoming messages and meetings.");
+    attr("#triage-pill-nav", "title", TRIAGE_LABEL + ": open, unscheduled tasks created by automated sweeps.");
   }
 
   // The "i" tooltips. Hover and keyboard focus show them through CSS; a tap toggles

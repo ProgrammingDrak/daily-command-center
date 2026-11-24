@@ -29,7 +29,9 @@
     const pool = TM.normalizeCollection(rows.filter(b => !TM.isWheneverPoolRow(b) && (b.date === date || (b.properties?.all_day && b.date <= date && (!b.properties.all_day_end || b.properties.all_day_end > date)) || (!b.date && !datedIds.has(b.properties?.local_id))))
       .map(b => fromBlock(b, { done }, parentKeys))).filter(e => e.date || !e.completed);
     const opts = { isDone: e => e.completed, isDeleted: () => false, trivialFlags: props._trivialFlags || {}, waitingRows: all };
-    const day = TM.selectDay(pool, date, opts);
+    const sweepNodes = TM.selectSweepTriage(pool, {...opts, isCollapsed: () => false});
+    const sweepIds = new Set(sweepNodes.map(node => node.ev.id));
+    const day = TM.selectDay(pool.filter(ev => !sweepIds.has(ev.id)), date, opts);
     const tree = items => TM.selectTree(TM.normalizeCollection(items), { isCollapsed: () => false }).map(n => ({ ...n.ev, depth: n.depth, hierarchyLabel:TM.hierarchyLabel(n.ev) }));
     const timeZone = options.timeZone || 'UTC', now = options.now || new Date();
     const timeBlocks = TB.forDate(snapshot.dayState?.schedule?.timeBlocks || snapshot.dayState?.schedule?.blocks || [], date);
@@ -38,7 +40,7 @@
     const unscheduled = Q.orderUnscheduled(day.unscheduled, list(props._unscheduledOrder));
     const queuedIds = new Set(day.unscheduled.map(e => e.id));
     const nodes = TM.selectTree(day.visible.filter(e => !queuedIds.has(e.id)).concat(unscheduled), { pool: day.visible, isCollapsed: () => false });
-    const groups = TB.groupItineraryTree(nodes, timeBlocks);
+    const groups = TB.groupItineraryTree(nodes, timeBlocks, {sourceReviewIntoTriage:false});
     const completionMinutes = new Map();
     const completionMinute = ev => {
       if (completionMinutes.has(ev)) return completionMinutes.get(ev);
@@ -51,7 +53,7 @@
     const flatten = nodes => nodes.map(n => ({ ...n.ev, depth: n.depth }));
     const sections = groups.filter(g => !['triage', 'unplanned'].includes(g.block.id)).map(g => ({ block: g.block, rows: flatten(g.nodes) }));
     const itinerary = sections.flatMap(g => g.rows);
-    const triage = flatten(groups.find(g => g.block.id === 'triage').nodes);
+    const triage = flatten(sweepNodes);
     const unplanned = flatten(groups.find(g => g.block.id === 'unplanned').nodes);
     const anytime = tree(Q.selectWhenever(TM.selectWheneverPoolBlocks(rows).map(b => fromBlock(b, {}, parentKeys))).filter(e => !e.completed));
     const eligible=new Set(list(carry.rows).map(row=>row.id));

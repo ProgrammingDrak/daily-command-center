@@ -808,6 +808,29 @@ module.exports = function mount(app, ctx) {
   app.post("/api/dcc/triage-check/ingest", async (req, res) => {
     try {
       const body = req.body || {};
+      const packet = body.packet || body;
+      if (Object.hasOwn(packet, "reply_findings") || Object.hasOwn(packet, "sweep_findings")) {
+        if (req.dccServiceAuth?.source !== "verified-sweep-capture")
+          return res.status(403).json({ error:"Dedicated Sweep service authentication required" });
+        if (body.dry_run != null && typeof body.dry_run !== "boolean") return res.status(400).json({ error: "dry_run must be boolean" });
+        const { userId, workspaceId } = req.dccServiceAuth;
+        const owner = { userId, workspaceId };
+        const result = await require("../triage-reply-findings")({ pool: ctx.pool, blockDB }).capture({
+          packet, ...owner, dryRun: body.dry_run === true,
+        });
+        if (!body.dry_run && !result.duplicate) broadcast("blocks-changed", { action: "triage-reply-finding", blockIds: result.changedIds }, owner.workspaceId);
+        return res.json({ ok: true, owner, status: body.dry_run ? "dry_run" : result.duplicate ? "duplicate" : "merged",
+          task_ids: result.taskIds, source_ids: result.sourceIds });
+      }
+      if (Object.hasOwn(packet, "reply_drafts")) {
+        if (body.dry_run != null && typeof body.dry_run !== "boolean") return res.status(400).json({ error: "dry_run must be boolean" });
+        const owner = await resolveOwnerStrict(req);
+        const result = await require("../triage-reply-drafts")({ pool: ctx.pool }).attach({
+          packet, ...owner, dryRun: body.dry_run === true,
+        });
+        if (!body.dry_run && !result.duplicate) broadcast("blocks-changed", { action: "triage-reply-draft", blockIds: result.changedIds }, owner.workspaceId);
+        return res.json({ ok: true, owner, status: body.dry_run ? "dry_run" : result.duplicate ? "duplicate" : "merged", task_ids: result.taskIds });
+      }
       const date = body.date || (body.packet && body.packet.date) || getTodayStr();
       const existing = await readDccDayState(date, req, buildSkeletonState(date));
       const nextState = dccIntelligence.ingestTriageCheckPacket({ date, state: existing, packet: body.packet || body });
@@ -816,7 +839,7 @@ module.exports = function mount(app, ctx) {
       res.json({ ok: true, date, packet_id: last.id || null, attention_items: last.attention_items || 0, open_items: nextState.triage?.open_items?.length || 0 });
     } catch (e) {
       console.error("[triage-check ingest] failed:", e);
-      res.status(500).json({ error: e.message || "triage-check ingest failed" });
+      res.status(e.statusCode || e.status || 500).json({ error: e.message || "triage-check ingest failed" });
     }
   });
 

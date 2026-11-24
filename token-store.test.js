@@ -57,3 +57,11 @@ test("revokeToken returns false when nothing live matched", async () => {
   const store = createTokenStore(pool);
   assert.strictEqual(await store.revokeToken(99), false);
 });
+
+ test("verifyToken exact scope rejects all without changing legacy wildcard behavior", async () => {
+  for (const [scope, exact, expected] of [["all",true,false],["sweep",true,true],["all",false,true]]) {
+    const pool=stubPool(),store=createTokenStore(pool);
+    pool.queueRow({id:7,scope});
+    assert.strictEqual(await store.verifyToken("synthetic-token","sweep",{exact}),expected);
+  }
+});

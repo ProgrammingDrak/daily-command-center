@@ -97,8 +97,8 @@ test("★ the Unscheduled section renders a TREE, not a flat list of roots", () 
   const pill = schedTabCode.slice(start, end);
   assert.match(pill, /_renderQueueInto\(listEl,_orderUnscheduledNodes\(model\.unscheduledGroup\.nodes\),model\)/,
     "the pill must render the grouped TREE's nodes, not a flat list of roots");
-  assert.match(pill, /_renderQueueInto\(listEl,model\.triageGroup\.nodes,model,status\)/,
-    "Triage renders the grouped tree too");
+  assert.match(pill, /_renderQueueInto\(listEl,model\.triageGroup\.nodes,model,null\)/,
+    "Triage renders the canonical group without a legacy loader status");
   assert.match(pill, /row\(node\.ev,_isSubRow\(node\)\?0:rank\+\+,isDone\(node\.ev\)\?"done":"open",node\)/,
     "and with the real done/open mode, or a done step renders as an unchecked row");
 });
@@ -209,7 +209,7 @@ test("★ the list view derives ONCE — one selectDay call feeding every sectio
   const model = schedTabCode.slice(mStart, schedTabCode.indexOf("\nfunction ", mStart + 1));
   const calls = (model.match(/TaskModel\.selectDay\(/g) || []).length;
   assert.equal(calls, 1, "the shared model must call selectDay exactly once, got " + calls);
-  assert.match(model, /const day=DCC\.TaskModel\.selectDay\(DCC\.TaskModel\.selectDayScoped\(scheduled\),viewDate,\{today:actualToday,carryoverPool:unfPool,waitingRows:window\.blockStore \? window\.blockStore\.getByType\("block"\) : \[\]\}\)/);
+  assert.match(model, /const day=DCC\.TaskModel\.selectDay\(DCC\.TaskModel\.selectDayScoped\(scheduled\),viewDate,\{today:actualToday,carryoverPool:unfPool,waitingRows\}\)/);
   assert.match(model, /const unfPool=\[\];/,
     "the list derivation must keep its carryover pool empty because Loose Ends owns those rows");
   const pStart = schedTabCode.indexOf("function renderUnscheduledInto(");

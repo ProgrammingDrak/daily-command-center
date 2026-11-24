@@ -33,7 +33,13 @@ await task('glasses-long', 'A long task title to verify wrapping and readable fo
 await task('glasses-done', 'Finished morning task', { start: '08:00', end: '08:30', done: true, status: 'done', completedAt: date + 'T08:30:00Z' });
 await task('glasses-child-done', 'Completed planning step', { start: null, end: null, subtaskOf: 'glasses-now', done: true, status: 'done', completedAt: date + 'T11:50:00Z' });
 await task('glasses-child-open', 'Remaining planning step', { start: null, end: null, subtaskOf: 'glasses-now' });
-await task('glasses-triage', 'Review a source message', { start: null, end: null, triageBlock: true, triageId: 'source-1' });
+// Triage fixtures use the same server-only provenance as trusted sweep capture;
+// an ordinary dated/manual source bookmark must remain outside this drawer.
+await ctx.blockDB.createItineraryTask({ id:'glasses-triage', date:null, ...owner,
+  [require('../lib/sweep-triage').CAPTURE]:{runId:'synthetic-glasses-review'},
+  properties:{local_id:'glasses-triage',kind:'task',type:'task',title:'Review a source message',
+    status:'open',publicVisibility:'private',duration:30,start:null,end:null,
+    triageBlock:true,triageId:'gmail:aaa111:aaa222'} });
 await task('glasses-done-untimed', 'Finished unscheduled work', { start: null, end: null, done: true, status: 'done', completedAt: date + 'T11:40:00Z' });
 const yesterday = new Date(date + 'T12:00:00Z'); yesterday.setUTCDate(yesterday.getUTCDate() - 1);
 await task('glasses-earlier', 'Yesterday still needs attention', { start: '10:00', end: '10:30' }, yesterday.toISOString().slice(0,10));

@@ -19,11 +19,12 @@ test('full itinerary retains nested done/open steps and files untimed completion
 });
 test('pills preserve desktop order, root counts, source-review distinction and saved unscheduled ordering', () => {
   const s = snapshot([root({ _unscheduledOrder: ['u2', 'u1'] }), task('u1', { start: null }), task('u2', { start: null }), task('child', { start: null, subtaskOf: 'u1' }), task('triage', { start: null, triageBlock: true, triageId: 'message' }), task('repeat', { start: null, triageBlock: true, triageId: 'repeat', responsibilityId: 'r1' }), task('done', { start: null, done: true })]);
+  s.globals=[task('sweep', { start:null, publicVisibility:'private', sweepTriage:{origin:'automated_sweep', disposition:'pending'} }, {date:null})];
   const v = M.project(s, undefined, options);
   assert.deepEqual(v.queues.map(q => q.label), ['Triage', 'Loose Ends', 'Waiting', 'Unscheduled', 'Whenever']);
-  assert.deepEqual(ids(v.triage), ['triage']);
-  assert.deepEqual(ids(v.unplanned), ['u2', 'u1', 'child', 'repeat']);
-  assert.equal(v.queues.find(q => q.id === 'unscheduled').count, 3);
+  assert.deepEqual(ids(v.triage), ['sweep']);
+  assert.deepEqual(ids(v.unplanned), ['u2', 'u1', 'child', 'repeat', 'triage']);
+  assert.equal(v.queues.find(q => q.id === 'unscheduled').count, 4);
   assert.equal(v.queues.find(q => q.id === 'triage').count, 1);
 });
 test('Whenever uses the same quick-win order as desktop and retains parent nesting', () => {

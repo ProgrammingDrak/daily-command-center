@@ -894,8 +894,8 @@ function triageDraftAction(item){
   return {kind:"status",label:"Draft ready"};
 }
 async function copyTriageDraft(triageId){
-  const item=(INIT_TRIAGE||[]).find(entry=>entry.id===triageId)||
-    ((typeof scheduled!=="undefined"?scheduled:[]).find(task=>task.triageId===triageId)||{}).triageContext;
+  const stored=((typeof scheduled!=="undefined"?scheduled:[]).find(task=>task.triageId===triageId)||{}).triageContext;
+  const item=stored&&stored.draft_preview?stored:(INIT_TRIAGE||[]).find(entry=>entry.id===triageId)||stored;
   const text=item&&item.draft_preview;
   if(!text)return false;
   let copied=false;

@@ -19,7 +19,7 @@
     return !!(task.triageBlock && (task.triageId||task.triageKey||context.id) &&
       !task.responsibilityId && !task.delegatedItemId && !context.waiting_item_id);
   }
-  function groupItineraryTree(nodes,blocks){
+  function groupItineraryTree(nodes,blocks,{sourceReviewIntoTriage=true}={}){
     const triage={block:TRIAGE_BLOCK,nodes:[]},unplanned={block:UNPLANNED_BLOCK,nodes:[]},outside={block:OUTSIDE_BLOCK,nodes:[]};
     const groups=(blocks||[]).map(block=>({block:Object.assign({},block,{collapsible:true,editable:true,timed:true,sortable:false,dropTarget:"timed"}),nodes:[]}));
     const byId=new Map(groups.map(g=>[g.block.id,g]));
@@ -28,7 +28,7 @@
       if(!node.depth||!bucket){
         const task=node.ev;
         const untimed=task.untimed===true||(task.untimed!==false&&minutes(task.start,false)===null);
-        bucket=untimed?(isSourceReviewTask(task)?triage:unplanned):(byId.get((blockForTask(task,blocks)||{}).id)||outside);
+        bucket=untimed?(sourceReviewIntoTriage&&isSourceReviewTask(task)?triage:unplanned):(byId.get((blockForTask(task,blocks)||{}).id)||outside);
       }
       bucket.nodes.push(node);
     });

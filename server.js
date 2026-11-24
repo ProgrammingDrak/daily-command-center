@@ -253,6 +253,20 @@ app.use(async (req, res, next) => {
       return res.status(401).json({ error: "Meeting audio service token required" });
     }
     if (req.method === "GET" && req.path === "/api/waiting-items/attention" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
+    if (req.method === "POST" && req.path === "/api/dcc/triage-check/ingest") {
+      const packet = req.body?.packet || req.body || {};
+      if (Object.hasOwn(packet, "sweep_findings") || Object.hasOwn(packet, "reply_findings")) {
+        // Do not infer sweep origin from browser sessions, target headers or
+        // the broad DCC token. The verified sweep identity is server configured.
+        try {
+          req.dccServiceAuth = await require("./lib/sweep-triage").authenticate(req.headers.authorization, tokenStore.verifyToken);
+        } catch (error) {
+          if (error.statusCode) return res.status(error.statusCode).json({error:error.message});
+          throw error;
+        }
+        return next();
+      }
+    }
     if (DCC_ENDPOINTS.has(req.path) && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) return next();
     if (!req.session.userId) {
       if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" });

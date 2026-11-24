@@ -192,6 +192,8 @@
       titleNamingVersion: p.titleNamingVersion || "",
       triageContext: p.triageContext || null,
       triageBlock: p.triageBlock === true,
+      ...(p.sweepTriage ? {sweepTriage:{...p.sweepTriage}} : {}),
+      ...(p.completed === true ? {retiredSweepCandidate:true} : {}),
       triageId: p.triageId || null,
       triageKey: p.triageKey || null,
       triageTitle: p.triageTitle || "",
@@ -1071,6 +1073,23 @@
   //     inside its parent wherever that parent does render
   // `opts.pool` defaults to `items`, which is exactly the old behaviour, so a call
   // site opts in to the fix by naming its pool.
+  function isPendingSweepTriage(ev) {
+    return !!(ev && ev._dateless && ev.untimed && ev.publicVisibility === "private" &&
+      ev.sweepTriage?.origin === "automated_sweep" && ev.sweepTriage.disposition === "pending" &&
+      !ev.completedAt && !ev.retiredSweepCandidate &&
+      !["done","completed","deleted","archived","cancelled"].includes(ev.status) &&
+      !parentIdOf(ev) && !ev.responsibilityId && !ev.delegatedItemId && !ev.triageContext?.waiting_item_id);
+  }
+  function selectSweepTriage(items, opts = {}) {
+    const pending = _arr(items).filter(isPendingSweepTriage);
+    if (!pending.length) return [];
+    const candidates = selectActive(selectVisible(pending, opts), opts);
+    const waiting = _arr(opts.waitingRows), parked = waitingParkedIds(candidates.concat(waiting), waiting);
+    // Manual subtasks stay with their parent in task details and All Tasks.
+    // They do not get sweep provenance from their parent.
+    return selectTree(candidates.filter(ev => !parked.has(String(ev.id))), opts);
+  }
+
   function selectTree(items, opts) {
     opts = opts || {};
     const list = _arr(items);
@@ -1171,6 +1190,7 @@
     selectLooseEndsTriage,
     selectRoots: selectRoots,
     selectDay: selectDay,
-    selectTree: selectTree
+    selectTree: selectTree,
+    isPendingSweepTriage, selectSweepTriage
   };
 });
