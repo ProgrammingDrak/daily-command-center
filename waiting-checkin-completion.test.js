@@ -130,7 +130,28 @@ test("triage check-in cancellation leaves suppression, dismissal, and reward unt
   }
 });
 
-test("Waiting rows share itinerary controls without offering check-in on unset follow-ups", () => {
+test("Waiting task completion saves immediately without a confirmation popup", async () => {
+  const requests = [], notices = [];
+  let refreshes = 0;
+  const context = vm.createContext({
+    getDelegatedItemById: id => ({id}),
+    window: {confirm: () => assert.fail("Quick completion must not prompt")},
+    postWaitingAction: async (...args) => { requests.push(args); },
+    closeDelegatedModal() {},
+    afterWaitingAction: async () => { refreshes++; },
+    toast: (...args) => notices.push(args),
+  });
+  vm.runInContext(region(delegated, "  async function completeWaitingItem(", "  // Schedule a 15-minute check-in task"), context);
+  assert.equal(await context.completeWaitingItem("waiting"), true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0][0], "waiting");
+  assert.equal(requests[0][1], "complete");
+  assert.ok(Number.isFinite(Date.parse(requests[0][2].completedAt)));
+  assert.equal(refreshes, 1);
+  assert.equal(notices[0][1], "success");
+});
+
+test("Waiting rows complete actual work even when follow-ups are finished or unset", () => {
   const calls = [];
   const context = vm.createContext({
     isTaskDependency: () => false,
@@ -140,6 +161,7 @@ test("Waiting rows share itinerary controls without offering check-in on unset f
     taskForItem: item => ({id:item.id,title:"Review"}),
     waitingSourceRef: () => "",
     markDelegatedItemCheckedById: id => calls.push(["check-in",id]),
+    completeWaitingItem: id => calls.push(["complete",id]),
     scheduleDelegatedItem: (id,button) => calls.push(["schedule",id,button]),
     openDelegatedModal: id => calls.push(["edit",id]),
     openTaskActions: (id,button) => calls.push(["actions",id,button]),
@@ -157,10 +179,14 @@ test("Waiting rows share itinerary controls without offering check-in on unset f
   ]) {
     const {ev,opts} = context.renderCard({id:"waiting",properties});
     assert.equal(ev.id,"waiting");
-    assert.equal(typeof opts.onComplete === "function",hasCheckIn);
+    assert.equal(opts.completionTitle,"Mark as completed");
+    assert.equal(typeof opts.onComplete === "function",properties.status !== "done");
     assert.equal(typeof opts.onSchedule === "function",hasCheckIn);
-    if (hasCheckIn) { opts.onComplete(); opts.onSchedule("trigger"); }
+    if (properties.status !== "done") opts.onComplete();
+    if (hasCheckIn) opts.onSchedule("trigger");
     opts.onOpen(); opts.onRadial("trigger"); opts.onDelete();
   }
-  assert.deepEqual(calls.slice(0,5),[["check-in","waiting"],["schedule","waiting","trigger"],["edit","waiting"],["actions","waiting","trigger"],["delete","waiting"]]);
+  assert.equal(calls.filter(([action])=>action === "complete").length,4);
+  assert.equal(calls.some(([action])=>action === "check-in"),false);
+  assert.deepEqual(calls.slice(0,5),[["complete","waiting"],["schedule","waiting","trigger"],["edit","waiting"],["actions","waiting","trigger"],["delete","waiting"]]);
 });

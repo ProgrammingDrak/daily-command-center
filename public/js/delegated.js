@@ -644,8 +644,8 @@
       done, dataset:{waitingId:item.id}, barColor:"var(--waiting)",
       titleExtrasHtml:sourceLink,
       metaHtml:'<span class="it-list-untimed">'+esc(blockerLabel(item) + " · " + dueLabel(item))+'</span>',
-      completionTitle:"Record a check-in. The delegated task stays open.",
-      onComplete:!done && !noFollowUp ? ()=>markDelegatedItemCheckedById(item.id) : null,
+      completionTitle:"Mark as completed",
+      onComplete:!done ? ()=>completeWaitingItem(item.id) : null,
       onSchedule:!done && !noFollowUp ? trigger=>scheduleDelegatedItem(item.id, trigger) : null,
       onOpen:()=>openDelegatedModal(item.id),
       onRadial:trigger=>openTaskActions(item.id, trigger),
@@ -935,7 +935,6 @@
   async function completeWaitingItem(id) {
     const item = getDelegatedItemById(id);
     if (!item) return false;
-    if (typeof window.confirm === "function" && !window.confirm("Mark this task complete and close its Waiting item?")) return false;
     try {
       await postWaitingAction(id, "complete", { completedAt: new Date().toISOString() });
       closeDelegatedModal();
