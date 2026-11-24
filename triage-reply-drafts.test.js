@@ -52,7 +52,7 @@ test("authenticated intake, real Postgres store and existing block readback pres
   let server;
   try {
     await pool.query(`CREATE TABLE blocks(id text PRIMARY KEY,type text,date text,parent_id text,user_id integer,workspace_id text,properties jsonb,deleted_at timestamptz,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now())`);
-    const props={kind:"task",type:"task",title:"Owner's edited title",detail:"Owner notes",priority:"High",status:"open",triageBlock:true,publicVisibility:"private",triageId:draft().triage_id,triageSourceRef:source,triageContext:{id:draft().triage_id,source_ref:source,link:source,summary:"Owner context"}};
+    const props={sweepTriage:{origin:"automated_sweep",disposition:"pending",runId:"synthetic"},kind:"task",type:"task",title:"Owner's edited title",detail:"Owner notes",priority:"High",status:"open",triageBlock:true,publicVisibility:"private",triageId:draft().triage_id,triageSourceRef:source,triageContext:{id:draft().triage_id,source_ref:source,link:source,summary:"Owner context"}};
     await pool.query("INSERT INTO blocks(id,type,user_id,workspace_id,properties) VALUES('task-fixture','block',7,'ws-owned',$1),('foreign','block',9,'ws-other',$1),('same-workspace-foreign','block',9,'ws-owned',$1)",[props]);
     const poolPath=require.resolve("./pg-pool");
     require.cache[poolPath]={id:poolPath,filename:poolPath,loaded:true,exports:pool};
@@ -96,7 +96,7 @@ test("authenticated intake, real Postgres store and existing block readback pres
     assert.equal((await post({packet:{reply_drafts:[{...draft(),triage_id:"wrong-source-wrapper"}]}})).status,409);
     assert.equal((await post({packet:{reply_drafts:[{...draft(),source_ref:source.replace("7919","7920")}]}})).status,400);
     assert.equal((await post({packet:{reply_drafts:[{...draft(),draft_preview:"Overwrite owner"}]}})).status,409);
-    for(const patch of [{status:"done"},{triageBlock:false},{publicVisibility:"public"},{responsibilityId:"recurring"},{delegatedItemId:"waiting"},{kind:"backlog"}]) {
+    for(const patch of [{sweepTriage:null},{sweepTriage:{origin:"automated_sweep",disposition:"dismissed"}},{sweepTriage:{origin:"automated_sweep",disposition:"promoted"}},{status:"archived"},{status:"done"},{triageBlock:false},{publicVisibility:"public"},{responsibilityId:"recurring"},{delegatedItemId:"waiting"},{kind:"backlog"}]) {
       await pool.query("UPDATE blocks SET properties=properties || $1::jsonb WHERE id='task-fixture'",[JSON.stringify(patch)]);
       assert.equal((await post(body)).status,409,JSON.stringify(patch));
       await pool.query("UPDATE blocks SET properties=$1 WHERE id='task-fixture'",[row.properties]);

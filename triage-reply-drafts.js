@@ -49,6 +49,7 @@ module.exports = function createTriageReplyDraftStore({ pool }) {
       // An isolated node cannot establish the real lane of a nested task.
     // Hold these for owner review instead of treating a moved child as a root.
     if (row.parent_id || props.subtaskOf || props.wrapId) fail(409, "Task is no longer a standalone Triage root");
+    if (!TaskModel.isPendingSweepTriage(TaskModel.fromBlock(row))) fail(409, "Task is outside pending sweep Triage");
     const groups = TimeBlocks.groupItineraryTree([{ ev: TaskModel.fromBlock(row), depth: 0 }], []);
       if (!groups.find(group => group.block.id === TimeBlocks.TRIAGE_BLOCK.id).nodes.length) fail(409, "Task is outside the Triage lane");
       const source = props.triageSourceRef || context.source_ref || context.source_url || context.link || props.source_id;

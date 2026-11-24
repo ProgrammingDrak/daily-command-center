@@ -139,6 +139,13 @@ test("public handler atomically creates a private Triage task with its researche
       assert.equal((await request("/api/triage/tasks/"+plainId+"/dismiss",{})).status,200);
     }
     assert.equal((await request("/api/blocks/"+plainId)).body.properties.sweepTriage.disposition,"dismissed");
+    const dismissedRows=(await pool.query("SELECT * FROM blocks ORDER BY id")).rows;
+    const dismissedOperations=(await pool.query("SELECT * FROM operations ORDER BY id")).rows;
+    const dismissedDraft={packet:{reply_drafts:[{task_id:plainId,triage_id:plain.source_id,source_ref:plain.source_ref,draft_preview:"Do not attach this after owner dismissal"}]}};
+    assert.equal((await request("/api/dcc/triage-check/ingest",{...dismissedDraft,dry_run:true})).status,409);
+    assert.equal((await request("/api/dcc/triage-check/ingest",dismissedDraft)).status,409);
+    assert.deepEqual((await pool.query("SELECT * FROM blocks ORDER BY id")).rows,dismissedRows);
+    assert.deepEqual((await pool.query("SELECT * FROM operations ORDER BY id")).rows,dismissedOperations);
     assert.equal((await send()).status,"duplicate");
     const audit=(await pool.query("SELECT before_data,after_data FROM operations WHERE block_id=$1 ORDER BY id DESC LIMIT 1",[plainId])).rows[0];
     assert.equal(audit.before_data.sweepTriage.disposition,"pending");
