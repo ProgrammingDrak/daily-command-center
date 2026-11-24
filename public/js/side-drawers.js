@@ -410,6 +410,7 @@
     }
 
     document.addEventListener("keydown", e => {
+      if(window.DCC?.overlay?.activeBlocking) return;
       if(window.DCC?.overlay?.layerAboveOpen()) return;
       const d = drawer();
       if(e.target.closest?.(".tlb-overlay,.resched-popover")) return;
@@ -421,11 +422,12 @@
     });
 
     document.addEventListener("pointerdown", e => {
+      if(window.DCC?.overlay?.activeBlocking) return;
       if(window.DCC?.overlay?.eventInLayerAbove(e)) return;
       const d = drawer();
       if(!d?.classList.contains("open")) return;
       if(e.target.closest("#tasks-drawer .side-drawer-body")) return;
-      if(e.target.closest(".sidecar-tabs,.tlb-overlay,.resched-popover")) return;
+      if(e.target.closest(".sidecar-tabs,.tlb-overlay,.resched-popover,.toast-container")) return;
       if(e.target.closest("#dcc-launcher,#dcc-scrim")) return;
       closeTasks();
     });

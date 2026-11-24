@@ -121,6 +121,8 @@
         metaHtml:metadata.filter(Boolean).map(value => '<span class="it-list-context">'+esc(value)+'</span>').join(""),
         onOpen:() => taskEditor(row.id),
         onRadial:done(row)||ev._contextOnly ? null : trigger => window.openTaskRadial(ev,trigger,{onSettled:refresh}),
+        onDelete:done(row)||ev._contextOnly ? null : trigger => deleteTask(row,trigger),
+        deleteLabel:'Delete task',deleteTitle:'Delete task and its nested tasks',
         onComplete:ev._contextOnly?null:() => toggleCompletion(row),
         onSchedule:done(row) ? null : anchor => scheduleTask({id:row.id, title:taskTitle(row), raw:row},anchor),
         actionsBeforeHtml:canReturn ? '<button class="btn btn-ghost" type="button" data-return-idea>Return to Someday</button>' : "",
@@ -154,6 +156,22 @@
       notify(error.message,"error");
       button.disabled = false;
     }
+  }
+
+  async function deleteTask(row,trigger) {
+    try {
+      if(!window.DCCWorkingQueue?.openDelete)throw new Error('Task deletion is unavailable. Reload and try again.');
+      await window.DCCWorkingQueue.openDelete(row.id,trigger,{
+        resolveAnchor:async()=>{
+          const library=await loadLibrary();
+          const current=library.tasks.find(task=>task.id===row.id&&!task.deleted_at);
+          return current?{blockId:current.id,date:current.date||null}:null;
+        },
+        onSettled:refresh,
+        returnFocus:()=>root()?.querySelector('.it-list-item[data-id="'+CSS.escape(row.id)+'"] .btn-del-task')
+          ||root()?.querySelector('[data-filter="search"]'),
+      });
+    } catch(error) { notify(error.message,'error'); }
   }
 
   async function toggleCompletion(row) {
