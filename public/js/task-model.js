@@ -1081,7 +1081,9 @@
       !parentIdOf(ev) && !ev.responsibilityId && !ev.delegatedItemId && !ev.triageContext?.waiting_item_id);
   }
   function selectSweepTriage(items, opts = {}) {
-    const candidates = selectActive(selectVisible(_arr(items).filter(isPendingSweepTriage), opts), opts);
+    const pending = _arr(items).filter(isPendingSweepTriage);
+    if (!pending.length) return [];
+    const candidates = selectActive(selectVisible(pending, opts), opts);
     const waiting = _arr(opts.waitingRows), parked = waitingParkedIds(candidates.concat(waiting), waiting);
     // Manual subtasks stay with their parent in task details and All Tasks.
     // They do not get sweep provenance from their parent.

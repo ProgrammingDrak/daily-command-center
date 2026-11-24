@@ -97,8 +97,8 @@ test("★ the Unscheduled section renders a TREE, not a flat list of roots", () 
   const pill = schedTabCode.slice(start, end);
   assert.match(pill, /_renderQueueInto\(listEl,_orderUnscheduledNodes\(model\.unscheduledGroup\.nodes\),model\)/,
     "the pill must render the grouped TREE's nodes, not a flat list of roots");
-  assert.match(pill, /_renderQueueInto\(listEl,model\.triageGroup\.nodes,model,status\)/,
-    "Triage renders the grouped tree too");
+  assert.match(pill, /_renderQueueInto\(listEl,model\.triageGroup\.nodes,model,null\)/,
+    "Triage renders the canonical group without a legacy loader status");
   assert.match(pill, /row\(node\.ev,_isSubRow\(node\)\?0:rank\+\+,isDone\(node\.ev\)\?"done":"open",node\)/,
     "and with the real done/open mode, or a done step renders as an unchecked row");
 });

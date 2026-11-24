@@ -88,6 +88,6 @@ test('glasses itinerary expands desktop-collapsed parents before filtering done 
   ctx.DCC=ctx.window.DCC;ctx.DCC.TaskModel=T;ctx.DCC.TimeBlocks=timeBlocks;
   const text=source('schedule-tab');
   vm.runInContext(text.slice(text.indexOf('function _datelessTriageNodes('),text.indexOf('// Finished work is recorded')),ctx);
-  vm.runInContext(text.slice(text.indexOf('window.glassesItineraryTasks='),text.indexOf('// Triage rows are created')),ctx);
+  vm.runInContext(text.slice(text.indexOf('window.glassesItineraryTasks='),text.indexOf('function renderTriageInto(')),ctx);
   assert.deepEqual(Array.from(ctx.window.glassesItineraryTasks(),ev=>ev.id),['child']);
 });
