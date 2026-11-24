@@ -101,3 +101,19 @@ test('Undo toast pointerdown preserves the collection and does not steal the act
   handler({target:{closest:()=>null}});
   assert.equal(closed,1,'ordinary outside clicks still dismiss the drawer');
 });
+
+test('acknowledged canonical Undo refreshes the library without reopening its drawer',()=>{
+  const state=fs.readFileSync(require.resolve('./public/js/state.js'),'utf8');
+  const start=state.indexOf('function _applyTaskRestoreOutcome(');
+  const end=state.indexOf('\nconst _UNDO_SNAPSHOT_CAP',start);
+  let refreshed=0;
+  const page={window:{DCC:{TaskActions:{finish(){}}},DCCTaskLibrary:{refresh:()=>refreshed++}},
+    _deleteUndoIntentKey:()=> 'pool:task',_deleteUndoSnapshots:new Map(),_deleteUndoIntents:new Map(),
+    _persistDeleteUndo(){},recalcTimes(){},render(){}};
+  vm.createContext(page);vm.runInContext(state.slice(start,end),page);
+  const meta={rootId:'task',canonicalOnly:true,ids:['task'],date:null,deleteMutationId:'delete-1'};
+  page._applyTaskRestoreOutcome(meta,{ok:false,permanent:true});
+  assert.equal(refreshed,0,'a failed restore must not claim fresh restored data');
+  page._applyTaskRestoreOutcome(meta,{ok:true});
+  assert.equal(refreshed,1,'confirmed restore must refresh the visible library');
+});

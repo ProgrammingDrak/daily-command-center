@@ -2018,7 +2018,7 @@ function _applyTaskRestoreOutcome(meta,result){
     if(result.ok&&typeof refoldTaskStateFromBlockCache==="function")refoldTaskStateFromBlockCache();
     if(meta.canonicalOnly){
       window.DCCWorkingQueue?.invalidate();
-      if(result.ok){window.DCC?.Carryover?.recollect?.(meta.date);void window.DCC?.CatchUp?.refresh?.({focus:false});}
+      if(result.ok){window.DCC?.Carryover?.recollect?.(meta.date);void window.DCC?.CatchUp?.refresh?.({focus:false});void window.DCCTaskLibrary?.refresh?.();}
     }
     else {ids.forEach(id=>result.ok?deletedSet.delete(id):deletedSet.add(id));saveDeletedState();}
     recalcTimes();render();
