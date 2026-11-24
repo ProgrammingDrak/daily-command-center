@@ -209,7 +209,7 @@ test("★ the list view derives ONCE — one selectDay call feeding every sectio
   const model = schedTabCode.slice(mStart, schedTabCode.indexOf("\nfunction ", mStart + 1));
   const calls = (model.match(/TaskModel\.selectDay\(/g) || []).length;
   assert.equal(calls, 1, "the shared model must call selectDay exactly once, got " + calls);
-  assert.match(model, /const day=DCC\.TaskModel\.selectDay\(DCC\.TaskModel\.selectDayScoped\(scheduled\),viewDate,\{today:actualToday,carryoverPool:unfPool,waitingRows:window\.blockStore \? window\.blockStore\.getByType\("block"\) : \[\]\}\)/);
+  assert.match(model, /const day=DCC\.TaskModel\.selectDay\(DCC\.TaskModel\.selectDayScoped\(scheduled\),viewDate,\{today:actualToday,carryoverPool:unfPool,waitingRows\}\)/);
   assert.match(model, /const unfPool=\[\];/,
     "the list derivation must keep its carryover pool empty because Loose Ends owns those rows");
   const pStart = schedTabCode.indexOf("function renderUnscheduledInto(");

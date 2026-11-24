@@ -906,6 +906,36 @@ function suggestedCommuteOrigin(blockId){
   return "";
 }
 
+// Durable reviewed tasks have no day. Project their private trees straight into
+// the Triage drawer, never into the day's plan, progress, or Unscheduled group.
+function _datelessTriageNodes(items,waitingRows,options){
+  const {TaskModel,TimeBlocks}=DCC;
+  const privateDateless=items.filter(ev=>ev&&ev._dateless&&ev.untimed&&ev.publicVisibility==="private"
+    &&!["done","deleted","archived"].includes(ev.status));
+  if(!privateDateless.length)return [];
+  const candidates=TaskModel.selectActive(TaskModel.selectVisible(privateDateless));
+  const parked=TaskModel.waitingParkedIds(candidates.concat(waitingRows),waitingRows);
+  const eligible=candidates.filter(ev=>!parked.has(String(ev.id)));
+  const children=new Map(),roots=[];
+  eligible.forEach(ev=>{
+    const parent=TaskModel.parentIdOf(ev);
+    if(parent){
+      if(!children.has(parent))children.set(parent,[]);
+      children.get(parent).push(ev);
+    }else if(TimeBlocks.isSourceReviewTask(ev))roots.push(ev);
+  });
+  const tree=[],seen=new Set(),pending=roots.slice().reverse();
+  while(pending.length){
+    const ev=pending.pop();
+    if(seen.has(ev.id))continue;
+    seen.add(ev.id);
+    tree.push(ev);
+    const kids=children.get(ev.id)||[];
+    for(let i=kids.length-1;i>=0;i--)pending.push(kids[i]);
+  }
+  return TaskModel.selectTree(tree,options.expandAll?{isCollapsed:()=>false}:{});
+}
+
 function _itineraryListModel(options={}){
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   // isActive() is time-of-day only (no date), so the "Now" chip must be gated to
@@ -915,7 +945,8 @@ function _itineraryListModel(options={}){
   // Loose Ends owns past-day unfinished work now. Keep carryovers out of the task
   // list derivation entirely, including the old hidden fetch and second render.
   const unfPool=[];
-  const day=DCC.TaskModel.selectDay(DCC.TaskModel.selectDayScoped(scheduled),viewDate,{today:actualToday,carryoverPool:unfPool,waitingRows:window.blockStore ? window.blockStore.getByType("block") : []});
+  const waitingRows=window.blockStore ? window.blockStore.getByType("block") : [];
+  const day=DCC.TaskModel.selectDay(DCC.TaskModel.selectDayScoped(scheduled),viewDate,{today:actualToday,carryoverPool:unfPool,waitingRows});
   const visible=day.visible;
   const timeBlocks=DCC.TimeBlocks.forDate((__state&&__state.schedule&&(__state.schedule.timeBlocks||__state.schedule.blocks))||[],viewDate);
   const groups=DCC.TimeBlocks.groupItineraryTree(DCC.TaskModel.selectTree(day.timed.concat(_orderUnscheduled(day.unscheduled)),{pool:visible,...(options.expandAll?{isCollapsed:()=>false}:{})}),timeBlocks);
@@ -923,6 +954,7 @@ function _itineraryListModel(options={}){
   const triageGroup=groups.find(g=>g.block.id===DCC.TimeBlocks.TRIAGE_BLOCK.id)||{nodes:[]};
   _fileDoneUntimedOnTheDay(groups,triageGroup,timeBlocks);
   _fileDoneUntimedOnTheDay(groups,unscheduledGroup,timeBlocks);
+  triageGroup.nodes=triageGroup.nodes.concat(_datelessTriageNodes(scheduled,waitingRows,options));
   return {viewDate,isTodayView,unfPool,day,timeBlocks,groups,unscheduledGroup,triageGroup};
 }
 // Finished work is recorded on the day it was finished, never in a pill: the drawer's
