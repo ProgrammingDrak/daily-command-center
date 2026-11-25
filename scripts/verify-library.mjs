@@ -32,10 +32,8 @@ try {
   await page.locator('[data-tool="pen"]').click();
   assert.equal(await page.locator('[data-pen-style] option').count(),7);
   await page.getByRole("button", { name: "Pencil", exact: true }).click();
-  // Inline, the page is a card; drawing happens full screen.
-  await page.locator("[data-expand]").click();
-  await page.waitForSelector(".jsk-overlay.open");
-  const canvas = page.locator(".jsk-overlay [data-canvas]");
+  const canvas = page.locator("[data-canvas]");
+  await canvas.scrollIntoViewIfNeeded();
   const box = await canvas.boundingBox();
   for (let n = 0; n < 20; n++) {
     await page.mouse.move(box.x + 30, box.y + 40 + n * 5);
@@ -43,8 +41,6 @@ try {
     await page.mouse.move(box.x + 90, box.y + 45 + n * 5);
     await page.mouse.up();
   }
-  await page.keyboard.press("Escape");
-  await page.waitForFunction(() => !document.querySelector(".dcc-overlay"));
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await page.waitForFunction(() => document.querySelector("[data-status]")?.textContent.includes("Synced to vault"));
   await check("Journal text, 20 strokes, and rich paper metadata reach the vault", async () => {

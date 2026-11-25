@@ -27,7 +27,7 @@
   function mount(pages = [[]], options = {}) {
     const stage = document.createElement('section');
     document.querySelector('#mount').append(stage);
-    sketch = JournalSketchbook.mount(stage, pages, { inlineDrawing: !new URLSearchParams(location.search).has('card'), onMinimize: () => { window.minimizeSaves = (window.minimizeSaves || 0) + 1; window.autosaveToSession?.(); }, ...options });
+    sketch = JournalSketchbook.mount(stage, pages, { onMinimize: () => { window.minimizeSaves = (window.minimizeSaves || 0) + 1; window.autosaveToSession?.(); }, ...options });
     stage.querySelector('[data-collapse]').click();
     return stage;
   }
