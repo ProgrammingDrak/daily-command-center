@@ -30,6 +30,97 @@
 
   const MAX_UNDO = 60;
 
+  // Shared input ownership for every Ink host. Storage and rendering stay in
+  // host callbacks; capture, palm rejection, and navigation have one owner.
+  function createPointerInput(opts) {
+    const base = opts.base, wrap = opts.wrap;
+    const state = opts.state || { activePointer: null, activePointerType: null,
+      penSeen: false, fingerDraw: opts.fingerDraw || "off" };
+    const touches = new Set();
+    let navigation = null, lastPen = -Infinity;
+    function release(id) { try { base.releasePointerCapture(id); } catch { /* already released */ } }
+    function finish(ev, cancel = false) {
+      touches.delete(ev.pointerId);
+      if (navigation?.id === ev.pointerId) {
+        const g = navigation;
+        navigation = null;
+        release(ev.pointerId);
+        if (!cancel && Math.abs(g.dx) > 80 && Math.abs(g.dx) > Math.abs(g.dy) * 2 &&
+            Date.now() - g.start < 1200 && Date.now() - lastPen > 800)
+          opts.onNavigate?.(g.dx < 0 ? 1 : -1);
+        return;
+      }
+      if (ev.pointerId !== state.activePointer) return;
+      if (state.activePointerType === "pen") lastPen = Date.now();
+      state.activePointer = null;
+      state.activePointerType = null;
+      release(ev.pointerId);
+      if (cancel) opts.onCancel?.(ev);
+      else opts.onFinish?.(ev);
+    }
+    function down(ev) {
+      if (opts.enabled && !opts.enabled()) return;
+      ev.preventDefault();
+      if (ev.pointerType === "pen") {
+        state.penSeen = true;
+        lastPen = Date.now();
+        navigation = null;
+        if (state.activePointerType === "touch") finish({ pointerId: state.activePointer }, true);
+      }
+      if (ev.pointerType === "touch") {
+        touches.add(ev.pointerId);
+        if (touches.size > 1) {
+          navigation = null;
+          if (state.activePointerType === "touch") finish({ pointerId: state.activePointer }, true);
+          return;
+        }
+      }
+      const draws = ev.pointerType === "pen" || ev.pointerType === "mouse" ||
+        state.fingerDraw === "on" || (state.fingerDraw === "auto" && !state.penSeen);
+      if (!draws) {
+        if (ev.pointerType === "touch" && opts.onNavigate && state.activePointer === null && Date.now() - lastPen > 800) {
+          navigation = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, dx: 0, dy: 0, start: Date.now() };
+          try { base.setPointerCapture(ev.pointerId); } catch { navigation = null; }
+        }
+        return;
+      }
+      if (state.activePointer !== null || (ev.pointerType !== "pen" && ev.button !== 0)) return;
+      state.activePointer = ev.pointerId;
+      state.activePointerType = ev.pointerType;
+      try { base.setPointerCapture(ev.pointerId); }
+      catch { state.activePointer = null; state.activePointerType = null; return; }
+      opts.onStart?.(ev);
+    }
+    function move(ev) {
+      if (navigation?.id === ev.pointerId) {
+        ev.preventDefault();
+        navigation.dx = ev.clientX - navigation.x;
+        navigation.dy = ev.clientY - navigation.y;
+      } else if (ev.pointerId === state.activePointer) opts.onMove?.(ev);
+    }
+    const handlers = { pointerdown: down, pointermove: move, pointerup: ev => finish(ev),
+      pointercancel: ev => finish(ev, true), lostpointercapture: ev => finish(ev),
+      pointerleave: ev => { if (!base.hasPointerCapture(ev.pointerId)) finish(ev); },
+      contextmenu: ev => ev.preventDefault() };
+    for (const [type, handler] of Object.entries(handlers)) base.addEventListener(type, handler);
+    const preventTouch = ev => { if (ev.cancelable) ev.preventDefault(); };
+    wrap.addEventListener("touchstart", preventTouch, { passive: false });
+    wrap.addEventListener("touchmove", preventTouch, { passive: false });
+    return { state, isBusy: () => state.activePointer !== null,
+      setFingerDraw(value) { state.fingerDraw = value === "on" ? "on" : value === "auto" ? "auto" : "off"; },
+      finishActive(extra = {}) { if (state.activePointer !== null) finish({ ...extra, pointerId: state.activePointer }); },
+      cancelActive() { if (state.activePointer !== null) finish({ pointerId: state.activePointer }, true); },
+      destroy() {
+        this.cancelActive();
+        if (navigation) release(navigation.id);
+        navigation = null;
+        for (const [type, handler] of Object.entries(handlers)) base.removeEventListener?.(type, handler);
+        wrap.removeEventListener("touchstart", preventTouch);
+        wrap.removeEventListener("touchmove", preventTouch);
+      }
+    };
+  }
+
   function create(opts) {
     const base = opts.base;
     const live = opts.live;
@@ -46,7 +137,7 @@
     // endpoints and makes the live pixels match the durable vector rendering.
     const prefix = document.createElement("canvas");
     const prefixCtx = prefix.getContext("2d");
-    let finalized = 0;
+    const renderer = S.createLiveRenderer(live, prefix);
 
     const state = {
       page: S.emptyPage(),
@@ -91,7 +182,6 @@
       baseCtx.setTransform(k, 0, 0, k, 0, 0);
       liveCtx.setTransform(k, 0, 0, k, 0, 0);
       prefixCtx.setTransform(k, 0, 0, k, 0, 0);
-      finalized = 0;
       redraw();
       redrawLive();
     }
@@ -119,35 +209,8 @@
     }
 
     // A new stroke or layout invalidates both live pixels and the stable prefix.
-    function clearLive() {
-      clear(liveCtx, live);
-      clear(prefixCtx, prefix);
-      finalized = 0;
-    }
-
-    function redrawLive(append) {
-      const spec = state.current ? S.toolSpec(state.current.tool) : null;
-      if (!append) clearLive();
-      else clear(liveCtx, live);
-      if (!state.current) return;
-      const modern = S.modernHighlight(state.current);
-      live.style.opacity = modern ? spec.alpha : spec.graphite ? 0.7 : 1;
-      live.style.mixBlendMode = modern ? "multiply" : "normal";
-      const n = S.pointCount(state.current);
-      if ((spec.alpha >= 1 || S.modernHighlight(state.current)) && n >= 3) {
-        if (finalized < n - 2) {
-          S.drawStroke(prefixCtx, state.current, { scale: 1, from: finalized + 1, to: n - 1, mask: S.modernStroke(state.current) });
-          finalized = n - 2;
-        }
-        liveCtx.save();
-        liveCtx.setTransform(1, 0, 0, 1, 0, 0);
-        liveCtx.drawImage(prefix, 0, 0);
-        liveCtx.restore();
-        S.drawStroke(liveCtx, state.current, { scale: 1, from: n - 1, mask: S.modernStroke(state.current) });
-      } else {
-        S.drawStroke(liveCtx, state.current, { scale: 1, mask: S.modernStroke(state.current) });
-      }
-    }
+    function clearLive() { renderer.clear(); }
+    function redrawLive(append) { renderer.draw(state.current, append); }
 
     // ── history ──────────────────────────────────────────────────────────────
 
@@ -205,58 +268,8 @@
     // A finger is only allowed to draw until the first time a pen is used. After
     // that this canvas belongs to the pen and touch is for panning, which is what
     // lets you rest your hand while writing.
-    function pointerDraws(ev) {
-      if (ev.pointerType === "pen") return true;
-      if (ev.pointerType === "mouse") return true;
-      return state.fingerDraw === "on" || (state.fingerDraw === "auto" && !state.penSeen);
-    }
-
-    const touches = new Set();
-    let navigation = null;
-    let lastPen = -Infinity;
     function onDown(ev) {
-      // Even rejected palm contacts must not start a native selection gesture.
-      ev.preventDefault();
-      if (ev.pointerType === "pen") {
-        state.penSeen = true;
-        lastPen = Date.now();
-        navigation = null;
-      }
-      if (ev.pointerType === "touch") {
-        touches.add(ev.pointerId);
-        if (touches.size > 1) {
-          navigation = null;
-          if (state.activePointerType === "touch") onCancel({ pointerId: state.activePointer });
-          return;
-        }
-      }
-      // A resting palm can arrive before the first Pencil event. Let the pen
-      // take over that provisional touch rather than waiting for the palm up.
-      if (ev.pointerType === "pen" && state.activePointerType === "touch") {
-        onCancel({ pointerId: state.activePointer });
-      }
-      if (!pointerDraws(ev)) {
-        // Paper uses explicit horizontal page swipes, not native touch scrolling.
-        // Delay after Pencil contact prevents a resting palm from turning pages.
-        if (ev.pointerType === "touch" && opts.onNavigate && state.activePointer === null && Date.now() - lastPen > 800) {
-          navigation = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, dx: 0, dy: 0, start: Date.now() };
-          try { base.setPointerCapture(ev.pointerId); } catch { navigation = null; }
-        }
-        return;
-      }
-      if (state.activePointer !== null) return;
-      // A pen's barrel button and an inverted stylus both mean erase.
       const erasing = state.tool === "eraser" || ev.button === 5 || ev.buttons === 32;
-
-      state.activePointer = ev.pointerId;
-      state.activePointerType = ev.pointerType;
-      try { base.setPointerCapture(ev.pointerId); }
-      catch {
-        state.activePointer = null;
-        state.activePointerType = null;
-        return;
-      }
-
       const p = toPage(ev);
       if (erasing) {
         state.current = null;
@@ -271,12 +284,6 @@
     }
 
     function onMove(ev) {
-      if (navigation && navigation.id === ev.pointerId) {
-        ev.preventDefault();
-        navigation.dx = ev.clientX - navigation.x;
-        navigation.dy = ev.clientY - navigation.y;
-        return;
-      }
       if (ev.pointerId !== state.activePointer) return;
       ev.preventDefault();
 
@@ -301,22 +308,6 @@
     }
 
     function onUp(ev) {
-      touches.delete(ev.pointerId);
-      if (navigation && navigation.id === ev.pointerId) {
-        const gesture = navigation;
-        navigation = null;
-        try { base.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
-        if (Math.abs(gesture.dx) > 80 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 2 && Date.now() - gesture.start < 1200 && Date.now() - lastPen > 800) {
-          opts.onNavigate(gesture.dx < 0 ? 1 : -1);
-        }
-        return;
-      }
-      if (ev.pointerId !== state.activePointer) return;
-      if (state.activePointerType === "pen") lastPen = Date.now();
-      state.activePointer = null;
-      state.activePointerType = null;
-      try { base.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
-
       if (state.erasing) {
         if (state.erasing.removed.length) {
           pushUndo({ type: "erase", removed: state.erasing.removed });
@@ -337,12 +328,7 @@
       // Copy in device pixels, without applying the page transform a second time.
       // Highlighter segments multiply individually, so keep their vector replay:
       // flattening them first would change overlaps on existing colored ink.
-      if (S.toolSpec(stroke.tool).alpha >= 1 || S.modernHighlight(stroke)) {
-        S.compositeStroke(baseCtx, live, stroke);
-      } else {
-        S.drawStroke(baseCtx, stroke, { scale: 1 });
-      }
-      clearLive();
+      renderer.commit(baseCtx, stroke);
       changed();
     }
 
@@ -355,17 +341,6 @@
     }
 
     function onCancel(ev) {
-      touches.delete(ev.pointerId);
-      if (navigation && navigation.id === ev.pointerId) {
-        navigation = null;
-        try { base.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
-      }
-      if (ev.pointerId !== state.activePointer) return;
-      // A cancelled pointer (a system gesture, a call coming in) must not leave
-      // half a stroke behind.
-      state.activePointer = null;
-      state.activePointerType = null;
-      try { base.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
       state.current = null;
       // Erasing updates the base immediately. Roll those provisional removals
       // back if a palm is preempted or the browser cancels the gesture.
@@ -377,24 +352,8 @@
       clearLive();
     }
 
-    base.addEventListener("pointerdown", onDown);
-    base.addEventListener("pointermove", onMove);
-    base.addEventListener("pointerup", onUp);
-    base.addEventListener("pointercancel", onCancel);
-    // Leaving the canvas while captured is still the same stroke. An unexpected
-    // capture loss must finish it, however, or activePointer blocks the next one.
-    base.addEventListener("pointerleave", (ev) => {
-      if (!base.hasPointerCapture(ev.pointerId)) onUp(ev);
-    });
-    base.addEventListener("lostpointercapture", onUp);
-    base.addEventListener("contextmenu", (e) => e.preventDefault());
-
-    // Safari's native touch/selection recognizers are separate from pointer
-    // drawing. Cancel their defaults on the paper only, including ignored palms;
-    // do not draw from touch events (that would duplicate Pencil strokes).
-    const preventTouch = (ev) => { if (ev.cancelable) ev.preventDefault(); };
-    wrap.addEventListener("touchstart", preventTouch, { passive: false });
-    wrap.addEventListener("touchmove", preventTouch, { passive: false });
+    const input = createPointerInput({ base, wrap, state, onStart: onDown,
+      onMove, onFinish: onUp, onCancel, onNavigate: opts.onNavigate });
 
     let resizeTimer = null;
     const onResize = () => {
@@ -465,13 +424,12 @@
       destroy() {
         clearTimeout(resizeTimer);
         if (resizeObserver) resizeObserver.disconnect();
-        wrap.removeEventListener("touchstart", preventTouch);
-        wrap.removeEventListener("touchmove", preventTouch);
+        input.destroy();
         window.removeEventListener("resize", onResize);
         window.removeEventListener("orientationchange", onResize);
       },
     };
   }
 
-  return { create };
+  return { create, createPointerInput };
 });

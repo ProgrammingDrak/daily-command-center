@@ -63,13 +63,14 @@
     zoom: ["zoom-in", "Zoom"],
     tape: ["rectangle-horizontal", "Tape"]
   };
-  function mount(stage, storedPages, { readOnly = false, templates, objects, initialPage = 0, onAttachImage } = {}) {
+  function mount(stage, storedPages, { readOnly = false, templates, objects, papers, initialPage = 0, onAttachImage, onChange = () => {} } = {}) {
     const panelId = `journal-sketchbook-${++sequence}`;
     stage.classList.add("journal-notebook", "journal-sketchbook");
     let disposed = false;
     const images = new Map();
     let pages = storedPages.map((strokes, n) => ({
       paper: templates?.[n] || "dotted",
+      paperSettings: papers?.[n] || null,
       strokes: strokes.map(fromStored),
       objects: clone(objects?.[n] || [])
     }));
@@ -79,6 +80,8 @@
       penType = "fineliner",
       color = "#292722",
       width = 4,
+      angle = 45,
+      eraserRadius = 24,
       shape = "rectangle",
       eraseMode = "whole",
       zoom = 1,
@@ -97,11 +100,30 @@
       ruler: { color: "#292722", width: 4 }
     };
 
+    let preferences = {};
+    try { preferences = JSON.parse(localStorage.getItem("mycelium-ink-tools") || "{}"); } catch { /* optional preferences */ }
+    if (!preferences || typeof preferences !== "object" || Array.isArray(preferences)) preferences = {};
+    function writing() { return ["pen", "pencil", "highlighter"].includes(tool); }
+    function rememberTool() {
+      if (!writing()) return;
+      preferences[strokeKind()] = { color, size:width, angle };
+      try { localStorage.setItem("mycelium-ink-tools", JSON.stringify(preferences)); } catch { /* ink remains editable */ }
+    }
+    function restoreTool() {
+      const saved = preferences[strokeKind()] || {}, spec = InkStrokes.toolSpec(strokeKind());
+      if (/^#[a-f0-9]{6}$/i.test(saved.color)) color = saved.color;
+      width = Math.max(0.6, Math.min(48, Number(saved.size) || spec.sizes?.[1] || width));
+      angle = Math.max(0, Math.min(170, Number.isFinite(saved.angle) ? saved.angle : 45));
+    }
     const undo = [],
       redo = [];
     stage.innerHTML = `<div class="jsk-menu" role="group" aria-label="Sketchbook menu">
       <button type="button" class="jsk-collapse" data-collapse data-notebook-toggle aria-expanded="false" aria-controls="${panelId}">Sketchbook <span data-chevron aria-hidden="true">›</span></button>
-      <label data-paper-label>Paper <select data-paper data-template aria-label="Paper for this page" ${readOnly ? "disabled" : ""}>${JournalNotebook.PAPER_TYPES.map((p) => `<option value="${p.id}">${p.label}</option>`).join("")}</select></label>
+      <label data-paper-label>Paper <select data-paper data-template aria-label="Paper for this page" ${readOnly ? "disabled" : ""}>${JournalNotebook.PAPER_TYPES.map((p) => `<option value="${p.id}">${p.label}</option>`).join("")}<optgroup label="Ink paper library">${InkStrokes.PAPERS.map(p => `<option value="ink:${p.id}">${p.label}</option>`).join("")}</optgroup></select></label>
+      <button type="button" data-paper-settings ${readOnly ? "hidden" : ""}>Paper options</button>
+      <button type="button" data-finger aria-pressed="false" ${readOnly ? "hidden" : ""}>Finger draw: off</button>
+      <button type="button" data-export>Export drawing</button>
+      <button type="button" data-import ${readOnly ? "hidden" : ""}>Import drawing</button>
       <span class="jsk-page-label" data-page-label></span><span class="jsk-spacer"></span><button type="button" data-undo aria-label="Undo drawing" ${readOnly ? "hidden" : ""}>↶</button><button type="button" data-redo aria-label="Redo drawing" ${readOnly ? "hidden" : ""}>↷</button></div>
       <div data-sketch class="journal-drawer-content" id="${panelId}" hidden>
         <div class="jsk-toolbox" role="group" aria-label="Drawing tools"></div><div class="jsk-context" data-context></div>
@@ -114,12 +136,24 @@
         </div>
         <div class="jsk-pages journal-page-turn"><button type="button" class="jsk-previous" data-previous aria-label="Previous drawing page">←</button><span data-dots class="jsk-pages journal-page-dots" role="group" aria-label="Drawing pages"></span><span data-page-status class="jsk-page-label" role="status" aria-live="polite"></span><button type="button" class="jsk-next" data-next aria-label="Next drawing page">→</button><button type="button" data-add-page data-add ${readOnly ? "hidden" : ""}>+ Page</button></div>
       </div>
+      <input type="file" data-ink-file accept="application/json,.json" hidden>
       <input type="file" data-image-file accept="image/*" hidden>
       <p class="jsk-status" role="status" aria-live="polite"></p>`;
 
     const q = (selector) => stage.querySelector(selector),
       canvas = q("[data-canvas]"),
       ctx = canvas.getContext("2d");
+
+    // Paper/committed ink stays cached while only the current stroke changes.
+    const committed = document.createElement("canvas"), prefix = document.createElement("canvas");
+    const live = document.createElement("canvas");
+    for (const layer of [committed, prefix, live]) { layer.width = W; layer.height = H; }
+    live.className = "jsk-live";
+    live.setAttribute("aria-hidden", "true");
+    canvas.after(live);
+    const committedCtx = committed.getContext("2d");
+    const renderer = InkStrokes.createLiveRenderer(live, prefix);
+
 
     function status(text) {
       if (!disposed) q(".jsk-status").textContent = text;
@@ -133,6 +167,7 @@
       redo[index] = [];
       undo[index].push(before);
       if (undo[index].length > 30) undo[index].shift();
+      onChange();
     }
     function edit(operation) {
       if (readOnly) return;
@@ -230,12 +265,14 @@
         showText();
         return;
       }
+      rememberTool();
       if (styles[tool]) styles[tool] = { color, width };
       tool = next;
       if (styles[next]) {
         color = styles[next].color;
         width = styles[next].width;
       }
+      if (writing()) restoreTool();
       setOpen(true);
       markTool();
       paintContext();
@@ -271,10 +308,10 @@
           '<label>Tool <select data-writing><option value="pen">Pen</option><option value="pencil">Pencil</option><option value="highlighter">Highlighter</option></select></label>';
         if (tool === "pen")
           container.innerHTML +=
-            '<label>Style <select data-pen-style><option value="fineliner">Felt / fineliner</option><option value="fountain">Fountain</option><option value="brush">Brush</option><option value="ballpoint">Ballpoint</option></select></label>';
+            '<label>Style <select data-pen-style><option value="fineliner">Felt / fineliner</option><option value="fountain">Fountain</option><option value="brush">Brush</option><option value="ballpoint">Ballpoint</option><option value="mechanical">Mechanical pencil</option><option value="marker">Marker</option><option value="calligraphy">Calligraphy</option></select></label>';
         palette(container);
         container.innerHTML +=
-          '<label>Width <select data-width><option value="2">Fine</option><option value="4">Medium</option><option value="8">Broad</option><option value="18">Highlight fine</option><option value="30">Highlight broad</option></select></label>';
+          `<label>Width <input data-width type="range" min="0.6" max="48" step="0.2" aria-label="Stroke width"><output data-width-value>${width}</output></label>${InkStrokes.toolSpec(strokeKind()).nib ? '<label>Nib angle <input data-angle type="range" min="0" max="170" step="5" aria-label="Nib angle"></label>' : ''}`;
         const type = container.querySelector("[data-writing]");
         if (type) {
           type.value = tool;
@@ -286,27 +323,39 @@
         if (pen) {
           pen.value = penType;
           pen.onchange = (event) => {
+            rememberTool();
             penType = event.target.value;
+            restoreTool();
+            paintContext();
           };
         }
         container.querySelector("[data-width]").value = String(width);
         container.querySelector("[data-width]").onchange = (event) => {
           width = Number(event.target.value);
+          container.querySelector("[data-width-value]").textContent = width;
+          rememberTool();
         };
+        const nib = container.querySelector("[data-angle]");
+        if (nib) { nib.value = angle; nib.oninput = event => { angle = Number(event.target.value); rememberTool(); }; }
         // innerHTML additions replace descendants; bind palette after all fields exist.
         container.querySelectorAll("[data-color]").forEach(
           (button) =>
             (button.onclick = () => {
               color = button.dataset.color;
               container.querySelector("input[type=color]").value = color;
+              rememberTool();
             })
         );
         container.querySelector("input[type=color]").oninput = (event) => {
           color = event.target.value;
+          rememberTool();
         };
       } else if (tool === "eraser") {
         container.innerHTML +=
           '<label>Erase <select data-erase-mode><option value="whole">Whole stroke</option><option value="partial">Partial stroke</option></select></label>';
+        container.innerHTML += '<label>Radius <input data-radius type="range" min="4" max="100" step="1" aria-label="Eraser radius"></label>';
+        container.querySelector("[data-radius]").value = eraserRadius;
+        container.querySelector("[data-radius]").oninput = event => { eraserRadius = Number(event.target.value); };
         container.querySelector("select").value = eraseMode;
         container.querySelector("select").onchange = (event) => {
           eraseMode = event.target.value;
@@ -478,7 +527,8 @@
       });
     }
     function transform() {
-      canvas.style.transform = `translate(${pan.x}px,${pan.y}px) scale(${zoom})`;
+      for (const layer of [canvas, live])
+        layer.style.transform = `translate(${pan.x}px,${pan.y}px) scale(${zoom})`;
     }
     function objectBounds(object) {
       return object.kind === "shape"
@@ -555,14 +605,15 @@
         context.restore();
       }
     }
-    function paintPage(context, page) {
+    function paintPage(context, page, objects = true) {
       context.clearRect(0, 0, W, H);
-      JournalNotebook.drawPaper(context, page.paper);
+      if (page.paperSettings) InkStrokes.drawPaper(context, {w:W,h:H,paper:page.paperSettings});
+      else JournalNotebook.drawPaper(context, page.paper);
       for (const stroke of page.strokes) {
         if (stroke.legacy) JournalNotebook.drawLegacy(context, [toStored(stroke)]);
         else InkStrokes.drawStroke(context, stroke);
       }
-      drawObjects(context, page.objects);
+      if (objects) drawObjects(context, page.objects);
     }
     function bounds(item) {
       if (item.kind) return objectBounds(item);
@@ -590,9 +641,12 @@
         y = Math.min(...boxes.map((b) => b.y));
       return { x, y, w: Math.max(...boxes.map((b) => b.x + b.w)) - x, h: Math.max(...boxes.map((b) => b.y + b.h)) - y };
     }
-    function paint() {
+    function paint(refresh = true) {
       if (disposed) return;
-      paintPage(ctx, activePage());
+      if (refresh) paintPage(committedCtx, activePage(), false);
+      ctx.clearRect(0, 0, W, H);
+      ctx.drawImage(committed, 0, 0);
+      drawObjects(ctx, activePage().objects);
       const selected = selectionBounds();
       if (selected) {
         ctx.save();
@@ -634,7 +688,7 @@
       if (q("[data-page-status]").textContent !== pageLabel) q("[data-page-status]").textContent = pageLabel;
       canvas.setAttribute("aria-label", `Hand drawing page ${index + 1} of ${pages.length}`);
       q(".journal-current-paper").dataset.paperType = activePage().paper;
-      q("[data-paper]").value = activePage().paper;
+      q("[data-paper]").value = activePage().paperSettings ? "ink:" + activePage().paperSettings.type : activePage().paper;
       q("[data-undo]").disabled = !undo[index]?.length;
       q("[data-redo]").disabled = !redo[index]?.length;
       q("[data-selection]").hidden = readOnly || !selection.length;
@@ -659,7 +713,7 @@
         const button = q(selector);
         button.disabled = !pages[n];
         button.style.visibility = pages[n] ? "visible" : "hidden";
-        if (pages[n]) paintPage(button.querySelector("canvas").getContext("2d"), pages[n]);
+        if (refresh && pages[n]) paintPage(button.querySelector("canvas").getContext("2d"), pages[n]);
       }
     }
     function turn(target) {
@@ -681,37 +735,53 @@
     q(".jsk-next").onclick = q(".jsk-peek-next").onclick = () => turn(index + 1);
     q("[data-add-page]").onclick = () => {
       if (readOnly || pages.length >= 100) return;
-      pages.push({ paper: activePage().paper, strokes: [], objects: [] });
+      pages.push({ paper: activePage().paper, paperSettings: clone(activePage().paperSettings), strokes: [], objects: [] });
+      onChange();
       turn(pages.length - 1);
     };
     q("[data-paper]").onchange = (event) => {
       const paper = event.target.value;
       edit(() => {
-        activePage().paper = paper;
+        if (paper.startsWith("ink:")) activePage().paperSettings = InkStrokes.normalizePaper({ ...activePage().paperSettings, type:paper.slice(4) });
+        else { activePage().paper = paper; activePage().paperSettings = null; }
       });
     };
     q("[data-undo]").onclick = () => {
       if (readOnly) return;
       if (undo[index]?.length) {
         redo[index] ||= [];
-        redo[index].push(clone(activePage()));
-        pages[index] = undo[index].pop();
+        const entry = undo[index].pop();
+        if (entry.addedStroke) {
+          activePage().strokes.pop();
+          redo[index].push(entry);
+        } else {
+          redo[index].push(clone(activePage()));
+          pages[index] = entry;
+        }
         selection = [];
         paint();
+        onChange();
       }
     };
     q("[data-redo]").onclick = () => {
       if (readOnly) return;
       if (redo[index]?.length) {
         undo[index] ||= [];
-        undo[index].push(clone(activePage()));
-        pages[index] = redo[index].pop();
+        const entry = redo[index].pop();
+        if (entry.addedStroke) {
+          activePage().strokes.push(entry.addedStroke);
+          undo[index].push(entry);
+        } else {
+          undo[index].push(clone(activePage()));
+          pages[index] = entry;
+        }
         selection = [];
         paint();
+        onChange();
       }
     };
     function cleanPage(page) {
-      return { paper: page.paper, strokes: page.strokes, objects: page.objects.map(({ image, ...object }) => object) };
+      return { paper: page.paper, paperSettings: page.paperSettings, strokes: page.strokes, objects: page.objects.map(({ image, ...object }) => object) };
     }
     function point(event) {
       const r = canvas.getBoundingClientRect();
@@ -726,12 +796,12 @@
     }
     function erase(p) {
       const page = activePage();
-      page.objects = page.objects.filter((object) => object.kind !== "shape" || !InkShapes.hit(object, p.x, p.y, 24));
-      if (eraseMode === "whole") page.strokes = InkStrokes.eraseAt(page.strokes, p.x, p.y, 24).strokes;
+      page.objects = page.objects.filter((object) => object.kind !== "shape" || !InkShapes.hit(object, p.x, p.y, eraserRadius));
+      if (eraseMode === "whole") page.strokes = InkStrokes.eraseAt(page.strokes, p.x, p.y, eraserRadius).strokes;
       else {
         const kept = [];
         for (const stroke of page.strokes) {
-          if (!InkStrokes.strokeHit(stroke, p.x, p.y, 24)) {
+          if (!InkStrokes.strokeHit(stroke, p.x, p.y, eraserRadius)) {
             kept.push(stroke);
             continue;
           }
@@ -747,7 +817,7 @@
             for (let k = 0; k < steps; k++) {
               const x = a.x + ((b.x - a.x) * k) / steps,
                 y = a.y + ((b.y - a.y) * k) / steps;
-              if (Math.hypot(x - p.x, y - p.y) < 24 + stroke.size / 2) flush();
+              if (Math.hypot(x - p.x, y - p.y) < eraserRadius + stroke.size / 2) flush();
               else run.push(x, y, a.p);
             }
           }
@@ -759,26 +829,26 @@
     function shapeRecord(a, b) {
       return InkShapes.create(tool === "ruler" ? "line" : shape, a, b, { color, size: width });
     }
-    canvas.addEventListener("pointerdown", (event) => {
-      if (!event.isPrimary || event.button !== 0 || gesture) return;
-      event.preventDefault();
-      canvas.setPointerCapture(event.pointerId);
+    function startGesture(event) {
+      if (event.pointerType === "pen" && tool === "hand") choose("pen");
+      const gestureTool = event.button === 5 || event.buttons === 32 ? "eraser" : tool;
       const p = point(event);
       gesture = {
         id: event.pointerId,
+        pointerType: event.pointerType,
         start: p,
         end: p,
-        before: clone(cleanPage(activePage())),
+        before: ["pen", "pencil", "highlighter"].includes(gestureTool) ? null : clone(cleanPage(activePage())),
         client: { x: event.clientX, y: event.clientY },
         pan: { ...pan },
-        kind: tool
+        kind: gestureTool
       };
-      if (["pen", "pencil", "highlighter"].includes(tool)) {
-        const stroke = InkStrokes.newStroke(strokeKind(), color, width, { v: 2, angle: 45 });
+      if (["pen", "pencil", "highlighter"].includes(gestureTool)) {
+        const stroke = InkStrokes.newStroke(strokeKind(), color, width, { v: 2, angle });
         InkStrokes.addPoint(stroke, p.x, p.y, p.p);
-        activePage().strokes.push(stroke);
         gesture.stroke = stroke;
-      } else if (tool === "eraser") erase(p);
+        renderer.draw(stroke);
+      } else if (gestureTool === "eraser") erase(p);
       else if (tool === "shape" || tool === "ruler") {
         gesture.object = shapeRecord(p, p);
         activePage().objects.push(gesture.object);
@@ -815,15 +885,23 @@
         laser = { start: p, end: p };
         clearTimeout(laserTimer);
       }
-      paint();
-    });
-    canvas.addEventListener("pointermove", (event) => {
+      if (!gesture.stroke) paint();
+    }
+    function moveGesture(event) {
       if (!gesture || event.pointerId !== gesture.id) return;
+      event.preventDefault();
       const p = point(event);
       gesture.end = p;
-      if (gesture.stroke && ["pen", "pencil", "highlighter"].includes(gesture.kind))
-        InkStrokes.addPoint(gesture.stroke, p.x, p.y, p.p);
-      else if (gesture.kind === "eraser") erase(p);
+      if (gesture.stroke) {
+        const coalesced = event.getCoalescedEvents?.();
+        for (const sample of coalesced?.length ? coalesced : [event]) {
+          const next = point(sample);
+          InkStrokes.addPoint(gesture.stroke, next.x, next.y, next.p);
+        }
+        renderer.draw(gesture.stroke, true);
+        return;
+      }
+      if (gesture.kind === "eraser") erase(p);
       else if (gesture.kind === "shape" || gesture.kind === "ruler")
         Object.assign(gesture.object, shapeRecord(gesture.start, p));
       else if (gesture.kind === "tape") {
@@ -855,17 +933,31 @@
         });
       } else if (gesture.kind === "laser") laser.end = p;
       paint();
-    });
+    }
     function finish(event, cancel = false) {
       if (!gesture || event.pointerId !== gesture.id) return;
       const g = gesture;
       gesture = null;
+      if (g.stroke) {
+        if (cancel) renderer.clear();
+        else {
+          activePage().strokes.push(g.stroke);
+          undo[index] ||= [];
+          undo[index].push({ addedStroke: g.stroke });
+          if (undo[index].length > 30) undo[index].shift();
+          redo[index] = [];
+          renderer.commit(committedCtx, g.stroke);
+          onChange();
+        }
+        paint(false);
+        return;
+      }
       if (cancel) {
         pages[index] = g.before;
         paint();
         return;
       }
-      const p = point(event);
+      const p = Number.isFinite(event.clientX) ? point(event) : g.end;
       if (g.kind === "lasso") {
         const r = {
           x: Math.min(g.start.x, p.x),
@@ -903,12 +995,66 @@
     }
     function finishPending() {
       if (gesture) {
-        checkpoint(gesture.before);
-        gesture = null;
+        const r = canvas.getBoundingClientRect();
+        input.finishActive({
+          clientX: r.left + gesture.end.x / W * r.width,
+          clientY: r.top + gesture.end.y / H * r.height });
       }
     }
-    canvas.addEventListener("pointerup", (event) => finish(event));
-    canvas.addEventListener("pointercancel", (event) => finish(event, true));
+    const input = InkCanvas.createPointerInput({ base: canvas, wrap: q(".jsk-paper"),
+      fingerDraw: "off", enabled: () => !readOnly,
+      onStart: startGesture, onMove: moveGesture,
+      onFinish: event => finish(event), onCancel: event => finish(event, true),
+      onNavigate: delta => { if (!readOnly || open) turn(index + delta); }
+    });
+    q("[data-finger]").onclick = () => {
+      const on = input.state.fingerDraw !== "on";
+      input.setFingerDraw(on ? "on" : "off");
+      q("[data-finger]").textContent = `Finger draw: ${on ? "on" : "off"}`;
+      q("[data-finger]").setAttribute("aria-pressed", String(on));
+    };
+    q("[data-paper-settings]").onclick = () => {
+      if (readOnly || input.isBusy()) return;
+      popup("Paper options", content => {
+        const paper = InkStrokes.normalizePaper(activePage().paperSettings || {type:"dots",tint:"cream"});
+        content.innerHTML = `<label>Layout <select data-layout>${InkStrokes.PAPERS.map(p => `<option value="${p.id}">${p.label}</option>`).join("")}</select></label>
+          <label>Tone <select data-tone>${Object.keys(InkStrokes.TINTS).map(t => `<option>${t}</option>`).join("")}</select></label>
+          <label>Spacing <input data-spacing type="number" min="4" max="12" step="1" aria-label="Paper spacing"></label>
+          <label><input data-margin type="checkbox"> Ruled margin</label><button type="button" data-apply>Apply paper</button>`;
+        const layout = content.querySelector("[data-layout]"), tone = content.querySelector("[data-tone]"), spacing = content.querySelector("[data-spacing]"), margin = content.querySelector("[data-margin]");
+        layout.value = paper.type; tone.value = paper.tint; spacing.value = paper.spacing; margin.checked = paper.margin;
+        const update = () => { const spec = InkStrokes.PAPERS.find(p => p.id === layout.value); spacing.disabled = !spec.usesSpacing; margin.disabled = !layout.value.startsWith("ruled"); };
+        layout.onchange = update; update();
+        content.querySelector("[data-apply]").onclick = () => {
+          edit(() => { activePage().paperSettings = InkStrokes.normalizePaper({type:layout.value,tint:tone.value,spacing:Number(spacing.value),margin:margin.checked}); });
+          q("[data-popup]").hidden = true;
+        };
+      });
+    };
+    q("[data-export]").onclick = () => {
+      finishPending();
+      const exported = { format:"dcc-journal-drawing", v:1, markdown:JournalNotebook.pack("", pages.map(p => p.strokes.map(toStored)), pages.map(p => p.paper), pages.map(p => clone(p.objects)), pages.map(p => p.paperSettings)) };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(exported)], {type:"application/json"}));
+      const link = document.createElement("a"); link.href = url; link.download = "journal-drawing.json"; link.click();
+      setTimeout(() => URL.revokeObjectURL(url),1000);
+    };
+    q("[data-import]").onclick = () => q("[data-ink-file]").click();
+    q("[data-ink-file]").onchange = async event => {
+      const file = event.target.files[0]; event.target.value = "";
+      if (!file || readOnly || input.isBusy()) return;
+      try {
+        if (file.size > 20 * 1024 * 1024) throw new Error("Drawing archive is too large.");
+        const raw = JSON.parse(await file.text());
+        if (disposed || input.isBusy()) throw new Error("Finish the current stroke before importing.");
+        if (raw.format !== "dcc-journal-drawing" || raw.v !== 1 || typeof raw.markdown !== "string") throw new Error("Choose a journal drawing export.");
+        const restored = JournalNotebook.unpack(raw.markdown);
+        if (pages.length + restored.pages.length > 100) throw new Error("A journal supports up to 100 drawing pages.");
+        if (disposed) return;
+        pages.push(...restored.pages.map((strokes,n) => ({paper:restored.templates[n],paperSettings:restored.papers?.[n] || null,strokes:strokes.map(fromStored),objects:restored.objects[n]})));
+        turn(pages.length - restored.pages.length); onChange();
+        status("Imported as new pages. Existing pages are preserved.");
+      } catch (error) { status(error.message); }
+    };
     stage.querySelectorAll("[data-select-action]").forEach(
       (button) =>
         (button.onclick = () =>
@@ -979,6 +1125,9 @@
         finishPending();
         return pages.map((page) => page.strokes.map(toStored));
       },
+      isBusy() { return input.isBusy(); },
+      readPapers() { return pages.map(page => clone(page.paperSettings)); },
+      readCommitted() { return pages.map(page => page.strokes.map(toStored)); },
       readTemplates() {
         return pages.map((page) => page.paper);
       },
@@ -988,6 +1137,8 @@
       destroy() {
         disposed = true;
         clearTimeout(laserTimer);
+        renderer.clear();
+        input.destroy();
         for (const image of images.values()) {
           image.onload = null;
           image.onerror = null;

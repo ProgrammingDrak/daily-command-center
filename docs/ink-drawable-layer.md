@@ -48,6 +48,29 @@ The canvas does not require DCC APIs, authentication, a notebook shelf, OCR,
 IndexedDB, or a service worker. Those are host responsibilities. Reuse these
 canonical files rather than maintaining a divergent copy inside DCC.
 
+### Journal sketchbook adapter
+
+The journal uses `InkStrokes.createLiveRenderer(live, prefix)`, extracted from
+this component, for the same incremental preview and bitmap commit. `InkCanvas`
+calls that same helper. The journal retains its existing paper, objects,
+coordinates, and vault-editor storage format.
+
+Journal input preserves palm-first Pencil takeover, ignored palm defaults,
+capture-loss completion, capture-failure recovery, and cancellation. Stroke
+undo entries hold only the added stroke. Full-page history snapshots remain
+for object and paper edits, outside normal writing.
+
+Run `node scripts/verify-journal-pencil.mjs` for the isolated browser regression.
+`--baseline` runs the original checked-in sketchbook and should fail before
+this fix is committed. The fixture never accesses production or user storage.
+Start `node scripts/journal-pencil-preview.mjs` for manual local QA at
+`http://127.0.0.1:8098/scripts/journal-pencil-fixture.html`.
+
+The regression covers 100 rapid strokes, a 10,000-point stroke, palm contact,
+capture loss/failure, cancellation, mixed history, legacy ink, save/reopen,
+graphite/highlighter pixels, native mouse capture, and a 390px viewport.
+Desktop Edge verification passed. Physical iPad/Pencil confirmation is pending.
+
 ## Minimal host integration
 
 Load `strokes.js` before `canvas.js`; browser globals are `InkStrokes` and

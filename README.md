@@ -2,7 +2,17 @@
 
 ## Mycelium Ink
 
-`/ink` is an admin-only, local-first handwritten notebook.
+`/library` is the admin-only home for daily journals and handwritten notebooks.
+The permanent Journals book collects existing dated entries. Other notebooks
+keep their original account-scoped IndexedDB records and stable sync identities.
+The old `/ink` address redirects to Library.
+
+Journal sketches share Ink's live renderer and pointer controller, all nine
+implements, fifteen configurable paper layouts, finger drawing, and recovery
+guards. Journal drafts save locally before background vault sync. Conflicts
+preserve the local draft and expose the vault copy for review.
+
+See [Library behavior and validation](docs/library-journal-ink.md).
 
 The existing canvas is also a reusable [drawable-layer building block](docs/ink-drawable-layer.md).
 Its integration contract preserves the iPad/Pencil behavior validated in `ink-v7`.

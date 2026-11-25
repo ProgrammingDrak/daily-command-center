@@ -459,10 +459,10 @@
     if (isJournalNode(node) && window.JournalNotebook) {
       try {
         const ink = window.JournalNotebook.unpack(node.body || "");
-        if (ink.pages.some(page => page.length) || ink.objects.some(page => page.length) || ink.pages.length > 1 || ink.templates.some(id => id !== "dotted")) {
+        if (ink.pages.some(page => page.length) || ink.objects.some(page => page.length) || ink.pages.length > 1 || ink.templates.some(id => id !== "dotted") || ink.papers?.some(Boolean)) {
           const paper = document.createElement("section");
           el.querySelector(".vault-body-md").after(paper);
-          journalNotebookReader = window.JournalNotebook.mount(paper, ink.pages, { readOnly: true, templates: ink.templates, objects: ink.objects });
+          journalNotebookReader = window.JournalNotebook.mount(paper, ink.pages, { readOnly: true, templates: ink.templates, objects: ink.objects, papers: ink.papers });
         }
       } catch { window.DCC.toast("Journal drawing could not be opened", "error"); }
     }

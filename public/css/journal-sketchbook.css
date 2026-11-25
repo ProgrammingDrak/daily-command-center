@@ -196,6 +196,9 @@
   left: 0;
 }
 .journal-sketchbook .jsk-paper {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
   position: relative;
   background: #f7f1df;
   border: 1px solid #d4c9ae;
@@ -209,6 +212,16 @@
   height: 360px;
   touch-action: none;
   transform-origin: center;
+}
+.journal-sketchbook .jsk-paper .jsk-live {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.journal-sketchbook :is(.jsk-menu, .jsk-toolbox, .jsk-status, .jsk-pages) {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 .journal-sketchbook .jsk-paper[data-hand="true"] canvas {
   touch-action: pan-y;

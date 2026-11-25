@@ -101,6 +101,18 @@
       })
     );
   }
+  function pageSettings(pages, settings) {
+    if (settings === undefined) return undefined;
+    if (!Array.isArray(settings) || settings.length !== pages.length) throw new Error("Invalid journal paper settings");
+    const types = ["blank", "ruled-narrow", "ruled", "ruled-wide", "dots", "grid", "engineering", "cornell", "music", "checklist", "daily", "weekly", "monthly", "handwriting", "isometric"];
+    return settings.map(p => {
+      if (p === null) return null;
+      if (!p || !types.includes(p.type) || !["white", "cream", "gray"].includes(p.tint) ||
+          !Number.isFinite(p.spacing) || p.spacing < 4 || p.spacing > 12 || typeof p.margin !== "boolean")
+        throw new Error("Invalid journal paper settings");
+      return { type:p.type, tint:p.tint, spacing:p.spacing, margin:p.margin };
+    });
+  }
   function unpack(markdown) {
     const start = markdown.lastIndexOf(MARKER);
     if (start < 0 || !markdown.endsWith("\n-->"))
@@ -111,10 +123,13 @@
     for (const page of data.pages) {
       if (!Array.isArray(page)) throw new Error("Invalid journal drawing page");
       for (const stroke of page) {
+        if (stroke.style !== undefined && (!stroke.style || stroke.style.v !== 2 ||
+          !Number.isFinite(stroke.style.angle) || stroke.style.angle < 0 || stroke.style.angle > 170))
+          throw new Error("Invalid journal nib settings");
         if (
           !/^#[a-f0-9]{6}$/i.test(stroke.color) ||
           !Number.isFinite(stroke.size) ||
-          stroke.size < 1 ||
+          stroke.size < 0.6 ||
           stroke.size > 128 ||
           (stroke.tool && !WRITING_TOOLS.includes(stroke.tool)) ||
           !Array.isArray(stroke.points) ||
@@ -140,18 +155,21 @@
       text: markdown.slice(0, start),
       pages: data.pages,
       templates: pageTemplates(data.pages, data.templates),
-      objects: pageObjects(data.pages, data.objects)
+      objects: pageObjects(data.pages, data.objects),
+      ...(data.papers !== undefined ? { papers: pageSettings(data.pages, data.papers) } : {})
     };
   }
-  function pack(text, pages, templates, objects) {
+  function pack(text, pages, templates, objects, papers) {
+    const settings = pageSettings(pages, papers);
     const paper = pageTemplates(pages, templates);
     const content = pageObjects(pages, objects);
     const customPaper = paper.some((id) => id !== "dotted");
     const hasObjects = content.some((page) => page.length);
-    const data = { pages, ...(customPaper ? { templates: paper } : {}), ...(hasObjects ? { objects: content } : {}) };
+    const hasSettings = settings?.some(Boolean);
+    const data = { pages, ...(hasSettings ? { papers: settings } : {}), ...(customPaper ? { templates: paper } : {}), ...(hasObjects ? { objects: content } : {}) };
     // Text annotations may contain HTML comment delimiters; escape them in the
     // serialized payload so they cannot escape the hidden Markdown block.
-    return pages.some((page) => page.length) || pages.length > 1 || customPaper || hasObjects
+    return pages.some((page) => page.length) || pages.length > 1 || customPaper || hasObjects || hasSettings
       ? text +
           MARKER +
           JSON.stringify(data).replace(/[<>&]/g, (char) => ({ "<": "\\u003c", ">": "\\u003e", "&": "\\u0026" })[char]) +
