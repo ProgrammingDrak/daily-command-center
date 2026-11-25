@@ -1229,7 +1229,9 @@ app.delete("/api/me/slack/claim", async (req, res) => {
 app.get("/pet/:shareSlug", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "public-pet.html")); });
 // Mycelium is Drake's personal vault. DCC has multiple accounts, so the ink
 // shell must not become a shared authenticated surface by accident.
-app.get(["/ink", "/ink.html"], requireAdmin, (req, res) => { res.sendFile(path.join(PROJECT_DIR, "ink.html")); });
+app.get(["/ink", "/ink.html"], requireAdmin, (_req, res) => { res.redirect(302, "/library"); });
+app.get(["/library", "/library.html"], requireAdmin, (_req, res) => { res.sendFile(path.join(PROJECT_DIR, "library.html")); });
+app.get("/library/notebook", requireAdmin, (_req, res) => { res.sendFile(path.join(PROJECT_DIR, "ink.html")); });
 // Keep existing authentication and account binding ahead of the launch redirect.
 app.get(["/glasses", "/glasses.html"], require("./lib/glasses-launch"));
 app.get(["/", "/index.html"], require("./lib/glasses-shell")(PROJECT_DIR));

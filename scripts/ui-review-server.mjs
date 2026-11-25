@@ -19,6 +19,10 @@ const root = path.resolve(here, "..");
 const port = Number(process.env.PORT || 8099);
 const app = express();
 app.use(express.json());
+if(process.env.DCC_REVIEW_LIBRARY==='1') {
+  const {default: mountLibraryReview}=await import('./library-review-backend.js');
+  mountLibraryReview(app,root);
+}
 if(process.env.DCC_TASK_ACTIONS_REVIEW==='1'){
   app.get('/api/me',(_req,res)=>res.json({id:1,userId:1,workspaceId:'ws-1',username:'review',onboardingState:{dailyCommandCenterTour:{version:2,completedAt:'2026-01-01T00:00:00.000Z'}}}));
   const options={delayMs:2000,failureStatus:0};

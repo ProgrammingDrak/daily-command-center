@@ -476,7 +476,7 @@
     return details;
   }
 
-  function mountJournalEntry(cover, prev, initial, { readOnly = false, onAttachment, onNotebookImage, notebook = false, initialPage = 0 } = {}) {
+  function mountJournalEntry(cover, prev, initial, { readOnly = false, onAttachment, onNotebookImage, notebook = false, initialPage = 0, onChange = () => {} } = {}) {
     let photos = [], dirty = false, cleanup;
     const ink = notebook ? window.JournalNotebook.unpack(initial) : null;
     if (ink) initial = ink.text;
@@ -485,7 +485,7 @@
       .replace(/\[\[photo:([0-9a-f-]{36})\]\]/gi, "[Photo](#dcc-photo-$1)")
       .replace(/\(media:sha256:([a-f0-9]{12,64})\)/gi, "(/api/vault/media/$1)");
     const readText = () => dirty ? journalMarkdown(prev) : initial;
-    const read = () => book ? window.JournalNotebook.pack(readText(), book.read(), book.readTemplates(), book.readObjects()) : readText();
+    const read = () => book ? window.JournalNotebook.pack(readText(), book.read(), book.readTemplates(), book.readObjects(), book.readPapers()) : readText();
     function keepCleanup(clear) {
       const previous = cleanup;
       cleanup = () => { previous?.(); clear(); };
@@ -507,7 +507,7 @@
       }
     };
     for (const event of ["input", "keyup", "pointerup", "blur"]) prev.addEventListener(event, rememberCursor);
-    prev.addEventListener("input", () => { dirty = true; });
+    prev.addEventListener("input", () => { dirty = true; onChange(); });
     const restoreCursor = () => {
       prev.focus();
       const selection = window.getSelection();
@@ -538,6 +538,7 @@
       selection.addRange(cursor);
       dirty = true;
       if (source.includes("/api/vault/media/")) paintCover();
+      onChange();
     }
     function formatEntry(format) {
       restoreCursor();
@@ -545,6 +546,7 @@
       else document.execCommand(format === "list" ? "insertUnorderedList" : format);
       dirty = true;
       rememberCursor();
+      onChange();
     }
     function mountFormatting(host) {
       for (const [label, format] of [["Bold", "bold"], ["Italic", "italic"], ["Heading", "heading"], ["List", "list"]]) {
@@ -571,10 +573,12 @@
     if (ink) {
       const paper = node("section");
       prev.after(paper);
-      book = window.JournalNotebook.mount(paper, ink.pages, { readOnly, templates: ink.templates, objects: ink.objects, initialPage, onAttachImage: onNotebookImage });
+      book = window.JournalNotebook.mount(paper, ink.pages, { readOnly, templates: ink.templates, objects: ink.objects, papers: ink.papers, initialPage, onAttachImage: onNotebookImage, onChange });
     }
     return {
       read, insert, mountFormatting,
+      isBusy: () => book?.isBusy() || false,
+      readCommitted: () => book ? window.JournalNotebook.pack(readText(), book.readCommitted(), book.readTemplates(), book.readObjects(), book.readPapers()) : readText(),
       setPhotos(next) {
         photos = next;
         if (!dirty && !prev.contains(document.activeElement)) paint();
@@ -1000,7 +1004,7 @@
       if (entry) target.append(button("Photos & reflection", () => detail(entry)));
     },
   };
-  document.getElementById("completion-photo-gallery").addEventListener("click", gallery);
+  document.getElementById("completion-photo-gallery")?.addEventListener("click", gallery);
   window.addEventListener("task-completion-confirmed", event => {
     if (event.detail?.replayed) return;
     const entry = fromTask(event.detail?.task);

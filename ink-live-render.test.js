@@ -109,8 +109,10 @@ test("degenerate strokes still draw", () => {
 test("the live layer appends, and only for opaque tools", () => {
   // The highlighter multiplies at 0.32 alpha, so re-touching its joining
   // segment would darken that one segment. It keeps the full redraw.
-  assert.match(CANVAS, /spec\.alpha >= 1/);
-  assert.match(CANVAS, /from: finalized \+ 1, to: n - 1/);
+  const renderer = S.createLiveRenderer.toString();
+  assert.match(renderer, /spec\.alpha >= 1/);
+  assert.match(renderer, /from: finalized \+ 1, to: n - 1/);
+  assert.match(CANVAS, /S\.createLiveRenderer\(live, prefix\)/);
   assert.match(CANVAS, /if \(added\) redrawLive\(true\)/);
 });
 

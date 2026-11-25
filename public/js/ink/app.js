@@ -331,6 +331,7 @@
         // must never clear the dirty flag for newer ink or a new paper setting.
         if (current.pages[current.index]?.id === rec.id && ink.state.revision === revision) ink.clearDirty();
         setStatus({ state: ink.isDirty() ? "unsaved" : "saved" });
+        if (window.parent !== window) window.parent.postMessage({ type:"dcc-library:changed" }, location.origin);
         if (sync) sync.nudge();
         successful = true;
       } catch (e) {
@@ -383,6 +384,7 @@
     // the queue. Still nudged rather than forced, so it lands after the shelf
     // has painted instead of hitching the transition.
     if (sync) sync.nudge(1200);
+    if (window.parent !== window) window.parent.postMessage({ type:"dcc-library:back" }, location.origin);
   });
 
   el.nbName.addEventListener("click", () => openBookDialog(current.notebook));
@@ -739,5 +741,10 @@
     await loadServerBuildLabel();
     await renderShelf();
     sync.start();
+    // Library retains this proven notebook editor, including its original local
+    // database, worker rendering, archives, and version-guarded acknowledgements.
+    window.InkApp = { openNotebook, savePage, isBusy: () => !!ink?.isPenDown(), isDirty: () => !!ink?.isDirty() };
+    const notebookId = new URL(location.href).searchParams.get("notebook");
+    if (notebookId && /^nb_[a-z0-9]{12,96}$/i.test(notebookId)) await openNotebook(notebookId);
   })();
 })();

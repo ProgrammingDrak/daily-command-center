@@ -289,6 +289,50 @@
     ctx.restore();
   }
 
+  // Shared by Mycelium Ink and the journal. Keep the source canvas synchronized:
+  // rapid copy/clear cycles can expose stale pixels with desynchronized buffers.
+  function createLiveRenderer(live, prefix) {
+    const ctx = live.getContext("2d"), prefixCtx = prefix.getContext("2d");
+    let finalized = 0;
+    function clearCanvas(context, canvas) {
+      context.save();
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.restore();
+    }
+    function clear() {
+      clearCanvas(ctx, live);
+      clearCanvas(prefixCtx, prefix);
+      finalized = 0;
+    }
+    function draw(stroke, append) {
+      if (!append) clear();
+      else clearCanvas(ctx, live);
+      if (!stroke) return;
+      const spec = toolSpec(stroke.tool), modern = modernHighlight(stroke);
+      live.style.opacity = modern ? spec.alpha : spec.graphite ? 0.7 : 1;
+      live.style.mixBlendMode = modern ? "multiply" : "normal";
+      const n = pointCount(stroke);
+      if ((spec.alpha >= 1 || modern) && n >= 3) {
+        if (finalized < n - 2) {
+          drawStroke(prefixCtx, stroke, { scale: 1, from: finalized + 1, to: n - 1, mask: modernStroke(stroke) });
+          finalized = n - 2;
+        }
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(prefix, 0, 0);
+        ctx.restore();
+        drawStroke(ctx, stroke, { scale: 1, from: n - 1, mask: modernStroke(stroke) });
+      } else drawStroke(ctx, stroke, { scale: 1, mask: modernStroke(stroke) });
+    }
+    function commit(target, stroke) {
+      if (toolSpec(stroke.tool).alpha >= 1 || modernHighlight(stroke)) compositeStroke(target, live, stroke);
+      else drawStroke(target, stroke, { scale: 1 });
+      clear();
+    }
+    return { clear, draw, commit };
+  }
+
   function midpoint(a, b) {
     return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
   }
@@ -524,7 +568,7 @@
     FORMAT_VERSION, PAGE_W, PAGE_H, PAPER_SPACING, NIB_ANGLE, TOOLS, PAPERS, TINTS, normalizePaper, drawPaper, modernStroke, modernHighlight, compositeStroke,
     emptyPage, newStroke, addPoint, pointCount, pointAt,
     normalizePressure, widthAt, toolSpec,
-    drawStroke, drawPage,
+    drawStroke, drawPage, createLiveRenderer,
     eraseAt, strokeHit, distanceToSegment,
     pageBounds, isBlank,
     serialize, deserialize, validStroke,
