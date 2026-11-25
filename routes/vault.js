@@ -1442,7 +1442,7 @@ app.post("/api/vault/capture", async (req, res) => {
 });
 
 // One-tap daily note for the requested date, defaulting to today. Idempotent — returns the existing note if
-// it's already there (never duplicates), else creates it from the journal template.
+// it's already there (never duplicates), else creates it empty with the journal template's frontmatter.
 app.post("/api/vault/daily", async (req, res) => {
   if (!vaultReady(res)) return;
   // "Today" must use the app timezone (getTodayStr -> APP_TIME_ZONE), not UTC:
@@ -1466,7 +1466,9 @@ app.post("/api/vault/daily", async (req, res) => {
   }
   const fm = Object.assign({}, tpl.data || {}, { type: "journal", title: iso, date: iso });
   try {
-    const node = await writeNode(slug, fm, tpl.content || "", { message: `daily ${slug}`, expectAbsent: true });
+    // A journal opens empty and ready for typing: the template supplies
+    // frontmatter only, never prompt headings in the body.
+    const node = await writeNode(slug, fm, "", { message: `daily ${slug}`, expectAbsent: true });
     res.status(201).json({ slug, node, created: true });
   } catch (e) {
     if (e.code === "STALE_WRITE" && ctx.vault.has(slug)) {

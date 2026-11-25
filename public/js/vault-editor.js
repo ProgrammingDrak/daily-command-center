@@ -103,7 +103,8 @@
     const fm = Object.assign({}, tpl.frontmatter || {}, { type });
     if (!fm.date && (fm.date === "" || "date" in fm)) fm.date = todayIso();
     if (prefill && prefill.title) fm.title = prefill.title;
-    const body = prefill && prefill.body != null ? prefill.body : (tpl.body || "");
+    // Journals start empty and ready for typing; other types keep their template body.
+    const body = prefill && prefill.body != null ? prefill.body : (type === "journal" ? "" : (tpl.body || ""));
     buildForm({ mode: "new", type, slug: null, hash: null, frontmatter: fm, body, promoteFrom: prefill && prefill.fromSlug });
   }
 
