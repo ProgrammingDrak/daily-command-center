@@ -427,7 +427,9 @@
       root.querySelector("[data-cover]"),
       root.querySelector("[data-text]"),
       record.body,
-      { notebook: true, onChange: changed, onAttachment: attach, onNotebookImage: upload }
+      { notebook: true, onChange: changed, onAttachment: attach, onNotebookImage: upload,
+        // Minimizing the full-screen sketchbook saves locally now, not after the debounce.
+        onSketchMinimize: () => { flush(); } }
     );
     entry.mountFormatting(root.querySelector("[data-format]"));
     const dateControl = document.createElement("input");

@@ -476,7 +476,7 @@
     return details;
   }
 
-  function mountJournalEntry(cover, prev, initial, { readOnly = false, onAttachment, onNotebookImage, notebook = false, initialPage = 0, onChange = () => {} } = {}) {
+  function mountJournalEntry(cover, prev, initial, { readOnly = false, onAttachment, onNotebookImage, notebook = false, initialPage = 0, onChange = () => {}, onSketchMinimize } = {}) {
     let photos = [], dirty = false, cleanup;
     const ink = notebook ? window.JournalNotebook.unpack(initial) : null;
     if (ink) initial = ink.text;
@@ -573,7 +573,7 @@
     if (ink) {
       const paper = node("section");
       prev.after(paper);
-      book = window.JournalNotebook.mount(paper, ink.pages, { readOnly, templates: ink.templates, objects: ink.objects, papers: ink.papers, initialPage, onAttachImage: onNotebookImage, onChange });
+      book = window.JournalNotebook.mount(paper, ink.pages, { readOnly, templates: ink.templates, objects: ink.objects, papers: ink.papers, initialPage, onAttachImage: onNotebookImage, onChange, onMinimize: onSketchMinimize });
     }
     return {
       read, insert, mountFormatting,
