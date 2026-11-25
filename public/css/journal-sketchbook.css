@@ -206,16 +206,17 @@
   box-shadow: 3px 3px 0 #c9bda2;
   overflow: hidden;
 }
-.journal-sketchbook .jsk-paper canvas {
-  display: block;
-  width: 100%;
+.journal-sketchbook .jsk-paper {
   height: 360px;
+}
+/* JavaScript fits both layers to the page aspect and sets size and offset. */
+.journal-sketchbook .jsk-paper canvas {
+  position: absolute;
+  display: block;
   touch-action: none;
   transform-origin: center;
 }
 .journal-sketchbook .jsk-paper .jsk-live {
-  position: absolute;
-  inset: 0;
   pointer-events: none;
 }
 .journal-sketchbook :is(.jsk-menu, .jsk-toolbox, .jsk-status, .jsk-pages) {
@@ -293,7 +294,7 @@
     grid-template-columns: 28px minmax(0, 1fr) 28px;
     gap: 5px;
   }
-  .journal-sketchbook .jsk-paper canvas {
+  .journal-sketchbook .jsk-paper {
     height: 330px;
   }
   .journal-sketchbook .jsk-context {

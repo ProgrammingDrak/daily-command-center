@@ -153,6 +153,36 @@
     canvas.after(live);
     const committedCtx = committed.getContext("2d");
     const renderer = InkStrokes.createLiveRenderer(live, prefix);
+    const paperBox = q(".jsk-paper");
+
+    // Fit the page inside its box without stretching, and back every layer with
+    // device pixels. Drawing code stays in page units through one transform.
+    // Strokes are vector data, so a resize only re-renders; nothing is lost.
+    function layout() {
+      if (disposed) return;
+      const boxW = paperBox.clientWidth, boxH = paperBox.clientHeight;
+      if (!boxW || !boxH) return;
+      const fit = Math.min(boxW / W, boxH / H);
+      const dpr = Math.min(window.devicePixelRatio || 1, 3);
+      const cssW = W * fit, cssH = H * fit;
+      for (const layer of [canvas, live]) {
+        layer.style.width = `${cssW}px`;
+        layer.style.height = `${cssH}px`;
+        layer.style.left = `${(boxW - cssW) / 2}px`;
+        layer.style.top = `${(boxH - cssH) / 2}px`;
+      }
+      const pxW = Math.max(1, Math.round(cssW * dpr)), pxH = Math.max(1, Math.round(cssH * dpr));
+      if (canvas.width === pxW && canvas.height === pxH) return;
+      for (const layer of [canvas, live, committed, prefix]) { layer.width = pxW; layer.height = pxH; }
+      for (const layer of [canvas, live, committed, prefix])
+        layer.getContext("2d").setTransform(pxW / W, 0, 0, pxH / H, 0, 0);
+      paint();
+      if (gesture?.stroke) renderer.draw(gesture.stroke);
+    }
+    const resizer = typeof ResizeObserver === "function" ? new ResizeObserver(() => layout()) : null;
+    resizer?.observe(paperBox);
+    // Browser zoom and moving to another display change devicePixelRatio.
+    window.addEventListener("resize", layout);
 
 
     function status(text) {
@@ -645,7 +675,10 @@
       if (disposed) return;
       if (refresh) paintPage(committedCtx, activePage(), false);
       ctx.clearRect(0, 0, W, H);
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.drawImage(committed, 0, 0);
+      ctx.restore();
       drawObjects(ctx, activePage().objects);
       const selected = selectionBounds();
       if (selected) {
@@ -1120,6 +1153,7 @@
     paintTools();
     paintContext();
     setOpen(false);
+    layout();
     return {
       read() {
         finishPending();
@@ -1136,6 +1170,8 @@
       },
       destroy() {
         disposed = true;
+        resizer?.disconnect();
+        window.removeEventListener("resize", layout);
         clearTimeout(laserTimer);
         renderer.clear();
         input.destroy();
