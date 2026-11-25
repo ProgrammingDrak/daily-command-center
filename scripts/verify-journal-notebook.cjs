@@ -53,6 +53,7 @@ const root = path.resolve(__dirname, "..");
       "public/js/vendor/marked.min.js",
       "public/js/vendor/purify.min.js",
       "public/js/ink/strokes.js",
+      "public/js/ink/canvas.js",
       "public/js/ink/shapes.js",
       "public/js/journal-notebook.js",
       "public/js/journal-sketchbook.js",
@@ -82,11 +83,11 @@ const root = path.resolve(__dirname, "..");
     assert.equal(await page.locator("[data-template]").isVisible(), true);
     assert.equal(await page.locator(".journal-drawer > summary").count(), 0);
     await page.locator("[data-notebook-toggle]").click();
-    assert.equal(await page.locator("[data-template] option").count(), 10);
+    assert.equal(await page.locator("[data-template] option").count(), 25);
     await page.locator("[data-template]").selectOption("college-ruled");
     await page.locator('[data-tool="pen"]').click();
     await page.locator("[data-close-popup]").click();
-    const canvas = page.locator(".journal-paper canvas");
+    const canvas = page.locator(".journal-paper [data-canvas]");
     await canvas.scrollIntoViewIfNeeded();
     async function stroke() {
       const box = await canvas.boundingBox();
@@ -139,7 +140,7 @@ const root = path.resolve(__dirname, "..");
     const x = footer.x + 10,
       y = footer.y + footer.height / 2;
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + 75, y }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + 100, y }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     assert.equal(await page.locator("[data-page-status]").textContent(), "Page 1 / 2");
     assert.equal(await page.locator("[data-template]").inputValue(), "college-ruled");
@@ -212,7 +213,7 @@ const root = path.resolve(__dirname, "..");
     assert.equal(await page.evaluate(() => window.viewer.read()), saved.body);
     assert.deepEqual(errors, []);
     console.log(
-      "Journal browser checks passed: 10 paper templates, independent page settings, dots/neighbor navigation, text/photos, drawing, undo/redo, eraser, touch swipes, save/reopen, phone, read-only."
+      "Journal browser checks passed: 25 paper layouts, independent page settings, dots/neighbor navigation, text/photos, drawing, undo/redo, eraser, touch swipes, save/reopen, phone, read-only."
     );
   } finally {
     await browser.close();
