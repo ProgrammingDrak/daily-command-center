@@ -63,7 +63,7 @@
     zoom: ["zoom-in", "Zoom"],
     tape: ["rectangle-horizontal", "Tape"]
   };
-  function mount(stage, storedPages, { readOnly = false, templates, objects, papers, initialPage = 0, onAttachImage, onChange = () => {} } = {}) {
+  function mount(stage, storedPages, { readOnly = false, templates, objects, papers, initialPage = 0, onAttachImage, onChange: notifyChange = () => {}, onMinimize = () => {} } = {}) {
     const panelId = `journal-sketchbook-${++sequence}`;
     stage.classList.add("journal-notebook", "journal-sketchbook");
     let disposed = false;
@@ -115,10 +115,16 @@
       width = Math.max(0.6, Math.min(48, Number(saved.size) || spec.sizes?.[1] || width));
       angle = Math.max(0, Math.min(170, Number.isFinite(saved.angle) ? saved.angle : 45));
     }
+    // Track edits made while full screen so minimize autosaves only real changes.
+    function onChange() {
+      if (full) full.changed = true;
+      notifyChange();
+    }
     const undo = [],
       redo = [];
     stage.innerHTML = `<div class="jsk-menu" role="group" aria-label="Sketchbook menu">
-      <button type="button" class="jsk-collapse" data-collapse data-notebook-toggle aria-expanded="false" aria-controls="${panelId}">Sketchbook <span data-chevron aria-hidden="true">›</span></button>
+      <button type="button" class="jsk-card" data-expand aria-haspopup="dialog" aria-label="Open sketchbook full screen">Sketchbook <span aria-hidden="true">⤢</span></button>
+      <button type="button" class="jsk-collapse" data-collapse data-notebook-toggle aria-expanded="false" aria-controls="${panelId}" aria-label="Show sketchbook preview"><span data-chevron aria-hidden="true">›</span></button>
       <label data-paper-label>Paper <select data-paper data-template aria-label="Paper for this page" ${readOnly ? "disabled" : ""}>${JournalNotebook.PAPER_TYPES.map((p) => `<option value="${p.id}">${p.label}</option>`).join("")}<optgroup label="Ink paper library">${InkStrokes.PAPERS.map(p => `<option value="ink:${p.id}">${p.label}</option>`).join("")}</optgroup></select></label>
       <button type="button" data-paper-settings ${readOnly ? "hidden" : ""}>Paper options</button>
       <button type="button" data-finger aria-pressed="false" ${readOnly ? "hidden" : ""}>Finger draw: off</button>
@@ -162,7 +168,9 @@
       if (disposed) return;
       const boxW = paperBox.clientWidth, boxH = paperBox.clientHeight;
       if (!boxW || !boxH) return;
-      const fit = Math.min(boxW / W, boxH / H);
+      // A small inset keeps the page edge and shadow inside the clipped box.
+      const inset = 4;
+      const fit = Math.max(0.01, Math.min((boxW - inset * 2) / W, (boxH - inset * 2) / H));
       const dpr = Math.min(window.devicePixelRatio || 1, 3);
       const cssW = W * fit, cssH = H * fit;
       for (const layer of [canvas, live]) {
@@ -216,6 +224,102 @@
       paint();
     }
     q("[data-collapse]").onclick = () => setOpen(!open);
+
+    // ── Full screen ──
+    // The same stage moves into DCC's shared blocking overlay (core-ui.js), so
+    // the canvas and its in-memory pages are never remounted. Every dismissal
+    // (button, Escape, Back) routes through minimize(); a backdrop click does not.
+    let full = null;
+    const prefersMotion = () => !window.DCC?.reducedMotion?.();
+    function clipTo(rect) {
+      const top = Math.max(0, rect.top), left = Math.max(0, rect.left);
+      const right = Math.max(0, window.innerWidth - rect.right), bottom = Math.max(0, window.innerHeight - rect.bottom);
+      return `inset(${top}px ${right}px ${bottom}px ${left}px round 14px)`;
+    }
+    const FULL_CLIP = "inset(0px 0px 0px 0px round 0px)";
+    function restoreInline() {
+      if (!full || full.restored) return;
+      full.restored = true;
+      full.placeholder.replaceWith(stage);
+      stage.classList.remove("is-fullscreen");
+      document.documentElement.style.overflow = full.rootOverflow;
+      document.body.style.overflow = full.bodyOverflow;
+    }
+    function enterFullscreen() {
+      if (full || disposed) return;
+      if (!window.DCC?.overlay) { setOpen(true); return; }
+      finishPending();
+      const from = stage.getBoundingClientRect();
+      const placeholder = document.createElement("div");
+      placeholder.className = "jsk-placeholder";
+      placeholder.style.height = `${from.height}px`;
+      stage.before(placeholder);
+      const card = q("[data-expand]");
+      const token = `${panelId}-${Date.now()}`;
+      full = { placeholder, token, changed: false, restored: false, closing: false,
+        rootOverflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow };
+      const session = full;
+      stage.classList.add("is-fullscreen");
+      full.handle = window.DCC.overlay.open({
+        kind: "modal", title: "Sketchbook", body: stage, anchor: card,
+        returnFocus: () => q("[data-expand]"),
+        canClose(reason) {
+          if (reason === "minimize") return true;
+          // Another blocking overlay is replacing this one: keep the stage.
+          if (reason === "replaced") { if (full === session) { restoreInline(); full = null; } return true; }
+          if (reason !== "backdrop") minimize(reason);
+          return false;
+        }
+      });
+      const { overlay, el } = full.handle;
+      overlay.classList.add("jsk-overlay");
+      const minimizeButton = el.querySelector(".dcc-overlay-close");
+      minimizeButton.textContent = "Minimize";
+      minimizeButton.setAttribute("aria-label", "Minimize sketchbook");
+      minimizeButton.classList.add("jsk-minimize");
+      document.documentElement.style.overflow = "hidden";
+      document.body.style.overflow = "hidden";
+      history.pushState(Object.assign({}, history.state, { jskSketch: token }), "");
+      setOpen(true);
+      if (prefersMotion() && el.animate)
+        el.animate([{ clipPath: clipTo(from) }, { clipPath: FULL_CLIP }], { duration: 200, easing: "cubic-bezier(.2,.7,.2,1)" });
+    }
+    async function minimize(reason = "minimize") {
+      if (!full || full.closing) return;
+      const session = full;
+      session.closing = true;
+      finishPending();
+      if (session.changed) {
+        session.changed = false;
+        try { onMinimize(); } catch (error) { status(error.message || "Autosave failed. Your drawing is still open."); }
+      }
+      const { el } = session.handle;
+      if (prefersMotion() && el.animate) {
+        const to = clipTo(session.placeholder.getBoundingClientRect());
+        await el.animate([{ clipPath: FULL_CLIP, opacity: 1 }, { clipPath: to, opacity: 1, offset: 0.85 }, { clipPath: to, opacity: 0 }],
+          { duration: 200, easing: "cubic-bezier(.2,.7,.2,1)", fill: "forwards" }).finished.catch(() => {});
+      }
+      restoreInline();
+      full = null;
+      session.handle.close("minimize");
+      // Drop the history entry this open pushed, unless Back already did.
+      if (reason !== "back" && history.state?.jskSketch === session.token) history.back();
+    }
+    q("[data-expand]").onclick = enterFullscreen;
+    function onPopState() {
+      if (full && history.state?.jskSketch !== full.token) minimize("back");
+    }
+    // Window capture runs before document listeners, including the journal
+    // editor's own Escape handler, so Escape only minimizes the sketchbook.
+    function onEscape(event) {
+      if (!full || event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!q("[data-popup]").hidden) q("[data-popup]").hidden = true;
+      else minimize("escape");
+    }
+    window.addEventListener("popstate", onPopState);
+    window.addEventListener("keydown", onEscape, true);
     function iconButton(key, labelOverride) {
       const info = toolInfo[key];
       return `<button type="button" data-tool="${key}" aria-pressed="false" data-tooltip="${info[1]}"><span class="jsk-icon" aria-hidden="true">${glyphs[key] || "◇"}</span><span>${labelOverride || info[1]}</span></button>`;
@@ -1169,6 +1273,14 @@
         return pages.map((page) => clone(page.objects));
       },
       destroy() {
+        if (full) {
+          const session = full;
+          restoreInline();
+          full = null;
+          session.handle.close("minimize");
+        }
+        window.removeEventListener("popstate", onPopState);
+        window.removeEventListener("keydown", onEscape, true);
         disposed = true;
         resizer?.disconnect();
         window.removeEventListener("resize", layout);
