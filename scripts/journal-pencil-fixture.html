@@ -2,17 +2,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Journal Pencil regression fixture</title>
+<link rel="stylesheet" href="/public/css/tokens.css">
+<link rel="stylesheet" href="/public/css/core-ui.css">
 <link rel="stylesheet" href="/public/css/journal-sketchbook.css">
 <style>
   :root { --ink:#292722; --surface-raised:#fff; --line:#ccc; --brand:#315fa8;
-    --brand-soft:#edf2fb; --ink-muted:#685f4e; --line-subtle:#ddd; --info:#315fa8; }
-  body { max-width:800px; margin:24px auto; padding:0 12px; font:16px system-ui; }
+    --brand-soft:#edf2fb; --ink-muted:#685f4e; --line-subtle:#ddd; --info:#315fa8;
+    --surface-overlay:#fbf8f0; --ink-strong:#292722; --surface-hover:#eee; --line-strong:#bbb; }
+  body { max-width:800px; margin:24px auto; padding:0 12px; font:16px system-ui; background:#fff; color:#292722; }
 </style>
 <h1>Journal sketchbook</h1>
 <p>Isolated local QA. This page never reads or writes journal data.</p>
 <button id="reopen">Save and reopen test drawing</button>
 <span id="saved" role="status"></span>
 <div id="mount"></div>
+<script src="/public/js/core-ui.js"></script>
 <script src="/public/js/ink/strokes.js"></script>
 <script src="/public/js/ink/canvas.js"></script>
 <script src="/public/js/ink/shapes.js"></script>
@@ -23,11 +27,19 @@
   function mount(pages = [[]], options = {}) {
     const stage = document.createElement('section');
     document.querySelector('#mount').append(stage);
-    sketch = JournalSketchbook.mount(stage, pages, options);
+    sketch = JournalSketchbook.mount(stage, pages, { onMinimize: () => { window.minimizeSaves = (window.minimizeSaves || 0) + 1; window.autosaveToSession?.(); }, ...options });
     stage.querySelector('[data-collapse]').click();
     return stage;
   }
-  mount();
+  // Full-screen QA: minimize autosaves to session storage; ?restore reopens it
+  // after a real reload. Nothing here touches journal data.
+  const restored = new URLSearchParams(location.search).has('restore') && sessionStorage.getItem('jsk-qa-autosave');
+  if (restored) {
+    const data = JournalNotebook.unpack(restored);
+    mount(data.pages, { templates:data.templates, objects:data.objects });
+  } else mount();
+  window.autosaveToSession = () => sessionStorage.setItem('jsk-qa-autosave',
+    JournalNotebook.pack('QA text', sketch.readCommitted(), sketch.readTemplates(), sketch.readObjects()));
   document.querySelector('#reopen').onclick = () => {
     const saved = JournalNotebook.pack('QA text', sketch.read(), sketch.readTemplates(), sketch.readObjects());
     sketch.destroy();
