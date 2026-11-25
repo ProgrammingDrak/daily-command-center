@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 const { chromium } = await import(process.env.QA_PLAYWRIGHT_MODULE || 'playwright-core');
 const browser = await chromium.launch({ channel: process.env.QA_BROWSER_CHANNEL || 'msedge', headless: true });
-const base = 'http://journal-qa.test/scripts/journal-pencil-fixture.html';
+const base = 'http://journal-qa.test/scripts/journal-pencil-fixture.html?card';
 try {
   const context = await browser.newContext({ viewport: { width: 900, height: 1000 }, deviceScaleFactor: 2 });
   await context.route('http://journal-qa.test/**', async route => {
@@ -30,6 +30,14 @@ try {
   const inline = await sharp();
   check(isSharp(inline) && inline.dpr === 2, 'inline canvas backed at device pixels');
   check(Math.abs(inline.cssW / inline.cssH - 1000 / 1200) < 0.01, 'inline page keeps its aspect ratio');
+
+  // Inline, the page is the card: a tap opens full screen and never draws.
+  check(await page.locator('[data-canvas-hint]').innerText() === 'Tap to open full screen', 'inline page invites a tap');
+  await page.locator('.jsk-paper').click();
+  await page.waitForSelector('.jsk-overlay.open .journal-sketchbook.is-fullscreen');
+  check(await page.evaluate(() => sketch.readCommitted()[0].length) === 0, 'tapping the inline page opens full screen without drawing');
+  await page.click('.jsk-minimize');
+  await page.waitForFunction(() => !document.querySelector('.dcc-overlay'));
 
   // Pick the pen before going full screen; it persists across cycles.
   await page.click('.jsk-toolbox [data-tool="pen"]');
@@ -99,7 +107,7 @@ try {
   check(await page.evaluate(() => window.minimizeSaves) === ways.length, 'unchanged minimize skips autosave');
 
   // The autosaved drawing survives a real reload.
-  await page.goto(base + '?restore');
+  await page.goto(base + '&restore');
   check(await strokes() === ways.length, 'drawing survives reload');
   check(errors.length === 0, 'no page errors: ' + errors.join('; '));
   console.log(JSON.stringify({ passed: checks.length, checks }, null, 2));

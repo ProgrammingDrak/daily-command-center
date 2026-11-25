@@ -367,6 +367,11 @@
   height: auto;
   min-height: 0;
 }
+/* Inline preview: the page scrolls normally and a tap opens full screen. */
+.journal-sketchbook .jsk-paper[data-preview="true"] canvas {
+  touch-action: pan-y;
+  cursor: zoom-in;
+}
 /* Pointer gestures own the page while full screen; nothing behind it scrolls. */
 .journal-sketchbook.is-fullscreen .jsk-paper canvas {
   touch-action: none;

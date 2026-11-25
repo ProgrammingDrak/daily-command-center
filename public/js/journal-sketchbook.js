@@ -63,7 +63,7 @@
     zoom: ["zoom-in", "Zoom"],
     tape: ["rectangle-horizontal", "Tape"]
   };
-  function mount(stage, storedPages, { readOnly = false, templates, objects, papers, initialPage = 0, onAttachImage, onChange: notifyChange = () => {}, onMinimize = () => {} } = {}) {
+  function mount(stage, storedPages, { readOnly = false, templates, objects, papers, initialPage = 0, onAttachImage, onChange: notifyChange = () => {}, onMinimize = () => {}, inlineDrawing = false } = {}) {
     const panelId = `journal-sketchbook-${++sequence}`;
     stage.classList.add("journal-notebook", "journal-sketchbook");
     let disposed = false;
@@ -234,6 +234,8 @@
     // the canvas and its in-memory pages are never remounted. Every dismissal
     // (button, Escape, Back) routes through minimize(); a backdrop click does not.
     let full = null;
+    // Without the shared overlay (or when a caller opts in) the page draws inline.
+    const previewOnly = () => !full && !inlineDrawing && !!window.DCC?.overlay;
     const prefersMotion = () => !window.DCC?.reducedMotion?.();
     function clipTo(rect) {
       const top = Math.max(0, rect.top), left = Math.max(0, rect.left);
@@ -248,6 +250,10 @@
       stage.classList.remove("is-fullscreen");
       document.documentElement.style.overflow = full.rootOverflow;
       document.body.style.overflow = full.bodyOverflow;
+      const session = full;
+      full = null;
+      markTool();
+      full = session;
     }
     function enterFullscreen() {
       if (full || disposed) return;
@@ -285,6 +291,7 @@
       document.body.style.overflow = "hidden";
       history.pushState(Object.assign({}, history.state, { jskSketch: token }), "");
       setOpen(true);
+      markTool();
       if (prefersMotion() && el.animate)
         el.animate([{ clipPath: clipTo(from) }, { clipPath: FULL_CLIP }], { duration: 200, easing: "cubic-bezier(.2,.7,.2,1)" });
     }
@@ -310,6 +317,7 @@
       if (reason !== "back" && history.state?.jskSketch === session.token) history.back();
     }
     q("[data-expand]").onclick = enterFullscreen;
+    paperBox.addEventListener("click", () => { if (previewOnly()) enterFullscreen(); });
     function onPopState() {
       if (full && history.state?.jskSketch !== full.token) minimize("back");
     }
@@ -384,6 +392,13 @@
                 : tool === "laser"
                   ? "Temporary pointer · fades automatically"
                   : `${toolInfo[tool]?.[1] || "Pen"} active`;
+      // Inline, the page is the card: a tap opens full screen, where drawing happens.
+      const preview = previewOnly();
+      q(".jsk-paper").dataset.preview = String(preview);
+      if (preview) {
+        canvas.style.cursor = "zoom-in";
+        q("[data-canvas-hint]").textContent = "Tap to open full screen";
+      }
     }
     function choose(next) {
       if (readOnly) return;
@@ -1143,7 +1158,7 @@
       }
     }
     const input = InkCanvas.createPointerInput({ base: canvas, wrap: q(".jsk-paper"),
-      fingerDraw: "off", enabled: () => !readOnly,
+      fingerDraw: "off", enabled: () => !readOnly && !previewOnly(),
       onStart: startGesture, onMove: moveGesture,
       onFinish: event => finish(event), onCancel: event => finish(event, true),
       onNavigate: delta => { if (!readOnly || open) turn(index + delta); }
