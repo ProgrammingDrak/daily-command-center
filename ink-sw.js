@@ -1,7 +1,7 @@
 "use strict";
 /* global self, caches, Response */
 // Private journal bodies, API responses, and media never enter Cache Storage.
-const CACHE = "mycelium-ink-shell-v9";
+const CACHE = "mycelium-ink-shell-v10";
 const SHELL = [
   "/library", "/library/notebook", "/public/ink-manifest.webmanifest",
   "/public/css/tokens.css", "/public/css/dashboard.css", "/public/css/core-ui.css",
@@ -12,7 +12,7 @@ const SHELL = [
   "/public/js/ink/render-worker.js", "/public/js/ink/canvas.js", "/public/js/ink/shapes.js",
   "/public/js/ink/sync.js", "/public/js/ink/app.js", "/public/js/journal-notebook.js",
   "/public/js/journal-sketchbook.js", "/public/js/journal-drafts.js",
-  "/public/js/library-workspace.js", "/public/js/core-ui.js", "/public/js/completion-memories.js",
+  "/public/js/library-workspace.js", "/public/js/core-ui.js", "/public/js/completion-memories.js", "/public/js/journal-blocks.js",
   "/public/fonts/Poppins-Regular.ttf", "/public/fonts/Poppins-Medium.ttf",
   "/public/fonts/Poppins-SemiBold.ttf", "/public/fonts/Poppins-Bold.ttf",
   "/public/icons/favicon.ico", "/public/icons/icon-192.png", "/public/icons/icon-512.png"
