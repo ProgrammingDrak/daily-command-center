@@ -374,3 +374,20 @@
 .journal-sketchbook.is-fullscreen :is([data-expand], [data-collapse]) {
   display: none;
 }
+/* Phones: keep each toolbar to one swipeable row so the page gets the height. */
+@media (max-width: 700px) {
+  .journal-sketchbook.is-fullscreen :is(.jsk-menu, .jsk-toolbox, .jsk-context) {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .journal-sketchbook.is-fullscreen :is(.jsk-menu, .jsk-toolbox, .jsk-context) > * {
+    flex: 0 0 auto;
+  }
+  .journal-sketchbook.is-fullscreen .jsk-spacer {
+    flex: 1 0 8px;
+  }
+  .jsk-overlay .dcc-overlay-body {
+    padding: 4px 10px 8px;
+  }
+}

@@ -179,6 +179,10 @@
         layer.style.left = `${(boxW - cssW) / 2}px`;
         layer.style.top = `${(boxH - cssH) / 2}px`;
       }
+      // Keep the hint on the page itself, not across the empty box.
+      const hint = q("[data-canvas-hint]"), sideGap = (boxW - cssW) / 2 + 8;
+      hint.style.left = hint.style.right = `${sideGap}px`;
+      hint.style.bottom = `${(boxH - cssH) / 2 + 8}px`;
       const pxW = Math.max(1, Math.round(cssW * dpr)), pxH = Math.max(1, Math.round(cssH * dpr));
       if (canvas.width === pxW && canvas.height === pxH) return;
       for (const layer of [canvas, live, committed, prefix]) { layer.width = pxW; layer.height = pxH; }
