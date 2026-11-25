@@ -371,6 +371,11 @@
 .journal-sketchbook.is-fullscreen .jsk-paper canvas {
   touch-action: none;
 }
+.journal-sketchbook .jsk-fullscreen-button {
+  border-color: var(--brand);
+  color: var(--ink-strong, var(--ink));
+  font-weight: 600;
+}
 .journal-sketchbook.is-fullscreen :is([data-expand], [data-collapse]) {
   display: none;
 }

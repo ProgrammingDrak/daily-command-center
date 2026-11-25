@@ -123,8 +123,8 @@
     const undo = [],
       redo = [];
     stage.innerHTML = `<div class="jsk-menu" role="group" aria-label="Sketchbook menu">
-      <button type="button" class="jsk-card" data-expand aria-haspopup="dialog" aria-label="Open sketchbook full screen">Sketchbook <span aria-hidden="true">⤢</span></button>
-      <button type="button" class="jsk-collapse" data-collapse data-notebook-toggle aria-expanded="false" aria-controls="${panelId}" aria-label="Show sketchbook preview"><span data-chevron aria-hidden="true">›</span></button>
+      <button type="button" class="jsk-collapse" data-collapse data-notebook-toggle aria-expanded="false" aria-controls="${panelId}">Sketchbook <span data-chevron aria-hidden="true">›</span></button>
+      <button type="button" class="jsk-fullscreen-button" data-expand aria-haspopup="dialog" aria-label="Open sketchbook full screen"><span aria-hidden="true">⤢</span> Full screen</button>
       <label data-paper-label>Paper <select data-paper data-template aria-label="Paper for this page" ${readOnly ? "disabled" : ""}>${JournalNotebook.PAPER_TYPES.map((p) => `<option value="${p.id}">${p.label}</option>`).join("")}<optgroup label="Ink paper library">${InkStrokes.PAPERS.map(p => `<option value="ink:${p.id}">${p.label}</option>`).join("")}</optgroup></select></label>
       <button type="button" data-paper-settings ${readOnly ? "hidden" : ""}>Paper options</button>
       <button type="button" data-finger aria-pressed="false" ${readOnly ? "hidden" : ""}>Finger draw: off</button>
