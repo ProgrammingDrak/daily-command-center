@@ -1,6 +1,6 @@
 // Isolated browser regression for the full-screen journal sketchbook.
 // No production requests or user storage: files are fulfilled from disk.
-/* global document, window, history, sketch, devicePixelRatio */
+/* global document, window, history, sketch, devicePixelRatio, getComputedStyle, MouseEvent, Touch, TouchEvent, PointerEvent */
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
