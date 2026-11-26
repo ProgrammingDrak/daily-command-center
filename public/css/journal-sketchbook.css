@@ -200,22 +200,25 @@
   user-select: none;
   -webkit-touch-callout: none;
   position: relative;
-  background: #f7f1df;
-  border: 1px solid #d4c9ae;
-  border-radius: 3px 14px 14px 3px;
-  box-shadow: 3px 3px 0 #c9bda2;
   overflow: hidden;
 }
-.journal-sketchbook .jsk-paper canvas {
-  display: block;
-  width: 100%;
+/* The page, not its box, carries the paper look, so the drawable area is visible. */
+.journal-sketchbook .jsk-paper [data-canvas] {
+  background: #f7f1df;
+  border-radius: 3px 14px 14px 3px;
+  box-shadow: 0 0 0 1px #d4c9ae, 3px 3px 0 #c9bda2;
+}
+.journal-sketchbook .jsk-paper {
   height: 360px;
+}
+/* JavaScript fits both layers to the page aspect and sets size and offset. */
+.journal-sketchbook .jsk-paper canvas {
+  position: absolute;
+  display: block;
   touch-action: none;
   transform-origin: center;
 }
 .journal-sketchbook .jsk-paper .jsk-live {
-  position: absolute;
-  inset: 0;
   pointer-events: none;
 }
 .journal-sketchbook :is(.jsk-menu, .jsk-toolbox, .jsk-status, .jsk-pages) {
@@ -293,7 +296,7 @@
     grid-template-columns: 28px minmax(0, 1fr) 28px;
     gap: 5px;
   }
-  .journal-sketchbook .jsk-paper canvas {
+  .journal-sketchbook .jsk-paper {
     height: 330px;
   }
   .journal-sketchbook .jsk-context {
@@ -305,5 +308,249 @@
   }
   .journal-sketchbook .jsk-context label {
     flex-wrap: wrap;
+  }
+}
+
+.journal-sketchbook .jsk-fullscreen-button {
+  border-color: var(--brand);
+  color: var(--ink-strong, var(--ink));
+  font-weight: 600;
+}
+
+/* ── Full screen (GoodNotes-style) ──
+   The stage moves into DCC's shared overlay (core-ui.js). One slim top bar
+   holds the tools; the page fills the width and scrolls beneath it. */
+.journal-sketchbook .jsk-fsbar,
+.journal-sketchbook .jsk-fs-float {
+  display: none;
+}
+.jsk-overlay.dcc-overlay--modal {
+  padding: 0;
+  align-items: stretch;
+  justify-content: stretch;
+}
+.jsk-overlay .dcc-modal {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  transform: none;
+  transition: none;
+}
+.jsk-overlay .dcc-overlay-head {
+  display: none;
+}
+.jsk-overlay .dcc-overlay-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.journal-sketchbook.is-fullscreen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+.journal-sketchbook.is-fullscreen .journal-drawer-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.journal-sketchbook.is-fullscreen :is(.jsk-menu, .jsk-toolbox, .jsk-context, .jsk-pages.journal-page-turn, .jsk-peek, .jsk-canvas-text) {
+  display: none;
+}
+.journal-sketchbook.is-fullscreen .jsk-fsbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 52px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-subtle, var(--line));
+  background: var(--surface-overlay);
+}
+.journal-sketchbook.is-fullscreen.tools-hidden .jsk-fsbar {
+  display: none;
+}
+.jsk-fsbar .jsk-fs-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.jsk-fsbar .jsk-fs-tools {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: center;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.jsk-fsbar .jsk-fs-tools > * {
+  flex: 0 0 auto;
+}
+.journal-sketchbook .jsk-fsbar button,
+.journal-sketchbook .jsk-fs-float button {
+  min-width: 40px;
+  min-height: 40px;
+  padding: 4px 8px;
+  font-size: 18px;
+  line-height: 1;
+}
+.journal-sketchbook .jsk-fsbar [data-fs-tool][aria-pressed="true"] {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+.jsk-fsbar .jsk-fs-sep {
+  width: 1px;
+  height: 26px;
+  margin: 0 4px;
+  background: var(--line);
+}
+.jsk-fsbar .jsk-fs-page {
+  min-width: 46px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-muted, var(--ink));
+}
+.journal-sketchbook .jsk-fsbar .jsk-fs-swatch {
+  min-width: 30px;
+  width: 30px;
+  min-height: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--swatch);
+  border: 2px solid var(--surface-overlay);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.journal-sketchbook .jsk-fsbar .jsk-fs-swatch[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--brand);
+}
+.jsk-fsbar input[type="color"] {
+  width: 32px;
+  min-height: 30px;
+  padding: 2px;
+}
+.journal-sketchbook .jsk-fsbar .jsk-fs-width span {
+  display: block;
+  border-radius: 50%;
+  background: currentColor;
+}
+.journal-sketchbook .jsk-fsbar .jsk-fs-width[aria-pressed="true"] {
+  border-color: var(--brand);
+}
+.journal-sketchbook .jsk-fsbar .jsk-minimize {
+  font-size: 14px;
+  padding: 4px 14px;
+  font-weight: 600;
+}
+.journal-sketchbook.is-fullscreen.tools-hidden .jsk-fs-float {
+  display: flex;
+  gap: 6px;
+  position: fixed;
+  top: 10px;
+  right: 12px;
+  z-index: 3;
+}
+.journal-sketchbook.is-fullscreen .jsk-fs-float button {
+  font-size: 14px;
+  background: color-mix(in srgb, var(--surface-overlay) 85%, transparent);
+  backdrop-filter: blur(4px);
+}
+/* The page fills the width; the gallery scrolls it vertically. */
+.journal-sketchbook.is-fullscreen .jsk-gallery {
+  flex: 1;
+  min-height: 0;
+  display: block;
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.journal-sketchbook.is-fullscreen .jsk-paper {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1000 / 1200;
+}
+.journal-sketchbook.is-fullscreen .jsk-paper [data-canvas] {
+  border-radius: 0;
+  box-shadow: none;
+}
+/* Pointer gestures own the page while full screen; nothing behind it scrolls. */
+.journal-sketchbook.is-fullscreen .jsk-paper canvas {
+  touch-action: none;
+}
+.journal-sketchbook.is-fullscreen .jsk-popup {
+  position: fixed;
+  top: 60px;
+  right: 12px;
+  z-index: 4;
+  width: min(380px, calc(100vw - 24px));
+  max-height: calc(100dvh - 80px);
+  overflow-y: auto;
+  margin: 0;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+.journal-sketchbook.is-fullscreen .jsk-selection-actions {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--surface-overlay);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+}
+.journal-sketchbook.is-fullscreen .jsk-status:not(:empty) {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 3;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--surface-overlay);
+  font-size: 12px;
+}
+/* Phones: page and action groups share row one; tools scroll in row two. */
+@media (max-width: 700px) {
+  .journal-sketchbook.is-fullscreen .jsk-fsbar {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .jsk-fsbar .jsk-fs-pages {
+    order: 1;
+  }
+  .jsk-fsbar .jsk-fs-actions {
+    order: 2;
+    margin-left: auto;
+  }
+  .jsk-fsbar .jsk-fs-tools {
+    order: 3;
+    flex-basis: 100%;
+    justify-content: flex-start;
+  }
+  /* Swipe turns pages on phones; keep the page count and Add page. */
+  .jsk-fsbar :is([data-fs-prev], [data-fs-next]) {
+    display: none;
+  }
+  .journal-sketchbook .jsk-fsbar button {
+    min-width: 36px;
+    min-height: 38px;
+    padding: 4px 6px;
+  }
+  .jsk-fsbar .jsk-fs-group {
+    gap: 3px;
+  }
+  .jsk-fsbar .jsk-fs-page {
+    min-width: 34px;
+  }
+  .journal-sketchbook .jsk-fsbar .jsk-minimize {
+    padding: 4px 10px;
   }
 }

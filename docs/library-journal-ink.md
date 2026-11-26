@@ -26,6 +26,26 @@ continues using InkArchive; name/ID collisions create copies instead of replacin
 the existing notebook. Notebook settings remain available by selecting its title
 in the editor, including its existing deletion confirmation.
 
+## Full-screen sketchbook
+
+The Sketchbook card opens the same stage inside DCC's shared blocking overlay
+(`core-ui.js`), so the canvas is never remounted. Minimize with the top-right
+button, Escape, or browser Back; a backdrop click does not close it. Page
+scroll locks while open and focus returns to the card. Layers fit the page
+aspect and carry device-pixel backing stores, re-rendering from stroke data on
+resize. Minimizing after an edit calls `onSketchMinimize`: Library flushes its
+local draft, and the DCC journal editor writes the note while staying open.
+
+## Journal text blocks
+
+New journals open empty; the vault template supplies frontmatter only. The
+text surface edits like a block editor and stores plain markdown.
+`journal-blocks.js` adds markdown shortcuts (`#`, `-`, `1.`, `[]`, `>`,
+```` ``` ````, `---`, `**bold**`, `` `code` ``), a "/" block menu, per-block
+add and drag handles, clickable to-dos, and markdown paste. The serializer in
+`completion-memories.js` writes headings, lists (nested and to-do), quotes,
+code, dividers, and inline marks back to markdown.
+
 ## Durability and conflicts
 
 `JournalDrafts` uses a separate account-scoped IndexedDB database. Each journal
@@ -56,6 +76,8 @@ warming makes additional entries available. Uncached attachments require a netwo
 DCC_REVIEW_LIBRARY=1 PORT=8102 npm run ui-review:serve
 node scripts/verify-library.mjs
 node scripts/verify-journal-pencil.mjs
+node scripts/verify-journal-fullscreen.mjs
+node scripts/verify-journal-blocks.mjs
 node --test journal-library.test.js journal-notebook.test.js ink*.test.js notebook-production-boundary.test.js
 ```
 

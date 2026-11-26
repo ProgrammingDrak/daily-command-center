@@ -476,7 +476,7 @@
     return details;
   }
 
-  function mountJournalEntry(cover, prev, initial, { readOnly = false, onAttachment, onNotebookImage, notebook = false, initialPage = 0, onChange = () => {} } = {}) {
+  function mountJournalEntry(cover, prev, initial, { readOnly = false, onAttachment, onNotebookImage, notebook = false, initialPage = 0, onChange = () => {}, onSketchMinimize } = {}) {
     let photos = [], dirty = false, cleanup;
     const ink = notebook ? window.JournalNotebook.unpack(initial) : null;
     if (ink) initial = ink.text;
@@ -499,6 +499,8 @@
       if (!initial.trim()) prev.replaceChildren();
     }
     if (!readOnly) prev.contentEditable = "true";
+    // Notion-style blocks: markdown shortcuts, "/" menu, handles, to-dos.
+    const unblock = !readOnly && window.JournalBlocks ? window.JournalBlocks.enhance(prev) : null;
     let cursor;
     const rememberCursor = () => {
       const selection = window.getSelection();
@@ -567,13 +569,13 @@
       }
       const text = clipboard?.getData("text/plain") || "";
       if (/^\[[^\n]+\]\(#dcc-(?:card-|photo-)/.test(text)) insert(text);
-      else document.execCommand("insertText", false, text);
+      else if (!window.JournalBlocks?.pasteText(text)) document.execCommand("insertText", false, text);
     });
     paint();
     if (ink) {
       const paper = node("section");
       prev.after(paper);
-      book = window.JournalNotebook.mount(paper, ink.pages, { readOnly, templates: ink.templates, objects: ink.objects, papers: ink.papers, initialPage, onAttachImage: onNotebookImage, onChange });
+      book = window.JournalNotebook.mount(paper, ink.pages, { readOnly, templates: ink.templates, objects: ink.objects, papers: ink.papers, initialPage, onAttachImage: onNotebookImage, onChange, onMinimize: onSketchMinimize });
     }
     return {
       read, insert, mountFormatting,
@@ -584,38 +586,73 @@
         if (!dirty && !prev.contains(document.activeElement)) paint();
         else paintCover();
       },
-      destroy() { cleanup?.(); book?.destroy(); },
+      destroy() { cleanup?.(); unblock?.(); book?.destroy(); },
     };
   }
 
   function journalMarkdown(element) {
+    const childText = node => Array.from(node.childNodes, serialize).join("");
+    // Lists keep nesting and to-do state. Chrome's indent can place a nested
+    // list directly inside its parent list; it nests under the previous item.
+    const codeBlocks = [];
+    const listMarkdown = (list, indent) => {
+      const lines = [];
+      let index = 0, width = 2;
+      for (const child of list.children) {
+        if (child.tagName === "UL" || child.tagName === "OL") { lines.push(listMarkdown(child, indent + " ".repeat(width))); continue; }
+        if (child.tagName !== "LI") continue;
+        const marker = list.tagName === "OL" ? (++index) + ". " : "- ";
+        width = marker.length;
+        // Loose task lists (marked) wrap the checkbox in the item's first <p>.
+        const box = child.querySelector(':scope > input[type="checkbox"], :scope > p:first-child > input[type="checkbox"]');
+        const nested = Array.from(child.children).filter(item => item.tagName === "UL" || item.tagName === "OL");
+        const own = Array.from(child.childNodes).filter(item => item !== box && !nested.includes(item)).map(serialize)
+          .join("").replace(/\n+/g, " ").trim();
+        lines.push(indent + marker + (box ? (box.checked ? "[x] " : "[ ] ") : "") + own);
+        for (const sub of nested) lines.push(listMarkdown(sub, indent + " ".repeat(width)));
+      }
+      return lines.join("\n");
+    };
     const serialize = node => {
       if (node.nodeType === Node.TEXT_NODE) {
-        return node.textContent.split(/(\[\[[^\]\n]+\]\])/g).map((part, index) =>
-          index % 2 ? part : part.replace(/[\\`*_\[\]<>]/g, "\\$&")
+        return node.textContent.replace(/\u200b/g, "").split(/(\[\[[^\]\n]+\]\])/g).map((part, index) =>
+          index % 2 ? part : part.replace(/[\\`*_\[\]<>~]/g, "\\$&")
         ).join("");
       }
       if (node.nodeType !== Node.ELEMENT_NODE) return "";
       if (node.dataset.journalMarkdown) return node.dataset.journalMarkdown;
-      const text = Array.from(node.childNodes, serialize).join("");
       switch (node.tagName) {
         case "BR": return "\n";
-        case "P": case "DIV": return text + "\n\n";
-        case "B": case "STRONG": return `**${text}**`;
-        case "I": case "EM": return `*${text}*`;
+        case "P": case "DIV": return childText(node) + "\n\n";
+        case "B": case "STRONG": return `**${childText(node)}**`;
+        case "I": case "EM": return `*${childText(node)}*`;
+        case "S": case "DEL": case "STRIKE": return `~~${childText(node)}~~`;
+        case "CODE": return "`" + node.textContent.replace(/\u200b/g, "") + "`";
         case "H1": case "H2": case "H3": case "H4": case "H5": case "H6":
-          return "\n" + "#".repeat(Number(node.tagName[1])) + " " + text + "\n\n";
-        case "UL": case "OL":
-          return "\n" + Array.from(node.children, (item, index) =>
-            (node.tagName === "OL" ? (index + 1) + ". " : "- ") + serialize(item).trim()
-          ).join("\n") + "\n\n";
-        case "A": return `[${text}](${node.getAttribute("href") || ""})`;
+          return "\n" + "#".repeat(Number(node.tagName[1])) + " " + childText(node).trim() + "\n\n";
+        case "UL": case "OL": return "\n" + listMarkdown(node, "") + "\n\n";
+        case "BLOCKQUOTE": {
+          const inner = childText(node).replace(/\n{3,}/g, "\n\n").trim();
+          return "\n" + inner.split("\n").map(line => line ? "> " + line : ">").join("\n") + "\n\n";
+        }
+        case "PRE": {
+          const code = node.querySelector("code");
+          const language = /language-([\w-]+)/.exec(code?.className || "")?.[1] || "";
+          const text = node.textContent.replace(/\u200b/g, "").replace(/\n$/, "");
+          // Park code bodies so the blank-line collapse below cannot touch them.
+          codeBlocks.push(text);
+          return "\n```" + language + "\n\u0000" + (codeBlocks.length - 1) + "\u0000\n```\n\n";
+        }
+        case "HR": return "\n---\n\n";
+        case "INPUT": return "";
+        case "A": return `[${childText(node)}](${node.getAttribute("href") || ""})`;
         case "IMG": return `![${node.alt}](${node.getAttribute("src") || ""})`;
-        case "SPAN": case "LI": return text;
+        case "SPAN": case "LI": return childText(node);
         default: return node.outerHTML;
       }
     };
-    return Array.from(element.childNodes, serialize).join("").trim();
+    return Array.from(element.childNodes, serialize).join("").replace(/\n{3,}/g, "\n\n")
+      .replace(/\u0000(\d+)\u0000/g, (match, index) => codeBlocks[Number(index)]).trim();
   }
 
   function mountTaskPhotos(host, blockId, title, readOnly) {

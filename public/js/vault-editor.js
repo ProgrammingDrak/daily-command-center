@@ -103,7 +103,8 @@
     const fm = Object.assign({}, tpl.frontmatter || {}, { type });
     if (!fm.date && (fm.date === "" || "date" in fm)) fm.date = todayIso();
     if (prefill && prefill.title) fm.title = prefill.title;
-    const body = prefill && prefill.body != null ? prefill.body : (tpl.body || "");
+    // Journals start empty and ready for typing; other types keep their template body.
+    const body = prefill && prefill.body != null ? prefill.body : (type === "journal" ? "" : (tpl.body || ""));
     buildForm({ mode: "new", type, slug: null, hash: null, frontmatter: fm, body, promoteFrom: prefill && prefill.fromSlug });
   }
 
@@ -242,7 +243,11 @@
     if (write) write.onclick = () => { write.classList.add("active"); q("#ed-preview").classList.remove("active"); body.hidden = false; prev.hidden = true; };
     const cover = q("#ed-day-cover");
     const state = st;
-    const entry = cover ? DCC.CompletionMemories.mountJournalEntry(cover, prev, body.value, { onAttachment: uploadAttachment, onNotebookImage: uploadNotebookImage, notebook: true }) : null;
+    const entry = cover ? DCC.CompletionMemories.mountJournalEntry(cover, prev, body.value, {
+      onAttachment: uploadAttachment, onNotebookImage: uploadNotebookImage, notebook: true,
+      // Minimizing the full-screen sketchbook writes the note and keeps the editor open.
+      onSketchMinimize: () => { save({ stay: true }); }
+    }) : null;
     if (entry) {
       state.clearDayStory = entry.destroy;
       state.readJournal = entry.read;
@@ -519,7 +524,18 @@
   }
 
   // ── Save ──
-  async function save() {
+  // Saves run one at a time so an autosave and a Save click never race on
+  // the optimistic-lock hash.
+  async function save(options) {
+    const state = st;
+    while (state && state.saving) await state.saving;
+    if (!state || st !== state) return;
+    state.saving = persist(state, options || {});
+    try { await state.saving; } finally { state.saving = null; }
+  }
+
+  async function persist(state, { stay = false } = {}) {
+    const st = state;
     const q = (sel) => inner().querySelector(sel);
     const title = q("#ed-title").value.trim();
     const date = q("#ed-date").value.trim();
@@ -543,6 +559,13 @@
         data = await res.json();
         if (res.status === 409) { saveBtn.disabled = false; toast("This note changed elsewhere — reload before saving", "error"); return; }
         if (!res.ok) throw new Error(data.error || "save failed");
+        if (stay) {
+          // Autosave keeps the editor open; the next write uses the new hash.
+          st.hash = data.hash;
+          saveBtn.disabled = false;
+          toast("Sketch saved");
+          return;
+        }
         const savedSlug = st.slug;
         toast("Saved"); close(); ctx.onSaved(savedSlug);
       } else {
@@ -555,8 +578,21 @@
         // Promote: the new typed note now holds the content, so remove the
         // fleeting source from the inbox. Best-effort — the create already
         // succeeded, so a failed cleanup just leaves the inbox note behind.
-        if (st.promoteFrom) {
-          try { await fetch("/api/vault/node/" + st.promoteFrom.split("/").map(encodeURIComponent).join("/"), { method: "DELETE" }); } catch {}
+        const promoted = st.promoteFrom;
+        if (promoted) {
+          try { await fetch("/api/vault/node/" + promoted.split("/").map(encodeURIComponent).join("/"), { method: "DELETE" }); } catch {}
+        }
+        if (stay) {
+          // The note now exists: later saves update it instead of creating a copy.
+          st.mode = "edit";
+          st.slug = data.slug;
+          st.hash = data.node && data.node.hash;
+          st.promoteFrom = null;
+          saveBtn.disabled = false;
+          toast("Sketch saved to " + data.slug);
+          return;
+        }
+        if (promoted) {
           toast("Promoted to " + data.slug);
         } else {
           toast("Created " + data.slug);

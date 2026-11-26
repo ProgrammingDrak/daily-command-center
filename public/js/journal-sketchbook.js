@@ -63,7 +63,7 @@
     zoom: ["zoom-in", "Zoom"],
     tape: ["rectangle-horizontal", "Tape"]
   };
-  function mount(stage, storedPages, { readOnly = false, templates, objects, papers, initialPage = 0, onAttachImage, onChange = () => {} } = {}) {
+  function mount(stage, storedPages, { readOnly = false, templates, objects, papers, initialPage = 0, onAttachImage, onChange: notifyChange = () => {}, onMinimize = () => {} } = {}) {
     const panelId = `journal-sketchbook-${++sequence}`;
     stage.classList.add("journal-notebook", "journal-sketchbook");
     let disposed = false;
@@ -115,10 +115,36 @@
       width = Math.max(0.6, Math.min(48, Number(saved.size) || spec.sizes?.[1] || width));
       angle = Math.max(0, Math.min(170, Number.isFinite(saved.angle) ? saved.angle : 45));
     }
+    // Track edits made while full screen so minimize autosaves only real changes.
+    function onChange() {
+      if (full) full.changed = true;
+      notifyChange();
+    }
     const undo = [],
       redo = [];
-    stage.innerHTML = `<div class="jsk-menu" role="group" aria-label="Sketchbook menu">
+    // Full-screen bar: hidden inline, one slim row (two on phones) in full screen.
+    const fsTools = ["pen", "pencil", "highlighter", "eraser", "lasso", "shape", "text", "image", "elements"];
+    const fsGlyph = { ...glyphs, pen: "✒" };
+    const fsBar = `<div class="jsk-fsbar" role="toolbar" aria-label="Sketchbook tools">
+      <div class="jsk-fs-group jsk-fs-pages">
+        <button type="button" data-fs-prev aria-label="Previous page">‹</button><span class="jsk-fs-page" data-fs-page></span><button type="button" data-fs-next aria-label="Next page">›</button><button type="button" data-fs-add aria-label="Add page" ${readOnly ? "hidden" : ""}>+</button>
+      </div>
+      <div class="jsk-fs-group jsk-fs-tools" ${readOnly ? "hidden" : ""}>
+        ${fsTools.map(key => `<button type="button" data-fs-tool="${key}" aria-pressed="false" aria-label="${toolInfo[key][1]}" title="${toolInfo[key][1]}">${fsGlyph[key] || "◇"}</button>`).join("")}
+        <span class="jsk-fs-group" data-fs-ink><span class="jsk-fs-sep" aria-hidden="true"></span>
+          ${["#292722", "#315fa8", "#ba5268", "#43896e", "#e7c840"].map(c => `<button type="button" class="jsk-fs-swatch" data-fs-color="${c}" aria-pressed="false" aria-label="Ink color ${c}" style="--swatch:${c}"></button>`).join("")}
+          <input type="color" data-fs-custom aria-label="Custom ink color">
+          ${[0, 1, 2].map(n => `<button type="button" class="jsk-fs-width" data-fs-width="${n}" aria-pressed="false"><span style="width:${4 + n * 4}px;height:${4 + n * 4}px"></span></button>`).join("")}
+        </span>
+      </div>
+      <div class="jsk-fs-group jsk-fs-actions">
+        <button type="button" data-fs-undo aria-label="Undo drawing" ${readOnly ? "hidden" : ""}>↶</button><button type="button" data-fs-redo aria-label="Redo drawing" ${readOnly ? "hidden" : ""}>↷</button><button type="button" data-fs-more aria-label="More options">⋯</button><button type="button" data-fs-hide aria-label="Hide tools" title="Hide tools">⌃</button><button type="button" class="jsk-minimize" data-fs-minimize aria-label="Minimize sketchbook">Minimize</button>
+      </div>
+    </div>
+    <div class="jsk-fs-float"><button type="button" data-fs-show aria-label="Show tools">⌄ Tools</button><button type="button" data-fs-minimize aria-label="Minimize sketchbook">Minimize</button></div>`;
+    stage.innerHTML = fsBar + `<div class="jsk-menu" role="group" aria-label="Sketchbook menu">
       <button type="button" class="jsk-collapse" data-collapse data-notebook-toggle aria-expanded="false" aria-controls="${panelId}">Sketchbook <span data-chevron aria-hidden="true">›</span></button>
+      <button type="button" class="jsk-fullscreen-button" data-expand aria-haspopup="dialog" aria-label="Open sketchbook full screen"><span aria-hidden="true">⤢</span> Full screen</button>
       <label data-paper-label>Paper <select data-paper data-template aria-label="Paper for this page" ${readOnly ? "disabled" : ""}>${JournalNotebook.PAPER_TYPES.map((p) => `<option value="${p.id}">${p.label}</option>`).join("")}<optgroup label="Ink paper library">${InkStrokes.PAPERS.map(p => `<option value="ink:${p.id}">${p.label}</option>`).join("")}</optgroup></select></label>
       <button type="button" data-paper-settings ${readOnly ? "hidden" : ""}>Paper options</button>
       <button type="button" data-finger aria-pressed="false" ${readOnly ? "hidden" : ""}>Finger draw: off</button>
@@ -153,10 +179,54 @@
     canvas.after(live);
     const committedCtx = committed.getContext("2d");
     const renderer = InkStrokes.createLiveRenderer(live, prefix);
+    const paperBox = q(".jsk-paper");
+
+    // Fit the page inside its box without stretching, and back every layer with
+    // device pixels. Drawing code stays in page units through one transform.
+    // Strokes are vector data, so a resize only re-renders; nothing is lost.
+    function layout() {
+      if (disposed) return;
+      const boxW = paperBox.clientWidth, boxH = paperBox.clientHeight;
+      if (!boxW || !boxH) return;
+      // A small inset keeps the page edge and shadow inside the clipped box.
+      const inset = 4;
+      const fit = Math.max(0.01, Math.min((boxW - inset * 2) / W, (boxH - inset * 2) / H));
+      const cssW = W * fit, cssH = H * fit;
+      // Cap each of the four layers near 6 MP so a page-filling canvas stays within
+      // iOS Safari's page-wide canvas memory budget.
+      const dpr = Math.min(window.devicePixelRatio || 1, 3, Math.sqrt(6e6 / Math.max(1, cssW * cssH)));
+      for (const layer of [canvas, live]) {
+        layer.style.width = `${cssW}px`;
+        layer.style.height = `${cssH}px`;
+        layer.style.left = `${(boxW - cssW) / 2}px`;
+        layer.style.top = `${(boxH - cssH) / 2}px`;
+      }
+      // Keep the hint on the page itself, not across the empty box.
+      const hint = q("[data-canvas-hint]"), sideGap = (boxW - cssW) / 2 + 8;
+      hint.style.left = hint.style.right = `${sideGap}px`;
+      hint.style.bottom = `${(boxH - cssH) / 2 + 8}px`;
+      const pxW = Math.max(1, Math.round(cssW * dpr)), pxH = Math.max(1, Math.round(cssH * dpr));
+      if (canvas.width === pxW && canvas.height === pxH) return;
+      for (const layer of [canvas, live, committed, prefix]) { layer.width = pxW; layer.height = pxH; }
+      for (const layer of [canvas, live, committed, prefix])
+        layer.getContext("2d").setTransform(pxW / W, 0, 0, pxH / H, 0, 0);
+      paint();
+      if (gesture?.stroke) renderer.draw(gesture.stroke);
+    }
+    const resizer = typeof ResizeObserver === "function" ? new ResizeObserver(() => layout()) : null;
+    resizer?.observe(paperBox);
+    // Browser zoom and moving to another display change devicePixelRatio.
+    window.addEventListener("resize", layout);
 
 
+    let statusTimer = null;
     function status(text) {
-      if (!disposed) q(".jsk-status").textContent = text;
+      if (disposed) return;
+      q(".jsk-status").textContent = text;
+      // Full screen shows status as a brief pill over the page.
+      clearTimeout(statusTimer);
+      if (stage.classList.contains("is-fullscreen"))
+        statusTimer = setTimeout(() => { if (!disposed) q(".jsk-status").textContent = ""; }, 2500);
     }
     function activePage() {
       return pages[index];
@@ -186,6 +256,214 @@
       paint();
     }
     q("[data-collapse]").onclick = () => setOpen(!open);
+
+    // ── Full screen ──
+    // The same stage moves into DCC's shared blocking overlay (core-ui.js), so
+    // the canvas and its in-memory pages are never remounted. Every dismissal
+    // (button, Escape, Back) routes through minimize(); a backdrop click does not.
+    let full = null;
+    const prefersMotion = () => !window.DCC?.reducedMotion?.();
+    function clipTo(rect) {
+      const top = Math.max(0, rect.top), left = Math.max(0, rect.left);
+      const right = Math.max(0, window.innerWidth - rect.right), bottom = Math.max(0, window.innerHeight - rect.bottom);
+      return `inset(${top}px ${right}px ${bottom}px ${left}px round 14px)`;
+    }
+    const FULL_CLIP = "inset(0px 0px 0px 0px round 0px)";
+    function restoreInline() {
+      if (!full || full.restored) return;
+      full.restored = true;
+      full.placeholder.replaceWith(stage);
+      stage.classList.remove("is-fullscreen", "tools-hidden");
+      document.documentElement.style.overflow = full.rootOverflow;
+      document.body.style.overflow = full.bodyOverflow;
+    }
+    function enterFullscreen() {
+      if (full || disposed) return;
+      if (!window.DCC?.overlay) { setOpen(true); return; }
+      finishPending();
+      const from = stage.getBoundingClientRect();
+      const placeholder = document.createElement("div");
+      placeholder.className = "jsk-placeholder";
+      placeholder.style.height = `${from.height}px`;
+      stage.before(placeholder);
+      const card = q("[data-expand]");
+      const token = `${panelId}-${Date.now()}`;
+      full = { placeholder, token, changed: false, restored: false, closing: false,
+        rootOverflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow };
+      const session = full;
+      stage.classList.add("is-fullscreen");
+      full.handle = window.DCC.overlay.open({
+        kind: "modal", title: "Sketchbook", body: stage, anchor: card,
+        returnFocus: () => q("[data-expand]"),
+        canClose(reason) {
+          if (reason === "minimize") return true;
+          // Another blocking overlay is replacing this one: keep the stage.
+          if (reason === "replaced") { if (full === session) { restoreInline(); full = null; } return true; }
+          if (reason !== "backdrop") minimize(reason);
+          return false;
+        }
+      });
+      const { overlay, el } = full.handle;
+      overlay.classList.add("jsk-overlay");
+      // The sketchbook bar carries its own Minimize; the shared header is hidden.
+      document.documentElement.style.overflow = "hidden";
+      document.body.style.overflow = "hidden";
+      history.pushState(Object.assign({}, history.state, { jskSketch: token }), "");
+      setOpen(true);
+      // Full screen is for writing: start with the pen, like a notes app.
+      if (!readOnly && tool === "hand") choose("pen");
+      syncBar();
+      if (prefersMotion() && el.animate)
+        el.animate([{ clipPath: clipTo(from) }, { clipPath: FULL_CLIP }], { duration: 200, easing: "cubic-bezier(.2,.7,.2,1)" });
+    }
+    async function minimize(reason = "minimize") {
+      if (!full || full.closing) return;
+      const session = full;
+      session.closing = true;
+      finishPending();
+      if (session.changed) {
+        session.changed = false;
+        try { onMinimize(); } catch (error) { status(error.message || "Autosave failed. Your drawing is still open."); }
+      }
+      const { el } = session.handle;
+      if (prefersMotion() && el.animate) {
+        const to = clipTo(session.placeholder.getBoundingClientRect());
+        await el.animate([{ clipPath: FULL_CLIP, opacity: 1 }, { clipPath: to, opacity: 1, offset: 0.85 }, { clipPath: to, opacity: 0 }],
+          { duration: 200, easing: "cubic-bezier(.2,.7,.2,1)", fill: "forwards" }).finished.catch(() => {});
+      }
+      restoreInline();
+      full = null;
+      session.handle.close("minimize");
+      // Drop the history entry this open pushed, unless Back already did.
+      if (reason !== "back" && history.state?.jskSketch === session.token) history.back();
+    }
+    q("[data-expand]").onclick = enterFullscreen;
+    function onPopState() {
+      if (full && history.state?.jskSketch !== full.token) minimize("back");
+    }
+    // Window capture runs before document listeners, including the journal
+    // editor's own Escape handler, so Escape only minimizes the sketchbook.
+    function onEscape(event) {
+      if (!full || event.key !== "Escape" || window.DCC?.overlay?.layerAboveOpen?.()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!q("[data-popup]").hidden) q("[data-popup]").hidden = true;
+      else minimize("escape");
+    }
+    window.addEventListener("popstate", onPopState);
+    window.addEventListener("keydown", onEscape, true);
+
+    // ── Full-screen bar ──
+    function widthPresets() {
+      return (writing() && InkStrokes.toolSpec(strokeKind()).sizes) || [2, 4, 8];
+    }
+    function syncBar() {
+      const bar = q(".jsk-fsbar");
+      if (!bar) return;
+      bar.querySelectorAll("[data-fs-tool]").forEach(button =>
+        button.setAttribute("aria-pressed", String(button.dataset.fsTool === tool)));
+      q("[data-fs-ink]").hidden = !(writing() || tool === "shape" || tool === "ruler");
+      bar.querySelectorAll("[data-fs-color]").forEach(button =>
+        button.setAttribute("aria-pressed", String(button.dataset.fsColor.toLowerCase() === String(color).toLowerCase())));
+      q("[data-fs-custom]").value = /^#[a-f0-9]{6}$/i.test(color) ? color : "#292722";
+      const sizes = widthPresets();
+      bar.querySelectorAll("[data-fs-width]").forEach((button, n) => {
+        button.setAttribute("aria-label", `Stroke width ${sizes[n]}`);
+        button.setAttribute("aria-pressed", String(Math.abs(width - sizes[n]) < 0.01));
+      });
+      q("[data-fs-page]").textContent = `${index + 1} / ${pages.length}`;
+      q("[data-fs-prev]").disabled = index === 0;
+      q("[data-fs-next]").disabled = index === pages.length - 1;
+      q("[data-fs-undo]").disabled = !undo[index]?.length;
+      q("[data-fs-redo]").disabled = !redo[index]?.length;
+    }
+    function setInk(next) {
+      if (next.color) color = next.color;
+      if (next.width) width = next.width;
+      if (styles[tool]) styles[tool] = { color, width };
+      rememberTool();
+      syncBar();
+    }
+    q(".jsk-fsbar").querySelectorAll("[data-fs-tool]").forEach(button => (button.onclick = () => {
+      const target = button.dataset.fsTool;
+      if (target === "text") showText();
+      else if (target === "elements") showElements();
+      else if (target === "image") choose("image");
+      else if (target === tool) showToolOptions(target);
+      else choose(target);
+      syncBar();
+    }));
+    stage.querySelectorAll("[data-fs-color]").forEach(button => (button.onclick = () => setInk({ color: button.dataset.fsColor })));
+    q("[data-fs-custom]").oninput = event => setInk({ color: event.target.value });
+    stage.querySelectorAll("[data-fs-width]").forEach((button, n) => (button.onclick = () => setInk({ width: widthPresets()[n] })));
+    q("[data-fs-prev]").onclick = () => turn(index - 1);
+    q("[data-fs-next]").onclick = () => turn(index + 1);
+    q("[data-fs-add]").onclick = () => q("[data-add-page]").click();
+    q("[data-fs-undo]").onclick = () => q("[data-undo]").click();
+    q("[data-fs-redo]").onclick = () => q("[data-redo]").click();
+    q("[data-fs-more]").onclick = () => showMore();
+    q("[data-fs-hide]").onclick = () => { stage.classList.add("tools-hidden"); q("[data-popup]").hidden = true; q("[data-fs-show]").focus(); };
+    q("[data-fs-show]").onclick = () => { stage.classList.remove("tools-hidden"); q("[data-fs-hide]").focus(); };
+    stage.querySelectorAll("[data-fs-minimize]").forEach(button => (button.onclick = () => minimize("close-button")));
+    function showMore() {
+      popup("More", content => {
+        const label = document.createElement("label");
+        label.textContent = "Paper ";
+        const select = q("[data-paper]").cloneNode(true);
+        select.removeAttribute("data-paper");
+        select.removeAttribute("data-template");
+        select.value = q("[data-paper]").value;
+        select.onchange = () => {
+          const real = q("[data-paper]");
+          real.value = select.value;
+          real.dispatchEvent(new Event("change"));
+        };
+        label.append(select);
+        content.append(label);
+        const finger = input.state.fingerDraw === "on";
+        const items = [
+          ["Paper options", () => q("[data-paper-settings]").click(), !readOnly],
+          [`Finger draw: ${finger ? "on" : "off"}`, () => q("[data-finger]").click(), !readOnly],
+          ["Export drawing", () => q("[data-export]").click(), true],
+          ["Import drawing", () => q("[data-import]").click(), !readOnly],
+          ["Hand", () => choose("hand"), !readOnly],
+          ["Zoom", () => showZoom(), true],
+          ["Sticky note", () => showText(true), !readOnly],
+          ["Tape", () => choose("tape"), !readOnly],
+          ["Ruler", () => choose("ruler"), !readOnly],
+          ["Laser", () => choose("laser"), !readOnly]
+        ];
+        for (const [text, action, shown] of items) {
+          if (!shown) continue;
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = text;
+          button.onclick = () => { q("[data-popup]").hidden = true; action(); syncBar(); };
+          content.append(button);
+        }
+      });
+    }
+    // The shared pointer input blocks native touch scrolling over the page, so
+    // full screen scrolls it here: fingers scroll unless finger drawing is on,
+    // two fingers always scroll, and a stylus never does.
+    let touchScroll = null;
+    const averageY = touches => [...touches].reduce((sum, t) => sum + t.clientY, 0) / touches.length;
+    paperBox.addEventListener("touchstart", event => {
+      touchScroll = null;
+      if (!full) return;
+      const touches = [...event.touches];
+      const penActive = () => input.state.activePointerType === "pen";
+      if (touches.some(t => t.touchType === "stylus") || penActive()) return;
+      const fingersDraw = input.state.fingerDraw === "on" || (input.state.fingerDraw === "auto" && !input.state.penSeen);
+      if (touches.length >= 2 || !fingersDraw)
+        touchScroll = { y: averageY(event.touches), top: q(".jsk-gallery").scrollTop };
+    }, { passive: true });
+    paperBox.addEventListener("touchmove", event => {
+      // A pen stroke started on this contact (pen pointer events arrive first).
+      if (input.state.activePointerType === "pen") touchScroll = null;
+      if (touchScroll && full) q(".jsk-gallery").scrollTop = touchScroll.top - (averageY(event.touches) - touchScroll.y);
+    }, { passive: true });
+    paperBox.addEventListener("touchend", event => { if (!event.touches.length) touchScroll = null; }, { passive: true });
     function iconButton(key, labelOverride) {
       const info = toolInfo[key];
       return `<button type="button" data-tool="${key}" aria-pressed="false" data-tooltip="${info[1]}"><span class="jsk-icon" aria-hidden="true">${glyphs[key] || "◇"}</span><span>${labelOverride || info[1]}</span></button>`;
@@ -404,6 +682,11 @@
       q("[data-popup]").hidden = true;
     };
     function showToolOptions(next) {
+      if (full) {
+        if (next !== tool) choose(next);
+        popup(toolInfo[tool]?.[1] || "Tool options", settings);
+        return;
+      }
       if (next !== tool) choose(next);
       tool = next;
       setOpen(true);
@@ -645,7 +928,10 @@
       if (disposed) return;
       if (refresh) paintPage(committedCtx, activePage(), false);
       ctx.clearRect(0, 0, W, H);
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.drawImage(committed, 0, 0);
+      ctx.restore();
       drawObjects(ctx, activePage().objects);
       const selected = selectionBounds();
       if (selected) {
@@ -704,6 +990,7 @@
         if (n === index) button.setAttribute("aria-current", "page");
         else button.removeAttribute("aria-current");
       });
+      syncBar();
       q(".jsk-previous").disabled = index === 0;
       q(".jsk-next").disabled = index === pages.length - 1;
       for (const [selector, n] of [
@@ -721,6 +1008,7 @@
       clearTimeout(laserTimer);
       laser = null;
       index = Math.max(0, Math.min(pages.length - 1, target));
+      if (full) q(".jsk-gallery").scrollTop = 0;
       selection = [];
       zoom = 1;
       pan = { x: 0, y: 0 };
@@ -1120,6 +1408,7 @@
     paintTools();
     paintContext();
     setOpen(false);
+    layout();
     return {
       read() {
         finishPending();
@@ -1135,7 +1424,18 @@
         return pages.map((page) => clone(page.objects));
       },
       destroy() {
+        if (full) {
+          const session = full;
+          restoreInline();
+          full = null;
+          session.handle.close("minimize");
+        }
+        window.removeEventListener("popstate", onPopState);
+        window.removeEventListener("keydown", onEscape, true);
         disposed = true;
+        clearTimeout(statusTimer);
+        resizer?.disconnect();
+        window.removeEventListener("resize", layout);
         clearTimeout(laserTimer);
         renderer.clear();
         input.destroy();
@@ -1144,6 +1444,8 @@
           image.onerror = null;
         }
         images.clear();
+        // Safari is slow to reclaim dropped canvases; release backing stores now.
+        for (const layer of [canvas, live, committed, prefix]) { layer.width = 0; layer.height = 0; }
         stage.remove();
       }
     };
