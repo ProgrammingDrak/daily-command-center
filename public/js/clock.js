@@ -10,7 +10,7 @@ function updateClock(){
     _lastClockText=clockText;
     document.getElementById("clock").textContent=clockText;
     if (viewMode === "today") {
-      document.getElementById("date-label").textContent=d.toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"});
+      setDateLabel(d);
     }
   }
   // Cache timezone string — recalculate once per minute, not every second
@@ -53,6 +53,17 @@ function dateToDisplay(dateStr) {
   return d.toLocaleDateString("en-US", {weekday:"long", year:"numeric", month:"long", day:"numeric"});
 }
 
+// The date shares the one-line Day Progress bar, so it reads short ("Thu, Nov 26",
+// with the year only outside the current one); the full date stays on the tooltip.
+function setDateLabel(d) {
+  const label = document.getElementById("date-label");
+  if (!label) return;
+  const short = { weekday:"short", month:"short", day:"numeric" };
+  if (d.getFullYear() !== new Date().getFullYear()) short.year = "numeric";
+  label.textContent = d.toLocaleDateString("en-US", short);
+  label.closest("button")?.setAttribute("title", d.toLocaleDateString("en-US", {weekday:"long", year:"numeric", month:"long", day:"numeric"}));
+}
+
 function updateDateNav() {
   const label = document.getElementById("date-label");
   const badge = document.getElementById("dn-badge");
@@ -60,7 +71,8 @@ function updateDateNav() {
   const tomorrowBtn = document.getElementById("dn-tomorrow-btn");
 
   if (viewDate) {
-    label.textContent = dateToDisplay(viewDate);
+    const parts = viewDate.split("-");
+    setDateLabel(new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])));
   }
 
   // Badge

@@ -214,7 +214,11 @@ test("the header is one capsule with All Tasks and Someday", () => {
   assert.match(header, /id="waiting-pill-nav"[^>]*aria-controls="tasks-drawer"/);
   assert.doesNotMatch(header, /id="unscheduled-pill-nav"/);
   const itinerary = html.slice(html.indexOf('id="tab-schedule"'), html.indexOf('id="list-view"'));
-  assert.match(itinerary, /id="unscheduled-sub"[\s\S]*data-placement="unplanned"[\s\S]*id="off-the-clock-toggle"[^>]*aria-controls="off-the-clock-content"/);
+  // Off the Clock's toggle lives on the one-line Day Progress bar; both it and the
+  // section head stay drop targets for unscheduling a task.
+  assert.match(itinerary, /id="unscheduled-sub"[\s\S]*data-placement="unplanned"[\s\S]*id="off-the-clock-content"/);
+  const toolbar = html.slice(html.indexOf('id="it-toolbar"'), html.indexOf('id="it-toolbar-list"'));
+  assert.match(toolbar, /data-placement="unplanned"[\s\S]*id="off-the-clock-toggle"[^>]*aria-controls="off-the-clock-content"/);
   assert.match(header, /id="whenever-pill-nav"[^>]*aria-controls="tasks-drawer"/);
   assert.match(header, /id="someday-pill-nav"[^>]*aria-controls="tasks-drawer"/);
   for (const id of ["triage-pill-nav-count", "waiting-pill-nav-count", "whenever-pill-nav-count",
@@ -245,7 +249,8 @@ test("the work list no longer renders the Triage or Unscheduled groups, or count
   // The whole subtree, not the groups' nodes: a collapsed parent's subtasks are not
   // nodes, and counting them showed a Work list badge over a list with no open rows.
   assert.match(list, /const queuedIds=new Set\(day\.unscheduled\.map\(ev=>ev\.id\)\);/);
-  assert.match(list, /section\("Work list",\[\.\.\.activeIds\]\.filter\(id=>!queuedIds\.has\(id\)\)\.length\);/);
+  assert.match(list, /const workListCount=\[\.\.\.activeIds\]\.filter\(id=>!queuedIds\.has\(id\)\)\.length;/);
+  assert.match(list, /section\("Work list",workListCount\)/);
   assert.doesNotMatch(list, /triageTaskLoadState|block\.id==="triage"/, "the Triage status moved with its rows");
   // Removing the zone must not strand its mover: the radial and the pill both reach it.
   const change = tab.slice(tab.indexOf("function buildTaskChangeItems"), tab.indexOf("// Sub-fan: convert this task"));

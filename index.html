@@ -29,7 +29,7 @@
 <link rel="stylesheet" href="/public/css/commitments.css">
 <link rel="stylesheet" href="/public/css/completion-memories.css?v=journal-gallery-2">
 <link rel="stylesheet" href="/public/css/journal-sketchbook.css?v=journal-pencil-2">
-<link rel="stylesheet" href="/public/css/task-workspace.css?v=wishlist-nav-1">
+<link rel="stylesheet" href="/public/css/task-workspace.css?v=itinerary-one-line-1">
 <link rel="stylesheet" href="/public/css/device-views/glasses.css">
 </head>
 <body>
@@ -205,7 +205,7 @@
   <div class="progress-wrap">
     <section class="progress-box" aria-labelledby="day-progress-title">
       <div class="progress-label progress-header">
-        <button type="button" id="day-progress-title" aria-expanded="false" aria-controls="day-progress-bars">Day Progress <span aria-hidden="true">&#9662;</span></button>
+        <button type="button" id="day-progress-title" aria-expanded="false" aria-controls="day-progress-bars" title="Day Progress"><span class="day-progress-word">Day Progress</span> <span aria-hidden="true">&#9662;</span></button>
         <div class="progress-date-controls">
           <div class="date-nav" id="date-nav">
             <button class="dn-arrow" id="dn-prev" onclick="navDate(-1)" title="Previous day" aria-label="Previous day">&lsaquo;</button>
@@ -219,6 +219,19 @@
           </div>
         </div>
         <span class="progress-heading-actions"><span id="ppct">Loading…</span><button type="button" id="progress-day-review" aria-controls="actual-view" aria-expanded="false" disabled>Day review</button></span>
+        <!-- Itinerary-only controls share the Day Progress line (task-workspace.css
+             shows them for the List and Calendar views only). The list renderer
+             fills #it-toolbar-list; Off the Clock's content stays in #unscheduled-sub. -->
+        <div class="it-toolbar" id="it-toolbar" role="toolbar" aria-label="Itinerary controls">
+          <button type="button" class="it-list-ctrl-btn it-toolbar-brief" data-itinerary-brief aria-label="Daily Brief"><span class="it-toolbar-brief-daily">Daily </span>Brief</button>
+          <span class="it-toolbar-offclock queue-theme--amber" id="it-toolbar-offclock" data-placement="unplanned">
+            <button type="button" class="time-block-toggle" id="off-the-clock-toggle" aria-expanded="true" aria-controls="off-the-clock-content" title="Work for this day without a start time. Drop a task here to unschedule it.">
+              <span class="time-block-chevron" aria-hidden="true">▾</span>
+              <span>Off the Clock</span><span class="untimed-sub-count" id="unscheduled-count" aria-live="polite">0</span>
+            </button>
+          </span>
+          <span class="it-toolbar-list" id="it-toolbar-list"></span>
+        </div>
       </div>
       <div id="day-progress-bars" hidden>
         <div class="progress-row-label" id="plan-progress-label">Plan / itinerary</div>
@@ -280,27 +293,14 @@
 
 <div class="tab-content active" id="tab-working-queue" role="tabpanel" aria-labelledby="task-view-queue"><div id="working-queue-root"></div></div>
 <div class="tab-content" id="tab-schedule" role="tabpanel" aria-labelledby="task-view-list">
-  <div class="source-row">
-    <button type="button" class="gb-refresh-btn" data-itinerary-brief>Daily Brief</button>
-  </div>
-  <div class="source-row">
-    <span class="sched-drag-hint sched-drag-hint-desktop">Drag to reorder &middot; left to nest &middot; right for subtask &middot; +/- to adjust time &middot; Check to complete</span>
-    <span class="sched-drag-hint sched-drag-hint-touch">Press &amp; hold to reorder &middot; left to nest &middot; right for subtask &middot; tap a row for details</span>
-  </div>
   <!-- Shown only while Actual is on. Day review is an explicit panel, never a
        replacement for the List or Calendar. -->
   <div id="actual-view" class="actual-day-review" style="display:none"></div>
   <!-- The Itinerary add-task bar lives in the bottom-right "+" launcher. -->
   <div class="tl" id="timeline" style="display:none"></div>
-  <section class="untimed-sub queue-theme--amber off-the-clock" id="unscheduled-sub" aria-labelledby="unscheduled-sub-title">
+  <section class="untimed-sub queue-theme--amber off-the-clock" id="unscheduled-sub" aria-label="Off the Clock">
     <div class="untimed-sub-head" data-placement="unplanned">
-      <h3 class="untimed-sub-title" id="unscheduled-sub-title">
-        <button type="button" class="time-block-toggle" id="off-the-clock-toggle" aria-expanded="true" aria-controls="off-the-clock-content">
-          <span class="time-block-chevron" aria-hidden="true">▾</span>
-          <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-          <span>Off the Clock</span><span class="untimed-sub-count" id="unscheduled-count" aria-live="polite">0</span>
-        </button>
-      </h3>
+      <h3 class="untimed-sub-title">Off the Clock</h3>
       <div class="untimed-sort" id="unscheduled-sort" role="group" aria-label="Sort Off the Clock">
         <button type="button" data-unscheduled-sort="manual">Manual</button>
         <button type="button" data-unscheduled-sort="alpha">A–Z</button>
@@ -2161,7 +2161,7 @@
 <script src="/public/js/task-actions.js?v=shared-actions-1"></script>
 <!-- Before schedule.js: its add-bar destinations read DCC.Whenever.LABEL at load. -->
 <script src="/public/js/task-queues.js"></script>
-<script src="/public/js/whenever.js?v=off-the-clock-1"></script>
+<script src="/public/js/whenever.js?v=itinerary-one-line-1"></script>
 <!-- day-context.js: the one day-context + free-slot engine (window.DCC.getDayContext/findSlot); must load before state.js/schedule.js consume it -->
 <script src="/public/js/day-context.js?v=day-context-2"></script>
 <script src="/public/js/core-ui.js?v=core-ui-1"></script>
@@ -2189,7 +2189,7 @@
 <script src="/public/js/hold-action.js"></script>
 <script src="/public/js/itinerary-commute.js"></script>
 <script src="/public/js/itinerary-costs.js?v=ledger-2"></script>
-<script src="/public/js/schedule-tab.js?v=off-the-clock-1"></script>
+<script src="/public/js/schedule-tab.js?v=itinerary-one-line-1"></script>
 <script src="/public/js/schedule-zones.js?v=2"></script>
 <script src="/public/js/itinerary-calendar.js?v=calendar-zones-2"></script>
 <script src="/public/js/touch-drag.js"></script>

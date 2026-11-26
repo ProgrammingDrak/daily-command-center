@@ -389,6 +389,8 @@
     openDay,
     async copy(date, button) {
       button.disabled = true;
+      // The button may be icon-only (the itinerary's one-line bar), so restore its markup.
+      const label = button.innerHTML;
       try {
         const token = await openDay(date,true);
         if (!token) return;
@@ -396,7 +398,7 @@
         try {
           await navigator.clipboard.writeText(url);
           button.textContent = "Link copied";
-          setTimeout(()=>{button.textContent="Share Itinerary";},1800);
+          setTimeout(()=>{button.innerHTML=label;},1800);
         } catch { window.prompt("Copy the itinerary link",url); }
       } catch(error) {
         button.textContent = "Try sharing again";
