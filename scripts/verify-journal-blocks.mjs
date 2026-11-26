@@ -1,6 +1,6 @@
 // Browser check for Notion-style journal blocks against the synthetic Library
 // review server (DCC_REVIEW_LIBRARY=1 PORT=8102 npm run ui-review:serve).
-/* global document, window */
+/* global document, window, getSelection, DataTransfer, ClipboardEvent, Event */
 import assert from "node:assert/strict";
 const { chromium } = await import(process.env.QA_PLAYWRIGHT_MODULE || "playwright-core");
 const base = process.env.LIBRARY_QA_URL || "http://127.0.0.1:8102";
@@ -72,10 +72,11 @@ try {
   await page.waitForFunction(() => /Synced to vault|Saved locally/.test(document.querySelector("[data-status]")?.textContent || ""), null, { timeout: 30000 });
   await page.waitForFunction(() => document.querySelector("[data-status]")?.textContent.includes("Synced to vault"), null, { timeout: 30000 });
   const state = await page.request.get(base + "/api/review/library/state").then(r => r.json());
-  const body = state.notes.find(n => n.slug === "journal/2026/2026-11-25").body.split("<!-- dcc-journal-ink")[0];
+  const journalBody = notes => (notes.find(n => n.slug.startsWith("journal/") && n.body.includes("# My day"))?.body || "").split("<!-- dcc-journal-ink")[0];
+  const body = journalBody(state.notes);
   for (const fragment of ["# My day", "**bold**", "`code`", "- first\n- second", "- [x] call mom\n- [ ] water plants", "> A quote", "---", "After the line"])
     check(body.includes(fragment), `markdown keeps ${JSON.stringify(fragment)}`);
-  check(!/​/.test(body), "no zero-width spacers reach the markdown");
+  check(!/\u200b/.test(body), "no zero-width spacers reach the markdown");
 
   // Reload renders the same blocks from markdown.
   await page.reload();
@@ -99,6 +100,25 @@ try {
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.press("Backspace");
   check(await page.locator(".jb-root .jb-empty").count() >= 1, "an empty journal shows the typing placeholder");
+
+  // Serializer edge cases: loose to-dos, nested lists, code blank lines, tildes.
+  await page.getByRole("textbox", { name: "Journal text", exact: true }).evaluate(el => {
+    el.innerHTML = '<h1>My day</h1>'
+      + '<ul><li><p><input type="checkbox" checked disabled> loose done</p></li><li><p><input type="checkbox" disabled> loose open</p></li></ul>'
+      + '<ol><li>a<ul><li>b</li></ul></li></ol>'
+      + '<pre><code class="language-py">x = 1\n\n\n\ny = 2</code></pre>'
+      + '<p>x~y</p>';
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  let edge = "";
+  for (let i = 0; i < 60 && !edge.includes("x\\~y"); i++) {
+    await page.waitForTimeout(500);
+    edge = journalBody((await page.request.get(base + "/api/review/library/state").then(r => r.json())).notes);
+  }
+  check(edge.includes("- [x] loose done") && edge.includes("- [ ] loose open"), "loose to-do lists keep their checkbox state");
+  check(edge.includes("1. a\n   - b"), "nested lists keep their indent");
+  check(edge.includes("```py\nx = 1\n\n\n\ny = 2\n```"), "code blocks keep blank lines");
+  check(edge.includes("x\\~y"), "tildes are escaped");
   check(errors.length === 0, "no page errors: " + errors.join("; "));
   console.log(JSON.stringify({ passed: checks.length, checks }, null, 2));
 } finally {

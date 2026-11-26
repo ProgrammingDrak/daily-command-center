@@ -594,6 +594,7 @@
     const childText = node => Array.from(node.childNodes, serialize).join("");
     // Lists keep nesting and to-do state. Chrome's indent can place a nested
     // list directly inside its parent list; it nests under the previous item.
+    const codeBlocks = [];
     const listMarkdown = (list, indent) => {
       const lines = [];
       let index = 0, width = 2;
@@ -602,7 +603,8 @@
         if (child.tagName !== "LI") continue;
         const marker = list.tagName === "OL" ? (++index) + ". " : "- ";
         width = marker.length;
-        const box = Array.from(child.children).find(item => item.matches('input[type="checkbox"]'));
+        // Loose task lists (marked) wrap the checkbox in the item's first <p>.
+        const box = child.querySelector(':scope > input[type="checkbox"], :scope > p:first-child > input[type="checkbox"]');
         const nested = Array.from(child.children).filter(item => item.tagName === "UL" || item.tagName === "OL");
         const own = Array.from(child.childNodes).filter(item => item !== box && !nested.includes(item)).map(serialize)
           .join("").replace(/\n+/g, " ").trim();
@@ -637,7 +639,9 @@
           const code = node.querySelector("code");
           const language = /language-([\w-]+)/.exec(code?.className || "")?.[1] || "";
           const text = node.textContent.replace(/\u200b/g, "").replace(/\n$/, "");
-          return "\n```" + language + "\n" + text + "\n```\n\n";
+          // Park code bodies so the blank-line collapse below cannot touch them.
+          codeBlocks.push(text);
+          return "\n```" + language + "\n\u0000" + (codeBlocks.length - 1) + "\u0000\n```\n\n";
         }
         case "HR": return "\n---\n\n";
         case "INPUT": return "";
@@ -647,7 +651,8 @@
         default: return node.outerHTML;
       }
     };
-    return Array.from(element.childNodes, serialize).join("").replace(/\n{3,}/g, "\n\n").trim();
+    return Array.from(element.childNodes, serialize).join("").replace(/\n{3,}/g, "\n\n")
+      .replace(/\u0000(\d+)\u0000/g, (match, index) => codeBlocks[Number(index)]).trim();
   }
 
   function mountTaskPhotos(host, blockId, title, readOnly) {

@@ -192,8 +192,9 @@
       const inset = 4;
       const fit = Math.max(0.01, Math.min((boxW - inset * 2) / W, (boxH - inset * 2) / H));
       const cssW = W * fit, cssH = H * fit;
-      // Cap each layer near 10 MP so a page-filling canvas stays within mobile limits.
-      const dpr = Math.min(window.devicePixelRatio || 1, 3, Math.sqrt(10e6 / Math.max(1, cssW * cssH)));
+      // Cap each of the four layers near 6 MP so a page-filling canvas stays within
+      // iOS Safari's page-wide canvas memory budget.
+      const dpr = Math.min(window.devicePixelRatio || 1, 3, Math.sqrt(6e6 / Math.max(1, cssW * cssH)));
       for (const layer of [canvas, live]) {
         layer.style.width = `${cssW}px`;
         layer.style.height = `${cssH}px`;
@@ -343,7 +344,7 @@
     // Window capture runs before document listeners, including the journal
     // editor's own Escape handler, so Escape only minimizes the sketchbook.
     function onEscape(event) {
-      if (!full || event.key !== "Escape") return;
+      if (!full || event.key !== "Escape" || window.DCC?.overlay?.layerAboveOpen?.()) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (!q("[data-popup]").hidden) q("[data-popup]").hidden = true;
@@ -1443,6 +1444,8 @@
           image.onerror = null;
         }
         images.clear();
+        // Safari is slow to reclaim dropped canvases; release backing stores now.
+        for (const layer of [canvas, live, committed, prefix]) { layer.width = 0; layer.height = 0; }
         stage.remove();
       }
     };

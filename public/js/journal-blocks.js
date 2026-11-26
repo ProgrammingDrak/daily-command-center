@@ -601,6 +601,10 @@
   // Paste: markdown becomes blocks; plain text stays plain. Returns true when handled.
   function pasteText(text) {
     if (!text || !looksLikeMarkdown(text) || !window.marked || !window.DOMPurify) return false;
+    // Code blocks take the text literally.
+    const anchor = window.getSelection()?.anchorNode;
+    const at = anchor && (anchor.nodeType === Node.ELEMENT_NODE ? anchor : anchor.parentElement);
+    if (at?.closest("pre, code")) return false;
     document.execCommand("insertHTML", false, window.DOMPurify.sanitize(window.marked.parse(text)));
     return true;
   }

@@ -586,7 +586,7 @@
           // The note now exists: later saves update it instead of creating a copy.
           st.mode = "edit";
           st.slug = data.slug;
-          st.hash = data.hash;
+          st.hash = data.node && data.node.hash;
           st.promoteFrom = null;
           saveBtn.disabled = false;
           toast("Sketch saved to " + data.slug);
