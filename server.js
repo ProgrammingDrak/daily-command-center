@@ -1058,6 +1058,7 @@ require("./routes/work-rotation")(app, ctx);
 require("./routes/dcc")(app, ctx);
 require("./routes/evaluation")(app, ctx);
 require("./routes/schedule-settings")(app, ctx);
+require("./routes/journal-preferences")(app, ctx);
 require("./routes/meeting")(app, ctx);
 require("./routes/meeting-dashboard")(app, ctx);
 require("./routes/meeting-audio")(app, ctx);

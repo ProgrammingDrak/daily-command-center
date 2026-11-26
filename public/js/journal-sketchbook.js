@@ -1,11 +1,31 @@
 // Goodnotes-style journal tools. Uses the vault editor's save, conflict, and
-// attachment paths; localStorage only holds tool and paper preferences, and
-// there are no external recognition services.
+// attachment paths; localStorage only holds pen preferences, and there are no
+// external recognition services.
 (function () {
   "use strict";
   const W = 1000,
     H = 1200;
   let sequence = 0;
+  // The paper a fresh journal starts on is an account preference
+  // (/api/journal/preferences), fetched once per page load and shared by every
+  // sketchbook so it follows the user across browsers and devices.
+  let paperPreference = null;
+  function loadPaperPreference() {
+    paperPreference ||= fetch("/api/journal/preferences", { credentials: "same-origin" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body) => body?.lastPaper || null)
+      .catch(() => null);
+    return paperPreference;
+  }
+  function savePaperPreference(lastPaper) {
+    paperPreference = Promise.resolve(lastPaper);
+    fetch("/api/journal/preferences", {
+      method: "PATCH",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lastPaper })
+    }).catch(() => { /* the preference is optional; the journal still saves its own paper */ });
+  }
   const glyphs = {
     hand: "↔",
     pen: "✎",
@@ -107,22 +127,24 @@
     // The last paper chosen becomes the starting paper of a fresh journal, so a
     // new entry does not fall back to dotted every time. Only an untouched,
     // single blank page adopts it; journals with saved ink keep their paper.
-    const PAPER_KEY = "mycelium-journal-paper";
+    let paperTouched = false;
     function rememberPaper() {
       if (readOnly) return;
+      paperTouched = true;
       const page = activePage();
-      try { localStorage.setItem(PAPER_KEY, JSON.stringify({ paper: page.paper, paperSettings: page.paperSettings })); } catch { /* optional preference */ }
+      savePaperPreference({ paper: page.paper, paperSettings: clone(page.paperSettings) });
     }
-    (function restorePaper() {
-      const page = pages[0];
-      if (readOnly || pages.length !== 1 || page.strokes.length || page.objects.length || page.paper !== "dotted" || page.paperSettings) return;
+    const untouched = () => !paperTouched && pages.length === 1 && !pages[0].strokes.length &&
+      !pages[0].objects.length && pages[0].paper === "dotted" && !pages[0].paperSettings;
+    if (!readOnly && untouched()) loadPaperPreference().then((saved) => {
+      if (disposed || !saved || !untouched()) return;
       try {
-        const saved = JSON.parse(localStorage.getItem(PAPER_KEY) || "null");
-        if (!saved || typeof saved !== "object") return;
-        if (saved.paperSettings) page.paperSettings = InkStrokes.normalizePaper(saved.paperSettings);
-        else if (JournalNotebook.PAPER_TYPES.some((type) => type.id === saved.paper)) page.paper = saved.paper;
+        if (saved.paperSettings) pages[0].paperSettings = InkStrokes.normalizePaper(saved.paperSettings);
+        else if (JournalNotebook.PAPER_TYPES.some((type) => type.id === saved.paper)) pages[0].paper = saved.paper;
+        else return;
+        paint();
       } catch { /* fall back to dotted */ }
-    })();
+    });
     function writing() { return ["pen", "pencil", "highlighter"].includes(tool); }
     function rememberTool() {
       if (!writing()) return;
