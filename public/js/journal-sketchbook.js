@@ -1,5 +1,6 @@
 // Goodnotes-style journal tools. Uses the vault editor's save, conflict, and
-// attachment paths; no localStorage and no external recognition services.
+// attachment paths; localStorage only holds tool and paper preferences, and
+// there are no external recognition services.
 (function () {
   "use strict";
   const W = 1000,
@@ -103,6 +104,25 @@
     let preferences = {};
     try { preferences = JSON.parse(localStorage.getItem("mycelium-ink-tools") || "{}"); } catch { /* optional preferences */ }
     if (!preferences || typeof preferences !== "object" || Array.isArray(preferences)) preferences = {};
+    // The last paper chosen becomes the starting paper of a fresh journal, so a
+    // new entry does not fall back to dotted every time. Only an untouched,
+    // single blank page adopts it; journals with saved ink keep their paper.
+    const PAPER_KEY = "mycelium-journal-paper";
+    function rememberPaper() {
+      if (readOnly) return;
+      const page = activePage();
+      try { localStorage.setItem(PAPER_KEY, JSON.stringify({ paper: page.paper, paperSettings: page.paperSettings })); } catch { /* optional preference */ }
+    }
+    (function restorePaper() {
+      const page = pages[0];
+      if (readOnly || pages.length !== 1 || page.strokes.length || page.objects.length || page.paper !== "dotted" || page.paperSettings) return;
+      try {
+        const saved = JSON.parse(localStorage.getItem(PAPER_KEY) || "null");
+        if (!saved || typeof saved !== "object") return;
+        if (saved.paperSettings) page.paperSettings = InkStrokes.normalizePaper(saved.paperSettings);
+        else if (JournalNotebook.PAPER_TYPES.some((type) => type.id === saved.paper)) page.paper = saved.paper;
+      } catch { /* fall back to dotted */ }
+    })();
     function writing() { return ["pen", "pencil", "highlighter"].includes(tool); }
     function rememberTool() {
       if (!writing()) return;
@@ -1033,6 +1053,7 @@
         if (paper.startsWith("ink:")) activePage().paperSettings = InkStrokes.normalizePaper({ ...activePage().paperSettings, type:paper.slice(4) });
         else { activePage().paper = paper; activePage().paperSettings = null; }
       });
+      rememberPaper();
     };
     q("[data-undo]").onclick = () => {
       if (readOnly) return;
@@ -1315,6 +1336,7 @@
         layout.onchange = update; update();
         content.querySelector("[data-apply]").onclick = () => {
           edit(() => { activePage().paperSettings = InkStrokes.normalizePaper({type:layout.value,tint:tone.value,spacing:Number(spacing.value),margin:margin.checked}); });
+          rememberPaper();
           q("[data-popup]").hidden = true;
         };
       });
