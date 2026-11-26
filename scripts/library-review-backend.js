@@ -69,6 +69,7 @@ module.exports = function mountLibraryReview(app, root) {
     res.json(next);
   });
   app.post("/api/vault/notebook-page-ingest", (_req, res) => res.json({ ok: true, hash: "notebook-review" }));
+  app.delete("/api/vault/notebook/:notebookId", (req, res) => res.json({ ok: true, removed: false, slug: "notebooks/review" }));
   app.post("/api/review/library/options", (req, res) => {
     options.delayMs = Math.min(5000, Math.max(0, Number(req.body.delayMs) || 0));
     options.nextStatus = [0, 409, 503].includes(req.body.nextStatus) ? req.body.nextStatus : 0;

@@ -1828,6 +1828,32 @@ app.post("/api/vault/attach", (req, res) => {
   //     so hash-keyed dedup alone would append a second copy of the same page.
   //  3. An empty transcript is valid. A page holding only a diagram has no words
   //     on it and is still a real page.
+  // Deleting a Library notebook removes its vault copy too. The slug is derived
+  // here from the notebook id, exactly as ingest derives it, so a client can only
+  // ever delete a notebook node, never an arbitrary vault path. Already gone is
+  // success: the device may never have synced a written page.
+  app.delete("/api/vault/notebook/:notebookId", (req, res) => {
+    if (typeof ctx.isAdminSession !== "function" || !ctx.isAdminSession(req)) {
+      return res.status(403).json({ error: "Personal vault access required" });
+    }
+    if (!vaultReady(res)) return;
+    let slug;
+    try {
+      slug = notebookVaultSlug(req.params.notebookId);
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+    return withNotebookLock(slug, async () => {
+      try {
+        const removed = await ctx.vault.delete(slug);
+        if (removed && ctx.syncMgr) ctx.syncMgr.notifyChange({ slug, message: `delete ${slug}` });
+        res.json({ ok: true, removed: !!removed, slug });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
+    });
+  });
+
   app.post("/api/vault/notebook-page-ingest", (req, res) => {
     // This is Drake's personal vault, not a multi-tenant DCC data surface.
     // Fail closed when the host does not supply the admin-session predicate.

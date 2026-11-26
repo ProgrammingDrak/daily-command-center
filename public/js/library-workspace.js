@@ -336,7 +336,7 @@
     const host = root.querySelector("[data-shelf]");
     if (!host) return;
     host.innerHTML = visible.length
-      ? `<div class="lr-shelf" data-layout="${DEFAULT_LAYOUT}">${visible.map((b) => `<button class="lr-book" data-open="${esc(b.id)}" aria-label="Open ${esc(b.title)}"><div class="lr-cover" style="--book-color:${COLORS[b.cover] || COLORS.slate}"><div class="lr-cover-top">${b.kind === "journal" ? "Daily journal" : "Notebook"}</div><div><div class="lr-cover-name">${esc(b.title)}</div><div class="lr-cover-note">${b.kind === "journal" ? "Your days, together" : "A place to think"}</div></div><span aria-hidden="true">▤</span></div><div class="lr-book-meta"><strong class="lr-book-title">${esc(b.title)}</strong><small>${esc(b.description)}</small></div></button>`).join("")}</div>`
+      ? `<div class="lr-shelf" data-layout="${DEFAULT_LAYOUT}">${visible.map((b) => `<div class="lr-book-slot"><button class="lr-book-menu" type="button" data-book-menu="${esc(b.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="Actions for ${esc(b.title)}" title="Actions">☰</button><button class="lr-book" data-open="${esc(b.id)}" aria-label="Open ${esc(b.title)}"><div class="lr-cover" style="--book-color:${COLORS[b.cover] || COLORS.slate}"><div class="lr-cover-top">${b.kind === "journal" ? "Daily journal" : "Notebook"}</div><div><div class="lr-cover-name">${esc(b.title)}</div><div class="lr-cover-note">${b.kind === "journal" ? "Your days, together" : "A place to think"}</div></div><span aria-hidden="true">▤</span></div><div class="lr-book-meta"><strong class="lr-book-title">${esc(b.title)}</strong><small>${esc(b.description)}</small></div></button></div>`).join("")}</div>`
       : '<div class="lr-empty"><h2>No matching notebooks</h2><p>Try another title, or create a notebook.</p></div>';
     host.querySelectorAll("[data-open]").forEach(
       (button) =>
@@ -345,6 +345,127 @@
           else openNotebook(button.dataset.open).catch(notify);
         })
     );
+    host.querySelectorAll("[data-book-menu]").forEach((button) => (button.onclick = (event) => {
+      event.stopPropagation();
+      toggleBookMenu(button);
+    }));
+  }
+
+  // ── Book actions (☰). Notebooks: Open, Rename, Delete. The Journals book is
+  // every daily entry together, so it offers no one-tap delete-all. ──────────
+  let bookMenu = null;
+  function closeBookMenu({ restoreFocus = false } = {}) {
+    if (!bookMenu) return;
+    const { menu, button } = bookMenu;
+    bookMenu = null;
+    menu.remove();
+    button.setAttribute("aria-expanded", "false");
+    if (restoreFocus) button.focus();
+  }
+  function toggleBookMenu(button) {
+    const id = button.dataset.bookMenu;
+    const wasOpen = bookMenu?.button === button;
+    closeBookMenu();
+    if (wasOpen) return;
+    const items = id === "journals"
+      ? [["Open", () => openJournals().catch(notify)], ["Open today", () => createDay(today()).catch(notify)]]
+      : [["Open", () => openNotebook(id).catch(notify)], ["Rename", () => renameBook(id)], ["Delete", () => deleteBook(id).catch(notify), "danger"]];
+    const menu = document.createElement("div");
+    menu.className = "lr-menu";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", button.getAttribute("aria-label"));
+    for (const [label, run, tone] of items) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      item.textContent = label;
+      if (tone) item.classList.add(tone);
+      item.onclick = (event) => {
+        event.stopPropagation();
+        closeBookMenu();
+        run();
+      };
+      menu.append(item);
+    }
+    button.after(menu);
+    button.setAttribute("aria-expanded", "true");
+    bookMenu = { menu, button };
+    menu.querySelector("button").focus();
+  }
+  document.addEventListener("click", (event) => {
+    if (bookMenu && !bookMenu.menu.contains(event.target)) closeBookMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (!bookMenu) return;
+    if (event.key === "Escape") closeBookMenu({ restoreFocus: true });
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const items = [...bookMenu.menu.querySelectorAll("button")];
+      const at = items.indexOf(document.activeElement);
+      items[(at + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+      event.preventDefault();
+    }
+  });
+
+  function renameBook(id) {
+    const nb = notebooks.find((n) => n.id === id);
+    if (!nb) return;
+    const dialog = document.getElementById("library-rename-dialog");
+    const input = dialog.querySelector("input");
+    input.value = nb.title;
+    dialog.querySelector("[data-cancel]").onclick = () => dialog.close();
+    dialog.querySelector("form").onsubmit = async (event) => {
+      event.preventDefault();
+      const title = input.value.trim();
+      if (!title) return;
+      try {
+        await InkStore.renameNotebook(id, title);
+        dialog.close();
+        await refresh();
+        paintShelf();
+        DCC.toast(`Renamed to “${title}”`);
+      } catch (error) {
+        notify(error);
+      }
+    };
+    dialog.showModal();
+    input.select();
+  }
+
+  async function deleteBook(id) {
+    const nb = notebooks.find((n) => n.id === id);
+    if (!nb) return;
+    const pages = await InkStore.listPages(id);
+    const dialog = document.getElementById("library-delete-dialog");
+    const confirm = dialog.querySelector("[data-confirm]");
+    dialog.querySelector("[data-message]").textContent =
+      `Delete “${nb.title}” and its ${pages.length} ${pages.length === 1 ? "page" : "pages"}? ` +
+      "It is removed from this device and from your vault. This cannot be undone.";
+    dialog.querySelector("[data-error]").textContent = "";
+    confirm.disabled = false;
+    dialog.querySelector("[data-cancel]").onclick = () => dialog.close();
+    confirm.onclick = async () => {
+      confirm.disabled = true;
+      try {
+        // Vault copy first: if the vault cannot be reached, nothing is deleted and
+        // the notebook stays on the shelf to retry. 403 means this account has no
+        // personal vault, so there is no copy to remove.
+        if (!navigator.onLine) throw new Error("You're offline. Connect to delete this notebook everywhere.");
+        const res = await fetch("/api/vault/notebook/" + encodeURIComponent(id), { method: "DELETE", credentials: "same-origin" });
+        if (!res.ok && res.status !== 403) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `Could not delete the vault copy (${res.status})`);
+        }
+        await InkStore.deleteNotebook(id);
+        dialog.close();
+        await refresh();
+        paintShelf();
+        DCC.toast(`Deleted “${nb.title}”`);
+      } catch (error) {
+        dialog.querySelector("[data-error]").textContent = error.message || "Could not delete this notebook";
+        confirm.disabled = false;
+      }
+    };
+    dialog.showModal();
   }
   async function openNotebook(id) {
     if (!(await flush())) return;
