@@ -31,6 +31,7 @@
 <link rel="stylesheet" href="/public/css/journal-sketchbook.css?v=journal-pencil-2">
 <link rel="stylesheet" href="/public/css/task-workspace.css?v=wishlist-nav-1">
 <link rel="stylesheet" href="/public/css/device-views/glasses.css">
+<link rel="stylesheet" href="/public/css/game-hud.css?v=game-1">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -131,6 +132,8 @@
     <a class="tab wishlist-nav" href="/library">Library</a>
   </nav>
   <div class="dcc-cluster" id="dcc-cluster">
+    <button class="game-hud" id="game-hud" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="game-panel" aria-label="Game summary">…</button>
+    <span class="dcc-visually-hidden" id="game-hud-live" role="status" aria-live="polite"></span>
     <div class="time-now" id="dcc-clock"><time class="clock" id="clock">--:--</time><span class="tz-label" id="tz-label">--</span></div>
     <a class="admin-link" href="/admin" title="Open admin activity">Admin</a>
     <div class="dcc-settings-wrap" id="dcc-settings-wrap">
@@ -2184,6 +2187,7 @@
 <script src="/public/js/tag-manager.js"></script>
 <script src="/public/js/work-checkin-policy.js"></script>
 <script src="/public/js/work-sessions.js?v=work-sessions-3"></script>
+<script src="/public/js/game-hud.js?v=game-1"></script>
 <script src="/public/js/time-reallocate.js?v=time-reallocate-1"></script>
 <script src="/public/js/itinerary-card.js?v=inline-journal-1"></script>
 <script src="/public/js/hold-action.js"></script>

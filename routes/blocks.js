@@ -856,6 +856,7 @@ module.exports = function mount(app, ctx) {
             workspaceId, userId, task: result.task, completed: !!body.completed,
           }))
         : [];
+      if (gameAwards.length) broadcast("game-changed", { awarded: gameAwards }, workspaceId);
       const blockIds = (result.broadcastIds || (result.task && result.task.id ? [result.task.id] : []))
         .concat(cascaded.blockIds);
       if (blockIds.length) {
@@ -961,6 +962,7 @@ module.exports = function mount(app, ctx) {
           workspaceId: req.workspaceId || block.workspace_id, userId: req.session?.userId || block.user_id, task: block, atMs: body.at == null ? Date.now() : Date.parse(body.at),
         }))
       : [];
+    if (gameAwards.length) broadcast("game-changed", { awarded: gameAwards }, req.workspaceId);
     return { ok: true, changed: !!result.changed, reason: result.reason || null, block, affectedTasks: result.conversation?.affectedTasks || [], game: { awarded: gameAwards } };
   }));
 

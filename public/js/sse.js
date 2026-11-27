@@ -356,6 +356,7 @@
             break;
 
           case 'slot-changed':
+          case 'game-changed':
           case 'punishment-changed':
             document.dispatchEvent(new CustomEvent(msg.type, { detail: msg }));
             break;
