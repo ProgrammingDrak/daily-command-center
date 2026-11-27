@@ -17,6 +17,9 @@ See [Library behavior and validation](docs/library-journal-ink.md).
 The existing canvas is also a reusable [drawable-layer building block](docs/ink-drawable-layer.md).
 Its integration contract preserves the iPad/Pencil behavior validated in `ink-v7`.
 
+Every interaction follows the [instant-feel interactions building block](docs/instant-interactions.md):
+a tap changes the screen within about 100 ms and never waits on the server.
+
 - IndexedDB stores strokes before any network request.
 - Each account workspace uses a separate local database.
 - The service worker caches shell files only. It never caches APIs or ink.
