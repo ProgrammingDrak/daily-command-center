@@ -12,6 +12,26 @@
   const localTickMs=15000;
   let refreshTimer=null, invalidated=false, scopeRejected=false, readVersion=null;
   const emptyState={revision:0,foreground:[],queue:{items:[],order:[]}};
+  // Which queued task is opened into a tile. Display-only: never persisted or sent.
+  let openCard=null,justOpened=null; // justOpened: animate only the render that opens it
+  const WQ_SVG=d=>'<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+d+'</svg>';
+  const WQ_ICON={
+    bolt:WQ_SVG('<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>'),
+    play:'<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>',
+    pause:'<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1"/><rect x="14" y="4.5" width="4" height="15" rx="1"/></svg>',
+    moon:WQ_SVG('<path d="M20 15A8 8 0 1 1 9 4a6.5 6.5 0 0 0 11 11z"/>'),
+    cal:WQ_SVG('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>'),
+    snooze:WQ_SVG('<circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M5 3 2 6M19 3l3 3"/>'),
+    camera:WQ_SVG('<path d="M4 7h3l2-3h6l2 3h3v13H4z"/><circle cx="12" cy="13" r="3.5"/>'),
+    copy:WQ_SVG('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/>'),
+    up:WQ_SVG('<path d="M12 19V5M5 12l7-7 7 7"/>'),
+    down:WQ_SVG('<path d="M12 5v14M5 12l7 7 7-7"/>'),
+    ret:WQ_SVG('<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>'),
+    info:WQ_SVG('<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>'),
+    trash:WQ_SVG('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>'),
+    book:WQ_SVG('<path d="M4 5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2z"/><path d="M4 21a2 2 0 0 1 2-2h14"/>'),
+    fold:WQ_SVG('<path d="M6 15l6-6 6 6"/>'),
+  };
   let state=emptyState,pending=null,conflict=null,loading=null,sending=false,ticking=false,problem='',startOpening=false;
   try {const cached=JSON.parse(localStorage.getItem(key));if(cached){delete cached.readVersion;state=cached;}pending=JSON.parse(localStorage.getItem(key+':pending'));conflict=JSON.parse(localStorage.getItem(key+':conflict'));}catch(_e){}
   const completionPrefix=key+':completion:';
@@ -194,7 +214,142 @@
       notifySync();
     }
   }
-  const esc=DCC.esc,items=()=>(state.queue?.items||[]).map(item=>window.DCCQueuePolicy.presentation(item));
+  const esc=DCC.esc;
+  // ======== Instant actions (docs/instant-interactions.md) ========
+  // One-tap queue commands change the view at once and are saved on this device
+  // as intents, then sent one at a time in tap order. The view is always the
+  // server state with the unsent intents predicted on top, so dropping a refused
+  // intent restores exactly what it changed and never touches anything newer.
+  // Dialog flows (snooze, set aside, switch foreground, block, done, delete)
+  // keep confirming in their dialog.
+  const intentPrefix=key+':intent:',ackKey=key+':acks',OFFLINE_INTENT='Queue changes are saved on this device. Waiting to sync.';
+  let intentCache=null,viewCache=null,intentVersion=0,intentSeq=0,drainPromise=null,intentRetry=null,lastRenderKey='';
+  function readIntents(){
+    const list=[];
+    for(let i=0;i<localStorage.length;i++){
+      const storageKey=localStorage.key(i);if(!storageKey?.startsWith(intentPrefix))continue;
+      try{const entry=JSON.parse(localStorage.getItem(storageKey));if(entry?.body?.sourceEventId)list.push(entry);}catch(_e){}
+    }
+    return list.sort((a,b)=>a.seq-b.seq||a.body.sourceEventId.localeCompare(b.body.sourceEventId));
+  }
+  function intents(){if(!intentCache)intentCache=readIntents();return intentCache;}
+  function bumpIntents(){intentCache=null;viewCache=null;intentVersion++;notifySync();}
+  const represent=item=>window.DCCQueuePolicy.presentation({...item,status:['foreground','completed'].includes(item.status)?item.status:'queued'});
+  // What the server will do to the visible items. Only the fields the card shows;
+  // the acknowledged snapshot replaces the prediction a moment later.
+  function predict(list,order,b){
+    const copy=item=>({...item,task:{...item.task,properties:{...item.task.properties}}});
+    const patch=fn=>list.map(item=>item.task.id===b.taskId?fn(copy(item)):item);
+    switch(b.action){
+      case 'queue-priority':return {list:patch(item=>{item.taskPriority=b.taskPriority;item.task.properties.taskPriority=b.taskPriority;return item;}),order};
+      case 'queue-reorder':{
+        const at=new Map(b.order.map((id,i)=>[id,i])),rank=item=>at.has(item.task.id)?at.get(item.task.id):Infinity;
+        return {list:list.slice().sort((a,c)=>rank(a)-rank(c)),order:b.order.concat(order.filter(id=>!at.has(id)))};
+      }
+      case 'queue-return':return {list:patch(item=>represent({...item,status:'queued',onBreak:false,breakStartedAt:null})),order};
+      case 'queue-dismiss':return {list:patch(item=>represent({...item,dueAt:null,snoozedUntil:null,generation:null,notifiedAt:null})),order};
+      case 'queue-unblock':return {list:patch(item=>represent({...item,blocked:false,needsReview:false,dueAt:null,snoozedUntil:null})),order};
+      case 'queue-remove':return {list:list.filter(item=>item.task.id!==b.taskId),order:order.filter(id=>id!==b.taskId)};
+      case 'pause':return {list:patch(item=>{
+        if(!b.attentionMode){item.onBreak=true;item.breakStartedAt=b.at;return item;}
+        delete item.task.properties.startedAt;
+        return represent({...item,status:'queued',onBreak:false,breakStartedAt:null,snoozedUntil:null,...(b.attentionMode==='needs-you'?{dueAt:b.at,generation:b.sourceEventId}:{dueAt:null})});
+      }),order};
+      case 'start':return {list:list.map(item=>{
+        if(item.task.id===b.taskId){const next=copy(item);next.task.properties.startedAt=b.at;return {...next,status:'foreground',onBreak:false,breakStartedAt:null,needsYou:false,snoozed:false,dueAt:null,snoozedUntil:null,backgroundSince:null};}
+        if(item.status!=='foreground')return item;
+        const next=copy(item);delete next.task.properties.startedAt;return represent({...next,status:'queued',onBreak:false});
+      }),order};
+      default:return {list,order};
+    }
+  }
+  function view(){
+    const second=Math.floor(Date.now()/1000);
+    if(viewCache&&viewCache.state===state&&viewCache.version===intentVersion&&viewCache.second===second)return viewCache;
+    let list=(state.queue?.items||[]).map(item=>window.DCCQueuePolicy.presentation(item)),order=(state.queue?.order||[]).slice();
+    for(const entry of intents()){try{({list,order}=predict(list,order,entry.body));}catch(_e){}}
+    viewCache={state,version:intentVersion,second,list,order};
+    return viewCache;
+  }
+  const items=()=>view().list;
+  // Revisions produced by this device's own acknowledged commands. A revision an
+  // action was built on is still safe to send against if every change since then
+  // was ours; anything else goes as-is and the server refuses it (409).
+  function readAcks(){try{return JSON.parse(localStorage.getItem(ackKey))||[];}catch(_e){return [];}}
+  function recordAck(from,to){
+    if(!Number.isFinite(from)||!Number.isFinite(to)||from===to)return;
+    try{localStorage.setItem(ackKey,JSON.stringify(readAcks().filter(ack=>ack.from!==from).concat({from,to}).slice(-50)));}catch(_e){}
+  }
+  function rebased(revision){
+    const current=state.revision;if(!Number.isFinite(revision)||revision===current)return revision;
+    const acks=readAcks();let at=revision;
+    for(let hops=0;hops<60&&at!==current;hops++){const next=acks.find(ack=>ack.from===at);if(!next)return revision;at=next.to;}
+    return at===current?current:revision;
+  }
+  const intentLabel=b=>({'queue-priority':'Priority change','queue-reorder':'Reorder','queue-return':'Return to Priority','queue-dismiss':'Dismiss reminder','queue-unblock':'Unblock','queue-remove':'Remove',start:'Bring forward',pause:b.attentionMode?'Move':'Pause'})[b.action]||'Queue change';
+  // Apply now, save on this device, send in the background. Never waits.
+  function instant(body){
+    try{
+      assertActionAccount();
+      if(conflict)throw new Error('Review the current queue conflict before changing tasks.');
+      localStorage.setItem(intentPrefix+body.sourceEventId,JSON.stringify({body,seq:Date.now()*1000+(intentSeq++%1000)}));
+      bumpIntents();render();
+      void drainIntents();
+      return Promise.resolve();
+    }catch(error){return Promise.reject(error);}
+  }
+  function scheduleIntentRetry(){if(intentRetry)return;intentRetry=setTimeout(()=>{intentRetry=null;void drainIntents();},5000);}
+  function drainIntents(){
+    if(drainPromise)return drainPromise;
+    if(conflict||!sameAccount()||!intents().length)return Promise.resolve();
+    const run=async()=>{
+      for(let entry=intents()[0];entry;entry=intents()[0]){
+        if(!sameAccount()||conflict)return;
+        if(window.blockStore?.hasPendingWrites?.()){window.blockStore.flushPending();scheduleIntentRetry();return;}
+        const body=entry.body.action==='queue-dismiss'?entry.body:{...entry.body,expectedRevision:rebased(entry.body.expectedRevision)};
+        try{
+          const result=await requestQueue({method:'POST',body});
+          if(!sameAccount())return;
+          recordAck(body.expectedRevision,(result.currentState||result.state)?.revision);
+          localStorage.removeItem(intentPrefix+entry.body.sourceEventId);bumpIntents();
+          if(problem===OFFLINE_INTENT)problem='';
+          apply(result);
+        }catch(error){
+          if(!sameAccount())return;
+          if([401,403].includes(error.status)){setConflict({body,message:error.message,status:error.status});render();return;}
+          if(rejectedStatuses.includes(error.status)){
+            // Refused: drop only this change. The view falls back by itself.
+            localStorage.removeItem(intentPrefix+entry.body.sourceEventId);bumpIntents();render();
+            DCC.toast(intentLabel(body)+' was not saved: '+(error.code==='queue_revision_changed'?'the queue changed on another device or worker.':error.message)+' It has been undone.','error',8000);
+            refresh().catch(()=>{});
+            continue;
+          }
+          // Offline, timeout or server error: keep it on this device and retry.
+          if(problem!==OFFLINE_INTENT){problem=OFFLINE_INTENT;render();}
+          notifySync();scheduleIntentRetry();return;
+        }
+      }
+    };
+    drainPromise=(navigator.locks?.request?navigator.locks.request(key+':write',run):run()).catch(()=>{}).finally(()=>{drainPromise=null;});
+    return drainPromise;
+  }
+  // Everything the queue renders from. Equal keys mean an identical screen.
+  function renderKey(){
+    return JSON.stringify([displayedItems().map(i=>[i.task.id,i.status,!!i.needsYou,!!i.snoozed,i.dueAt||null,i.snoozedUntil||null,!!i.onBreak,i.taskPriority,i.actualMinutes??null,!!i.blocked,!!i.needsReview,i.note||'',i.completedAt??null,!!i.savingCompletion,i.task.properties.startedAt||null,i.task.properties.title,i.task.date,i.task.parent_id,i.backgroundSince||null,i.breakStartedAt||null,i.execution?.state||null,(i.delegated||[]).length,i.generation||null]),
+      !!state.otherWorkspaceForeground,problem,!!pending,!!conflict,completionEntries().length,reviewEntries().length,sending,openCard,completedPeriod]);
+  }
+  // A background repaint (a save reply or refresh) that lands between press and
+  // release would rebuild the card under the finger and lose the tap, hold or
+  // drag. Hold it until release; the click still fires first. Explicit render()
+  // calls are never held.
+  let pointerHeld=false,heldRender=false;
+  document.addEventListener('pointerdown',event=>{if(event.target?.closest?.('#working-queue-root'))pointerHeld=true;},true);
+  const releasePointer=()=>{if(!pointerHeld)return;pointerHeld=false;if(heldRender){heldRender=false;setTimeout(()=>{if(!pointerHeld)render();},0);}};
+  for(const type of ['pointerup','pointercancel','dragend'])document.addEventListener(type,releasePointer,true);
+  window.addEventListener('blur',releasePointer);
+  function backgroundRender(){if(pointerHeld){heldRender=true;return;}render();}
+  // Dialog commands go after any instant changes already tapped.
+  async function settleIntents(){if(intents().length)await drainIntents();}
   let completedPeriod='today'; // Per-view choice only; each new page starts on Today.
   function persist(name,value){if(value==null)localStorage.removeItem(key+name);else localStorage.setItem(key+name,JSON.stringify(value));}
   // Memory, then storage, then the header notice: observers read the new state.
@@ -204,10 +359,12 @@
   function newer(value){return value && (value.revision>state.revision || (value.revision===state.revision && (value.queue?.serverNow||'')>=(state.queue?.serverNow||'')));}
   function accept(value, version=null, save=true){
     if(!sameAccount()||!newer(value))return;
-    state=value;
+    state=value;viewCache=null;
     readVersion=version;
     if(save)persist('',{...value,readVersion:version});
-    render();
+    // An acknowledgement that matches what is already on screen repaints nothing,
+    // so it can't cancel a hold or drop :active mid-tap.
+    if(renderKey()!==lastRenderKey)backgroundRender();
   }
   function apply(result){window.blockStore?.acceptWorkRotation?.(result.affectedTasks||[]);accept(result.currentState||result.state);window.DCCWorkSessions?.refresh();}
   function requestQueue(options={}, version=null, suffix=''){
@@ -270,8 +427,9 @@
     if(sending)throw new Error('A queue update is still being saved.');
     if(pending && pending.sourceEventId!==body.sourceEventId)throw new Error('Resolve the pending update first.');
     if(window.blockStore?.hasPendingWrites?.()){window.blockStore.flushPending();throw new Error('Wait for your task edits to sync first.');}
+    if(body.action!=='queue-dismiss'&&Number.isFinite(body.expectedRevision)){const revision=rebased(body.expectedRevision);if(revision!==body.expectedRevision)body={...body,expectedRevision:revision};}
     sending=true;setPending(body);captureQueueUndo(body);render();
-    try {const result=await requestQueue({method:'POST',body});assertActionAccount();setPending(null);apply(result);if(body.action==='undo-completion')DCC.TaskActions?.finish('queue:'+body.sourceEventId);return result;}
+    try {const result=await requestQueue({method:'POST',body});assertActionAccount();recordAck(body.expectedRevision,(result.currentState||result.state)?.revision);setPending(null);apply(result);if(body.action==='undo-completion')DCC.TaskActions?.finish('queue:'+body.sourceEventId);return result;}
     catch(error){
       if(sameAccount()&&[...rejectedStatuses,401,403].includes(error.status)){
         if(body.action==='undo-completion')DCC.TaskActions?.finish('queue:'+body.sourceEventId,'rejected');
@@ -286,7 +444,11 @@
     }
     finally{sending=false;render();}
   }
-  function send(body){return navigator.locks?.request?navigator.locks.request(key+':write',()=>sendUnlocked(body)):sendUnlocked(body);}
+  function send(body){
+    const go=()=>navigator.locks?.request?navigator.locks.request(key+':write',()=>sendUnlocked(body)):sendUnlocked(body);
+    // Only wait when instant changes are queued ahead; otherwise pending is visible at once.
+    return intents().length?settleIntents().then(go):go();
+  }
   const warn=error=>DCC.toast(error.message||'Queue update failed','error');
   function activate(id){if(DCC.nav)DCC.nav.go({page:'tasks',view:'queue'});else document.querySelector('.tab[data-tab="working-queue"]')?.click();render();if(id)document.querySelector('[data-queue-id="'+CSS.escape(id)+'"]')?.scrollIntoView({block:'nearest',behavior:DCC.reducedMotion?.()?'auto':'smooth'});}
   // Independent columns: each lane sizes to its own content. Stacked keeps the
@@ -380,6 +542,7 @@
     const completedOpen=root.querySelector('.wq-completed')?.open;
     const periodFocused=focused?.matches('[data-completed-period]');
     const all=displayedItems();
+    lastRenderKey=renderKey();
     const completionView=window.DCCCompletedQueueFilter.select(all,completedPeriod,Date.now(),state.timeZone);
     const periodLabel=window.DCCCompletedQueueFilter.options.find(([value])=>value===completedPeriod)[1];
     const helpOpen=new Set(Array.from(root.querySelectorAll('.wq-help[open]')).map(el=>el.dataset.queueHelp));
@@ -389,76 +552,101 @@
     const completedFocused=focused?.matches('.wq-completed > summary');
     const index=new Map((window.DCCWorkSessions?.availableTasks()||[]).map(t=>[t.id,t]));all.forEach(i=>{const t=DCC.TaskModel.fromBlock(i.task);index.set(t.id,t);});
     const cards=[];
+    // Rows + Tiles: Needs You, Priority and Background tasks are compact rows.
+    // Foreground, and the one row opened in place, render as a full tile. Opening
+    // and folding is display-only (openCard), so it never waits on the network.
     function card(item){
       const row=item.task,task=DCC.TaskModel.fromBlock(row),foreground=item.status==='foreground',completed=item.status==='completed';
+      const tile=!completed&&(foreground||openCard===row.id);
+      const id=row.id,title=pathFor(task,index),exactTitle=String(row.properties.title??task.title??'');
       const elapsed=item.backgroundSince?Math.max(0,Math.floor((Date.now()-Date.parse(item.backgroundSince))/60000)):0;
       const reminder=item.snoozed?'':item.dueAt?(Date.parse(item.dueAt)<=Date.now()?'Check back now':'Check back in '+Math.max(1,Math.ceil((Date.parse(item.dueAt)-Date.now())/60000))+'m'):'';
       const actual=item.actualMinutes==null?'Focused actuals unknown':item.actualMinutes+'m focused saved';
       const activeMinutes=foreground&&!item.onBreak?Math.max(0,Math.floor((Date.now()-Date.parse(row.properties.startedAt))/60000)):0;
-      let controls=completed?'':foreground?button('background','Send to background',row.id)+button('pause','Pause',row.id):button('focus','Bring forward',row.id);
-      if(!completed){if(!foreground)controls+=button('up','↑',row.id,'aria-label="Move up" title="Move up one position. Hold or Shift+Enter to move to the top of this group."')+button('down','↓',row.id,'aria-label="Move down" title="Move down one position. Hold or Shift+Enter to move to the top of this group."');}
       const held=!completed&&!foreground&&returnHold(item);
-      if(!completed&&!foreground)controls+=button('return','Return to Priority',row.id,held?'disabled aria-describedby="queue-return-'+esc(row.id)+'"':'')+button('snooze','Snooze',row.id,'aria-haspopup="dialog"');
-      if(item.dueAt)controls+=button('dismiss','Dismiss reminder',row.id);
-      if(!item.savingCompletion)controls+=button('delete','Delete task',row.id,
-        'aria-haspopup="dialog" aria-label="Delete task: '+esc(task.title)+'"');
-      const snoozedHtml=item.snoozed?'<p class="wq-attention">Snoozed until '+esc(when(Date.parse(item.snoozedUntil),completionView.timeZone))+'</p><p class="wq-time">Attention snoozed; worker state and focused time are unchanged.</p>':'';
-
-
-      const finished=item.savingCompletion?'<p class="wq-time">Done &middot; saving&hellip;</p>':item.status==='completed'?(Number.isFinite(item.completedAt)?'<p class="wq-time"><time datetime="'+new Date(item.completedAt).toISOString()+'">Completed '+esc(new Intl.DateTimeFormat(undefined,{timeZone:completionView.timeZone,dateStyle:'medium',timeStyle:'short'}).format(item.completedAt))+'</time></p>':'<p class="wq-time">Completion time unavailable</p>'):'';
+      const statusKey=completed?'completed':foreground?'foreground':item.needsYou?'needs':item.snoozed?'snoozed':item.status==='queued'?'priority':'background';
+      const statusLabel=item.needsYou?'Needs You':item.snoozed?'Snoozed':item.status==='queued'?'Priority':foreground?'Foreground':completed?'Completed':'Background'; // the break veil carries 'On a break'
+      const snoozedUntil=item.snoozed?when(Date.parse(item.snoozedUntil),completionView.timeZone):'';
+      const finished=item.savingCompletion?'<p class="wq-time">Done &middot; saving&hellip;</p>':completed?(Number.isFinite(item.completedAt)?'<p class="wq-time"><time datetime="'+new Date(item.completedAt).toISOString()+'">Completed '+esc(new Intl.DateTimeFormat(undefined,{timeZone:completionView.timeZone,dateStyle:'medium',timeStyle:'short'}).format(item.completedAt))+'</time></p>':'<p class="wq-time">Completion time unavailable</p>'):'';
+      const levels=DCC.TaskPriority.levels,priority=levels.includes(item.taskPriority)?item.taskPriority:'Medium',level=levels.indexOf(priority),nextPriority=levels[(level+1)%levels.length];
+      const pLabel=priority+' priority. Click to change to '+nextPriority+' priority. Tap, hold, Shift+Enter or Arrow Down to choose.';
+      const glyph={'Very low':'⇊',Low:'↓',Medium:'=',High:'↑','Very high':'⇈'}[priority];
       const readingUrl=DCC.safeUrlAttr?.(row.properties?.readingSession?.url||'');
-      if(readingUrl)controls+='<a href="'+readingUrl+'" rel="noreferrer">Open book in QuietShelf</a>';
-      const node=window.renderItineraryListRow({...task,title:pathFor(task,index)},{
-        extraClass:'wq-card'+(foreground?' wq-focus':'')+(item.onBreak?' wq-on-break':''),dataset:{queueId:row.id},
-        done:completed, completionTitle:'Complete task: '+task.title,
-        onComplete:completed?null:()=>transition('done',item).catch(warn),
-        onCompleteWithNotes:completed?null:()=>transition('done',item).catch(warn),
-        onOpen:()=>openDetails(row.id).catch(warn),
-        onSchedule:completed?null:anchor=>openSchedule(item,anchor).catch(warn),scheduleLabel:'Schedule',
-        titleExtrasHtml:'<span class="wq-status">'+esc(item.needsYou?'Needs You':item.snoozed?'Snoozed':item.status==='queued'?'Priority':item.status)+'</span>',
-        metaHtml:'<p class="wq-time">'+esc(foreground?activeMinutes+'m this session · '+actual:actual+(item.backgroundSince?' · '+elapsed+'m waiting':''))+'</p>'+(reminder?'<p class="wq-attention">'+esc(reminder)+'</p>':'')+snoozedHtml+finished+(held?'<p class="wq-time" id="queue-return-'+esc(row.id)+'">'+esc(held)+'</p>':'')+contextHtml(item)
-      });
-      if(!completed){
-        const levels=DCC.TaskPriority.levels,priority=levels.includes(item.taskPriority)?item.taskPriority:'Medium';
-        const next=levels[(levels.indexOf(priority)+1)%levels.length];
-        const label=priority+' priority. Click to change to '+next+' priority. Tap, hold, Shift+Enter or Arrow Down to choose.';
-        const utility=node.querySelector('.it-list-utility');
-        utility.insertAdjacentHTML('beforeend',button('priority','<span aria-hidden="true">'+({'Very low':'⇊',Low:'↓',Medium:'=',High:'↑','Very high':'⇈'})[priority]+'</span>',row.id,'class="wq-priority-symbol" data-priority-level="'+levels.indexOf(priority)+'" aria-haspopup="dialog" aria-label="'+label+'" title="'+label+'"'));
+      const ttl='<span class="ttl" role="button" tabindex="0" aria-label="Open task details: '+esc(task.title)+'" title="'+esc(title)+'">'+esc(title)+'</span>';
+      const complete=completed||item.savingCompletion?'':'<button type="button" class="wq-complete quick-complete-control" data-queue-action="complete" data-task-id="'+esc(id)+'" title="Tap to complete. Hold for the same completion flow." aria-label="Complete task: '+esc(task.title)+'">'+WQ_ICON.bolt+'</button>';
+      const prio=completed?'':button('priority',tile?'<span aria-hidden="true">'+glyph+'</span><span class="wq-priority-label">'+priority+'</span>':'<span aria-hidden="true">'+glyph+'</span>',id,'class="wq-priority-symbol'+(tile?' wq-priority-badge':'')+'" data-priority-level="'+level+'" aria-haspopup="dialog" aria-label="'+esc(pLabel)+'" title="'+esc(pLabel)+'"');
+      const status='<span class="wq-status" data-wq-status="'+statusKey+'">'+esc(statusLabel)+'</span>';
+      const tool=(action,icon,label,extra='')=>button(action,WQ_ICON[icon]+'<span>'+label+'</span>',id,'class="wq-tool'+(action==='delete'?' wq-tool-danger':'')+'" '+extra);
+      const node=document.createElement('div');
+      node.className='wq-card '+(tile?'wq-tile':'wq-row')+(foreground?' wq-focus':'')+(item.onBreak?' wq-on-break':'')+(completed?' wq-done':'')+(tile&&justOpened===id?' wq-opening':'');
+      node.dataset.queueId=id;node.dataset.wqStatus=statusKey;
+      if(!tile){
+        const meta=completed?'':esc(item.snoozed?'Snoozed until '+snoozedUntil:reminder||actual+(item.backgroundSince?' · '+elapsed+'m waiting':''));
+        node.innerHTML='<div class="wq-row-main">'+complete+
+          '<button type="button" class="wq-row-hit" data-queue-action="'+(completed?'details':'expand')+'" data-task-id="'+esc(id)+'"'+(completed?'':' aria-expanded="false"')+' aria-label="'+esc((completed?'Open task details: ':'Open: ')+title)+'"><span class="wq-row-title">'+esc(title)+'</span><span class="wq-row-meta">'+status+(meta?' · '+meta:'')+'</span>'+finished+'</button>'+
+          prio+(completed?'':button('focus',WQ_ICON.play,id,'class="wq-play" aria-label="Bring forward: '+esc(task.title)+'" title="Bring forward"'))+
+          (completed&&!item.savingCompletion?button('delete',WQ_ICON.trash,id,'class="wq-row-delete" aria-haspopup="dialog" aria-label="Delete task: '+esc(task.title)+'"'):'')+'</div>';
+      }else{
+        const band='<div class="wq-band">'+prio+'<span class="wq-band-end">'+status+(foreground?'':button('expand',WQ_ICON.fold,id,'class="wq-fold" aria-expanded="true" aria-label="Fold back to a row" title="Fold back to a row"'))+'</span></div>';
+        const titleRow='<div class="wq-tile-title">'+ttl+'<button type="button" class="wq-copy-title" data-queue-action="copy-title" data-task-id="'+esc(id)+'" aria-label="Copy task title: '+esc(exactTitle)+'" title="Copy task title">'+WQ_ICON.copy+'</button></div>';
+        const attention=(reminder?'<div class="wq-banner wq-banner-due"><span class="wq-attention">'+esc(reminder)+'</span>'+(item.dueAt?button('dismiss','Dismiss reminder',id):'')+'</div>':'')+
+          (item.snoozed?'<div class="wq-banner wq-banner-snoozed"><span><span class="wq-attention">Snoozed until '+esc(snoozedUntil)+'</span><span class="wq-time">Attention snoozed; worker state and focused time are unchanged.</span></span>'+(item.dueAt?button('dismiss','Dismiss reminder',id):'')+'</div>':'')+
+          (held?'<p class="wq-time wq-held" id="queue-return-'+esc(id)+'">'+esc(held)+'</p>':'')+finished;
+        let body,bar,strip;
+        if(foreground){
+          const progress=Math.min(1,activeMinutes/25),circ=2*Math.PI*44;
+          body='<div class="wq-fg"><div class="wq-ring" aria-hidden="true"><svg viewBox="0 0 108 108"><circle cx="54" cy="54" r="44" class="wq-ring-track"/><circle cx="54" cy="54" r="44" class="wq-ring-fill" stroke-dasharray="'+(progress*circ).toFixed(1)+' '+circ.toFixed(1)+'" transform="rotate(-90 54 54)"/></svg><span><b>'+activeMinutes+'</b>min</span></div><div class="wq-fg-text">'+titleRow+'<p class="wq-time">'+esc(item.onBreak?'Timer paused · '+actual:activeMinutes+'m this session · '+actual)+'</p></div></div>';
+          bar=button('pause',WQ_ICON.pause+'Pause',id,'class="wq-big wq-big-amber"')+button('background',WQ_ICON.moon+'Send to background',id,'class="wq-big"')+'<button type="button" class="wq-big btn-schedule" data-schedule-id="'+esc(id)+'" aria-label="Schedule">'+WQ_ICON.cal+'Schedule</button>';
+          strip=complete.replace('class="wq-complete quick-complete-control"','class="wq-tool wq-tool-done quick-complete-control"').replace(WQ_ICON.bolt,WQ_ICON.bolt+'<span>Done</span>')+tool('photo','camera','Photo','aria-label="Add task photos"')+tool('details','info','Details')+(item.savingCompletion?'':tool('delete','trash','Delete','aria-haspopup="dialog" aria-label="Delete task: '+esc(task.title)+'"'));
+        }else{
+          const stat=(value,label)=>'<div class="wq-stat"><b>'+esc(value)+'</b><span>'+label+'</span></div>';
+          body=titleRow+'<div class="wq-stats">'+stat(item.actualMinutes==null?'—':item.actualMinutes+'m','Focused saved')+stat(item.backgroundSince?elapsed+'m':'—','Waiting')+stat(item.snoozed?new Intl.DateTimeFormat(undefined,{timeZone:completionView.timeZone,hour:'numeric',minute:'2-digit'}).format(Date.parse(item.snoozedUntil)):reminder?(Date.parse(item.dueAt)<=Date.now()?'Now':reminder.replace('Check back in ','')):'—','Check back')+'</div>';
+          bar=button('focus',WQ_ICON.play+'Bring forward',id,'class="wq-big wq-big-go"')+'<button type="button" class="wq-big btn-schedule" data-schedule-id="'+esc(id)+'" aria-label="Schedule">'+WQ_ICON.cal+'Schedule</button>'+button('snooze',WQ_ICON.snooze+'Snooze',id,'class="wq-big" aria-haspopup="dialog"');
+          strip=complete.replace('class="wq-complete quick-complete-control"','class="wq-tool wq-tool-done quick-complete-control"').replace(WQ_ICON.bolt,WQ_ICON.bolt+'<span>Done</span>')+tool('photo','camera','Photo','aria-label="Add task photos"')+
+            tool('up','up','Up','aria-label="Move up" title="Move up one position. Hold or Shift+Enter to move to the top of this group."')+tool('down','down','Down','aria-label="Move down" title="Move down one position. Hold or Shift+Enter to move to the top of this group."')+
+            tool('return','ret','Return',held?'disabled aria-describedby="queue-return-'+esc(id)+'" aria-label="Return to Priority"':'aria-label="Return to Priority" title="Return to Priority"')+tool('details','info','Details')+(item.savingCompletion?'':tool('delete','trash','Delete','aria-haspopup="dialog" aria-label="Delete task: '+esc(task.title)+'"'));
+        }
+        node.innerHTML=band+'<div class="wq-tile-body">'+body+attention+contextHtml(item)+(readingUrl?'<a class="wq-book" href="'+readingUrl+'" rel="noreferrer">'+WQ_ICON.book+'Open book in QuietShelf</a>':'')+'</div><div class="wq-bar">'+bar+'</div><div class="wq-strip">'+strip+'</div>';
+        if(foreground&&!item.onBreak&&window.DCCWorkSessions?.checkInHtml)node.querySelector('.wq-tile-body').insertAdjacentHTML('beforeend',window.DCCWorkSessions.checkInHtml(task,Date.now()));
       }
-      const title=node.querySelector('.ttl'),titleGroup=document.createElement('span'),copy=document.createElement('button');
-      titleGroup.className='wq-title-with-copy';title.replaceWith(titleGroup);titleGroup.appendChild(title);
-      const exactTitle=String(row.properties.title??task.title??'');
-      copy.type='button';copy.className='wq-copy-title';copy.dataset.queueAction='copy-title';copy.dataset.taskId=row.id;
-      copy.setAttribute('aria-label','Copy task title: '+exactTitle);copy.title='Copy task title';copy.draggable=false;
-      copy.innerHTML='<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg>';
-      copy.addEventListener('pointerdown',event=>event.stopPropagation());
-      copy.addEventListener('click',async event=>{event.preventDefault();event.stopPropagation();const hadFocus=document.activeElement===copy;copy.disabled=true;try{const ok=await DCC.copyText(exactTitle);DCC.toast(ok?'Title copied':'Could not copy title. Select the title and copy it manually.',ok?'success':'error');}finally{copy.disabled=false;if(hadFocus&&document.activeElement===document.body){const current=document.querySelector('[data-queue-id="'+CSS.escape(row.id)+'"] .wq-copy-title');current?.focus({preventScroll:true});}}});
-      titleGroup.appendChild(copy);
+      node.querySelectorAll('.btn-schedule').forEach(schedule=>schedule.addEventListener('click',event=>{event.stopPropagation();openSchedule(item,schedule).catch(warn);}));
+      node.querySelectorAll('[data-queue-action="photo"]').forEach(photo=>photo.addEventListener('click',event=>{
+        event.stopPropagation();
+        if(typeof window.openAddModal!=='function')return;
+        const anchor=typeof window.taskAnchorById==='function'?window.taskAnchorById(task._blockId)||window.taskAnchorById(task.id):null;
+        window.openAddModal(task.id,task.title,{anchor,generic:true,tab:'photos'});
+      }));
+      const ttlEl=node.querySelector('.ttl');
+      if(ttlEl){
+        ttlEl.addEventListener('click',event=>{event.stopPropagation();openDetails(id).catch(warn);});
+        ttlEl.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();openDetails(id).catch(warn);}});
+      }
+      const copy=node.querySelector('.wq-copy-title');
+      if(copy){
+        copy.addEventListener('pointerdown',event=>event.stopPropagation());
+        copy.addEventListener('click',async event=>{event.preventDefault();event.stopPropagation();const hadFocus=document.activeElement===copy;copy.disabled=true;try{const ok=await DCC.copyText(exactTitle);DCC.toast(ok?'Title copied':'Could not copy title. Select the title and copy it manually.',ok?'success':'error');}finally{copy.disabled=false;if(hadFocus&&document.activeElement===document.body){const current=document.querySelector('[data-queue-id="'+CSS.escape(id)+'"] .wq-copy-title');current?.focus({preventScroll:true});}}});
+      }
       node.tabIndex=0;node.draggable=!completed;
-      const actions=document.createElement('div');actions.className='wq-actions';actions.innerHTML=controls;
-      const schedule=node.querySelector('.btn-schedule');if(schedule)actions.prepend(schedule);
-      node.querySelector('.it-list-main').appendChild(actions);
-      if(foreground&&!item.onBreak&&window.DCCWorkSessions?.checkInHtml)node.insertAdjacentHTML('beforeend',window.DCCWorkSessions.checkInHtml(task,Date.now()));
+      node.querySelectorAll('[data-queue-action="complete"]').forEach(done=>DCC.bindHoldAction(done,()=>transition('done',item).catch(warn),()=>transition('done',item).catch(warn)));
       if(item.onBreak){
-        // Cover the whole shared card, including its utility gutter. Keep the
-        // underlying layout intact, but remove every covered control from use.
+        // Cover the whole tile. Keep the underlying layout intact, but remove
+        // every covered control from use.
         for(const child of node.children){child.inert=true;child.setAttribute('aria-hidden','true');}
         node.tabIndex=-1;node.draggable=false;node.setAttribute('role','group');
         node.setAttribute('aria-label','Paused task: '+task.title);
         const veil=document.createElement('div');veil.className='wq-break-veil';
-        veil.innerHTML='<div class="wq-break-header"><span class="wq-break-title">'+esc(pathFor(task,index))+'</span><span class="wq-break-badge">On a break</span>'+button('break-options','⋯',row.id,'aria-label="Task options" aria-haspopup="dialog"')+'</div><div class="wq-break-body"><div class="wq-break-copy"><strong role="status"><span class="wq-break-symbol" aria-hidden="true">Ⅱ</span> I’m on a break</strong><p><span data-break-clock data-break-since="'+esc(item.breakStartedAt)+'"></span> on break<span class="wq-break-timer-note">Work timer paused</span></p></div>'+button('focus','▶ Resume task',row.id)+'</div>';
+        veil.innerHTML='<div class="wq-break-header"><span class="wq-break-title">'+esc(title)+'</span><span class="wq-break-badge">On a break</span>'+button('break-options','⋯',id,'aria-label="Task options" aria-haspopup="dialog"')+'</div><div class="wq-break-body"><div class="wq-break-copy"><strong role="status"><span class="wq-break-symbol" aria-hidden="true">Ⅱ</span> I’m on a break</strong><p><span data-break-clock data-break-since="'+esc(item.breakStartedAt)+'"></span> on break<span class="wq-break-timer-note">Work timer paused</span></p></div>'+button('focus','▶ Resume task',id)+'</div>';
         veil.addEventListener('click',event=>{if(!event.target.closest('[data-queue-action]'))event.stopPropagation();});
         node.appendChild(veil);
       }
-      const completionButton=node.querySelector('.quick-complete-control');if(completionButton){completionButton.dataset.queueAction='complete';completionButton.dataset.taskId=row.id;}
       const priorityButton=node.querySelector('[data-queue-action="priority"]');
       if(priorityButton){
         const choose=()=>choosePriority(item);
         let touch=false;priorityButton.addEventListener('pointerdown',event=>{touch=event.pointerType==='touch';});
-        DCC.bindHoldAction(priorityButton,()=>{if(touch){touch=false;choose();return;}const levels=DCC.TaskPriority.levels;send(envelope('queue-priority',{taskId:row.id,taskPriority:levels[(levels.indexOf(item.taskPriority||'Medium')+1)%levels.length]})).catch(warn);},choose);
+        DCC.bindHoldAction(priorityButton,()=>{if(touch){touch=false;choose();return;}instant(envelope('queue-priority',{taskId:id,taskPriority:nextPriority})).catch(warn);},choose);
         priorityButton.addEventListener('keydown',event=>{if(event.key==='ArrowDown'){event.preventDefault();event.stopPropagation();choose();}});
       }
-      node.querySelectorAll('[data-queue-action="up"],[data-queue-action="down"]').forEach(control=>DCC.bindHoldAction(control,()=>reorder(row.id,control.dataset.queueAction==='up'?-1:1)?.catch(warn),()=>reorder(row.id,'top')?.catch(warn)));
+      node.querySelectorAll('[data-queue-action="up"],[data-queue-action="down"]').forEach(control=>DCC.bindHoldAction(control,()=>reorder(id,control.dataset.queueAction==='up'?-1:1)?.catch(warn),()=>reorder(id,'top')?.catch(warn)));
       cards.push(node);return '<div data-wq-card="'+(cards.length-1)+'"></div>';
     }
     function lane(title,rows,empty,cls='',policy='') {return '<section class="wq-lane '+cls+'" data-queue-lane="'+cls+'"><div class="wq-heading"><h2>'+title+' <small>'+rows.length+'</small></h2>'+(policy==='needs'?button('snooze-all',sending?'Saving…':'Snooze all',null,'aria-haspopup="dialog" aria-label="Snooze all '+rows.length+' Needs You items" '+(!rows.length||sending||pending||conflict?'disabled':'')):'')+(policy==='foreground'?button('pomodoro',window.DCCPomodoro?.label()||'🍅',null,'aria-label="Create or open Pomodoro focus plan" aria-haspopup="dialog"'):'')+'<details class="wq-help" data-queue-help="'+policy+'"><summary aria-label="About '+title+'">ⓘ</summary><p>'+esc(window.DCCQueuePolicy.tips[policy])+'</p></details></div>'+(cls==='wq-next'?'<p class="wq-empty">Very high → High → Medium → Low → Very low. Move tasks within a priority; change Priority to move between levels.</p>':'')+(rows.length?rows.map(card).join(''):'<p class="wq-empty">'+empty+'</p>')+'</section>';}
@@ -469,7 +657,7 @@
     const syncMessage=sending?'Saving…':problem||((pending||completionEntries().length)?'Update awaiting confirmation.':'');
     root.innerHTML='<header class="wq-header">'+button('journal','<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v16H6.5A2.5 2.5 0 0 0 4 21.5 2.5 2.5 0 0 0 6.5 24H20"/><path d="M8 7h8"/></svg><span>Journal</span>',null,'class="wq-journal" title="Open the journal for the day on screen"')+button('add','Add tasks')+'</header>'+
       (syncMessage?'<p class="wq-sync" role="status">'+esc(syncMessage)+'</p>':'')+
-      ((pending||completionEntries().length)&&!conflict?button('retry','Retry saved update'):'')+
+      ((pending||completionEntries().length||problem===OFFLINE_INTENT)&&!conflict?button('retry','Retry saved update'):'')+
       (conflict?'<div class="wq-conflict wq-actions"><span>Update conflict.</span>'+button('conflict','Review change')+button('clear-conflict','Dismiss conflict')+'</div>':'')+
       (!conflict&&reviewCount?'<div class="wq-conflict wq-actions"><span>'+reviewCount+' '+(reviewCount===1?'change needs':'changes need')+' review.</span>'+button('conflict','Review change')+'</div>':'')+
       (state.otherWorkspaceForeground?'<p class="wq-conflict">Another workspace holds Foreground. Open it, pause if needed, then choose Return to Priority before bringing a task forward here.</p>':'')+
@@ -492,7 +680,7 @@
   }
   function choosePriority(item){
     const body=form('<label>Priority<select data-priority aria-label="Priority" size="5">'+DCC.TaskPriority.levels.map((level,i)=>'<option value="'+level+'"'+(level===(item.taskPriority||'Medium')?' selected':'')+'>'+['⇊','↓','=','↑','⇈'][i]+' '+level+'</option>').join('')+'</select></label>');
-    modal('Choose priority',body,()=>send(envelope('queue-priority',{taskId:item.task.id,taskPriority:body.querySelector('[data-priority]').value})));
+    modal('Choose priority',body,()=>instant(envelope('queue-priority',{taskId:item.task.id,taskPriority:body.querySelector('[data-priority]').value})));
   }
   function taskAnchor(id){
     const item=items().find(i=>i.task.id===id)||items().find(i=>i.task.properties.local_id===id);
@@ -625,6 +813,11 @@
     let displaced=null,startRevision=null;
     if(action==='start'){
       if(startOpening)return;
+      const local=items().find(row=>row.task.id===item.task.id);
+      if(local&&local.status!=='completed'&&!state.otherWorkspaceForeground&&!local.task.properties.guidedDefinitionId&&!items().some(row=>row.status==='foreground'&&row.task.id!==local.task.id)){
+        if(local.status==='foreground'&&!local.onBreak)return;
+        return instant(envelope('start',{taskId:local.task.id,expectedForegroundTaskId:null})).catch(warn);
+      }
       startOpening=true;
       try {
         await refresh();
@@ -635,8 +828,8 @@
         displaced=items().find(row=>row.status==='foreground'&&row.task.id!==item.task.id)||null;
         startRevision=state.revision;
         if(!displaced&&!item.task.properties.guidedDefinitionId){
-          await send(envelope('start',{taskId:item.task.id,expectedRevision:startRevision,expectedForegroundTaskId:null}));
-          startOpening=false;return;
+          startOpening=false;
+          return instant(envelope('start',{taskId:item.task.id,expectedRevision:startRevision,expectedForegroundTaskId:null})).catch(warn);
         }
       } catch(error){startOpening=false;warn(error);return;}
     }
@@ -751,8 +944,8 @@
     const peerIndex=peers.indexOf(id),targetId=target==='top'?peers[0]:typeof target==='number'?peers[peerIndex+target]:target;
     if(!targetId||!peers.includes(targetId)||id===targetId)return;
     const activeIds=new Set(items().filter(item=>item.status!=='completed').map(item=>item.task.id));
-    const order=state.queue.order.filter(id=>activeIds.has(id)),from=order.indexOf(id),to=order.indexOf(targetId);
-    order.splice(from,1);order.splice(to,0,id);return send(envelope('queue-reorder',{order}));
+    const order=view().order.filter(id=>activeIds.has(id)),from=order.indexOf(id),to=order.indexOf(targetId);
+    order.splice(from,1);order.splice(to,0,id);return instant(envelope('queue-reorder',{order}));
   }
   function reviewRejectedChanges(){
     const entries=reviewEntries();
@@ -811,13 +1004,20 @@
   document.addEventListener('click',event=>{
     const button=event.target.closest?.('[data-queue-action]');if(!button)return;const action=button.dataset.queueAction,item=items().find(i=>i.task.id===button.dataset.taskId);
     if(action==='add'){addTasks();return;}
-    if(action==='journal'){openJournal(button);return;}if(action==='retry'){if(pending&&!completionEntries().some(entry=>entry.body.sourceEventId===pending.sourceEventId))send(pending).catch(warn);else void drainCompletions();return;}
+    if(action==='journal'){openJournal(button);return;}if(action==='retry'){void drainIntents();if(pending&&!completionEntries().some(entry=>entry.body.sourceEventId===pending.sourceEventId))send(pending).catch(warn);else void drainCompletions();return;}
     if(action==='snooze-all'){snooze(null);return;}
     if(action==='pomodoro'){window.DCCPomodoro?.open(items().find(i=>i.status==='foreground')?.task);return;}
     if(action==='clear-conflict'){setConflict(null);render();void drainCompletions();return;}
     if(action==='conflict'&&!conflict){reviewRejectedChanges();return;}
     if(action==='conflict'){const body=form('<p>'+esc(conflict?.message)+'</p><pre>'+esc(JSON.stringify(conflict?.note ? {command:conflict.body,notes:conflict.note.text} : conflict?.body,null,2))+'</pre>');DCC.overlay.open({kind:'modal',title:'Attempted change',body,actions:[{label:'Close'}]});return;}
     if(!item)return;
+    if(action==='expand'){
+      // Display-only: no network. Focus follows the control the person used.
+      const opening=openCard!==item.task.id;openCard=opening?item.task.id:null;justOpened=openCard;render();justOpened=null;
+      document.querySelector('[data-queue-id="'+CSS.escape(item.task.id)+'"] '+(opening?'.wq-fold':'.wq-row-hit'))?.focus({preventScroll:true});
+      return;
+    }
+    if(['photo','copy-title'].includes(action))return; // Bound on the card itself.
     if(action==='delete'){openDelete(item.task.id,button).catch(warn);return;}
     if(action==='details'){const task=DCC.TaskModel.fromBlock(item.task);if(window.DCCTaskWorkspace?.preview)window.DCCTaskWorkspace.preview(task);else if(typeof window.openAddModal==='function')window.openAddModal(task.id,task.title);else {const body=form('<h3>'+esc(task.title)+'</h3><p>'+esc(task.detail||'No task details yet.')+'</p>');DCC.overlay.open({kind:'modal',title:'Task details',body,actions:[{label:'Close'}]});}return;}
     if(['snooze','remind'].includes(action)){snooze(item);return;}
@@ -827,7 +1027,7 @@
     if(action==='note'){const body=form('<label>Where you left off<textarea maxlength="4000">'+esc(item.note||'')+'</textarea></label>');modal('Task context',body,()=>send(envelope('queue-note',{taskId:item.task.id,note:body.querySelector('textarea').value})));return;}
     if(['up','down','complete'].includes(action))return; // Shared row/hold controls own these events.
     const map={return:'queue-return',pause:'pause',remove:'queue-remove',unblock:'queue-unblock',dismiss:'queue-dismiss'};
-    if(map[action])send(envelope(map[action],{taskId:item.task.id,...(['snooze','dismiss'].includes(action)?{generation:item.generation}:{})})).catch(warn);
+    if(map[action])instant(envelope(map[action],{taskId:item.task.id,...(['snooze','dismiss'].includes(action)?{generation:item.generation}:{})})).catch(warn);
   });
   let dragging=null;
   document.addEventListener('dragstart',event=>{const row=event.target.closest?.('[data-queue-id][draggable=true]');if(event.target.closest?.('button,input,select,textarea,a')){event.preventDefault();return;}if(row){dragging=row.dataset.queueId;event.dataTransfer.setData('text/plain',dragging);}});
@@ -843,9 +1043,9 @@
     else if(dest==='wq-background'){if(item.status==='foreground')transition('background-start',item).catch(warn);else snooze(item);}
     else if(dest==='wq-next'){
       const held=returnHold(item);if(held){DCC.toast(held);return;}
-      send(envelope(item.status==='foreground'&&!item.onBreak?'pause':'queue-return',{taskId:id,...(item.status==='foreground'&&!item.onBreak?{attentionMode:'priority'}:{})})).catch(warn);
+      instant(envelope(item.status==='foreground'&&!item.onBreak?'pause':'queue-return',{taskId:id,...(item.status==='foreground'&&!item.onBreak?{attentionMode:'priority'}:{})})).catch(warn);
     }else if(dest==='wq-needs'){
-      send(envelope('pause',{taskId:id,attentionMode:'needs-you'})).catch(warn);
+      instant(envelope('pause',{taskId:id,attentionMode:'needs-you'})).catch(warn);
     }
   });
   document.addEventListener('dragend',()=>{dragging=null;});
@@ -865,6 +1065,7 @@
     if(document.hidden||ticking||sending||!navigator.onLine||!sameAccount())return;
     ticking=true;
     try{
+      if(intents().length){await drainIntents();if(intents().length)return;}
       const completions=completionEntries();
       if(completions.length&&(!pending||completions.some(entry=>entry.body.sourceEventId===pending.sourceEventId))){
         await drainCompletions();return;
@@ -898,6 +1099,7 @@
       }
       if(event.key===key+':conflict'){conflict=JSON.parse(event.newValue);importLegacyReview();render();notifySync();}
       if(event.key===key+':pending'){pending=JSON.parse(event.newValue);render();notifySync();}
+      if(event.key?.startsWith(intentPrefix)){bumpIntents();render();}
       if(event.key?.startsWith(completionPrefix)||event.key?.startsWith(reviewPrefix)){syncQueueActionReceipts();render();notifySync();}
     }catch(_e){}
   });
@@ -916,7 +1118,7 @@
   DCC.tabs?.register('working-queue',()=>{render();invalidate();});
   function syncState(){
     const review=conflict||reviewEntries().at(0);
-    return {pending:!!pending||completionEntries().length>0,conflict:review?{message:review.message||''}:null};
+    return {pending:!!pending||completionEntries().length>0||intents().length>0,conflict:review?{message:review.message||''}:null};
   }
   DCC.TaskActions?.registerPool('working-queue',()=>taskPool({sourceRows:contextRows()}));
   syncQueueActionReceipts();

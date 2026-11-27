@@ -72,20 +72,47 @@ If you aren't sure which kind something is, it's probably the second.
   move → top) fire at about 550 ms. A tap must not wait for the hold timer to
   decide; it acts on release.
 
-## Known gap: Working Queue actions (as of 2026-11-27)
+## Working Queue: how it's done (2026-11-27)
 
-In `public/js/working-queue.js` (`sendUnlocked`, ~line 267), every queue action
-except completion awaits the server before the card changes. That includes bring
-forward, background, pause, snooze, dismiss, return, priority, reorder and
-delete. A second action during a save throws "A queue update is still being
-saved." `render()` (~line 376) also rebuilds the whole queue root on every
-change.
+The Rows + Tiles card build closed the Working Queue gap. `public/js/working-queue.js`:
 
-The Rows + Tiles card build should close this gap. Move these actions onto the
-completion-outbox pattern and switch to per-card repaint, applying all the rules
-above.
+- **Intents.** One-tap commands (priority, reorder, Bring forward with nothing in
+  Foreground, pause, resume, Return to Priority, dismiss reminder, drags to
+  Priority / Needs You) call `instant()`. It saves the command to `localStorage`
+  under `…:intent:<id>`, repaints, and drains in tap order through the same
+  write lock as completions.
+- **View = server + predictions.** `items()` is the server snapshot with every
+  unsent intent applied by `predict()`. Dropping a refused intent rolls back
+  exactly what it changed.
+- **Revisions.** The server refuses a command whose `expectedRevision` is stale.
+  `recordAck()` remembers which revision changes came from this device's own
+  acknowledged commands. `rebased()` moves a command forward only across those.
+  Anything else (another device, a worker report) is sent as-is, so the server
+  refuses it with a 409 and the change is undone with a toast.
+- **Failures.** A 400/404/409 drops only that intent and shows a toast. A 401/403
+  becomes the existing conflict review. Offline, timeout or 5xx keeps the intent,
+  shows "Queue changes are saved on this device. Waiting to sync." with
+  *Retry saved update*, and retries on a timer, on reconnect and on the 15 s tick.
+- **Dialog flows stay confirmed in their dialog.** That covers snooze, set
+  aside, switching Foreground, Blocked / Waiting, Done and Delete. They keep their
+  tested retry-the-same-update behaviour, and `send()` waits for queued intents
+  first. Done was already instant after its dialog.
+
+### Two traps found while building it
+
+- **A repaint between press and release loses the tap.** Background repaints
+  (save replies, refreshes) are held while a pointer is down on the queue and run
+  right after release (`backgroundRender()`). Replies that match what's on screen
+  repaint nothing (`renderKey()`). Explicit `render()` calls are never held.
+- **Post-hold click suppression must be local.** `hold-action.js` swallows the
+  click the browser fires when a hold is released. It used to swallow *any* click
+  for 800 ms, which ate a quick tap on another task once the UI stopped waiting
+  for the server. It now only swallows a click within 16 px of the release point.
 
 ## How to prove it (the regression test)
+
+The Working Queue's check is `scripts/verify-queue-instant.mjs`, which runs in CI's smoke job.
+Copy its `timed()` helper for new surfaces.
 
 Every new or changed interaction ships with a latency check run against the
 synthetic review server (`scripts/ui-review-server.mjs`, loopback only, never user

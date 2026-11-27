@@ -5,10 +5,13 @@
     if (!button) return;
     let timer=null, press=null, armed=false, cancelled=false, heldKey=null;
     function clear() { clearTimeout(timer);timer=null;armed=false;button.classList.remove('is-holding'); }
-    function suppressReleaseClick(pointerId) {
+    // Swallow only the click the browser fires for this release, at the release
+    // point. A deliberate tap elsewhere right after a hold must still work.
+    function suppressReleaseClick(pointerId,x,y) {
       const block=event=>{
         if(event.detail===0)return;
         if(event.pointerId!=null&&event.pointerId!==pointerId)return;
+        if(Number.isFinite(x)&&Math.hypot(event.clientX-x,event.clientY-y)>16)return;
         event.preventDefault();event.stopImmediatePropagation();document.removeEventListener('click',block,true);
       };
       document.addEventListener('click',block,true);
@@ -27,7 +30,7 @@
     button.addEventListener('pointerup',event=>{
       if(!press||event.pointerId!==press.id)return;
       const held=armed,id=press.id;press=null;clear();
-      if(cancelled||held)suppressReleaseClick(id);
+      if(cancelled||held)suppressReleaseClick(id,event.clientX,event.clientY);
       if(held&&!cancelled&&button.isConnected)onHold?.();
     });
     button.addEventListener('pointercancel',()=>{cancelled=true;press=null;clear();});
