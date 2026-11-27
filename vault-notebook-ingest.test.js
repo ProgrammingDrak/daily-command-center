@@ -246,3 +246,33 @@ test("OCR can replace pending text without changing the ink", async () => {
     assert.strictEqual(node.data.pages[0].ocr_status, "complete");
   } finally { await h.close(); }
 });
+
+test("deleting a notebook removes its vault node and tolerates one that never synced", async () => {
+  const h = await startVault();
+  try {
+    assert.equal((await post(h.base, pageForm())).status, 201);
+    const slug = (await (await fetch(`${h.base}/api/vault/nodes?type=notebook`)).json())[0]?.slug;
+    assert.ok(slug && h.vault.get(slug), "notebook node exists before delete");
+    let res = await fetch(`${h.base}/api/vault/notebook/${NOTEBOOK_ID}`, { method: "DELETE" });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true, removed: true, slug });
+    assert.equal(h.vault.get(slug), null);
+    res = await fetch(`${h.base}/api/vault/notebook/${NOTEBOOK_ID}`, { method: "DELETE" });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).removed, false);
+    res = await fetch(`${h.base}/api/vault/notebook/..%2Fjournal%2Fx`, { method: "DELETE" });
+    assert.equal(res.status, 400, "only notebook ids are accepted");
+  } finally {
+    await h.close();
+  }
+});
+
+test("deleting a notebook requires the personal vault session", async () => {
+  const h = await startVault({ admin: false });
+  try {
+    const res = await fetch(`${h.base}/api/vault/notebook/${NOTEBOOK_ID}`, { method: "DELETE" });
+    assert.equal(res.status, 403);
+  } finally {
+    await h.close();
+  }
+});

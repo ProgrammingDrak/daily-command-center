@@ -648,3 +648,81 @@
     min-height: 480px;
   }
 }
+
+/* Book actions: a ☰ button on each cover's top-right corner opens a small menu. */
+.lr-book-slot {
+  position: relative;
+  min-width: 0;
+}
+.lr-book-slot > .lr-book {
+  width: 100%;
+}
+.lr-book-menu {
+  position: absolute;
+  z-index: 2;
+  top: 10px;
+  right: 10px;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #ffffff1f;
+  border-radius: 10px;
+  background: #0000002e;
+  color: #fff;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.lr-book-menu:hover,
+.lr-book-menu[aria-expanded="true"] {
+  background: #00000059;
+}
+.lr-book-menu:focus-visible,
+.lr-menu button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.lr-menu {
+  position: absolute;
+  z-index: 3;
+  top: 58px;
+  right: 10px;
+  min-width: 160px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-overlay);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px #00000066;
+}
+.lr-menu button {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.lr-menu button:hover {
+  background: var(--surface-hover);
+}
+.lr-menu button.danger,
+.lr-button.danger {
+  color: var(--danger);
+}
+.lr-button.danger {
+  border-color: var(--danger);
+}
+.lr-dialog-error:empty {
+  display: none;
+}
+.lr-dialog .lr-dialog-error {
+  color: var(--danger);
+}

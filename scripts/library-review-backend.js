@@ -36,6 +36,10 @@ module.exports = function mountLibraryReview(app, root) {
     if (!note) return res.status(404).json({ error: "not found" });
     res.json(note);
   });
+  app.delete("/api/vault/node/*", (req, res) => {
+    if (!notes.delete(req.params[0])) return res.status(404).json({ error: "not found" });
+    res.json({ ok: true });
+  });
   app.post("/api/vault/daily", (req, res) => {
     const date = req.body.date || "2026-11-25",
       slug = `journal/${date.slice(0, 4)}/${date}`;
@@ -69,6 +73,7 @@ module.exports = function mountLibraryReview(app, root) {
     res.json(next);
   });
   app.post("/api/vault/notebook-page-ingest", (_req, res) => res.json({ ok: true, hash: "notebook-review" }));
+  app.delete("/api/vault/notebook/:notebookId", (req, res) => res.json({ ok: true, removed: false, slug: "notebooks/review" }));
   app.post("/api/review/library/options", (req, res) => {
     options.delayMs = Math.min(5000, Math.max(0, Number(req.body.delayMs) || 0));
     options.nextStatus = [0, 409, 503].includes(req.body.nextStatus) ? req.body.nextStatus : 0;

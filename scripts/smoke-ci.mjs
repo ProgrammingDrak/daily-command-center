@@ -131,7 +131,9 @@ for (const tab of TABS) {
 
 // Measure the full five-door state with real and representative badge counts.
 // Wait for the shipped font so a fallback font cannot hide a width regression.
-await page.evaluate(() => { window.DCC.nav.go({ page: "tasks", view: "list" }); });
+// Working Queue keeps the centered date; the Itinerary puts its controls on the
+// same line (checked below), so centering is measured on the queue view.
+await page.evaluate(() => { window.DCC.nav.go({ page: "tasks", view: "queue" }); });
 check("date navigation is centered inside Day Progress, with views and queues above", (await page.evaluate(() => {
   const head = document.getElementById("task-workspace-head"), nav = document.getElementById("date-nav");
   const progress = head?.querySelector(".progress-wrap"), header = progress?.querySelector(".progress-header");
@@ -143,6 +145,16 @@ check("date navigation is centered inside Day Progress, with views and queues ab
     !progress.querySelector("#date-picker-drop") &&
     n.left >= h.left - 1 && n.right <= h.right + 1 && n.top >= h.top - 1 && n.bottom <= h.bottom + 1 &&
     Math.abs((n.left + n.right - h.left - h.right) / 2) <= 1;
+})) === true);
+await page.evaluate(() => { window.DCC.nav.go({ page: "tasks", view: "list" }); });
+check("itinerary controls share one Day Progress line with the date fully visible", (await page.evaluate(() => {
+  const header = document.querySelector("#task-workspace-head .progress-header"), nav = document.getElementById("date-nav");
+  const toolbar = document.getElementById("it-toolbar"), brief = toolbar?.querySelector("[data-itinerary-brief]");
+  if (!header || !nav || !toolbar || !brief || !header.contains(nav) || !header.contains(toolbar)) return false;
+  const h = header.getBoundingClientRect(), n = nav.getBoundingClientRect(), b = brief.getBoundingClientRect();
+  const sameRow = Math.abs((n.top + n.bottom) / 2 - (b.top + b.bottom) / 2) <= 2;
+  return sameRow && n.left >= h.left - 1 && n.right <= h.right + 1 && n.top >= h.top - 1 && n.bottom <= h.bottom + 1 &&
+    document.documentElement.scrollWidth <= window.innerWidth;
 })) === true);
 // The date control stays in Day Progress; its calendar must escape that clip.
 const progressWasExpanded = await page.locator("#day-progress-title").getAttribute("aria-expanded");

@@ -1,10 +1,31 @@
 // Goodnotes-style journal tools. Uses the vault editor's save, conflict, and
-// attachment paths; no localStorage and no external recognition services.
+// attachment paths; localStorage only holds pen preferences, and there are no
+// external recognition services.
 (function () {
   "use strict";
   const W = 1000,
     H = 1200;
   let sequence = 0;
+  // The paper a fresh journal starts on is an account preference
+  // (/api/journal/preferences), fetched once per page load and shared by every
+  // sketchbook so it follows the user across browsers and devices.
+  let paperPreference = null;
+  function loadPaperPreference() {
+    paperPreference ||= fetch("/api/journal/preferences", { credentials: "same-origin" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body) => body?.lastPaper || null)
+      .catch(() => null);
+    return paperPreference;
+  }
+  function savePaperPreference(lastPaper) {
+    paperPreference = Promise.resolve(lastPaper);
+    fetch("/api/journal/preferences", {
+      method: "PATCH",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lastPaper })
+    }).catch(() => { /* the preference is optional; the journal still saves its own paper */ });
+  }
   const glyphs = {
     hand: "↔",
     pen: "✎",
@@ -103,6 +124,31 @@
     let preferences = {};
     try { preferences = JSON.parse(localStorage.getItem("mycelium-ink-tools") || "{}"); } catch { /* optional preferences */ }
     if (!preferences || typeof preferences !== "object" || Array.isArray(preferences)) preferences = {};
+    // A fresh journal (one untouched blank page, no stored paper) starts on
+    // college ruled, or on the paper last chosen on this account once that
+    // preference loads. Journals with saved ink keep their paper. The stored
+    // format's implicit default stays dotted, so older dotted journals are unchanged.
+    const DEFAULT_PAPER = "college-ruled";
+    let paperTouched = false;
+    function rememberPaper() {
+      if (readOnly) return;
+      paperTouched = true;
+      const page = activePage();
+      savePaperPreference({ paper: page.paper, paperSettings: clone(page.paperSettings) });
+    }
+    const blank = () => !paperTouched && pages.length === 1 && !pages[0].strokes.length && !pages[0].objects.length;
+    if (!readOnly && blank() && pages[0].paper === "dotted" && !pages[0].paperSettings) {
+      pages[0].paper = DEFAULT_PAPER;
+      loadPaperPreference().then((saved) => {
+        if (disposed || !saved || !blank()) return;
+        try {
+          if (saved.paperSettings) pages[0].paperSettings = InkStrokes.normalizePaper(saved.paperSettings);
+          else if (JournalNotebook.PAPER_TYPES.some((type) => type.id === saved.paper)) pages[0].paper = saved.paper;
+          else return;
+          paint();
+        } catch { /* keep the default paper */ }
+      });
+    }
     function writing() { return ["pen", "pencil", "highlighter"].includes(tool); }
     function rememberTool() {
       if (!writing()) return;
@@ -1033,6 +1079,7 @@
         if (paper.startsWith("ink:")) activePage().paperSettings = InkStrokes.normalizePaper({ ...activePage().paperSettings, type:paper.slice(4) });
         else { activePage().paper = paper; activePage().paperSettings = null; }
       });
+      rememberPaper();
     };
     q("[data-undo]").onclick = () => {
       if (readOnly) return;
@@ -1315,6 +1362,7 @@
         layout.onchange = update; update();
         content.querySelector("[data-apply]").onclick = () => {
           edit(() => { activePage().paperSettings = InkStrokes.normalizePaper({type:layout.value,tint:tone.value,spacing:Number(spacing.value),margin:margin.checked}); });
+          rememberPaper();
           q("[data-popup]").hidden = true;
         };
       });

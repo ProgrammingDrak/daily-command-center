@@ -209,6 +209,8 @@
     toggle.querySelector(".time-block-chevron").textContent = collapsed ? "▸" : "▾";
     document.getElementById("off-the-clock-content").hidden = collapsed;
     document.getElementById("unscheduled-sort").hidden = collapsed;
+    // The toggle sits on the Day Progress line; a collapsed section leaves no box behind.
+    document.getElementById("unscheduled-sub")?.classList.toggle("is-collapsed", collapsed);
   }
 
   // The Triage half, the same way: the itinerary renders its own rows, plus the
@@ -509,6 +511,7 @@
     const triageSeg = document.getElementById("triage-pill-nav");
     if (triageSeg) triageSeg.addEventListener("click", () => open("triage"));
     wireDrop(offClockToggle?.closest("[data-placement]"));
+    wireDrop(document.querySelector("#unscheduled-sub [data-placement]"));
     wireTips();
 
     // Same three orders the old Unplanned header offered, same persisted setting.

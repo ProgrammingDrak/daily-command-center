@@ -379,3 +379,50 @@ body[data-nav-page="activity"] .progress-header { display: flex; justify-content
   .task-workspace-head .progress-date-controls .date-nav { flex-wrap: wrap; }
   .progress-date-controls .dn-date { font-size: 10px; }
 }
+
+/* Itinerary (List and Calendar): Day Progress, the date, Daily Brief, Off the
+   Clock, Expand/Collapse, the Work list count, Journal and Share sit on ONE line.
+   When the line is wider than the screen it scrolls sideways instead of wrapping.
+   The Working Queue keeps the plain Day Progress header. */
+.it-toolbar { display: none; }
+body[data-nav-page="tasks"]:is([data-nav-view="list"], [data-nav-view="calendar"]) .progress-header {
+  display: flex; flex-wrap: nowrap; align-items: center; gap: 6px;
+  overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
+}
+body[data-nav-page="tasks"]:is([data-nav-view="list"], [data-nav-view="calendar"]) .progress-header::-webkit-scrollbar { display: none; }
+body[data-nav-page="tasks"]:is([data-nav-view="list"], [data-nav-view="calendar"]) .progress-header > * { flex: 0 0 auto; }
+body[data-nav-page="tasks"]:is([data-nav-view="list"], [data-nav-view="calendar"]) .progress-header .date-nav { flex-wrap: nowrap; }
+body[data-nav-page="tasks"]:is([data-nav-view="list"], [data-nav-view="calendar"]) .it-toolbar {
+  display: flex; align-items: center; gap: 4px; margin-left: auto; white-space: nowrap;
+}
+body[data-nav-view="calendar"] :is(.it-toolbar-offclock, .it-toolbar-list) { display: none; }
+.it-toolbar-list, .it-toolbar .it-list-controls, .it-toolbar .it-list-section { display: flex; align-items: center; gap: 5px; margin: 0; }
+.it-toolbar .it-list-ctrl-btn { min-height: 24px; height: 24px; padding: 0 8px; line-height: 22px; white-space: nowrap; }
+.it-toolbar .it-list-section { margin-left: 2px; }
+.it-toolbar .it-list-section > span { cursor: help; }
+.it-toolbar-brief { color: var(--accent-light); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+/* The border sits on the 24px button itself so the bar stays one 24px row. */
+.it-toolbar-offclock { display: inline-flex; border-radius: 6px; color: var(--queue-ink); }
+.it-toolbar-offclock.drag-over-block { background: var(--queue-soft); }
+.it-toolbar-offclock .time-block-toggle { box-sizing: border-box; border: 1px solid var(--queue-line); border-radius: 6px; min-height: 24px; height: 24px; gap: 4px; padding: 0 6px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.it-toolbar-offclock .untimed-sub-count { min-width: 18px; height: 18px; font-size: 10px; }
+.off-the-clock.is-collapsed { display: none; }
+.it-toolbar .it-list-ctrl-btn { text-transform: none; letter-spacing: 0; font-size: 11px; }
+.it-toolbar .it-toolbar-share:not(:has(svg)) { width: auto; padding: 0 8px; }
+.it-toolbar .it-list-ctrl-icon { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; }
+/* Narrow screens (iPad portrait and below): "Day Progress" shrinks to its ▾ toggle;
+   the words stay readable to screen readers. */
+@media (max-width: 900px) {
+  body[data-nav-page="tasks"]:is([data-nav-view="list"], [data-nav-view="calendar"]) .day-progress-word {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  body[data-nav-page="tasks"]:is([data-nav-view="list"], [data-nav-view="calendar"]) #day-progress-title { min-width: 28px; }
+  body[data-nav-page="tasks"]:is([data-nav-view="list"], [data-nav-view="calendar"]) .ppct-done { display: none; }
+  body[data-nav-page="tasks"]:is([data-nav-view="list"], [data-nav-view="calendar"]) .progress-heading-actions { gap: 4px; }
+  body[data-nav-page="tasks"]:is([data-nav-view="list"], [data-nav-view="calendar"]) .it-toolbar .it-list-section { margin-left: 0; }
+  /* The › arrow already steps to tomorrow. */
+  body[data-nav-page="tasks"]:is([data-nav-view="list"], [data-nav-view="calendar"]) #dn-tomorrow-btn { display: none !important; }
+}
+@media (max-width: 900px) {
+  .it-toolbar-brief-daily, .it-toolbar-offclock .time-block-chevron { display: none; }
+}

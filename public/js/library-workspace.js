@@ -228,6 +228,15 @@
       try {
         const nodes = await api("/api/vault/nodes?type=journal");
         if (!Array.isArray(nodes)) throw new Error("Journal list unavailable");
+        // An entry deleted on another device: drop this device's clean cached copy.
+        // Records with unsynced edits or conflicts stay, so no local writing is lost.
+        const remote = new Set(nodes.map((node) => node.slug));
+        const gone = records.filter((r) => !remote.has(r.slug) && !r.dirty && !r.conflict && !r.pendingCreate);
+        if (gone.length) {
+          await Promise.all(gone.map((r) => drafts.remove(r.slug)));
+          const goneSlugs = new Set(gone.map((r) => r.slug));
+          journals = journals.filter((n) => !goneSlugs.has(n.slug));
+        }
         const merged = new Map(journals.map((n) => [n.slug, n]));
         for (const node of nodes)
           if (String(node.slug).startsWith("journal/") && !node.sensitive)
@@ -336,7 +345,7 @@
     const host = root.querySelector("[data-shelf]");
     if (!host) return;
     host.innerHTML = visible.length
-      ? `<div class="lr-shelf" data-layout="${DEFAULT_LAYOUT}">${visible.map((b) => `<button class="lr-book" data-open="${esc(b.id)}" aria-label="Open ${esc(b.title)}"><div class="lr-cover" style="--book-color:${COLORS[b.cover] || COLORS.slate}"><div class="lr-cover-top">${b.kind === "journal" ? "Daily journal" : "Notebook"}</div><div><div class="lr-cover-name">${esc(b.title)}</div><div class="lr-cover-note">${b.kind === "journal" ? "Your days, together" : "A place to think"}</div></div><span aria-hidden="true">▤</span></div><div class="lr-book-meta"><strong class="lr-book-title">${esc(b.title)}</strong><small>${esc(b.description)}</small></div></button>`).join("")}</div>`
+      ? `<div class="lr-shelf" data-layout="${DEFAULT_LAYOUT}">${visible.map((b) => `<div class="lr-book-slot"><button class="lr-book-menu" type="button" data-book-menu="${esc(b.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="Actions for ${esc(b.title)}" title="Actions">☰</button><button class="lr-book" data-open="${esc(b.id)}" aria-label="Open ${esc(b.title)}"><div class="lr-cover" style="--book-color:${COLORS[b.cover] || COLORS.slate}"><div class="lr-cover-top">${b.kind === "journal" ? "Daily journal" : "Notebook"}</div><div><div class="lr-cover-name">${esc(b.title)}</div><div class="lr-cover-note">${b.kind === "journal" ? "Your days, together" : "A place to think"}</div></div><span aria-hidden="true">▤</span></div><div class="lr-book-meta"><strong class="lr-book-title">${esc(b.title)}</strong><small>${esc(b.description)}</small></div></button></div>`).join("")}</div>`
       : '<div class="lr-empty"><h2>No matching notebooks</h2><p>Try another title, or create a notebook.</p></div>';
     host.querySelectorAll("[data-open]").forEach(
       (button) =>
@@ -345,6 +354,128 @@
           else openNotebook(button.dataset.open).catch(notify);
         })
     );
+    host.querySelectorAll("[data-book-menu]").forEach((button) => (button.onclick = (event) => {
+      event.stopPropagation();
+      toggleBookMenu(button);
+    }));
+  }
+
+  // ── Book actions (☰). Notebooks: Open, Rename, Delete. The Journals book is
+  // every daily entry together, so it offers no one-tap delete-all. ──────────
+  let bookMenu = null;
+  function closeBookMenu({ restoreFocus = false } = {}) {
+    if (!bookMenu) return;
+    const { menu, button } = bookMenu;
+    bookMenu = null;
+    menu.remove();
+    button.setAttribute("aria-expanded", "false");
+    if (restoreFocus) button.focus();
+  }
+  function toggleBookMenu(button) {
+    const id = button.dataset.bookMenu;
+    const wasOpen = bookMenu?.button === button;
+    closeBookMenu();
+    if (wasOpen) return;
+    const items = id === "journals"
+      ? [["Open", () => openJournals().catch(notify)], ["Open today", () => createDay(today()).catch(notify)]]
+      : [["Open", () => openNotebook(id).catch(notify)], ["Rename", () => renameBook(id)], ["Delete", () => deleteBook(id).catch(notify), "danger"]];
+    const menu = document.createElement("div");
+    menu.className = "lr-menu";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", button.getAttribute("aria-label"));
+    for (const [label, run, tone] of items) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      item.textContent = label;
+      if (tone) item.classList.add(tone);
+      item.onclick = (event) => {
+        event.stopPropagation();
+        closeBookMenu();
+        run();
+      };
+      menu.append(item);
+    }
+    button.after(menu);
+    button.setAttribute("aria-expanded", "true");
+    bookMenu = { menu, button };
+    menu.querySelector("button").focus();
+  }
+  document.addEventListener("click", (event) => {
+    if (bookMenu && !bookMenu.menu.contains(event.target)) closeBookMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (!bookMenu) return;
+    if (event.key === "Escape") closeBookMenu({ restoreFocus: true });
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const items = [...bookMenu.menu.querySelectorAll("button")];
+      const at = items.indexOf(document.activeElement);
+      items[(at + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+      event.preventDefault();
+    }
+  });
+
+  function renameBook(id) {
+    const nb = notebooks.find((n) => n.id === id);
+    if (!nb) return;
+    const dialog = document.getElementById("library-rename-dialog");
+    const input = dialog.querySelector("input");
+    input.value = nb.title;
+    dialog.querySelector("[data-cancel]").onclick = () => dialog.close();
+    dialog.querySelector("form").onsubmit = async (event) => {
+      event.preventDefault();
+      const title = input.value.trim();
+      if (!title) return;
+      try {
+        await InkStore.renameNotebook(id, title);
+        dialog.close();
+        await refresh();
+        paintShelf();
+        DCC.toast(`Renamed to “${title}”`);
+      } catch (error) {
+        notify(error);
+      }
+    };
+    dialog.showModal();
+    input.select();
+  }
+
+  async function deleteBook(id) {
+    const nb = notebooks.find((n) => n.id === id);
+    if (!nb) return;
+    const pages = await InkStore.listPages(id);
+    const dialog = document.getElementById("library-delete-dialog");
+    const confirm = dialog.querySelector("[data-confirm]");
+    dialog.querySelector("h2").textContent = "Delete notebook?";
+    dialog.querySelector("[data-message]").textContent =
+      `Delete “${nb.title}” and its ${pages.length} ${pages.length === 1 ? "page" : "pages"}? ` +
+      "It is removed from this device and from your vault. This cannot be undone.";
+    dialog.querySelector("[data-error]").textContent = "";
+    confirm.disabled = false;
+    dialog.querySelector("[data-cancel]").onclick = () => dialog.close();
+    confirm.onclick = async () => {
+      confirm.disabled = true;
+      try {
+        // Vault copy first: if the vault cannot be reached, nothing is deleted and
+        // the notebook stays on the shelf to retry. 403 means this account has no
+        // personal vault, so there is no copy to remove.
+        if (!navigator.onLine) throw new Error("You're offline. Connect to delete this notebook everywhere.");
+        const res = await fetch("/api/vault/notebook/" + encodeURIComponent(id), { method: "DELETE", credentials: "same-origin" });
+        if (!res.ok && res.status !== 403) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `Could not delete the vault copy (${res.status})`);
+        }
+        await InkStore.deleteNotebook(id);
+        dialog.close();
+        await refresh();
+        paintShelf();
+        DCC.toast(`Deleted “${nb.title}”`);
+      } catch (error) {
+        dialog.querySelector("[data-error]").textContent = error.message || "Could not delete this notebook";
+        confirm.disabled = false;
+      }
+    };
+    dialog.showModal();
   }
   async function openNotebook(id) {
     if (!(await flush())) return;
@@ -399,7 +530,7 @@
     active = record;
     version = 0;
     savedVersion = 0;
-    root.innerHTML = `<nav class="lr-breadcrumb"><button data-library>Library</button><span>/ Journals</span></nav><div data-conflict></div><div class="lr-workspace"><aside class="lr-outline"><h2>Journals</h2><p class="lr-sub">Your days, together</p><button class="lr-button" data-today>Open today</button><div class="lr-month">Daily entries</div>${journals.map((n) => `<button class="lr-entry" data-entry="${esc(n.slug)}" aria-current="${n.slug === target}">${esc(n.frontmatter?.date || n.slug.split("/").pop())}${n.dirty ? "<span>Local changes waiting</span>" : ""}</button>`).join("")}</aside><section class="lr-editor"><select class="lr-mobile-date" aria-label="Journal date">${journals.map((n) => `<option value="${esc(n.slug)}" ${n.slug === target ? "selected" : ""}>${esc(n.frontmatter?.date || n.slug)}</option>`).join("")}</select><div class="lr-editor-head"><div><div class="lr-eyebrow">Daily entry</div><h2>${esc(record.frontmatter?.date ? dateLabel(record.frontmatter.date) : record.frontmatter?.title || target)}</h2><div class="lr-caption" data-status></div></div><div class="lr-actions"><button class="lr-button" data-save>Save</button><button class="lr-button" data-attach>Attach</button><button class="lr-button" data-export-entry>Export entry</button><button class="lr-button lr-today-mobile" data-new-day>Today</button></div></div><div data-format class="lr-actions"></div><div data-cover class="memory-story-cover"></div><div data-text class="memory-inline-story"></div><input data-file type="file" hidden></section></div>`;
+    root.innerHTML = `<nav class="lr-breadcrumb"><button data-library>Library</button><span>/ Journals</span></nav><div data-conflict></div><div class="lr-workspace"><aside class="lr-outline"><h2>Journals</h2><p class="lr-sub">Your days, together</p><button class="lr-button" data-today>Open today</button><div class="lr-month">Daily entries</div>${journals.map((n) => `<button class="lr-entry" data-entry="${esc(n.slug)}" aria-current="${n.slug === target}">${esc(n.frontmatter?.date || n.slug.split("/").pop())}${n.dirty ? "<span>Local changes waiting</span>" : ""}</button>`).join("")}</aside><section class="lr-editor"><select class="lr-mobile-date" aria-label="Journal date">${journals.map((n) => `<option value="${esc(n.slug)}" ${n.slug === target ? "selected" : ""}>${esc(n.frontmatter?.date || n.slug)}</option>`).join("")}</select><div class="lr-editor-head"><div><div class="lr-eyebrow">Daily entry</div><h2>${esc(record.frontmatter?.date ? dateLabel(record.frontmatter.date) : record.frontmatter?.title || target)}</h2><div class="lr-caption" data-status></div></div><div class="lr-actions"><button class="lr-button" data-save>Save</button><button class="lr-button" data-attach>Attach</button><button class="lr-button" data-export-entry>Export entry</button><button class="lr-button danger" data-delete-entry>Delete</button><button class="lr-button lr-today-mobile" data-new-day>Today</button></div></div><div data-format class="lr-actions"></div><div data-cover class="memory-story-cover"></div><div data-text class="memory-inline-story"></div><input data-file type="file" hidden></section></div>`;
     const upload = async (file) => {
       if (attaching) throw new Error("Wait for the current attachment");
       attaching = true;
@@ -460,6 +591,8 @@
       if (await flush())
         download(entry.readCommitted(), (record.frontmatter?.date || "journal") + ".md", "text/markdown");
     };
+    root.querySelector("[data-delete-entry]").onclick = () =>
+      deleteEntry(target, record.frontmatter?.date ? dateLabel(record.frontmatter.date) : record.frontmatter?.title || target).catch(notify);
     root.querySelector("[data-attach]").onclick = () => root.querySelector("[data-file]").click();
     root.querySelector("[data-file]").onchange = (e) => {
       const file = e.target.files[0];
@@ -479,6 +612,50 @@
     u.searchParams.set("journal", target);
     history.replaceState({}, "", u);
     scheduleSync();
+  }
+  // One journal entry: confirm, then delete the vault note and this device's copy.
+  async function deleteEntry(slug, label) {
+    const dialog = document.getElementById("library-delete-dialog");
+    const confirm = dialog.querySelector("[data-confirm]");
+    dialog.querySelector("h2").textContent = "Delete journal entry?";
+    dialog.querySelector("[data-message]").textContent =
+      `Delete the journal entry for ${label}? Its writing and drawings are removed from this device and from your vault. ` +
+      "Photos and attachments stay in the vault. This cannot be undone.";
+    dialog.querySelector("[data-error]").textContent = "";
+    confirm.disabled = false;
+    dialog.querySelector("[data-cancel]").onclick = () => dialog.close();
+    confirm.onclick = async () => {
+      confirm.disabled = true;
+      try {
+        if (isBusy()) throw new Error("Finish the current drawing or upload first");
+        if (!navigator.onLine) throw new Error("You're offline. Connect to delete this entry everywhere.");
+        // Settle pending local saves and any in-flight sync first, so neither can
+        // write the entry back after it is deleted.
+        if (!(await flush())) throw new Error("Could not settle local changes. Try again");
+        clearTimeout(syncTimer);
+        while (syncing) await syncing.catch(() => {});
+        const res = await fetch(path(slug), { method: "DELETE", credentials: "same-origin" });
+        if (!res.ok && res.status !== 404) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `Could not delete the vault copy (${res.status})`);
+        }
+        await drafts.remove(slug);
+        entry?.destroy();
+        entry = null;
+        active = null;
+        version = savedVersion = 0;
+        dialog.close();
+        DCC.toast(`Deleted the journal entry for ${label}`);
+        await refresh();
+        if (journals.length) await openJournals(journals[0].slug);
+        else await shelf();
+        scheduleSync();
+      } catch (error) {
+        dialog.querySelector("[data-error]").textContent = error.message || "Could not delete this entry";
+        confirm.disabled = false;
+      }
+    };
+    dialog.showModal();
   }
   async function createDay(date) {
     if (!(await flush())) return;

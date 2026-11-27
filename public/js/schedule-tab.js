@@ -1093,19 +1093,25 @@ function buildListView(){
     }
   }catch(e){}
 
+  // Expand/Collapse, the Work list count, Journal and Share sit on the Day Progress
+  // line (#it-toolbar-list in index.html), rebuilt with the list on every render.
+  const toolbar=document.getElementById("it-toolbar-list");
+  if(toolbar)toolbar.replaceChildren();
   if(parentIds.length){
-    const controls=document.createElement("div");
+    const controls=document.createElement("span");
     controls.className="it-list-controls";
+    // One toggle: expand everything if anything is collapsed, otherwise collapse all.
+    const anyCollapsed=parentIds.some(id=>isCollapsed(id));
+    const action=anyCollapsed?"expand":"collapse",label=anyCollapsed?"Expand all":"Collapse all";
     controls.innerHTML=
-      '<button class="it-list-ctrl-btn" data-collapse-action="expand">Expand all</button>'+
-      '<button class="it-list-ctrl-btn" data-collapse-action="collapse">Collapse all</button>';
-    controls.querySelectorAll(".it-list-ctrl-btn").forEach(btn=>{
-      btn.addEventListener("click",e=>{
-        e.stopPropagation();
-        if(typeof setCollapsedAll==="function"){setCollapsedAll(parentIds,btn.dataset.collapseAction==="collapse");render("schedule");}
-      });
+      '<button class="it-list-ctrl-btn it-list-ctrl-icon" data-collapse-action="'+action+'" title="'+label+'" aria-label="'+label+'">'+
+        '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'+
+        (anyCollapsed?'<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>':'<path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>')+'</svg></button>';
+    controls.querySelector(".it-list-ctrl-btn").addEventListener("click",e=>{
+      e.stopPropagation();
+      if(typeof setCollapsedAll==="function"){setCollapsedAll(parentIds,!anyCollapsed);render("schedule");}
     });
-    wrap.appendChild(controls);
+    (toolbar||wrap).appendChild(controls);
   }
 
   // One unified list in schedule order: open AND done inline (done rows shrink
@@ -1121,11 +1127,25 @@ function buildListView(){
   // fold widened from `subtaskOf` to either parent edge (so a done RIDE-ALONG folds
   // too) and gated on the subtree being finished (so a done step with open steps under
   // it stays visible with its children nested, instead of hiding live work).
-  const workListHeader=section("Work list",[...activeIds].filter(id=>!queuedIds.has(id)).length);
+  const workListCount=[...activeIds].filter(id=>!queuedIds.has(id)).length;
+  const workListHeader=toolbar?document.createElement("span"):section("Work list",workListCount);
+  if(toolbar){
+    workListHeader.className="it-list-section it-toolbar-worklist";
+    workListHeader.innerHTML='<span>Work list</span>'+(workListCount?'<b>'+workListCount+'</b>':'');
+    workListHeader.firstChild.title=matchMedia("(hover: none)").matches
+      ?"Press & hold to reorder · left to nest · right for subtask · tap a row for details"
+      :"Drag to reorder · left to nest · right for subtask · +/- to adjust time · Check to complete";
+    toolbar.appendChild(workListHeader);
+  }
   const journalButton=document.createElement("button");
   journalButton.type="button";
   journalButton.className="it-list-ctrl-btn";
-  journalButton.textContent="Journal";
+  if(toolbar){
+    journalButton.classList.add("it-list-ctrl-icon");
+    journalButton.title="Journal";
+    journalButton.setAttribute("aria-label","Journal");
+    journalButton.innerHTML='<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v16H6.5A2.5 2.5 0 0 0 4 21.5 2.5 2.5 0 0 0 6.5 24H20"/><path d="M8 7h8"/></svg>';
+  }else journalButton.textContent="Journal";
   journalButton.addEventListener("click",async()=>{
     journalButton.disabled=true;
     try{await DCC.openDayJournal(viewDate);}
@@ -1137,7 +1157,13 @@ function buildListView(){
     shareButton.type = "button";
     shareButton.className = "it-list-ctrl-btn";
     shareButton.textContent = "Share Itinerary";
-    shareButton.title = "Copy a link to the public tasks on this day";
+    shareButton.title = "Share Itinerary: copy a link to the public tasks on this day";
+    if (toolbar) {
+      // Icon-only on the one-line bar; the "Link copied" feedback still shows as text.
+      shareButton.classList.add("it-list-ctrl-icon", "it-toolbar-share");
+      shareButton.setAttribute("aria-label", "Share Itinerary");
+      shareButton.innerHTML = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>';
+    }
     shareButton.addEventListener("click", () => DCC.ItineraryShare.copy(viewDate,shareButton));
     workListHeader.appendChild(shareButton);
     DCC.ItineraryShare.openDay(viewDate);
@@ -1980,7 +2006,10 @@ function buildProgress(){
   // Shells are wrappers, not tasks — they don't count toward the day's done tally.
   const counted=dayItems.filter(ev=>!_isShellEv(ev));
   const dc=DCC.TaskModel.selectDone(counted).length;
-  document.getElementById("ppct").textContent=dc+" / "+counted.length+" done · "+Math.round(dc/(counted.length||1)*100)+"%";
+  // "done" is a span so the one-line itinerary bar can drop it on narrow screens.
+  const ppct=document.getElementById("ppct"),pct=Math.round(dc/(counted.length||1)*100);
+  ppct.innerHTML=dc+"/"+counted.length+'<span class="ppct-done"> done</span> · '+pct+"%";
+  ppct.title=dc+" of "+counted.length+" done · "+pct+"%";
   updateProgressNow();
   if(focusTrack&&focusKey){
     const replacement=Array.from(document.getElementById(focusTrack.id).querySelectorAll("button")).find(b=>(b.dataset.progressKey||b.dataset.entryId)===focusKey);

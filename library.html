@@ -13,7 +13,7 @@
     <link rel="stylesheet" href="/public/css/ui-optimization.css" />
     <link rel="stylesheet" href="/public/css/completion-memories.css" />
     <link rel="stylesheet" href="/public/css/journal-sketchbook.css?v=library-1" />
-    <link rel="stylesheet" href="/public/css/library.css?v=library-1" />
+    <link rel="stylesheet" href="/public/css/library.css?v=library-menu-1" />
   </head>
   <body class="library-app">
     <header class="header dcc-topbar">
@@ -28,6 +28,25 @@
     </header>
     <main id="library-root" aria-label="Library"><p role="status">Opening your Library…</p></main>
     <p id="library-status" class="lr-live" role="status" aria-live="polite"></p>
+    <dialog id="library-rename-dialog" class="lr-dialog">
+      <form>
+        <h2>Rename notebook</h2>
+        <label>Notebook title<input name="title" required maxlength="120" autocomplete="off" /></label>
+        <div class="lr-actions">
+          <button class="lr-button" type="button" data-cancel>Cancel</button
+          ><button class="lr-button primary" type="submit">Rename</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="library-delete-dialog" class="lr-dialog" aria-labelledby="library-delete-title">
+      <h2 id="library-delete-title">Delete notebook?</h2>
+      <p data-message></p>
+      <p class="lr-dialog-error" data-error role="alert"></p>
+      <div class="lr-actions">
+        <button class="lr-button" type="button" data-cancel>Cancel</button
+        ><button class="lr-button danger" type="button" data-confirm>Delete</button>
+      </div>
+    </dialog>
     <dialog id="library-dialog" class="lr-dialog">
       <form>
         <h2>New notebook</h2>
@@ -47,9 +66,9 @@
     <script src="/public/js/ink/archive.js"></script>
     <script src="/public/js/ink/sync.js"></script>
     <script src="/public/js/journal-notebook.js?v=library-1"></script>
-    <script src="/public/js/journal-sketchbook.js?v=library-1"></script>
-    <script src="/public/js/journal-drafts.js?v=library-1"></script>
-    <script src="/public/js/library-workspace.js?v=library-1"></script>
+    <script src="/public/js/journal-sketchbook.js?v=college-default-1"></script>
+    <script src="/public/js/journal-drafts.js?v=library-delete-1"></script>
+    <script src="/public/js/library-workspace.js?v=library-delete-1"></script>
     <script src="/public/js/core-ui.js"></script>
     <script src="/public/js/journal-blocks.js?v=library-1"></script>
     <script src="/public/js/completion-memories.js?v=library-1"></script>
