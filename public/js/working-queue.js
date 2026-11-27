@@ -214,7 +214,142 @@
       notifySync();
     }
   }
-  const esc=DCC.esc,items=()=>(state.queue?.items||[]).map(item=>window.DCCQueuePolicy.presentation(item));
+  const esc=DCC.esc;
+  // ======== Instant actions (docs/instant-interactions.md) ========
+  // One-tap queue commands change the view at once and are saved on this device
+  // as intents, then sent one at a time in tap order. The view is always the
+  // server state with the unsent intents predicted on top, so dropping a refused
+  // intent restores exactly what it changed and never touches anything newer.
+  // Dialog flows (snooze, set aside, switch foreground, block, done, delete)
+  // keep confirming in their dialog.
+  const intentPrefix=key+':intent:',ackKey=key+':acks',OFFLINE_INTENT='Queue changes are saved on this device. Waiting to sync.';
+  let intentCache=null,viewCache=null,intentVersion=0,intentSeq=0,drainPromise=null,intentRetry=null,lastRenderKey='';
+  function readIntents(){
+    const list=[];
+    for(let i=0;i<localStorage.length;i++){
+      const storageKey=localStorage.key(i);if(!storageKey?.startsWith(intentPrefix))continue;
+      try{const entry=JSON.parse(localStorage.getItem(storageKey));if(entry?.body?.sourceEventId)list.push(entry);}catch(_e){}
+    }
+    return list.sort((a,b)=>a.seq-b.seq||a.body.sourceEventId.localeCompare(b.body.sourceEventId));
+  }
+  function intents(){if(!intentCache)intentCache=readIntents();return intentCache;}
+  function bumpIntents(){intentCache=null;viewCache=null;intentVersion++;notifySync();}
+  const represent=item=>window.DCCQueuePolicy.presentation({...item,status:['foreground','completed'].includes(item.status)?item.status:'queued'});
+  // What the server will do to the visible items. Only the fields the card shows;
+  // the acknowledged snapshot replaces the prediction a moment later.
+  function predict(list,order,b){
+    const copy=item=>({...item,task:{...item.task,properties:{...item.task.properties}}});
+    const patch=fn=>list.map(item=>item.task.id===b.taskId?fn(copy(item)):item);
+    switch(b.action){
+      case 'queue-priority':return {list:patch(item=>{item.taskPriority=b.taskPriority;item.task.properties.taskPriority=b.taskPriority;return item;}),order};
+      case 'queue-reorder':{
+        const at=new Map(b.order.map((id,i)=>[id,i])),rank=item=>at.has(item.task.id)?at.get(item.task.id):Infinity;
+        return {list:list.slice().sort((a,c)=>rank(a)-rank(c)),order:b.order.concat(order.filter(id=>!at.has(id)))};
+      }
+      case 'queue-return':return {list:patch(item=>represent({...item,status:'queued',onBreak:false,breakStartedAt:null})),order};
+      case 'queue-dismiss':return {list:patch(item=>represent({...item,dueAt:null,snoozedUntil:null,generation:null,notifiedAt:null})),order};
+      case 'queue-unblock':return {list:patch(item=>represent({...item,blocked:false,needsReview:false,dueAt:null,snoozedUntil:null})),order};
+      case 'queue-remove':return {list:list.filter(item=>item.task.id!==b.taskId),order:order.filter(id=>id!==b.taskId)};
+      case 'pause':return {list:patch(item=>{
+        if(!b.attentionMode){item.onBreak=true;item.breakStartedAt=b.at;return item;}
+        delete item.task.properties.startedAt;
+        return represent({...item,status:'queued',onBreak:false,breakStartedAt:null,snoozedUntil:null,...(b.attentionMode==='needs-you'?{dueAt:b.at,generation:b.sourceEventId}:{dueAt:null})});
+      }),order};
+      case 'start':return {list:list.map(item=>{
+        if(item.task.id===b.taskId){const next=copy(item);next.task.properties.startedAt=b.at;return {...next,status:'foreground',onBreak:false,breakStartedAt:null,needsYou:false,snoozed:false,dueAt:null,snoozedUntil:null,backgroundSince:null};}
+        if(item.status!=='foreground')return item;
+        const next=copy(item);delete next.task.properties.startedAt;return represent({...next,status:'queued',onBreak:false});
+      }),order};
+      default:return {list,order};
+    }
+  }
+  function view(){
+    const second=Math.floor(Date.now()/1000);
+    if(viewCache&&viewCache.state===state&&viewCache.version===intentVersion&&viewCache.second===second)return viewCache;
+    let list=(state.queue?.items||[]).map(item=>window.DCCQueuePolicy.presentation(item)),order=(state.queue?.order||[]).slice();
+    for(const entry of intents()){try{({list,order}=predict(list,order,entry.body));}catch(_e){}}
+    viewCache={state,version:intentVersion,second,list,order};
+    return viewCache;
+  }
+  const items=()=>view().list;
+  // Revisions produced by this device's own acknowledged commands. A revision an
+  // action was built on is still safe to send against if every change since then
+  // was ours; anything else goes as-is and the server refuses it (409).
+  function readAcks(){try{return JSON.parse(localStorage.getItem(ackKey))||[];}catch(_e){return [];}}
+  function recordAck(from,to){
+    if(!Number.isFinite(from)||!Number.isFinite(to)||from===to)return;
+    try{localStorage.setItem(ackKey,JSON.stringify(readAcks().filter(ack=>ack.from!==from).concat({from,to}).slice(-50)));}catch(_e){}
+  }
+  function rebased(revision){
+    const current=state.revision;if(!Number.isFinite(revision)||revision===current)return revision;
+    const acks=readAcks();let at=revision;
+    for(let hops=0;hops<60&&at!==current;hops++){const next=acks.find(ack=>ack.from===at);if(!next)return revision;at=next.to;}
+    return at===current?current:revision;
+  }
+  const intentLabel=b=>({'queue-priority':'Priority change','queue-reorder':'Reorder','queue-return':'Return to Priority','queue-dismiss':'Dismiss reminder','queue-unblock':'Unblock','queue-remove':'Remove',start:'Bring forward',pause:b.attentionMode?'Move':'Pause'})[b.action]||'Queue change';
+  // Apply now, save on this device, send in the background. Never waits.
+  function instant(body){
+    try{
+      assertActionAccount();
+      if(conflict)throw new Error('Review the current queue conflict before changing tasks.');
+      localStorage.setItem(intentPrefix+body.sourceEventId,JSON.stringify({body,seq:Date.now()*1000+(intentSeq++%1000)}));
+      bumpIntents();render();
+      void drainIntents();
+      return Promise.resolve();
+    }catch(error){return Promise.reject(error);}
+  }
+  function scheduleIntentRetry(){if(intentRetry)return;intentRetry=setTimeout(()=>{intentRetry=null;void drainIntents();},5000);}
+  function drainIntents(){
+    if(drainPromise)return drainPromise;
+    if(conflict||!sameAccount()||!intents().length)return Promise.resolve();
+    const run=async()=>{
+      for(let entry=intents()[0];entry;entry=intents()[0]){
+        if(!sameAccount()||conflict)return;
+        if(window.blockStore?.hasPendingWrites?.()){window.blockStore.flushPending();scheduleIntentRetry();return;}
+        const body=entry.body.action==='queue-dismiss'?entry.body:{...entry.body,expectedRevision:rebased(entry.body.expectedRevision)};
+        try{
+          const result=await requestQueue({method:'POST',body});
+          if(!sameAccount())return;
+          recordAck(body.expectedRevision,(result.currentState||result.state)?.revision);
+          localStorage.removeItem(intentPrefix+entry.body.sourceEventId);bumpIntents();
+          if(problem===OFFLINE_INTENT)problem='';
+          apply(result);
+        }catch(error){
+          if(!sameAccount())return;
+          if([401,403].includes(error.status)){setConflict({body,message:error.message,status:error.status});render();return;}
+          if(rejectedStatuses.includes(error.status)){
+            // Refused: drop only this change. The view falls back by itself.
+            localStorage.removeItem(intentPrefix+entry.body.sourceEventId);bumpIntents();render();
+            DCC.toast(intentLabel(body)+' was not saved: '+(error.code==='queue_revision_changed'?'the queue changed on another device or worker.':error.message)+' It has been undone.','error',8000);
+            refresh().catch(()=>{});
+            continue;
+          }
+          // Offline, timeout or server error: keep it on this device and retry.
+          if(problem!==OFFLINE_INTENT){problem=OFFLINE_INTENT;render();}
+          notifySync();scheduleIntentRetry();return;
+        }
+      }
+    };
+    drainPromise=(navigator.locks?.request?navigator.locks.request(key+':write',run):run()).catch(()=>{}).finally(()=>{drainPromise=null;});
+    return drainPromise;
+  }
+  // Everything the queue renders from. Equal keys mean an identical screen.
+  function renderKey(){
+    return JSON.stringify([displayedItems().map(i=>[i.task.id,i.status,!!i.needsYou,!!i.snoozed,i.dueAt||null,i.snoozedUntil||null,!!i.onBreak,i.taskPriority,i.actualMinutes??null,!!i.blocked,!!i.needsReview,i.note||'',i.completedAt??null,!!i.savingCompletion,i.task.properties.startedAt||null,i.task.properties.title,i.task.date,i.task.parent_id,i.backgroundSince||null,i.breakStartedAt||null,i.execution?.state||null,(i.delegated||[]).length,i.generation||null]),
+      !!state.otherWorkspaceForeground,problem,!!pending,!!conflict,completionEntries().length,reviewEntries().length,sending,openCard,completedPeriod]);
+  }
+  // A background repaint (a save reply or refresh) that lands between press and
+  // release would rebuild the card under the finger and lose the tap, hold or
+  // drag. Hold it until release; the click still fires first. Explicit render()
+  // calls are never held.
+  let pointerHeld=false,heldRender=false;
+  document.addEventListener('pointerdown',event=>{if(event.target?.closest?.('#working-queue-root'))pointerHeld=true;},true);
+  const releasePointer=()=>{if(!pointerHeld)return;pointerHeld=false;if(heldRender){heldRender=false;setTimeout(()=>{if(!pointerHeld)render();},0);}};
+  for(const type of ['pointerup','pointercancel','dragend'])document.addEventListener(type,releasePointer,true);
+  window.addEventListener('blur',releasePointer);
+  function backgroundRender(){if(pointerHeld){heldRender=true;return;}render();}
+  // Dialog commands go after any instant changes already tapped.
+  async function settleIntents(){if(intents().length)await drainIntents();}
   let completedPeriod='today'; // Per-view choice only; each new page starts on Today.
   function persist(name,value){if(value==null)localStorage.removeItem(key+name);else localStorage.setItem(key+name,JSON.stringify(value));}
   // Memory, then storage, then the header notice: observers read the new state.
@@ -224,10 +359,12 @@
   function newer(value){return value && (value.revision>state.revision || (value.revision===state.revision && (value.queue?.serverNow||'')>=(state.queue?.serverNow||'')));}
   function accept(value, version=null, save=true){
     if(!sameAccount()||!newer(value))return;
-    state=value;
+    state=value;viewCache=null;
     readVersion=version;
     if(save)persist('',{...value,readVersion:version});
-    render();
+    // An acknowledgement that matches what is already on screen repaints nothing,
+    // so it can't cancel a hold or drop :active mid-tap.
+    if(renderKey()!==lastRenderKey)backgroundRender();
   }
   function apply(result){window.blockStore?.acceptWorkRotation?.(result.affectedTasks||[]);accept(result.currentState||result.state);window.DCCWorkSessions?.refresh();}
   function requestQueue(options={}, version=null, suffix=''){
@@ -290,8 +427,9 @@
     if(sending)throw new Error('A queue update is still being saved.');
     if(pending && pending.sourceEventId!==body.sourceEventId)throw new Error('Resolve the pending update first.');
     if(window.blockStore?.hasPendingWrites?.()){window.blockStore.flushPending();throw new Error('Wait for your task edits to sync first.');}
+    if(body.action!=='queue-dismiss'&&Number.isFinite(body.expectedRevision)){const revision=rebased(body.expectedRevision);if(revision!==body.expectedRevision)body={...body,expectedRevision:revision};}
     sending=true;setPending(body);captureQueueUndo(body);render();
-    try {const result=await requestQueue({method:'POST',body});assertActionAccount();setPending(null);apply(result);if(body.action==='undo-completion')DCC.TaskActions?.finish('queue:'+body.sourceEventId);return result;}
+    try {const result=await requestQueue({method:'POST',body});assertActionAccount();recordAck(body.expectedRevision,(result.currentState||result.state)?.revision);setPending(null);apply(result);if(body.action==='undo-completion')DCC.TaskActions?.finish('queue:'+body.sourceEventId);return result;}
     catch(error){
       if(sameAccount()&&[...rejectedStatuses,401,403].includes(error.status)){
         if(body.action==='undo-completion')DCC.TaskActions?.finish('queue:'+body.sourceEventId,'rejected');
@@ -306,7 +444,11 @@
     }
     finally{sending=false;render();}
   }
-  function send(body){return navigator.locks?.request?navigator.locks.request(key+':write',()=>sendUnlocked(body)):sendUnlocked(body);}
+  function send(body){
+    const go=()=>navigator.locks?.request?navigator.locks.request(key+':write',()=>sendUnlocked(body)):sendUnlocked(body);
+    // Only wait when instant changes are queued ahead; otherwise pending is visible at once.
+    return intents().length?settleIntents().then(go):go();
+  }
   const warn=error=>DCC.toast(error.message||'Queue update failed','error');
   function activate(id){if(DCC.nav)DCC.nav.go({page:'tasks',view:'queue'});else document.querySelector('.tab[data-tab="working-queue"]')?.click();render();if(id)document.querySelector('[data-queue-id="'+CSS.escape(id)+'"]')?.scrollIntoView({block:'nearest',behavior:DCC.reducedMotion?.()?'auto':'smooth'});}
   // Independent columns: each lane sizes to its own content. Stacked keeps the
@@ -400,6 +542,7 @@
     const completedOpen=root.querySelector('.wq-completed')?.open;
     const periodFocused=focused?.matches('[data-completed-period]');
     const all=displayedItems();
+    lastRenderKey=renderKey();
     const completionView=window.DCCCompletedQueueFilter.select(all,completedPeriod,Date.now(),state.timeZone);
     const periodLabel=window.DCCCompletedQueueFilter.options.find(([value])=>value===completedPeriod)[1];
     const helpOpen=new Set(Array.from(root.querySelectorAll('.wq-help[open]')).map(el=>el.dataset.queueHelp));
@@ -500,7 +643,7 @@
       if(priorityButton){
         const choose=()=>choosePriority(item);
         let touch=false;priorityButton.addEventListener('pointerdown',event=>{touch=event.pointerType==='touch';});
-        DCC.bindHoldAction(priorityButton,()=>{if(touch){touch=false;choose();return;}send(envelope('queue-priority',{taskId:id,taskPriority:nextPriority})).catch(warn);},choose);
+        DCC.bindHoldAction(priorityButton,()=>{if(touch){touch=false;choose();return;}instant(envelope('queue-priority',{taskId:id,taskPriority:nextPriority})).catch(warn);},choose);
         priorityButton.addEventListener('keydown',event=>{if(event.key==='ArrowDown'){event.preventDefault();event.stopPropagation();choose();}});
       }
       node.querySelectorAll('[data-queue-action="up"],[data-queue-action="down"]').forEach(control=>DCC.bindHoldAction(control,()=>reorder(id,control.dataset.queueAction==='up'?-1:1)?.catch(warn),()=>reorder(id,'top')?.catch(warn)));
@@ -514,7 +657,7 @@
     const syncMessage=sending?'Saving…':problem||((pending||completionEntries().length)?'Update awaiting confirmation.':'');
     root.innerHTML='<header class="wq-header">'+button('journal','<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v16H6.5A2.5 2.5 0 0 0 4 21.5 2.5 2.5 0 0 0 6.5 24H20"/><path d="M8 7h8"/></svg><span>Journal</span>',null,'class="wq-journal" title="Open the journal for the day on screen"')+button('add','Add tasks')+'</header>'+
       (syncMessage?'<p class="wq-sync" role="status">'+esc(syncMessage)+'</p>':'')+
-      ((pending||completionEntries().length)&&!conflict?button('retry','Retry saved update'):'')+
+      ((pending||completionEntries().length||problem===OFFLINE_INTENT)&&!conflict?button('retry','Retry saved update'):'')+
       (conflict?'<div class="wq-conflict wq-actions"><span>Update conflict.</span>'+button('conflict','Review change')+button('clear-conflict','Dismiss conflict')+'</div>':'')+
       (!conflict&&reviewCount?'<div class="wq-conflict wq-actions"><span>'+reviewCount+' '+(reviewCount===1?'change needs':'changes need')+' review.</span>'+button('conflict','Review change')+'</div>':'')+
       (state.otherWorkspaceForeground?'<p class="wq-conflict">Another workspace holds Foreground. Open it, pause if needed, then choose Return to Priority before bringing a task forward here.</p>':'')+
@@ -537,7 +680,7 @@
   }
   function choosePriority(item){
     const body=form('<label>Priority<select data-priority aria-label="Priority" size="5">'+DCC.TaskPriority.levels.map((level,i)=>'<option value="'+level+'"'+(level===(item.taskPriority||'Medium')?' selected':'')+'>'+['⇊','↓','=','↑','⇈'][i]+' '+level+'</option>').join('')+'</select></label>');
-    modal('Choose priority',body,()=>send(envelope('queue-priority',{taskId:item.task.id,taskPriority:body.querySelector('[data-priority]').value})));
+    modal('Choose priority',body,()=>instant(envelope('queue-priority',{taskId:item.task.id,taskPriority:body.querySelector('[data-priority]').value})));
   }
   function taskAnchor(id){
     const item=items().find(i=>i.task.id===id)||items().find(i=>i.task.properties.local_id===id);
@@ -670,6 +813,11 @@
     let displaced=null,startRevision=null;
     if(action==='start'){
       if(startOpening)return;
+      const local=items().find(row=>row.task.id===item.task.id);
+      if(local&&local.status!=='completed'&&!state.otherWorkspaceForeground&&!local.task.properties.guidedDefinitionId&&!items().some(row=>row.status==='foreground'&&row.task.id!==local.task.id)){
+        if(local.status==='foreground'&&!local.onBreak)return;
+        return instant(envelope('start',{taskId:local.task.id,expectedForegroundTaskId:null})).catch(warn);
+      }
       startOpening=true;
       try {
         await refresh();
@@ -680,8 +828,8 @@
         displaced=items().find(row=>row.status==='foreground'&&row.task.id!==item.task.id)||null;
         startRevision=state.revision;
         if(!displaced&&!item.task.properties.guidedDefinitionId){
-          await send(envelope('start',{taskId:item.task.id,expectedRevision:startRevision,expectedForegroundTaskId:null}));
-          startOpening=false;return;
+          startOpening=false;
+          return instant(envelope('start',{taskId:item.task.id,expectedRevision:startRevision,expectedForegroundTaskId:null})).catch(warn);
         }
       } catch(error){startOpening=false;warn(error);return;}
     }
@@ -796,8 +944,8 @@
     const peerIndex=peers.indexOf(id),targetId=target==='top'?peers[0]:typeof target==='number'?peers[peerIndex+target]:target;
     if(!targetId||!peers.includes(targetId)||id===targetId)return;
     const activeIds=new Set(items().filter(item=>item.status!=='completed').map(item=>item.task.id));
-    const order=state.queue.order.filter(id=>activeIds.has(id)),from=order.indexOf(id),to=order.indexOf(targetId);
-    order.splice(from,1);order.splice(to,0,id);return send(envelope('queue-reorder',{order}));
+    const order=view().order.filter(id=>activeIds.has(id)),from=order.indexOf(id),to=order.indexOf(targetId);
+    order.splice(from,1);order.splice(to,0,id);return instant(envelope('queue-reorder',{order}));
   }
   function reviewRejectedChanges(){
     const entries=reviewEntries();
@@ -856,7 +1004,7 @@
   document.addEventListener('click',event=>{
     const button=event.target.closest?.('[data-queue-action]');if(!button)return;const action=button.dataset.queueAction,item=items().find(i=>i.task.id===button.dataset.taskId);
     if(action==='add'){addTasks();return;}
-    if(action==='journal'){openJournal(button);return;}if(action==='retry'){if(pending&&!completionEntries().some(entry=>entry.body.sourceEventId===pending.sourceEventId))send(pending).catch(warn);else void drainCompletions();return;}
+    if(action==='journal'){openJournal(button);return;}if(action==='retry'){void drainIntents();if(pending&&!completionEntries().some(entry=>entry.body.sourceEventId===pending.sourceEventId))send(pending).catch(warn);else void drainCompletions();return;}
     if(action==='snooze-all'){snooze(null);return;}
     if(action==='pomodoro'){window.DCCPomodoro?.open(items().find(i=>i.status==='foreground')?.task);return;}
     if(action==='clear-conflict'){setConflict(null);render();void drainCompletions();return;}
@@ -879,7 +1027,7 @@
     if(action==='note'){const body=form('<label>Where you left off<textarea maxlength="4000">'+esc(item.note||'')+'</textarea></label>');modal('Task context',body,()=>send(envelope('queue-note',{taskId:item.task.id,note:body.querySelector('textarea').value})));return;}
     if(['up','down','complete'].includes(action))return; // Shared row/hold controls own these events.
     const map={return:'queue-return',pause:'pause',remove:'queue-remove',unblock:'queue-unblock',dismiss:'queue-dismiss'};
-    if(map[action])send(envelope(map[action],{taskId:item.task.id,...(['snooze','dismiss'].includes(action)?{generation:item.generation}:{})})).catch(warn);
+    if(map[action])instant(envelope(map[action],{taskId:item.task.id,...(['snooze','dismiss'].includes(action)?{generation:item.generation}:{})})).catch(warn);
   });
   let dragging=null;
   document.addEventListener('dragstart',event=>{const row=event.target.closest?.('[data-queue-id][draggable=true]');if(event.target.closest?.('button,input,select,textarea,a')){event.preventDefault();return;}if(row){dragging=row.dataset.queueId;event.dataTransfer.setData('text/plain',dragging);}});
@@ -895,9 +1043,9 @@
     else if(dest==='wq-background'){if(item.status==='foreground')transition('background-start',item).catch(warn);else snooze(item);}
     else if(dest==='wq-next'){
       const held=returnHold(item);if(held){DCC.toast(held);return;}
-      send(envelope(item.status==='foreground'&&!item.onBreak?'pause':'queue-return',{taskId:id,...(item.status==='foreground'&&!item.onBreak?{attentionMode:'priority'}:{})})).catch(warn);
+      instant(envelope(item.status==='foreground'&&!item.onBreak?'pause':'queue-return',{taskId:id,...(item.status==='foreground'&&!item.onBreak?{attentionMode:'priority'}:{})})).catch(warn);
     }else if(dest==='wq-needs'){
-      send(envelope('pause',{taskId:id,attentionMode:'needs-you'})).catch(warn);
+      instant(envelope('pause',{taskId:id,attentionMode:'needs-you'})).catch(warn);
     }
   });
   document.addEventListener('dragend',()=>{dragging=null;});
@@ -917,6 +1065,7 @@
     if(document.hidden||ticking||sending||!navigator.onLine||!sameAccount())return;
     ticking=true;
     try{
+      if(intents().length){await drainIntents();if(intents().length)return;}
       const completions=completionEntries();
       if(completions.length&&(!pending||completions.some(entry=>entry.body.sourceEventId===pending.sourceEventId))){
         await drainCompletions();return;
@@ -950,6 +1099,7 @@
       }
       if(event.key===key+':conflict'){conflict=JSON.parse(event.newValue);importLegacyReview();render();notifySync();}
       if(event.key===key+':pending'){pending=JSON.parse(event.newValue);render();notifySync();}
+      if(event.key?.startsWith(intentPrefix)){bumpIntents();render();}
       if(event.key?.startsWith(completionPrefix)||event.key?.startsWith(reviewPrefix)){syncQueueActionReceipts();render();notifySync();}
     }catch(_e){}
   });
@@ -968,7 +1118,7 @@
   DCC.tabs?.register('working-queue',()=>{render();invalidate();});
   function syncState(){
     const review=conflict||reviewEntries().at(0);
-    return {pending:!!pending||completionEntries().length>0,conflict:review?{message:review.message||''}:null};
+    return {pending:!!pending||completionEntries().length>0||intents().length>0,conflict:review?{message:review.message||''}:null};
   }
   DCC.TaskActions?.registerPool('working-queue',()=>taskPool({sourceRows:contextRows()}));
   syncQueueActionReceipts();

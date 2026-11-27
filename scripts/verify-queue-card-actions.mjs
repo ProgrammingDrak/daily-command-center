@@ -23,6 +23,8 @@ const tb=async(id,action)=>(await tile(id)).locator('[data-queue-action="'+actio
 const order=()=>page.locator('.wq-next [data-queue-id]').evaluateAll(els=>els.map(el=>el.dataset.queueId));
 const refresh=()=>page.evaluate(()=>DCCWorkingQueue.refresh());
 const count=()=>commands.filter(c=>c.action==='queue-reorder').length;
+// Reorders show instantly and save just after; wait for the save to go out.
+const waitCount=async(n,msg)=>{for(let i=0;i<100&&count()<n;i++)await page.waitForTimeout(50);assert.equal(count(),n,msg);};
 const waitOrder=ids=>page.waitForFunction(ids=>JSON.stringify([...document.querySelectorAll('.wq-next [data-queue-id]')].map(el=>el.dataset.queueId))===JSON.stringify(ids),ids);
 async function hold(id,action){await refresh();const target=button(id,action);await target.scrollIntoViewIfNeeded();const b=await target.boundingBox();await page.mouse.move(b.x+b.width/2,b.y+b.height/2);await page.mouse.down();await page.waitForTimeout(620);await page.mouse.up();}
 async function closeDetails(){await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('#add-modal-overlay.open'));}
@@ -57,11 +59,11 @@ try{
  assert.equal(await card('b').getByRole('button',{name:'Copy task title: Compare launch options',exact:true}).evaluate(el=>el===document.activeElement),true,'clipboard fallback restores keyboard focus');
  assert.equal(commands.length,copiedBefore);
  assert.equal(await page.locator('.wq-style-options').count(),0);
- let before=count();await (await tb('c','up')).click();await waitOrder(['a','c','b','old']);assert.equal(count(),before+1);
- before=count();await tile('b');await hold('b','up');await waitOrder(['b','a','c','old']);await page.waitForTimeout(150);assert.equal(count(),before+1);
- before=count();await tile('c');await hold('c','down');await waitOrder(['c','b','a','old']);assert.equal(count(),before+1,'down hold also jumps top');
- before=count();await (await tb('a','down')).focus();await page.keyboard.press('Shift+Enter');await waitOrder(['a','c','b','old']);assert.equal(count(),before+1);
- before=count();await (await tb('b','up')).focus();await page.keyboard.press('Shift+Space');await waitOrder(['b','a','c','old']);assert.equal(count(),before+1);
+ let before=count();await (await tb('c','up')).click();await waitOrder(['a','c','b','old']);await waitCount(before+1);
+ before=count();await tile('b');await hold('b','up');await waitOrder(['b','a','c','old']);await page.waitForTimeout(150);await waitCount(before+1);
+ before=count();await tile('c');await hold('c','down');await waitOrder(['c','b','a','old']);await waitCount(before+1,'down hold also jumps top');
+ before=count();await (await tb('a','down')).focus();await page.keyboard.press('Shift+Enter');await waitOrder(['a','c','b','old']);await waitCount(before+1);
+ before=count();await (await tb('b','up')).focus();await page.keyboard.press('Shift+Space');await waitOrder(['b','a','c','old']);await waitCount(before+1);
  for(const kind of ['cancel','move','blur','rerender']){
   await tile('c');const target=button('c','up');await target.scrollIntoViewIfNeeded();before=count();
   await target.dispatchEvent('pointerdown',{pointerId:77,button:0,clientX:10,clientY:10});
