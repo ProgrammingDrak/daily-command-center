@@ -1,5 +1,6 @@
 const { performance } = require("node:perf_hooks");
 const { slackTarget } = require("../lib/slack-status");
+const { safeHook: safeGameHook } = require("./game");
 // Extracted from server.js — mounted via routes/index pattern: module.exports(app, ctx).
 // ctx carries shared server-scope helpers/stores; see server.js where ctx is built.
 //
@@ -848,6 +849,13 @@ module.exports = function mount(app, ctx) {
       // AFTER the cascade: that moves real task state, this is decoration on top
       // of it, and recordCompletionPost deliberately swallows its own failures.
       await recordCompletionPost(result, body, userId, workspaceId);
+      // XP: best-effort, after the real completion work. Skipped on a duplicate
+      // (the store is idempotent anyway, this only saves the queries).
+      const gameAwards = (ctx.gameStore && result.task && !result.duplicate)
+        ? await safeGameHook("completion", () => ctx.gameStore.onTaskCompletion({
+            workspaceId, userId, task: result.task, completed: !!body.completed,
+          }))
+        : [];
       const blockIds = (result.broadcastIds || (result.task && result.task.id ? [result.task.id] : []))
         .concat(cascaded.blockIds);
       if (blockIds.length) {
@@ -872,6 +880,7 @@ module.exports = function mount(app, ctx) {
         ok: true, mutationId: body.mutationId, persistenceTarget: result.persistenceTarget,
         task: result.task, affectedTasks: result.affectedTasks || [], revision: result.revision,
         duplicate: !!result.duplicate, requestId, dependencyTransitions: result.dependencyTransitions || [],
+        game: { awarded: gameAwards },
       });
     } catch (error) {
       const status = error.statusCode || error.status || 500;
@@ -947,7 +956,12 @@ module.exports = function mount(app, ctx) {
     }, req.workspaceId);
     if (result.changed) ctx.broadcastQueueChange?.(req.session.userId, req.workspaceId);
     await syncSlack(block);
-    return { ok: true, changed: !!result.changed, reason: result.reason || null, block, affectedTasks: result.conversation?.affectedTasks || [] };
+    const gameAwards = (ctx.gameStore && body.action === "start" && result.changed)
+      ? await safeGameHook("start", () => ctx.gameStore.onTaskStarted({
+          workspaceId: req.workspaceId || block.workspace_id, userId: req.session?.userId || block.user_id, task: block, atMs: body.at == null ? Date.now() : Date.parse(body.at),
+        }))
+      : [];
+    return { ok: true, changed: !!result.changed, reason: result.reason || null, block, affectedTasks: result.conversation?.affectedTasks || [], game: { awarded: gameAwards } };
   }));
 
   app.get("/api/blocks/:id/work", route(async (req, res) => {

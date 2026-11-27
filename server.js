@@ -165,7 +165,7 @@ require("./routes/conversation")(app, { pool, blockDB, APP_TIME_ZONE, getTodaySt
 
 // ── Auth Middleware ──
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/auth/device/start", "/api/auth/device/status", "/api/auth/device/cancel", "/api/auth/device/inspect", "/api/auth/device/approve", "/api/auth/device/redeem", "/api/gcal/callback", "/api/slack/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
-const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/ingest/day-state/v2", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts", "/api/dcc/meeting-signals", "/api/dcc/slack-reconcile"]);
+const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/ingest/day-state/v2", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts", "/api/dcc/meeting-signals", "/api/dcc/slack-reconcile", "/api/dcc/game/close-day"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/shared-itinerary/") || req.path.startsWith("/sponsor/") || req.path.startsWith("/reimburse/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 // On Render the app runs behind a same-host reverse proxy, so EVERY request's
@@ -1033,6 +1033,7 @@ const ctx = {
   queueReadSecret: sessionSecret, broadcastQueueChange,
   APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, gcalAuth, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAdminSession, isAllowedSweepBlockItem, meetingAutomation, meetingSignals, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, reimbursementStore, rewardVaultStore, readDayStateMirror, readJSON, readTriageSuppressionsForWorkspace, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, waitingItems, writeJSON,
   dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR, accessStore,
+  gameStore: require("./game-store").createGameStore({ pool, blockDB }),
   meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN, registerPublicSse, closePublicSse,
   ...routeHelpers,
   get vault() { return vault; },
@@ -1063,6 +1064,7 @@ require("./routes/meeting-dashboard")(app, ctx);
 require("./routes/meeting-audio")(app, ctx);
 require("./routes/gcal")(app, ctx);
 require("./routes/slots")(app, ctx);
+require("./routes/game")(app, ctx);
 require("./routes/budget")(app, ctx);
 require("./routes/reimbursements")(app, ctx);
 require("./routes/punishments")(app, ctx);
