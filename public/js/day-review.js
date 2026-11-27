@@ -1,84 +1,17 @@
-// ======== DAY REVIEW ========
-// Game-styled, time-stamped review of a single day: the SCHEDULED plan rendered
-// as translucent "ghost" blocks on a time grid, with the ACTUAL time spent
-// overlaid as solid, glowing fills. Becomes the past-day (archive) view.
+// ======== ACTUAL TIME HELPERS ========
+// Shared rules for matching recorded time (`time_entry` blocks, with a read-only
+// fallback to legacy `_sessions`) to planned items, plus the manual Actual-time
+// editor the List and Calendar Actual toggle open (window.editTimeEntries).
 //
-// Why this exists: the legacy Actual view renders from the in-memory `scheduled`
-// array, which is empty for past days (it is hydrated from a dcc_state snapshot
-// that only exists for a handful of days). This view instead sources the plan
-// DIRECTLY from blockStore (the durable source of truth), so every past day
-// populates. Actual time comes from `time_entry` blocks, with a read-only
-// fallback to legacy `_sessions` data.
+// This file used to also render the "Day review" planned-vs-actual panel. That
+// panel was removed on 2026-11-27; the filename is kept because
+// actual-projection.js and its tests load these helpers from here.
 (function () {
   "use strict";
 
-  const HOUR_HEIGHT = 58;   // px per hour on the grid
-  const EDGE_PAD_MIN = 30;  // breathing room above first / below last block
-
-  // ── small utils (reuse globals from state.js / data.js where available) ──
   function esc(s) { return escHtml(s); } // shared escaper in tag-manager.js
   function toMin(v) { return (typeof pt === "function") ? pt(v) : 0; }            // "HH:MM" / ISO / "9:00 AM" -> minutes
-  function fmtClock(min) { return (typeof f12 === "function") ? f12((typeof fmt === "function") ? fmt(((min % 1440) + 1440) % 1440) : min) : (min + "m"); }
-  function fmtDur(min) { return (typeof ms === "function") ? ms(Math.max(0, Math.round(min))) : Math.round(min) + "m"; }
-  function evColor(ev) {
-    const tagC = (typeof taskTagColor === "function") ? taskTagColor(ev) : null;
-    if (tagC) return tagC;
-    return (typeof cfg === "function") ? cfg(ev.type).color : "#a78bfa";
-  }
   function normTitle(t) { return String(t || "").trim().toLowerCase(); }
-  function todayStr() { return (typeof __todayDate === "string" && __todayDate) || new Date().toISOString().slice(0, 10); }
-
-  // ── gather the planned items for a date ──
-  // Today: prefer the live `scheduled` array (carries manual edits). Other days:
-  // read straight from the blockStore day cache (loaded by switchToDate).
-  function gatherPlanned(dateStr) {
-    const isToday = dateStr === todayStr();
-    if (isToday && typeof scheduled !== "undefined" && Array.isArray(scheduled) && scheduled.length) {
-      return DCC.TaskModel.selectNotDeleted(scheduled)
-        // A task rescheduled (pushed) away no longer lives on this day, so it
-        // doesn't belong in its planned-vs-actual retrospective. Every other
-        // schedule view filters these; without it, rescheduling from the Actual
-        // view looked like it did nothing (the card stayed put). (Ported from the
-        // superseded buildActualView fix in PR #108.)
-        .filter(ev => ev && ev.start)
-        .map(ev => ({
-          id: ev.id, _blockId: ev._blockId || ev.id, title: ev.title || "(untitled)",
-          type: ev.type || "task", start: ev.start, end: ev.end || ev.start,
-          source: ev.source || "manual", tags: Array.isArray(ev.tags) ? ev.tags : [],
-          done: (typeof isDone === "function") ? isDone(ev) : false,
-          meetingBlockId: ev.meetingBlockId || ev.block_id || null,
-          source_id: ev.source_id || null, gcal_event_id: ev.gcal_event_id || null,
-          actualMinutesFrom: ev.actualMinutesFrom || null, actualTimeUnknown: ev.actualTimeUnknown === true
-        }))
-        .sort((a, b) => toMin(a.start) - toMin(b.start));
-    }
-    const bs = window.blockStore;
-    if (!bs) return [];
-    const pool = []
-      .concat(bs.getByType("block") || [])
-      .concat(bs.getByType("schedule_item") || [])
-      .concat(bs.getByType("added_task") || []);
-    const seen = new Set();
-    const out = [];
-    for (const b of pool) {
-      const p = b.properties || {};
-      if (!p.start) continue;
-      if (b.date && b.date !== dateStr) continue;   // only this day's blocks
-      if (seen.has(b.id)) continue;
-      seen.add(b.id);
-      out.push({
-        id: b.id, _blockId: b.id, title: p.title || "(untitled)",
-        type: p.type || "task", start: p.start, end: p.end || p.start,
-        source: p.source || "manual", tags: Array.isArray(p.tags) ? p.tags : [],
-        done: !!p.done,
-        meetingBlockId: p.meetingBlockId || p.block_id || null,
-        gcal_event_id: p.gcal_event_id || null, source_id: p.source_id || null,
-        actualMinutesFrom: p.actualMinutesFrom || null, actualTimeUnknown: p.actualTimeUnknown === true
-      });
-    }
-    out.sort((a, b) => toMin(a.start) - toMin(b.start));
-    return out;
-  }
 
   // ── match a time_entry to a planned event ──
   function entryMatchesEvent(entryProps, ev) {
@@ -115,240 +48,8 @@
     return [];
   }
 
-  // greedy column assignment so overlapping plan blocks sit side-by-side
-  function assignColumns(events) {
-    const sorted = events.map((ev, i) => ({ ev, i, s: toMin(ev.start), e: Math.max(toMin(ev.end), toMin(ev.start) + 5) }))
-      .sort((a, b) => a.s - b.s || a.e - b.e);
-    const active = []; // {col, end}
-    let maxCol = 0;
-    for (const node of sorted) {
-      for (let k = active.length - 1; k >= 0; k--) if (active[k].end <= node.s) active.splice(k, 1);
-      const used = new Set(active.map(a => a.col));
-      let col = 0; while (used.has(col)) col++;
-      node.col = col; active.push({ col, end: node.e });
-      maxCol = Math.max(maxCol, col);
-    }
-    const cols = maxCol + 1;
-    const byId = {};
-    sorted.forEach(n => { byId[n.ev.id] = { col: n.col, cols }; });
-    return byId;
-  }
-
-  // ── build the per-day model ──
-  function buildModel(dateStr) {
-    const planned = gatherPlanned(dateStr);
-    const ctx = {
-      timeEntries: (window.blockStore && window.blockStore.getTimeEntries) ? window.blockStore.getTimeEntries(dateStr) : [],
-      sessions: (typeof loadSessions === "function") ? (loadSessions() || {}) : {},
-      done: (typeof loadDoneState === "function") ? loadDoneState() : { ids: [], at: {} }
-    };
-    const doneIds = new Set((ctx.done.ids || []));
-    const rows = planned.map(ev => {
-      const segs = actualSegmentsFor(ev, ctx);
-      const actualMin = segs.reduce((s, x) => s + (x.durMin || 0), 0);
-      const plannedMin = Math.max(0, toMin(ev.end) - toMin(ev.start));
-      const done = ev.done || doneIds.has(ev.id);
-      const doneAtTs = (ctx.done.at || {})[ev.id] || null;
-      return { ev, segs, actualMin, plannedMin, done, doneAtTs,
-        startMin: toMin(ev.start), endMin: Math.max(toMin(ev.end), toMin(ev.start) + 5),
-        editable: ev.source !== "gcal" || true /* allow logging time on anything */ };
-    });
-    // Unscheduled actual time from entries with no matching plan block.
-    const extras = [];
-    const seenExtra = new Set();
-    for (const te of ctx.timeEntries) {
-      const p = te.properties || {};
-      const matched = planned.some(ev => entryMatchesEvent(p, ev));
-      if (matched) continue;
-      const key = p.calendarEventId || (p.allocationKind === "unknown" ? "unknown" : (p.blockId || normTitle(p.taskTitle) || te.id));
-      if (!seenExtra.has(key)) { seenExtra.add(key); extras.push({ key, title: p.taskTitle || "(untracked)", min: 0, blockId: p.blockId || null, allocationKind: p.allocationKind || "focused" }); }
-      const ex = extras.find(x => x.key === key);
-      if (ex) ex.min += (p.durSec || 0) / 60;
-    }
-    return { dateStr, rows, extras, ctx };
-  }
-
-  // ── render ──
-  function buildDayReview(dateStr) {
-    const wrap = document.getElementById("actual-view");
-    if (!wrap) return;
-    dateStr = dateStr || (typeof viewDate !== "undefined" && viewDate) || todayStr();
-    const model = buildModel(dateStr);
-    wrap.innerHTML = "";
-
-    const root = document.createElement("div");
-    root.className = "dr-root";
-    root.appendChild(renderHUD(model));
-
-    if (!model.rows.length) {
-      const empty = document.createElement("div");
-      empty.className = "dr-empty";
-      empty.innerHTML = "No scheduled items recorded for this day.";
-      root.appendChild(empty);
-      appendExtras(root, model);
-      wrap.appendChild(root);
-      return;
-    }
-
-    // grid bounds
-    let lo = Math.min.apply(null, model.rows.map(r => r.startMin));
-    let hi = Math.max.apply(null, model.rows.map(r => r.endMin));
-    model.rows.forEach(r => r.segs.forEach(s => {
-      if (s.startMin != null) { lo = Math.min(lo, s.startMin); hi = Math.max(hi, s.startMin + s.durMin); }
-    }));
-    const gridStart = Math.max(0, Math.floor((lo - EDGE_PAD_MIN) / 60) * 60);
-    const gridEnd = Math.min(1440, Math.ceil((hi + EDGE_PAD_MIN) / 60) * 60);
-    const minsToY = m => ((m - gridStart) / 60) * HOUR_HEIGHT;
-    const gridHeight = minsToY(gridEnd);
-
-    const grid = document.createElement("div");
-    grid.className = "dr-grid";
-    grid.style.height = gridHeight + "px";
-
-    // hour lines + labels
-    for (let h = gridStart; h <= gridEnd; h += 60) {
-      const y = minsToY(h);
-      const line = document.createElement("div");
-      line.className = "dr-hourline";
-      line.style.top = y + "px";
-      line.innerHTML = '<span class="dr-hourlabel">' + fmtClock(h) + '</span>';
-      grid.appendChild(line);
-    }
-
-    const cols = assignColumns(model.rows.map(r => r.ev));
-    const LANE_LEFT = 64; // px gutter for hour labels
-
-    model.rows.forEach(r => {
-      const ev = r.ev;
-      const color = evColor(ev);
-      const ci = cols[ev.id] || { col: 0, cols: 1 };
-      const widthPct = 100 / ci.cols;
-      const leftCalc = "calc(" + LANE_LEFT + "px + (100% - " + LANE_LEFT + "px) * " + (ci.col / ci.cols) + ")";
-      const blockWidth = "calc((100% - " + LANE_LEFT + "px) * " + (widthPct / 100) + " - 8px)";
-      const top = minsToY(r.startMin);
-      const height = Math.max(20, minsToY(r.endMin) - top);
-
-      // ghost (planned) block
-      const ghost = document.createElement("div");
-      ghost.className = "dr-block" + (r.done ? " done" : "") + (r.actualMin > 0 ? " has-actual" : "");
-      ghost.style.cssText = "top:" + top + "px;height:" + height + "px;left:" + leftCalc + ";width:" + blockWidth + ";--dr-color:" + color + ";";
-
-      const statusBadge = r.done
-        ? '<span class="dr-badge done">DONE</span>'
-        : (r.actualMin > 0 ? '' : '<span class="dr-badge missed">no actual</span>');
-      let diff = "";
-      if (r.actualMin > 0 && r.plannedMin > 0) {
-        const d = Math.round(r.actualMin - r.plannedMin);
-        if (d > 2) diff = '<span class="dr-diff over">+' + fmtDur(d) + '</span>';
-        else if (d < -2) diff = '<span class="dr-diff under">-' + fmtDur(Math.abs(d)) + '</span>';
-        else diff = '<span class="dr-diff match">on target</span>';
-      }
-      ghost.innerHTML =
-        '<div class="dr-block-head">' +
-          '<span class="dr-block-title">' + esc(ev.title) + '</span>' +
-          statusBadge +
-        '</div>' +
-        '<div class="dr-block-meta">' +
-          '<span>' + fmtClock(r.startMin) + (r.plannedMin ? ' · ' + fmtDur(r.plannedMin) : '') + '</span>' +
-          (r.actualMin > 0 ? '<span class="dr-actual-amt">actual ' + fmtDur(r.actualMin) + '</span>' : '') +
-          diff +
-        '</div>' +
-        '<button class="dr-addtime" data-block-id="' + esc(ev.id) + '" data-title="' + esc(ev.title) + '" title="Add / edit actual time">+ time</button>';
-
-      // solid actual fills (positioned by their own time; fall back to planned start)
-      let stackBase = r.startMin;
-      r.segs.forEach(seg => {
-        const segStart = (seg.startMin != null) ? seg.startMin : stackBase;
-        const segH = Math.max(4, (seg.durMin / 60) * HOUR_HEIGHT);
-        stackBase = segStart + seg.durMin;
-        const fill = document.createElement("div");
-        fill.className = "dr-fill" + (seg.source === "legacy" ? " legacy" : "");
-        fill.style.cssText = "top:" + minsToY(segStart) + "px;height:" + segH + "px;left:" + leftCalc + ";width:" + blockWidth + ";--dr-color:" + color + ";";
-        fill.title = (seg.startMin != null ? fmtClock(segStart) + " · " : "") + fmtDur(seg.durMin) + (seg.source ? " (" + seg.source + ")" : "");
-        // A fill IS the segment, so it is the shortest path to re-attributing that
-        // time. Only real time_entry rows carry an id; the legacy `_sessions`
-        // fallback has none and stays read-only, as it always was.
-        if (seg._id && seg._entry && window.DCCTimeReallocate) {
-          fill.dataset.timeEntry = seg._id;
-          // The ROW rides on the element. blockStore.get() only sees the day and
-          // global caches, so on a past day (which reads the range cache) a
-          // lookup by id would come back empty and the dialog would refuse to open.
-          fill._timeEntry = seg._entry;
-          fill.title += " — click to move or split";
-        }
-        grid.appendChild(fill);
-      });
-
-      grid.appendChild(ghost);
-    });
-
-    root.appendChild(grid);
-
-    appendExtras(root, model);
-
-    wrap.appendChild(root);
-
-    // wire add/edit-time buttons (interactive even in archive read-only mode)
-    root.querySelectorAll(".dr-addtime").forEach(btn => {
-      btn.addEventListener("click", e => {
-        e.stopPropagation();
-        editTimeEntries(btn.dataset.blockId, btn.dataset.title, dateStr, btn);
-      });
-    });
-
-    // Click a solid actual fill to move or split the time it represents. The
-    // segment's own row is handed over, so the dialog needs no second read.
-    root.querySelectorAll(".dr-fill[data-time-entry]").forEach(fill => {
-      fill.addEventListener("click", e => {
-        e.stopPropagation();
-        const entry = fill._timeEntry || (window.blockStore && window.blockStore.get(fill.dataset.timeEntry));
-        if (!entry) { if (typeof showToast === "function") showToast("That time is not loaded yet", "error"); return; }
-        window.DCCTimeReallocate.open({
-          entry,
-          taskTitle: (entry.properties || {}).taskTitle,
-          onSaved: () => { buildDayReview(dateStr); document.dispatchEvent(new CustomEvent("dcc:actual-time-saved", { detail: { date: dateStr } })); }
-        });
-      });
-    });
-  }
-
-  // ── HUD ──
-  function appendExtras(root, model) {
-    if (!model.extras.length) return;
-    const ex = document.createElement("div");
-    ex.className = "dr-extras";
-    ex.innerHTML = '<div class="dr-extras-head">Additional activity</div>' +
-      model.extras.map(x => '<div class="dr-extra-row"><span>' + esc(x.allocationKind === "unknown" ? "Unknown time (not focused effort)" : x.title) + '</span><b>' + fmtDur(x.min) + '</b></div>').join("");
-    root.appendChild(ex);
-  }
-
   function knownActualMinutes(model) {
     return model.rows.reduce((s, r) => s + r.actualMin, 0) + model.extras.filter(x => x.allocationKind !== "unknown").reduce((s, x) => s + x.min, 0);
-  }
-
-  function renderHUD(model) {
-    const hud = document.createElement("div");
-    hud.className = "dr-hud";
-    const planned = model.rows.length;
-    const plannedMin = model.rows.reduce((s, r) => s + r.plannedMin, 0);
-    const actualMin = knownActualMinutes(model);
-    const variance = actualMin - plannedMin;
-    const dispDate = (function () {
-      const p = String(model.dateStr).split("-");
-      try { return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }); }
-      catch (e) { return model.dateStr; }
-    })();
-    hud.innerHTML =
-      '<div class="dr-hud-date">' + dispDate + '</div><button data-completion-review data-review-date="' + esc(model.dateStr) + '">Did these happen?</button>' +
-      '<div class="dr-hud-stats">' +
-        statCard(fmtDur(plannedMin), 'planned time', 'muted') +
-        statCard(fmtDur(actualMin), 'known actual time', 'green') +
-        statCard((variance > 0 ? '+' : variance < 0 ? '-' : '') + fmtDur(Math.abs(variance)), variance > 0 ? 'over plan' : variance < 0 ? 'under plan' : 'on plan', variance > 0 ? 'accent' : '') +
-      '</div>';
-    return hud;
-  }
-  function statCard(big, label, tone) {
-    return '<div class="dr-stat ' + (tone || '') + '"><div class="dr-stat-big">' + big + '</div><div class="dr-stat-label">' + label + '</div></div>';
   }
 
   // ── manual / retroactive time entry editor ──
@@ -406,8 +107,7 @@
     panel.querySelector(".dr-ed-cancel").addEventListener("click", closeEditor);
     panel.querySelector(".dr-ed-save").addEventListener("click", async () => {
       await saveSegments(panel, blockId, taskTitle, dateStr, existing);
-      closeEditor();
-      buildDayReview(dateStr);
+      closeEditor(); // saveSegments fires dcc:actual-time-saved; the List/Calendar repaint on it
     });
     if (window.DCC && window.DCC.overlay) {
       _timeEditorHandle = window.DCC.overlay.open({
@@ -479,7 +179,6 @@
   // expose
   if (typeof module === "object" && module.exports) module.exports = { entryMatchesEvent, actualSegmentsFor, knownActualMinutes };
   if (typeof window !== "undefined") {
-    window.buildDayReview = buildDayReview;
     window.editTimeEntries = editTimeEntries;
     // The List and Calendar Actual toggle (actual-projection.js) reuses this rule.
     window.DCCDayReviewModel = { entryMatchesEvent, actualSegmentsFor, knownActualMinutes };

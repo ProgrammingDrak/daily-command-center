@@ -50,7 +50,6 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
   let explicitActual=false; // the URL or the person chose Actual on or off
   let archiveDefault=false; // Actual forced on for a past day, not a choice
   let archiveMode=false;    // the viewed day is a past (archive) day
-  let reviewOpen=false;     // explicit Day review panel inside List/Calendar
   const byId=id=>document.getElementById(id);
 
   function retiredNotice(name){
@@ -97,8 +96,6 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
       toggle.setAttribute("aria-pressed",String(!!state.actual));
       toggle.classList.toggle("active",!!state.actual);
     }
-    const reviewButton=byId("progress-day-review");
-    if(reviewButton){const open=reviewOpen&&state.page==="tasks"&&state.view!=="queue";reviewButton.setAttribute("aria-expanded",String(open));reviewButton.textContent=open?"Close day review":"Day review";}
     const body=document.body;
     body.dataset.navPage=state.page;
     body.dataset.navView=state.view;
@@ -161,12 +158,6 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
     return state;
   }
 
-  function setReviewOpen(open){
-    reviewOpen=!!open;
-    if(NS.panelFor(state)==="schedule")runScheduleView(state,state);
-    return reviewOpen;
-  }
-
   // A focused editor, or a task-add popover holding text, is a draft that a
   // rebuild of its container would destroy.
   function hasDraftIn(container){
@@ -177,9 +168,8 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
 
   DCC.nav={
     get:()=>Object.assign({},state),
-    go,setActual,select,setArchive,setReviewOpen,hasDraftIn,
+    go,setActual,select,setArchive,hasDraftIn,
     isRetired:NS.isRetired,
-    reviewOpen:()=>reviewOpen&&state.page==="tasks"&&state.view!=="queue",
     prefs:()=>Object.assign({},prefs)
   };
   DCC.tabs.select=select;

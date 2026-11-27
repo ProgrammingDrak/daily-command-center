@@ -53,16 +53,8 @@ try {
   assert.match(summary, /25m\s*Without a clock time/);
   assert.match(summary, /7m\s*Unknown time \(not focused\)/);
   assert.equal(await page.locator('#actual-summary [data-completion-review]').count(), 1);
-  assert.equal(await page.locator("#actual-view").isHidden(), true, "Day review is not shown in place of the List");
   assert.equal(await page.locator("#list-view").isVisible(), true);
   check("List Actual chips and totals for positioned, unplaced, unknown, other-day, duplicate-title and near-midnight evidence");
-
-  await page.locator(".actual-review-toggle").click();
-  await page.waitForSelector("#actual-view .dr-root");
-  assert.equal(await page.locator("#list-view").isVisible(), true);
-  await page.locator(".actual-review-toggle").click();
-  assert.equal(await page.locator("#actual-view").isHidden(), true);
-  check("Day review opens only as an explicit panel above the List");
 
   // ── Date switch keeps the toggle and re-reads that day's evidence ──
   await page.evaluate((d) => switchToDate(d), seeded.yesterday);

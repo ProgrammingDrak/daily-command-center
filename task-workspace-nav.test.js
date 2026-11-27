@@ -65,11 +65,11 @@ test("Actual is not a view: no Actual view button, Itinerary and Calendar keep t
   assert.doesNotMatch(html, /class="svt-btn[^"]*" data-view="actual"/);
   assert.doesNotMatch(html, /id="sched-view-toggle"/);
   const schedule = slice(html, 'id="tab-schedule"', "<!-- Anytime dock");
-  for (const id of ["actual-view", "list-view", "calendar-view"]) assert.match(schedule, new RegExp('id="' + id + '"'));
+  for (const id of ["list-view", "calendar-view"]) assert.match(schedule, new RegExp('id="' + id + '"'));
   const tab = read("public/js/schedule-tab.js");
   assert.doesNotMatch(tab, /schedView\s*=\s*["']actual["']/);
   assert.doesNotMatch(read("public/js/persistence.js"), /"actual"\s*:\s*\(/);
-  assert.match(read("public/js/features.js"), /actualView:[^\n]*DCC\.nav\.reviewOpen\(\)/);
+  assert.doesNotMatch(read("public/js/features.js"), /actualView:/);
 });
 
 test("retired pages have no visible route from the top bar, mobile, tutorial or shortcuts", () => {
@@ -447,15 +447,10 @@ test("a focused editor inside a view counts as a draft", () => {
   assert.equal(h.DCC.nav.hasDraftIn(list), true);
 });
 
-test("Day review is independent of Actual details", () => {
+test("Day review is removed from navigation", () => {
   const h = harness({ search: "?tab=tasks&view=list&actual=1" });
-  assert.equal(h.DCC.nav.reviewOpen(), false);
-  h.DCC.nav.setReviewOpen(true);
-  assert.equal(h.DCC.nav.reviewOpen(), true);
-  h.DCC.nav.setActual(false);
-  assert.equal(h.DCC.nav.reviewOpen(), true, "turning Actual off does not hide the independent review");
-  h.DCC.nav.go({ view: "queue" });
-  assert.equal(h.DCC.nav.reviewOpen(), false);
+  assert.equal(h.DCC.nav.reviewOpen, undefined);
+  assert.equal(h.DCC.nav.setReviewOpen, undefined);
 });
 
 // ── Itinerary Actual presentation ──
@@ -467,7 +462,7 @@ function listActualContext(entries, scheduled, nav = { page: "tasks", view: "lis
     blockStore: { getTimeEntries: () => entries }, loadSessions: () => ({}),
     isDeleted: () => false,
     escHtml: (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]),
-    DCC: { ActualProjection, nav: { get: () => nav, reviewOpen: () => false } }
+    DCC: { ActualProjection, nav: { get: () => nav } }
   });
   context.window = context;
   const source = read("public/js/schedule-tab.js");
@@ -492,11 +487,12 @@ test("Itinerary Actual adds evidence chips and an edit entry point to each row",
   assert.match(row("c"), /data-actual-edit="c" aria-label="Add or edit actual time for Plan &lt;Q1&gt;">\+ time</);
 });
 
-test("the progress header owns actual totals and Day review", () => {
+test("the progress header owns actual totals and has no Day review", () => {
   const html = read("index.html");
   const schedule = read("public/js/schedule-tab.js");
   assert.doesNotMatch(html, /id="actual-summary"/);
-  assert.match(html, /id="progress-day-review"/);
+  assert.doesNotMatch(html, /id="progress-day-review"|id="actual-view"/);
+  assert.doesNotMatch(schedule, /buildDayReview|openProgressDayReview/);
   assert.match(schedule, /model\.knownMin=day\?\.knownMin/);
   assert.match(schedule, /A\.minutes\(model\.knownMin\|\|0\)/);
 });

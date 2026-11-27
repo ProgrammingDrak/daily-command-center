@@ -188,9 +188,9 @@ if ((await page.locator("#day-progress-title").getAttribute("aria-expanded")) !=
 }
 await page.setViewportSize({ width: 375, height: 812 });
 await page.evaluate(() => window.DCC.nav.setActual(true));
-check("Actual keeps the List and exposes evidence controls in Day Progress", (await page.evaluate(() =>
+check("Actual keeps the List, exposes evidence controls in Day Progress, and has no Day review panel", (await page.evaluate(() =>
   document.getElementById("list-view").style.display !== "none" && !document.getElementById("progress-hide-actual-details").hidden &&
-  document.getElementById("actual-view").style.display === "none")) === true);
+  document.getElementById("actual-view") === null && document.getElementById("progress-day-review") === null)) === true);
 await page.evaluate(() => window.DCC.nav.go({ view: "calendar" }));
 check("Actual keeps the Calendar", (await page.evaluate(() => document.getElementById("calendar-view").style.display === "block")) === true);
 await page.evaluate(() => { window.DCC.nav.setActual(false); window.DCC.nav.go({ view: "list" }); });

@@ -81,10 +81,10 @@ test("only visible blocking overlays defer itinerary rendering", () => {
   assert.equal(vm.runInContext("_anyModalOpen()", modalContext([overlay])), false);
 });
 
-test("render('schedule') marks the schedule sub-views, the Actual summary and the pill drawer that renders itinerary rows", () => {
+test("render('schedule') marks the schedule sub-views, the progress bars and the pill drawer that renders itinerary rows", () => {
   const c = ctx();
   vm.runInContext("_markDirty('schedule')", c);
-  assert.deepEqual(dirtyKeys(c), ["actualView", "listView", "progress", "scheduleTimeline", "whenever"]);
+  assert.deepEqual(dirtyKeys(c), ["listView", "progress", "scheduleTimeline", "whenever"]);
 });
 
 test("no-scope render() marks every registered surface dirty", () => {
@@ -483,7 +483,7 @@ test("★ every SURFACES build names a function that exists in public/js", () =>
   const registrySrc = SURFACES_SLICE;
   // Each entry reads `if(typeof buildX==="function")buildX();`
   const names = [...registrySrc.matchAll(/typeof\s+([A-Za-z_$][\w$]*)\s*===\s*"function"/g)].map((m) => m[1]);
-  assert.ok(names.length >= 20, "expected to find the registry's build function names, got " + names.length);
+  assert.ok(names.length >= 19, "expected to find the registry's build function names, got " + names.length);
   // A build is "defined" by a declaration OR an assignment. `buildScheduleDelegated`
   // is `window.buildScheduleDelegated = renderDelegatedSidebar` (delegated.js), so a
   // `function X(`-only check false-positives on a perfectly healthy surface — which is

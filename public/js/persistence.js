@@ -701,7 +701,6 @@ async function switchToDate(dateStr) {
   if (typeof buildSchedule === "function") buildSchedule();
   if (schedView === "list" && typeof buildListView === "function") buildListView();
   else if (schedView === "calendar" && typeof buildItineraryCalendar === "function") buildItineraryCalendar();
-  if (nav && nav.reviewOpen() && typeof buildDayReview === "function") buildDayReview(viewDate);
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();
   window.dispatchEvent(new CustomEvent("dcc:view-date-changed", { detail: { date: viewDate, blocksLoaded: dayBlocksLoaded } }));
