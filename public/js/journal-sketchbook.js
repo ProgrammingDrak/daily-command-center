@@ -124,9 +124,11 @@
     let preferences = {};
     try { preferences = JSON.parse(localStorage.getItem("mycelium-ink-tools") || "{}"); } catch { /* optional preferences */ }
     if (!preferences || typeof preferences !== "object" || Array.isArray(preferences)) preferences = {};
-    // The last paper chosen becomes the starting paper of a fresh journal, so a
-    // new entry does not fall back to dotted every time. Only an untouched,
-    // single blank page adopts it; journals with saved ink keep their paper.
+    // A fresh journal (one untouched blank page, no stored paper) starts on
+    // college ruled, or on the paper last chosen on this account once that
+    // preference loads. Journals with saved ink keep their paper. The stored
+    // format's implicit default stays dotted, so older dotted journals are unchanged.
+    const DEFAULT_PAPER = "college-ruled";
     let paperTouched = false;
     function rememberPaper() {
       if (readOnly) return;
@@ -134,17 +136,19 @@
       const page = activePage();
       savePaperPreference({ paper: page.paper, paperSettings: clone(page.paperSettings) });
     }
-    const untouched = () => !paperTouched && pages.length === 1 && !pages[0].strokes.length &&
-      !pages[0].objects.length && pages[0].paper === "dotted" && !pages[0].paperSettings;
-    if (!readOnly && untouched()) loadPaperPreference().then((saved) => {
-      if (disposed || !saved || !untouched()) return;
-      try {
-        if (saved.paperSettings) pages[0].paperSettings = InkStrokes.normalizePaper(saved.paperSettings);
-        else if (JournalNotebook.PAPER_TYPES.some((type) => type.id === saved.paper)) pages[0].paper = saved.paper;
-        else return;
-        paint();
-      } catch { /* fall back to dotted */ }
-    });
+    const blank = () => !paperTouched && pages.length === 1 && !pages[0].strokes.length && !pages[0].objects.length;
+    if (!readOnly && blank() && pages[0].paper === "dotted" && !pages[0].paperSettings) {
+      pages[0].paper = DEFAULT_PAPER;
+      loadPaperPreference().then((saved) => {
+        if (disposed || !saved || !blank()) return;
+        try {
+          if (saved.paperSettings) pages[0].paperSettings = InkStrokes.normalizePaper(saved.paperSettings);
+          else if (JournalNotebook.PAPER_TYPES.some((type) => type.id === saved.paper)) pages[0].paper = saved.paper;
+          else return;
+          paint();
+        } catch { /* keep the default paper */ }
+      });
+    }
     function writing() { return ["pen", "pencil", "highlighter"].includes(tool); }
     function rememberTool() {
       if (!writing()) return;
