@@ -218,7 +218,7 @@
             <button class="dn-quick dn-tomorrow" id="dn-tomorrow-btn" onclick="switchToDate(__tomorrowDate)" style="display:none">Tomorrow</button>
           </div>
         </div>
-        <span class="progress-heading-actions"><span id="ppct">Loading…</span><button type="button" id="progress-day-review" aria-controls="actual-view" aria-expanded="false" disabled>Day review</button></span>
+        <span class="progress-heading-actions"><span id="ppct">Loading…</span></span>
         <!-- Itinerary-only controls share the Day Progress line (task-workspace.css
              shows them for the List and Calendar views only). The list renderer
              fills #it-toolbar-list; Off the Clock's content stays in #unscheduled-sub. -->
@@ -293,9 +293,6 @@
 
 <div class="tab-content active" id="tab-working-queue" role="tabpanel" aria-labelledby="task-view-queue"><div id="working-queue-root"></div></div>
 <div class="tab-content" id="tab-schedule" role="tabpanel" aria-labelledby="task-view-list">
-  <!-- Shown only while Actual is on. Day review is an explicit panel, never a
-       replacement for the List or Calendar. -->
-  <div id="actual-view" class="actual-day-review" style="display:none"></div>
   <!-- The Itinerary add-task bar lives in the bottom-right "+" launcher. -->
   <div class="tl" id="timeline" style="display:none"></div>
   <section class="untimed-sub queue-theme--amber off-the-clock" id="unscheduled-sub" aria-label="Off the Clock">
@@ -2238,7 +2235,7 @@
 <script src="/public/js/block-store.js?v=ledger-1"></script>
 <script src="/public/js/task-library.js?v=off-the-clock-1"></script>
 <script src="/public/js/reading-sessions.js?v=1"></script>
-<script src="/public/js/day-review.js?v=task-workspace-nav-2"></script>
+<script src="/public/js/day-review.js?v=actual-helpers-1"></script>
 <script src="/public/js/actual-projection.js?v=task-workspace-nav-2"></script>
 <script src="/public/js/progress-actual.js"></script>
 <script src="/public/js/delegated.js?v=waiting-follow-up-1"></script>

@@ -437,7 +437,6 @@
     if(typeof buildProgress==="function")buildProgress();
     if(typeof updateSync==="function")updateSync();
     if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();
-    if(window.DCC&&DCC.nav&&DCC.nav.reviewOpen()&&typeof buildActualView==="function")buildActualView();
   }
 
   async function refreshScheduleAfterResponsibilityChange(){

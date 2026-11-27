@@ -1,8 +1,18 @@
 .wq-header {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
   margin: 8px 0;
 }
+.wq-header .wq-journal {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  border-color: var(--border);
+}
+.wq-header .wq-journal:hover { border-color: var(--cyan, #22d3ee); }
 .wq-sync,
 .wq-time,
 .wq-empty {

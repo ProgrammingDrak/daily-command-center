@@ -467,7 +467,7 @@
     root.dataset.priorityStyle='outline';
     const reviewCount=reviewEntries().length;
     const syncMessage=sending?'Saving…':problem||((pending||completionEntries().length)?'Update awaiting confirmation.':'');
-    root.innerHTML='<header class="wq-header">'+button('add','Add tasks')+'</header>'+
+    root.innerHTML='<header class="wq-header">'+button('journal','<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v16H6.5A2.5 2.5 0 0 0 4 21.5 2.5 2.5 0 0 0 6.5 24H20"/><path d="M8 7h8"/></svg><span>Journal</span>',null,'class="wq-journal" title="Open the journal for the day on screen"')+button('add','Add tasks')+'</header>'+
       (syncMessage?'<p class="wq-sync" role="status">'+esc(syncMessage)+'</p>':'')+
       ((pending||completionEntries().length)&&!conflict?button('retry','Retry saved update'):'')+
       (conflict?'<div class="wq-conflict wq-actions"><span>Update conflict.</span>'+button('conflict','Review change')+button('clear-conflict','Dismiss conflict')+'</div>':'')+
@@ -800,10 +800,18 @@
     }
     show();
   }
+  // Opens (creating if needed) the journal for the day the date bar is showing.
+  async function openJournal(control){
+    if(typeof DCC.openDayJournal!=='function'){DCC.toast?.('Journal is still loading. Try again in a moment.','error');return;}
+    const date=(typeof viewDate!=='undefined'&&viewDate)||(typeof __todayDate!=='undefined'&&__todayDate)||undefined;
+    control.disabled=true;
+    try{await DCC.openDayJournal(date);}finally{control.disabled=false;}
+  }
   document.addEventListener('change',event=>{if(event.target.matches('[data-completed-period]')){completedPeriod=event.target.value;render();}});
   document.addEventListener('click',event=>{
     const button=event.target.closest?.('[data-queue-action]');if(!button)return;const action=button.dataset.queueAction,item=items().find(i=>i.task.id===button.dataset.taskId);
-    if(action==='add'){addTasks();return;}if(action==='retry'){if(pending&&!completionEntries().some(entry=>entry.body.sourceEventId===pending.sourceEventId))send(pending).catch(warn);else void drainCompletions();return;}
+    if(action==='add'){addTasks();return;}
+    if(action==='journal'){openJournal(button);return;}if(action==='retry'){if(pending&&!completionEntries().some(entry=>entry.body.sourceEventId===pending.sourceEventId))send(pending).catch(warn);else void drainCompletions();return;}
     if(action==='snooze-all'){snooze(null);return;}
     if(action==='pomodoro'){window.DCCPomodoro?.open(items().find(i=>i.status==='foreground')?.task);return;}
     if(action==='clear-conflict'){setConflict(null);render();void drainCompletions();return;}

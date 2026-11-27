@@ -1,7 +1,7 @@
 // ======== LIST / CALENDAR + ACTUAL ========
 // DCC.nav (tabs.js) owns which view is showing. This applies it to #tab-schedule:
-// List or Calendar is the view; Actual adds recorded evidence to that view, and
-// Day review is an explicit panel above it. Nothing here replaces a view.
+// List or Calendar is the view; Actual adds recorded evidence to that view.
+// Nothing here replaces a view.
 function _schedViewDate(){return (typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state&&__state.date)||null);}
 // Rebuild a container unless it holds a draft; then wait for focus to leave it.
 function _buildUnlessDraft(container,build){
@@ -32,11 +32,6 @@ function applyScheduleView(navState,prev){
   if(offClock)offClock.hidden=schedView!=="list";
   if(listView)listView.style.display=schedView==="list"?"flex":"none";
   if(calendarView)calendarView.style.display=schedView==="calendar"?"block":"none";
-  const review=document.getElementById("actual-view");
-  const reviewOpen=!!(window.DCC&&DCC.nav&&DCC.nav.reviewOpen());
-  if(review){review.style.display=reviewOpen?"block":"none";review.hidden=!reviewOpen;}
-  const reviewButton=document.getElementById("progress-day-review");
-  if(reviewButton){reviewButton.setAttribute("aria-expanded",String(reviewOpen));reviewButton.textContent=reviewOpen?"Close day review":"Day review";}
   const viewChanged=!prev||prev.view!==nav.view||prev.page!==nav.page;
   const actualChanged=!prev||prev.actual!==nav.actual;
   const dismiss=document.getElementById("progress-hide-actual-details");
@@ -51,14 +46,8 @@ function applyScheduleView(navState,prev){
     if(viewChanged)_buildUnlessDraft(calendarView,()=>buildItineraryCalendar());
     else if(actualChanged&&window.ItineraryCalendar&&ItineraryCalendar.paintActual)ItineraryCalendar.paintActual();
   }
-  if(reviewOpen&&typeof buildDayReview==="function")buildDayReview(_schedViewDate());
 }
 window.applyScheduleView=applyScheduleView;
-// Day review stays the planned-vs-actual chart with time_entry editing. It is
-// opened from the progress header above the Planned and Actual bars.
-function buildActualView(dateStr){
-  if(typeof buildDayReview==="function") buildDayReview(dateStr);
-}
 document.addEventListener("dcc:actual-time-saved",()=>{
   buildProgress();
   if(!_actualOn())return;
@@ -1865,7 +1854,7 @@ function buildProgressActual(model,start,total){
     const timing=(seg.clockLabel||A.clock(seg.startMin)+" – "+A.clock(seg.endMin))+" · "+A.minutes(seg.endMin-seg.startMin)+(seg.live?" · Ongoing":" · Recorded");
     button.setAttribute("aria-label",seg.title+" · "+timing);
     _bindProgressTooltip(button,{title:seg.title},timing);
-    button.addEventListener("click",()=>{if(block&&typeof openAddModal==="function")openAddModal(p.local_id||block.id,seg.title);else openProgressDayReview(true);});
+    if(block&&typeof openAddModal==="function")button.addEventListener("click",()=>openAddModal(p.local_id||block.id,seg.title));
     track.appendChild(button);
   });
   const notes=[A.minutes(model.knownMin||0)+" recorded actual."];
@@ -1879,14 +1868,6 @@ function buildProgressActual(model,start,total){
   if(note.textContent!==message)note.textContent=message;
   note.hidden=!notes.length;
 }
-function openProgressDayReview(forceOpen){
-  if(window.DCC&&DCC.nav){
-    const open=forceOpen===true||!DCC.nav.reviewOpen();
-    if(DCC.nav.get().view==="queue")DCC.nav.go({page:"tasks",view:"list"});
-    DCC.nav.setReviewOpen(open);
-  }
-}
-document.getElementById("progress-day-review")?.addEventListener("click",openProgressDayReview);
 document.getElementById("progress-hide-actual-details")?.addEventListener("click",()=>DCC.nav.setActual(false));
 document.getElementById("day-progress-title")?.addEventListener("click",event=>{
   const toggle=event.currentTarget,bars=document.getElementById("day-progress-bars");
@@ -1948,10 +1929,9 @@ function buildProgress(){
   const track=document.getElementById("ptrack");
   if(!track)return;
   const ready=_dayProgressStatus==="ready";
-  const actualTrack=document.getElementById("pactual"),reviewButton=document.getElementById("progress-day-review");
+  const actualTrack=document.getElementById("pactual");
   track.setAttribute("aria-busy",String(_dayProgressStatus==="loading"));
   if(actualTrack)actualTrack.setAttribute("aria-busy",String(_dayProgressStatus==="loading"));
-  if(reviewButton)reviewButton.disabled=!ready;
   if(!ready){
     if(_progressTooltipClose)_progressTooltipClose();
     track.replaceChildren();if(actualTrack)actualTrack.replaceChildren();
@@ -2013,7 +1993,7 @@ function buildProgress(){
   updateProgressNow();
   if(focusTrack&&focusKey){
     const replacement=Array.from(document.getElementById(focusTrack.id).querySelectorAll("button")).find(b=>(b.dataset.progressKey||b.dataset.entryId)===focusKey);
-    (replacement||document.getElementById("progress-day-review"))?.focus({preventScroll:true});
+    (replacement||document.getElementById("day-progress-title"))?.focus({preventScroll:true});
   }
 }
 function _isShellEv(ev){

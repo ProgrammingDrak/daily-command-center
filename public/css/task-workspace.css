@@ -243,7 +243,6 @@ body[data-nav-page="activity"] .progress-header > :not(.progress-date-controls) 
 body[data-nav-page="activity"] .progress-header { display: flex; justify-content: center; }
 
 /* ── Actual evidence ── */
-.actual-day-review { margin-bottom: var(--sp-3); }
 .it-actual {
   display: inline-flex;
   align-items: center;

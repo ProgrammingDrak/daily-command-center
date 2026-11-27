@@ -56,13 +56,13 @@ try{
   // Match the reference screenshot tally so narrow-header coverage is realistic.
   await page.locator("#ppct").evaluate(el=>{el.textContent="8 / 25 done · 32%";});
   const m=await page.evaluate(()=>{
-   const plan=document.querySelector('#ptrack').getBoundingClientRect(),actual=document.querySelector('#pactual').getBoundingClientRect(),heading=document.querySelector('.progress-label').getBoundingClientRect(),button=document.querySelector('#progress-day-review').getBoundingClientRect();
-   return {plan:plan.height,actual:actual.height,gap:actual.top-plan.bottom,heading:heading.height,reviewHeight:button.height,reviewInHeading:button.top>=heading.top&&button.bottom<=heading.bottom+1,segments:[...document.querySelectorAll('#pactual button')].map(b=>{const r=b.getBoundingClientRect();return {height:r.height,inside:r.top>=actual.top-.1&&r.bottom<=actual.bottom+.1,label:b.getAttribute('aria-label')};})};
+   const plan=document.querySelector('#ptrack').getBoundingClientRect(),actual=document.querySelector('#pactual').getBoundingClientRect(),heading=document.querySelector('.progress-label').getBoundingClientRect();
+   return {plan:plan.height,actual:actual.height,gap:actual.top-plan.bottom,heading:heading.height,segments:[...document.querySelectorAll('#pactual button')].map(b=>{const r=b.getBoundingClientRect();return {height:r.height,inside:r.top>=actual.top-.1&&r.bottom<=actual.bottom+.1,label:b.getAttribute('aria-label')};})};
   });
   assert.equal(m.actual,m.plan,'equal total track height at '+width);
   assert.equal(m.plan,width<=760?14:18);
   assert.ok(m.gap<=21,'compact inter-bar gap at '+width+': '+m.gap);
-  assert.ok(m.heading<=(width<=760?80:24)&&m.reviewHeight>=24&&m.reviewInHeading,'compact accessible review header');
+  assert.ok(m.heading<=(width<=760?80:24),'compact progress header');
   assert.ok(m.segments.every(s=>s.height>0&&s.inside&&s.label),'all activity portions visible and labeled');
   compactMeasurements.push({width,...m});
  };
@@ -100,25 +100,6 @@ try{
  await page.evaluate(()=>buildProgress());
  assert.equal(await page.evaluate(()=>document.activeElement.dataset.progressKey),planFocus,'plan focus survives refresh');
  const savedActual=await page.evaluate(()=>localStorage.getItem('dcc-itinerary-actual'));
- await page.locator('#progress-day-review').click();
- await page.waitForSelector('#actual-view .dr-root');
- assert.equal(await page.locator('#list-view').isVisible(),true);
- assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false);
- assert.equal(await page.evaluate(()=>localStorage.getItem('dcc-itinerary-actual')),savedActual);
- await page.locator('#progress-day-review').click();
- assert.equal(await page.locator('#actual-view').isHidden(),true);
- await page.reload();
- await page.waitForFunction(()=>!!window.DCC?.nav);
- assert.equal(await page.evaluate(()=>window.DCC.nav.get().actual),false,'review never persists the overlay');
- assert.equal(await page.locator('#actual-view').isHidden(),true,'review panel is ephemeral');
- await page.goto(base+'/?tab=tasks&view=queue');
- await page.waitForFunction(()=>!!document.querySelector('#ptrack').dataset.date);
- await page.locator('#progress-day-review').click();
- await page.waitForSelector('#actual-view .dr-root');
- assert.equal(await page.locator('#list-view').isVisible(),true,'queue review opens itinerary');
- await page.goBack();
- await page.waitForFunction(()=>window.DCC.nav.get().view==='queue');
- assert.equal(await page.locator('#progress-day-review').getAttribute('aria-expanded'),'false');
  await page.goto(base+'/?tab=tasks&view=list&actual=1');
  await page.locator('#day-progress-title').click();
  await page.waitForSelector('.actual-details-dismiss');
@@ -168,6 +149,6 @@ try{
  }
  // No application script exceptions; intentionally blocked external fonts are transport noise.
  assert.deepEqual(errors,[]);
- await fs.writeFile(out+'/results.json',JSON.stringify({checks:['equal total height desktop/mobile','compact spacing and header','three overlaps retained and focusable','recorded evidence','unplaced and unknown minutes','same pixel axis','two ongoing overlapping sessions','mobile 320/375','keyboard tooltip and focus survives refresh','independent review open-close-reload','queue review and Back','legacy URL and saved preference dismissal','day review preserves itinerary','empty past date'],aligned,compactMeasurements,errors},null,2));
- console.log('PASS progress bars: recorded, empty, ongoing, overlap, timezone, alignment, mobile, keyboard, day review');
+ await fs.writeFile(out+'/results.json',JSON.stringify({checks:['equal total height desktop/mobile','compact spacing and header','three overlaps retained and focusable','recorded evidence','unplaced and unknown minutes','same pixel axis','two ongoing overlapping sessions','mobile 320/375','keyboard tooltip and focus survives refresh','legacy URL and saved preference dismissal','empty past date'],aligned,compactMeasurements,errors},null,2));
+ console.log('PASS progress bars: recorded, empty, ongoing, overlap, timezone, alignment, mobile, keyboard');
 }finally{await browser.close();}

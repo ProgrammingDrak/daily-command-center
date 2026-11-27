@@ -33,20 +33,20 @@ try {
   await page.goto(base+'/?tab=tasks&view=queue');
   await page.locator('#working-queue-root').getByRole('button',{name:'Add tasks',exact:true}).waitFor();
   await page.locator('#day-progress-title').click();
-  const measure=()=>({date:typeof viewDate!=='undefined'?viewDate:null,axisDate:document.querySelector('#ptrack').dataset.date,tally:document.querySelector('#ppct').textContent,start:document.querySelector('#pstart').textContent,gap:document.querySelector('#pactual').getBoundingClientRect().top-document.querySelector('#ptrack').getBoundingClientRect().bottom,busy:document.querySelector('#ptrack').getAttribute('aria-busy'),reviewDisabled:document.querySelector('#progress-day-review').disabled,note:document.querySelector('#pactual-note').textContent});
+  const measure=()=>({date:typeof viewDate!=='undefined'?viewDate:null,axisDate:document.querySelector('#ptrack').dataset.date,tally:document.querySelector('#ppct').textContent,start:document.querySelector('#pstart').textContent,gap:document.querySelector('#pactual').getBoundingClientRect().top-document.querySelector('#ptrack').getBoundingClientRect().bottom,busy:document.querySelector('#ptrack').getAttribute('aria-busy'),note:document.querySelector('#pactual-note').textContent});
   if(mode==='pending') {
    await frames(page);const m=await page.evaluate(measure);results.push({mode,...m});
-   assert.equal(m.tally,'Loading…');assert.equal(m.start,'');assert.equal(m.busy,'true');assert.equal(m.reviewDisabled,true);assert.equal(m.gap,20);
+   assert.equal(m.tally,'Loading…');assert.equal(m.start,'');assert.equal(m.busy,'true');assert.equal(m.gap,20);
    await page.screenshot({path:out+'/loading-queue.png'});release();
   }
   await page.waitForFunction(()=>window.__dayReady);await frames(page);
   const ready=await page.evaluate(measure);results.push({mode:mode+'-ready',...ready});
   assert.equal(ready.busy,'false');
   if(['failed','forbidden'].includes(mode)) {
-   assert.equal(ready.tally,'Unavailable');assert.equal(ready.start,'');assert.equal(ready.reviewDisabled,true);assert.match(ready.note,/unavailable/);
+   assert.equal(ready.tally,'Unavailable');assert.equal(ready.start,'');assert.match(ready.note,/unavailable/);
    await page.screenshot({path:out+'/unavailable-queue.png'});
   } else {
-   assert.equal(ready.axisDate,ready.date);assert.equal(ready.reviewDisabled,false);assert.doesNotMatch(ready.tally,/Loading|Unavailable|--/);
+   assert.equal(ready.axisDate,ready.date);assert.doesNotMatch(ready.tally,/Loading|Unavailable|--/);
   }
   if(mode==='normal') {
    // A populated day must be cleared when the next block snapshot fails,
@@ -57,7 +57,6 @@ try {
    assert.equal(await page.locator('#ptrack button, #pactual button').count(),0);
    assert.equal(await page.locator('#ptrack').getAttribute('data-date'),null);
    assert.equal(await page.locator('#ppct').innerText(),'Unavailable');
-   assert.equal(await page.locator('#progress-day-review').isDisabled(),true);
    // Suppress incidental comment/reaction renders while allowing core date data.
    await page.route('**/api/todo-share/**',r=>r.fulfill({json:{comments:[],reactions:[]}}));
    await page.evaluate(()=>switchToDate('2026-01-04'));await frames(page);
