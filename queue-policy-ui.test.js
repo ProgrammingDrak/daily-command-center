@@ -99,7 +99,7 @@ test(
     );
     assert.equal(await page.locator(".wq-background [data-queue-id]").count(), 1);
     assert.equal(await page.locator(".wq-needs [data-queue-id=c]").count(), 1);
-    for (const label of ["Foreground", "Needs You", "Priority Queue", "Background"]) {
+    for (const label of ["Doing now", "Mochi needs you", "Up next", "Waiting"]) {
       const summary = page.getByLabel("About " + label, { exact: true });
       await summary.focus();
       await page.keyboard.press("Enter");
@@ -127,8 +127,8 @@ test(
     assert.equal(writes[0].expectedRevision, 1);
     await page.screenshot({ path: path.join(__dirname, "../queue-policy-review.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByLabel("About Background", { exact: true }).click();
-    assert.equal(await page.getByLabel("About Background", { exact: true }).locator("..").getAttribute("open"), null);
+    await page.getByLabel("About Waiting", { exact: true }).click();
+    assert.equal(await page.getByLabel("About Waiting", { exact: true }).locator("..").getAttribute("open"), null);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
     assert.deepEqual(errors, []);
   }

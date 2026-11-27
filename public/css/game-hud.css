@@ -20,7 +20,10 @@
 .game-hud b { color: var(--ink-strong); font-weight: 600; }
 .game-hud--offline { opacity: 0.6; }
 .game-streak, .game-xp { display: inline-flex; align-items: center; gap: 0.25rem; }
-.game-lives { display: inline-flex; gap: 1px; color: var(--danger); }
+.game-lives { display: inline-flex; gap: 2px; color: #b9c7e6; }
+.game-pet { display: inline-flex; width: 30px; height: 30px; }
+.game-pet svg { width: 100%; height: 100%; }
+.game-xp { color: #f6c453; }
 .game-heart.is-empty { color: var(--ink-faint); }
 
 .game-gain {

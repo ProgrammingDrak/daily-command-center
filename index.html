@@ -31,7 +31,8 @@
 <link rel="stylesheet" href="/public/css/journal-sketchbook.css?v=journal-pencil-2">
 <link rel="stylesheet" href="/public/css/task-workspace.css?v=wishlist-nav-1">
 <link rel="stylesheet" href="/public/css/device-views/glasses.css">
-<link rel="stylesheet" href="/public/css/game-hud.css?v=game-1">
+<link rel="stylesheet" href="/public/css/game-hud.css?v=mochi-1">
+<link rel="stylesheet" href="/public/css/mochi-today.css?v=mochi-1">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -132,7 +133,7 @@
     <a class="tab wishlist-nav" href="/library">Library</a>
   </nav>
   <div class="dcc-cluster" id="dcc-cluster">
-    <button class="game-hud" id="game-hud" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="game-panel" aria-label="Game summary">…</button>
+    <button class="game-hud" id="game-hud" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="game-panel" aria-label="Mochi">…</button>
     <span class="dcc-visually-hidden" id="game-hud-live" role="status" aria-live="polite"></span>
     <div class="time-now" id="dcc-clock"><time class="clock" id="clock">--:--</time><span class="tz-label" id="tz-label">--</span></div>
     <a class="admin-link" href="/admin" title="Open admin activity">Admin</a>
@@ -176,7 +177,7 @@
   <div class="task-view-bar" id="task-view-bar">
     <button type="button" id="completion-photo-gallery">All Photos</button>
     <div class="task-view-switch" id="task-view-switch" role="tablist" aria-label="Task views">
-      <button type="button" role="tab" id="task-view-queue" data-task-view="queue" aria-controls="tab-working-queue" aria-selected="true">Working Queue</button>
+      <button type="button" role="tab" id="task-view-queue" data-task-view="queue" aria-controls="tab-working-queue" aria-selected="true">Today with Mochi</button>
       <button type="button" role="tab" id="task-view-list" data-task-view="list" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">Itinerary</button>
       <button type="button" role="tab" id="task-view-calendar" data-task-view="calendar" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">Calendar</button>
     </div>
@@ -2187,7 +2188,8 @@
 <script src="/public/js/tag-manager.js"></script>
 <script src="/public/js/work-checkin-policy.js"></script>
 <script src="/public/js/work-sessions.js?v=work-sessions-3"></script>
-<script src="/public/js/game-hud.js?v=game-1"></script>
+<script src="/public/js/mochi-art.js?v=mochi-1"></script>
+<script src="/public/js/game-hud.js?v=mochi-1"></script>
 <script src="/public/js/time-reallocate.js?v=time-reallocate-1"></script>
 <script src="/public/js/itinerary-card.js?v=inline-journal-1"></script>
 <script src="/public/js/hold-action.js"></script>
@@ -2272,6 +2274,7 @@
 <script src="/public/js/pomodoro.js"></script>
 <script src="/public/js/queue-layout.js"></script>
 <script src="/public/js/working-queue.js"></script>
+<script src="/public/js/mochi-today.js?v=mochi-1"></script>
 <script src="/public/js/side-drawers.js?v=off-the-clock-1"></script>
 <script src="/public/js/budget.js"></script>
 <script src="/public/js/reimbursements.js"></script>

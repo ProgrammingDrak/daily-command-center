@@ -1,5 +1,5 @@
-// game-hud.js — the small, always-visible game header (streak, lives, today XP)
-// and its "Today" panel (Big 3, minimum day, week tier).
+// game-hud.js — the small, always-visible Mochi chip (sparks today, streak,
+// rest days) and the "Mochi's plan" panel (3 asks, minimum day, weekend trip).
 // Data comes from GET /api/game/summary. The HUD refreshes when the server
 // sends a `game-changed` SSE event, when a work session changes, when the tab
 // becomes visible, and once a minute as a fallback. When today's XP goes up it
@@ -26,29 +26,34 @@
     return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   }
 
+  // Rest days: each one keeps the streak safe on a missed day. Drawn as moons.
   function heartsHtml(lives) {
     var out = "";
     for (var i = 0; i < lives.max; i++) {
-      out += '<span class="game-heart' + (i < lives.left ? "" : " is-empty") + '" aria-hidden="true">' + (i < lives.left ? "♥" : "♡") + "</span>";
+      out += '<span class="game-heart' + (i < lives.left ? "" : " is-empty") + '" aria-hidden="true">☾</span>';
     }
     return out;
   }
+  var pet = null;
+  function petHtml(mood) {
+    return window.DCCMochiArt ? '<span class="game-pet">' + window.DCCMochiArt.svg({ mood: mood || "happy", hat: pet && pet.accessory, color: pet && pet.color }) + "</span>" : "";
+  }
 
   function render(s) {
-    var label = s.streak.current + " day streak, " + s.lives.left + " of " + s.lives.max + " lives, " + s.todayXp + " XP today";
-    hud.setAttribute("aria-label", label + ". Open today's game panel.");
+    var label = s.todayXp + " sparks today, " + s.streak.current + " day streak, " + s.lives.left + " of " + s.lives.max + " rest days left";
+    hud.setAttribute("aria-label", label + ". Open Mochi's plan.");
     hud.title = label;
-    hud.innerHTML =
-      '<span class="game-streak"><span aria-hidden="true">🔥</span><b>' + s.streak.current + "</b></span>" +
-      '<span class="game-lives">' + heartsHtml(s.lives) + "</span>" +
-      '<span class="game-xp"><b data-game-xp>' + s.todayXp + "</b> XP</span>";
+    hud.innerHTML = petHtml() +
+      '<span class="game-xp"><span aria-hidden="true">★</span> <b data-game-xp>' + s.todayXp + "</b></span>" +
+      '<span class="game-streak"><b>' + s.streak.current + "</b> " + (s.streak.current === 1 ? "day" : "days") + "</span>" +
+      '<span class="game-lives">' + heartsHtml(s.lives) + "</span>";
   }
 
   function floatGain(points) {
     if (!(points > 0) || reducedMotion()) return;
     var el = document.createElement("span");
     el.className = "game-gain";
-    el.textContent = "+" + points + " XP";
+    el.textContent = "+" + points + " sparks";
     el.setAttribute("aria-hidden", "true");
     hud.appendChild(el);
     hud.classList.add("game-hud--gain");
@@ -57,13 +62,14 @@
 
   function announce(points) {
     var live = document.getElementById("game-hud-live");
-    if (live && points > 0) live.textContent = "+" + points + " XP";
+    if (live && points > 0) live.textContent = "+" + points + " sparks for Mochi";
   }
 
   async function refresh() {
     if (inflight) return inflight;
     inflight = (async function () {
       try {
+        if (!pet) { try { var ps = await DCC.api("/api/pet-home/state"); pet = (ps && ps.home && ps.home.pet) || {}; } catch (_p) { pet = {}; } }
         var s = await DCC.api("/api/game/summary", { errorLabel: "Could not load game summary" });
         var gained = last && last.today === s.today ? s.todayXp - last.todayXp : 0;
         var prevXp = last ? last.todayXp : s.todayXp;
@@ -133,14 +139,15 @@
       return '<li class="' + (b.done ? "is-done" : "") + '">' + (b.done ? "✓ " : "○ ") + esc(b.title) + "</li>";
     }).join("");
     panel.innerHTML =
-      '<div class="game-panel-head"><h3 id="game-panel-title">Today</h3><button type="button" class="game-panel-close" data-game-close aria-label="Close">&times;</button></div>' +
-      '<p class="game-panel-stats">🔥 ' + s.streak.current + " day streak (best " + s.streak.best + ") · " +
-        s.lives.left + " of " + s.lives.max + " lives · lives refill Monday</p>" +
-      '<div class="game-tier"><div class="game-tier-line"><b>' + esc(t.label) + "</b><span>" + s.weekXp + " XP this week" +
+      '<div class="game-panel-head"><h3 id="game-panel-title">Mochi\'s plan</h3><button type="button" class="game-panel-close" data-game-close aria-label="Close">&times;</button></div>' +
+      '<p class="game-panel-stats">' + s.streak.current + " day streak (best " + s.streak.best + ") · " +
+        s.lives.left + " of " + s.lives.max + " rest days left · rest days refill Monday</p>" +
+      '<div class="game-tier"><div class="game-tier-line"><b>Weekend trip: ' + esc(t.label) + "</b><span>" + s.weekXp + " sparks this week" +
         (t.next ? " · " + t.next.xpToGo + " to " + esc(t.next.label) : "") + "</span></div>" +
         '<div class="game-tier-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + progress + '"><span style="width:' + Math.max(0, Math.min(100, progress)) + '%"></span></div></div>' +
-      '<section class="game-section"><h4>Big 3</h4>' +
-        (doneList ? '<ul class="game-big3-status">' + doneList + "</ul>" : '<p class="game-hint">Pick up to 3 tasks that make today a win.</p>') +
+      '<section class="game-section"><h4>Mochi\'s 3 asks</h4>' +
+        (doneList ? '<ul class="game-big3-status">' + doneList + "</ul>" : "") +
+        '<p class="game-hint">Pick up to 3 tasks that make today a win. Finish all 3 for a big bonus.</p>' +
         [0, 1, 2].map(function (i) { return selectHtml(i, ids[i] || "", rows); }).join("") +
       "</section>" +
       '<section class="game-section"><h4>Minimum day</h4>' +
@@ -163,6 +170,7 @@
       status("Saving…");
       await DCC.api("/api/game/intentions/" + last.today, { method: "PUT", body: { big3: big3, minimumDay: minimumDay } });
       status("Saved");
+      window.dispatchEvent(new CustomEvent("dcc:game-intentions-changed"));
       refresh();
     } catch (e) {
       status("");
@@ -173,6 +181,7 @@
   async function toggleMinimum(done) {
     try {
       await DCC.api("/api/game/intentions/" + last.today + "/minimum-day", { method: "POST", body: { done: done } });
+      window.dispatchEvent(new CustomEvent("dcc:game-intentions-changed"));
       refresh();
     } catch (e) {
       DCC.toast(e.message || "Could not update minimum day");
