@@ -151,10 +151,18 @@ test("local date rolls over at midnight New York, not UTC", () => {
   assert.equal(new Date(R.zonedMidnightMs("2026-03-09")).toISOString(), "2026-03-09T04:00:00.000Z");
 });
 
-test("tiers by week XP", () => {
-  assert.equal(R.tierFor(0).id, "bronze");
+test("weekly trips by week XP", () => {
+  assert.equal(R.tierFor(0).id, "backyard");
   assert.equal(R.tierFor(199).next.xpToGo, 1);
-  assert.equal(R.tierFor(200).id, "silver");
-  assert.equal(R.tierFor(5000).id, "diamond");
+  assert.equal(R.tierFor(200).id, "park");
+  assert.equal(R.tierFor(5000).id, "seaside");
   assert.equal(R.tierFor(5000).next, null);
+});
+
+test("Mochi grows from lifetime sparks and never past the last stage", () => {
+  assert.equal(R.petStageFor(0).id, "seed");
+  assert.equal(R.petStageFor(149).next.xpToGo, 1);
+  assert.equal(R.petStageFor(150).id, "sprout");
+  assert.equal(R.petStageFor(99999).id, "grove");
+  assert.equal(R.petStageFor(99999).next, null);
 });

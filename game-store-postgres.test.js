@@ -103,6 +103,8 @@ test("game store: XP, Big 3, idempotency, streak close and Monday refill", { ski
     const { rows } = await pool.query("SELECT outcome FROM streak_days WHERE date IN ('2026-11-28','2026-11-29') ORDER BY date");
     assert.deepEqual(rows.map((r) => r.outcome), ["reset", "reset"]);
     assert.equal(s.weekXp, 0, "week XP resets on Monday");
-    assert.equal(s.tier.id, "bronze");
+    assert.equal(s.tier.id, "backyard");
+    assert.equal(s.lifetimeXp, 100, "growth keeps last week's sparks");
+    assert.equal(s.petStage.id, "seed");
   });
 });

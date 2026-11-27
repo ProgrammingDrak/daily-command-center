@@ -1,8 +1,25 @@
 const { performance } = require("node:perf_hooks");
 const { route } = require("../lib/route-helpers");
 const { createConversationStore } = require("../conversation-store");
+const { safeHook: safeGameHook } = require("./game");
 module.exports = function mount(app, ctx, config = {}) {
   const store = createConversationStore(ctx);
+  // Sparks for Mochi from queue commands. Best-effort: never blocks the queue.
+  async function queueGameAwards(action, body, result, foregroundBefore, owner) {
+    const game = ctx.gameStore;
+    const task = result && result.task;
+    if (!game || !task || !task.id) return [];
+    const who = { workspaceId: owner.workspaceId, userId: owner.userId };
+    const atMs = Number.isFinite(Date.parse(body.at)) ? Date.parse(body.at) : Date.now();
+    if (action === "start") return safeGameHook("queue-start", () => game.onTaskStarted({ ...who, task, atMs }));
+    if (action === "done") {
+      return safeGameHook("queue-done", () => game.onTaskCompletion({
+        ...who, task, completed: true, atMs, inFocus: foregroundBefore.includes(task.id),
+      }));
+    }
+    if (action === "undo-completion") return safeGameHook("queue-undo", () => game.onTaskCompletion({ ...who, task, completed: false, atMs }));
+    return [];
+  }
   function replyRead(res, value, result, start) {
     const durationMs = Number((performance.now() - start).toFixed(1));
     res.setHeader("Server-Timing", (result === "unchanged" ? "queue-unchanged" : "queue-snapshot") + ";dur=" + durationMs);
@@ -74,6 +91,12 @@ module.exports = function mount(app, ctx, config = {}) {
     "/api/working-queue",
     route(async (req, res) => {
       const start = performance.now();
+      const action = req.body && req.body.action;
+      // Mochi's "sits with you" bonus needs to know if the task was in
+      // Foreground before this Done moved it out.
+      const foregroundBefore = action === "done" && ctx.gameStore
+        ? await safeGameHook("queue-foreground", async () => ((await store.state(req.queueOwner)).foreground || []).map((i) => i.task && i.task.id))
+        : [];
       const result = await store.execute(req.body, req.queueOwner);
       res.setHeader("Server-Timing", "queue-command;dur=" + (performance.now() - start).toFixed(1));
       ctx.broadcast?.(
@@ -90,7 +113,9 @@ module.exports = function mount(app, ctx, config = {}) {
         req.workspaceId
       );
       ctx.broadcastQueueChange?.(req.queueOwner.userId, req.workspaceId);
-      return result;
+      const awarded = await queueGameAwards(action, req.body || {}, result, foregroundBefore, req.queueOwner);
+      if (awarded.length) ctx.broadcast?.("game-changed", { awarded }, req.workspaceId);
+      return { ...result, game: { awarded } };
     })
   );
   return store;

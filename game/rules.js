@@ -185,15 +185,23 @@ function livesToday(state, today, cfg = CONFIG) {
 
 // ── Tiers ──────────────────────────────────────────────────────────────────
 
-function tierFor(weekXp, cfg = CONFIG) {
+function ladder(list, xp) {
   let idx = 0;
-  cfg.TIERS.forEach((t, i) => { if (weekXp >= t.min) idx = i; });
-  const tier = cfg.TIERS[idx], next = cfg.TIERS[idx + 1] || null;
-  return { ...tier, next: next ? { ...next, xpToGo: next.min - weekXp } : null };
+  list.forEach((t, i) => { if (xp >= t.min) idx = i; });
+  const cur = list[idx], next = list[idx + 1] || null;
+  return { ...cur, next: next ? { ...next, xpToGo: next.min - xp } : null };
+}
+
+function tierFor(weekXp, cfg = CONFIG) {
+  return ladder(cfg.TIERS, weekXp);
+}
+
+function petStageFor(lifetimeXp, cfg = CONFIG) {
+  return ladder(cfg.PET_STAGES, lifetimeXp);
 }
 
 module.exports = {
   zonedParts, localDate, isDateStr, addDays, weekStart, zonedMidnightMs, hhmmToMinutes,
   gamePriority, completionXp, isOnTimeStart, keys, startAward, completionAwards, reopenVoidKeys,
-  dayCounts, freshStreak, closeDay, datesToClose, livesToday, tierFor,
+  dayCounts, freshStreak, closeDay, datesToClose, livesToday, tierFor, petStageFor,
 };

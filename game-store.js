@@ -285,9 +285,10 @@ function createGameStore({ pool, blockDB = require("./db"), config = CONFIG, now
     const { state } = await closeDays({ workspaceId, userId, today });
     const week = R.weekStart(today, config);
     const weekEnd = R.addDays(week, 6);
-    const [todayXp, weekXp, intentions] = await Promise.all([
+    const [todayXp, weekXp, lifetimeXp, intentions] = await Promise.all([
       xpBetween(workspaceId, today, today),
       xpBetween(workspaceId, week, weekEnd),
+      xpBetween(workspaceId, "1970-01-01", "9999-12-31"),
       getIntentions(workspaceId, today),
     ]);
     const rows = await taskRows(workspaceId, intentions.big3);
@@ -301,6 +302,7 @@ function createGameStore({ pool, blockDB = require("./db"), config = CONFIG, now
       today, timeZone: tz,
       todayXp, weekXp, weekStart: week,
       tier: R.tierFor(weekXp, config),
+      lifetimeXp, petStage: R.petStageFor(lifetimeXp, config),
       streak: { current: state.currentStreak, best: state.bestStreak, lastClosedDate: state.lastClosedDate },
       lives: {
         left: R.livesToday(state, today, config), max: config.STREAK.LIVES_PER_WEEK,

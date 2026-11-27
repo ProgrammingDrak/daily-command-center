@@ -1,4 +1,5 @@
-// game/config.js — every number the XP / streak game uses lives here.
+// game/config.js — every number the Mochi game uses lives here. The UI calls
+// XP "sparks": they belong to Mochi, not to the player.
 // Change a value here and the server, the tests and the HUD all follow.
 // XP is separate from the slot-credit economy (slot-scoring.js). Nothing here
 // moves slot credits, and no rule here may ever produce negative points.
@@ -40,14 +41,24 @@ const STREAK = {
   REFILL_WEEKDAY: 1,
 };
 
-// Weekly tiers by week XP (Monday–Sunday, TIME_ZONE). `min` is inclusive.
-// Must stay sorted by `min`, first entry at 0.
+// Weekly trips by week XP ("sparks" in the UI): the more sparks this week,
+// the farther Mochi travels at the weekend. `min` is inclusive. Must stay
+// sorted by `min`, first entry at 0. (Internally still called tiers.)
 const TIERS = [
-  { id: "bronze", label: "Bronze", min: 0 },
-  { id: "silver", label: "Silver", min: 200 },
-  { id: "gold", label: "Gold", min: 450 },
-  { id: "platinum", label: "Platinum", min: 750 },
-  { id: "diamond", label: "Diamond", min: 1100 },
+  { id: "backyard", label: "Backyard", min: 0 },
+  { id: "park", label: "Park", min: 200 },
+  { id: "forest", label: "Forest", min: 450 },
+  { id: "mountains", label: "Mountains", min: 750 },
+  { id: "seaside", label: "Seaside", min: 1100 },
 ];
 
-module.exports = { TIME_ZONE, XP, PRIORITY_LEVELS, BIG3_MAX, STREAK, TIERS };
+// Mochi grows from lifetime sparks. Growth never resets and never goes down.
+const PET_STAGES = [
+  { id: "seed", label: "Seed", min: 0 },
+  { id: "sprout", label: "Sprout", min: 150 },
+  { id: "sapling", label: "Sapling", min: 400 },
+  { id: "bloom", label: "Bloom", min: 800 },
+  { id: "grove", label: "Grove", min: 1400 },
+];
+
+module.exports = { TIME_ZONE, XP, PRIORITY_LEVELS, BIG3_MAX, STREAK, TIERS, PET_STAGES };
