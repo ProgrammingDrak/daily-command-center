@@ -95,7 +95,7 @@ module.exports = function mount(app, ctx, config = {}) {
       // Mochi's "sits with you" bonus needs to know if the task was in
       // Foreground before this Done moved it out.
       const foregroundBefore = action === "done" && ctx.gameStore
-        ? await safeGameHook("queue-foreground", async () => ((await store.state(req.queueOwner)).foreground || []).map((i) => i.task && i.task.id))
+        ? await safeGameHook("queue-foreground", async () => ((await store.state(req.queueOwner)).foreground || []).map((i) => i && i.id))
         : [];
       const result = await store.execute(req.body, req.queueOwner);
       res.setHeader("Server-Timing", "queue-command;dur=" + (performance.now() - start).toFixed(1));

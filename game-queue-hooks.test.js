@@ -29,7 +29,7 @@ const task = { id: "t1", type: "block", date: "2026-11-27", properties: { title:
 
 test("queue Done awards sparks and the 'sits with you' bonus only for the Foreground task", async () => {
   const calls = [];
-  fakeStore = { state: async () => ({ foreground: [{ task: { id: "t1" } }] }), execute: async () => ({ ok: true, task, affectedTasks: [task] }) };
+  fakeStore = { state: async () => ({ foreground: [{ id: "t1", title: "T" }] }), execute: async () => ({ ok: true, task, affectedTasks: [task] }) };
   const { a, broadcasts } = app({ onTaskCompletion: async (i) => { calls.push(i); return [{ type: "complete", points: 10 }]; } });
   const res = await post(a, { action: "done", taskId: "t1", at: "2026-11-27T15:00:00Z" });
   assert.equal(res.status, 200);
