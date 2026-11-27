@@ -228,6 +228,15 @@
       try {
         const nodes = await api("/api/vault/nodes?type=journal");
         if (!Array.isArray(nodes)) throw new Error("Journal list unavailable");
+        // An entry deleted on another device: drop this device's clean cached copy.
+        // Records with unsynced edits or conflicts stay, so no local writing is lost.
+        const remote = new Set(nodes.map((node) => node.slug));
+        const gone = records.filter((r) => !remote.has(r.slug) && !r.dirty && !r.conflict && !r.pendingCreate);
+        if (gone.length) {
+          await Promise.all(gone.map((r) => drafts.remove(r.slug)));
+          const goneSlugs = new Set(gone.map((r) => r.slug));
+          journals = journals.filter((n) => !goneSlugs.has(n.slug));
+        }
         const merged = new Map(journals.map((n) => [n.slug, n]));
         for (const node of nodes)
           if (String(node.slug).startsWith("journal/") && !node.sensitive)
@@ -437,6 +446,7 @@
     const pages = await InkStore.listPages(id);
     const dialog = document.getElementById("library-delete-dialog");
     const confirm = dialog.querySelector("[data-confirm]");
+    dialog.querySelector("h2").textContent = "Delete notebook?";
     dialog.querySelector("[data-message]").textContent =
       `Delete “${nb.title}” and its ${pages.length} ${pages.length === 1 ? "page" : "pages"}? ` +
       "It is removed from this device and from your vault. This cannot be undone.";
@@ -520,7 +530,7 @@
     active = record;
     version = 0;
     savedVersion = 0;
-    root.innerHTML = `<nav class="lr-breadcrumb"><button data-library>Library</button><span>/ Journals</span></nav><div data-conflict></div><div class="lr-workspace"><aside class="lr-outline"><h2>Journals</h2><p class="lr-sub">Your days, together</p><button class="lr-button" data-today>Open today</button><div class="lr-month">Daily entries</div>${journals.map((n) => `<button class="lr-entry" data-entry="${esc(n.slug)}" aria-current="${n.slug === target}">${esc(n.frontmatter?.date || n.slug.split("/").pop())}${n.dirty ? "<span>Local changes waiting</span>" : ""}</button>`).join("")}</aside><section class="lr-editor"><select class="lr-mobile-date" aria-label="Journal date">${journals.map((n) => `<option value="${esc(n.slug)}" ${n.slug === target ? "selected" : ""}>${esc(n.frontmatter?.date || n.slug)}</option>`).join("")}</select><div class="lr-editor-head"><div><div class="lr-eyebrow">Daily entry</div><h2>${esc(record.frontmatter?.date ? dateLabel(record.frontmatter.date) : record.frontmatter?.title || target)}</h2><div class="lr-caption" data-status></div></div><div class="lr-actions"><button class="lr-button" data-save>Save</button><button class="lr-button" data-attach>Attach</button><button class="lr-button" data-export-entry>Export entry</button><button class="lr-button lr-today-mobile" data-new-day>Today</button></div></div><div data-format class="lr-actions"></div><div data-cover class="memory-story-cover"></div><div data-text class="memory-inline-story"></div><input data-file type="file" hidden></section></div>`;
+    root.innerHTML = `<nav class="lr-breadcrumb"><button data-library>Library</button><span>/ Journals</span></nav><div data-conflict></div><div class="lr-workspace"><aside class="lr-outline"><h2>Journals</h2><p class="lr-sub">Your days, together</p><button class="lr-button" data-today>Open today</button><div class="lr-month">Daily entries</div>${journals.map((n) => `<button class="lr-entry" data-entry="${esc(n.slug)}" aria-current="${n.slug === target}">${esc(n.frontmatter?.date || n.slug.split("/").pop())}${n.dirty ? "<span>Local changes waiting</span>" : ""}</button>`).join("")}</aside><section class="lr-editor"><select class="lr-mobile-date" aria-label="Journal date">${journals.map((n) => `<option value="${esc(n.slug)}" ${n.slug === target ? "selected" : ""}>${esc(n.frontmatter?.date || n.slug)}</option>`).join("")}</select><div class="lr-editor-head"><div><div class="lr-eyebrow">Daily entry</div><h2>${esc(record.frontmatter?.date ? dateLabel(record.frontmatter.date) : record.frontmatter?.title || target)}</h2><div class="lr-caption" data-status></div></div><div class="lr-actions"><button class="lr-button" data-save>Save</button><button class="lr-button" data-attach>Attach</button><button class="lr-button" data-export-entry>Export entry</button><button class="lr-button danger" data-delete-entry>Delete</button><button class="lr-button lr-today-mobile" data-new-day>Today</button></div></div><div data-format class="lr-actions"></div><div data-cover class="memory-story-cover"></div><div data-text class="memory-inline-story"></div><input data-file type="file" hidden></section></div>`;
     const upload = async (file) => {
       if (attaching) throw new Error("Wait for the current attachment");
       attaching = true;
@@ -581,6 +591,8 @@
       if (await flush())
         download(entry.readCommitted(), (record.frontmatter?.date || "journal") + ".md", "text/markdown");
     };
+    root.querySelector("[data-delete-entry]").onclick = () =>
+      deleteEntry(target, record.frontmatter?.date ? dateLabel(record.frontmatter.date) : record.frontmatter?.title || target).catch(notify);
     root.querySelector("[data-attach]").onclick = () => root.querySelector("[data-file]").click();
     root.querySelector("[data-file]").onchange = (e) => {
       const file = e.target.files[0];
@@ -600,6 +612,50 @@
     u.searchParams.set("journal", target);
     history.replaceState({}, "", u);
     scheduleSync();
+  }
+  // One journal entry: confirm, then delete the vault note and this device's copy.
+  async function deleteEntry(slug, label) {
+    const dialog = document.getElementById("library-delete-dialog");
+    const confirm = dialog.querySelector("[data-confirm]");
+    dialog.querySelector("h2").textContent = "Delete journal entry?";
+    dialog.querySelector("[data-message]").textContent =
+      `Delete the journal entry for ${label}? Its writing and drawings are removed from this device and from your vault. ` +
+      "Photos and attachments stay in the vault. This cannot be undone.";
+    dialog.querySelector("[data-error]").textContent = "";
+    confirm.disabled = false;
+    dialog.querySelector("[data-cancel]").onclick = () => dialog.close();
+    confirm.onclick = async () => {
+      confirm.disabled = true;
+      try {
+        if (isBusy()) throw new Error("Finish the current drawing or upload first");
+        if (!navigator.onLine) throw new Error("You're offline. Connect to delete this entry everywhere.");
+        // Settle pending local saves and any in-flight sync first, so neither can
+        // write the entry back after it is deleted.
+        if (!(await flush())) throw new Error("Could not settle local changes. Try again");
+        clearTimeout(syncTimer);
+        while (syncing) await syncing.catch(() => {});
+        const res = await fetch(path(slug), { method: "DELETE", credentials: "same-origin" });
+        if (!res.ok && res.status !== 404) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `Could not delete the vault copy (${res.status})`);
+        }
+        await drafts.remove(slug);
+        entry?.destroy();
+        entry = null;
+        active = null;
+        version = savedVersion = 0;
+        dialog.close();
+        DCC.toast(`Deleted the journal entry for ${label}`);
+        await refresh();
+        if (journals.length) await openJournals(journals[0].slug);
+        else await shelf();
+        scheduleSync();
+      } catch (error) {
+        dialog.querySelector("[data-error]").textContent = error.message || "Could not delete this entry";
+        confirm.disabled = false;
+      }
+    };
+    dialog.showModal();
   }
   async function createDay(date) {
     if (!(await flush())) return;

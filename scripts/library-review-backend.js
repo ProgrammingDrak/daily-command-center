@@ -36,6 +36,10 @@ module.exports = function mountLibraryReview(app, root) {
     if (!note) return res.status(404).json({ error: "not found" });
     res.json(note);
   });
+  app.delete("/api/vault/node/*", (req, res) => {
+    if (!notes.delete(req.params[0])) return res.status(404).json({ error: "not found" });
+    res.json({ ok: true });
+  });
   app.post("/api/vault/daily", (req, res) => {
     const date = req.body.date || "2026-11-25",
       slug = `journal/${date.slice(0, 4)}/${date}`;

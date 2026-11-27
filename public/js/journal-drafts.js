@@ -161,7 +161,13 @@
         };
       });
     }
-    return { read, list, put, edit, setBase, acknowledge, cache, markConflict, resolve };
+    // Deleting an entry drops its local record, pending edits and conflict copies.
+    const remove = (slug) =>
+      transaction("readwrite", (s, done) => {
+        s.delete(slug);
+        done(true);
+      });
+    return { read, list, put, edit, setBase, acknowledge, cache, markConflict, resolve, remove };
   }
   return { create };
 });
