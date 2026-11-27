@@ -12,6 +12,26 @@
   const localTickMs=15000;
   let refreshTimer=null, invalidated=false, scopeRejected=false, readVersion=null;
   const emptyState={revision:0,foreground:[],queue:{items:[],order:[]}};
+  // Which queued task is opened into a tile. Display-only: never persisted or sent.
+  let openCard=null,justOpened=null; // justOpened: animate only the render that opens it
+  const WQ_SVG=d=>'<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+d+'</svg>';
+  const WQ_ICON={
+    bolt:WQ_SVG('<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>'),
+    play:'<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>',
+    pause:'<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1"/><rect x="14" y="4.5" width="4" height="15" rx="1"/></svg>',
+    moon:WQ_SVG('<path d="M20 15A8 8 0 1 1 9 4a6.5 6.5 0 0 0 11 11z"/>'),
+    cal:WQ_SVG('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>'),
+    snooze:WQ_SVG('<circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M5 3 2 6M19 3l3 3"/>'),
+    camera:WQ_SVG('<path d="M4 7h3l2-3h6l2 3h3v13H4z"/><circle cx="12" cy="13" r="3.5"/>'),
+    copy:WQ_SVG('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/>'),
+    up:WQ_SVG('<path d="M12 19V5M5 12l7-7 7 7"/>'),
+    down:WQ_SVG('<path d="M12 5v14M5 12l7 7 7-7"/>'),
+    ret:WQ_SVG('<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>'),
+    info:WQ_SVG('<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>'),
+    trash:WQ_SVG('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>'),
+    book:WQ_SVG('<path d="M4 5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2z"/><path d="M4 21a2 2 0 0 1 2-2h14"/>'),
+    fold:WQ_SVG('<path d="M6 15l6-6 6 6"/>'),
+  };
   let state=emptyState,pending=null,conflict=null,loading=null,sending=false,ticking=false,problem='',startOpening=false;
   try {const cached=JSON.parse(localStorage.getItem(key));if(cached){delete cached.readVersion;state=cached;}pending=JSON.parse(localStorage.getItem(key+':pending'));conflict=JSON.parse(localStorage.getItem(key+':conflict'));}catch(_e){}
   const completionPrefix=key+':completion:';
@@ -389,76 +409,101 @@
     const completedFocused=focused?.matches('.wq-completed > summary');
     const index=new Map((window.DCCWorkSessions?.availableTasks()||[]).map(t=>[t.id,t]));all.forEach(i=>{const t=DCC.TaskModel.fromBlock(i.task);index.set(t.id,t);});
     const cards=[];
+    // Rows + Tiles: Needs You, Priority and Background tasks are compact rows.
+    // Foreground, and the one row opened in place, render as a full tile. Opening
+    // and folding is display-only (openCard), so it never waits on the network.
     function card(item){
       const row=item.task,task=DCC.TaskModel.fromBlock(row),foreground=item.status==='foreground',completed=item.status==='completed';
+      const tile=!completed&&(foreground||openCard===row.id);
+      const id=row.id,title=pathFor(task,index),exactTitle=String(row.properties.title??task.title??'');
       const elapsed=item.backgroundSince?Math.max(0,Math.floor((Date.now()-Date.parse(item.backgroundSince))/60000)):0;
       const reminder=item.snoozed?'':item.dueAt?(Date.parse(item.dueAt)<=Date.now()?'Check back now':'Check back in '+Math.max(1,Math.ceil((Date.parse(item.dueAt)-Date.now())/60000))+'m'):'';
       const actual=item.actualMinutes==null?'Focused actuals unknown':item.actualMinutes+'m focused saved';
       const activeMinutes=foreground&&!item.onBreak?Math.max(0,Math.floor((Date.now()-Date.parse(row.properties.startedAt))/60000)):0;
-      let controls=completed?'':foreground?button('background','Send to background',row.id)+button('pause','Pause',row.id):button('focus','Bring forward',row.id);
-      if(!completed){if(!foreground)controls+=button('up','↑',row.id,'aria-label="Move up" title="Move up one position. Hold or Shift+Enter to move to the top of this group."')+button('down','↓',row.id,'aria-label="Move down" title="Move down one position. Hold or Shift+Enter to move to the top of this group."');}
       const held=!completed&&!foreground&&returnHold(item);
-      if(!completed&&!foreground)controls+=button('return','Return to Priority',row.id,held?'disabled aria-describedby="queue-return-'+esc(row.id)+'"':'')+button('snooze','Snooze',row.id,'aria-haspopup="dialog"');
-      if(item.dueAt)controls+=button('dismiss','Dismiss reminder',row.id);
-      if(!item.savingCompletion)controls+=button('delete','Delete task',row.id,
-        'aria-haspopup="dialog" aria-label="Delete task: '+esc(task.title)+'"');
-      const snoozedHtml=item.snoozed?'<p class="wq-attention">Snoozed until '+esc(when(Date.parse(item.snoozedUntil),completionView.timeZone))+'</p><p class="wq-time">Attention snoozed; worker state and focused time are unchanged.</p>':'';
-
-
-      const finished=item.savingCompletion?'<p class="wq-time">Done &middot; saving&hellip;</p>':item.status==='completed'?(Number.isFinite(item.completedAt)?'<p class="wq-time"><time datetime="'+new Date(item.completedAt).toISOString()+'">Completed '+esc(new Intl.DateTimeFormat(undefined,{timeZone:completionView.timeZone,dateStyle:'medium',timeStyle:'short'}).format(item.completedAt))+'</time></p>':'<p class="wq-time">Completion time unavailable</p>'):'';
+      const statusKey=completed?'completed':foreground?'foreground':item.needsYou?'needs':item.snoozed?'snoozed':item.status==='queued'?'priority':'background';
+      const statusLabel=item.needsYou?'Needs You':item.snoozed?'Snoozed':item.status==='queued'?'Priority':foreground?'Foreground':completed?'Completed':'Background'; // the break veil carries 'On a break'
+      const snoozedUntil=item.snoozed?when(Date.parse(item.snoozedUntil),completionView.timeZone):'';
+      const finished=item.savingCompletion?'<p class="wq-time">Done &middot; saving&hellip;</p>':completed?(Number.isFinite(item.completedAt)?'<p class="wq-time"><time datetime="'+new Date(item.completedAt).toISOString()+'">Completed '+esc(new Intl.DateTimeFormat(undefined,{timeZone:completionView.timeZone,dateStyle:'medium',timeStyle:'short'}).format(item.completedAt))+'</time></p>':'<p class="wq-time">Completion time unavailable</p>'):'';
+      const levels=DCC.TaskPriority.levels,priority=levels.includes(item.taskPriority)?item.taskPriority:'Medium',level=levels.indexOf(priority),nextPriority=levels[(level+1)%levels.length];
+      const pLabel=priority+' priority. Click to change to '+nextPriority+' priority. Tap, hold, Shift+Enter or Arrow Down to choose.';
+      const glyph={'Very low':'⇊',Low:'↓',Medium:'=',High:'↑','Very high':'⇈'}[priority];
       const readingUrl=DCC.safeUrlAttr?.(row.properties?.readingSession?.url||'');
-      if(readingUrl)controls+='<a href="'+readingUrl+'" rel="noreferrer">Open book in QuietShelf</a>';
-      const node=window.renderItineraryListRow({...task,title:pathFor(task,index)},{
-        extraClass:'wq-card'+(foreground?' wq-focus':'')+(item.onBreak?' wq-on-break':''),dataset:{queueId:row.id},
-        done:completed, completionTitle:'Complete task: '+task.title,
-        onComplete:completed?null:()=>transition('done',item).catch(warn),
-        onCompleteWithNotes:completed?null:()=>transition('done',item).catch(warn),
-        onOpen:()=>openDetails(row.id).catch(warn),
-        onSchedule:completed?null:anchor=>openSchedule(item,anchor).catch(warn),scheduleLabel:'Schedule',
-        titleExtrasHtml:'<span class="wq-status">'+esc(item.needsYou?'Needs You':item.snoozed?'Snoozed':item.status==='queued'?'Priority':item.status)+'</span>',
-        metaHtml:'<p class="wq-time">'+esc(foreground?activeMinutes+'m this session · '+actual:actual+(item.backgroundSince?' · '+elapsed+'m waiting':''))+'</p>'+(reminder?'<p class="wq-attention">'+esc(reminder)+'</p>':'')+snoozedHtml+finished+(held?'<p class="wq-time" id="queue-return-'+esc(row.id)+'">'+esc(held)+'</p>':'')+contextHtml(item)
-      });
-      if(!completed){
-        const levels=DCC.TaskPriority.levels,priority=levels.includes(item.taskPriority)?item.taskPriority:'Medium';
-        const next=levels[(levels.indexOf(priority)+1)%levels.length];
-        const label=priority+' priority. Click to change to '+next+' priority. Tap, hold, Shift+Enter or Arrow Down to choose.';
-        const utility=node.querySelector('.it-list-utility');
-        utility.insertAdjacentHTML('beforeend',button('priority','<span aria-hidden="true">'+({'Very low':'⇊',Low:'↓',Medium:'=',High:'↑','Very high':'⇈'})[priority]+'</span>',row.id,'class="wq-priority-symbol" data-priority-level="'+levels.indexOf(priority)+'" aria-haspopup="dialog" aria-label="'+label+'" title="'+label+'"'));
+      const ttl='<span class="ttl" role="button" tabindex="0" aria-label="Open task details: '+esc(task.title)+'" title="'+esc(title)+'">'+esc(title)+'</span>';
+      const complete=completed||item.savingCompletion?'':'<button type="button" class="wq-complete quick-complete-control" data-queue-action="complete" data-task-id="'+esc(id)+'" title="Tap to complete. Hold for the same completion flow." aria-label="Complete task: '+esc(task.title)+'">'+WQ_ICON.bolt+'</button>';
+      const prio=completed?'':button('priority',tile?'<span aria-hidden="true">'+glyph+'</span><span class="wq-priority-label">'+priority+'</span>':'<span aria-hidden="true">'+glyph+'</span>',id,'class="wq-priority-symbol'+(tile?' wq-priority-badge':'')+'" data-priority-level="'+level+'" aria-haspopup="dialog" aria-label="'+esc(pLabel)+'" title="'+esc(pLabel)+'"');
+      const status='<span class="wq-status" data-wq-status="'+statusKey+'">'+esc(statusLabel)+'</span>';
+      const tool=(action,icon,label,extra='')=>button(action,WQ_ICON[icon]+'<span>'+label+'</span>',id,'class="wq-tool'+(action==='delete'?' wq-tool-danger':'')+'" '+extra);
+      const node=document.createElement('div');
+      node.className='wq-card '+(tile?'wq-tile':'wq-row')+(foreground?' wq-focus':'')+(item.onBreak?' wq-on-break':'')+(completed?' wq-done':'')+(tile&&justOpened===id?' wq-opening':'');
+      node.dataset.queueId=id;node.dataset.wqStatus=statusKey;
+      if(!tile){
+        const meta=completed?'':esc(item.snoozed?'Snoozed until '+snoozedUntil:reminder||actual+(item.backgroundSince?' · '+elapsed+'m waiting':''));
+        node.innerHTML='<div class="wq-row-main">'+complete+
+          '<button type="button" class="wq-row-hit" data-queue-action="'+(completed?'details':'expand')+'" data-task-id="'+esc(id)+'"'+(completed?'':' aria-expanded="false"')+' aria-label="'+esc((completed?'Open task details: ':'Open: ')+title)+'"><span class="wq-row-title">'+esc(title)+'</span><span class="wq-row-meta">'+status+(meta?' · '+meta:'')+'</span>'+finished+'</button>'+
+          prio+(completed?'':button('focus',WQ_ICON.play,id,'class="wq-play" aria-label="Bring forward: '+esc(task.title)+'" title="Bring forward"'))+
+          (completed&&!item.savingCompletion?button('delete',WQ_ICON.trash,id,'class="wq-row-delete" aria-haspopup="dialog" aria-label="Delete task: '+esc(task.title)+'"'):'')+'</div>';
+      }else{
+        const band='<div class="wq-band">'+prio+'<span class="wq-band-end">'+status+(foreground?'':button('expand',WQ_ICON.fold,id,'class="wq-fold" aria-expanded="true" aria-label="Fold back to a row" title="Fold back to a row"'))+'</span></div>';
+        const titleRow='<div class="wq-tile-title">'+ttl+'<button type="button" class="wq-copy-title" data-queue-action="copy-title" data-task-id="'+esc(id)+'" aria-label="Copy task title: '+esc(exactTitle)+'" title="Copy task title">'+WQ_ICON.copy+'</button></div>';
+        const attention=(reminder?'<div class="wq-banner wq-banner-due"><span class="wq-attention">'+esc(reminder)+'</span>'+(item.dueAt?button('dismiss','Dismiss reminder',id):'')+'</div>':'')+
+          (item.snoozed?'<div class="wq-banner wq-banner-snoozed"><span><span class="wq-attention">Snoozed until '+esc(snoozedUntil)+'</span><span class="wq-time">Attention snoozed; worker state and focused time are unchanged.</span></span>'+(item.dueAt?button('dismiss','Dismiss reminder',id):'')+'</div>':'')+
+          (held?'<p class="wq-time wq-held" id="queue-return-'+esc(id)+'">'+esc(held)+'</p>':'')+finished;
+        let body,bar,strip;
+        if(foreground){
+          const progress=Math.min(1,activeMinutes/25),circ=2*Math.PI*44;
+          body='<div class="wq-fg"><div class="wq-ring" aria-hidden="true"><svg viewBox="0 0 108 108"><circle cx="54" cy="54" r="44" class="wq-ring-track"/><circle cx="54" cy="54" r="44" class="wq-ring-fill" stroke-dasharray="'+(progress*circ).toFixed(1)+' '+circ.toFixed(1)+'" transform="rotate(-90 54 54)"/></svg><span><b>'+activeMinutes+'</b>min</span></div><div class="wq-fg-text">'+titleRow+'<p class="wq-time">'+esc(item.onBreak?'Timer paused · '+actual:activeMinutes+'m this session · '+actual)+'</p></div></div>';
+          bar=button('pause',WQ_ICON.pause+'Pause',id,'class="wq-big wq-big-amber"')+button('background',WQ_ICON.moon+'Send to background',id,'class="wq-big"')+'<button type="button" class="wq-big btn-schedule" data-schedule-id="'+esc(id)+'" aria-label="Schedule">'+WQ_ICON.cal+'Schedule</button>';
+          strip=complete.replace('class="wq-complete quick-complete-control"','class="wq-tool wq-tool-done quick-complete-control"').replace(WQ_ICON.bolt,WQ_ICON.bolt+'<span>Done</span>')+tool('photo','camera','Photo','aria-label="Add task photos"')+tool('details','info','Details')+(item.savingCompletion?'':tool('delete','trash','Delete','aria-haspopup="dialog" aria-label="Delete task: '+esc(task.title)+'"'));
+        }else{
+          const stat=(value,label)=>'<div class="wq-stat"><b>'+esc(value)+'</b><span>'+label+'</span></div>';
+          body=titleRow+'<div class="wq-stats">'+stat(item.actualMinutes==null?'—':item.actualMinutes+'m','Focused saved')+stat(item.backgroundSince?elapsed+'m':'—','Waiting')+stat(item.snoozed?new Intl.DateTimeFormat(undefined,{timeZone:completionView.timeZone,hour:'numeric',minute:'2-digit'}).format(Date.parse(item.snoozedUntil)):reminder?(Date.parse(item.dueAt)<=Date.now()?'Now':reminder.replace('Check back in ','')):'—','Check back')+'</div>';
+          bar=button('focus',WQ_ICON.play+'Bring forward',id,'class="wq-big wq-big-go"')+'<button type="button" class="wq-big btn-schedule" data-schedule-id="'+esc(id)+'" aria-label="Schedule">'+WQ_ICON.cal+'Schedule</button>'+button('snooze',WQ_ICON.snooze+'Snooze',id,'class="wq-big" aria-haspopup="dialog"');
+          strip=complete.replace('class="wq-complete quick-complete-control"','class="wq-tool wq-tool-done quick-complete-control"').replace(WQ_ICON.bolt,WQ_ICON.bolt+'<span>Done</span>')+tool('photo','camera','Photo','aria-label="Add task photos"')+
+            tool('up','up','Up','aria-label="Move up" title="Move up one position. Hold or Shift+Enter to move to the top of this group."')+tool('down','down','Down','aria-label="Move down" title="Move down one position. Hold or Shift+Enter to move to the top of this group."')+
+            tool('return','ret','Return',held?'disabled aria-describedby="queue-return-'+esc(id)+'" aria-label="Return to Priority"':'aria-label="Return to Priority" title="Return to Priority"')+tool('details','info','Details')+(item.savingCompletion?'':tool('delete','trash','Delete','aria-haspopup="dialog" aria-label="Delete task: '+esc(task.title)+'"'));
+        }
+        node.innerHTML=band+'<div class="wq-tile-body">'+body+attention+contextHtml(item)+(readingUrl?'<a class="wq-book" href="'+readingUrl+'" rel="noreferrer">'+WQ_ICON.book+'Open book in QuietShelf</a>':'')+'</div><div class="wq-bar">'+bar+'</div><div class="wq-strip">'+strip+'</div>';
+        if(foreground&&!item.onBreak&&window.DCCWorkSessions?.checkInHtml)node.querySelector('.wq-tile-body').insertAdjacentHTML('beforeend',window.DCCWorkSessions.checkInHtml(task,Date.now()));
       }
-      const title=node.querySelector('.ttl'),titleGroup=document.createElement('span'),copy=document.createElement('button');
-      titleGroup.className='wq-title-with-copy';title.replaceWith(titleGroup);titleGroup.appendChild(title);
-      const exactTitle=String(row.properties.title??task.title??'');
-      copy.type='button';copy.className='wq-copy-title';copy.dataset.queueAction='copy-title';copy.dataset.taskId=row.id;
-      copy.setAttribute('aria-label','Copy task title: '+exactTitle);copy.title='Copy task title';copy.draggable=false;
-      copy.innerHTML='<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg>';
-      copy.addEventListener('pointerdown',event=>event.stopPropagation());
-      copy.addEventListener('click',async event=>{event.preventDefault();event.stopPropagation();const hadFocus=document.activeElement===copy;copy.disabled=true;try{const ok=await DCC.copyText(exactTitle);DCC.toast(ok?'Title copied':'Could not copy title. Select the title and copy it manually.',ok?'success':'error');}finally{copy.disabled=false;if(hadFocus&&document.activeElement===document.body){const current=document.querySelector('[data-queue-id="'+CSS.escape(row.id)+'"] .wq-copy-title');current?.focus({preventScroll:true});}}});
-      titleGroup.appendChild(copy);
+      node.querySelectorAll('.btn-schedule').forEach(schedule=>schedule.addEventListener('click',event=>{event.stopPropagation();openSchedule(item,schedule).catch(warn);}));
+      node.querySelectorAll('[data-queue-action="photo"]').forEach(photo=>photo.addEventListener('click',event=>{
+        event.stopPropagation();
+        if(typeof window.openAddModal!=='function')return;
+        const anchor=typeof window.taskAnchorById==='function'?window.taskAnchorById(task._blockId)||window.taskAnchorById(task.id):null;
+        window.openAddModal(task.id,task.title,{anchor,generic:true,tab:'photos'});
+      }));
+      const ttlEl=node.querySelector('.ttl');
+      if(ttlEl){
+        ttlEl.addEventListener('click',event=>{event.stopPropagation();openDetails(id).catch(warn);});
+        ttlEl.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();openDetails(id).catch(warn);}});
+      }
+      const copy=node.querySelector('.wq-copy-title');
+      if(copy){
+        copy.addEventListener('pointerdown',event=>event.stopPropagation());
+        copy.addEventListener('click',async event=>{event.preventDefault();event.stopPropagation();const hadFocus=document.activeElement===copy;copy.disabled=true;try{const ok=await DCC.copyText(exactTitle);DCC.toast(ok?'Title copied':'Could not copy title. Select the title and copy it manually.',ok?'success':'error');}finally{copy.disabled=false;if(hadFocus&&document.activeElement===document.body){const current=document.querySelector('[data-queue-id="'+CSS.escape(id)+'"] .wq-copy-title');current?.focus({preventScroll:true});}}});
+      }
       node.tabIndex=0;node.draggable=!completed;
-      const actions=document.createElement('div');actions.className='wq-actions';actions.innerHTML=controls;
-      const schedule=node.querySelector('.btn-schedule');if(schedule)actions.prepend(schedule);
-      node.querySelector('.it-list-main').appendChild(actions);
-      if(foreground&&!item.onBreak&&window.DCCWorkSessions?.checkInHtml)node.insertAdjacentHTML('beforeend',window.DCCWorkSessions.checkInHtml(task,Date.now()));
+      node.querySelectorAll('[data-queue-action="complete"]').forEach(done=>DCC.bindHoldAction(done,()=>transition('done',item).catch(warn),()=>transition('done',item).catch(warn)));
       if(item.onBreak){
-        // Cover the whole shared card, including its utility gutter. Keep the
-        // underlying layout intact, but remove every covered control from use.
+        // Cover the whole tile. Keep the underlying layout intact, but remove
+        // every covered control from use.
         for(const child of node.children){child.inert=true;child.setAttribute('aria-hidden','true');}
         node.tabIndex=-1;node.draggable=false;node.setAttribute('role','group');
         node.setAttribute('aria-label','Paused task: '+task.title);
         const veil=document.createElement('div');veil.className='wq-break-veil';
-        veil.innerHTML='<div class="wq-break-header"><span class="wq-break-title">'+esc(pathFor(task,index))+'</span><span class="wq-break-badge">On a break</span>'+button('break-options','⋯',row.id,'aria-label="Task options" aria-haspopup="dialog"')+'</div><div class="wq-break-body"><div class="wq-break-copy"><strong role="status"><span class="wq-break-symbol" aria-hidden="true">Ⅱ</span> I’m on a break</strong><p><span data-break-clock data-break-since="'+esc(item.breakStartedAt)+'"></span> on break<span class="wq-break-timer-note">Work timer paused</span></p></div>'+button('focus','▶ Resume task',row.id)+'</div>';
+        veil.innerHTML='<div class="wq-break-header"><span class="wq-break-title">'+esc(title)+'</span><span class="wq-break-badge">On a break</span>'+button('break-options','⋯',id,'aria-label="Task options" aria-haspopup="dialog"')+'</div><div class="wq-break-body"><div class="wq-break-copy"><strong role="status"><span class="wq-break-symbol" aria-hidden="true">Ⅱ</span> I’m on a break</strong><p><span data-break-clock data-break-since="'+esc(item.breakStartedAt)+'"></span> on break<span class="wq-break-timer-note">Work timer paused</span></p></div>'+button('focus','▶ Resume task',id)+'</div>';
         veil.addEventListener('click',event=>{if(!event.target.closest('[data-queue-action]'))event.stopPropagation();});
         node.appendChild(veil);
       }
-      const completionButton=node.querySelector('.quick-complete-control');if(completionButton){completionButton.dataset.queueAction='complete';completionButton.dataset.taskId=row.id;}
       const priorityButton=node.querySelector('[data-queue-action="priority"]');
       if(priorityButton){
         const choose=()=>choosePriority(item);
         let touch=false;priorityButton.addEventListener('pointerdown',event=>{touch=event.pointerType==='touch';});
-        DCC.bindHoldAction(priorityButton,()=>{if(touch){touch=false;choose();return;}const levels=DCC.TaskPriority.levels;send(envelope('queue-priority',{taskId:row.id,taskPriority:levels[(levels.indexOf(item.taskPriority||'Medium')+1)%levels.length]})).catch(warn);},choose);
+        DCC.bindHoldAction(priorityButton,()=>{if(touch){touch=false;choose();return;}send(envelope('queue-priority',{taskId:id,taskPriority:nextPriority})).catch(warn);},choose);
         priorityButton.addEventListener('keydown',event=>{if(event.key==='ArrowDown'){event.preventDefault();event.stopPropagation();choose();}});
       }
-      node.querySelectorAll('[data-queue-action="up"],[data-queue-action="down"]').forEach(control=>DCC.bindHoldAction(control,()=>reorder(row.id,control.dataset.queueAction==='up'?-1:1)?.catch(warn),()=>reorder(row.id,'top')?.catch(warn)));
+      node.querySelectorAll('[data-queue-action="up"],[data-queue-action="down"]').forEach(control=>DCC.bindHoldAction(control,()=>reorder(id,control.dataset.queueAction==='up'?-1:1)?.catch(warn),()=>reorder(id,'top')?.catch(warn)));
       cards.push(node);return '<div data-wq-card="'+(cards.length-1)+'"></div>';
     }
     function lane(title,rows,empty,cls='',policy='') {return '<section class="wq-lane '+cls+'" data-queue-lane="'+cls+'"><div class="wq-heading"><h2>'+title+' <small>'+rows.length+'</small></h2>'+(policy==='needs'?button('snooze-all',sending?'Saving…':'Snooze all',null,'aria-haspopup="dialog" aria-label="Snooze all '+rows.length+' Needs You items" '+(!rows.length||sending||pending||conflict?'disabled':'')):'')+(policy==='foreground'?button('pomodoro',window.DCCPomodoro?.label()||'🍅',null,'aria-label="Create or open Pomodoro focus plan" aria-haspopup="dialog"'):'')+'<details class="wq-help" data-queue-help="'+policy+'"><summary aria-label="About '+title+'">ⓘ</summary><p>'+esc(window.DCCQueuePolicy.tips[policy])+'</p></details></div>'+(cls==='wq-next'?'<p class="wq-empty">Very high → High → Medium → Low → Very low. Move tasks within a priority; change Priority to move between levels.</p>':'')+(rows.length?rows.map(card).join(''):'<p class="wq-empty">'+empty+'</p>')+'</section>';}
@@ -818,6 +863,13 @@
     if(action==='conflict'&&!conflict){reviewRejectedChanges();return;}
     if(action==='conflict'){const body=form('<p>'+esc(conflict?.message)+'</p><pre>'+esc(JSON.stringify(conflict?.note ? {command:conflict.body,notes:conflict.note.text} : conflict?.body,null,2))+'</pre>');DCC.overlay.open({kind:'modal',title:'Attempted change',body,actions:[{label:'Close'}]});return;}
     if(!item)return;
+    if(action==='expand'){
+      // Display-only: no network. Focus follows the control the person used.
+      const opening=openCard!==item.task.id;openCard=opening?item.task.id:null;justOpened=openCard;render();justOpened=null;
+      document.querySelector('[data-queue-id="'+CSS.escape(item.task.id)+'"] '+(opening?'.wq-fold':'.wq-row-hit'))?.focus({preventScroll:true});
+      return;
+    }
+    if(['photo','copy-title'].includes(action))return; // Bound on the card itself.
     if(action==='delete'){openDelete(item.task.id,button).catch(warn);return;}
     if(action==='details'){const task=DCC.TaskModel.fromBlock(item.task);if(window.DCCTaskWorkspace?.preview)window.DCCTaskWorkspace.preview(task);else if(typeof window.openAddModal==='function')window.openAddModal(task.id,task.title);else {const body=form('<h3>'+esc(task.title)+'</h3><p>'+esc(task.detail||'No task details yet.')+'</p>');DCC.overlay.open({kind:'modal',title:'Task details',body,actions:[{label:'Close'}]});}return;}
     if(['snooze','remind'].includes(action)){snooze(item);return;}

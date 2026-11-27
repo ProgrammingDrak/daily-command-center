@@ -102,7 +102,7 @@ try {
         const rect=node=>{const r=node.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
         const veil=el.querySelector('.wq-break-veil'),title=veil.querySelector('.wq-break-title'),header=veil.querySelector('.wq-break-header'),body=veil.querySelector('.wq-break-body');
         const controls=[...veil.querySelectorAll('button')];
-        return{card:rect(el),veil:rect(veil),title:rect(title),header:rect(header),body:rect(body),controls:controls.map(rect),headerChildren:[...header.children].map(rect),bodyChildren:[...body.children].map(rect),titleReadable:title.scrollHeight<=title.clientHeight,overflow:veil.scrollHeight>veil.clientHeight||veil.scrollWidth>veil.clientWidth,underlyingInert:[...el.children].filter(n=>n!==veil).every(n=>n.inert&&n.getAttribute('aria-hidden')==='true'),mainPadding:getComputedStyle(el.querySelector('.it-list-main')).paddingBottom};
+        return{card:rect(el),veil:rect(veil),title:rect(title),header:rect(header),body:rect(body),controls:controls.map(rect),headerChildren:[...header.children].map(rect),bodyChildren:[...body.children].map(rect),titleReadable:title.scrollHeight<=title.clientHeight,overflow:veil.scrollHeight>veil.clientHeight||veil.scrollWidth>veil.clientWidth,underlyingInert:[...el.children].filter(n=>n!==veil).every(n=>n.inert&&n.getAttribute('aria-hidden')==='true'),mainPadding:getComputedStyle(el.querySelector('.wq-strip')).paddingBottom};
       });
       const within=(inner,outer)=>inner.x>=outer.x-1&&inner.y>=outer.y-1&&inner.right<=outer.right+1&&inner.bottom<=outer.bottom+1;
       assert.ok(Math.abs(measured.card.width-measured.veil.width)<=2&&Math.abs(measured.card.height-measured.veil.height)<=2,'veil fits full card including gutter');
@@ -118,8 +118,8 @@ try {
       for(const control of await card('a').locator('.wq-break-veil button').all()){await control.focus();assert.equal(await control.evaluate(el=>el===document.activeElement),true);}
       await button('a','break-options').focus();await page.keyboard.press('Tab');assert.equal(await button('a','focus').evaluate(el=>el===document.activeElement),true);
       await page.keyboard.press('Shift+Tab');assert.equal(await button('a','break-options').evaluate(el=>el===document.activeElement),true);
-      await card('a').locator('.it-list-main [data-queue-action=pause]').evaluate(el=>el.focus());
-      assert.equal(await card('a').locator('.it-list-main [data-queue-action=pause]').evaluate(el=>el===document.activeElement),false,'underlying control cannot receive focus');
+      await card('a').locator('.wq-bar [data-queue-action=pause]').evaluate(el=>el.focus());
+      assert.equal(await card('a').locator('.wq-bar [data-queue-action=pause]').evaluate(el=>el===document.activeElement),false,'underlying control cannot receive focus');
       await card('a').screenshot({path:path.join(output,'fitted-break-'+theme+'-'+width+'.png')});
       geometry.push({theme,width,beforeHeight:before.height,...measured});
       await button('a','focus').click();await page.waitForFunction(()=>!document.querySelector('.wq-break-veil'));

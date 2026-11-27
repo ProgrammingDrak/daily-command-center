@@ -8,7 +8,7 @@ const port=process.env.QUEUE_CARD_REVIEW_PORT||'8192',base='http://127.0.0.1:'+p
 const server=spawn(process.execPath,['scripts/ui-review-server.mjs'],{env:{...process.env,PORT:port,DCC_WORKING_QUEUE_REVIEW:'1'},stdio:['ignore','pipe','inherit']});
 await new Promise((resolve,reject)=>{server.once('error',reject);server.once('exit',code=>reject(new Error('Preview exited '+code)));server.stdout.on('data',b=>{if(String(b).includes('UI review server:'))resolve();});});
 const browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});
-const page=await browser.newPage({viewport:{width:1280,height:1100}}),errors=[],commands=[];
+const page=await browser.newPage({viewport:{width:1280,height:1100},reducedMotion:'reduce'}),errors=[],commands=[];
 page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST'&&r.url().endsWith('/api/working-queue'))commands.push(r.postDataJSON());});
 const out=process.env.DCC_QA_OUTPUT||'/tmp/dcc-queue-card-actions';fs.mkdirSync(out,{recursive:true});
 const date=new Date().toISOString().slice(0,10),past=new Date(Date.now()-2*86400000).toISOString().slice(0,10);
@@ -16,11 +16,15 @@ const api=async(path,data)=>{const r=data?await page.request.post(base+path,{dat
 const make=(id,title,p={},day=date,parent_id=null,type='block')=>api('/api/blocks',{id,type,date:day,parent_id,properties:{local_id:id,title,type:'task',duration:30,status:'open',...p}});
 const command=async(action,taskId,extra={})=>{const state=await api('/api/working-queue');return api('/api/working-queue',{action,taskId,...extra,expectedRevision:state.revision,sourceEventId:crypto.randomUUID(),at:new Date().toISOString()});};
 const card=id=>page.locator('[data-queue-id="'+id+'"]'),button=(id,action)=>card(id).locator('[data-queue-action="'+action+'"]');
+// Rows + Tiles: a queued task is a compact row until opened; its tile holds the full controls.
+const tile=async id=>{const c=card(id);await c.waitFor();if(await c.evaluate(el=>el.classList.contains('wq-row')))await c.locator('[data-queue-action="expand"]').click();await page.locator('[data-queue-id="'+id+'"].wq-tile').waitFor();return card(id);};
+const fold=async id=>{const c=card(id);if(await c.evaluate(el=>el.classList.contains('wq-tile')&&!el.classList.contains('wq-focus')))await c.locator('.wq-fold').click();await page.locator('[data-queue-id="'+id+'"].wq-row').waitFor();};
+const tb=async(id,action)=>(await tile(id)).locator('[data-queue-action="'+action+'"]');
 const order=()=>page.locator('.wq-next [data-queue-id]').evaluateAll(els=>els.map(el=>el.dataset.queueId));
 const refresh=()=>page.evaluate(()=>DCCWorkingQueue.refresh());
 const count=()=>commands.filter(c=>c.action==='queue-reorder').length;
 const waitOrder=ids=>page.waitForFunction(ids=>JSON.stringify([...document.querySelectorAll('.wq-next [data-queue-id]')].map(el=>el.dataset.queueId))===JSON.stringify(ids),ids);
-async function hold(id,action){const target=button(id,action);await target.scrollIntoViewIfNeeded();const b=await target.boundingBox();await page.mouse.move(b.x+b.width/2,b.y+b.height/2);await page.mouse.down();await page.waitForTimeout(620);await page.mouse.up();}
+async function hold(id,action){await refresh();const target=button(id,action);await target.scrollIntoViewIfNeeded();const b=await target.boundingBox();await page.mouse.move(b.x+b.width/2,b.y+b.height/2);await page.mouse.down();await page.waitForTimeout(620);await page.mouse.up();}
 async function closeDetails(){await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('#add-modal-overlay.open'));}
 try{
  await api('/api/queue-review/reset',{});
@@ -39,6 +43,7 @@ try{
  assert.deepEqual(await order(),['a','b','c','old']);
  await page.evaluate(()=>{window.copyLog=[];Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>window.copyLog.push(text)}});});
  const copiedBefore=commands.length;
+ await tile('b');
  await card('b').getByRole('button',{name:'Copy task title: Compare launch options',exact:true}).click();
  await page.waitForFunction(()=>window.copyLog?.[0]==='Compare launch options');
  assert.equal(commands.length,copiedBefore,'copy never mutates task state');
@@ -52,13 +57,13 @@ try{
  assert.equal(await card('b').getByRole('button',{name:'Copy task title: Compare launch options',exact:true}).evaluate(el=>el===document.activeElement),true,'clipboard fallback restores keyboard focus');
  assert.equal(commands.length,copiedBefore);
  assert.equal(await page.locator('.wq-style-options').count(),0);
- let before=count();await button('c','up').click();await waitOrder(['a','c','b','old']);assert.equal(count(),before+1);
- before=count();await hold('b','up');await waitOrder(['b','a','c','old']);await page.waitForTimeout(150);assert.equal(count(),before+1);
- before=count();await hold('c','down');await waitOrder(['c','b','a','old']);assert.equal(count(),before+1,'down hold also jumps top');
- before=count();await button('a','down').focus();await page.keyboard.press('Shift+Enter');await waitOrder(['a','c','b','old']);assert.equal(count(),before+1);
- before=count();await button('b','up').focus();await page.keyboard.press('Shift+Space');await waitOrder(['b','a','c','old']);assert.equal(count(),before+1);
+ let before=count();await (await tb('c','up')).click();await waitOrder(['a','c','b','old']);assert.equal(count(),before+1);
+ before=count();await tile('b');await hold('b','up');await waitOrder(['b','a','c','old']);await page.waitForTimeout(150);assert.equal(count(),before+1);
+ before=count();await tile('c');await hold('c','down');await waitOrder(['c','b','a','old']);assert.equal(count(),before+1,'down hold also jumps top');
+ before=count();await (await tb('a','down')).focus();await page.keyboard.press('Shift+Enter');await waitOrder(['a','c','b','old']);assert.equal(count(),before+1);
+ before=count();await (await tb('b','up')).focus();await page.keyboard.press('Shift+Space');await waitOrder(['b','a','c','old']);assert.equal(count(),before+1);
  for(const kind of ['cancel','move','blur','rerender']){
-  const target=button('c','up');await target.scrollIntoViewIfNeeded();before=count();
+  await tile('c');const target=button('c','up');await target.scrollIntoViewIfNeeded();before=count();
   await target.dispatchEvent('pointerdown',{pointerId:77,button:0,clientX:10,clientY:10});
   if(kind==='cancel')await target.dispatchEvent('pointercancel',{pointerId:77});
   if(kind==='move')await target.dispatchEvent('pointermove',{pointerId:77,clientX:40,clientY:10});
@@ -77,7 +82,7 @@ try{
  assert.equal((await api('/api/blocks/b')).properties._taskNotes.text,'Saved canonical itinerary notes');
  await page.locator('[data-task-view="queue"]').click();await refresh();
  // Date-scoped legacy notes: same local_id, different canonical rows and days.
- await card('old').locator('.ttl').click();await page.locator('#am-panel-photos').waitFor();
+ await (await tile('old')).locator('.ttl').click();await page.locator('#am-panel-photos').waitFor();
  assert.match(await page.locator('#am-items-list').innerText(),/Earlier occurrence child/);
  assert.match(await page.locator('#am-items-list').innerText(),/Earlier follow-up/);
  assert.doesNotMatch(await page.locator('#am-items-list').innerText(),/Current occurrence child|Current follow-up/);
@@ -110,7 +115,7 @@ try{
  assert.equal((await api('/api/blocks/old')).properties._taskNotes.text,'Completion note retained for retry');
  assert.equal((await api('/api/blocks/today')).properties._taskNotes,undefined);assert.equal((await api('/api/blocks/today-note')).properties.text,'Current occurrence notes');
  // Schedule uses the same date chooser/placement picker; blocked state pauses atomically.
- await card('a').getByRole('button',{name:'Schedule',exact:true}).click();await page.locator('.resched-popover').getByText('Tomorrow',{exact:true}).click();
+ await (await tile('a')).getByRole('button',{name:'Schedule',exact:true}).click();await page.locator('.resched-popover').getByText('Tomorrow',{exact:true}).click();
  await page.locator('#sched-picker-overlay.open').waitFor();await page.screenshot({path:out+'/schedule-desktop.png'});
  await page.getByRole('button',{name:'⚡ Earliest free',exact:true}).click();
  await page.waitForFunction(()=>!window.DCCWorkingQueue.getState().queue.items.some(i=>i.task.id==='a'));
@@ -134,7 +139,7 @@ try{
  await page.reload({waitUntil:'domcontentloaded'});await page.waitForFunction(()=>window.DCCWorkingQueue);await refresh();
  // Undated queue tasks use the task library's canonical date-only assignment.
  await make('undated-schedule','Undated scheduling task',{},null);await command('queue-add','undated-schedule');await refresh();
- await card('undated-schedule').getByRole('button',{name:'Schedule',exact:true}).click();
+ await (await tile('undated-schedule')).getByRole('button',{name:'Schedule',exact:true}).click();
  await page.locator('.resched-popover').getByText('Tomorrow',{exact:true}).click();
  await page.waitForFunction(()=>!window.DCCWorkingQueue.getState().queue.items.some(i=>i.task.id==='undated-schedule'));
  assert.notEqual((await api('/api/blocks/undated-schedule')).date,null);
@@ -155,10 +160,12 @@ try{
   await page.setViewportSize({width,height:1100});await page.evaluate(()=>window.scrollTo(0,0));
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
   assert.equal(await card('b').getByRole('button',{name:'Context',exact:true}).count(),0);
-  await card('b').getByText('Focused actuals unknown',{exact:true}).waitFor();
+  await fold('b');assert.match(await card('b').locator('.wq-row-meta').innerText(),/Priority · Focused actuals unknown/);
+  for(const target of [button('b','complete'),button('b','priority'),button('b','focus'),button('b','expand')]){const box=await target.boundingBox();assert.ok(box.width>=44&&box.height>=44,'44px row touch target');}
+  await tile('b');
   for(const target of [button('b','complete'),button('b','up'),card('b').getByRole('button',{name:'Schedule',exact:true})]){const box=await target.boundingBox();assert.ok(box.width>=44&&box.height>=44,'44px touch target');}
   await button('b','complete').focus();await page.keyboard.press('Enter');await page.getByRole('dialog').getByText('Previously recorded',{exact:true}).waitFor();await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('.done-modal-overlay.open'));
   await page.screenshot({path:out+'/queue-'+width+'.png',fullPage:true});
  }
- assert.deepEqual(errors,[]);console.log('PASS: shared details and notes, canonical occurrence isolation, note-only retry, ordering/hold/keyboard/cancellation, Schedule, block timer, mobile layouts.');
+ assert.deepEqual(errors,[]);console.log('PASS: rows open into tiles, shared details and notes, canonical occurrence isolation, note-only retry, ordering/hold/keyboard/cancellation, Schedule, block timer, mobile layouts.');
 }catch(error){await page.screenshot({path:out+'/failure.png',fullPage:true});console.log(await page.locator('#working-queue-root').innerText());throw error;}finally{fs.writeFileSync(out+'/results.json',JSON.stringify({errors,commands},null,2));await browser.close();server.kill();}
