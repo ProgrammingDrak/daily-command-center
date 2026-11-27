@@ -397,18 +397,19 @@ body[data-nav-page="tasks"]:is([data-nav-view="list"], [data-nav-view="calendar"
 }
 body[data-nav-view="calendar"] :is(.it-toolbar-offclock, .it-toolbar-list) { display: none; }
 .it-toolbar-list, .it-toolbar .it-list-controls, .it-toolbar .it-list-section { display: flex; align-items: center; gap: 5px; margin: 0; }
-.it-toolbar .it-list-ctrl-btn { min-height: 28px; padding: 4px 8px; white-space: nowrap; }
+.it-toolbar .it-list-ctrl-btn { min-height: 24px; height: 24px; padding: 0 8px; line-height: 22px; white-space: nowrap; }
 .it-toolbar .it-list-section { margin-left: 2px; }
 .it-toolbar .it-list-section > span { cursor: help; }
 .it-toolbar-brief { color: var(--accent-light); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
-.it-toolbar-offclock { display: inline-flex; border: 1px solid var(--queue-line); border-radius: 6px; color: var(--queue-ink); }
+/* The border sits on the 24px button itself so the bar stays one 24px row. */
+.it-toolbar-offclock { display: inline-flex; border-radius: 6px; color: var(--queue-ink); }
 .it-toolbar-offclock.drag-over-block { background: var(--queue-soft); }
-.it-toolbar-offclock .time-block-toggle { min-height: 28px; gap: 4px; padding: 2px 6px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.it-toolbar-offclock .time-block-toggle { box-sizing: border-box; border: 1px solid var(--queue-line); border-radius: 6px; min-height: 24px; height: 24px; gap: 4px; padding: 0 6px; font-size: 11px; font-weight: 800; white-space: nowrap; }
 .it-toolbar-offclock .untimed-sub-count { min-width: 18px; height: 18px; font-size: 10px; }
 .off-the-clock.is-collapsed { display: none; }
 .it-toolbar .it-list-ctrl-btn { text-transform: none; letter-spacing: 0; font-size: 11px; }
 .it-toolbar .it-toolbar-share:not(:has(svg)) { width: auto; padding: 0 8px; }
-.it-toolbar .it-list-ctrl-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; padding: 0; }
+.it-toolbar .it-list-ctrl-icon { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; }
 /* Narrow screens (iPad portrait and below): "Day Progress" shrinks to its ▾ toggle;
    the words stay readable to screen readers. */
 @media (max-width: 900px) {
